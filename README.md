@@ -176,8 +176,9 @@ Five come with the app. You can edit or remove any of them in the Bots tab.
   it, and so does `/bots color qa gold`. `/bots color qa random` picks another.
 - `@elu` starts when it joins a session and then runs there every hour. Once ELU Code is
   installed, it runs while ELU Code is closed too, through the login item that runs
-  schedules. `/bots schedule off elu` stops that in one session. It needs the ELU MCP
-  server in Claude Code: `npx @elu-labs/mcp-setup`.
+  schedules. `/bots schedule off elu` stops that in one session. It needs ELU connected:
+  `npx -y @elu-labs/cli --offer=promo` signs you up, or in, adds ELU to your web app and
+  connects your AI tools.
 
 ## Teammates
 
