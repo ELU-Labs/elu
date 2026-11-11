@@ -511,7 +511,7 @@ test('/invite with a name says in one line why there is nobody to add, and plain
   assert.deepEqual(sets(), [{ type: 'channelSet', team: 'team-1', id, name: 'design', members: [ME, SARA, LI] }]);
   // Plain /invite makes the one-use code, and so does a team's name: neither changes a channel.
   await send(v, '/invite'); await choose(v, 'Invite', /^Someone new/); await until(() => modal(v, 'Team invite'), 'the invite');
-  assert.match(modal(v, 'Team invite').children.find(child => child.options?.scrollable).getText(), /^k7qm-x2pd-9fhw\n\nOne use, expires in 24 h\./);
+  assert.match(modal(v, 'Team invite').children.find(child => child.options?.scrollable).getText(), /^╭────────────────────╮\n│   k7qm-x2pd-9fhw   │\n╰────────────────────╯\n\nOne use, expires in 24 h\./);
   await closeDialog(v, 'Team invite'); assert.deepEqual(invites(), [['createInvite', 'team-1', { hours: 24 }]]);
   await send(v, '/invite Core'); await until(() => modal(v, 'Team invite'), 'the invite for a named team');
   await closeDialog(v, 'Team invite'); assert.equal(invites().length, 2); assert.equal(sets().length, 1);
@@ -792,16 +792,16 @@ test('the invite window shows a short code and copies it; a drag over its row co
   await until(() => modal(v, 'Team invite'), 'invite');
   // The window copies the code as it opens, and says so.
   const body = modal(v, 'Team invite').children.find(child => child.options?.scrollable);
-  assert.deepEqual(copied, ['k7qm-x2pd-9fhw']); assert.match(body.getText(), /^k7qm-x2pd-9fhw\n\nCopied to your clipboard\. One use, expires in 24 h\./);
+  assert.deepEqual(copied, ['k7qm-x2pd-9fhw']); assert.match(body.getText(), /^╭────────────────────╮\n│   k7qm-x2pd-9fhw   │\n╰────────────────────╯\n\nCopied to your clipboard\. One use, expires in 24 h\./);
   assert.doesNotMatch(body.getText(), /elu-team/); assert.match(v.panels.status.getText(), /ready and copied/);
   copied.length = 0;
   await until(() => body.lpos, 'drawn');
-  // A drag along the code's row, from its first column to the window's edge, takes the row's padding with it.
-  const pos = body.lpos, x0 = pos.xi + body.ileft, y0 = pos.yi + body.itop, x1 = pos.xl - 1 - body.iright;
+  // A drag along the code's row (the frame's middle row), from its first column to the window's edge, takes the frame and the row's padding with it.
+  const pos = body.lpos, x0 = pos.xi + body.ileft, y0 = pos.yi + body.itop + 1, x1 = pos.xl - 1 - body.iright;
   const sgr = (b, x, y, up = false) => `\x1b[<${b};${x + 1};${y + 1}${up ? 'm' : 'M'}`;
   v.input.write(sgr(0, x0, y0)); v.input.write(sgr(32, x1, y0)); v.input.write(sgr(0, x1, y0, true));
   await until(() => copied.length, 'copied');
-  assert.equal(copied[0].trim(), 'k7qm-x2pd-9fhw');
+  assert.equal(copied[0].trim(), '│   k7qm-x2pd-9fhw   │');
   await closeDialog(v, 'Team invite');
   // Pasted after /join, as the terminal hands a paste over, then Enter.
   const ask = v.panels.ask; ask.focus(); ask.readInput(); await until(() => ask.__listener, 'message box');

@@ -607,7 +607,7 @@ test('an invite code is 12 characters in three groups, with no look-alike charac
 test('a pasted code is read whatever came with it: case, spaces, tabs, line breaks, dashes, quotes, and /join or elu join in front, even twice', () => {
   const code = 'k7qm-x2pd-9fhw';
   for (const text of [code, 'K7QM-X2PD-9FHW', 'k7qmx2pd9fhw', ' k7qm - x2pd - 9fhw ', 'k7qm-x2pd-\n9fhw', 'k7qm-x2pd-   \r\n9fhw  ', 'k7\tqm-x2pd-9f\nhw', '/join k7qm-x2pd-9fhw',
-    '/join /join k7qm-x2pd-9fhw', '/join\n/join k7qm-\nx2pd-9fhw', 'elu join k7qm-x2pd-9fhw', 'ELU JOIN elu join k7qm x2pd 9fhw', '`k7qm-x2pd-9fhw`', '"k7qm-x2pd-9fhw"', 'k7qm–x2pd—9fhw', 'k7qm-x2pd-9fhw​']) {
+    '/join /join k7qm-x2pd-9fhw', '│   k7qm-x2pd-9fhw   │', '╭──╮\n│ k7qm-x2pd-9fhw │\n╰──╯', '/join\n/join k7qm-\nx2pd-9fhw', 'elu join k7qm-x2pd-9fhw', 'ELU JOIN elu join k7qm x2pd 9fhw', '`k7qm-x2pd-9fhw`', '"k7qm-x2pd-9fhw"', 'k7qm–x2pd—9fhw', 'k7qm-x2pd-9fhw​']) {
     assert.deepEqual(readCode(text), { short: code }, JSON.stringify(text));
   }
   for (const text of ['k7qm-x2pd-9fh', 'k7qm-x2pd-9fhwa', 'k7qm-x2pd-9fhl', 'k7qm-x2pd-9fh0', 'k7qm-x2pd-9fh1', 'k7qm-x2pd-9fho', 'k7qm-x2pd-9fhi', '/join', '', 'join k7qm-x2pd-9fhw', null, 7, 'k'.repeat(5000)]) {
