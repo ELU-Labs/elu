@@ -195,8 +195,7 @@ elu invite               # prints a code like k7qm-x2pd-9fhw; it works once, wit
 # on your teammate's computer, in the project you may ask about
 elu id --name kim
 elu peer on
-elu join CODE            # shows who admitted you and their fingerprint: check it with them
-elu share                # then share the project
+elu join CODE            # joins their team, to ask about their project
 ```
 
 `elu peers` shows who is online. In the app, write to a teammate in the Chats tab, or
@@ -204,9 +203,8 @@ type `@kim where are the tax rates?` in any session. A teammate's question is an
 read only, from a project you shared. `elu share`, or `/share` in the app, shares the
 project you are in. Inviting a teammate shares one too: `elu invite` shares the folder you
 run it in when it is an ELU Code project (`--project PATH` names another), and `/invite`
-the open project. Joining shows who admitted you, with their fingerprint: check it with
-them, then `/join` asks before it shares the open project, and after `elu join` you run
-`elu share`. The wire format is in
+the open project. Joining only joins: it shares nothing of yours, and you can `/share` a
+project later. The wire format is in
 [docs/peer-network.md](docs/peer-network.md).
 
 Teammates on a team a project is shared with also see the work in it: for each live

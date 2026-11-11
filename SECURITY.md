@@ -159,10 +159,9 @@ What others learn:
   the public key a joiner's proof is checked against. Not the code: a copy of the file
   cannot be used to join.
 - Whoever holds the code, or a copy of your `invites.json`, can also answer as you: wait on
-  the topic and admit the joiner to a team of their own. The joiner is shown the name and
-  fingerprint of whoever admitted them, and `elu invite` and `/invite` show yours, so tell
-  them yours to compare. A join with a short code shares no project until the joiner says
-  so: `/join` asks, and after `elu join` it takes `elu share`.
+  the topic and admit the joiner to a team of their own. Joining shares nothing of the
+  joiner's, so all they would get is the joiner's questions. The joiner shares a project
+  only with `/share` or `elu share`, and `elu peers` shows each member's fingerprint.
 
 ## The never list
 
