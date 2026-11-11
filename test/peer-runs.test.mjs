@@ -20,7 +20,7 @@ import { peerFile } from '../lib/peer/paths.mjs';
 import { savePeerPolicy, savePeerSettings } from '../lib/peer/settings.mjs';
 import { createIdentity } from '../lib/peer/identity.mjs';
 import { createTeam, teams as everyTeam } from '../lib/peer/roster.mjs';
-import { createInvite, parseInvite, redeemInvite } from '../lib/peer/invite.mjs';
+import { createInvite, redeemCode } from '../lib/peer/invite.mjs';
 import { share as shareWith, shares } from '../lib/peer/shares.mjs';
 import { saveRemotePlans } from '../lib/peer/plans.mjs';
 import { saveBot } from '../lib/bots.mjs';
@@ -94,7 +94,7 @@ const drafts = () => { const dir = peerFile('drafts'); return fs.existsSync(dir)
 // they would from the daemon; the returned send() delivers one and returns its record.
 function teammate(p) {
   const me = createIdentity({ name: 'ana' }), team = createTeam(me, 'core');
-  redeemInvite(team.id, parseInvite(createInvite(me, team.id, { hours: 1 })).secret, SARA, 'sara');
+  redeemCode(createInvite(me, team.id, { hours: 1 }), SARA, 'sara');
   share(p.root, { handle: 'app' });
   const events = [], ctx = { me, kick: () => {}, event: text => events.push(text), push: () => {} }, methods = intakeMethods(ctx);
   const send = (text, { kind = 'handoff', threadId = 'thread-1', messageId = crypto.randomUUID() } = {}) => {

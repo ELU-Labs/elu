@@ -102,8 +102,11 @@ too long, made for the run and removed when it ends (`docs/vendors/claude.md`).
 ## What teammates are told
 
 A project is shared with `elu share` or `/share`, and also when a teammate is added:
-`elu invite` and `elu join` share the folder they run in when it is an ELU Code project
-(`--project PATH` names another), and `/invite` and `/join` share the open project. A share has status
+`elu invite` shares the folder it runs in when it is an ELU Code project (`--project PATH`
+names another), and `/invite` the open project. A join shares only after the joiner says
+so: `/join` asks before it shares the open project, and after `elu join` with a short code
+it takes `elu share` (a long code from 0.1.3, which names the inviter's key, still shares as
+`elu invite` does). A share has status
 on unless you made it with `elu share --no-status`; `/share`, and `elu share` without that
 flag, turn status on again. While status is on, and the project has an `origin` remote, the
 teammates on a team it is shared with are told two things about it, and neither is checked
@@ -133,6 +136,33 @@ it is kept, and it counts only in a project you share with a team that teammate 
 own model and bots in that project are given the titles and goals as data, marked as a
 teammate's text and never as a request; a teammate's question running on your machine is
 given none of it.
+
+## Invite codes
+
+An invite code is 12 random characters, such as `k7qm-x2pd-9fhw`, about 59.4 bits. It works
+once, for 24 hours. Anyone who has it can join that team as a member, so send it only to
+the person you mean. It names no team and no key: while the invite is open, your peer
+daemon waits on a network topic derived from the code with scrypt, and the joiner finds you
+there. Before you say anything about the team, each side proves to the other that it knows
+the code, over that connection only ([docs/peer-network.md](docs/peer-network.md#roster)).
+
+What others learn:
+
+- A DHT node near the topic, or anyone looking it up, sees the topic, your peer key and the
+  IP addresses of the two machines. Not the team, its members or the code. Getting the code
+  back from the topic costs one scrypt run of 64 MiB per guess: hundreds of thousands of
+  GPU-years for the whole space, against a code that lasts a day.
+- Someone on the topic who does not know the code fails the proof and learns no more than
+  the topic told them. A proof covers both sides' fresh nonces and both keys of the
+  connection, so it cannot be replayed or passed through a relay.
+- Your `invites.json` keeps, for each code, the topic, the key you prove yourself with and
+  the public key a joiner's proof is checked against. Not the code: a copy of the file
+  cannot be used to join.
+- Whoever holds the code, or a copy of your `invites.json`, can also answer as you: wait on
+  the topic and admit the joiner to a team of their own. The joiner is shown the name and
+  fingerprint of whoever admitted them, and `elu invite` and `/invite` show yours, so tell
+  them yours to compare. A join with a short code shares no project until the joiner says
+  so: `/join` asks, and after `elu join` it takes `elu share`.
 
 ## The never list
 
