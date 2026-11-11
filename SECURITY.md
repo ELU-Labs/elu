@@ -102,8 +102,11 @@ too long, made for the run and removed when it ends (`docs/vendors/claude.md`).
 ## What teammates are told
 
 A project is shared with `elu share` or `/share`, and also when a teammate is added:
-`elu invite` and `elu join` share the folder they run in when it is an ELU Code project
-(`--project PATH` names another), and `/invite` and `/join` share the open project. A share has status
+`elu invite` shares the folder it runs in when it is an ELU Code project (`--project PATH`
+names another), and `/invite` the open project. A join shares only after the joiner says
+so: `/join` asks before it shares the open project, and after `elu join` with a short code
+it takes `elu share` (a long code from 0.1.3, which names the inviter's key, still shares as
+`elu invite` does). A share has status
 on unless you made it with `elu share --no-status`; `/share`, and `elu share` without that
 flag, turn status on again. While status is on, and the project has an `origin` remote, the
 teammates on a team it is shared with are told two things about it, and neither is checked
@@ -155,6 +158,11 @@ What others learn:
 - Your `invites.json` keeps, for each code, the topic, the key you prove yourself with and
   the public key a joiner's proof is checked against. Not the code: a copy of the file
   cannot be used to join.
+- Whoever holds the code, or a copy of your `invites.json`, can also answer as you: wait on
+  the topic and admit the joiner to a team of their own. The joiner is shown the name and
+  fingerprint of whoever admitted them, and `elu invite` and `/invite` show yours, so tell
+  them yours to compare. A join with a short code shares no project until the joiner says
+  so: `/join` asks, and after `elu join` it takes `elu share`.
 
 ## The never list
 

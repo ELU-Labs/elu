@@ -12,7 +12,7 @@ import { peerFile } from '../lib/peer/paths.mjs';
 import { canonical, sign, verify, publicKeyHex, base32, unbase32 } from '../lib/peer/canonical.mjs';
 import { createIdentity, loadIdentity, identity, renameIdentity, exportIdentity, importIdentity } from '../lib/peer/identity.mjs';
 import { makeOp, validateOp, opProblem, fold, createTeam, readLog, team, teams, appendOp, head, merge, opsMissing, teamPath, setChannel } from '../lib/peer/roster.mjs';
-import { SCRYPT, admitProven, checkInviterProof, checkJoinerProof, createInvite, inviteKeys, inviteKeysAsync, inviterProof, joinerProof, openInvites, parseInvite, redeemCode, redeemInvite } from '../lib/peer/invite.mjs';
+import { RETRY_MS, SCRYPT, admitProven, checkInviterProof, checkJoinerProof, createInvite, inviteKeys, inviteKeysAsync, inviterProof, joinerProof, openInvites, parseInvite, redeemCode, redeemInvite } from '../lib/peer/invite.mjs';
 import { ALPHABET, newCode, readCode } from '../lib/peer/invite-code.mjs';
 import { shares, share, unshare, repoId, shareFor, normalizeRemote, teamProjects, setTeamProject, teamShare } from '../lib/peer/shares.mjs';
 import { scanSecrets, redactPaths, prepareOutgoing } from '../lib/peer/secrets.mjs';
@@ -662,9 +662,14 @@ test('an invite admits once, keeps neither the code nor what a joiner proves wit
     for (const secret of [code, code.replace(/-/g, ''), keys.seed.toString('hex')]) assert.equal(text.includes(secret), false);
     const [row] = JSON.parse(text);
     assert.deepEqual(Object.keys(row).sort(), ['expiresAt', 'hash', 'prover', 'topic', 'usedAt', 'usedBy', 'verifier']);
-    assert.deepEqual([row.topic, row.prover, row.verifier, row.hash, row.usedBy], [keys.topic, keys.prover, keys.verifier, sha256(keys.verifier), member.identity.key]);
+    assert.deepEqual([row.topic, row.prover, row.verifier, row.hash, row.usedBy], [keys.topic, keys.prover, keys.verifier, sha256(`short:${keys.verifier}`), member.identity.key]);
+    // 0.1.3 admits elu.join {secret} through any row whose hash is sha256(secret): no value in the row hashes to it.
+    for (const value of [row.topic, row.prover, row.verifier]) assert.notEqual(sha256(value), row.hash);
     assert.ok(row.expiresAt > Date.now() + 3500 * 1000 && row.expiresAt <= Date.now() + 3600 * 1000);
-    assert.deepEqual(openInvites([teamId]), [], 'a used invite is no longer announced');
+    assert.deepEqual(openInvites([teamId]), [], 'a used invite is not open');
+    // Its joiner may come back for RETRY_MS, in case the reply that admitted them was lost.
+    assert.deepEqual(openInvites([teamId], Date.now(), { retries: true }).map(x => x.usedBy), [member.identity.key]);
+    assert.deepEqual(openInvites([teamId], Date.parse(row.usedAt) + RETRY_MS + 1, { retries: true }), []);
     const again = admitProven({ teamId, ...row }, member.identity.key, 'sara');
     assert.equal(again.body.key, member.identity.key); assert.equal(again.body.invite, row.hash);
     assert.equal(readLog(teamId).ops.length, 2);

@@ -174,7 +174,7 @@ Over a limit, the message is not sent, it stays in the message box, and one line
 - **Ops.** `{teamId, id: sha256(canonical body), type, by: hexKey, at, body, sig}`. `sig` is ed25519 over the canonical JSON of everything except `sig`; canonical means sorted keys and no whitespace.
 - **Types.**
   - `create`: by the founder; body `{name}`. The teamId is the id of this op.
-  - `admit`: body `{key, name, role: "member"|"admin", invite}`. `invite` names the invite: sha256 of the joiner's verifier key for a short code, sha256(secret) for a long one.
+  - `admit`: body `{key, name, role: "member"|"admin", invite}`. `invite` names the invite: sha256 of `short:` followed by the joiner's verifier key for a short code, sha256(secret) for a long one.
   - `remove`: body `{key}`.
   - `role`: body `{key, role}`.
   - `relays`: body `{keys}`.
@@ -211,16 +211,19 @@ Over a limit, the message is not sent, it stays in the message box, and one line
     - `topic`, the Hyperswarm topic;
     - `prover`, the inviter's HMAC-SHA256 key;
     - `seed`, an ed25519 seed whose public key is `verifier`.
-  - **Stored.** The inviter's `invites.json` (mode 600) keeps `{hash: sha256(verifier), expiresAt, usedBy, topic, prover, verifier}`: not the code, and not `seed`, so the file alone cannot be used to join.
-  - **Finding the inviter.** While an invite is unused and unexpired, the inviter's daemon announces on `topic` (`swarm.join(topic, {server: true, client: false})`) and leaves it once the invite is used or expired. The joiner derives the same topic, looks it up (`{server: false, client: true})`), and tries each peer it finds there. A peer found on the topic gets nothing but the hello until both proofs pass.
+  - **Stored.** The inviter's `invites.json` (mode 600) keeps `{hash: sha256("short:" + verifier), expiresAt, usedBy, topic, prover, verifier}`, and `usedAt` once used: not the code, and not `seed`, so the file alone cannot be used to join. The prefix means no long code's secret hashes to a short row's `hash`, so a 0.1.3 daemon reading the file does not take the verifier as a secret.
+  - **Finding the inviter.** While an invite is unused and unexpired, the inviter's daemon announces on `topic` (`swarm.join(topic, {server: true, client: false})`). It stays there for 10 minutes after the invite is used, or until it expires if that is sooner, and then leaves. The joiner derives the same topic, looks it up (`{server: false, client: true})`), and tries each peer it finds there. A peer found on the topic gets nothing but the hello until both proofs pass.
   - **Proofs.** Both cover the canonical JSON `{proof: "elu-code invite", role, topic, joinerNonce, inviterNonce, inviter, joiner}`, where the nonces are 32 fresh random bytes from each side and `inviter` and `joiner` are the two Noise public keys of this connection (all hex).
     1. Joiner → `elu.invite.start {topic, nonce: joinerNonce}`.
     2. Inviter → `{nonce: inviterNonce, proof: HMAC-SHA256(prover, role "inviter")}`. The joiner checks it, and closes the connection if it is wrong.
     3. Joiner → `elu.invite.prove {proof: ed25519 signature with seed over role "joiner", name}`.
     4. The inviter checks the signature against `verifier`, the expiry and that the invite is unused, appends `admit`, and replies `{teamId, inviter: its key, ops: the full log}`. The joiner checks that `inviter` is the key on the connection and that the log admits it.
-  - A proof that fails ends the connection. A key with 3 failed proofs in 10 minutes, or 30 failures from anyone in that time, gets no invite answers until the window has passed.
+  - **A lost reply.** For 10 minutes after an invite is used, the key it admitted may run the exchange again and gets the same `admit` op with the full log. Any other key is refused.
+  - A proof that fails ends the connection. A key with 3 failed proofs in 10 minutes gets no invite answers until the window has passed. A start that names an unknown topic is refused and closed, and does not count: finding a topic costs a scrypt run either way. There is no limit on failures from everyone, since keys cost nothing and it would let anyone lock the real joiner out.
+  - **Who answered.** The inviter's proof shows only that the other side knows the code. Anyone the code reached, and anyone with a copy of the inviter's `invites.json`, could answer as the inviter with a team of their own. So the joiner is shown the name and fingerprint of the key that admitted it, `elu invite` and `/invite` show the inviter's own fingerprint to compare, and a join with a short code shares no project until the joiner says so (`/join` asks; `elu join` leaves it to `elu share`).
   - **Long codes from 0.1.3 and earlier** still join: `elu-team:v1:` + base32 of `{teamId, inviter key, secret(32), expiresAt}`. The joiner dials the inviter's key and calls `elu.join {teamId, secret, name}`; the inviter checks `sha256(secret)` against a row that has no `topic`. A short invite is never redeemed through `elu.join`.
   - The inviter must be online for the join. Until it, neither hello names the team, since the joiner is not on it.
+  - **The daemon's version.** `state.json` carries the daemon's package version. A daemon keeps the code it started with, so before inviting, joining or turning peer mode on, the app and CLI restart one whose version is not their own (0.1.3 and earlier write none): a shutdown sent while peer mode is off, then this copy's daemon. If it does not stop within 10 seconds, they refuse and say to run `elu peer off`, then `elu peer on`.
 
 ## Status
 

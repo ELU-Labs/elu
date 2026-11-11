@@ -37,7 +37,7 @@ import { peerCli } from '../lib/peer/cli.mjs';
 import { refuse } from '../lib/util.mjs';
 import { BOTS_TOLD, cleanBots, cleanBox, cleanRows, overlaps, statusRows, thisMachine } from '../lib/peer/status.mjs';
 import { createAsk, dismissAsk, reconnect, reviewText, teammate, tickAsks, teamAsk, dismissTeam, applyTask, getAsk, asks as allAsks } from '../lib/peer/asks.mjs';
-import { checkInviterProof, inviteKeys, joinerProof, openInvites, parseInvite, redeemCode } from '../lib/peer/invite.mjs';
+import { RETRY_MS, checkInviterProof, inviteKeys, joinerProof, openInvites, parseInvite, redeemCode } from '../lib/peer/invite.mjs';
 import { base32, canonical } from '../lib/peer/canonical.mjs';
 import * as peer from '../lib/peer/index.mjs';
 import { boardRows } from '../lib/board.mjs';
@@ -451,7 +451,8 @@ async function startInvite(daemon, key, topic) {
   const joiner = fakeSocket(), joinerNonce = crypto.randomBytes(32).toString('hex');
   daemon.attach(joiner.socket, key); joiner.say(hi);
   joiner.say({ jsonrpc: '2.0', id: 1, method: 'elu.invite.start', params: { topic, nonce: joinerNonce } });
-  const reply = await until(() => joiner.frames().find(frame => frame.id === 1), 'the start reply', 5000);
+  // A reply, not a request of the inviter's with the same id (it has its own once I am a member there).
+  const reply = await until(() => joiner.frames().find(frame => frame.id === 1 && !Object.hasOwn(frame, 'method')), 'the start reply', 5000);
   return { joiner, reply, fields: { topic, joinerNonce, inviterNonce: reply.result?.nonce, inviter: daemon.me.key, joiner: key } };
 }
 
@@ -480,7 +481,7 @@ test('a long code from 0.1.3 joins over the wire: the joiner is told no team bef
   });
 });
 
-test('a short code over the wire: the inviter announces its topic, proves itself first, names the team only after the joiner\'s proof, then leaves the topic', async t => {
+test('a short code over the wire: the inviter announces its topic, proves itself first, names the team only after the joiner\'s proof, and leaves the topic once its joiner can no longer come back', async t => {
   const anaHome = newHome(t), liHome = newHome(t), li = withHome(liHome, () => createIdentity({ name: 'li' }));
   const { teamId, ops } = await withHome(anaHome, async () => {
     const me = createIdentity({ name: 'ana' }), made = createTeam(me, 'core'); createTeam(me, 'side');
@@ -497,8 +498,10 @@ test('a short code over the wire: the inviter announces its topic, proves itself
     assert.equal(proved.result.teamId, made.id); assert.equal(proved.result.inviter, me.key);
     await until(() => daemon.sessions.get(li.key)?.admitted, 'the joiner admitted', 5000);
     await new Promise(resolve => setImmediate(resolve));
-    assert.deepEqual(topics, [`+${keys.topic}`, `-${keys.topic}`], 'the used invite\'s topic is left');
+    assert.deepEqual(topics, [`+${keys.topic}`], 'still announced, in case the reply was lost');
     assert.deepEqual(openInvites([made.id]), []);
+    daemon.inviteTopics(Date.now() + RETRY_MS + 1000);
+    assert.deepEqual(topics, [`+${keys.topic}`, `-${keys.topic}`], 'the used invite\'s topic is left');
     joiner.socket.destroy();
     assert.equal(joiner.wire.out.includes('"side"'), false);
     return { teamId: made.id, ops: proved.result.ops };
@@ -509,7 +512,7 @@ test('a short code over the wire: the inviter announces its topic, proves itself
   });
 });
 
-test('a short invite refuses whoever cannot prove the code: a wrong code, a relay, a replay, a proof before the start, elu.join, and too many failures', async t => {
+test('a short invite refuses whoever cannot prove the code: a wrong code, a relay, a replay, a proof before the start, elu.join, and too many failures from one key', async t => {
   peerHome(t);
   const me = createIdentity({ name: 'ana' }), made = createTeam(me, 'core');
   const code = createInvite(me, made.id, { hours: 1 }), keys = inviteKeys(code), wrong = inviteKeys('k7qm-x2pd-9fhw');
@@ -537,11 +540,19 @@ test('a short invite refuses whoever cannot prove the code: a wrong code, a rela
     joiner.say({ jsonrpc: '2.0', id: 9, ...frame });
     await until(() => joiner.socket.destroyed, `${frame.method} closed`, 5000);
   }
-  // An unknown topic counts as a failure; a key with three gets no more answers, even with the right code.
+  // An unknown or malformed topic is refused and closed, and does not count.
   const bob = someone();
-  for (let i = 0; i < 2; i++) { const { joiner, reply } = await startInvite(daemon, bob, wrong.topic); assert.match(reply.error.message, /not valid/); await until(() => joiner.socket.destroyed, 'closed', 5000); }
-  const third = await startInvite(daemon, bob, keys.topic); prove(third.joiner, third.fields, wrong.seed); await refused(third.joiner, 2, /proof did not match/);
+  for (const topic of [wrong.topic, wrong.topic, wrong.topic, wrong.topic, 'nope']) { const { joiner, reply } = await startInvite(daemon, bob, topic); assert.match(reply.error.message, /not valid/); await until(() => joiner.socket.destroyed, 'closed', 5000); }
+  assert.equal(daemon.proofFails.has(bob), false);
+  // Failed proofs on a known topic do: a key with three gets no more answers, even with the right code.
+  for (let i = 0; i < 3; i++) { const next = await startInvite(daemon, bob, keys.topic); prove(next.joiner, next.fields, wrong.seed); await refused(next.joiner, 2, /proof did not match/); }
   const blocked = await startInvite(daemon, bob, keys.topic); assert.match(blocked.reply.error.message, /Too many failed invite attempts/);
+  // Failures from many keys lock nobody else out: eleven throwaway keys fail three times each.
+  await Promise.all(Array.from({ length: 11 }, async () => {
+    const key = someone();
+    for (let i = 0; i < 3; i++) { const next = await startInvite(daemon, key, keys.topic); prove(next.joiner, next.fields, wrong.seed); await refused(next.joiner, 2, /proof did not match/); }
+  }));
+  assert.ok([...daemon.proofFails.values()].reduce((sum, times) => sum + times.length, 0) >= 33);
   // None of it used the invite, and nobody was admitted.
   assert.equal(openInvites([made.id]).length, 1); assert.deepEqual(team(made.id).members.map(m => m.name), ['ana']);
   assert.equal(daemon.sessions.size, 0);
@@ -550,6 +561,46 @@ test('a short invite refuses whoever cannot prove the code: a wrong code, a rela
   real.joiner.say({ jsonrpc: '2.0', id: 2, method: 'elu.invite.prove', params: { proof: joinerProof(keys.seed, real.fields), name: 'li' } });
   await until(() => daemon.sessions.get(li)?.admitted, 'li admitted', 5000);
   assert.deepEqual(team(made.id).members.map(m => m.name), ['ana', 'li']);
+});
+
+test('a joiner whose reply was lost comes back with the same code and gets the same admit; nobody else can, and not after the retry window', async t => {
+  const anaHome = newHome(t), li = withHome(newHome(t), () => createIdentity({ name: 'li' })), kim = withHome(newHome(t), () => createIdentity({ name: 'kim' }));
+  await withHome(anaHome, async () => {
+    const me = createIdentity({ name: 'ana' }), made = createTeam(me, 'core');
+    const code = createInvite(me, made.id, { hours: 1 }), keys = inviteKeys(code);
+    const { daemon, topics } = inviterDaemon(me);
+    daemon.inviteTopics();
+    const exchange = async key => {
+      const { joiner, reply, fields } = await startInvite(daemon, key, keys.topic);
+      if (reply.error) return { joiner, error: reply.error.message };
+      assert.ok(checkInviterProof(keys.prover, fields, reply.result.proof));
+      joiner.say({ jsonrpc: '2.0', id: 2, method: 'elu.invite.prove', params: { proof: joinerProof(keys.seed, fields), name: key === li.key ? 'li' : 'kim' } });
+      const proved = await until(() => joiner.frames().find(frame => frame.id === 2 && !Object.hasOwn(frame, 'method')), 'the prove reply', 5000);
+      return { joiner, result: proved.result, error: proved.error?.message };
+    };
+    // The first exchange admits li; the connection drops before li reads the reply.
+    const first = await exchange(li.key); first.joiner.socket.destroy();
+    const admits = () => readLog(made.id).ops.filter(op => op.type === 'admit');
+    assert.equal(admits().length, 1);
+    // li comes back on a new connection, now as a member here, and gets the same op and the roster.
+    const again = await exchange(li.key);
+    assert.equal(again.error, undefined); assert.equal(again.result.teamId, made.id);
+    assert.deepEqual(again.result.ops.filter(op => op.type === 'admit'), admits()); assert.equal(admits().length, 1);
+    again.joiner.socket.destroy();
+    // With no invite open, a stranger is closed at the hello.
+    const stranger = fakeSocket(); daemon.attach(stranger.socket, kim.key); stranger.say(hi);
+    await until(() => stranger.socket.destroyed, 'a stranger closed', 5000);
+    // With another invite open, someone else with the used code is told so, and that is not a failed proof.
+    const next = inviteKeys(createInvite(me, made.id, { hours: 1 }));
+    const other = await exchange(kim.key);
+    assert.match(other.error, /already used/); assert.equal(daemon.proofFails.has(kim.key), false);
+    assert.deepEqual(topics, [`+${keys.topic}`], 'still announced for the retry window');
+    // After the window the topic is left and li's start finds nothing.
+    const file = teamPath(made.id, 'invites.json'), rows = JSON.parse(fs.readFileSync(file, 'utf8'));
+    fs.writeFileSync(file, JSON.stringify(rows.map(row => row.usedBy ? { ...row, usedAt: new Date(Date.now() - RETRY_MS - 1000).toISOString() } : row)));
+    daemon.inviteTopics(); assert.deepEqual(topics, [`+${keys.topic}`, `+${next.topic}`, `-${keys.topic}`]);
+    const late = await exchange(li.key); assert.match(late.error, /not valid/); late.joiner.socket.destroy();
+  });
 });
 
 test('an expired short invite is no longer announced, and its topic is left', async t => {
@@ -1264,12 +1315,13 @@ test('team create, invite and join over the network with a short code', async t 
   const s = await daemon(t, sara, { conductor: false }), joining = run(sara, { type: 'join', code });
   await new Promise(resolve => setTimeout(resolve, 4000));
   const a = await daemon(t, ana, { conductor: false });
-  assert.deepEqual(await joining, { id: teamId, name: 'core' });
+  // The joiner is told who admitted it, to check with the person who sent the code.
+  assert.deepEqual(await joining, { id: teamId, name: 'core', inviter: { name: 'ana', fingerprint: a.key.slice(0, 8) } });
   assert.deepEqual(withHome(sara, () => head(teamId)), withHome(ana, () => head(teamId)));
   assert.deepEqual(withHome(ana, () => team(teamId)).members.map(m => m.name), ['ana', 'sara']);
   await until(() => online(ana, saraKey) && online(sara, a.key), 'teammates online after the join');
-  // The invite is used, so the inviter left its topic.
-  await until(() => withHome(ana, () => fs.readFileSync(peerFile('daemon.log'), 'utf8')).includes(`invite topic ${withHome(ana, () => inviteKeys(code)).topic.slice(0, 8)} left`), 'the topic left');
+  // Each state.json names the version of the daemon that wrote it.
+  assert.equal(state(ana).version, require('../package.json').version);
   const status = withHome(sara, () => peer.peerStatus());
   assert.equal(status.running, true); assert.equal(status.teams[0].members.find(m => m.key === a.key).path, 'direct');
   // A stopped daemon leaves its DHT routing table for the next start.
@@ -1285,10 +1337,82 @@ test('a long code from 0.1.3 still joins over the network', async t => {
   const { teamId, code } = withHome(ana, () => { const me = createIdentity({ name: 'ana' }), made = createTeam(me, 'core'); return { teamId: made.id, code: longInvite(me, made.id).code }; });
   withHome(sara, () => createIdentity({ name: 'sara' }));
   enable(ana, bootstrap); enable(sara, bootstrap);
-  await daemon(t, ana, { conductor: false }); await daemon(t, sara, { conductor: false });
-  assert.deepEqual(await run(sara, { type: 'join', code: `${code.slice(0, 200)}\n${code.slice(200)}` }), { id: teamId, name: 'core' });
+  const a = await daemon(t, ana, { conductor: false }); await daemon(t, sara, { conductor: false });
+  assert.deepEqual(await run(sara, { type: 'join', code: `${code.slice(0, 200)}\n${code.slice(200)}` }), { id: teamId, name: 'core', inviter: { name: 'ana', fingerprint: a.key.slice(0, 8) } });
   assert.deepEqual(withHome(ana, () => team(teamId)).members.map(m => m.name), ['ana', 'sara']);
   await assert.rejects(run(sara, { type: 'join', code }), /already on this team/);
+});
+
+test('a joiner whose reply was lost joins again over the network with the same code', async t => {
+  const bootstrap = await testnet(t), ana = newHome(t), sara = newHome(t);
+  const { teamId, code } = withHome(ana, () => { const me = createIdentity({ name: 'ana' }), made = createTeam(me, 'core'); return { teamId: made.id, code: createInvite(me, made.id, { hours: 1 }) }; });
+  const saraKey = withHome(sara, () => createIdentity({ name: 'sara' }).key);
+  enable(ana, bootstrap); enable(sara, bootstrap);
+  // Ana's daemon admits Sara, then drops the connection before its reply goes out.
+  const a = await daemon(t, ana, { conductor: false, dropProveReply: true }); await daemon(t, sara, { conductor: false });
+  await assert.rejects(run(sara, { type: 'join', code }), /disconnected/);
+  assert.deepEqual(withHome(ana, () => team(teamId)).members.map(m => m.name), ['ana', 'sara'], 'admitted at the inviter');
+  assert.equal(withHome(sara, () => team(teamId)), null, 'but not told so');
+  // The same code again: Ana is still on its topic, and Sara gets the admit it missed.
+  assert.deepEqual(await run(sara, { type: 'join', code }), { id: teamId, name: 'core', inviter: { name: 'ana', fingerprint: a.key.slice(0, 8) } });
+  assert.equal(withHome(ana, () => readLog(teamId)).ops.filter(op => op.type === 'admit').length, 1);
+  assert.deepEqual(withHome(sara, () => head(teamId)), withHome(ana, () => head(teamId)));
+  await until(() => online(ana, saraKey) && online(sara, a.key), 'teammates online after the join');
+});
+
+// A daemon as 0.1.3 runs it, for the version check: a heartbeat with no version, and a
+// shutdown honoured while peer mode is off, unless told to ignore it.
+const OLD_DAEMON = `const fs = require('fs'), path = require('path'), [dir, obey] = process.argv.slice(2);
+const beat = stopped => fs.writeFileSync(path.join(dir, 'state.json'), JSON.stringify({ running: !stopped, stopped, pid: process.pid, at: new Date().toISOString(), teams: [] }));
+beat(false);
+setInterval(() => {
+  beat(false);
+  const folder = path.join(dir, 'commands');
+  for (const name of fs.existsSync(folder) ? fs.readdirSync(folder) : []) {
+    if (name.endsWith('.result.json')) continue;
+    const file = path.join(folder, name); let command; try { command = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { continue; } fs.rmSync(file, { force: true });
+    const enabled = JSON.parse(fs.readFileSync(path.join(dir, 'settings.json'), 'utf8')).enabled;
+    if (command.type === 'shutdown' && obey === 'yes' && !enabled) { beat(true); process.exit(0); }
+  }
+}, 100);`;
+test('a daemon from another version is restarted before peer on and before an invite, and one that does not stop is refused with what to do', { timeout: 180000 }, async t => {
+  // Added first, so it runs before the home is removed and the testnet goes.
+  const exits = []; let home = null;
+  t.after(async () => { for (const kill of exits) await kill(); if (home) await withHome(home, async () => { if (peer.peerStatus().running) await stopCurrent().catch(() => {}); }); });
+  const bootstrap = await testnet(t), version = require('../package.json').version; home = peerHome(t);
+  const me = createIdentity({ name: 'ana' }), made = createTeam(me, 'core'); enable(home, bootstrap);
+  const script = path.join(path.dirname(home), 'old-daemon.cjs'); fs.writeFileSync(script, OLD_DAEMON);
+  const old = async obey => {
+    const child = spawn(process.execPath, [script, peerFile(), obey], { stdio: 'ignore' });
+    const exited = new Promise(resolve => child.once('exit', resolve)); exits.push(() => { child.kill('SIGKILL'); return exited; });
+    await until(() => peer.peerStatus().running, 'the old daemon running', 10000);
+    return { child, exited };
+  };
+  const current = () => { const status = peer.peerStatus(); return status.running && !status.stale && state(home)?.version === version; };
+  async function stopCurrent() {
+    const pid = state(home)?.pid; peer.stopPeer();
+    await until(() => !peer.peerStatus().running && !(() => { try { process.kill(pid, 0); return true; } catch { return false; } })(), 'the daemon stopped', 20000);
+  }
+  // Peer on with an old daemon running: it is shut down and this version's starts.
+  const first = await old('yes');
+  assert.equal(peer.peerStatus().stale, true);
+  assert.equal(await peer.startPeer(), true);
+  await first.exited; await until(current, 'this version\'s daemon running', 30000);
+  assert.equal(peer.peerSettings().enabled, true);
+  await stopCurrent();
+  // An invite with an old daemon running: restarted first, and the new one announces the code's topic.
+  savePeerSettings({ enabled: true });
+  const second = await old('yes');
+  const code = await peer.createInvite(made.id, { hours: 1 });
+  await second.exited; await until(current, 'this version\'s daemon after the invite', 30000);
+  await until(() => fs.readFileSync(peerFile('daemon.log'), 'utf8').includes(`invite topic ${inviteKeys(code).topic.slice(0, 8)} announced`), 'the topic announced', 30000);
+  await stopCurrent();
+  // One that ignores the shutdown: refused with what to do, and no invite is made.
+  savePeerSettings({ enabled: true });
+  const stubborn = await old('no'), before = fs.readFileSync(teamPath(made.id, 'invites.json'), 'utf8');
+  await assert.rejects(peer.createInvite(made.id, { hours: 1 }), /another version of ELU Code\. Run elu peer off, wait a moment, then elu peer on/);
+  assert.equal(fs.readFileSync(teamPath(made.id, 'invites.json'), 'utf8'), before);
+  assert.equal(stubborn.child.exitCode, null);
 });
 
 test('a teammate the other side has not heard of proves it in the hello, and each side then pushes the roster ops the other lacks', async t => {
