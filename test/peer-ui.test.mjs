@@ -20,10 +20,10 @@ function fakePeer({ enabled = true, items, running = true, refuse = () => null, 
   const calls = [];
   const record = (name, value) => (...args) => { calls.push([name, ...args]); return typeof value === 'function' ? value(...args) : value; };
   const facade = {
-    calls, enabled, channels: [],
+    calls, enabled, running, channels: [],
     sent: () => calls.filter(row => row[0] === 'sendPeerCommand').map(row => row[1]),
     peerSettings: () => ({ enabled: facade.enabled }),
-    peerStatus: record('peerStatus', () => ({ running, pid: 1, key: ME, name: 'ana', fingerprint: 'aaaaaaaa', error: null, counters: { direct: 1, relayed: 0, failed: 0 },
+    peerStatus: record('peerStatus', () => ({ running: facade.running, pid: 1, key: ME, name: 'ana', fingerprint: 'aaaaaaaa', error: null, counters: { direct: 1, relayed: 0, failed: 0 },
       teams: teamless && !facade.made ? [] : [{ id: 'team-1', name: 'Core', role: 'admin', members: [
         { key: ME, fingerprint: 'aaaaaaaa', name: 'ana', role: 'admin', online: true, path: null, lastSeen: ago(0) },
         { key: SARA, fingerprint: 'bbbbbbbb', name: 'sara', role: 'member', online: true, path: 'direct', lastSeen: ago(0), box: 'sara-box', bots: remoteBots },
@@ -762,6 +762,21 @@ test('the first /invite makes the team, named after the open project', async t =
   await until(() => modal(v, 'Team invite'), 'invite');
   assert.deepEqual(peer.calls.filter(row => row[0] === 'createTeam'), [['createTeam', path.basename(p.root)]]);
   assert.deepEqual(peer.calls.find(row => row[0] === 'createInvite').slice(1), ['team-1', { hours: 24 }]);
+  await closeDialog(v, 'Team invite');
+});
+
+test('a new person: /invite asks their name, turns peer mode on, then makes the team and the code', async t => {
+  const p = project(later(t)); environment(t, p.parent);
+  const peer = fakePeer({ teamless: true, running: false }); let me = null;
+  peer.identity = ({ create, name } = {}) => { if (create) { peer.calls.push(['identity', name]); me = { name }; return me; } if (!me) throw new Error('Create your peer identity first with elu id --name NAME.'); return me; };
+  peer.startPeer = () => { peer.calls.push(['startPeer']); peer.running = true; return true; };
+  const v = await view(t, { repo: repository(p.root), peer });
+  await send(v, '/invite'); await until(() => modal(v, 'Your name'), 'name prompt');
+  const field = modal(v, 'Your name').children.find(child => child.type === 'textbox');
+  await until(() => field.__listener, 'name input'); field.setValue('ana'); field.submit();
+  await choose(v, 'Bots your teammates can use', /^Done$/); await until(() => modal(v, 'Team invite'), 'invite');
+  const order = ['identity', 'startPeer', 'createTeam', 'createInvite'].map(name => peer.calls.findIndex(row => row[0] === name));
+  assert.ok(order.every((at, i) => at >= 0 && (i === 0 || at > order[i - 1])), JSON.stringify(order));
   await closeDialog(v, 'Team invite');
 });
 
