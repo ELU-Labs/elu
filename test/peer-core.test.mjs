@@ -782,9 +782,9 @@ test('expired invites are refused and not announced, and a refused admit leaves 
   assert.throws(() => admitProven({ teamId: id, ...old }, signer().key, 'sara'), /expired/);
   const bob = signer('bob'), first = createInvite(me, id, { hours: 2 });
   redeemCode(first, bob.key, 'bob');
-  appendOp(id, makeOp(me, id, 'remove', { key: bob.key }));
+  // Bob is still on the team, so an admit of him is refused.
   const second = createInvite(me, id);
-  assert.throws(() => redeemCode(second, bob.key, 'bob'), /cannot be admitted again/);
+  assert.throws(() => redeemCode(second, bob.key, 'bob'), /You are already on this team\./);
   assert.deepEqual(openInvites([id]).map(row => row.topic), [inviteKeys(second).topic], 'the refused admit left it open');
   assert.throws(() => redeemCode(second, signer().key, 'bad\nname'), /name is not valid/);
   for (const hours of [0, -1, 721, '24', NaN]) assert.throws(() => createInvite(me, id, { hours }), /hours/);
