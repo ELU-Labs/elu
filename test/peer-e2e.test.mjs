@@ -56,7 +56,8 @@ async function command(home, value, timeout = 120000) {
 }
 const items = home => withHome(home.dir, () => peer.peerItems());
 
-test('two homes team up, ask, answer, route a local A2A call through the CLI, share a channel and ask a shared bot', { timeout: 600000 }, async t => {
+// Two homes on a local testnet.
+async function twoHomes(t) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'elu-code-e2e-')));
   const homes = { a: { dir: path.join(root, 'a') }, b: { dir: path.join(root, 'b') } };
   let net = null;
@@ -75,6 +76,11 @@ test('two homes team up, ask, answer, route a local A2A call through the CLI, sh
   net = await createTestnet(3, { host: '127.0.0.1' });
   const bootstrap = net.bootstrap.map(node => `${node.host}:${node.port}`);
   for (const home of Object.values(homes)) withHome(home.dir, () => savePeerSettings({ bootstrap }));
+  return homes;
+}
+
+test('two homes team up, ask, answer, route a local A2A call through the CLI, share a channel and ask a shared bot', { timeout: 600000 }, async t => {
+  const homes = await twoHomes(t);
   withHome(homes.a.dir, () => savePeerSettings({ localA2A: true }));
   // B's project, registered in B's home, answered by the fake CLIs on B's PATH.
   const side = withHome(homes.b.dir, () => registeredProject(t));
@@ -88,10 +94,10 @@ test('two homes team up, ask, answer, route a local A2A call through the CLI, sh
   assert.match(invite.code, /^[2-9a-hjkmnp-z]{4}-[2-9a-hjkmnp-z]{4}-[2-9a-hjkmnp-z]{4}$/); assert.equal(invite.project, null, 'A invites from outside a project');
   assert.equal(invite.fingerprint, a.fingerprint);
   // B joins from its project. The code is pasted in pieces, upper case, after a second "elu join". B is told who admitted it, and
-  // joining shares nothing of B's.
-  const joined = await ok(homes.b, ['join', 'elu', 'join', ...invite.code.toUpperCase().split('-'), '--project', side.root]);
+  // joining shares nothing of B's. B takes each message by hand (Manual).
+  const joined = await ok(homes.b, ['join', 'elu', 'join', ...invite.code.toUpperCase().split('-'), '--project', side.root, '--manual']);
   assert.deepEqual(joined.team, { id: team.id, name: 'core', inviter: { name: 'a', fingerprint: a.fingerprint }, project: null });
-  assert.match(joined.message, /^Joined core with a\./);
+  assert.match(joined.message, /^Joined core with a\. Manual: each message waits for you to approve it\./);
   assert.equal(read(homes.b, 'peer', 'team-projects.json'), null, 'nothing shared by the join');
   // The daemon's heartbeat shows the new member within a tick.
   await until(async () => (await ok(homes.a, ['team'])).teams[0].members.map(m => m.name).join() === 'a,b', 'b on a\'s roster');
@@ -105,10 +111,10 @@ test('two homes team up, ask, answer, route a local A2A call through the CLI, sh
   const asked = await ok(homes.a, ['ask', '@b', 'Where is coupon normalization?']);
   assert.match(asked.askId, /^[a-f0-9-]{36}$/);
 
-  // B accepts through a facade command; the reply goes back into the thread with no second step.
+  // B approves through a facade command; the reply goes back into the thread with no second step.
   const incoming = await until(() => items(homes.b).find(row => row.kind === 'incoming'), 'incoming ask at b');
   assert.equal(incoming.name, 'a'); assert.equal(incoming.project, 'app');
-  await command(homes.b, { type: 'accept', id: incoming.id });
+  await command(homes.b, { type: 'approve', id: incoming.id });
   const replied = await until(() => items(homes.b).find(row => row.kind === 'replied'), `reply sent at b\n${log(homes.b)}`, 240000);
   assert.match(replied.text, /add multiple agents/);
 
@@ -154,4 +160,45 @@ test('two homes team up, ask, answer, route a local A2A call through the CLI, sh
   await command(homes.a, { type: 'ask', to: 'b', text: 'And yours?', bot: 'private' });
   const refused = await until(() => items(homes.a).find(row => row.kind === 'rejected' && row.question === 'And yours?'), 'the refusal at a');
   assert.equal(refused.text, 'That bot is not shared with teammates.'); assert.equal(refused.bot, 'private');
+});
+
+// Each home's project and fake vendor CLIs; prompts() reads what its claude was given.
+function sideOf(t, home) {
+  const side = withHome(home.dir, () => registeredProject(t)), fake = answeringClis(side.parent), inputs = path.join(side.parent, 'inputs.jsonl');
+  return { ...side, env: { PATH: fake.env.PATH }, prompts: () => fs.existsSync(inputs) ? fs.readFileSync(inputs, 'utf8').trim().split('\n').map(line => JSON.parse(line)).filter(row => row.vendor === 'claude').map(row => row.input) : [] };
+}
+test('a message reaches a teammate who shares nothing, both ways: Auto starts it at once as their own session, Manual waits for approval and gives the session its rules', { timeout: 600000 }, async t => {
+  const homes = await twoHomes(t), sideA = sideOf(t, homes.a), sideB = sideOf(t, homes.b);
+  const RULES = 'Only answer questions, do not edit files.';
+  await ok(homes.a, ['id', '--name', 'a']); const b = (await ok(homes.b, ['id', '--name', 'b'])).identity;
+  await ok(homes.a, ['team', 'create', 'core']);
+  await ok(homes.a, ['peer', 'on'], sideA.env);
+  // A invites from its project, Manual with rules; B joins from its own with the defaults: Auto, no rules.
+  const { invite, lines } = await ok(homes.a, ['invite', '--hours', '1', '--project', sideA.root, '--manual', '--rules', RULES]);
+  assert.ok(lines.includes('Manual: each message waits for you to approve it.') && lines.includes(`Rules: ${RULES}`), lines.join('\n'));
+  const joined = await ok(homes.b, ['join', invite.code, '--project', sideB.root]);
+  assert.deepEqual({ ...joined.access, at: undefined }, { handling: 'auto', rules: '', root: sideB.root, at: undefined });
+  assert.equal(read(homes.b, 'peer', 'shares.json'), null, 'B shares nothing');
+  await ok(homes.b, ['peer', 'on'], sideB.env);
+  await until(async () => (await ok(homes.a, ['peers'])).peer.teams[0].members.find(m => m.key === b.key)?.online, 'b online at a');
+
+  // A writes to @b: B shows it, and a session starts at once in B's project as if B typed it.
+  await ok(homes.a, ['ask', '@b', 'testing if you see this message?']);
+  const atB = await until(() => items(homes.b).find(row => row.text === 'testing if you see this message?' && ['answering', 'replied'].includes(row.kind)), `the message at b\n${log(homes.b)}`);
+  assert.equal(atB.name, 'a'); assert.equal(atB.root, sideB.root);
+  const answer = await until(async () => (await ok(homes.a, ['peers'])).items.find(row => row.kind === 'answer' && row.question === 'testing if you see this message?'), `b's answer at a\n${log(homes.b)}`, 240000);
+  assert.equal(answer.name, 'b');
+  const bPrompt = sideB.prompts().at(-1);
+  assert.match(bPrompt, /Respond to the owner immediately/); assert.doesNotMatch(bPrompt, /The owner's rules for teammates/, 'B wrote no rules');
+
+  // B writes to @a: A shows it waiting; approving starts the session with A's rules in its prompt.
+  await ok(homes.b, ['ask', '@a', 'Can you rename the coupon module?']);
+  const waiting = await until(() => items(homes.a).find(row => row.kind === 'incoming' && row.text === 'Can you rename the coupon module?'), `the message at a\n${log(homes.a)}`);
+  assert.equal(waiting.name, 'b'); assert.equal(waiting.root, sideA.root);
+  assert.equal(sideA.prompts().length, 0, 'nothing runs before A approves');
+  await command(homes.a, { type: 'approve', id: waiting.id });
+  const reply = await until(async () => (await ok(homes.b, ['peers'])).items.find(row => row.kind === 'answer' && row.question === 'Can you rename the coupon module?'), `a's answer at b\n${log(homes.a)}`, 240000);
+  assert.equal(reply.name, 'a');
+  const aPrompt = sideA.prompts().at(-1);
+  assert.match(aPrompt, /The owner's rules for teammates\n@b is a teammate/); assert.ok(aPrompt.includes(RULES));
 });
