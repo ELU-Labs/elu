@@ -765,7 +765,7 @@ test('share, invite and join use the open project', async t => {
   await send(v, '/invite'); await choose(v, bots, /^Done$/);
   await until(() => modal(v, 'Team invite'), 'invite');
   assert.deepEqual(peer.calls.filter(row => row[0] === 'share').at(-1).slice(1), [p.root, { teams: ['team-1'] }]);
-  assert.match(modal(v, 'Team invite').children.find(child => child.options?.scrollable).getText(), /Teammates can ask about sample, the folder \S[^]*sample app\.[^]*types \/join and this code in the project you can ask about/);
+  assert.match(modal(v, 'Team invite').children.find(child => child.options?.scrollable).getText(), /Teammates can ask about sample, the folder \S[^]*sample app\.[^]*Run npx -y @elu-labs\/elu[^]*type \/join and this code/);
   await closeDialog(v, 'Team invite');
   await send(v, '/join nope'); await until(() => /Use \/join code/.test(v.panels.status.getText()), 'join usage');
   await send(v, '/join elu-team:v1:TESTCODE'); await choose(v, bots, /^Done$/);
