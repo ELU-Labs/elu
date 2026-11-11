@@ -780,6 +780,22 @@ test('a new person: /invite asks their name, turns peer mode on, then makes the 
   await closeDialog(v, 'Team invite');
 });
 
+test('a drag over the invite code copies the whole code, however the dialog wraps it', async t => {
+  const p = project(later(t)); environment(t, p.parent);
+  const code = 'elu-team:v1:' + Array.from({ length: 398 }, (_, i) => 'abcdefghijklmnopqrstuvwxyz234567'[i % 32]).join('');
+  const peer = fakePeer(), copied = []; peer.createInvite = () => ({ code });
+  const v = await view(t, { repo: repository(p.root), peer, clipboard: text => copied.push(text) });
+  await send(v, '/invite'); await choose(v, 'Bots your teammates can use', /^Done$/);
+  await until(() => modal(v, 'Team invite'), 'invite');
+  const body = modal(v, 'Team invite').children.find(child => child.options?.scrollable);
+  await until(() => body.lpos, 'drawn');
+  const pos = body.lpos, x0 = pos.xi + body.ileft, y0 = pos.yi + body.itop, x1 = pos.xl - 1 - body.iright, last = y0 + Math.ceil(code.length / (x1 - x0)) + 1;
+  const sgr = (b, x, y, up = false) => `\x1b[<${b};${x + 1};${y + 1}${up ? 'm' : 'M'}`;
+  v.input.write(sgr(0, x0, y0)); v.input.write(sgr(32, x1, last)); v.input.write(sgr(0, x1, last, true));
+  await until(() => copied.length, 'copied');
+  assert.equal(copied[0].split('\n')[0].trim(), code);
+});
+
 test('share, invite and join use the open project', async t => {
   const p = project(later(t)); environment(t, p.parent);
   const peer = fakePeer(), v = await view(t, { repo: repository(p.root), peer });
