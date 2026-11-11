@@ -85,9 +85,9 @@ test('two homes team up, ask, answer, route a local A2A call through the CLI, sh
   const team = (await ok(homes.a, ['team', 'create', 'core'])).team;
   await ok(homes.a, ['peer', 'on']);
   const { invite } = await ok(homes.a, ['invite', '--hours', '1']);
-  assert.match(invite.code, /^elu-team:v1:/); assert.equal(invite.project, null, 'A invites from outside a project');
-  // B joins from its project, which becomes the team's project on B.
-  const joined = await ok(homes.b, ['join', invite.code, '--project', side.root]);
+  assert.match(invite.code, /^[2-9a-hjkmnp-z]{4}-[2-9a-hjkmnp-z]{4}-[2-9a-hjkmnp-z]{4}$/); assert.equal(invite.project, null, 'A invites from outside a project');
+  // B joins from its project, which becomes the team's project on B. The code is pasted in pieces, upper case, after a second "elu join".
+  const joined = await ok(homes.b, ['join', 'elu', 'join', ...invite.code.toUpperCase().split('-'), '--project', side.root]);
   assert.deepEqual(joined.team, { id: team.id, name: 'core', project: 'sample-app' });
   // The daemon's heartbeat shows the new member within a tick.
   await until(async () => (await ok(homes.a, ['team'])).teams[0].members.map(m => m.name).join() === 'a,b', 'b on a\'s roster');
