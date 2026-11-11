@@ -594,6 +594,8 @@ test('setChannel creates, changes and deletes a channel, and refuses a bad name,
 test('an invite admits once, stores only the hash, and retries return the same admit', (t) => {
   const { teamId, founder, member, code } = makeTeam(t);
   const parsed = parseInvite(code);
+  // A code copied across wrapped lines may carry line breaks or spaces; it is the same code.
+  assert.deepEqual(parseInvite(`${code.slice(0, 90)}\n${code.slice(90, 180)} ${code.slice(180)}`), parsed);
   assert.equal(parsed.teamId, teamId); assert.equal(parsed.inviter, founder.identity.key); assert.match(parsed.secret, /^[0-9a-f]{64}$/);
   assert.ok(parsed.expiresAt > Date.now() + 3500 * 1000 && parsed.expiresAt <= Date.now() + 3600 * 1000);
   withHome(founder.home, () => {

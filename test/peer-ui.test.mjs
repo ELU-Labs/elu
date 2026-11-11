@@ -510,10 +510,10 @@ test('/invite with a name says in one line why there is nobody to add, and plain
   await send(v, '/invite LI'); await until(() => /Added @li to #design\./.test(status()), 'a bare name');
   assert.deepEqual(sets(), [{ type: 'channelSet', team: 'team-1', id, name: 'design', members: [ME, SARA, LI] }]);
   // Plain /invite makes the one-use code, and so does a team's name: neither changes a channel.
-  await send(v, '/invite'); await choose(v, title, /^Done$/); await until(() => modal(v, 'Team invite'), 'the invite');
+  await send(v, '/invite'); await choose(v, 'Invite', /^Someone new/); await until(() => modal(v, 'Team invite'), 'the invite');
   assert.match(modal(v, 'Team invite').children.find(child => child.options?.scrollable).getText(), /^elu-team:v1:TESTCODE\n\nOne use, expires in 24 h\./);
   await closeDialog(v, 'Team invite'); assert.deepEqual(invites(), [['createInvite', 'team-1', { hours: 24 }]]);
-  await send(v, '/invite Core'); await choose(v, title, /^Done$/); await until(() => modal(v, 'Team invite'), 'the invite for a named team');
+  await send(v, '/invite Core'); await until(() => modal(v, 'Team invite'), 'the invite for a named team');
   await closeDialog(v, 'Team invite'); assert.equal(invites().length, 2); assert.equal(sets().length, 1);
   // Outside Chats there is no open channel.
   await send(v, '/sessions'); await until(() => v.current.view === 'tasks', 'Sessions');
@@ -569,36 +569,40 @@ test('my own bot is in Direct messages, and writing to it starts a session with 
   assert.deepEqual(peer.sent(), [], 'nothing went to a teammate');
 });
 
-test('/invite and /join ask which bots teammates may use', async t => {
+test('/invite offers a code for someone new or which bots teammates may use, and the code comes without a bots question', async t => {
   const { v } = await teamView(t), title = 'Bots your teammates can use', status = () => v.panels.status.getText(), shared = () => listBots().map(bot => [bot.name, bot.shared]);
   const invite = () => modal(v, 'Team invite').children.find(child => child.options?.scrollable).getText();
-  // A new home has the bots the app comes with, none of them shared: the question lists them, and Done with none ticked shares none.
-  // @pair is not offered: it runs on Codex, and a teammate's question cannot run there.
+  // Plain /invite says what it can do first.
   await send(v, '/invite');
-  await until(() => rowsOf(v, title).includes('Done'), 'the bots the app comes with');
-  assert.deepEqual(rowsOf(v, title), ['[ ] @reviewer', '[ ] @lead', '[ ] @qa', '[ ] @elu', 'Done']);
-  await choose(v, title, /^Done$/); await until(() => modal(v, 'Team invite'), 'the invite');
+  await until(() => rowsOf(v, 'Invite').length === 2, 'the invite menu');
+  assert.deepEqual(rowsOf(v, 'Invite'), ['Someone new: get an invite code to send them', 'Choose which of your bots teammates can use']);
+  // Someone new goes straight to the code. A new home has the bots the app comes with, none shared.
+  await choose(v, 'Invite', /^Someone new/); await until(() => modal(v, 'Team invite'), 'the invite');
+  assert.equal(modal(v, title), undefined, 'no bots question on the way to the code');
   assert.match(invite(), /No bot is shared, so a teammate’s message comes to you\./); assert.ok(shared().every(([, on]) => !on), 'none shared');
   await closeDialog(v, 'Team invite');
-  // With no bots the question is not asked: a teammate's message comes to me, as before.
+  // The bots choice lists the bots a teammate can use. @pair is not offered: it runs on Codex, and a teammate's question cannot run there.
+  await send(v, '/invite'); await choose(v, 'Invite', /^Choose which of your bots/);
+  await until(() => rowsOf(v, title).includes('Done'), 'the bots the app comes with');
+  assert.deepEqual(rowsOf(v, title), ['[ ] @reviewer', '[ ] @lead', '[ ] @qa', '[ ] @elu', 'Done']);
+  await choose(v, title, /^Done$/); await until(() => /No bot is shared, so a teammate’s message comes to you\./.test(status()), 'none shared');
+  assert.equal(modal(v, 'Team invite'), undefined, 'choosing bots makes no code');
+  // With no bots to share the menu offers only the code, and the code says nothing about bots.
   for (const bot of listBots()) removeBot(bot.name);
-  await send(v, '/invite'); await until(() => modal(v, 'Team invite'), 'the invite, with no question'); assert.equal(modal(v, title), undefined);
+  await send(v, '/invite'); await until(() => rowsOf(v, 'Invite').length === 1, 'one choice');
+  await choose(v, 'Invite', /^Someone new/); await until(() => modal(v, 'Team invite'), 'the invite');
   assert.ok(!/bot/i.test(invite()), 'the invite says nothing about bots'); await closeDialog(v, 'Team invite');
   saveBot({ name: 'notes', vendor: 'claude', instructions: 'Keep notes.' }); saveBot({ name: 'docs', vendor: 'claude', instructions: 'Write docs.', shared: true });
-  await send(v, '/invite');
+  await send(v, '/invite'); await choose(v, 'Invite', /^Choose which of your bots/);
   await until(() => rowsOf(v, title).length === 3, 'the bots list');
   assert.deepEqual(rowsOf(v, title), ['[x] @docs', '[ ] @notes', 'Done']);
   await choose(v, title, /\[ \] @notes/); await until(() => rowsOf(v, title).includes('[x] @notes'), 'ticked'); await choose(v, title, /^Done$/);
-  await until(() => modal(v, 'Team invite'), 'the invite');
-  assert.match(invite(), /Teammates can write to @docs, @notes\./);
+  await until(() => /Teammates can write to @docs, @notes\./.test(status()), 'both shared');
   assert.deepEqual(shared(), [['docs', true], ['notes', true]]);
-  await closeDialog(v, 'Team invite');
-  // Joining asks the same. With none ticked, every message comes to me.
+  // Joining asks nothing about bots: it says which are shared.
   await send(v, '/join elu-team:v1:TESTCODE');
-  await choose(v, title, /\[x\] @docs/); await until(() => rowsOf(v, title).includes('[ ] @docs'), 'unticked');
-  await choose(v, title, /\[x\] @notes/); await until(() => rowsOf(v, title).includes('[ ] @notes'), 'unticked'); await choose(v, title, /^Done$/);
-  await until(() => /Joined Docs\..*No bot is shared, so a teammate’s message comes to you\./.test(status()), 'joined');
-  assert.deepEqual(shared(), [['docs', false], ['notes', false]]);
+  await until(() => /Joined Docs\..*Teammates can write to @docs, @notes\./.test(status()), 'joined');
+  assert.equal(modal(v, title), undefined);
 });
 
 test('a thread shows under its channel, #general or its teammate, and a row counts what waits for me', () => {
@@ -710,7 +714,7 @@ test('a typed @name and the peer commands call the facade and report in the stat
   assert.ok(!peer.sent().some(row => ['handoff', 'review'].includes(row.type)), 'nothing sends a handoff or a review');
   await send(v, '/share'); await until(() => /Open a project to share it/.test(status()), 'share needs a project');
   // A home has the bots the app comes with, so /invite first asks which of them teammates may use.
-  await send(v, '/invite'); await choose(v, 'Bots your teammates can use', /^Done$/);
+  await send(v, '/invite'); await choose(v, 'Invite', /^Someone new/);
   await until(() => modal(v, 'Team invite'), 'invite code');
   assert.deepEqual(peer.calls.find(row => row[0] === 'createInvite').slice(1), ['team-1', { hours: 24 }]);
   assert.match(modal(v, 'Team invite').children.find(child => child.options?.scrollable).getText(), /elu-team:v1:TESTCODE[^]*Type \/share in a project so teammates can ask about it\./);
@@ -758,7 +762,7 @@ test('the first /invite makes the team, named after the open project', async t =
   const peer = fakePeer({ teamless: true }), v = await view(t, { repo: repository(p.root), peer });
   await send(v, '/invite @kim'); await until(() => /No team yet\. \/invite alone starts one/.test(v.panels.status.getText()), 'a name with no team');
   assert.deepEqual(peer.calls.filter(row => row[0] === 'createTeam'), []);
-  await send(v, '/invite'); await choose(v, 'Bots your teammates can use', /^Done$/);
+  await send(v, '/invite'); await choose(v, 'Invite', /^Someone new/);
   await until(() => modal(v, 'Team invite'), 'invite');
   assert.deepEqual(peer.calls.filter(row => row[0] === 'createTeam'), [['createTeam', path.basename(p.root)]]);
   assert.deepEqual(peer.calls.find(row => row[0] === 'createInvite').slice(1), ['team-1', { hours: 24 }]);
@@ -771,10 +775,10 @@ test('a new person: /invite asks their name, turns peer mode on, then makes the 
   peer.identity = ({ create, name } = {}) => { if (create) { peer.calls.push(['identity', name]); me = { name }; return me; } if (!me) throw new Error('Create your peer identity first with elu id --name NAME.'); return me; };
   peer.startPeer = () => { peer.calls.push(['startPeer']); peer.enabled = true; peer.running = true; return true; };
   const v = await view(t, { repo: repository(p.root), peer });
-  await send(v, '/invite'); await until(() => modal(v, 'Your name'), 'name prompt');
+  await send(v, '/invite'); await choose(v, 'Invite', /^Someone new/); await until(() => modal(v, 'Your name'), 'name prompt');
   const field = modal(v, 'Your name').children.find(child => child.type === 'textbox');
   await until(() => field.__listener, 'name input'); field.setValue('ana'); field.submit();
-  await choose(v, 'Bots your teammates can use', /^Done$/); await until(() => modal(v, 'Team invite'), 'invite');
+  await until(() => modal(v, 'Team invite'), 'invite');
   const order = ['identity', 'startPeer', 'createTeam', 'createInvite'].map(name => peer.calls.findIndex(row => row[0] === name));
   assert.ok(order.every((at, i) => at >= 0 && (i === 0 || at > order[i - 1])), JSON.stringify(order));
   await closeDialog(v, 'Team invite');
@@ -785,7 +789,7 @@ test('a drag over the invite code copies the whole code, however the dialog wrap
   const code = 'elu-team:v1:' + Array.from({ length: 398 }, (_, i) => 'abcdefghijklmnopqrstuvwxyz234567'[i % 32]).join('');
   const peer = fakePeer(), copied = []; peer.createInvite = () => ({ code });
   const v = await view(t, { repo: repository(p.root), peer, clipboard: text => copied.push(text) });
-  await send(v, '/invite'); await choose(v, 'Bots your teammates can use', /^Done$/);
+  await send(v, '/invite'); await choose(v, 'Invite', /^Someone new/);
   await until(() => modal(v, 'Team invite'), 'invite');
   const body = modal(v, 'Team invite').children.find(child => child.options?.scrollable);
   await until(() => body.lpos, 'drawn');
@@ -806,13 +810,13 @@ test('share, invite and join use the open project', async t => {
   await send(v, '/share ../x'); await until(() => /Use \/share \[handle\]/.test(v.panels.status.getText()), 'bad handle');
   // Adding a teammate picks this project for the team: the inviter's and the joiner's. Both are first asked which bots teammates may use.
   const bots = 'Bots your teammates can use';
-  await send(v, '/invite'); await choose(v, bots, /^Done$/);
+  await send(v, '/invite'); await choose(v, 'Invite', /^Someone new/);
   await until(() => modal(v, 'Team invite'), 'invite');
   assert.deepEqual(peer.calls.filter(row => row[0] === 'share').at(-1).slice(1), [p.root, { teams: ['team-1'] }]);
   assert.match(modal(v, 'Team invite').children.find(child => child.options?.scrollable).getText(), /Teammates can ask about sample, the folder \S[^]*sample app\.[^]*Run npx -y @elu-labs\/elu[^]*type \/join and this code/);
   await closeDialog(v, 'Team invite');
   await send(v, '/join nope'); await until(() => /Use \/join code/.test(v.panels.status.getText()), 'join usage');
-  await send(v, '/join elu-team:v1:TESTCODE'); await choose(v, bots, /^Done$/);
+  await send(v, '/join elu-team:v1:TESTCODE');
   await until(() => /Joined Docs\. Teammates can ask about sample, the folder \S[^]*sample app\. No bot is shared, so a teammate’s message comes to you\./.test(v.panels.status.getText()), 'joined');
   assert.deepEqual(peer.calls.find(row => row[0] === 'joinTeam').slice(1), ['elu-team:v1:TESTCODE']);
   assert.deepEqual(peer.calls.filter(row => row[0] === 'share').at(-1).slice(1), [p.root, { teams: ['team-2'] }]);
