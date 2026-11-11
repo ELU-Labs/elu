@@ -11,10 +11,10 @@ import { projectFolder } from '../lib/workspace.mjs';
 import { peerFile } from '../lib/peer/paths.mjs';
 import { canonical, sign, verify, publicKeyHex, base32, unbase32 } from '../lib/peer/canonical.mjs';
 import { createIdentity, loadIdentity, identity, renameIdentity, exportIdentity, importIdentity } from '../lib/peer/identity.mjs';
-import { makeOp, validateOp, opProblem, fold, createTeam, readLog, team, teams, appendOp, head, merge, opsMissing, teamPath, setChannel } from '../lib/peer/roster.mjs';
+import { makeOp, validateOp, opProblem, fold, createTeam, readLog, team, teams, appendOp, head, merge, opsMissing, teamPath, setChannel, leaveOp, removeOp, latestAdmit } from '../lib/peer/roster.mjs';
 import { RETRY_MS, SCRYPT, admitProven, checkInviterProof, checkJoinerProof, createInvite, inviteKeys, inviteKeysAsync, inviterProof, joinerProof, openInvites, parseInvite, redeemCode, redeemInvite } from '../lib/peer/invite.mjs';
 import { ALPHABET, newCode, readCode } from '../lib/peer/invite-code.mjs';
-import { shares, share, unshare, repoId, shareFor, normalizeRemote, teamProjects, setTeamProject, teamShare } from '../lib/peer/shares.mjs';
+import { shares, share, unshare, repoId, shareFor, normalizeRemote, teamProjects, setTeamProject, teamShare, forgetTeam } from '../lib/peer/shares.mjs';
 import { scanSecrets, redactPaths, prepareOutgoing } from '../lib/peer/secrets.mjs';
 import { DEFAULT_PEER_POLICY, DEFAULT_PEER_SETTINGS, defaultBox, peerBox, peerPolicy, peerSettings, savePeerPolicy, savePeerSettings } from '../lib/peer/settings.mjs';
 
@@ -223,22 +223,107 @@ test('authority: only admins change the roster and members may only leave', () =
   const left = fold([create, bobIn, opAt(bob, id, 'leave', {}, 1500)]);
   assert.equal(left.members[1].removed, true); assert.equal(left.members[1].left, true);
 });
-test('removal wins and a removed key is never admitted again', () => {
+test('removal wins until an admin admits the key again, and nothing it signs while out applies', () => {
   const ana = signer('ana'), bob = signer('bob'), cat = signer('cat'), dan = signer('dan');
   const create = opAt(ana, '', 'create', { name: 'core', founderName: 'ana' }, 1000), id = create.id;
   const base = [create, admit(ana, id, bob, 1100, 'admin'), admit(ana, id, cat, 1150)];
   const removeBob = opAt(ana, id, 'remove', { key: bob.key }, 2000);
-  const lateAdmit = admit(bob, id, dan, 2100), lateRemove = opAt(bob, id, 'remove', { key: cat.key }, 2200);
-  const readmit = admit(ana, id, bob, 3000), afterLeave = admit(ana, id, cat, 3100);
-  const state = fold([...base, removeBob, lateAdmit, lateRemove, readmit, opAt(cat, id, 'leave', {}, 2500), afterLeave]);
-  assert.match(state.rejected.find(r => r.id === lateAdmit.id).reason, /was removed/);
-  assert.match(state.rejected.find(r => r.id === lateRemove.id).reason, /was removed/);
-  assert.match(state.rejected.find(r => r.id === readmit.id).reason, /cannot be admitted again/);
-  assert.match(state.rejected.find(r => r.id === afterLeave.id).reason, /cannot be admitted again/);
-  assert.deepEqual(state.members.map(m => [m.name, m.removed]), [['ana', false], ['bob', true], ['cat', true]]);
-  // An admin's op made before the removal still applies.
+  // Out from 2000 to 3000: what bob signs dated in between does not apply, admin or not.
+  const lateAdmit = admit(bob, id, dan, 2100), lateRemove = opAt(bob, id, 'remove', { key: cat.key }, 2200), lateChannel = channelOp(bob, id, hex16(1), 'out', [bob], 2900);
+  const catLeaves = opAt(cat, id, 'leave', {}, 2500), catOut = channelOp(cat, id, hex16(2), 'gone', [cat], 2600);
+  // A new admit brings each back: bob as a plain member now, cat as an admin.
+  const readmit = admit(ana, id, bob, 3000), afterLeave = admit(ana, id, cat, 3100, 'admin');
+  // Back, bob holds the role the new admit gave: a channel of his own applies, an admit does not.
+  const bobChannel = channelOp(bob, id, hex16(3), 'back', [bob], 3200), bobAdmits = admit(bob, id, dan, 3300), catAdmits = admit(cat, id, dan, 3400);
+  const ops = [...base, removeBob, lateAdmit, lateRemove, lateChannel, catLeaves, catOut, readmit, afterLeave, bobChannel, bobAdmits, catAdmits];
+  const state = fold(ops);
+  for (const op of [lateAdmit, lateRemove, lateChannel, catOut]) assert.match(refusal(state, op), /was removed/);
+  assert.match(refusal(state, bobAdmits), /not an admin/);
+  for (const op of [removeBob, catLeaves, readmit, afterLeave, bobChannel, catAdmits]) assert.equal(refusal(state, op), null);
+  assert.deepEqual(state.members.map(m => [m.name, m.role, m.removed, m.left, m.joinedAt]), [['ana', 'admin', false, false, 1000], ['bob', 'member', false, false, 3000], ['cat', 'admin', false, false, 3100], ['dan', 'member', false, false, 3400]]);
+  assert.deepEqual(state.channels.map(row => row.name), ['back']);
+  // The same in any order.
+  for (let i = 0; i < 10; i++) assert.deepEqual(view(fold(shuffle(ops))), view(state));
+  // An admin's op made before the removal still applies, and so does it after a return.
   const early = admit(bob, id, dan, 1900);
   assert.ok(fold([...base, removeBob, early]).members.some(m => m.key === dan.key && !m.removed));
+  assert.ok(fold([...base, removeBob, early, readmit]).members.some(m => m.key === dan.key && !m.removed));
+  // Out again after coming back, and back again: the latest admit is the one that counts.
+  const twice = [...ops, opAt(ana, id, 'remove', { key: bob.key }, 4000), admit(ana, id, bob, 5000, 'admin')];
+  assert.deepEqual(fold(twice).members.find(m => m.key === bob.key), { key: bob.key, name: 'bob', role: 'admin', removed: false, left: false, joinedAt: 5000 });
+  assert.equal(latestAdmit(twice, bob.key).at, 5000);
+  // Still on the team: an admit of them is refused, and the founder can neither leave nor be removed.
+  const again = fold([...base, admit(ana, id, bob, 1200), opAt(ana, id, 'remove', { key: ana.key }, 1300), opAt(ana, id, 'leave', {}, 1400)]);
+  assert.deepEqual(again.rejected.map(row => row.reason), ['The key is already a member.', 'The founder cannot be removed.', 'The founder cannot leave the team.']);
+});
+test('merge: a returning member cannot backdate an op to before it went out, nor date one into the window', (t) => {
+  const { teamId, founder, member } = makeTeam(t);
+  // Times just ahead of the team's own ops, inside the 10 minutes merge allows.
+  const T = Date.now() + 1000, sara = member.identity, ana = founder.identity;
+  const at = (op) => withHome(founder.home, () => appendOp(teamId, op)).op;
+  at(opAt(ana, teamId, 'role', { key: sara.key, role: 'admin' }, T));
+  const removal = at(opAt(ana, teamId, 'remove', { key: sara.key }, T + 1000));
+  // Out: nothing of hers is taken, whatever its date.
+  const puppet = signer('puppet');
+  for (const when of [T + 500, T + 1500, T + 9000]) assert.match(withHome(founder.home, () => merge(teamId, [admit(sara, teamId, puppet, when, 'admin')])).rejected[0].reason, /was removed/);
+  at(opAt(ana, teamId, 'admit', { key: sara.key, name: 'sara', role: 'member', invite: invite() }, T + 5000));
+  // Back as a member: an admin op dated to when she was an admin, one in the window, and one now as a member are all refused.
+  const backdated = admit(sara, teamId, puppet, removal.at - 1, 'admin'), sameTime = admit(sara, teamId, puppet, removal.at, 'admin'), inside = admit(sara, teamId, puppet, T + 3000, 'admin');
+  const now = admit(sara, teamId, puppet, T + 6000, 'admin');
+  const result = withHome(founder.home, () => merge(teamId, [backdated, sameTime, inside, now]));
+  assert.deepEqual(result.added, []);
+  assert.deepEqual(result.rejected.map(row => row.reason), ['The signer was removed from the team.', 'The signer was removed from the team.', 'The signer was removed from the team.', 'The signer is not an admin.']);
+  assert.ok(!withHome(founder.home, () => team(teamId)).members.some(m => m.key === puppet.key));
+  // What she may do as a member, she does.
+  const own = channelOp(sara, teamId, hex16(9), 'mine', [sara], T + 7000);
+  assert.equal(withHome(founder.home, () => merge(teamId, [own])).added.length, 1);
+  // Her machine takes the whole log back: her own old ops are skipped, not refused, and she is on the team.
+  const pulled = withHome(member.home, () => merge(teamId, withHome(founder.home, () => readLog(teamId).ops)));
+  assert.deepEqual(pulled.rejected, []);
+  assert.equal(withHome(member.home, () => team(teamId)).members.find(m => m.key === sara.key).removed, false);
+});
+test('leaving and removing: the founder can do neither to themselves, and only admins remove', (t) => {
+  const { teamId, founder, member } = makeTeam(t);
+  const sync = (from, to) => withHome(to.home, () => merge(teamId, withHome(from.home, () => readLog(teamId).ops)));
+  withHome(founder.home, () => {
+    assert.throws(() => leaveOp(founder.identity, teamId), /^.*You made core, so you cannot leave it\.$/);
+    assert.throws(() => removeOp(founder.identity, teamId, founder.identity.key), /To leave the team yourself/);
+    assert.throws(() => removeOp(founder.identity, teamId, signer().key), /That person is not on core\./);
+  });
+  withHome(member.home, () => assert.throws(() => removeOp(member.identity, teamId, founder.identity.key), /Only an admin of core can remove a teammate\./));
+  withHome(founder.home, () => appendOp(teamId, makeOp(founder.identity, teamId, 'role', { key: member.identity.key, role: 'admin' })));
+  sync(founder, member);
+  withHome(member.home, () => assert.throws(() => removeOp(member.identity, teamId, founder.identity.key), /ana made core, so they cannot be removed\./));
+  // The member leaves; their machine shows them off it, and so does the founder's once it has the op.
+  withHome(member.home, () => { leaveOp(member.identity, teamId); assert.throws(() => leaveOp(member.identity, teamId), /You are not on that team\./); });
+  sync(member, founder);
+  assert.deepEqual(withHome(founder.home, () => team(teamId)).members.map(m => [m.name, m.removed, m.left]), [['ana', false, false], ['sara', true, true]]);
+  // A new invite brings the same key back; an invite to someone still on the team is refused and stays unused.
+  const back = withHome(founder.home, () => { const code = createInvite(founder.identity, teamId, { hours: 1 }); redeemCode(code, member.identity.key, 'sara'); return code; });
+  assert.ok(back);
+  withHome(founder.home, () => {
+    const code = createInvite(founder.identity, teamId, { hours: 1 });
+    assert.throws(() => redeemCode(code, member.identity.key, 'sara'), /You are already on this team\./);
+    assert.equal(openInvites([teamId]).length, 1, 'the refused invite is still open');
+  });
+  sync(founder, member);
+  assert.equal(withHome(member.home, () => team(teamId)).members.find(m => m.key === member.identity.key).removed, false);
+  // The founder removes them, and a new invite brings them back again.
+  withHome(founder.home, () => { removeOp(founder.identity, teamId, member.identity.key); redeemCode(createInvite(founder.identity, teamId, { hours: 1 }), member.identity.key, 'sara2'); });
+  sync(founder, member);
+  assert.deepEqual(withHome(member.home, () => team(teamId)).members.map(m => [m.name, m.role, m.removed]), [['ana', 'admin', false], ['sara2', 'member', false]]);
+});
+test('forgetting a team drops it from every share and from team-projects', (t) => {
+  withHome(newHome(t), () => {
+    const first = 'a'.repeat(64), second = 'b'.repeat(64), { root } = registeredProject(t);
+    share(root, { handle: 'app', teams: [first, second] }); setTeamProject(first, 'app'); setTeamProject(second, 'app');
+    forgetTeam(first);
+    assert.deepEqual(shares().map(row => [row.handle, row.teams]), [['app', [second]]]);
+    assert.deepEqual(teamProjects(), { [second]: 'app' });
+    forgetTeam(first); forgetTeam(second);
+    assert.deepEqual(shares().map(row => row.teams), [[]]); assert.deepEqual(teamProjects(), {});
+    assert.throws(() => forgetTeam('x'), /Choose a team/);
+  });
 });
 test('two admins acting at once converge to the same log, head and state', (t) => {
   const { teamId, founder, member } = makeTeam(t);

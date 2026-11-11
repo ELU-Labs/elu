@@ -541,6 +541,40 @@ test('/invite offers someone on two teams once, and with no teammates it points 
   assert.ok(!peer.sent().some(row => row.type === 'channelSet'));
 });
 
+test('/leave leaves the team after one confirm, the founder is told why not, and only an admin’s /remove takes a teammate off', { timeout: 20000 }, async t => {
+  const peer = fakePeer({ items: [] }), base = peer.peerStatus; let founder = SARA, role = 'admin', two = false;
+  peer.peerStatus = () => { const value = base(); Object.assign(value.teams[0], { founder, role }); if (two) value.teams.push({ ...value.teams[0], id: 'team-2', name: 'Docs' }); return value; };
+  const { v } = await teamView(t, { peer }), status = () => v.panels.status.getText(), changes = () => peer.sent().filter(row => ['teamLeave', 'teamRemove'].includes(row.type));
+  const body = title => modal(v, title).children.find(child => child.options?.scrollable).getText();
+  // One confirm; anything but y sends nothing.
+  await send(v, '/leave'); await until(() => modal(v, 'Leave Core'), 'the confirm');
+  assert.equal(body('Leave Core'), 'Leave Core? You stop getting its messages.\n\n[y/N]');
+  await closeDialog(v, 'Leave Core', 'n'); assert.deepEqual(changes(), []);
+  await send(v, '/leave'); await closeDialog(v, 'Leave Core', 'y');
+  await until(() => /You left Core\./.test(status()), 'left');
+  assert.deepEqual(changes(), [{ type: 'teamLeave', team: 'team-1' }]);
+  // On two teams, it is named.
+  two = true;
+  await send(v, '/leave'); await until(() => /You are on 2 teams\. Use \/leave NAME: Core, Docs\./.test(status()), 'which team');
+  await send(v, '/leave docs'); await closeDialog(v, 'Leave Docs', 'y'); await until(() => /You left Docs\./.test(status()), 'left Docs');
+  assert.deepEqual(changes().at(-1), { type: 'teamLeave', team: 'team-2' });
+  two = false;
+  // The person who made the team cannot leave it.
+  founder = ME;
+  await send(v, '/leave'); await until(() => /You made Core, so you cannot leave it\. \/remove @name removes a teammate\./.test(status()), 'the founder');
+  assert.ok(!modal(v, 'Leave Core'));
+  // /remove: one confirm, then the change; a name nobody has is refused.
+  await send(v, '/remove @sara'); await until(() => modal(v, 'Remove @sara'), 'remove confirm');
+  assert.equal(body('Remove @sara'), 'Remove @sara from Core?\n\n[y/N]');
+  await closeDialog(v, 'Remove @sara', 'y'); await until(() => /Removed @sara from Core\./.test(status()), 'removed');
+  assert.deepEqual(changes().at(-1), { type: 'teamRemove', team: 'team-1', key: SARA });
+  await send(v, '/remove @bob'); await until(() => /No teammate @bob on Core\./.test(status()), 'unknown');
+  // Nobody removes the founder, and someone who is not an admin removes nobody.
+  founder = LI; await send(v, '/remove @li'); await until(() => /@li made Core, so they cannot be removed\./.test(status()), 'the founder stays');
+  role = 'member'; await send(v, '/remove @sara'); await until(() => /Only an admin of Core can remove a teammate\./.test(status()), 'not an admin');
+  assert.equal(changes().length, 3);
+});
+
 test('a teammate’s shared bot is in Direct messages with its machine name, and writing to it asks that bot', async t => {
   const { v, peer } = await teamView(t, { peer: fakePeer({ remoteBots: [{ name: 'reviewer', about: 'Reviews code' }] }) });
   const status = () => v.panels.status.getText();

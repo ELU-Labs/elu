@@ -216,6 +216,9 @@ A message you type can carry pictures. Drag a screenshot into the message box, o
 its path, and it goes with the message: up to 4 pictures, 8 MB each. Your teammate's model
 sees them when it answers.
 
+`/leave` (or `elu team leave`) takes you off a team. An admin's `/remove @kim` (or
+`elu team remove kim`) takes kim off it. Either way, a new invite brings them back.
+
 In a channel, `/invite @kim` adds a teammate you already have. `/invite` alone makes a
 code for someone new; the first time, it also makes your team, named after the open project.
 

@@ -155,3 +155,50 @@ test('two homes team up, ask, answer, route a local A2A call through the CLI, sh
   const refused = await until(() => items(homes.a).find(row => row.kind === 'rejected' && row.question === 'And yours?'), 'the refusal at a');
   assert.equal(refused.text, 'That bot is not shared with teammates.'); assert.equal(refused.bot, 'private');
 });
+
+test('a teammate leaves and joins again with the same identity, then is removed and joins again', { timeout: 600000 }, async t => {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'elu-code-e2e-')));
+  const homes = { a: { dir: path.join(root, 'a') }, b: { dir: path.join(root, 'b') } };
+  let net = null;
+  t.after(async () => {
+    for (const home of Object.values(homes)) await cli(home, ['peer', 'off']).catch(() => {});
+    const pids = Object.values(homes).flatMap(home => [read(home, 'peer', 'state.json')?.pid, read(home, 'peer', 'peer.lock')?.pid]).filter(Number.isInteger);
+    await until(() => pids.every(pid => !alive(pid)), 'daemons to exit', 15000).catch(() => { for (const pid of pids) { try { process.kill(pid, 'SIGKILL'); } catch { /* Gone. */ } } });
+    if (net) await Promise.race([net.destroy(), pause(10000)]);
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+  const createTestnet = require('hyperdht/testnet.js');
+  net = await createTestnet(3, { host: '127.0.0.1' });
+  const bootstrap = net.bootstrap.map(node => `${node.host}:${node.port}`);
+  for (const home of Object.values(homes)) withHome(home.dir, () => savePeerSettings({ bootstrap }));
+  const members = async () => (await ok(homes.a, ['peers'])).peer.teams[0].members;
+
+  const a = (await ok(homes.a, ['id', '--name', 'a'])).identity, b = (await ok(homes.b, ['id', '--name', 'kim'])).identity;
+  const team = (await ok(homes.a, ['team', 'create', 'shop'])).team;
+  await ok(homes.a, ['peer', 'on']);
+  const first = (await ok(homes.a, ['invite', '--hours', '1'])).invite.code;
+  assert.match((await ok(homes.b, ['join', first])).message, /^Joined shop with a\./);
+  await ok(homes.b, ['peer', 'on']);
+  await until(async () => (await members()).find(m => m.key === b.key)?.online, `kim online at a\n${log(homes.a)}`);
+  // The founder cannot leave; kim cannot remove anyone.
+  assert.match((await cli(homes.a, ['team', 'leave'])).message, /^You made shop, so you cannot leave it\. elu team remove NAME removes a teammate\.$/);
+  assert.match((await cli(homes.b, ['team', 'remove', 'a'])).message, /^Only an admin of shop can remove a teammate\.$/);
+
+  // Kim leaves: a's machine hears it at once, and kim's lists no team.
+  assert.equal((await ok(homes.b, ['team', 'leave'])).message, 'You left shop.');
+  await until(async () => !(await members()).some(m => m.key === b.key), `kim gone at a\n${log(homes.a)}`);
+  await until(async () => (await ok(homes.b, ['team'])).teams.length === 0, 'no team at kim');
+  // A new code, the same identity: kim is back.
+  const second = (await ok(homes.a, ['invite', '--hours', '1'])).invite.code;
+  assert.deepEqual((await ok(homes.b, ['join', second])).team, { id: team.id, name: 'shop', inviter: { name: 'a', fingerprint: a.fingerprint }, project: null });
+  await until(async () => (await members()).find(m => m.key === b.key && m.role === 'member')?.online, `kim back at a\n${log(homes.a)}`);
+
+  // a removes kim, and kim joins again.
+  assert.equal((await ok(homes.a, ['team', 'remove', 'kim'])).message, 'Removed kim from shop. A new invite brings them back.');
+  await until(async () => !(await members()).some(m => m.key === b.key), 'kim removed at a');
+  await until(async () => (await ok(homes.b, ['team'])).teams.length === 0, `the removal at kim\n${log(homes.b)}`);
+  const third = (await ok(homes.a, ['invite', '--hours', '1'])).invite.code;
+  assert.match((await ok(homes.b, ['join', third])).message, /^Joined shop with a\./);
+  await until(async () => (await members()).find(m => m.key === b.key)?.online, 'kim back again at a');
+  assert.deepEqual((await ok(homes.b, ['team'])).teams.map(row => [row.id, row.members.map(m => m.name).sort().join()]), [[team.id, 'a,kim']]);
+});

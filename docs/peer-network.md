@@ -183,11 +183,15 @@ Over a limit, the message is not sent, it stays in the message box, and one line
     - `id` is 16 hex characters.
     - `name` is 1 to 30 lowercase letters, digits, `-` or `_`. It starts with a letter or digit, and `general` is taken.
     - `members` is a list of up to 20 distinct keys.
-- **Merge.** A pushed op is stored only if the fold applies it. Ops over 10 minutes in the future, and every op from a key the receiver's log already shows removed or departed (whatever its `at`), are dropped. Two logs can then differ by refused ops; sync keeps offering them and the receiver keeps refusing.
+- **Merge.** A pushed op is stored only if the fold applies it. Dropped: ops over 10 minutes in the future; every op from a key the receiver's log shows out of the team now (whatever its `at`); and every op from a key that sorts at or before that key's latest leave or removal in the receiver's log, even after the key came back. Two logs can then differ by refused ops; sync keeps offering them and the receiver keeps refusing.
 - **Fold.**
   - The log is a grow-only set. State is computed by sorting ops by `(at, id)` and applying them in that order.
   - An op is applied only if, at that point in the fold, its signer holds the needed role: the founder for create; an admin for admit, remove, role and relays; anyone for their own leave; a member for a channel op, under the channel rules below.
-  - Removal wins: a removed key's later ops are ignored, and a removed key is never re-admitted with the same key. The founder cannot be removed.
+  - Removal wins: from a key's removal or its own leave, its ops are ignored. The founder cannot be removed, leave, or change role.
+  - **Coming back.** An admin's later `admit` of that key (a new invite, redeemed as usual) brings it back with the role, name and join time of that admit. Ops it signed before it went out stay applied; ops that sort between its exit and the new admit are not applied; ops that sort after the admit apply under its new role.
+    - Why this is safe with timestamps that the signer picks: the fold judges an op by where it sorts, never by when it was signed. A returning key cannot backdate an op to when it held its old role, because every machine that has the exit refuses, at merge, any op of that key sorting at or before it. An op dated into the window between exit and admit is not applied. An op signed while out and forward-dated (at most 10 minutes, the merge limit) past the new admit applies only under the role that admit gave, the same as an op signed after coming back. An admin's `admit` is stamped after the newest op that admin has, so it sorts after the exit it answers.
+    - A machine that never got the exit can still take a backdated op from that key, as it could before; it is refused by every machine that has the exit, and the logs differ by that op.
+    - A teammate on 0.1.5 or earlier refuses the new `admit`, so it keeps the returning member out until it updates.
   - The fold returns `channels: [{id, name, members, createdBy, createdAt}]`, oldest first.
 - **Channels.** A channel is a named group inside a team. `#general` is everyone on the team and needs no op.
   - One `channel` op sets the whole channel: its name and its members. An op with no members deletes the channel.
@@ -199,6 +203,9 @@ Over a limit, the message is not sent, it stays in the message box, and one line
   - Limits: 50 channels per team, and 200 channel ops per signer. An op past a limit is not applied.
   - A channel op syncs like every other op, so the people added get the channel from any teammate.
   - A teammate on an older build refuses the op and sees no channels.
+- **Leaving and removing.** `/leave` or `elu team leave` appends the member's `leave`; `/remove @name` or `elu team remove NAME` appends an admin's `remove`. With the daemon running, the op is pushed at once to every teammate online, the one removed included, before their connections close (it waits up to 5 s for them). The machine that left drops the team from Chats and forgets which of its projects was that team's, so coming back shares nothing until the owner shares again.
+  - A machine that was offline gets the op on its next connection. Its hello still lists the team as shared, while the other side's log shows one of them out: that connection serves nothing but an invite exchange; the side that has the op pushes it (as in sync), and the connection closes once the other side has it, or after 30 s.
+  - With the daemon off, the op is written to the log and goes out the same way once peer mode is on.
 - **Sync.**
   - On every connection, each side compares `{seq, head}`, where head is the sha256 of the sorted op ids.
   - The side with ops the other lacks pushes them with `elu.roster.push`. The receiver validates every op and drops invalid ones.
@@ -217,7 +224,7 @@ Over a limit, the message is not sent, it stays in the message box, and one line
     1. Joiner → `elu.invite.start {topic, nonce: joinerNonce}`.
     2. Inviter → `{nonce: inviterNonce, proof: HMAC-SHA256(prover, role "inviter")}`. The joiner checks it, and closes the connection if it is wrong.
     3. Joiner → `elu.invite.prove {proof: ed25519 signature with seed over role "joiner", name}`.
-    4. The inviter checks the signature against `verifier`, the expiry and that the invite is unused, appends `admit`, and replies `{teamId, inviter: its key, ops: the full log}`. The joiner checks that `inviter` is the key on the connection and that the log admits it.
+    4. The inviter checks the signature against `verifier`, the expiry and that the invite is unused, appends `admit`, and replies `{teamId, inviter: its key, ops: the full log}`. The joiner checks that `inviter` is the key on the connection and that the log admits it. A key still on the team is refused (`You are already on this team.`) and the invite stays unused; a key that left or was removed is admitted again.
   - **A lost reply.** For 10 minutes after an invite is used, the key it admitted may run the exchange again and gets the same `admit` op with the full log. Any other key is refused.
   - A proof that fails ends the connection. A key with 3 failed proofs in 10 minutes gets no invite answers until the window has passed. A start that names an unknown topic is refused and closed, and does not count: finding a topic costs a scrypt run either way. There is no limit on failures from everyone, since keys cost nothing and it would let anyone lock the real joiner out.
   - **Who answered.** The inviter's proof shows only that the other side knows the code. Anyone the code reached, and anyone with a copy of the inviter's `invites.json`, could answer as the inviter with a team of their own. So a join shares nothing of the joiner's: the joiner shares a project only with `/share` or `elu share`, and `elu peers` shows the fingerprint of every member.
