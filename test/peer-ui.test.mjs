@@ -511,7 +511,7 @@ test('/invite with a name says in one line why there is nobody to add, and plain
   assert.deepEqual(sets(), [{ type: 'channelSet', team: 'team-1', id, name: 'design', members: [ME, SARA, LI] }]);
   // Plain /invite makes the one-use code, and so does a team's name: neither changes a channel.
   await send(v, '/invite'); await choose(v, 'Invite', /^Someone new/); await until(() => modal(v, 'Team invite'), 'the invite');
-  assert.match(modal(v, 'Team invite').children.find(child => child.options?.scrollable).getText(), /^k7qm-x2pd-9fhw\n\nOne use, expires in 24 h\./);
+  assert.match(modal(v, 'Team invite').children.find(child => child.options?.scrollable).getText(), /^╭────────────────────╮\n│   k7qm-x2pd-9fhw   │\n╰────────────────────╯\n\nOne use, expires in 24 h\./);
   await closeDialog(v, 'Team invite'); assert.deepEqual(invites(), [['createInvite', 'team-1', { hours: 24 }]]);
   await send(v, '/invite Core'); await until(() => modal(v, 'Team invite'), 'the invite for a named team');
   await closeDialog(v, 'Team invite'); assert.equal(invites().length, 2); assert.equal(sets().length, 1);
@@ -599,9 +599,9 @@ test('/invite offers a code for someone new or which bots teammates may use, and
   await choose(v, title, /\[ \] @notes/); await until(() => rowsOf(v, title).includes('[x] @notes'), 'ticked'); await choose(v, title, /^Done$/);
   await until(() => /Teammates can write to @docs, @notes\./.test(status()), 'both shared');
   assert.deepEqual(shared(), [['docs', true], ['notes', true]]);
-  // Joining asks nothing about bots: it says which are shared.
+  // Joining asks nothing about bots, or anything else.
   await send(v, '/join k7qm-x2pd-9fhw');
-  await until(() => /Joined Docs with sara \(bbbbbbbb\)\. Check that fingerprint with them, then \/share a project\. Teammates can write to @docs, @notes\./.test(status()), 'joined');
+  await until(() => /Joined Docs with sara\. Ask about their project in Chats\./.test(status()), 'joined');
   assert.equal(modal(v, title), undefined);
 });
 
@@ -792,16 +792,16 @@ test('the invite window shows a short code and copies it; a drag over its row co
   await until(() => modal(v, 'Team invite'), 'invite');
   // The window copies the code as it opens, and says so.
   const body = modal(v, 'Team invite').children.find(child => child.options?.scrollable);
-  assert.deepEqual(copied, ['k7qm-x2pd-9fhw']); assert.match(body.getText(), /^k7qm-x2pd-9fhw\n\nCopied to your clipboard\. One use, expires in 24 h\./);
+  assert.deepEqual(copied, ['k7qm-x2pd-9fhw']); assert.match(body.getText(), /^╭────────────────────╮\n│   k7qm-x2pd-9fhw   │\n╰────────────────────╯\n\nCopied to your clipboard\. One use, expires in 24 h\./);
   assert.doesNotMatch(body.getText(), /elu-team/); assert.match(v.panels.status.getText(), /ready and copied/);
   copied.length = 0;
   await until(() => body.lpos, 'drawn');
-  // A drag along the code's row, from its first column to the window's edge, takes the row's padding with it.
-  const pos = body.lpos, x0 = pos.xi + body.ileft, y0 = pos.yi + body.itop, x1 = pos.xl - 1 - body.iright;
+  // A drag along the code's row (the frame's middle row), from its first column to the window's edge, takes the frame and the row's padding with it.
+  const pos = body.lpos, x0 = pos.xi + body.ileft, y0 = pos.yi + body.itop + 1, x1 = pos.xl - 1 - body.iright;
   const sgr = (b, x, y, up = false) => `\x1b[<${b};${x + 1};${y + 1}${up ? 'm' : 'M'}`;
   v.input.write(sgr(0, x0, y0)); v.input.write(sgr(32, x1, y0)); v.input.write(sgr(0, x1, y0, true));
   await until(() => copied.length, 'copied');
-  assert.equal(copied[0].trim(), 'k7qm-x2pd-9fhw');
+  assert.equal(copied[0].trim(), '│   k7qm-x2pd-9fhw   │');
   await closeDialog(v, 'Team invite');
   // Pasted after /join, as the terminal hands a paste over, then Enter.
   const ask = v.panels.ask; ask.focus(); ask.readInput(); await until(() => ask.__listener, 'message box');
@@ -810,7 +810,6 @@ test('the invite window shows a short code and copies it; a drag over its row co
   v.input.write('\r');
   await until(() => peer.calls.some(row => row[0] === 'joinTeam'), 'joined');
   assert.deepEqual(peer.calls.find(row => row[0] === 'joinTeam').slice(1), ['k7qm-x2pd-9fhw']);
-  await closeDialog(v, 'Joined');
 });
 
 test('a code pasted into the message box with /join, broken by line breaks, spaces, tabs and CRLF as a terminal hands it over, joins with that code', async t => {
@@ -827,7 +826,6 @@ test('a code pasted into the message box with /join, broken by line breaks, spac
     v.input.write('\r');
     await until(() => joins().length === before + 1, `joined after ${JSON.stringify(pasted)}`);
     assert.equal(joins().at(-1), 'k7qm-x2pd-9fhw', JSON.stringify(pasted));
-    await closeDialog(v, 'Joined');
   };
   // Soft-wrapped rows with trailing spaces and a CRLF, the whole line pasted with its /join.
   await paste('', '/join k7qm-x2pd-   \r\n9fhw  \n', '/join k7qm-x2pd-   \n9fhw  \n');
@@ -852,26 +850,17 @@ test('share, invite and join use the open project', async t => {
   await send(v, '/invite'); await choose(v, 'Invite', /^Someone new/);
   await until(() => modal(v, 'Team invite'), 'invite');
   assert.deepEqual(peer.calls.filter(row => row[0] === 'share').at(-1).slice(1), [p.root, { teams: ['team-1'] }]);
-  // The window shows the inviter's fingerprint, for the joiner to compare with whoever admits them.
-  assert.match(modal(v, 'Team invite').children.find(child => child.options?.scrollable).getText(), /Teammates can ask about sample, the folder \S[^]*sample app\.[^]*Run npx -y @elu-labs\/elu[^]*type \/join and paste this code[^]*Your fingerprint is aaaaaaaa\./);
+  const window = modal(v, 'Team invite').children.find(child => child.options?.scrollable).getText();
+  assert.match(window, /Teammates can ask about sample, the folder \S[^]*sample app\.[^]*Run npx -y @elu-labs\/elu[^]*type \/join and paste this code/); assert.doesNotMatch(window, /fingerprint/i);
   await closeDialog(v, 'Team invite');
   await send(v, '/join nope'); await until(() => /That is not an invite code\. Use \/join code/.test(v.panels.status.getText()), 'join usage');
   assert.equal(peer.calls.some(row => row[0] === 'joinTeam'), false);
-  // A short code: whoever admitted the joiner is named, and the project is shared only on a yes.
+  // Joining only joins: nothing is asked and nothing of the joiner's is shared.
   const shares = () => peer.calls.filter(row => row[0] === 'share').length, before = shares();
   await send(v, '/join K7QM X2PD 9FHW');
-  await until(() => modal(v, 'Joined'), 'the join asks before sharing');
-  const asked = (modal(v, 'Joined').children.find(child => child.options?.scrollable)?.getText() ?? '').replace(/\s+/g, ' ');
-  assert.match(asked, /You joined Docs with sara \(bbbbbbbb\)\.[^]*check that fingerprint with them before you share\.[^]*Share sample app with Docs\?/);
-  assert.equal(shares(), before, 'nothing shared while it asks');
-  await closeDialog(v, 'Joined', 'y');
-  await until(() => /Joined Docs with sara \(bbbbbbbb\)\. Teammates can ask about sample, the folder \S[^]*sample app\. No bot is shared, so a teammate’s message comes to you\./.test(v.panels.status.getText()), 'joined');
+  await until(() => /Joined Docs with sara\. Ask about their project in Chats\./.test(v.panels.status.getText()), 'joined');
   assert.deepEqual(peer.calls.find(row => row[0] === 'joinTeam').slice(1), ['k7qm-x2pd-9fhw']);
-  assert.deepEqual(peer.calls.filter(row => row[0] === 'share').at(-1).slice(1), [p.root, { teams: ['team-2'] }]);
-  // Without a yes, nothing is shared.
-  await send(v, '/join k7qm-x2pd-9fhw'); await closeDialog(v, 'Joined', '');
-  await until(() => /Joined Docs with sara \(bbbbbbbb\)\. Nothing is shared yet: \/share when you have checked\./.test(v.panels.status.getText()), 'joined without sharing');
-  assert.equal(shares(), before + 1);
+  assert.equal(modal(v, 'Joined'), undefined, 'nothing asked'); assert.equal(shares(), before, 'nothing shared');
 });
 
 test('a peer daemon an update left running is restarted before /join', async t => {
@@ -883,7 +872,6 @@ test('a peer daemon an update left running is restarted before /join', async t =
   await until(() => peer.calls.some(row => row[0] === 'joinTeam'), 'joined');
   const at = name => peer.calls.findIndex(row => row[0] === name);
   assert.ok(at('startPeer') >= 0 && at('startPeer') < at('joinTeam'), JSON.stringify(peer.calls.map(row => row[0])));
-  await closeDialog(v, 'Joined');
 });
 
 test('Chats shows one line when peer mode is off or the facade is missing', async t => {

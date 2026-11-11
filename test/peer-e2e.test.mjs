@@ -88,10 +88,10 @@ test('two homes team up, ask, answer, route a local A2A call through the CLI, sh
   assert.match(invite.code, /^[2-9a-hjkmnp-z]{4}-[2-9a-hjkmnp-z]{4}-[2-9a-hjkmnp-z]{4}$/); assert.equal(invite.project, null, 'A invites from outside a project');
   assert.equal(invite.fingerprint, a.fingerprint);
   // B joins from its project. The code is pasted in pieces, upper case, after a second "elu join". B is told who admitted it, and
-  // nothing is shared until B has checked that: whoever had the code could have answered as A.
+  // joining shares nothing of B's.
   const joined = await ok(homes.b, ['join', 'elu', 'join', ...invite.code.toUpperCase().split('-'), '--project', side.root]);
   assert.deepEqual(joined.team, { id: team.id, name: 'core', inviter: { name: 'a', fingerprint: a.fingerprint }, project: null });
-  assert.match(joined.message, new RegExp(`^Joined core with a \\(${a.fingerprint}\\)\\. Check that fingerprint with the person who invited you, then run elu share`));
+  assert.match(joined.message, /^Joined core with a\./);
   assert.equal(read(homes.b, 'peer', 'team-projects.json'), null, 'nothing shared by the join');
   // The daemon's heartbeat shows the new member within a tick.
   await until(async () => (await ok(homes.a, ['team'])).teams[0].members.map(m => m.name).join() === 'a,b', 'b on a\'s roster');
