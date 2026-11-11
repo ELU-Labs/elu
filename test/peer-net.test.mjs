@@ -1603,7 +1603,9 @@ test('leaving and removing reach the teammates online, and the same key joins ag
   await until(() => withHome(sara.home, () => team(crew.teamId)).members.find(m => m.key === sara.identity.key)?.removed && state(sara.home)?.teams?.length === 0, 'the removal at sara');
   const again = withHome(ana.home, () => createInvite(ana.identity, crew.teamId, { hours: 1 }));
   // The code she came back with is still in its retry window, but its admit no longer stands.
-  await assert.rejects(run(sara.home, { type: 'join', code }, 120000), /already used/);
+  // The refusal is followed at once by the close, so her side may see either.
+  await assert.rejects(run(sara.home, { type: 'join', code }, 120000), /already used|disconnected/);
+  assert.equal(withHome(ana.home, () => readLog(crew.teamId)).ops.at(-1).type, 'remove', 'nothing written for the old code');
   assert.ok(withHome(ana.home, () => team(crew.teamId)).members.find(m => m.key === sara.identity.key).removed);
   assert.equal(online(ana.home, sara.identity.key), false);
   await run(sara.home, { type: 'join', code: again }, 120000);
