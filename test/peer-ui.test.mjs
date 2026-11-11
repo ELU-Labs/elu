@@ -16,15 +16,15 @@ const ME = 'a'.repeat(64), SARA = 'b'.repeat(64), LI = 'c'.repeat(64);
 const LONG = 'Could you check whether the retry budget in the uploader resets after a successful flush or only after restart because we keep seeing duplicate batches';
 const ago = minutes => new Date(Date.now() - minutes * 60000).toISOString();
 
-function fakePeer({ enabled = true, items, running = true, refuse = () => null, remoteBots = [] } = {}) {
+function fakePeer({ enabled = true, items, running = true, refuse = () => null, remoteBots = [], teamless = false } = {}) {
   const calls = [];
   const record = (name, value) => (...args) => { calls.push([name, ...args]); return typeof value === 'function' ? value(...args) : value; };
   const facade = {
-    calls, enabled, channels: [],
+    calls, enabled, running, channels: [],
     sent: () => calls.filter(row => row[0] === 'sendPeerCommand').map(row => row[1]),
     peerSettings: () => ({ enabled: facade.enabled }),
-    peerStatus: record('peerStatus', () => ({ running, pid: 1, key: ME, name: 'ana', fingerprint: 'aaaaaaaa', error: null, counters: { direct: 1, relayed: 0, failed: 0 },
-      teams: [{ id: 'team-1', name: 'Core', role: 'admin', members: [
+    peerStatus: record('peerStatus', () => ({ running: facade.running, pid: 1, key: ME, name: 'ana', fingerprint: 'aaaaaaaa', error: null, counters: { direct: 1, relayed: 0, failed: 0 },
+      teams: teamless && !facade.made ? [] : [{ id: 'team-1', name: 'Core', role: 'admin', members: [
         { key: ME, fingerprint: 'aaaaaaaa', name: 'ana', role: 'admin', online: true, path: null, lastSeen: ago(0) },
         { key: SARA, fingerprint: 'bbbbbbbb', name: 'sara', role: 'member', online: true, path: 'direct', lastSeen: ago(0), box: 'sara-box', bots: remoteBots },
         { key: LI, fingerprint: 'cccccccc', name: 'li', role: 'member', online: false, path: null, lastSeen: ago(90), handles: ['api'] },
@@ -51,6 +51,7 @@ function fakePeer({ enabled = true, items, running = true, refuse = () => null, 
     startPeer: record('startPeer', { running: true }), stopPeer: record('stopPeer', { running: false }),
     share: record('share', (root, { handle }) => ({ handle: handle ?? 'sample', root, status: true })),
     createInvite: record('createInvite', () => ({ code: 'elu-team:v1:TESTCODE' })),
+    createTeam: record('createTeam', name => { facade.made = true; return { id: 'team-1', name }; }),
     joinTeam: record('joinTeam', async () => ({ id: 'team-2', name: 'Docs' })),
   };
   return facade;
@@ -624,7 +625,9 @@ test('a thread shows under its channel, #general or its teammate, and a row coun
   // On two teams, each #general names its team, and a person on both is listed once.
   const docs = { id: 'team-2', name: 'Docs', members: [{ key: ME, name: 'ana' }, { key: SARA, name: 'sara', online: true }] };
   assert.deepEqual(lines(chatBar({ status: { key: ME, teams: [core, docs] }, items: [] }, 60, false)), ['Channels', '# general · Core 3', '# design · Core 2', '# general · Docs 2', '+ Add channel', '', 'Direct messages', '● @sara online', '○ @li offline', '+ Add teammate']);
-  assert.deepEqual(lines(chatBar({ status: { key: ME, teams: [] }, items: [] }, 60, false)), ['No team yet. elu team create NAME']);
+  const empty = lines(chatBar({ status: { key: ME, teams: [] }, items: [] }, 40, false));
+  assert.ok(empty.every(text => text.length <= 40 && !text.endsWith('…')), empty.join('|'));
+  for (const text of ['Invite someone: /invite', 'Got a code? /join CODE']) assert.ok(empty.join(' ').replace(/\s+/g, ' ').includes(text), text);
 });
 
 test('a channel lists me first, then who is online, then the rest, and counts the names that do not fit', () => {
@@ -750,6 +753,33 @@ test('Enter in the command list runs /peer, fills in /join, and shows a failed c
   assert.equal(v.panels.ask.getValue(), '/changes', 'the command is kept');
 });
 
+test('the first /invite makes the team, named after the open project', async t => {
+  const p = project(later(t)); environment(t, p.parent);
+  const peer = fakePeer({ teamless: true }), v = await view(t, { repo: repository(p.root), peer });
+  await send(v, '/invite @kim'); await until(() => /No team yet\. \/invite alone starts one/.test(v.panels.status.getText()), 'a name with no team');
+  assert.deepEqual(peer.calls.filter(row => row[0] === 'createTeam'), []);
+  await send(v, '/invite'); await choose(v, 'Bots your teammates can use', /^Done$/);
+  await until(() => modal(v, 'Team invite'), 'invite');
+  assert.deepEqual(peer.calls.filter(row => row[0] === 'createTeam'), [['createTeam', path.basename(p.root)]]);
+  assert.deepEqual(peer.calls.find(row => row[0] === 'createInvite').slice(1), ['team-1', { hours: 24 }]);
+  await closeDialog(v, 'Team invite');
+});
+
+test('a new person: /invite asks their name, turns peer mode on, then makes the team and the code', async t => {
+  const p = project(later(t)); environment(t, p.parent);
+  const peer = fakePeer({ teamless: true, running: false, enabled: false }); let me = null;
+  peer.identity = ({ create, name } = {}) => { if (create) { peer.calls.push(['identity', name]); me = { name }; return me; } if (!me) throw new Error('Create your peer identity first with elu id --name NAME.'); return me; };
+  peer.startPeer = () => { peer.calls.push(['startPeer']); peer.enabled = true; peer.running = true; return true; };
+  const v = await view(t, { repo: repository(p.root), peer });
+  await send(v, '/invite'); await until(() => modal(v, 'Your name'), 'name prompt');
+  const field = modal(v, 'Your name').children.find(child => child.type === 'textbox');
+  await until(() => field.__listener, 'name input'); field.setValue('ana'); field.submit();
+  await choose(v, 'Bots your teammates can use', /^Done$/); await until(() => modal(v, 'Team invite'), 'invite');
+  const order = ['identity', 'startPeer', 'createTeam', 'createInvite'].map(name => peer.calls.findIndex(row => row[0] === name));
+  assert.ok(order.every((at, i) => at >= 0 && (i === 0 || at > order[i - 1])), JSON.stringify(order));
+  await closeDialog(v, 'Team invite');
+});
+
 test('share, invite and join use the open project', async t => {
   const p = project(later(t)); environment(t, p.parent);
   const peer = fakePeer(), v = await view(t, { repo: repository(p.root), peer });
@@ -763,7 +793,7 @@ test('share, invite and join use the open project', async t => {
   await send(v, '/invite'); await choose(v, bots, /^Done$/);
   await until(() => modal(v, 'Team invite'), 'invite');
   assert.deepEqual(peer.calls.filter(row => row[0] === 'share').at(-1).slice(1), [p.root, { teams: ['team-1'] }]);
-  assert.match(modal(v, 'Team invite').children.find(child => child.options?.scrollable).getText(), /Teammates can ask about sample, the folder \S[^]*sample app\.[^]*types \/join and this code in the project you can ask about/);
+  assert.match(modal(v, 'Team invite').children.find(child => child.options?.scrollable).getText(), /Teammates can ask about sample, the folder \S[^]*sample app\.[^]*Run npx -y @elu-labs\/elu[^]*type \/join and this code/);
   await closeDialog(v, 'Team invite');
   await send(v, '/join nope'); await until(() => /Use \/join code/.test(v.panels.status.getText()), 'join usage');
   await send(v, '/join elu-team:v1:TESTCODE'); await choose(v, bots, /^Done$/);
