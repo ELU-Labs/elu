@@ -192,19 +192,29 @@ elu team create shop
 elu peer on
 elu invite               # prints a code like k7qm-x2pd-9fhw; it works once, within 24 hours
 
-# on your teammate's computer, in the project you may ask about
+# on your teammate's computer, in their copy of the project
 elu id --name kim
 elu peer on
-elu join CODE            # joins their team, to ask about their project
+elu join CODE            # joins their team; your messages start sessions here
 ```
 
 `elu peers` shows who is online. In the app, write to a teammate in the Chats tab, or
-type `@kim where are the tax rates?` in any session. A teammate's question is answered
-read only, from a project you shared. `elu share`, or `/share` in the app, shares the
-project you are in. Inviting a teammate shares one too: `elu invite` shares the folder you
+type `@kim where are the tax rates?` in any session. A message always reaches them, and
+they can reply in the same thread.
+
+What a teammate's message does on your machine is yours to choose, once per team: `/join`
+asks, and so does your first `/invite` for a team. **Auto** (the default) starts a session
+in your project as if you had typed the message yourself: your default permission mode, a
+new worktree, and any Task it proposes still waits for your approval. **Manual** keeps each
+message waiting until you press y. You can also write rules in plain English, such as "Only
+work on the elu repo. Don't write anything until I accept it.", and every session a teammate
+starts is told them. Push, merge, tag, deploy and publish stay blocked either way. `/access`,
+or `elu access`, shows and changes all of it.
+
+`elu share`, or `/share` in the app, shares the project you are in, so teammates can name it
+and see its live work. Inviting a teammate shares one too: `elu invite` shares the folder you
 run it in when it is an ELU Code project (`--project PATH` names another), and `/invite`
-the open project. Joining only joins: it shares nothing of yours, and you can `/share` a
-project later. The wire format is in
+the open project. Joining shares nothing of yours. The wire format is in
 [docs/peer-network.md](docs/peer-network.md).
 
 Teammates on a team a project is shared with also see the work in it: for each live

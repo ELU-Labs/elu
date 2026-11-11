@@ -24,7 +24,7 @@ correct, and model review is not a substitute for a person reviewing a pull requ
 
 It depends on the session's permission mode ([docs/permissions.md](docs/permissions.md)).
 
-- **Read only** is the profile of every reviewer, every teammate question and every task
+- **Read only** is the profile of every reviewer, every question for a shared bot and every task
   saved without a mode. It gives no shell tools unless the Claude role declares explicit
   command prefixes. ELU Code adds none by itself: the test and build scripts it finds in a
   project run only as checks, inside the check sandbox, and a prefix reaches the model only
@@ -47,9 +47,9 @@ It depends on the session's permission mode ([docs/permissions.md](docs/permissi
 The helpers a bot hands work to run under the same mode and the same denied commands as
 the bot.
 
-A teammate's question starts only after you accept it, unless you set that teammate to be
-accepted without asking. Its answer then goes back to them without waiting for you to read
-it, unless you chose to read that teammate's replies first. A reply that looks like it
+What a teammate's message does here is set per team ([What teammates can do
+here](#what-teammates-can-do-here)). Its answer goes back to them without waiting for you
+to read it, unless you chose to read that teammate's replies first. A reply that looks like it
 holds a key or a token is always held for you; that check looks for the shapes of secrets
 and is not a guarantee. Only a project's own folder can be shared, never your home folder,
 and a shared project answers only the teams it was shared with.
@@ -98,6 +98,38 @@ exception is visible in `elu policy show`. In Read only, Ask for approval and Ap
 me ELU Code names that folder itself where its path is short enough for Claude Code to
 use: a private one under your cache folder, or in your runtime folder where that path is
 too long, made for the run and removed when it ends (`docs/vendors/claude.md`).
+
+## What teammates can do here
+
+Each team has one setting on your machine, asked by `/join` and by your first `/invite` for
+that team, and changed with `/access` or `elu access`:
+
+- **Auto** (the default): a teammate's message starts a session at once, as if you had
+  typed it into ELU Code: in the project you joined or invited from, in your default
+  permission mode, in a new worktree. That mode is enforced as it is for your own sessions:
+  with Full access, a teammate's message can make the model run any command in that
+  project's worktree without asking you. Any Task it proposes waits for your approval
+  before an edit starts, as your own do.
+- **Manual**: each message waits until you approve it (y), then starts that same session.
+  w picks the mode, place and folders first; n declines.
+- A team whose setting was never set (joined with an earlier version) is Manual with no
+  rules: its messages arrive as chat and wait for you. Nothing turns Auto on by itself.
+
+**Rules** are plain English you write, up to 1000 characters, such as "Only answer
+questions, do not edit files." They go, under the heading "The owner's rules for
+teammates", into the prompt of every turn of every session a teammate starts here, and the
+model is told to follow them, to refuse what they forbid and say so, and to only propose
+when they say to change nothing until you accept. They are a guard in what the model is
+told, not a limit ELU Code enforces: a model can get them wrong. What is enforced is the
+permission mode, the never list (push, merge, tag, deploy and publish stay blocked for
+every session a teammate starts, in every mode), the Task approval before an edit, and the
+per-teammate and per-team message and spending caps, which count each such session's real
+cost when it ends. A session a teammate starts has no dollar limit of its own beyond those
+caps unless you set one with `/budget`.
+
+A question for one of your shared bots is answered by that bot, read only, after you
+accept it, as before. A machine on ELU Code 0.1.5 or earlier refuses a message when its
+owner shares no project; the sender is then told that the teammate needs to update.
 
 ## What teammates are told
 
