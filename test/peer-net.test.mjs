@@ -1260,9 +1260,11 @@ test('team create, invite and join over the network with a short code', async t 
   assert.match(code, /^[2-9a-hjkmnp-z]{4}-[2-9a-hjkmnp-z]{4}-[2-9a-hjkmnp-z]{4}$/);
   const saraKey = withHome(sara, () => createIdentity({ name: 'sara' }).key);
   enable(ana, bootstrap); enable(sara, bootstrap);
-  const a = await daemon(t, ana, { conductor: false }), s = await daemon(t, sara, { conductor: false });
-  const joined = await run(sara, { type: 'join', code });
-  assert.deepEqual(joined, { id: teamId, name: 'core' });
+  // Sara starts looking before Ana's daemon is up, and keeps looking until it announces.
+  const s = await daemon(t, sara, { conductor: false }), joining = run(sara, { type: 'join', code });
+  await new Promise(resolve => setTimeout(resolve, 4000));
+  const a = await daemon(t, ana, { conductor: false });
+  assert.deepEqual(await joining, { id: teamId, name: 'core' });
   assert.deepEqual(withHome(sara, () => head(teamId)), withHome(ana, () => head(teamId)));
   assert.deepEqual(withHome(ana, () => team(teamId)).members.map(m => m.name), ['ana', 'sara']);
   await until(() => online(ana, saraKey) && online(sara, a.key), 'teammates online after the join');
