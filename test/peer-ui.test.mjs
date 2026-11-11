@@ -50,7 +50,7 @@ function fakePeer({ enabled = true, items, running = true, refuse = () => null, 
     }),
     startPeer: record('startPeer', { running: true }), stopPeer: record('stopPeer', { running: false }),
     share: record('share', (root, { handle }) => ({ handle: handle ?? 'sample', root, status: true })),
-    createInvite: record('createInvite', () => ({ code: 'elu-team:v1:TESTCODE' })),
+    createInvite: record('createInvite', () => ({ code: 'k7qm-x2pd-9fhw' })),
     createTeam: record('createTeam', name => { facade.made = true; return { id: 'team-1', name }; }),
     joinTeam: record('joinTeam', async () => ({ id: 'team-2', name: 'Docs' })),
   };
@@ -511,7 +511,7 @@ test('/invite with a name says in one line why there is nobody to add, and plain
   assert.deepEqual(sets(), [{ type: 'channelSet', team: 'team-1', id, name: 'design', members: [ME, SARA, LI] }]);
   // Plain /invite makes the one-use code, and so does a team's name: neither changes a channel.
   await send(v, '/invite'); await choose(v, 'Invite', /^Someone new/); await until(() => modal(v, 'Team invite'), 'the invite');
-  assert.match(modal(v, 'Team invite').children.find(child => child.options?.scrollable).getText(), /^elu-team:v1:TESTCODE\n\nOne use, expires in 24 h\./);
+  assert.match(modal(v, 'Team invite').children.find(child => child.options?.scrollable).getText(), /^k7qm-x2pd-9fhw\n\nOne use, expires in 24 h\./);
   await closeDialog(v, 'Team invite'); assert.deepEqual(invites(), [['createInvite', 'team-1', { hours: 24 }]]);
   await send(v, '/invite Core'); await until(() => modal(v, 'Team invite'), 'the invite for a named team');
   await closeDialog(v, 'Team invite'); assert.equal(invites().length, 2); assert.equal(sets().length, 1);
@@ -600,7 +600,7 @@ test('/invite offers a code for someone new or which bots teammates may use, and
   await until(() => /Teammates can write to @docs, @notes\./.test(status()), 'both shared');
   assert.deepEqual(shared(), [['docs', true], ['notes', true]]);
   // Joining asks nothing about bots: it says which are shared.
-  await send(v, '/join elu-team:v1:TESTCODE');
+  await send(v, '/join k7qm-x2pd-9fhw');
   await until(() => /Joined Docs\..*Teammates can write to @docs, @notes\./.test(status()), 'joined');
   assert.equal(modal(v, title), undefined);
 });
@@ -717,7 +717,7 @@ test('a typed @name and the peer commands call the facade and report in the stat
   await send(v, '/invite'); await choose(v, 'Invite', /^Someone new/);
   await until(() => modal(v, 'Team invite'), 'invite code');
   assert.deepEqual(peer.calls.find(row => row[0] === 'createInvite').slice(1), ['team-1', { hours: 24 }]);
-  assert.match(modal(v, 'Team invite').children.find(child => child.options?.scrollable).getText(), /elu-team:v1:TESTCODE[^]*Type \/share in a project so teammates can ask about it\./);
+  assert.match(modal(v, 'Team invite').children.find(child => child.options?.scrollable).getText(), /k7qm-x2pd-9fhw[^]*Type \/share in a project so teammates can ask about it\./);
   await closeDialog(v, 'Team invite');
   assert.ok(!peer.calls.some(row => row[0] === 'share'), 'no project open, nothing shared');
   await send(v, '/peer off'); await until(() => peer.calls.some(row => row[0] === 'stopPeer'), 'peer off');
@@ -784,22 +784,57 @@ test('a new person: /invite asks their name, turns peer mode on, then makes the 
   await closeDialog(v, 'Team invite');
 });
 
-test('a drag over the invite code copies the whole code, however the dialog wraps it', async t => {
+test('the invite window shows a short code and copies it; a drag over its row copies it too, and pasting that after /join joins with it', async t => {
   const p = project(later(t)); environment(t, p.parent);
-  const code = 'elu-team:v1:' + Array.from({ length: 398 }, (_, i) => 'abcdefghijklmnopqrstuvwxyz234567'[i % 32]).join('');
-  const peer = fakePeer(), copied = []; peer.createInvite = () => ({ code });
+  const peer = fakePeer(), copied = [];
   const v = await view(t, { repo: repository(p.root), peer, clipboard: text => copied.push(text) });
   await send(v, '/invite'); await choose(v, 'Invite', /^Someone new/);
   await until(() => modal(v, 'Team invite'), 'invite');
-  // The window copies the code as it opens.
-  assert.deepEqual(copied, [code]); assert.match(modal(v, 'Team invite').children.find(child => child.options?.scrollable).getText(), /Copied to your clipboard\./); copied.length = 0;
+  // The window copies the code as it opens, and says so.
   const body = modal(v, 'Team invite').children.find(child => child.options?.scrollable);
+  assert.deepEqual(copied, ['k7qm-x2pd-9fhw']); assert.match(body.getText(), /^k7qm-x2pd-9fhw\n\nCopied to your clipboard\. One use, expires in 24 h\./);
+  assert.doesNotMatch(body.getText(), /elu-team/); assert.match(v.panels.status.getText(), /ready and copied/);
+  copied.length = 0;
   await until(() => body.lpos, 'drawn');
-  const pos = body.lpos, x0 = pos.xi + body.ileft, y0 = pos.yi + body.itop, x1 = pos.xl - 1 - body.iright, last = y0 + Math.ceil(code.length / (x1 - x0)) + 1;
+  // A drag along the code's row, from its first column to the window's edge, takes the row's padding with it.
+  const pos = body.lpos, x0 = pos.xi + body.ileft, y0 = pos.yi + body.itop, x1 = pos.xl - 1 - body.iright;
   const sgr = (b, x, y, up = false) => `\x1b[<${b};${x + 1};${y + 1}${up ? 'm' : 'M'}`;
-  v.input.write(sgr(0, x0, y0)); v.input.write(sgr(32, x1, last)); v.input.write(sgr(0, x1, last, true));
+  v.input.write(sgr(0, x0, y0)); v.input.write(sgr(32, x1, y0)); v.input.write(sgr(0, x1, y0, true));
   await until(() => copied.length, 'copied');
-  assert.equal(copied[0].split('\n')[0].trim(), code);
+  assert.equal(copied[0].trim(), 'k7qm-x2pd-9fhw');
+  await closeDialog(v, 'Team invite');
+  // Pasted after /join, as the terminal hands a paste over, then Enter.
+  const ask = v.panels.ask; ask.focus(); ask.readInput(); await until(() => ask.__listener, 'message box');
+  v.input.write('/join '); v.input.write(`\x1b[200~${copied[0]}\x1b[201~`);
+  await until(() => ask.getValue() === `/join ${copied[0]}`, 'the box holds the paste as it came');
+  v.input.write('\r');
+  await until(() => peer.calls.some(row => row[0] === 'joinTeam'), 'joined');
+  assert.deepEqual(peer.calls.find(row => row[0] === 'joinTeam').slice(1), ['k7qm-x2pd-9fhw']);
+});
+
+test('a code pasted into the message box with /join, broken by line breaks, spaces, tabs and CRLF as a terminal hands it over, joins with that code', async t => {
+  const p = project(later(t)); environment(t, p.parent);
+  const peer = fakePeer(), v = await view(t, { repo: repository(p.root), peer });
+  const ask = v.panels.ask, joins = () => peer.calls.filter(row => row[0] === 'joinTeam').map(row => row[1]);
+  const paste = async (typed, pasted, holds) => {
+    ask.focus(); ask.readInput(); await until(() => ask.__listener, 'message box'); ask.clearValue();
+    if (typed) v.input.write(typed);
+    const before = joins().length;
+    v.input.write(`\x1b[200~${pasted}\x1b[201~`);
+    // What the message box holds after the paste: CRLF and a lone CR become line breaks, everything else stays.
+    await until(() => ask.getValue() === holds, `the box holds ${JSON.stringify(holds)}, not ${JSON.stringify(ask.getValue())}`);
+    v.input.write('\r');
+    await until(() => joins().length === before + 1, `joined after ${JSON.stringify(pasted)}`);
+    assert.equal(joins().at(-1), 'k7qm-x2pd-9fhw', JSON.stringify(pasted));
+  };
+  // Soft-wrapped rows with trailing spaces and a CRLF, the whole line pasted with its /join.
+  await paste('', '/join k7qm-x2pd-   \r\n9fhw  \n', '/join k7qm-x2pd-   \n9fhw  \n');
+  // A tab, a lone CR and upper case, after a typed /join.
+  await paste('/join ', 'K7QM\tX2PD\r9FHW', '/join K7QM\tX2PD\n9FHW');
+  // /join typed, then the whole line pasted again: the second /join is not part of the code.
+  await paste('/join ', '/join\nk7qm -\nx2pd - 9fhw', '/join /join\nk7qm -\nx2pd - 9fhw');
+  // The command a teammate was sent, pasted after /join.
+  await paste('/join ', 'elu join k7qm-x2pd-9fhw', '/join elu join k7qm-x2pd-9fhw');
 });
 
 test('share, invite and join use the open project', async t => {
@@ -817,10 +852,11 @@ test('share, invite and join use the open project', async t => {
   assert.deepEqual(peer.calls.filter(row => row[0] === 'share').at(-1).slice(1), [p.root, { teams: ['team-1'] }]);
   assert.match(modal(v, 'Team invite').children.find(child => child.options?.scrollable).getText(), /Teammates can ask about sample, the folder \S[^]*sample app\.[^]*Run npx -y @elu-labs\/elu[^]*type \/join and paste this code/);
   await closeDialog(v, 'Team invite');
-  await send(v, '/join nope'); await until(() => /Use \/join code/.test(v.panels.status.getText()), 'join usage');
-  await send(v, '/join elu-team:v1:TESTCODE');
+  await send(v, '/join nope'); await until(() => /That is not an invite code\. Use \/join code/.test(v.panels.status.getText()), 'join usage');
+  assert.equal(peer.calls.some(row => row[0] === 'joinTeam'), false);
+  await send(v, '/join K7QM X2PD 9FHW');
   await until(() => /Joined Docs\. Teammates can ask about sample, the folder \S[^]*sample app\. No bot is shared, so a teammate’s message comes to you\./.test(v.panels.status.getText()), 'joined');
-  assert.deepEqual(peer.calls.find(row => row[0] === 'joinTeam').slice(1), ['elu-team:v1:TESTCODE']);
+  assert.deepEqual(peer.calls.find(row => row[0] === 'joinTeam').slice(1), ['k7qm-x2pd-9fhw']);
   assert.deepEqual(peer.calls.filter(row => row[0] === 'share').at(-1).slice(1), [p.root, { teams: ['team-2'] }]);
 });
 
