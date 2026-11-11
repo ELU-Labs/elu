@@ -5,50 +5,20 @@ use, with bots that review and do work, and teammates you can ask.
 
 ![ELU Code on a made-up project, with stand-in vendors](docs/demo.gif)
 
-Sessions run in the vendors' own unmodified command lines (Claude Code, Codex, Antigravity
-and Grok Build), with your existing sign-in. ELU Code has no account and no telemetry, and
-it never reads your Claude Code sign-in. The Usage tab shows Claude plan usage from what
-Claude Code reports during your sessions. For Codex plan usage, ELU Code starts Codex's own
-`app-server`, which asks with your Codex sign-in, whenever `codex` is installed: when you
-open a project that is set up or send a message, at most once a minute while a session is
-on screen, and from the Usage tab ([what is read and when](SECURITY.md#credentials)).
-
 ## Install
 
-You need macOS or Linux, Node 22 or newer, Git, and at least one vendor command line
-installed and signed in: Claude Code (`claude`) or Codex (`codex`).
-
-Codex must be installed even if your sessions run on Claude Code, but it does not need to
-be signed in. ELU Code runs your project's checks and its pre-push hooks inside Codex's
-sandbox (`codex sandbox`); without it the checks fail and `/publish` refuses. Install it
-with `npm install --global @openai/codex`. To use a copy that is not on your PATH, set
-`ELU_CODE_SANDBOX_HELPER` to its absolute path. On Linux that sandbox is bubblewrap:
-install `bubblewrap` and, on Ubuntu 24.04, load the AppArmor profile in
-[docs/permissions.md](docs/permissions.md#linux). The Linux tests run with both.
-
-GitHub CLI (`gh`) is needed for draft pull requests, and for `@elu` to review and merge a
-fix pull request.
+From your home folder, not inside a project you do not trust:
 
 ```sh
 npx -y @elu-labs/elu
 ```
 
-That opens ELU Code. The first time, it also installs `elu` as a global command: it prints
-the `npm install --global` line it runs, and uses `~/.local` when npm's global folder
-cannot be written. From then on you type `elu`. To open ELU Code without installing
-anything, put `ELU_NO_INSTALL=1` in front of that line.
+This opens ELU Code and installs the `elu` command; next time you type `elu`.
 
-Run that first line from your home folder, not from inside a project you do not trust:
-`npx` lets the folder it starts in decide what runs.
-
-The Usage tab lists the vendor command lines ELU Code found and whether each is signed in.
-Antigravity (`agy`) and Grok Build (`grok`) are checked once on each machine: your first
-message to one starts the check by itself. It takes about seven short turns on that vendor
-and a few minutes. Vendor notes: [docs/vendors](docs/vendors).
-
-Google's FAQ says that using another app to reach Antigravity breaks its terms and can get
-your account suspended or terminated. ELU Code wraps `agy`, so read
-[docs/vendors/antigravity.md](docs/vendors/antigravity.md) before you send it a message.
+You need macOS or Linux, Node 22 or newer, Git, Claude Code signed in, and Codex installed
+(no sign-in needed; its sandbox runs your project's checks):
+`npm install --global @openai/codex`. Using Antigravity? Read
+[its page](docs/vendors/antigravity.md) first. More in [Install details](#install-details).
 
 ## Start
 
@@ -246,6 +216,48 @@ sees them when it answers.
 
 In a channel, `/invite @kim` adds a teammate you already have. `/invite` alone makes a
 code for someone new.
+
+## Install details
+
+Sessions run in the vendors' own unmodified command lines (Claude Code, Codex, Antigravity
+and Grok Build), with your existing sign-in. ELU Code has no account and no telemetry, and
+it never reads your Claude Code sign-in. The Usage tab shows Claude plan usage from what
+Claude Code reports during your sessions. For Codex plan usage, ELU Code starts Codex's own
+`app-server`, which asks with your Codex sign-in, whenever `codex` is installed: when you
+open a project that is set up or send a message, at most once a minute while a session is
+on screen, and from the Usage tab ([what is read and when](SECURITY.md#credentials)).
+
+You need macOS or Linux, Node 22 or newer, Git, and Claude Code (`claude`) installed and
+signed in: new projects and the built-in bots run on it. To run sessions on Codex
+(`codex`), sign in to it and choose it with `/model`.
+
+Codex must be installed even if your sessions run on Claude Code, but it does not need to
+be signed in. ELU Code runs your project's checks and its pre-push hooks inside Codex's
+sandbox (`codex sandbox`); without it the checks fail and `/publish` refuses. Install it
+with `npm install --global @openai/codex`. To use a copy that is not on your PATH, set
+`ELU_CODE_SANDBOX_HELPER` to its absolute path. On Linux that sandbox is bubblewrap:
+install `bubblewrap` and, on Ubuntu 24.04, load the AppArmor profile in
+[docs/permissions.md](docs/permissions.md#linux). The Linux tests run with both.
+
+GitHub CLI (`gh`) is needed for draft pull requests, and for `@elu` to review and merge a
+fix pull request.
+
+The first run of `npx -y @elu-labs/elu` opens ELU Code and installs `elu` as a global
+command: it prints the `npm install --global` line it runs, and uses `~/.local` when npm's
+global folder cannot be written. To open ELU Code without installing anything, run
+`ELU_NO_INSTALL=1 npx -y @elu-labs/elu`.
+
+Run `npx -y @elu-labs/elu` from your home folder, not from inside a project you do not
+trust: `npx` lets the folder it starts in decide what runs.
+
+The Usage tab lists the vendor command lines ELU Code found and whether each is signed in.
+Antigravity (`agy`) and Grok Build (`grok`) are checked once on each machine: your first
+message to one starts the check by itself. It takes about seven short turns on that vendor
+and a few minutes. Vendor notes: [docs/vendors](docs/vendors).
+
+Google's FAQ says that using another app to reach Antigravity breaks its terms and can get
+your account suspended or terminated. ELU Code wraps `agy`, so read
+[docs/vendors/antigravity.md](docs/vendors/antigravity.md) before you send it a message.
 
 ## Update and remove
 
