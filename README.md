@@ -216,7 +216,7 @@ its path, and it goes with the message: up to 4 pictures, 8 MB each. Your teamma
 sees them when it answers.
 
 In a channel, `/invite @kim` adds a teammate you already have. `/invite` alone makes a
-code for someone new.
+code for someone new; the first time, it also makes your team, named after the open project.
 
 ## Install details
 
