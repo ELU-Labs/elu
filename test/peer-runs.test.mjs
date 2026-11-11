@@ -8,14 +8,14 @@ import { project, fakeClis, config, keyLike, approveProjectFiles, git } from './
 import { sessionTasks } from '../lib/plan.mjs';
 import { repository } from '../lib/git.mjs';
 import { projectSnapshot, registerProject, personalDirectory } from '../lib/projects.mjs';
-import { saveTask } from '../lib/state.mjs';
+import { readTask, saveTask } from '../lib/state.mjs';
 import { pendingRequests, saveRequest, updateRequest } from '../lib/workspace.mjs';
 import { Conductor, enqueue, retryRequest, conductorSettings } from '../lib/conductor.mjs';
 import { validateResult, validateConversation, conversationSchema, resultSchema } from '../lib/config.mjs';
 import { protectedPath, protectedFiles } from '../lib/policy.mjs';
 import * as claude from '../lib/adapters/claude.mjs';
 import * as codex from '../lib/adapters/codex.mjs';
-import { isPeerRun } from '../lib/modes.mjs';
+import { isPeerRun, saveDefaultMode } from '../lib/modes.mjs';
 import { peerFile } from '../lib/peer/paths.mjs';
 import { savePeerPolicy, savePeerSettings } from '../lib/peer/settings.mjs';
 import { createIdentity } from '../lib/peer/identity.mjs';
@@ -29,6 +29,7 @@ const share = (root, options = {}) => shareWith(root, { teams: everyTeam().map(s
 import { message, TaskState } from '../lib/peer/a2a.mjs';
 import { intakeMethods } from '../lib/peer/intake.mjs';
 import { acceptIncoming, processOutbox } from '../lib/peer/replies.mjs';
+import { saveTeamAccess } from '../lib/peer/access.mjs';
 import { getRecord, thread } from '../lib/peer/taskstore.mjs';
 
 const SARA = 'b'.repeat(64), ME = 'a'.repeat(64);
@@ -303,11 +304,84 @@ test('w needs a mode, y takes none, and autoAccept answers questions but never w
   assert.throws(() => acceptIncoming(sara.ctx, handoff.task.id, { how: 'work' }), /Pick a mode to work on a teammate's request\./);
   assert.throws(() => acceptIncoming(sara.ctx, handoff.task.id, { how: 'answer', permissions: 'ask' }), /Teammate questions stay read-only\./);
   assert.throws(() => acceptIncoming(sara.ctx, handoff.task.id, { how: 'work', permissions: 'ask', place: 'here' }), /Here needs Full access\./);
-  assert.throws(() => acceptIncoming(sara.ctx, handoff.task.id, { how: 'build' }), /Choose answer or work\./);
+  assert.throws(() => acceptIncoming(sara.ctx, handoff.task.id, { how: 'build' }), /Choose answer, work or own\./);
+  assert.throws(() => acceptIncoming(sara.ctx, handoff.task.id, { how: 'own', permissions: 'full' }), /starts your own kind of session/);
   assert.equal(getRecord(handoff.task.id).waiting, true, 'a refused decision leaves the message waiting'); assert.equal(sara.rowOf(handoff), undefined);
   acceptIncoming(sara.ctx, handoff.task.id, { how: 'work', permissions: 'auto' });
   assert.equal(sara.rowOf(handoff).permissions, 'auto'); assert.equal(sara.rowOf(handoff).state, 'queued');
   assert.throws(() => acceptIncoming(sara.ctx, handoff.task.id, { how: 'work', permissions: 'ask' }), /No request is waiting for you\./);
+});
+
+const RULES = 'Only answer questions, do not edit files.';
+test('Auto starts a teammate\'s message at once as the owner\'s own session: his mode, a new worktree, his Task approval, the rules in its prompt and the never list in Full access', async t => {
+  const p = setup(t, 'normal'), sara = teammate(p), teamId = everyTeam()[0].id;
+  saveDefaultMode('full');
+  saveTeamAccess(teamId, { handling: 'auto', rules: RULES, root: p.root });
+  const record = sara.send(HANDOFF, { kind: 'ask' });
+  assert.equal(record.waiting, false); assert.equal(record.access, teamId); assert.deepEqual(sara.events, ['ask from @sara']);
+  const row = sara.rowOf(record);
+  assert.equal(row.state, 'queued'); assert.equal(row.permissions, 'full'); assert.deepEqual(row.place, { kind: 'worktree' }); assert.equal(row.readOnly, false); assert.equal(row.context, HANDOFF);
+  assert.deepEqual(row.origin, { kind: 'handoff', peer: SARA, name: 'sara', a2aTaskId: record.task.id, threadId: 'thread-1', hop: 1, team: teamId, own: true });
+  assert.equal(isPeerRun(row.origin), false, 'the owner\'s kind of session, not a hardened peer run');
+  conduct(t);
+  await until(() => request(p.root, row.id)?.state === 'done', 'own session', 60000);
+  const value = readTask(p.repo, request(p.root, row.id).taskId);
+  assert.equal(value.kind, 'conversation', 'no edit started'); assert.equal(value.permissions, 'full'); assert.equal(value.origin.team, teamId);
+  // As if the owner typed it: the Task it proposes waits for his approval.
+  const [proposed] = sessionTasks(p.repo, value.id);
+  assert.equal(proposed?.state, 'proposed'); assert.equal(proposed.startedBy, 'owner');
+  const first = p.prompts()[0];
+  assert.match(first.input, /The owner approves or rejects the Task, and the work starts only after they approve\./);
+  assert.match(first.input, /The owner's rules for teammates\n@sara is a teammate, and their message started this session\.[^]*Refuse anything they forbid, and say which rule stops it\.[^]*only propose/);
+  assert.ok(first.input.includes(`\n\n${RULES}`), 'the rules as the owner wrote them');
+  assert.ok(first.input.indexOf(RULES) < first.input.indexOf('<<peer-data-'), 'the rules come before the teammate\'s message');
+  // Full access keeps the never list: in the prompt, and as deny rules the vendor enforces.
+  assert.match(first.input, /This session runs with Full access/); assert.match(first.input, /Do not push, merge, tag, publish, or deploy\./);
+  assert.match(first.input, /Never run these, alone or inside a longer command line, in any mode: git push, git tag, git merge, gh pr merge/);
+  const deny = JSON.parse(first.args[first.args.indexOf('--settings') + 1]).permissions.deny;
+  for (const rule of ['Bash(git push:*)', 'Bash(git merge:*)', 'Bash(gh pr merge:*)', 'Bash(git tag:*)', 'Bash(npm publish:*)']) assert.ok(deny.includes(rule), rule);
+  // The reply goes back into the sender's thread.
+  processOutbox(sara.ctx);
+  assert.equal(getRecord(record.task.id).task.status.state, TaskState.COMPLETED);
+  assert.deepEqual(thread('thread-1').map(line => [line.dir, line.kind]), [['in', 'ask'], ['local', 'held'], ['out', 'answer']]);
+});
+
+test('Manual keeps a teammate\'s message waiting, and a team never set does too; y starts the owner\'s own session with the rules in its prompt', async t => {
+  const p = setup(t, 'answer'), sara = teammate(p), teamId = everyTeam()[0].id;
+  // Never set (a machine from before this setting): it waits, never Auto.
+  const unset = sara.send('Where is it?', { kind: 'ask', threadId: 'thread-0' });
+  assert.equal(unset.waiting, true); assert.equal(sara.rowOf(unset), undefined);
+  saveTeamAccess(teamId, { handling: 'manual', rules: RULES, root: p.root });
+  const record = sara.send('Where is coupon normalization?', { kind: 'ask' });
+  assert.equal(record.waiting, true); assert.equal(sara.rowOf(record), undefined, 'nothing queued until the owner approves');
+  acceptIncoming(sara.ctx, record.task.id, { how: 'own' });
+  const row = sara.rowOf(record);
+  assert.equal(row.permissions, 'ask'); assert.deepEqual(row.place, { kind: 'worktree' });
+  assert.deepEqual(row.origin, { kind: 'handoff', peer: SARA, name: 'sara', a2aTaskId: record.task.id, threadId: 'thread-1', hop: 1, team: teamId, own: true });
+  assert.deepEqual(sara.events.slice(-1), ['working on ask from @sara']);
+  conduct(t);
+  await until(() => request(p.root, row.id)?.state === 'done', 'approved session', 60000);
+  const input = p.prompts().at(-1).input;
+  assert.match(input, /Respond to the owner immediately/); assert.match(input, /The owner's rules for teammates/); assert.ok(input.includes(RULES));
+  processOutbox(sara.ctx);
+  assert.equal(getRecord(record.task.id).task.status.state, TaskState.COMPLETED);
+  // A rule changed now counts from the next turn.
+  saveTeamAccess(teamId, { rules: 'Answer in one line.' });
+  const later = sara.send('And the tests?', { kind: 'ask', threadId: 'thread-2' }); acceptIncoming(sara.ctx, later.task.id, { how: 'own' });
+  await until(() => request(p.root, sara.rowOf(later).id)?.state === 'done', 'second session', 60000);
+  assert.ok(p.prompts().at(-1).input.includes('Answer in one line.')); assert.ok(!p.prompts().at(-1).input.includes(RULES));
+});
+
+test('a teammate\'s question answered read-only is told the owner\'s rules too', async t => {
+  const p = setup(t, 'answer'), sara = teammate(p), teamId = everyTeam()[0].id;
+  saveTeamAccess(teamId, { handling: 'manual', rules: RULES, root: p.root });
+  const record = sara.send('Where is it?', { kind: 'ask' });
+  acceptIncoming(sara.ctx, record.task.id, { how: 'answer' });
+  const row = sara.rowOf(record); assert.equal(row.readOnly, true); assert.equal(row.origin.team, teamId);
+  conduct(t);
+  await until(() => request(p.root, row.id)?.state === 'done', 'question run');
+  const input = p.prompts().at(-1).input;
+  assert.match(input, /Answer the teammate @sara in plain text/); assert.ok(input.includes(RULES));
 });
 
 test('a work reply is held when the owner holds that teammate\'s replies or when it may carry a secret', async t => {
