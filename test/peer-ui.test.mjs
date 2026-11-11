@@ -767,7 +767,7 @@ test('the first /invite makes the team, named after the open project', async t =
 
 test('a new person: /invite asks their name, turns peer mode on, then makes the team and the code', async t => {
   const p = project(later(t)); environment(t, p.parent);
-  const peer = fakePeer({ teamless: true, running: false }); let me = null;
+  const peer = fakePeer({ teamless: true, running: false, enabled: false }); let me = null;
   peer.identity = ({ create, name } = {}) => { if (create) { peer.calls.push(['identity', name]); me = { name }; return me; } if (!me) throw new Error('Create your peer identity first with elu id --name NAME.'); return me; };
   peer.startPeer = () => { peer.calls.push(['startPeer']); peer.running = true; return true; };
   const v = await view(t, { repo: repository(p.root), peer });
