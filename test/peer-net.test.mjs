@@ -1596,6 +1596,10 @@ test('leaving and removing reach the teammates online, and the same key joins ag
   assert.deepEqual(removed, { team: crew.teamId, name: 'core', key: sara.identity.key, member: 'sara' });
   await until(() => withHome(sara.home, () => team(crew.teamId)).members.find(m => m.key === sara.identity.key)?.removed && state(sara.home)?.teams?.length === 0, 'the removal at sara');
   const again = withHome(ana.home, () => createInvite(ana.identity, crew.teamId, { hours: 1 }));
+  // The code she came back with is still in its retry window, but its admit no longer stands.
+  await assert.rejects(run(sara.home, { type: 'join', code }, 120000), /already used/);
+  assert.ok(withHome(ana.home, () => team(crew.teamId)).members.find(m => m.key === sara.identity.key).removed);
+  assert.equal(online(ana.home, sara.identity.key), false);
   await run(sara.home, { type: 'join', code: again }, 120000);
   await until(() => online(ana.home, sara.identity.key) && online(sara.home, ana.identity.key), 'online after the second return');
   assert.deepEqual(withHome(ana.home, () => team(crew.teamId)).members.map(m => [m.name, m.removed]), [['ana', false], ['sara', false]]);

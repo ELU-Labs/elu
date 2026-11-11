@@ -770,6 +770,27 @@ test('an invite admits once, keeps neither the code nor what a joiner proves wit
     assert.throws(() => createInvite(member.identity, teamId), /Only a team admin/);
   });
 });
+test('a retry of a used invite is answered only while the admit it made still stands', (t) => {
+  const { teamId, member, founder } = makeTeam(t);
+  withHome(founder.home, () => {
+    const sara = member.identity.key, rowOf = digest => ({ teamId, ...JSON.parse(fs.readFileSync(teamPath(teamId, 'invites.json'), 'utf8')).find(row => row.hash === digest) });
+    const [first] = JSON.parse(fs.readFileSync(teamPath(teamId, 'invites.json'), 'utf8')), row = { teamId, ...first };
+    assert.equal(admitProven(row, sara, 'sara').body.key, sara, 'still on the team: the same admit');
+    // Removed within the retry window: the old code brings nothing back, and writes nothing.
+    removeOp(founder.identity, teamId, sara);
+    const ops = readLog(teamId).ops.length;
+    assert.throws(() => admitProven(row, sara, 'sara'), /This invite was already used\./);
+    assert.equal(readLog(teamId).ops.length, ops);
+    assert.ok(team(teamId).members.find(m => m.key === sara).removed);
+    // Back by a new invite: the old code's retry is still refused, the new one's is answered.
+    const code = createInvite(founder.identity, teamId, { hours: 1 }), back = redeemCode(code, sara, 'sara');
+    assert.throws(() => admitProven(row, sara, 'sara'), /This invite was already used\./);
+    assert.equal(admitProven(rowOf(back.body.invite), sara, 'sara').id, back.id);
+    // Left after coming back: neither code answers.
+    leaveOp(member.identity, teamId);
+    assert.throws(() => admitProven(rowOf(back.body.invite), sara, 'sara'), /This invite was already used\./);
+  });
+});
 test('expired invites are refused and not announced, and a refused admit leaves the invite unused', (t) => {
   peerHome(t);
   const me = createIdentity({ name: 'ana' }), { id } = createTeam(me, 'core');
