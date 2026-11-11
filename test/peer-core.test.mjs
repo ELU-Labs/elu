@@ -12,7 +12,8 @@ import { peerFile } from '../lib/peer/paths.mjs';
 import { canonical, sign, verify, publicKeyHex, base32, unbase32 } from '../lib/peer/canonical.mjs';
 import { createIdentity, loadIdentity, identity, renameIdentity, exportIdentity, importIdentity } from '../lib/peer/identity.mjs';
 import { makeOp, validateOp, opProblem, fold, createTeam, readLog, team, teams, appendOp, head, merge, opsMissing, teamPath, setChannel } from '../lib/peer/roster.mjs';
-import { createInvite, parseInvite, redeemInvite } from '../lib/peer/invite.mjs';
+import { SCRYPT, admitProven, checkInviterProof, checkJoinerProof, createInvite, inviteKeys, inviteKeysAsync, inviterProof, joinerProof, openInvites, parseInvite, redeemCode, redeemInvite } from '../lib/peer/invite.mjs';
+import { ALPHABET, newCode, readCode } from '../lib/peer/invite-code.mjs';
 import { shares, share, unshare, repoId, shareFor, normalizeRemote, teamProjects, setTeamProject, teamShare } from '../lib/peer/shares.mjs';
 import { scanSecrets, redactPaths, prepareOutgoing } from '../lib/peer/secrets.mjs';
 import { DEFAULT_PEER_POLICY, DEFAULT_PEER_SETTINGS, defaultBox, peerBox, peerPolicy, peerSettings, savePeerPolicy, savePeerSettings } from '../lib/peer/settings.mjs';
@@ -589,57 +590,139 @@ test('setChannel creates, changes and deletes a channel, and refuses a bad name,
   });
 });
 
-// invite.mjs
+// invite-code.mjs and invite.mjs
 
-test('an invite admits once, stores only the hash, and retries return the same admit', (t) => {
-  const { teamId, founder, member, code } = makeTeam(t);
-  const parsed = parseInvite(code);
-  // A code copied across wrapped lines may carry line breaks or spaces; it is the same code.
-  assert.deepEqual(parseInvite(`${code.slice(0, 90)}\n${code.slice(90, 180)} ${code.slice(180)}`), parsed);
-  assert.equal(parsed.teamId, teamId); assert.equal(parsed.inviter, founder.identity.key); assert.match(parsed.secret, /^[0-9a-f]{64}$/);
-  assert.ok(parsed.expiresAt > Date.now() + 3500 * 1000 && parsed.expiresAt <= Date.now() + 3600 * 1000);
+const CODE = /^[2-9a-hjkmnp-z]{4}-[2-9a-hjkmnp-z]{4}-[2-9a-hjkmnp-z]{4}$/;
+const sha256 = text => crypto.createHash('sha256').update(text).digest('hex');
+const nonce = () => crypto.randomBytes(32).toString('hex');
+test('an invite code is 12 characters in three groups, with no look-alike characters, each drawn evenly', () => {
+  assert.equal(ALPHABET.length, 31); for (const ch of '01ilo') assert.equal(ALPHABET.includes(ch), false, ch);
+  const codes = Array.from({ length: 2000 }, newCode);
+  for (const code of codes) assert.match(code, CODE);
+  assert.equal(new Set(codes).size, codes.length);
+  const counts = new Map(); for (const ch of codes.join('').replace(/-/g, '')) counts.set(ch, (counts.get(ch) ?? 0) + 1);
+  // 24,000 characters over 31: about 774 each, give or take 27.
+  assert.equal(counts.size, 31); for (const [ch, n] of counts) assert.ok(n > 600 && n < 950, `${ch}: ${n}`);
+});
+test('a pasted code is read whatever came with it: case, spaces, tabs, line breaks, dashes, quotes, and /join or elu join in front, even twice', () => {
+  const code = 'k7qm-x2pd-9fhw';
+  for (const text of [code, 'K7QM-X2PD-9FHW', 'k7qmx2pd9fhw', ' k7qm - x2pd - 9fhw ', 'k7qm-x2pd-\n9fhw', 'k7qm-x2pd-   \r\n9fhw  ', 'k7\tqm-x2pd-9f\nhw', '/join k7qm-x2pd-9fhw',
+    '/join /join k7qm-x2pd-9fhw', '/join\n/join k7qm-\nx2pd-9fhw', 'elu join k7qm-x2pd-9fhw', 'ELU JOIN elu join k7qm x2pd 9fhw', '`k7qm-x2pd-9fhw`', '"k7qm-x2pd-9fhw"', 'k7qm–x2pd—9fhw', 'k7qm-x2pd-9fhw​']) {
+    assert.deepEqual(readCode(text), { short: code }, JSON.stringify(text));
+  }
+  for (const text of ['k7qm-x2pd-9fh', 'k7qm-x2pd-9fhwa', 'k7qm-x2pd-9fhl', 'k7qm-x2pd-9fh0', 'k7qm-x2pd-9fh1', 'k7qm-x2pd-9fho', 'k7qm-x2pd-9fhi', '/join', '', 'join k7qm-x2pd-9fhw', null, 7, 'k'.repeat(5000)]) {
+    assert.equal(readCode(text), null, JSON.stringify(text)?.slice(0, 40));
+  }
+  assert.deepEqual(parseInvite('/join K7QM x2pd\r\n9fhw'), { short: code });
+  assert.throws(() => parseInvite('k7qm-x2pd-9fh'), /not valid/);
+});
+test('a code derives its topic and proof keys with scrypt and HKDF, the same way every time, and the topic gives neither key', async () => {
+  assert.deepEqual({ ...SCRYPT }, { N: 65536, r: 8, p: 1, maxmem: 160 * 1024 * 1024 });
+  const a = inviteKeys('k7qm-x2pd-9fhw'), b = await inviteKeysAsync('K7QM X2PD\n9FHW'), c = await inviteKeysAsync('k7qm-x2pd-9fhx');
+  assert.deepEqual({ ...b }, { ...a }); assert.deepEqual(b.seed, a.seed);
+  // Computed here from the documented parameters (docs/peer-network.md, "Invites").
+  const master = crypto.scryptSync('k7qmx2pd9fhw', 'elu-code invite code', 32, SCRYPT);
+  const part = info => Buffer.from(crypto.hkdfSync('sha256', master, Buffer.alloc(0), `elu-code invite ${info}`, 32));
+  assert.deepEqual({ ...a }, { topic: part('topic').toString('hex'), prover: part('inviter proof').toString('hex'), verifier: publicKeyHex(part('joiner proof')) });
+  assert.deepEqual(a.seed, part('joiner proof'));
+  assert.equal(new Set([a.topic, a.prover, a.verifier, c.topic, c.prover, c.verifier]).size, 6);
+  // The seed never reaches JSON.
+  assert.equal(JSON.stringify(a).includes(a.seed.toString('hex')), false);
+  // Slow on purpose: one guess at a code costs a whole scrypt run.
+  const started = process.hrtime.bigint(); crypto.scryptSync('aaaaaaaaaaaa', 'elu-code invite code', 32, SCRYPT);
+  assert.ok(process.hrtime.bigint() - started > 10_000_000n, 'scrypt took under 10 ms');
+  assert.throws(() => inviteKeys('nope'), /not valid/); await assert.rejects(inviteKeysAsync(`elu-team:v1:${'a'.repeat(40)}`), /not valid/);
+});
+test('invite proofs: the right code passes; a wrong code, a relay, a replay or the other side\'s proof fails', () => {
+  const keys = inviteKeys('k7qm-x2pd-9fhw'), wrong = inviteKeys('k7qm-x2pd-9fhx'), ana = signer('ana'), kim = signer('kim'), relay = signer('relay');
+  const fields = { topic: keys.topic, joinerNonce: nonce(), inviterNonce: nonce(), inviter: ana.key, joiner: kim.key };
+  const inviter = inviterProof(keys.prover, fields), joiner = joinerProof(keys.seed, fields);
+  assert.ok(checkInviterProof(keys.prover, fields, inviter)); assert.ok(checkJoinerProof(keys.verifier, fields, joiner));
+  // A wrong code: neither proof is accepted.
+  assert.equal(checkInviterProof(keys.prover, fields, inviterProof(wrong.prover, fields)), false);
+  assert.equal(checkJoinerProof(keys.verifier, fields, joinerProof(wrong.seed, fields)), false);
+  // A relay between them knows the topic, not the code. Each leg has the relay's own key on one side, so the real proofs passed along fail.
+  const kimToRelay = { ...fields, inviter: relay.key }, relayToAna = { ...fields, joiner: relay.key };
+  assert.equal(checkInviterProof(keys.prover, kimToRelay, inviterProof(keys.prover, relayToAna)), false);
+  assert.equal(checkJoinerProof(keys.verifier, relayToAna, joinerProof(keys.seed, kimToRelay)), false);
+  // A proof replayed on another connection meets the other side's fresh nonce.
+  assert.equal(checkInviterProof(keys.prover, { ...fields, joinerNonce: nonce() }, inviter), false);
+  assert.equal(checkJoinerProof(keys.verifier, { ...fields, inviterNonce: nonce() }, joiner), false);
+  // One side's proof is not the other's, and junk is refused without throwing.
+  assert.equal(checkJoinerProof(keys.verifier, fields, inviter), false); assert.equal(checkInviterProof(keys.prover, fields, joiner), false);
+  for (const bad of [null, '', 'zz', inviter.toUpperCase(), 7, {}]) { assert.equal(checkInviterProof(keys.prover, fields, bad), false); assert.equal(checkJoinerProof(keys.verifier, fields, bad), false); }
+  assert.equal(checkInviterProof(keys.prover, { ...fields, topic: 'x' }, inviter), false); assert.equal(checkJoinerProof(keys.verifier, { ...fields, joiner: null }, joiner), false);
+});
+test('an invite admits once, keeps neither the code nor what a joiner proves with, and retries return the same admit', (t) => {
+  const { teamId, member, founder, code } = makeTeam(t);
+  assert.match(code, CODE); assert.deepEqual(parseInvite(code), { short: code });
   withHome(founder.home, () => {
-    const file = teamPath(teamId, 'invites.json'), text = fs.readFileSync(file, 'utf8');
-    assert.equal(mode(file), 0o600); assert.ok(!text.includes(parsed.secret));
+    const file = teamPath(teamId, 'invites.json'), text = fs.readFileSync(file, 'utf8'), keys = inviteKeys(code);
+    assert.equal(mode(file), 0o600);
+    for (const secret of [code, code.replace(/-/g, ''), keys.seed.toString('hex')]) assert.equal(text.includes(secret), false);
     const [row] = JSON.parse(text);
-    assert.equal(row.hash, crypto.createHash('sha256').update(parsed.secret).digest('hex')); assert.equal(row.usedBy, member.identity.key);
-    const again = redeemInvite(teamId, parsed.secret, member.identity.key, 'sara');
-    assert.equal(again.body.key, member.identity.key);
+    assert.deepEqual(Object.keys(row).sort(), ['expiresAt', 'hash', 'prover', 'topic', 'usedAt', 'usedBy', 'verifier']);
+    assert.deepEqual([row.topic, row.prover, row.verifier, row.hash, row.usedBy], [keys.topic, keys.prover, keys.verifier, sha256(keys.verifier), member.identity.key]);
+    assert.ok(row.expiresAt > Date.now() + 3500 * 1000 && row.expiresAt <= Date.now() + 3600 * 1000);
+    assert.deepEqual(openInvites([teamId]), [], 'a used invite is no longer announced');
+    const again = admitProven({ teamId, ...row }, member.identity.key, 'sara');
+    assert.equal(again.body.key, member.identity.key); assert.equal(again.body.invite, row.hash);
     assert.equal(readLog(teamId).ops.length, 2);
-    assert.throws(() => redeemInvite(teamId, parsed.secret, signer().key, 'eve'), /already used/);
-    assert.throws(() => redeemInvite(teamId, invite(), signer().key, 'eve'), /not valid/);
-    assert.throws(() => redeemInvite(teamId, parsed.secret, 'nope', 'eve'), /joiner key/);
+    assert.throws(() => admitProven({ teamId, ...row }, signer().key, 'eve'), /already used/);
+    assert.throws(() => redeemCode(code, signer().key, 'eve'), /not valid/);
+    assert.throws(() => redeemCode(newCode(), signer().key, 'eve'), /not valid/);
+    assert.throws(() => admitProven({ teamId, ...row }, 'nope', 'eve'), /joiner key/);
+    // A short invite is never redeemed as a long code's secret, whatever is sent.
+    for (const secret of [row.topic, row.prover, row.verifier, keys.seed.toString('hex')]) assert.throws(() => redeemInvite(teamId, secret, signer().key, 'eve'), /not valid/);
   });
   withHome(member.home, () => {
     assert.deepEqual(team(teamId).members.map(m => [m.name, m.role]), [['ana', 'admin'], ['sara', 'member']]);
     assert.throws(() => createInvite(member.identity, teamId), /Only a team admin/);
   });
 });
-test('expired invites are refused and a refused admit leaves the invite unused', (t) => {
+test('expired invites are refused and not announced, and a refused admit leaves the invite unused', (t) => {
   peerHome(t);
   const me = createIdentity({ name: 'ana' }), { id } = createTeam(me, 'core');
-  const expired = parseInvite(createInvite(me, id));
+  const expired = createInvite(me, id);
   const file = teamPath(id, 'invites.json');
   fs.writeFileSync(file, JSON.stringify(JSON.parse(fs.readFileSync(file, 'utf8')).map(row => ({ ...row, expiresAt: Date.now() - 1 }))));
-  assert.throws(() => redeemInvite(id, expired.secret, signer().key, 'sara'), /expired/);
-  const bob = signer('bob'), first = parseInvite(createInvite(me, id, { hours: 2 }));
-  redeemInvite(id, first.secret, bob.key, 'bob');
+  assert.deepEqual(openInvites([id]), []);
+  assert.throws(() => redeemCode(expired, signer().key, 'sara'), /not valid/);
+  const [old] = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.throws(() => admitProven({ teamId: id, ...old }, signer().key, 'sara'), /expired/);
+  const bob = signer('bob'), first = createInvite(me, id, { hours: 2 });
+  redeemCode(first, bob.key, 'bob');
   appendOp(id, makeOp(me, id, 'remove', { key: bob.key }));
-  const second = parseInvite(createInvite(me, id));
-  assert.throws(() => redeemInvite(id, second.secret, bob.key, 'bob'), /cannot be admitted again/);
-  assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).find(row => row.hash === crypto.createHash('sha256').update(second.secret).digest('hex')).usedBy, null);
-  assert.throws(() => redeemInvite(id, second.secret, signer().key, 'bad\nname'), /name is not valid/);
+  const second = createInvite(me, id);
+  assert.throws(() => redeemCode(second, bob.key, 'bob'), /cannot be admitted again/);
+  assert.deepEqual(openInvites([id]).map(row => row.topic), [inviteKeys(second).topic], 'the refused admit left it open');
+  assert.throws(() => redeemCode(second, signer().key, 'bad\nname'), /name is not valid/);
   for (const hours of [0, -1, 721, '24', NaN]) assert.throws(() => createInvite(me, id, { hours }), /hours/);
   assert.throws(() => createInvite(me, 'b'.repeat(64)), /not on this machine/);
 });
-test('invite codes are parsed strictly', () => {
+test('a long code from 0.1.3 or earlier still parses, pasted messily, and redeems once', (t) => {
+  peerHome(t);
+  const me = createIdentity({ name: 'ana' }), { id } = createTeam(me, 'core'), secret = invite(), expiresAt = Date.now() + 3600 * 1000;
+  fs.writeFileSync(teamPath(id, 'invites.json'), JSON.stringify([{ hash: sha256(secret), expiresAt, usedBy: null }]));
+  const code = `elu-team:v1:${base32(Buffer.from(canonical({ teamId: id, inviter: me.key, secret, expiresAt })))}`;
+  assert.ok(code.length > 400);
+  assert.deepEqual(parseInvite(`/join /join ${code.slice(0, 100)}  \n${code.slice(100, 200)}\t${code.slice(200)}\r\n`), { teamId: id, inviter: me.key, secret, expiresAt });
+  const bob = signer('bob'), op = redeemInvite(id, secret, bob.key, 'bob');
+  assert.equal(op.body.invite, sha256(secret));
+  assert.deepEqual(redeemInvite(id, secret, bob.key, 'bob'), op, 'a retry gets the same admit');
+  assert.throws(() => redeemInvite(id, secret, signer().key, 'eve'), /already used/);
+  assert.throws(() => redeemInvite(id, invite(), signer().key, 'eve'), /not valid/);
+  assert.deepEqual(openInvites([id]), [], 'a long invite has no topic');
+});
+test('long invite codes are parsed strictly', () => {
   const value = { teamId: 'a'.repeat(64), inviter: 'b'.repeat(64), secret: 'c'.repeat(64), expiresAt: 1700000000000 };
   const code = `elu-team:v1:${base32(Buffer.from(canonical(value)))}`;
   assert.deepEqual(parseInvite(code), value);
   assert.deepEqual(parseInvite(`  ${code}\n`), value);
+  assert.deepEqual(parseInvite(code.toUpperCase()), value, 'case is not part of a code');
   const encode = v => `elu-team:v1:${base32(Buffer.from(typeof v === 'string' ? v : canonical(v)))}`;
-  for (const bad of [code.toUpperCase(), code.replace('v1', 'v2'), `${code}a`, code.slice(0, -4), encode({ ...value, extra: 1 }), encode({ ...value, teamId: '../x' }),
-    encode({ ...value, expiresAt: '1' }), encode(JSON.stringify(value, null, 1)), encode('[1]'), `elu-team:v1:${'a'.repeat(500)}`, null, 7]) {
+  for (const bad of [code.replace('v1', 'v2'), `${code}a`, code.slice(0, -4), encode({ ...value, extra: 1 }), encode({ ...value, teamId: '../x' }),
+    encode({ ...value, expiresAt: '1' }), encode(JSON.stringify(value, null, 1)), encode('[1]'), `elu-team:v1:${'a'.repeat(500)}`, `elu-team:v1:${'a'.repeat(600)}`, null, 7]) {
     assert.throws(() => parseInvite(bad), /not valid/, String(bad).slice(0, 40));
   }
 });

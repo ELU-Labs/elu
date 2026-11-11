@@ -6,7 +6,7 @@ import { repository } from '../lib/git.mjs';
 import { saveTask } from '../lib/state.mjs';
 import { createIdentity } from '../lib/peer/identity.mjs';
 import { createTeam, readLog, merge } from '../lib/peer/roster.mjs';
-import { createInvite, parseInvite, redeemInvite } from '../lib/peer/invite.mjs';
+import { createInvite, redeemCode } from '../lib/peer/invite.mjs';
 import { projectFolder } from '../lib/workspace.mjs';
 import { registerProject } from '../lib/projects.mjs';
 
@@ -33,14 +33,14 @@ export function withHome(home, fn) {
   restore(); return result;
 }
 // A founder and a member in two homes, joined through a real invite and redeem (no
-// network): the member's home receives the founder's full log, as elu.join returns it.
+// network): the member's home receives the founder's full log, as elu.invite.prove returns it.
 export function makeTeam(t, { founderName = 'ana', memberName = 'sara', teamName = 'core' } = {}) {
   const founderHome = newHome(t), memberHome = newHome(t);
   const member = withHome(memberHome, () => createIdentity({ name: memberName }));
   const { founder, teamId, code, log } = withHome(founderHome, () => {
     const founder = createIdentity({ name: founderName }), state = createTeam(founder, teamName);
-    const code = createInvite(founder, state.id, { hours: 1 }), invite = parseInvite(code);
-    redeemInvite(state.id, invite.secret, member.key, memberName);
+    const code = createInvite(founder, state.id, { hours: 1 });
+    redeemCode(code, member.key, memberName);
     return { founder, teamId: state.id, code, log: readLog(state.id).ops };
   });
   withHome(memberHome, () => { const { rejected } = merge(teamId, log); if (rejected.length) throw new Error(rejected[0].reason); });

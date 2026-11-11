@@ -8,12 +8,13 @@ import { createRequire } from 'node:module';
 import { PassThrough } from 'node:stream';
 import { EventEmitter } from 'node:events';
 import { fileURLToPath } from 'node:url';
-import { newHome, withHome, makeTeam, registeredProject, answeringClis, liveTask } from './peer-helpers.mjs';
+import crypto from 'node:crypto';
+import { newHome, peerHome, withHome, makeTeam, registeredProject, answeringClis, liveTask } from './peer-helpers.mjs';
 import { keyLike } from './helpers.mjs';
 import { peerFile } from '../lib/peer/paths.mjs';
 import { defaultBox, savePeerSettings, savePeerPolicy } from '../lib/peer/settings.mjs';
 import { createIdentity, identity as loadIdentity } from '../lib/peer/identity.mjs';
-import { appendOp, createTeam, head, makeOp, merge, readLog, setChannel, team, teams as everyTeam } from '../lib/peer/roster.mjs';
+import { appendOp, createTeam, head, makeOp, merge, readLog, setChannel, team, teamPath, teams as everyTeam } from '../lib/peer/roster.mjs';
 import { createInvite } from '../lib/peer/invite.mjs';
 import { share as shareWith, setTeamProject } from '../lib/peer/shares.mjs';
 // A share is for the teams it was shared with. These tests share with every team on the
@@ -36,7 +37,8 @@ import { peerCli } from '../lib/peer/cli.mjs';
 import { refuse } from '../lib/util.mjs';
 import { BOTS_TOLD, cleanBots, cleanBox, cleanRows, overlaps, statusRows, thisMachine } from '../lib/peer/status.mjs';
 import { createAsk, dismissAsk, reconnect, reviewText, teammate, tickAsks, teamAsk, dismissTeam, applyTask, getAsk, asks as allAsks } from '../lib/peer/asks.mjs';
-import { parseInvite, redeemInvite } from '../lib/peer/invite.mjs';
+import { checkInviterProof, inviteKeys, joinerProof, openInvites, parseInvite, redeemCode } from '../lib/peer/invite.mjs';
+import { base32, canonical } from '../lib/peer/canonical.mjs';
 import * as peer from '../lib/peer/index.mjs';
 import { boardRows } from '../lib/board.mjs';
 import { botKey, botVendors, botsFile, canShare, removeBot, saveBot } from '../lib/bots.mjs';
@@ -324,7 +326,7 @@ test('a project is asked about only by the teams it is shared with, by name or w
   withHome(sara.home, () => {
     // Sara is in two teams: core with Ana, and her own, where Bob is. Each team gets one project.
     const me = loadIdentity(), second = createTeam(me, 'side');
-    redeemInvite(second.id, parseInvite(createInvite(me, second.id, { hours: 1 })).secret, bob.key, 'bob');
+    redeemCode(createInvite(me, second.id, { hours: 1 }), bob.key, 'bob');
     const app = registeredProject(t), docs = registeredProject(t), web = registeredProject(t), old = registeredProject(t), lost = registeredProject(t);
     shareWith(app.root, { handle: 'app', teams: [crew.teamId] }); shareWith(docs.root, { handle: 'docs', teams: [second.id] });
     const methods = intakeMethods({ me, kick: () => {}, event: () => {} });
@@ -353,7 +355,7 @@ test('a project is asked about only by the teams it is shared with, by name or w
     peer.share(old.root, { teams: [second.id] });
     assert.deepEqual([...peer.shares().find(row => row.handle === 'old').teams].sort(), [crew.teamId, second.id].sort());
     const late = createTeam(me, 'late');
-    redeemInvite(late.id, parseInvite(createInvite(me, late.id, { hours: 1 })).secret, cy.key, 'cy');
+    redeemCode(createInvite(me, late.id, { hours: 1 }), cy.key, 'cy');
     assert.equal(reason(send(cy, 'old')), 'No project named old is shared.'); assert.equal(where(send(cy, 'lost')), 'lost');
     assert.equal(where(send(ana, 'old')), 'old'); assert.equal(where(send(bob, 'old')), 'old');
   });
@@ -363,7 +365,7 @@ test('a project\'s name and its live status go only to teammates on a team it is
   const crew = makeTeam(t), ana = crew.founder.identity, sara = crew.member, bob = withHome(newHome(t), () => createIdentity({ name: 'bob' }));
   await withHome(sara.home, async () => {
     const me = loadIdentity(), second = createTeam(me, 'side');
-    redeemInvite(second.id, parseInvite(createInvite(me, second.id, { hours: 1 })).secret, bob.key, 'bob');
+    redeemCode(createInvite(me, second.id, { hours: 1 }), bob.key, 'bob');
     const app = registeredProject(t), docs = registeredProject(t), old = registeredProject(t);
     shareWith(app.root, { handle: 'app', teams: [crew.teamId] }); shareWith(docs.root, { handle: 'docs', teams: [second.id] });
     const daemon = Object.assign(new PeerDaemon({ conductor: () => {} }), { me, methods: {} });
@@ -408,7 +410,7 @@ test('a hello names only the teams its receiver is on, and a stranger or a remov
   const crew = makeTeam(t), ana = crew.founder.identity, sara = crew.member, bob = withHome(newHome(t), () => createIdentity({ name: 'bob' }));
   await withHome(sara.home, async () => {
     const me = loadIdentity(), second = createTeam(me, 'side');
-    redeemInvite(second.id, parseInvite(createInvite(me, second.id, { hours: 1 })).secret, bob.key, 'bob');
+    redeemCode(createInvite(me, second.id, { hours: 1 }), bob.key, 'bob');
     const daemon = Object.assign(new PeerDaemon({ conductor: () => {} }), { me, methods: {} });
     // Each teammate hears my name and only the team we share, with the ops that admit me there.
     const toAna = daemon.hello(ana.key), toBob = daemon.hello(bob.key);
@@ -429,16 +431,40 @@ test('a hello names only the teams its receiver is on, and a stranger or a remov
   });
 });
 
-test('an invite join over the wire: the joiner is told no team before elu.join, and gets the whole roster in its reply', async t => {
+// A long code as 0.1.3 made it, with its row in the inviter's invites.json (the active home's).
+function longInvite(me, teamId) {
+  const secret = crypto.randomBytes(32).toString('hex'), expiresAt = Date.now() + 3600 * 1000, file = teamPath(teamId, 'invites.json');
+  const rows = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : [];
+  fs.writeFileSync(file, JSON.stringify([...rows, { hash: crypto.createHash('sha256').update(secret).digest('hex'), expiresAt, usedBy: null }]));
+  return { secret, code: `elu-team:v1:${base32(Buffer.from(canonical({ teamId, inviter: me.key, secret, expiresAt })))}` };
+}
+// An inviter's daemon with fake sockets: no network, and every connection is one the test speaks for.
+function inviterDaemon(me) {
+  const topics = [];
+  const daemon = Object.assign(new PeerDaemon({ conductor: () => {} }), { me, node: { dial() {}, leave() {}, joinTopic: topic => topics.push(`+${topic}`), leaveTopic: topic => topics.push(`-${topic}`) } });
+  daemon.methods = daemon.extensions();
+  return { daemon, topics };
+}
+const hi = { jsonrpc: '2.0', method: 'elu.hello', params: { binding: BINDING, a2aVersion: '1.0', ...NOBODY } };
+// One side of an invite exchange: the joiner's half, spoken through a fake socket.
+async function startInvite(daemon, key, topic) {
+  const joiner = fakeSocket(), joinerNonce = crypto.randomBytes(32).toString('hex');
+  daemon.attach(joiner.socket, key); joiner.say(hi);
+  joiner.say({ jsonrpc: '2.0', id: 1, method: 'elu.invite.start', params: { topic, nonce: joinerNonce } });
+  const reply = await until(() => joiner.frames().find(frame => frame.id === 1), 'the start reply', 5000);
+  return { joiner, reply, fields: { topic, joinerNonce, inviterNonce: reply.result?.nonce, inviter: daemon.me.key, joiner: key } };
+}
+
+test('a long code from 0.1.3 joins over the wire: the joiner is told no team before elu.join, and gets the whole roster in its reply', async t => {
   const anaHome = newHome(t), liHome = newHome(t), li = withHome(liHome, () => createIdentity({ name: 'li' }));
   const { teamId, ops } = await withHome(anaHome, async () => {
     const me = createIdentity({ name: 'ana' }), made = createTeam(me, 'core'); createTeam(me, 'side');
-    const { secret } = parseInvite(createInvite(me, made.id, { hours: 1 }));
-    const daemon = Object.assign(new PeerDaemon({ conductor: () => {} }), { me, node: { dial() {}, leave() {} } }); daemon.methods = daemon.extensions();
+    const { secret } = longInvite(me, made.id);
+    const { daemon } = inviterDaemon(me);
     const joiner = fakeSocket();
     daemon.attach(joiner.socket, li.key);
     assert.deepEqual(joiner.frames()[0].params, { binding: BINDING, a2aVersion: '1.0', ...NOBODY });
-    joiner.say({ jsonrpc: '2.0', method: 'elu.hello', params: { binding: BINDING, a2aVersion: '1.0', ...NOBODY } });
+    joiner.say(hi);
     joiner.say({ jsonrpc: '2.0', id: 1, method: 'elu.join', params: { teamId: made.id, secret, name: 'li' } });
     const reply = await until(() => joiner.frames().find(frame => frame.id === 1), 'the join reply', 5000);
     await until(() => daemon.sessions.get(li.key)?.admitted, 'the joiner admitted', 5000);
@@ -454,10 +480,93 @@ test('an invite join over the wire: the joiner is told no team before elu.join, 
   });
 });
 
+test('a short code over the wire: the inviter announces its topic, proves itself first, names the team only after the joiner\'s proof, then leaves the topic', async t => {
+  const anaHome = newHome(t), liHome = newHome(t), li = withHome(liHome, () => createIdentity({ name: 'li' }));
+  const { teamId, ops } = await withHome(anaHome, async () => {
+    const me = createIdentity({ name: 'ana' }), made = createTeam(me, 'core'); createTeam(me, 'side');
+    const code = createInvite(me, made.id, { hours: 1 }), keys = inviteKeys(code);
+    const { daemon, topics } = inviterDaemon(me);
+    daemon.inviteTopics(); daemon.inviteTopics();
+    assert.deepEqual(topics, [`+${keys.topic}`], 'announced once');
+    const { joiner, reply, fields } = await startInvite(daemon, li.key, keys.topic);
+    assert.ok(checkInviterProof(keys.prover, fields, reply.result.proof), 'the inviter proves it knows the code');
+    // Nothing about the team has gone out yet.
+    for (const word of [made.id, '"core"', '"side"', '"ana"']) assert.equal(joiner.wire.out.includes(word), false, word);
+    joiner.say({ jsonrpc: '2.0', id: 2, method: 'elu.invite.prove', params: { proof: joinerProof(keys.seed, fields), name: 'li' } });
+    const proved = await until(() => joiner.frames().find(frame => frame.id === 2), 'the prove reply', 5000);
+    assert.equal(proved.result.teamId, made.id); assert.equal(proved.result.inviter, me.key);
+    await until(() => daemon.sessions.get(li.key)?.admitted, 'the joiner admitted', 5000);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(topics, [`+${keys.topic}`, `-${keys.topic}`], 'the used invite\'s topic is left');
+    assert.deepEqual(openInvites([made.id]), []);
+    joiner.socket.destroy();
+    assert.equal(joiner.wire.out.includes('"side"'), false);
+    return { teamId: made.id, ops: proved.result.ops };
+  });
+  withHome(liHome, () => {
+    assert.deepEqual(merge(teamId, ops).rejected, []);
+    assert.deepEqual(team(teamId).members.map(m => m.name), ['ana', 'li']);
+  });
+});
+
+test('a short invite refuses whoever cannot prove the code: a wrong code, a relay, a replay, a proof before the start, elu.join, and too many failures', async t => {
+  peerHome(t);
+  const me = createIdentity({ name: 'ana' }), made = createTeam(me, 'core');
+  const code = createInvite(me, made.id, { hours: 1 }), keys = inviteKeys(code), wrong = inviteKeys('k7qm-x2pd-9fhw');
+  const { daemon } = inviterDaemon(me);
+  const someone = () => withHome(newHome(t), () => createIdentity({ name: 'x' }).key);
+  const refused = async (joiner, id, pattern) => {
+    const frame = await until(() => joiner.frames().find(row => row.id === id), `reply ${id}`, 5000);
+    assert.match(frame.error?.message ?? '', pattern); await until(() => joiner.socket.destroyed, 'closed', 5000);
+  };
+  const prove = (joiner, fields, seed) => joiner.say({ jsonrpc: '2.0', id: 2, method: 'elu.invite.prove', params: { proof: joinerProof(seed, fields), name: 'eve' } });
+  // Someone who found the topic but has the wrong code: the start is answered, the proof is not.
+  const eve = someone(), first = await startInvite(daemon, eve, keys.topic);
+  assert.equal(checkInviterProof(wrong.prover, first.fields, first.reply.result.proof), false, 'the inviter proof is no help without the code');
+  prove(first.joiner, first.fields, wrong.seed); await refused(first.joiner, 2, /proof did not match/);
+  // A relay that passes along a proof the real joiner made for its connection to the relay.
+  const kim = someone(), relay = someone(), leg = await startInvite(daemon, relay, keys.topic);
+  prove(leg.joiner, { ...leg.fields, inviter: relay, joiner: kim }, keys.seed); await refused(leg.joiner, 2, /proof did not match/);
+  // A proof replayed on a new connection: the inviter's nonce is new.
+  const dan = someone(), once = await startInvite(daemon, dan, keys.topic);
+  const replay = await startInvite(daemon, dan, keys.topic);
+  replay.joiner.say({ jsonrpc: '2.0', id: 2, method: 'elu.invite.prove', params: { proof: joinerProof(keys.seed, once.fields), name: 'dan' } }); await refused(replay.joiner, 2, /proof did not match/);
+  // A proof with no start, and a short invite's keys sent through elu.join.
+  for (const frame of [{ method: 'elu.invite.prove', params: { proof: '0'.repeat(128), name: 'x' } }, { method: 'elu.join', params: { teamId: made.id, secret: keys.verifier, name: 'x' } }]) {
+    const joiner = fakeSocket(); daemon.attach(joiner.socket, someone()); joiner.say(hi);
+    joiner.say({ jsonrpc: '2.0', id: 9, ...frame });
+    await until(() => joiner.socket.destroyed, `${frame.method} closed`, 5000);
+  }
+  // An unknown topic counts as a failure; a key with three gets no more answers, even with the right code.
+  const bob = someone();
+  for (let i = 0; i < 2; i++) { const { joiner, reply } = await startInvite(daemon, bob, wrong.topic); assert.match(reply.error.message, /not valid/); await until(() => joiner.socket.destroyed, 'closed', 5000); }
+  const third = await startInvite(daemon, bob, keys.topic); prove(third.joiner, third.fields, wrong.seed); await refused(third.joiner, 2, /proof did not match/);
+  const blocked = await startInvite(daemon, bob, keys.topic); assert.match(blocked.reply.error.message, /Too many failed invite attempts/);
+  // None of it used the invite, and nobody was admitted.
+  assert.equal(openInvites([made.id]).length, 1); assert.deepEqual(team(made.id).members.map(m => m.name), ['ana']);
+  assert.equal(daemon.sessions.size, 0);
+  // The real joiner still gets in.
+  const li = someone(), real = await startInvite(daemon, li, keys.topic);
+  real.joiner.say({ jsonrpc: '2.0', id: 2, method: 'elu.invite.prove', params: { proof: joinerProof(keys.seed, real.fields), name: 'li' } });
+  await until(() => daemon.sessions.get(li)?.admitted, 'li admitted', 5000);
+  assert.deepEqual(team(made.id).members.map(m => m.name), ['ana', 'li']);
+});
+
+test('an expired short invite is no longer announced, and its topic is left', async t => {
+  peerHome(t);
+  const me = createIdentity({ name: 'ana' }), made = createTeam(me, 'core'), keys = inviteKeys(createInvite(me, made.id, { hours: 1 }));
+  const { daemon, topics } = inviterDaemon(me);
+  daemon.inviteTopics(); daemon.inviteTopics(Date.now() + 2 * 3600 * 1000);
+  assert.deepEqual(topics, [`+${keys.topic}`, `-${keys.topic}`]);
+  // A transient node (joining with peer mode off) announces nothing.
+  const transient = Object.assign(new PeerDaemon({ conductor: () => {}, requireEnabled: false }), { me, node: { joinTopic: () => assert.fail('announced') } });
+  transient.inviteTopics();
+});
+
 test('a team ask goes to every teammate as one thread; the first to take it answers and the other copies are withdrawn', t => {
   const crew = makeTeam(t), ana = crew.founder.identity, sara = crew.member.identity, li = withHome(newHome(t), () => createIdentity({ name: 'li' }));
   withHome(crew.founder.home, () => {
-    redeemInvite(crew.teamId, parseInvite(createInvite(ana, crew.teamId, { hours: 1 })).secret, li.key, 'li');
+    redeemCode(createInvite(ana, crew.teamId, { hours: 1 }), li.key, 'li');
     const events = [], ctx = { me: loadIdentity(), session: () => null, dial: () => {}, event: text => events.push(text), kick: () => {} };
     const sent = teamAsk(ctx, { text: 'Where does the parser trim a coupon code?' });
     assert.deepEqual(sent.map(ask => ask.to).sort(), [sara.key, li.key].sort());
@@ -509,7 +618,7 @@ test('an ask sent in a team goes to that team, and one sent in a channel to the 
   const crew = makeTeam(t), ana = crew.founder.identity, sara = crew.member.identity;
   const [li, mo] = ['li', 'mo'].map(name => withHome(newHome(t), () => createIdentity({ name })));
   withHome(crew.founder.home, () => {
-    const join = (teamId, who) => redeemInvite(teamId, parseInvite(createInvite(ana, teamId, { hours: 1 })).secret, who.key, who.name);
+    const join = (teamId, who) => redeemCode(createInvite(ana, teamId, { hours: 1 }), who.key, who.name);
     const core = crew.teamId, side = createTeam(ana, 'side').id; join(core, li); join(side, mo);
     const events = [], ctx = { me: loadIdentity(), session: () => null, dial: () => {}, event: text => events.push(text), kick: () => {} };
     const to = sent => sent.map(ask => ask.to).sort(), keys = (...who) => who.map(member => member.key).sort();
@@ -1105,7 +1214,7 @@ test('elu peer trust and untrust resolve a roster name, refuse unknown and ambig
     await assert.rejects(peerCli(['peer', 'trust'], {}), /Use elu peer trust @NAME\./);
     await assert.rejects(peerCli(['peer', 'untrust', '@sara', 'extra'], {}), /Use elu peer untrust @NAME\./);
     await assert.rejects(peerCli(['peer', 'bogus'], {}), /trust @NAME\|untrust @NAME/);
-    redeemInvite(crew.teamId, parseInvite(createInvite(ana, crew.teamId, { hours: 1 })).secret, 'c'.repeat(64), 'sara');
+    redeemCode(createInvite(ana, crew.teamId, { hours: 1 }), 'c'.repeat(64), 'sara');
     await assert.rejects(peerCli(['peer', 'trust', '@sara'], {}), /More than one teammate is named @sara\./);
     const untrusted = await peerCli(['peer', 'untrust', sara.key.slice(0, 8)], {});
     assert.equal(untrusted.message, '@sara is no longer trusted. Paths go out as [path].'); assert.equal(untrusted.peer.trusted, false);
@@ -1145,9 +1254,10 @@ test('teammates\' saved status rows show only while they are online', t => {
 });
 
 // --- Network tests: hyperdht/testnet on 127.0.0.1, two homes, one daemon process each. ---
-test('team create, invite and join over the network', async t => {
+test('team create, invite and join over the network with a short code', async t => {
   const bootstrap = await testnet(t), ana = newHome(t), sara = newHome(t);
   const { teamId, code } = withHome(ana, () => { const me = createIdentity({ name: 'ana' }), made = createTeam(me, 'core'); return { teamId: made.id, code: createInvite(me, made.id, { hours: 1 }) }; });
+  assert.match(code, /^[2-9a-hjkmnp-z]{4}-[2-9a-hjkmnp-z]{4}-[2-9a-hjkmnp-z]{4}$/);
   const saraKey = withHome(sara, () => createIdentity({ name: 'sara' }).key);
   enable(ana, bootstrap); enable(sara, bootstrap);
   const a = await daemon(t, ana, { conductor: false }), s = await daemon(t, sara, { conductor: false });
@@ -1156,7 +1266,8 @@ test('team create, invite and join over the network', async t => {
   assert.deepEqual(withHome(sara, () => head(teamId)), withHome(ana, () => head(teamId)));
   assert.deepEqual(withHome(ana, () => team(teamId)).members.map(m => m.name), ['ana', 'sara']);
   await until(() => online(ana, saraKey) && online(sara, a.key), 'teammates online after the join');
-  await assert.rejects(run(sara, { type: 'join', code }), /already on this team/);
+  // The invite is used, so the inviter left its topic.
+  await until(() => withHome(ana, () => fs.readFileSync(peerFile('daemon.log'), 'utf8')).includes(`invite topic ${withHome(ana, () => inviteKeys(code)).topic.slice(0, 8)} left`), 'the topic left');
   const status = withHome(sara, () => peer.peerStatus());
   assert.equal(status.running, true); assert.equal(status.teams[0].members.find(m => m.key === a.key).path, 'direct');
   // A stopped daemon leaves its DHT routing table for the next start.
@@ -1167,13 +1278,24 @@ test('team create, invite and join over the network', async t => {
   void s;
 });
 
+test('a long code from 0.1.3 still joins over the network', async t => {
+  const bootstrap = await testnet(t), ana = newHome(t), sara = newHome(t);
+  const { teamId, code } = withHome(ana, () => { const me = createIdentity({ name: 'ana' }), made = createTeam(me, 'core'); return { teamId: made.id, code: longInvite(me, made.id).code }; });
+  withHome(sara, () => createIdentity({ name: 'sara' }));
+  enable(ana, bootstrap); enable(sara, bootstrap);
+  await daemon(t, ana, { conductor: false }); await daemon(t, sara, { conductor: false });
+  assert.deepEqual(await run(sara, { type: 'join', code: `${code.slice(0, 200)}\n${code.slice(200)}` }), { id: teamId, name: 'core' });
+  assert.deepEqual(withHome(ana, () => team(teamId)).members.map(m => m.name), ['ana', 'sara']);
+  await assert.rejects(run(sara, { type: 'join', code }), /already on this team/);
+});
+
 test('a teammate the other side has not heard of proves it in the hello, and each side then pushes the roster ops the other lacks', async t => {
   const bootstrap = await testnet(t), founder = newHome(t), bea = newHome(t), cy = newHome(t);
   const beaKey = withHome(bea, () => createIdentity({ name: 'bea' }).key), cyKey = withHome(cy, () => createIdentity({ name: 'cy' }).key);
   const danKey = withHome(newHome(t), () => createIdentity({ name: 'dan' }).key);
   const { teamId, early, all } = withHome(founder, () => {
     const me = createIdentity({ name: 'ana' }), made = createTeam(me, 'core');
-    const admit = (key, name) => redeemInvite(made.id, parseInvite(createInvite(me, made.id, { hours: 1 })).secret, key, name);
+    const admit = (key, name) => redeemCode(createInvite(me, made.id, { hours: 1 }), key, name);
     admit(cyKey, 'cy'); const early = readLog(made.id).ops;
     admit(beaKey, 'bea'); admit(danKey, 'dan');
     return { teamId: made.id, early, all: readLog(made.id).ops };

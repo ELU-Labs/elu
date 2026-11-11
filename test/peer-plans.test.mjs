@@ -9,7 +9,7 @@ import { saveTask } from '../lib/state.mjs';
 import { peerFile } from '../lib/peer/paths.mjs';
 import { createIdentity, identity as loadIdentity } from '../lib/peer/identity.mjs';
 import { appendOp, createTeam, head, makeOp } from '../lib/peer/roster.mjs';
-import { createInvite, parseInvite, redeemInvite } from '../lib/peer/invite.mjs';
+import { createInvite, redeemCode } from '../lib/peer/invite.mjs';
 import { share, unshare } from '../lib/peer/shares.mjs';
 import { savePeerSettings } from '../lib/peer/settings.mjs';
 import { saveBot } from '../lib/bots.mjs';
@@ -117,7 +117,7 @@ test('Tasks go only to teammates on a team the project is shared with, again whe
   const crew = makeTeam(t), ana = crew.founder.identity, sara = crew.member, bob = withHome(newHome(t), () => createIdentity({ name: 'bob' })), li = withHome(newHome(t), () => createIdentity({ name: 'li' }));
   await withHome(sara.home, async () => {
     const me = loadIdentity(), second = createTeam(me, 'side');
-    for (const who of [bob, li]) redeemInvite(second.id, parseInvite(createInvite(me, second.id, { hours: 1 })).secret, who.key, who.name);
+    for (const who of [bob, li]) redeemCode(createInvite(me, second.id, { hours: 1 }), who.key, who.name);
     const app = registeredProject(t, { origin: ORIGIN }), docs = registeredProject(t, { origin: OTHER });
     share(app.root, { handle: 'app', teams: [crew.teamId] }); share(docs.root, { handle: 'docs', teams: [second.id] });
     writePlans(app.root, 1, [plan()]); writePlans(docs.root, 1, [plan({ id: 't-0000d0c5', title: 'Write the setup page' })]);
@@ -197,7 +197,7 @@ test('teammates\' Tasks count only in a project this machine shares with a team 
   const crew = makeTeam(t), ana = crew.founder.identity, sara = crew.member, bob = withHome(newHome(t), () => createIdentity({ name: 'bob' }));
   withHome(sara.home, () => {
     const me = loadIdentity(), now = Date.now(), second = createTeam(me, 'side');
-    redeemInvite(second.id, parseInvite(createInvite(me, second.id, { hours: 1 })).secret, bob.key, 'bob');
+    redeemCode(createInvite(me, second.id, { hours: 1 }), bob.key, 'bob');
     savePeerSettings({ enabled: true });
     const app = registeredProject(t, { origin: ORIGIN }), docs = registeredProject(t, { origin: OTHER }), loose = registeredProject(t, { origin: 'https://github.com/elu-labs/loose.git' });
     const mine = share(app.root, { handle: 'app', teams: [crew.teamId] }), other = share(docs.root, { handle: 'docs', teams: [second.id] });
