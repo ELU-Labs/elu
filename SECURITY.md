@@ -134,6 +134,28 @@ own model and bots in that project are given the titles and goals as data, marke
 teammate's text and never as a request; a teammate's question running on your machine is
 given none of it.
 
+## Invite codes
+
+An invite code is 12 random characters, such as `k7qm-x2pd-9fhw`, about 59.4 bits. It works
+once, for 24 hours. Anyone who has it can join that team as a member, so send it only to
+the person you mean. It names no team and no key: while the invite is open, your peer
+daemon waits on a network topic derived from the code with scrypt, and the joiner finds you
+there. Before you say anything about the team, each side proves to the other that it knows
+the code, over that connection only ([docs/peer-network.md](docs/peer-network.md#roster)).
+
+What others learn:
+
+- A DHT node near the topic, or anyone looking it up, sees the topic, your peer key and the
+  IP addresses of the two machines. Not the team, its members or the code. Getting the code
+  back from the topic costs one scrypt run of 64 MiB per guess: hundreds of thousands of
+  GPU-years for the whole space, against a code that lasts a day.
+- Someone on the topic who does not know the code fails the proof and learns no more than
+  the topic told them. A proof covers both sides' fresh nonces and both keys of the
+  connection, so it cannot be replayed or passed through a relay.
+- Your `invites.json` keeps, for each code, the topic, the key you prove yourself with and
+  the public key a joiner's proof is checked against. Not the code: a copy of the file
+  cannot be used to join.
+
 ## The never list
 
 The never list (push, tag, merge, deploy, publish) is enforced only where the means are

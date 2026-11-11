@@ -190,7 +190,7 @@ the two connect directly over Hyperswarm.
 elu id --name sam        # once: your name on the team
 elu team create shop
 elu peer on
-elu invite               # prints a code that works once, within 24 hours
+elu invite               # prints a code like k7qm-x2pd-9fhw; it works once, within 24 hours
 
 # on your teammate's computer, in the project you may ask about
 elu id --name kim
