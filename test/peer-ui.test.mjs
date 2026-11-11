@@ -624,7 +624,9 @@ test('a thread shows under its channel, #general or its teammate, and a row coun
   // On two teams, each #general names its team, and a person on both is listed once.
   const docs = { id: 'team-2', name: 'Docs', members: [{ key: ME, name: 'ana' }, { key: SARA, name: 'sara', online: true }] };
   assert.deepEqual(lines(chatBar({ status: { key: ME, teams: [core, docs] }, items: [] }, 60, false)), ['Channels', '# general · Core 3', '# design · Core 2', '# general · Docs 2', '+ Add channel', '', 'Direct messages', '● @sara online', '○ @li offline', '+ Add teammate']);
-  assert.deepEqual(lines(chatBar({ status: { key: ME, teams: [] }, items: [] }, 60, false)), ['No team yet. elu team create NAME']);
+  const empty = lines(chatBar({ status: { key: ME, teams: [] }, items: [] }, 40, false));
+  assert.ok(empty.every(text => text.length <= 40 && !text.endsWith('…')), empty.join('|'));
+  for (const text of ['To invite someone:', '/invite', '!elu team create NAME', '/join']) assert.ok(empty.join(' ').replace(/\s+/g, ' ').includes(text), text);
 });
 
 test('a channel lists me first, then who is online, then the rest, and counts the names that do not fit', () => {
