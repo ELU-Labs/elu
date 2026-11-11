@@ -1,0 +1,50 @@
+name: Tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A newer push to a pull request replaces its older run. Runs on main all finish.
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    # The suite takes about four minutes. A run that hangs stops here, not at the six-hour default.
+    timeout-minutes: 20
+    strategy:
+      # A failure on one system does not stop the other, so each reports its own result.
+      fail-fast: false
+      matrix:
+        # A pull request is tested on Linux only. macOS runs on main, and on any branch when this
+        # workflow is started by hand: gh workflow run test.yml --ref <branch>
+        os: ${{ fromJSON(github.event_name == 'pull_request' && '["ubuntu-24.04"]' || '["ubuntu-24.04", "macos-15"]') }}
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22.9.0
+      - run: npm ci --ignore-scripts
+      - if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap apparmor-profiles apparmor-utils
+          sudo install -m 0644 /usr/share/apparmor/extra-profiles/bwrap-userns-restrict /etc/apparmor.d/bwrap-userns-restrict
+          sudo apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict
+      - run: npm install --global --ignore-scripts @openai/codex@0.166.0-alpha.5.1
+      - run: npm test
+        env:
+          TMPDIR: ${{ runner.temp }}
+      - run: node --test test/native.test.mjs
+        env:
+          ELU_CODE_NATIVE: codex
+          TMPDIR: ${{ runner.temp }}

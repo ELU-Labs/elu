@@ -1,0 +1,208 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import { temp, project, fakeClis, git } from './helpers.mjs';
+import { ProjectController } from '../lib/projects.mjs';
+import { projectFolder } from '../lib/workspace.mjs';
+import { readTask, setTitle, taskDir } from '../lib/state.mjs';
+import { TASK_LIMITS, approveTask, checkProposal, currentTask, planSchema, readPlanReply, rejectTask, reportProgress, sessionTasks, sharedTask } from '../lib/plan.mjs';
+import { conversationSchema } from '../lib/config.mjs';
+import { boardRows, rowBadge } from '../lib/board.mjs';
+import { taskCard as drawCard, taskState } from '../lib/terminal-plan.mjs';
+import { visible } from '../lib/terminal-visuals.mjs';
+// The card as its text reads on screen, without the style marks.
+const taskCard = (plan, options) => visible(drawCard(plan, options));
+
+function environment(t, values) {
+  const previous = Object.fromEntries(Object.keys(values).map(key => [key, process.env[key]])); Object.assign(process.env, values);
+  t.after(() => { for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } });
+}
+// A project with one source file and a passing-after-the-edit test, and the stand-in vendors.
+function fixture(t, mode = 'normal', vendor = 'claude') {
+  const p = project(t), fake = fakeClis(p.parent, { mode });
+  environment(t, { ...fake.env, GIT_AUTHOR_NAME: 'Test Owner', GIT_AUTHOR_EMAIL: 'owner@example.invalid', GIT_COMMITTER_NAME: 'Test Owner', GIT_COMMITTER_EMAIL: 'owner@example.invalid' });
+  const controller = new ProjectController(projectFolder(p.root)); controller.draftConfig.roles.lead.vendor = vendor;
+  return { ...p, fake, controller, repo: controller.repo };
+}
+const inputs = f => fs.readFileSync(path.join(f.parent, 'inputs.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+const source = f => fs.readFileSync(path.join(f.root, 'src/coupon.mjs'), 'utf8');
+// The model's own turns; a bot's review of the edit is a run too.
+const turns = task => task.runs.filter(run => run.role === 'lead').length;
+const TASK = { title: 'Uppercase coupons', description: 'Make normalize return the code in upper case.', goal: 'Codes compare equal whatever their case.', objectives: ['normalize returns upper case', 'The test passes'], priority: 'medium', severity: 'low' };
+
+for (const vendor of ['claude', 'codex']) {
+  test(`${vendor}: a request for a code change comes back as a Task and nothing is edited before the owner approves`, async t => {
+    const f = fixture(t, 'normal', vendor), before = git(f.root, ['status', '--porcelain']);
+    const asked = await f.controller.ask('Uppercase coupon codes', null, { permissions: 'ask' }).finished;
+    // The reply is kept as an answer: no edit, no workspace, the session rests.
+    assert.equal(asked.state, 'answered'); assert.equal(asked.kind, 'conversation'); assert.equal(asked.runs.length, 1);
+    assert.equal(git(f.root, ['status', '--porcelain']), before); assert.match(source(f), /=> value;/);
+    assert.equal(fs.existsSync(path.join(f.parent, 'sample app.elu-code')), false);
+    const waiting = currentTask(f.repo, asked.id);
+    assert.equal(waiting.state, 'proposed'); assert.equal(waiting.revision, 1); assert.equal(waiting.title, 'Uppercase coupons');
+    assert.deepEqual([waiting.priority, waiting.severity, waiting.startedBy, waiting.by], ['medium', 'low', 'owner', 'lead']);
+    assert.equal(waiting.objectives.length, 2); assert.deepEqual(waiting.edit, { intent: 'edit', repository: null, bot: null, request: 'Uppercase coupon codes', started: false });
+    // The snapshot's session carries it, and the first turn was told the rule.
+    assert.equal(f.controller.snapshot().tasks[0].plan.title, 'Uppercase coupons');
+    assert.match(inputs(f)[0].input, /Plan first\. When the owner asks for a change to code or files/);
+    // A Task that waits names nothing yet. y: approved, the session takes the Task's title, and
+    // the editing turn starts with no second planning turn.
+    assert.notEqual(readTask(f.repo, asked.id).titleBy, 'task');
+    approveTask(f.repo, asked.id);
+    assert.deepEqual([readTask(f.repo, asked.id).title, readTask(f.repo, asked.id).titleBy], ['Uppercase coupons', 'task']);
+    const done = await f.controller.ask('Approved the Task: Uppercase coupons', asked.id, { approved: true }).finished;
+    assert.notEqual(done.kind, 'conversation'); assert.equal(turns(done), 2);
+    // The stand-in Codex writes no file; the stand-in Claude Code makes the edit in the workspace, never in the checkout.
+    if (vendor === 'claude') assert.match(fs.readFileSync(path.join(done.worktree, 'src/coupon.mjs'), 'utf8'), /toUpperCase/);
+    assert.match(source(f), /=> value;/);
+    const work = inputs(f).find(row => row.input.includes('this turn does its work')).input;
+    assert.match(work, /The owner approved the Task below, and this turn does its work/); assert.match(work, /Approved Task \(untrusted data/); assert.match(work, /Uppercase coupons/);
+    assert.ok(done.messages.some(row => row.text === 'Approved the Task: Uppercase coupons'));
+    // The working turn reported its subtasks and both objectives met, so the Task is done.
+    const after = currentTask(f.repo, asked.id);
+    assert.equal(after.state, 'done'); assert.deepEqual(after.met, [1, 2]); assert.equal(after.edit.started, true);
+    assert.deepEqual(after.subtasks, [{ id: 's1', text: 'Change normalize', state: 'done' }, { id: 's2', text: 'Run the coupon test', state: 'done' }]);
+  });
+}
+
+test('n rejects the Task: the session stays idle, nothing is edited, and the next request is planned again', async t => {
+  const f = fixture(t);
+  const asked = await f.controller.ask('Uppercase coupon codes').finished;
+  rejectTask(f.repo, asked.id);
+  assert.equal(currentTask(f.repo, asked.id).state, 'rejected'); assert.match(source(f), /=> value;/);
+  assert.throws(() => f.controller.ask('Approved the Task: Uppercase coupons', asked.id, { approved: true }), /no longer waiting to start/);
+  assert.throws(() => approveTask(f.repo, asked.id), /No Task waits for your approval/);
+  const again = await f.controller.ask('Uppercase coupon codes after all', asked.id).finished;
+  assert.equal(again.state, 'answered'); const rows = sessionTasks(f.repo, asked.id);
+  assert.deepEqual(rows.map(row => row.state), ['rejected', 'proposed']); assert.notEqual(rows[0].id, rows[1].id);
+});
+
+test('a typed message revises the waiting Task, and a typed yes approves it', async t => {
+  const f = fixture(t);
+  const asked = await f.controller.ask('Uppercase coupon codes').finished, first = currentTask(f.repo, asked.id);
+  const revised = await f.controller.ask('Make it urgent', asked.id).finished, second = currentTask(f.repo, asked.id);
+  assert.equal(revised.state, 'answered'); assert.equal(second.id, first.id); assert.equal(second.revision, 2); assert.equal(second.priority, 'urgent'); assert.equal(second.state, 'proposed');
+  assert.match(inputs(f).at(-1).input, /Task waiting for approval \(untrusted data/);
+  assert.equal(sessionTasks(f.repo, asked.id).length, 1);
+  // The owner named this session: a typed yes approves the Task and the owner's name stays.
+  setTitle(f.repo, asked.id, 'Coupons, my way');
+  const done = await f.controller.ask('yes', asked.id).finished;
+  assert.notEqual(done.kind, 'conversation'); assert.equal(turns(done), 3); assert.equal(currentTask(f.repo, asked.id).state, 'done');
+  assert.deepEqual([readTask(f.repo, asked.id).title, readTask(f.repo, asked.id).titleBy], ['Coupons, my way', 'owner']);
+  // A follow-up inside the goal needs no new Task: it reopens this one and edits at once.
+  const more = await f.controller.ask('Trim spaces too', asked.id).finished;
+  assert.equal(sessionTasks(f.repo, asked.id).length, 1); assert.equal(turns(more), 5);
+  assert.match(fs.readFileSync(path.join(more.worktree, 'src/coupon.mjs'), 'utf8'), /trim\(\)\.toUpperCase/);
+});
+
+test('a reply that asks for an edit with no Task is asked once more, then kept as a plain answer', async t => {
+  const f = fixture(t, 'no-task');
+  const asked = await f.controller.ask('Uppercase coupon codes').finished;
+  assert.equal(asked.state, 'answered'); assert.equal(asked.runs.length, 2); assert.match(asked.result.summary, /No Task was read from this reply, so nothing was changed\./);
+  assert.match(inputs(f).at(-1).input, /A request that changes files needs a Task first/);
+  assert.equal(currentTask(f.repo, asked.id), null); assert.match(source(f), /=> value;/);
+});
+
+test('a Task that does not read is asked for again, then left out', async t => {
+  const f = fixture(t, 'bad-task');
+  const asked = await f.controller.ask('Uppercase coupon codes').finished;
+  assert.equal(asked.state, 'answered'); assert.equal(asked.runs.length, 2); assert.match(inputs(f).at(-1).input, /A Task's priority is one of: urgent, high, medium, low\./);
+  assert.match(asked.result.summary, /No Task was read/); assert.equal(currentTask(f.repo, asked.id), null);
+});
+
+test('a reply that asks the owner something first proposes no Task yet; the Task comes with the answer', async t => {
+  const f = fixture(t, 'question');
+  const asked = await f.controller.ask('Normalize coupon codes').finished;
+  assert.equal(asked.state, 'needs_input'); assert.equal(asked.reply?.question ?? asked.result?.question, 'Which format?'); assert.equal(currentTask(f.repo, asked.id), null);
+  const answered = await f.controller.ask('Uppercase', asked.id).finished;
+  assert.equal(answered.state, 'answered'); assert.equal(currentTask(f.repo, asked.id).state, 'proposed'); assert.match(source(f), /=> value;/);
+});
+
+test('an edit never starts without an approved Task, whatever the session record says', async t => {
+  const f = fixture(t);
+  const asked = await f.controller.ask('Uppercase coupon codes').finished;
+  // Approval is the owner's alone: not a schedule's, not a teammate's, not a new session's.
+  assert.throws(() => f.controller.ask('go', asked.id, { approved: true, timed: true }), /Only the owner approves a Task/);
+  assert.throws(() => f.controller.ask('go', null, { approved: true }), /Only the owner approves a Task/);
+  assert.throws(() => f.controller.ask('go', asked.id, { approved: true }), /no longer waiting to start/);
+  assert.equal(currentTask(f.repo, asked.id).state, 'proposed'); assert.match(source(f), /=> value;/);
+});
+
+test('a question gets a plain answer and no Task', async t => {
+  const f = fixture(t, 'answer');
+  const asked = await f.controller.ask('How do coupons work?').finished;
+  assert.equal(asked.state, 'answered'); assert.equal(currentTask(f.repo, asked.id), null); assert.equal(f.controller.snapshot().tasks[0].plan, undefined);
+});
+
+test('a run a schedule starts records its Task as started by schedule and goes on without waiting', async t => {
+  const f = fixture(t);
+  const done = await f.controller.ask('Uppercase coupon codes', null, { timed: true }).finished;
+  assert.notEqual(done.kind, 'conversation'); assert.match(fs.readFileSync(path.join(done.worktree, 'src/coupon.mjs'), 'utf8'), /toUpperCase/);
+  const task = sessionTasks(f.repo, done.id)[0];
+  assert.equal(task.startedBy, 'schedule'); assert.equal(task.edit, null); assert.ok(task.approvedAt); assert.equal(task.state, 'done');
+  assert.deepEqual([readTask(f.repo, done.id).title, readTask(f.repo, done.id).titleBy], ['Uppercase coupons', 'task']);
+  assert.match(inputs(f)[0].input, /A schedule started this turn and nobody is there to approve/);
+});
+
+test('a Task is checked as untrusted text', () => {
+  assert.deepEqual(checkProposal({ ...TASK, title: '  Uppercase \n coupons ' }).title, 'Uppercase coupons');
+  assert.throws(() => checkProposal({ ...TASK, title: 'x'.repeat(TASK_LIMITS.title + 1) }), /at most 80 characters/);
+  assert.throws(() => checkProposal({ ...TASK, title: `Fix ${String.fromCharCode(27)}[31m it` }), /control characters/);
+  assert.throws(() => checkProposal({ ...TASK, goal: `Fix ${String.fromCharCode(0x202e)} it` }), /control characters/);
+  assert.throws(() => checkProposal({ ...TASK, priority: 'soon' }), /priority is one of/);
+  assert.throws(() => checkProposal({ ...TASK, severity: 'bad' }), /severity is one of/);
+  assert.throws(() => checkProposal({ ...TASK, objectives: [] }), /1 to 8 objectives/);
+  assert.throws(() => checkProposal({ ...TASK, objectives: Array(9).fill('x') }), /1 to 8 objectives/);
+  assert.throws(() => checkProposal({ ...TASK, description: '   ' }), /needs a description/);
+  assert.equal(checkProposal({ ...TASK, description: 'One\r\n\r\n\r\n\r\nTwo\tend  ' }).description, 'One\n\nTwo end');
+  // Extra fields of a reply never reach the record.
+  assert.deepEqual(Object.keys(checkProposal({ ...TASK, state: 'approved', edit: { repository: '/' } })), ['title', 'description', 'goal', 'objectives', 'priority', 'severity']);
+});
+
+test('the reply fields: one Task at most, subtasks read leniently, and the result keeps its own keys', () => {
+  const schema = planSchema(conversationSchema({}), { propose: true, progress: true });
+  assert.deepEqual(schema.required.slice(-3), ['task', 'subtasks', 'objectivesMet']); assert.equal(schema.properties.task.maxItems, 1);
+  assert.equal(conversationSchema({}).properties.task, undefined);
+  const read = readPlanReply({ outcome: 'done', task: [TASK], subtasks: [{ text: ' a  b ', state: 'doing' }, { text: '', state: 'done' }, { text: 'c', state: 'odd' }, 'no'], objectivesMet: [2, 2, 0, 9, 'x', 1] }, { propose: true, progress: true });
+  assert.deepEqual(read.rest, { outcome: 'done' }); assert.equal(read.reply.proposal.title, 'Uppercase coupons');
+  assert.deepEqual(read.reply.subtasks, [{ id: 's1', text: 'a b', state: 'doing' }, { id: 's2', text: 'c', state: 'todo' }]); assert.deepEqual(read.reply.met, [1, 2]);
+  assert.throws(() => readPlanReply({ task: [TASK, TASK] }, { propose: true }), /one Task at most/);
+  assert.deepEqual(readPlanReply({ task: [{ ...TASK, priority: 'soon' }] }, { propose: true, strict: false }).reply, { unread: true });
+  // A turn that may not propose never does, and an empty list is no Task.
+  assert.equal(readPlanReply({ task: [TASK] }, { propose: false }).reply, null); assert.equal(readPlanReply({ task: [] }, { propose: true }).reply, null);
+});
+
+test('subtasks change freely after approval; the goal and the objectives cannot be changed by a report', async t => {
+  const f = fixture(t);
+  const asked = await f.controller.ask('Uppercase coupon codes').finished;
+  assert.equal(reportProgress(f.repo, asked.id, { subtasks: [{ id: 's1', text: 'early', state: 'done' }] }), null);
+  approveTask(f.repo, asked.id);
+  const moved = reportProgress(f.repo, asked.id, { subtasks: [{ id: 's1', text: 'one', state: 'doing' }], met: [1, 7], goal: 'Another goal', objectives: ['x'], title: 'Other' });
+  assert.deepEqual(moved.subtasks, [{ id: 's1', text: 'one', state: 'doing' }]); assert.deepEqual(moved.met, [1]);
+  assert.equal(moved.goal, 'Coupon codes compare equal whatever their case.'); assert.equal(moved.objectives.length, 2); assert.equal(moved.title, 'Uppercase coupons');
+  // What a reader for someone else gets has no edit.
+  const shared = sharedTask(currentTask(f.repo, asked.id));
+  assert.equal(shared.edit, undefined); assert.equal(shared.title, 'Uppercase coupons'); assert.doesNotMatch(JSON.stringify(shared), /request|repository/);
+  // The file sits beside the session record, private.
+  const file = path.join(taskDir(f.repo, asked.id), 'plan.json');
+  assert.equal(fs.statSync(file).mode & 0o777, 0o600); assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).version, 1);
+});
+
+test('the card and the list row say what waits, and markup in a Task shows as typed', async t => {
+  const f = fixture(t);
+  const asked = await f.controller.ask('Uppercase coupon codes').finished, plan = currentTask(f.repo, asked.id);
+  const card = taskCard(plan, { width: 60, colour: false });
+  assert.match(card, /^Task · waits for your approval\nUppercase coupons\nmedium priority · low severity\n/);
+  assert.match(card, /Goal: Coupon codes compare equal whatever their case\.\nObjectives\n  1\. normalize returns the code in upper case\n  2\. The coupon test passes\nEsc, then y approve · n reject · or type what to change$/);
+  assert.match(taskCard(plan, { width: 60, colour: false, approval: true }), /y and n answer the approval below first/);
+  assert.match(taskCard({ ...plan, revision: 3 }, { width: 60, colour: false }), /^Task · waits for your approval · revision 3\n/);
+  const working = { ...plan, state: 'approved', subtasks: [{ id: 's1', text: 'Change normalize', state: 'done' }, { id: 's2', text: 'Run the test', state: 'doing' }, { id: 's3', text: 'Tidy', state: 'todo' }], met: [1] };
+  assert.equal(taskState(working), 'approved · 1 of 3 subtasks done');
+  assert.match(taskCard(working, { width: 60, colour: false }), /  ✓ 1\. normalize returns the code in upper case\n  · 2\. The coupon test passes\nSubtasks\n  \[x\] Change normalize\n  \[~\] Run the test\n  \[ \] Tidy$/);
+  assert.equal(taskState({ ...working, state: 'done', met: [1, 2] }), 'done · 2 of 2 objectives reported met');
+  assert.doesNotMatch(drawCard({ ...plan, title: '{red-fg}Loud{/red-fg}' }, { width: 60, colour: true }), /\{red-fg\}Loud/);
+  const project = { ...f.controller.snapshot(), root: f.root, name: 'sample app' };
+  const row = boardRows([project], Date.now(), { approvals: [] }).find(value => value.kind === 'task');
+  assert.equal(row.group, 0); assert.equal(row.now, 'Task to approve: Uppercase coupons'); assert.equal(rowBadge(row).title, 'Task to approve');
+});

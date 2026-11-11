@@ -1,0 +1,448 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import { temp, project, fakeClis, git, autoApprove } from './helpers.mjs';
+import { ProjectController } from '../lib/projects.mjs';
+import { projectFolder } from '../lib/workspace.mjs';
+import { repository } from '../lib/git.mjs';
+import { taskDir, readTask, saveTask, lock } from '../lib/state.mjs';
+import { pinnedConfig, structuralChecks } from '../lib/checks.mjs';
+import { protectedPath } from '../lib/policy.mjs';
+import { sandboxArgs } from '../lib/sandbox.mjs';
+import { capMode, checkMode, defaultMode, saveDefaultMode } from '../lib/modes.mjs';
+import { enqueue } from '../lib/conductor.mjs';
+import { saveSchedule, parseWhen } from '../lib/schedules.mjs';
+import { answerApproval, approvalsDir, awaitDecision, pendingApprovals, requestApproval } from '../lib/approvals.mjs';
+import { defaultConfig } from '../lib/config.mjs';
+
+// Sessions with permissions, end to end against the fake CLIs.
+// The personal directory (XDG_CONFIG_HOME) and HOME both point into the test folder, so a
+// folder the owner names sits in "home" and the approval files are the test's own.
+function environment(t, values) {
+  const previous = Object.fromEntries(Object.keys(values).map(key => [key, process.env[key]])); Object.assign(process.env, values);
+  t.after(() => { for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } });
+}
+function setup(t, mode = 'normal') {
+  const p = project(t), fake = fakeClis(p.parent, { mode });
+  environment(t, { ...fake.env, HOME: p.parent, GIT_AUTHOR_NAME: 'Test Owner', GIT_AUTHOR_EMAIL: 'owner@example.invalid', GIT_COMMITTER_NAME: 'Test Owner', GIT_COMMITTER_EMAIL: 'owner@example.invalid' });
+  const work = path.join(p.parent, 'notes'); fs.mkdirSync(work);
+  const controller = autoApprove(new ProjectController(projectFolder(p.root)));
+  const calls = () => fs.existsSync(fake.calls) ? fs.readFileSync(fake.calls, 'utf8').trim().split('\n').map(JSON.parse) : [];
+  const leads = () => calls().filter(call => call.vendor === 'claude' && call.args.includes('-p'));
+  const inputs = () => fs.readFileSync(path.join(p.parent, 'inputs.jsonl'), 'utf8').trim().split('\n').map(JSON.parse).filter(row => row.vendor === 'claude');
+  return { ...p, fake, work, controller, calls, leads, inputs };
+}
+const valueOf = (args, flag) => args.includes(flag) ? args[args.indexOf(flag) + 1] : undefined;
+// The Claude Code calls of a task that has run nothing else here, split by who ran: the
+// model's own turns, and the reviews of its bots (@reviewer is in a new session and runs on
+// Claude Code too). Calls and runs are in the same order.
+const callsOf = (f, task) => {
+  const calls = f.leads(); assert.equal(calls.length, task.runs.length, JSON.stringify(task.runs.map(run => run.role)));
+  return { turns: calls.filter((call, i) => task.runs[i].role === 'lead'), reviews: calls.filter((call, i) => task.runs[i].role !== 'lead') };
+};
+const settingsOf = args => JSON.parse(valueOf(args, '--settings'));
+// A named folder the file tools may not write to, nor a sandboxed command.
+const writeRules = dir => ['Edit', 'Write'].flatMap(tool => [`${tool}(//${dir.slice(1)})`, `${tool}(//${dir.slice(1)}/**)`]);
+const writeDenied = (settings, dir) => writeRules(dir).every(rule => settings.permissions.deny.includes(rule)) && settings.sandbox.filesystem?.denyWrite.includes(dir) === true;
+const writeOpen = (settings, dir) => writeRules(dir).every(rule => !settings.permissions.deny.includes(rule)) && settings.sandbox.filesystem?.denyWrite.includes(dir) !== true;
+const SARA = 'b'.repeat(64);
+// The entries of a sandbox list that lie in a Git folder, links resolved where the path exists.
+const gitEntries = list => list.filter(entry => entry.split(path.sep).includes('.git')).map(entry => { try { return fs.realpathSync(entry); } catch { return entry; } });
+const origin = (kind, extra = {}) => ({ kind, peer: SARA, name: 'sara', a2aTaskId: 'task-1', threadId: 'thread-1', hop: 1, ...extra });
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+test('a new session gets the personal default; a follow-up inherits mode, place and folders; a switch applies next turn', async t => {
+  const f = setup(t, 'answer');
+  assert.equal(defaultMode(), 'ask'); saveDefaultMode('auto'); assert.equal(defaultMode(), 'auto');
+  // The terminal app passes the default it shows; the runtime stores exactly what it is given.
+  const first = await f.controller.ask('Where is coupon normalization?', null, { permissions: defaultMode(), place: 'worktree', folders: [f.work] }).finished;
+  assert.equal(first.state, 'answered'); assert.equal(first.permissions, 'auto'); assert.deepEqual(first.place, { kind: 'worktree' }); assert.deepEqual(first.folders, [fs.realpathSync(f.work)]);
+  assert.equal(first.runs[0].permissions, 'auto'); assert.equal(first.runs[0].effectivePermissions, 'auto'); assert.equal(first.runs[0].denials, undefined);
+  let [run] = f.leads();
+  assert.equal(valueOf(run.args, '--permission-mode'), 'auto'); assert.equal(valueOf(run.args, '--permission-prompt-tool'), 'mcp__elu-code-approval__approve');
+  assert.ok(run.args.flatMap((a, i) => a === '--add-dir' ? [run.args[i + 1]] : []).includes(fs.realpathSync(f.work)), 'the folder is a working directory');
+  assert.ok(writeDenied(settingsOf(run.args), fs.realpathSync(f.work)), 'which it reads and never writes');
+  assert.equal(run.args.includes('--restricted'), false);
+  const prompt = f.inputs()[0].input;
+  assert.match(prompt, /When an action is declined or blocked, do not retry it another way\. Return outcome needs_input and name the action you need\./);
+  assert.match(prompt, /You may also read these folders: /); assert.doesNotMatch(prompt, /install packages/);
+  // The never list by name, once, with the read-only way to list tags.
+  assert.equal(prompt.split('Never run these, alone or inside a longer command line, in any mode: git push, git tag, git merge, gh pr merge, gh release, npm publish, pnpm publish, yarn publish, cargo publish, firebase deploy, vercel deploy, gcloud run deploy, gcloud app deploy, fly deploy, kubectl apply, terraform apply. To list tags use git for-each-ref --sort=-creatordate refs/tags or git describe --tags, never git tag.').length, 2);
+  assert.match(prompt, /This session runs with Approve for me: you have a shell, the internet, and the MCP tools you were given; an action outside the project or the sandbox is reviewed before it runs\./);
+  assert.match(prompt, /The repository's own ELU Code config \(roles, network, commands\) does not limit this session\./);
+  const policy = fs.readFileSync(path.join(taskDir(f.controller.repo, first.id), 'policy.yaml'), 'utf8');
+  // A follow-up without choices keeps the session's.
+  const second = await f.controller.ask('And the tests?', first.id).finished;
+  assert.equal(second.permissions, 'auto'); assert.deepEqual(second.folders, first.folders); assert.equal(second.runs[1].permissions, 'auto'); assert.equal(second.permissionChanges, undefined);
+  assert.equal(valueOf(f.leads()[1].args, '--permission-mode'), 'auto'); assert.equal(valueOf(f.leads()[1].args, '--resume'), first.sessions.lead.id);
+  // A switch is recorded and applies from this turn on; the pinned policy never moves.
+  const third = await f.controller.ask('Now do it', first.id, { permissions: 'full' }).finished;
+  assert.equal(third.permissions, 'full'); assert.deepEqual(third.permissionChanges.map(row => [row.from, row.to]), [['auto', 'full']]);
+  assert.equal(third.runs[2].permissions, 'full'); assert.equal(third.runs[2].effectivePermissions, 'full');
+  run = f.leads()[2]; assert.equal(valueOf(run.args, '--permission-mode'), 'bypassPermissions'); assert.deepEqual(settingsOf(run.args).sandbox, { enabled: false });
+  assert.equal(settingsOf(run.args).permissions.deny.some(rule => rule.includes(fs.realpathSync(f.work).slice(1))), false, 'Full access leaves the folder as it is');
+  assert.match(f.inputs()[2].input, /^Work only on the given task\. Do not push, merge, tag, publish, or deploy\./);
+  assert.match(f.inputs()[2].input, /This session runs with Full access: any file, any command, the internet, and the MCP tools you were given\./);
+  assert.equal(fs.readFileSync(path.join(taskDir(f.controller.repo, first.id), 'policy.yaml'), 'utf8'), policy);
+  assert.equal(pinnedConfig(f.controller.repo, null, { task: third }).configHash, first.configHash);
+  // Nothing in the repository or its configuration records the mode.
+  assert.equal(git(f.root, ['status', '--porcelain']), '');
+});
+
+test('an automatic edit task inherits the conversation mode; the reviewer and the locked lead keep the locked launch', async t => {
+  const f = setup(t);
+  const task = await f.controller.ask('Normalize coupon codes', null, { permissions: 'auto', place: 'worktree', folders: [f.work] }).finished;
+  assert.equal(task.state, 'ready'); assert.equal(task.kind, undefined); assert.equal(task.mode, 'automatic');
+  assert.equal(task.permissions, 'auto'); assert.deepEqual(task.folders, [fs.realpathSync(f.work)]); assert.deepEqual(task.place, { kind: 'worktree' });
+  const leads = task.runs.filter(run => run.role === 'lead'); assert.equal(leads.length, 2);
+  assert.ok(leads.every(run => run.permissions === 'auto' && run.effectivePermissions === 'auto'));
+  assert.ok(task.runs.filter(run => run.role !== 'lead').every(run => run.permissions === undefined), 'a reviewer never carries a mode');
+  assert.deepEqual(task.runs.map(run => run.role), ['lead', 'lead', 'bot:reviewer']);
+  const { turns: claudeRuns, reviews } = callsOf(f, task);
+  assert.ok(claudeRuns.every(run => valueOf(run.args, '--permission-mode') === 'auto' && valueOf(run.args, '--permission-prompts') === 'host'));
+  // The review is read-only and asks nothing, whatever the session's mode.
+  for (const review of reviews) { assert.equal(valueOf(review.args, '--permission-mode'), 'dontAsk'); assert.equal(valueOf(review.args, '--permission-prompts'), 'none'); assert.equal(valueOf(review.args, '--tools'), 'Read,Grep,Glob'); assert.ok(review.args.includes('--restricted')); assert.equal(review.args.includes('--permission-prompt-tool'), false); }
+  assert.ok(claudeRuns.every(run => settingsOf(run.args).permissions.deny.includes('Bash(git push:*)')));
+  const edit = claudeRuns.at(-1), settings = settingsOf(edit.args);
+  assert.equal(settings.permissions.deny.some(rule => rule.includes('package.json')), false, 'auto lifts the dependency files');
+  assert.ok(settings.permissions.deny.some(rule => rule.includes('/.elu-code')), 'other protected paths stay denied');
+  assert.ok(edit.args.includes('--add-dir') && edit.args.includes(fs.realpathSync(f.work)));
+  assert.ok(claudeRuns.every(run => writeDenied(settingsOf(run.args), fs.realpathSync(f.work))), 'the named folder is read only in every turn of the session');
+  assert.equal(git(f.root, ['status', '--porcelain']), ''); assert.equal(fs.existsSync(path.join(f.root, '.elu-code')), false);
+  // A task saved without a mode runs the read-only launch.
+  const old = await f.controller.ask('Explain the change', null).finished;
+  assert.equal(old.permissions, undefined); assert.equal(old.runs[0].permissions, undefined); assert.equal(old.runs[0].effectivePermissions, undefined);
+  const locked = f.leads().at(-1).args;
+  assert.equal(valueOf(locked, '--permission-mode'), 'dontAsk'); assert.equal(valueOf(locked, '--permission-prompts'), 'none'); assert.ok(locked.includes('--restricted') && locked.includes('--safe-mode'));
+  assert.equal(locked.includes('--permission-prompt-tool'), false); assert.match(f.inputs().at(-1).input, /install packages/);
+});
+
+// The owner names the folder of all his code. The session edits a repository in it, in a
+// worktree beside that repository: inside the named folder. A deny wins over an allow in the
+// vendor, so the edit's launch leaves the folder to the workspace's rules; the conversation,
+// which runs in the project folder outside it, reads it and may not write there.
+test('a named folder that holds the repository a session edits is read only to the conversation and left to the workspace\'s rules in the edit inside it', async t => {
+  const f = setup(t), code = path.join(f.parent, 'code'), hub = path.join(f.parent, 'hub');
+  fs.mkdirSync(code); fs.cpSync(f.root, path.join(code, 'sample app'), { recursive: true }); fs.mkdirSync(hub);
+  fs.writeFileSync(path.join(f.parent, 'repository.txt'), '../code/sample app');
+  const controller = autoApprove(new ProjectController(projectFolder(hub)));
+  const task = await controller.ask('Normalize coupon codes', null, { permissions: 'auto', folders: [code] }).finished;
+  const named = fs.realpathSync(code);
+  assert.equal(task.repository, path.join(named, 'sample app')); assert.ok(task.worktree.startsWith(`${named}${path.sep}`), task.worktree);
+  assert.notEqual(task.state, 'blocked', task.error?.message);
+  // Where each turn ran, from the npm settings file the launch names in its folder.
+  const turns = f.leads().filter(call => valueOf(call.args, '--permission-mode') === 'auto'), ranIn = call => path.dirname(path.dirname(settingsOf(call.args).env.npm_config_globalconfig));
+  const conversations = turns.filter(call => ranIn(call) === hub), edits = turns.filter(call => ranIn(call) === task.worktree);
+  assert.ok(conversations.length >= 1 && edits.length >= 1, 'the conversation and the edit ran'); assert.equal(conversations.length + edits.length, turns.length);
+  for (const conversation of conversations) assert.ok(writeDenied(settingsOf(conversation.args), named), 'the conversation reads the folder and never writes it');
+  for (const edit of edits) {
+    assert.ok(edit.args.includes('--add-dir') && edit.args.includes(named), 'the edit reads the folder');
+    assert.ok(writeOpen(settingsOf(edit.args), named), 'and is not denied the folder that holds its worktree');
+    assert.ok(edit.args.includes(`--allowedTools=Edit(//${task.worktree.slice(1)}/**)`), 'edits in the worktree stay allowed');
+  }
+});
+
+test('a schedule never runs with Full access; an automatic request is capped at Approve for me', async t => {
+  const p = project(t), fake = fakeClis(p.parent); environment(t, fake.env);
+  assert.throws(() => checkMode('full', { allowFull: false }), /Approve for me at most/);
+  assert.throws(() => saveSchedule({ root: p.root, goal: 'Nightly tidy', when: parseWhen('daily 9:00', new Date(2026, 10, 9, 8)), permissions: 'full' }, new Date(2026, 10, 9, 8)), /Approve for me at most/);
+  const row = saveSchedule({ root: p.root, goal: 'Nightly tidy', when: parseWhen('daily 9:00', new Date(2026, 10, 9, 8)), permissions: 'auto' }, new Date(2026, 10, 9, 8));
+  assert.equal(row.permissions, 'auto');
+  // An owner's request from another machine (A2A) is capped at auto whatever the default says.
+  saveDefaultMode('full');
+  assert.equal(capMode(defaultMode(), 'auto'), 'auto'); assert.equal(capMode('ask', 'auto'), 'ask');
+  const request = enqueue(p.root, 'Normalize coupons', { permissions: capMode(defaultMode(), 'auto') });
+  assert.equal(request.permissions, 'auto');
+  assert.throws(() => enqueue(p.root, 'q', { origin: origin('ask'), readOnly: true, context: 'ctx', permissions: 'auto' }), /Teammate questions stay read-only/);
+});
+
+test('a handoff from a teammate runs the mode the owner picked; a teammate question never gets one', async t => {
+  const f = setup(t, 'answer');
+  const handoff = await f.controller.ask('Work on the request from @sara in the peer data block.', null, { origin: origin('handoff'), context: 'Please rename normalize to normalise.', permissions: 'auto' }).finished;
+  assert.equal(handoff.state, 'answered'); assert.equal(handoff.permissions, 'auto'); assert.equal(handoff.runs[0].permissions, 'auto');
+  assert.equal(valueOf(f.leads()[0].args, '--permission-mode'), 'auto');
+  // The same mode on an ask is ignored: the run is locked, the teammate's text stays in the peer block.
+  const ask = await f.controller.ask('Answer the question from @sara.', null, { origin: origin('ask'), readOnly: true, context: 'Where is normalization?', permissions: 'full', folders: [f.work] }).finished;
+  assert.equal(ask.state, 'answered'); assert.equal(ask.runs[0].permissions, undefined);
+  const run = f.leads()[1].args;
+  assert.equal(valueOf(run, '--permission-mode'), 'dontAsk'); assert.equal(run.includes('--permission-prompt-tool'), false); assert.equal(run.includes('--add-dir'), false);
+  assert.ok(run.includes('--restricted') && run.includes('--safe-mode'));
+  assert.doesNotMatch(f.inputs()[1].input, /You may also read these folders/); assert.doesNotMatch(f.inputs()[1].input, /This session runs with/);
+  assert.throws(() => f.controller.ask('More?', ask.id, { origin: origin('ask'), readOnly: true, context: 'x', permissions: 'auto' }), /Teammate questions stay read-only/);
+});
+
+test('place branch runs in a worktree with that branch checked out, as it is', async t => {
+  const f = setup(t);
+  git(f.root, ['checkout', '-q', '-b', 'feat/coupons']);
+  fs.writeFileSync(path.join(f.root, 'src/extra.mjs'), 'export const extra = 1;\n'); git(f.root, ['add', '.']); git(f.root, ['commit', '-qm', 'Branch work']);
+  const branchHead = git(f.root, ['rev-parse', 'HEAD']);
+  git(f.root, ['checkout', '-q', 'main']);
+  fs.writeFileSync(path.join(f.root, 'owner.txt'), 'uncommitted on main');
+  const task = await f.controller.ask('Normalize coupon codes', null, { permissions: 'auto', place: 'branch:feat/coupons' }).finished;
+  assert.equal(task.state, 'ready'); assert.deepEqual(task.place, { kind: 'branch', branch: 'feat/coupons' });
+  assert.equal(task.branch, 'feat/coupons'); assert.equal(task.base, branchHead);
+  assert.equal(git(task.worktree, ['branch', '--show-current']), 'feat/coupons'); assert.equal(git(task.worktree, ['rev-parse', 'HEAD']), branchHead);
+  assert.ok(fs.existsSync(path.join(task.worktree, 'src/extra.mjs')), 'the branch content is there');
+  assert.equal(fs.existsSync(path.join(task.worktree, 'owner.txt')), false, 'the checkout\'s local edits are not copied onto a named branch');
+  assert.deepEqual(task.localChanges, []); assert.notEqual(task.worktree, f.root);
+  assert.equal(git(f.root, ['branch', '--show-current']), 'main'); assert.equal(fs.readFileSync(path.join(f.root, 'owner.txt'), 'utf8'), 'uncommitted on main');
+  assert.equal(git(f.root, ['rev-parse', 'feat/coupons']), branchHead, 'nothing is committed by the run');
+  await assert.rejects(f.controller.ask('Normalize coupon codes', null, { permissions: 'auto', place: 'branch:feat/missing' }).finished, /Branch not found: feat\/missing/);
+});
+
+test('place here runs in the checkout itself with a dirty tree; checks keep the network on in full', async t => {
+  const f = setup(t);
+  fs.writeFileSync(path.join(f.root, 'src/owner.mjs'), 'export const owner = true;\n');
+  const head = git(f.root, ['rev-parse', 'HEAD']);
+  assert.throws(() => enqueue(f.root, 'x', { permissions: 'auto', place: 'here' }), /Here needs Full access/);
+  const task = await f.controller.ask('Normalize coupon codes', null, { permissions: 'full', place: 'here' }).finished;
+  assert.equal(task.state, 'ready'); assert.deepEqual(task.place, { kind: 'here' });
+  assert.equal(task.worktree, f.root); assert.equal(task.branch, 'main'); assert.equal(task.base, head); assert.deepEqual(task.localChanges, []);
+  assert.equal(fs.readFileSync(path.join(f.root, 'src/coupon.mjs'), 'utf8'), 'export const normalize = (value) => value.toUpperCase();\n', 'the lead edited the checkout');
+  assert.equal(fs.readFileSync(path.join(f.root, 'src/owner.mjs'), 'utf8'), 'export const owner = true;\n'); assert.equal(git(f.root, ['rev-parse', 'HEAD']), head);
+  assert.equal(fs.existsSync(path.join(f.controller.repo.worktrees, task.id)), false, 'no worktree');
+  assert.ok(task.runs.filter(run => run.role === 'lead').every(run => run.permissions === 'full' && run.effectivePermissions === 'full'));
+  const names = task.evidence.results.map(row => row.name);
+  assert.ok(names.includes('secret-paths') && names.includes('no-deleted-tests'));
+  for (const name of ['changed-lines', 'protected-paths', 'unchanged-scripts', 'no-dependency-changes']) assert.equal(names.includes(name), false, `${name} is skipped in full`);
+  const sandboxed = f.calls().filter(call => call.vendor === 'codex' && call.args[0] === 'sandbox' && call.args.includes('--'));
+  assert.ok(sandboxed.length >= 1, 'the checks ran in the sandbox');
+  assert.ok(sandboxed.every(call => call.args.some(arg => arg.includes('network={enabled=true}'))), 'full keeps the network on for checks');
+  // A `here` task on the default branch has no branch of its own to publish; nothing is committed first.
+  await assert.rejects(f.controller.pushPlan(task.id), /default branch/);
+  assert.equal(git(f.root, ['rev-parse', 'HEAD']), head);
+});
+
+test('full skips the cap and the protected paths but a secret path still blocks; auto allows a lockfile change', t => {
+  const dir = temp(t), root = path.join(dir, 'repo'); fs.mkdirSync(root);
+  git(root, ['init', '--initial-branch=main']); git(root, ['config', 'user.name', 'T']); git(root, ['config', 'user.email', 't@example.invalid']);
+  fs.mkdirSync(path.join(root, 'src')); fs.writeFileSync(path.join(root, 'src/a.mjs'), 'export const a = 1;\n');
+  fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ name: 'x', dependencies: { left: '1.0.0' } })); fs.writeFileSync(path.join(root, 'package-lock.json'), '{"name":"x","lockfileVersion":3}\n');
+  git(root, ['add', '.']); git(root, ['commit', '-qm', 'init']);
+  const base = git(root, ['rev-parse', 'HEAD']), config = defaultConfig();
+  fs.writeFileSync(path.join(root, 'src/a.mjs'), Array.from({ length: 500 }, (_, i) => `export const v${i} = ${i};`).join('\n') + '\n');
+  fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ name: 'x', dependencies: { left: '1.0.0', right: '2.0.0' } }));
+  fs.writeFileSync(path.join(root, 'package-lock.json'), '{"name":"x","lockfileVersion":3,"packages":{}}\n');
+  fs.writeFileSync(path.join(root, 'src/.env'), 'SECRET=x\n');
+  const task = { worktree: root, base, place: { kind: 'worktree' } };
+  const status = (mode) => Object.fromEntries(structuralChecks(task, config, { mode }).results.map(row => [row.name, row.status]));
+  const locked = status('locked');
+  assert.equal(locked['changed-lines'], 'failed'); assert.equal(locked['protected-paths'], 'failed'); assert.equal(locked['no-dependency-changes'], 'failed'); assert.equal(locked['secret-paths'], 'failed');
+  const auto = status('auto');
+  assert.equal(auto['changed-lines'], 'failed'); assert.equal(auto['protected-paths'], 'passed', 'dependency files are not protected in auto'); assert.equal(auto['no-dependency-changes'], undefined); assert.equal(auto['unchanged-scripts'], 'passed');
+  const full = status('full');
+  assert.equal(full['changed-lines'], undefined); assert.equal(full['protected-paths'], undefined); assert.equal(full['unchanged-scripts'], undefined); assert.equal(full['no-dependency-changes'], undefined);
+  assert.equal(full['secret-paths'], 'failed'); assert.equal(full['no-deleted-tests'], 'passed'); assert.equal(full['declared-paths'], 'passed');
+  for (const file of ['package.json', 'package-lock.json', 'yarn.lock', 'pnpm-lock.yaml', 'Cargo.lock']) { assert.equal(protectedPath(file), true, file); assert.equal(protectedPath(file, { mode: 'ask' }), true); assert.equal(protectedPath(file, { mode: 'auto' }), false); assert.equal(protectedPath(file, { mode: 'full' }), false); }
+  for (const file of ['.github/workflows/ci.yml', '.git/config', 'Makefile', 'tsconfig.json']) for (const mode of ['locked', 'ask', 'auto', 'full']) assert.equal(protectedPath(file, { mode }), true, `${file} in ${mode}`);
+  const args = sandboxArgs({ cwd: root, scratch: path.join(dir, 'scratch'), program: 'node', helper: process.execPath, network: 'on' });
+  assert.ok(args.some(arg => arg.includes('network={enabled=true}')));
+  assert.ok(sandboxArgs({ cwd: root, scratch: path.join(dir, 'scratch'), program: 'node', helper: process.execPath }).some(arg => arg.includes('network={enabled=false}')));
+});
+
+// The fake Claude starts the relay from --mcp-config exactly as the real one would and asks
+// to touch a file outside the workspace. The test is the owner at the terminal.
+async function answering(f, decision, { delay = 0 } = {}) {
+  const answered = [];
+  for (;;) {
+    const rows = pendingApprovals({ root: f.controller.repo.project ?? f.controller.repo.root });
+    for (const row of rows) { if (delay) await sleep(delay); answerApproval(row.id, decision); answered.push(row); }
+    if (f.done) return answered;
+    await sleep(25);
+  }
+}
+async function relay(f, decision, options) {
+  const run = f.controller.ask('Normalize coupon codes', null, { permissions: 'auto' });
+  const finished = run.finished.finally(() => { f.done = true; });
+  const [task, answered] = await Promise.all([finished, answering(f, decision, options)]);
+  return { task, answered };
+}
+
+test('an allowed approval reaches Claude through the relay and is kept with the task', async t => {
+  const f = setup(t, 'relay');
+  const { task, answered } = await relay(f, 'allow');
+  assert.equal(task.state, 'ready');
+  assert.ok(answered.length >= 1); assert.ok(answered.every(row => row.summary.startsWith('Run: touch ') && row.tool === 'Bash' && row.role === 'lead' && row.vendor === 'claude' && row.taskId === task.id));
+  assert.ok(fs.existsSync(path.join(f.fake.dir, 'touched')), 'the allowed touch happened');
+  assert.equal(task.approvals.length, answered.length);
+  // row.session is the id the run was started with; the fake reports its own fixed session id, so the tie is the relay log named after it.
+  for (const row of task.approvals) { assert.equal(row.decision, 'allow'); assert.equal(row.tool, 'Bash'); assert.equal(row.role, 'lead'); assert.match(row.summary, /^Run: touch /); assert.ok(fs.existsSync(path.join(taskDir(f.controller.repo, task.id), `lead-${row.session}.approvals.jsonl`))); }
+  assert.ok(task.runs.filter(run => run.role === 'lead').every(run => run.denials === undefined));
+  const dances = f.calls().filter(call => call.approval);
+  assert.ok(dances.length >= 1); assert.deepEqual(dances[0].approval.tools, ['approve']); assert.equal(dances[0].approval.decision.behavior, 'allow');
+  assert.equal(pendingApprovals().length, 0);
+  const log = fs.readdirSync(taskDir(f.controller.repo, task.id)).filter(name => name.endsWith('.approvals.jsonl'));
+  assert.ok(log.length >= 1); assert.equal(fs.statSync(path.join(taskDir(f.controller.repo, task.id), log[0])).mode & 0o777, 0o600);
+});
+
+// The relay removes an approval's two files once it is decided. Looked at between the two
+// removals, the request must not read as still waiting: the owner would be shown it again
+// (the test above would count it twice), and a second answer would be left with no request.
+test('a decided approval is not listed as waiting while its files are removed', async t => {
+  const f = setup(t);
+  requestApproval({ id: 'decided', root: f.root, taskId: '1', role: 'lead', vendor: 'claude', tool: 'Bash', input: { command: 'npm test' } });
+  assert.deepEqual(pendingApprovals().map(row => row.id), ['decided']); assert.equal(answerApproval('decided', 'allow'), true);
+  // A failed assertion inside a removal would be swallowed there, so each look is kept and checked after.
+  const looks = [], remove = fs.rmSync; let looking = false;
+  t.mock.method(fs, 'rmSync', (file, options) => {
+    remove(file, options); if (looking) return;
+    looking = true; try { looks.push({ removed: path.basename(String(file)), waiting: pendingApprovals().map(row => row.id), answeredAgain: answerApproval('decided', 'deny') }); } finally { looking = false; }
+  });
+  assert.equal(await awaitDecision('decided', { waitSeconds: 5 }), 'allow');
+  assert.deepEqual(looks.map(look => look.removed).sort(), ['decided.answer.json', 'decided.json']);
+  for (const look of looks) { assert.deepEqual(look.waiting, [], `listed again once ${look.removed} was removed`); assert.equal(look.answeredAgain, false, `answered again once ${look.removed} was removed`); }
+  assert.deepEqual(fs.readdirSync(approvalsDir()), []);
+});
+
+test('a denied approval is reported as a denial on the run, and nothing was touched', async t => {
+  const f = setup(t, 'relay');
+  const { task, answered } = await relay(f, 'deny');
+  assert.ok(answered.length >= 1); assert.equal(fs.existsSync(path.join(f.fake.dir, 'touched')), false);
+  assert.ok(task.approvals.every(row => row.decision === 'deny'));
+  const leads = task.runs.filter(run => run.role === 'lead' && run.vendor === 'claude');
+  assert.ok(leads.length >= 1);
+  for (const run of leads) { assert.equal(run.denials.length, 1); assert.equal(run.denials[0].tool, 'Bash'); assert.match(run.denials[0].input.command, /^touch /); assert.equal(run.denials[0].tool_use_id, 'toolu_fake_touch'); }
+  assert.equal(f.calls().filter(call => call.approval).at(-1).approval.decision.behavior, 'deny');
+});
+
+test('the role time limit waits while an approval is pending', async t => {
+  const f = setup(t, 'relay');
+  // Without the hold a 5 s limit would kill a run that waits 6 s for its answer.
+  f.controller.draftConfig.roles.lead.timeoutSeconds = 5; f.controller.draftConfig.checks = [];
+  const { task, answered } = await relay(f, 'allow', { delay: 6000 });
+  assert.ok(answered.length >= 1);
+  assert.ok(task.runs.filter(run => run.role === 'lead').every(run => run.code === 0), 'the run was not killed while it waited');
+  assert.ok(['ready', 'unverified'].includes(task.state), task.error?.message);
+  assert.equal(pendingApprovals().length, 0);
+});
+
+test('bypassPermissions never asks: a full session touches without an approval', async t => {
+  const f = setup(t, 'relay');
+  const run = f.controller.ask('Normalize coupon codes', null, { permissions: 'full' });
+  const task = await run.finished;
+  assert.equal(task.state, 'ready'); assert.equal(task.approvals, undefined);
+  assert.equal(fs.existsSync(path.join(f.fake.dir, 'touched')), false, 'the fake only touches through the relay');
+  assert.equal(f.calls().filter(call => call.approval).length, 0);
+  const { turns, reviews } = callsOf(f, task); assert.equal(turns.length, 2); assert.equal(reviews.length, 1);
+  assert.ok(turns.every(call => valueOf(call.args, '--permission-mode') === 'bypassPermissions'));
+  assert.ok(reviews.every(call => valueOf(call.args, '--permission-mode') === 'dontAsk'), 'a review never runs with Full access');
+});
+
+test('a saved task without a place is a worktree task; a mode switch on a running task waits for its turn', async t => {
+  const f = setup(t, 'answer');
+  const first = await f.controller.ask('Explain', null, { permissions: 'ask' }).finished;
+  const saved = readTask(f.controller.repo, first.id); delete saved.place; delete saved.folders; saveTask(f.controller.repo, saved);
+  const second = await f.controller.ask('Again', first.id).finished;
+  assert.equal(second.permissions, 'ask'); assert.equal(second.place, undefined); assert.equal(valueOf(f.leads()[1].args, '--permission-mode'), 'default');
+  assert.deepEqual(settingsOf(f.leads()[1].args).permissions.ask.slice(0, 2), ['WebFetch', 'WebSearch']);
+  const repo = repository(f.root); assert.equal(repo.root, f.root);
+});
+
+// The owner's own case: his session asks, its turn waits on an approval, and he sets the
+// mode. The turn holds the session for its whole length and writes its own copy of the
+// record back when it ends.
+test('a mode set while a turn waits on an approval is never refused, reads back at once and is kept when the turn ends', async t => {
+  const f = setup(t, 'relay'), root = f.controller.repo.project ?? f.controller.repo.root;
+  const run = f.controller.ask('Normalize coupon codes', null, { permissions: 'ask' });
+  const finished = run.finished.finally(() => { f.done = true; });
+  // A failure below must not leave the turn waiting on its approval.
+  t.after(async () => { for (const row of pendingApprovals({ root })) answerApproval(row.id, 'deny'); await finished.catch(() => {}); });
+  let waiting = [];
+  while (!waiting.length && !f.done) { waiting = pendingApprovals({ root }); await sleep(25); }
+  assert.equal(waiting.length, 1, 'the turn waits on an approval'); assert.equal(readTask(f.controller.repo, run.id).state, 'running');
+  for (const mode of ['auto', 'ask', 'full']) {
+    assert.equal(f.controller.setPermissions(run.id, mode).permissions, mode);
+    assert.equal(readTask(f.controller.repo, run.id).permissions, mode, `${mode} reads back while the turn runs`);
+  }
+  assert.equal(f.controller.setBudget(run.id, 7).budgetUsd, 7); assert.deepEqual(f.controller.addFolder(run.id, f.work).folders, [fs.realpathSync(f.work)]);
+  assert.equal(readTask(f.controller.repo, run.id).budgetUsd, 7); assert.equal(f.controller.budget(run.id).limit, 7);
+  assert.equal(pendingApprovals({ root }).length, 1, 'the approval still waits: saving the mode answers nothing');
+  const [task] = await Promise.all([finished, answering(f, 'allow')]);
+  assert.ok(['ready', 'unverified'].includes(task.state), task.error?.message);
+  const saved = JSON.parse(fs.readFileSync(path.join(taskDir(f.controller.repo, run.id), 'task.json'), 'utf8'));
+  assert.equal(saved.permissions, 'full'); assert.deepEqual(saved.permissionChanges.map(row => [row.from, row.to]), [['ask', 'auto'], ['auto', 'ask'], ['ask', 'full']]);
+  assert.deepEqual(saved.folders, [fs.realpathSync(f.work)]);
+  assert.equal(fs.existsSync(path.join(taskDir(f.controller.repo, run.id), 'settings.json')), false, 'nothing is left beside the record');
+  // The turn that was waiting started with Ask for approval; the next one runs with what he chose.
+  const { turns } = callsOf(f, task);
+  assert.equal(valueOf(turns[0].args, '--permission-mode'), 'default'); assert.equal(valueOf(turns.at(-1).args, '--permission-mode'), 'bypassPermissions');
+});
+
+test('settings changed while a turn holds the session wait beside the record, read back at once, and the turn takes them in when it saves', async t => {
+  const f = setup(t, 'answer');
+  const first = await f.controller.ask('Explain', null, { permissions: 'ask' }).finished, repo = f.controller.repo, id = first.id;
+  const record = () => JSON.parse(fs.readFileSync(path.join(taskDir(repo, id), 'task.json'), 'utf8')), beside = path.join(taskDir(repo, id), 'settings.json');
+  // With nothing running the record itself is written, as before.
+  f.controller.setPermissions(id, 'auto'); assert.equal(record().permissions, 'auto'); assert.equal(fs.existsSync(beside), false);
+  // A turn: it holds the session and keeps its own copy of the record.
+  let release = lock(repo, `task-${id}`), held = readTask(repo, id);
+  f.controller.setPermissions(id, 'full'); f.controller.setBudget(id, 12); f.controller.addFolder(id, f.work); f.controller.setBots(id, []);
+  assert.equal(record().permissions, 'auto', 'the record is the turn’s to write'); assert.ok(fs.existsSync(beside));
+  const now = readTask(repo, id);
+  assert.equal(now.permissions, 'full'); assert.equal(now.budgetUsd, 12); assert.deepEqual(now.folders, [fs.realpathSync(f.work)]); assert.deepEqual(now.bots, []);
+  assert.deepEqual(now.permissionChanges.map(row => [row.from, row.to]), [['ask', 'auto'], ['auto', 'full']]);
+  f.controller.setBudget(id, null); assert.equal(readTask(repo, id).budgetUsd, undefined, 'a limit taken away mid-turn is away');
+  // The turn saves its own copy: the changes are in the record and in its copy, and no longer beside it.
+  held.messages.push({ at: new Date().toISOString(), text: 'More.' }); saveTask(repo, held); release();
+  assert.equal(held.permissions, 'full'); assert.equal(record().permissions, 'full'); assert.equal(record().messages.at(-1).text, 'More.');
+  assert.equal(record().budgetUsd, undefined); assert.deepEqual(record().bots, []); assert.deepEqual(record().folders, [fs.realpathSync(f.work)]);
+  assert.equal(fs.existsSync(beside), false);
+  // What the turn itself changed is kept when the owner changed something else meanwhile.
+  release = lock(repo, `task-${id}`); held = readTask(repo, id);
+  held.bots = ['reviewer']; f.controller.setPermissions(id, 'ask'); saveTask(repo, held); release();
+  assert.deepEqual(record().bots, ['reviewer']); assert.equal(record().permissions, 'ask'); assert.equal(fs.existsSync(beside), false);
+  // A change that came as the turn ended, after its last save, still reads back and is taken in by the next save.
+  release = lock(repo, `task-${id}`); held = readTask(repo, id); saveTask(repo, held); f.controller.setPermissions(id, 'auto'); release();
+  assert.equal(record().permissions, 'ask'); assert.equal(readTask(repo, id).permissions, 'auto');
+  f.controller.setBudget(id, 3); assert.equal(record().permissions, 'auto'); assert.equal(record().budgetUsd, 3); assert.equal(fs.existsSync(beside), false);
+});
+
+test('a session with a spending limit keeps it when its conversation becomes an editing run, and that run is launched with it', async t => {
+  const f = setup(t, 'relay'), root = f.controller.repo.project ?? f.controller.repo.root;
+  const run = f.controller.ask('Normalize coupon codes', null, { permissions: 'ask' });
+  const finished = run.finished.finally(() => { f.done = true; });
+  t.after(async () => { for (const row of pendingApprovals({ root })) answerApproval(row.id, 'deny'); await finished.catch(() => {}); });
+  // The limit is set while the conversation's own turn waits on an approval; the edit follows in the same message.
+  let waiting = [];
+  while (!waiting.length && !f.done) { waiting = pendingApprovals({ root }); await sleep(25); }
+  assert.equal(waiting.length, 1, 'the conversation waits on an approval'); f.controller.setBudget(run.id, 7);
+  const [task] = await Promise.all([finished, answering(f, 'allow')]);
+  assert.notEqual(task.kind, 'conversation', 'the session went on to edit');
+  assert.equal(readTask(f.controller.repo, run.id).budgetUsd, 7); assert.equal(f.controller.budget(run.id).limit, 7);
+  const { turns } = callsOf(f, task);
+  assert.equal(valueOf(turns[0].args, '--max-budget-usd'), undefined, 'the turn that had begun had no limit');
+  assert.equal(valueOf(turns.at(-1).args, '--max-budget-usd'), '7', 'the editing run is launched with the limit');
+});
+
+// ELU Code keeps its records of every session in the repository's Git folder. A Read only
+// session runs in the project folder, where that folder is inside the working directory.
+test('a Read only session may not read ELU Code\'s records in the Git folder, with the file tools or from a command', async t => {
+  const f = setup(t, 'answer'), common = fs.realpathSync(path.join(f.root, '.git')), records = path.join(common, 'elu-code');
+  const task = await f.controller.ask('Explain the change', null).finished;
+  assert.equal(task.state, 'answered', JSON.stringify(task.error));
+  const args = f.leads().at(-1).args, settings = settingsOf(args);
+  assert.ok(args.includes('--restricted'), 'a Read only launch');
+  for (const rule of [`Read(//${records.slice(1)})`, `Read(//${records.slice(1)}/**)`]) assert.ok(settings.permissions.deny.includes(rule), rule);
+  const real = entry => { try { return fs.realpathSync(entry); } catch { return entry; } };
+  assert.ok(settings.sandbox.filesystem.denyRead.some(entry => [common, records].includes(real(entry))), 'a command cannot read them either');
+});
+
+// git needs to read the repository to answer status, diff and log. A sandboxed command reads
+// the Git folder for that and may not write there; ELU Code's records in it stay closed.
+test('in Read only, Ask for approval and Approve for me a sandboxed command reads the repository\'s Git folder, and none of ELU Code\'s records in it', async t => {
+  const f = setup(t, 'answer'), common = fs.realpathSync(path.join(f.root, '.git')), records = path.join(common, 'elu-code');
+  for (const [permissions, label] of [['ask', 'Ask for approval'], ['auto', 'Approve for me'], [undefined, 'Read only']]) {
+    const task = await f.controller.ask('Where is coupon normalization?', null, permissions ? { permissions } : undefined).finished;
+    assert.equal(task.state, 'answered', `${label} ${JSON.stringify(task.error)}`);
+    const args = f.leads().at(-1).args, { denyRead, denyWrite } = settingsOf(args).sandbox.filesystem;
+    assert.equal(args.includes('--restricted'), label === 'Read only', label);
+    assert.deepEqual([...new Set(gitEntries(denyRead))], [records], `${label}: a command reads the Git folder but for the records`);
+    assert.ok(gitEntries(denyWrite).includes(common), `${label}: a command writes nothing in the Git folder`);
+  }
+  // A teammate's question is given tracked files only: its commands read none of the folder.
+  const peer = await f.controller.ask('Answer the question from @sara.', null, { origin: origin('ask'), readOnly: true, context: 'Where is normalization?' }).finished;
+  assert.equal(peer.state, 'answered', JSON.stringify(peer.error));
+  const closed = settingsOf(f.leads().at(-1).args).sandbox.filesystem;
+  assert.ok(gitEntries(closed.denyRead).includes(common), 'the whole folder stays closed to a teammate\'s question');
+});

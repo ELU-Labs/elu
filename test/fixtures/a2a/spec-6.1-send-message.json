@@ -1,0 +1,12 @@
+{
+  "_source": "A2A v1.0.1 docs/specification.md lines 1320-1326, §6.1 Basic Task Execution, request body",
+  "message": {
+    "role": "ROLE_USER",
+    "parts": [
+      {
+        "text": "What is the weather today?"
+      }
+    ],
+    "messageId": "msg-uuid"
+  }
+}

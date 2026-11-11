@@ -1,0 +1,285 @@
+# Permissions
+
+A turn runs in one of four profiles. You choose one of three modes when you start a
+session; a turn that is not your own session's runs read only.
+
+## Modes
+
+| | Read only | Ask for approval | Approve for me | Full access |
+| --- | --- | --- | --- | --- |
+| Who gets it | bots that review or answer, teammate questions, tasks saved without a mode | your session | your session | your session |
+| Reads | the workspace; answer turns may read your home | without asking: the workspace, folders and, for answer turns, your home (below) | same | anything |
+| Edits in the workspace | edit turns only | yes | yes | yes |
+| Edits outside it | no | asks | a reviewer model decides; on Antigravity refused, and on Claude Code an answer turn's edit asks | yes |
+| Shell inside the vendor sandbox | no | yes; Antigravity runs no sandbox, so every command asks | yes | yes, no sandbox |
+| Shell outside it, network, web tools | no | asks | a reviewer model decides | yes |
+| Secrets and ELU Code state | no | no | no | file tools denied; a shell can read |
+| Never list (push, tag, merge, deploy, publish) | blocked | blocked; every escape asks | stand-in commands and, except on Codex, deny rules; a command that gets past them gets through if the reviewer allows it | stand-in commands, prompt text and, except on Codex, deny rules; no sandbox behind them |
+| Runs in | worktree | worktree or a named branch | same | also here |
+| Checks | sandboxed, no network, structural limits | same | no network; dependency files may change | network on; only secret paths and deleted tests block |
+
+"Asks" is a live approval in your terminal where the vendor has a relay: Claude
+Code, and Antigravity and Grok Build once the `relay` step of their one-time check
+has passed on this machine. Elsewhere the action is denied and reported, and the
+model returns `needs_input` naming what it needs. "A reviewer model decides" is the
+vendor's own reviewer, such as Claude Code's auto mode.
+
+A reply ELU Code cannot read is asked for once more. Claude Code is asked in the
+same session, which has done the work already, and the chat says it was asked for
+its reply again. Another vendor, or a Claude Code session that cannot be picked
+up, starts once more for the same message. The chat then says it was started
+twice, because anything the first one ran the second may have run again. A
+`needs_input` reply that names what it needs in its summary and asks no question
+is read as it is.
+
+Read only has no shell unless the project's settings file names command prefixes
+for the model (`roles.lead.commands` in `.elu-code/config.yaml`, for example
+`npm test`). ELU Code never adds one by itself. The test and build scripts it
+finds in a project run as checks after an edit, inside the check sandbox. A
+settings file counts only after you have approved it on this machine: ELU Code
+shows it and asks when it is new or changed. Until you approve a change, the
+settings you approved last stay in use.
+
+The workspace is the place you picked: a worktree on a new task branch, a
+worktree with a named branch checked out, or, in Full access, the checkout
+itself with its current branch and a dirty tree allowed. Folders are extra
+directories in your home that the model may read this session, added with
+`/permissions folders add <path>`; they are never a secret folder or ELU Code's
+state. A folder that holds one of those is refused too, and a link counts as
+where it leads: with `~/.config` linked to `~/dotfiles/config`, `~/dotfiles` is
+refused. In Ask for approval and Approve for me a folder is read and never written:
+Claude Code denies writes there to its file tools and to sandboxed commands, Codex gives
+the folder read access only, and Antigravity denies writes there to its file tool. On
+Claude Code and Antigravity a folder that holds the workspace or lies inside it, such as
+the folder of all your projects (a worktree sits beside its project), gets no such deny,
+because a deny there would refuse every edit in the workspace. Full access adds no rule
+for folders. Answer turns have no workspace: they run in the project
+folder, and in Ask and Auto a write there asks like any outside write.
+
+In Ask for approval and Approve for me, answer turns read your whole home folder
+without asking on Claude Code, Codex and Grok Build: your session's own, and a working
+bot's when you write to it. Claude Code is given the home folder with `--add-dir` for
+those turns; Codex reads anywhere in every turn; Grok Build allows `Read` and `Grep`
+with no path. On Claude Code a command that stays in the sandbox also reads outside the
+workspace without asking. Antigravity keeps its file tool to the workspace and folders.
+The secret folders (`~/.ssh`, `~/.aws`, `~/.config`, `~/Library` and the rest) and ELU
+Code's state stay closed, as the table says. Your session's answer turns, and a working
+bot's until the session's work is published, also get a list of up to 60 Git
+repositories found in your home, so the model can find the code you mean.
+
+## Which profile a turn runs with
+
+In order: a bot that reviews or answers runs read only; a teammate's question or
+review, or a read-only turn, runs read only; otherwise the session's mode. A task
+saved without a mode runs read only.
+
+A bot that works (one with a schedule, and `@lead`, `@qa` and each bot you make) runs in
+the session's mode when you write to it, and so do the helpers it hands work to. On Claude
+Code a working bot can start helpers when its instructions ask for them. They run on the
+bot's own model unless the bot was saved with another for them, as `@lead` was, with the
+tools and the denied commands of the bot's turn, and they start no helpers of their own.
+A bot that is allowed to merge pull requests starts helpers only when it was saved with a
+model for them. A turn its schedule started runs with Approve for me at most, because
+nobody may be watching.
+
+One entry of the never list can open: a bot that is allowed to merge pull requests
+(`@elu` comes allowed; a bot you make is not) may run `gh pr merge` in its own working
+turn on `claude`. Ask for approval still asks you before each merge. Push, tag,
+`git merge`, deploy and publish stay blocked for that bot and for everyone else.
+
+A longer command line that holds a never-list command is refused whole. The chat
+then names the part, as in `Blocked: git tag is never allowed, in any mode`, and
+does not point at `/permissions`. Each turn's instructions name the commands once
+and say how to list tags without `git tag`: `git for-each-ref
+--sort=-creatordate refs/tags` or `git describe --tags`.
+
+A rule on the command's text does not see what a script runs, and Codex has no
+deny rules. So every session with permissions also gets stand-in commands, on
+every vendor; on Codex they alone hold the never list. A
+private folder goes first on the session's PATH with one small script per command
+word (`git`, `gh`, `npm` and the rest). Each refuses the never-list call by name,
+in the same words, whatever runs it: the model, a script, `sh -c`, `npm test`.
+The command is read as the tool reads it, so `git -C dir push` is refused and
+`git merge-base` or `git stash push` is not. Every other call goes to the real
+command with its arguments untouched; `git tag` alone and `git tag -l` only list
+tags and pass. The chat shows the refusal as a Blocked line even when the turn
+went on to answer.
+
+Pushing to a folder on this machine and working in a scratch repository under the
+temporary directory are not publishing, and a project's own tests do both, so the
+stand-in for `git` lets them through:
+
+- `git push` passes when every place it would push to is a path or a `file://` URL
+  on this machine. git itself is asked, so the remote's `pushurl`, every
+  `url.<base>.insteadOf` and `pushInsteadOf` rule and the remote of a push that
+  names none are read as git reads them. A destination on another machine, one git
+  cannot place, or an option the stand-in does not know (`--receive-pack`,
+  `--repo`, submodules pushed on demand) is refused before anything is sent.
+- `git merge` and a `git tag` that makes or deletes a tag pass when the repository
+  they act on lies inside the system temporary directory: its top level and the
+  folder that holds its history, links resolved. Everywhere else they are refused.
+  A worktree under the temporary directory of a repository kept elsewhere is that
+  repository, and is refused.
+
+The temporary directory is the one ELU Code itself was started with, and `/tmp`;
+a session cannot name another by changing `TMPDIR`.
+
+Stand-in commands are not a sandbox. A full path to the real command
+(`/usr/bin/git push`), a changed PATH, a Git alias or another program that does the
+same work gets past them, and a session in Full access can rewrite the folder; it
+is written again when the next session starts. In Ask for approval and Approve for
+me the vendor's sandbox, where it runs one, still stands behind them; Antigravity in
+Ask for approval runs none, so every command asks and one you approve runs outside
+any sandbox. In Full access nothing does.
+
+## Git in the sandbox
+
+In Read only, Ask for approval and Approve for me a command in the sandbox reads the
+repository's Git folder and writes nothing there. `git status`, `git diff`, `git log`
+and `git show` work without asking. `git add`, `git commit`, `git stash` and the like
+are refused in the sandbox.
+
+What a sandboxed command can read that way:
+
+- The repository's history through git: every committed version of every file. That
+  includes a file committed once and later removed, and committed files the sandbox
+  hides by name in the worktree (`.env*`, `*.pem`, `.npmrc`): `git show HEAD:.env`
+  prints one.
+- The Git settings file: remote URLs, and a token if one is written into a URL.
+- The stash and the reflog.
+
+The sandbox has no network, so a sandboxed command cannot send any of it anywhere.
+What it prints goes to the model, as all output does, and into the session's record.
+ELU Code's own records in the folder (`.git/elu-code`) stay closed to commands and
+to the file tools. A teammate's question reads none of the Git folder.
+
+## Approvals
+
+Claude Code is started with ELU Code's approval relay as its permission prompt
+tool: a small MCP server over stdio, started from the same private config file
+as your own servers, with one tool. When Claude would prompt, the call becomes a
+request under ELU Code's personal directory and the terminal shows it under
+Needs you. Allow lets the action run; deny tells the model not to retry it
+another way; no answer within 20 minutes counts as a denial. The role's time
+limit waits while a request is open, and the conductor does not treat the wait
+as a stall. Every decision is kept with the task, and blocked actions are kept
+on the run.
+
+The keys are `y` allow and `n` deny. Where the session can be given Full access
+there is a third, `f`: it asks what `/permissions full` asks, then allows the
+action and switches the session to Full access, so that session stops asking.
+It is not offered for a bot's scheduled turn or a turn that runs read only.
+
+## Plan first
+
+A message that asks for a change to code or files, or for work that needs planning, comes
+back as a Task before anything is edited: a title, a description, the goal, the objectives
+that say when it is done, a priority and a severity. You approve it with `y`, reject it
+with `n`, or change it with a message. This holds in every mode, Full access included, for
+the session's model and for a bot that works, such as `@lead`.
+
+ELU Code enforces this much, on every vendor:
+
+- The editing turn starts only for a Task you approved. That is the turn that runs in the
+  session's workspace and is followed by the checks and the review. A reply that asks for
+  an edit with no Task is asked for its Task once more. If none comes, the reply is kept
+  as a plain answer with a line that says no Task was read, and nothing starts.
+- Only you approve, in your own session: with the key, or by typing `yes`. A teammate's
+  message, a schedule and a bot's own turn cannot approve a Task.
+- A Task is read as untrusted text. The title is one line of up to 80 characters; the
+  description up to 2000; the goal up to 500; one to eight objectives of up to 300 each;
+  the priority is urgent, high, medium or low; the severity is critical, high, medium or
+  low. Control characters are refused, and markup is shown as typed.
+- After approval the model reports its subtasks and the objectives it says are met. A
+  report cannot change the goal or an objective: those change only through a revised Task
+  that you approve again. Done on the card is the model's report. The checks and the
+  review are what verify the edit.
+
+The rest is an instruction to the model, not a boundary. The model decides whether a
+message needs a Task and whether a follow-up is inside a Task you already approved, and
+it is told to change nothing in the turn that proposes one. That
+first turn runs with the session's mode, in the project folder, so what stops an edit
+there is the mode:
+
+| First turn | Claude Code | Codex | Grok Build | Antigravity |
+| --- | --- | --- | --- | --- |
+| Read only | no edit tools | read-only sandbox | edits denied | edits denied |
+| Ask for approval | an edit in the project folder asks you | read-only sandbox | an edit asks you, or is denied and reported | not fenced: it can edit in the project folder |
+| Approve for me | an edit in the project folder asks you | read-only sandbox; Codex's reviewer model decides a request to leave it | Grok's reviewer model decides | not fenced |
+| Full access | not fenced | not fenced | not fenced | not fenced |
+
+Some turns wait for nobody:
+
+- A session a schedule starts, and a bot's own scheduled turn, have nobody to approve.
+  The Task is recorded as started by schedule and the work goes on.
+- A teammate's handoff you chose to work on with `w` records its Task as started by a
+  handoff and goes on.
+- A teammate's question and any read-only turn change nothing and make no Task.
+- `elu run "<goal>"` on the command line makes no Task.
+
+## Lifecycle
+
+- New sessions start with your personal default, `ask` until you change it
+  with `/permissions default <mode>`; the place is a worktree.
+- A follow-up inherits the session's mode, place and folders. Switching the
+  mode applies from the next turn and is recorded on the session; the pinned
+  policy does not change.
+- A switch made while a turn runs is saved at once, and so are the spending
+  limit, the folders and the bots. The turn in progress keeps the mode it
+  started with, with one exception: after a switch to Full access, ELU Code
+  allows that turn's approvals for you, the one that waits and the ones it asks
+  next. Three kinds stay yours to answer: a removal with `rm` or `rmdir`, an
+  MCP tool, and a command too long to show whole. The never list is not asked,
+  so it stays refused. A bot's scheduled turn is not answered this way: it runs
+  with Approve for me at most.
+- A turn that starts in Full access is never answered for you. What it still
+  asks, its vendor asks in every mode (Claude Code asks before `rm` or `rmdir`
+  on your home, the working folder or a top-level folder), and you answer it.
+- The automatic edit task of a conversation inherits the conversation's choices.
+- A schedule stores `ask` or `auto`; it never runs with Full access. An
+  unanswered approval times out and the task asks you.
+- A request sent to the local A2A endpoint, which is off by default, runs your
+  personal default, capped at `auto`.
+- A teammate's message you answer runs read only and never gets a mode. One you
+  choose to work on runs with the mode you pick then.
+- `elu run` runs read only unless you pass `--permissions auto|full`,
+  with `--place here|branch:<name>` and `--folder <path>` (repeatable). `ask`
+  needs the terminal app.
+- Publishing pushes the session's branch. A `here` session on a default branch
+  cannot publish. The publish preview says when the model ran with Full access.
+
+## Linux
+
+Claude Code's shell sandbox on Linux is bubblewrap. It needs `bwrap` and `socat`
+on PATH, and `bwrap` must be allowed to make user namespaces. Where the sandbox
+does not start, the system fences nothing, so Ask for approval asks you for every
+command and Approve for me sends every command to the reviewer.
+
+The Permissions picker says which case this machine is: "No OS sandbox here" when
+a tool is not installed, "The OS sandbox cannot start here" when both are installed
+and `bwrap` cannot start. ELU Code finds out by starting `bwrap` once, around a
+command that does nothing, when the picker first opens; start ELU Code again after
+a fix.
+
+Ubuntu 24.04 stops a program from making user namespaces unless an AppArmor
+profile lets it, and has no profile for `bwrap`. This one does, saved as
+`/etc/apparmor.d/bwrap`:
+
+    abi <abi/4.0>,
+    include <tunables/global>
+
+    profile bwrap /usr/bin/bwrap flags=(unconfined) {
+      userns,
+      include if exists <local/bwrap>
+    }
+
+and loaded once with `sudo apparmor_parser -r /etc/apparmor.d/bwrap`. Nothing is
+installed or changed for you.
+
+The check sandbox (`codex sandbox`), which runs every project's checks whatever the
+vendor, is bubblewrap on Linux too. The Linux tests run with `bubblewrap` installed
+and an AppArmor profile like this one loaded.
+
+## Claude Code
+
+See [vendors/claude.md](vendors/claude.md) for the exact launch per profile.

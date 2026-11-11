@@ -1,0 +1,4 @@
+{"type":"thread.started","thread_id":"12345678-1234-4234-8234-123456789abc"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"{\"outcome\":\"done\",\"summary\":\"No actionable findings. The change converts lowercase coupon codes to uppercase and preserves the exported API. Supplied checks passed. No prior findings required verification.\",\"question\":null,\"choices\":[],\"comments\":[],\"responses\":[]}"}}
+{"type":"turn.completed","usage":{"input_tokens":11458,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":98,"reasoning_output_tokens":36}}

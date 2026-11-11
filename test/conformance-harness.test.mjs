@@ -1,0 +1,86 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { conformanceHarness, conformanceState, conformant, requireConformance, runConformance, vendorReading } from '../lib/conformance.mjs';
+import { ADAPTERS } from '../lib/adapters/index.mjs';
+import { atomic, personalDirectory } from '../lib/util.mjs';
+
+function home(t) {
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'elu-code-conformance-'))), previous = process.env.XDG_CONFIG_HOME;
+  process.env.XDG_CONFIG_HOME = path.join(dir, 'personal');
+  t.after(() => { if (previous === undefined) delete process.env.XDG_CONFIG_HOME; else process.env.XDG_CONFIG_HOME = previous; fs.rmSync(dir, { recursive: true, force: true }); });
+  return dir;
+}
+
+test('the harness gives a step a repository, a planted secret, a listener and a marker command', async t => {
+  const dir = home(t), h = await conformanceHarness({ scratch: path.join(dir, 'h') });
+  t.after(() => h.close());
+  assert.equal(spawnSync('git', ['-C', h.repo, 'rev-parse', '--abbrev-ref', 'HEAD'], { encoding: 'utf8' }).stdout.trim(), 'main');
+  assert.equal(spawnSync('git', ['-C', h.repo, 'status', '--porcelain'], { encoding: 'utf8' }).stdout, '', 'the fixture is committed');
+  assert.ok(fs.existsSync(path.join(h.repo, 'README.md')));
+  assert.ok(!h.outsideFile.startsWith(`${h.repo}/`)); assert.match(fs.readFileSync(h.outsideFile, 'utf8'), /^planted-/);
+  assert.equal(h.listener.hits(), 0);
+  assert.equal((await fetch(h.listener.url)).status, 404); assert.equal(h.listener.hits(), 1);
+  assert.equal(h.marker.ran(), false);
+  assert.equal(spawnSync(h.marker.command).status, 0); assert.equal(h.marker.ran(), true);
+  await h.close(); await assert.rejects(fetch(h.listener.url), 'the listener is gone after close');
+  await assert.rejects(conformanceHarness({ scratch: 'relative' }), /absolute scratch folder/);
+});
+
+test('a gated vendor refuses to run until its one-time check passed here, for this exact binary and version', async t => {
+  const dir = home(t), log = [];
+  assert.equal(requireConformance('claude', { bin: '/x/claude', version: '2.1.319' }), true, 'Claude is not gated');
+  assert.equal(requireConformance('codex', { bin: '/x/codex', version: '0.166.0-alpha.5.1' }), true, 'Codex is not gated');
+  assert.throws(() => requireConformance('grok', { bin: '/x/grok', version: '1.0.0' }), /^EluCodeError: Grok Build has not been checked on this machine yet\. Your first message to it runs the check\.$/);
+  assert.throws(() => requireConformance('agy', { bin: '/x/agy', version: '1.0.0' }), /^EluCodeError: Antigravity CLI has not been checked on this machine yet\. Your first message to it runs the check\.$/);
+  assert.throws(() => requireConformance('cursor', { bin: '/x/agent', version: '1' }), /Unknown vendor/);
+  assert.equal(conformanceState('grok'), null); assert.equal(conformant('grok', { bin: '/x/grok', version: '1.0.0' }), false);
+  await assert.rejects(runConformance('grok', { bin: 'grok', version: '1.0.0', scratch: path.join(dir, 's') }), /resolved binary path/);
+  await assert.rejects(runConformance('grok', { bin: '/x/grok', version: '', scratch: path.join(dir, 's') }), /version it proves/);
+  // The record the check writes (each adapter's own tests run the steps). An optional step may fail; a required one shuts the gate.
+  const file = path.join(personalDirectory(), 'conformance', 'grok.json'), steps = Object.fromEntries(ADAPTERS.grok.conformance.map(step => [step.id, 'pass']));
+  for (const vendor of ['agy', 'grok']) assert.ok(ADAPTERS[vendor].conformance.some(step => step.required) && ADAPTERS[vendor].conformance.some(step => !step.required), `${vendor} has required and optional steps`);
+  const record = extra => atomic(file, { v: 1, bin: '/x/grok', version: '1.0.0', steps, relay: false, at: new Date().toISOString(), ...extra });
+  record({});
+  const state = conformanceState('grok');
+  assert.equal(state.bin, '/x/grok'); assert.equal(state.version, '1.0.0'); assert.equal(state.relay, false); assert.ok(Date.parse(state.at) > 0);
+  assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+  assert.equal(requireConformance('grok', { bin: '/x/grok', version: '1.0.0' }), true);
+  assert.throws(() => requireConformance('grok', { bin: '/x/grok', version: '1.0.1' }), /Grok Build has not been checked on this machine yet/, 'a new release proves itself again');
+  assert.throws(() => requireConformance('grok', { bin: '/other/grok', version: '1.0.0' }), /Grok Build has not been checked on this machine yet/, 'another binary proves itself again');
+  assert.throws(() => requireConformance('agy', { bin: '/x/agy', version: '1.0.0' }), /Antigravity CLI has not been checked on this machine yet/, 'one vendor never vouches for another');
+  const optional = ADAPTERS.grok.conformance.find(step => !step.required).id, required = ADAPTERS.grok.conformance.find(step => step.required).id;
+  record({ steps: { ...steps, [optional]: 'fail' } }); assert.equal(requireConformance('grok', { bin: '/x/grok', version: '1.0.0' }), true, 'an optional step may fail');
+  record({ steps: { ...steps, [required]: 'fail' } }); assert.throws(() => requireConformance('grok', { bin: '/x/grok', version: '1.0.0' }), /^EluCodeError: Grok Build did not pass its check on this machine \(not proven: it is signed in\)\. Your next message to it runs the check again\.$/, 'a failed required step keeps the gate shut, and the refusal names it');
+  record({ steps: { ...steps, [required]: 'skip' } }); assert.throws(() => requireConformance('grok', { bin: '/x/grok', version: '1.0.0' }), /Grok Build did not pass its check on this machine \(not proven: it is signed in\)/, 'a skipped required step too');
+  assert.equal(log.length, 0, 'no step ran');
+  // The state file is read strictly: unknown shapes mean no check passed.
+  fs.writeFileSync(file, JSON.stringify({ v: 1, bin: '/x/grok', version: '1.0.0', steps: { ok: 'pass', 'Bad Id': 'pass', odd: 'maybe' }, relay: 'yes' }));
+  assert.deepEqual(conformanceState('grok'), { bin: '/x/grok', version: '1.0.0', steps: { ok: 'pass' }, relay: false, at: null });
+  for (const text of ['{"v":2}', '{"v":1,"bin":"/x/grok","version":"1.0.0"}', 'not json']) { fs.writeFileSync(file, text); assert.equal(conformanceState('grok'), null, text); }
+  assert.throws(() => requireConformance('grok', { bin: '/x/grok', version: '1.0.0' }), /Grok Build has not been checked on this machine yet/);
+});
+
+test('a kept reading of the vendors is read again once a check wrote its record', t => {
+  home(t);
+  let reads = 0;
+  const list = vendorReading(), source = () => [{ reading: ++reads }], file = path.join(personalDirectory(), 'conformance', 'grok.json');
+  const record = (version, signin) => atomic(file, { v: 1, bin: '/x/grok', version, steps: { signin }, relay: false, at: new Date().toISOString() });
+  assert.equal(list.kept(), null);
+  assert.deepEqual(list.read(source), [{ reading: 1 }]); assert.deepEqual(list.kept(), [{ reading: 1 }]); assert.deepEqual(list.kept(), [{ reading: 1 }]);
+  assert.equal(reads, 1, 'one reading serves until a check ran');
+  // Grok's check passed: the reading from before still says the check is to come.
+  record('1.0.0', 'pass'); assert.equal(list.kept(), null);
+  assert.deepEqual(list.read(source), [{ reading: 2 }]); assert.deepEqual(list.kept(), [{ reading: 2 }]);
+  // A check that failed, or ran for a new release, changes the rows as well.
+  record('1.0.0', 'fail'); assert.equal(list.kept(), null); list.read(source);
+  record('1.0.1', 'pass'); assert.equal(list.kept(), null);
+  // A check that finishes while the vendors are being read is not missed.
+  list.read(() => { record('1.0.2', 'pass'); return [{ reading: 'during' }]; }); assert.equal(list.kept(), null);
+  // A source that fails leaves nothing kept, and forget drops a good reading.
+  assert.throws(() => list.read(() => { throw new Error('no vendors'); }), /no vendors/); assert.equal(list.kept(), null);
+  list.read(source); assert.equal(list.kept().length, 1); list.forget(); assert.equal(list.kept(), null);
+});

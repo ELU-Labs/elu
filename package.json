@@ -1,0 +1,72 @@
+{
+  "name": "@elu-labs/elu",
+  "version": "0.1.0",
+  "description": "A full-screen terminal app that runs coding sessions on the AI command lines you already use, with bots that review and do work, and teammates you can ask.",
+  "keywords": [
+    "ai",
+    "coding-agent",
+    "terminal",
+    "tui",
+    "cli",
+    "claude-code",
+    "codex",
+    "code-review",
+    "git-worktree",
+    "multi-agent",
+    "a2a",
+    "peer-to-peer"
+  ],
+  "homepage": "https://github.com/ELU-Labs/elu#readme",
+  "bugs": {
+    "url": "https://github.com/ELU-Labs/elu/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ELU-Labs/elu.git"
+  },
+  "type": "module",
+  "license": "MIT",
+  "author": "ELU Labs, Inc.",
+  "bin": {
+    "elu": "bin/elu.cjs"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "os": [
+    "darwin",
+    "linux"
+  ],
+  "files": [
+    "bin/",
+    "lib/",
+    "npm-shrinkwrap.json",
+    "README.md",
+    "docs/*.md",
+    "docs/vendors/*.md",
+    "THIRD_PARTY_NOTICES.md",
+    "LICENSES/",
+    "SECURITY.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "test:conformance": "node --test test/conformance*.test.mjs",
+    "test:sandbox": "node --test test/sandbox.test.mjs",
+    "test:live": "node --test test/live.test.mjs"
+  },
+  "dependencies": {
+    "blessed": "0.1.81"
+  },
+  "optionalDependencies": {
+    "blind-relay": "1.6.1",
+    "hyperdht": "6.36.0",
+    "hyperswarm": "4.17.2"
+  },
+  "devDependencies": {
+    "@a2a-js/sdk": "1.3.0"
+  }
+}

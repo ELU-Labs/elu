@@ -1,0 +1,21 @@
+{
+  "_source": "A2A v1.0.1 docs/specification.md lines 1335-1346, §6.1 Basic Task Execution, response body",
+  "task": {
+    "id": "task-uuid",
+    "contextId": "context-uuid",
+    "status": {
+      "state": "TASK_STATE_COMPLETED"
+    },
+    "artifacts": [
+      {
+        "artifactId": "artifact-uuid",
+        "name": "Weather Report",
+        "parts": [
+          {
+            "text": "Today will be sunny with a high of 75°F"
+          }
+        ]
+      }
+    ]
+  }
+}
