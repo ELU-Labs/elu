@@ -1404,7 +1404,8 @@ test('a daemon from another version is restarted before peer on and before an in
   savePeerSettings({ enabled: true });
   const second = await old('yes');
   const code = await peer.createInvite(made.id, { hours: 1 });
-  await second.exited; await until(current, 'this version\'s daemon after the invite', 30000);
+  assert.ok(current(), 'the new daemon is running when the invite is made, so the CLI says to stay online');
+  await second.exited;
   await until(() => fs.readFileSync(peerFile('daemon.log'), 'utf8').includes(`invite topic ${inviteKeys(code).topic.slice(0, 8)} announced`), 'the topic announced', 30000);
   await stopCurrent();
   // One that ignores the shutdown: refused with what to do, and no invite is made.
