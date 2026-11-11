@@ -409,7 +409,7 @@ async function run(home, command) {
 
 test('a picture typed into a message reaches the teammate whole, shows on both sides, and their model is given it for the run', async t => {
   const bootstrap = await testnet(t), crew = makeTeam(t), ana = crew.founder, sara = crew.member;
-  for (const home of [ana.home, sara.home]) withHome(home, () => savePeerSettings({ enabled: true, bootstrap }));
+  for (const home of [ana.home, sara.home]) withHome(home, () => savePeerSettings({ bootstrap }));
   const { parent, root } = withHome(sara.home, () => registeredProject(t));
   const fake = answeringClis(parent); withHome(sara.home, () => share(root, { handle: 'app' }));
   // The stand-in vendor keeps a copy of whatever is in the folder it was given to read.

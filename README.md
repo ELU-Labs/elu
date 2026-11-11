@@ -189,14 +189,16 @@ the two connect directly over Hyperswarm.
 # on your computer
 elu id --name sam        # once: your name on the team
 elu team create shop
-elu peer on
 elu invite               # prints a code like k7qm-x2pd-9fhw; it works once, within 24 hours
 
 # on your teammate's computer, in the project you may ask about
 elu id --name kim
-elu peer on
 elu join CODE            # joins their team, to ask about their project
 ```
+
+There is nothing to turn on. Once your computer is on a team, a background process (the
+peer daemon) keeps it reachable by your teammates, also while ELU Code is closed. Until you
+invite someone or join a team, nothing starts and nothing connects.
 
 `elu peers` shows who is online. In the app, write to a teammate in the Chats tab, or
 type `@kim where are the tax rates?` in any session. A teammate's question is answered
@@ -267,9 +269,7 @@ your account suspended or terminated. ELU Code wraps `agy`, so read
 npx -y @elu-labs/elu@latest
 ```
 
-That installs the newest version where `elu` already is, and opens it. If peer mode is on,
-restart it so it runs the new version: `elu peer off`, wait until `elu peer status` says
-the daemon is stopped, then `elu peer on`.
+That installs the newest version where `elu` already is, and opens it.
 
 To remove ELU Code, first delete your schedules in the app (Sessions tab, under Scheduled:
 `x` on each one), so they no longer keep the Mac awake, and quit it with `/quit`.
@@ -284,10 +284,11 @@ and delete `elu-code-scheduler.service` and `elu-code-scheduler.timer` in
 Stop what still runs in the background:
 
 ```sh
-elu peer off                # if peer mode is on
 elu peer uninstall          # if you made the peer daemon start at login
 elu conductor stop          # stops sessions that are still running
 ```
+
+`elu uninstall`, below, also stops the peer daemon.
 
 In each project folder that is a Git repository, see what ELU Code would remove there,
 then remove it:

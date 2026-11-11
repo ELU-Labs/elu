@@ -39,7 +39,14 @@ channels    team: pairwise A2A tasks + status notifications
 conductor   peer daemon <-> conductor through files only (requests, outbox, commands)
 ```
 
-There is no ELU server anywhere. Defaults that touch third parties:
+There is no ELU server anywhere, and no on or off. The daemon runs while this machine is an active member of at least one team:
+
+- Nothing starts on a machine that never made or joined a team, and it makes no peer connection.
+- `/invite`, `elu team create` and `elu invite` start it once the team exists; `/join` and `elu join` start it for the join, through a `join` command it reads when it starts. The app starts it when it opens on a machine on a team, and again within a minute when it stops. It is a detached process, so it keeps running when the app closes.
+- With no team, no join and no command under way for 60 seconds (the last team left, or a join that failed), it stops by itself. `peer --daemon` started with no team and no command waiting, by a login service say, exits before it connects. `elu uninstall` stops it.
+- An `enabled` field in `settings.json`, written by 0.1.5 and earlier, is ignored.
+
+Defaults that touch third parties:
 
 - the HyperDHT bootstrap nodes. HyperDHT's own public nodes are used unless `bootstrap` in `peer/settings.json` names others; the routing table is cached after the first join.
 - other HyperDHT nodes. Announcing the key and dialling a teammate send requests to DHT nodes that anyone may run, and they see this machine's IP address and port.
@@ -223,7 +230,7 @@ Over a limit, the message is not sent, it stays in the message box, and one line
   - **Who answered.** The inviter's proof shows only that the other side knows the code. Anyone the code reached, and anyone with a copy of the inviter's `invites.json`, could answer as the inviter with a team of their own. So a join shares nothing of the joiner's: the joiner shares a project only with `/share` or `elu share`, and `elu peers` shows the fingerprint of every member.
   - **Long codes from 0.1.3 and earlier** still join: `elu-team:v1:` + base32 of `{teamId, inviter key, secret(32), expiresAt}`. The joiner dials the inviter's key and calls `elu.join {teamId, secret, name}`; the inviter checks `sha256(secret)` against a row that has no `topic`. A short invite is never redeemed through `elu.join`.
   - The inviter must be online for the join. Until it, neither hello names the team, since the joiner is not on it.
-  - **The daemon's version.** `state.json` carries the daemon's package version. A daemon keeps the code it started with, so before inviting, joining or turning peer mode on, the app and CLI restart one whose version is not their own (0.1.3 and earlier write none): a shutdown sent while peer mode is off, then this copy's daemon. If it does not stop within 10 seconds, they refuse and say to run `elu peer off`, then `elu peer on`.
+  - **The daemon's version.** `state.json` carries the daemon's package version. A daemon keeps the code it started with, so when the app opens and before inviting or joining, the app and CLI restart one whose version is not their own (0.1.3 and earlier write none): a shutdown, with `enabled: false` written to `settings.json` for daemons from 0.1.5 and earlier, which honour a shutdown only then, then this copy's daemon. If it does not stop within 10 seconds, they refuse and say to try again.
 
 ## Status
 

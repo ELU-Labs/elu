@@ -16,13 +16,14 @@ const ME = 'a'.repeat(64), SARA = 'b'.repeat(64), LI = 'c'.repeat(64);
 const LONG = 'Could you check whether the retry budget in the uploader resets after a successful flush or only after restart because we keep seeing duplicate batches';
 const ago = minutes => new Date(Date.now() - minutes * 60000).toISOString();
 
-function fakePeer({ enabled = true, items, running = true, refuse = () => null, remoteBots = [], teamless = false } = {}) {
+// teamless: this machine is on no team until /invite makes one (createTeam).
+function fakePeer({ items, running = true, refuse = () => null, remoteBots = [], teamless = false } = {}) {
   const calls = [];
   const record = (name, value) => (...args) => { calls.push([name, ...args]); return typeof value === 'function' ? value(...args) : value; };
   const facade = {
-    calls, enabled, running, channels: [],
+    calls, running, channels: [],
     sent: () => calls.filter(row => row[0] === 'sendPeerCommand').map(row => row[1]),
-    peerSettings: () => ({ enabled: facade.enabled }),
+    onTeam: () => !teamless || facade.made === true,
     peerStatus: record('peerStatus', () => ({ running: facade.running, stale: facade.stale === true, pid: 1, key: ME, name: 'ana', fingerprint: 'aaaaaaaa', error: null, counters: { direct: 1, relayed: 0, failed: 0 },
       teams: teamless && !facade.made ? [] : [{ id: 'team-1', name: 'Core', role: 'admin', members: [
         { key: ME, fingerprint: 'aaaaaaaa', name: 'ana', role: 'admin', online: true, path: null, lastSeen: ago(0) },
@@ -48,7 +49,7 @@ function fakePeer({ enabled = true, items, running = true, refuse = () => null, 
       if (type !== 'channelSet') return {};
       facade.channels = [...facade.channels.filter(row => row.id !== id), ...(members.length ? [{ id, name, members }] : [])]; return { id };
     }),
-    startPeer: record('startPeer', { running: true }), stopPeer: record('stopPeer', { running: false }),
+    startPeer: record('startPeer', true),
     share: record('share', (root, { handle }) => ({ handle: handle ?? 'sample', root, status: true })),
     createInvite: record('createInvite', () => ({ code: 'k7qm-x2pd-9fhw' })),
     createTeam: record('createTeam', name => { facade.made = true; return { id: 'team-1', name }; }),
@@ -710,7 +711,8 @@ test('a typed @name and the peer commands call the facade and report in the stat
   await until(() => peer.sent().at(-1).to === 'li', 'free text ask');
   assert.deepEqual(peer.sent().at(-1), { type: 'ask', to: 'li', project: null, text: "what's the cache key?" });
   await send(v, '/peers'); await until(() => /1 of 2 teammates online: @sara \(direct\)/.test(status()), 'peers');
-  for (const gone of ['/ask @sara hello', '/handoff @li Fix the flaky upload test', '/review @sara']) { await send(v, gone); await until(() => status().includes(`Unknown command: ${gone.split(' ')[0]}.`), `${gone} is unknown`); }
+  // There is no peer on or off: /peer is an unknown command, whatever follows it.
+  for (const gone of ['/ask @sara hello', '/handoff @li Fix the flaky upload test', '/review @sara', '/peer', '/peer on', '/peer off']) { await send(v, gone); await until(() => status().includes(`Unknown command: ${gone.split(' ')[0]}.`), `${gone} is unknown`); }
   assert.ok(!peer.sent().some(row => ['handoff', 'review'].includes(row.type)), 'nothing sends a handoff or a review');
   await send(v, '/share'); await until(() => /Open a project to share it/.test(status()), 'share needs a project');
   // A home has the bots the app comes with, so /invite first asks which of them teammates may use.
@@ -720,35 +722,34 @@ test('a typed @name and the peer commands call the facade and report in the stat
   assert.match(modal(v, 'Team invite').children.find(child => child.options?.scrollable).getText(), /k7qm-x2pd-9fhw[^]*Type \/share in a project so teammates can ask about it\./);
   await closeDialog(v, 'Team invite');
   assert.ok(!peer.calls.some(row => row[0] === 'share'), 'no project open, nothing shared');
-  await send(v, '/peer off'); await until(() => peer.calls.some(row => row[0] === 'stopPeer'), 'peer off');
-  await until(() => /Peer mode is off/.test(status()), 'peer off message');
-  await send(v, '/peer on'); await until(() => peer.calls.some(row => row[0] === 'startPeer'), 'peer on');
+  assert.equal(peer.calls.filter(row => row[0] === 'startPeer').length, 0, 'the daemon was running, so nothing was started');
   assert.equal(peer.sent().length, 2, 'only the two questions went out; refused and unknown commands send nothing');
 });
 
-test('/peer on with no identity asks for your name and creates it, no CLI step needed', async t => {
+test('a first /join asks for your name, then joins; the join starts the daemon itself', async t => {
   const p = project(later(t)); environment(t, p.parent);
-  const peer = fakePeer({ enabled: false }); let me = null;
+  const peer = fakePeer({ teamless: true, running: false }); let me = null;
   peer.identity = ({ create, name } = {}) => { if (create) { peer.calls.push(['identity', name]); me = { name }; return me; } if (!me) throw new Error('Create your peer identity first with elu id --name NAME.'); return me; };
   const v = await view(t, { repo: repository(p.root), peer });
-  await send(v, '/peer on'); await until(() => modal(v, 'Your name'), 'name prompt');
+  await send(v, '/join k7qm-x2pd-9fhw'); await until(() => modal(v, 'Your name'), 'name prompt');
   const field = modal(v, 'Your name').children.find(child => child.type === 'textbox');
   await until(() => field.__listener, 'name input'); field.setValue('ana'); field.submit();
-  await until(() => peer.calls.some(row => row[0] === 'startPeer'), 'peer on after the name');
+  await until(() => /Joined Docs with sara\./.test(v.panels.status.getText()), 'joined after the name');
   assert.deepEqual(peer.calls.find(row => row[0] === 'identity'), ['identity', 'ana']);
-  assert.ok(peer.calls.findIndex(row => row[0] === 'identity') < peer.calls.findIndex(row => row[0] === 'startPeer'));
+  assert.ok(peer.calls.findIndex(row => row[0] === 'identity') < peer.calls.findIndex(row => row[0] === 'joinTeam'));
+  assert.equal(peer.calls.filter(row => row[0] === 'startPeer').length, 0, 'joinTeam starts the daemon; the app asks nothing more');
 });
 
-test('Enter in the command list runs /peer, fills in /join, and shows a failed command\'s error', async t => {
+test('Enter in the command list runs /peers, fills in /join, and shows a failed command\'s error; there is no /peer', async t => {
   const p = project(later(t)); environment(t, p.parent);
-  const peer = fakePeer({ enabled: false }), v = await view(t, { repo: repository(p.root), peer });
+  const peer = fakePeer({ teamless: true }), v = await view(t, { repo: repository(p.root), peer });
   const status = () => v.panels.status.getText(), palette = v.panels.palette;
   const type = async text => { v.panels.ask.focus(); v.panels.ask.readInput(); await until(() => v.panels.ask.__listener, 'message box'); v.panels.ask.clearValue(); v.input.write(text); await until(() => !palette.hidden, `list for ${text}`); };
-  await type('/peer'); v.input.write('\r');
-  await until(() => peer.calls.some(row => row[0] === 'startPeer'), 'a bare /peer turns peer mode on');
-  await until(() => /Peer mode is on/.test(status()), 'on message');
-  peer.enabled = true; await type('/peer'); v.input.write('\r');
-  await until(() => peer.calls.some(row => row[0] === 'stopPeer'), 'a bare /peer turns it off again');
+  await type('/peer');
+  assert.deepEqual(palette.items.map(item => item.getText().trim().split(/\s+/)[0]), ['/peers'], 'no /peer to turn anything on or off');
+  v.input.write('\r');
+  await until(() => /No team yet\. Invite someone with \/invite, or join with \/join CODE\./.test(status()), '/peers on no team');
+  assert.equal(peer.calls.filter(row => row[0] === 'startPeer').length, 0);
   await type('/joi'); v.input.write('\r');
   await until(() => v.panels.ask.getValue() === '/join ' && /Usage: \/join code/.test(status()), '/join needs a code, so Enter fills it in');
   assert.equal(peer.sent().length, 0);
@@ -769,17 +770,20 @@ test('the first /invite makes the team, named after the open project', async t =
   await closeDialog(v, 'Team invite');
 });
 
-test('a new person: /invite asks their name, turns peer mode on, then makes the team and the code', async t => {
+test('a new person: /invite asks their name, makes the team, starts the daemon, then makes the code', async t => {
   const p = project(later(t)); environment(t, p.parent);
-  const peer = fakePeer({ teamless: true, running: false, enabled: false }); let me = null;
+  const peer = fakePeer({ teamless: true, running: false }); let me = null;
   peer.identity = ({ create, name } = {}) => { if (create) { peer.calls.push(['identity', name]); me = { name }; return me; } if (!me) throw new Error('Create your peer identity first with elu id --name NAME.'); return me; };
-  peer.startPeer = () => { peer.calls.push(['startPeer']); peer.enabled = true; peer.running = true; return true; };
+  peer.startPeer = () => { peer.calls.push(['startPeer']); peer.running = true; return true; };
   const v = await view(t, { repo: repository(p.root), peer });
+  // On no team, opening the app starts nothing.
+  await new Promise(resolve => setTimeout(resolve, 300));
+  assert.equal(peer.calls.filter(row => row[0] === 'startPeer').length, 0, 'nothing started before the invite');
   await send(v, '/invite'); await choose(v, 'Invite', /^Someone new/); await until(() => modal(v, 'Your name'), 'name prompt');
   const field = modal(v, 'Your name').children.find(child => child.type === 'textbox');
   await until(() => field.__listener, 'name input'); field.setValue('ana'); field.submit();
   await until(() => modal(v, 'Team invite'), 'invite');
-  const order = ['identity', 'startPeer', 'createTeam', 'createInvite'].map(name => peer.calls.findIndex(row => row[0] === name));
+  const order = ['identity', 'createTeam', 'startPeer', 'createInvite'].map(name => peer.calls.findIndex(row => row[0] === name));
   assert.ok(order.every((at, i) => at >= 0 && (i === 0 || at > order[i - 1])), JSON.stringify(order));
   await closeDialog(v, 'Team invite');
 });
@@ -874,15 +878,16 @@ test('a peer daemon an update left running is restarted before /join', async t =
   assert.ok(at('startPeer') >= 0 && at('startPeer') < at('joinTeam'), JSON.stringify(peer.calls.map(row => row[0])));
 });
 
-test('Chats shows one line when peer mode is off or the facade is missing', async t => {
-  for (const peer of [fakePeer({ enabled: false }), null]) {
-    await t.test(peer ? 'off' : 'missing', async t => {
+test('Chats shows a few lines on no team or when the facade is missing, and starts nothing', async t => {
+  for (const peer of [fakePeer({ teamless: true, running: false }), null]) {
+    await t.test(peer ? 'no team' : 'missing', async t => {
       const { v } = await teamView(t, { peer, columns: 80, rows: 24 });
-      await until(() => v.text().includes(peer ? 'Peer mode is off. Type /peer on to start it.' : 'Peer mode needs the optional networking packages'), 'off line');
+      await until(() => peer ? ['No team yet.', 'Invite someone: /invite', 'Got a code? /join CODE'].every(line => v.lines().some(row => row.trim() === line)) : v.text().includes('Teammates need the optional networking packages'), 'no team lines');
       assert.ok(v.panels.teamBoxes.every(pane => pane.hidden));
-      if (peer) assert.equal(peer.calls.length, 0, 'no peer reads while off');
+      if (peer) assert.match(v.panels.pills.getText(), /○ no team/);
+      if (peer) assert.equal(peer.calls.length, 0, 'no peer reads and no daemon started on no team');
       await send(v, '@sara hello');
-      await until(() => /Peer mode (is off|needs the optional)/.test(v.panels.status.getText()), 'a message to a teammate is refused');
+      await until(() => /No team yet\. Invite someone with \/invite|Teammates need the optional/.test(v.panels.status.getText()), 'a message to a teammate is refused');
     });
   }
 });
@@ -967,13 +972,28 @@ test('with the daemon stopped, a message to a teammate is refused and the header
   const peer = fakePeer({ running: false });
   const { v } = await teamView(t, { peer });
   await until(() => /○ peers stopped/.test(v.panels.pills.getText()), 'stopped summary');
-  // Peer mode is on, so the view starts the daemon again, once a minute at most.
+  // On a team, the view starts the daemon again, once a minute at most.
   await until(() => peer.calls.some(row => row[0] === 'startPeer'), 'restart');
   await new Promise(resolve => setTimeout(resolve, 300));
   assert.equal(peer.calls.filter(row => row[0] === 'startPeer').length, 1);
   await send(v, '@sara hello');
   await until(() => /The peer daemon is not running/.test(v.panels.status.getText()), 'refused');
   assert.equal(peer.sent().length, 0);
+});
+
+test('on a team, the app starts the peer daemon as it opens, without a word, and restarts one of another version', async t => {
+  const p = project(later(t)); environment(t, p.parent);
+  const peer = fakePeer({ running: false });
+  peer.startPeer = () => { peer.calls.push(['startPeer']); peer.running = true; return true; };
+  const v = await view(t, { repo: repository(p.root), peer });
+  await until(() => peer.calls.some(row => row[0] === 'startPeer'), 'started as the app opens');
+  await new Promise(resolve => setTimeout(resolve, 300));
+  assert.equal(peer.calls.filter(row => row[0] === 'startPeer').length, 1);
+  assert.doesNotMatch(v.panels.status.getText(), /had stopped|could not start/);
+  const stale = fakePeer(); stale.stale = true;
+  stale.startPeer = () => { stale.calls.push(['startPeer']); stale.stale = false; return true; };
+  await view(t, { repo: repository(p.root), peer: stale });
+  await until(() => stale.calls.some(row => row[0] === 'startPeer'), 'a daemon an update left running is restarted as the app opens');
 });
 
 test('typing @ in Chats offers teammates by name', async t => {
@@ -1101,9 +1121,9 @@ test('Kanban shows teammates\' Tasks under their names, apart from my cards and 
   assert.equal(panels.kanbanTeamList.hidden, true); assert.equal(panels.kanbanTeam.height, 3);
 });
 
-test('with peer mode off, Kanban has no Teammates section and asks for nothing', async t => {
+test('on no team, Kanban has no Teammates section and asks for nothing', async t => {
   const p = project(later(t)); environment(t, p.parent);
-  const peer = fakePeer({ enabled: false }); let asked = 0;
+  const peer = fakePeer({ teamless: true }); let asked = 0;
   peer.teammateTasks = () => { asked++; return [{ peer: SARA, name: 'sara', online: true, heardAt: ago(0), tasks: [teamTask()] }]; }; peer.taskSharing = () => { asked++; return 'on'; };
   const v = await view(t, { repo: repository(p.root), peer });
   await send(v, '/kanban'); await until(() => v.current.view === 'kanban' && !v.panels.kanbanBoxes[0].hidden, 'Kanban');

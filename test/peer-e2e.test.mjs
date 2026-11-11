@@ -12,8 +12,9 @@ import * as peer from '../lib/peer/index.mjs';
 import { saveBot } from '../lib/bots.mjs';
 
 // End to end through the CLI: two homes (XDG_CONFIG_HOME values), each with its own
-// detached peer daemon started by `elu peer on`, on a local hyperdht testnet. B
-// answers with the fake vendor CLIs from a shared project.
+// detached peer daemon, on a local hyperdht testnet. Nothing turns it on: A's starts when A
+// makes a team, B's for B's join. B answers with the fake vendor CLIs from a shared project.
+const running = home => withHome(home.dir, () => peer.peerStatus().running);
 const require = createRequire(import.meta.url);
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function until(check, label, timeout = 120000) {
@@ -64,7 +65,8 @@ test('two homes team up, ask, answer, route a local A2A call through the CLI, sh
   // conductors stop, then the testnet goes, then the homes are removed.
   t.after(async () => {
     for (const home of Object.values(homes)) {
-      await cli(home, ['peer', 'off']).catch(() => {}); await cli(home, ['conductor', 'stop']).catch(() => {});
+      try { withHome(home.dir, () => peer.stopPeer()); } catch { /* None running. */ }
+      await cli(home, ['conductor', 'stop']).catch(() => {});
     }
     const pids = Object.values(homes).flatMap(home => [read(home, 'peer', 'state.json')?.pid, read(home, 'peer', 'peer.lock')?.pid, read(home, 'conductor', 'state.json')?.pid, read(home, 'conductor.lock')?.pid]).filter(Number.isInteger);
     await until(() => pids.every(pid => !alive(pid)), 'daemons to exit', 15000).catch(() => { for (const pid of pids) { try { process.kill(pid, 'SIGKILL'); } catch { /* Gone. */ } } });
@@ -82,14 +84,18 @@ test('two homes team up, ask, answer, route a local A2A call through the CLI, sh
 
   // Identities, a team, an invite and a network join.
   const a = (await ok(homes.a, ['id', '--name', 'a'])).identity, b = (await ok(homes.b, ['id', '--name', 'b'])).identity;
+  // An identity alone starts nothing.
+  await pause(1000); assert.equal(running(homes.a), false); assert.equal(read(homes.a, 'peer', 'state.json'), null);
   const team = (await ok(homes.a, ['team', 'create', 'core'])).team;
-  await ok(homes.a, ['peer', 'on']);
+  await until(() => running(homes.a), `a's daemon running after team create\n${log(homes.a)}`);
   const { invite } = await ok(homes.a, ['invite', '--hours', '1']);
   assert.match(invite.code, /^[2-9a-hjkmnp-z]{4}-[2-9a-hjkmnp-z]{4}-[2-9a-hjkmnp-z]{4}$/); assert.equal(invite.project, null, 'A invites from outside a project');
   assert.equal(invite.fingerprint, a.fingerprint);
   // B joins from its project. The code is pasted in pieces, upper case, after a second "elu join". B is told who admitted it, and
   // joining shares nothing of B's.
-  const joined = await ok(homes.b, ['join', 'elu', 'join', ...invite.code.toUpperCase().split('-'), '--project', side.root]);
+  // B's daemon is started for the join and keeps running, with the fake CLIs on its PATH.
+  assert.equal(running(homes.b), false);
+  const joined = await ok(homes.b, ['join', 'elu', 'join', ...invite.code.toUpperCase().split('-'), '--project', side.root], env);
   assert.deepEqual(joined.team, { id: team.id, name: 'core', inviter: { name: 'a', fingerprint: a.fingerprint }, project: null });
   assert.match(joined.message, /^Joined core with a\./);
   assert.equal(read(homes.b, 'peer', 'team-projects.json'), null, 'nothing shared by the join');
@@ -99,7 +105,7 @@ test('two homes team up, ask, answer, route a local A2A call through the CLI, sh
   // B shares the project and comes online; A asks.
   const shared = await ok(homes.b, ['share', side.root, '--as', 'app']);
   assert.equal(shared.share.handle, 'app'); assert.deepEqual(read(homes.b, 'peer', 'team-projects.json'), { [team.id]: 'app' }, 'the share is the team\'s project');
-  await ok(homes.b, ['peer', 'on'], env);
+  assert.equal(running(homes.b), true, 'b\'s daemon running after the join');
   await until(async () => (await ok(homes.a, ['peers'])).peer.teams[0].members.find(m => m.key === b.key)?.online, 'b online at a');
   // The ask names no project: B answers about the team's project.
   const asked = await ok(homes.a, ['ask', '@b', 'Where is coupon normalization?']);
