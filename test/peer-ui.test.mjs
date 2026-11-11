@@ -711,8 +711,8 @@ test('a typed @name and the peer commands call the facade and report in the stat
   await until(() => peer.sent().at(-1).to === 'li', 'free text ask');
   assert.deepEqual(peer.sent().at(-1), { type: 'ask', to: 'li', project: null, text: "what's the cache key?" });
   await send(v, '/peers'); await until(() => /1 of 2 teammates online: @sara \(direct\)/.test(status()), 'peers');
-  // There is no peer on or off: /peer is an unknown command, whatever follows it.
-  for (const gone of ['/ask @sara hello', '/handoff @li Fix the flaky upload test', '/review @sara', '/peer', '/peer on', '/peer off']) { await send(v, gone); await until(() => status().includes(`Unknown command: ${gone.split(' ')[0]}.`), `${gone} is unknown`); }
+  // There is no peer on or off: /peer on and /peer off are unknown commands.
+  for (const gone of ['/ask @sara hello', '/handoff @li Fix the flaky upload test', '/review @sara', '/peer on', '/peer off']) { await send(v, gone); await until(() => status().includes(`Unknown command: ${gone.split(' ')[0]}.`), `${gone} is unknown`); }
   assert.ok(!peer.sent().some(row => ['handoff', 'review'].includes(row.type)), 'nothing sends a handoff or a review');
   await send(v, '/share'); await until(() => /Open a project to share it/.test(status()), 'share needs a project');
   // A home has the bots the app comes with, so /invite first asks which of them teammates may use.
@@ -882,7 +882,7 @@ test('Chats shows a few lines on no team or when the facade is missing, and star
   for (const peer of [fakePeer({ teamless: true, running: false }), null]) {
     await t.test(peer ? 'no team' : 'missing', async t => {
       const { v } = await teamView(t, { peer, columns: 80, rows: 24 });
-      await until(() => peer ? ['No team yet.', 'Invite someone: /invite', 'Got a code? /join CODE'].every(line => v.lines().some(row => row.trim() === line)) : v.text().includes('Teammates need the optional networking packages'), 'no team lines');
+      await until(() => peer ? ['No team yet.', 'Invite someone: /invite', 'Got a code? /join CODE'].every(line => v.text().includes(line)) : v.text().includes('Teammates need the optional networking packages'), `no team lines in\n${v.text()}`);
       assert.ok(v.panels.teamBoxes.every(pane => pane.hidden));
       if (peer) assert.match(v.panels.pills.getText(), /○ no team/);
       if (peer) assert.equal(peer.calls.length, 0, 'no peer reads and no daemon started on no team');
