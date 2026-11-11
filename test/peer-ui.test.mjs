@@ -791,6 +791,8 @@ test('a drag over the invite code copies the whole code, however the dialog wrap
   const v = await view(t, { repo: repository(p.root), peer, clipboard: text => copied.push(text) });
   await send(v, '/invite'); await choose(v, 'Invite', /^Someone new/);
   await until(() => modal(v, 'Team invite'), 'invite');
+  // The window copies the code as it opens.
+  assert.deepEqual(copied, [code]); assert.match(modal(v, 'Team invite').children.find(child => child.options?.scrollable).getText(), /Copied to your clipboard\./); copied.length = 0;
   const body = modal(v, 'Team invite').children.find(child => child.options?.scrollable);
   await until(() => body.lpos, 'drawn');
   const pos = body.lpos, x0 = pos.xi + body.ileft, y0 = pos.yi + body.itop, x1 = pos.xl - 1 - body.iright, last = y0 + Math.ceil(code.length / (x1 - x0)) + 1;
@@ -813,7 +815,7 @@ test('share, invite and join use the open project', async t => {
   await send(v, '/invite'); await choose(v, 'Invite', /^Someone new/);
   await until(() => modal(v, 'Team invite'), 'invite');
   assert.deepEqual(peer.calls.filter(row => row[0] === 'share').at(-1).slice(1), [p.root, { teams: ['team-1'] }]);
-  assert.match(modal(v, 'Team invite').children.find(child => child.options?.scrollable).getText(), /Teammates can ask about sample, the folder \S[^]*sample app\.[^]*Run npx -y @elu-labs\/elu[^]*type \/join and this code/);
+  assert.match(modal(v, 'Team invite').children.find(child => child.options?.scrollable).getText(), /Teammates can ask about sample, the folder \S[^]*sample app\.[^]*Run npx -y @elu-labs\/elu[^]*type \/join and paste this code/);
   await closeDialog(v, 'Team invite');
   await send(v, '/join nope'); await until(() => /Use \/join code/.test(v.panels.status.getText()), 'join usage');
   await send(v, '/join elu-team:v1:TESTCODE');
