@@ -204,7 +204,7 @@ Over a limit, the message is not sent, it stays in the message box, and one line
   - A channel op syncs like every other op, so the people added get the channel from any teammate.
   - A teammate on an older build refuses the op and sees no channels.
 - **Leaving and removing.** `/leave` or `elu team leave` appends the member's `leave`; `/remove @name` or `elu team remove NAME` appends an admin's `remove`. With the daemon running, the op is pushed at once to every teammate online, the one removed included, before their connections close (it waits up to 5 s for them). The machine that left drops the team from Chats and forgets which of its projects was that team's, so coming back shares nothing until the owner shares again.
-  - A machine that was offline gets the op on its next connection. Its hello still lists the team as shared, while the other side's log shows one of them out: that connection serves nothing but an invite exchange; the side that has the op pushes it (as in sync), and the connection closes once the other side has it, or after 30 s.
+  - A machine that was offline gets the op on its next connection. Its hello still lists the team as shared, while the other side's log shows one of them out: that connection serves nothing but an invite exchange; the side that has the op pushes the ops the other lacks up to that exit (as in sync, never an op that sorts after it), and the connection closes once the other side has it, or after 30 s. Sync applies the same cap on any connection, for a team where one of the two is out.
   - With the daemon off, the op is written to the log and goes out the same way once peer mode is on.
 - **Sync.**
   - On every connection, each side compares `{seq, head}`, where head is the sha256 of the sorted op ids.

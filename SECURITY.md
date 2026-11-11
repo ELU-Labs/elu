@@ -166,7 +166,9 @@ What others learn:
 ## Leaving, removal and coming back
 
 A teammate who leaves, or whom an admin removes, is out of the team from that op on: their
-machine is refused at connection and their later ops are not applied. A new invite brings
+later ops are not applied, and a connection from their machine serves nothing but an invite
+exchange. Over it they are told about their exit and nothing written after it: no member
+admitted since, channel or role change. The connection then closes. A new invite brings
 the same key back as a new member with the role that invite gives. What they signed before
 they went out stays; nothing they sign that is dated between going out and coming back
 applies; and a machine that saw them go out refuses any op of theirs dated before that, so

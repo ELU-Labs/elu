@@ -1562,6 +1562,9 @@ test('a member removed while away is told so at admission, and served nothing', 
   const { crew, ana, sara, side } = await pair(t);
   // Sara is removed while she is away, so her log still says she is a member.
   withHome(ana.home, () => appendOp(crew.teamId, makeOp(loadIdentity(), crew.teamId, 'remove', { key: sara.identity.key })));
+  // After it, dan joins and gets a channel: Sara is told she is out, and nothing written since.
+  const dan = 'd'.repeat(64);
+  const later = withHome(ana.home, () => { const op = redeemCode(createInvite(loadIdentity(), crew.teamId, { hours: 1 }), dan, 'dan'); return [op.id, setChannel(loadIdentity(), crew.teamId, { name: 'later', members: [ana.identity.key, dan] }).op.id]; });
   await daemon(t, ana.home, { conductor: false }); await daemon(t, sara.home, { env: side.env });
   // Ana's machine pushes her the removal on that connection and nothing else: her machine then shows no team.
   await until(() => withHome(sara.home, () => team(crew.teamId)).members.find(m => m.key === sara.identity.key).removed, 'the removal at sara');
@@ -1571,6 +1574,9 @@ test('a member removed while away is told so at admission, and served nothing', 
   assert.equal(records(ana.home).length, 0);
   assert.equal(online(sara.home, ana.identity.key), false); assert.equal(online(ana.home, sara.identity.key), false);
   assert.ok(!withHome(ana.home, () => team(crew.teamId)).members.find(m => m.key === sara.identity.key && !m.removed));
+  const hers = withHome(sara.home, () => readLog(crew.teamId).ops.map(op => op.id));
+  for (const id of later) assert.ok(!hers.includes(id), 'nothing after her removal');
+  assert.ok(!withHome(sara.home, () => team(crew.teamId)).members.some(m => m.key === dan));
 });
 
 test('leaving and removing reach the teammates online, and the same key joins again with a new code', async t => {
