@@ -3547,9 +3547,9 @@ test('a lone y answers only the row it was typed on: when that row leaves the li
   await selectRow(v, /@sara question/);
   // y is typed on @sara's question, then she takes it back before Enter.
   panels.ask.focus(); panels.ask.readInput(); await until(() => panels.ask.__listener, 'message box');
-  panels.ask.setValue('y');
+  await pause(200); panels.ask.setValue('y'); await pause(200);
   items.splice(items.findIndex(item => item.id === 'in-1'), 1);
-  await until(() => !rows(v).some(row => /@sara question/.test(row)) && /@li question/.test(cursor(v)), "the cursor moves to @li's question");
+  await until(() => !rows(v).some(row => /@sara question/.test(row)) && /@li question/.test(cursor(v)), "the cursor moves to @li's question").catch(error => { throw new Error(`${error.message}: ${JSON.stringify(rows(v))} | ${cursor(v)} | ${v.current.view} ${v.current.session}`); });
   panels.ask.submit();
   await until(() => /› The selected item changed\. Choose one in the list first\./.test(status()), 'refused');
   assert.deepEqual(peer.sent.filter(c => ['approve', 'discard', 'work'].includes(c.type)), [], 'nothing was answered');
