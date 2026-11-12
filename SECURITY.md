@@ -363,7 +363,8 @@ ELU Code offers to add the server instead. A config or line that holds a key is 
 or run as it is; one without a key is sent, or run, if you press Enter on it again. Text
 that looks like a server's settings with a key in it but does not read as one is never sent
 either: take the key out, or use `/mcp add`. In an open session, a `!` command that holds a
-key (a bearer token, an `Authorization` header, a `..._TOKEN=` value) is not run. Text you
+key (a bearer token, an `Authorization` header, a `..._TOKEN=` value) is not run; with no
+session open it runs, and its output shows only to you. Text you
 paste into the message box still shows on your screen until you send it or clear it.
 
 On Claude Code, the model of your sessions and each bot that works there also get your

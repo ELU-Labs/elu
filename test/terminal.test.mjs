@@ -3249,7 +3249,7 @@ test('a claude mcp add line with a key is never run or sent: with ! in an open s
   await until(() => /Not run\. It holds an MCP server's key: take the key out to send the rest, or use \/mcp add\./.test(status()), 'not run');
   for (const round of ['once', 'twice']) {
     await send(v, `!curl -s -H "Authorization: Bearer ${key}" https://x.example.invalid`);
-    await until(() => /Not run\. It holds a key, and a command run in a session joins its chat, which the model reads\. Run it with no session open\./.test(status()), `not run ${round}`);
+    await until(() => /Not run\. It holds a key, and the model reads this session's commands\./.test(status().replace(/\s+/g, ' ')), `not run ${round}`);
   }
   await new Promise(resolve => setTimeout(resolve, 300)); assert.equal(ran(), '', 'nothing joined the session\'s shell file');
   // The next turn gets the words and the new server, never the key.
