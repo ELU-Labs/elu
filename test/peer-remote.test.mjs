@@ -16,6 +16,8 @@ import { enqueue } from '../lib/conductor.mjs';
 import { boardRows, remoteRow, rowActions, rowTitle } from '../lib/board.mjs';
 import { remoteSessions as remoteGlue } from '../lib/terminal-remote.mjs';
 import { teamPath } from '../lib/peer/roster.mjs';
+import { readTask, saveTask } from '../lib/state.mjs';
+import { listEntries } from '../lib/permission-rules.mjs';
 
 // A connection as the daemon hands it to a method: admitted, on a build that has remote
 // sessions unless said otherwise, recording what is sent to it.
@@ -207,6 +209,53 @@ test('events stream to the viewer, a gap is caught up by seq, and approvals are 
   assert.deepEqual(await withHome(devbox.home, () => host['elu.remote.answer']({ id: started.id, approval: 'approval-2', decision: 'deny' }, toHost)), { answered: true });
   assert.deepEqual(await withHome(devbox.home, () => host['elu.remote.answer']({ id: started.id, approval: 'approval-2', decision: 'allow' }, toHost)), { answered: false });
   assert.throws(() => withHome(devbox.home, () => host['elu.remote.answer']({ id: started.id, approval: 'approval-2', decision: 'maybe' }, toHost)), { message: 'Answer allow or deny.' });
+});
+
+// a on an approval answered from the other computer keeps the rule where the session runs:
+// its relay reads the rules there. The rule is made there from the request, never sent.
+test('a from my other computer keeps the rule on the computer the session runs on', async t => {
+  const { team, laptop, devbox } = machines(t);
+  const project = withHome(devbox.home, () => { const project = registeredProject(t); saveTeamAccess(team.teamId, { root: project.root }); markMine(devbox.identity.key, laptop.identity.key); noteTheirs(laptop.identity.key, true); return project; });
+  withHome(laptop.home, () => { markMine(laptop.identity.key, devbox.identity.key); noteTheirs(devbox.identity.key, true); });
+  const toHost = connection(laptop.identity.key), toViewer = connection(devbox.identity.key);
+  const hostCtx = context(devbox.identity, { [laptop.identity.key]: toHost }), viewCtx = context(laptop.identity, { [devbox.identity.key]: toViewer });
+  const host = hostMethods(hostCtx), viewer = viewMethods(viewCtx);
+  toViewer.request = (method, params) => withHome(devbox.home, () => host[method](params, toHost));
+  const started = await withHome(laptop.home, () => remoteCommand(viewCtx, { type: 'remoteStart', to: devbox.identity.key, text: 'Run the tests', permissions: 'ask' }));
+  const taskId = '1';
+  // The session the laptop started is the owner's own there (origin.mine), so his rules apply.
+  const worktree = withHome(devbox.home, () => {
+    const { repo, worktree } = liveTask(project.root, { id: taskId, goal: 'Run the tests', state: 'running' });
+    saveTask(repo, { ...readTask(repo, taskId), origin: { kind: 'mine', mine: true, machine: laptop.identity.key, name: 'ana', remoteId: started.id } });
+    const [request] = pendingRequests(project.root); updateRequest(project.root, request.id, { state: 'running', taskId });
+    const ask = (id, command) => requestApproval({ id, root: project.root, taskId, role: 'lead', vendor: 'claude', tool: 'Bash', input: { command }, cwd: worktree, access: 'read', rules: 'saved', sandboxed: true });
+    ask('approval-a1', 'npm test'); ask('approval-a2', 'npm test -- --watch=false'); ask('approval-a3', 'git push origin main');
+    hostTick(hostCtx);
+    return worktree;
+  });
+  await withHome(laptop.home, () => viewTick(viewCtx));
+  const pushed = toHost.sent.filter(([method]) => method === 'elu.remote.events').flatMap(([, params]) => params.items.flatMap(item => item.events));
+  for (const event of pushed) withHome(laptop.home, () => viewer['elu.remote.events']({ items: [{ id: started.id, events: [event] }] }, toViewer));
+  const seen = withHome(laptop.home, () => remoteSessions().find(row => row.id === started.id));
+  // The laptop is told what a would keep, and is offered a only where a rule can be kept.
+  assert.deepEqual(seen.approvals.map(item => [item.id, item.always ?? null]), [['approval-a1', 'Run npm test, with any arguments'], ['approval-a2', 'Run npm test, with any arguments'], ['approval-a3', null]]);
+  const row = remoteRow(seen, 'devbox');
+  assert.deepEqual(rowActions(row).map(([key]) => key), ['y', 'n', 'a', 'enter']);
+  const glue = remoteGlue({ facade: { mineRows: () => [], remoteSessions: () => [] }, peerRead: () => null, peerCommand: command => withHome(laptop.home, () => remoteCommand(viewCtx, command)), chatMessage: ({ text }) => text, ink: text => text, colour: false });
+  assert.match(glue.view(row, 80), /Esc, then y allow · n deny · a always/);
+  assert.equal(await glue.action(row, 'always', 'project'), 'Allowed. From now on, without asking on @devbox: Run npm test, with any arguments (this project).');
+  // Kept on the devbox, for its project; the laptop keeps nothing.
+  withHome(devbox.home, () => {
+    assert.deepEqual(listEntries().filter(entry => entry.kind === 'rule').map(entry => [entry.rule.words.join(' '), entry.rule.scope, entry.rule.project]), [['npm test', 'project', project.root]]);
+    // What else waits that the rule covers is allowed too; the never list still waits.
+    assert.deepEqual(pendingApprovals({ taskId }).map(item => item.id), ['approval-a3']);
+  });
+  withHome(laptop.home, () => assert.deepEqual(listEntries().filter(entry => entry.kind === 'rule'), []));
+  // Never for the never list, whatever the laptop sends; deny with a rule is refused.
+  await assert.rejects(withHome(devbox.home, async () => host['elu.remote.answer']({ id: started.id, approval: 'approval-a3', decision: 'allow', always: 'all' }, toHost)), /never list/);
+  assert.throws(() => withHome(devbox.home, () => host['elu.remote.answer']({ id: started.id, approval: 'approval-a3', decision: 'deny', always: 'all' }, toHost)), { message: 'Keep the rule for this project or all your projects.' });
+  withHome(devbox.home, () => assert.deepEqual(pendingApprovals({ taskId }).map(item => item.id), ['approval-a3'], 'still waits for y or n'));
+  assert.ok(worktree);
 });
 
 test('an older build is told to update, never asked a question instead', async t => {
