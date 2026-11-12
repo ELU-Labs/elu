@@ -271,6 +271,11 @@ limits teammates get. Treat it like a login to this machine.
   keeps the rule on the machine where the session runs, since that is where its approvals are
   answered. That machine makes the rule from its own copy of the request, never from what the
   other one sends, so the never list and the limits on rules hold there too.
+- A machine of yours sees every session on the other one, not only the ones it started:
+  sessions you started there, ones a schedule or a bot started, and ones a teammate's message
+  started, with their chat, steps, changes and approvals. It can continue, stop and answer
+  each of them. A teammate's question answered in Chats is not shown. An ordinary teammate
+  sees none of this.
 
 ## Leaving, removal and coming back
 

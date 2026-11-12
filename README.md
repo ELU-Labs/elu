@@ -275,8 +275,9 @@ laptop and `/mine @laptop` on the devbox. From then on, `@devbox fix the flaky t
 new session box starts the session on the devbox, with the mode, model and bots you picked.
 It shows in Sessions marked "on devbox", live, and its approvals wait on both machines. It is
 your own session there, so your rules apply, and `a` on its approval, from either machine,
-keeps the rule on the devbox, where it runs. `/mine` lists your computers and
-`/mine remove @devbox` ends it.
+keeps the rule on the devbox, where it runs.
+Sessions also lists every other session on the devbox in the same repository under "On devbox", and Projects lists its other projects as "<project> on devbox".
+`/mine` lists your computers and `/mine remove @devbox` ends it.
 [SECURITY.md](SECURITY.md#your-other-computers) says what that allows.
 
 In a channel, `/invite @kim` adds a teammate you already have. `/invite` alone makes a
