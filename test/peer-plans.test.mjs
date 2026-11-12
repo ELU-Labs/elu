@@ -408,7 +408,7 @@ function folderProject(t, { name = 'work' } = {}) {
 }
 function cloneIn(repo, name, { from = null, origin = ORIGIN } = {}) {
   const target = path.join(repo.root, name), run = (cwd, args) => { const r = spawnSync('git', ['-C', cwd, ...args], { encoding: 'utf8' }); if (r.status !== 0) throw new Error(r.stderr); return r.stdout.trim(); };
-  if (from) run(repo.root, ['clone', '-q', from, target]); else { fs.mkdirSync(target); run(target, ['init', '-q']); run(target, ['-c', 'user.name=T', '-c', 'user.email=t@example.invalid', 'commit', '-q', '--allow-empty', '-m', `start ${name}`]); }
+  if (from) run(repo.root, ['clone', '-q', from, target]); else { fs.mkdirSync(target); run(target, ['init', '-q']); run(target, ['-c', 'user.name=T', '-c', 'user.email=t@example.invalid', 'commit', '-q', '--allow-empty', '-m', `start ${name} ${Math.random()}`]); }
   run(target, ['remote', from ? 'set-url' : 'add', 'origin', origin]);
   return target;
 }

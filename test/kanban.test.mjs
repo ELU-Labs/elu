@@ -176,7 +176,7 @@ test('teammates\' sessions are cards in the column their board has them, with wh
   assert.equal(items.find(item => item.title === 'Li alone').detail, '@li · offline');
   assert.equal(Boolean(cart.card || cart.task || cart.request), false);
   // The name stays beside the title when the column is narrow.
-  assert.deepEqual(fitTeammateCard('Fix the cart total for every coupon there is', cart.detail, 30), { title: 'Fix the cart total for…', detail: '@sara' });
+  assert.deepEqual(fitTeammateCard('Fix the cart total for every coupon there is', cart.detail, 30), { title: 'Fix the cart total…', detail: '@sara' });
 });
 
 test('a project above several repositories has a board for each, led by the open session\'s; a session in no repository is on each', t => {
