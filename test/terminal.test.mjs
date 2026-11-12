@@ -2529,7 +2529,12 @@ test('a beside y and n keeps the rule for this project and allows what it covers
   await until(() => /Run: git push origin main outside the sandbox\nEsc, then y allow · n deny · f full access(?! · a)/.test(chat()) && !/a always/.test(chat()), 'no a for the never list');
   click(v, panels.chat, 4, 1); await until(() => v.current.screen.focused === panels.chat, 'the chat is focused again');
   v.input.write('a'); await until(() => /That is on the never list, so it is never allowed\. y allows it once, n denies it\./.test(status()), 'why');
-  assert.equal(modal(v, 'Always allow'), undefined); assert.equal(answer('run-3-d'), null); answerApproval('run-3-d', 'deny');
+  assert.equal(modal(v, 'Always allow'), undefined); assert.equal(answer('run-3-d'), null);
+  // On the session's row in the list a says the same, and opens no answer box.
+  await send(v, '/permissions rules remove 99'); await until(() => /No rule has that number/.test(status()), 'another message first');
+  v.input.write('\x1b'); await until(() => v.current.screen.focused === panels.board && /Run the tests/.test(cursor(v)), 'the session\'s row');
+  v.input.write('a'); await until(() => /That is on the never list/.test(status()), 'why, from the list');
+  assert.equal(modal(v, 'Answer Run the tests'), undefined); assert.equal(answer('run-3-d'), null); answerApproval('run-3-d', 'deny');
   // A request whose session reads only the defaults (a teammate's) gets no a.
   wants('run-3-e', '3', 'cargo build', 'defaults');
   await until(() => /Run: cargo build outside the sandbox\nEsc, then y allow · n deny · f full access(?! · a)/.test(chat()) && !/a always/.test(chat()), 'no a with the defaults only');
