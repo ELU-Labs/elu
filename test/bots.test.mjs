@@ -796,7 +796,7 @@ test('a reviewing bot whose run fails after the edit keeps the edits, names its 
   fs.renameSync(codexBin, kept);
   fs.writeFileSync(codexBin, '#!/bin/sh\nif [ "$1" = exec ]; then cat >/dev/null; echo \'{"type":"turn.failed","error":{"message":"unexpected status 401 Unauthorized"}}\'; exit 1; fi\nexec "$(dirname "$0")/codex-fake" "$@"\n', { mode: 0o755 });
   const run = f.controller.ask('Normalize coupon codes', null, { bots: ['critic'] });
-  await assert.rejects(run.finished, /^Error: @critic could not finish\./);
+  await assert.rejects(run.finished, { message: '@critic could not finish.' });
   const task = readTask(f.repo, run.id);
   assert.equal(task.state, 'unverified'); assert.match(task.error.message, /^@critic could not finish\./);
   assert.ok(openTask(sessionTasks(f.repo, task.id)), 'a turn that failed leaves its Task open');
