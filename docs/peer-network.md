@@ -22,7 +22,7 @@ Not supported:
 - One device per person; no multi-device.
 - Offline catch-up only through the sender's outbox, with no always-on mirror.
 - Handoffs are text goals, not patches.
-- Only pictures travel with a message (PNG, JPEG, GIF, WebP). No other file does.
+- Only pictures travel with a message to a teammate (PNG, JPEG, GIF, WebP). Other files go only to a session on another computer of yours (see [Files](#files)).
 - No Windows support.
 - A share grants the whole repository (tracked files minus sensitive ones), not per-path globs.
 
@@ -77,7 +77,7 @@ Defaults that touch third parties:
   - **A2A core:** `SendMessage`, `GetTask`, `CancelTask`. The push-config methods return PushNotificationNotSupported; any other core method returns UnsupportedOperation.
   - `SendMessage` never blocks: it returns the Task (SUBMITTED, or REJECTED with a reason) at once, whatever `returnImmediately` says. Later states arrive as `elu.taskUpdate` or through `GetTask`.
   - Unknown fields in A2A objects and params are ignored (A2A §5.7); size limits still apply.
-  - **Extensions:** `elu.hello`, `elu.invite.start` `{topic, nonce}`, `elu.invite.prove` `{proof, name, exits?}`, `elu.join` `{teamId, secret, name}`, `elu.roster.get` `{teamId, after}`, `elu.roster.push` `{teamId, ops}`, `elu.picture.put` `{id, seq, last, size, sha256, data}` (see [Pictures](#pictures)).
+  - **Extensions:** `elu.hello`, `elu.invite.start` `{topic, nonce}`, `elu.invite.prove` `{proof, name, exits?}`, `elu.join` `{teamId, secret, name}`, `elu.roster.get` `{teamId, after}`, `elu.roster.push` `{teamId, ops}`, `elu.picture.put` `{id, seq, last, size, sha256, data}` (see [Pictures](#pictures)), and the `elu.mine` and `elu.remote.*` methods between computers of one owner, `elu.remote.files` among them (see [Your other computers](#your-other-computers)).
   - **Notifications:** `elu.status` `{rows, box, bots: [{name, about}]}`, `elu.plans` `{tasks}` and `elu.taskUpdate` `{task}`. `box` and `bots` are described under [Status](#status), `elu.plans` under [Tasks](#tasks).
 - **Errors.** JSON-RPC error objects; `data` is a list of `google.rpc.ErrorInfo` with `reason` set to the code's name. Messages carry no local paths, unless the caller is a peer I trust (`trusted` in `peers.json`), who gets them as written.
 
@@ -155,6 +155,7 @@ Two machines of the same owner (a laptop and a devbox, say) can each start and w
 - An invite made with `mine: true` (`/invite`, then "Another computer of mine", or `elu invite --mine`; good for 1 hour by default) marks nothing by itself on either side. The `elu.invite.prove` result carries `mineOffer: true`, and the joiner's app asks "Is <name>'s computer yours too?" (No first; Esc is no). On the command line only `elu join CODE --mine` says yes. A yes marks the inviter on the joiner and sends `elu.mine {mine: true}`; the inviter marks the joiner back only on that, from the key its mine code admitted, once, within a week of the join. A `mineOffer` from the other side is never enough to mark anything.
 - A machine already on the team that uses a mine code is refused, and the code stays unused: both sides are told to run `/mine` on each machine instead. `/invite`, "Another computer of mine", lists such machines first.
 - `hello` carries `remote: 1`. A build without it is older: it is never sent the methods below, and every action toward it says "@name needs to update ELU Code to run sessions from here." Nothing falls back to an ask.
+- `hello` carries `files: 1` on a build that takes files (`elu.remote.files`). Files are never sent to a computer whose hello says `remote: 1` without it, nor to one that answers Method not found: the owner is told "@name needs to update ELU Code to receive files."
 
 Wire, on the existing connection:
 
@@ -170,6 +171,7 @@ Wire, on the existing connection:
 | `elu.remote.events` (notification) | host to viewer | `{items: [{id, events}]}` | none |
 | `elu.remote.list` | viewer to host | `{since, after, limit}` | `{full, cursor, projects, sessions, gone, next}` |
 | `elu.remote.watch` | viewer to host | `{ref}` | `{id, project, title}` |
+| `elu.remote.files` | viewer to host | `{id, send, seq, last, size, data, text}` (`text` on the last piece only; see [Files](#files)) | `{ok}` per piece, then `{id, files, bytes, dir}` |
 
 - Every request and notification above except `elu.mine` is refused with "Only your own computers can do this." unless the sender's key is mine on the receiver, and the host sends events only to such a key. An `id` (a UUID the viewer chose) belongs to the key that started it; to any other key it is "That session is not on this computer."
 - `start` runs the message as the host owner's own new session: `permissions` is `ask`, `auto` or `full`, `place` is as for a local session, `model` is `{vendor, model}` or null, and `bots` are names of the host's own bots (one it lacks is refused). Teammate rules, Auto/Manual and teammate caps do not apply; the never list, the sandbox and the host's limits do. It runs in the registered `root` of the first team the two share that has one (`/access`); with none it is refused with what to do on the host. The task's `origin` is `{kind: "mine", mine: true, machine, name, remoteId}`.
@@ -188,6 +190,29 @@ Every session on a computer of mine, not only the ones started from here:
 - Sessions on the viewer shows, after its own, a heading per computer of mine ("On devbox · online" or "offline"): the sessions there that work in a repository the open project holds (its own, and each one its Kanban has a board for: the clones its folder holds and the ones its recent sessions work in, as the daemon last found them, read again every minute), and the ones started from the viewer, newest first. A session listed with no `repoId` (an older build, or one in no repository) shows when its project there has the same `repoId` as the open project. With none of them, the heading says "No sessions of this project. Projects lists its others." Each row takes its time and its place from the listing. What waits for the owner there, in any project (the home folder too): an approval, a Task to approve or a question, also shows under Needs you, marked "on devbox". The computer's other projects show in Projects as "<project> on devbox", and so does one with the open project's `repoId` while a session of it is not shown under the heading; Enter there lists that project's sessions under a heading of its own. A row is watched when the cursor rests on it for 300 ms, and not while its computer is offline ("<name> is offline. What it listed last is shown."). A watch that failed is asked again after 30 s, not on every draw.
 - A computer of mine whose build answers `elu.remote.list` with Method not found, or that does not say `remote: 1`, shows "Update ELU Code on <name> to see its sessions here." and is asked again after 10 minutes.
 - Both methods are refused, as the others, unless the sender's key is mine on the host. Nothing about a computer is listed, watched or sent to a key that is not.
+
+### Files
+
+A message to a session on another computer of yours can take files and folders from this one. Only computers that are yours on both sides send or take them; a teammate never does.
+
+**What is sent**
+
+- A message typed to such a session that names files or folders here (absolute, `~/`, quoted, or with spaces escaped as a dropped file is) asks one line first: "Send 14 files (2.1 MB), including 1 key file, from this computer with this message?". y sends them with the message, n sends the text alone. `/send PATH...` sends files alone after the same line. Both computers are yours, so anything you can read may go, key files included; the line names them.
+- A folder goes whole, except its `.git`, a link that leads out of it, a link to a folder in it, and anything that is not a file or a folder (the line says how many were left out). ELU Code's own state folder never goes.
+- At most 5,000 files and 200 MB a send. Over that, the line says so and offers the text alone.
+- A Claude Code session of yours (its relay, `elu-code-approval`) has two tools: `list_other_sessions` (each computer of yours, and its sessions' id, title, state and the question or approval they wait on) and `send_to_session` `{session, paths, message?}`. A send reads only what that session may read: never ELU Code's state, the home's secret folders or an untracked file whose name may hold a secret, and in Approve for me nothing outside the folders its turn reads (its workspace, the folders added with `/permissions folders`, and the home only in a turn that reads across it). Paths are compared by what they are on disk, and those closed folders and secret names without case, so another spelling of the same file is the same file. Each file is copied only if it is still the file that was checked, never through a link. A teammate's session on that computer, such as a handoff accepted there, is not listed and takes no files. In Ask for approval each send is an approval for you, naming the session, its computer and the paths. Sessions on other models do not have these tools.
+
+**On the wire**
+
+1. The app or the tool copies the files to `peer/files/out/<set>/` in the state folder, each with its SHA-256. The daemon sends only from there.
+2. One send is one stream: its list as a JSON line (`{items: [{name, written}], files: [{path, size, sha256}]}`), then each file's bytes in that order. It goes in pieces of 700 KiB with `elu.remote.files` `{id, send, seq, last, size, data}`, `data` base64, the message as `text` on the last piece. Pieces count toward the same request rate as the other requests to that computer, and one turned away as busy is sent again shortly.
+3. The host takes pieces only from a key that is mine there, for a session that key may write to (as `elu.remote.send`), that has started, and that is the owner's own: never a teammate's, such as a handoff accepted there ("That session is a teammate's. Files from your other computers go only to your own sessions."). It stages them in `peer/files/in/<sender key>/`, at most 2 sends from one computer at a time, and removes a half-sent one after 10 minutes.
+4. With the last piece in, the list is checked again (the same caps; each path relative, no `.` or `..`, no `.git`, no name given twice) and every file is written new (0600, folders 0700, never through a link) and checked against its SHA-256. On any fault nothing stays and nothing reaches the session.
+
+**Where they land**
+
+- In the session's inbox, `elu-code/inbox/<project id>-<task id>/<time>-<computer>/` in the data folder (`$XDG_DATA_HOME`, else `~/.local/share`): outside the state folder, which no session may read, and outside every project and worktree. Where that folder is inside a Git work tree that does not ignore it (a home folder that is a repository, say), nothing is received, so no session there commits what landed: the sender is told to add it to that repository's `.gitignore`. The inbox is added to the session's folders, as `/permissions folders add` would, so the session reads it in every mode.
+- The message continues the session as one typed there, each path it named pointing where that file or folder landed, and ends with "Files from @laptop: 14 files (2.1 MB) in <folder>". The sender sees "Sent 14 files to the session on @devbox."
 
 ## Pictures
 
