@@ -3,9 +3,9 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { compile as claude, parse as parseClaude, NEVER_RULES } from '../lib/adapters/claude.mjs';
+import { compile as claude, parse as parseClaude, secretReads, NEVER_RULES } from '../lib/adapters/claude.mjs';
 import { defaultConfig } from '../lib/config.mjs';
-import { temp, readRole } from './helpers.mjs';
+import { temp, readRole, git as gitIn } from './helpers.mjs';
 import { commandRule } from '../lib/policy.mjs';
 import { APPROVAL_TOOL } from '../lib/mcp.mjs';
 
@@ -41,6 +41,8 @@ test('stream fixtures parse; truncated and unexpected server streams cannot repo
 
 // The profiles with permissions. The relay settings stand in for a run's private MCP file.
 const SESSION = '12345678-1234-4234-8234-123456789abc';
+// A file name pattern of the sandbox's lists (* any run of characters) as a test.
+const glob = name => new RegExp(`^${name.replace(/[.+^$(){}|[\]\\]/g, '\\$&').replace(/\*/g, '.*')}$`);
 function modeFixture(t) {
   const cwd = temp(t), mcp = { file: path.join(cwd, 'mcp.json'), names: ['elu-code-approval'] };
   fs.writeFileSync(mcp.file, '{"mcpServers":{}}');
@@ -206,4 +208,29 @@ test('parse reports the profile Claude ran with and its denials, clipped and not
   }
   const plain = parseClaude([{ ...init, permissionMode: undefined }, { ...result, permission_denials: undefined }].map(row => JSON.stringify(row)).join('\n'), { servers: ['elu-code-approval'] });
   assert.equal(plain.effectiveMode, null); assert.deepEqual(plain.denials, []);
+});
+
+test('a sandboxed command is kept from untracked secret files by path, never from tracked ones, which Git must read', t => {
+  const f = modeFixture(t), root = f.cwd, run = (dir, ...args) => gitIn(dir, args);
+  run(root, 'init', '--initial-branch=main'); run(root, 'config', 'user.name', 'Test Owner'); run(root, 'config', 'user.email', 'owner@example.invalid');
+  const write = (name, text) => { fs.mkdirSync(path.dirname(path.join(root, name)), { recursive: true }); fs.writeFileSync(path.join(root, name), text); };
+  // Tracked: an .npmrc and an .env.example the repository keeps, which every clone has.
+  write('backend/agents/.npmrc', 'registry=https://registry.npmjs.org/\n'); write('.env.example', 'API_KEY=\n'); write('.gitignore', '.env\n.repos/\n');
+  run(root, 'add', '.'); run(root, 'commit', '-m', 'Add sample');
+  // Untracked: an ignored .env, a key nobody added, another repository inside this one, and an
+  // ignored checkout of another repository, whose files Git never lists from here.
+  write('.env', 'API_KEY=secret\n'); write('keys/dev.pem', 'key\n'); fs.mkdirSync(path.join(root, 'vendor/lib'), { recursive: true }); run(path.join(root, 'vendor/lib'), 'init'); write('vendor/lib/.env', 'X=1\n');
+  fs.mkdirSync(path.join(root, '.repos/other'), { recursive: true }); run(path.join(root, '.repos/other'), 'init'); write('.repos/other/.env', 'TOKEN=secret\n'); write('.repos/other/.npmrc', '//registry.npmjs.org/:_authToken=x\n');
+  const reads = secretReads(root), globs = reads.filter(entry => entry.includes('/**/')), covers = file => reads.includes(file) || globs.some(entry => file.startsWith(`${entry.slice(0, entry.indexOf('/**/'))}/`) && glob(entry.slice(entry.indexOf('/**/') + 4)).test(path.basename(file)));
+  assert.ok(reads.includes(path.join(root, '.env')) && reads.includes(path.join(root, 'keys/dev.pem')), 'untracked secrets are hidden by path');
+  assert.ok(covers(path.join(root, 'vendor/lib/.env')), 'a repository inside keeps the names');
+  assert.ok(covers(path.join(root, '.repos/other/.env')) && covers(path.join(root, '.repos/other/.npmrc')), 'an ignored repository inside keeps them too');
+  assert.equal(reads.some(entry => entry.startsWith('**/')) || [path.join(root, 'backend/agents/.npmrc'), path.join(root, '.env.example')].some(covers), false, 'tracked files stay readable, so git status, diff and add read them');
+  assert.deepEqual(secretReads(path.join(root, 'backend')), [], 'from a folder inside, only what lies under it');
+  for (const mode of ['ask', 'auto']) {
+    const { denyRead } = settingsOf(claude({ ...f.base, mode })).sandbox.filesystem;
+    assert.ok(denyRead.includes(path.join(root, '.env')) && !denyRead.includes('**/.npmrc'), `${mode}: the launch hides the untracked ones only`);
+  }
+  // Outside a Git work tree every match is hidden by name, as before.
+  assert.deepEqual(secretReads(temp(t)), ['**/.env*', '**/.npmrc', '**/auth.json', '**/credentials.json', '**/*.pem']);
 });
