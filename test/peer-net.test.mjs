@@ -1519,7 +1519,8 @@ test('the daemon\'s teamLeave pushes the leave to the teammates online and stops
     merge(crew.teamId, back); assert.equal(peer.onTeam(), true);
     const daemon = Object.assign(new PeerDaemon({ conductor: () => {}, onExit: () => exits.push('sara again') }), { me: sara });
     assert.deepEqual(daemon.extensions()['elu.roster.push']({ teamId: crew.teamId, ops: [removal] }, { key: ana.key }), { added: 1, rejected: 0 });
-    await new Promise(resolve => setImmediate(resolve)); await new Promise(resolve => setImmediate(resolve));
+    // It stops a moment after its answer, so the answer is not lost to the close.
+    await new Promise(resolve => setTimeout(resolve, 300)); await new Promise(resolve => setImmediate(resolve));
     assert.equal(peer.onTeam(), false);
   });
   assert.deepEqual(exits, ['sara', 'sara again']);
@@ -1801,7 +1802,7 @@ test('leaving and removing reach the teammates online, and the same key joins ag
   await assert.rejects(run(sara.home, { type: 'teamRemove', team: crew.teamId, key: ana.identity.key }), /Only an admin of core/);
   // Sara leaves: Ana's machine gets the op at once, and Sara's no longer lists the team or its project.
   withHome(sara.home, () => setTeamProject(crew.teamId, 'app'));
-  assert.deepEqual(await run(sara.home, { type: 'teamLeave', team: crew.teamId }), { team: crew.teamId, name: 'core', stopping: true });
+  assert.deepEqual(await run(sara.home, { type: 'teamLeave', team: crew.teamId }), { team: crew.teamId, name: 'core', told: true, stopping: true });
   await until(() => withHome(ana.home, () => team(crew.teamId)).members.find(m => m.key === sara.identity.key)?.left, `the leave at ana\n${a.log()}`);
   await until(() => state(sara.home)?.teams?.length === 0 && !state(ana.home)?.teams[0].members.some(m => m.key === sara.identity.key), 'both heartbeats');
   assert.deepEqual(read(sara.home, 'team-projects.json'), {});
