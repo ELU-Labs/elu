@@ -1970,7 +1970,7 @@ test('a message sent after its session started and before the screen drew it wai
   assert.equal(pendingRequests(p.root).find(row => row.goal === 'Tidy the coupon module')?.state, 'running', 'its request is not cancelled');
   conductor.busy = false;
   await until(() => tasks().find(task => task.id === second)?.state === 'stopped', 'stopped');
-  await until(() => /Stopped by the owner\./.test(status()), 'and the line then says how it ended');
+  await until(() => /You stopped it\. Type continue to carry on\./.test(status().replace(/\s+/g, ' ')), 'and the line then says how it ended, and what to do');
   assert.equal(tasks().find(task => task.id === id).state, 'running', 'the first session works on');
 });
 
@@ -2006,7 +2006,7 @@ test('/stop in an idle session whose next turn the conductor is starting stops t
   const conductor = resources(t).conductor, tasks = () => projectSnapshot(p.repo).tasks, row = goal => pendingRequests(p.root).find(value => value.goal === goal);
   await send(v, 'Keep working on the board'); await until(() => tasks()[0]?.state === 'running' && /is working/.test(panels.chat.getText()), 'the session works');
   await send(v, '/stop'); await until(() => tasks()[0].state === 'stopped' && row('Keep working on the board')?.state === 'done', 'the session is idle');
-  await until(() => /Stopped by the owner\./.test(status()), 'the screen says how it ended');
+  await until(() => /You stopped it\..*Type continue to carry on\./.test(status()), 'the screen says how it ended, and what to do');
   conductor.busy = true;
   await send(v, 'Now tidy the coupon module'); await until(() => row('Now tidy the coupon module'), 'the next message saved');
   const next = row('Now tidy the coupon module'); assert.equal(next.continuationTaskId, tasks()[0].id, 'it is for that session');
@@ -2373,6 +2373,31 @@ test('a coloured line under the chat that would fill the pane to its last column
   await until(() => first() >= 0, 'the stop line, drawn');
   assert.deepEqual(drawn().slice(first(), first() + 2), ['Stopped after 3 seconds with no output. Your changes are kept. Reply to', 'carry on.']);
   assert.equal(panels.chat._clines.length, panels.chat.getContent().split('\n').length, 'no row was wrapped again');
+});
+
+test("a session that stopped says why and the one thing to do under its last message, in the status row and on its row: the owner's 15-minute stop on a Full session with an approved Task says to type continue", { timeout: 30000 }, async t => {
+  const p = setup(t); registerProject(p.repo);
+  const at = new Date().toISOString(), log = path.join(p.parent, 'lead.log');
+  // His session as 0.1.9 kept it: Full access, an approved Task with 2 of 10 subtasks done, and the wall clock's stop.
+  liveTask(p.root, { id: '4', goal: 'Fix coupons', state: 'blocked', activeRole: null });
+  saveTask(p.repo, { ...readTask(p.repo, '4'), permissions: 'full', runs: [{ role: 'lead', vendor: 'claude', logFile: log, code: null, at }], messages: [{ at, text: 'Fix coupons' }], error: { message: 'The model could not finish.', cause: 'unknown', logFile: log, timedOut: true, outputLimit: false } });
+  const plan = { title: 'Fix coupons', description: 'Trim and uppercase every code.', goal: 'Codes compare equal.', objectives: ['Codes are trimmed', 'Its test passes'], priority: 'high', severity: 'low' };
+  proposeTask(p.repo, '4', plan); approvePlan(p.repo, '4');
+  reportProgress(p.repo, '4', { subtasks: Array.from({ length: 10 }, (_, index) => ({ id: `s${index + 1}`, text: `Step ${index + 1}`, state: index < 2 ? 'done' : 'todo' })) });
+  // A session whose policy changed under it cannot go on: a new session is the one thing to do.
+  liveTask(p.root, { id: '5', goal: 'Rename the cart module', state: 'blocked', activeRole: null });
+  saveTask(p.repo, { ...readTask(p.repo, '5'), messages: [{ at, text: 'Rename the cart module' }], error: { message: 'The task policy changed. Start a new task.' } });
+  const v = await view(t, { repo: p.repo }), panels = v.current.panels;
+  await sized(v, 140, 32);
+  const chat = () => panels.chat.getText().replace(/\s+/g, ' '), status = () => panels.status.getText().replace(/\s+/g, ' ').trim();
+  await selectRow(v, /Fix coupons/);
+  await until(() => chat().includes('Stopped before it finished. Your changes are kept. Type continue to carry on.'), 'the line under his last message');
+  assert.doesNotMatch(chat(), /The model could not finish/, 'the old words are not shown');
+  await until(() => status().includes('blocked · Type continue to carry on.'), 'the status row says the same action');
+  assert.ok(rows(v).some(row => /Fix coupons · type continue/.test(row)), `its row says it too: ${rows(v).join(' | ')}`);
+  await selectRow(v, /Rename the cart/);
+  await until(() => chat().includes('The task policy changed. Start a new session with /new.'), 'why, and a new session');
+  await until(() => status().includes('blocked · Start a new session with /new.'), 'the status row');
 });
 
 // A peer daemon stand-in for the owner's decisions: what the TUI sent, who is trusted, and

@@ -17,6 +17,8 @@ import * as claude from '../lib/adapters/claude.mjs';
 import * as codex from '../lib/adapters/codex.mjs';
 import { botModels, codexModels, claudeModels, matchModels } from '../lib/bot-models.mjs';
 import { botModelProblem, botRoomProblem } from '../lib/bots.mjs';
+import { stopLine } from '../lib/stop-line.mjs';
+import { openTask, sessionTasks } from '../lib/plan.mjs';
 
 // Bots: named agents the owner defines once (lib/bots.mjs) and uses in any chat. In a chat a
 // bot answers a message written to it, reviews the lead's edits, and, when shared, answers
@@ -783,6 +785,29 @@ test('with no other model to run on, the bot and the model each say why they cou
   await assert.rejects(f.controller.ask('And the tests?', first.id).finished, /The model could not run: Claude says this account is out of usage credits for Opus 5\.5\./);
   task = readTask(f.repo, first.id);
   assert.equal(task.error.message, 'The model could not run: Claude says this account is out of usage credits for Opus 5.5.'); assert.equal(task.error.cause, 'model-unavailable');
+  // Continuing on the same model would be refused again: the line says to choose another.
+  assert.equal(stopLine(task).text, 'The model could not run: Claude says this account is out of usage credits for Opus 5.5. Choose another with /model, then type continue.');
+});
+
+test('a reviewing bot whose run fails after the edit keeps the edits, names its own vendor, and continue carries the work on', async t => {
+  const f = setup(t, 'normal');
+  // @critic's Codex is signed out: its review run fails after the lead has edited.
+  const codexBin = path.join(f.fake.dir, 'codex'), kept = path.join(f.fake.dir, 'codex-fake');
+  fs.renameSync(codexBin, kept);
+  fs.writeFileSync(codexBin, '#!/bin/sh\nif [ "$1" = exec ]; then cat >/dev/null; echo \'{"type":"turn.failed","error":{"message":"unexpected status 401 Unauthorized"}}\'; exit 1; fi\nexec "$(dirname "$0")/codex-fake" "$@"\n', { mode: 0o755 });
+  const run = f.controller.ask('Normalize coupon codes', null, { bots: ['critic'] });
+  await assert.rejects(run.finished, { message: '@critic could not finish.' });
+  const task = readTask(f.repo, run.id);
+  assert.equal(task.state, 'unverified'); assert.match(task.error.message, /^@critic could not finish\./);
+  assert.ok(openTask(sessionTasks(f.repo, task.id)), 'a turn that failed leaves its Task open');
+  assert.equal(stopLine(task).text, '@critic could not finish: Codex is signed out. Sign in again with codex login, then type continue.');
+  // Signed in again, the owner's continue works on the Task: the lead works and @critic reviews.
+  fs.rmSync(codexBin); fs.renameSync(kept, codexBin);
+  const before = f.inputs('claude').length;
+  const done = await f.controller.ask('continue', task.id).finished;
+  assert.equal(done.state, 'ready', JSON.stringify(done.error)); assert.equal(done.error, null); assert.equal(done.reviewStatus, 'passed');
+  assert.ok(f.inputs('claude').slice(before).some(row => row.input.includes('Implement the task.')), 'the working turn ran, not a read-only reply');
+  assert.ok(done.messages.some(row => row.text === 'continue'), 'the message is kept with the work');
 });
 
 test('the working @lead with no usage credits for its model plans and edits on the session\'s own model, and says so once', async t => {
