@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { project, fakeClis, config, keyLike, approveProjectFiles, git, autoApprove } from './helpers.mjs';
+import { project, fakeClis, config, keyLike, approveProjectFiles, git, autoApprove, cli } from './helpers.mjs';
 import { approveTask, sessionTasks } from '../lib/plan.mjs';
 import { repository } from '../lib/git.mjs';
 import { ProjectController, conversationEntries, projectSnapshot, registerProject, personalDirectory } from '../lib/projects.mjs';
@@ -750,6 +750,33 @@ test('a teammate\'s session that works in the home folder asks the owner once: y
   assert.equal(readTask(repo, allowed.id).state, 'answered');
   const mine = await inHome.ask('Go on.', allowed.id).finished;
   assert.equal(mine.state, 'answered');
+});
+
+test('elu allow-home lets a teammate\'s session in the home folder run there, and the message it held goes again', async t => {
+  const p = setup(t, 'answer');
+  const home = homeAt(t, path.join(p.parent, 'home')), repo = projectFolder(home); registerProject(repo);
+  const inHome = new ProjectController(repo);
+  const started = await inHome.ask('Work on the handoff from @sara shown in the peer data block.', null, { origin: origin('handoff', { own: true }), context: 'Where are the tests?', permissions: 'ask', home: true }).finished;
+  const { homeAllowed: _allowed, ...rest } = readTask(repo, started.id); saveTask(repo, rest);
+  // A teammate's later message is held with the question.
+  const row = enqueue(home, 'Work on the handoff from @sara shown in the peer data block.', { continuationTaskId: started.id, origin: origin('handoff', { own: true }), context: 'And the docs?', permissions: 'ask' });
+  conduct(t);
+  await until(() => request(home, row.id)?.state === 'waiting', 'the held message');
+  assert.equal(request(home, row.id).reason, HOME_QUESTION);
+  // Asked wrongly, it says how, and changes nothing.
+  for (const [args, line] of [[['allow-home'], 'Use elu allow-home <session>.'], [['allow-home', 'one'], 'Use elu allow-home <session>.'], [['allow-home', '99'], 'No session 99 in a project at your home folder.']]) {
+    const refused = cli(home, args); assert.equal(refused.status, 1, refused.stdout); assert.equal(refused.json.message, line);
+  }
+  // The session's id: kept on the session, and the held message is queued again and runs.
+  const allowed = cli(home, ['allow-home', started.id]);
+  assert.equal(allowed.status, 0, allowed.stdout + allowed.stderr); assert.equal(allowed.json.message, `Session ${started.id} may run in your home folder now. Its message is on its way.`);
+  assert.equal(readTask(repo, started.id).homeAllowed, true);
+  await until(() => request(home, row.id)?.state === 'done', 'the message ran', 60000);
+  const value = readTask(repo, started.id);
+  assert.equal(value.state, 'answered'); assert.ok(value.messages.some(entry => entry.context === 'And the docs?'));
+  // Again, with nothing held: it says to send the message again.
+  const again = cli(home, ['allow-home', started.id]);
+  assert.equal(again.status, 0, again.stdout); assert.equal(again.json.message, `Session ${started.id} may run in your home folder now. Send your message again.`);
 });
 
 test('a teammate\'s session never edits a repository in the home folder, even when the model names the home folder', async t => {
