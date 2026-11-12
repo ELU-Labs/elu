@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { readBoard, addCard, editCard, removeCard, startCard, linkCards, setDone, boardColumns, fitDetail, fitCard, closeSession, reopenSession } from '../lib/kanban.mjs';
+import { readBoard, addCard, editCard, removeCard, startCard, linkCards, setDone, boardColumns, fitDetail, fitCard, fitTeammateCard, teammateLabel, closeSession, reopenSession } from '../lib/kanban.mjs';
 import { project } from './helpers.mjs';
 import { projectFolder } from '../lib/workspace.mjs';
 
@@ -117,4 +117,33 @@ test('sessions typed elsewhere appear by state; answered questions are done, old
   const written = tasks.map(row => row.id === '3' ? { ...row, messages: [{ at: new Date(Date.now() + 60000).toISOString(), text: 'And in CI?' }] } : row);
   assert.ok(names(boardColumns(readBoard(repo), { tasks: written, queue })).done.includes('What is our test runner?'));
   reopenSession(repo, '3'); assert.ok(names(boardColumns(readBoard(repo), { tasks, queue })).done.includes('What is our test runner?'));
+});
+
+test('teammates\' Tasks are cards on the same columns, with their name, counted with mine', t => {
+  const p = project(t), repo = projectFolder(p.root), now = Date.now(), ago = minutes => new Date(now - minutes * 60000).toISOString();
+  addCard(repo, 'My own card');
+  const shared = (extra = {}) => ({ repoId: 'e'.repeat(64), handle: 'shop', id: 't-1', revision: 1, title: 'Fix the real issues', description: '', goal: 'It works.', objectives: ['One', 'Two'], priority: 'high', severity: 'medium', state: 'approved', startedBy: 'owner', who: 'Opus 5.5',
+    subtasks: [{ text: 'A', state: 'done' }, { text: 'B', state: 'doing' }], met: [], approvedAt: ago(30), doneAt: null, updatedAt: ago(2), ...extra });
+  const people = [
+    { peer: 'b'.repeat(64), name: 'sara', box: 'devbox', online: true, heardAt: ago(0), tasks: [shared(), shared({ id: 't-2', title: 'Old work', state: 'done', met: [1, 2], doneAt: ago(60) })] },
+    { peer: 'c'.repeat(64), name: 'li', box: null, online: false, heardAt: ago(90), tasks: [shared({ id: 't-3', title: 'Li work', subtasks: [] })] },
+  ];
+  const columns = boardColumns(readBoard(repo), { tasks: [task('4', 'My session', 'running')], queue: [] }, now, people);
+  assert.deepEqual(names(columns), { todo: ['My own card'], progress: ['Fix the real issues', 'Li work', 'My session'], needs: [], done: ['Old work'] });
+  const items = columns.flatMap(column => column.items), sara = items.find(item => item.title === 'Fix the real issues');
+  assert.equal(sara.detail, 'sara on devbox · 1/2 · high · medium');
+  assert.equal(items.find(item => item.title === 'Li work').detail, 'li · approved · high · medium');
+  assert.equal(items.find(item => item.title === 'Old work').detail, 'sara on devbox · done 2/2 · high · medium');
+  assert.equal(sara.note, "sara on devbox's Task · approved · 1 of 2 subtasks done · high priority · medium severity · worked on by Opus 5.5 · read-only");
+  assert.match(items.find(item => item.title === 'Li work').note, /· offline · read-only$/);
+  assert.deepEqual([sara.teammate.name, sara.shared.id, sara.key, Boolean(sara.card || sara.task || sara.request)], ['sara', 't-1', `peer-${'b'.repeat(64)}/t-1`, false]);
+  // The counts each column shows include them.
+  assert.deepEqual(columns.map(column => column.items.length), [1, 3, 0, 1]);
+  // None, or nothing usable, changes nothing.
+  assert.deepEqual(names(boardColumns(readBoard(repo), { tasks: [], queue: [] }, now, [{ name: 'x' }, null])), { todo: ['My own card'], progress: [], needs: [], done: [] });
+  // The name stays beside the title however narrow the column, and a long name is cut.
+  assert.deepEqual(fitTeammateCard('Fix the real ELU issues in the web app', 'sara on devbox · 1/2 · high', 30), { title: 'Fix the real…', detail: 'sara on devbox' });
+  assert.deepEqual(fitTeammateCard('Short', 'sara · 1/2 · high', 30), { title: 'Short', detail: 'sara · 1/2 · high' });
+  assert.equal(teammateLabel({ name: 'a'.repeat(40), box: 'b'.repeat(40) }).length, 24 + 4 + 24);
+  assert.deepEqual(fitTeammateCard('Title', teammateLabel({ name: 'a'.repeat(40), box: 'b'.repeat(40) }), 20), { title: 'Title', detail: `${'a'.repeat(9)}…` });
 });

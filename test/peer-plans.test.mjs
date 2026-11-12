@@ -10,14 +10,14 @@ import { peerFile } from '../lib/peer/paths.mjs';
 import { createIdentity, identity as loadIdentity } from '../lib/peer/identity.mjs';
 import { appendOp, createTeam, head, makeOp } from '../lib/peer/roster.mjs';
 import { createInvite, redeemCode } from '../lib/peer/invite.mjs';
-import { share, unshare } from '../lib/peer/shares.mjs';
+import { repoId, setBoardOff, share, unshare } from '../lib/peer/shares.mjs';
 import { savePeerSettings } from '../lib/peer/settings.mjs';
 import { saveBot } from '../lib/bots.mjs';
 import { approveTask, proposeTask, sessionTasks } from '../lib/plan.mjs';
 import { BINDING } from '../lib/peer/a2a.mjs';
 import { PeerDaemon } from '../lib/peer/daemon.mjs';
 import { Session } from '../lib/peer/rpc.mjs';
-import { BYTES_MAX, CONTEXT_MAX, DONE_MS, KEEP_MS, PLANS_MAX, SHOWN_MAX, cleanPlan, cleanPlans, fitPlans, heardPlans, planRows, prunePlans, remotePlans, saveRemotePlans, teammatePlanParts, teammatePlans } from '../lib/peer/plans.mjs';
+import { BOARDS_MAX, BYTES_MAX, CONTEXT_MAX, DONE_MS, KEEP_MS, PLANS_MAX, SHOWN_MAX, boardPlans, cleanBoards, cleanPlan, cleanPlans, fitPlans, heardPlans, planRows, planSharing, prunePlans, remoteBoards, remotePlans, saveRemoteBoards, saveRemotePlans, teammatePlanParts, teammatePlans, toldBoards } from '../lib/peer/plans.mjs';
 
 const ORIGIN = 'https://github.com/elu-labs/sample.git', OTHER = 'https://github.com/elu-labs/docs.git';
 const REPO = 'a'.repeat(64);
@@ -132,6 +132,10 @@ test('Tasks go only to teammates on a team the project is shared with, again whe
     const toAna = connect(ana, crew.teamId, { plans: true }), toBob = connect(bob, second.id, { plans: true });
     assert.equal(daemon.sessions.get(ana.key)?.admitted, true); assert.equal(daemon.sessions.get(bob.key)?.admitted, true);
     assert.equal(daemon.hello(ana.key).plans, true, 'this build says in its hello that it reads Tasks');
+    // elu.status names the repositories shared with the teams we are both on, and with which of them, so a teammate's own clone joins that team's board.
+    const statusOf = side => side.wire.out.split('\n').flatMap(line => { try { const frame = JSON.parse(line); return frame.method === 'elu.status' ? [frame.params] : []; } catch { return []; } }).at(-1);
+    assert.deepEqual(statusOf(toAna).boards, [{ repoId: repoId(app.root), handle: 'app', teams: [crew.teamId] }]);
+    assert.deepEqual(statusOf(toBob).boards, [{ repoId: repoId(docs.root), handle: 'docs', teams: [second.id] }]);
     // On connect each is told the Tasks of the projects open to them, and nothing of the other project.
     assert.deepEqual([toAna.titles(), toBob.titles()], [['Fix the login redirect'], ['Write the setup page']]);
     assert.equal(toAna.wire.out.includes('Write the setup page'), false); assert.equal(toBob.wire.out.includes('Fix the login redirect'), false);
@@ -268,5 +272,98 @@ test('a turn is told teammates\' Tasks as data inside a peer block, without desc
     saveRemotePlans(ana.key, Array.from({ length: PLANS_MAX }, (_, n) => told({ repoId: mine.repoId, id: `t-${n}`, title: `Task ${n} ${'x'.repeat(60)}`, goal: 'g'.repeat(500) })), now);
     const long = teammatePlanParts(app.root, now)[0];
     assert.ok(long.length < CONTEXT_MAX + 1200, String(long.length)); assert.equal((long.match(/^- Task/gm) ?? []).length, 6);
+  });
+});
+
+test('same repository, same board: a member\'s clone of a repository a teammate shares with the team tells its Tasks without /share, and nothing else does', async t => {
+  const crew = makeTeam(t), ana = crew.founder.identity, sara = crew.member, bob = withHome(newHome(t), () => createIdentity({ name: 'bob' }));
+  await withHome(sara.home, async () => {
+    const me = loadIdentity(), now = Date.now(), side = createTeam(me, 'side');
+    redeemCode(createInvite(me, side.id, { hours: 1 }), bob.key, 'bob');
+    // Sara joined Ana's team and opened her own clone of Ana's repository. She shares nothing.
+    const clone = registeredProject(t, { origin: ORIGIN }), other = registeredProject(t, { origin: OTHER }), bare = registeredProject(t);
+    for (const project of [clone, other, bare]) writePlans(project.root, 1, [plan({ id: 't-00000001', title: `Work in ${path.basename(project.root)}` })]);
+    const shop = repoId(clone.root), mine = `Work in ${path.basename(clone.root)}`;
+    assert.deepEqual(planRows(now), [], 'nothing is told before a teammate says they share the repository');
+    assert.equal(planSharing(clone.root), 'none');
+    // Ana says she shares it with the team: Sara's clone is on that board, told to that team only, with Ana's handle.
+    saveRemoteBoards(ana.key, [{ repoId: shop, handle: 'shop', teams: [crew.teamId] }], now);
+    const rows = boardPlans(now);
+    assert.deepEqual(rows.map(row => [row.task.title, row.task.handle, row.task.repoId, row.teams]), [[mine, 'shop', shop, [crew.teamId]]]);
+    assert.equal(planSharing(clone.root), 'board'); assert.equal(planSharing(other.root), 'none'); assert.equal(planSharing(bare.root), 'no-origin');
+    for (const word of [clone.root, '"edit"', 'fix the login redirect please']) assert.equal(JSON.stringify(rows).includes(word), false, word);
+    // A claim counts only from someone on that team, and only for a team this machine is on.
+    saveRemoteBoards(ana.key, [], now);
+    saveRemoteBoards(bob.key, [{ repoId: shop, handle: 'shop', teams: [crew.teamId] }], now);
+    assert.deepEqual(planRows(now), [], 'bob is not on the team he names');
+    saveRemoteBoards(bob.key, [{ repoId: shop, handle: 'shop', teams: ['f'.repeat(64)] }], now);
+    assert.deepEqual(planRows(now), [], 'a team this machine is not on');
+    saveRemoteBoards(bob.key, [{ repoId: shop, handle: 'shop', teams: [side.id] }], now);
+    assert.deepEqual(boardPlans(now).map(row => row.teams), [[side.id]], 'bob shares it with the side team');
+    saveRemoteBoards(bob.key, [], now); saveRemoteBoards(ana.key, [{ repoId: shop, handle: 'shop', teams: [crew.teamId] }], now);
+    // Kept off: told to nobody, and back on again.
+    setBoardOff(clone.root, true);
+    assert.deepEqual(planRows(now), []); assert.equal(planSharing(clone.root), 'off');
+    setBoardOff(clone.root, false);
+    assert.deepEqual(planRows(now).map(task => task.title), [mine]);
+    // Never the home folder, or a folder that holds it.
+    const home = process.env.HOME; process.env.HOME = clone.root;
+    try { assert.deepEqual(planRows(now), []); assert.equal(planSharing(clone.root), 'home'); } finally { process.env.HOME = home; }
+    process.env.HOME = path.join(clone.root, 'inside');
+    try { assert.deepEqual(planRows(now), [], 'a folder that holds the home folder'); } finally { process.env.HOME = home; }
+    assert.deepEqual(planRows(now).map(task => task.title), [mine]);
+
+    // Over the wire: Ana, on the team, is told it; Bob, on the other team only, is not.
+    const daemon = Object.assign(new PeerDaemon({ conductor: () => {} }), { me, node: { dial() {}, leave() {} } }); daemon.methods = daemon.extensions();
+    const connect = (who, teamId, extra = {}) => {
+      const wire = { out: '' }, socket = Object.assign(new EventEmitter(), { destroyed: false, write: chunk => { wire.out += chunk; return true; }, destroy() { this.destroyed = true; this.emit('close'); } });
+      daemon.attach(socket, who.key);
+      socket.emit('data', Buffer.from(`${JSON.stringify({ jsonrpc: '2.0', method: 'elu.hello', params: { binding: BINDING, a2aVersion: '1.0', name: who.name, teams: [{ id: teamId, ...head(teamId), ops: [] }], handles: [], ...extra } })}\n`));
+      const frames = method => wire.out.split('\n').flatMap(line => { try { const frame = JSON.parse(line); return frame.method === method ? [frame.params] : []; } catch { return []; } });
+      return { socket, wire, frames, titles: () => frames('elu.plans').at(-1)?.tasks.map(task => task.title) ?? null, say: (method, params) => socket.emit('data', Buffer.from(`${JSON.stringify({ jsonrpc: '2.0', method, params })}\n`)) };
+    };
+    const settle = () => new Promise(resolve => setTimeout(resolve, 20));
+    const toAna = connect(ana, crew.teamId, { plans: true }), toBob = connect(bob, side.id, { plans: true });
+    assert.deepEqual([toAna.titles(), toBob.titles()], [[mine], []]);
+    assert.deepEqual(toAna.frames('elu.status').at(-1).boards, [], 'Sara shares nothing, so she names no repository');
+    // Ana's own elu.status replaces what she said: unshared, the clone leaves the board on the next tell.
+    toAna.say('elu.status', { rows: [], box: 'ana-mac', bots: [], boards: [] }); await settle();
+    assert.deepEqual(remoteBoards(ana.key), []); assert.equal(daemon.plansAt, 0, 'a change in the boards tells again on the next tick');
+    daemon.tellPlans(); assert.deepEqual(toAna.titles(), []);
+    toAna.say('elu.status', { rows: [], boards: [{ repoId: shop, handle: 'shop', teams: [crew.teamId] }, { repoId: 'x', handle: 'bad', teams: [crew.teamId] }] }); await settle();
+    assert.deepEqual(remoteBoards(ana.key), [{ repoId: shop, handle: 'shop', teams: [crew.teamId] }]);
+    daemon.tellPlans(); assert.deepEqual(toAna.titles(), [mine]);
+    // A build from before the board sends no boards: what was said stays, and nothing is added.
+    toAna.say('elu.status', { rows: [] }); await settle();
+    assert.deepEqual(remoteBoards(ana.key), [{ repoId: shop, handle: 'shop', teams: [crew.teamId] }]);
+
+    // The other way: Ana's Tasks show in Sara's clone, and in no project of another repository.
+    fs.writeFileSync(peerFile('state.json'), JSON.stringify({ running: true, at: new Date(now).toISOString(), key: me.key, teams: [{ id: crew.teamId, members: [{ key: me.key, online: true }, { key: ana.key, online: true, box: 'ana-mac' }] }, { id: side.id, members: [{ key: me.key, online: true }, { key: bob.key, online: true }] }] }));
+    saveRemotePlans(ana.key, [told({ repoId: shop, handle: 'shop', title: 'Ana in the shop' }), told({ repoId: repoId(other.root), handle: 'docs', id: 't-2', title: 'Ana elsewhere' })], now);
+    saveRemotePlans(bob.key, [told({ repoId: shop, handle: 'shop', id: 't-3', title: 'Bob in the shop' })], now);
+    assert.deepEqual(teammatePlans(clone.root, now).map(person => [person.name, person.box, person.tasks.map(task => task.title)]), [['ana', 'ana-mac', ['Ana in the shop']]]);
+    assert.deepEqual(teammatePlans(other.root, now), []); assert.deepEqual(teammatePlans(bare.root, now), []);
+    assert.match(teammatePlanParts(clone.root, now)[0], /Ana in the shop/);
+    // Sara leaves the team: Ana's claim and Ana's Tasks no longer count here.
+    appendOp(crew.teamId, makeOp(me, crew.teamId, 'leave', {}));
+    assert.deepEqual(teammatePlans(clone.root, now), []); assert.deepEqual(planRows(now), []);
+    toAna.socket.destroy(); toBob.socket.destroy();
+  });
+});
+
+test('a teammate\'s list of shared repositories is checked field by field, and dropped with them', t => {
+  withHome(newHome(t), () => {
+    createIdentity({ name: 'sara' });
+    const good = { repoId: REPO, handle: 'app', teams: ['b'.repeat(64)] };
+    assert.deepEqual(cleanBoards([good, { ...good }, { ...good, repoId: 'c'.repeat(64), teams: [] }, { ...good, repoId: 'd'.repeat(64), handle: '../x' }, { ...good, repoId: 'e'.repeat(64), teams: ['nope', 'b'.repeat(64), 'b'.repeat(64)], extra: 1 }, 'junk']),
+      [good, { repoId: 'e'.repeat(64), handle: 'app', teams: ['b'.repeat(64)] }]);
+    assert.equal(cleanBoards(Array.from({ length: 40 }, (_, n) => ({ ...good, repoId: n.toString(16).padStart(64, '0') }))).length, BOARDS_MAX);
+    assert.deepEqual([cleanBoards(null), cleanBoards({})], [[], []]);
+    assert.deepEqual(toldBoards(['b'.repeat(64)]), [], 'nothing shared, nothing named');
+    const ana = 'a'.repeat(64), gone = 'c'.repeat(64);
+    saveRemoteBoards(ana, [good]); saveRemoteBoards(gone, [good]); saveRemoteBoards('../x', [good]);
+    assert.equal(fs.statSync(peerFile('boards', `${ana}.json`)).mode & 0o777, 0o600);
+    prunePlans({ teammates: [ana], online: [ana] });
+    assert.deepEqual(fs.readdirSync(peerFile('boards')), [`${ana}.json`]); assert.deepEqual(remoteBoards(gone), []);
   });
 });

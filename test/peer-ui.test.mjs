@@ -1315,49 +1315,46 @@ const teamTask = (extra = {}) => ({ repoId: 'e'.repeat(64), handle: 'web', id: '
   objectives: ['The return address survives sign-in', 'A bad return address falls back to home'], priority: 'high', severity: 'critical', state: 'approved', startedBy: 'owner', who: 'Opus 5.5',
   subtasks: [{ text: 'Carry the return address through the form', state: 'done' }, { text: 'Check the address is on this site', state: 'doing' }, { text: 'Tests', state: 'todo' }], met: [1], approvedAt: ago(30), doneAt: null, updatedAt: ago(2), ...extra });
 
-test('Kanban shows teammates\' Tasks under their names, apart from my cards and read-only, and Enter shows the whole Task', async t => {
+test('Kanban shows teammates\' Tasks as cards in the same columns with their name, counted with mine, read-only, and Enter shows the whole Task', async t => {
   const p = project(later(t)); environment(t, p.parent);
   const peer = fakePeer(), asked = [];
   let people = [
-    { peer: SARA, name: 'sara', online: true, heardAt: ago(0), tasks: [teamTask(), teamTask({ id: 't-2', title: '{red-fg}Loud{/} title', priority: 'low', severity: 'medium', who: '@scout', subtasks: [], met: [], updatedAt: ago(5) })] },
+    { peer: SARA, name: 'sara', box: 'sara-box', online: true, heardAt: ago(0), tasks: [teamTask(), teamTask({ id: 't-2', title: '{red-fg}Loud{/} title', priority: 'low', severity: 'medium', who: '@scout', subtasks: [], met: [], approvedAt: ago(20), updatedAt: ago(5) })] },
     { peer: LI, name: 'li', online: false, heardAt: ago(180), tasks: [teamTask({ id: 't-3', title: 'Old cleanup', state: 'done', priority: 'low', severity: 'low', who: 'bot', subtasks: [], met: [1, 2], doneAt: ago(60), updatedAt: ago(60) })] },
-  ], sharing = 'on';
+  ], sharing = 'board';
   peer.teammateTasks = root => { asked.push(root); return people; }; peer.taskSharing = () => sharing;
-  const v = await view(t, { repo: repository(p.root), peer }), panels = v.panels, focused = () => v.current.screen.focused, rows = () => panels.kanbanTeamList.items.map(plainItem);
-  await send(v, '/kanban'); await until(() => v.current.view === 'kanban' && !panels.kanbanTeam.hidden && rows().length === 5, 'the Teammates section');
+  const v = await view(t, { repo: repository(p.root), peer }), panels = v.panels, focused = () => v.current.screen.focused;
+  const column = index => panels.kanbanLists[index].items.map(item => plainItem(item).trimEnd()), label = index => panels.kanbanBoxes[index]._label.getText().trim();
+  await send(v, '/kanban'); await until(() => v.current.view === 'kanban' && column(1).length === 2 && column(3).length === 1, 'the teammates\' cards');
   assert.deepEqual(asked.slice(0, 1), [p.root], 'asked for this project only');
-  assert.equal(panels.kanbanTeam._label.getText().trim(), "Teammates' Tasks 3 · read-only");
-  assert.deepEqual(rows().map(row => row.trimEnd()), [
-    '● sara · online',
-    '  Fix the login redirect  high · critical · in progress · 1/3 done · Opus 5.5 · 2m ago',
-    '  {red-fg}Loud{/} title  low · medium · in progress · @scout · 5m ago',
-    '○ li · offline · last heard 3h ago',
-    '  Old cleanup  low · low · done · bot · 1h ago',
-  ]);
-  // It sits under the four columns, which end where it starts; my cards stay in the columns.
-  const column = panels.kanbanBoxes[0], full = column.height + 7;
-  assert.equal(panels.kanbanTeam.top, column.top + column.height); assert.equal(panels.kanbanTeam.height, 7);
-  assert.equal(panels.kanbanBoxes.every(frame => frame.height === column.height && !frame.hidden), true);
-  // Down from the end of a column goes to the first Task, not to a teammate's name.
-  panels.kanbanLists[0].focus(); v.input.write('\x1b[B');
-  await until(() => focused() === panels.kanbanTeamList && panels.kanbanTeamList.selected === 1, 'the first Task');
-  await until(() => /enter view/.test(panels.keys.getText()), 'the keys for a teammate\'s Task');
-  v.input.write('\x1b[B'); await until(() => panels.kanbanTeamList.selected === 2, 'the next Task');
-  v.input.write('\x1b[B'); await until(() => panels.kanbanTeamList.selected === 4, 'over the next teammate\'s name');
-  // No key changes a teammate's Task or makes a card of it.
+  // Approved is In progress, done is Done; each card names whose it is, the name kept when the title is cut.
+  assert.match(column(1)[0], /^Fix the login.*  sara on sara-box/); assert.match(column(1)[1], /^\{red-fg\}Loud\{\/\} title  sara on sara-box/);
+  assert.match(column(3)[0], /^Old cleanup  li · done 2\/2/);
+  assert.deepEqual([label(0), label(1), label(2), label(3)], ['To do 0', 'In progress 2', 'Needs you 0', 'Done 1']);
+  // No strip under the board: the columns take the whole height, and there is no separate list to move to.
+  assert.equal(panels.kanbanTeam.hidden, true); assert.equal(panels.kanbanTeamList, undefined);
+  // The line under the board names the whole of it, and that it is read-only; the keys say Enter reads it.
+  panels.kanbanLists[1].focus(); panels.kanbanLists[1].select(0);
+  await until(() => /sara on sara-box's Task · approved · 1 of 3 subtasks done · high priority · critical severity · worked on by Opus 5\.5 · read-only/.test(panels.status.getText()), 'the card\'s line');
+  await until(() => /enter read/.test(panels.keys.getText()) && !/start|done|delete/.test(panels.keys.getText()), 'the keys for a teammate\'s card');
+  // No key moves, edits or deletes it: each says whose it is.
   const open = v.current.screen.children.length;
-  for (const key of ['x', 'n', '+', '>', '<', '\x1b[C', '\x1b[D', '\x1b[1;2C', '\x1b[1;2D']) v.input.write(key);
-  await new Promise(resolve => setTimeout(resolve, 150));
-  assert.equal(focused(), panels.kanbanTeamList); assert.equal(panels.kanbanTeamList.selected, 4); assert.equal(v.current.screen.children.length, open, 'no dialog opened');
-  assert.deepEqual(readBoard(repository(p.root)).cards, []); assert.deepEqual(peer.sent(), []);
+  for (const key of ['x', '>', '<', '\x1b[1;2C', '\x1b[1;2D', '\x1b[3~']) {
+    panels.kanbanLists[1].focus(); panels.kanbanLists[1].select(0); v.input.write(key);
+    await until(() => /That is sara's Task\. Enter opens it to read; it changes only on their machine\./.test(panels.status.getText()), `the answer to ${JSON.stringify(key)}`);
+    await new Promise(resolve => setTimeout(resolve, 30));
+  }
+  panels.kanbanLists[3].focus(); panels.kanbanLists[3].select(0); v.input.write('<');
+  await until(() => /That is li's Task\./.test(panels.status.getText()), 'Done is read-only too');
+  assert.equal(v.current.screen.children.length, open, 'no dialog opened');
+  assert.deepEqual(readBoard(repository(p.root)).cards, []); assert.deepEqual(readBoard(repository(p.root)).done, []); assert.deepEqual(peer.sent(), []);
   // Enter shows the whole Task to read.
-  panels.kanbanTeamList.select(1); v.input.write('\r');
+  panels.kanbanLists[1].focus(); panels.kanbanLists[1].select(0); v.input.write('\r');
   await until(() => modal(v, "sara's Task"), 'the Task opens');
-  const lines = rowsOf(v, "sara's Task");
-  assert.deepEqual(lines.map(line => line.trimEnd()), [
+  assert.deepEqual(rowsOf(v, "sara's Task").map(line => line.trimEnd()), [
     'Fix the login redirect',
     'in progress · priority high · severity critical · revision 2',
-    "Worked on by Opus 5.5 on sara's machine · started by its owner",
+    "Worked on by Opus 5.5 on sara's machine sara-box · started by its owner",
     'approved 30m ago · updated 2m ago',
     '', 'Goal', 'Sign-in returns to the page that asked for it.',
     '', 'Description', 'After sign-in the app returns to the home page.',
@@ -1365,34 +1362,50 @@ test('Kanban shows teammates\' Tasks under their names, apart from my cards and 
     '', 'Subtasks · 1 of 3 done', '  ✓ Carry the return address through the form', '  ▸ Check the address is on this site', '  · Tests',
   ]);
   v.input.write('\x1b'); await until(() => !modal(v, "sara's Task"), 'Esc closes it');
-  // A Task a teammate took over from a handoff says so.
+  // A Task a teammate took over from a handoff says so; an offline teammate's says when they were last heard.
+  panels.kanbanLists[3].focus(); panels.kanbanLists[3].select(0); v.input.write('\r');
+  await until(() => rowsOf(v, "li's Task").some(line => /last heard 3h ago/.test(line)), 'last heard');
+  v.input.write('\x1b'); await until(() => !modal(v, "li's Task"), 'Esc closes it');
   people = [{ ...people[0], tasks: [teamTask({ startedBy: 'handoff' })] }, people[1]];
-  await until(() => rows().length === 4, 'the changed list', 8000);
-  panels.kanbanTeamList.focus(); panels.kanbanTeamList.select(1); v.input.write('\r');
+  await until(() => column(1).length === 1 && label(1) === 'In progress 1', 'the changed list', 8000);
+  panels.kanbanLists[1].focus(); panels.kanbanLists[1].select(0); v.input.write('\r');
   await until(() => rowsOf(v, "sara's Task").some(line => /started by a handoff/.test(line)), 'started by a handoff');
   v.input.write('\x1b'); await until(() => !modal(v, "sara's Task"), 'Esc closes it again');
+  // The Task done on their machine moves to Done here.
+  people = [{ ...people[0], tasks: [teamTask({ state: 'done', met: [1, 2], doneAt: ago(0) })] }, people[1]];
+  await until(() => column(1).length === 0 && column(3).length === 2 && label(3) === 'Done 2', 'moved to Done', 8000);
+  assert.match(column(3)[0], /^Fix the login.*  sara on sara-box/);
   assert.deepEqual(readBoard(repository(p.root)).cards, []); assert.deepEqual(peer.sent(), []);
-  // Up from the first Task goes back to the columns; down from the last goes to the message box.
-  panels.kanbanTeamList.focus(); panels.kanbanTeamList.select(1); v.input.write('\x1b[A');
-  await until(() => panels.kanbanLists.includes(focused()), 'back to a column');
-  panels.kanbanTeamList.focus(); panels.kanbanTeamList.select(3); v.input.write('\x1b[B');
-  await until(() => focused() === panels.ask, 'the message box');
-  // A teammate's Tasks that are gone leave the section, and the columns take the room back.
-  panels.kanbanTeamList.focus(); people = [];
-  await until(() => panels.kanbanTeam.hidden && panels.kanbanLists.includes(focused()), 'the section closes', 8000);
-  assert.equal(column.height, full);
-  // A shared project with no origin remote says once why its Tasks are not told.
-  sharing = 'no-origin';
-  await until(() => !panels.kanbanTeam.hidden && /Tasks are not shown to teammates: this project has no origin remote\./.test(panels.kanbanTeam.getText()), 'the note', 8000);
-  assert.equal(panels.kanbanTeamList.hidden, true); assert.equal(panels.kanbanTeam.height, 3);
+  // Gone on their side: gone here.
+  people = [];
+  await until(() => column(1).length === 0 && column(3).length === 0, 'the cards leave', 8000);
+  // When this project's own Tasks do not reach the team, one line under the board says why.
+  const notes = { 'no-origin': /Your Tasks are not shown to teammates: this project has no origin remote\./, home: /from your home folder/, off: /kept off the team board\. \/share on puts them back\./, 'status-off': /status is off/, none: /nobody on your team has shared this repository/ };
+  for (const [value, pattern] of Object.entries(notes)) {
+    sharing = value;
+    await until(() => !panels.kanbanTeam.hidden && pattern.test(panels.kanbanTeam.getText()), `the note for ${value}`, 8000);
+    assert.equal(panels.kanbanTeam.height, 3); assert.equal(panels.kanbanTeam.top, panels.kanbanBoxes[0].top + panels.kanbanBoxes[0].height);
+  }
+  sharing = 'on';
+  await until(() => panels.kanbanTeam.hidden, 'no note while they are told', 8000);
 });
 
-test('on no team, Kanban has no Teammates section and asks for nothing', async t => {
+test('/share off keeps the open project\'s Tasks off the team board and /share on puts them back', async t => {
+  const p = project(later(t)); environment(t, p.parent);
+  const peer = fakePeer(), calls = [];
+  peer.taskBoard = (root, on) => { calls.push([root, on]); return null; };
+  const v = await view(t, { repo: repository(p.root), peer });
+  await send(v, '/share off'); await until(() => /kept off the team board\. \/share on puts them back\./.test(v.panels.status.getText()), 'off');
+  await send(v, '/share on'); await until(() => /on the team board again/.test(v.panels.status.getText()), 'on');
+  assert.deepEqual(calls, [[p.root, false], [p.root, true]]);
+});
+
+test('on no team, Kanban has no teammates\' cards and asks for nothing', async t => {
   const p = project(later(t)); environment(t, p.parent);
   const peer = fakePeer({ teamless: true }); let asked = 0;
   peer.teammateTasks = () => { asked++; return [{ peer: SARA, name: 'sara', online: true, heardAt: ago(0), tasks: [teamTask()] }]; }; peer.taskSharing = () => { asked++; return 'on'; };
   const v = await view(t, { repo: repository(p.root), peer });
   await send(v, '/kanban'); await until(() => v.current.view === 'kanban' && !v.panels.kanbanBoxes[0].hidden, 'Kanban');
   await new Promise(resolve => setTimeout(resolve, 200));
-  assert.equal(v.panels.kanbanTeam.hidden, true); assert.equal(asked, 0);
+  assert.equal(v.panels.kanbanTeam.hidden, true); assert.equal(asked, 0); assert.equal(v.panels.kanbanBoxes[1]._label.getText().trim(), 'In progress 0');
 });

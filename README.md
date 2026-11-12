@@ -41,7 +41,7 @@ as `.env`, stops it until `.gitignore` keeps that file out.
 | --- | --- |
 | Sessions | Every session across your projects. The selected one is open beside the list. |
 | Projects | Your projects. `n` makes one, `o` makes another the active one. |
-| Kanban | The open project's tasks: To do, In progress, Needs you, Done. In a project shared with a team, the Tasks teammates' sessions are working on show under them, by teammate, to read only. |
+| Kanban | The open project's tasks: To do, In progress, Needs you, Done. On a team, everyone with a clone of the same repository shares one board: teammates' Tasks show in the same columns with their name, to read only. `/share off` keeps a project's own Tasks off it. |
 | Chats | Your team's channels, your teammates and your bots. |
 | Bots | Your bots. `n` makes one, Enter opens one. |
 | Usage | Your vendor accounts and their plan usage. |

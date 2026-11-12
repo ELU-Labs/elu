@@ -199,15 +199,26 @@ for secrets:
   subtasks, which objectives are met, who works on it, and its times. They are sent within
   5 seconds of a change, and to each teammate when they connect.
 
+**Without sharing.** A team has one board for each repository a member shared with it. A
+project of yours whose `origin` remote is that same repository is on that board too, though
+you never shared it, so the teammates on that team are told its Tasks as above (not its status
+rows, and nothing else about it). This needs no step on your machine. It never applies to your
+home folder or a folder that holds it, or to a project with no `origin` remote. Any member of
+the team can put a repository on its board by saying they share it, so a teammate who knows
+your repository's remote can bring your clone of it onto the board. `/share off` in a project
+keeps its Tasks off every board; `/share on` puts them back.
+
 Every teammate on any of your teams is also told, whatever the status of your shares, this
 machine's name (the peer setting `box`, by default the first part of its host name), the
-bots you share and what each is for, and the names of the projects shared with their team.
+bots you share and what each is for, the names of the projects shared with their team, and
+the repository ids (a hash of the `origin` remote) of those projects.
 Nothing else about your work is told: not a Task you have not approved or a rejected one,
 the rest of your request, the chat, file contents or absolute paths. A teammate's question
 and its answer are another matter, covered above.
 
 What a teammate tells is untrusted text: each field is checked and cut to its limit before
-it is kept, and it counts only in a project you share with a team that teammate is on. Your
+it is kept, and it counts only in your project of the same repository, when that repository
+is on the board of a team that teammate is on. Your
 own model and bots in that project are given the titles and goals as data, marked as a
 teammate's text and never as a request; a teammate's question running on your machine is
 given none of it.
