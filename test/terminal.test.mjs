@@ -10,6 +10,7 @@ import { ProjectController, projectSnapshot, dashboardSnapshot, claimView, regis
 import { LIMIT } from '../lib/project-settings.mjs';
 import { answerTrust, pendingTrust, trustedText, unusedTrust } from '../lib/project-trust.mjs';
 import { launchTerminal, geometry, plain, foldersNamed } from '../lib/terminal.mjs';
+import { WHEEL_FRAME_MS } from '../lib/wheel.mjs';
 import { projectFolder, saveRequest, pendingRequests, updateRequest } from '../lib/workspace.mjs';
 import { displayText } from '../lib/terminal-visuals.mjs';
 import { vendorText } from '../lib/terminal-commands.mjs';
@@ -500,13 +501,15 @@ test('a trackpad stroke on the Sessions list moves a row a step and draws the ap
   for (let id = 1; id <= 24; id++) saveTask(p.repo, { id: String(id), kind: 'conversation', goal: `Cart question ${id}`, state: 'answered', worktree: p.root, branch: null, base: null, createdAt: at, runs: [], reviews: [], responses: [], sessions: {}, result, messages: [{ at, text: `Cart question ${id}` }] });
   let draws = 0; const v = await view(t, { repo: p.repo, onRender: () => { draws++; } }), board = v.current.panels.board;
   await selectRow(v, /Cart question \d+/); await pause(60);
-  const start = board.selected, steps = 20, renders = countRenders(v); draws = 0;
+  const start = board.selected, steps = 20, renders = countRenders(v), began = Date.now(); draws = 0;
   // Twenty reports 5 ms apart, each its own read, as Ghostty sends a stroke of the fingers.
   await new Promise(resolve => { for (let n = 0; n < steps; n++) setTimeout(() => { wheel(v, board, 1, 1); if (n === steps - 1) resolve(); }, 5 * n); });
   await pause(60);
-  const drawn = draws, rendered = renders();
+  const drawn = draws, rendered = renders(), elapsed = Date.now() - began;
   assert.equal(board.selected, start + steps, 'a row a step, none dropped');
-  assert.ok(drawn < steps, `fewer draws of the app than steps (${drawn})`); assert.ok(rendered < steps, `fewer renders than steps (${rendered})`);
+  // The app draws at most once a frame, besides its 30 ms refresh here, and the wheel adds no render of its own.
+  assert.ok(drawn < steps && drawn <= Math.ceil(elapsed / WHEEL_FRAME_MS) + Math.ceil(elapsed / 30) + 2, `fewer draws of the app than steps, at most one a frame (${drawn} in ${elapsed} ms)`);
+  assert.ok(rendered <= drawn, `every render is one of the app's draws (${rendered} renders, ${drawn} draws)`);
   // The last draw shows the row the wheel stopped on: the bar is on it and its session is beside the list.
   const row = rows(v)[board.selected], id = /Cart question (\d+)/.exec(row)?.[1];
   assert.match(row, /^▌/); assert.ok(id); assert.equal(v.current.session, id);
