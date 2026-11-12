@@ -6,6 +6,7 @@ import path from 'node:path';
 import { stopLine, logCause } from '../lib/stop-line.mjs';
 import { boardRows, rowTitle } from '../lib/board.mjs';
 import { STUCK_LINE } from '../lib/runner.mjs';
+import * as claude from '../lib/adapters/claude.mjs';
 
 // A session as it is kept: an edit session (no kind) unless said otherwise, whose last turn ran on Claude.
 const at = '2026-11-12T10:00:00.000Z';
@@ -68,8 +69,15 @@ test('work that cannot go on in this session says why and to start a new session
   const blocked = message => said({ error: { message } }).text;
   assert.equal(blocked('The task policy changed. Start a new task.'), 'The task policy changed. Start a new session with /new.');
   assert.equal(blocked('This task cannot be continued. Start a new task for published work.'), 'This work is published, so it cannot go on here. Start a new session with /new.');
-  assert.equal(blocked('Git hooks changed after the preview. Review the hooks before continuing.'), 'Git hooks changed after the preview. Start a new session with /new.');
-  assert.equal(blocked('Submodules are not supported for checked tasks.'), 'Submodules are not supported for checked tasks. Start a new session with /new.');
+  // A new session starts from the hooks as they are now: they are looked at first.
+  assert.equal(blocked('Git hooks changed after the preview. Review the hooks before continuing.'), 'Git hooks changed after the preview. Review the hooks, then start a new session with /new.');
+  assert.equal(blocked('The saved hooks are missing or changed. Start a new task before publishing.'), 'The saved hooks are missing or changed. Start a new session with /new.');
+  // Every new session in such a repository is refused the same way, so /new is never the way out.
+  const submodules = said({ error: { message: 'Submodules are not supported for checked tasks.' } });
+  assert.equal(submodules.text, 'ELU Code cannot edit a repository that has submodules. Ask about it here instead.'); assert.doesNotMatch(submodules.text, /\/new/);
+  const driver = said({ error: { message: 'Git attribute filter=lfs enables an executable driver.' } });
+  assert.equal(driver.text, "Git runs a program for the filter=lfs attribute in this repository. Remove filter.lfs from Git's config, then type continue.");
+  assert.doesNotMatch(driver.text, /\/new/);
   assert.equal(blocked('Git filesystem monitors can execute programs. Disable the monitor before starting a checked task.'), "Git's filesystem monitor is on, and it can run programs. Turn it off with git config core.fsmonitor false, then type continue.");
   // Too much output for one turn.
   const loud = said({ error: { message: 'The model could not finish.', cause: 'unknown', outputLimit: true } });
@@ -93,11 +101,73 @@ test('a stop, a review or checks that did not pass, and older stored lines each 
     assert.equal(said({ error: { message } }).text, message);
   }
   // Anything else says what happened, then to try again.
-  assert.equal(said({ error: { message: 'The model could not run: Claude says this account is out of usage credits for Fable 5.2.', cause: 'quota', vendorSaid: { code: 'model_requires_usage_credits' } } }).text, 'The model could not run: Claude says this account is out of usage credits for Fable 5.2. Type continue to try again.');
+  assert.equal(said({ error: { message: 'Claude Code stopped for a reason of its own.' } }).text, 'Claude Code stopped for a reason of its own. Type continue to try again.');
+});
+
+// A Claude run refused with an API error, as the runner keeps it: who could not run, in
+// Claude's words (adapter vendorError), with the cause adapter classify gives.
+const init = model => ({ type: 'system', subtype: 'init', model });
+const refused = extra => ({ type: 'result', subtype: 'success', is_error: true, duration_ms: 180, num_turns: 1, total_cost_usd: 0, ...extra });
+// What test/fakes/claude.mjs prints for noCredits, as the real CLI does.
+const NO_CREDITS = refused({ api_error_status: 429, api_error: 'model_requires_usage_credits', result: "You're out of usage credits. Switch to another model, or manage usage credits at https://claude.ai/settings/usage?from=cc_cli_limit_message, to continue." });
+const SIGNED_OUT = refused({ api_error_status: 401, api_error: 'authentication_error', result: 'Invalid API key · Please run /login' });
+function kept(t, rows) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'stop-line-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const logFile = path.join(dir, 'lead.log'), text = rows.map(row => JSON.stringify(row)).join('\n') + '\n'; fs.writeFileSync(logFile, text);
+  const vendorSaid = claude.vendorError(text, { name: id => id === 'claude-fable-5-2' ? 'Fable 5.2' : id });
+  return { message: `The model could not run: ${vendorSaid.text}`, cause: vendorSaid.cause, logFile };
+}
+
+test("a Claude run refused with an API error keeps Claude's words and gets the action for its cause", t => {
+  // No credits for the model asked for: classify keeps model-unavailable, and continuing on the same model would fail again.
+  const credits = kept(t, [init('claude-fable-5-2'), NO_CREDITS]);
+  assert.equal(credits.cause, 'model-unavailable');
+  const stop = stopLine(session({ error: credits }));
+  assert.equal(stop.text, 'The model could not run: Claude says this account is out of usage credits for Fable 5.2. Choose another with /model, then type continue.');
+  assert.equal(stop.short, 'choose another with /model, then type continue');
+  // Signed out: classify says nothing of it, the log does, and the owner signs in, not /login in Claude's own app.
+  const signedOut = kept(t, [init('claude-opus-5-5'), SIGNED_OUT]);
+  assert.equal(signedOut.cause, 'unknown');
+  assert.equal(stopLine(session({ error: signedOut })).text, 'The model could not run: Claude Code is signed out. Sign in again with claude, then type continue.');
+  // Any other refusal keeps Claude's words, then to try again.
+  const other = kept(t, [init('claude-opus-5-5'), refused({ api_error_status: 500, api_error: 'api_error', result: 'Internal server error' })]);
+  assert.equal(stopLine(session({ error: other })).text, 'The model could not run: Claude says: Internal server error. Type continue to try again.');
+});
+
+test("a bot's or a reviewer's failed run names that run's vendor, not the lead's", () => {
+  const runs = [{ role: 'lead', vendor: 'claude', at, logFile: '/runs/lead.log' }, { role: 'bot:checker', vendor: 'agy', at, logFile: '/runs/checker.log' }, { role: 'lead', vendor: 'claude', at, logFile: '/runs/lead-2.log' }];
+  assert.equal(said({ runs, error: { message: 'Antigravity could not finish.', cause: 'auth', logFile: '/runs/checker.log' } }).text, 'Antigravity could not finish: Antigravity CLI is signed out. Sign in again with agy, then type continue.');
+  // A Codex bot whose log reads as signed out.
+  const codex = [...runs, { role: 'bot:critic', vendor: 'codex', at, logFile: '/runs/critic.log' }];
+  assert.equal(said({ runs: codex, error: { message: '@critic could not finish.', cause: 'unknown', logFile: '/runs/critic.log' } }, { logCause: () => 'auth' }).text, '@critic could not finish: Codex is signed out. Sign in again with codex login, then type continue.');
+  // An error that names no log is the last run's.
+  assert.equal(said({ runs: codex, error: { message: '@critic could not finish.', cause: 'auth' } }).text, '@critic could not finish: Codex is signed out. Sign in again with codex login, then type continue.');
+});
+
+test("a turn stopped by the session's own /budget says so, not that the account is out of credits", t => {
+  const spent = { budgetUsd: 5, runs: [{ role: 'lead', vendor: 'claude', at, costUsd: 3 }, { role: 'lead', vendor: 'claude', at, costUsd: 2.01, logFile: null }] };
+  // claude.classify keeps error_max_budget_usd as quota.
+  assert.equal(claude.classify(JSON.stringify(refused({ subtype: 'error_max_budget_usd', is_error: true }))), 'quota');
+  const stop = said({ ...spent, error: { message: 'The model could not finish.', cause: 'quota', logFile: null } });
+  assert.equal(stop.text, 'This session has spent its $5 limit. /budget 20 raises it, then type continue.');
+  assert.equal(said({ budgetUsd: 100, runs: [{ role: 'lead', vendor: 'claude', at, costUsd: 100 }], error:{ message: 'The model could not finish.', cause: 'quota' } }).text, 'This session has spent its $100 limit. /budget off removes it, then type continue.');
+  // A bot's own share of the limit.
+  assert.equal(said({ budgetUsd: 5, runs: [{ role: 'bot:scout', vendor: 'claude', at, costUsd: 5, logFile: '/runs/scout.log' }], error: { message: '@scout could not finish.', cause: 'quota', logFile: '/runs/scout.log' } }).text, '@scout has spent its $5 limit in this session. /budget 20 raises it, then type continue.');
+  // Under the limit, quota is the account's.
+  assert.equal(said({ budgetUsd: 5, runs: [{ role: 'lead', vendor: 'claude', at, costUsd: 1 }], error: { message: 'The model could not finish.', cause: 'quota' } }).text, 'The model could not finish: the account is out of usage credits. Type continue to try again.');
+  // The log says it too, when the cost of the run that stopped is not known.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'stop-line-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const logFile = path.join(dir, 'lead.log');
+  fs.writeFileSync(logFile, [init('claude-opus-5-5'), refused({ subtype: 'error_max_budget_usd', is_error: true, errors: [] })].map(row => JSON.stringify(row)).join('\n') + '\n');
+  assert.equal(logCause(logFile), 'budget');
+  assert.equal(stopLine(session({ budgetUsd: 5, runs: [{ role: 'lead', vendor: 'claude', at, costUnknown: true, logFile }], error: { message: 'The model could not finish.', cause: 'quota', logFile } })).text, 'This session has spent its $5 limit. /budget 20 raises it, then type continue.');
 });
 
 test('only a session that stopped and waits for the owner has the line', () => {
-  for (const state of ['running', 'preparing', 'answered', 'ready', 'unverified']) assert.equal(said({ state, error: { message: 'The model could not finish.', timedOut: true } }), null, state);
+  for (const state of ['running', 'preparing', 'answered', 'ready']) assert.equal(said({ state, error: { message: 'The model could not finish.', timedOut: true } }), null, state);
+  // Edits kept as not verified wait for the owner only when a later turn of the work failed.
+  assert.equal(said({ state: 'unverified', error: null }), null, 'edits that are only not verified');
+  assert.equal(said({ state: 'unverified', error: { message: 'The model could not finish.', cause: 'unknown', timedOut: true } }).text, 'Stopped before it finished. Your changes are kept. Type continue to carry on.');
   assert.equal(said({ state: 'needs_input', error: null, result: { question: 'Which page?' } }), null, 'a question is answered, not continued');
   assert.equal(said({ state: 'needs_input', error: { message: 'The model could not finish.', cause: 'unknown', timedOut: true } }).action, 'Type continue to carry on.', 'one that waits after an error says what to do');
   assert.equal(stopLine(null), null);
@@ -116,4 +186,9 @@ test('in the Sessions list a stopped row keeps its name, then the action where i
   // A finished session's row is its name alone, as before.
   const [done] = boardRows([{ name: 'shop', root: '/p/shop', activity: [], tasks: [{ ...task, state: 'answered', error: null, result: { summary: 'Done.' } }], queue: [] }], now);
   assert.equal(rowTitle(done, now), 'Normalize coupons');
+  // Edits a later turn could not finish: the stop line, not /publish.
+  const [failed] = boardRows([{ name: 'shop', root: '/p/shop', activity: [], tasks: [{ ...task, state: 'unverified' }], queue: [] }], now);
+  assert.equal(failed.now, 'Stopped before it finished. Your changes are kept. Type continue to carry on.'); assert.equal(rowTitle(failed, now), 'Normalize coupons · type continue');
+  const [unverified] = boardRows([{ name: 'shop', root: '/p/shop', activity: [], tasks: [{ ...task, state: 'unverified', error: null }], queue: [] }], now);
+  assert.equal(unverified.now, 'edits not verified · /publish runs the checks first'); assert.equal(rowTitle(unverified, now), 'Normalize coupons');
 });
