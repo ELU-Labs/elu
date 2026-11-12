@@ -3,21 +3,28 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
+import os from 'node:os';
+import { spawnSync } from 'node:child_process';
 import { newHome, withHome, makeTeam, registeredProject } from './peer-helpers.mjs';
 import { repository } from '../lib/git.mjs';
-import { saveTask } from '../lib/state.mjs';
+import { hash } from '../lib/util.mjs';
+import { saveTask, taskPlace } from '../lib/state.mjs';
+import { projectFolder } from '../lib/workspace.mjs';
+import { registerProject } from '../lib/projects.mjs';
+import { closeSession, setDone } from '../lib/kanban.mjs';
+import { CARDS_MAX, NAME_MAX, TITLE_MAX, cardsFor, cleanCard, cleanCards, cleanProofs, localRepos, proofsFor, repoProof, saveCards, saveLocalRepos, saveProofs, sessionCards, teammateSessions } from '../lib/peer/cards.mjs';
 import { peerFile } from '../lib/peer/paths.mjs';
 import { createIdentity, identity as loadIdentity } from '../lib/peer/identity.mjs';
 import { appendOp, createTeam, head, makeOp } from '../lib/peer/roster.mjs';
 import { createInvite, redeemCode } from '../lib/peer/invite.mjs';
-import { share, unshare } from '../lib/peer/shares.mjs';
+import { repoId, setBoardOff, share, unshare } from '../lib/peer/shares.mjs';
 import { savePeerSettings } from '../lib/peer/settings.mjs';
 import { saveBot } from '../lib/bots.mjs';
 import { approveTask, proposeTask, sessionTasks } from '../lib/plan.mjs';
 import { BINDING } from '../lib/peer/a2a.mjs';
 import { PeerDaemon } from '../lib/peer/daemon.mjs';
 import { Session } from '../lib/peer/rpc.mjs';
-import { BYTES_MAX, CONTEXT_MAX, DONE_MS, KEEP_MS, PLANS_MAX, SHOWN_MAX, cleanPlan, cleanPlans, fitPlans, heardPlans, planRows, prunePlans, remotePlans, saveRemotePlans, teammatePlanParts, teammatePlans } from '../lib/peer/plans.mjs';
+import { BOARDS_MAX, BYTES_MAX, CONTEXT_MAX, DONE_MS, KEEP_MS, PLANS_MAX, SHOWN_MAX, boardBy, boardPlans, boardWho, cleanBoards, firstCommit, cleanPlan, cleanPlans, fitPlans, heardPlans, planRows, planSharing, prunePlans, remoteBoards, remotePlans, saveRemoteBoards, saveRemotePlans, teammatePlanParts, teammatePlans, toldBoards } from '../lib/peer/plans.mjs';
 
 const ORIGIN = 'https://github.com/elu-labs/sample.git', OTHER = 'https://github.com/elu-labs/docs.git';
 const REPO = 'a'.repeat(64);
@@ -132,6 +139,12 @@ test('Tasks go only to teammates on a team the project is shared with, again whe
     const toAna = connect(ana, crew.teamId, { plans: true }), toBob = connect(bob, second.id, { plans: true });
     assert.equal(daemon.sessions.get(ana.key)?.admitted, true); assert.equal(daemon.sessions.get(bob.key)?.admitted, true);
     assert.equal(daemon.hello(ana.key).plans, true, 'this build says in its hello that it reads Tasks');
+    // elu.status names the repositories shared with the teams we are both on, and with which of them, so a teammate's own clone joins that team's board.
+    const statusOf = side => side.wire.out.split('\n').flatMap(line => { try { const frame = JSON.parse(line); return frame.method === 'elu.status' ? [frame.params] : []; } catch { return []; } }).at(-1);
+    // Each with the repository's first commit, which a teammate's clone must have for the claim to count there.
+    assert.match(firstCommit(app.root), /^[0-9a-f]{40}$/);
+    assert.deepEqual(statusOf(toAna).boards, [{ repoId: repoId(app.root), handle: 'app', commit: firstCommit(app.root), teams: [crew.teamId] }]);
+    assert.deepEqual(statusOf(toBob).boards, [{ repoId: repoId(docs.root), handle: 'docs', commit: firstCommit(docs.root), teams: [second.id] }]);
     // On connect each is told the Tasks of the projects open to them, and nothing of the other project.
     assert.deepEqual([toAna.titles(), toBob.titles()], [['Fix the login redirect'], ['Write the setup page']]);
     assert.equal(toAna.wire.out.includes('Write the setup page'), false); assert.equal(toBob.wire.out.includes('Fix the login redirect'), false);
@@ -268,5 +281,317 @@ test('a turn is told teammates\' Tasks as data inside a peer block, without desc
     saveRemotePlans(ana.key, Array.from({ length: PLANS_MAX }, (_, n) => told({ repoId: mine.repoId, id: `t-${n}`, title: `Task ${n} ${'x'.repeat(60)}`, goal: 'g'.repeat(500) })), now);
     const long = teammatePlanParts(app.root, now)[0];
     assert.ok(long.length < CONTEXT_MAX + 1200, String(long.length)); assert.equal((long.match(/^- Task/gm) ?? []).length, 6);
+  });
+});
+
+test('same repository, same board: a member\'s clone of a repository a teammate shares with the team tells its Tasks without /share, and nothing else does', async t => {
+  const crew = makeTeam(t), ana = crew.founder.identity, sara = crew.member, bob = withHome(newHome(t), () => createIdentity({ name: 'bob' }));
+  await withHome(sara.home, async () => {
+    const me = loadIdentity(), now = Date.now(), side = createTeam(me, 'side');
+    redeemCode(createInvite(me, side.id, { hours: 1 }), bob.key, 'bob');
+    // Sara joined Ana's team and opened her own clone of Ana's repository. She shares nothing.
+    const clone = registeredProject(t, { origin: ORIGIN }), other = registeredProject(t, { origin: OTHER }), bare = registeredProject(t);
+    for (const project of [clone, other, bare]) writePlans(project.root, 1, [plan({ id: 't-00000001', title: `Work in ${path.basename(project.root)}` })]);
+    const shop = repoId(clone.root), first = firstCommit(clone.root), mine = `Work in ${path.basename(clone.root)}`;
+    assert.deepEqual(planRows(now), [], 'nothing is told before a teammate says they share the repository');
+    assert.equal(planSharing(clone.root), 'none'); assert.equal(boardBy(clone.root), null);
+    // Knowing the remote is not enough: a claim whose first commit Sara's clone does not have puts nothing on a board.
+    saveRemoteBoards(ana.key, [{ repoId: shop, handle: 'shop', commit: 'f'.repeat(40), teams: [crew.teamId] }], now);
+    assert.deepEqual(planRows(now), [], 'a guessed remote with a commit this clone does not have');
+    assert.equal(planSharing(clone.root), 'none'); assert.deepEqual(teammatePlans(clone.root, now), []);
+    // Ana says she shares it with the team: Sara's clone is on that board, told to that team only, with Ana's handle.
+    saveRemoteBoards(ana.key, [{ repoId: shop, handle: 'shop', commit: first, teams: [crew.teamId] }], now);
+    const rows = boardPlans(now);
+    assert.deepEqual(rows.map(row => [row.task.title, row.task.handle, row.task.repoId, row.teams]), [[mine, 'shop', shop, [crew.teamId]]]);
+    assert.equal(planSharing(clone.root), 'board'); assert.equal(planSharing(other.root), 'none'); assert.equal(planSharing(bare.root), 'no-origin');
+    // Whose share puts it there, for the note on Sara's board.
+    assert.deepEqual(boardBy(clone.root), { team: 'core', by: ['ana'] }); assert.equal(boardBy(other.root), null);
+    assert.equal(boardWho(boardBy(clone.root)), "core's board: ana shares this repository");
+    assert.equal(boardWho({ team: 'crew', by: ['ana', 'li', 'bo'] }), "crew's board: ana, li and others share this repository");
+    for (const word of [clone.root, '"edit"', 'fix the login redirect please']) assert.equal(JSON.stringify(rows).includes(word), false, word);
+    // A claim counts only from someone on that team, and only for a team this machine is on.
+    saveRemoteBoards(ana.key, [], now);
+    saveRemoteBoards(bob.key, [{ repoId: shop, handle: 'shop', commit: first, teams: [crew.teamId] }], now);
+    assert.deepEqual(planRows(now), [], 'bob is not on the team he names');
+    saveRemoteBoards(bob.key, [{ repoId: shop, handle: 'shop', commit: first, teams: ['f'.repeat(64)] }], now);
+    assert.deepEqual(planRows(now), [], 'a team this machine is not on');
+    saveRemoteBoards(bob.key, [{ repoId: shop, handle: 'shop', commit: first, teams: [side.id] }], now);
+    assert.deepEqual(boardPlans(now).map(row => row.teams), [[side.id]], 'bob shares it with the side team');
+    // Shared from here with one team: only that team, though bob says he shares it with another. The share's teams are the owner's choice.
+    share(clone.root, { handle: 'mine', teams: [crew.teamId] });
+    assert.deepEqual(boardPlans(now).map(row => row.teams), [[crew.teamId]], 'a share limited to crew stays with crew');
+    unshare('mine');
+    saveRemoteBoards(bob.key, [], now); saveRemoteBoards(ana.key, [{ repoId: shop, handle: 'shop', commit: first, teams: [crew.teamId] }], now);
+    // Kept off: told to nobody, and back on again.
+    setBoardOff(clone.root, true);
+    assert.deepEqual(planRows(now), []); assert.equal(planSharing(clone.root), 'off');
+    setBoardOff(clone.root, false);
+    assert.deepEqual(planRows(now).map(task => task.title), [mine]);
+    // Never the home folder, or a folder that holds it.
+    const home = process.env.HOME; process.env.HOME = clone.root;
+    try { assert.deepEqual(planRows(now), []); assert.equal(planSharing(clone.root), 'home'); } finally { process.env.HOME = home; }
+    process.env.HOME = path.join(clone.root, 'inside');
+    try { assert.deepEqual(planRows(now), [], 'a folder that holds the home folder'); } finally { process.env.HOME = home; }
+    assert.deepEqual(planRows(now).map(task => task.title), [mine]);
+
+    // Over the wire: Ana, on the team, is told it; Bob, on the other team only, is not.
+    const daemon = Object.assign(new PeerDaemon({ conductor: () => {} }), { me, node: { dial() {}, leave() {} } }); daemon.methods = daemon.extensions();
+    const connect = (who, teamId, extra = {}) => {
+      const wire = { out: '' }, socket = Object.assign(new EventEmitter(), { destroyed: false, write: chunk => { wire.out += chunk; return true; }, destroy() { this.destroyed = true; this.emit('close'); } });
+      daemon.attach(socket, who.key);
+      socket.emit('data', Buffer.from(`${JSON.stringify({ jsonrpc: '2.0', method: 'elu.hello', params: { binding: BINDING, a2aVersion: '1.0', name: who.name, teams: [{ id: teamId, ...head(teamId), ops: [] }], handles: [], ...extra } })}\n`));
+      const frames = method => wire.out.split('\n').flatMap(line => { try { const frame = JSON.parse(line); return frame.method === method ? [frame.params] : []; } catch { return []; } });
+      return { socket, wire, frames, titles: () => frames('elu.plans').at(-1)?.tasks.map(task => task.title) ?? null, say: (method, params) => socket.emit('data', Buffer.from(`${JSON.stringify({ jsonrpc: '2.0', method, params })}\n`)) };
+    };
+    const settle = () => new Promise(resolve => setTimeout(resolve, 20));
+    const toAna = connect(ana, crew.teamId, { plans: true }), toBob = connect(bob, side.id, { plans: true });
+    assert.deepEqual([toAna.titles(), toBob.titles()], [[mine], []]);
+    assert.deepEqual(toAna.frames('elu.status').at(-1).boards, [], 'Sara shares nothing, so she names no repository');
+    // Ana's own elu.status replaces what she said: unshared, the clone leaves the board on the next tell.
+    toAna.say('elu.status', { rows: [], box: 'ana-mac', bots: [], boards: [] }); await settle();
+    assert.deepEqual(remoteBoards(ana.key), []); assert.equal(daemon.plansAt, 0, 'a change in the boards tells again on the next tick');
+    daemon.tellPlans(); assert.deepEqual(toAna.titles(), []);
+    toAna.say('elu.status', { rows: [], boards: [{ repoId: shop, handle: 'shop', commit: first, teams: [crew.teamId] }, { repoId: 'x', handle: 'bad', commit: first, teams: [crew.teamId] }, { repoId: 'b'.repeat(64), handle: 'nocommit', teams: [crew.teamId] }] }); await settle();
+    assert.deepEqual(remoteBoards(ana.key), [{ repoId: shop, handle: 'shop', commit: first, teams: [crew.teamId] }]);
+    daemon.tellPlans(); assert.deepEqual(toAna.titles(), [mine]);
+    // A build from before the board sends no boards: what was said stays, and nothing is added.
+    toAna.say('elu.status', { rows: [] }); await settle();
+    assert.deepEqual(remoteBoards(ana.key), [{ repoId: shop, handle: 'shop', commit: first, teams: [crew.teamId] }]);
+
+    // The other way: Ana's Tasks show in Sara's clone, and in no project of another repository.
+    fs.writeFileSync(peerFile('state.json'), JSON.stringify({ running: true, at: new Date(now).toISOString(), key: me.key, teams: [{ id: crew.teamId, members: [{ key: me.key, online: true }, { key: ana.key, online: true, box: 'ana-mac' }] }, { id: side.id, members: [{ key: me.key, online: true }, { key: bob.key, online: true }] }] }));
+    saveRemotePlans(ana.key, [told({ repoId: shop, handle: 'shop', title: 'Ana in the shop' }), told({ repoId: repoId(other.root), handle: 'docs', id: 't-2', title: 'Ana elsewhere' })], now);
+    saveRemotePlans(bob.key, [told({ repoId: shop, handle: 'shop', id: 't-3', title: 'Bob in the shop' })], now);
+    assert.deepEqual(teammatePlans(clone.root, now).map(person => [person.name, person.box, person.tasks.map(task => task.title)]), [['ana', 'ana-mac', ['Ana in the shop']]]);
+    assert.deepEqual(teammatePlans(other.root, now), []); assert.deepEqual(teammatePlans(bare.root, now), []);
+    assert.match(teammatePlanParts(clone.root, now)[0], /Ana in the shop/);
+    // Kept off the board: teammates' Tasks are neither shown nor given to the models there, and come back with it.
+    setBoardOff(clone.root, true);
+    assert.deepEqual(teammatePlans(clone.root, now), []); assert.deepEqual(teammatePlanParts(clone.root, now), []); assert.equal(boardBy(clone.root), null);
+    setBoardOff(clone.root, false);
+    assert.equal(teammatePlans(clone.root, now).length, 1);
+    // Shared from here with the side team only: Ana's claim for crew does not bring her Tasks in.
+    share(clone.root, { handle: 'mine', teams: [side.id] });
+    assert.deepEqual(teammatePlans(clone.root, now).map(person => person.name), ['bob']);
+    unshare('mine');
+    // Sara leaves the team: Ana's claim and Ana's Tasks no longer count here.
+    appendOp(crew.teamId, makeOp(me, crew.teamId, 'leave', {}));
+    assert.deepEqual(teammatePlans(clone.root, now), []); assert.deepEqual(planRows(now), []);
+    toAna.socket.destroy(); toBob.socket.destroy();
+  });
+});
+
+test('a teammate\'s list of shared repositories is checked field by field, and dropped with them', t => {
+  withHome(newHome(t), () => {
+    createIdentity({ name: 'sara' });
+    const good = { repoId: REPO, handle: 'app', commit: '0'.repeat(40), teams: ['b'.repeat(64)] };
+    assert.deepEqual(cleanBoards([good, { ...good }, { ...good, repoId: 'c'.repeat(64), teams: [] }, { ...good, repoId: 'd'.repeat(64), handle: '../x' }, { ...good, repoId: 'e'.repeat(64), teams: ['nope', 'b'.repeat(64), 'b'.repeat(64)], extra: 1 },
+      { ...good, repoId: '1'.repeat(64), commit: undefined }, { ...good, repoId: '2'.repeat(64), commit: 'HEAD' }, { ...good, repoId: '3'.repeat(64), commit: '--all' }, { ...good, repoId: '4'.repeat(64), commit: 'a'.repeat(64) }, 'junk']),
+      [good, { repoId: 'e'.repeat(64), handle: 'app', commit: '0'.repeat(40), teams: ['b'.repeat(64)] }, { ...good, repoId: '4'.repeat(64), commit: 'a'.repeat(64) }], 'a claim names a commit id, or it is dropped');
+    assert.equal(cleanBoards(Array.from({ length: 40 }, (_, n) => ({ ...good, repoId: n.toString(16).padStart(64, '0') }))).length, BOARDS_MAX);
+    assert.deepEqual([cleanBoards(null), cleanBoards({})], [[], []]);
+    assert.deepEqual(toldBoards(['b'.repeat(64)]), [], 'nothing shared, nothing named');
+    const ana = 'a'.repeat(64), gone = 'c'.repeat(64);
+    saveRemoteBoards(ana, [good]); saveRemoteBoards(gone, [good]); saveRemoteBoards('../x', [good]);
+    assert.equal(fs.statSync(peerFile('boards', `${ana}.json`)).mode & 0o777, 0o600);
+    prunePlans({ teammates: [ana], online: [ana] });
+    assert.deepEqual(fs.readdirSync(peerFile('boards')), [`${ana}.json`]); assert.deepEqual(remoteBoards(gone), []);
+  });
+});
+
+// --- Every session on the Kanban of teammates who have the same repository (lib/peer/cards.mjs) ---
+// A project whose folder is above its repositories, as a parent folder or the home folder is,
+// with a clone in it: a copy of `from` (same history), or a new one with the given origin.
+function folderProject(t, { name = 'work' } = {}) {
+  const parent = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'elu-code-cards-'))); t.after(() => fs.rmSync(parent, { recursive: true, force: true }));
+  const root = path.join(parent, name); fs.mkdirSync(root);
+  const repo = projectFolder(root); registerProject(repo); return repo;
+}
+function cloneIn(repo, name, { from = null, origin = ORIGIN } = {}) {
+  const target = path.join(repo.root, name), run = (cwd, args) => { const r = spawnSync('git', ['-C', cwd, ...args], { encoding: 'utf8' }); if (r.status !== 0) throw new Error(r.stderr); return r.stdout.trim(); };
+  if (from) run(repo.root, ['clone', '-q', from, target]); else { fs.mkdirSync(target); run(target, ['init', '-q']); run(target, ['-c', 'user.name=T', '-c', 'user.email=t@example.invalid', 'commit', '-q', '--allow-empty', '-m', `start ${name} ${Math.random()}`]); }
+  run(target, ['remote', from ? 'set-url' : 'add', 'origin', origin]);
+  return target;
+}
+// A session of a project that works in one of its clones.
+function session(repo, id, repository, extra = {}) {
+  const place = taskPlace(repo, id, repository);
+  saveTask(repo, { id: String(id), goal: 'Fix the cart total', state: 'running', repository, worktree: place.worktree, branch: place.branch, base: 'a'.repeat(40), createdAt: new Date().toISOString(), runs: [], reviews: [], messages: [], sessions: {}, ...extra });
+}
+const cardOf = (extra = {}) => ({ repoId: REPO, id: '0123456789abcdef', title: 'Fix the cart total', column: 'progress', by: 'ana', at: iso(Date.now(), 60000), ...extra });
+
+test('a told session card keeps only its own fields, each cleaned and within its limit', () => {
+  const clean = cleanCard(cardOf({ title: '  Fix \x1b[31mthe\x1b[0m\ncart‮ total\x07  ', by: 'an\x00a\n', path: '/Users/x/app', goal: 'secret words', remote: 'r-1', plan: 't-1' }));
+  assert.deepEqual(clean, { repoId: REPO, id: '0123456789abcdef', title: 'Fix the cart total', column: 'progress', by: 'ana', at: clean.at, plan: 't-1', remote: 'r-1' });
+  assert.deepEqual([cleanCard(cardOf({ title: 'T'.repeat(500) })).title.length, cleanCard(cardOf({ by: 'b'.repeat(500) })).by.length], [TITLE_MAX, NAME_MAX]);
+  assert.equal(cleanCard(cardOf({ by: 7 })).by, null);
+  for (const bad of [{ column: 'todo' }, { column: 'archived' }, { title: '\x1b[2J\x07' }, { repoId: 'abc' }, { id: '../x' }, { id: 5 }, { at: 'yesterday' }]) assert.equal(cleanCard(cardOf(bad)), null, JSON.stringify(bad));
+  assert.deepEqual([cleanCard(cardOf({ plan: '../x' })).plan, cleanCard(cardOf({ remote: 'a b' })).remote], [undefined, undefined]);
+  assert.equal(cleanCards(Array.from({ length: 300 }, (_, n) => cardOf({ id: n.toString(16).padStart(16, '0') }))).length, CARDS_MAX);
+  assert.equal(cleanCards([cardOf(), cardOf({ title: 'Again' })]).length, 1);
+  assert.deepEqual([cleanCards(null), cleanCards({ 0: cardOf() })], [[], []]);
+  // Proofs are for one pair of machines and one first commit.
+  const a = 'a'.repeat(64), b = 'b'.repeat(64), c = 'c'.repeat(64), first = '1'.repeat(40);
+  assert.notEqual(repoProof(a, b, REPO, first), repoProof(b, a, REPO, first)); assert.notEqual(repoProof(a, b, REPO, first), repoProof(a, c, REPO, first)); assert.notEqual(repoProof(a, b, REPO, first), repoProof(a, b, REPO, '2'.repeat(40)));
+  assert.deepEqual(cleanProofs([repoProof(a, b, REPO, first), 'x', 7, repoProof(a, b, REPO, first)]), [repoProof(a, b, REPO, first)]);
+});
+
+test('every session in a repository a teammate proves they have is told them, from a project above its clones, and nothing else is', t => {
+  const crew = makeTeam(t), ana = crew.founder, sara = crew.member, now = Date.now();
+  // Ana: a folder holding a clone of the shop and one of the docs, with sessions in each.
+  const atAna = withHome(ana.home, () => {
+    const repo = folderProject(t), shop = cloneIn(repo, 'shop'), docs = cloneIn(repo, 'docs', { origin: OTHER });
+    session(repo, 1, shop); session(repo, 2, shop, { goal: 'Which tax rate?', state: 'needs_input' }); session(repo, 3, docs, { goal: 'Docs work' });
+    return { repo, shop };
+  });
+  // Sara: her own folder with a clone of Ana's shop (the same first commit), and in another project a clone with the same remote and another history.
+  const atSara = withHome(sara.home, () => { const repo = folderProject(t), shop = cloneIn(repo, 'shop', { from: atAna.shop }); const other = folderProject(t, { name: 'other' }); cloneIn(other, 'shop'); return { repo, shop, other }; });
+  const anaRepos = withHome(ana.home, () => localRepos(now)), saraRepos = withHome(sara.home, () => localRepos(now));
+  assert.deepEqual([...anaRepos.values()].map(row => [row.name, row.roots]).sort(), [['elu-labs/docs', [atAna.repo.root]], ['elu-labs/sample', [atAna.repo.root]]]);
+  assert.equal([...saraRepos.values()].filter(row => row.name === 'elu-labs/sample').length, 2, 'two histories under one remote are two repositories');
+  const rows = withHome(ana.home, () => sessionCards({ me: ana.identity.key, owner: 'ana', repos: anaRepos, now }));
+  assert.deepEqual(rows.map(row => [row.card.title, row.card.column, row.card.by]).sort(), [['Docs work', 'progress', 'ana'], ['Fix the cart total', 'progress', 'ana'], ['Which tax rate?', 'needs', 'ana']]);
+  for (const word of [atAna.repo.root, atAna.shop, 'feat/task']) assert.equal(JSON.stringify(rows.map(row => row.card)).includes(word), false, word);
+  // Told to Sara only for the repository she proved, with her clone of the same history.
+  const proofs = proofsFor(sara.identity.key, ana.identity.key, saraRepos);
+  const told = cardsFor(sara.identity.key, ana.identity.key, rows, anaRepos, proofs);
+  assert.deepEqual(told.map(card => card.title).sort(), ['Fix the cart total', 'Which tax rate?']);
+  assert.deepEqual(cardsFor(sara.identity.key, ana.identity.key, rows, anaRepos, []), [], 'nothing before she proves it');
+  assert.deepEqual(cardsFor(sara.identity.key, ana.identity.key, rows, anaRepos, proofsFor(crew.founder.identity.key, ana.identity.key, saraRepos)), [], 'a proof made for another pair counts for nothing');
+  const otherOnly = new Map([...saraRepos].filter(([, row]) => row.roots.includes(atSara.other.root)));
+  assert.deepEqual(cardsFor(sara.identity.key, ana.identity.key, rows, anaRepos, proofsFor(sara.identity.key, ana.identity.key, otherOnly)), [], 'a clone with another first commit gets nothing');
+  // At Sara's: kept only from Ana's proof, shown in the project of that clone and not in the other.
+  withHome(sara.home, () => {
+    fs.mkdirSync(peerFile(), { recursive: true });
+    fs.writeFileSync(peerFile('state.json'), JSON.stringify({ key: sara.identity.key, running: true, at: new Date().toISOString(), teams: [{ id: crew.teamId, members: [{ key: ana.identity.key, name: 'ana', online: true, box: 'ana-box' }] }] }));
+    saveLocalRepos(saraRepos);
+    saveProofs(ana.identity.key, proofsFor(ana.identity.key, sara.identity.key, anaRepos));
+    const kept = saveCards(ana.identity.key, sara.identity.key, [...told, cardOf({ repoId: rows.find(row => row.card.title === 'Docs work').card.repoId, id: 'ffffffffffffffff', title: 'Docs work' })]);
+    assert.deepEqual(kept.map(card => card.title).sort(), ['Fix the cart total', 'Which tax rate?'], 'a card for a repository Sara does not have is not kept');
+    const board = teammateSessions(atSara.repo.root);
+    assert.deepEqual([board.repos.map(row => row.name), board.people.map(person => [person.name, person.box, person.online, person.sessions.map(card => card.column).sort()])], [['elu-labs/sample'], [['ana', 'ana-box', true, ['needs', 'progress']]]]);
+    assert.deepEqual(teammateSessions(atSara.other.root), { repos: [], people: [] });
+    // Cleaned on the way in.
+    saveCards(ana.identity.key, sara.identity.key, [{ ...told[0], title: `Loud\x1b[2J\x07 ${'x'.repeat(400)}`, by: 'a\x00na' }]);
+    const [loud] = teammateSessions(atSara.repo.root).people[0].sessions;
+    assert.deepEqual([loud.title.length, /[\x00-\x1f]/.test(loud.title), loud.by], [TITLE_MAX, false, 'ana']);
+    // Kept off here: none shown.
+    setBoardOff(atSara.repo.root, true); assert.deepEqual(teammateSessions(atSara.repo.root), { repos: [], people: [] });
+    assert.equal([...localRepos(now).values()].some(row => row.roots.includes(atSara.repo.root)), false, 'and its repositories are proven to nobody');
+    setBoardOff(atSara.repo.root, false);
+  });
+  // Kept off at Ana's: nothing is told.
+  withHome(ana.home, () => { setBoardOff(atAna.repo.root, true); assert.deepEqual(sessionCards({ me: ana.identity.key, owner: 'ana', repos: anaRepos, now }), []); setBoardOff(atAna.repo.root, false); });
+  // Moved to Done on Ana's board: Done for Sara; archived: gone.
+  withHome(ana.home, () => {
+    setDone(atAna.repo, { task: { id: '2' } }, true);
+    let columns = sessionCards({ me: ana.identity.key, owner: 'ana', repos: anaRepos, now: Date.now() + 1000 }).map(row => [row.card.title, row.card.column]);
+    assert.deepEqual(columns.find(row => row[0] === 'Which tax rate?'), ['Which tax rate?', 'done']);
+    closeSession(atAna.repo, '2');
+    assert.equal(sessionCards({ me: ana.identity.key, owner: 'ana', repos: anaRepos, now: Date.now() + 1000 }).some(row => row.card.title === 'Which tax rate?'), false);
+  });
+});
+
+test('who started a session goes with its card, and only the computer of mine that started it is told its id there', t => {
+  const crew = makeTeam(t), ana = crew.founder, sara = crew.member, now = Date.now();
+  withHome(ana.home, () => {
+    const repo = folderProject(t), shop = cloneIn(repo, 'shop');
+    session(repo, 1, shop, { goal: 'Asked by a teammate', origin: { kind: 'handoff', peer: sara.identity.key, name: 'sa\x1bra' } });
+    session(repo, 2, shop, { goal: 'From my laptop', origin: { kind: 'mine', mine: true, machine: sara.identity.key, name: 'laptop', remoteId: '0f0e0d0c-0b0a-4908-8706-050403020100' } });
+    const repos = localRepos(now), rows = sessionCards({ me: ana.identity.key, owner: 'ana', repos, now });
+    assert.deepEqual(rows.map(row => [row.card.title, row.card.by]).sort(), [['Asked by a teammate', 'sara'], ['From my laptop', 'ana']]);
+    const proofs = key => [...repos.values()].map(row => repoProof(key, ana.identity.key, row.repoId, row.commit));
+    const toSara = cardsFor(sara.identity.key, ana.identity.key, rows, repos, proofs(sara.identity.key)), toBob = cardsFor('d'.repeat(64), ana.identity.key, rows, repos, proofs('d'.repeat(64)));
+    assert.equal(toSara.find(card => card.title === 'From my laptop').remote, '0f0e0d0c-0b0a-4908-8706-050403020100');
+    assert.equal(toBob.find(card => card.title === 'From my laptop').remote, undefined);
+  });
+});
+
+test('a card\'s title leaves without a secret or a path, and its id says nothing about the folder or the session', t => {
+  const crew = makeTeam(t), ana = crew.founder, sara = crew.member, now = Date.now();
+  // Built here so no token is written in the repository.
+  const token = `ghp_${'A1b2'.repeat(9)}`, home = os.homedir();
+  withHome(ana.home, () => {
+    const repo = folderProject(t), shop = cloneIn(repo, 'shop');
+    session(repo, 1, shop, { goal: `Rotate ${token} used by /Users/me/clients/demo/deploy.sh and ~/notes/keys.txt\nMore words` });
+    session(repo, 2, shop, { goal: `Fix /Users/me/clients/demo/deploy.sh, ~/notes/keys.txt and ${home}/work/app\nMore words` });
+    session(repo, 3, shop, { goal: 'Check the password: hunter22 login' });
+    const repos = localRepos(now), rows = sessionCards({ owner: 'ana', repos, now });
+    const proofs = [...repos.values()].map(row => repoProof(sara.identity.key, ana.identity.key, row.repoId, row.commit));
+    const told = cardsFor(sara.identity.key, ana.identity.key, rows, repos, proofs);
+    assert.deepEqual(told.map(card => card.title).sort(), ['Check the [redacted] login', 'Fix [path], [path] and [path]', 'Session']);
+    for (const text of [JSON.stringify(rows), JSON.stringify(told)]) for (const word of [token, 'ghp_', '/Users/me', 'clients/demo', 'deploy.sh', '~/notes', 'keys.txt', home, 'hunter22', repo.root]) assert.equal(text.includes(word), false, word);
+    // The id is the same on every telling, made with a secret only this machine keeps.
+    const again = sessionCards({ owner: 'ana', repos, now });
+    assert.deepEqual(again.map(row => row.card.id), rows.map(row => row.card.id));
+    const secret = peerFile('card-secret');
+    assert.equal(fs.statSync(secret).mode & 0o777, 0o600); assert.match(fs.readFileSync(secret, 'utf8'), /^[0-9a-f]{64}$/);
+    for (const id of ['1', '2', '3']) for (const guess of [hash(`${ana.identity.key}\0${repo.root}\0${id}`), hash(`\0${repo.root}\0${id}`)]) assert.equal(rows.some(row => row.card.id === guess.slice(0, 16)), false);
+  });
+});
+
+test('a session waiting for its owner to approve a Task is in Needs you on a teammate\'s board, as on the owner\'s own', t => {
+  const crew = makeTeam(t), ana = crew.founder, now = Date.now();
+  withHome(ana.home, () => {
+    // Conversations work in the project's own folder, here the repository itself.
+    const app = registeredProject(t, { origin: ORIGIN }), repo = projectFolder(app.root);
+    const talk = (id, goal) => saveTask(repo, { id: String(id), kind: 'conversation', goal, state: 'answered', worktree: repo.project ?? repo.root, base: null, branch: null, createdAt: new Date().toISOString(), runs: [], reviews: [], responses: [], messages: [], sessions: {} });
+    talk(1, 'Plan the export'); talk(2, 'Where is the export?');
+    writePlans(app.root, 1, [plan({ session: '1', state: 'proposed', approvedAt: null })]);
+    const rows = sessionCards({ owner: 'ana', repos: localRepos(now), now });
+    assert.deepEqual(rows.map(row => [row.card.title, row.card.column]).sort(), [['Plan the export', 'needs'], ['Where is the export?', 'done']]);
+  });
+});
+
+test('a conversation in a folder above its clones is told from its first message, while it asks and while its Task waits, in the project\'s main repository or the one its Task names', t => {
+  const crew = makeTeam(t), ana = crew.founder, sara = crew.member, now = Date.now();
+  const origin = name => `https://github.com/elu-labs/${name}.git`;
+  withHome(ana.home, () => {
+    const talk = (repo, id, goal, extra = {}) => saveTask(repo, { id: String(id), kind: 'conversation', goal, state: 'running', worktree: repo.root, base: null, branch: null, createdAt: iso(now, 600000 - id * 1000), runs: [], reviews: [], responses: [], messages: [], sessions: {}, ...extra });
+    const plans = (repo, id, tasks) => { const folder = path.join(repo.state, 'tasks', String(id)); fs.mkdirSync(folder, { recursive: true }); fs.writeFileSync(path.join(folder, 'plan.json'), JSON.stringify({ version: 1, tasks })); };
+    const waits = (id, repository) => plan({ id: `t-0000000${id}`, session: String(id), state: 'proposed', approvedAt: null, edit: { repository, bot: null, request: 'rename it', started: false } });
+    // One clone in the folder; several, one named as the folder; several, none named.
+    const one = folderProject(t, { name: 'one' }); cloneIn(one, 'shop', { origin: origin('shop') });
+    const many = folderProject(t, { name: 'many' }); const manyShop = cloneIn(many, 'shop', { origin: origin('shop-two') }); cloneIn(many, 'Many', { origin: origin('many') });
+    const none = folderProject(t, { name: 'none' }); cloneIn(none, 'a', { origin: origin('a') }); cloneIn(none, 'b', { origin: origin('b') });
+    talk(one, 1, 'Plan the export'); talk(one, 2, 'Which tax rate?', { state: 'needs_input' }); talk(one, 3, 'Rename the cart', { state: 'answered' }); plans(one, 3, [waits(3, '/no/such/folder')]);
+    talk(many, 1, 'Many export');
+    talk(none, 1, 'Nowhere yet');
+    const repos = localRepos(now), nameOf = key => repos.get(key).name;
+    const told = () => sessionCards({ owner: 'ana', repos, now: Date.now() }).map(row => [row.card.title, row.card.column, nameOf(row.repo)]).sort();
+    assert.deepEqual(told(), [['Many export', 'progress', 'elu-labs/many'], ['Plan the export', 'progress', 'elu-labs/shop'], ['Rename the cart', 'needs', 'elu-labs/shop'], ['Which tax rate?', 'needs', 'elu-labs/shop']]);
+    // Sent to a teammate who proves the repository.
+    const rows = sessionCards({ owner: 'ana', repos, now }), proofs = [...repos.values()].map(row => repoProof(sara.identity.key, ana.identity.key, row.repoId, row.commit));
+    assert.deepEqual(cardsFor(sara.identity.key, ana.identity.key, rows, repos, proofs).map(card => card.title).sort(), ['Many export', 'Plan the export', 'Rename the cart', 'Which tax rate?']);
+    // The most recent session that has a repository makes it the project's main one.
+    session(many, 2, manyShop, { goal: 'Shop work' });
+    assert.deepEqual(told().filter(row => ['Many export', 'Shop work'].includes(row[0])), [['Many export', 'progress', 'elu-labs/shop-two'], ['Shop work', 'progress', 'elu-labs/shop-two']]);
+    // A Task that names a repository puts its session there, before any edit; the others go with the newest such session.
+    talk(none, 2, 'Fix b', { state: 'answered', createdAt: iso(now, 1000) }); plans(none, 2, [waits(2, 'b')]);
+    talk(none, 3, 'Fix a', { state: 'answered', createdAt: iso(now, 5000) }); plans(none, 3, [waits(3, path.join(none.root, 'a'))]);
+    assert.deepEqual(told().filter(row => ['Fix a', 'Fix b', 'Nowhere yet'].includes(row[0])), [['Fix a', 'needs', 'elu-labs/a'], ['Fix b', 'needs', 'elu-labs/b'], ['Nowhere yet', 'progress', 'elu-labs/b']]);
+  });
+});
+
+test('a session a teammate\'s message started keeps what was asked and who asked to the teams that message came through', t => {
+  const crew = makeTeam(t), ana = crew.founder, sara = crew.member, now = Date.now();
+  const carl = withHome(newHome(t), () => createIdentity({ name: 'carl' }));
+  withHome(ana.home, () => {
+    // Ana is on core with Sara and on side with Carl; Sara and Carl share no team.
+    const side = createTeam(ana.identity, 'side').id;
+    redeemCode(createInvite(ana.identity, side, { hours: 1 }), carl.key, 'carl');
+    const repo = folderProject(t), shop = cloneIn(repo, 'shop');
+    session(repo, 1, shop, { goal: 'Move the coupon check', origin: { kind: 'handoff', peer: sara.identity.key, name: 'sara', teams: [crew.teamId] } });
+    session(repo, 2, shop, { goal: 'Rename the cart', origin: { kind: 'handoff', peer: carl.key, name: 'carl' } });
+    session(repo, 3, shop, { goal: 'My own work' });
+    const repos = localRepos(now), rows = sessionCards({ owner: 'ana', repos, now });
+    const proofs = key => [...repos.values()].map(row => repoProof(key, ana.identity.key, row.repoId, row.commit));
+    const seen = key => cardsFor(key, ana.identity.key, rows, repos, proofs(key)).map(card => [card.title, card.by]).sort();
+    assert.deepEqual(seen(sara.identity.key), [['Move the coupon check', 'sara'], ['My own work', 'ana'], ['Session', 'teammate']]);
+    assert.deepEqual(seen(carl.key), [['My own work', 'ana'], ['Rename the cart', 'carl'], ['Session', 'teammate']]);
+    // The teams named on the session count, not every team its sender is on.
+    assert.deepEqual(cardsFor(carl.key, ana.identity.key, rows, repos, proofs(carl.key), [crew.teamId]).map(card => card.title).sort(), ['Move the coupon check', 'My own work', 'Rename the cart']);
+    const withheld = cardsFor(carl.key, ana.identity.key, rows, repos, proofs(carl.key)).find(card => card.title === 'Session');
+    assert.deepEqual(Object.keys(withheld), ['repoId', 'id', 'title', 'column', 'by', 'at']);
   });
 });
