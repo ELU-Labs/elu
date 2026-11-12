@@ -2113,9 +2113,8 @@ test('/schedule offers times in the command list, saves a time and message typed
   assert.equal(pendingRequests(p.root).length, 0, 'nothing runs now');
   // A time and a message typed together are saved at once; the message keeps its apostrophes.
   await send(v, "/schedule daily 9:00 triage new issues, don't close any");
-  await until(() => saved("triage new issues, don't close any")?.when.label === 'daily 9:00', 'daily saved');
+  await until(() => saved("triage new issues, don't close any")?.when.label === 'daily 9:00' && /^› Scheduled daily 9:00/.test(status()) && v.current.session === 'new', 'daily saved, and the form beside the list again');
   // The form it is typed in keeps what it holds: a bot added there goes with the schedule.
-  await send(v, '/new'); await until(() => v.current.session === 'new', 'the form');
   await send(v, '/bots add qa'); await until(() => /Bots\s+@reviewer @qa/.test(composeText(v)), 'qa in the form');
   await send(v, '/schedule every 2h'); await until(() => /Runs every 2h, next .+\. Write the message below\./.test(status()), 'the time is set and the message is next');
   assert.match(composeText(v), /When\s+every 2h/); assert.match(panels.ask._label.getText(), /Schedule → Opus · every 2h · sample app · with @reviewer @qa/);
