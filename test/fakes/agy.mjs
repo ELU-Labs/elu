@@ -98,6 +98,8 @@ async function headless() {
   if (conversation && !fs.existsSync(dir)) { console.error(`conversation not found: ${conversation}`); process.exit(1); }
   fs.mkdirSync(dir, { recursive: true });
   const schema = flag('--json-schema') ? readJson(flag('--json-schema')) : null;
+  // slow: prints nothing for half a minute first, as a headless run does while it works.
+  if (cfg.mode === 'slow') await new Promise(resolve => setTimeout(resolve, 30000));
   const result = await turn(text, { cwd, skip: args.includes('--dangerously-skip-permissions'), sandbox: args.includes('--sandbox'), ask: null, dir });
   if (schema?.properties?.intent) { result.intent = 'answer'; if (schema.properties.repository) result.repository = ''; }
   if (cfg.name !== undefined && schema?.properties?.name) result.name = cfg.name;
