@@ -148,8 +148,26 @@ test('elu update installs the newer version where elu is and says so; when curre
   assert.deepEqual(s.calls, []);
   // A failed install says how to update by hand.
   const failed = await runUpdate({ home: s.home, npm: ['npm'], apps: () => 0, run: (npm, args) => args[0] === 'prefix' ? { status: 0, stdout: `${s.prefix}\n`, stderr: '' } : { status: 1, stdout: '', stderr: 'npm error code EACCES\n' }, env: { HOME: s.home, PATH: `${path.join(s.prefix, 'bin')}:/usr/bin`, ...env } });
-  assert.deepEqual([failed.success, failed.message], [false, 'The update did not work (code EACCES). To update by hand: npm install --global @elu-labs/elu@3.4.0']);
+  assert.deepEqual([failed.success, failed.message], [false, 'The update did not work (code EACCES). To update by hand: npm install --global --ignore-scripts @elu-labs/elu@3.4.0']);
   assert.equal(JSON.parse(fs.readFileSync(path.join(s.root, 'package.json'), 'utf8')).version, '3.3.0');
+});
+
+test('the line to update by hand installs under ~/.local when elu is there, after npm fails or when npm is missing', async t => {
+  personal(t);
+  const dir = temp(t), home = path.join(dir, 'home'), npmGlobal = path.join(dir, 'global'), empty = path.join(dir, 'empty'); fs.mkdirSync(empty);
+  place(path.join(home, '.local'), { version: '3.2.1' });
+  const calls = [], run = (npm, args) => { calls.push(args); return args[0] === 'prefix' ? { status: 0, stdout: `${npmGlobal}\n`, stderr: '' } : { status: 1, stdout: '', stderr: 'npm error code ETIMEDOUT\n' }; };
+  const update = options => runUpdate({ home, run, latest: async () => '3.4.0', apps: () => 0, env: { HOME: home, PATH: empty }, ...options });
+  const line = `npm install --global --prefix ${path.join(home, '.local')} --ignore-scripts @elu-labs/elu@3.4.0`;
+  const failed = await update({ npm: ['npm'] });
+  assert.deepEqual(calls, [['prefix', '--global'], line.split(' ').slice(1)]);
+  assert.deepEqual([failed.success, failed.message], [false, `The update did not work (code ETIMEDOUT). To update by hand: ${line}`]);
+  const missing = await update({ npm: null });
+  assert.deepEqual([missing.success, missing.message], [false, `npm was not found. To update by hand: ${line}`]);
+  assert.equal(calls.length, 2);
+  // With no installed command to go by, the line is npm's own.
+  fs.rmSync(path.join(home, '.local'), { recursive: true });
+  assert.equal((await update({ npm: null })).message, 'npm was not found. To update by hand: npm install --global --ignore-scripts @elu-labs/elu@3.4.0');
 });
 
 test('elu update from the command line asks the registry and prints one line', async t => {
