@@ -21,7 +21,7 @@ import { savePeerPolicy, savePeerSettings } from '../lib/peer/settings.mjs';
 import { createIdentity } from '../lib/peer/identity.mjs';
 import { createTeam, teams as everyTeam } from '../lib/peer/roster.mjs';
 import { createInvite, redeemCode } from '../lib/peer/invite.mjs';
-import { share as shareWith, shares } from '../lib/peer/shares.mjs';
+import { share as shareWith, shares, unshare } from '../lib/peer/shares.mjs';
 import { saveRemotePlans } from '../lib/peer/plans.mjs';
 import { saveBot } from '../lib/bots.mjs';
 // Shared with every team on the machine, as /share does.
@@ -417,7 +417,7 @@ test('a peer run cannot read Git metadata, untracked, ignored or sensitive files
 test('the owner\'s lead and bots are told what teammates are working on in the project, and a teammate\'s question is not', async t => {
   const p = setup(t, 'answer'); git(p.root, ['remote', 'add', 'origin', 'https://github.com/elu-labs/sample.git']);
   const { me } = teammate(p);
-  savePeerSettings({ enabled: true }); saveBot({ name: 'scout', vendor: 'claude', model: 'opus', effort: 'high', instructions: 'Look for risky changes.' });
+  saveBot({ name: 'scout', vendor: 'claude', model: 'opus', effort: 'high', instructions: 'Look for risky changes.' });
   fs.writeFileSync(peerFile('state.json'), JSON.stringify({ running: true, at: new Date().toISOString(), key: me.key, teams: [{ id: 'team', members: [{ key: me.key, online: true }, { key: SARA, online: true }] }] }));
   const repoId = shares().find(row => row.root === p.root).repoId, at = new Date().toISOString(); assert.match(repoId, /^[0-9a-f]{64}$/);
   // What Sara's machine told this one: a Task in this project, with text that reads like an order.
@@ -433,9 +433,9 @@ test('the owner\'s lead and bots are told what teammates are working on in the p
   for (const input of [...lead, ...scout]) { assert.match(input, BLOCK); assert.equal(input.includes('DESCRIPTION-NOT-GIVEN'), false); }
   // A teammate's question running here is given nothing about anyone's Tasks.
   assert.equal(question[0].includes('Rework coupon parsing'), false); assert.equal(question[0].includes('What teammates are working on'), false);
-  // With peer mode off, the owner's own turn is given none either.
-  savePeerSettings({ enabled: false });
+  // Once the project is no longer shared, the owner's own turn is given none either.
+  unshare(shares().find(row => row.root === p.root).handle);
   const later = enqueue(p.root, 'And where are the tests?');
-  await until(() => request(p.root, later.id)?.state === 'done', 'the turn with peer mode off');
+  await until(() => request(p.root, later.id)?.state === 'done', 'the turn after the share ended');
   assert.equal(given('And where are the tests?')[0].includes('Rework coupon parsing'), false);
 });

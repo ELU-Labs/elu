@@ -39,7 +39,16 @@ channels    team: pairwise A2A tasks + status notifications
 conductor   peer daemon <-> conductor through files only (requests, outbox, commands)
 ```
 
-There is no ELU server anywhere. Defaults that touch third parties:
+There is no ELU server anywhere, and no on or off. The daemon runs while this machine is an active member of at least one team:
+
+- Nothing starts on a machine that never made or joined a team, and it makes no peer connection.
+- `/invite`, `elu team create` and `elu invite` start it once the team exists; `/join` and `elu join` start it for the join, through a `join` command it reads when it starts. The app starts it when it opens on a machine on a team, and again within a minute when it stops. It is a detached process, so it keeps running when the app closes.
+- `/leave` and `elu team leave` take this machine off a team. Leaving the last one, or hearing that an admin removed this machine from it (`/remove`, `elu team remove`), stops the daemon at once. Otherwise, with no team, no join and no command under way for 60 seconds (a join that failed, say), it stops by itself. `peer --daemon` started with no team and no command waiting, by a login service say, exits before it connects.
+- A daemon of another version left running on a machine on no team (0.1.5 started one before a join, which may have failed) is stopped when the app opens, and by `elu peers` and the `elu` commands that need a team.
+- `elu peer uninstall` and `elu uninstall` stop it, but only until the app opens or an `elu` peer command runs while the machine is still on a team.
+- An `enabled` field in `settings.json`, written by 0.1.5 and earlier, is ignored.
+
+Defaults that touch third parties:
 
 - the HyperDHT bootstrap nodes. HyperDHT's own public nodes are used unless `bootstrap` in `peer/settings.json` names others; the routing table is cached after the first join.
 - other HyperDHT nodes. Announcing the key and dialling a teammate send requests to DHT nodes that anyone may run, and they see this machine's IP address and port.
@@ -203,9 +212,10 @@ Over a limit, the message is not sent, it stays in the message box, and one line
   - Limits: 50 channels per team, and 200 channel ops per signer. An op past a limit is not applied.
   - A channel op syncs like every other op, so the people added get the channel from any teammate.
   - A teammate on an older build refuses the op and sees no channels.
-- **Leaving and removing.** `/leave` or `elu team leave` appends the member's `leave`; `/remove @name` or `elu team remove NAME` appends an admin's `remove`. With the daemon running, the op is pushed at once to every teammate online, the one removed included, before their connections close (it waits up to 5 s for them). The machine that left drops the team from Chats and forgets which of its projects was that team's, so coming back shares nothing until the owner shares again.
+- **Leaving and removing.** `/leave` or `elu team leave` appends the member's `leave`; `/remove @name` or `elu team remove NAME` appends an admin's `remove`. The founder cannot leave and cannot be removed. Both go through the daemon, which is started for it when it is not running; a daemon started for it first waits, until 10 s after its start, for the team's teammates to connect. The op is then pushed at once to every teammate online, the one removed included, before their connections close (it waits up to 5 s for them). The machine that left drops the team from Chats and forgets which of its projects was that team's, so coming back shares nothing until the owner shares again.
   - A machine that was offline gets the op on its next connection. Its hello still lists the team as shared, while the other side's log shows one of them out: that connection serves nothing but an invite exchange; the side that has the op pushes the ops the other lacks up to that exit (as in sync, never an op that sorts after it), and the connection closes once the other side has it, or after 30 s. Sync applies the same cap on any connection, for a team where one of the two is out.
-  - With the daemon off, the op is written to the log and goes out the same way once peer mode is on.
+  - A machine on no team after its leave, or after it hears it was removed, stops its daemon at once.
+  - Without the networking packages the op is written to the log here. A remove goes out the same way once the daemon runs; a leave from the last team reaches nobody from this machine.
 - **Sync.**
   - On every connection, each side compares `{seq, head}`, where head is the sha256 of the sorted op ids.
   - The side with ops the other lacks pushes them with `elu.roster.push`. The receiver validates every op and drops invalid ones.
@@ -230,7 +240,7 @@ Over a limit, the message is not sent, it stays in the message box, and one line
   - **Who answered.** The inviter's proof shows only that the other side knows the code. Anyone the code reached, and anyone with a copy of the inviter's `invites.json`, could answer as the inviter with a team of their own. So a join shares nothing of the joiner's: the joiner shares a project only with `/share` or `elu share`, and `elu peers` shows the fingerprint of every member.
   - **Long codes from 0.1.3 and earlier** still join: `elu-team:v1:` + base32 of `{teamId, inviter key, secret(32), expiresAt}`. The joiner dials the inviter's key and calls `elu.join {teamId, secret, name}`; the inviter checks `sha256(secret)` against a row that has no `topic`. A short invite is never redeemed through `elu.join`.
   - The inviter must be online for the join. Until it, neither hello names the team, since the joiner is not on it.
-  - **The daemon's version.** `state.json` carries the daemon's package version. A daemon keeps the code it started with, so before inviting, joining or turning peer mode on, the app and CLI restart one whose version is not their own (0.1.3 and earlier write none): a shutdown sent while peer mode is off, then this copy's daemon. If it does not stop within 10 seconds, they refuse and say to run `elu peer off`, then `elu peer on`.
+  - **The daemon's version.** `state.json` carries the daemon's package version. A daemon keeps the code it started with, so when the app opens and before inviting or joining, the app and CLI restart one whose version is not their own (0.1.3 and earlier write none): a shutdown, with `enabled: false` written to `settings.json` for daemons from 0.1.5 and earlier, which honour a shutdown only then, then this copy's daemon. If it does not stop within 10 seconds, they refuse and say to try again.
 
 ## Status
 
@@ -262,7 +272,7 @@ A Task is a session's approved plan: what the owner agreed the model should do. 
 - **Receiving.** Every field is checked against the same lists and limits, control characters and terminal escapes are removed, unknown fields are dropped, and a Task that fails a check is dropped. The list is kept whole in `peer/plans/<key>.json` (mode 0600), at most 30 Tasks per teammate across all projects. At most 20 of one teammate's Tasks are shown in one project.
 - **Where it counts.** A teammate's Tasks are used only in a project this machine also shares with a team that teammate is on. Tasks named for any other project are kept and never shown or used.
 - **On the board.** In that project the Kanban tab shows a section under its four columns, `Teammates' Tasks N · read-only`: a row with each teammate's name and whether they are online, then one row for each of their Tasks with its title, priority · severity, state, subtasks done, who works on it, and how long ago it changed. Enter opens the whole Task to read. No key changes a teammate's Task or makes a card of it. A shared project with no `origin` remote shows one line there instead: its Tasks are not shown to teammates.
-- **For the models.** Each turn of the owner's own lead, and of a bot, in that project is given a block headed "What teammates are working on in this project". One line of ours says it is information to avoid doing the same work twice, never a request. Each teammate's Tasks follow inside a peer-data block, the kind used for any teammate's text: title, state, subtasks done, priority, severity, who works on it, and the goal cut to 300 characters. No description. At most 8 teammates, 6 Tasks each and 6000 characters in all. A teammate's question running on this machine is given none of it, and neither is a reviewer. With peer mode off nobody is.
+- **For the models.** Each turn of the owner's own lead, and of a bot, in that project is given a block headed "What teammates are working on in this project". One line of ours says it is information to avoid doing the same work twice, never a request. Each teammate's Tasks follow inside a peer-data block, the kind used for any teammate's text: title, state, subtasks done, priority, severity, who works on it, and the goal cut to 300 characters. No description. At most 8 teammates, 6 Tasks each and 6000 characters in all. A teammate's question running on this machine is given none of it, and neither is a reviewer. On no team nobody is.
 - **Ageing.** A teammate who is offline keeps their Tasks, marked as last heard, for 48 hours after they were last connected. They are deleted at once when that person is no longer on a team with this machine. A finished Task leaves 24 hours after it was done.
 - **Older builds.** A machine says `plans: true` in its `elu.hello` when it reads Tasks. One that does not say so is sent no `elu.plans`, and sends none.
 

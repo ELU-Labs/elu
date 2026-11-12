@@ -99,6 +99,26 @@ me ELU Code names that folder itself where its path is short enough for Claude C
 use: a private one under your cache folder, or in your runtime folder where that path is
 too long, made for the run and removed when it ends (`docs/vendors/claude.md`).
 
+## When ELU Code connects to teammates
+
+ELU Code makes no peer connection until this machine makes a team or tries to join one
+with a code. Someone who never invites anyone and never joins a team starts no peer daemon
+and connects to nothing. A join starts the daemon for the join: it announces this machine's
+key on HyperDHT and looks for the inviter, and when the join fails it stops again within
+about two minutes. Once the machine makes a team (`/invite`, `elu team create`,
+`elu invite`) or joins one (`/join`, `elu join`), the peer daemon runs in the background,
+also while ELU Code is closed, so teammates can reach it: it announces this machine's key on
+HyperDHT and connects to its teammates
+([docs/peer-network.md](docs/peer-network.md#layers)).
+
+There is no switch to turn it off while you stay on a team. To take this machine offline,
+leave each team (`/leave` or `elu team leave`); once the machine is on no team, the daemon
+stops. It stops too when an admin removes this machine from its last team. The person who
+made a team cannot leave it, so their machine stays reachable while they keep the team.
+`elu peer uninstall` stops the daemon and removes its login item, and `elu uninstall` stops
+it too, but only until ELU Code next opens or an `elu` peer command runs while the machine
+is still on a team.
+
 ## What teammates are told
 
 A project is shared with `elu share` or `/share`, and also when a teammate is added:

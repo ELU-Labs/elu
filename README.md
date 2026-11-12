@@ -189,14 +189,18 @@ the two connect directly over Hyperswarm.
 # on your computer
 elu id --name sam        # once: your name on the team
 elu team create shop
-elu peer on
 elu invite               # prints a code like k7qm-x2pd-9fhw; it works once, within 24 hours
 
 # on your teammate's computer, in the project you may ask about
 elu id --name kim
-elu peer on
 elu join CODE            # joins their team, to ask about their project
 ```
+
+There is nothing to turn on. Once your computer is on a team, a background process (the
+peer daemon) keeps it reachable by your teammates, also while ELU Code is closed. Until you
+invite someone or join a team, nothing starts and nothing connects. There is no off switch
+while you stay on a team: `/leave` (or `elu team leave`) takes you off one, and once you are
+on no team the daemon stops. The person who made a team cannot leave it.
 
 `elu peers` shows who is online. In the app, write to a teammate in the Chats tab, or
 type `@kim where are the tax rates?` in any session. A teammate's question is answered
@@ -217,7 +221,8 @@ its path, and it goes with the message: up to 4 pictures, 8 MB each. Your teamma
 sees them when it answers.
 
 `/leave` (or `elu team leave`) takes you off a team. An admin's `/remove @kim` (or
-`elu team remove kim`) takes kim off it. Either way, a new invite brings them back.
+`elu team remove kim`) takes kim off it, and kim's daemon stops when kim is on no other
+team. Either way, a new invite brings them back.
 
 In a channel, `/invite @kim` adds a teammate you already have. `/invite` alone makes a
 code for someone new; the first time, it also makes your team, named after the open project.
@@ -270,9 +275,7 @@ your account suspended or terminated. ELU Code wraps `agy`, so read
 npx -y @elu-labs/elu@latest
 ```
 
-That installs the newest version where `elu` already is, and opens it. If peer mode is on,
-restart it so it runs the new version: `elu peer off`, wait until `elu peer status` says
-the daemon is stopped, then `elu peer on`.
+That installs the newest version where `elu` already is, and opens it.
 
 To remove ELU Code, first delete your schedules in the app (Sessions tab, under Scheduled:
 `x` on each one), so they no longer keep the Mac awake, and quit it with `/quit`.
@@ -287,8 +290,7 @@ and delete `elu-code-scheduler.service` and `elu-code-scheduler.timer` in
 Stop what still runs in the background:
 
 ```sh
-elu peer off                # if peer mode is on
-elu peer uninstall          # if you made the peer daemon start at login
+elu peer uninstall          # stops the peer daemon and removes its login item
 elu conductor stop          # stops sessions that are still running
 ```
 

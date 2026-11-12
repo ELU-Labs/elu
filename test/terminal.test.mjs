@@ -1261,7 +1261,7 @@ test('a new session opens beside the list; mouse and keys move between Sessions,
   click(v, panels.chat, 4, 1); await until(() => focused() === panels.chat, 'a click in the right pane focuses it');
   assert.equal(v.current.session, id); assert.match(panels.keys.getText(), /↑↓ scroll {2}esc sessions {2}i type/);
   click(v, panels.tabs[3]); await until(() => v.current.view === 'chats', 'mouse opens Chats');
-  // With no peer mode there is nothing in Chats to focus, so its tab keeps the focus.
+  // On no team there is nothing in Chats to focus, so its tab keeps the focus.
   assert.equal(v.current.screen.focused, panels.tabs[3]); assert.equal(panels.tabs[3].style.bold, true);
   click(v, panels.tabs[0]); await until(() => v.current.view === 'tasks' && v.current.session === id && row.test(cursor(v)), 'mouse returns to Sessions, on the same session');
   await openTask(v, row);
@@ -2265,13 +2265,13 @@ function fakePeer({ items = [], trusted = [], results = {} } = {}) {
   const member = (key, name) => ({ key, fingerprint: key.slice(0, 8), name, role: key === KEYS.me ? 'admin' : 'member', online: true, path: key === KEYS.me ? null : 'direct', lastSeen: ago(0) });
   const facade = {
     sent,
-    peerSettings: () => ({ enabled: true }),
+    onTeam: () => true,
     peerPolicy: key => ({ trusted: trust.has(key) }),
     peerStatus: () => ({ running: true, pid: 1, key: KEYS.me, name: 'ana', fingerprint: 'aaaaaaaa', error: null, counters: { direct: 1, relayed: 0, failed: 0 }, teams: [{ id: 'team-1', name: 'Core', role: 'admin', members: [member(KEYS.me, 'ana'), member(KEYS.sara, 'sara'), member(KEYS.li, 'li')] }] }),
     peerItems: () => items, teamAgents: () => [], tickerEvents: () => [],
     sendPeerCommand: command => { sent.push(command); facade.last = command; return { id: `command-${sent.length}` }; },
     awaitCommand: async () => results[facade.last.type]?.(facade.last) ?? {},
-    startPeer: () => ({ running: true }), stopPeer: () => ({ running: false }),
+    startPeer: () => true,
   };
   return facade;
 }
