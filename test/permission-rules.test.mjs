@@ -104,7 +104,7 @@ test('defaults are on from the first run, listed, and each can be turned off and
   const { project } = home(t);
   const ctx = { project, cwd: project, saved: false, sandboxed: true };
   assert.deepEqual(DEFAULTS.map(row => row.id), ['read', 'git-read', 'checks']);
-  assert.deepEqual(listEntries().map(entryLine), ['1. on   Read and search files in the project (default, all projects)', '2. on   Git read commands: status, diff, log, show, branch, blame (default, all projects)', "3. on   The project's own test, lint, typecheck, format and build scripts, inside the sandbox (default, all projects)"]);
+  assert.deepEqual(listEntries().map(entryLine), ['1. on   Read and search files in the project (default, all projects)', '2. on   Git read commands: status, diff, log, show, branch, blame, inside the sandbox (default, all projects)', "3. on   The project's own test, lint, typecheck, format and build scripts, inside the sandbox (default, all projects)"]);
   // Reading and searching in the project.
   for (const command of ['ls', 'ls -la src', 'cat package.json', 'grep -rn todo src', 'rg needle', 'find . -name "*.js"', `cat ${path.join(project, 'package.json')}`, 'wc -l src/a.js | tail -1']) assert.equal(allowedBy(...bash(command), ctx)?.by, 'default', command);
   assert.equal(allowedBy('Read', { file_path: path.join(project, 'a.js') }, ctx)?.by, 'default');
@@ -117,11 +117,11 @@ test('defaults are on from the first run, listed, and each can be turned off and
   for (const command of ['npm test', 'npm run lint', 'npm run build:web', 'npm test -- --watch', 'make test', 'node --test']) assert.equal(allowedBy(...bash(command), ctx)?.by, 'default', command);
   for (const command of ['npm run deploy', 'npm run nope', 'make install', 'npm install', 'npx eslint .', 'cargo test', 'pytest', 'yarn deploy']) assert.equal(allowedBy(...bash(command), ctx), null, command);
   assert.equal(allowedBy(...bash('npm test', { dangerouslyDisableSandbox: true }), ctx), null, 'leaving the sandbox is asked');
-  assert.equal(allowedBy(...bash('git status', { dangerouslyDisableSandbox: true }), ctx)?.by, 'default', 'a git read is a read in or out of the sandbox');
+  assert.equal(allowedBy(...bash('git status', { dangerouslyDisableSandbox: true }), ctx), null, 'a git read that leaves the sandbox asks');
   // Off, a default answers nothing; on again, it does.
-  assert.equal(removeEntry(2), 'Turned off: Git read commands: status, diff, log, show, branch, blame.');
+  assert.equal(removeEntry(2), 'Turned off: Git read commands: status, diff, log, show, branch, blame, inside the sandbox.');
   assert.equal(allowedBy(...bash('git status'), ctx), null); assert.equal(listEntries()[1].on, false);
-  assert.equal(turnOnEntry(2), 'Turned on: Git read commands: status, diff, log, show, branch, blame.');
+  assert.equal(turnOnEntry(2), 'Turned on: Git read commands: status, diff, log, show, branch, blame, inside the sandbox.');
   assert.equal(allowedBy(...bash('git status'), ctx)?.by, 'default');
   assert.throws(() => turnOnEntry(9), /Only a default/); assert.throws(() => removeEntry(9), /No rule has that number/);
   // An unreadable file answers nothing, defaults included, and nothing is saved over it.
@@ -202,6 +202,21 @@ test('a kept rule never reaches a secret, ELU Code\'s state or a git option that
   saveRule(rule('cat /etc/hosts', { cwd: project }).rule, { scope: 'all' });
   assert.equal(allowedBy(...bash('cat /etc/hosts'), ctx)?.by, 'rule');
   assert.equal(allowedBy(...bash('cat ~/.ssh/id_ed25519'), ctx), null, 'cat kept once reads nothing else');
+});
+
+test('the read and git defaults answer a command only inside the sandbox, and never one that runs a program or writes a file', t => {
+  const { project } = home(t);
+  const inside = { project, cwd: project, saved: false, sandboxed: true };
+  for (const command of ['cat package.json', 'git status', 'rg needle', 'git log -3']) {
+    assert.equal(allowedBy(...bash(command), inside)?.by, 'default', command);
+    assert.equal(allowedBy(...bash(command, { dangerouslyDisableSandbox: true }), inside), null, `${command} outside the sandbox`);
+    assert.equal(allowedBy(...bash(command), { ...inside, sandboxed: false }), null, `${command} with no sandbox`);
+    assert.equal(allowedBy('execute', { command }, { project, cwd: project, saved: false }), null, `${command} over ACP`);
+  }
+  for (const command of ['rg --hostname-bin=./x --hyperlink-format=default --color=always foo', 'rg --hostname-bin ./x foo', 'rg --pre=./x foo', 'rg --pre-glob "*" foo', 'tree -o src/index.js .', 'tree --output src/x', 'tree -aR', 'tree -H . -o x', 'file -C -m x', 'file --compile x', 'find . -fprint out'])
+    assert.equal(allowedBy(...bash(command), inside), null, command);
+  // A read with the file tools in the project stays a default on every vendor.
+  assert.equal(allowedBy('read_file', { path: path.join(project, 'package.json') }, { project, cwd: project, saved: false })?.by, 'default');
 });
 
 test('every vendor\'s way of asking is read the same', () => {

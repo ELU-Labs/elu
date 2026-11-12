@@ -203,9 +203,12 @@ Rules are kept in your personal directory (`permission-rules.json`), never in th
 
 These are on from the first run and apply in every mode:
 
-1. Read and search files in the project: `ls`, `cat`, `grep`, `rg`, `find` without
-   `-exec` or `-delete`, and the like, on paths inside the project that are not secrets.
+1. Read and search files in the project: the vendor's file tools, and commands such as `ls`,
+   `cat`, `grep`, `rg` and `find` without `-exec` or `-delete`, on paths inside the project
+   that are not secrets. A command only inside the sandbox, and never with an option that
+   runs a program or writes a file (`rg --pre` or `--hostname-bin`, `tree -o`).
 2. Git read commands: `status`, `diff`, `log`, `show`, `branch` (listing only), `blame`.
+   Inside the sandbox only.
 3. The project's own `test`, `lint`, `typecheck`, `format` and `build` scripts
    by name from `package.json` or the `Makefile`, and `cargo`, `go` and `pytest` checks where
    the project has `Cargo.toml`, `go.mod` or a Python project file, plus `node --test`. Inside
