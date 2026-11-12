@@ -40,6 +40,11 @@ const session='12345678-1234-4234-8234-123456789abc';
 const resumed=args.includes('--resume');
 if(cfg.badReply==='lost'&&resumed){console.error('No conversation found with session ID: '+args[args.indexOf('--resume')+1]);console.log('{"type":"result","subtype":"error_during_execution","is_error":true,"session_id":"'+session+'","total_cost_usd":0}');process.exit(1);}
 const badReply=cfg.badReply==='once'&&!resumed||cfg.badReply==='lost'&&!input.includes('Invalid output to correct');
+// models (fake.json): the full id a run reports in system/init for the --model it was started
+// with. noCredits: a --model this account has no usage credits for; that run ends as the real
+// CLI's does then, with the API error on its result line.
+const nothingSpent=0;const modelArg=args.includes('--model')?args[args.indexOf('--model')+1]:null;const reported=cfg.models?.[modelArg]??'claude-fable-5-1';
+if(cfg.noCredits&&modelArg===cfg.noCredits){console.log(JSON.stringify({type:'system',subtype:'init',session_id:session,model:reported,permissionMode:'default',mcp_servers:[]}));console.log(JSON.stringify({type:'result',subtype:'success',is_error:true,api_error_status:429,api_error:'model_requires_usage_credits',duration_ms:180,num_turns:1,result:"You're out of usage credits. Switch to another model, or manage usage credits at https://claude.ai/settings/usage?from=cc_cli_limit_message, to continue.",session_id:session,total_cost_usd:nothingSpent}));process.exit(1);}
 if(mode==='no-sandbox'){console.error('Error: sandbox required but unavailable: bubblewrap (bwrap) not installed, socat not installed');console.error('  sandbox.failIfUnavailable is set.');console.log(JSON.stringify({type:'result',subtype:'error_during_execution',is_error:true,session_id:session}));process.exit(1);}
 // An answer turn with permissions has Write in its tools, but a lead that is told ELU Code prepares the workspace does not edit there.
 const edit=(args[args.indexOf('--tools')+1]??'').split(',').includes('Write')&&!conversation;
@@ -57,7 +62,7 @@ if((mode==='review-fix'||mode==='review-block')&&input.includes('Address the rev
 const mcpArg=args[args.indexOf('--mcp-config')+1];const servers=!args.includes('--safe-mode')&&mcpArg&&!mcpArg.startsWith('{')&&fs.existsSync(mcpArg)?JSON.parse(fs.readFileSync(mcpArg,'utf8')).mcpServers:{};const mcp=Object.keys(servers).map(name=>({name,status:'connected'}));
 const permissionMode=args.includes('--permission-mode')?args[args.indexOf('--permission-mode')+1]:'default';
 // permissionMode (fake.json): the mode this run says it really got, when that is not the one it was started with.
-console.log(JSON.stringify({type:'system',subtype:'init',session_id:session,model:'claude-fable-5-1',permissionMode:cfg.permissionMode??permissionMode,mcp_servers:mcp}));
+console.log(JSON.stringify({type:'system',subtype:'init',session_id:session,model:reported,permissionMode:cfg.permissionMode??permissionMode,mcp_servers:mcp}));
 console.log(JSON.stringify({type:'rate_limit_event',rate_limit_info:{unifiedWindows:{five_hour:{utilization:0.36,resetsAt:Math.floor(Date.now()/1000)+10800},seven_day:{utilization:0.71,resetsAt:Math.floor(Date.now()/1000)+604800}}}}));
 console.error('A harmless diagnostic on stderr.');
 // relay: like the real CLI, a tool call the permission mode would prompt for goes to the
