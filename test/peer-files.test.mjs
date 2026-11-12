@@ -9,13 +9,14 @@ import { PassThrough } from 'node:stream';
 import { makeTeam, newHome, withHome, registeredProject, liveTask } from './peer-helpers.mjs';
 import { hash } from '../lib/util.mjs';
 import { markMine, noteTheirs } from '../lib/peer/mine.mjs';
-import { FILES_UPDATE, NOT_MINE, hostMethods, remoteCommand, watchId } from '../lib/peer/remote.mjs';
+import { FILES_UPDATE, NOT_MINE, NOT_OWN_SESSION, hostMethods, remoteCommand, watchId } from '../lib/peer/remote.mjs';
 import { saveTeamAccess } from '../lib/peer/access.mjs';
 import { pendingRequests } from '../lib/workspace.mjs';
-import { readTask } from '../lib/state.mjs';
+import { readTask, saveTask } from '../lib/state.mjs';
 import { repository } from '../lib/git.mjs';
 import { offerFiles, offerPaths, stageFiles } from '../lib/peer/index.mjs';
-import { BYTES_MAX, FILES_MAX, PIECE, collectFiles, inboxRoot, landFiles, namedPaths, pathsInText, pieces, stagedFiles, takePiece } from '../lib/peer/files.mjs';
+import { BYTES_MAX, FILES_MAX, PIECE, collectFiles, inboxRoot, landFiles, namedPaths, pathsInText, pieces, stageFiles as stageCollected, stagedFiles, takePiece } from '../lib/peer/files.mjs';
+import { sessionReads } from '../lib/session-reads.mjs';
 import { remoteSessions as remoteGlue } from '../lib/terminal-remote.mjs';
 import * as claude from '../lib/adapters/claude.mjs';
 import { defaultConfig } from '../lib/config.mjs';
@@ -287,6 +288,16 @@ test("a session's tool sends only what the session may read, lists only my compu
       const said = await call(n, SEND_TOOL, { session: p.id, paths: [file], message: 'x' });
       assert.equal(said.isError, true, file); assert.match(said.content[0].text, why, file);
     }
+    // The same, spelled in other letter case: on a disk that does not tell case apart it is the
+    // same file or folder (compared on disk); on one that does, a stand-in of that name is made,
+    // and secret folders, ELU Code's state and secret names are closed without case there too.
+    const spelled = (file, body) => { if (!fs.existsSync(file)) { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, body); } return file; };
+    const upperState = path.join(path.dirname(env), path.basename(env).toUpperCase(), 'elu-code');
+    spelled(path.join(upperState, 'peer', 'note.json'), '{}');
+    for (const [n, file, why] of [[40, spelled(path.join(HOME, '.SSH', 'id_ed25519'), 'PRIVATE KEY'), /in a folder this session may not read/], [41, spelled(path.join(project.root, '.ENV'), 'TOKEN=1\n'), /may hold a secret and Git does not track it/], [42, upperState, /ELU Code's own state/]]) {
+      const said = await call(n, SEND_TOOL, { session: p.id, paths: [file], message: 'x' });
+      assert.equal(said.isError, true, file); assert.match(said.content[0].text, why, file);
+    }
     // A folder that holds one is refused whole.
     let said = await call(5, SEND_TOOL, { session: p.id, paths: [project.root], message: 'x' });
     assert.equal(said.isError, true); assert.match(said.content[0].text, /\.env may hold a secret/);
@@ -295,14 +306,17 @@ test("a session's tool sends only what the session may read, lists only my compu
     assert.equal(said.isError, true); assert.match(said.content[0].text, /outside the folders this session reads/);
     assert.deepEqual(outgoing(), []);
     // The list names my other computer and its sessions; an id that is none of them is refused.
-    const machines = path.join(env, 'elu-code', 'peer', 'remote', 'machines'); fs.mkdirSync(machines, { recursive: true });
-    fs.writeFileSync(path.join(machines, `${p.devbox.identity.key}.json`), JSON.stringify({ key: p.devbox.identity.key, listedAt: new Date().toISOString(), projects: [{ id: p.ref.split(':')[0], name: 'shop', repoId: null, home: false }], sessions: [{ id: p.id, ref: p.ref, project: p.ref.split(':')[0], title: 'Look at the batch results', state: 'needs_input', question: 'Where are the batch results?', approvals: [], by: 'you' }] }));
+    // A teammate's session there (a handoff accepted on it) is neither listed nor sent to.
+    const machines = path.join(env, 'elu-code', 'peer', 'remote', 'machines'), TEAMMATE = crypto.randomUUID(); fs.mkdirSync(machines, { recursive: true });
+    fs.writeFileSync(path.join(machines, `${p.devbox.identity.key}.json`), JSON.stringify({ key: p.devbox.identity.key, listedAt: new Date().toISOString(), projects: [{ id: p.ref.split(':')[0], name: 'shop', repoId: null, home: false }], sessions: [{ id: p.id, ref: p.ref, project: p.ref.split(':')[0], title: 'Look at the batch results', state: 'needs_input', question: 'Where are the batch results?', approvals: [], by: 'you' }, { id: TEAMMATE, ref: `${p.ref.split(':')[0]}:2`, project: p.ref.split(':')[0], title: "Sara's handoff", state: 'running', approvals: [], by: 'teammate', who: 'sara' }] }));
     said = await call(7, LIST_TOOL, {});
     const listed = JSON.parse(said.content[0].text);
     assert.equal(listed.computers.length, 1);
     assert.deepEqual(listed.computers[0].sessions, [{ session: p.id, title: 'Look at the batch results', state: 'needs_input', project: 'shop', waits: 'question: Where are the batch results?' }]);
-    said = await call(8, SEND_TOOL, { session: crypto.randomUUID(), paths: [path.join(project.root, 'notes.txt')] });
-    assert.match(said.content[0].text, /No session on your other computers has that id/);
+    for (const [n, session] of [[8, crypto.randomUUID()], [43, TEAMMATE]]) {
+      said = await call(n, SEND_TOOL, { session, paths: [path.join(project.root, 'notes.txt')] });
+      assert.match(said.content[0].text, /No session on your other computers has that id/);
+    }
     // The session is there, but this computer's daemon is not running: nothing is staged.
     said = await call(9, SEND_TOOL, { session: p.id, paths: [path.join(project.root, 'notes.txt')] });
     assert.equal(said.isError, true); assert.match(said.content[0].text, /offline|not running/);
@@ -321,11 +335,96 @@ test("a session's tool sends only what the session may read, lists only my compu
     const [pending] = pendingApprovals();
     // Answered first, so a failed check below does not leave the relay waiting.
     answerApproval(pending.id, 'deny');
-    assert.equal(pending.summary, `Send to a session on another computer of yours: ${b.key}`);
+    // It names the session and the computer the files would go to.
+    assert.match(pending.summary, /^Send to "Look at the batch results" on @\S+: /); assert.ok(pending.summary.endsWith(`: ${b.key}`), pending.summary);
     assert.equal(JSON.parse((await ask.next(row => row.id === 21)).result.content[0].text).behavior, 'deny');
     // A session without the owner's saved rules (a teammate's question) gets no such tools.
     const theirs = relay(t, argv('ask').map(value => value === 'saved' ? 'defaults' : value));
     theirs.send({ jsonrpc: '2.0', id: 30, method: 'tools/list' });
     assert.deepEqual((await theirs.next(row => row.id === 30)).result.tools.map(tool => tool.name), [TOOL_NAME]);
   });
+});
+
+test("only the owner's own sessions take files: a teammate's handoff accepted there refuses them before any piece is kept", t => {
+  const p = pair(t), b = batch(t);
+  const parts = () => withHome(p.laptop.home, () => [...pieces(stagedFiles(stageFiles(offerPaths([b.key]))))]);
+  const piece = (id, data) => ({ id, send: crypto.randomUUID(), seq: 0, last: true, size: data.length, data: data.toString('base64'), text: 'the key' });
+  const watched = (taskId, origin) => withHome(p.devbox.home, () => {
+    liveTask(p.project.root, { id: taskId, goal: 'Their work', state: 'ready' });
+    const repo = repository(p.project.root); saveTask(repo, { ...readTask(repo, taskId), origin });
+    return p.host['elu.remote.watch']({ ref: `${p.ref.split(':')[0]}:${taskId}` }, p.toHost).id;
+  });
+  // A teammate's handoff: refused, nothing staged, nothing landed, no folder added.
+  const theirs = watched('2', { kind: 'handoff', peer: 'b'.repeat(64), name: 'sara', threadId: 'thread-1' });
+  const [data] = parts();
+  withHome(p.devbox.home, () => {
+    assert.throws(() => p.host['elu.remote.files'](piece(theirs, data), p.toHost), { message: NOT_OWN_SESSION });
+    const dir = path.join(p.devbox.home, 'elu-code', 'peer', 'files', 'in', p.laptop.identity.key);
+    assert.deepEqual(fs.existsSync(dir) ? fs.readdirSync(dir) : [], []);
+    assert.equal(readTask(repository(p.project.root), '2').folders, undefined);
+    assert.equal(pendingRequests(p.project.root).filter(row => row.continuationTaskId === '2').length, 0);
+  });
+  // The owner's own handoff from this computer of his is his session: it takes them.
+  const own = watched('3', { kind: 'handoff', peer: p.laptop.identity.key, name: 'ana', threadId: 'thread-2', own: true });
+  withHome(p.devbox.home, () => assert.equal(p.host['elu.remote.files'](piece(own, parts()[0]), p.toHost).files, 1));
+});
+
+test("a turn reads across the home only when it adds it: Approve for me refuses a file there outside the turn's folders", t => {
+  const home = newHome(t), base = path.dirname(home), cwd = path.join(base, 'project'), other = path.join(base, 'other');
+  fs.mkdirSync(cwd); fs.mkdirSync(other); fs.writeFileSync(path.join(other, 'notes.txt'), 'notes'); fs.writeFileSync(path.join(cwd, 'a.txt'), 'a');
+  withHome(home, () => {
+    const narrow = sessionReads({ mode: 'auto', cwd, folders: [], home: base });
+    assert.match(narrow(path.join(other, 'notes.txt')), /outside the folders this session reads/);
+    assert.equal(narrow(path.join(cwd, 'a.txt')), null);
+    // The conversation's turn adds the home (--add-dir), and the runner says so in its folders.
+    assert.equal(sessionReads({ mode: 'auto', cwd, folders: [base], home: base })(path.join(other, 'notes.txt')), null);
+    assert.equal(sessionReads({ mode: 'auto', cwd, folders: [other], home: base })(path.join(other, 'notes.txt')), null);
+  });
+});
+
+test('a file swapped after its check is not copied: for a link to a secret, through a folder that became a link, or for another file', t => {
+  const home = newHome(t), base = path.dirname(home), work = path.join(base, 'work'), secrets = path.join(base, 'secrets');
+  fs.mkdirSync(path.join(work, 'sub'), { recursive: true }); fs.mkdirSync(secrets);
+  fs.writeFileSync(path.join(secrets, 'key'), 'PRIVATE KEY');
+  const decoy = path.join(work, 'decoy.txt'), nested = path.join(work, 'sub', 'key');
+  const reset = () => { fs.rmSync(work, { recursive: true, force: true }); fs.mkdirSync(path.join(work, 'sub'), { recursive: true }); fs.writeFileSync(decoy, 'harmless!!!'); fs.writeFileSync(nested, 'harmless!!!'); };
+  const outgoing = () => { const dir = path.join(home, 'elu-code', 'peer', 'files', 'out'); return fs.existsSync(dir) ? fs.readdirSync(dir) : []; };
+  withHome(home, () => {
+    const swaps = [
+      [decoy, () => { fs.rmSync(decoy); fs.symlinkSync(path.join(secrets, 'key'), decoy); }],
+      [decoy, () => { fs.copyFileSync(path.join(secrets, 'key'), `${decoy}.new`); fs.renameSync(`${decoy}.new`, decoy); }],
+      [nested, () => { fs.renameSync(path.join(work, 'sub'), path.join(base, 'old-sub')); fs.symlinkSync(secrets, path.join(work, 'sub')); fs.rmSync(path.join(base, 'old-sub'), { recursive: true }); }],
+    ];
+    for (const [file, swap] of swaps) {
+      reset();
+      const collected = collectFiles(namedPaths([file]));
+      assert.equal(collected.bytes, 'PRIVATE KEY'.length);
+      swap();
+      assert.throws(() => stageCollected(collected), /changed while it was read/, file);
+      assert.deepEqual(outgoing(), [], 'nothing stays behind');
+    }
+    // Unchanged, or written again in place, it goes.
+    reset();
+    const collected = collectFiles(namedPaths([decoy])); fs.writeFileSync(decoy, 'harmless!!?');
+    const staged = stageCollected(collected);
+    assert.equal(staged.count, 1);
+    assert.equal(fs.readFileSync(path.join(home, 'elu-code', 'peer', 'files', 'out', staged.set, 'data', '1'), 'utf8'), 'harmless!!?');
+  });
+});
+
+test('files are not received into a Git work tree: a home folder that is a repository refuses them, unless it ignores the folder', async t => {
+  const p = pair(t), b = batch(t);
+  t.after(() => { fs.rmSync(path.join(HOME, '.git'), { recursive: true, force: true }); fs.rmSync(path.join(HOME, '.gitignore'), { force: true }); });
+  assert.equal(spawnSync('git', ['init', '-q', HOME]).status, 0);
+  const sendIt = () => withHome(p.laptop.home, () => remoteCommand(p.viewCtx, { type: 'remoteFiles', id: p.id, to: p.devbox.identity.key, ref: p.ref, text: '', files: stageFiles(offerPaths([b.key])) }));
+  await assert.rejects(sendIt(), error => /Files are not received here: the folder for them, .* is inside the Git repository .*\. Add it to that repository's \.gitignore\./.test(error.message) && error.message.includes(inboxRoot()));
+  withHome(p.devbox.home, () => assert.deepEqual(requestsFor(p.project.root), []));
+  // Refused before any piece was taken.
+  assert.equal(p.calls.filter(([method]) => method === 'elu.remote.files').length, 1);
+  // Ignored by that repository, the folder is outside its work: they land.
+  fs.writeFileSync(path.join(HOME, '.gitignore'), '.local/\n');
+  const result = await sendIt();
+  assert.equal(result.files, 1);
+  withHome(p.devbox.home, () => assert.equal(requestsFor(p.project.root).length, 1));
+  assert.equal(spawnSync('git', ['-C', HOME, 'status', '--porcelain', '--untracked-files=all', '--', '.local'], { encoding: 'utf8' }).stdout.trim(), '');
 });
