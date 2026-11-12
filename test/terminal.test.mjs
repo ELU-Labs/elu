@@ -81,7 +81,7 @@ async function view(t, options = {}) {
   // Each test runs its own conductor in this process, as the background one would.
   const owned = resources(t);
   if (!owned.conductor) { const conductor = new Conductor({ tickMs: 20 }).start(); owned.conductor = conductor; owned.views.push(() => conductor.stop()); }
-  const finished = launchTerminal({ usage: fakeUsage(t), ...options, input, output, refreshMs: 30, startConductor: () => false, onRender: value => { rendered = value; } });
+  const finished = launchTerminal({ usage: fakeUsage(t), ...options, input, output, refreshMs: 30, startConductor: () => false, onRender: value => { rendered = value; options.onRender?.(value); } });
   finished.catch(() => {});
   await until(() => rendered, 'first render');
   const state = { input, output, finished, get current() { return rendered; }, get raw() { return raw; }, get events() { return events; }, frame() { return rendered.screen.screenshot(0, output.columns, 0, output.rows); } };
@@ -486,6 +486,42 @@ test('the wheel moves the Projects list one row a step, and every step of a trac
   assert.equal(list.selected, 3, 'and stops at the last row');
   v.input.write(`\x1b[<64;${list.aleft + 2};${list.atop + 1}M`); await until(() => list.selected === 2, 'up a row at once');
   assert.equal(v.current.view, 'projects'); assert.equal(modal(v, 'Project sample app'), undefined, 'the wheel opens nothing');
+});
+
+// Counts the screen's renders until the returned function is called, which says how many there were.
+function countRenders(v) {
+  const screen = v.current.screen, render = screen.render; let renders = 0;
+  screen.render = function (...args) { renders++; return render.apply(this, args); };
+  return () => { screen.render = render; return renders; };
+}
+
+test('a trackpad stroke on the Sessions list moves a row a step and draws the app at most once a frame', { timeout: 30000 }, async t => {
+  const p = setup(t), at = new Date(Date.now() - 60000).toISOString(), result = { outcome: 'done', intent: 'answer', summary: 'Answered.', question: null, choices: [], comments: [], responses: [] };
+  for (let id = 1; id <= 24; id++) saveTask(p.repo, { id: String(id), kind: 'conversation', goal: `Cart question ${id}`, state: 'answered', worktree: p.root, branch: null, base: null, createdAt: at, runs: [], reviews: [], responses: [], sessions: {}, result, messages: [{ at, text: `Cart question ${id}` }] });
+  let draws = 0; const v = await view(t, { repo: p.repo, onRender: () => { draws++; } }), board = v.current.panels.board;
+  await selectRow(v, /Cart question \d+/); await pause(60);
+  const start = board.selected, steps = 20, renders = countRenders(v); draws = 0;
+  // Twenty reports 5 ms apart, each its own read, as Ghostty sends a stroke of the fingers.
+  await new Promise(resolve => { for (let n = 0; n < steps; n++) setTimeout(() => { wheel(v, board, 1, 1); if (n === steps - 1) resolve(); }, 5 * n); });
+  await pause(60);
+  const drawn = draws, rendered = renders();
+  assert.equal(board.selected, start + steps, 'a row a step, none dropped');
+  assert.ok(drawn < steps, `fewer draws of the app than steps (${drawn})`); assert.ok(rendered < steps, `fewer renders than steps (${rendered})`);
+  // The last draw shows the row the wheel stopped on: the bar is on it and its session is beside the list.
+  const row = rows(v)[board.selected], id = /Cart question (\d+)/.exec(row)?.[1];
+  assert.match(row, /^▌/); assert.ok(id); assert.equal(v.current.session, id);
+});
+
+test('the wheel on a dialog\'s list moves a row a step and draws once a frame, not once a step', { timeout: 30000 }, async t => {
+  const p = setup(t), v = await view(t, { repo: p.repo, loginItem: { install: () => ({ installed: true }), uninstall: () => ({ removed: true }) } });
+  await send(v, '/schedule'); await until(() => modal(v, 'When') && dialogRows(v, 'When').length === 8, 'the list of times');
+  const list = dialogList(v, 'When'); assert.equal(list.selected, 0); await pause(60);
+  // Seven steps in one read, as a trackpad sends them.
+  const renders = countRenders(v);
+  v.input.write(`\x1b[<65;${list.aleft + 2};${list.atop + 1}M`.repeat(7)); await pause(60);
+  const rendered = renders();
+  assert.equal(list.selected, 7, 'a row a step'); assert.ok(rendered < 7, `fewer draws than steps (${rendered})`);
+  assert.ok(modal(v, 'When'), 'the wheel chooses nothing');
 });
 
 test('a click on another tab while a dialog is open does not switch the view', async t => {
