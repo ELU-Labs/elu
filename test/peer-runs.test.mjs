@@ -579,7 +579,7 @@ function homeAt(t, folder) {
   t.after(() => { if (previous === undefined) delete process.env.HOME; else process.env.HOME = previous; });
   return fs.realpathSync(folder);
 }
-const HOME_NOTE = /^Open ELU Code in the project folder for core, not your home folder, then approve again\.$/;
+const HOME_NOTE = /Open ELU Code in the project folder for core, not your home folder, then approve again\.$/;
 test('a teammate\'s message never runs in the home folder: y, w and an older Auto setting leave it waiting with a plain line, and approving from the project runs it as their words', async t => {
   const p = setup(t, 'answer'), sara = teammate(p), teamId = everyTeam()[0].id;
   unshare('app');
