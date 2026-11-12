@@ -120,6 +120,10 @@ and `/permissions default auto` sets what new sessions start with.
 - **Full access** (`full`): any file, any command, the internet.
 
 When the model asks, `y` allows and `n` denies; `f` allows and gives that session Full access.
+`a` allows and keeps a narrow rule, such as `npm test` or `git diff`, for this project or all
+of them, so it is not asked again. Reads in the project, git reads and the project's own test,
+lint and build scripts run without asking from the start. `/permissions rules` or
+`elu permissions` lists them all and removes any. The never list always wins.
 You can change the mode while a turn runs.
 
 Bots that review, and a teammate's question, always run read only.
@@ -172,6 +176,9 @@ Five come with the app. You can edit or remove any of them in the Bots tab.
   opens its page, where each row changes one thing: its model, its schedule, its MCP
   servers, its instructions. How a bot goes about its work is in its instructions: write
   there that it hands pieces to helpers, and on Claude Code it can start them.
+- A bot whose model your Claude account has no usage credits for runs once more on the
+  session's model, when that is another Claude model, and the chat says so in one line. Its later turns in that session start
+  there.
 - Each bot has a color: its name and its replies show in it. **Color** on its page changes
   it, and so does `/bots color qa gold`. `/bots color qa random` picks another.
 - `@elu` starts when it joins a session and then runs there every hour. Once ELU Code is
@@ -220,7 +227,8 @@ reading it unless it looks like a secret. Any Task it proposes waits for your ap
 only an approved Task's edit runs in a new worktree. **Manual** keeps each message waiting
 until you press y. You can also write rules in plain English, such as "Only work on the elu
 repo. Don't write anything until I accept it.", and every session a teammate starts is told
-them. Push, merge, tag, deploy and publish stay blocked as they are for your own sessions in
+them. A teammate's message never runs in your home folder: it waits until you approve it with
+ELU Code open in a project. Their session shows their own words under their name. Push, merge, tag, deploy and publish stay blocked as they are for your own sessions in
 that mode. [SECURITY.md](SECURITY.md#what-teammates-can-do-here) has the details. `/access`,
 or `elu access`, shows and changes all of it.
 
@@ -243,6 +251,18 @@ sees them when it answers.
 `elu team remove kim`) takes kim off it, and kim's daemon stops when kim is on no other
 team. Either way, a new invite brings them back, also when nobody heard the leave yet: the
 leave goes along with the invite.
+
+Your own computers work together the same way. On your laptop, `/invite` and choose
+"Another computer of mine" (or `elu invite --mine`), then `/join` that code on your devbox
+and answer Yes when it asks if the laptop is yours too (or `elu join CODE --mine`). A devbox
+already on your team needs no code: pick it in that same list, or run `/mine @devbox` on the
+laptop and `/mine @laptop` on the devbox. From then on, `@devbox fix the flaky test` in the
+new session box starts the session on the devbox, with the mode, model and bots you picked.
+It shows in Sessions marked "on devbox", live, and its approvals wait on both machines. It is
+your own session there, so your rules apply, and `a` on its approval, from either machine,
+keeps the rule on the devbox, where it runs. `/mine` lists your computers and
+`/mine remove @devbox` ends it.
+[SECURITY.md](SECURITY.md#your-other-computers) says what that allows.
 
 In a channel, `/invite @kim` adds a teammate you already have. `/invite` alone makes a
 code for someone new; the first time, it also makes your team, named after the open project.

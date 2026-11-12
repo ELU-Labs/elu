@@ -148,8 +148,9 @@ What a sandboxed command can read that way:
 - The Git settings file: remote URLs, and a token if one is written into a URL.
 - The stash and the reflog.
 
-The sandbox has no network, so a sandboxed command cannot send any of it anywhere.
-What it prints goes to the model, as all output does, and into the session's record.
+The sandbox has no network of its own: a sandboxed command reaches only a host you allowed
+when asked (see Network below), so it cannot send any of it anywhere else. What it prints
+goes to the model, as all output does, and into the session's record.
 ELU Code's own records in the folder (`.git/elu-code`) stay closed to commands and
 to the file tools. A teammate's question reads none of the Git folder.
 
@@ -169,6 +170,100 @@ The keys are `y` allow and `n` deny. Where the session can be given Full access
 there is a third, `f`: it asks what `/permissions full` asks, then allows the
 action and switches the session to Full access, so that session stops asking.
 It is not offered for a bot's scheduled turn or a turn that runs read only.
+
+### Network
+
+In Ask for approval, a sandboxed command that connects to a host (`curl https://elu.dev`,
+`npm view`) asks you under Needs you as "Network access to elu.dev". Claude Code asks this
+on its own output, not through the relay, so ELU Code starts it with the prompt as a
+stream-json message (`--input-format stream-json`), keeps its input open and writes your
+answer back. Allow lets that host through for the rest of the session: Claude Code keeps it
+for the run, and later turns of the session start with it in the sandbox's allowed hosts.
+Deny, or no answer, fails the connection. Before, the input was closed once the prompt was
+read, and Claude Code denied every host without asking and reported it as "user denied".
+
+`a` keeps the host as a rule. Hosts that publish packages, take pushes or deploy
+(`registry.npmjs.org`, `pypi.org`, `github.com`, `ghcr.io`, Docker Hub, and the deploy APIs
+of Vercel, Netlify, Fly, Firebase, Cloud Run, Heroku and Cloudflare) are never kept as a rule,
+and one you allowed is asked again in the session's next turn. In Approve for me Claude
+Code's own classifier decides, and Full access has no sandbox.
+
+### Allowed without asking
+
+`a` (always) beside `y` and `n` keeps the kind of action as a rule and allows it now. It
+shows the rule in plain words, then asks where: **This project** (the default) or **All my
+projects**. A rule is kept narrow:
+
+- A command keeps its program and subcommand: `npm test`, `git diff`, `pytest`,
+  `python -m pytest`, `npm run lint`, `gh pr view`. Arguments may change.
+- A program that does too much as a word, such as `npm install`, `curl`, `docker`, `find`
+  or `git branch`, keeps the exact command. So do programs that read the files you name
+  (`cat`, `grep`, `rg`, `ls`, `head`, `tail` and the like) and `git fetch`, `clone` and
+  `ls-remote`.
+- The arguments are checked each time a rule answers: one that names a secret or ELU Code's
+  own files, or a git option that runs a program or writes a file (`--output`, `--ext-diff`,
+  `--no-index`, `--upload-pack`), asks.
+- A line that joins or wraps commands (`;`, `&&`, `||`, `$( )`, backticks, a redirect, a
+  leading `NAME=value`) gets no `a`; it can only be allowed once. A pipe into `head`,
+  `tail`, `wc` or `grep`, and `2>&1`, are read through.
+- No rule for the never list, removals (`rm`, `rmdir`), `sudo`, `env`, `xargs`, `ssh`,
+  `chmod`, inline code (`node -e`, `python -c`, `sh -c`), a full path to a program, a
+  secret (`.env`, keys, credentials, `~/.ssh`, `~/.aws`), an MCP tool or a web search.
+- A rule asked inside the sandbox applies inside it only; one asked outside it says so.
+  Where commands run with no sandbox at all (Antigravity, Grok Build, or Claude Code where
+  its sandbox cannot start), every command counts as outside it.
+- An edit becomes edits in the session's own workspace, in turns that edit (a Task you
+  approved). Outside the project it is that one file. `.git`, `.elu-code` and secrets are
+  asked each time.
+- A web fetch becomes that host, and so does a sandboxed command's network access, except
+  the hosts that publish, take pushes or deploy (see Network above).
+
+A path is judged where it really leads: a link in the project to a secret, to your home or
+to another folder is not a path in the project, for a rule or a default.
+
+Rules are kept in your personal directory (`permission-rules.json`), never in the repo.
+
+These are on from the first run and apply in every mode:
+
+1. Read and search files in the project: the vendor's file tools, and commands such as `ls`,
+   `cat`, `grep`, `rg` and `find` without `-exec` or `-delete`, on paths inside the project
+   that are not secrets. A command only inside the sandbox, and never with an option that
+   runs a program or writes a file (`rg --pre` or `--hostname-bin`, `tree -o`).
+2. Git read commands: `status`, `diff`, `log`, `show`, `branch` (listing only), `blame`.
+   Inside the sandbox only.
+3. The project's own `test`, `lint`, `typecheck`, `format` and `build` scripts
+   by name from `package.json` or the `Makefile`, and `cargo`, `go` and `pytest` checks where
+   the project has `Cargo.toml`, `go.mod` or a Python project file, plus `node --test`. Inside
+   the sandbox only, so never on Antigravity or Grok Build, which run commands without one.
+
+They never cover installs, removals, network writes or secrets. In Ask for approval this
+means the reads and checks a session runs most no longer wait for you, while anything that
+leaves the sandbox, edits outside the project or reaches the internet still asks, unless a
+rule of yours covers it.
+
+`/permissions rules` lists the defaults and your rules, numbered, with where each applies:
+`x` removes a rule or turns a default off, `o` turns a default on. `/permissions rules remove
+N` and `/permissions rules on N` do the same by number, and so do `elu permissions`,
+`elu permissions remove N` and `elu permissions on N`. A file that cannot be read turns
+every rule and default off until it is fixed.
+
+When a rule or a default answers, nothing waits under Needs you; the decision is kept with
+the task as allowed by your rule or by default, and the session shows "Allowed by your rule:
+npm test".
+
+Your rules apply in your own sessions and your bots' sessions, and in a session started from
+one of your own machines (`origin.mine`). A session a teammate started uses the defaults
+only, and `a` is not offered there. Rules live on each machine: a session runs with the rules
+of the machine it runs on. An approval of a session on your other computer waits on both
+machines, with `a` beside `y` and `n` where that machine offers it, and `a` from either one
+keeps the rule on the machine where the session runs. That machine makes the rule from its own
+copy of the request.
+
+Every vendor that asks goes through the relay: Claude Code through its permission prompt
+tool, Antigravity and Grok Build over ACP. The relay checks the never list, then your
+rules, then the defaults, before it writes a request. Claude Code's own allow rules are not
+used, so a rule never lets a command leave the sandbox without the relay seeing it. Codex
+does not ask during a turn, so rules change nothing there.
 
 ## Plan first
 
