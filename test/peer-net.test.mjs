@@ -10,7 +10,7 @@ import { EventEmitter } from 'node:events';
 import { fileURLToPath } from 'node:url';
 import crypto from 'node:crypto';
 import { newHome, peerHome, withHome, makeTeam, registeredProject, answeringClis, liveTask } from './peer-helpers.mjs';
-import { keyLike } from './helpers.mjs';
+import { CLI, keyLike } from './helpers.mjs';
 import { peerFile } from '../lib/peer/paths.mjs';
 import { defaultBox, savePeerSettings, savePeerPolicy } from '../lib/peer/settings.mjs';
 import { createIdentity, identity as loadIdentity } from '../lib/peer/identity.mjs';
@@ -65,7 +65,7 @@ async function testnet(t, host = '127.0.0.1') {
   });
   return net.bootstrap.map(node => `${node.host}:${node.port}`);
 }
-function enable(home, bootstrap, extra = {}) { withHome(home, () => savePeerSettings({ enabled: true, bootstrap, ...extra })); }
+function enable(home, bootstrap, extra = {}) { withHome(home, () => savePeerSettings({ bootstrap, ...extra })); }
 async function daemon(t, home, { env = {}, ...options } = {}) {
   const child = spawn(process.execPath, [RUNNER, JSON.stringify(options)], { env: { ...process.env, ...env, XDG_CONFIG_HOME: home }, stdio: ['pipe', 'pipe', 'pipe'] });
   let out = '', err = '';
@@ -609,9 +609,6 @@ test('an expired short invite is no longer announced, and its topic is left', as
   const { daemon, topics } = inviterDaemon(me);
   daemon.inviteTopics(); daemon.inviteTopics(Date.now() + 2 * 3600 * 1000);
   assert.deepEqual(topics, [`+${keys.topic}`, `-${keys.topic}`]);
-  // A transient node (joining with peer mode off) announces nothing.
-  const transient = Object.assign(new PeerDaemon({ conductor: () => {}, requireEnabled: false }), { me, node: { joinTopic: () => assert.fail('announced') } });
-  transient.inviteTopics();
 });
 
 test('a team ask goes to every teammate as one thread; the first to take it answers and the other copies are withdrawn', t => {
@@ -1092,18 +1089,57 @@ test('intake writes nothing for strangers or muted teammates, keeps no text on r
   });
 });
 
-test('a shutdown is ignored when peer mode is on again or when it predates the daemon', async t => {
+test('a shutdown is honoured whatever an old setting says, unless it predates the daemon', async t => {
   const home = newHome(t), exits = [];
   await withHome(home, async () => {
     const daemon = Object.assign(new PeerDaemon({ onExit: () => exits.push('exit') }), { startedAt: new Date().toISOString() });
+    // enabled, saved by 0.1.5 and earlier, means nothing now.
     savePeerSettings({ enabled: true });
-    assert.deepEqual(await daemon.command({ type: 'shutdown', at: new Date().toISOString() }), { stopping: false });
-    savePeerSettings({ enabled: false });
     assert.deepEqual(await daemon.command({ type: 'shutdown', at: new Date(Date.now() - 60000).toISOString() }), { stopping: false });
     assert.deepEqual(await daemon.command({ type: 'shutdown', at: new Date(Date.now() + 1000).toISOString() }), { stopping: true });
     await new Promise(resolve => setImmediate(resolve));
   });
   assert.deepEqual(exits, ['exit']);
+});
+
+test('the daemon stops by itself once this machine has been on no team for a while, and not while a join or a command is under way', async t => {
+  const home = newHome(t), exits = [];
+  await withHome(home, async () => {
+    const me = createIdentity({ name: 'ana' }), daemon = Object.assign(new PeerDaemon({ idleMs: 1000, conductor: () => {}, onExit: () => exits.push('exit') }), { me });
+    const now = Date.now();
+    assert.equal(daemon.idle(now), false); assert.equal(daemon.idle(now + 999), false);
+    // A join, or a command, keeps it up and starts the wait again.
+    daemon.joins.set('k', {}); assert.equal(daemon.idle(now + 5000), false); daemon.joins.clear();
+    daemon.running.add('c'); assert.equal(daemon.idle(now + 5000), false); daemon.running.clear();
+    assert.equal(daemon.idle(now + 5000), false, 'the wait starts again');
+    // On a team it never stops by itself.
+    const made = createTeam(me, 'core');
+    assert.equal(daemon.idle(now + 60000), false); assert.equal(daemon.idleSince, null);
+    // No team left (here the roster is gone; leaving does the same): it stops after idleMs.
+    fs.rmSync(teamPath(made.id), { recursive: true, force: true });
+    assert.equal(daemon.idle(now + 70000), false); assert.equal(daemon.idle(now + 71000), true);
+    assert.equal(daemon.idle(now + 80000), false, 'once');
+    await new Promise(resolve => setImmediate(resolve));
+  });
+  assert.deepEqual(exits, ['exit']);
+});
+
+test('elu peer --daemon on a machine on no team exits at once and connects to nothing; with a team and an old enabled false it runs', { timeout: 120000 }, async t => {
+  const bootstrap = await testnet(t), home = newHome(t), env = { ...process.env, XDG_CONFIG_HOME: home };
+  withHome(home, () => { createIdentity({ name: 'ana' }); savePeerSettings({ enabled: false, bootstrap }); });
+  const started = Date.now(), quiet = spawnSync(process.execPath, [CLI, 'peer', '--daemon'], { env, encoding: 'utf8', timeout: 30000 });
+  assert.equal(quiet.status, 0, quiet.stderr); assert.equal(quiet.stdout, '');
+  assert.ok(Date.now() - started < 30000);
+  assert.equal(state(home), null, 'no heartbeat'); assert.equal(read(home, 'peer.lock'), null, 'no lock');
+  assert.equal(withHome(home, () => peer.peerWanted()), false);
+  // The same machine on a team: an enabled false saved by an older version is ignored.
+  withHome(home, () => createTeam(loadIdentity(), 'core'));
+  assert.equal(withHome(home, () => peer.peerWanted()), true);
+  const child = spawn(process.execPath, [CLI, 'peer', '--daemon'], { env, stdio: 'ignore' }), exited = new Promise(resolve => child.once('exit', resolve));
+  t.after(async () => { if (child.exitCode === null) { child.kill('SIGTERM'); await exited; } });
+  await until(() => state(home)?.running && withHome(home, () => peer.peerStatus().running), 'the daemon running', 30000);
+  assert.equal(read(home, 'settings.json').enabled, false);
+  child.kill('SIGTERM'); await exited;
 });
 
 test('asks reach a teammate by display name or fingerprint, are scanned, paced on reconnect, back off offline, and cancel on dismiss', async t => {
@@ -1251,7 +1287,7 @@ test('an a2a refusal keeps its paths for a trusted caller and cuts them for anyo
   });
 });
 
-test('elu team leave and elu team remove: plain refusals, and with peer mode off the op is written here', async t => {
+test('elu team leave and elu team remove: plain refusals, and the op written here when the daemon cannot start', async t => {
   const crew = makeTeam(t), ana = crew.founder.identity, sara = crew.member.identity, teamId = crew.teamId;
   await withHome(crew.founder.home, async () => {
     await assert.rejects(peerCli(['team', 'leave'], {}), /^.*You made core, so you cannot leave it\. elu team remove NAME removes a teammate\.$/);
@@ -1261,9 +1297,11 @@ test('elu team leave and elu team remove: plain refusals, and with peer mode off
   });
   await withHome(crew.member.home, async () => {
     await assert.rejects(peerCli(['team', 'remove', 'ana'], {}), /Only an admin of core can remove a teammate\./);
-    const left = await peerCli(['team', 'leave', 'core'], {});
-    assert.equal(left.message, 'You left core. Your teammates hear it when peer mode is on for you and them.');
-    assert.equal(withHome(crew.member.home, () => team(teamId)).members.find(m => m.key === sara.key).left, true);
+    // Without the networking packages the CLI and the app write the op here: what they call then.
+    assert.deepEqual(peer.leaveTeam(teamId), { team: teamId, name: 'core' });
+    assert.equal(team(teamId).members.find(m => m.key === sara.key).left, true);
+    assert.equal(peer.leaveUnheard(), true, 'noted, so the daemon tells them once it can start');
+    assert.equal(peer.peerWanted(), true);
     await assert.rejects(peerCli(['team', 'leave'], {}), /Create a team first/);
   });
   await withHome(crew.founder.home, async () => {
@@ -1271,26 +1309,27 @@ test('elu team leave and elu team remove: plain refusals, and with peer mode off
     merge(teamId, withHome(crew.member.home, () => readLog(teamId).ops));
     await assert.rejects(peerCli(['team', 'remove', '@sara'], {}), /No teammate sara on core\./);
     redeemCode(createInvite(ana, teamId, { hours: 1 }), sara.key, 'sara');
-    const result = await peerCli(['team', 'remove', '@Sara'], {});
-    assert.equal(result.message, 'Removed sara from core. They and your other teammates hear it when peer mode is on for you and them. A new invite brings them back.');
-    assert.deepEqual(result.removed, { key: sara.key, name: 'sara' });
+    assert.deepEqual(peer.removeMember(teamId, sara.key), { team: teamId, name: 'core', key: sara.key, member: 'sara' });
+    assert.equal(team(teamId).members.find(m => m.key === sara.key).removed, true);
+    await assert.rejects(peer.teamChange({ type: 'teamJoin', team: teamId }), /Unknown team change\./);
   });
 });
 
-test('elu peer trust and untrust resolve a roster name, refuse unknown and ambiguous names, and show in peer status', async t => {
+test('elu peer trust and untrust resolve a roster name, refuse unknown and ambiguous names, and show in elu peers; peer on, off and status are gone', async t => {
   const crew = makeTeam(t), ana = crew.founder.identity, sara = crew.member.identity;
   await withHome(crew.founder.home, async () => {
     const peers = () => JSON.parse(fs.readFileSync(peerFile('peers.json'), 'utf8'));
     const result = await peerCli(['peer', 'trust', '@sara'], {});
     assert.equal(result.message, 'Trusted @sara. Paths go out as they are. Their text shows as sent.');
     assert.deepEqual(result.peer, { key: sara.key, name: 'sara', trusted: true }); assert.equal(peers()[sara.key].trusted, true);
-    const lines = (await peerCli(['peer', 'status'], {})).lines;
+    const listed = await peerCli(['peers'], {}), lines = listed.lines;
     assert.match(lines.find(line => line.includes(' sara ')), /offline  trusted$/); assert.doesNotMatch(lines.find(line => line.includes(' ana ')), /trusted/);
-    assert.match((await peerCli(['peers'], {})).lines.find(line => line.includes(' sara ')), /trusted$/);
+    assert.match(listed.message, /^The peer daemon is not running\. It starts when you open ELU Code, invite or ask\. /);
+    for (const gone of [['peer'], ['peer', 'on'], ['peer', 'off'], ['peer', 'status']]) await assert.rejects(peerCli(gone, {}), new RegExp(`Unknown command: ${gone.join(' ')}\\. Use elu peer install\\|uninstall or elu peer trust\\|untrust @NAME\\.$`));
     await assert.rejects(peerCli(['peer', 'trust', '@nobody'], {}), /No teammate is named @nobody\./);
     await assert.rejects(peerCli(['peer', 'trust'], {}), /Use elu peer trust @NAME\./);
     await assert.rejects(peerCli(['peer', 'untrust', '@sara', 'extra'], {}), /Use elu peer untrust @NAME\./);
-    await assert.rejects(peerCli(['peer', 'bogus'], {}), /trust @NAME\|untrust @NAME/);
+    await assert.rejects(peerCli(['peer', 'bogus'], {}), /trust\|untrust @NAME/);
     await assert.rejects(peerCli(['team', 'bogus'], {}), /Use elu team create NAME, elu team leave \[TEAM\] or elu team remove NAME \[--team TEAM\]\./);
     redeemCode(createInvite(ana, crew.teamId, { hours: 1 }), 'c'.repeat(64), 'sara');
     await assert.rejects(peerCli(['peer', 'trust', '@sara'], {}), /More than one teammate is named @sara\./);
@@ -1388,7 +1427,7 @@ test('a joiner whose reply was lost joins again over the network with the same c
 });
 
 // A daemon as 0.1.3 runs it, for the version check: a heartbeat with no version, and a
-// shutdown honoured while peer mode is off, unless told to ignore it.
+// shutdown honoured only while the saved setting says enabled false, unless told to ignore it.
 const OLD_DAEMON = `const fs = require('fs'), path = require('path'), [dir, obey] = process.argv.slice(2);
 const beat = stopped => fs.writeFileSync(path.join(dir, 'state.json'), JSON.stringify({ running: !stopped, stopped, pid: process.pid, at: new Date().toISOString(), teams: [] }));
 beat(false);
@@ -1399,10 +1438,10 @@ setInterval(() => {
     if (name.endsWith('.result.json')) continue;
     const file = path.join(folder, name); let command; try { command = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { continue; } fs.rmSync(file, { force: true });
     const enabled = JSON.parse(fs.readFileSync(path.join(dir, 'settings.json'), 'utf8')).enabled;
-    if (command.type === 'shutdown' && obey === 'yes' && !enabled) { beat(true); process.exit(0); }
+    if (command.type === 'shutdown' && obey === 'yes' && enabled === false) { beat(true); process.exit(0); }
   }
 }, 100);`;
-test('a daemon from another version is restarted before peer on and before an invite, and one that does not stop is refused with what to do', { timeout: 180000 }, async t => {
+test('a daemon from another version is restarted when the daemon is started and before an invite, and one that does not stop is refused with what to do', { timeout: 180000 }, async t => {
   // Added first, so it runs before the home is removed and the testnet goes.
   const exits = []; let home = null;
   t.after(async () => { for (const kill of exits) await kill(); if (home) await withHome(home, async () => { if (peer.peerStatus().running) await stopCurrent().catch(() => {}); }); });
@@ -1420,15 +1459,16 @@ test('a daemon from another version is restarted before peer on and before an in
     const pid = state(home)?.pid; peer.stopPeer();
     await until(() => !peer.peerStatus().running && !(() => { try { process.kill(pid, 0); return true; } catch { return false; } })(), 'the daemon stopped', 20000);
   }
-  // Peer on with an old daemon running: it is shut down and this version's starts.
+  // Starting with an old daemon running: it is shut down and this version's starts. The old
+  // one is told with enabled false, which this version's ignores.
+  savePeerSettings({ enabled: true });
   const first = await old('yes');
   assert.equal(peer.peerStatus().stale, true);
   assert.equal(await peer.startPeer(), true);
   await first.exited; await until(current, 'this version\'s daemon running', 30000);
-  assert.equal(peer.peerSettings().enabled, true);
+  assert.equal(peer.peerSettings().enabled, false);
   await stopCurrent();
   // An invite with an old daemon running: restarted first, and the new one announces the code's topic.
-  savePeerSettings({ enabled: true });
   const second = await old('yes');
   const code = await peer.createInvite(made.id, { hours: 1 });
   assert.ok(current(), 'the new daemon is running when the invite is made, so the CLI says to stay online');
@@ -1436,11 +1476,183 @@ test('a daemon from another version is restarted before peer on and before an in
   await until(() => fs.readFileSync(peerFile('daemon.log'), 'utf8').includes(`invite topic ${inviteKeys(code).topic.slice(0, 8)} announced`), 'the topic announced', 30000);
   await stopCurrent();
   // One that ignores the shutdown: refused with what to do, and no invite is made.
-  savePeerSettings({ enabled: true });
   const stubborn = await old('no'), before = fs.readFileSync(teamPath(made.id, 'invites.json'), 'utf8');
-  await assert.rejects(peer.createInvite(made.id, { hours: 1 }), /another version of ELU Code\. Run elu peer off, wait a moment, then elu peer on/);
+  await assert.rejects(peer.createInvite(made.id, { hours: 1 }), /The peer daemon of another version of ELU Code did not stop\. Wait a moment, then try again\./);
   assert.equal(fs.readFileSync(teamPath(made.id, 'invites.json'), 'utf8'), before);
   assert.equal(stubborn.child.exitCode, null);
+});
+
+test('the daemon\'s teamLeave pushes the leave to the teammates online and stops on no team; one that hears it was removed from its last team stops too', async t => {
+  const crew = makeTeam(t), ana = crew.founder.identity, sara = crew.member.identity, pushed = [], closed = [], exits = [];
+  // The member, with the founder connected, and a project that is the team's.
+  await withHome(crew.member.home, async () => {
+    const { root } = registeredProject(t), row = shareWith(root, { teams: [crew.teamId] }); setTeamProject(crew.teamId, row.handle);
+    const daemon = Object.assign(new PeerDaemon({ conductor: () => {}, onExit: () => exits.push('sara') }), { me: sara, node: { dial: () => {}, leave: () => {} } });
+    daemon.sessions.set(ana.key, { key: ana.key, admitted: true, request: async (method, params) => { pushed.push({ method, params }); return { added: 1, rejected: 0 }; }, close: reason => closed.push(reason) });
+    assert.deepEqual(await daemon.command({ type: 'teamLeave', team: crew.teamId }), { team: crew.teamId, name: 'core', told: true, stopping: true });
+    assert.equal(peer.leaveUnheard(), false, 'the founder took the leave, so nothing is left to tell');
+    assert.equal(pushed.length, 1); assert.equal(pushed[0].method, 'elu.roster.push');
+    assert.deepEqual(pushed[0].params.ops.map(op => [op.type, op.by]), [['leave', sara.key]]);
+    assert.deepEqual(closed, ['no longer a teammate'], 'the connection closes after the push');
+    assert.equal(peer.onTeam(), false); assert.equal(peer.peerWanted(), false);
+    assert.deepEqual(peer.teamProjects(), {}, 'no project is the team\'s any more'); assert.deepEqual(peer.shares()[0].teams, [], 'and the share is open to no team');
+    await new Promise(resolve => setImmediate(resolve));
+    await assert.rejects(daemon.command({ type: 'teamLeave', team: crew.teamId }), /Choose one of your teams\./);
+  });
+  assert.deepEqual(exits, ['sara']);
+  // The founder takes the leave in, cannot leave, lets sara back in and removes her: still on
+  // the team, the founder's daemon keeps running.
+  let back = [], removal = null;
+  await withHome(crew.founder.home, async () => {
+    assert.equal(merge(crew.teamId, pushed[0].params.ops).added.length, 1);
+    assert.deepEqual(team(crew.teamId).members.filter(m => m.key === sara.key).map(m => [m.removed, m.left]), [[true, true]]);
+    const daemon = Object.assign(new PeerDaemon({ conductor: () => {}, onExit: () => exits.push('ana') }), { me: ana });
+    await assert.rejects(daemon.command({ type: 'teamLeave', team: crew.teamId }), /You made core, so you cannot leave it\./);
+    redeemCode(createInvite(ana, crew.teamId, { hours: 1 }), sara.key, 'sara'); back = readLog(crew.teamId).ops;
+    assert.deepEqual(await daemon.command({ type: 'teamRemove', team: crew.teamId, key: sara.key }), { team: crew.teamId, name: 'core', key: sara.key, member: 'sara' });
+    removal = readLog(crew.teamId).ops.at(-1); assert.equal(removal.type, 'remove');
+    await new Promise(resolve => setImmediate(resolve));
+  });
+  assert.deepEqual(exits, ['sara']);
+  // Sara is back on the team, then hears she was removed from it: on no team, her daemon stops.
+  await withHome(crew.member.home, async () => {
+    merge(crew.teamId, back); assert.equal(peer.onTeam(), true);
+    const daemon = Object.assign(new PeerDaemon({ conductor: () => {}, onExit: () => exits.push('sara again') }), { me: sara });
+    assert.deepEqual(daemon.extensions()['elu.roster.push']({ teamId: crew.teamId, ops: [removal] }, { key: ana.key }), { added: 1, rejected: 0 });
+    // It stops a moment after its answer, so the answer is not lost to the close.
+    await new Promise(resolve => setTimeout(resolve, 300)); await new Promise(resolve => setImmediate(resolve));
+    assert.equal(peer.onTeam(), false);
+  });
+  assert.deepEqual(exits, ['sara', 'sara again']);
+});
+
+// The daemon of a member, as a test drives it: dials and leaves are recorded, and nothing connects.
+const memberDaemon = (me, exits, dials = []) => Object.assign(new PeerDaemon({ conductor: () => {}, onExit: () => exits.push(me.name) }), { me, node: { dial: key => dials.push(key), leave: () => {} } });
+
+test('a leave no teammate heard keeps the daemon running and dialling them; the first to connect is given it, and then the daemon stops', async t => {
+  const crew = makeTeam(t), ana = crew.founder.identity, sara = crew.member.identity, exits = [], dials = [];
+  const founderIds = withHome(crew.founder.home, () => readLog(crew.teamId).ops.map(op => op.id));
+  // The founder's hello to sara: it still lists the team, since its log has her on it.
+  const hello = withHome(crew.founder.home, () => Object.assign(new PeerDaemon({ conductor: () => {} }), { me: ana }).hello(sara.key));
+  assert.deepEqual(hello.teams.map(row => row.id), [crew.teamId]);
+  const pushed = [];
+  await withHome(crew.member.home, async () => {
+    const daemon = memberDaemon(sara, exits, dials);
+    // Nobody is connected: the leave is written and noted as unheard, and the daemon does not stop.
+    assert.deepEqual(await daemon.command({ type: 'teamLeave', team: crew.teamId }), { team: crew.teamId, name: 'core', told: false, stopping: false });
+    assert.equal(peer.onTeam(), false); assert.equal(peer.leaveUnheard(), true); assert.equal(peer.peerWanted(), true);
+    assert.deepEqual([...new Set(dials)], [ana.key], 'it dials the founder');
+    assert.equal(daemon.idle(Date.now() + 3600000), false); assert.equal(daemon.alone(), false);
+    // The founder connects. Its hello says it still counts sara in, so the connection only brings it up to date.
+    const session = { key: ana.key, state: 'open', remoteHello: hello, close: () => {},
+      request: async (method, params) => { pushed.push({ method, params }); return method === 'elu.roster.get' ? { teamId: crew.teamId, ids: founderIds } : { added: params.ops.length, rejected: 0 }; } };
+    assert.equal(daemon.admit(hello, session), 'member'); assert.equal(session.departed, true);
+    await daemon.sync(session);
+    assert.deepEqual(pushed.map(row => row.method), ['elu.roster.get', 'elu.roster.push']);
+    assert.deepEqual(pushed[1].params.ops.map(op => [op.type, op.by]), [['leave', sara.key]]);
+    assert.equal(peer.leaveUnheard(), false); assert.equal(peer.peerWanted(), false);
+    await new Promise(resolve => setImmediate(resolve));
+  });
+  assert.deepEqual(exits, ['sara'], 'with nothing left to tell, it stops');
+  await withHome(crew.founder.home, async () => {
+    assert.equal(merge(crew.teamId, pushed[1].params.ops).added.length, 1);
+    assert.equal(team(crew.teamId).members.find(m => m.key === sara.key).left, true);
+  });
+});
+
+test('an unheard leave goes with the invite proof, so the inviter lets the member back in; one whose teammates all count it out already is dropped', async t => {
+  const crew = makeTeam(t), ana = crew.founder.identity, sara = crew.member.identity, exits = [];
+  const sent = await withHome(crew.member.home, async () => {
+    const daemon = memberDaemon(sara, exits);
+    assert.equal((await daemon.command({ type: 'teamLeave', team: crew.teamId })).told, false);
+    const list = daemon.exitsFor(ana.key);
+    assert.deepEqual(list.map(row => [row.teamId, row.ops.at(-1).type, row.ops.at(-1).by]), [[crew.teamId, 'leave', sara.key]]);
+    assert.deepEqual(daemon.exitsFor('f'.repeat(64)), [], 'only for a former teammate');
+    return list;
+  });
+  await withHome(crew.founder.home, async () => {
+    const daemon = memberDaemon(ana, exits);
+    const prove = (exitsSent) => {
+      const code = createInvite(ana, crew.teamId, { hours: 1 }), keys = inviteKeys(code), row = openInvites([crew.teamId]).find(x => x.topic === keys.topic);
+      const fields = { topic: row.topic, joinerNonce: 'a'.repeat(64), inviterNonce: 'b'.repeat(64), inviter: ana.key, joiner: sara.key };
+      return daemon.extensions()['elu.invite.prove']({ proof: joinerProof(keys.seed, fields), name: 'sara', ...(exitsSent ? { exits: exitsSent } : {}) }, { key: sara.key, invite: { row, fields }, close: () => {} });
+    };
+    // Without the leave, the founder still has her on the team; an entry for another team is not taken.
+    assert.throws(() => prove(null), /You are already on this team\./);
+    assert.throws(() => prove([{ teamId: 'e'.repeat(64), ops: sent[0].ops }]), /You are already on this team\./);
+    const back = prove(sent);
+    assert.equal(back.teamId, crew.teamId);
+    const mine = team(crew.teamId).members.find(m => m.key === sara.key);
+    assert.deepEqual([mine.removed, mine.role], [false, 'member']);
+    assert.ok(readLog(crew.teamId).ops.some(op => op.type === 'leave' && op.by === sara.key), 'the leave came first');
+    await new Promise(resolve => setImmediate(resolve));
+  });
+  // Back on the team, sara's unheard leave is moot.
+  await withHome(crew.member.home, async () => {
+    const daemon = memberDaemon(sara, exits);
+    merge(crew.teamId, withHome(crew.founder.home, () => readLog(crew.teamId).ops)); daemon.heard(crew.teamId);
+    assert.equal(peer.onTeam(), true); assert.equal(peer.leaveUnheard(), false);
+    assert.equal(fs.readFileSync(peerFile('unheard.json'), 'utf8').trim(), '[]');
+    // She leaves again, unheard; the founder has removed her meanwhile, so its hello leaves the team out: nobody needs the leave.
+    assert.equal((await daemon.command({ type: 'teamLeave', team: crew.teamId })).told, false);
+    assert.equal(peer.leaveUnheard(), true);
+    assert.equal(daemon.admit({ teams: [] }, { key: ana.key }), null);
+    assert.equal(peer.leaveUnheard(), false); assert.equal(peer.peerWanted(), false);
+    await new Promise(resolve => setImmediate(resolve)); await new Promise(resolve => setImmediate(resolve));
+  });
+  assert.deepEqual(exits, ['sara']);
+});
+
+test('elu team leave and remove start the daemon for them, and a member on no team after a leave stops it; elu peer uninstall stops it from any folder; elu peers stops an older version\'s daemon on no team', { timeout: 240000 }, async t => {
+  const exits = [], crew = makeTeam(t), home = crew.member.home, founderHome = crew.founder.home;
+  t.after(async () => { for (const kill of exits) await kill(); for (const h of [home, founderHome]) withHome(h, () => { if (peer.peerStatus().running) peer.stopPeer(); }); });
+  const bootstrap = await testnet(t); enable(home, bootstrap); enable(founderHome, bootstrap);
+  // The login item lives under HOME on macOS: a scratch one, so nothing of this machine's is touched.
+  const previous = process.env.HOME; process.env.HOME = path.dirname(home);
+  t.after(() => { if (previous === undefined) delete process.env.HOME; else process.env.HOME = previous; });
+  const gone = pid => { try { process.kill(pid, 0); return false; } catch { return true; } };
+  const stopped = async (where, label) => { const pid = state(where)?.pid; await until(() => !withHome(where, () => peer.peerStatus().running) && (!pid || gone(pid)), label, 30000); };
+  await withHome(home, async () => {
+    // elu peer uninstall: no login item here, and the daemon stops.
+    await peer.ensurePeer();
+    const uninstalled = await peerCli(['peer', 'uninstall'], {});
+    assert.equal(uninstalled.peerStopped, true); assert.equal(uninstalled.message, 'The peer daemon no longer starts at login, and it stopped.');
+  });
+  await stopped(home, 'the daemon stopped by peer uninstall');
+  // elu team leave on the last team, with the founder offline: the daemon is started for it,
+  // nobody is there to hear it, so it keeps running for the leave.
+  const left = await withHome(home, () => peerCli(['team', 'leave'], {}));
+  assert.equal(left.message, 'You left core. No teammate was online, so the first one to connect is told.');
+  assert.equal(left.told, false);
+  await withHome(home, async () => {
+    assert.equal(peer.onTeam(), false); assert.equal(peer.peerWanted(), true); assert.equal(peer.peerStatus().running, true);
+    await assert.rejects(peerCli(['team', 'leave'], {}), /Create a team first/);
+  });
+  // The founder comes online: sara's daemon gives it the leave, and with nothing left to tell, exits.
+  await withHome(founderHome, () => peer.ensurePeer());
+  await until(() => withHome(founderHome, () => team(crew.teamId).members.find(m => m.key === crew.member.identity.key).left === true), 'the founder has the leave', 90000);
+  await stopped(home, 'the daemon exited once the leave was heard');
+  withHome(home, () => { assert.equal(peer.leaveUnheard(), false); assert.equal(peer.peerWanted(), false); });
+  // elu team remove: the founder's daemon keeps running on the team. Sara is let back in first.
+  await withHome(founderHome, async () => {
+    redeemCode(createInvite(crew.founder.identity, crew.teamId, { hours: 1 }), crew.member.identity.key, 'sara');
+    const removed = await peerCli(['team', 'remove', 'sara'], {});
+    assert.equal(removed.message, 'Removed sara from core. A new invite brings them back.');
+    assert.equal(team(crew.teamId).members.find(m => m.key === crew.member.identity.key).removed, true);
+    assert.equal(peer.peerStatus().running, true);
+  });
+  // A daemon of 0.1.5 left running on no team: elu peers stops it and starts none.
+  await withHome(home, async () => {
+    const script = path.join(path.dirname(home), 'old-daemon.cjs'); fs.writeFileSync(script, OLD_DAEMON);
+    const child = spawn(process.execPath, [script, peerFile(), 'yes'], { stdio: 'ignore' }), exited = new Promise(resolve => child.once('exit', resolve));
+    exits.push(() => { child.kill('SIGKILL'); return exited; });
+    await until(() => withHome(home, () => peer.peerStatus().running && peer.peerStatus().stale), 'the old daemon running', 10000);
+    const listed = await peerCli(['peers'], {});
+    assert.match(listed.message, /^No team yet, so nothing runs\./);
+    await exited; await new Promise(resolve => setTimeout(resolve, 1500));
+    assert.equal(peer.peerStatus().running, false, 'nothing started in its place');
+    await assert.rejects(peerCli(['ask', '@ana', 'hi'], {}), /No team yet\. Create one with elu team create NAME, or join one with elu join CODE\./);
+  });
 });
 
 test('a teammate the other side has not heard of proves it in the hello, and each side then pushes the roster ops the other lacks', async t => {
@@ -1565,33 +1777,38 @@ test('a member removed while away is told so at admission, and served nothing', 
   // After it, dan joins and gets a channel: Sara is told she is out, and nothing written since.
   const dan = 'd'.repeat(64);
   const later = withHome(ana.home, () => { const op = redeemCode(createInvite(loadIdentity(), crew.teamId, { hours: 1 }), dan, 'dan'); return [op.id, setChannel(loadIdentity(), crew.teamId, { name: 'later', members: [ana.identity.key, dan] }).op.id]; });
-  await daemon(t, ana.home, { conductor: false }); await daemon(t, sara.home, { env: side.env });
-  // Ana's machine pushes her the removal on that connection and nothing else: her machine then shows no team.
+  await daemon(t, ana.home, { conductor: false }); const hers = await daemon(t, sara.home, { env: side.env });
+  // Ana's machine pushes her the removal on that connection and nothing else: her machine then
+  // shows no team, and on no team her daemon stops.
   await until(() => withHome(sara.home, () => team(crew.teamId)).members.find(m => m.key === sara.identity.key).removed, 'the removal at sara');
   await until(() => state(sara.home)?.teams?.length === 0, 'no team at sara');
+  await until(() => hers.child.exitCode !== null, 'sara\'s daemon stops on no team');
   const log = withHome(ana.home, () => fs.readFileSync(peerFile('daemon.log'), 'utf8'));
   assert.ok(log.includes(`telling ${sara.identity.key.slice(0, 8)} about a team`), log);
   assert.equal(records(ana.home).length, 0);
   assert.equal(online(sara.home, ana.identity.key), false); assert.equal(online(ana.home, sara.identity.key), false);
   assert.ok(!withHome(ana.home, () => team(crew.teamId)).members.find(m => m.key === sara.identity.key && !m.removed));
-  const hers = withHome(sara.home, () => readLog(crew.teamId).ops.map(op => op.id));
-  for (const id of later) assert.ok(!hers.includes(id), 'nothing after her removal');
+  const ids = withHome(sara.home, () => readLog(crew.teamId).ops.map(op => op.id));
+  for (const id of later) assert.ok(!ids.includes(id), 'nothing after her removal');
   assert.ok(!withHome(sara.home, () => team(crew.teamId)).members.some(m => m.key === dan));
 });
 
 test('leaving and removing reach the teammates online, and the same key joins again with a new code', async t => {
   const { crew, ana, sara, side } = await pair(t);
-  const a = await daemon(t, ana.home, { conductor: false }); await daemon(t, sara.home, { env: side.env });
+  const a = await daemon(t, ana.home, { conductor: false }); let hers = await daemon(t, sara.home, { env: side.env });
   await connected(ana, sara);
   // The founder cannot leave; Sara cannot remove anyone.
   await assert.rejects(run(ana.home, { type: 'teamLeave', team: crew.teamId }), /You made core, so you cannot leave it\./);
   await assert.rejects(run(sara.home, { type: 'teamRemove', team: crew.teamId, key: ana.identity.key }), /Only an admin of core/);
   // Sara leaves: Ana's machine gets the op at once, and Sara's no longer lists the team or its project.
   withHome(sara.home, () => setTeamProject(crew.teamId, 'app'));
-  assert.deepEqual(await run(sara.home, { type: 'teamLeave', team: crew.teamId }), { team: crew.teamId, name: 'core' });
+  assert.deepEqual(await run(sara.home, { type: 'teamLeave', team: crew.teamId }), { team: crew.teamId, name: 'core', told: true, stopping: true });
   await until(() => withHome(ana.home, () => team(crew.teamId)).members.find(m => m.key === sara.identity.key)?.left, `the leave at ana\n${a.log()}`);
   await until(() => state(sara.home)?.teams?.length === 0 && !state(ana.home)?.teams[0].members.some(m => m.key === sara.identity.key), 'both heartbeats');
   assert.deepEqual(read(sara.home, 'team-projects.json'), {});
+  // On no team, her daemon stops; a join starts one again.
+  await until(() => hers.child.exitCode !== null, 'sara\'s daemon stops after the leave');
+  hers = await daemon(t, sara.home, { env: side.env });
   // A new code brings the same key back.
   const code = withHome(ana.home, () => createInvite(ana.identity, crew.teamId, { hours: 1 }));
   assert.deepEqual(await run(sara.home, { type: 'join', code }, 120000), { id: crew.teamId, name: 'core', inviter: { name: 'ana', fingerprint: ana.identity.key.slice(0, 8) } });
@@ -1601,6 +1818,8 @@ test('leaving and removing reach the teammates online, and the same key joins ag
   const removed = await run(ana.home, { type: 'teamRemove', team: crew.teamId, key: sara.identity.key });
   assert.deepEqual(removed, { team: crew.teamId, name: 'core', key: sara.identity.key, member: 'sara' });
   await until(() => withHome(sara.home, () => team(crew.teamId)).members.find(m => m.key === sara.identity.key)?.removed && state(sara.home)?.teams?.length === 0, 'the removal at sara');
+  await until(() => hers.child.exitCode !== null, 'sara\'s daemon stops after the removal');
+  hers = await daemon(t, sara.home, { env: side.env });
   const again = withHome(ana.home, () => createInvite(ana.identity, crew.teamId, { hours: 1 }));
   // The code she came back with is still in its retry window, but its admit no longer stands.
   // The refusal is followed at once by the close, so her side may see either.

@@ -58,3 +58,13 @@ test('EOF at confirmation declines without crashing',(t)=>{
  const p=project(t),f=fakeClis(p.parent);const script=`process.stdin.isTTY=true;const{main}=await import(${JSON.stringify(pathToFileURL(CLI).href)});const result=await main(['init']);console.log(JSON.stringify(result));`;
  const result=command(process.execPath,['--input-type=module','-e',script],p.root,f.env);assert.equal(result.status,0,result.stderr);assert.equal(fs.existsSync(path.join(p.root,'.elu-code')),false);
 });
+test('uninstall also stops the peer daemon, which runs while the machine is on a team',(t)=>{
+ const q=setup(t),peer=path.join(q.env.XDG_CONFIG_HOME,'elu-code','peer');fs.mkdirSync(peer,{recursive:true});
+ const version=JSON.parse(fs.readFileSync(new URL('../package.json',import.meta.url),'utf8')).version;
+ // A daemon's heartbeat, with this process standing in for it.
+ fs.writeFileSync(path.join(peer,'state.json'),JSON.stringify({running:true,stopped:false,pid:process.pid,version,at:new Date().toISOString(),teams:[]}));
+ const result=cli(q.root,['uninstall','--yes'],q.env);assert.equal(result.status,0,result.stdout);assert.equal(result.json.peerStopped,true);assert.match(result.json.message,/ The peer daemon stopped\.$/);
+ const folder=path.join(peer,'commands');assert.deepEqual(fs.readdirSync(folder).map(name=>JSON.parse(fs.readFileSync(path.join(folder,name),'utf8')).type),['shutdown']);
+ // With none running, uninstall says nothing about it.
+ const p=setup(t),again=cli(p.root,['uninstall','--yes'],p.env);assert.equal(again.status,0,again.stdout);assert.equal(again.json.peerStopped,undefined);
+});

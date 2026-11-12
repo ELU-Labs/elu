@@ -23,7 +23,7 @@ addUserBin();
 sweepServers();
 // Peer commands load lib/peer/ only when used; it never imports the optional packages at load time.
 const PEER_COMMANDS = new Set(['id', 'team', 'invite', 'join', 'share', 'unshare', 'peers', 'peer', 'ask', 'relay']);
-const HELP = `ELU Code — terminal coding workspace\n\nRun elu anywhere to open the terminal app.\nThe first start asks for a project name; later starts open your last project.\nSessions lists every session; type a message to start one.\nKanban shows the open project's tasks. Chats holds your channels and direct messages. Type / for commands and help.\nEditing workspaces are prepared automatically. Pushes require separate approval.\n\nCommands:\n  conductor [stop]\n  schedule [list]\n  dashboard\n  init [--yes] [--dry-run]\n  run <goal> [--yes] [--dry-run] [--permissions auto|full] [--place here|branch:NAME] [--folder PATH]...\n  run <id> --publish [--approve-push <confirmationId>]\n  status [id] [--recover]\n  open <id> [--bot NAME] [--exec]\n  check <id>\n  policy show\n  uninstall [--yes] [--dry-run]\n\nPeer network:\n  id [--name N] [--export] [--import CODE]\n  team create NAME | team | team leave [TEAM] | team remove NAME [--team ID]\n  invite [--team ID] [--hours N] [--project PATH]\n  join CODE [--project PATH]\n  share [PATH] [--as HANDLE] [--no-status] | unshare HANDLE\n  peers\n  peer on|off|status|install|uninstall\n  ask [@NAME] [--project H] TEXT\n  relay [--team ID]\n\nEvery command accepts --json. --dry-run prints the proposed task setup;\nit does not execute the task or verify the resulting implementation.\n`;
+const HELP = `ELU Code — terminal coding workspace\n\nRun elu anywhere to open the terminal app.\nThe first start asks for a project name; later starts open your last project.\nSessions lists every session; type a message to start one.\nKanban shows the open project's tasks. Chats holds your channels and direct messages. Type / for commands and help.\nEditing workspaces are prepared automatically. Pushes require separate approval.\n\nCommands:\n  conductor [stop]\n  schedule [list]\n  dashboard\n  init [--yes] [--dry-run]\n  run <goal> [--yes] [--dry-run] [--permissions auto|full] [--place here|branch:NAME] [--folder PATH]...\n  run <id> --publish [--approve-push <confirmationId>]\n  status [id] [--recover]\n  open <id> [--bot NAME] [--exec]\n  check <id>\n  policy show\n  uninstall [--yes] [--dry-run]\n\nPeer network:\n  id [--name N] [--export] [--import CODE]\n  team create NAME | team | team leave [TEAM] | team remove NAME [--team ID]\n  invite [--team ID] [--hours N] [--project PATH]\n  join CODE [--project PATH]\n  share [PATH] [--as HANDLE] [--no-status] | unshare HANDLE\n  peers\n  peer install|uninstall | peer trust|untrust @NAME\n  ask [@NAME] [--project H] TEXT\n  relay [--team ID]\n\nEvery command accepts --json. --dry-run prints the proposed task setup;\nit does not execute the task or verify the resulting implementation.\n`;
 function argumentsOf(argv) {
   const flags = {}; const words = [];
   const boolean = new Set(['json', 'yes', 'dry-run', 'publish', 'recover', 'exec', 'help', 'version', 'daemon', 'export', 'no-status']);
@@ -84,6 +84,9 @@ export async function main(argv = process.argv.slice(2)) {
     const { launchTerminal } = await import('../lib/terminal.mjs'); return launchTerminal();
   }
   if (words[0] === 'peer' && flags.daemon) {
+    // Started by the app, the CLI or a login service. On no team, with no join waiting, it
+    // has nothing to do and exits before it connects to anything.
+    if (!(await import('../lib/peer/index.mjs')).peerWanted()) return { quiet: true };
     const { PeerDaemon } = await import('../lib/peer/daemon.mjs');
     const owner = new PeerDaemon({ onExit: () => close() });
     let closing = false; const close = async () => { if (closing) return; closing = true; await owner.stop(); process.exit(0); };
@@ -187,7 +190,11 @@ export async function main(argv = process.argv.slice(2)) {
   }
   if (command === 'uninstall') {
     const plan = uninstallPlan(repo);
-    return await confirm(plan, flags) ? applyUninstall(repo, plan) : { ...plan, needsConfirmation: !flags['dry-run'] };
+    if (!await confirm(plan, flags)) return { ...plan, needsConfirmation: !flags['dry-run'] };
+    const done = applyUninstall(repo, plan);
+    // The peer daemon stops too. It starts again when ELU Code opens on a machine still on a team.
+    let peerStopped = false; try { peerStopped = (await import('../lib/peer/index.mjs')).stopPeer(); } catch { /* No peer files. */ }
+    return peerStopped ? { ...done, peerStopped, message: `${done.message} The peer daemon stopped.` } : done;
   }
   refuse(`Unknown command: ${words.join(' ')}. Use elu --help.`);
 }
