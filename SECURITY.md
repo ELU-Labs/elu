@@ -259,6 +259,11 @@ limits teammates get. Treat it like a login to this machine.
   yes ("Is <name>'s computer yours too?", or `elu join CODE --mine`). A teammate who sends you
   one cannot make their computer yours: say No.
 - An approval waits on both machines. The first answer, from either one, is the one that counts.
+- A machine of yours sees every session on the other one, not only the ones it started:
+  sessions you started there, ones a schedule or a bot started, and ones a teammate's message
+  started, with their chat, steps, changes and approvals. It can continue, stop and answer
+  each of them. A teammate's question answered in Chats is not shown. An ordinary teammate
+  sees none of this.
 
 ## Leaving, removal and coming back
 
