@@ -7,6 +7,7 @@ import { parseWhen, nextRun, saveSchedule, listSchedules, runDue, runScheduleNow
 import { enqueue } from '../lib/conductor.mjs';
 import { pendingRequests, updateRequest } from '../lib/workspace.mjs';
 import { project } from './helpers.mjs';
+import { saveDefaultMode } from '../lib/modes.mjs';
 
 // Local times, so the tests hold in any time zone. 2026-11-09 is a Monday.
 const at = (day, hour, minute = 0) => new Date(2026, 10, day, hour, minute);
@@ -83,13 +84,37 @@ test('a schedule runs with Ask or Approve for me, never Full access', t => {
   home(t); const p = project(t), start = () => true, when = () => parseWhen('every 1h', at(9, 8));
   assert.throws(() => saveSchedule({ root: p.root, goal: 'Lint', when: when(), permissions: 'full' }, at(9, 8)), /Approve for me at most/);
   assert.throws(() => saveSchedule({ root: p.root, goal: 'Lint', when: when(), permissions: 'locked' }, at(9, 8)), /Choose ask, auto, or full/);
-  const row = saveSchedule({ root: p.root, goal: 'Lint', when: when(), permissions: 'auto' }, at(9, 8));
-  assert.equal(row.permissions, 'auto'); assert.equal(listSchedules()[0].permissions, 'auto');
-  assert.equal(saveSchedule({ root: p.root, goal: 'Plain', when: when() }, at(9, 8)).permissions, null);
+  const row = saveSchedule({ root: p.root, goal: 'Lint', when: when(), permissions: 'auto', picked: true }, at(9, 8));
+  assert.equal(row.permissions, 'auto'); assert.equal(listSchedules()[0].permissions, 'auto'); assert.equal(listSchedules()[0].picked, true);
+  const plain = saveSchedule({ root: p.root, goal: 'Plain', when: when() }, at(9, 8));
+  assert.equal(plain.permissions, null); assert.equal('picked' in plain, false);
+  assert.throws(() => saveSchedule({ root: p.root, goal: 'Lint', when: when(), permissions: 'auto', picked: 'yes' }, at(9, 8)), /picked is true or false/);
   assert.equal(runDue(at(9, 10), { start }), 2);
-  const requests = pendingRequests(p.root);
-  assert.equal(requests.find(request => request.scheduleId === row.id).permissions, 'auto');
-  assert.equal('permissions' in requests.find(request => request.scheduleId !== row.id), false);
+  const requests = pendingRequests(p.root), run = requests.find(request => request.scheduleId === row.id);
+  // A picked mode is kept on the run, above the default (Ask for approval here).
+  assert.equal(run.permissions, 'auto'); assert.equal(run.picked, true);
+  assert.equal('permissions' in requests.find(request => request.scheduleId === plain.id), false);
+});
+
+// A mode the owner did not pick follows the default at each run, so a lower default reaches
+// a schedule saved before it. A schedule saved before picks were kept counts as not picked.
+test('a schedule whose mode was not picked runs with no more access than the default now', t => {
+  home(t); const p = project(t), start = () => true, when = () => parseWhen('every 1h', at(9, 8));
+  saveDefaultMode('auto');
+  const row = saveSchedule({ root: p.root, goal: 'Lint', when: when(), permissions: 'auto', picked: false }, at(9, 8));
+  assert.equal('picked' in row, false);
+  assert.equal(runDue(at(9, 10), { start }), 1);
+  assert.equal(pendingRequests(p.root).find(request => request.scheduleId === row.id).permissions, 'auto', 'the default allows it');
+  saveDefaultMode('ask');
+  for (const request of pendingRequests(p.root)) updateRequest(p.root, request.id, { state: 'done' });
+  assert.equal(runDue(at(9, 11, 1), { start }), 1);
+  const runs = pendingRequests(p.root).filter(request => request.scheduleId === row.id && request.state !== 'done');
+  assert.equal(runs.length, 1); assert.equal(runs[0].permissions, 'ask'); assert.equal('picked' in runs[0], false);
+  // And it never goes above Approve for me, whatever the default.
+  saveDefaultMode('full');
+  for (const request of pendingRequests(p.root)) updateRequest(p.root, request.id, { state: 'done' });
+  assert.equal(runDue(at(9, 12, 2), { start }), 1);
+  assert.equal(pendingRequests(p.root).find(request => request.scheduleId === row.id && request.state !== 'done').permissions, 'auto');
 });
 
 test('a schedule whose project folder is gone is noted, not run', t => {

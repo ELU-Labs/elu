@@ -2415,6 +2415,7 @@ test('a scheduled draft that follows the default gets Approve for me at most, an
   await until(() => /New sessions start with Full access, this scheduled one with Approve for me\. Schedules run with Approve for me at most\./.test(status().replace(/\s+/g, ' ')) && /Permissions {2}Approve for me/.test(text()), 'never full');
   await send(v, 'Check dependencies for updates'); await until(() => /Scheduled daily 9:00/.test(status()), 'scheduled');
   assert.equal(listSchedules().find(row => row.goal === 'Check dependencies for updates')?.permissions, 'auto');
+  assert.equal('picked' in listSchedules().find(row => row.goal === 'Check dependencies for updates'), false, 'it follows the default at each run');
 });
 
 // A message sent from the form uses its settings up wherever the form was opened. One opened
@@ -2444,6 +2445,7 @@ test('a mode picked in a form opened from Kanban does not carry into the next ne
   await send(v, '/permissions auto'); await until(() => /Approve for me for this session\./.test(status()), 'auto picked');
   await send(v, 'Check dependencies for updates'); await until(() => /Scheduled daily 9:00/.test(status()), 'scheduled');
   assert.equal(listSchedules().find(row => row.goal === 'Check dependencies for updates')?.permissions, 'auto');
+  assert.equal(listSchedules().find(row => row.goal === 'Check dependencies for updates')?.picked, true, 'picked, so a lower default leaves it');
   await selectRow(v, /\+ New session/); await until(() => /Permissions {2}Ask for approval/.test(text()) && /When\s+now/.test(text()), 'the next form has no schedule and the default');
 });
 
@@ -2451,6 +2453,7 @@ test('a saved request goes again with no more access than the default now', { ti
   const p = setup(t);
   saveRequest(p.root, 'Add a retry budget', null, { state: 'blocked', reason: 'Checks are still needed.', permissions: 'full', place: { kind: 'here' } });
   saveRequest(p.root, 'Rename billing', null, { state: 'blocked', reason: 'Checks are still needed.', permissions: 'full' });
+  saveRequest(p.root, 'Tidy the changelog', null, { state: 'blocked', reason: 'Checks are still needed.', permissions: 'auto', scheduleId: 'schedule-0a1b2c3d' });
   const v = await view(t, { repo: p.repo }), panels = v.current.panels, status = () => panels.status.getText();
   const started = goal => { const row = v.current.snapshot.tasks.find(task => task.goal === goal); return row && readTask(p.repo, row.id); };
   await send(v, '/kanban'); await until(() => v.current.view === 'kanban', 'Kanban');
@@ -2465,6 +2468,10 @@ test('a saved request goes again with no more access than the default now', { ti
   await until(() => /Queued again, with Ask for approval, the default now\./.test(status()), 'retried');
   await until(() => started('Rename billing'), 'second session');
   assert.equal(started('Rename billing').permissions, 'ask');
+  // A schedule's run whose mode was not picked is retried with the default now too.
+  await selectRow(v, /Tidy the changelog/); v.input.write('r');
+  await until(() => /Queued again, with Ask for approval, the default now\./.test(status()) && pendingRequests(p.root).some(row => row.goal === 'Tidy the changelog' && row.state !== 'blocked'), 'the run retried');
+  assert.equal(pendingRequests(p.root).find(row => row.goal === 'Tidy the changelog').permissions, 'ask');
 });
 
 // The pick is saved on the request, so a window that did not send it, or ELU Code opened again,
