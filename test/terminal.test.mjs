@@ -3417,7 +3417,11 @@ test("the owner's list: his one running session is one row, its spent messages l
   await selectRow(v, /@ali question/);
   await until(() => /y accept · n decline · enter read/.test(panels.chat.getText()), 'its keys beside the list');
   panels.chat.focus();
-  await until(() => /y accept {2}n decline {2}↑↓ scroll {2}esc sessions {2}i type/.test(panels.keys.getText()), 'the same keys while the pane has the focus');
+  await until(() => /y accept {2}n decline {2}c decline {2}↑↓ scroll {2}esc sessions {2}i type/.test(panels.keys.getText()), 'the same keys while the pane has the focus');
+  // Ctrl-Y and Ctrl-N there answer nothing.
+  v.input.write('\x19'); v.input.write('\x0e'); await pause(300);
+  assert.deepEqual(peer.sent.filter(c => ['approve', 'discard', 'work'].includes(c.type)), [], 'Ctrl-Y and Ctrl-N answer nothing');
+  assert.ok(rows(v).some(row => /@ali question/.test(row)), 'the question still waits');
   v.input.write('n');
   await until(() => peer.sent.some(c => c.type === 'discard' && c.id === 'in-ali') && /Declined @ali's message\./.test(status()), 'n declines it from the pane');
   assert.equal(panels.ask.getValue(), ''); assert.deepEqual(pendingRequests(p.root).map(row => row.goal), ['you have my approval'], 'no session was started');
@@ -3515,4 +3519,55 @@ test('y or n alone in an open session answers what it waits on; with nothing wai
   await send(v, 'n');
   await until(() => pendingRequests(p.root).some(row => row.goal === 'n' && row.continuationTaskId === '4') || readTask(p.repo, '4').messages.some(row => row.text === 'n'), 'n goes to the session');
   assert.doesNotMatch(panels.status.getText(), /y and n answer/);
+});
+
+test("Ctrl-C beside the list declines nothing: the teammate's question is never answered by it", { timeout: 30000 }, async t => {
+  const p = setup(t), peer = fakePeer({ items: [ownerAsk()] }), v = await view(t, { repo: p.repo, peer }), panels = v.current.panels;
+  await wide(v);
+  await selectRow(v, /@ali question/);
+  await until(() => /y accept · n decline · enter read · c decline/.test(panels.chat.getText()), 'its keys beside the list');
+  panels.chat.focus();
+  await until(() => /y accept {2}n decline {2}c decline/.test(panels.keys.getText()), 'the pane has the focus');
+  // Nothing is highlighted, so Ctrl-C quits; it declines nothing on the way out.
+  let closed = false; v.finished.then(() => { closed = true; }, () => { closed = true; });
+  v.input.write('\x03');
+  await until(() => closed || v.current.screen.destroyed || modal(v, 'Quit'), 'Ctrl-C quits', 5000).catch(() => {});
+  await pause(300);
+  assert.deepEqual(peer.sent.filter(c => ['approve', 'discard', 'work'].includes(c.type)), [], 'no decline was sent');
+});
+
+test('a lone y answers only the row it was typed on: when that row leaves the list, Enter answers nothing', { timeout: 30000 }, async t => {
+  const p = setup(t), status = () => v.current.panels.status.getText();
+  const items = [
+    { id: 'in-1', kind: 'incoming', peer: KEYS.sara, name: 'sara', project: null, text: 'Can you look at the flaky test?', at: ago(30), state: 'submitted', threadId: 'th-1', request: 'ask' },
+    { id: 'in-2', kind: 'incoming', peer: KEYS.li, name: 'li', project: null, text: 'Is the release out?', at: ago(20), state: 'submitted', threadId: 'th-2', request: 'ask' },
+  ];
+  const peer = fakePeer({ items }), v = await view(t, { repo: p.repo, peer }), panels = v.current.panels;
+  await wide(v);
+  await selectRow(v, /@sara question/);
+  // y is typed on @sara's question, then she takes it back before Enter.
+  panels.ask.focus(); panels.ask.readInput(); await until(() => panels.ask.__listener, 'message box');
+  panels.ask.setValue('y');
+  items.splice(items.findIndex(item => item.id === 'in-1'), 1);
+  await until(() => !rows(v).some(row => /@sara question/.test(row)) && /@li question/.test(cursor(v)), "the cursor moves to @li's question");
+  panels.ask.submit();
+  await until(() => /› The selected item changed\. Choose one in the list first\./.test(status()), 'refused');
+  assert.deepEqual(peer.sent.filter(c => ['approve', 'discard', 'work'].includes(c.type)), [], 'nothing was answered');
+  assert.equal(pendingRequests(p.root).length, 0, 'no session was started');
+  // Typed on the row it answers, it works.
+  await send(v, 'y');
+  await until(() => peer.sent.some(c => c.type === 'approve' && c.id === 'in-2'), "y accepts @li's question");
+});
+
+test('while the session works, its message that did not run says why, without keys that would act on the turn', { timeout: 30000 }, async t => {
+  const p = setup(t), began = ago(600), now = new Date().toISOString();
+  liveTask(p.root, { id: '3', goal: 'ELU Issues', state: 'ready' });
+  saveTask(p.repo, { ...readTask(p.repo, '3'), state: 'running', activeRole: 'lead', activeSince: now, owner: { pid: process.pid, identity: processIdentity(process.pid) }, messages: [{ at: began, text: 'ELU Issues' }] });
+  saveRequest(p.root, 'Add the migration step', null, { state: 'blocked', reason: 'The model was not available.', blockedAt: now, priority: 0, continuationTaskId: '3', taskId: null, attempts: 0, notBefore: null, queuedAt: ago(60), createdAt: ago(60) });
+  const v = await view(t, { repo: p.repo }), panels = v.current.panels, chat = () => panels.chat.getText().replace(/\n┃ /g, ' ').replace(/\s+/g, ' ');
+  await wide(v);
+  await selectRow(v, /ELU Issues/);
+  await until(() => /You \(blocked\)[^]*Add the migration step[^]*The model was not available\./.test(chat()), 'its chat says why');
+  assert.doesNotMatch(chat(), /r sends it again/);
+  assert.equal(pendingRequests(p.root).length, 1, 'the message still waits');
 });

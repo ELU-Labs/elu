@@ -145,7 +145,7 @@ test('a row that is not a session shows its own text and keys beside the list', 
   assert.deepEqual(rowCard(find(one, 'schedule'), now), { title: '◷ daily 9:00 · shop', tone: 'blue', text: 'Check the nightly build and list what failed\nNext run in 18h.', keys: 'r run now · p pause · x delete · enter last run' });
   assert.deepEqual(rowCard(find(one, 'approval'), now), { title: '? wants to · shop', tone: 'orange', text: 'The model wants to edit: src/auth.mjs', keys: 'y allow · n deny · enter open' });
   const ask = rowCard(find(one, 'peer'), now);
-  assert.deepEqual([ask.title, ask.tone, ask.keys], ['? @sara question · shop', 'orange', 'y accept · n decline · enter read']);
+  assert.deepEqual([ask.title, ask.tone, ask.keys], ['? @sara question · shop', 'orange', 'y accept · n decline · enter read · c decline']);
   assert.match(ask.text, /How do we rotate the signing keys on the build machines\?/);
   const paused = boardRows([shop], now, { schedules: [{ ...schedule, enabled: false }] }).find(row => row.kind === 'schedule');
   assert.match(rowCard(paused, now).text, /\nPaused\.$/); assert.match(rowCard(paused, now).keys, /p resume/);
@@ -182,7 +182,29 @@ test("the owner's list: one session is one row, and the teammate's question is t
   const rows = boardRows([home], now, { items: [ownerAsk] });
   assert.deepEqual(rows.map(row => [row.kind, row.group, row.kind === 'task' ? row.id : row.item.id]), [['peer', 0, 'peer-ask'], ['task', 1, '3']]);
   assert.deepEqual(boardSections(rows).filter(line => line.header).map(line => [line.header, line.count]), [['Needs you', 1], ['Running', 1]]);
-  assert.deepEqual(rowActions(rows[0]), [['y', 'accept'], ['n', 'decline'], ['enter', 'read']]);
+  assert.deepEqual(rowActions(rows[0]), [['y', 'accept'], ['n', 'decline'], ['enter', 'read'], ['c', 'decline']]);
+  // A reply or an ask of his that waits to go: c discards it, as n does.
+  const reply = boardRows([home], now, { items: [{ ...ownerAsk, id: 'peer-reply', kind: 'held', request: undefined }] }).find(row => row.kind === 'peer');
+  assert.deepEqual(rowActions(reply), [['y', 'send'], ['n', 'discard'], ['enter', 'read'], ['c', 'discard']]);
+});
+
+test("only the owner's own later turns spend his blocked message: a bot's scheduled turn or a teammate's message in the session does not", () => {
+  const idle = { ...ownerTask, state: 'answered', messages: [{ at: at(700), text: 'ELU Issues' }] }, held = ownerQueue.slice(0, 2);
+  const later = { continuationTaskId: '3', taskId: '3', createdAt: at(1) };
+  // A bot's scheduled turn, done or failed, and a teammate's follow-up in the same thread.
+  assert.deepEqual(supersededRequests([...held, { ...later, id: 'request-4', goal: 'Check the build', state: 'done', bot: 'critic', scheduled: true }], [idle]), []);
+  assert.deepEqual(supersededRequests([...held, { ...later, id: 'request-5', goal: 'And the docs?', state: 'done', origin: { kind: 'handoff', name: 'ali', peer: 'c'.repeat(64) } }], [idle]), []);
+  assert.deepEqual(supersededRequests([...held, { ...later, id: 'request-6', goal: 'Nightly', state: 'queued', scheduleId: 'schedule-0a1b2c3d' }], [idle]), []);
+  // What those turns leave in the session: the bot's scheduled message and the teammate's.
+  const ran = [{ at: at(0), text: 'Check the build', to: '@critic', scheduled: true }, { at: at(0), text: 'And the docs?', from: '@ali', peer: 'c'.repeat(64), kind: 'handoff' }];
+  assert.deepEqual(supersededRequests(held, [{ ...idle, messages: [...idle.messages, ...ran] }]), []);
+  // His own message to a bot in the session does spend them, as one to the lead does.
+  assert.deepEqual(supersededRequests(held, [{ ...idle, messages: [...idle.messages, { at: at(0), text: 'Look again', to: '@critic' }] }]), ['request-1', 'request-2']);
+  assert.deepEqual(supersededRequests([...held, { ...later, id: 'request-7', goal: 'Look again', state: 'done', bot: 'critic' }], [idle]), ['request-1', 'request-2']);
+  // While a bot's turn runs, his message waits on the session's row, which stands for the turn.
+  const busy = { ...idle, state: 'running', activeRole: 'bot:critic', activeSince: at(0) };
+  const rows = boardRows([{ name: 'home', root: '/p/home', activity: [], tasks: [busy], queue: held }], now);
+  assert.deepEqual(rows.map(row => [row.kind, row.group, row.id]), [['task', 1, '3']]);
 });
 
 test('a blocked or saved message to a session shows on that session\'s row; one for a new session keeps its own row, and c takes either away', () => {
