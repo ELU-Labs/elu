@@ -179,7 +179,12 @@ projects**. A rule is kept narrow:
 - A command keeps its program and subcommand: `npm test`, `git diff`, `pytest`,
   `python -m pytest`, `npm run lint`, `gh pr view`. Arguments may change.
 - A program that does too much as a word, such as `npm install`, `curl`, `docker`, `find`
-  or `git branch`, keeps the exact command.
+  or `git branch`, keeps the exact command. So do programs that read the files you name
+  (`cat`, `grep`, `rg`, `ls`, `head`, `tail` and the like) and `git fetch`, `clone` and
+  `ls-remote`.
+- The arguments are checked each time a rule answers: one that names a secret or ELU Code's
+  own files, or a git option that runs a program or writes a file (`--output`, `--ext-diff`,
+  `--no-index`, `--upload-pack`), asks.
 - A line that joins or wraps commands (`;`, `&&`, `||`, `$( )`, backticks, a redirect, a
   leading `NAME=value`) gets no `a`; it can only be allowed once. A pipe into `head`,
   `tail`, `wc` or `grep`, and `2>&1`, are read through.

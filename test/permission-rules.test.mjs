@@ -182,6 +182,28 @@ test('where the turn has no working sandbox, every command counts as outside it'
   assert.deepEqual(allowedBy('execute', { command: 'npm test' }, bare), { by: 'rule', text: 'npm test' }, 'one kept there says so and answers there');
 });
 
+// What a rule allows is checked each time it answers, not only when it was kept.
+test('a kept rule never reaches a secret, ELU Code\'s state or a git option that runs a program; read programs keep the exact command', t => {
+  const { project } = home(t);
+  const ctx = { project, cwd: project, saved: true, sandboxed: true }, outside = command => bash(command, { dangerouslyDisableSandbox: true });
+  saveRule({ kind: 'command', words: ['npm', 'test'], exact: false, outside: true }, { scope: 'all' });
+  saveRule({ kind: 'command', words: ['git', 'log'], exact: false, outside: true }, { scope: 'all' });
+  saveRule({ kind: 'command', words: ['git', 'diff'], exact: false, outside: true }, { scope: 'all' });
+  assert.equal(allowedBy(...outside('npm test -- src/a.test.js'), ctx)?.by, 'rule');
+  assert.equal(allowedBy(...outside('git log --oneline -5'), ctx)?.by, 'rule');
+  const state = path.join(process.env.XDG_CONFIG_HOME, 'elu-code', 'permission-rules.json');
+  for (const command of ['npm test -- ~/.ssh/id_ed25519', 'npm test --config=.env', 'npm test ~/.aws', `npm test ${state}`, `npm test --out=${state}`, 'npm test .env.local',
+    'git log --output=/tmp/x', 'git diff --no-index /dev/null notes.txt', 'git log --ext-diff', 'git diff -Oorder.txt', 'git log --exec=x', 'git diff --textconv'])
+    assert.equal(allowedBy(...outside(command), ctx), null, command);
+  // Programs that read what they are given, and git subcommands that reach another machine, keep the exact command.
+  for (const command of ['cat /etc/hosts', 'grep -r x .', 'rg needle', 'ls -la', 'head -5 a.txt', 'tail a.txt', 'tree', 'jq . a.json', 'git fetch origin', 'git clone https://x.test/r', 'git ls-remote origin', 'git archive HEAD', 'git bundle create b HEAD']) {
+    const made = rule(command).rule; assert.equal(made.exact, true, command); assert.equal(made.words.join(' '), command);
+  }
+  saveRule(rule('cat /etc/hosts', { cwd: project }).rule, { scope: 'all' });
+  assert.equal(allowedBy(...bash('cat /etc/hosts'), ctx)?.by, 'rule');
+  assert.equal(allowedBy(...bash('cat ~/.ssh/id_ed25519'), ctx), null, 'cat kept once reads nothing else');
+});
+
 test('every vendor\'s way of asking is read the same', () => {
   assert.deepEqual(actionOf('Bash', { command: 'npm test', dangerouslyDisableSandbox: true }), { kind: 'command', line: 'npm test', outside: true });
   assert.deepEqual(actionOf('execute', { CommandLine: 'npm test', Cwd: '/p' }), { kind: 'command', line: 'npm test', outside: false }, 'Antigravity');
