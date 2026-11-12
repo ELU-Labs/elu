@@ -1212,7 +1212,7 @@ test('Tasks shows peer work that waits for you first, and y / n decide it', { ti
   assert.ok(v.lines().every(line => line.length <= 160));
   board.focus(); selectRow(board, /reply to @sara/); await until(() => /y send {2}n discard/.test(v.panels.keys.getText()), 'reply row hint');
   selectRow(board, /@sara question/); await until(() => /y accept {2}n decline/.test(v.panels.keys.getText()), 'question row hint');
-  await until(() => /^\? @sara question · sample app\n┃ Question · How do we rotate keys\?\n\ny accept · n decline · enter open$/.test(v.panels.chat.getText()), 'the question beside the list');
+  await until(() => /^\? @sara question · sample app\n┃ Question · How do we rotate keys\?\n\ny accept · n decline · enter open · c decline$/.test(v.panels.chat.getText()), 'the question beside the list');
   assert.equal(v.current.session, null, 'a teammate’s message is not a session of yours'); assert.equal(v.current.screen.focused, board);
   v.input.write('y');
   // y approves: the daemon queues the session your own prompt would start, which the board then shows as a session.
