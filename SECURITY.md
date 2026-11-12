@@ -224,7 +224,9 @@ each teammate, and each other computer of yours, who has a clone of that same re
 No share is needed. A card holds only the session's title (its name, or the first line of
 what was asked, up to 80 characters), its column (In progress, Needs you or Done), who
 started it, the time it last moved, and the id of its Task when it has one. Never the chat,
-a file, a diff or a path. To know who has which repository, each machine sends each teammate
+a file, a diff or a path: a path in the title reads [path], and a title with a secret in it
+goes as "Session". A session a teammate's message started shows what they asked and their
+name only to teammates on a team that message came through; anyone else sees "Session". To know who has which repository, each machine sends each teammate
 one proof per repository: a hash of the two machines' keys, the repository id and its first
 commit. A teammate without a clone of that history cannot make the proof, and a proof made
 for one pair of machines counts for no other, so a card goes only to someone who has the
