@@ -2633,7 +2633,7 @@ test('a blocked run shows what was blocked, and a lead that asked instead says s
   assert.match(panels.header.getText(), /Auto/); assert.match(panels.ask._label.getText(), /Message Claude · Approve for me/);
 });
 
-test('a teammate message is answered, worked on in a mode picked now, or declined; a task preselects w', { timeout: 40000 }, async t => {
+test('a teammate message is approved as your own session, worked on in a mode picked now, or declined; y is preselected', { timeout: 40000 }, async t => {
   const p = setup(t), home = path.join(p.parent, 'home'), evals = path.join(home, 'evals'); fs.mkdirSync(evals, { recursive: true });
   environment(t, { HOME: fs.realpathSync(home) });
   const token = letter => `ghp_${letter.repeat(24)}`;
@@ -2662,13 +2662,17 @@ test('a teammate message is answered, worked on in a mode picked now, or decline
   await open('li');
   assert.match(row(/@li/), new RegExp(`sends you a task · Run evals with ${token('b')}`));
   await until(() => members.items.some(item => /@li\b.*trusted/.test(item.getText())), 'trusted mark');
-  // y on a question and y on a task open the same picker: the agent answers one and does the other.
-  await open('sara'); v.input.write('y'); await until(() => modal(v, 'Accept'), 'accept picker'); v.input.write('\r');
-  await until(() => peer.sent.some(c => c.type === 'work' && c.id === 'in-1'), 'y accepts');
-  assert.deepEqual(peer.sent.find(c => c.type === 'work' && c.id === 'in-1'), { type: 'work', id: 'in-1', permissions: 'ask', place: { kind: 'worktree' }, folders: [] });
+  // y approves: the message starts as if you typed it, in the open project when it names none. No picker.
+  await open('sara'); v.input.write('y');
+  await until(() => peer.sent.some(c => c.type === 'approve' && c.id === 'in-1'), 'y approves');
+  assert.deepEqual(peer.sent.find(c => c.type === 'approve' && c.id === 'in-1'), { type: 'approve', id: 'in-1', root: p.repo.root });
+  assert.equal(modal(v, 'Accept'), undefined, 'y opens no picker');
   assert.equal(peer.sent.filter(c => c.type === 'accept').length, 0, 'the read-only answer path is not used from the screen');
-  await until(() => /Accepted @sara\. It runs as your session; the reply goes back to this thread\./.test(status()), 'accept line');
-  await open('li'); v.input.write('y'); await until(() => modal(v, 'Accept'), 'accept picker for a task');
+  await until(() => /Approved @sara\. It runs as your session; the reply goes back to this thread\./.test(status()), 'approve line');
+  // w in the thread picks the mode, place and folders first.
+  await open('li'); v.input.write('\r'); await until(() => modal(v, 'Thread with @li'), 'task dialog');
+  assert.match(dialogText(v, 'Thread with @li'), /y approves: it starts as if you typed it\. w picks the mode first\. n declines\./); assert.match(dialogText(v, 'Thread with @li'), new RegExp(token('b')));
+  v.input.write('w'); await until(() => modal(v, 'Accept'), 'accept picker for a task');
   const work = dialogText(v, 'Accept');
   assert.match(work, /Permissions {2}Ask for approval {6}1 to change/); assert.match(work, /Runs in {6}New worktree {10}2 to change/);
   assert.match(work, /Asks before outside edits, escapes, and internet\./); assert.match(work, /A copy of this repo on a new branch\./); assert.match(work, /Other folders it may read\./); assert.doesNotMatch(work, /read-only/);
@@ -2676,19 +2680,18 @@ test('a teammate message is answered, worked on in a mode picked now, or decline
   v.input.write('1'); await until(() => modal(v, 'Permissions'), 'mode picker'); v.input.write('2');
   await until(() => modal(v, 'Accept') && /Permissions {2}Approve for me/.test(dialogText(v, 'Accept')), 'mode picked');
   v.input.write('\r');
-  await until(() => peer.sent.some(c => c.type === 'work' && c.id === 'in-2'), 'y accepts the task');
-  assert.deepEqual(peer.sent.find(c => c.type === 'work' && c.id === 'in-2'), { type: 'work', id: 'in-2', permissions: 'auto', place: { kind: 'worktree' }, folders: [fs.realpathSync(evals)] });
+  await until(() => peer.sent.some(c => c.type === 'work' && c.id === 'in-2'), 'w accepts the task');
+  assert.deepEqual(peer.sent.find(c => c.type === 'work' && c.id === 'in-2'), { type: 'work', id: 'in-2', permissions: 'auto', place: { kind: 'worktree' }, folders: [fs.realpathSync(evals)], root: p.repo.root });
   await until(() => /Accepted @li\. It runs as your session; the reply goes back to this thread\./.test(status()), 'accept line for a task');
   await open('sara'); v.input.write('n');
   await until(() => peer.sent.some(c => c.type === 'discard' && c.id === 'in-1') && /Declined @sara\./.test(status()), 'n declines');
-  // Enter reads a message; y is preselected for a question and a task alike, and w is no key.
+  // Enter reads a message; y is preselected, so Enter again approves it. w on the list opens nothing.
   const field = title => modal(v, title).children.find(child => child.type === 'textbox');
   await open('li'); v.input.write('\r'); await until(() => modal(v, 'Thread with @li'), 'task dialog');
-  assert.match(dialogText(v, 'Thread with @li'), /y accepts in a mode you pick\. n declines\./); assert.match(dialogText(v, 'Thread with @li'), new RegExp(token('b')));
   assert.equal(field('Thread with @li').getValue(), 'y');
-  v.input.write('\r'); await until(() => modal(v, 'Accept'), 'Enter accepts a task'); v.input.write('\x1b'); await until(() => !modal(v, 'Accept'), 'Esc leaves it waiting');
-  assert.equal(peer.sent.filter(c => c.type === 'work').length, 2);
-  await open('li'); v.input.write('w'); await new Promise(resolve => setTimeout(resolve, 150)); assert.equal(modal(v, 'Accept'), undefined, 'w opens nothing');
+  v.input.write('\r'); await until(() => peer.sent.some(c => c.type === 'approve' && c.id === 'in-2'), 'Enter approves a task');
+  assert.equal(peer.sent.filter(c => c.type === 'work').length, 1);
+  await open('li'); v.input.write('w'); await new Promise(resolve => setTimeout(resolve, 150)); assert.equal(modal(v, 'Accept'), undefined, 'w on the list opens nothing');
   await open('sara'); v.input.write('\r'); await until(() => modal(v, 'Thread with @sara'), 'question dialog');
   assert.equal(field('Thread with @sara').getValue(), 'y'); assert.match(dialogText(v, 'Thread with @sara'), /\[redacted\]/);
   v.input.write('n'); await until(() => peer.sent.filter(c => c.type === 'discard' && c.id === 'in-1').length === 2, 'n in the dialog declines');
@@ -2715,7 +2718,7 @@ test('trust is set from the teammate screen; a cut path is reported after a send
   assert.match(dialogText(v, 'Teammate @li'), /Trust: trusted · paths go out as they are\./); assert.match(dialogText(v, 'Teammate @li'), /t removes trust/);
   v.input.write('t'); await until(() => modal(v, 'Trust @li'), 'remove confirm'); assert.match(dialogText(v, 'Trust @li'), /Remove trust for @li\?/);
   await dialog(v, 'Trust @li', 'y'); await until(() => peer.sent.some(c => c.type === 'untrust' && c.key === KEYS.li) && /Removed trust for @li\./.test(status()), 'untrust sent');
-  await send(v, '@li anything'); await until(() => /Sent to @li\. It runs after they accept it\./.test(status()), 'plain line');
+  await send(v, '@li anything'); await until(() => /Sent to @li\. Their reply shows in this thread\./.test(status()), 'plain line');
   await send(v, '@sara where is /Users/me/evals'); await until(() => /Paths outside the repo were replaced with \[path\]\. Trust @sara to keep them\./.test(status()), 'cut line');
   assert.deepEqual(peer.sent.filter(c => ['ask', 'handoff'].includes(c.type)).map(c => [c.type, c.to]), [['ask', 'li'], ['ask', 'sara']]);
 });

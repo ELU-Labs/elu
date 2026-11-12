@@ -34,6 +34,7 @@ import { acceptIncoming, processOutbox, sendReply, syncRecords } from '../lib/pe
 import { task as a2aTask, TaskState } from '../lib/peer/a2a.mjs';
 import { peerDataBlock } from '../lib/peer/peerdata.mjs';
 import { peerCli } from '../lib/peer/cli.mjs';
+import { RULES_MAX, saveTeamAccess, teamAccess, teammateRules } from '../lib/peer/access.mjs';
 import { refuse } from '../lib/util.mjs';
 import { BOTS_TOLD, cleanBots, cleanBox, cleanRows, overlaps, statusRows, thisMachine } from '../lib/peer/status.mjs';
 import { createAsk, dismissAsk, reconnect, reviewText, teammate, tickAsks, teamAsk, dismissTeam, applyTask, getAsk, asks as allAsks } from '../lib/peer/asks.mjs';
@@ -303,11 +304,11 @@ test('a question that names no project goes to the project chosen for the team',
     share(app.root, { handle: 'app' }); share(docs.root, { handle: 'docs' });
     const methods = intakeMethods({ me: loadIdentity(), kick: () => {}, event: () => {} }), session = { key: ana.key };
     const send = (id, project = null) => methods.SendMessage({ message: message({ text: 'Where is it?', contextId: `thread-${id}`, messageId: id, ext: { kind: 'ask', project, hop: 1, from: { key: ana.key, name: 'ana' } } }) }, session);
-    const reason = task => task.status.message.parts[0].text;
-    assert.match(reason(send('m-1')), /Name a project: app, docs/, 'two shares and no choice');
+    // Two shares and no choice: the message still arrives, with no project, and waits for the owner.
+    const where = task => { const record = getRecord(task.id); return [record.root, record.project]; };
+    const unplaced = send('m-1'); assert.equal(unplaced.status.state, 'TASK_STATE_SUBMITTED'); assert.deepEqual(where(unplaced), [null, null]);
     // Joining from the docs folder picks docs for the team (index.share with the team). The
     // project is chosen at intake and kept on the record; the run is queued when the owner decides.
-    const where = task => { const record = getRecord(task.id); return [record.root, record.project]; };
     peer.share(docs.root, { teams: [crew.teamId] });
     const second = send('m-2'); assert.equal(second.status.state, 'TASK_STATE_SUBMITTED');
     assert.deepEqual(where(second), [docs.root, 'docs']);
@@ -340,7 +341,7 @@ test('a project is asked about only by the teams it is shared with, by name or w
     assert.equal(where(send(ana)), 'app'); assert.equal(where(send(bob)), 'docs');
     // A second project for core: the list Ana is offered holds her team's projects only.
     shareWith(web.root, { handle: 'web', teams: [crew.teamId] });
-    assert.equal(reason(send(ana)), 'Name a project: app, web.'); assert.equal(where(send(bob)), 'docs');
+    const unplaced = send(ana); assert.equal(unplaced.status.state, 'TASK_STATE_SUBMITTED'); assert.equal(where(unplaced), null, 'two projects and no choice: it arrives with none'); assert.equal(where(send(bob)), 'docs');
     // Sharing a project again with another team adds that team and keeps the first.
     shareWith(web.root, { teams: [second.id] });
     assert.equal(where(send(ana, 'web')), 'web'); assert.equal(where(send(bob, 'web')), 'web');
@@ -358,6 +359,159 @@ test('a project is asked about only by the teams it is shared with, by name or w
     redeemCode(createInvite(me, late.id, { hours: 1 }), cy.key, 'cy');
     assert.equal(reason(send(cy, 'old')), 'No project named old is shared.'); assert.equal(where(send(cy, 'lost')), 'lost');
     assert.equal(where(send(ana, 'old')), 'old'); assert.equal(where(send(bob, 'old')), 'old');
+  });
+});
+
+test('a message reaches a teammate who shares no project and waits; y with the open project starts it there; Auto starts it at once; real refusals still refuse', t => {
+  const crew = makeTeam(t), ana = crew.founder.identity, sara = crew.member;
+  withHome(sara.home, () => {
+    const events = [], ctx = { me: loadIdentity(), kick: () => events.push('kick'), event: text => events.push(text), push: () => {} };
+    const methods = intakeMethods(ctx), session = { key: ana.key };
+    const send = (text, id, extra = {}) => methods.SendMessage({ message: message({ text, contextId: `thread-${id}`, messageId: id, ext: { kind: 'ask', project: extra.project ?? null, hop: 1, from: { key: ana.key, name: 'ana' } } }) }, extra.session ?? session);
+    const reason = task => task.status.message.parts[0].text;
+    // Sara shares nothing and never set what teammates can do: the message arrives as chat and waits.
+    const first = send('testing if you see this message?', 'm-1');
+    assert.equal(first.status.state, 'TASK_STATE_SUBMITTED');
+    const record = getRecord(first.id);
+    assert.equal(record.waiting, true); assert.equal(record.root, null); assert.equal(record.project, null); assert.equal(record.text, 'testing if you see this message?');
+    assert.deepEqual(thread('thread-m-1').map(line => [line.dir, line.kind, line.text]), [['in', 'ask', 'testing if you see this message?']]);
+    const item = peer.peerItems().find(row => row.taskId === first.id);
+    assert.equal(item.kind, 'incoming'); assert.equal(item.text, 'testing if you see this message?'); assert.equal(item.name, 'ana');
+    assert.deepEqual(peer.threadMessages('thread-m-1').map(row => [row.from, row.name, row.text]), [['peer', 'ana', 'testing if you see this message?']]);
+    // y needs a project: with none it stays waiting; with the one the owner has open it starts there, as his own session.
+    assert.throws(() => acceptIncoming(ctx, first.id, { how: 'own' }), /Open ELU Code in the project teammates work in/);
+    assert.equal(getRecord(first.id).waiting, true);
+    assert.throws(() => acceptIncoming(ctx, first.id, { how: 'own', root: '/nowhere' }), /Open a project of yours/);
+    const { root } = registeredProject(t);
+    acceptIncoming(ctx, first.id, { how: 'own', root });
+    const row = pendingRequests(root).find(r => r.origin?.a2aTaskId === first.id);
+    assert.equal(row.state, 'queued'); assert.equal(row.permissions, 'ask'); assert.deepEqual(row.place, { kind: 'worktree' }); assert.equal(row.readOnly, false);
+    assert.deepEqual(row.origin, { kind: 'handoff', peer: ana.key, name: 'ana', a2aTaskId: first.id, threadId: 'thread-m-1', hop: 1, own: true });
+    assert.equal(getRecord(first.id).root, root);
+    // Auto with the project chosen at join, which is not shared: the next message starts at once there.
+    saveTeamAccess(crew.teamId, { handling: 'auto', rules: 'Be brief.', root });
+    const second = send('and this one?', 'm-2'), auto = getRecord(second.id);
+    assert.equal(second.status.state, 'TASK_STATE_SUBMITTED'); assert.equal(auto.waiting, false); assert.equal(auto.root, root); assert.deepEqual(auto.accessTeams, [crew.teamId]);
+    const started = pendingRequests(root).find(r => r.id === auto.requestId);
+    assert.equal(started.state, 'queued'); assert.deepEqual(started.origin.teams, [crew.teamId]); assert.equal(started.origin.own, true); assert.equal(events.at(-1), 'kick');
+    // Manual: it waits, in the same project.
+    saveTeamAccess(crew.teamId, { handling: 'manual' });
+    const third = getRecord(send('a third', 'm-3').id);
+    assert.equal(third.waiting, true); assert.equal(third.requestId, null); assert.equal(third.root, root);
+    // The real refusals still refuse.
+    assert.match(reason(send('x', 'm-4', { project: 'nope' })), /No project named nope is shared\./);
+    assert.match(reason(send('   ', 'm-5')), /The message has no text\./);
+    savePeerPolicy(ana.key, { muted: true }); assert.match(reason(send('x', 'm-6')), /not taking requests/); savePeerPolicy(ana.key, { muted: false });
+    assert.match(reason(methods.SendMessage({ message: message({ text: 'x', messageId: 'm-7', ext: { kind: 'ask', from: { key: 'c'.repeat(64), name: 'eve' } } }) }, { key: 'c'.repeat(64) })), /not on a team/);
+    // A question for a shared bot still needs a project to read.
+    saveBot({ name: 'docs', instructions: 'Answer from the docs.', shared: true });
+    saveTeamAccess(crew.teamId, { root: null });
+    const forBot = methods.SendMessage({ message: message({ text: 'Where are the docs?', contextId: 'thread-b', messageId: 'm-8', ext: { kind: 'ask', bot: 'docs', project: null, hop: 1, from: { key: ana.key, name: 'ana' } } }) }, session);
+    assert.equal(reason(forBot), 'There is no project here for that bot to read yet.');
+  });
+});
+
+test('what teammates can do here is saved per team, checked, and its rules reach the sessions of that team', t => {
+  const crew = makeTeam(t), ana = crew.founder.identity, sara = crew.member;
+  withHome(sara.home, () => {
+    assert.equal(teamAccess(crew.teamId), null, 'never set');
+    assert.throws(() => saveTeamAccess(crew.teamId, { handling: 'full' }), /Choose auto or manual\./);
+    assert.throws(() => saveTeamAccess(crew.teamId, { rules: 'x'.repeat(RULES_MAX + 1) }), /Keep the rules to 1000 characters\./);
+    assert.throws(() => saveTeamAccess(crew.teamId, { folder: '/' }), /Unknown access setting: folder\./);
+    assert.throws(() => saveTeamAccess(crew.teamId, { root: path.dirname(os.homedir()) }), /home folder cannot be/);
+    assert.throws(() => saveTeamAccess('team', {}), /Choose a team\./);
+    assert.equal(teamAccess(crew.teamId), null, 'a refused save writes nothing');
+    const saved = saveTeamAccess(crew.teamId, { rules: '  Only work on the elu repo.\r\nDon\'t write anything until I accept it.  ' });
+    assert.deepEqual({ ...saved, at: undefined }, { handling: 'auto', rules: 'Only work on the elu repo.\nDon\'t write anything until I accept it.', root: null, at: undefined }, 'Auto is the default');
+    assert.equal(saveTeamAccess(crew.teamId, { handling: 'manual' }).rules, saved.rules, 'what is not given is kept');
+    assert.equal(teammateRules({ peer: ana.key, team: crew.teamId }), saved.rules);
+    assert.equal(teammateRules({ peer: ana.key }), saved.rules, 'a session from before teams were named gets the rules of the teams the teammate is on');
+    assert.equal(teammateRules({ peer: 'c'.repeat(64) }), '', 'someone on none of my teams gets none');
+    assert.equal(teammateRules({ peer: ana.key, team: 'd'.repeat(64) }), '');
+    assert.equal(teammateRules({ peer: ana.key, teams: ['d'.repeat(64)] }), '');
+    // A session names every team of its project, and gets the rules of all of them.
+    const me = loadIdentity(), side = createTeam(me, 'side');
+    saveTeamAccess(side.id, { rules: 'Never touch billing.' });
+    assert.equal(teammateRules({ peer: ana.key, teams: [crew.teamId, side.id] }), `${saved.rules}\n\nNever touch billing.`);
+  });
+});
+
+test('the setting comes from the project a message runs in, never from the room the sender picks; a team ask never starts a session by itself', t => {
+  const crew = makeTeam(t), ana = crew.founder.identity, sara = crew.member, bob = withHome(newHome(t), () => createIdentity({ name: 'bob' }));
+  withHome(sara.home, () => {
+    // Sara and Ana are on core (Auto, project x, no rules) and side (Manual, project y, rules); Bob is on side too.
+    const me = loadIdentity(), side = createTeam(me, 'side');
+    redeemCode(createInvite(me, side.id, { hours: 1 }), ana.key, 'ana'); redeemCode(createInvite(me, side.id, { hours: 1 }), bob.key, 'bob');
+    const x = registeredProject(t), y = registeredProject(t), other = registeredProject(t);
+    shareWith(y.root, { handle: 'why', teams: [side.id] }); shareWith(other.root, { handle: 'other', teams: [crew.teamId] });
+    saveTeamAccess(crew.teamId, { handling: 'auto', root: x.root });
+    saveTeamAccess(side.id, { handling: 'manual', rules: 'Side rules.', root: y.root });
+    const ctx = { me, kick: () => {}, event: () => {}, push: () => {} }, methods = intakeMethods(ctx);
+    let n = 0;
+    const send = (ext, from = ana) => { const id = `room-${++n}`; return getRecord(methods.SendMessage({ message: message({ text: 'Please change it.', contextId: `thread-${id}`, messageId: id, ext: { kind: 'ask', project: null, hop: 1, from: { key: from.key, name: from.name }, ...ext } }) }, { key: from.key }).id); };
+    // The room says core, the project is side's: side's Manual and side's rules decide.
+    const picked = send({ project: 'why', room: { team: crew.teamId, channel: null } });
+    assert.equal(picked.root, y.root); assert.equal(picked.waiting, true); assert.equal(picked.requestId, null); assert.deepEqual(picked.accessTeams, [side.id]);
+    acceptIncoming(ctx, picked.task.id, { how: 'own' });
+    const row = pendingRequests(y.root).find(r => r.origin?.a2aTaskId === picked.task.id);
+    assert.deepEqual(row.origin.teams, [side.id]); assert.equal(teammateRules(row.origin), 'Side rules.');
+    // With one team too: a shared project that is not the one core's setting names waits.
+    const elsewhere = send({ project: 'other' });
+    assert.equal(elsewhere.root, other.root); assert.equal(elsewhere.waiting, true); assert.deepEqual(elsewhere.accessTeams, [crew.teamId]);
+    // No project named: core's own project, in Auto.
+    const plain = send({ room: { team: crew.teamId, channel: null } });
+    assert.equal(plain.root, x.root); assert.equal(plain.waiting, false); assert.ok(plain.requestId);
+    // A team ask to #general of a three-member team set to Auto waits on every machine.
+    saveTeamAccess(side.id, { handling: 'auto', root: y.root });
+    const group = send({ team: true, room: { team: side.id, channel: null } });
+    assert.equal(group.root, y.root); assert.equal(group.team, true); assert.equal(group.waiting, true); assert.equal(group.requestId, null);
+    // The same message to Sara alone starts at once.
+    assert.equal(send({ room: { team: side.id, channel: null }, project: 'why' }).waiting, false);
+  });
+});
+
+test('elu invite never turns Auto on for a team that already has members; a new team gets Auto unless --manual', async t => {
+  const crew = makeTeam(t), ana = crew.founder;
+  await withHome(ana.home, async () => {
+    const { root } = registeredProject(t);
+    const existing = await peerCli(['invite'], { project: root });
+    assert.equal(teamAccess(crew.teamId).handling, 'manual', 'Sara is already on it');
+    assert.ok(existing.lines.includes('Manual: each message waits for you to approve it.'), existing.lines.join('\n'));
+    // A later invite keeps the setting; --auto through elu access is how it changes.
+    await peerCli(['invite'], { project: root, auto: true });
+    assert.equal(teamAccess(crew.teamId).handling, 'manual', 'only the first invite sets it');
+    const me = loadIdentity(), fresh = createTeam(me, 'fresh');
+    await peerCli(['invite'], { team: fresh.id, project: root });
+    assert.equal(teamAccess(fresh.id).handling, 'auto');
+  });
+});
+
+test('elu access shows and changes what teammates can do here; --auto with --manual is refused', async t => {
+  const crew = makeTeam(t), sara = crew.member;
+  await withHome(sara.home, async () => {
+    const { root } = registeredProject(t);
+    const unset = await peerCli(['access'], {});
+    assert.equal(unset.access, null); assert.match(unset.lines[0], /core: not set\. Messages wait for you to approve them\./);
+    await assert.rejects(peerCli(['access'], { auto: true, manual: true }), /Choose --auto or --manual\./);
+    const saved = await peerCli(['access'], { manual: true, rules: 'Only answer questions, do not edit files.', project: root });
+    assert.equal(saved.message, 'Saved what teammates can do here.');
+    assert.deepEqual(saved.lines, ['core', '  Manual: each message waits for you to approve it.', '  Rules: Only answer questions, do not edit files.', `  Project: ${root}`]);
+    const auto = await peerCli(['access'], { auto: true });
+    assert.equal(auto.access.handling, 'auto'); assert.equal(auto.access.rules, 'Only answer questions, do not edit files.'); assert.equal(auto.access.root, root);
+  });
+});
+
+test('a sender whose teammate runs an ELU Code that refuses messages without a shared project is told to have them update', t => {
+  const crew = makeTeam(t), ana = crew.founder;
+  withHome(ana.home, () => {
+    const ctx = { me: loadIdentity(), event: () => {}, kick: () => {}, dial: () => {}, session: () => null };
+    const ask = createAsk(ctx, { to: 'sara', text: 'testing if you see this message?', byOwner: true });
+    applyTask(ctx, crew.member.identity.key, a2aTask({ id: 'old-1', contextId: ask.threadId, state: TaskState.REJECTED, statusMessage: 'They have not shared a project, so there is nothing of theirs to ask about yet.' }), ask.id);
+    assert.equal(getAsk(ask.id).state, 'rejected');
+    assert.equal(getAsk(ask.id).reason, '@sara needs to update ELU Code to get messages: their version takes them only when they share a project.');
+    const other = createAsk(ctx, { to: 'sara', text: 'and this?', byOwner: true });
+    applyTask(ctx, crew.member.identity.key, a2aTask({ id: 'old-2', contextId: other.threadId, state: TaskState.REJECTED, statusMessage: 'This teammate is not taking requests from you.' }), other.id);
+    assert.equal(getAsk(other.id).reason, 'This teammate is not taking requests from you.', 'other refusals are shown as they are');
   });
 });
 
@@ -856,8 +1010,8 @@ test('a question for a bot is taken only when that bot is shared, waits for the 
     assert.deepEqual(waiting(), { 'Ask 1': 'reviewer', 'Ask 2': null });
     // Accepted, the request names the bot that answers it; a plain ask's request is what it was before bots.
     acceptIncoming(ctx, forBot.id, { how: 'answer' }); acceptIncoming(ctx, plain.id, { how: 'answer' });
-    assert.deepEqual(origin(forBot), { kind: 'ask', peer: ana.key, name: 'ana', a2aTaskId: forBot.id, threadId: 'thread-m-1', hop: 1, bot: 'reviewer' });
-    assert.deepEqual(origin(plain), { kind: 'ask', peer: ana.key, name: 'ana', a2aTaskId: plain.id, threadId: 'thread-m-2', hop: 1 });
+    assert.deepEqual(origin(forBot), { kind: 'ask', peer: ana.key, name: 'ana', a2aTaskId: forBot.id, threadId: 'thread-m-1', hop: 1, bot: 'reviewer', teams: [crew.teamId] });
+    assert.deepEqual(origin(plain), { kind: 'ask', peer: ana.key, name: 'ana', a2aTaskId: plain.id, threadId: 'thread-m-2', hop: 1, teams: [crew.teamId] }, 'the teams of the project, whose rules the run is told');
     assert.equal(pendingRequests(root).every(row => row.readOnly === true && row.state === 'queued'), true);
     const mine = task => { const item = peer.peerItems().find(row => row.taskId === task.id); return [item.kind, 'bot' in item ? item.bot : null]; };
     assert.deepEqual(mine(forBot), ['answering', 'reviewer']); assert.deepEqual(mine(plain), ['answering', null]);
@@ -868,7 +1022,7 @@ test('a question for a bot is taken only when that bot is shared, waits for the 
     assert.deepEqual(mine(forBot), ['replied', 'reviewer']); assert.deepEqual(mine(plain), ['replied', null]);
     // A question the owner works on themselves is their own session: its request names no bot.
     const worked = send({ bot: 'reviewer' }); acceptIncoming(ctx, worked.id, { how: 'work', permissions: 'ask' });
-    assert.deepEqual(origin(worked), { kind: 'handoff', peer: ana.key, name: 'ana', a2aTaskId: worked.id, threadId: worked.contextId, hop: 1 });
+    assert.deepEqual(origin(worked), { kind: 'handoff', peer: ana.key, name: 'ana', a2aTaskId: worked.id, threadId: worked.contextId, hop: 1, teams: [crew.teamId] });
     // A bot taken back, and a bots file that cannot be read, share nothing from then on.
     const declined = () => { const task = send({ bot: 'reviewer' }); return [task.status.state, reason(task)]; };
     saveBot({ name: 'reviewer', instructions: 'Review the diff.' });

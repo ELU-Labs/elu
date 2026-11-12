@@ -17,7 +17,7 @@ const LONG = 'Could you check whether the retry budget in the uploader resets af
 const ago = minutes => new Date(Date.now() - minutes * 60000).toISOString();
 
 // teamless: this machine is on no team until /invite makes one (createTeam).
-function fakePeer({ items, running = true, refuse = () => null, remoteBots = [], teamless = false } = {}) {
+function fakePeer({ items, running = true, refuse = () => null, remoteBots = [], teamless = false, access = { 'team-1': { handling: 'auto', rules: '', root: null, at: null } } } = {}) {
   const calls = [];
   const record = (name, value) => (...args) => { calls.push([name, ...args]); return typeof value === 'function' ? value(...args) : value; };
   const facade = {
@@ -64,6 +64,10 @@ function fakePeer({ items, running = true, refuse = () => null, remoteBots = [],
     createInvite: record('createInvite', () => ({ code: 'k7qm-x2pd-9fhw' })),
     createTeam: record('createTeam', name => { facade.made = true; return { id: 'team-1', name }; }),
     joinTeam: record('joinTeam', async () => ({ id: 'team-2', name: 'Docs', inviter: { name: 'sara', fingerprint: 'bbbbbbbb' } })),
+    // What teammates can do here, per team: team-1 was set before these tests start, unless a test says otherwise.
+    access: { ...access },
+    teamAccess: id => facade.access[id] ?? null,
+    saveTeamAccess: record('saveTeamAccess', (id, update) => { facade.access[id] = { handling: 'auto', rules: '', root: null, ...facade.access[id], ...update, at: 'now' }; return facade.access[id]; }),
   };
   return facade;
 }
@@ -137,6 +141,12 @@ async function closeDialog(v, title, value = '') {
   await until(() => !modal(v, title), `${title} closed`);
 }
 const plainItem = item => item.getText();
+// /join's questions: Join, then what teammates can do here (Auto or Manual), then the rules.
+async function answerJoin(v, { handling = /^Auto/, rules = '' } = {}) {
+  await choose(v, 'Join a team', /^Join$/);
+  await choose(v, 'What teammates can do here', handling);
+  await closeDialog(v, 'Rules for teammates', rules);
+}
 function selectRow(list, pattern) {
   const index = list.items.findIndex(item => pattern.test(plainItem(item)));
   assert.ok(index >= 0, `no row matches ${pattern}`); list.select(index); return index;
@@ -271,8 +281,10 @@ test('Chats keys approve, discard, accept, continue and write to a teammate', as
   await until(() => peer.sent().some(row => row.type === 'approve' && row.id === 'held-1'), 'approve held reply');
   await openRow(v, /@li\s+offline/, '@li'); threads.focus(); selectRow(threads, /draft to send/); v.input.write('n');
   await until(() => peer.sent().some(row => row.type === 'discard' && row.id === 'draft-1'), 'discard draft');
-  selectRow(threads, /@li asks you/); v.input.write('y'); await until(() => modal(v, 'Accept'), 'accept picker'); v.input.write('\r');
-  await until(() => peer.sent().some(row => row.type === 'work' && row.id === 'incoming-1'), 'accept incoming without a saved request');
+  // y approves a teammate's message: it starts as if you typed it, with no picker.
+  selectRow(threads, /@li asks you/); v.input.write('y');
+  await until(() => peer.sent().some(row => row.type === 'approve' && row.id === 'incoming-1'), 'approve incoming without a saved request');
+  assert.equal(modal(v, 'Accept'), undefined, 'no picker');
   await openRow(v, /@sara\s+direct/, '@sara'); threads.focus(); selectRow(threads, /answered/); v.input.write('c');
   await until(() => peer.sent().some(row => row.type === 'continue' && row.id === 'answer-1'), 'continue');
   threads.focus(); selectRow(threads, /answered/); v.input.write('\r');
@@ -283,7 +295,7 @@ test('Chats keys approve, discard, accept, continue and write to a teammate', as
   // a starts an @name ask, as it always did.
   roster.focus(); v.input.write('a'); await until(() => v.panels.ask.getValue() === '@sara ' && v.current.screen.focused === v.panels.ask, 'a starts an ask');
   v.panels.ask.clearValue();
-  assert.deepEqual(peer.sent().map(row => Object.keys(row).sort().join()), ['id,type', 'id,type', 'folders,id,permissions,place,type', 'id,type']);
+  assert.deepEqual(peer.sent().map(row => Object.keys(row).sort().join()), ['id,type', 'id,type', 'id,type', 'id,type']);
 });
 
 test('a thread dialog acts on the letter it names, only while its field is empty', { timeout: 20000 }, async t => {
@@ -304,9 +316,9 @@ test('a thread dialog acts on the letter it names, only while its field is empty
   // A message row each, and a reply row under the held reply and the answer.
   await until(() => threads.items.length === 5, 'threads');
   const open = async (list, pattern, title, hint) => { list.focus(); selectRow(list, pattern); v.input.write('\r'); await until(() => modal(v, title) && v.text().includes(hint), hint); };
-  // Enter reads an ask; y in the dialog accepts it, as y does on the list: the picker opens, Enter starts it.
-  await open(threads, /asks you/, 'Thread with @sara', 'y accepts in a mode you pick. n declines.');
-  v.input.write('y'); await until(() => modal(v, 'Accept'), 'accept picker'); v.input.write('\r');
+  // Enter reads an ask; w in the dialog opens the picker, Enter starts it in the picked mode.
+  await open(threads, /asks you/, 'Thread with @sara', 'y approves: it starts as if you typed it. w picks the mode first. n declines.');
+  v.input.write('w'); await until(() => modal(v, 'Accept'), 'accept picker'); v.input.write('\r');
   // The daemon runs it as the owner's session in the picked mode; the dialog only sends the command.
   await until(() => peer.sent().some(row => row.type === 'work' && row.id === 'incoming:task-ask' && row.permissions === 'ask'), 'ask accepted from the dialog');
   await until(() => !modal(v, 'Thread with @sara') && /Accepted @sara/.test(v.panels.status.getText()), 'dialog closed');
@@ -329,8 +341,8 @@ test('Shift letters and typed text never fail silently, and nothing opens an ext
   const [, threads] = v.panels.teamLists, status = () => v.panels.status.getText(), screen = v.current.screen;
   await until(() => threads.items.length > 1, 'threads');
   // Caps Lock or Shift: Y on the list and N in a dialog still decide.
-  await openRow(v, /@li\s+offline/, '@li'); threads.focus(); selectRow(threads, /@li asks you/); v.input.write('Y'); await until(() => modal(v, 'Accept'), 'Y opens the picker'); v.input.write('\r');
-  await until(() => peer.sent().some(row => row.type === 'work' && row.id === 'incoming-1'), 'Y accepts on the list');
+  await openRow(v, /@li\s+offline/, '@li'); threads.focus(); selectRow(threads, /@li asks you/); v.input.write('Y');
+  await until(() => peer.sent().some(row => row.type === 'approve' && row.id === 'incoming-1'), 'Y approves on the list');
   await openRow(v, /@sara\s+direct/, '@sara'); threads.focus(); selectRow(threads, /reply ready/); v.input.write('\r'); await until(() => modal(v, 'Thread with @sara'), 'dialog');
   v.input.write('N'); await until(() => peer.sent().some(row => row.type === 'discard' && row.id === 'held-1'), 'N discards in the dialog');
   // Other text and Enter says what to press.
@@ -365,14 +377,14 @@ test('typing in Chats writes to the open channel or person, and @name to one tea
   await send(v, '@sara web How do we deploy?');
   await until(() => peer.sent().some(row => row.type === 'ask'), 'ask');
   assert.deepEqual(peer.sent().at(-1), { type: 'ask', to: 'sara', project: 'web', text: 'How do we deploy?' });
-  await until(() => /Sent to @sara\. It runs after they accept it\./.test(status()) && v.panels.ask.getValue() === '', 'sent');
+  await until(() => /Sent to @sara\. Their reply shows in this thread\./.test(status()) && v.panels.ask.getValue() === '', 'sent');
   // A person: every word is the message, even one that is a project they share.
   await openRow(v, /@li\s+offline/, '@li');
   await until(() => /Message @li/.test(label()), 'the box names the person');
   await send(v, 'api tests fail on my machine');
   await until(() => peer.sent().at(-1).to === LI, 'direct message');
   assert.deepEqual(peer.sent().at(-1), { type: 'ask', to: LI, project: null, text: 'api tests fail on my machine' });
-  await until(() => /Sent to @li\. It runs after they accept it\./.test(status()) && v.panels.ask.getValue() === '', 'sent to the person');
+  await until(() => /Sent to @li\. Their reply shows in this thread\./.test(status()) && v.panels.ask.getValue() === '', 'sent to the person');
 });
 
 test('a channel is made from teammates on the team; typing writes to it, m changes who is in it, x leaves it', { timeout: 20000 }, async t => {
@@ -656,9 +668,9 @@ test('/invite offers a code for someone new or which bots teammates may use, and
   await choose(v, title, /\[ \] @notes/); await until(() => rowsOf(v, title).includes('[x] @notes'), 'ticked'); await choose(v, title, /^Done$/);
   await until(() => /Teammates can write to @docs, @notes\./.test(status()), 'both shared');
   assert.deepEqual(shared(), [['docs', true], ['notes', true]]);
-  // Joining asks nothing about bots, or anything else.
-  await send(v, '/join k7qm-x2pd-9fhw');
-  await until(() => /Joined Docs with sara\. Ask about their project in Chats\./.test(status()), 'joined');
+  // Joining asks nothing about bots: only to join, and what teammates can do here.
+  await send(v, '/join k7qm-x2pd-9fhw'); await answerJoin(v);
+  await until(() => /Joined Docs with sara\. Their messages start sessions here, as if you typed them\./.test(status()), 'joined');
   assert.equal(modal(v, title), undefined);
 });
 
@@ -867,7 +879,7 @@ test('the invite window shows a short code and copies it; a drag over its row co
   const ask = v.panels.ask; ask.focus(); ask.readInput(); await until(() => ask.__listener, 'message box');
   v.input.write('/join '); v.input.write(`\x1b[200~${copied[0]}\x1b[201~`);
   await until(() => ask.getValue() === `/join ${copied[0]}`, 'the box holds the paste as it came');
-  v.input.write('\r');
+  v.input.write('\r'); await answerJoin(v);
   await until(() => peer.calls.some(row => row[0] === 'joinTeam'), 'joined');
   assert.deepEqual(peer.calls.find(row => row[0] === 'joinTeam').slice(1), ['k7qm-x2pd-9fhw']);
 });
@@ -883,7 +895,7 @@ test('a code pasted into the message box with /join, broken by line breaks, spac
     v.input.write(`\x1b[200~${pasted}\x1b[201~`);
     // What the message box holds after the paste: CRLF and a lone CR become line breaks, everything else stays.
     await until(() => ask.getValue() === holds, `the box holds ${JSON.stringify(holds)}, not ${JSON.stringify(ask.getValue())}`);
-    v.input.write('\r');
+    v.input.write('\r'); await answerJoin(v);
     await until(() => joins().length === before + 1, `joined after ${JSON.stringify(pasted)}`);
     assert.equal(joins().at(-1), 'k7qm-x2pd-9fhw', JSON.stringify(pasted));
   };
@@ -915,12 +927,117 @@ test('share, invite and join use the open project', async t => {
   await closeDialog(v, 'Team invite');
   await send(v, '/join nope'); await until(() => /That is not an invite code\. Use \/join code/.test(v.panels.status.getText()), 'join usage');
   assert.equal(peer.calls.some(row => row[0] === 'joinTeam'), false);
-  // Joining only joins: nothing is asked and nothing of the joiner's is shared.
+  // Joining shares nothing of the joiner's: teammates' messages start sessions in the open project.
   const shares = () => peer.calls.filter(row => row[0] === 'share').length, before = shares();
-  await send(v, '/join K7QM X2PD 9FHW');
-  await until(() => /Joined Docs with sara\. Ask about their project in Chats\./.test(v.panels.status.getText()), 'joined');
+  await send(v, '/join K7QM X2PD 9FHW'); await answerJoin(v);
+  await until(() => /Joined Docs with sara\. Their messages start sessions here, as if you typed them\./.test(v.panels.status.getText()), 'joined');
   assert.deepEqual(peer.calls.find(row => row[0] === 'joinTeam').slice(1), ['k7qm-x2pd-9fhw']);
-  assert.equal(modal(v, 'Joined'), undefined, 'nothing asked'); assert.equal(shares(), before, 'nothing shared');
+  assert.equal(shares(), before, 'nothing shared');
+  assert.deepEqual(peer.calls.find(row => row[0] === 'saveTeamAccess').slice(1), ['team-2', { handling: 'auto', rules: '', root: p.root }]);
+});
+
+test('/join asks to join first, then what teammates can do here: Cancel or Esc joins nothing, Enter twice takes Auto with no rules', async t => {
+  const p = project(later(t)); environment(t, p.parent);
+  const peer = fakePeer(), v = await view(t, { repo: repository(p.root), peer }), status = () => v.panels.status.getText();
+  const joins = () => peer.calls.filter(row => row[0] === 'joinTeam').length, saves = () => peer.calls.filter(row => row[0] === 'saveTeamAccess').map(row => row.slice(1));
+  // Cancel on the confirm joins nothing.
+  await send(v, '/join k7qm-x2pd-9fhw'); await until(() => rowsOf(v, 'Join a team').length === 2, 'the confirm');
+  assert.deepEqual(rowsOf(v, 'Join a team'), ['Join', 'Cancel']);
+  assert.match(v.text(), /This code joins the team of the person who sent it to you\./);
+  await choose(v, 'Join a team', /^Cancel$/);
+  await until(() => /Nothing was done\. You did not join\./.test(status()), 'cancelled');
+  assert.equal(joins(), 0);
+  // Esc on the rules joins nothing either.
+  await send(v, '/join k7qm-x2pd-9fhw'); await choose(v, 'Join a team', /^Join$/);
+  await until(() => rowsOf(v, 'What teammates can do here').length === 2, 'what teammates can do');
+  assert.deepEqual(rowsOf(v, 'What teammates can do here'), ['Auto: their message starts a session here, as if you typed it', 'Manual: each message waits for you to approve it']);
+  assert.match(v.text(), /Push, merge, deploy and publish stay blocked either way\./);
+  await choose(v, 'What teammates can do here', /^Auto/); await until(() => modal(v, 'Rules for teammates'), 'the rules');
+  assert.match(v.text().replace(/[│\s]+/g, ' '), /Optional, in plain English\. For example: Only work on the elu repo\. Don't write anything until I accept it\./, 'the hint, read across its wrap');
+  modal(v, 'Rules for teammates').children.find(child => child.type === 'textbox').emit('cancel');
+  await until(() => !modal(v, 'Rules for teammates'), 'closed');
+  await new Promise(resolve => setTimeout(resolve, 100));
+  assert.equal(joins(), 0); assert.deepEqual(saves(), []);
+  // Enter on each: Join, then Auto, then empty rules.
+  await send(v, '/join k7qm-x2pd-9fhw');
+  await until(() => modal(v, 'Join a team'), 'confirm'); v.input.write('\r');
+  await until(() => modal(v, 'What teammates can do here'), 'handling'); v.input.write('\r');
+  await closeDialog(v, 'Rules for teammates', '');
+  await until(() => joins() === 1 && /Joined Docs with sara\. Their messages start sessions here, as if you typed them\./.test(status()), 'joined with Auto');
+  assert.deepEqual(saves(), [['team-2', { handling: 'auto', rules: '', root: p.root }]]);
+  // Manual and the rules are saved as typed, with the open project.
+  const rules = "Only work on the elu repo. Don't write anything until I accept it.";
+  await send(v, '/join k7qm-x2pd-9fhw'); await answerJoin(v, { handling: /^Manual/, rules });
+  await until(() => joins() === 2 && /Joined Docs with sara\. Their messages wait for you to approve them\./.test(status()), 'joined with Manual');
+  assert.deepEqual(saves().at(-1), ['team-2', { handling: 'manual', rules, root: p.root }]);
+});
+
+test('the first /invite for a team asks what teammates can do here before the code; later invites do not ask again', async t => {
+  const p = project(later(t)); environment(t, p.parent);
+  const peer = fakePeer({ access: {} }), v = await view(t, { repo: repository(p.root), peer }), status = () => v.panels.status.getText();
+  const invites = () => peer.calls.filter(row => row[0] === 'createInvite').length, saves = () => peer.calls.filter(row => row[0] === 'saveTeamAccess').map(row => row.slice(1));
+  await send(v, '/invite'); await choose(v, 'Invite', /^Someone new/);
+  await until(() => modal(v, 'What teammates can do here'), 'asked first');
+  assert.equal(invites(), 0, 'no code before the answers');
+  v.input.write('\x1b'); await until(() => /Nothing was done\. No invite was made\./.test(status()), 'Esc makes no code');
+  assert.equal(invites(), 0);
+  await send(v, '/invite'); await choose(v, 'Invite', /^Someone new/);
+  await choose(v, 'What teammates can do here', /^Manual/); await closeDialog(v, 'Rules for teammates', 'Only answer questions, do not edit files.');
+  await until(() => modal(v, 'Team invite'), 'the code');
+  assert.deepEqual(saves(), [['team-1', { handling: 'manual', rules: 'Only answer questions, do not edit files.', root: p.root }]]);
+  await closeDialog(v, 'Team invite');
+  await send(v, '/invite'); await choose(v, 'Invite', /^Someone new/); await until(() => modal(v, 'Team invite'), 'the second code');
+  assert.equal(modal(v, 'What teammates can do here'), undefined, 'not asked again'); assert.equal(saves().length, 1); assert.equal(invites(), 2);
+  await closeDialog(v, 'Team invite');
+});
+
+test('/access shows what teammates can do here and changes it; Esc changes nothing', async t => {
+  const p = project(later(t)); environment(t, p.parent);
+  const peer = fakePeer({ access: { 'team-1': { handling: 'auto', rules: 'Be brief.', root: null, at: 'then' } } }), v = await view(t, { repo: repository(p.root), peer }), status = () => v.panels.status.getText();
+  const list = () => modal(v, 'What teammates can do here').children.find(child => child.type === 'list');
+  await send(v, '/access'); await until(() => modal(v, 'What teammates can do here'), 'the handling');
+  assert.match(status(), /Core now: Auto · rules: Be brief\./); assert.equal(list().selected, 0);
+  await choose(v, 'What teammates can do here', /^Manual/);
+  await until(() => modal(v, 'Rules for teammates'), 'the rules');
+  assert.equal(modal(v, 'Rules for teammates').children.find(child => child.type === 'textbox').getValue(), 'Be brief.', 'the rules as they are');
+  await closeDialog(v, 'Rules for teammates', 'Only answer questions.');
+  await until(() => /Saved for Core: messages wait for you to approve them, with your rules in /.test(status()), 'saved');
+  assert.deepEqual(peer.calls.filter(row => row[0] === 'saveTeamAccess').map(row => row.slice(1)), [['team-1', { handling: 'manual', rules: 'Only answer questions.', root: p.root }]]);
+  // It opens on what is saved now; Esc changes nothing.
+  await send(v, '/access'); await until(() => modal(v, 'What teammates can do here') && list().selected === 1, 'Manual first');
+  v.input.write('\x1b'); await until(() => /Nothing was changed\./.test(status()), 'Esc');
+  assert.equal(peer.calls.filter(row => row[0] === 'saveTeamAccess').length, 1);
+});
+
+test('/access on a team with teammates and no setting offers Manual first, so Enter keeps their messages waiting', async t => {
+  const p = project(later(t)); environment(t, p.parent);
+  const peer = fakePeer({ access: {} }), v = await view(t, { repo: repository(p.root), peer }), status = () => v.panels.status.getText();
+  const list = () => modal(v, 'What teammates can do here').children.find(child => child.type === 'list');
+  await send(v, '/access'); await until(() => modal(v, 'What teammates can do here'), 'the handling');
+  assert.match(status(), /Core now: Not set: messages wait for you to approve them\./); assert.equal(list().selected, 1);
+  v.input.write('\r'); await closeDialog(v, 'Rules for teammates', '');
+  await until(() => /Saved for Core: messages wait for you to approve them/.test(status()), 'saved');
+  assert.equal(peer.access['team-1'].handling, 'manual');
+});
+
+test('a project that cannot hold teammates\' sessions is left out, and the last status line of /join, /invite and /access says why', async t => {
+  const p = project(later(t)); environment(t, p.parent);
+  const peer = fakePeer({ access: {} }), status = () => v.panels.status.getText();
+  const save = peer.saveTeamAccess;
+  peer.saveTeamAccess = (id, update) => { if (update.root) throw new Error('Your home folder cannot be the project teammates work in.'); return save(id, update); };
+  const v = await view(t, { repo: repository(p.root), peer });
+  const NOTE = /No project was saved for their sessions: Your home folder cannot be the project teammates work in\. Until one is, their messages wait for you\./;
+  await send(v, '/join k7qm-x2pd-9fhw'); await answerJoin(v);
+  await until(() => /Joined Docs with sara\./.test(status()), 'joined');
+  assert.match(status(), NOTE); assert.doesNotMatch(status(), /start sessions here/);
+  assert.deepEqual(peer.access['team-2'], { handling: 'auto', rules: '', root: null, at: 'now' });
+  await send(v, '/access'); await choose(v, 'What teammates can do here', /^Manual/); await closeDialog(v, 'Rules for teammates', '');
+  await until(() => /Saved for Core/.test(status()), 'access saved'); assert.match(status(), NOTE);
+  delete peer.access['team-1'];
+  await send(v, '/invite'); await choose(v, 'Invite', /^Someone new/);
+  await choose(v, 'What teammates can do here', /^Manual/); await closeDialog(v, 'Rules for teammates', '');
+  await until(() => modal(v, 'Team invite'), 'the code'); assert.match(status(), NOTE);
+  await closeDialog(v, 'Team invite');
 });
 
 test('a peer daemon an update left running is restarted before /join', async t => {
@@ -928,7 +1045,7 @@ test('a peer daemon an update left running is restarted before /join', async t =
   const peer = fakePeer(); peer.stale = true;
   peer.startPeer = () => { peer.calls.push(['startPeer']); peer.stale = false; return true; };
   const v = await view(t, { repo: repository(p.root), peer });
-  await send(v, '/join k7qm-x2pd-9fhw');
+  await send(v, '/join k7qm-x2pd-9fhw'); await answerJoin(v);
   await until(() => peer.calls.some(row => row[0] === 'joinTeam'), 'joined');
   const at = name => peer.calls.findIndex(row => row[0] === name);
   assert.ok(at('startPeer') >= 0 && at('startPeer') < at('joinTeam'), JSON.stringify(peer.calls.map(row => row[0])));
@@ -975,10 +1092,10 @@ test('Tasks shows peer work that waits for you first, and y / n decide it', { ti
   selectRow(board, /@sara question/); await until(() => /y accept {2}n decline/.test(v.panels.keys.getText()), 'question row hint');
   await until(() => /^\? @sara question · sample app\n┃ Question · How do we rotate keys\?\n\ny accept · n decline · enter open$/.test(v.panels.chat.getText()), 'the question beside the list');
   assert.equal(v.current.session, null, 'a teammate’s message is not a session of yours'); assert.equal(v.current.screen.focused, board);
-  v.input.write('y'); await until(() => modal(v, 'Accept'), 'accept picker'); v.input.write('\r');
-  // y accepts: the daemon queues the run in the picked mode, which the board then shows as a session.
-  await until(() => peer.sent().some(row => row.type === 'work' && row.id === 'task-ask' && row.permissions === 'ask'), 'ask accepted');
-  assert.match(v.panels.status.getText(), /Accepted @sara\. It runs as your session; the reply goes back to this thread\./);
+  v.input.write('y');
+  // y approves: the daemon queues the session your own prompt would start, which the board then shows as a session.
+  await until(() => peer.sent().some(row => row.type === 'approve' && row.id === 'task-ask'), 'ask approved');
+  await until(() => /Approved @sara\. It runs as your session; the reply goes back to this thread\./.test(v.panels.status.getText()), 'approved line');
   updateRequest(p.root, ask.id, { state: 'queued' });
   await until(() => !rows().some(row => row.includes('@sara question')), 'accepted row leaves group 0');
   selectRow(board, /@sara task/); v.input.write('n');
