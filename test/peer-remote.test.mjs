@@ -217,10 +217,10 @@ test('mine and unmine tell the other machine, and connecting says each side\'s h
 test('Sessions lists a session on my other computer, says where, and offers its keys', () => {
   const now = Date.parse('2026-11-11T10:00:00Z'), view = { id: START.id, machine: 'a'.repeat(64), createdAt: '2026-11-11T09:59:00Z', lastAt: '2026-11-11T09:59:30Z', state: 'running', title: 'Make coupons upper case', approvals: [], steps: [{ text: 'Reading src/coupon.mjs' }] };
   const running = remoteRow(view, 'devbox', now);
-  assert.equal(running.group, 1); assert.equal(rowTitle(running, now), 'Make coupons upper case · on devbox');
+  assert.equal(running.group, 1); assert.equal(rowTitle(running, now), 'on devbox · Make coupons upper case');
   assert.deepEqual(rowActions(running), [['enter', 'open'], ['s', 'stop']]);
   const asking = remoteRow({ ...view, approvals: [{ id: 'approval-1', role: 'bot:reviewer', summary: 'Run ls', at: '2026-11-11T09:59:40Z' }] }, 'devbox', now);
-  assert.equal(asking.group, 0); assert.equal(rowTitle(asking, now), 'Make coupons upper case · on devbox · @reviewer wants to run ls');
+  assert.equal(asking.group, 0); assert.equal(rowTitle(asking, now), 'on devbox · @reviewer wants to run ls');
   assert.deepEqual(rowActions(asking).slice(0, 2), [['y', 'allow'], ['n', 'deny']]);
   const task = remoteRow({ ...view, state: 'answered', plan: { title: 'Uppercase coupons', state: 'proposed' } }, 'devbox', now);
   assert.equal(task.label, 'TASK'); assert.deepEqual(rowActions(task).slice(0, 2), [['y', 'approve'], ['n', 'reject']]);
