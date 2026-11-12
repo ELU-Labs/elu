@@ -23,7 +23,9 @@ test('the command list offers each next word of a command', () => {
 });
 
 test('/permissions offers the modes, the default, and the folders the model may read', () => {
-  assert.deepEqual(values('/permissions '), ['/permissions ask', '/permissions auto', '/permissions full', '/permissions default', '/permissions folders']);
+  assert.deepEqual(values('/permissions '), ['/permissions ask', '/permissions auto', '/permissions full', '/permissions default', '/permissions folders', '/permissions rules']);
+  assert.deepEqual(argumentMatches('/permissions ru', ctx).map(row => `${row.value} · ${row.more}`), ['/permissions rules · false'], 'rules alone opens the list');
+  assert.deepEqual(values('/permissions rules '), ['/permissions rules remove', '/permissions rules on']);
   assert.deepEqual(argumentMatches('/permissions fo', ctx).map(row => `${row.value} · ${row.description} · ${row.more}`), ['/permissions folders · Let the model read another folder this session · true'], 'add follows it');
   assert.deepEqual(argumentMatches('/permissions folders ', ctx).map(row => `${row.value} · ${row.description} · ${row.more}`), ['/permissions folders add · Add a folder the model may read this session · true'], 'a path follows it');
   assert.deepEqual(values('/permissions default '), ['/permissions default ask', '/permissions default auto', '/permissions default full']);
