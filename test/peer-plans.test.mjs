@@ -7,6 +7,7 @@ import os from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { newHome, withHome, makeTeam, registeredProject } from './peer-helpers.mjs';
 import { repository } from '../lib/git.mjs';
+import { hash } from '../lib/util.mjs';
 import { saveTask, taskPlace } from '../lib/state.mjs';
 import { projectFolder } from '../lib/workspace.mjs';
 import { registerProject } from '../lib/projects.mjs';
@@ -503,5 +504,63 @@ test('who started a session goes with its card, and only the computer of mine th
     const toSara = cardsFor(sara.identity.key, ana.identity.key, rows, repos, proofs(sara.identity.key)), toBob = cardsFor('d'.repeat(64), ana.identity.key, rows, repos, proofs('d'.repeat(64)));
     assert.equal(toSara.find(card => card.title === 'From my laptop').remote, '0f0e0d0c-0b0a-4908-8706-050403020100');
     assert.equal(toBob.find(card => card.title === 'From my laptop').remote, undefined);
+  });
+});
+
+test('a card\'s title leaves without a secret or a path, and its id says nothing about the folder or the session', t => {
+  const crew = makeTeam(t), ana = crew.founder, sara = crew.member, now = Date.now();
+  // Built here so no token is written in the repository.
+  const token = `ghp_${'A1b2'.repeat(9)}`, home = os.homedir();
+  withHome(ana.home, () => {
+    const repo = folderProject(t), shop = cloneIn(repo, 'shop');
+    session(repo, 1, shop, { goal: `Rotate ${token} used by /Users/me/clients/demo/deploy.sh and ~/notes/keys.txt\nMore words` });
+    session(repo, 2, shop, { goal: `Fix /Users/me/clients/demo/deploy.sh, ~/notes/keys.txt and ${home}/work/app\nMore words` });
+    session(repo, 3, shop, { goal: 'Check the password: hunter22 login' });
+    const repos = localRepos(now), rows = sessionCards({ owner: 'ana', repos, now });
+    const proofs = [...repos.values()].map(row => repoProof(sara.identity.key, ana.identity.key, row.repoId, row.commit));
+    const told = cardsFor(sara.identity.key, ana.identity.key, rows, repos, proofs);
+    assert.deepEqual(told.map(card => card.title).sort(), ['Check the [redacted] login', 'Fix [path], [path] and [path]', 'Session']);
+    for (const text of [JSON.stringify(rows), JSON.stringify(told)]) for (const word of [token, 'ghp_', '/Users/me', 'clients/demo', 'deploy.sh', '~/notes', 'keys.txt', home, 'hunter22', repo.root]) assert.equal(text.includes(word), false, word);
+    // The id is the same on every telling, made with a secret only this machine keeps.
+    const again = sessionCards({ owner: 'ana', repos, now });
+    assert.deepEqual(again.map(row => row.card.id), rows.map(row => row.card.id));
+    const secret = peerFile('card-secret');
+    assert.equal(fs.statSync(secret).mode & 0o777, 0o600); assert.match(fs.readFileSync(secret, 'utf8'), /^[0-9a-f]{64}$/);
+    for (const id of ['1', '2', '3']) for (const guess of [hash(`${ana.identity.key}\0${repo.root}\0${id}`), hash(`\0${repo.root}\0${id}`)]) assert.equal(rows.some(row => row.card.id === guess.slice(0, 16)), false);
+  });
+});
+
+test('a session waiting for its owner to approve a Task is in Needs you on a teammate\'s board, as on the owner\'s own', t => {
+  const crew = makeTeam(t), ana = crew.founder, now = Date.now();
+  withHome(ana.home, () => {
+    const repo = folderProject(t), shop = cloneIn(repo, 'shop');
+    session(repo, 1, shop, { kind: 'conversation', state: 'answered', goal: 'Plan the export' });
+    session(repo, 2, shop, { kind: 'conversation', state: 'answered', goal: 'Where is the export?' });
+    fs.writeFileSync(path.join(repo.state, 'tasks', '1', 'plan.json'), JSON.stringify({ version: 1, tasks: [plan({ session: '1', state: 'proposed', approvedAt: null })] }));
+    const rows = sessionCards({ owner: 'ana', repos: localRepos(now), now });
+    assert.deepEqual(rows.map(row => [row.card.title, row.card.column]).sort(), [['Plan the export', 'needs'], ['Where is the export?', 'done']]);
+  });
+});
+
+test('a session a teammate\'s message started keeps what was asked and who asked to the teams that message came through', t => {
+  const crew = makeTeam(t), ana = crew.founder, sara = crew.member, now = Date.now();
+  const carl = withHome(newHome(t), () => createIdentity({ name: 'carl' }));
+  withHome(ana.home, () => {
+    // Ana is on core with Sara and on side with Carl; Sara and Carl share no team.
+    const side = createTeam(ana.identity, 'side').id;
+    redeemCode(createInvite(ana.identity, side, { hours: 1 }), carl.key, 'carl');
+    const repo = folderProject(t), shop = cloneIn(repo, 'shop');
+    session(repo, 1, shop, { goal: 'Move the coupon check', origin: { kind: 'handoff', peer: sara.identity.key, name: 'sara', teams: [crew.teamId] } });
+    session(repo, 2, shop, { goal: 'Rename the cart', origin: { kind: 'handoff', peer: carl.key, name: 'carl' } });
+    session(repo, 3, shop, { goal: 'My own work' });
+    const repos = localRepos(now), rows = sessionCards({ owner: 'ana', repos, now });
+    const proofs = key => [...repos.values()].map(row => repoProof(key, ana.identity.key, row.repoId, row.commit));
+    const seen = key => cardsFor(key, ana.identity.key, rows, repos, proofs(key)).map(card => [card.title, card.by]).sort();
+    assert.deepEqual(seen(sara.identity.key), [['Move the coupon check', 'sara'], ['My own work', 'ana'], ['Session', 'teammate']]);
+    assert.deepEqual(seen(carl.key), [['My own work', 'ana'], ['Rename the cart', 'carl'], ['Session', 'teammate']]);
+    // The teams named on the session count, not every team its sender is on.
+    assert.deepEqual(cardsFor(carl.key, ana.identity.key, rows, repos, proofs(carl.key), [crew.teamId]).map(card => card.title).sort(), ['Move the coupon check', 'My own work', 'Rename the cart']);
+    const withheld = cardsFor(carl.key, ana.identity.key, rows, repos, proofs(carl.key)).find(card => card.title === 'Session');
+    assert.deepEqual(Object.keys(withheld), ['repoId', 'id', 'title', 'column', 'by', 'at']);
   });
 });
