@@ -543,6 +543,36 @@ test('a session waiting for its owner to approve a Task is in Needs you on a tea
   });
 });
 
+test('a conversation in a folder above its clones is told from its first message, while it asks and while its Task waits, in the project\'s main repository or the one its Task names', t => {
+  const crew = makeTeam(t), ana = crew.founder, sara = crew.member, now = Date.now();
+  const origin = name => `https://github.com/elu-labs/${name}.git`;
+  withHome(ana.home, () => {
+    const talk = (repo, id, goal, extra = {}) => saveTask(repo, { id: String(id), kind: 'conversation', goal, state: 'running', worktree: repo.root, base: null, branch: null, createdAt: iso(now, 600000 - id * 1000), runs: [], reviews: [], responses: [], messages: [], sessions: {}, ...extra });
+    const plans = (repo, id, tasks) => { const folder = path.join(repo.state, 'tasks', String(id)); fs.mkdirSync(folder, { recursive: true }); fs.writeFileSync(path.join(folder, 'plan.json'), JSON.stringify({ version: 1, tasks })); };
+    const waits = (id, repository) => plan({ id: `t-0000000${id}`, session: String(id), state: 'proposed', approvedAt: null, edit: { repository, bot: null, request: 'rename it', started: false } });
+    // One clone in the folder; several, one named as the folder; several, none named.
+    const one = folderProject(t, { name: 'one' }); cloneIn(one, 'shop', { origin: origin('shop') });
+    const many = folderProject(t, { name: 'many' }); const manyShop = cloneIn(many, 'shop', { origin: origin('shop-two') }); cloneIn(many, 'Many', { origin: origin('many') });
+    const none = folderProject(t, { name: 'none' }); cloneIn(none, 'a', { origin: origin('a') }); cloneIn(none, 'b', { origin: origin('b') });
+    talk(one, 1, 'Plan the export'); talk(one, 2, 'Which tax rate?', { state: 'needs_input' }); talk(one, 3, 'Rename the cart', { state: 'answered' }); plans(one, 3, [waits(3, '/no/such/folder')]);
+    talk(many, 1, 'Many export');
+    talk(none, 1, 'Nowhere yet');
+    const repos = localRepos(now), nameOf = key => repos.get(key).name;
+    const told = () => sessionCards({ owner: 'ana', repos, now: Date.now() }).map(row => [row.card.title, row.card.column, nameOf(row.repo)]).sort();
+    assert.deepEqual(told(), [['Many export', 'progress', 'elu-labs/many'], ['Plan the export', 'progress', 'elu-labs/shop'], ['Rename the cart', 'needs', 'elu-labs/shop'], ['Which tax rate?', 'needs', 'elu-labs/shop']]);
+    // Sent to a teammate who proves the repository.
+    const rows = sessionCards({ owner: 'ana', repos, now }), proofs = [...repos.values()].map(row => repoProof(sara.identity.key, ana.identity.key, row.repoId, row.commit));
+    assert.deepEqual(cardsFor(sara.identity.key, ana.identity.key, rows, repos, proofs).map(card => card.title).sort(), ['Many export', 'Plan the export', 'Rename the cart', 'Which tax rate?']);
+    // The most recent session that has a repository makes it the project's main one.
+    session(many, 2, manyShop, { goal: 'Shop work' });
+    assert.deepEqual(told().filter(row => ['Many export', 'Shop work'].includes(row[0])), [['Many export', 'progress', 'elu-labs/shop-two'], ['Shop work', 'progress', 'elu-labs/shop-two']]);
+    // A Task that names a repository puts its session there, before any edit; the others go with the newest such session.
+    talk(none, 2, 'Fix b', { state: 'answered', createdAt: iso(now, 1000) }); plans(none, 2, [waits(2, 'b')]);
+    talk(none, 3, 'Fix a', { state: 'answered', createdAt: iso(now, 5000) }); plans(none, 3, [waits(3, path.join(none.root, 'a'))]);
+    assert.deepEqual(told().filter(row => ['Fix a', 'Fix b', 'Nowhere yet'].includes(row[0])), [['Fix a', 'needs', 'elu-labs/a'], ['Fix b', 'needs', 'elu-labs/b'], ['Nowhere yet', 'progress', 'elu-labs/b']]);
+  });
+});
+
 test('a session a teammate\'s message started keeps what was asked and who asked to the teams that message came through', t => {
   const crew = makeTeam(t), ana = crew.founder, sara = crew.member, now = Date.now();
   const carl = withHome(newHome(t), () => createIdentity({ name: 'carl' }));

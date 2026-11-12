@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { readBoard, addCard, editCard, removeCard, startCard, linkCards, setDone, boardColumns, fitDetail, fitCard, fitTeammateCard, teammateLabel, closeSession, reopenSession, sessionPlace } from '../lib/kanban.mjs';
-import { boardSlice, folderRemote, projectBoards, repoName } from '../lib/kanban-repos.mjs';
+import { boardSlice, folderRemote, projectBoards, repoName, sessionFolders } from '../lib/kanban-repos.mjs';
 import { project, git } from './helpers.mjs';
 import { projectFolder } from '../lib/workspace.mjs';
 
@@ -212,4 +212,32 @@ test('one session is one card on the owner\'s board while its first turn runs, t
   // Before its session exists the request is the card, and a request whose session is not in the list stays one.
   assert.deepEqual(boardColumns(board, { tasks: [], queue: [{ ...running, state: 'queued', taskId: null }] }).flatMap(column => column.items.map(item => [column.column, item.detail])), [['progress', 'queued']]);
   assert.deepEqual(boardColumns(board, { tasks: [], queue: [running] }).flatMap(column => column.items.map(item => [column.column, item.detail])), [['progress', 'running']]);
+});
+
+test('a session in a folder above its clones is on its repository\'s board: the one its Task names, else the project\'s main repository', t => {
+  const p = project(t), now = Date.now(), ago = minutes => new Date(now - minutes * 60000).toISOString();
+  const folder = name => { const root = fs.mkdtempSync(path.join(p.parent, `${name}-`)), named = path.join(root, name); fs.mkdirSync(named); return named; };
+  const clone = (parent, name, origin) => { const root = path.join(parent, name); fs.mkdirSync(root); git(root, ['init', '-q']); git(root, ['remote', 'add', 'origin', origin]); return root; };
+  const talk = (id, goal, extra = {}) => task(id, goal, 'running', { kind: 'conversation', createdAt: ago(5), ...extra });
+  const boardOf = (repo, tasks, clones) => { const found = projectBoards(repo, { tasks }, { clones, now }); return Object.fromEntries(tasks.map(row => { const id = found.of.get(row.id); return [row.id, id ? found.boards.find(board => board.id === id).name : null]; })); };
+  // One clone: every session goes with it, while it runs, asks, or its Task waits.
+  const one = folder('one'), shop = clone(one, 'shop', 'git@github.com:acme/shop.git'), oneRepo = { root: one, common: null, state: path.join(one, '.state') };
+  const waiting = { id: 't-1', title: 'Rename the cart', state: 'proposed', priority: 'high', severity: 'low', objectives: ['One'], met: [], subtasks: [], edit: { repository: '', request: 'x' } };
+  const tasks = [talk('1', 'Plan the export', { worktree: one }), talk('2', 'Which tax rate?', { state: 'needs_input' }), talk('3', 'Rename the cart', { state: 'answered', plan: waiting })];
+  assert.deepEqual(boardOf(oneRepo, tasks, [shop]), { 1: 'acme/shop', 2: 'acme/shop', 3: 'acme/shop' });
+  // Without the clones found, they are on every board as before.
+  assert.deepEqual([...sessionFolders(oneRepo, tasks, { now }).values()], [null, null, null]);
+  // Several clones: the repository of the most recent session that has one, else the clone named as the project folder.
+  const many = folder('Many'), api = clone(many, 'api', 'git@github.com:acme/api.git'), own = clone(many, 'MANY', 'git@github.com:acme/many.git'), manyRepo = { root: many, common: null, state: path.join(many, '.state') };
+  assert.deepEqual(boardOf(manyRepo, [talk('1', 'Plan the export')], [api, own]), { 1: 'acme/many' });
+  assert.deepEqual(boardOf(manyRepo, [talk('1', 'Plan the export'), task('2', 'Api work', 'ready', { repository: api, createdAt: ago(1) }), task('3', 'Older', 'ready', { repository: own, createdAt: ago(60) })], [api, own]), { 1: 'acme/api', 2: 'acme/api', 3: 'acme/many' });
+  const none = folder('none'), a = clone(none, 'a', 'git@github.com:acme/a.git'), b = clone(none, 'b', 'git@github.com:acme/b.git'), noneRepo = { root: none, common: null, state: path.join(none, '.state') };
+  assert.deepEqual(boardOf(noneRepo, [talk('1', 'Plan the export')], [a, b]), { 1: null });
+  // A Task that names a repository for its edit, relative to the project or absolute, puts its session there; a name that is no folder counts for nothing.
+  const names = repository => ({ ...waiting, edit: { repository, request: 'x' } });
+  assert.deepEqual(boardOf(noneRepo, [talk('1', 'Fix b', { plan: names('b') }), talk('2', 'Fix a', { plan: names(path.join(a, 'src', '..')), createdAt: ago(9) }), talk('3', 'Nowhere', { plan: names('/no/such/folder') })], [a, b]), { 1: 'acme/b', 2: 'acme/a', 3: 'acme/b' });
+  assert.deepEqual(boardOf(noneRepo, [talk('1', 'Fix b', { plan: { ...names('b'), state: 'rejected' } })], [a, b]), { 1: null }, 'a rejected Task names nothing');
+  // A session working inside a clone, and a project that is a clone itself.
+  assert.deepEqual(boardOf(noneRepo, [talk('1', 'In a', { worktree: a })], [a, b]), { 1: 'acme/a' });
+  assert.deepEqual(boardOf({ root: shop, common: null, state: path.join(one, '.state') }, [talk('1', 'Plan the export')], []), { 1: 'acme/shop' });
 });
