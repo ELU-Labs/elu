@@ -290,6 +290,14 @@ your own session there, so your rules apply, and `a` on its approval, from eithe
 keeps the rule on the devbox, where it runs.
 Sessions also lists every other session on the devbox in the same repository under "On devbox", and Projects lists its other projects as "<project> on devbox".
 `/mine` lists your computers and `/mine remove @devbox` ends it.
+
+Signed in to GitHub with `gh` as the same account on both, your laptop and devbox need none
+of that: once they are on a team together they pair by themselves, and say
+"@devbox is yours: both computers are signed in to GitHub as <you>." To do this, each one keeps
+its public peer key and box name in one secret gist of that account ("ELU Code computers"),
+written and read only through `gh`; nothing else goes to GitHub. Anyone signed in to that
+GitHub account counts as you. A computer you `/mine remove` stays removed until you `/mine` it
+again. `/mine auto off` (or `ELU_NO_GITHUB_PAIRING=1`) turns this off.
 [SECURITY.md](SECURITY.md#your-other-computers) says what that allows.
 
 In a channel, `/invite @kim` adds a teammate you already have. `/invite` alone makes a
