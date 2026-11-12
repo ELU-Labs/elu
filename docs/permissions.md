@@ -14,6 +14,9 @@ session; a turn that is not your own session's runs read only.
 | Shell inside the vendor sandbox | no | yes; Antigravity runs no sandbox, so every command asks | yes | yes, no sandbox |
 | Shell outside it, network, web tools | no | asks | a reviewer model decides | yes |
 | Secrets and ELU Code state | no | no | no | file tools denied; a shell can read |
+| Never list (push, tag, merge, deploy, publish) | blocked | blocked; every escape asks | stand-in commands and, except on Codex, deny rules; a command that gets past them gets through if the reviewer allows it | stand-in commands, prompt text and, except on Codex, deny rules; no sandbox behind them |
+| Runs in | worktree | worktree or a named branch | same | also here |
+| Checks | sandboxed, no network, structural limits | same | no network; dependency files may change | network on; only secret paths and deleted tests block |
 
 Secrets here are files Git does not track whose names look like secrets: `.env*`, `.npmrc`,
 `.netrc`, `.pypirc`, `auth.json`, `credentials`, `credentials.json`, `id_rsa`, `id_ed25519`,
@@ -21,9 +24,6 @@ Secrets here are files Git does not track whose names look like secrets: `.env*`
 repository tracks is read in every mode, as any other tracked file: it is in the repository
 already. A teammate's question is denied the names whatever Git says. Outside a Git work
 tree every file of those names is denied.
-| Never list (push, tag, merge, deploy, publish) | blocked | blocked; every escape asks | stand-in commands and, except on Codex, deny rules; a command that gets past them gets through if the reviewer allows it | stand-in commands, prompt text and, except on Codex, deny rules; no sandbox behind them |
-| Runs in | worktree | worktree or a named branch | same | also here |
-| Checks | sandboxed, no network, structural limits | same | no network; dependency files may change | network on; only secret paths and deleted tests block |
 
 "Asks" is a live approval in your terminal where the vendor has a relay: Claude
 Code, and Antigravity and Grok Build once the `relay` step of their one-time check
