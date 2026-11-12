@@ -704,7 +704,7 @@ test("my other computer's sessions show here by the repository each works in, fr
     const home = folderAt(t, 'ana'), shop = cloneAt(home.root, 'shop-web', X), other = cloneAt(home.root, 'other', Z);
     editIn(home, 1, shop, 'Fix the cart total', 3); editIn(home, 2, other, 'Tidy the other one', 2);
     const hub = folderAt(t, 'hub'); cloneAt(hub.root, 'shop', X);
-    chat(hub.root, 1, { goal: 'Where is the cart?', minutes: 1 });
+    saveTask(hub, { id: '1', kind: 'conversation', goal: 'Where is the cart?', state: 'answered', worktree: hub.root, base: null, branch: null, createdAt: new Date(Date.now() - 60000).toISOString(), runs: [], reviews: [], responses: [], messages: [], sessions: {}, result: null });
     markMine(devbox.identity.key, laptop.identity.key); noteTheirs(laptop.identity.key, true); relist();
   });
   const toHost = connection(laptop.identity.key), hostCtx = context(devbox.identity, { [laptop.identity.key]: toHost }), host = hostMethods(hostCtx);
