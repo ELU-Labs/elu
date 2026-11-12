@@ -287,6 +287,12 @@ It shows in Sessions marked "on devbox", live, and its approvals wait on both ma
 your own session there, so your rules apply, and `a` on its approval, from either machine,
 keeps the rule on the devbox, where it runs.
 Sessions also lists every other session on the devbox in the same repository under "On devbox", and Projects lists its other projects as "<project> on devbox".
+A message you type to a devbox session that names files or folders on the laptop asks
+"Send 14 files (2.1 MB) from this computer with this message?": y sends them along, n sends
+the text alone. `/send PATH...` sends files without a message. They land in that session's
+inbox on the devbox, which it may read in every mode, and each path in your message points
+there. A Claude Code session of yours can list your sessions on your other computers and send
+them files itself; in Ask for approval you allow each send.
 `/mine` lists your computers and `/mine remove @devbox` ends it.
 [SECURITY.md](SECURITY.md#your-other-computers) says what that allows.
 
