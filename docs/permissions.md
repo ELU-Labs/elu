@@ -185,8 +185,8 @@ has printed nothing for 10 minutes, or after 2 hours, a safety cap. Time a reque
 you counts toward neither, and the 10 minutes start again once it is answered. A stopped turn
 says so in the chat in one line, such as "Stopped after 10 minutes with no output. Your
 changes are kept. Reply to carry on." Its edits stay on disk, and your next message carries
-on. `roles.lead.timeoutSeconds` in `.elu-code/config.yaml` sets the 10 minutes (600, or 900
-as older settings files say, both mean the default). A vendor that prints its answer only at
+on. `roles.lead.timeoutSeconds` in `.elu-code/config.yaml` sets the 10 minutes; the 900 it
+says by default means the default, as 600 does. A vendor that prints its answer only at
 the end (Antigravity and Grok Build without the live relay) has the cap alone.
 
 The keys are `y` allow and `n` deny. Where the session can be given Full access
