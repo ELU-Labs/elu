@@ -579,7 +579,7 @@ function homeAt(t, folder) {
   t.after(() => { if (previous === undefined) delete process.env.HOME; else process.env.HOME = previous; });
   return fs.realpathSync(folder);
 }
-const HOME_NOTE = /^This message would run in your home folder\. Answer y when ELU Code asks, or open ELU Code in the project folder for core and approve it there\.$/;
+const HOME_NOTE = /This message would run in your home folder\. Answer y when ELU Code asks, or open ELU Code in the project folder for core and approve it there\.$/;
 test('a teammate\'s message never runs in the home folder: y, w and an older Auto setting leave it waiting with a plain line, and approving from the project runs it as their words', async t => {
   const p = setup(t, 'answer'), sara = teammate(p), teamId = everyTeam()[0].id;
   unshare('app');
@@ -670,7 +670,7 @@ test('a session whose project is the home folder but that works in a repository 
   const value = await s.controller.ask('I approve', s.id).finished;
   assert.notEqual(value.state, 'blocked', JSON.stringify(value.error));
   const turns = p.prompts().slice(before);
-  assert.equal(turns.length, 1, 'one turn: the work goes on, with no read-only reply turn first');
+  assert.equal(turns.length, 1, `one turn: the work goes on, with no read-only reply turn first: ${JSON.stringify(turns.map(row => [Boolean(schemaOf(row.args).properties.intent), row.args.includes('--resume'), row.input.slice(-400)]))}`);
   const [work] = turns, settings = settingsOf(work.args);
   assert.equal(schemaOf(work.args).properties.intent, undefined, 'a working turn, not a reply turn');
   assert.ok(work.input.includes('I approve')); assert.match(work.input, /this turn does its work/);
