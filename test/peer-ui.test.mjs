@@ -828,14 +828,37 @@ test('Enter in the command list runs /peers, fills in /join, and shows a failed 
 
 test('the first /invite makes the team, named after the open project', async t => {
   const p = project(later(t)); environment(t, p.parent);
-  const peer = fakePeer({ teamless: true }), v = await view(t, { repo: repository(p.root), peer });
+  const peer = fakePeer({ teamless: true, access: {} }), v = await view(t, { repo: repository(p.root), peer });
   await send(v, '/invite @kim'); await until(() => /No team yet\. \/invite alone starts one/.test(v.panels.status.getText()), 'a name with no team');
   assert.deepEqual(peer.calls.filter(row => row[0] === 'createTeam'), []);
   await send(v, '/invite'); await choose(v, 'Invite', /^Someone new/);
+  // What teammates can do here is asked before the team is made.
+  await until(() => modal(v, 'What teammates can do here'), 'asked first');
+  assert.deepEqual(peer.calls.filter(row => row[0] === 'createTeam'), [], 'no team before the answers');
+  await choose(v, 'What teammates can do here', /^Auto/); await closeDialog(v, 'Rules for teammates', '');
   await until(() => modal(v, 'Team invite'), 'invite');
   assert.deepEqual(peer.calls.filter(row => row[0] === 'createTeam'), [['createTeam', path.basename(p.root)]]);
   assert.deepEqual(peer.calls.find(row => row[0] === 'createInvite').slice(1), ['team-1', { hours: 24 }]);
   await closeDialog(v, 'Team invite');
+});
+
+test('on no team, Esc on what teammates can do here makes no team and starts nothing', async t => {
+  const p = project(later(t)); environment(t, p.parent);
+  const peer = fakePeer({ teamless: true, running: false, access: {} }), v = await view(t, { repo: repository(p.root), peer }), status = () => v.panels.status.getText();
+  peer.startPeer = () => { peer.calls.push(['startPeer']); peer.running = true; return true; };
+  await send(v, '/invite'); await choose(v, 'Invite', /^Someone new/);
+  await until(() => modal(v, 'What teammates can do here'), 'asked first');
+  v.input.write('\x1b'); await until(() => /Nothing was done\. No invite was made\./.test(status()), 'Esc makes nothing');
+  await new Promise(resolve => setTimeout(resolve, 300));
+  assert.deepEqual(peer.calls.filter(row => ['createTeam', 'startPeer', 'createInvite', 'saveTeamAccess'].includes(row[0])), [], 'no team, no daemon, no code');
+  assert.equal(peer.onTeam(), false);
+  // Esc on the rules makes nothing either.
+  await send(v, '/invite'); await choose(v, 'Invite', /^Someone new/);
+  await choose(v, 'What teammates can do here', /^Manual/); await until(() => modal(v, 'Rules for teammates'), 'the rules');
+  modal(v, 'Rules for teammates').children.find(child => child.type === 'textbox').emit('cancel');
+  await until(() => !modal(v, 'Rules for teammates'), 'closed');
+  await new Promise(resolve => setTimeout(resolve, 300));
+  assert.deepEqual(peer.calls.filter(row => ['createTeam', 'startPeer', 'createInvite', 'saveTeamAccess'].includes(row[0])), []);
 });
 
 test('a new person: /invite asks their name, makes the team, starts the daemon, then makes the code', async t => {
@@ -850,6 +873,7 @@ test('a new person: /invite asks their name, makes the team, starts the daemon, 
   await send(v, '/invite'); await choose(v, 'Invite', /^Someone new/); await until(() => modal(v, 'Your name'), 'name prompt');
   const field = modal(v, 'Your name').children.find(child => child.type === 'textbox');
   await until(() => field.__listener, 'name input'); field.setValue('ana'); field.submit();
+  await choose(v, 'What teammates can do here', /^Auto/); await closeDialog(v, 'Rules for teammates', '');
   await until(() => modal(v, 'Team invite'), 'invite');
   const order = ['identity', 'createTeam', 'startPeer', 'createInvite'].map(name => peer.calls.findIndex(row => row[0] === name));
   assert.ok(order.every((at, i) => at >= 0 && (i === 0 || at > order[i - 1])), JSON.stringify(order));
