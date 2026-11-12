@@ -203,8 +203,9 @@ while you stay on a team: `/leave` (or `elu team leave`) takes you off one, and 
 on no team the daemon stops. If no teammate was online to hear that you left, it keeps
 running until one of them connects and is told. The person who made a team cannot leave it.
 An admin removes a teammate with `/remove @kim` (or `elu team remove kim`). Leaving, or being
-removed, also forgets what that team's messages could do on your machine; a new invite
-brings you back, and joining asks again.
+removed, also forgets what that team's messages could do on your machine. A new invite
+brings you back and sets it again: `/join` asks, and `elu join` saves its flags, Auto with
+no rules when there are none.
 
 `elu peers` shows who is online. In the app, write to a teammate in the Chats tab, or
 type `@kim where are the tax rates?` in any session. A message always reaches them, and

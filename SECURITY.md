@@ -144,10 +144,12 @@ that team, and changed with `/access` or `elu access`:
   in your default mode, Full access included, since you started it. w picks the mode, place
   and folders first; n declines.
 - A team whose setting was never set (joined with an earlier version) is Manual with no
-  rules: its messages arrive as chat and wait for you. Leaving a team, or being removed from
-  it, forgets its setting on your machine; joining it again with a new invite asks again. Nothing turns Auto on by itself:
+  rules: its messages arrive as chat and wait for you. Nothing turns Auto on by itself:
   `elu invite` on such a team saves Manual unless you pass `--auto`, and `/invite` and
   `/access` offer Manual first.
+- Leaving a team, or being removed from it, forgets its setting on your machine. Coming
+  back with a new invite sets it again: `/join` asks, and `elu join` saves its flags, Auto
+  with no rules when there are none.
 
 **Rules** are plain English you write, up to 1000 characters, such as "Only answer
 questions, do not edit files." They go, under the heading "The owner's rules for
