@@ -3479,8 +3479,10 @@ test('y or n alone in the message box answers the selected item, and never start
   const requests = () => pendingRequests(p.root).map(row => row.goal).sort().join('|');
   // On a teammate's question, N sent alone declines it.
   await selectRow(v, /@sara question/);
+  await until(() => v.current.session === null && /y accept · n decline/.test(panels.chat.getText()), 'its text beside the list');
+  const shown = `${v.current.session} | ${panels.keys.getText()} | ${panels.board.selected} | ${cursor(v)}`;
   await send(v, ' N ');
-  await until(() => peer.sent.some(c => c.type === 'discard' && c.id === 'in-1') && /Declined @sara's message\./.test(status()), 'a lone N declines').catch(error => { throw new Error(`${error.message}: ${status()} | ${v.current.view} | ${cursor(v)} | ${JSON.stringify(peer.sent)}`); });
+  await until(() => peer.sent.some(c => c.type === 'discard' && c.id === 'in-1') && /Declined @sara's message\./.test(status()), 'a lone N declines').catch(error => { throw new Error(`${error.message}: ${status()} | before: ${shown} | after: ${v.current.session} ${panels.board.selected} ${cursor(v)} | ${JSON.stringify(peer.sent)}`); });
   assert.equal(panels.ask.getValue(), ''); assert.equal(requests(), 'Add a retry budget'); assert.deepEqual(projectSnapshot(p.repo).tasks, []);
   await send(v, 'y');
   await until(() => peer.sent.some(c => c.type === 'approve' && c.id === 'in-1'), 'a lone y accepts');
