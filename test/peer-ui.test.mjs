@@ -17,8 +17,8 @@ const LONG = 'Could you check whether the retry budget in the uploader resets af
 const ago = minutes => new Date(Date.now() - minutes * 60000).toISOString();
 
 // teamless: this machine is on no team until /invite makes one (createTeam).
-// mine: mineRows(); remote: remoteSessions(); joined: what joinTeam answers.
-function fakePeer({ items, running = true, refuse = () => null, remoteBots = [], teamless = false, access = { 'team-1': { handling: 'auto', rules: '', root: null, at: null } }, mine = [], remote = [], joined = null } = {}) {
+// mine: mineRows(); remote: remoteSessions(); machines: remoteMachines(); repoId: projectRepoId(); joined: what joinTeam answers.
+function fakePeer({ items, running = true, refuse = () => null, remoteBots = [], teamless = false, access = { 'team-1': { handling: 'auto', rules: '', root: null, at: null } }, mine = [], remote = [], machines = [], repoId = null, joined = null } = {}) {
   const calls = [];
   const record = (name, value) => (...args) => { calls.push([name, ...args]); return typeof value === 'function' ? value(...args) : value; };
   const facade = {
@@ -67,6 +67,8 @@ function fakePeer({ items, running = true, refuse = () => null, remoteBots = [],
     joinTeam: record('joinTeam', async () => joined ?? ({ id: 'team-2', name: 'Docs', inviter: { name: 'sara', fingerprint: 'bbbbbbbb' } })),
     mineRows: () => mine,
     remoteSessions: () => remote,
+    remoteMachines: () => machines,
+    projectRepoId: () => repoId,
     // What teammates can do here, per team: team-1 was set before these tests start, unless a test says otherwise.
     access: { ...access },
     teamAccess: id => facade.access[id] ?? null,
@@ -733,9 +735,38 @@ test('a session on my other computer that waits for y or n shows n once in the k
   board.focus(); selectRow(board, /wants to run ls/);
   await until(() => /y allow {2}n deny {2}enter open {2}tab next/.test(keys()), 'approval keys');
   assert.doesNotMatch(keys(), /new session/);
-  selectRow(board, /on sara-box · Uppercase plan/);
+  selectRow(board, /Uppercase plan/);
   await until(() => /y approve {2}n reject {2}enter open {2}tab next/.test(keys()), 'Task keys');
   assert.doesNotMatch(keys(), /new session/);
+});
+
+test('Sessions lists every session of my other computer in this repository under its name, and Projects opens its other projects', async t => {
+  const now = Date.now(), at = minutes => new Date(now - minutes * 60000).toISOString(), SHOP = 'e'.repeat(64);
+  const p1 = '1'.repeat(16), p2 = '2'.repeat(16);
+  const session = (ref, title, minutes, extra = {}) => ({ id: `${ref.slice(-1)}1111111-1111-4111-8111-11111111111${ref.slice(-1)}`, ref, project: ref.split(':')[0], title, state: 'answered', at: at(minutes), createdAt: at(minutes + 1), approvals: [], by: 'you', who: null, ...extra });
+  const machines = [{ key: SARA, listedAt: at(0), older: false, projects: [{ id: p1, name: 'shop', repoId: SHOP, home: false }, { id: p2, name: 'ana', repoId: null, home: true }],
+    sessions: [session(`${p1}:1`, 'Typed there by hand', 5), session(`${p1}:2`, 'Kim asked for a fix', 2, { by: 'teammate', who: 'kim', state: 'running', approvals: [{ id: 'approval-1', role: 'lead', summary: 'Run npm test', at: at(1) }] }), session(`${p2}:3`, 'Tidy my notes', 3)] },
+    // li is not mine: what is kept for li shows nowhere.
+    { key: LI, listedAt: at(0), projects: [{ id: p1, name: 'shop', repoId: SHOP }], sessions: [session(`${p1}:4`, 'Li private', 1)] }];
+  const p = project(later(t)); environment(t, p.parent);
+  const peer = fakePeer({ items: [], mine: [{ key: SARA, mine: true, theirs: true }], machines, repoId: SHOP }), v = await view(t, { repo: repository(p.root), dashboard: true, peer });
+  const board = v.panels.board, rows = () => board.items.map(plainItem).map(row => row.trim());
+  await until(() => rows().some(row => /ON SARA-BOX · ONLINE/.test(row)), 'the heading of my other computer');
+  const at2 = rows(), heading = at2.findIndex(row => /ON SARA-BOX · ONLINE/.test(row));
+  assert.match(at2[heading + 1], /Kim asked for a fix/); assert.match(at2[heading + 2], /Typed there by hand/);
+  assert.ok(!at2.some(row => /Tidy my notes|Li private/.test(row)), 'another project of it, and a computer that is not mine, are not listed here');
+  // Its approval also waits under Needs you, marked with the computer.
+  assert.ok(at2.findIndex(row => /on sara-box · wants to/.test(row)) >= 0 && at2.findIndex(row => /on sara-box · wants to/.test(row)) < heading);
+  // Projects lists its other project; Enter opens it in Sessions under a heading of its own.
+  await send(v, '/projects'); await until(() => v.current.view === 'projects' && v.panels.projectsList.items.some(item => /ana on sara-box/.test(plainItem(item))), 'the other project');
+  assert.ok(!v.panels.projectsList.items.some(item => /shop on sara-box/.test(plainItem(item))), 'the project of this repository is in Sessions');
+  v.panels.projectsList.focus(); selectRow(v.panels.projectsList, /ana on sara-box/); v.input.write('\r');
+  await until(() => v.current.view === 'tasks' && rows().some(row => /ANA ON SARA-BOX/.test(row)), 'its sessions');
+  assert.match(rows()[rows().findIndex(row => /ANA ON SARA-BOX/.test(row)) + 1], /Tidy my notes/);
+  // The row under the cursor is opened: watched on that computer.
+  await until(() => peer.sent().some(row => row.type === 'remoteWatch' && row.ref === `${p2}:3`), 'watched there');
+  assert.match(rows()[board.selected], /Tidy my notes/, 'the cursor is on it');
+  assert.equal(peer.sent().find(row => row.type === 'remoteWatch').to, SARA);
 });
 
 test('a thread shows under its channel, #general or its teammate, and a row counts what waits for me', () => {

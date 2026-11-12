@@ -251,6 +251,7 @@ already on your team needs no code: pick it in that same list, or run `/mine @de
 laptop and `/mine @laptop` on the devbox. From then on, `@devbox fix the flaky test` in the
 new session box starts the session on the devbox, with the mode, model and bots you picked.
 It shows in Sessions marked "on devbox", live, and its approvals wait on both machines.
+Sessions also lists every other session on the devbox in the same repository under "On devbox", and Projects lists its other projects as "<project> on devbox".
 `/mine` lists your computers and `/mine remove @devbox` ends it.
 [SECURITY.md](SECURITY.md#your-other-computers) says what that allows.
 
