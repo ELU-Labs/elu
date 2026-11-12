@@ -19,6 +19,8 @@ const schemaArg=args.indexOf('--json-schema');
 const schema=schemaArg>=0?JSON.parse(args[schemaArg+1]):null;
 const conversation=Boolean(schema?.properties?.intent);if(conversation&&schema.properties.repository){const named=cfg.repository;result.repository=named&&fs.existsSync(named)?fs.readFileSync(named,'utf8'):'';}if(conversation){result.intent=mode==='answer'||mode==='slow-answer'||mode==='dialogue'&&input.includes('Just explain the implementation')?'answer':'edit';if(result.intent==='answer')result.summary='Yes. You can add multiple agents with /agents.\nNo project checks or setup are needed to ask a question.\nYour next message continues this conversation.';}
 if(cfg.name!==undefined&&schema?.properties?.name)result.name=cfg.name;
+// intent (fake.json): answer makes every conversation turn an answer, so a relay test needs no Task.
+if(conversation&&cfg.intent==='answer'){result.intent='answer';result.summary='Looked.';}
 // A request for an edit plans first (lib/plan.mjs): it comes back with a Task unless the prompt
 // carries one the owner approved. fake.json may give its own Task, or none with mode no-task;
 // mode bad-task returns one that does not read. A turn that reports progress ticks every subtask.
@@ -55,6 +57,8 @@ console.error('A harmless diagnostic on stderr.');
 // --permission-prompt-tool server from --mcp-config: initialize, tools/list, then approve for a
 // touch outside the workspace. Allowed, the touch happens; denied, the result reports the denial.
 // bypassPermissions never asks. The server is started exactly as the config says, env included.
+// asks (fake.json): the calls to ask about instead, each { tool_name, input }, in order; an allowed
+// one is recorded in ran.jsonl beside the fake, and each decision gets its own calls row.
 const denials=[];
 const promptTool=args.includes('--permission-prompt-tool')?args[args.indexOf('--permission-prompt-tool')+1]:null;
 // commands (fake.json): what the model runs this turn, in a session with permissions. Each starts
@@ -83,11 +87,15 @@ if(mode==='relay'&&promptTool&&permissionMode!=='bypassPermissions'){
  await call('initialize',{protocolVersion:'2025-06-18',capabilities:{},clientInfo:{name:'fake-claude',version:'0'}});
  child.stdin.write(JSON.stringify({jsonrpc:'2.0',method:'notifications/initialized'})+'\n');
  const tools=(await call('tools/list',{})).result.tools.map(tool=>tool.name);
- const target=path.join(path.dirname(process.argv[1]),'touched'),input={command:`touch ${target}`};
- const reply=await call('tools/call',{name:promptTool.split('__')[2],arguments:{tool_name:'Bash',input,tool_use_id:'toolu_fake_touch'},_meta:{progressToken:1}});
- const decision=JSON.parse(reply.result.content[0].text);
- if(decision.behavior==='allow')fs.writeFileSync(target,'');else denials.push({tool_name:'Bash',tool_use_id:'toolu_fake_touch',tool_input:input});
+ const target=path.join(path.dirname(process.argv[1]),'touched');
+ const asks=Array.isArray(cfg.asks)?cfg.asks.map((ask,i)=>({...ask,id:`toolu_fake_ask_${i+1}`})):[{tool_name:'Bash',input:{command:`touch ${target}`},id:'toolu_fake_touch',touch:true}];
+ for(const ask of asks){
+  const reply=await call('tools/call',{name:promptTool.split('__')[2],arguments:{tool_name:ask.tool_name,input:ask.input,tool_use_id:ask.id},_meta:{progressToken:1}});
+  const decision=JSON.parse(reply.result.content[0].text);
+  if(decision.behavior==='allow'){if(ask.touch)fs.writeFileSync(target,'');else fs.appendFileSync(path.join(path.dirname(process.argv[1]),'ran.jsonl'),JSON.stringify(ask.input)+'\n');}
+  else denials.push({tool_name:ask.tool_name,tool_use_id:ask.id,tool_input:ask.input});
+  if(cfg.calls)fs.appendFileSync(cfg.calls,JSON.stringify({vendor,args:[],approval:{tools,decision,progress:progress.length}})+'\n');
+ }
  child.stdin.end();
- if(cfg.calls)fs.appendFileSync(cfg.calls,JSON.stringify({vendor,args:[],approval:{tools,decision,progress:progress.length}})+'\n');
 }
 console.log(JSON.stringify({type:'result',is_error:false,session_id:session,total_cost_usd:0,...(denials.length?{permission_denials:denials}:{}),structured_output:mode==='invalid'||badReply?{outcome:'nope'}:result}));

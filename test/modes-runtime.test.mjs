@@ -15,6 +15,7 @@ import { enqueue } from '../lib/conductor.mjs';
 import { saveSchedule, parseWhen } from '../lib/schedules.mjs';
 import { answerApproval, approvalsDir, awaitDecision, pendingApprovals, requestApproval } from '../lib/approvals.mjs';
 import { defaultConfig } from '../lib/config.mjs';
+import { ruleFor, saveRule } from '../lib/permission-rules.mjs';
 
 // Sessions with permissions, end to end against the fake CLIs.
 // The personal directory (XDG_CONFIG_HOME) and HOME both point into the test folder, so a
@@ -445,4 +446,51 @@ test('in Read only, Ask for approval and Approve for me a sandboxed command read
   assert.equal(peer.state, 'answered', JSON.stringify(peer.error));
   const closed = settingsOf(f.leads().at(-1).args).sandbox.filesystem;
   assert.ok(gitEntries(closed.denyRead).includes(common), 'the whole folder stays closed to a teammate\'s question');
+});
+
+// Approvals you give once, end to end with the fake Claude and the real relay: the owner keeps
+// one approval as a rule (what a in the terminal does), and the next session that runs the
+// same command is not asked. A default never asks; the never list always does; a teammate's
+// session uses the defaults only, and one from the owner's own machine uses his rules.
+test('a rule kept once answers the next session; defaults never ask; the never list does; a teammate\'s session gets the defaults only', { timeout: 60000 }, async t => {
+  const f = setup(t, 'relay'), root = f.controller.repo.project ?? f.controller.repo.root;
+  const asking = asks => fakeClis(f.parent, { mode: 'relay', intent: 'answer', asks: asks.map(([command, outside = true]) => ({ tool_name: 'Bash', input: { command, ...(outside ? { dangerouslyDisableSandbox: true } : {}) } })) });
+  // Every request that waits is denied and kept, so a run never hangs on one.
+  const settle = async (run, keep = null) => {
+    const asked = []; let done = false; const finished = run.finished.finally(() => { done = true; });
+    while (!done) { for (const row of pendingApprovals({ root })) { asked.push(row); if (keep?.(row)) continue; answerApproval(row.id, 'deny'); } await sleep(25); }
+    return { task: await finished, asked };
+  };
+  asking([['npm test']]);
+  // The first session asks; the owner keeps it for this project, and it is allowed.
+  let offered = null;
+  const first = await settle(f.controller.ask('Run the tests', null, { permissions: 'ask' }), row => {
+    if (offered) return false;
+    assert.equal(row.rules, 'saved'); assert.equal(row.access, 'read'); assert.deepEqual(row.input, { command: 'npm test', dangerouslyDisableSandbox: true });
+    offered = ruleFor(row.tool, row.input, { project: row.root, cwd: row.cwd, access: row.access });
+    assert.equal(offered.summary, 'Run npm test, with any arguments, also outside the sandbox');
+    saveRule(offered.rule, { scope: 'project', project: row.root }); answerApproval(row.id, 'allow'); return true;
+  });
+  assert.equal(first.task.state, 'answered', JSON.stringify(first.task.error)); assert.equal(first.asked.length, 1);
+  assert.deepEqual(first.task.approvals.map(row => [row.decision, row.by ?? null]), [['allow', null]]);
+  // A new session runs the same command: nothing waits, and the decision names the rule.
+  const second = await settle(f.controller.ask('Run the tests again', null, { permissions: 'ask' }));
+  assert.deepEqual(second.asked, []); assert.equal(second.task.state, 'answered');
+  assert.deepEqual(second.task.approvals.map(row => [row.summary, row.decision, row.by, row.rule]), [['Run: npm test outside the sandbox', 'allow', 'rule', 'npm test']]);
+  assert.ok(fs.readFileSync(path.join(f.fake.dir, 'ran.jsonl'), 'utf8').includes('"npm test"'), 'the command ran');
+  // A default never asks; the never list asks every time, whatever is saved.
+  asking([['git status', false], ['git push origin main']]);
+  const third = await settle(f.controller.ask('Check and push', null, { permissions: 'ask' }));
+  assert.deepEqual(third.asked.map(row => row.summary), ['Run: git push origin main outside the sandbox']);
+  assert.equal(ruleFor(third.asked[0].tool, third.asked[0].input).refused, 'That is on the never list, so it is never allowed.');
+  assert.deepEqual(third.task.approvals.map(row => [row.summary, row.decision, row.by ?? null]), [['Run: git status', 'allow', 'default'], ['Run: git push origin main outside the sandbox', 'deny', null]]);
+  // A session a teammate started: the defaults answer, the owner's rule does not.
+  asking([['git status', false], ['npm test']]);
+  const theirs = await settle(f.controller.ask('Work on the request from @sara in the peer data block.', null, { origin: origin('handoff'), context: 'Run the tests.', permissions: 'ask' }));
+  assert.deepEqual(theirs.asked.map(row => [row.summary, row.rules]), [['Run: npm test outside the sandbox', 'defaults']]);
+  assert.deepEqual(theirs.task.approvals.map(row => [row.decision, row.by ?? null]), [['allow', 'default'], ['deny', null]]);
+  // One from the owner's own other machine (origin.mine) uses his rules.
+  const mine = await settle(f.controller.ask('Work on the request from @sara in the peer data block.', null, { origin: origin('handoff', { mine: true }), context: 'Run the tests.', permissions: 'ask' }));
+  assert.deepEqual(mine.asked, []); assert.equal(mine.task.origin.mine, true);
+  assert.deepEqual(mine.task.approvals.map(row => [row.decision, row.by, row.rule]), [['allow', 'default', 'git status'], ['allow', 'rule', 'npm test']]);
 });

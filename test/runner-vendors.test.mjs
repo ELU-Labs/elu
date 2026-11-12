@@ -12,6 +12,7 @@ import { atomic, personalDirectory } from '../lib/util.mjs';
 import { ADAPTERS } from '../lib/adapters/index.mjs';
 import * as agy from '../lib/adapters/agy.mjs';
 import * as claude from '../lib/adapters/claude.mjs';
+import { saveRule } from '../lib/permission-rules.mjs';
 
 // Every vendor through the runner, against the fakes: Codex leads with its
 // own launch and parse, Grok takes the prompt from a file under a private HOME, and an ACP
@@ -249,6 +250,27 @@ test('a Grok lead asks over ACP once the relay is proven here: allow runs the co
   assert.deepEqual(second.runs[1].denials, [{ tool: 'execute', summary: `Run ${f.marker}` }]);
   assert.equal(second.approvals.length, 2); assert.equal(second.approvals[1].decision, 'deny');
   assert.equal(pendingApprovals().length, 0, 'nothing is left to answer');
+});
+
+// Approvals you give once, over ACP: the relay answers a kept rule without asking, and the
+// never list is asked whatever is kept.
+test('a Grok lead over ACP: a kept rule allows its command without asking, and the decision names the rule', async t => {
+  const f = setup(t, 'grok');
+  fs.mkdirSync(path.join(f.parent, '.grok')); fs.writeFileSync(path.join(f.parent, '.grok', 'auth.json'), '{}\n', { mode: 0o600 });
+  proven('grok', f.bin, '1.0.77', { relay: true });
+  fs.writeFileSync(path.join(f.fake.dir, 'elu-marker'), `#!/bin/sh\nprintf ran > ${JSON.stringify(f.ran)}\n`, { mode: 0o755 });
+  saveRule({ kind: 'command', words: ['elu-marker'], exact: false }, { scope: 'project', project: f.controller.repo.project ?? f.controller.repo.root });
+  const task = await f.controller.ask('Run the command elu-marker then reply done with the summary "ran it".', null, { permissions: 'ask' }).finished;
+  assert.equal(task.state, 'answered', JSON.stringify(task.error)); assert.equal(fs.readFileSync(f.ran, 'utf8'), 'ran', 'the command ran');
+  assert.deepEqual(pendingApprovals(), [], 'nothing waited for the owner');
+  assert.deepEqual(task.approvals.map(row => [row.summary, row.decision, row.by, row.rule]), [['Run elu-marker', 'allow', 'rule', 'elu-marker']]);
+  // Elsewhere the rule does not apply: the same command asks.
+  const other = project(t), controller = new ProjectController(projectFolder(other.root)); Object.assign(controller.draftConfig.roles.lead, { vendor: 'grok', maxCostUsd: null });
+  fs.rmSync(f.ran);
+  const pending = controller.ask('Run the command elu-marker then reply done with the summary "asked".', null, { permissions: 'ask' }).finished;
+  const asked = await answer('deny', { vendor: 'grok' });
+  assert.equal(asked.rules, 'saved'); assert.equal(asked.summary, 'Run elu-marker');
+  await pending; assert.equal(fs.existsSync(f.ran), false);
 });
 
 test('an Antigravity lead runs headless under the workspace HOME and asks over ACP once the relay is proven here', async t => {
