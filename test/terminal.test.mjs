@@ -2140,6 +2140,10 @@ test('/schedule offers times in the command list, saves a time and message typed
   assert.ok(panels.palette.hidden);
   // Where there are choices, the key bar is for the list.
   ask.setValue(''); v.input.write('/model '); await until(() => !panels.palette.hidden && /↑↓ choose/.test(keys()), 'the list keys');
+  // Away from the form, a time picked from the list names the project each run starts in.
+  ask.setValue(''); await send(v, '/projects'); await until(() => v.current.view === 'projects', 'Projects');
+  await typing(); ask.setValue(''); v.input.write('/schedule '); await until(() => offered().length === 7, 'the times again');
+  v.input.write('\r'); await until(() => status() === `› Write the message after the time. ${RUNS}`, 'the project named');
 });
 
 test('the first start in a new folder asks for a project name and saves it there', async t => {
