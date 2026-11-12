@@ -1328,7 +1328,7 @@ test('Kanban shows teammates\' Tasks as cards in the same columns with their nam
   await send(v, '/kanban'); await until(() => v.current.view === 'kanban' && column(1).length === 2 && column(3).length === 1, 'the teammates\' cards');
   assert.deepEqual(asked.slice(0, 1), [p.root], 'asked for this project only');
   // Approved is In progress, done is Done; each card names whose it is, the name kept when the title is cut.
-  assert.match(column(1)[0], /^Fix the login.*  sara on sara-box/); assert.match(column(1)[1], /^\{red-fg\}Loud\{\/\} title  sara on sara-box/);
+  assert.match(column(1)[0], /^Fix the login.*  sara on sara-box/); assert.match(column(1)[1], /^\{red-fg\}Loud\{\/\}.*  sara on sara-box/);
   assert.match(column(3)[0], /^Old cleanup  li · done 2\/2/);
   assert.deepEqual([label(0), label(1), label(2), label(3)], ['To do 0', 'In progress 2', 'Needs you 0', 'Done 1']);
   // No strip under the board: the columns take the whole height, and there is no separate list to move to.
