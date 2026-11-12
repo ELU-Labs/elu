@@ -391,9 +391,9 @@ test('a message reaches a teammate who shares no project and waits; y with the o
     // Auto with the project chosen at join, which is not shared: the next message starts at once there.
     saveTeamAccess(crew.teamId, { handling: 'auto', rules: 'Be brief.', root });
     const second = send('and this one?', 'm-2'), auto = getRecord(second.id);
-    assert.equal(second.status.state, 'TASK_STATE_SUBMITTED'); assert.equal(auto.waiting, false); assert.equal(auto.root, root); assert.equal(auto.access, crew.teamId);
+    assert.equal(second.status.state, 'TASK_STATE_SUBMITTED'); assert.equal(auto.waiting, false); assert.equal(auto.root, root); assert.deepEqual(auto.accessTeams, [crew.teamId]);
     const started = pendingRequests(root).find(r => r.id === auto.requestId);
-    assert.equal(started.state, 'queued'); assert.equal(started.origin.team, crew.teamId); assert.equal(started.origin.own, true); assert.equal(events.at(-1), 'kick');
+    assert.equal(started.state, 'queued'); assert.deepEqual(started.origin.teams, [crew.teamId]); assert.equal(started.origin.own, true); assert.equal(events.at(-1), 'kick');
     // Manual: it waits, in the same project.
     saveTeamAccess(crew.teamId, { handling: 'manual' });
     const third = getRecord(send('a third', 'm-3').id);
@@ -428,6 +428,61 @@ test('what teammates can do here is saved per team, checked, and its rules reach
     assert.equal(teammateRules({ peer: ana.key }), saved.rules, 'a session from before teams were named gets the rules of the teams the teammate is on');
     assert.equal(teammateRules({ peer: 'c'.repeat(64) }), '', 'someone on none of my teams gets none');
     assert.equal(teammateRules({ peer: ana.key, team: 'd'.repeat(64) }), '');
+    assert.equal(teammateRules({ peer: ana.key, teams: ['d'.repeat(64)] }), '');
+    // A session names every team of its project, and gets the rules of all of them.
+    const me = loadIdentity(), side = createTeam(me, 'side');
+    saveTeamAccess(side.id, { rules: 'Never touch billing.' });
+    assert.equal(teammateRules({ peer: ana.key, teams: [crew.teamId, side.id] }), `${saved.rules}\n\nNever touch billing.`);
+  });
+});
+
+test('the setting comes from the project a message runs in, never from the room the sender picks; a team ask never starts a session by itself', t => {
+  const crew = makeTeam(t), ana = crew.founder.identity, sara = crew.member, bob = withHome(newHome(t), () => createIdentity({ name: 'bob' }));
+  withHome(sara.home, () => {
+    // Sara and Ana are on core (Auto, project x, no rules) and side (Manual, project y, rules); Bob is on side too.
+    const me = loadIdentity(), side = createTeam(me, 'side');
+    redeemCode(createInvite(me, side.id, { hours: 1 }), ana.key, 'ana'); redeemCode(createInvite(me, side.id, { hours: 1 }), bob.key, 'bob');
+    const x = registeredProject(t), y = registeredProject(t), other = registeredProject(t);
+    shareWith(y.root, { handle: 'why', teams: [side.id] }); shareWith(other.root, { handle: 'other', teams: [crew.teamId] });
+    saveTeamAccess(crew.teamId, { handling: 'auto', root: x.root });
+    saveTeamAccess(side.id, { handling: 'manual', rules: 'Side rules.', root: y.root });
+    const ctx = { me, kick: () => {}, event: () => {}, push: () => {} }, methods = intakeMethods(ctx);
+    let n = 0;
+    const send = (ext, from = ana) => { const id = `room-${++n}`; return getRecord(methods.SendMessage({ message: message({ text: 'Please change it.', contextId: `thread-${id}`, messageId: id, ext: { kind: 'ask', project: null, hop: 1, from: { key: from.key, name: from.name }, ...ext } }) }, { key: from.key }).id); };
+    // The room says core, the project is side's: side's Manual and side's rules decide.
+    const picked = send({ project: 'why', room: { team: crew.teamId, channel: null } });
+    assert.equal(picked.root, y.root); assert.equal(picked.waiting, true); assert.equal(picked.requestId, null); assert.deepEqual(picked.accessTeams, [side.id]);
+    acceptIncoming(ctx, picked.task.id, { how: 'own' });
+    const row = pendingRequests(y.root).find(r => r.origin?.a2aTaskId === picked.task.id);
+    assert.deepEqual(row.origin.teams, [side.id]); assert.equal(teammateRules(row.origin), 'Side rules.');
+    // With one team too: a shared project that is not the one core's setting names waits.
+    const elsewhere = send({ project: 'other' });
+    assert.equal(elsewhere.root, other.root); assert.equal(elsewhere.waiting, true); assert.deepEqual(elsewhere.accessTeams, [crew.teamId]);
+    // No project named: core's own project, in Auto.
+    const plain = send({ room: { team: crew.teamId, channel: null } });
+    assert.equal(plain.root, x.root); assert.equal(plain.waiting, false); assert.ok(plain.requestId);
+    // A team ask to #general of a three-member team set to Auto waits on every machine.
+    saveTeamAccess(side.id, { handling: 'auto', root: y.root });
+    const group = send({ team: true, room: { team: side.id, channel: null } });
+    assert.equal(group.root, y.root); assert.equal(group.team, true); assert.equal(group.waiting, true); assert.equal(group.requestId, null);
+    // The same message to Sara alone starts at once.
+    assert.equal(send({ room: { team: side.id, channel: null }, project: 'why' }).waiting, false);
+  });
+});
+
+test('elu invite never turns Auto on for a team that already has members; a new team gets Auto unless --manual', async t => {
+  const crew = makeTeam(t), ana = crew.founder;
+  await withHome(ana.home, async () => {
+    const { root } = registeredProject(t);
+    const existing = await peerCli(['invite'], { project: root });
+    assert.equal(teamAccess(crew.teamId).handling, 'manual', 'Sara is already on it');
+    assert.ok(existing.lines.includes('Manual: each message waits for you to approve it.'), existing.lines.join('\n'));
+    // A later invite keeps the setting; --auto through elu access is how it changes.
+    await peerCli(['invite'], { project: root, auto: true });
+    assert.equal(teamAccess(crew.teamId).handling, 'manual', 'only the first invite sets it');
+    const me = loadIdentity(), fresh = createTeam(me, 'fresh');
+    await peerCli(['invite'], { team: fresh.id, project: root });
+    assert.equal(teamAccess(fresh.id).handling, 'auto');
   });
 });
 
