@@ -167,7 +167,7 @@ test('scope: a rule for this project answers only there, one for all projects ev
   assert.equal(usesSavedRules(undefined), true); assert.equal(usesSavedRules(null), true);
   assert.equal(usesSavedRules({ kind: 'handoff', peer: 'b'.repeat(64) }), false);
   assert.equal(usesSavedRules({ kind: 'handoff', peer: 'b'.repeat(64), own: true }), false, 'a teammate\'s message started as an own session is still the teammate\'s');
-  assert.equal(usesSavedRules({ kind: 'handoff', peer: 'b'.repeat(64), mine: true }), true, 'started from one of the owner\'s own machines');
+  assert.equal(usesSavedRules({ kind: 'mine', mine: true, machine: 'b'.repeat(64), name: 'ali', remoteId: '0f0e0d0c-0b0a-4908-8706-050403020100' }), true, 'started from one of the owner\'s own machines');
   assert.equal(usesSavedRules({ kind: 'handoff', peer: 'b'.repeat(64), mine: 'yes' }), false);
   // A rule saved inside the sandbox does not answer outside it; saved again outside, it does, and is kept once.
   saveRule(rule('cargo test').rule, { scope: 'all' });

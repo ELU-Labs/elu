@@ -490,9 +490,9 @@ test('a rule kept once answers the next session; defaults never ask; the never l
   const theirs = await settle(f.controller.ask('Work on the request from @sara in the peer data block.', null, { origin: origin('handoff'), context: 'Run the tests.', permissions: 'ask' }));
   assert.deepEqual(theirs.asked.map(row => [row.summary, row.rules]), [['Run: npm test outside the sandbox', 'defaults']]);
   assert.deepEqual(theirs.task.approvals.map(row => [row.decision, row.by ?? null]), [['allow', 'default'], ['deny', null]]);
-  // One from the owner's own other machine (origin.mine) uses his rules.
-  const mine = await settle(f.controller.ask('Work on the request from @sara in the peer data block.', null, { origin: origin('handoff', { mine: true }), context: 'Run the tests.', permissions: 'ask' }));
-  assert.deepEqual(mine.asked, []); assert.equal(mine.task.origin.mine, true);
+  // One the owner's own other computer started (origin.mine, lib/peer/remote.mjs) uses his rules.
+  const mine = await settle(f.controller.ask('Run the tests.', null, { mine: { machine: 'c'.repeat(64), name: 'ali', remoteId: '0f0e0d0c-0b0a-4908-8706-050403020100' }, permissions: 'ask' }));
+  assert.deepEqual(mine.asked, []); assert.equal(mine.task.origin.mine, true); assert.equal(mine.task.origin.peer, undefined);
   assert.deepEqual(mine.task.approvals.map(row => [row.decision, row.by, row.rule]), [['allow', 'default', 'git status'], ['allow', 'rule', 'npm test']]);
 });
 

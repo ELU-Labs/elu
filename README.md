@@ -248,6 +248,16 @@ sees them when it answers.
 team. Either way, a new invite brings them back, also when nobody heard the leave yet: the
 leave goes along with the invite.
 
+Your own computers work together the same way. On your laptop, `/invite` and choose
+"Another computer of mine" (or `elu invite --mine`), then `/join` that code on your devbox
+and answer Yes when it asks if the laptop is yours too (or `elu join CODE --mine`). A devbox
+already on your team needs no code: pick it in that same list, or run `/mine @devbox` on the
+laptop and `/mine @laptop` on the devbox. From then on, `@devbox fix the flaky test` in the
+new session box starts the session on the devbox, with the mode, model and bots you picked.
+It shows in Sessions marked "on devbox", live, and its approvals wait on both machines.
+`/mine` lists your computers and `/mine remove @devbox` ends it.
+[SECURITY.md](SECURITY.md#your-other-computers) says what that allows.
+
 In a channel, `/invite @kim` adds a teammate you already have. `/invite` alone makes a
 code for someone new; the first time, it also makes your team, named after the open project.
 
