@@ -562,7 +562,7 @@ function fakeSocket() {
   const wire = { out: '' }, socket = Object.assign(new EventEmitter(), { destroyed: false, write: chunk => { wire.out += chunk; return true; }, destroy() { this.destroyed = true; this.emit('close'); } });
   return { socket, wire, frames: () => wire.out.split('\n').filter(Boolean).map(line => JSON.parse(line)), say: value => socket.emit('data', Buffer.from(`${JSON.stringify(value)}\n`)) };
 }
-const NOBODY = { name: '', teams: [], handles: [], plans: true, remote: 1 };
+const NOBODY = { name: '', teams: [], handles: [], plans: true, remote: 1, cards: 1 };
 
 test('a hello names only the teams its receiver is on, and a stranger or a removed teammate gets no team and no name', async t => {
   const crew = makeTeam(t), ana = crew.founder.identity, sara = crew.member, bob = withHome(newHome(t), () => createIdentity({ name: 'bob' }));
