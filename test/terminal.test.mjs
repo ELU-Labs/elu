@@ -4137,3 +4137,20 @@ test('in the list a lone y or n answers what the selected session waits on and i
   await until(() => sent('n'), 'n goes to the session as a reply');
   assert.doesNotMatch(status(), /y and n answer/);
 });
+
+test('a newer version is named in the status line as the app opens, and /update says how to update', async t => {
+  const p = setup(t); registerProject(p.repo);
+  let asked = 0;
+  const v = await view(t, { repo: p.repo, updateCheck: async () => { asked++; return 'ELU Code 9.9.9 is out. /quit, then elu update.'; } }), status = () => v.current.panels.status.getText();
+  await until(() => /ELU Code 9\.9\.9 is out\. \/quit, then elu update\./.test(status()), 'the new-version line');
+  assert.equal(asked, 1);
+  await send(v, '/update'); await until(() => /To update, \/quit, then run elu update\./.test(status()), 'how to update');
+});
+
+test('an update check that fails says nothing and the app opens all the same', async t => {
+  const p = setup(t); registerProject(p.repo);
+  let asked = 0;
+  const v = await view(t, { repo: p.repo, updateCheck: async () => { asked++; throw new Error('offline'); } });
+  await until(() => asked === 1, 'the check'); await new Promise(resolve => setTimeout(resolve, 200));
+  assert.doesNotMatch(v.current.panels.status.getText(), /is out|offline/);
+});

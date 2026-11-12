@@ -118,7 +118,11 @@ test('a start through npx runs the installed copy of the same version, and its o
   const handed = command(process.execPath, [path.join(copy, 'bin', 'elu.cjs'), 'peers', '--json'], dir, env);
   assert.equal(handed.status, 0, handed.stderr);
   assert.equal(handed.stdout, 'installed copy ["peers","--json"] true\n');
-  // Another version is not run in its place, and a start with arguments installs nothing.
+  // A newer installed version runs in its place: npx can hand out an older copy it kept.
+  place(prefix, { version: '99.0.0', entry });
+  const newer = command(process.execPath, [path.join(copy, 'bin', 'elu.cjs'), 'update'], dir, env);
+  assert.equal(newer.stdout, 'installed copy ["update"] true\n');
+  // An older version is not run in its place, and a start with arguments installs nothing.
   place(prefix, { version: '0.0.1', entry });
   const other = command(process.execPath, [path.join(copy, 'bin', 'elu.cjs'), '--help'], dir, env);
   assert.equal(other.stdout, own.stdout);
@@ -186,17 +190,21 @@ test('a global folder that cannot be written sends the install to ~/.local, and 
   assert.deepEqual(s.said, []);
 });
 
-test('a newer elu is never replaced by an older copy: the copy npx fetched runs and says why nothing was installed', (t) => {
+test('a newer elu is never replaced by an older copy: the installed one opens in its place', (t) => {
   const s = scene(t);
   for (const version of ['3.2.2', '3.10.0', '4.0.0']) {
-    place(s.prefix, { version });
-    assert.equal(s.go(), null);
-    assert.equal(s.said.pop(), `The elu command on this computer is newer (${version}) than this copy (3.2.1), so it was left as it is.\n`);
-    assert.equal(s.go({ argv: ['--version'] }), null);
-    assert.equal(s.go({ interactive: false }), null);
+    const installed = place(s.prefix, { version });
+    assert.equal(s.go(), installed);
+    assert.equal(s.said.pop(), `Opening ELU Code ${version}, the version installed here. npx gave an older copy (3.2.1).\n`);
+    // With arguments or no terminal it runs too, and says nothing.
+    assert.equal(s.go({ argv: ['--version'] }), installed);
+    assert.equal(s.go({ interactive: false }), installed);
   }
+  // Under ~/.local, off PATH, as the first start leaves it when npm's folder cannot be written.
+  fs.rmSync(s.prefix, { recursive: true }); const local = place(path.join(s.home, '.local'), { version: '3.3.0' });
+  assert.equal(s.go(), local);
   assert.deepEqual(s.calls, []);
-  assert.deepEqual(s.said, []);
+  assert.deepEqual(s.said, ['Opening ELU Code 3.3.0, the version installed here. npx gave an older copy (3.2.1).\n']);
 });
 
 test('an older elu is updated where it is', (t) => {
