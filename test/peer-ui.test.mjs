@@ -23,7 +23,7 @@ function fakePeer({ items, running = true, refuse = () => null, remoteBots = [],
   const facade = {
     calls, running, channels: [],
     sent: () => calls.filter(row => row[0] === 'sendPeerCommand').map(row => row[1]),
-    onTeam: () => !teamless || facade.made === true,
+    onTeam: () => !facade.left && (!teamless || facade.made === true),
     peerStatus: record('peerStatus', () => ({ running: facade.running, stale: facade.stale === true, pid: 1, key: ME, name: 'ana', fingerprint: 'aaaaaaaa', error: null, counters: { direct: 1, relayed: 0, failed: 0 },
       teams: teamless && !facade.made ? [] : [{ id: 'team-1', name: 'Core', role: 'admin', members: [
         { key: ME, fingerprint: 'aaaaaaaa', name: 'ana', role: 'admin', online: true, path: null, lastSeen: ago(0) },
@@ -50,6 +50,9 @@ function fakePeer({ items, running = true, refuse = () => null, remoteBots = [],
       facade.channels = [...facade.channels.filter(row => row.id !== id), ...(members.length ? [{ id, name, members }] : [])]; return { id };
     }),
     startPeer: record('startPeer', true),
+    // On no team, the app asks once for a daemon of another version to be stopped.
+    restartStale: record('restartStale', false),
+    teamLeave: record('teamLeave', async team => { facade.left = true; return { team, name: 'Core', founder: false, told: true, stopping: true }; }),
     share: record('share', (root, { handle }) => ({ handle: handle ?? 'sample', root, status: true })),
     createInvite: record('createInvite', () => ({ code: 'k7qm-x2pd-9fhw' })),
     createTeam: record('createTeam', name => { facade.made = true; return { id: 'team-1', name }; }),
@@ -885,7 +888,8 @@ test('Chats shows a few lines on no team or when the facade is missing, and star
       await until(() => peer ? ['No team yet.', 'Invite someone: /invite', 'Got a code? /join CODE'].every(line => v.text().includes(line)) : v.text().includes('Teammates need the optional networking packages'), `no team lines in\n${v.text()}`);
       assert.ok(v.panels.teamBoxes.every(pane => pane.hidden));
       if (peer) assert.match(v.panels.pills.getText(), /○ no team/);
-      if (peer) assert.equal(peer.calls.length, 0, 'no peer reads and no daemon started on no team');
+      // No peer reads and no daemon started: only the one check for a daemon an older version left running.
+      if (peer) { await until(() => peer.calls.length, 'the check'); await new Promise(resolve => setTimeout(resolve, 200)); assert.deepEqual(peer.calls, [['restartStale']]); }
       await send(v, '@sara hello');
       await until(() => /No team yet\. Invite someone with \/invite|Teammates need the optional/.test(v.panels.status.getText()), 'a message to a teammate is refused');
     });
@@ -994,6 +998,41 @@ test('on a team, the app starts the peer daemon as it opens, without a word, and
   stale.startPeer = () => { stale.calls.push(['startPeer']); stale.stale = false; return true; };
   await view(t, { repo: repository(p.root), peer: stale });
   await until(() => stale.calls.some(row => row[0] === 'startPeer'), 'a daemon an update left running is restarted as the app opens');
+});
+
+test('on no team, the app stops a daemon an older version left running, once, and starts none', async t => {
+  const p = project(later(t)); environment(t, p.parent);
+  const peer = fakePeer({ teamless: true, running: false });
+  // A 0.1.5 daemon still running after a join that failed: restartStale stops it and, on no team, starts nothing.
+  peer.restartStale = () => { peer.calls.push(['restartStale']); peer.stopped = true; return false; };
+  const v = await view(t, { repo: repository(p.root), peer });
+  await until(() => peer.stopped, 'the stray daemon stopped');
+  await send(v, '/chats'); await until(() => v.current.view === 'chats', 'Chats');
+  await new Promise(resolve => setTimeout(resolve, 300));
+  assert.deepEqual(peer.calls.map(row => row[0]), ['restartStale'], 'once, and nothing started');
+});
+
+test('/leave takes this machine off a team after a yes; leaving a team you made says it stays with your teammates', async t => {
+  const { v, peer } = await teamView(t), status = () => v.panels.status.getText();
+  const body = () => modal(v, 'Leave Core').children.find(child => child.options?.scrollable).getText();
+  await until(() => v.panels.teamLists[0].items.length, 'teammates');
+  await send(v, '/leave'); await until(() => modal(v, 'Leave Core'), 'confirm');
+  assert.match(body(), /^Leave Core\? You stop getting its messages, and its teammates can no longer reach you through it\./);
+  await closeDialog(v, 'Leave Core', 'n');
+  assert.equal(peer.calls.filter(row => row[0] === 'teamLeave').length, 0, 'no is no');
+  await send(v, '/leave Nope'); await until(() => /You are not on a team called Nope\./.test(status()), 'unknown team');
+  // The team's founder is told what leaving does to a team they made.
+  const plain = peer.peerStatus;
+  peer.peerStatus = (...args) => { const value = plain(...args); for (const row of value.teams) row.founder = ME; return value; };
+  await send(v, '/leave core'); await until(() => modal(v, 'Leave Core'), 'confirm again');
+  assert.match(body(), /^You made Core\. Leaving takes it off this computer for good; your teammates keep it\./);
+  await closeDialog(v, 'Leave Core', 'y');
+  await until(() => /You left Core\. You are on no team now, so the peer daemon stops\./.test(status()), 'left');
+  assert.deepEqual(peer.calls.filter(row => row[0] === 'teamLeave'), [['teamLeave', 'team-1']]);
+  // On no team now, so nothing starts the daemon again.
+  await new Promise(resolve => setTimeout(resolve, 300));
+  assert.equal(peer.calls.filter(row => row[0] === 'startPeer').length, 0);
+  await until(() => v.text().includes('No team yet.'), 'Chats shows no team');
 });
 
 test('typing @ in Chats offers teammates by name', async t => {
