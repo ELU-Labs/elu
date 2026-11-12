@@ -3,9 +3,15 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
+import os from 'node:os';
+import { spawnSync } from 'node:child_process';
 import { newHome, withHome, makeTeam, registeredProject } from './peer-helpers.mjs';
 import { repository } from '../lib/git.mjs';
-import { saveTask } from '../lib/state.mjs';
+import { saveTask, taskPlace } from '../lib/state.mjs';
+import { projectFolder } from '../lib/workspace.mjs';
+import { registerProject } from '../lib/projects.mjs';
+import { closeSession, setDone } from '../lib/kanban.mjs';
+import { CARDS_MAX, NAME_MAX, TITLE_MAX, cardsFor, cleanCard, cleanCards, cleanProofs, localRepos, proofsFor, repoProof, saveCards, saveLocalRepos, saveProofs, sessionCards, teammateSessions } from '../lib/peer/cards.mjs';
 import { peerFile } from '../lib/peer/paths.mjs';
 import { createIdentity, identity as loadIdentity } from '../lib/peer/identity.mjs';
 import { appendOp, createTeam, head, makeOp } from '../lib/peer/roster.mjs';
@@ -389,5 +395,113 @@ test('a teammate\'s list of shared repositories is checked field by field, and d
     assert.equal(fs.statSync(peerFile('boards', `${ana}.json`)).mode & 0o777, 0o600);
     prunePlans({ teammates: [ana], online: [ana] });
     assert.deepEqual(fs.readdirSync(peerFile('boards')), [`${ana}.json`]); assert.deepEqual(remoteBoards(gone), []);
+  });
+});
+
+// --- Every session on the Kanban of teammates who have the same repository (lib/peer/cards.mjs) ---
+// A project whose folder is above its repositories, as a parent folder or the home folder is,
+// with a clone in it: a copy of `from` (same history), or a new one with the given origin.
+function folderProject(t, { name = 'work' } = {}) {
+  const parent = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'elu-code-cards-'))); t.after(() => fs.rmSync(parent, { recursive: true, force: true }));
+  const root = path.join(parent, name); fs.mkdirSync(root);
+  const repo = projectFolder(root); registerProject(repo); return repo;
+}
+function cloneIn(repo, name, { from = null, origin = ORIGIN } = {}) {
+  const target = path.join(repo.root, name), run = (cwd, args) => { const r = spawnSync('git', ['-C', cwd, ...args], { encoding: 'utf8' }); if (r.status !== 0) throw new Error(r.stderr); return r.stdout.trim(); };
+  if (from) run(repo.root, ['clone', '-q', from, target]); else { fs.mkdirSync(target); run(target, ['init', '-q']); run(target, ['-c', 'user.name=T', '-c', 'user.email=t@example.invalid', 'commit', '-q', '--allow-empty', '-m', `start ${name}`]); }
+  run(target, ['remote', from ? 'set-url' : 'add', 'origin', origin]);
+  return target;
+}
+// A session of a project that works in one of its clones.
+function session(repo, id, repository, extra = {}) {
+  const place = taskPlace(repo, id, repository);
+  saveTask(repo, { id: String(id), goal: 'Fix the cart total', state: 'running', repository, worktree: place.worktree, branch: place.branch, base: 'a'.repeat(40), createdAt: new Date().toISOString(), runs: [], reviews: [], messages: [], sessions: {}, ...extra });
+}
+const cardOf = (extra = {}) => ({ repoId: REPO, id: '0123456789abcdef', title: 'Fix the cart total', column: 'progress', by: 'ana', at: iso(Date.now(), 60000), ...extra });
+
+test('a told session card keeps only its own fields, each cleaned and within its limit', () => {
+  const clean = cleanCard(cardOf({ title: '  Fix \x1b[31mthe\x1b[0m\ncart‮ total\x07  ', by: 'an\x00a\n', path: '/Users/x/app', goal: 'secret words', remote: 'r-1', plan: 't-1' }));
+  assert.deepEqual(clean, { repoId: REPO, id: '0123456789abcdef', title: 'Fix the cart total', column: 'progress', by: 'ana', at: clean.at, plan: 't-1', remote: 'r-1' });
+  assert.deepEqual([cleanCard(cardOf({ title: 'T'.repeat(500) })).title.length, cleanCard(cardOf({ by: 'b'.repeat(500) })).by.length], [TITLE_MAX, NAME_MAX]);
+  assert.equal(cleanCard(cardOf({ by: 7 })).by, null);
+  for (const bad of [{ column: 'todo' }, { column: 'archived' }, { title: '\x1b[2J\x07' }, { repoId: 'abc' }, { id: '../x' }, { id: 5 }, { at: 'yesterday' }]) assert.equal(cleanCard(cardOf(bad)), null, JSON.stringify(bad));
+  assert.deepEqual([cleanCard(cardOf({ plan: '../x' })).plan, cleanCard(cardOf({ remote: 'a b' })).remote], [undefined, undefined]);
+  assert.equal(cleanCards(Array.from({ length: 300 }, (_, n) => cardOf({ id: n.toString(16).padStart(16, '0') }))).length, CARDS_MAX);
+  assert.equal(cleanCards([cardOf(), cardOf({ title: 'Again' })]).length, 1);
+  assert.deepEqual([cleanCards(null), cleanCards({ 0: cardOf() })], [[], []]);
+  // Proofs are for one pair of machines and one first commit.
+  const a = 'a'.repeat(64), b = 'b'.repeat(64), c = 'c'.repeat(64), first = '1'.repeat(40);
+  assert.notEqual(repoProof(a, b, REPO, first), repoProof(b, a, REPO, first)); assert.notEqual(repoProof(a, b, REPO, first), repoProof(a, c, REPO, first)); assert.notEqual(repoProof(a, b, REPO, first), repoProof(a, b, REPO, '2'.repeat(40)));
+  assert.deepEqual(cleanProofs([repoProof(a, b, REPO, first), 'x', 7, repoProof(a, b, REPO, first)]), [repoProof(a, b, REPO, first)]);
+});
+
+test('every session in a repository a teammate proves they have is told them, from a project above its clones, and nothing else is', t => {
+  const crew = makeTeam(t), ana = crew.founder, sara = crew.member, now = Date.now();
+  // Ana: a folder holding a clone of the shop and one of the docs, with sessions in each.
+  const atAna = withHome(ana.home, () => {
+    const repo = folderProject(t), shop = cloneIn(repo, 'shop'), docs = cloneIn(repo, 'docs', { origin: OTHER });
+    session(repo, 1, shop); session(repo, 2, shop, { goal: 'Which tax rate?', state: 'needs_input' }); session(repo, 3, docs, { goal: 'Docs work' });
+    return { repo, shop };
+  });
+  // Sara: her own folder with a clone of Ana's shop (the same first commit), and in another project a clone with the same remote and another history.
+  const atSara = withHome(sara.home, () => { const repo = folderProject(t), shop = cloneIn(repo, 'shop', { from: atAna.shop }); const other = folderProject(t, { name: 'other' }); cloneIn(other, 'shop'); return { repo, shop, other }; });
+  const anaRepos = withHome(ana.home, () => localRepos(now)), saraRepos = withHome(sara.home, () => localRepos(now));
+  assert.deepEqual([...anaRepos.values()].map(row => [row.name, row.roots]).sort(), [['elu-labs/docs', [atAna.repo.root]], ['elu-labs/sample', [atAna.repo.root]]]);
+  assert.equal([...saraRepos.values()].filter(row => row.name === 'elu-labs/sample').length, 2, 'two histories under one remote are two repositories');
+  const rows = withHome(ana.home, () => sessionCards({ me: ana.identity.key, owner: 'ana', repos: anaRepos, now }));
+  assert.deepEqual(rows.map(row => [row.card.title, row.card.column, row.card.by]).sort(), [['Docs work', 'progress', 'ana'], ['Fix the cart total', 'progress', 'ana'], ['Which tax rate?', 'needs', 'ana']]);
+  for (const word of [atAna.repo.root, atAna.shop, 'feat/task']) assert.equal(JSON.stringify(rows.map(row => row.card)).includes(word), false, word);
+  // Told to Sara only for the repository she proved, with her clone of the same history.
+  const proofs = proofsFor(sara.identity.key, ana.identity.key, saraRepos);
+  const told = cardsFor(sara.identity.key, ana.identity.key, rows, anaRepos, proofs);
+  assert.deepEqual(told.map(card => card.title).sort(), ['Fix the cart total', 'Which tax rate?']);
+  assert.deepEqual(cardsFor(sara.identity.key, ana.identity.key, rows, anaRepos, []), [], 'nothing before she proves it');
+  assert.deepEqual(cardsFor(sara.identity.key, ana.identity.key, rows, anaRepos, proofsFor(crew.founder.identity.key, ana.identity.key, saraRepos)), [], 'a proof made for another pair counts for nothing');
+  const otherOnly = new Map([...saraRepos].filter(([, row]) => row.roots.includes(atSara.other.root)));
+  assert.deepEqual(cardsFor(sara.identity.key, ana.identity.key, rows, anaRepos, proofsFor(sara.identity.key, ana.identity.key, otherOnly)), [], 'a clone with another first commit gets nothing');
+  // At Sara's: kept only from Ana's proof, shown in the project of that clone and not in the other.
+  withHome(sara.home, () => {
+    fs.mkdirSync(peerFile(), { recursive: true });
+    fs.writeFileSync(peerFile('state.json'), JSON.stringify({ key: sara.identity.key, running: true, at: new Date().toISOString(), teams: [{ id: crew.teamId, members: [{ key: ana.identity.key, name: 'ana', online: true, box: 'ana-box' }] }] }));
+    saveLocalRepos(saraRepos);
+    saveProofs(ana.identity.key, proofsFor(ana.identity.key, sara.identity.key, anaRepos));
+    const kept = saveCards(ana.identity.key, sara.identity.key, [...told, cardOf({ repoId: rows.find(row => row.card.title === 'Docs work').card.repoId, id: 'ffffffffffffffff', title: 'Docs work' })]);
+    assert.deepEqual(kept.map(card => card.title).sort(), ['Fix the cart total', 'Which tax rate?'], 'a card for a repository Sara does not have is not kept');
+    const board = teammateSessions(atSara.repo.root);
+    assert.deepEqual([board.repos.map(row => row.name), board.people.map(person => [person.name, person.box, person.online, person.sessions.map(card => card.column).sort()])], [['elu-labs/sample'], [['ana', 'ana-box', true, ['needs', 'progress']]]]);
+    assert.deepEqual(teammateSessions(atSara.other.root), { repos: [], people: [] });
+    // Cleaned on the way in.
+    saveCards(ana.identity.key, sara.identity.key, [{ ...told[0], title: `Loud\x1b[2J\x07 ${'x'.repeat(400)}`, by: 'a\x00na' }]);
+    const [loud] = teammateSessions(atSara.repo.root).people[0].sessions;
+    assert.deepEqual([loud.title.length, /[\x00-\x1f]/.test(loud.title), loud.by], [TITLE_MAX, false, 'ana']);
+    // Kept off here: none shown.
+    setBoardOff(atSara.repo.root, true); assert.deepEqual(teammateSessions(atSara.repo.root), { repos: [], people: [] });
+    assert.equal([...localRepos(now).values()].some(row => row.roots.includes(atSara.repo.root)), false, 'and its repositories are proven to nobody');
+    setBoardOff(atSara.repo.root, false);
+  });
+  // Kept off at Ana's: nothing is told.
+  withHome(ana.home, () => { setBoardOff(atAna.repo.root, true); assert.deepEqual(sessionCards({ me: ana.identity.key, owner: 'ana', repos: anaRepos, now }), []); setBoardOff(atAna.repo.root, false); });
+  // Moved to Done on Ana's board: Done for Sara; archived: gone.
+  withHome(ana.home, () => {
+    setDone(atAna.repo, { task: { id: '2' } }, true);
+    let columns = sessionCards({ me: ana.identity.key, owner: 'ana', repos: anaRepos, now: Date.now() + 1000 }).map(row => [row.card.title, row.card.column]);
+    assert.deepEqual(columns.find(row => row[0] === 'Which tax rate?'), ['Which tax rate?', 'done']);
+    closeSession(atAna.repo, '2');
+    assert.equal(sessionCards({ me: ana.identity.key, owner: 'ana', repos: anaRepos, now: Date.now() + 1000 }).some(row => row.card.title === 'Which tax rate?'), false);
+  });
+});
+
+test('who started a session goes with its card, and only the computer of mine that started it is told its id there', t => {
+  const crew = makeTeam(t), ana = crew.founder, sara = crew.member, now = Date.now();
+  withHome(ana.home, () => {
+    const repo = folderProject(t), shop = cloneIn(repo, 'shop');
+    session(repo, 1, shop, { goal: 'Asked by a teammate', origin: { kind: 'handoff', peer: sara.identity.key, name: 'sa\x1bra' } });
+    session(repo, 2, shop, { goal: 'From my laptop', origin: { kind: 'mine', mine: true, machine: sara.identity.key, name: 'laptop', remoteId: '0f0e0d0c-0b0a-4908-8706-050403020100' } });
+    const repos = localRepos(now), rows = sessionCards({ me: ana.identity.key, owner: 'ana', repos, now });
+    assert.deepEqual(rows.map(row => [row.card.title, row.card.by]).sort(), [['Asked by a teammate', 'sara'], ['From my laptop', 'ana']]);
+    const proofs = key => [...repos.values()].map(row => repoProof(key, ana.identity.key, row.repoId, row.commit));
+    const toSara = cardsFor(sara.identity.key, ana.identity.key, rows, repos, proofs(sara.identity.key)), toBob = cardsFor('d'.repeat(64), ana.identity.key, rows, repos, proofs('d'.repeat(64)));
+    assert.equal(toSara.find(card => card.title === 'From my laptop').remote, '0f0e0d0c-0b0a-4908-8706-050403020100');
+    assert.equal(toBob.find(card => card.title === 'From my laptop').remote, undefined);
   });
 });

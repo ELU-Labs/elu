@@ -22,7 +22,10 @@ import { share as shareWith, setTeamProject } from '../lib/peer/shares.mjs';
 const share = (root, options = {}) => shareWith(root, { teams: everyTeam().map(state => state.id), ...options });
 import { pendingRequests, removeRequest, updateRequest } from '../lib/workspace.mjs';
 import { repository } from '../lib/git.mjs';
-import { saveTask } from '../lib/state.mjs';
+import { saveTask, taskPlace } from '../lib/state.mjs';
+import { projectFolder } from '../lib/workspace.mjs';
+import { registerProject } from '../lib/projects.mjs';
+import { setDone } from '../lib/kanban.mjs';
 import { saveDefaultMode } from '../lib/modes.mjs';
 import { BINDING, ErrorCode, message, peerExt } from '../lib/peer/a2a.mjs';
 import { MESSAGES_PER_DAY, count, intakeMethods } from '../lib/peer/intake.mjs';
@@ -1187,14 +1190,14 @@ test('a teammate is told this machine\'s box name and shared bots when they conn
     socket.emit('data', Buffer.from(`${JSON.stringify({ jsonrpc: '2.0', method: 'elu.hello', params: { binding: BINDING, a2aVersion: '1.0', name: 'sara', teams: [{ id: crew.teamId, ...head(crew.teamId), ops: [] }], handles: [] } })}\n`));
     assert.equal(daemon.sessions.get(sara.key)?.admitted, true);
     // On connect, with the rows, as a notification an older build reads the rows of.
-    assert.deepEqual(told(), [{ jsonrpc: '2.0', method: 'elu.status', params: { rows: [], box: 'ana-mbp', bots: [reviewer], boards: [] } }]);
+    assert.deepEqual(told(), [{ jsonrpc: '2.0', method: 'elu.status', params: { rows: [], box: 'ana-mbp', bots: [reviewer], boards: [], repos: [] } }]);
     // The first tick settles the rows; after that a tick with nothing changed says nothing.
     daemon.tick(); const settled = told().length; daemon.tick(); daemon.tick();
     assert.equal(told().length, settled); assert.equal(daemon.error, null);
     const next = change => { const count = told().length; change(); daemon.tick(); assert.equal(told().length, count + 1, 'told once'); daemon.tick(); assert.equal(told().length, count + 1, 'and not again'); return told().at(-1).params; };
-    assert.deepEqual(next(() => saveBot({ name: 'docs', about: docs.about, instructions: 'Read docs/.', shared: true })), { rows: [], box: 'ana-mbp', bots: [reviewer, docs], boards: [] });
-    assert.deepEqual(next(() => saveBot({ name: 'reviewer', instructions: 'Review the diff.' })), { rows: [], box: 'ana-mbp', bots: [docs], boards: [] }, 'a bot taken back is no longer told');
-    assert.deepEqual(next(() => savePeerSettings({ box: 'ana-studio' })), { rows: [], box: 'ana-studio', bots: [docs], boards: [] });
+    assert.deepEqual(next(() => saveBot({ name: 'docs', about: docs.about, instructions: 'Read docs/.', shared: true })), { rows: [], box: 'ana-mbp', bots: [reviewer, docs], boards: [], repos: [] });
+    assert.deepEqual(next(() => saveBot({ name: 'reviewer', instructions: 'Review the diff.' })), { rows: [], box: 'ana-mbp', bots: [docs], boards: [], repos: [] }, 'a bot taken back is no longer told');
+    assert.deepEqual(next(() => savePeerSettings({ box: 'ana-studio' })), { rows: [], box: 'ana-studio', bots: [docs], boards: [], repos: [] });
     assert.deepEqual(next(() => saveBot({ name: 'docs', about: 'Answers from docs/ and the README.', instructions: 'Read docs/.', shared: true })).bots, [{ name: 'docs', about: 'Answers from docs/ and the README.' }]);
     // A bot that is not shared changes nothing teammates are told.
     const quiet = told().length; saveBot({ name: 'private', instructions: 'Only for me.' }); daemon.tick();
@@ -2149,6 +2152,56 @@ test('same repository, same board: a joiner\'s own clone tells its Tasks over th
   // Ana stops sharing: Sara's clone leaves the board.
   withHome(ana.home, () => peer.unshare('shop'));
   await until(() => withHome(sara.home, () => peer.taskSharing(clone.root)) === 'none', 'the board gone at Sara\'s');
+});
+
+test('every session on one Kanban: a session in a clone under a parent folder shows on a teammate\'s board by its column, and nothing of another repository or history does', async t => {
+  const bootstrap = await testnet(t), crew = makeTeam(t), ana = crew.founder, sara = crew.member;
+  enable(ana.home, bootstrap); enable(sara.home, bootstrap);
+  const run = (cwd, args) => { const r = spawnSync('git', ['-C', cwd, ...args], { encoding: 'utf8' }); assert.equal(r.status, 0, r.stderr); return r.stdout.trim(); };
+  // A project whose folder holds the clones, as a parent folder or the home folder does.
+  const folder = name => { const parent = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'elu-code-board-'))); t.after(() => fs.rmSync(parent, { recursive: true, force: true })); const root = path.join(parent, name); fs.mkdirSync(root); const repo = projectFolder(root); registerProject(repo); return repo; };
+  const fresh = (root, origin) => { fs.mkdirSync(root); run(root, ['init', '-q']); run(root, ['-c', 'user.name=T', '-c', 'user.email=t@example.invalid', 'commit', '-q', '--allow-empty', '-m', 'start']); run(root, ['remote', 'add', 'origin', origin]); return root; };
+  const session = (repo, id, repository, extra = {}) => { const place = taskPlace(repo, id, repository); saveTask(repo, { id: String(id), goal: 'Fix the cart total', state: 'running', repository, worktree: place.worktree, branch: place.branch, base: 'a'.repeat(40), createdAt: new Date().toISOString(), runs: [], reviews: [], messages: [], sessions: {}, ...extra }); };
+  // Ana: her folder with a clone of the shop. Sara: hers with a clone of Ana's (the same history), one of the docs, and in another project the same remote with another history.
+  const atAna = withHome(ana.home, () => { const repo = folder('work'); return { repo, shop: fresh(path.join(repo.root, 'shop'), ORIGIN) }; });
+  const atSara = withHome(sara.home, () => {
+    const repo = folder('code'), shop = path.join(repo.root, 'shop'); run(repo.root, ['clone', '-q', atAna.shop, shop]); run(shop, ['remote', 'set-url', 'origin', 'git@github.com:elu-labs/sample.git']);
+    const docs = fresh(path.join(repo.root, 'docs'), 'https://github.com/elu-labs/docs.git');
+    const other = folder('other'); fresh(path.join(other.root, 'shop'), ORIGIN);
+    session(repo, 1, shop); session(repo, 2, docs, { goal: 'Docs only work' });
+    return { repo, shop, docs, other };
+  });
+  await daemon(t, ana.home, { conductor: false }); await daemon(t, sara.home, { conductor: false });
+  await connected(ana, sara);
+  assert.deepEqual(withHome(sara.home, () => peer.shares()), [], 'nobody shares anything');
+  const board = () => withHome(ana.home, () => peer.teammateSessions(atAna.repo.root));
+  const cards = () => board().people.flatMap(person => person.sessions.map(card => [person.name, card.title, card.column, card.by]));
+  // In progress while it works, with who started it.
+  await until(() => cards().length === 1 && cards(), 'Sara\'s session on Ana\'s Kanban');
+  assert.deepEqual(cards(), [['sara', 'Fix the cart total', 'progress', 'sara']]);
+  assert.deepEqual(board().repos.map(row => row.name), ['elu-labs/sample']);
+  // What Ana's machine keeps holds no path, no other repository and no goal beyond the title.
+  const kept = fs.readFileSync(withHome(ana.home, () => peerFile('cards', `${sara.identity.key}.json`)), 'utf8');
+  for (const word of ['Docs only work', atSara.shop, atSara.repo.root, 'feat/task']) assert.equal(kept.includes(word), false, word);
+  // Needs you when it waits for its owner; Done when it is finished.
+  withHome(sara.home, () => session(atSara.repo, 1, atSara.shop, { state: 'needs_input' }));
+  await until(() => cards()[0]?.[2] === 'needs', 'Needs you at Ana\'s');
+  withHome(sara.home, () => setDone(atSara.repo, { task: { id: '1' } }, true));
+  await until(() => cards()[0]?.[2] === 'done', 'Done at Ana\'s');
+  // A new message opens it again.
+  withHome(sara.home, () => session(atSara.repo, 1, atSara.shop, { state: 'running', messages: [{ at: new Date(Date.now() + 1000).toISOString(), text: 'more' }] }));
+  withHome(sara.home, () => setDone(atSara.repo, { task: { id: '1' } }, false));
+  await until(() => cards()[0]?.[2] === 'progress', 'back in progress');
+  // Ana starts a session in her clone: it shows at Sara's, and not in Sara's other project, a clone of the same remote with another history.
+  withHome(ana.home, () => session(atAna.repo, 1, atAna.shop, { goal: 'Ana in the shop' }));
+  await until(() => withHome(sara.home, () => peer.teammateSessions(atSara.repo.root)).people[0]?.sessions[0]?.title === 'Ana in the shop', 'Ana\'s session at Sara\'s');
+  assert.deepEqual(withHome(sara.home, () => peer.teammateSessions(atSara.other.root)), { repos: [], people: [] });
+  // Kept off at Sara's: gone at Ana's, and Ana's not shown at Sara's. Back on: back.
+  withHome(sara.home, () => peer.taskBoard(atSara.repo.root, false));
+  await until(() => cards().length === 0, 'kept off the board');
+  assert.deepEqual(withHome(sara.home, () => peer.teammateSessions(atSara.repo.root)), { repos: [], people: [] });
+  withHome(sara.home, () => peer.taskBoard(atSara.repo.root, true));
+  await until(() => cards().length === 1, 'back on the board');
 });
 
 test('autoAccept answers end to end, autoContinue queues the chat, and a secret keeps a reply held', async t => {

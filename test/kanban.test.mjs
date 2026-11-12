@@ -2,8 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { readBoard, addCard, editCard, removeCard, startCard, linkCards, setDone, boardColumns, fitDetail, fitCard, fitTeammateCard, teammateLabel, closeSession, reopenSession } from '../lib/kanban.mjs';
-import { project } from './helpers.mjs';
+import { readBoard, addCard, editCard, removeCard, startCard, linkCards, setDone, boardColumns, fitDetail, fitCard, fitTeammateCard, teammateLabel, closeSession, reopenSession, sessionPlace } from '../lib/kanban.mjs';
+import { boardSlice, folderRemote, projectBoards, repoName } from '../lib/kanban-repos.mjs';
+import { project, git } from './helpers.mjs';
 import { projectFolder } from '../lib/workspace.mjs';
 
 const names = columns => Object.fromEntries(columns.map(column => [column.column, column.items.map(item => item.title)]));
@@ -146,4 +147,56 @@ test('teammates\' Tasks are cards on the same columns, with their name, counted 
   assert.deepEqual(fitTeammateCard('Short', 'sara · 1/2 · high', 30), { title: 'Short', detail: 'sara · 1/2 · high' });
   assert.equal(teammateLabel({ name: 'a'.repeat(40), box: 'b'.repeat(40) }).length, 24 + 4 + 24);
   assert.deepEqual(fitTeammateCard('Title', teammateLabel({ name: 'a'.repeat(40), box: 'b'.repeat(40) }), 20), { title: 'Title', detail: `${'a'.repeat(9)}…` });
+});
+
+test('a session\'s place on the board is the column boardColumns shows it in, or none', t => {
+  const p = project(t), repo = projectFolder(p.root), old = new Date(Date.now() - 30 * 86400000).toISOString();
+  const tasks = [task('1', 'Speed up search', 'running'), task('2', 'Which cache?', 'needs_input'), task('3', 'What runner?', 'answered', { kind: 'conversation' }), task('6', 'Ancient', 'stopped', { createdAt: old }),
+    task('7', 'Rename billing', 'blocked'), task('8', 'A teammate asks', 'needs_input', { origin: { kind: 'ask', peer: 'b'.repeat(64) } }), task('9', 'Started from a card', 'ready')];
+  const card = addCard(repo, 'My words for it'); startCard(repo, card.id, 'request-1'); linkCards(repo, [{ id: 'request-1', taskId: '9' }]);
+  setDone(repo, { task: tasks[4] }, true); closeSession(repo, '3');
+  const board = readBoard(repo), shown = new Map(boardColumns(board, { tasks, queue: [] }).flatMap(column => column.items.filter(item => item.task).map(item => [item.task.id, column.column])));
+  for (const row of tasks) assert.equal(sessionPlace(board, row), shown.get(row.id) ?? null, row.goal);
+  assert.deepEqual(tasks.map(row => sessionPlace(board, row)), ['progress', 'needs', null, null, 'done', null, 'needs']);
+});
+
+test('teammates\' sessions are cards in the column their board has them, with who started them and where; a Task told with one is that card', t => {
+  const p = project(t), repo = projectFolder(p.root), now = Date.now(), ago = minutes => new Date(now - minutes * 60000).toISOString();
+  const sara = 'b'.repeat(64), card = (extra = {}) => ({ repoId: 'e'.repeat(64), id: '0123456789abcdef', title: 'Fix the cart', column: 'progress', by: 'sara', at: ago(2), ...extra });
+  const sessions = [{ peer: sara, name: 'sara', box: 'devbox', online: true, heardAt: ago(0), sessions: [card({ plan: 't-1' }), card({ id: '1123456789abcdef', title: 'Asks about tax', column: 'needs', by: 'li' }), card({ id: '2123456789abcdef', title: 'Shipped', column: 'done', at: ago(50) })] },
+    { peer: 'c'.repeat(64), name: 'li', box: null, online: false, heardAt: ago(90), sessions: [card({ id: '3123456789abcdef', title: 'Li alone', by: 'li', at: ago(5) })] }];
+  const tasks = [{ peer: sara, name: 'sara', box: 'devbox', online: true, heardAt: ago(0), tasks: [{ repoId: 'e'.repeat(64), handle: 'shop', id: 't-1', revision: 1, title: 'The cart Task', description: '', goal: 'Right totals.', objectives: ['One'], priority: 'high', severity: 'medium', state: 'approved', startedBy: 'owner', who: 'Opus 5.5', subtasks: [], met: [], approvedAt: ago(30), doneAt: null, updatedAt: ago(2) },
+    { repoId: 'e'.repeat(64), handle: 'shop', id: 't-9', revision: 1, title: 'A Task with no session told', description: '', goal: 'x', objectives: ['One'], priority: 'low', severity: 'low', state: 'approved', startedBy: 'owner', who: 'model', subtasks: [], met: [], approvedAt: ago(30), doneAt: null, updatedAt: ago(1) }] }];
+  const columns = boardColumns(readBoard(repo), { tasks: [], queue: [] }, now, tasks, sessions);
+  assert.deepEqual(names(columns), { todo: [], progress: ['A Task with no session told', 'Li alone', 'Fix the cart'], needs: ['Asks about tax'], done: ['Shipped'] });
+  const items = columns.flatMap(column => column.items), cart = items.find(item => item.title === 'Fix the cart');
+  assert.deepEqual([cart.detail, cart.shared.id, cart.session.id, cart.key], ['@sara · devbox', 't-1', '0123456789abcdef', `peer-${sara}/session/0123456789abcdef`]);
+  assert.equal(cart.note, "@sara's session on devbox · In progress · Task: The cart Task · read-only");
+  assert.equal(items.find(item => item.title === 'Asks about tax').detail, '@li · devbox');
+  assert.equal(items.find(item => item.title === 'Li alone').detail, '@li · offline');
+  assert.equal(Boolean(cart.card || cart.task || cart.request), false);
+  // The name stays beside the title when the column is narrow.
+  assert.deepEqual(fitTeammateCard('Fix the cart total for every coupon there is', cart.detail, 30), { title: 'Fix the cart total for…', detail: '@sara' });
+});
+
+test('a project above several repositories has a board for each, led by the open session\'s; a session in no repository is on each', t => {
+  const p = project(t), parent = fs.mkdtempSync(path.join(p.parent, 'work-'));
+  const clone = (name, origin) => { const root = path.join(parent, name); fs.mkdirSync(root); git(root, ['init', '-q']); if (origin) git(root, ['remote', 'add', 'origin', origin]); return root; };
+  const web = clone('web', 'git@github.com:acme/web.git'), api = clone('api', 'https://user:secret@github.com/acme/api.git'), loose = clone('loose', null);
+  assert.equal(repoName('github.com/acme/web'), 'acme/web');
+  assert.deepEqual(folderRemote(api).name, 'acme/api'); assert.equal(folderRemote(loose), null); assert.equal(folderRemote(parent), null);
+  const repo = { root: parent, common: null, state: path.join(p.parent, 'state') }, now = Date.now(), ago = minutes => new Date(now - minutes * 60000).toISOString();
+  const snapshot = { tasks: [task('1', 'Web work', 'running', { repository: web, createdAt: ago(10) }), task('2', 'Api work', 'needs_input', { repository: api, createdAt: ago(1) }), task('3', 'A question', 'answered', { kind: 'conversation' }), task('4', 'Loose work', 'ready', { repository: loose })], queue: [] };
+  const found = projectBoards(repo, snapshot, { now });
+  assert.deepEqual(found.boards.map(row => row.name), ['acme/api', 'acme/web']);
+  assert.deepEqual(projectBoards(repo, snapshot, { first: folderRemote(web).repoId, now }).boards.map(row => row.name), ['acme/web', 'acme/api']);
+  // A repository only a teammate's sessions are on has a board too.
+  assert.deepEqual(projectBoards(repo, snapshot, { others: [{ repoId: 'f'.repeat(64), name: 'acme/docs', at: ago(0) }], now }).boards.map(row => row.name), ['acme/docs', 'acme/api', 'acme/web']);
+  const kanban = { cards: [{ id: 'card-1', text: 'Todo', column: 'todo' }, { id: 'card-2', text: 'Started web', column: 'started', taskId: '1' }], done: [], closed: {}, archived: [] };
+  const slice = boardSlice(kanban, snapshot, folderRemote(web).repoId, found);
+  assert.deepEqual(slice.snapshot.tasks.map(row => row.id), ['1', '3', '4']); assert.deepEqual(slice.kanban.cards.map(row => row.id), ['card-1', 'card-2']);
+  assert.deepEqual(boardSlice(kanban, snapshot, folderRemote(api).repoId, found).kanban.cards.map(row => row.id), ['card-1']);
+  // With no repository at all, one board holds everything.
+  const none = projectBoards(repo, { tasks: [snapshot.tasks[2]] }, { now });
+  assert.deepEqual(none.boards, [{ id: null, name: 'No repository' }]); assert.equal(boardSlice(kanban, snapshot, null, none).snapshot, snapshot);
 });

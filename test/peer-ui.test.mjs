@@ -1385,8 +1385,8 @@ test('Kanban shows teammates\' Tasks as cards in the same columns with their nam
   let people = [
     { peer: SARA, name: 'sara', box: 'sara-box', online: true, heardAt: ago(0), tasks: [teamTask(), teamTask({ id: 't-2', title: '{red-fg}Loud{/} title', priority: 'low', severity: 'medium', who: '@scout', subtasks: [], met: [], approvedAt: ago(20), updatedAt: ago(5) })] },
     { peer: LI, name: 'li', online: false, heardAt: ago(180), tasks: [teamTask({ id: 't-3', title: 'Old cleanup', state: 'done', priority: 'low', severity: 'low', who: 'bot', subtasks: [], met: [1, 2], doneAt: ago(60), updatedAt: ago(60) })] },
-  ], sharing = 'on';
-  peer.teammateTasks = root => { asked.push(root); return people; }; peer.taskSharing = () => sharing; peer.taskBoardBy = () => ({ team: 'core', by: ['{red-fg}ana{/}'] });
+  ], off = false;
+  peer.teammateTasks = root => { asked.push(root); return people; }; peer.boardKeptOff = () => off;
   const v = await view(t, { repo: repository(p.root), peer }), panels = v.panels, focused = () => v.current.screen.focused;
   const column = index => panels.kanbanLists[index].items.map(item => plainItem(item).trimEnd()), label = index => panels.kanbanBoxes[index]._label.getText().trim();
   await send(v, '/kanban'); await until(() => v.current.view === 'kanban' && column(1).length === 2 && column(3).length === 1, 'the teammates\' cards');
@@ -1443,20 +1443,59 @@ test('Kanban shows teammates\' Tasks as cards in the same columns with their nam
   // Gone on their side: gone here.
   people = [];
   await until(() => column(1).length === 0 && column(3).length === 0, 'the cards leave', 8000);
-  // When this project's own Tasks do not reach the team, one line under the board says why; when they reach it through someone else's share, it says whose.
-  const notes = { 'no-origin': /Your Tasks are not shown to teammates: this project has no origin remote\./, home: /from your home folder/, off: /Kept off the team board: no Tasks go out or come in\. \/share on puts it back\./, 'status-off': /status is off/,
-    board: /Your Tasks here are on core's board: \{red-fg\}ana\{\/\} shares this repository\. \/share off keeps them off\./ };
-  for (const [value, pattern] of Object.entries(notes)) {
-    sharing = value;
-    await until(() => !panels.kanbanTeam.hidden && pattern.test(panels.kanbanTeam.getText()), `the note for ${value}`, 8000);
-    assert.equal(panels.kanbanTeam.height, 3); assert.equal(panels.kanbanTeam.top, panels.kanbanBoxes[0].top + panels.kanbanBoxes[0].height);
-  }
-  sharing = 'on';
-  await until(() => panels.kanbanTeam.hidden, 'no note while they are told', 8000);
-  // A project of a repository nobody on the team shares has no note, and never asks to be shared.
-  sharing = 'board'; await until(() => !panels.kanbanTeam.hidden, 'the board note', 8000);
-  sharing = 'none'; await until(() => panels.kanbanTeam.hidden, 'no note for an unrelated project', 8000);
+  // While this project is kept off the team board, one line under the board says so; otherwise there is none.
+  off = true;
+  await until(() => !panels.kanbanTeam.hidden && /Kept off the team board: teammates do not see your sessions here, and theirs are not shown\. \/share on puts it back\./.test(panels.kanbanTeam.getText()), 'the note', 8000);
+  assert.equal(panels.kanbanTeam.height, 3); assert.equal(panels.kanbanTeam.top, panels.kanbanBoxes[0].top + panels.kanbanBoxes[0].height);
+  off = false;
+  await until(() => panels.kanbanTeam.hidden, 'no note while it is on the board', 8000);
   await new Promise(resolve => setTimeout(resolve, 3500)); assert.equal(panels.kanbanTeam.hidden, true);
+});
+
+// --- Kanban: teammates' sessions, one board for each repository ---
+const WEB = '1'.repeat(64), API = '2'.repeat(64);
+const teamSession = (extra = {}) => ({ repoId: WEB, id: '0123456789abcdef', title: 'Fix the cart total', column: 'progress', by: 'sara', at: ago(1), ...extra });
+test('Kanban shows every session teammates run in the same repository, with who and where, read-only, and a project in several repositories picks a board', async t => {
+  const p = project(later(t)); environment(t, p.parent);
+  const peer = fakePeer();
+  let people = [{ peer: SARA, name: 'sara', box: 'sara-box', online: true, heardAt: ago(0), sessions: [
+    teamSession(), teamSession({ id: '1123456789abcdef', title: 'Which tax rate applies?', column: 'needs', by: 'li', at: ago(3) }),
+    teamSession({ repoId: API, id: '2123456789abcdef', title: 'Document the v2 endpoint', column: 'done', at: ago(20) }) ] }];
+  // The Task of a session they also told goes with its card, as one.
+  const tasks = [{ peer: SARA, name: 'sara', box: 'sara-box', online: true, heardAt: ago(0), tasks: [teamTask({ repoId: WEB, id: 't-cart' })] }];
+  people[0].sessions[0].plan = 't-cart';
+  peer.teammateTasks = () => tasks; peer.boardKeptOff = () => false;
+  peer.teammateSessions = () => ({ repos: [{ repoId: API, name: 'acme/api', at: ago(20) }, { repoId: WEB, name: 'acme/web', at: ago(1) }], people });
+  const v = await view(t, { repo: repository(p.root), peer }), panels = v.panels;
+  const column = index => panels.kanbanLists[index].items.map(item => plainItem(item).trimEnd()), label = index => panels.kanbanBoxes[index]._label.getText().trim();
+  await send(v, '/kanban'); await until(() => v.current.view === 'kanban' && column(1).length === 1 && column(2).length === 1, 'the teammates\' sessions');
+  // The board with the latest work leads. Each card says who started it and on which machine; the Task is not a second card.
+  assert.match(column(1)[0], /^Fix the cart total  @sara · sara-box/); assert.match(column(2)[0], /^Which tax rate applies\?  @li · sara-box/);
+  assert.deepEqual([label(0), label(1), label(2), label(3)], ['To do 0', 'In progress 1', 'Needs you 1', 'Done 0']);
+  await until(() => !panels.kanbanPick.hidden && /Board: acme\/web ▾/.test(panels.kanbanPick.getText()), 'the board picker');
+  // Read-only: Enter reads it, no key moves it.
+  panels.kanbanLists[1].focus(); panels.kanbanLists[1].select(0);
+  await until(() => /@sara's session on sara-box · In progress · Task: Fix the login redirect · read-only/.test(panels.status.getText()), 'the card\'s line');
+  v.input.write('x'); await until(() => /That is sara's session\. Enter opens it to read; it changes only on their machine\./.test(panels.status.getText()), 'x refused');
+  v.input.write('\r');
+  await until(() => modal(v, "sara's session"), 'the session opens');
+  const rows = rowsOf(v, "sara's session").map(line => line.trimEnd());
+  assert.deepEqual(rows.slice(0, 4), ['Fix the cart total', 'In progress', "Started by @sara · on sara's machine sara-box", 'last activity 1m ago']);
+  assert.ok(rows.includes('Task · Fix the login redirect')); assert.ok(rows.includes('It runs on their machine: only they can change it.'));
+  v.input.write('\x1b'); await until(() => !modal(v, "sara's session"), 'Esc closes it');
+  // The other repository's board: its own cards only.
+  panels.kanbanPick.focus(); panels.kanbanPick.emit('press');
+  await until(() => modal(v, 'Kanban board'), 'the picker');
+  v.input.write('\x1b[B'); v.input.write('\r');
+  await until(() => column(3).length === 1 && column(1).length === 0 && column(2).length === 0, 'the api board');
+  assert.match(column(3)[0], /^Document the v2 endpoint  @sara · sara-box/);
+  assert.match(panels.kanbanPick.getText(), /Board: acme\/api ▾/);
+  // Moved on their machine: moved here; gone there: gone here.
+  people = [{ ...people[0], sessions: [teamSession({ repoId: API, id: '2123456789abcdef', title: 'Document the v2 endpoint', column: 'needs', at: ago(0) })] }];
+  await until(() => column(2).length === 1 && column(3).length === 0, 'moved to Needs you', 8000);
+  people = [];
+  await until(() => column(2).length === 0, 'gone', 8000);
+  assert.deepEqual(readBoard(repository(p.root)).cards, []); assert.deepEqual(peer.sent(), []);
 });
 
 test('/share off keeps the open project\'s Tasks off the team board and /share on puts them back', async t => {
@@ -1464,7 +1503,7 @@ test('/share off keeps the open project\'s Tasks off the team board and /share o
   const peer = fakePeer(), calls = [];
   peer.taskBoard = (root, on) => { calls.push([root, on]); return null; };
   const v = await view(t, { repo: repository(p.root), peer });
-  await send(v, '/share off'); await until(() => /kept off the team board: your Tasks are not shown to teammates, and theirs are not shown here\. \/share on puts it back\./.test(v.panels.status.getText()), 'off');
+  await send(v, '/share off'); await until(() => /kept off the team board: teammates do not see your sessions here, and theirs are not shown\. \/share on puts it back\./.test(v.panels.status.getText()), 'off');
   await send(v, '/share on'); await until(() => /on the team board again/.test(v.panels.status.getText()), 'on');
   assert.deepEqual(calls, [[p.root, false], [p.root, true]]);
 });
