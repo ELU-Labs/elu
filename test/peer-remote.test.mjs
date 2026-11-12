@@ -261,7 +261,7 @@ test('Sessions lists a session on my other computer, says where, and offers its 
 });
 
 test('the new session box starts a session on my computer by its @name, and a message continues one', async t => {
-  const status = { key: 'k'.repeat(64), teams: [{ members: [{ key: 'k'.repeat(64), name: 'ana' }, { key: 'd'.repeat(64), name: 'ana', box: 'devbox', online: true }, { key: 'e'.repeat(64), name: 'kim', box: 'kims-mac', online: true }] }] };
+  const status = { key: 'k'.repeat(64), name: 'ana', box: 'laptop', teams: [{ members: [{ key: 'k'.repeat(64), name: 'ana' }, { key: 'd'.repeat(64), name: 'ana', box: 'devbox', online: true }, { key: 'e'.repeat(64), name: 'kim', box: 'kims-mac', online: true }] }] };
   const commands = [], facade = { mineRows: () => [{ key: 'd'.repeat(64), mine: true, theirs: true }], remoteSessions: () => [] };
   const glue = remoteGlue({ facade, peerRead: () => status, peerCommand: async command => { commands.push(command); return command.type === 'remoteStart' ? { id: START.id, project: 'shop' } : command.type === 'mine' ? { both: false, older: false } : { answered: true }; }, chatMessage: ({ text }) => text, ink: text => text, colour: false });
   assert.equal(glue.named('@devbox').key, 'd'.repeat(64));
@@ -278,9 +278,12 @@ test('the new session box starts a session on my computer by its @name, and a me
   assert.equal(await glue.action(row, 'accept'), 'Allowed.');
   assert.deepEqual(commands.at(-1), { type: 'remoteAnswer', id: START.id, approval: 'approval-1', decision: 'allow' });
   assert.match(glue.view({ ...row, remote: { ...row.remote, entries: [{ role: 'You', text: 'Make coupons upper case' }, { role: '@reviewer · review 1', text: 'Looks right.', bot: 'reviewer' }] } }, 80), /Looks right\.[\s\S]*Waiting for your approval on @devbox/);
-  assert.equal(await glue.mine(['@devbox']), 'Waiting for @devbox to mark this machine too.');
+  // It says what to type on the other computer: this one's box name, which /mine there finds.
+  assert.equal(await glue.mine(['@devbox']), 'Waiting for @devbox to mark this machine too. On @devbox, type /mine @laptop.');
   // After joining with a code made for that, yes marks the inviter here.
   assert.equal(await glue.agree('d'.repeat(64), 'ana'), 'Marked as yours. Once @devbox hears it, type @devbox first in the new session box to start a session there.');
   assert.deepEqual(commands.at(-1), { type: 'mine', key: 'd'.repeat(64) });
+  // Machines already on the team that are not both mine yet: the ones /invite offers to mark without a code.
+  assert.deepEqual(glue.unmarked().map(row => row.name), ['kims-mac']);
   await assert.rejects(glue.mine(['@nobody']), { message: "No teammate's computer is called @nobody." });
 });

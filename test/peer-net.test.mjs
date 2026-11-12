@@ -758,7 +758,7 @@ test('a joiner whose reply was lost comes back with the same code and gets the s
   });
 });
 
-test('a code for another computer of mine is only offered: the inviter marks nothing at the join', async t => {
+test('a code for another computer of mine is only offered: the inviter marks nothing at the join, and a machine already on the team is told to use /mine on both', async t => {
   const anaHome = newHome(t), li = withHome(newHome(t), () => createIdentity({ name: 'li' }));
   await withHome(anaHome, async () => {
     const me = createIdentity({ name: 'ana' }), made = createTeam(me, 'core');
@@ -773,6 +773,12 @@ test('a code for another computer of mine is only offered: the inviter marks not
     const first = await exchange(inviteKeys(createInvite(me, made.id, { hours: 1, mine: true })));
     assert.equal(first.error, undefined); assert.equal(first.result.mineOffer, true); assert.equal('mine' in first.result, false);
     assert.deepEqual(readMine(), [], 'nothing is marked until li says yes');
+    // li is on the team now. Another mine code from li is refused, stays unused, and says what to do instead.
+    const keys = inviteKeys(createInvite(me, made.id, { hours: 1, mine: true }));
+    const again = await exchange(keys);
+    assert.equal(again.error, "This computer is already on ana's team. To make the two yours, type /mine @ana here, and /mine @li on the other one.");
+    assert.ok(openInvites([made.id]).some(row => row.topic === keys.topic), 'the code is still unused');
+    assert.deepEqual(readMine(), []);
   });
 });
 
