@@ -97,7 +97,7 @@ You can send a message at any time. One sent while the session is working waits 
 | `/changes` | Shows what this session changed; `/chat` goes back |
 | `/publish` | Shows the exact push and draft pull request, then asks you |
 | `/stop` | Stops the running response. A message you sent while it ran is sent next; `/stop` again cancels that message |
-| `/schedule in 1h check the build` | Starts a session later or on a schedule: `/schedule [when] [message]`. `/schedule ` lists times such as `in 5m`, `in 1h` and `daily 9:00`. Each run is a new session with the model, mode and bots of the form; it does not see the chat it was made in |
+| `/schedule in 1h check the build` | Starts a session later or on a schedule: `/schedule [when] [message]`. `/schedule ` lists times such as `in 5m`, `in 1h` and `daily 9:00`. Each run is a new session with the model, mode and bots of the form (a bot with its own schedule is left out); it does not see the chat it was made in |
 | `/budget 5` | Limits this session to 5 dollars; `/budget off` removes the limit |
 | `! git status` | Runs a shell command. In an open session the model gets the command and its output with your next message |
 | `/quit` | Closes ELU Code. Sessions that are running or queued go on in the background; `elu conductor stop` stops them |

@@ -242,8 +242,12 @@ schedule, it never runs with Full access: from Full it runs with Approve for me.
   on your home, the working folder or a top-level folder), and you answer it.
 - The automatic edit task of a conversation inherits the conversation's choices.
 - A schedule stores `ask` or `auto`; it never runs with Full access. It also
-  keeps the bots of the form it was made in, and a branch if one was set; a
-  schedule never runs `here`. An unanswered approval times out and the task asks you.
+  keeps the bots of the form it was made in, and, for a one-time schedule, a
+  branch if one was set. A repeating schedule runs in a new worktree each time,
+  since a branch is checked out in one place at a time, and a schedule never
+  runs `here`. A bot with its own schedule is left out of the runs, so a run
+  never starts that bot's schedule. An unanswered approval times out and the
+  task asks you.
 - A request sent to the local A2A endpoint, which is off by default, runs your
   personal default, capped at `auto`.
 - A teammate's message you answer runs read only and never gets a mode. One you
