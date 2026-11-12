@@ -533,10 +533,11 @@ test('a card\'s title leaves without a secret or a path, and its id says nothing
 test('a session waiting for its owner to approve a Task is in Needs you on a teammate\'s board, as on the owner\'s own', t => {
   const crew = makeTeam(t), ana = crew.founder, now = Date.now();
   withHome(ana.home, () => {
-    const repo = folderProject(t), shop = cloneIn(repo, 'shop');
-    session(repo, 1, shop, { kind: 'conversation', state: 'answered', goal: 'Plan the export' });
-    session(repo, 2, shop, { kind: 'conversation', state: 'answered', goal: 'Where is the export?' });
-    fs.writeFileSync(path.join(repo.state, 'tasks', '1', 'plan.json'), JSON.stringify({ version: 1, tasks: [plan({ session: '1', state: 'proposed', approvedAt: null })] }));
+    // Conversations work in the project's own folder, here the repository itself.
+    const app = registeredProject(t, { origin: ORIGIN }), repo = projectFolder(app.root);
+    const talk = (id, goal) => saveTask(repo, { id: String(id), kind: 'conversation', goal, state: 'answered', worktree: repo.project ?? repo.root, base: null, branch: null, createdAt: new Date().toISOString(), runs: [], reviews: [], responses: [], messages: [], sessions: {} });
+    talk(1, 'Plan the export'); talk(2, 'Where is the export?');
+    writePlans(app.root, 1, [plan({ session: '1', state: 'proposed', approvedAt: null })]);
     const rows = sessionCards({ owner: 'ana', repos: localRepos(now), now });
     assert.deepEqual(rows.map(row => [row.card.title, row.card.column]).sort(), [['Plan the export', 'needs'], ['Where is the export?', 'done']]);
   });
