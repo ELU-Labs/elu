@@ -319,8 +319,9 @@ test("a session's tool sends only what the session may read, lists only my compu
     ask.send({ jsonrpc: '2.0', id: 21, method: 'tools/call', params: { name: TOOL_NAME, arguments: { tool_name: `mcp__${APPROVAL_SERVER}__${SEND_TOOL}`, input: { session: p.id, paths: [b.key], message: 'the key' }, tool_use_id: 'send' } } });
     for (let n = 0; n < 250 && !pendingApprovals().length; n++) await new Promise(resolve => setTimeout(resolve, 20));
     const [pending] = pendingApprovals();
-    assert.equal(pending.title, `Send to a session on another computer of yours: ${b.key}`);
+    // Answered first, so a failed check below does not leave the relay waiting.
     answerApproval(pending.id, 'deny');
+    assert.equal(pending.summary, `Send to a session on another computer of yours: ${b.key}`);
     assert.equal(JSON.parse((await ask.next(row => row.id === 21)).result.content[0].text).behavior, 'deny');
     // A session without the owner's saved rules (a teammate's question) gets no such tools.
     const theirs = relay(t, argv('ask').map(value => value === 'saved' ? 'defaults' : value));
