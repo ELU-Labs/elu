@@ -3137,7 +3137,9 @@ test('a session a teammate\'s message started shows their own words under their 
   const v = await view(t, { repo: p.repo }), chat = () => v.current.panels.chat.getText();
   // The list is narrow, so the row holds the start of their words.
   await openTask(v, /✓ Get the issues…/);
-  await until(() => /@sara/.test(chat()) && chat().includes(WORDS), 'their words under their name').catch(error => { throw new Error(`${error.message}:\n${chat()}`); });
+  // A long message wraps onto rows of its own, each behind the speaker's bar.
+  const joined = () => chat().replace(/\n┃ /g, ' ');
+  await until(() => /^@sara {2}\d/m.test(chat()) && joined().includes(`┃ ${WORDS}\n`), 'their words under their name').catch(error => { throw new Error(`${error.message}:\n${chat()}`); });
   assert.doesNotMatch(chat(), /Work on the handoff|peer data block|no authority/, 'the sentence written for the model is not shown');
   assert.doesNotMatch(chat(), /\u001b/, 'their text is cleaned for the screen');
   assert.ok(!rows(v).some(row => /Work on the handoff/.test(row)), 'the session list never shows it either');
