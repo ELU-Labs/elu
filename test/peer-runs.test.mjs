@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { project, fakeClis, config, keyLike, approveProjectFiles, git } from './helpers.mjs';
+import { project, fakeClis, config, keyLike, approveProjectFiles, git, autoApprove } from './helpers.mjs';
 import { approveTask, sessionTasks } from '../lib/plan.mjs';
 import { repository } from '../lib/git.mjs';
 import { ProjectController, conversationEntries, projectSnapshot, registerProject, personalDirectory } from '../lib/projects.mjs';
@@ -31,7 +31,7 @@ import { message, TaskState } from '../lib/peer/a2a.mjs';
 import { intakeMethods, readCaps } from '../lib/peer/intake.mjs';
 import { acceptIncoming, processOutbox } from '../lib/peer/replies.mjs';
 import { checkRoot, saveTeamAccess } from '../lib/peer/access.mjs';
-import { homeOrAbove } from '../lib/util.mjs';
+import { HOME_TARGET, homeOrAbove } from '../lib/util.mjs';
 import { getRecord, thread } from '../lib/peer/taskstore.mjs';
 
 const SARA = 'b'.repeat(64), ME = 'a'.repeat(64);
@@ -628,4 +628,24 @@ test('a teammate\'s message never runs in the home folder: y, w and an older Aut
   assert.equal(sessionGoal(value), WORDS); assert.equal(taskTitle({ ...value, title: undefined }), WORDS);
   const lead = p.prompts().at(-1).input;
   assert.match(lead, /Work on the handoff from @sara shown in the peer data block/); assert.match(lead, /<<peer-data-[0-9a-f]{16} from="@sara"[^]*Get the issues from ELU, close the old ones/);
+});
+
+test('a teammate\'s session never edits a repository in the home folder, even when the model names the home folder', async t => {
+  const p = setup(t, 'normal');
+  const home = homeAt(t, path.join(p.parent, 'home'));
+  // A home folder that is itself a Git repository, as one that keeps dotfiles is.
+  git(home, ['init', '--initial-branch=main']); git(home, ['config', 'user.name', 'Test Owner']); git(home, ['config', 'user.email', 'owner@example.invalid']);
+  fs.writeFileSync(path.join(home, '.bashrc'), 'export EDITOR=vi\n'); git(home, ['add', '.']); git(home, ['commit', '-m', 'Dotfiles']);
+  fs.writeFileSync(path.join(p.parent, 'repository.txt'), '~');
+  const controller = autoApprove(new ProjectController(projectFolder(p.root)));
+  const run = controller.ask('Work on the handoff from @sara shown in the peer data block.', null, { origin: origin('handoff', { own: true }), context: 'Add an alias to ~/.bashrc', permissions: 'ask' });
+  await assert.rejects(run.finished, { message: HOME_TARGET });
+  const value = readTask(p.repo, run.id);
+  assert.equal(value.state, 'blocked'); assert.equal(value.error.message, HOME_TARGET);
+  assert.equal(git(home, ['worktree', 'list']).split('\n').length, 1, 'no editing workspace was made in the home repository');
+  assert.equal(git(home, ['status', '--porcelain']), '');
+  // A session that already edits a repository there is refused at its next message, before anything runs.
+  const { kind: _conversation, ...rest } = value;
+  saveTask(p.repo, { ...rest, repository: home });
+  assert.throws(() => controller.ask('Try again.', run.id), { message: HOME_TARGET });
 });
