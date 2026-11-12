@@ -3446,7 +3446,7 @@ test('c takes away whatever the list shows: a blocked message is removed, a team
   await selectRow(v, /Add a retry budget/);
   await until(() => /enter open {2}r retry {2}c remove/.test(panels.keys.getText()), 'c in its keys');
   v.input.write('c');
-  await until(() => /^Removed\./.test(status()) && !pendingRequests(p.root).some(row => row.goal === 'Add a retry budget'), 'c removes it');
+  await until(() => /› Removed\./.test(status()) && !pendingRequests(p.root).some(row => row.goal === 'Add a retry budget'), 'c removes it');
   // A teammate's message: c declines it, and they are told.
   await selectRow(v, /@sara question/); v.input.write('c');
   await until(() => peer.sent.some(c => c.type === 'discard' && c.id === 'in-1') && /Declined @sara's message\./.test(status()), 'c declines it');
@@ -3466,7 +3466,7 @@ test('s on a session removes its message that did not run, and the session is li
   await wide(v);
   await until(() => rows(v).some(row => /✗ Release notes/.test(row)), 'the session under Needs you, blocked');
   await selectRow(v, /Release notes/); v.input.write('s');
-  await until(() => /^Removed\./.test(panels.status.getText()) && pendingRequests(p.root).length === 0, 's removes the message');
+  await until(() => /› Removed\./.test(panels.status.getText()) && pendingRequests(p.root).length === 0, 's removes the message');
   await until(() => rows(v).some(row => /✓ Release notes/.test(row)) && !/NEEDS YOU/.test(rows(v).join('\n')), 'the session is answered again, under Recent');
 });
 
@@ -3480,14 +3480,14 @@ test('y or n alone in the message box answers the selected item, and never start
   // On a teammate's question, N sent alone declines it.
   await selectRow(v, /@sara question/);
   await send(v, ' N ');
-  await until(() => peer.sent.some(c => c.type === 'discard' && c.id === 'in-1') && /Declined @sara's message\./.test(status()), 'a lone N declines');
+  await until(() => peer.sent.some(c => c.type === 'discard' && c.id === 'in-1') && /Declined @sara's message\./.test(status()), 'a lone N declines').catch(error => { throw new Error(`${error.message}: ${status()} | ${v.current.view} | ${cursor(v)} | ${JSON.stringify(peer.sent)}`); });
   assert.equal(panels.ask.getValue(), ''); assert.equal(requests(), 'Add a retry budget'); assert.deepEqual(projectSnapshot(p.repo).tasks, []);
   await send(v, 'y');
   await until(() => peer.sent.some(c => c.type === 'approve' && c.id === 'in-1'), 'a lone y accepts');
   // On a row that waits on neither, it starts nothing and says how.
   await selectRow(v, /Add a retry budget/);
   await send(v, 'n');
-  await until(() => /^y and n answer the selected item\. Choose one in the list first\./.test(status()), 'refused');
+  await until(() => /› y and n answer the selected item\. Choose one in the list first\./.test(status()), 'refused');
   assert.equal(requests(), 'Add a retry budget'); assert.deepEqual(projectSnapshot(p.repo).tasks, []);
   // Anything else typed goes as it always did.
   await selectRow(v, /\+ New session/);
@@ -3506,7 +3506,7 @@ test('y or n alone in an open session answers what it waits on; with nothing wai
   requestApproval({ id: 'run-3-a', root: p.root, taskId: '3', role: 'lead', vendor: 'claude', tool: 'Bash', input: { command: 'grep -rn model src' } });
   await until(() => /Waiting for your approval/.test(panels.chat.getText()), 'it waits on him');
   await send(v, 'Y');
-  await until(() => answer('run-3-a') === 'allow' && /^Allowed\./.test(panels.status.getText()), 'a lone Y allows it');
+  await until(() => answer('run-3-a') === 'allow' && /› Allowed\./.test(panels.status.getText()), 'a lone Y allows it').catch(error => { throw new Error(`${error.message}: ${panels.status.getText()} | ${answer('run-3-a')}`); });
   assert.ok(!pendingRequests(p.root).some(row => /^y$/i.test(row.goal)), 'nothing was queued');
   // A session that waits on nothing takes it as a reply.
   await openTask(v, /Release notes/); await until(() => v.current.session === '4', 'the other session is open');
