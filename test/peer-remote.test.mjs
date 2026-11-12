@@ -281,7 +281,7 @@ test('the new session box starts a session on my computer by its @name, and a me
   // It says what to type on the other computer: this one's box name, which /mine there finds.
   assert.equal(await glue.mine(['@devbox']), 'Waiting for @devbox to mark this machine too. On @devbox, type /mine @laptop.');
   // After joining with a code made for that, yes marks the inviter here.
-  assert.equal(await glue.agree('d'.repeat(64), 'ana'), 'Marked as yours. Once @devbox hears it, type @devbox first in the new session box to start a session there.');
+  assert.equal(await glue.agree('d'.repeat(64), 'ana'), 'Marked as yours. Type @devbox first in the new session box to start a session there.');
   assert.deepEqual(commands.at(-1), { type: 'mine', key: 'd'.repeat(64) });
   // Machines already on the team that are not both mine yet: the ones /invite offers to mark without a code.
   assert.deepEqual(glue.unmarked().map(row => row.name), ['kims-mac']);

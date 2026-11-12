@@ -701,7 +701,7 @@ test('joining with a code made for another computer asks whether it is yours: No
   // Yes marks the inviter's computer here, and says how to start a session there.
   await send(v, '/join k7qm-x2pd-9fhw'); await answerJoin(v);
   await choose(v, title, /^Yes/);
-  await until(() => /Marked as yours\. Once @sara-box hears it, type @sara-box first in the new session box to start a session there\./.test(status()), 'yes');
+  await until(() => /Joined Core with sara\. Marked as yours\. Type @sara-box first in the new session box to start a session there\./.test(status()), 'yes');
   assert.deepEqual(marked(), [{ type: 'mine', key: SARA }]);
 });
 
@@ -720,7 +720,7 @@ test('/invite, Another computer of mine, offers a computer already on the team, 
 test('a session on my other computer that waits for y or n shows n once in the key bar, and @name of that computer names it in the new session box', async t => {
   const at = new Date().toISOString(), base = { machine: SARA, createdAt: at, lastAt: at, title: 'Make coupons upper case', steps: [], entries: [] };
   const remote = [{ ...base, id: '11111111-1111-4111-8111-111111111111', state: 'running', approvals: [{ id: 'approval-1', summary: 'Run ls', at }] },
-    { ...base, id: '22222222-2222-4222-8222-222222222222', state: 'answered', title: 'Uppercase plan', plan: { title: 'Uppercase coupons', state: 'proposed', subtasks: [] }, approvals: [] }];
+    { ...base, id: '22222222-2222-4222-8222-222222222222', state: 'answered', title: 'Uppercase plan', plan: { title: 'Uppercase coupons', description: 'Make coupon codes upper case.', goal: 'Codes match in any case.', objectives: ['Codes are upper case'], priority: 'low', severity: 'low', state: 'proposed', subtasks: [], met: [] }, approvals: [] }];
   const p = project(later(t)); environment(t, p.parent);
   const peer = fakePeer({ items: [], mine: [{ key: SARA, mine: true, theirs: true }], remote }), v = await view(t, { repo: repository(p.root), dashboard: true, peer });
   const board = v.panels.board, keys = () => v.panels.keys.getText();
@@ -733,7 +733,7 @@ test('a session on my other computer that waits for y or n shows n once in the k
   board.focus(); selectRow(board, /wants to run ls/);
   await until(() => /y allow {2}n deny {2}enter open {2}tab next/.test(keys()), 'approval keys');
   assert.doesNotMatch(keys(), /new session/);
-  selectRow(board, /Uppercase plan/);
+  selectRow(board, /Task to approve/);
   await until(() => /y approve {2}n reject {2}enter open {2}tab next/.test(keys()), 'Task keys');
   assert.doesNotMatch(keys(), /new session/);
 });
