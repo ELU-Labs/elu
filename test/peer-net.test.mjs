@@ -1013,8 +1013,8 @@ test('a question for a bot is taken only when that bot is shared, waits for the 
     assert.deepEqual(waiting(), { 'Ask 1': 'reviewer', 'Ask 2': null });
     // Accepted, the request names the bot that answers it; a plain ask's request is what it was before bots.
     acceptIncoming(ctx, forBot.id, { how: 'answer' }); acceptIncoming(ctx, plain.id, { how: 'answer' });
-    assert.deepEqual(origin(forBot), { kind: 'ask', peer: ana.key, name: 'ana', a2aTaskId: forBot.id, threadId: 'thread-m-1', hop: 1, bot: 'reviewer' });
-    assert.deepEqual(origin(plain), { kind: 'ask', peer: ana.key, name: 'ana', a2aTaskId: plain.id, threadId: 'thread-m-2', hop: 1 });
+    assert.deepEqual(origin(forBot), { kind: 'ask', peer: ana.key, name: 'ana', a2aTaskId: forBot.id, threadId: 'thread-m-1', hop: 1, bot: 'reviewer', teams: [crew.teamId] });
+    assert.deepEqual(origin(plain), { kind: 'ask', peer: ana.key, name: 'ana', a2aTaskId: plain.id, threadId: 'thread-m-2', hop: 1, teams: [crew.teamId] }, 'the teams of the project, whose rules the run is told');
     assert.equal(pendingRequests(root).every(row => row.readOnly === true && row.state === 'queued'), true);
     const mine = task => { const item = peer.peerItems().find(row => row.taskId === task.id); return [item.kind, 'bot' in item ? item.bot : null]; };
     assert.deepEqual(mine(forBot), ['answering', 'reviewer']); assert.deepEqual(mine(plain), ['answering', null]);
