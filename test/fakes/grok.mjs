@@ -41,7 +41,8 @@ async function act(prompt, record, { bypass, canWrite, canShell, canFetch, cwd, 
       else blocked.push(`write ${file}`);
     }
   }
-  const command = prompt.match(/run the (?:shell )?command (\/\S+)/i)?.[1];
+  // A full path, or a program on PATH named elu-something.
+  const command = prompt.match(/run the (?:shell )?command (\/\S+|elu-[\w-]+)/i)?.[1];
   if (command) {
     if ((canShell || bypass) && await allow({ kind: 'execute', title: `Run ${command}`, rawInput: { command } }, false)) { spawnSync(command, { stdio: 'ignore' }); did.push(`ran ${command}`); }
     else blocked.push(`run ${command}`);

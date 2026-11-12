@@ -32,9 +32,10 @@ It depends on the session's permission mode ([docs/permissions.md](docs/permissi
   have only read-only file tools, with no shell, workspace creation, or check execution.
 - **Ask for approval** and **Approve for me** give the session's model, and a bot that
   works in the session, a shell inside the vendor's own sandbox, with no network. In Ask
-  for approval an action outside it asks you where the vendor can ask during a turn
-  (Claude Code, and Antigravity and Grok Build once their one-time check has proven it);
-  on Codex, which cannot, it is refused and reported. In Approve for me a reviewer model
+  for approval Claude Code's sandbox reaches a host only once you allow it when asked, for
+  the rest of that session. An action outside the sandbox asks you where the vendor can ask
+  during a turn (Claude Code, and Antigravity and Grok Build once their one-time check has
+  proven it); on Codex, which cannot, it is refused and reported. In Approve for me a reviewer model
   decides instead of you. The sandbox differs by vendor: Antigravity in Ask for approval
   has none, so every command needs your approval and one you approve runs outside any
   sandbox, and Grok Build's sandbox blocks the network on Linux only. The vendor pages in
@@ -81,11 +82,11 @@ A sandboxed command reads the rest of the Git folder, so `git status`, `git diff
 history: every committed version of every file, including a file committed once and later
 removed, and committed files the sandbox hides by name in the worktree (`.env*`, `*.pem`,
 `.npmrc`). It can read the Git settings file, with its remote URLs and any token written
-into one, and the stash and the reflog. The sandbox has no network, so a sandboxed
-command cannot send what it reads anywhere; what it prints goes to the model, as all
-output does, and into the session's record. `git add`, `git commit` and anything else
-that writes in the folder stay refused. A teammate's question is given tracked files
-only: its commands read none of the folder.
+into one, and the stash and the reflog. The sandbox has no network beyond the hosts you
+allowed when asked, so a sandboxed command cannot send what it reads anywhere else; what
+it prints goes to the model, as all output does, and into the session's record. `git add`,
+`git commit` and anything else that writes in the folder stay refused. A teammate's
+question is given tracked files only: its commands read none of the folder.
 
 Vendor tool permissions restrict direct file tools. Claude Code's own sandbox fences only
 shell commands and is never required: where it cannot start, commands run outside it under
@@ -296,6 +297,20 @@ already outside the sandbox: a process running as your user can forge an answer 
 for approval keeps the agent inside the sandbox until you say yes; Approve for me trusts
 the vendor's reviewer model; Full access trusts your choice. Request text is model output:
 control characters are stripped, otherwise the command, path or URL is shown exactly.
+
+A rule you keep with `a`, and the defaults, answer for you in the relay; they are not a
+sandbox either. What a rule can do: allow one program and subcommand with any arguments
+(`npm test`), one exact command, edits in the session's own workspace in turns that edit, one
+file outside the project, or pages on one host, in one project or all of them. What it
+cannot do: allow anything on the never list, joined or wrapped commands, removals, `sudo`,
+inline code, a secret file, `.git`, an MCP tool or a web search; leave the sandbox unless it
+was kept from a request that left it; or apply in a session a teammate started. Where a
+vendor runs commands with no sandbox (Antigravity, Grok Build, Claude Code where its sandbox
+cannot start), every command counts as leaving it. Arguments are checked each time only for
+secrets, ELU Code's own files and git options that run a program or write a file, so `npm
+test` allows `npm test -- anything else`, and a script the rule allows runs whatever the
+project put in it. The read and git defaults answer a command only inside the sandbox. Rules live in your personal directory, mode 0600, and
+are read again on every request; a file that cannot be read allows nothing.
 
 ## Configuration, MCP servers and hooks
 

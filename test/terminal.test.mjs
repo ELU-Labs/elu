@@ -22,6 +22,7 @@ import { saveTask, readTask, taskDir, taskTitle, setTitle, lock } from '../lib/s
 import { processIdentity } from '../lib/process.mjs';
 import { approvalsDir, requestApproval, answerApproval } from '../lib/approvals.mjs';
 import { defaultMode } from '../lib/modes.mjs';
+import { listEntries, readStore } from '../lib/permission-rules.mjs';
 import { shellSandboxLine } from '../lib/sandbox.mjs';
 import { listSchedules, saveSchedule, parseWhen } from '../lib/schedules.mjs';
 import { listBots, getBot, saveBot, removeBot, botVendors, botEfforts } from '../lib/bots.mjs';
@@ -2333,10 +2334,13 @@ test('/permissions sets the mode in compose, in a session, and as the default', 
   const p = setup(t), v = await view(t, { repo: p.repo }), panels = v.current.panels, status = () => panels.status.getText(), text = () => composeText(v);
   // Away from Sessions no session is open.
   await send(v, '/kanban'); await until(() => v.current.view === 'kanban', 'Kanban');
-  await send(v, '/permissions'); await until(() => /Open a session, or \/new\. \/permissions default <mode> sets new sessions\./.test(status()), 'needs a session');
+  // Bare, it lists what runs without asking; a mode needs a session.
+  await send(v, '/permissions');await until(() => modal(v, 'Allowed without asking'), 'the defaults and rules');
+  v.input.write('\x1b'); await until(() => !modal(v, 'Allowed without asking'), 'closed');
+  await send(v, '/permissions auto'); await until(() => /Open a session, or \/new\. \/permissions default <mode> sets new sessions\./.test(status()), 'needs a session');
   await send(v, '/new'); await until(() => !panels.compose.hidden && v.current.session === 'new', 'form');
   await send(v, '/permissions auto'); await until(() => /Approve for me for this session\./.test(status()) && /Permissions {2}Approve for me/.test(text()), 'compose mode');
-  await send(v, '/permissions nope'); await until(() => /Use \/permissions \[ask\|auto\|full\|default <mode>\|folders add <path>\]\./.test(status()), 'usage');
+  await send(v, '/permissions nope'); await until(() => /^› Use \/permissions \[ask\|auto\|full\|default <mode>\|folders add/.test(status()), 'usage');
   await send(v, '/permissions default auto'); await until(() => /New sessions start with Approve for me\./.test(status()), 'default saved');
   assert.equal(defaultMode(), 'auto');
   await send(v, '/sessions'); await until(() => v.current.view === 'tasks', 'Sessions');
@@ -2488,6 +2492,74 @@ test('f beside y and n allows what waits and gives the session Full access; wher
   await until(() => /Full access from the next message; this turn still asks\./.test(status().replace(/\n/g, ' ')), 'said as it is for a scheduled turn');
   await new Promise(resolve => setTimeout(resolve, 300)); assert.equal(answer('run-4-a'), null); assert.equal(readTask(p.repo, '4').permissions, 'full');
   v.input.write('\x1b'); await until(() => v.current.screen.focused === panels.board, 'the list'); v.input.write('n'); await until(() => answer('run-4-a') === 'deny', 'denied by hand');
+});
+
+// Approvals you give once: a beside y and n shows the rule, asks where, keeps it and allows.
+test('a beside y and n keeps the rule for this project and allows what it covers; the never list and teammates get no a; /permissions rules lists and removes', { timeout: 40000 }, async t => {
+  const p = setup(t), v = await view(t, { repo: p.repo }), panels = v.current.panels, status = () => panels.status.getText().replace(/\s+/g, ' '), chat = () => panels.chat.getText(), keys = () => panels.keys.getText();
+  const answer = id => { const file = path.join(approvalsDir(), `${id}.answer.json`); return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')).decision : null; };
+  const wants = (id, taskId, command, rules = 'saved') => requestApproval({ id, root: p.root, taskId, role: 'lead', vendor: 'claude', tool: 'Bash', input: { command, dangerouslyDisableSandbox: true }, cwd: p.root, access: 'read', rules });
+  const began = new Date().toISOString(), owner = { pid: process.pid, identity: processIdentity(process.pid) };
+  const running = (id, goal, extra = {}) => {
+    liveTask(p.root, { id, goal, state: 'ready' });
+    saveTask(p.repo, { ...readTask(p.repo, id), permissions: 'ask', state: 'running', activeRole: 'lead', activeSince: began, owner, messages: [{ at: began, text: goal }], ...extra });
+    resources(t).files.push(lock(p.repo, `task-${id}`));
+  };
+  running('3', 'Run the tests'); await wide(v);
+  await openTask(v, /Run the tes/); await until(() => v.current.session === '3', 'his session is open');
+  wants('run-3-a', '3', 'npm test'); wants('run-3-b', '3', 'npm test -- --watch'); wants('run-3-c', '3', 'curl -s https://example.test/');
+  await until(() => /Run: npm test outside the sandbox\nEsc, then y allow · n deny · f full access · a always/.test(chat()), 'the chat names a');
+  v.input.write('\x1b'); await until(() => v.current.screen.focused === panels.board && /y allow {2}n deny {2}f full access {2}a always {2}enter open/.test(keys()), 'the list names a');
+  // a shows the rule in plain words and asks where; Esc keeps nothing.
+  click(v, panels.chat, 4, 1); await until(() => v.current.screen.focused === panels.chat, 'the chat is focused');
+  v.input.write('a'); await until(() => modal(v, 'Always allow'), 'where');
+  assert.deepEqual(dialogRows(v, 'Always allow').map(row => row.trim().replace(/\s+/g, ' ')), [`This project ${p.root.replace(os.homedir(), '~')}`, 'All my projects']);
+  assert.match(modal(v, 'Always allow').children.map(child => child.getText?.() ?? '').join('\n').replace(/\s+/g, ' '), /Run npm test, with any arguments, also outside the sandbox, without asking\. Push, tag, merge, deploy and publish stay blocked\./);
+  v.input.write('\x1b'); await until(() => !modal(v, 'Always allow'), 'cancelled');
+  assert.equal(answer('run-3-a'), null); assert.deepEqual(readStore().rules, []);
+  // Enter on This project: kept, allowed now, and what else waits that it covers is allowed too.
+  click(v, panels.chat, 4, 1); await until(() => v.current.screen.focused === panels.chat, 'the chat is focused again');
+  v.input.write('a'); await until(() => modal(v, 'Always allow'), 'where again'); v.input.write('\r');
+  await until(() => /Allowed\. From now on, without asking: Run npm test, with any arguments, also outside the sandbox \(this project\)\./.test(status()), 'said as it is');
+  assert.equal(answer('run-3-a'), 'allow'); assert.equal(answer('run-3-b'), 'allow'); assert.equal(answer('run-3-c'), null, 'curl is not npm test');
+  assert.deepEqual(readStore().rules.map(row => [row.words.join(' '), row.scope, row.project, row.outside]), [['npm test', 'project', p.root, true]]);
+  // The never list: no a, and pressing it says why.
+  answerApproval('run-3-c', 'deny');
+  wants('run-3-d', '3', 'git push origin main');
+  await until(() => /Run: git push origin main outside the sandbox\nEsc, then y allow · n deny · f full access(?! · a)/.test(chat()) && !/a always/.test(chat()), 'no a for the never list');
+  click(v, panels.chat, 4, 1); await until(() => v.current.screen.focused === panels.chat, 'the chat is focused again');
+  v.input.write('a'); await until(() => /That is on the never list, so it is never allowed\. y allows it once, n denies it\./.test(status()), 'why');
+  assert.equal(modal(v, 'Always allow'), undefined); assert.equal(answer('run-3-d'), null);
+  // On the session's row in the list a says the same, and opens no answer box.
+  await send(v, '/permissions rules remove 99'); await until(() => /No rule has that number/.test(status()), 'another message first');
+  v.input.write('\x1b'); await until(() => v.current.screen.focused === panels.board && /Run the tests/.test(cursor(v)), 'the session\'s row');
+  v.input.write('a'); await until(() => /That is on the never list/.test(status()), 'why, from the list');
+  assert.equal(modal(v, 'Answer Run the tests'), undefined); assert.equal(answer('run-3-d'), null); answerApproval('run-3-d', 'deny');
+  // A request whose session reads only the defaults (a teammate's) gets no a.
+  wants('run-3-e', '3', 'cargo build', 'defaults');
+  await until(() => /Run: cargo build outside the sandbox\nEsc, then y allow · n deny · f full access(?! · a)/.test(chat()) && !/a always/.test(chat()), 'no a with the defaults only');
+  answerApproval('run-3-e', 'deny');
+  // A teammate's session: no a even where the request reads saved rules.
+  running('4', 'Their question', { origin: { kind: 'handoff', peer: 'b'.repeat(64), name: 'sara', threadId: null } });
+  wants('run-4-a', '4', 'cargo build');
+  await openTask(v, /Their quest/); await until(() => v.current.session === '4' && /Run: cargo build outside the sandbox\n/.test(chat()), 'their session is open');
+  assert.doesNotMatch(chat(), /a always/); answerApproval('run-4-a', 'deny');
+  // /permissions rules lists the defaults and his rule, with where it applies; x removes it.
+  await openTask(v, /Run the tes/); await until(() => v.current.session === '3', 'his session again');
+  await send(v, '/permissions rules'); await until(() => modal(v, 'Allowed without asking'), 'the list');
+  assert.deepEqual(dialogRows(v, 'Allowed without asking').map(row => row.replace(/\s+/g, ' ')), [
+    '1. on Read and search files in the project (default, all projects)', '2. on Git read commands: status, diff, log, show, branch, blame, inside the sandbox (default, all projects)',
+    "3. on The project's own test, lint, typecheck, format and build scripts, inside the sandbox (default, all projects)",
+    `4. Run npm test, with any arguments, also outside the sandbox · This project: ${p.root.replace(os.homedir(), '~')}`]);
+  v.input.write('\x1b[B'); v.input.write('\x1b[B'); v.input.write('x');
+  await until(() => /Turned off: The project's own test, lint/.test(status()) && /^3\. off/.test(dialogRows(v, 'Allowed without asking')[2] ?? ''), 'a default turned off, the list stays');
+  v.input.write('o'); await until(() => /Turned on: The project's own/.test(status()) && /^3\. on/.test(dialogRows(v, 'Allowed without asking')[2] ?? ''), 'and on again');
+  v.input.write('\x1b[B'); v.input.write('x'); await until(() => /Removed: Run npm test, with any arguments, also outside the sandbox\./.test(status()), 'removed');
+  assert.equal(dialogRows(v, 'Allowed without asking').length, 3); v.input.write('\x1b'); await until(() => !modal(v, 'Allowed without asking'), 'closed');
+  assert.deepEqual(readStore().rules, []);
+  await send(v, '/permissions rules remove 1'); await until(() => /Turned off: Read and search/.test(status()), 'by number');
+  await send(v, '/permissions rules on 1'); await until(() => /Turned on: Read and search/.test(status()), 'on by number');
+  assert.equal(listEntries().every(row => row.on), true);
 });
 
 test('what Full access itself asks stays with the owner: a turn that started in it, a removal, an MCP tool', { timeout: 40000 }, async t => {
