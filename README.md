@@ -176,6 +176,9 @@ Five come with the app. You can edit or remove any of them in the Bots tab.
   opens its page, where each row changes one thing: its model, its schedule, its MCP
   servers, its instructions. How a bot goes about its work is in its instructions: write
   there that it hands pieces to helpers, and on Claude Code it can start them.
+- A bot whose model your Claude account has no usage credits for runs once more on the
+  session's model, when that is another Claude model, and the chat says so in one line. Its later turns in that session start
+  there.
 - Each bot has a color: its name and its replies show in it. **Color** on its page changes
   it, and so does `/bots color qa gold`. `/bots color qa random` picks another.
 - `@elu` starts when it joins a session and then runs there every hour. Once ELU Code is
@@ -224,7 +227,8 @@ reading it unless it looks like a secret. Any Task it proposes waits for your ap
 only an approved Task's edit runs in a new worktree. **Manual** keeps each message waiting
 until you press y. You can also write rules in plain English, such as "Only work on the elu
 repo. Don't write anything until I accept it.", and every session a teammate starts is told
-them. Push, merge, tag, deploy and publish stay blocked as they are for your own sessions in
+them. A teammate's message never runs in your home folder: it waits until you approve it with
+ELU Code open in a project. Their session shows their own words under their name. Push, merge, tag, deploy and publish stay blocked as they are for your own sessions in
 that mode. [SECURITY.md](SECURITY.md#what-teammates-can-do-here) has the details. `/access`,
 or `elu access`, shows and changes all of it.
 
@@ -254,8 +258,10 @@ and answer Yes when it asks if the laptop is yours too (or `elu join CODE --mine
 already on your team needs no code: pick it in that same list, or run `/mine @devbox` on the
 laptop and `/mine @laptop` on the devbox. From then on, `@devbox fix the flaky test` in the
 new session box starts the session on the devbox, with the mode, model and bots you picked.
-It shows in Sessions marked "on devbox", live, and its approvals wait on both machines.
-`/mine` lists your computers and `/mine remove @devbox` ends it.
+It shows in Sessions marked "on devbox", live, and its approvals wait on both machines. It is
+your own session there, so your rules apply, and `a` on its approval, from either machine,
+keeps the rule on the devbox, where it runs. `/mine` lists your computers and
+`/mine remove @devbox` ends it.
 [SECURITY.md](SECURITY.md#your-other-computers) says what that allows.
 
 In a channel, `/invite @kim` adds a teammate you already have. `/invite` alone makes a

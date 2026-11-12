@@ -144,6 +144,11 @@ that team, and changed with `/access` or `elu access`:
 - **Manual**: each message waits until you approve it (y), then starts that same session,
   in your default mode, Full access included, since you started it. w picks the mode, place
   and folders first; n declines.
+- A teammate's message never runs in your home folder, or a folder above it, and its session
+  never edits a repository there, in any mode: that would reach every file of yours. When the
+  only project it could run in is your home folder, it waits, and y says to open ELU Code in
+  the project folder and approve it again. Its session shows the teammate's own words, under
+  their name, and is never sent again as yours.
 - A team whose setting was never set (joined with an earlier version) is Manual with no
   rules: its messages arrive as chat and wait for you. Nothing turns Auto on by itself:
   `elu invite` on such a team saves Manual unless you pass `--auto`, and `/invite` and
@@ -260,6 +265,12 @@ limits teammates get. Treat it like a login to this machine.
   yes ("Is <name>'s computer yours too?", or `elu join CODE --mine`). A teammate who sends you
   one cannot make their computer yours: say No.
 - An approval waits on both machines. The first answer, from either one, is the one that counts.
+- A session your other computer starts is your own, not a teammate's: your rules (`a`,
+  `/permissions rules`) and the defaults answer for it, it may run in your home folder as your
+  own sessions do, and its messages read as yours. `a` on its approval, from either machine,
+  keeps the rule on the machine where the session runs, since that is where its approvals are
+  answered. That machine makes the rule from its own copy of the request, never from what the
+  other one sends, so the never list and the limits on rules hold there too.
 
 ## Leaving, removal and coming back
 
@@ -326,7 +337,8 @@ sandbox either. What a rule can do: allow one program and subcommand with any ar
 file outside the project, or pages on one host, in one project or all of them. What it
 cannot do: allow anything on the never list, joined or wrapped commands, removals, `sudo`,
 inline code, a secret file, `.git`, an MCP tool or a web search; leave the sandbox unless it
-was kept from a request that left it; or apply in a session a teammate started. Where a
+was kept from a request that left it; or apply in a session a teammate started. A session
+your other computer started is yours, so they apply there, from that machine's own rules. Where a
 vendor runs commands with no sandbox (Antigravity, Grok Build, Claude Code where its sandbox
 cannot start), every command counts as leaving it. Arguments are checked each time only for
 secrets, ELU Code's own files and git options that run a program or write a file, so `npm

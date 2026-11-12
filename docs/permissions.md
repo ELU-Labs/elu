@@ -252,8 +252,12 @@ the task as allowed by your rule or by default, and the session shows "Allowed b
 npm test".
 
 Your rules apply in your own sessions and your bots' sessions, and in a session started from
-one of your own machines. A session a teammate started uses the defaults only, and `a` is
-not offered there.
+one of your own machines (`origin.mine`). A session a teammate started uses the defaults
+only, and `a` is not offered there. Rules live on each machine: a session runs with the rules
+of the machine it runs on. An approval of a session on your other computer waits on both
+machines, with `a` beside `y` and `n` where that machine offers it, and `a` from either one
+keeps the rule on the machine where the session runs. That machine makes the rule from its own
+copy of the request.
 
 Every vendor that asks goes through the relay: Claude Code through its permission prompt
 tool, Antigravity and Grok Build over ACP. The relay checks the never list, then your
