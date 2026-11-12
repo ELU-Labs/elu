@@ -55,20 +55,19 @@ test('/schedule reads the longest start that is a time, and the rest is the mess
 });
 
 test('a schedule keeps its bots and branch and each run starts with them; an older schedule without them still runs', t => {
-  home(t); const p = project(t), start = () => true;
+  const dir = home(t), p = project(t), start = () => true;
+  // A schedule saved before bots and places were kept: no such fields in the file.
+  fs.mkdirSync(path.join(dir, 'personal', 'elu-code'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'personal', 'elu-code', 'schedules.json'), JSON.stringify({ version: 1, schedules: [{ id: 'schedule-0ld0ld00', root: p.root, project: 'old', goal: 'Old schedule', when: parseWhen('every 1h', at(9, 8)), enabled: true, createdAt: at(9, 8).toISOString(), nextRunAt: at(9, 9).toISOString(), lastRunAt: null, lastRequestId: null, lastTaskId: null, runs: 0, note: null, permissions: null }] }));
   saveBot({ name: 'nightly', instructions: 'Check the nightly build.' });
   const row = saveSchedule({ root: p.root, goal: 'Check the build', when: parseWhen('every 1h', at(9, 8)), permissions: 'auto', bots: ['reviewer', 'nightly'], place: { kind: 'branch', branch: 'nightly-checks' } }, at(9, 8));
   assert.deepEqual([row.bots, row.place], [['reviewer', 'nightly'], { kind: 'branch', branch: 'nightly-checks' }]);
-  assert.deepEqual(listSchedules()[0].bots, ['reviewer', 'nightly']);
+  assert.deepEqual(listSchedules().find(value => value.id === row.id).bots, ['reviewer', 'nightly']);
   // A new worktree is what every run gets anyway, so it is not stored. Your checkout as it is needs Full access, which a schedule never has.
   assert.equal('place' in saveSchedule({ root: p.root, goal: 'Plain', when: parseWhen('every 1h', at(9, 8)), bots: [], place: { kind: 'worktree' } }, at(9, 8)), false);
   assert.throws(() => saveSchedule({ root: p.root, goal: 'Here', when: parseWhen('every 1h', at(9, 8)), place: { kind: 'here' } }, at(9, 8)), /Here needs Full access/);
   assert.throws(() => saveSchedule({ root: p.root, goal: 'Gone', when: parseWhen('every 1h', at(9, 8)), bots: ['nobody'] }, at(9, 8)), /There is no bot named nobody/);
-  // A schedule saved before bots and places were kept: no such fields in the file.
-  const file = path.join(process.env.XDG_CONFIG_HOME, 'elu-code', 'schedules.json'), saved = JSON.parse(fs.readFileSync(file, 'utf8'));
-  saved.schedules.push({ id: 'schedule-0ld0ld00', root: p.root, project: 'old', goal: 'Old schedule', when: parseWhen('every 1h', at(9, 8)), enabled: true, createdAt: at(9, 8).toISOString(), nextRunAt: at(9, 9).toISOString(), lastRunAt: null, lastRequestId: null, lastTaskId: null, runs: 0, note: null, permissions: null });
-  fs.writeFileSync(file, JSON.stringify(saved));
-  assert.equal(listSchedules().length, 3, 'the older schedule loads');
+  assert.equal(listSchedules().length, 3, 'the older schedule loads beside them');
   assert.equal(runDue(at(9, 10), { start }), 3);
   const requests = pendingRequests(p.root), of = goal => requests.find(request => request.goal === goal);
   assert.deepEqual([of('Check the build').bots, of('Check the build').place, of('Check the build').permissions], [['reviewer', 'nightly'], { kind: 'branch', branch: 'nightly-checks' }, 'auto']);
