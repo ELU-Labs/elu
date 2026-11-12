@@ -216,10 +216,21 @@ repository on its board by saying they share it. Their claim counts on your mach
 when it names the repository's first commit and your clone has that commit, so knowing the
 remote is not enough. For a public repository both are public, so any teammate, or anyone
 posing as your inviter (see Invite codes), can bring your clone of it onto their board.
-While your Tasks go out this way, the Kanban tab says so under the board and names the team
-and who shares the repository. `/share off` in a project keeps it off every board both ways:
-its Tasks are told to nobody, and teammates' Tasks are not shown in it or given to its models.
-`/share on` puts it back.
+`/share off` in a project keeps it off every board both ways: its Tasks are told to nobody,
+and teammates' Tasks are not shown in it or given to its models. `/share on` puts it back.
+
+**Sessions on the Kanban.** Every session you run in a repository is a card on the Kanban of
+each teammate, and each other computer of yours, who has a clone of that same repository.
+No share is needed. A card holds only the session's title (its name, or the first line of
+what was asked, up to 80 characters), its column (In progress, Needs you or Done), who
+started it, the time it last moved, and the id of its Task when it has one. Never the chat,
+a file, a diff or a path. To know who has which repository, each machine sends each teammate
+one proof per repository: a hash of the two machines' keys, the repository id and its first
+commit. A teammate without a clone of that history cannot make the proof, and a proof made
+for one pair of machines counts for no other, so a card goes only to someone who has the
+repository, and is kept only from someone who proved it. For a public repository anyone can
+get the history, so any teammate can. `/share off` in a project keeps its sessions and its
+repositories to itself, and shows no teammate's session in it.
 
 Every teammate on any of your teams is also told, whatever the status of your shares, this
 machine's name (the peer setting `box`, by default the first part of its host name), the
@@ -264,8 +275,9 @@ What others learn:
   Tasks of the joiner's clone of a repository they say they share, when they name its first
   commit too (see Without sharing). For a private repository that takes a copy of it; for a
   public one it does not. The joiner shares a project only with `/share` or `elu share`,
-  `/share off` keeps one off every board, the Kanban tab says when a project's Tasks go out
-  through someone else's share, and `elu peers` shows each member's fingerprint.
+  `/share off` keeps one off every board, and `elu peers` shows each member's fingerprint.
+  The titles and columns of the joiner's sessions in a repository the other side proves it
+  has go to them too (see Sessions on the Kanban).
 
 ## Your other computers
 
