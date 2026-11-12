@@ -176,7 +176,7 @@ test('a Claude turn that prints nothing is stopped by its quiet limit in one lin
   await until(() => request(p.root, sent.id)?.state === 'done', 'the stopped turn', 20000);
   const done = request(p.root, sent.id), id = done.taskId;
   assert.equal(done.attempts ?? 0, 0, 'not retried');
-  assert.equal(task(p.repo, id).error.message, 'Stopped after 2 seconds with no output. Your changes are kept. Reply to carry on.');
+  assert.equal(task(p.repo, id).error.message, 'Stopped after 2 seconds with no output. Reply to carry on.', 'an answer turn reads only, so it names no changes');
   assert.equal(task(p.repo, id).messages.filter(row => row.text === 'Hang without output').length, 1);
 });
 
@@ -190,7 +190,7 @@ test('a headless Antigravity turn, which prints only at the end, is not stopped 
   const done = request(p.root, sent.id);
   assert.ok(Date.now() - started >= 4000, 'ran to the cap: neither a quiet limit nor the stall time stopped it');
   assert.equal(done.attempts ?? 0, 0, 'not retried');
-  assert.equal(task(p.repo, done.taskId).error.message, 'Stopped after 4 seconds, the most one turn may run. Your changes are kept. Reply to carry on.');
+  assert.equal(task(p.repo, done.taskId).error.message, 'Stopped after 4 seconds, the most one turn may run. Reply to carry on.');
 });
 
 test('a request cancelled before dispatch is never started or revived', async t => {

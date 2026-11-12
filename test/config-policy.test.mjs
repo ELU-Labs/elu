@@ -71,7 +71,7 @@ test('YAML rejects aliases, duplicate keys, executable tags, and malformed inden
   assert.equal({}.polluted, undefined);
 });
 
-test('timeoutSeconds is how long a turn may print nothing: the old 900 and the new 600 are the default, the cap is two hours', () => {
+test('timeoutSeconds is how long a turn may print nothing: the 900 a config is written with and 600 are the default, the cap is two hours', () => {
   const lead = timeoutSeconds => ({ ...defaultConfig().roles.lead, timeoutSeconds });
   assert.equal(defaultConfig().roles.lead.timeoutSeconds, 900, 'a shared config keeps the 15 minutes an older ELU Code reads it as');
   for (const seconds of [1, 600, 900, 3600, 7200]) assert.doesNotThrow(() => validateConfig({ ...defaultConfig(), roles: { lead: lead(seconds) } }), String(seconds));
