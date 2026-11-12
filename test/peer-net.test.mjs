@@ -1025,7 +1025,7 @@ test('a question for a bot is taken only when that bot is shared, waits for the 
     assert.deepEqual(mine(forBot), ['replied', 'reviewer']); assert.deepEqual(mine(plain), ['replied', null]);
     // A question the owner works on themselves is their own session: its request names no bot.
     const worked = send({ bot: 'reviewer' }); acceptIncoming(ctx, worked.id, { how: 'work', permissions: 'ask' });
-    assert.deepEqual(origin(worked), { kind: 'handoff', peer: ana.key, name: 'ana', a2aTaskId: worked.id, threadId: worked.contextId, hop: 1 });
+    assert.deepEqual(origin(worked), { kind: 'handoff', peer: ana.key, name: 'ana', a2aTaskId: worked.id, threadId: worked.contextId, hop: 1, teams: [crew.teamId] });
     // A bot taken back, and a bots file that cannot be read, share nothing from then on.
     const declined = () => { const task = send({ bot: 'reviewer' }); return [task.status.state, reason(task)]; };
     saveBot({ name: 'reviewer', instructions: 'Review the diff.' });
