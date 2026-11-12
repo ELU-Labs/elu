@@ -13,7 +13,8 @@ From your home folder, not inside a project you do not trust:
 npx -y @elu-labs/elu
 ```
 
-This opens ELU Code and installs the `elu` command; next time you type `elu`.
+This opens ELU Code and installs the `elu` command; next time you type `elu`. To install
+a given version, name it: `npx -y @elu-labs/elu@0.1.12`.
 
 You need macOS or Linux, Node 22 or newer, Git, Claude Code signed in, and Codex installed
 (no sign-in needed; its sandbox runs your project's checks):
@@ -100,6 +101,7 @@ You can send a message at any time. One sent while the session is working waits 
 | `/schedule in 1h check the build` | Starts a session later or on a schedule: `/schedule [when] [message]`. `/schedule ` lists times such as `in 5m`, `in 1h` and `daily 9:00`. Each run is a new session with the model, mode and bots of the form (a bot with its own schedule is left out); it does not see the chat it was made in |
 | `/budget 5` | Limits this session to 5 dollars; `/budget off` removes the limit |
 | `! git status` | Runs a shell command. In an open session the model gets the command and its output with your next message |
+| `/update` | Says how to update: `/quit`, then `elu update` |
 | `/quit` | Closes ELU Code. Sessions that are running or queued go on in the background; `elu conductor stop` stops them |
 
 A schedule also runs while ELU Code is closed, through a login item, once ELU Code is
@@ -287,7 +289,21 @@ It shows in Sessions marked "on devbox", live, and its approvals wait on both ma
 your own session there, so your rules apply, and `a` on its approval, from either machine,
 keeps the rule on the devbox, where it runs.
 Sessions also lists every other session on the devbox in the same repository under "On devbox", and Projects lists its other projects as "<project> on devbox".
+A message you type to a devbox session that names files or folders on the laptop asks
+"Send 14 files (2.1 MB) from this computer with this message?": y sends them along, n sends
+the text alone. `/send PATH...` sends files without a message. They land in that session's
+inbox on the devbox, which it may read in every mode, and each path in your message points
+there. A Claude Code session of yours can list your sessions on your other computers and send
+them files itself; in Ask for approval you allow each send.
 `/mine` lists your computers and `/mine remove @devbox` ends it.
+
+Signed in to GitHub with `gh` as the same account on both, your laptop and devbox need none
+of that: once they are on a team together they pair by themselves, and say
+"@devbox is yours: both computers are signed in to GitHub as <you>." To do this, each one keeps
+its public peer key and box name in one secret gist of that account ("ELU Code computers"),
+written and read only through `gh`; nothing else goes to GitHub. Anyone signed in to that
+GitHub account counts as you. A computer you `/mine remove` stays removed until you `/mine` it
+again. `/mine auto off` (or `ELU_NO_GITHUB_PAIRING=1`) turns this off.
 [SECURITY.md](SECURITY.md#your-other-computers) says what that allows.
 
 In a channel, `/invite @kim` adds a teammate you already have. `/invite` alone makes a
@@ -337,11 +353,21 @@ your account suspended or terminated. ELU Code wraps `agy`, so read
 
 ## Update and remove
 
+Quit ELU Code with `/quit` in every terminal it is open in, then:
+
 ```sh
-npx -y @elu-labs/elu@latest
+elu update
 ```
 
-That installs the newest version where `elu` already is, and opens it.
+On 0.1.11 or older, which have no `elu update`, update once with
+`cd ~ && npx -y @elu-labs/elu@0.1.12`. Name the version: `@latest` can reuse an old copy
+npx kept.
+
+`elu update` installs the newest version where `elu` already is and restarts the peer
+daemon on it; sessions still running finish on the old version first. Once a day ELU Code
+checks for a newer version and says so in its status line; `ELU_NO_UPDATE_CHECK=1` turns
+that check off. Both ask the npm registry for the latest version number and send nothing
+else.
 
 To remove ELU Code, first delete your schedules in the app (Sessions tab, under Scheduled:
 `x` on each one), so they no longer keep the Mac awake, and quit it with `/quit`.

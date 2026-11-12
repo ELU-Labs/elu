@@ -120,6 +120,14 @@ made a team cannot leave it, so their machine stays reachable while they keep th
 it too, but only until ELU Code next opens or an `elu` peer command runs while the machine
 is still on a team.
 
+## Update check
+
+Once a day, as the app opens, ELU Code asks `https://registry.npmjs.org/@elu-labs/elu/latest`
+for the latest version number, in the background, and keeps the answer and the time in its
+state folder. `elu update` asks the same address. Neither sends anything about you or your
+projects. `ELU_NO_UPDATE_CHECK=1` turns the daily check off. `elu update` installs with
+`npm install --global --ignore-scripts`, by name and version, where `elu` already is.
+
 ## What teammates can do here
 
 Each team has one setting on your machine, asked by `/join` and by your first `/invite` for
@@ -301,6 +309,13 @@ limits teammates get. Treat it like a login to this machine.
 - Joining with such a code marks nothing on the joining machine until the person there says
   yes ("Is <name>'s computer yours too?", or `elu join CODE --mine`). A teammate who sends you
   one cannot make their computer yours: say No.
+- Two machines on a team together that are both signed in to GitHub (with `gh`) as the same
+  account mark each other by themselves. Each keeps its public peer key and box name in one
+  secret gist of that account; only `gh` talks to GitHub, and the token is never read. Anyone
+  signed in to that GitHub account counts as you, so sign in to it only on your own machines,
+  or turn this off with `/mine auto off` or `ELU_NO_GITHUB_PAIRING=1`. A teammate signed in as
+  someone else cannot write to your gist. A machine you `/mine remove` is not paired by GitHub
+  again until you mark it yourself.
 - An approval waits on both machines. The first answer, from either one, is the one that counts.
 - A session your other computer starts is your own, not a teammate's: your rules (`a`,
   `/permissions rules`) and the defaults answer for it, it may run in your home folder as your

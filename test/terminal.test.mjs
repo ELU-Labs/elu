@@ -10,6 +10,7 @@ import { ProjectController, projectSnapshot, dashboardSnapshot, claimView, regis
 import { LIMIT } from '../lib/project-settings.mjs';
 import { answerTrust, pendingTrust, trustedText, unusedTrust } from '../lib/project-trust.mjs';
 import { launchTerminal, geometry, plain, foldersNamed } from '../lib/terminal.mjs';
+import { WHEEL_FRAME_MS } from '../lib/wheel.mjs';
 import { projectFolder, saveRequest, pendingRequests, updateRequest } from '../lib/workspace.mjs';
 import { displayText } from '../lib/terminal-visuals.mjs';
 import { vendorText } from '../lib/terminal-commands.mjs';
@@ -81,7 +82,7 @@ async function view(t, options = {}) {
   // Each test runs its own conductor in this process, as the background one would.
   const owned = resources(t);
   if (!owned.conductor) { const conductor = new Conductor({ tickMs: 20 }).start(); owned.conductor = conductor; owned.views.push(() => conductor.stop()); }
-  const finished = launchTerminal({ usage: fakeUsage(t), ...options, input, output, refreshMs: 30, startConductor: () => false, onRender: value => { rendered = value; } });
+  const finished = launchTerminal({ usage: fakeUsage(t), ...options, input, output, refreshMs: 30, startConductor: () => false, onRender: value => { rendered = value; options.onRender?.(value); } });
   finished.catch(() => {});
   await until(() => rendered, 'first render');
   const state = { input, output, finished, get current() { return rendered; }, get raw() { return raw; }, get events() { return events; }, frame() { return rendered.screen.screenshot(0, output.columns, 0, output.rows); } };
@@ -472,18 +473,58 @@ test('a click on a Projects row behind a project\'s settings closes the dialog a
   v.input.write('\x1b'); await until(() => !modal(v, 'Project Shop') && v.current.screen.focused === list, 'Esc closes it');
 });
 
-test('the wheel moves the Projects list one row a step, and a trackpad burst one row', async t => {
+test('the wheel moves the Projects list one row a step, and every step of a trackpad burst', async t => {
   const one = setup(t); registerProject(one.repo);
   for (const name of ['Shop', 'Docs', 'Site']) nameProject(repository(project({ after: close => resources(t).files.push(close) }).root), name);
   const v = await view(t, { dashboard: true }), list = v.current.panels.projectsList;
   await send(v, '/projects'); await until(() => v.current.view === 'projects' && list.items.length === 4, 'four project rows');
   list.focus(); list.select(0); v.current.screen.render(); await pause(60);
   wheel(v, list.items[0]); await until(() => list.selected === 1, 'one step, one row'); await pause(60);
-  // Six steps in one read, as a trackpad sends them: one row, not twelve.
+  // Two steps in one read, as a trackpad sends them: two rows, not one and not four.
+  v.input.write(`\x1b[<65;${list.aleft + 2};${list.atop + 1}M`.repeat(2)); await pause();
+  assert.equal(list.selected, 3, 'a burst moves a row a step');
   v.input.write(`\x1b[<65;${list.aleft + 2};${list.atop + 1}M`.repeat(6)); await pause();
-  assert.equal(list.selected, 2, 'a burst moves one row');
-  v.input.write(`\x1b[<64;${list.aleft + 2};${list.atop + 1}M`); await until(() => list.selected === 1, 'up a row at once');
+  assert.equal(list.selected, 3, 'and stops at the last row');
+  v.input.write(`\x1b[<64;${list.aleft + 2};${list.atop + 1}M`); await until(() => list.selected === 2, 'up a row at once');
   assert.equal(v.current.view, 'projects'); assert.equal(modal(v, 'Project sample app'), undefined, 'the wheel opens nothing');
+});
+
+// Counts the screen's renders until the returned function is called, which says how many there were.
+function countRenders(v) {
+  const screen = v.current.screen, render = screen.render; let renders = 0;
+  screen.render = function (...args) { renders++; return render.apply(this, args); };
+  return () => { screen.render = render; return renders; };
+}
+
+test('a trackpad stroke on the Sessions list moves a row a step and draws the app at most once a frame', { timeout: 30000 }, async t => {
+  const p = setup(t), at = new Date(Date.now() - 60000).toISOString(), result = { outcome: 'done', intent: 'answer', summary: 'Answered.', question: null, choices: [], comments: [], responses: [] };
+  for (let id = 1; id <= 24; id++) saveTask(p.repo, { id: String(id), kind: 'conversation', goal: `Cart question ${id}`, state: 'answered', worktree: p.root, branch: null, base: null, createdAt: at, runs: [], reviews: [], responses: [], sessions: {}, result, messages: [{ at, text: `Cart question ${id}` }] });
+  let draws = 0; const v = await view(t, { repo: p.repo, onRender: () => { draws++; } }), board = v.current.panels.board;
+  await selectRow(v, /Cart question \d+/); await pause(60);
+  const start = board.selected, steps = 20, renders = countRenders(v), began = Date.now(); draws = 0;
+  // Twenty reports 5 ms apart, each its own read, as Ghostty sends a stroke of the fingers.
+  await new Promise(resolve => { for (let n = 0; n < steps; n++) setTimeout(() => { wheel(v, board, 1, 1); if (n === steps - 1) resolve(); }, 5 * n); });
+  await pause(60);
+  const drawn = draws, rendered = renders(), elapsed = Date.now() - began;
+  assert.equal(board.selected, start + steps, 'a row a step, none dropped');
+  // The app draws at most once a frame, besides its 30 ms refresh here, and the wheel adds no render of its own.
+  assert.ok(drawn < steps && drawn <= Math.ceil(elapsed / WHEEL_FRAME_MS) + Math.ceil(elapsed / 30) + 2, `fewer draws of the app than steps, at most one a frame (${drawn} in ${elapsed} ms)`);
+  assert.ok(rendered <= drawn, `every render is one of the app's draws (${rendered} renders, ${drawn} draws)`);
+  // The last draw shows the row the wheel stopped on: the bar is on it and its session is beside the list.
+  const row = rows(v)[board.selected], id = /Cart question (\d+)/.exec(row)?.[1];
+  assert.match(row, /^▌/); assert.ok(id); assert.equal(v.current.session, id);
+});
+
+test('the wheel on a dialog\'s list moves a row a step and draws once a frame, not once a step', { timeout: 30000 }, async t => {
+  const p = setup(t), v = await view(t, { repo: p.repo, loginItem: { install: () => ({ installed: true }), uninstall: () => ({ removed: true }) } });
+  await send(v, '/schedule'); await until(() => modal(v, 'When') && dialogRows(v, 'When').length === 8, 'the list of times');
+  const list = dialogList(v, 'When'); assert.equal(list.selected, 0); await pause(60);
+  // Seven steps in one read, as a trackpad sends them.
+  const renders = countRenders(v);
+  v.input.write(`\x1b[<65;${list.aleft + 2};${list.atop + 1}M`.repeat(7)); await pause(60);
+  const rendered = renders();
+  assert.equal(list.selected, 7, 'a row a step'); assert.ok(rendered < 7, `fewer draws than steps (${rendered})`);
+  assert.ok(modal(v, 'When'), 'the wheel chooses nothing');
 });
 
 test('a click on another tab while a dialog is open does not switch the view', async t => {
@@ -1970,7 +2011,7 @@ test('a message sent after its session started and before the screen drew it wai
   assert.equal(pendingRequests(p.root).find(row => row.goal === 'Tidy the coupon module')?.state, 'running', 'its request is not cancelled');
   conductor.busy = false;
   await until(() => tasks().find(task => task.id === second)?.state === 'stopped', 'stopped');
-  await until(() => /Stopped by the owner\./.test(status()), 'and the line then says how it ended');
+  await until(() => /You stopped it\. Type continue to carry on\./.test(status().replace(/\s+/g, ' ')), 'and the line then says how it ended, and what to do');
   assert.equal(tasks().find(task => task.id === id).state, 'running', 'the first session works on');
 });
 
@@ -2006,7 +2047,7 @@ test('/stop in an idle session whose next turn the conductor is starting stops t
   const conductor = resources(t).conductor, tasks = () => projectSnapshot(p.repo).tasks, row = goal => pendingRequests(p.root).find(value => value.goal === goal);
   await send(v, 'Keep working on the board'); await until(() => tasks()[0]?.state === 'running' && /is working/.test(panels.chat.getText()), 'the session works');
   await send(v, '/stop'); await until(() => tasks()[0].state === 'stopped' && row('Keep working on the board')?.state === 'done', 'the session is idle');
-  await until(() => /Stopped by the owner\./.test(status()), 'the screen says how it ended');
+  await until(() => /You stopped it\..*Type continue to carry on\./.test(status()), 'the screen says how it ended, and what to do');
   conductor.busy = true;
   await send(v, 'Now tidy the coupon module'); await until(() => row('Now tidy the coupon module'), 'the next message saved');
   const next = row('Now tidy the coupon module'); assert.equal(next.continuationTaskId, tasks()[0].id, 'it is for that session');
@@ -2375,6 +2416,31 @@ test('a coloured line under the chat that would fill the pane to its last column
   assert.equal(panels.chat._clines.length, panels.chat.getContent().split('\n').length, 'no row was wrapped again');
 });
 
+test("a session that stopped says why and the one thing to do under its last message, in the status row and on its row: the owner's 15-minute stop on a Full session with an approved Task says to type continue", { timeout: 30000 }, async t => {
+  const p = setup(t); registerProject(p.repo);
+  const at = new Date().toISOString(), log = path.join(p.parent, 'lead.log');
+  // His session as 0.1.9 kept it: Full access, an approved Task with 2 of 10 subtasks done, and the wall clock's stop.
+  liveTask(p.root, { id: '4', goal: 'Fix coupons', state: 'blocked', activeRole: null });
+  saveTask(p.repo, { ...readTask(p.repo, '4'), permissions: 'full', runs: [{ role: 'lead', vendor: 'claude', logFile: log, code: null, at }], messages: [{ at, text: 'Fix coupons' }], error: { message: 'The model could not finish.', cause: 'unknown', logFile: log, timedOut: true, outputLimit: false } });
+  const plan = { title: 'Fix coupons', description: 'Trim and uppercase every code.', goal: 'Codes compare equal.', objectives: ['Codes are trimmed', 'Its test passes'], priority: 'high', severity: 'low' };
+  proposeTask(p.repo, '4', plan); approvePlan(p.repo, '4');
+  reportProgress(p.repo, '4', { subtasks: Array.from({ length: 10 }, (_, index) => ({ id: `s${index + 1}`, text: `Step ${index + 1}`, state: index < 2 ? 'done' : 'todo' })) });
+  // A session whose policy changed under it cannot go on: a new session is the one thing to do.
+  liveTask(p.root, { id: '5', goal: 'Rename the cart module', state: 'blocked', activeRole: null });
+  saveTask(p.repo, { ...readTask(p.repo, '5'), messages: [{ at, text: 'Rename the cart module' }], error: { message: 'The task policy changed. Start a new task.' } });
+  const v = await view(t, { repo: p.repo }), panels = v.current.panels;
+  await sized(v, 140, 32);
+  const chat = () => panels.chat.getText().replace(/\s+/g, ' '), status = () => panels.status.getText().replace(/\s+/g, ' ').trim();
+  await selectRow(v, /Fix coupons/);
+  await until(() => chat().includes('Stopped before it finished. Your changes are kept. Type continue to carry on.'), 'the line under his last message');
+  assert.doesNotMatch(chat(), /The model could not finish/, 'the old words are not shown');
+  await until(() => status().includes('blocked · Type continue to carry on.'), 'the status row says the same action');
+  assert.ok(rows(v).some(row => /Fix coupons · type continue/.test(row)), `its row says it too: ${rows(v).join(' | ')}`);
+  await selectRow(v, /Rename the cart/);
+  await until(() => chat().includes('The task policy changed. Start a new session with /new.'), 'why, and a new session');
+  await until(() => status().includes('blocked · Start a new session with /new.'), 'the status row');
+});
+
 // A peer daemon stand-in for the owner's decisions: what the TUI sent, who is trusted, and
 // what the daemon answers (results[type](command) is the awaitCommand result).
 const KEYS = { me: 'a'.repeat(64), sara: 'b'.repeat(64), li: 'c'.repeat(64) };
@@ -2603,6 +2669,8 @@ test('a saved request whose mode was picked keeps it in any window, sent again o
   await send(v, 'Add a retry budget, with jitter');
   await until(() => started('Add a retry budget, with jitter'), 'session');
   assert.equal(started('Add a retry budget, with jitter').permissions, 'full');
+  // Its turn ends first: the line it leaves would otherwise take the place of the retry's.
+  await until(() => /Opus answered/.test(status()), 'first turn done');
   await selectRow(v, /Rename billing/); v.input.write('r');
   await until(() => /Queued again\./.test(status()) && !/the default now/.test(status()), 'retried as it was');
   await until(() => started('Rename billing'), 'second session');
@@ -4111,4 +4179,21 @@ test('in the list a lone y or n answers what the selected session waits on and i
   await send(v, 'n');
   await until(() => sent('n'), 'n goes to the session as a reply');
   assert.doesNotMatch(status(), /y and n answer/);
+});
+
+test('a newer version is named in the status line as the app opens, and /update says how to update', async t => {
+  const p = setup(t); registerProject(p.repo);
+  let asked = 0;
+  const v = await view(t, { repo: p.repo, updateCheck: async () => { asked++; return 'ELU Code 9.9.9 is out. /quit, then elu update.'; } }), status = () => v.current.panels.status.getText();
+  await until(() => /ELU Code 9\.9\.9 is out\. \/quit, then elu update\./.test(status()), 'the new-version line');
+  assert.equal(asked, 1);
+  await send(v, '/update'); await until(() => /To update, \/quit, then run elu update\./.test(status()), 'how to update');
+});
+
+test('an update check that fails says nothing and the app opens all the same', async t => {
+  const p = setup(t); registerProject(p.repo);
+  let asked = 0;
+  const v = await view(t, { repo: p.repo, updateCheck: async () => { asked++; throw new Error('offline'); } });
+  await until(() => asked === 1, 'the check'); await new Promise(resolve => setTimeout(resolve, 200));
+  assert.doesNotMatch(v.current.panels.status.getText(), /is out|offline/);
 });

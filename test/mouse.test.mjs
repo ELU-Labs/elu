@@ -8,8 +8,6 @@ import { launchTerminal } from '../lib/terminal.mjs';
 import { layout, position, indexAt, editKey } from '../lib/editor.mjs';
 import { spans, spanText, wordSpan, systemClipboard, reportSplitter } from '../lib/selection.mjs';
 import { pasteSplitter, pastedText } from '../lib/paste.mjs';
-import { steadyWheel, wheelGate, WHEEL_FRAME_MS } from '../lib/wheel.mjs';
-import blessed from 'blessed';
 import fs from 'node:fs';
 import os from 'node:os';
 
@@ -421,41 +419,4 @@ test('the app asks the terminal for SGR reports, which have no column limit', as
   const v = await view(t);
   await until(() => v.sent.includes('\x1b[?1006h'), 'SGR mode on');
   assert.ok(v.sent.indexOf('\x1b[?1006h') > v.sent.indexOf('\x1b[?1005h'), 'after the UTF-8 mode blessed picks');
-});
-
-test('a wheel step moves at once; more steps the same way within one frame count as one; a turn moves at once', () => {
-  let clock = 1000; const gate = wheelGate({ now: () => clock });
-  assert.equal(gate(1), true, 'the first step moves');
-  assert.equal(gate(1), false, 'a second step in the same frame does not'); clock += WHEEL_FRAME_MS - 1; assert.equal(gate(1), false);
-  assert.equal(gate(-1), true, 'a turn the other way moves at once');
-  clock += WHEEL_FRAME_MS; assert.equal(gate(-1), true, 'one frame later the next step moves');
-});
-
-// A real blessed screen on streams, with the clock of the wheel set by the test.
-function wheelScreen(t) {
-  const input = new PassThrough(), output = new PassThrough(); input.isTTY = output.isTTY = true; input.setRawMode = () => {}; output.columns = 80; output.rows = 24; output.resume();
-  const screen = blessed.screen({ input, output, terminal: 'xterm-256color', warnings: false });
-  t.after(() => { screen.destroy(); input.destroy(); output.destroy(); });
-  let clock = 0; return { screen, gate: () => wheelGate({ now: () => clock }), later: () => { clock += WHEEL_FRAME_MS; } };
-}
-
-test('one wheel step scrolls a text pane one line and moves a list one row, never half a screen', t => {
-  const { screen, gate, later } = wheelScreen(t);
-  const lines = Array.from({ length: 200 }, (_, n) => `line ${n}`).join('\n');
-  const pane = steadyWheel(blessed.box({ parent: screen, top: 0, left: 0, width: 40, height: 20, scrollable: true, alwaysScroll: true, mouse: true, content: lines }), null, gate());
-  screen.render();
-  pane.emit('wheeldown'); assert.equal(pane.childBase, 1, 'one line, where blessed scrolled ten');
-  for (let n = 0; n < 8; n++) pane.emit('wheeldown');
-  assert.equal(pane.childBase, 1, 'a trackpad burst within one frame is one step');
-  later(); pane.emit('wheeldown'); later(); pane.emit('wheeldown'); assert.equal(pane.childBase, 3);
-  pane.emit('wheelup'); assert.equal(pane.childBase, 2, 'back up a line at once');
-  const list = steadyWheel(blessed.list({ parent: screen, top: 0, left: 40, width: 30, height: 10, mouse: true, keys: true, items: Array.from({ length: 30 }, (_, n) => `row ${n}`) }), null, gate());
-  list.select(0); screen.render();
-  list.items[0].emit('wheeldown'); assert.equal(list.selected, 1, 'one row, where blessed moved two');
-  list.emit('wheeldown'); assert.equal(list.selected, 1, 'over the list itself too, and a burst is one step');
-  later(); list.emit('wheeldown'); assert.equal(list.selected, 2); assert.equal(list.childBase, 0, 'the rows did not jump half a screen');
-  later(); list.items[2].emit('wheelup'); later(); list.items[1].emit('wheelup'); later(); list.emit('wheelup'); assert.equal(list.selected, 0, 'and stops at the first row');
-  // A pane that draws its own rows is handed the step: the Changes view moves one row too.
-  const moved = [], changes = steadyWheel(blessed.box({ parent: screen, top: 12, left: 40, width: 30, height: 5 }), step => moved.push(step), gate());
-  changes.emit('wheeldown'); changes.emit('wheeldown'); later(); changes.emit('wheelup'); assert.deepEqual(moved, [1, -1]);
 });

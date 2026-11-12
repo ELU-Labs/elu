@@ -95,6 +95,8 @@ if(mode==='stall'&&edit){console.log(JSON.stringify({type:'assistant',message:{c
 if(mode==='question'&&!args.includes('--resume')&&!input.includes('Uppercase')){result.outcome='needs_input';result.question='Which format?';result.choices=['Uppercase','Lowercase'];}
 if((mode==='review-fix'||mode==='review-block')&&input.includes('Address the review')){result.responses=[{id:'R1',action:mode==='review-fix'?'fixed':'disputed',reason:mode==='review-fix'?'Handled the edge case.':'The finding still needs owner input.'}];}
 const mcpArg=args[args.indexOf('--mcp-config')+1];const servers=!args.includes('--safe-mode')&&mcpArg&&!mcpArg.startsWith('{')&&fs.existsSync(mcpArg)?JSON.parse(fs.readFileSync(mcpArg,'utf8')).mcpServers:{};const mcp=Object.keys(servers).map(name=>({name,status:'connected'}));
+// The approval relay's own arguments, one row a run that has it, for tests of what it was told (relays.jsonl beside calls.jsonl).
+if(cfg.calls&&servers['elu-code-approval'])fs.appendFileSync(path.join(path.dirname(cfg.calls),'relays.jsonl'),JSON.stringify(servers['elu-code-approval'].args)+'\n');
 const permissionMode=args.includes('--permission-mode')?args[args.indexOf('--permission-mode')+1]:'default';
 // permissionMode (fake.json): the mode this run says it really got, when that is not the one it was started with.
 console.log(JSON.stringify({type:'system',subtype:'init',session_id:session,model:reported,permissionMode:cfg.permissionMode??permissionMode,mcp_servers:mcp}));
