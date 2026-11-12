@@ -3571,3 +3571,65 @@ test('while the session works, its message that did not run says why, without ke
   assert.doesNotMatch(chat(), /r sends it again/);
   assert.equal(pendingRequests(p.root).length, 1, 'the message still waits');
 });
+
+test("a lone y or n taken as a key leaves nothing behind: not in the message box, not in the new session's draft", { timeout: 40000 }, async t => {
+  const p = setup(t), status = () => v.current.panels.status.getText();
+  const items = [ownerAsk()];
+  // A declined question leaves the list while the answer is still on its way, so the cursor moves to the session meanwhile.
+  const results = { discard: async command => { items.splice(items.findIndex(item => item.id === command.id), 1); await pause(400); return {}; } };
+  liveTask(p.root, { id: '4', goal: 'Release notes', state: 'answered' });
+  const peer = fakePeer({ items, results }), v = await view(t, { repo: p.repo, peer }), panels = v.current.panels;
+  await wide(v);
+  // Where n declines, the key bar does not also name it as new session.
+  await selectRow(v, /@ali question/);
+  await until(() => panels.keys.getText().trim() === 'y accept  n decline  enter read  c decline  tab next', 'the question row keys').catch(error => { throw new Error(`${error.message}: ${panels.keys.getText()}`); });
+  await send(v, 'n');
+  await until(() => peer.sent.some(c => c.type === 'discard' && c.id === 'in-ali') && /Declined @ali's message\./.test(status()), 'a lone n declines');
+  await until(() => !rows(v).some(row => /@ali question/.test(row)) && /Release notes/.test(cursor(v)), 'the question has left the list, and the cursor is on the session');
+  assert.equal(panels.ask.getValue(), '');
+  await selectRow(v, /\+ New session/);
+  assert.equal(panels.ask.getValue(), '', 'the new session has no draft');
+  // Typed for a new session, then sent on a question: the draft it was kept in goes with it.
+  items.push({ id: 'in-1', kind: 'incoming', peer: KEYS.sara, name: 'sara', project: null, text: 'Can you look at the flaky test?', at: ago(30), state: 'submitted', threadId: 'th-1', request: 'ask' });
+  await until(() => rows(v).some(row => /@sara question/.test(row)), "@sara's question is listed");
+  panels.ask.focus(); panels.ask.readInput(); await until(() => panels.ask.__listener, 'message box');
+  panels.ask.setValue('y'); await pause(100);
+  await selectRow(v, /@sara question/);
+  assert.equal(panels.ask.getValue(), 'y');
+  await send(v, 'y');
+  await until(() => peer.sent.some(c => c.type === 'approve' && c.id === 'in-1'), 'a lone y accepts');
+  assert.equal(panels.ask.getValue(), '');
+  await selectRow(v, /\+ New session/);
+  assert.equal(panels.ask.getValue(), '', 'the draft went with the y');
+  assert.equal(pendingRequests(p.root).length, 0, 'no session was started');
+});
+
+test('in the list a lone y or n answers what the selected session waits on and is never sent to it; once the session is opened it is a reply', { timeout: 40000 }, async t => {
+  const p = setup(t), began = ago(600), now = new Date().toISOString(), status = () => v.current.panels.status.getText();
+  const answer = id => { const file = path.join(approvalsDir(), `${id}.answer.json`); return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')).decision : null; };
+  const sent = text => pendingRequests(p.root).some(row => row.goal === text) || readTask(p.repo, '3').messages.some(row => row.text === text);
+  liveTask(p.root, { id: '3', goal: 'ELU Issues', state: 'ready' });
+  saveTask(p.repo, { ...readTask(p.repo, '3'), permissions: 'ask', state: 'running', activeRole: 'lead', activeSince: now, owner: { pid: process.pid, identity: processIdentity(process.pid) }, messages: [{ at: began, text: 'ELU Issues' }] });
+  const v = await view(t, { repo: p.repo }), panels = v.current.panels;
+  await wide(v);
+  // The cursor rests on the working session, which waits on nothing: n is refused, and nothing is sent.
+  await selectRow(v, /ELU Issues/);
+  await send(v, 'n');
+  await until(() => /› y and n answer the selected item\. Choose one in the list first\./.test(status()), 'refused').catch(error => { throw new Error(`${error.message}: ${status()} | ${JSON.stringify(pendingRequests(p.root).map(row => row.goal))}`); });
+  await pause(300);
+  assert.ok(!sent('n'), 'nothing was sent to the session');
+  assert.equal(panels.ask.getValue(), '');
+  // Once it waits on an approval, y on its row allows it.
+  requestApproval({ id: 'run-3-a', root: p.root, taskId: '3', role: 'lead', vendor: 'claude', tool: 'Bash', input: { command: 'grep -rn issue src' } });
+  await until(() => rows(v).some(row => /\? ELU Issues/.test(row)), 'the row waits');
+  await selectRow(v, /ELU Issues/);
+  await send(v, 'y');
+  await until(() => answer('run-3-a') === 'allow' && /› Allowed\./.test(status()), 'a lone y allows it');
+  assert.ok(!sent('y'), 'nothing was sent to the session');
+  // Opened with Enter, the session's chat takes a lone n as the owner's reply.
+  await until(() => !rows(v).some(row => /\? ELU Issues/.test(row)), 'the row waits no more');
+  await openTask(v, /ELU Issues/);
+  await send(v, 'n');
+  await until(() => sent('n'), 'n goes to the session as a reply');
+  assert.doesNotMatch(status(), /y and n answer/);
+});
