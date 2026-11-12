@@ -83,7 +83,7 @@ test('a shell wrapper standing in for an absent Claude reads as not installed', 
 
 test('an untested Claude whose piped --help is cut short is still read in full', t => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'elu-code-detect-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  const flags = '--print --add-dir --restricted --safe-mode --setting-sources --settings --strict-mcp-config --mcp-config --no-chrome --permission-mode --permission-prompts --tools --allowedTools --disallowedTools --output-format --json-schema --max-budget-usd --session-id --ignore-user-config --ignore-rules';
+  const flags = '--print --add-dir --restricted --safe-mode --setting-sources --settings --strict-mcp-config --mcp-config --no-chrome --permission-mode --permission-prompts --tools --allowedTools --disallowedTools --output-format --json-schema --max-budget-usd --session-id --input-format --ignore-user-config --ignore-rules';
   // Like Claude Code 2.1.321: a pipe gets only the first 8190 bytes, so --verbose at the end is lost.
   fs.writeFileSync(path.join(dir, 'claude'), `#!${process.execPath}
 import fs from 'node:fs'; const args = process.argv.slice(2);

@@ -495,3 +495,68 @@ test('a rule kept once answers the next session; defaults never ask; the never l
   assert.deepEqual(mine.asked, []); assert.equal(mine.task.origin.mine, true);
   assert.deepEqual(mine.task.approvals.map(row => [row.decision, row.by, row.rule]), [['allow', 'default', 'git status'], ['allow', 'rule', 'npm test']]);
 });
+
+// The owner's bug: a sandboxed command in Ask for approval connected to a host, Claude Code
+// asked on its own output, its input was already closed, and the host was denied as "user
+// denied" though nobody was asked. Now the question reaches the owner and his answer reaches Claude.
+test('in Ask for approval a host a sandboxed command connects to is asked once, the answer reaches Claude, and the session keeps it', { timeout: 60000 }, async t => {
+  const f = setup(t, 'answer'), root = f.controller.repo.project ?? f.controller.repo.root;
+  const connecting = hosts => fakeClis(f.parent, { mode: 'answer', network: hosts });
+  const connections = () => { const file = path.join(f.fake.dir, 'network.jsonl'); const rows = fs.existsSync(file) ? fs.readFileSync(file, 'utf8').trim().split('\n').map(JSON.parse) : []; fs.rmSync(file, { force: true }); return rows; };
+  const settle = async (run, answer) => {
+    const asked = []; let done = false; const finished = run.finished.finally(() => { done = true; });
+    while (!done) { for (const row of pendingApprovals({ root })) { asked.push(row); answerApproval(row.id, answer(row)); } await sleep(25); }
+    return { task: await finished, asked };
+  };
+  connecting(['elu.dev', 'elu.dev']);
+  const first = await settle(f.controller.ask('Check the MCP endpoint', null, { permissions: 'ask' }), () => 'allow');
+  assert.equal(first.task.state, 'answered', JSON.stringify(first.task.error));
+  assert.deepEqual(first.asked.map(row => [row.tool, row.summary, row.input]), [['SandboxNetworkAccess', 'Network access to elu.dev', { host: 'elu.dev' }]]);
+  assert.deepEqual(connections(), [{ host: 'elu.dev', allowed: true, asked: true, streaming: true }, { host: 'elu.dev', allowed: true, asked: false, streaming: true }]);
+  assert.deepEqual(first.task.approvals.map(row => [row.tool, row.summary, row.decision, row.host]), [['SandboxNetworkAccess', 'Network access to elu.dev', 'allow', 'elu.dev']]);
+  let run = f.leads().at(-1);
+  assert.equal(valueOf(run.args, '--input-format'), 'stream-json'); assert.deepEqual(settingsOf(run.args).sandbox.network.allowedDomains, []);
+  assert.match(f.inputs().at(-1).input, /Check the MCP endpoint/);
+  // The next turn of the same session starts with the host allowed: nothing is asked.
+  const second = await settle(f.controller.ask('Again', first.task.id), () => 'deny');
+  assert.equal(second.task.state, 'answered'); assert.deepEqual(second.asked, []);
+  assert.deepEqual(settingsOf(f.leads().at(-1).args).sandbox.network.allowedDomains, ['elu.dev']);
+  assert.deepEqual(connections(), [{ host: 'elu.dev', allowed: true, asked: false, streaming: true }, { host: 'elu.dev', allowed: true, asked: false, streaming: true }]);
+  // A denied host fails the command, and only the answer the owner gave is kept.
+  connecting(['example.com']);
+  const third = await settle(f.controller.ask('Fetch the example', null, { permissions: 'ask' }), () => 'deny');
+  assert.deepEqual(third.asked.map(row => row.summary), ['Network access to example.com']);
+  assert.deepEqual(connections(), [{ host: 'example.com', allowed: false, asked: true, streaming: true }]);
+  assert.deepEqual(third.task.approvals.map(row => [row.decision, row.host]), [['deny', 'example.com']]);
+  // The owner keeps the host for this project: the next session is answered by the rule.
+  const fourth = await settle(f.controller.ask('Fetch the example again', null, { permissions: 'ask' }), row => {
+    const offered = ruleFor(row.tool, row.input, { project: row.root, cwd: row.cwd, access: row.access, sandboxed: row.sandboxed });
+    assert.equal(offered.summary, 'Allow network access to example.com'); assert.equal(offered.line, 'Allow network access to example.com without asking.');
+    saveRule(offered.rule, { scope: 'project', project: row.root }); return 'allow';
+  });
+  assert.equal(fourth.asked.length, 1); connections();
+  const fifth = await settle(f.controller.ask('And once more', null, { permissions: 'ask' }), () => 'deny');
+  assert.deepEqual(fifth.asked, []); assert.deepEqual(connections(), [{ host: 'example.com', allowed: true, asked: true, streaming: true }]);
+  assert.deepEqual(fifth.task.approvals.map(row => [row.decision, row.by, row.rule, row.host]), [['allow', 'rule', 'network access to example.com', 'example.com']]);
+  // A host that takes pushes never becomes a rule, and is asked again in the next turn.
+  assert.equal(ruleFor('SandboxNetworkAccess', { host: 'github.com' }).refused, 'This host publishes, pushes or deploys, so it is asked each time.');
+  connecting(['github.com']);
+  const push = await settle(f.controller.ask('Push it', null, { permissions: 'ask' }), () => 'allow');
+  const pushAgain = await settle(f.controller.ask('Push it again', push.task.id), () => 'deny');
+  assert.deepEqual([push.asked.length, pushAgain.asked.length], [1, 1]); assert.deepEqual(settingsOf(f.leads().at(-1).args).sandbox.network.allowedDomains, []);
+  assert.deepEqual(connections(), [{ host: 'github.com', allowed: true, asked: true, streaming: true }, { host: 'github.com', allowed: false, asked: true, streaming: true }]);
+  // Approve for me decides without the owner, and Full access has no sandbox: neither streams its input.
+  connecting([]);
+  await f.controller.ask('Look', null, { permissions: 'auto' }).finished;
+  assert.equal(valueOf(f.leads().at(-1).args, '--input-format'), undefined);
+  await f.controller.ask('Look', null, { permissions: 'full' }).finished;
+  assert.equal(valueOf(f.leads().at(-1).args, '--input-format'), undefined);
+});
+
+// Before: the prompt went in as text, so the input was closed and the host was denied unasked.
+test('a run whose prompt goes in as text gets every host it asks about denied without anyone being asked', async t => {
+  const f = setup(t, 'answer'); fakeClis(f.parent, { mode: 'answer', network: ['elu.dev'] });
+  await f.controller.ask('Look', null, { permissions: 'auto' }).finished;
+  const rows = fs.readFileSync(path.join(f.fake.dir, 'network.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+  assert.deepEqual(rows, [{ host: 'elu.dev', allowed: false, asked: false, streaming: false }]);
+});

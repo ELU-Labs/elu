@@ -148,8 +148,9 @@ What a sandboxed command can read that way:
 - The Git settings file: remote URLs, and a token if one is written into a URL.
 - The stash and the reflog.
 
-The sandbox has no network, so a sandboxed command cannot send any of it anywhere.
-What it prints goes to the model, as all output does, and into the session's record.
+The sandbox has no network of its own: a sandboxed command reaches only a host you allowed
+when asked (see Network below), so it cannot send any of it anywhere else. What it prints
+goes to the model, as all output does, and into the session's record.
 ELU Code's own records in the folder (`.git/elu-code`) stay closed to commands and
 to the file tools. A teammate's question reads none of the Git folder.
 
@@ -169,6 +170,23 @@ The keys are `y` allow and `n` deny. Where the session can be given Full access
 there is a third, `f`: it asks what `/permissions full` asks, then allows the
 action and switches the session to Full access, so that session stops asking.
 It is not offered for a bot's scheduled turn or a turn that runs read only.
+
+### Network
+
+In Ask for approval, a sandboxed command that connects to a host (`curl https://elu.dev`,
+`npm view`) asks you under Needs you as "Network access to elu.dev". Claude Code asks this
+on its own output, not through the relay, so ELU Code starts it with the prompt as a
+stream-json message (`--input-format stream-json`), keeps its input open and writes your
+answer back. Allow lets that host through for the rest of the session: Claude Code keeps it
+for the run, and later turns of the session start with it in the sandbox's allowed hosts.
+Deny, or no answer, fails the connection. Before, the input was closed once the prompt was
+read, and Claude Code denied every host without asking and reported it as "user denied".
+
+`a` keeps the host as a rule. Hosts that publish packages, take pushes or deploy
+(`registry.npmjs.org`, `pypi.org`, `github.com`, `ghcr.io`, Docker Hub, and the deploy APIs
+of Vercel, Netlify, Fly, Firebase, Cloud Run, Heroku and Cloudflare) are never kept as a rule,
+and one you allowed is asked again in the session's next turn. In Approve for me Claude
+Code's own classifier decides, and Full access has no sandbox.
 
 ### Allowed without asking
 
@@ -197,7 +215,8 @@ projects**. A rule is kept narrow:
 - An edit becomes edits in the session's own workspace, in turns that edit (a Task you
   approved). Outside the project it is that one file. `.git`, `.elu-code` and secrets are
   asked each time.
-- A web fetch becomes that host.
+- A web fetch becomes that host, and so does a sandboxed command's network access, except
+  the hosts that publish, take pushes or deploy (see Network above).
 
 A path is judged where it really leads: a link in the project to a secret, to your home or
 to another folder is not a path in the project, for a rule or a default.

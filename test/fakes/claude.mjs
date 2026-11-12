@@ -2,7 +2,7 @@
 // copies it to a bin folder (adding the node shebang) next to fake.json, which holds the
 // test's mode and the files it records to. Without fake.json it behaves as a signed-in
 // 2.1.319 that records nothing.
-import fs from 'node:fs'; import path from 'node:path';
+import fs from 'node:fs'; import path from 'node:path'; import readline from 'node:readline';
 const vendor=path.basename(process.argv[1]); const args=process.argv.slice(2);
 let cfg={}; try{cfg=JSON.parse(fs.readFileSync(path.join(path.dirname(process.argv[1]),'fake.json'),'utf8'));}catch{}
 const mode=cfg.mode??'normal';
@@ -10,9 +10,16 @@ if(cfg.calls)fs.appendFileSync(cfg.calls, JSON.stringify({vendor,args,...(cfg.no
 if(args.includes('--version')){console.log('2.1.319');process.exit(0);}
 // The --model entry of the real --help, which is where the aliases a bot's Model step offers come from.
 const MODEL_HELP="  --model <model>                       Model for the current session. Provide\n                                        an alias for the latest model (e.g.\n                                        'fable', 'opus', or 'sonnet') or a\n                                        model's full name.\n  -n, --name <name>                     Set a display name for this session";
-if(args.includes('--help')){console.log('--print --add-dir --restricted --safe-mode --setting-sources --settings --strict-mcp-config --mcp-config --no-chrome --permission-mode --permission-prompts --tools --allowedTools --disallowedTools --output-format --verbose --json-schema --max-budget-usd --session-id --ignore-user-config --ignore-rules --json --sandbox --cd --output-schema --config');console.log(MODEL_HELP);process.exit(0);}
+if(args.includes('--help')){console.log('--print --add-dir --restricted --safe-mode --setting-sources --settings --strict-mcp-config --mcp-config --no-chrome --permission-mode --permission-prompts --tools --allowedTools --disallowedTools --output-format --verbose --json-schema --max-budget-usd --session-id --input-format --ignore-user-config --ignore-rules --json --sandbox --cd --output-schema --config');console.log(MODEL_HELP);process.exit(0);}
 if(args[0]==='auth'){console.log(JSON.stringify({loggedIn:mode!=='signed-out'}));process.exit(0);}
-let input=''; for await (const chunk of process.stdin) input+=chunk;
+// --input-format stream-json: the prompt is the first line, a user message, and the input stays
+// open for the answers to this run's control requests until the runner closes it.
+const streaming=args.includes('--input-format')&&args[args.indexOf('--input-format')+1]==='stream-json';
+const lines=[],waiters=[];let inputEnded=false;
+const nextLine=()=>lines.length?Promise.resolve(lines.shift()):inputEnded?Promise.resolve(null):new Promise(resolve=>waiters.push(resolve));
+let input='';
+if(streaming){const reader=readline.createInterface({input:process.stdin});reader.on('line',line=>{if(waiters.length)waiters.shift()(line);else lines.push(line);});reader.on('close',()=>{inputEnded=true;while(waiters.length)waiters.shift()(null);});const first=JSON.parse(await nextLine()??'{}');if(first.type!=='user'||typeof first.message?.content!=='string')throw new Error('The first stream-json line is not a user message.');input=first.message.content;}
+else for await (const chunk of process.stdin) input+=chunk;
 if(cfg.inputs)fs.appendFileSync(cfg.inputs, JSON.stringify({vendor,args,input})+'\n');
 const result={outcome:'done',summary:'Updated coupon normalization.',question:null,choices:[],comments:[],responses:[]};
 const schemaArg=args.indexOf('--json-schema');
@@ -77,6 +84,29 @@ if(Array.isArray(cfg.commands)&&promptTool){
   console.log(JSON.stringify({type:'assistant',message:{content:[{type:'tool_use',id,name:'Bash',input:{command,description:'Run it'}}]}}));
   console.log(JSON.stringify({type:'user',message:{content:[{type:'tool_result',tool_use_id:id,content:r.status===0?out:`Exit code ${r.status}\n${out}`,...(r.status===0?{}:{is_error:true})}]}}));});
 }
+// network (fake.json): hosts a sandboxed command of this turn connects to, in order. As in the real
+// CLI a host is let through when the settings list it in sandbox.network.allowedDomains or it was
+// allowed earlier in this run. Otherwise, in the default mode, Claude asks on its output with a
+// can_use_tool control request for SandboxNetworkAccess and reads the answer on its input; with
+// the prompt given as text that input is closed, so the host is denied without asking and the
+// command reports "user denied". Each connection is recorded in network.jsonl beside the fake.
+if(Array.isArray(cfg.network)){
+ const settingsArg=args.indexOf('--settings');const allowedDomains=settingsArg>=0?JSON.parse(args[settingsArg+1]).sandbox?.network?.allowedDomains??[]:[];
+ const allowedHere=new Set();let asked=0;
+ for(const [i,host] of cfg.network.entries()){
+  let allowed=permissionMode==='bypassPermissions'||allowedDomains.includes(host)||allowedHere.has(host),ask=false;
+  if(!allowed&&streaming&&!inputEnded&&permissionMode==='default'){
+   ask=true;const id=`req_fake_${++asked}`;
+   console.log(JSON.stringify({type:'control_request',request_id:id,request:{subtype:'can_use_tool',tool_name:'SandboxNetworkAccess',input:{host},permission_suggestions:[{type:'addRules',rules:[{toolName:'SandboxNetworkAccess',ruleContent:`domain:${host}`}],behavior:'allow',destination:'localSettings'}],description:`Allow network connection to ${host}?`,tool_use_id:`toolu_fake_net_${i+1}`}}));
+   for(;;){const line=await nextLine();if(line===null)break;let row;try{row=JSON.parse(line);}catch{continue;}if(row.type==='control_response'&&row.response?.request_id===id){allowed=row.response.subtype==='success'&&row.response.response?.behavior==='allow';break;}}
+   if(allowed)allowedHere.add(host);
+  }
+  const id=`toolu_fake_net_${i+1}`,command=`curl -sS https://${host}/`;
+  console.log(JSON.stringify({type:'assistant',message:{content:[{type:'tool_use',id,name:'Bash',input:{command,description:'Fetch it'}}]}}));
+  console.log(JSON.stringify({type:'user',message:{content:[{type:'tool_result',tool_use_id:id,content:allowed?'connected':`Exit code 56\ncurl: (56) CONNECT tunnel failed, response 403\n<sandbox_violations>\ndeny network-outbound ${host}:443 (user denied)\n</sandbox_violations>`,...(allowed?{}:{is_error:true})}]}}));
+  fs.appendFileSync(path.join(path.dirname(process.argv[1]),'network.jsonl'),JSON.stringify({host,allowed,asked:ask,streaming})+'\n');
+ }
+}
 if(mode==='relay'&&promptTool&&permissionMode!=='bypassPermissions'){
  const {spawn}=await import('node:child_process');const readline=await import('node:readline');
  const server=servers[promptTool.split('__')[1]];if(!server)throw new Error('The approval relay is not in --mcp-config.');
@@ -99,3 +129,5 @@ if(mode==='relay'&&promptTool&&permissionMode!=='bypassPermissions'){
  child.stdin.end();
 }
 console.log(JSON.stringify({type:'result',is_error:false,session_id:session,total_cost_usd:0,...(denials.length?{permission_denials:denials}:{}),structured_output:mode==='invalid'||badReply?{outcome:'nope'}:result}));
+// A stream-json run ends when its input does; one the runner never closes fails the test.
+if(streaming&&!inputEnded){const timer=setTimeout(()=>{console.error('The input was never closed after the result.');process.exit(3);},10000);while(await nextLine()!==null);clearTimeout(timer);}

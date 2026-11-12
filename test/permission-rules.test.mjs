@@ -100,6 +100,26 @@ test('an edit becomes edits in the workspace in an editing turn, or one exact fi
   assert.equal(allowedBy('Edit', { file_path: path.join(project, '.env') }, ctx), null);
 });
 
+test('network access to a host becomes that host; a registry, a code host or a deploy API never does', t => {
+  const { project, other } = home(t);
+  assert.deepEqual(actionOf('SandboxNetworkAccess', { host: 'ELU.dev.' }), { kind: 'network', host: 'elu.dev' });
+  for (const host of ['', 'a b', 'elu.dev:443', 'https://elu.dev', '-x.dev', 'elu..dev/x', 42]) assert.equal(actionOf('SandboxNetworkAccess', { host }).kind, 'other', String(host));
+  assert.deepEqual(ruleFor('SandboxNetworkAccess', { host: 'elu.dev' }), { rule: { kind: 'network', host: 'elu.dev' }, line: 'Allow network access to elu.dev without asking.', summary: 'Allow network access to elu.dev' });
+  for (const host of ['registry.npmjs.org', 'github.com', 'api.github.com', 'pypi.org', 'registry-1.docker.io', 'api.vercel.com']) assert.match(ruleFor('SandboxNetworkAccess', { host }).refused, /publishes, pushes or deploys/, host);
+  assert.match(ruleFor('SandboxNetworkAccess', { host: 'a b' }).refused, /asked each time/);
+  saveRule({ kind: 'network', host: 'elu.dev' }, { scope: 'project', project });
+  const ctx = { project, cwd: project, access: 'read', saved: true };
+  assert.deepEqual(allowedBy('SandboxNetworkAccess', { host: 'elu.dev' }, ctx), { by: 'rule', text: 'network access to elu.dev' });
+  for (const host of ['api.elu.dev', 'elu.dev.attacker.test', 'xelu.dev']) assert.equal(allowedBy('SandboxNetworkAccess', { host }, ctx), null, host);
+  assert.equal(allowedBy('SandboxNetworkAccess', { host: 'elu.dev' }, { ...ctx, project: other, cwd: other }), null, 'only in its project');
+  assert.equal(allowedBy('SandboxNetworkAccess', { host: 'elu.dev' }, { ...ctx, saved: false }), null, 'never in a teammate\'s session');
+  // A registry written into the file by hand is dropped when it is read.
+  const file = path.join(process.env.XDG_CONFIG_HOME, 'elu-code', 'permission-rules.json');
+  const store = JSON.parse(fs.readFileSync(file, 'utf8')); store.rules.push({ kind: 'network', host: 'registry.npmjs.org', scope: 'all' }); fs.writeFileSync(file, JSON.stringify(store));
+  assert.deepEqual(readStore().rules.map(row => row.host), ['elu.dev']);
+  assert.equal(allowedBy('SandboxNetworkAccess', { host: 'registry.npmjs.org' }, ctx), null);
+});
+
 test('defaults are on from the first run, listed, and each can be turned off and on', t => {
   const { project } = home(t);
   const ctx = { project, cwd: project, saved: false, sandboxed: true };

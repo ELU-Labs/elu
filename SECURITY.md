@@ -32,9 +32,10 @@ It depends on the session's permission mode ([docs/permissions.md](docs/permissi
   have only read-only file tools, with no shell, workspace creation, or check execution.
 - **Ask for approval** and **Approve for me** give the session's model, and a bot that
   works in the session, a shell inside the vendor's own sandbox, with no network. In Ask
-  for approval an action outside it asks you where the vendor can ask during a turn
-  (Claude Code, and Antigravity and Grok Build once their one-time check has proven it);
-  on Codex, which cannot, it is refused and reported. In Approve for me a reviewer model
+  for approval Claude Code's sandbox reaches a host only once you allow it when asked, for
+  the rest of that session. An action outside the sandbox asks you where the vendor can ask
+  during a turn (Claude Code, and Antigravity and Grok Build once their one-time check has
+  proven it); on Codex, which cannot, it is refused and reported. In Approve for me a reviewer model
   decides instead of you. The sandbox differs by vendor: Antigravity in Ask for approval
   has none, so every command needs your approval and one you approve runs outside any
   sandbox, and Grok Build's sandbox blocks the network on Linux only. The vendor pages in
@@ -81,11 +82,11 @@ A sandboxed command reads the rest of the Git folder, so `git status`, `git diff
 history: every committed version of every file, including a file committed once and later
 removed, and committed files the sandbox hides by name in the worktree (`.env*`, `*.pem`,
 `.npmrc`). It can read the Git settings file, with its remote URLs and any token written
-into one, and the stash and the reflog. The sandbox has no network, so a sandboxed
-command cannot send what it reads anywhere; what it prints goes to the model, as all
-output does, and into the session's record. `git add`, `git commit` and anything else
-that writes in the folder stay refused. A teammate's question is given tracked files
-only: its commands read none of the folder.
+into one, and the stash and the reflog. The sandbox has no network beyond the hosts you
+allowed when asked, so a sandboxed command cannot send what it reads anywhere else; what
+it prints goes to the model, as all output does, and into the session's record. `git add`,
+`git commit` and anything else that writes in the folder stay refused. A teammate's
+question is given tracked files only: its commands read none of the folder.
 
 Vendor tool permissions restrict direct file tools. Claude Code's own sandbox fences only
 shell commands and is never required: where it cannot start, commands run outside it under

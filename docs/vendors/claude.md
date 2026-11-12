@@ -28,11 +28,12 @@ Code memory, when there is one.
 | `--permission-mode` | `default` | `auto` | `bypassPermissions` |
 | `--permission-prompts` / `--permission-prompt-tool` | `host` / `mcp__elu-code-approval__approve` | same | same |
 | `--restricted` / `--safe-mode` | no | no | no |
+| `--input-format` | `stream-json`: the prompt is one user message and the input stays open for the network questions | text | text |
 | `--tools` | `Read,Grep,Glob,Edit,Write,Bash,WebFetch,WebSearch` | same | same |
 | `--allowedTools` | your MCP servers, `Read`, `Grep`, `Glob`, `Edit` and `Write` on the workspace | same | none |
 | `--disallowedTools` | `Agent,Task,NotebookEdit,PowerShell,Monitor`; a turn with helpers, below | same | same |
 | `--add-dir` | each folder of the session; an answer turn (yours, or a working bot's) also gets your home folder and a private copy of your Claude Code memory when there is one | same | same |
-| Sandbox | on where it starts, never required, no network; unsandboxed commands ask you | on where it starts, never required, no network; unsandboxed commands go to the reviewer | off |
+| Sandbox | on where it starts, never required; a host a command connects to asks you, and one you allowed stays allowed in the session; unsandboxed commands ask you | on where it starts, never required, no network; unsandboxed commands go to the reviewer | off |
 | Asks | web tools; answer turns also edits in the project folder | answer-turn edits only | none |
 | Denies | protected paths, writes in the folders of the session, secret reads, ELU Code state, the never list | same, without dependency files | secret reads, ELU Code state, the never list |
 
@@ -53,8 +54,9 @@ The never list as deny rules: `git push`, `git tag`, `git merge`, `gh pr merge`,
 `gh release`, `npm publish`, `pnpm publish`, `yarn publish`, `cargo publish`,
 `firebase deploy`, `vercel deploy`, `gcloud run deploy`, `gcloud app deploy`,
 `fly deploy`, `kubectl apply`, `terraform apply`. They match command text, so
-`git -C . push` or a shell wrapper gets past them; in Ask the sandbox has no
-network and the common directory is read-only, which is what holds. A bot that is
+`git -C . push` or a shell wrapper gets past them; in Ask the sandbox reaches no
+host you did not allow (a push to `github.com` asks you for that host, and it is never kept
+as a rule) and the common directory is read-only, which is what holds. A bot that is
 allowed to merge pull requests (`@elu` comes allowed; a bot you make is not) runs its
 own working turn without the `gh pr merge` rule; in Ask that command asks you instead.
 
@@ -122,3 +124,18 @@ approval. Nothing is installed for you.
 Not enforced or not verified on these releases: Bash rules match text only;
 WebFetch runs outside the sandbox; a `bypassPermissions` run does not check
 protected paths; whether Claude's auto reviewer counts toward the dollar budget.
+
+## Network questions
+
+In the default permission mode, a sandboxed command that connects to a host the settings do
+not list makes Claude Code ask on its own output: a `control_request` with subtype
+`can_use_tool`, tool `SandboxNetworkAccess` and input `{ host }`. It waits for a
+`control_response` on its input and never calls the permission prompt tool for it. With the
+prompt given as text, its input is closed once the prompt is read, the question cannot be
+sent, and the host is denied with `(user denied)` though nobody was asked. Read from the
+2.1.322 program, and seen in use: `curl https://elu.dev/api/mcp` ended
+`CONNECT tunnel failed, response 403` in an Ask session. So in Ask ELU Code passes
+`--input-format stream-json`, writes the prompt as one user message, answers each question
+from your answer under Needs you (or a rule of yours), and closes the input after the
+`result` line. A host you allowed is in `sandbox.network.allowedDomains` for the later turns
+of the session. Not yet seen with the real service.
