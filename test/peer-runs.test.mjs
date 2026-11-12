@@ -9,7 +9,7 @@ import { approveTask, sessionTasks } from '../lib/plan.mjs';
 import { repository } from '../lib/git.mjs';
 import { ProjectController, conversationEntries, projectSnapshot, registerProject, personalDirectory } from '../lib/projects.mjs';
 import { readTask, saveTask, requestGoal, sessionGoal, taskTitle, taskPlace } from '../lib/state.mjs';
-import { pendingRequests, projectFolder, saveRequest, updateRequest } from '../lib/workspace.mjs';
+import { pendingRequests, projectFolder, removeRequest, saveRequest, updateRequest } from '../lib/workspace.mjs';
 import { Conductor, PLAN_WAITS, enqueue, retryRequest, conductorSettings } from '../lib/conductor.mjs';
 import { validateResult, validateConversation, conversationSchema, resultSchema } from '../lib/config.mjs';
 import { protectedPath, protectedFiles } from '../lib/policy.mjs';
@@ -613,6 +613,14 @@ test('a teammate\'s message never runs in the home folder: y, w and an older Aut
   // The owner's own session in the home folder is unchanged.
   const mine = await inHome.ask('Where is coupon normalization?').finished;
   assert.equal(mine.state, 'answered');
+  // So is one the owner's other computer started (origin.mine): it is his own work, typed by
+  // him, so it runs in the home folder and reads as his words, not as a teammate's.
+  const own = { machine: 'c'.repeat(64), name: 'owner', remoteId: '0f0e0d0c-0b0a-4908-8706-050403020100' };
+  removeRequest(home, enqueue(home, 'Where are the tests?', { mine: own, permissions: 'ask' }).id);
+  const fromMine = await inHome.ask('Where are the tests?', null, { mine: own, permissions: 'ask' }).finished;
+  assert.equal(fromMine.state, 'answered'); assert.equal(fromMine.origin.mine, true); assert.equal(fromMine.origin.peer, undefined);
+  assert.equal(sessionGoal(fromMine), 'Where are the tests?');
+  assert.equal(conversationEntries(projectFolder(home), fromMine)[0].role, 'You');
   // Approved with the project open, it runs there, and the chat and lists show the teammate's own words.
   acceptIncoming(sara.ctx, record.task.id, { how: 'own', root: p.root });
   const row = sara.rowOf(getRecord(record.task.id));
