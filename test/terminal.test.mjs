@@ -2074,15 +2074,16 @@ test('a task scheduled from + New task lists under Scheduled and pauses, runs no
   const loginItem = { install: () => { calls.push('install'); return { installed: true }; }, uninstall: () => { calls.push('uninstall'); return { removed: true }; } };
   const v = await view(t, { repo: p.repo, loginItem }), panels = v.current.panels;
   await wide(v);
-  await send(v, '/schedule'); await dialog(v, 'When', 'weekdays 9am');
-  await until(() => /Schedule → Opus · weekdays 9:00 · sample app/.test(panels.ask._label.getText()), 'the message box says it is a schedule');
+  await send(v, '/schedule'); await until(() => modal(v, 'When') && dialogRows(v, 'When').length === 8, 'the list of times');
+  dialogList(v, 'When').select(6); v.input.write('\r');
+  await until(() => /Schedule → Opus · weekdays 9:00 · sample app · with @reviewer/.test(panels.ask._label.getText()), 'the message box says it is a schedule');
   assert.match(panels.composeList.items.map(item => item.getText()).join('\n'), /When\s+weekdays 9:00\s+next \w{3} \w{3} \d+ 9:00/);
   assert.match(panels.status.getText(), /Runs weekdays 9:00, next/);
   await send(v, 'Check dependencies for updates');
   await until(() => v.current.view === 'tasks' && rows(v).some(row => /SCHEDULED 1/.test(row)), 'Scheduled group');
   // The row has the time, the start of the message and the next run. The form is fresh again beside the list.
   assert.ok(rows(v).some(row => /◷ weekdays 9:00 · Check… +in \d+[mhd]$/.test(row)), rows(v).join('\n'));
-  assert.match(panels.status.getText().replace(/\s+/g, ' '), /Scheduled weekdays 9:00, next \w{3} \w{3} \d+ 9:00\.$/);
+  assert.match(panels.status.getText().replace(/\s+/g, ' '), /Scheduled weekdays 9:00, next \w{3} \w{3} \d+ 9:00\. Each run starts a new session in sample app with your message, Opus, Ask for approval and @reviewer\. It does not see this chat\.$/);
   assert.equal(v.current.session, 'new'); assert.match(panels.ask._label.getText(), /New session → Opus · sample app/); assert.equal(panels.ask.getValue(), '');
   assert.deepEqual(calls, ['install']); assert.equal(pendingRequests(p.root).length, 0, 'nothing runs now');
   // On its row the whole message and the next run show beside the list, with its keys.
@@ -2097,6 +2098,84 @@ test('a task scheduled from + New task lists under Scheduled and pauses, runs no
   // Its row is gone, so the cursor takes the nearest row: here the request that run now queued.
   await until(() => rows(v).indexOf(cursor(v)) > 1 && v.current.screen.focused === board, 'the cursor is on a row that is left');
   assert.deepEqual(calls, ['install', 'uninstall'], 'the last schedule removes the login item');
+});
+
+test('/schedule offers times in the command list, saves a time and message typed together, and lists the times when Enter is pressed on it alone', { timeout: 30000 }, async t => {
+  const p = setup(t), loginItem = { install: () => ({ installed: true }), uninstall: () => ({ removed: true }) };
+  const v = await view(t, { repo: p.repo, loginItem }), panels = v.current.panels, ask = panels.ask;
+  const status = () => panels.status.getText().replace(/\s+/g, ' '), keys = () => panels.keys.getText().trim(), saved = goal => listSchedules().find(row => row.goal === goal);
+  const offered = () => panels.palette.hidden ? [] : panels.palette.items.map(item => item.getText().replace(/\s+/g, ' ').trim());
+  const typing = async () => { ask.focus(); ask.readInput(); await until(() => ask.__listener, 'message box'); };
+  const RUNS = 'Each run starts a new session in sample app with your message, Opus, Ask for approval and @reviewer. It does not see this chat.';
+  await wide(v); await typing();
+  // Typing /schedule and a space lists the times to start from, each with what it means.
+  v.input.write('/schedule '); await until(() => offered().length === 7, 'the times');
+  assert.deepEqual(offered(), ['in 5m once, in 5 minutes', 'in 1h once, in an hour', 'in 1d once, this time tomorrow', 'every 1h every hour', 'every 1d every day at this time', 'daily 9:00 every day at 9:00', 'weekdays 9am Monday to Friday at 9:00']);
+  // Enter on one fills it in and says what each run gets; the key bar then says what /schedule takes.
+  v.input.write('\r'); await until(() => ask.getValue() === '/schedule in 5m ' && panels.palette.hidden, 'in 5m filled in');
+  assert.equal(status(), `› Write the message after the time. ${RUNS}`);
+  await until(() => keys() === '/schedule [when] [message] · Start a session later or on a schedule', 'the usage in the key bar');
+  v.input.write('check the build\r');
+  await until(() => saved('check the build'), 'saved at once');
+  assert.equal(saved('check the build').when.kind, 'once'); assert.deepEqual(saved('check the build').bots, ['reviewer']); assert.equal('place' in saved('check the build'), false);
+  assert.match(status(), new RegExp(`^› Scheduled once \\w{3} \\w{3} \\d+ \\d+:\\d\\d\\. ${RUNS.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`));
+  assert.equal(pendingRequests(p.root).length, 0, 'nothing runs now');
+  // A time and a message typed together are saved at once; the message keeps its apostrophes.
+  await send(v, "/schedule daily 9:00 triage new issues, don't close any");
+  await until(() => saved("triage new issues, don't close any")?.when.label === 'daily 9:00' && /^› Scheduled daily 9:00/.test(status()) && v.current.session === 'new', 'daily saved, and the form beside the list again');
+  // The form it is typed in keeps what it holds: a bot added there goes with the schedule.
+  await send(v, '/bots add qa'); await until(() => /Bots\s+@reviewer @qa/.test(composeText(v)), 'qa in the form');
+  await send(v, '/schedule every 2h'); await until(() => /Runs every 2h, next .+\. Write the message below\./.test(status()), 'the time is set and the message is next');
+  assert.match(composeText(v), /When\s+every 2h/); assert.match(panels.ask._label.getText(), /Schedule → Opus · every 2h · sample app · with @reviewer @qa/);
+  assert.equal(panels.composeHint.getContent().replace(/\s+/g, ' ').trim(), `${RUNS.replace('@reviewer', '@reviewer @qa')} Runs while this computer is awake, even with ELU Code closed.`);
+  await send(v, 'Run the linters'); await until(() => saved('Run the linters'), 'saved from the form');
+  assert.deepEqual([saved('Run the linters').when.label, saved('Run the linters').bots], ['every 2h', ['reviewer', 'qa']]);
+  // A start that is no time says which forms work, and the text stays in the box.
+  await send(v, '/schedule sometime soon check');
+  await until(() => status() === '› Could not read when it runs. Start with when it runs, such as in 30m, every 2h, daily 9:00, weekdays 9am or tomorrow 15:00, then your message.', 'what works');
+  assert.equal(ask.getValue(), '/schedule sometime soon check');
+  await send(v, '/schedule every 5m ping'); await until(() => /Choose every 15m to every 7d\./.test(status()), 'a time that is refused says why');
+  // Enter on /schedule alone lists the same times, then Other time, which takes any time /schedule reads.
+  await send(v, '/schedule'); await until(() => modal(v, 'When') && dialogRows(v, 'When').length === 8, 'the list of times');
+  const rows = dialogRows(v, 'When').map(row => row.replace(/\s+/g, ' ').trim());
+  assert.deepEqual([rows[0], rows[6], rows[7]], ['in 5m once, in 5 minutes', 'weekdays 9am Monday to Friday at 9:00', 'Other time…']);
+  assert.ok(modal(v, 'When').children.some(child => child.type !== 'list' && child.getText?.().replace(/\s+/g, ' ').includes(RUNS.replace('@reviewer', '@reviewer'))), 'the list says what each run gets');
+  dialogList(v, 'When').select(7); v.input.write('\r');
+  await until(() => modal(v, 'When')?.children.some(child => child.type === 'textbox'), 'Other time');
+  assert.match(dialogText(v, 'When'), /in 30m {12}once, in 30 minutes/);
+  await dialog(v, 'When', 'in 30m'); await until(() => /When\s+once \w{3} \w{3} \d+/.test(composeText(v)), 'once in 30 minutes');
+  // Any command and a space with nothing to choose shows its usage in the key bar.
+  await typing(); ask.setValue(''); v.input.write('/budget '); await until(() => keys() === '/budget [dollars|off] · What this session has spent; set a spending limit or remove it', 'the usage of /budget');
+  assert.ok(panels.palette.hidden);
+  // Where there are choices, the key bar is for the list.
+  ask.setValue(''); v.input.write('/model '); await until(() => !panels.palette.hidden && /↑↓ choose/.test(keys()), 'the list keys');
+  // Away from the form, a time picked from the list names the project each run starts in.
+  ask.setValue(''); await send(v, '/projects'); await until(() => v.current.view === 'projects', 'Projects');
+  await typing(); ask.setValue(''); v.input.write('/schedule '); await until(() => offered().length === 7, 'the times again');
+  // The status row there is one line, so the end of the sentence may be cut.
+  v.input.write('\r'); await until(() => /^› Write the message after the time\. Each run starts a new session in sample app with your message, Opus,/.test(status()), 'the project named');
+});
+
+test('/schedule typed in a session saves that session\'s bots, and the form keeps its draft', { timeout: 30000 }, async t => {
+  const p = setup(t), loginItem = { install: () => ({ installed: true }), uninstall: () => ({ removed: true }) };
+  const { repo } = liveTask(p.root, { id: '4', goal: 'Trim coupon codes', state: 'answered' });
+  saveTask(repo, { ...readTask(repo, '4'), bots: ['reviewer', 'qa'] });
+  const v = await view(t, { repo: p.repo, loginItem }), panels = v.current.panels, status = () => panels.status.getText().replace(/\s+/g, ' ');
+  const saved = goal => listSchedules().find(row => row.goal === goal);
+  await wide(v);
+  // Something typed in + New session, and not sent.
+  await selectRow(v, /\+ New session/); await until(() => v.current.session === 'new' && !panels.compose.hidden, 'the form');
+  panels.ask.setValue('Keep this draft');
+  await openTask(v, /Trim coupon codes/); await until(() => /with @reviewer @qa $/.test(panels.ask._label.getText()), 'the session names its bots');
+  await send(v, '/schedule in 1h check'); await until(() => saved('check'), 'saved');
+  assert.deepEqual(saved('check').bots, ['reviewer', 'qa']);
+  assert.match(status(), /Ask for approval and @reviewer @qa\. It does not see this chat\.$/);
+  // The schedule's message came with the command, so the form's draft is still there.
+  await selectRow(v, /\+ New session/); await until(() => v.current.session === 'new' && panels.ask.getValue() === 'Keep this draft', 'the draft is still there');
+  // A bot with its own schedule would start it in every session a run makes, so the runs leave it out, and the form says so.
+  await send(v, '/bots add elu'); await until(() => /Bots\s+@reviewer @elu/.test(composeText(v)), 'elu in the form');
+  await send(v, '/schedule every 2h'); await until(() => /When\s+every 2h/.test(composeText(v)), 'the time is set');
+  assert.match(panels.composeHint.getContent().replace(/\s+/g, ' '), /Ask for approval and @reviewer\. @elu runs on its own schedule, so it is left out\. It does not see this chat\./);
 });
 
 test('the first start in a new folder asks for a project name and saves it there', async t => {
@@ -2621,7 +2700,8 @@ test('a schedule offers only Ask for approval and Approve for me', { timeout: 20
   await wide(v);
   await send(v, '/new'); await until(() => !panels.compose.hidden, 'form');
   await send(v, '/permissions full'); await dialog(v, 'Full access', 'y'); await until(() => /Permissions {2}Full access/.test(text()), 'full');
-  pickRow(panels.composeList, /When/); v.input.write('\r'); await dialog(v, 'When', 'daily 9:00');
+  pickRow(panels.composeList, /When/); v.input.write('\r'); await until(() => modal(v, 'When'), 'the list of times');
+  dialogList(v, 'When').select(5); v.input.write('\r');
   await until(() => /Schedules run with Approve for me at most\./.test(status()) && /Permissions {2}Approve for me/.test(text()), 'capped');
   pickRow(panels.composeList, /Permissions/); v.input.write('\r'); await until(() => modal(v, 'Permissions'), 'picker');
   const picker = dialogText(v, 'Permissions');

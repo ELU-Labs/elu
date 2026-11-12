@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { argumentMatches, mentionMatches, botMatches, sessionMentions, commandMatches, parseCommand, COMMANDS, needsArgument } from '../lib/terminal-commands.mjs';
+import { argumentMatches, mentionMatches, botMatches, sessionMentions, commandMatches, parseCommand, needsArgument, typedCommand, COMMANDS } from '../lib/terminal-commands.mjs';
 
 const ctx = {
   models: () => [{ name: 'opus', vendor: 'Claude', note: 'most capable', current: true }, { name: 'gpt', vendor: 'Codex' }],
@@ -22,6 +22,27 @@ test('the command list offers each next word of a command', () => {
   for (const done of ['/agents add opus ', '/agents', '/help ', '/unknown x']) assert.deepEqual(values(done), [], done);
   assert.deepEqual(values('/agents add ', {}), [], 'no models known, nothing to offer');
   assert.deepEqual(values('/agents add ', { models: () => { throw new Error('no project'); } }), []);
+});
+
+test('/schedule offers times to start from; one fills in the time and the message follows', () => {
+  const shown = text => argumentMatches(text, {}).map(row => `${row.value} · ${row.description} · ${row.more}`);
+  assert.deepEqual(shown('/schedule '), ['/schedule in 5m · once, in 5 minutes · true', '/schedule in 1h · once, in an hour · true', '/schedule in 1d · once, this time tomorrow · true', '/schedule every 1h · every hour · true', '/schedule every 1d · every day at this time · true', '/schedule daily 9:00 · every day at 9:00 · true', '/schedule weekdays 9am · Monday to Friday at 9:00 · true']);
+  assert.deepEqual(values('/schedule in '), ['/schedule in 5m', '/schedule in 1h', '/schedule in 1d'], 'a time is matched across its words');
+  assert.deepEqual(values('/schedule EV'), ['/schedule every 1h', '/schedule every 1d']);
+  assert.deepEqual(values('/schedule  in  1'), ['/schedule in 1h', '/schedule in 1d'], 'extra spaces are read as one');
+  for (const done of ['/schedule in 5m ', '/schedule in 30m', '/schedule in 1h check the build', '/schedule']) assert.deepEqual(values(done), [], done);
+  // /schedule alone runs: it opens the list of times. Its usage names what it takes.
+  const schedule = COMMANDS.find(command => command.name === 'schedule');
+  assert.deepEqual([schedule.usage, schedule.description, needsArgument(schedule)], ['/schedule [when] [message]', 'Start a session later or on a schedule', false]);
+  // The message is kept as typed, apostrophes and all.
+  assert.deepEqual([parseCommand("/schedule in 1h don't break the build").text, parseCommand('/schedule').text], ["in 1h don't break the build", '']);
+});
+
+test('a typed command and a space name the command whose usage the key bar shows', () => {
+  assert.equal(typedCommand('/budget ').usage, '/budget [dollars|off]');
+  assert.equal(typedCommand('  /Schedule in 1h check').name, 'schedule');
+  assert.equal(typedCommand('/tasks ').name, 'sessions', 'an older name');
+  for (const text of ['/budget', '/nosuch ', 'check /budget ', '', '!ls /budget ']) assert.equal(typedCommand(text), null, text);
 });
 
 test('/permissions offers the modes, the default, and the folders the model may read', () => {
