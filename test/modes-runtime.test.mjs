@@ -120,10 +120,13 @@ test('an automatic edit task inherits the conversation mode; the reviewer and th
 });
 
 // A reply in a session whose edit has run resumes the working model in the session's own
-// folder: it may go on changing that folder, and asks nobody to write there. A session
-// still talking, and a read only one, keep the reading launch.
+// folder: it may go on changing that folder, and asks nobody to write there, while the Task
+// the owner approved is open. A session still talking, one whose Task is done, and one
+// already published keep the reading launch.
 test('a reply in a working session may change the session\'s own folder; a conversation reply reads', async t => {
-  const f = setup(t);
+  const f = setup(t), fakeFile = path.join(f.fake.dir, 'fake.json'), fake = JSON.parse(fs.readFileSync(fakeFile, 'utf8'));
+  // The working turn meets one objective of two, so its Task stays open.
+  fs.writeFileSync(fakeFile, JSON.stringify({ ...fake, objectivesMet: [1] }));
   const task = await f.controller.ask('Normalize coupon codes', null, { permissions: 'ask', place: 'worktree' }).finished;
   assert.equal(task.state, 'ready'); const worktree = fs.realpathSync(task.worktree), count = f.leads().length, asked = f.inputs().length;
   const replyPrompts = from => f.inputs().slice(from).map(row => row.input).filter(input => /Respond to the owner immediately/.test(input));
@@ -136,6 +139,22 @@ test('a reply in a working session may change the session\'s own folder; a conve
   assert.ok(settings.permissions.deny.includes('Bash(git push:*)'), 'the never list stays');
   const [prompt] = replyPrompts(asked);
   assert.match(prompt, /You may change files there in this turn/); assert.match(prompt, /Do not run git add or git commit/);
+  // Reads, with what an edit there asks of the owner.
+  const reads = async (id, text, why, folder = worktree) => {
+    const from = f.inputs().length, calls = f.leads().length;
+    await f.controller.ask(text, id).finished.catch(() => null);
+    const [said] = replyPrompts(from), launch = f.leads()[calls];
+    assert.ok(said && launch, why); assert.doesNotMatch(said, /You may change files there in this turn/, why);
+    assert.ok((settingsOf(launch.args).permissions.ask ?? []).some(rule => rule.startsWith(`Edit(//${folder.slice(1)}`)), why);
+  };
+  // Published work stays as it was published.
+  saveTask(f.controller.repo, { ...readTask(f.controller.repo, task.id), pushedCommit: readTask(f.controller.repo, task.id).commit ?? 'a'.repeat(40) });
+  await reads(task.id, 'One more rename', 'a published session reads');
+  // A session whose Task is done reads too: more work there starts as an edit of its own.
+  fs.writeFileSync(fakeFile, JSON.stringify(fake));
+  const done = await f.controller.ask('Uppercase the coupons', null, { permissions: 'ask', place: 'worktree' }).finished;
+  assert.equal(done.state, 'ready');
+  await reads(done.id, 'What did you change?', 'a done Task reads', fs.realpathSync(done.worktree));
   // A conversation that has not started an edit reads, as before.
   const before = f.inputs().length, calls = f.leads().length;
   await f.controller.ask('Where is coupon normalization?', null, { permissions: 'ask' }).finished;
