@@ -112,6 +112,14 @@ test('an automatic edit task inherits the conversation mode; the reviewer and th
   assert.ok(settings.permissions.deny.some(rule => rule.includes('/.elu-code')), 'other protected paths stay denied');
   assert.ok(edit.args.includes('--add-dir') && edit.args.includes(fs.realpathSync(f.work)));
   assert.ok(claudeRuns.every(run => writeDenied(settingsOf(run.args), fs.realpathSync(f.work))), 'the named folder is read only in every turn of the session');
+  // The relay is told what each turn reads beside its workspace, for the tools that send files:
+  // the home only in the conversation's turn, which reads across it; the edit reads the named folder.
+  const relays = fs.readFileSync(path.join(f.parent, 'relays.jsonl'), 'utf8').trim().split('\n').map(JSON.parse), reads = args => JSON.parse(valueOf(args, '--folders'));
+  assert.equal(relays.length, claudeRuns.length);
+  assert.ok(claudeRuns[0].args.includes(fs.realpathSync(f.parent)) || claudeRuns[0].args.includes(f.parent), 'the conversation turn adds the home');
+  assert.deepEqual(reads(relays[0]), [process.env.HOME, fs.realpathSync(f.work)]);
+  assert.equal(edit.args.includes(f.parent) || edit.args.includes(fs.realpathSync(f.parent)), false, 'the edit does not');
+  assert.deepEqual(reads(relays.at(-1)), [fs.realpathSync(f.work)]);
   assert.equal(git(f.root, ['status', '--porcelain']), ''); assert.equal(fs.existsSync(path.join(f.root, '.elu-code')), false);
   // A task saved without a mode runs the read-only launch.
   const old = await f.controller.ask('Explain the change', null).finished;
@@ -329,7 +337,8 @@ test('an allowed approval reaches Claude through the relay and is kept with the 
   for (const row of task.approvals) { assert.equal(row.decision, 'allow'); assert.equal(row.tool, 'Bash'); assert.equal(row.role, 'lead'); assert.match(row.summary, /^Run: touch /); assert.ok(fs.existsSync(path.join(taskDir(f.controller.repo, task.id), `lead-${row.session}.approvals.jsonl`))); }
   assert.ok(task.runs.filter(run => run.role === 'lead').every(run => run.denials === undefined));
   const dances = f.calls().filter(call => call.approval);
-  assert.ok(dances.length >= 1); assert.deepEqual(dances[0].approval.tools, ['approve']); assert.equal(dances[0].approval.decision.behavior, 'allow');
+  // The owner's own session also gets the tools for his other computers (lib/approval-server.mjs).
+  assert.ok(dances.length >= 1); assert.deepEqual(dances[0].approval.tools, ['approve', 'list_other_sessions', 'send_to_session']); assert.equal(dances[0].approval.decision.behavior, 'allow');
   assert.equal(pendingApprovals().length, 0);
   const log = fs.readdirSync(taskDir(f.controller.repo, task.id)).filter(name => name.endsWith('.approvals.jsonl'));
   assert.ok(log.length >= 1); assert.equal(fs.statSync(path.join(taskDir(f.controller.repo, task.id), log[0])).mode & 0o777, 0o600);
