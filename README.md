@@ -227,8 +227,8 @@ reading it unless it looks like a secret. Any Task it proposes waits for your ap
 only an approved Task's edit runs in a new worktree. **Manual** keeps each message waiting
 until you press y. You can also write rules in plain English, such as "Only work on the elu
 repo. Don't write anything until I accept it.", and every session a teammate starts is told
-them. A teammate's message never runs in your home folder: it waits until you approve it with
-ELU Code open in a project. Their session shows their own words under their name. Push, merge, tag, deploy and publish stay blocked as they are for your own sessions in
+them. A teammate's message never runs in your home folder on its own: ELU Code asks you
+first, and runs it there only when you press y. Their session shows their own words under their name. Push, merge, tag, deploy and publish stay blocked as they are for your own sessions in
 that mode. [SECURITY.md](SECURITY.md#what-teammates-can-do-here) has the details. `/access`,
 or `elu access`, shows and changes all of it.
 
