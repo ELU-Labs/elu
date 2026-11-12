@@ -120,6 +120,14 @@ made a team cannot leave it, so their machine stays reachable while they keep th
 it too, but only until ELU Code next opens or an `elu` peer command runs while the machine
 is still on a team.
 
+## Update check
+
+Once a day, as the app opens, ELU Code asks `https://registry.npmjs.org/@elu-labs/elu/latest`
+for the latest version number, in the background, and keeps the answer and the time in its
+state folder. `elu update` asks the same address. Neither sends anything about you or your
+projects. `ELU_NO_UPDATE_CHECK=1` turns the daily check off. `elu update` installs with
+`npm install --global --ignore-scripts`, by name and version, where `elu` already is.
+
 ## What teammates can do here
 
 Each team has one setting on your machine, asked by `/join` and by your first `/invite` for
