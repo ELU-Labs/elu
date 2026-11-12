@@ -9,10 +9,10 @@ import { fileURLToPath } from 'node:url';
 import { makeTeam, newHome, peerHome, withHome } from './peer-helpers.mjs';
 import { createIdentity } from '../lib/peer/identity.mjs';
 import { createInvite, redeemCode } from '../lib/peer/invite.mjs';
-import { createTeam, readLog, merge } from '../lib/peer/roster.mjs';
+import { createTeam, readLog, merge, removeOp } from '../lib/peer/roster.mjs';
 import { peerFile } from '../lib/peer/paths.mjs';
 import { peerSettings, savePeerSettings } from '../lib/peer/settings.mjs';
-import { PAIRED_BY_GITHUB, bothMine, markMine, markedMine, mineRows, unmarkMine } from '../lib/peer/mine.mjs';
+import { PAIRED_BY_GITHUB, bothMine, dropStrangers, markMine, markedMine, mineRows, unmarkMine } from '../lib/peer/mine.mjs';
 import { viewMethods } from '../lib/peer/remote.mjs';
 import { GIST, HINT, checkGithub, githubPairing, githubStatus, pairingHint, runGh } from '../lib/peer/github.mjs';
 import { PeerDaemon } from '../lib/peer/daemon.mjs';
@@ -133,6 +133,29 @@ test('a computer removed with /mine remove does not pair again by GitHub until m
   const gists = gh.gists('octo-user'); delete gists[0].files[`${devbox.identity.key}.json`]; gh.saveGists('octo-user', gists);
   await laptop.check();
   assert.equal(laptop.read(() => markedMine(devbox.identity.key)), true);
+});
+
+test('a /mine remove outlasts that computer leaving every shared team and coming back', async t => {
+  const gh = fakeGh(t), { team, laptop, devbox } = twoMachines(t, gh);
+  await pairUp(laptop, devbox);
+  laptop.read(() => unmarkMine(devbox.identity.key));
+  // The devbox is removed from the only team the two share: the daemon drops it, but keeps the refusal.
+  laptop.read(() => removeOp(laptop.identity, team.teamId, devbox.identity.key));
+  assert.deepEqual(laptop.read(() => dropStrangers(laptop.identity.key)), [devbox.identity.key]);
+  assert.deepEqual(laptop.read(() => mineRows()).map(row => [row.key, row.mine, row.theirs, row.refused]), [[devbox.identity.key, false, false, true]]);
+  assert.deepEqual(laptop.read(() => dropStrangers(laptop.identity.key)), [], 'a kept refusal is not dropped again');
+  // Invited back, its file still in the account's gist: GitHub pairing leaves it alone.
+  await new Promise(done => setTimeout(done, 5));
+  laptop.read(() => redeemCode(createInvite(laptop.identity, team.teamId, { hours: 1 }), devbox.identity.key, 'ana'));
+  assert.deepEqual(laptop.read(() => dropStrangers(laptop.identity.key)), []);
+  assert.ok(gh.gists('octo-user')[0].files[`${devbox.identity.key}.json`], 'still vouched for');
+  await laptop.check(); await devbox.check(); await laptop.check();
+  assert.equal(laptop.read(() => markedMine(devbox.identity.key)), false);
+  assert.equal(laptop.read(() => mineRows()).find(row => row.key === devbox.identity.key).refused, true);
+  assert.equal(paired(laptop, devbox), false);
+  // Marked by hand, the refusal is lifted.
+  laptop.read(() => markMine(laptop.identity.key, devbox.identity.key));
+  assert.equal(laptop.read(() => mineRows()).find(row => row.key === devbox.identity.key).refused, false);
 });
 
 test('a GitHub mark goes when its file leaves the gist or another account signs in, and comes back with the file', async t => {
