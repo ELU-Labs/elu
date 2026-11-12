@@ -3247,7 +3247,7 @@ async function homeLayout(t, mode = 'normal') {
   const web = path.join(fs.realpathSync(home), 'web');
   git(p.parent, ['clone', '-q', p.root, web]); git(web, ['config', 'user.name', 'Test Owner']); git(web, ['config', 'user.email', 'owner@example.invalid']);
   fs.mkdirSync(path.join(web, 'backend/agents'), { recursive: true }); fs.writeFileSync(path.join(web, 'backend/agents/.npmrc'), 'engine-strict=true\n');
-  git(web, ['add', '.']); git(web, ['commit', '-q', '-m', 'Track .npmrc']);
+  git(web, ['add', '.']); git(web, ['commit', '-q', '-m', 'Track .npmrc']); approveProjectFiles(web);
   fs.writeFileSync(path.join(p.parent, 'repository.txt'), web);
   const repo = projectFolder(fs.realpathSync(home)); registerProject(repo);
   return { ...p, home: repo.root, web, homeRepo: repo };
@@ -3291,7 +3291,7 @@ test('the app: a teammate-started session that works in the home folder asks onc
   await controller.close();
   const { homeAllowed: _allowed, ...rest } = readTask(p.homeRepo, first.id); saveTask(p.homeRepo, rest);
   const v = await view(t, { repo: p.homeRepo });
-  await openTask(v, /Where are the tests/);
+  await openTask(v, /Where are the/);
   await send(v, 'Go on.');
   await until(() => modal(v, 'Home folder'), 'the question');
   assert.match(dialogText(v, 'Home folder'), /This session's project is your home folder\. Let it run here\?\n\ny yes · n no/);
