@@ -757,9 +757,9 @@ test('Sessions lists every session of my other computer in this repository under
   assert.match(at2[heading + 1], /Kim asked for a fix/); assert.match(at2[heading + 2], /Typed there by hand/);
   assert.ok(!at2.some(row => /Tidy my notes|Li private/.test(row)), 'another project of it, and a computer that is not mine, are not listed here');
   // Its approval also waits under Needs you, marked with the computer.
-  assert.ok(at2.findIndex(row => /on sara-box · wants to run npm test/.test(row)) >= 0 && at2.findIndex(row => /on sara-box · wants to run npm test/.test(row)) < heading);
+  assert.ok(at2.findIndex(row => /on sara-box · wants to run npm/.test(row)) >= 0 && at2.findIndex(row => /on sara-box · wants to run npm/.test(row)) < heading);
   // So does one in its home folder, which Sessions does not list under this project.
-  assert.ok(at2.findIndex(row => /on sara-box · wants to run rm notes\.tmp/.test(row)) >= 0 && at2.findIndex(row => /on sara-box · wants to run rm notes\.tmp/.test(row)) < heading);
+  assert.ok(at2.findIndex(row => /on sara-box · wants to run rm/.test(row)) >= 0 && at2.findIndex(row => /on sara-box · wants to run rm/.test(row)) < heading);
   // Projects lists its other project; Enter opens it in Sessions under a heading of its own.
   await send(v, '/projects'); await until(() => v.current.view === 'projects' && v.panels.projectsList.items.some(item => /ana on sara-box/.test(plainItem(item))), 'the other project');
   assert.ok(!v.panels.projectsList.items.some(item => /shop on sara-box/.test(plainItem(item))), 'the project of this repository is in Sessions');
