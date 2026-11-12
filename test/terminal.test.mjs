@@ -2143,7 +2143,8 @@ test('/schedule offers times in the command list, saves a time and message typed
   // Away from the form, a time picked from the list names the project each run starts in.
   ask.setValue(''); await send(v, '/projects'); await until(() => v.current.view === 'projects', 'Projects');
   await typing(); ask.setValue(''); v.input.write('/schedule '); await until(() => offered().length === 7, 'the times again');
-  v.input.write('\r'); await until(() => status() === `› Write the message after the time. ${RUNS}`, 'the project named');
+  // The status row there is one line, so the end of the sentence may be cut.
+  v.input.write('\r'); await until(() => /^› Write the message after the time\. Each run starts a new session in sample app with your message, Opus,/.test(status()), 'the project named');
 });
 
 test('the first start in a new folder asks for a project name and saves it there', async t => {
