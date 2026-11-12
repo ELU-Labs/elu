@@ -3,12 +3,13 @@ import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { makeTeam, withHome, registeredProject, liveTask } from './peer-helpers.mjs';
+import { makeTeam, newHome, withHome, registeredProject, liveTask } from './peer-helpers.mjs';
+import { createIdentity } from '../lib/peer/identity.mjs';
 import { bothMine, dropStrangers, markMine, markedMine, mineRows, noteTheirs, unmarkMine } from '../lib/peer/mine.mjs';
 import { NOT_MINE, UPDATE, hostMethods, hostTick, remoteCommand, remoteConnected, remoteSessions, viewMethods, viewTick } from '../lib/peer/remote.mjs';
 import { saveTeamAccess } from '../lib/peer/access.mjs';
 import { leaveOp, merge } from '../lib/peer/roster.mjs';
-import { createInvite } from '../lib/peer/invite.mjs';
+import { createInvite, redeemCode, takeMineOffer } from '../lib/peer/invite.mjs';
 import { pendingRequests, updateRequest } from '../lib/workspace.mjs';
 import { requestApproval, pendingApprovals } from '../lib/approvals.mjs';
 import { enqueue } from '../lib/conductor.mjs';
@@ -71,6 +72,34 @@ test('an invite for another computer of mine is marked on its row', t => {
     createInvite(laptop.identity, team.teamId, { hours: 1, mine: true });
     const rows = JSON.parse(fs.readFileSync(teamPath(team.teamId, 'invites.json'), 'utf8'));
     assert.equal(rows.at(-1).mine, true);
+  });
+});
+
+test('a code for another computer of mine marks nothing until its joiner says yes, and that yes is taken once', t => {
+  const { team, laptop, devbox } = machines(t);
+  const box = withHome(newHome(t), () => createIdentity({ name: 'ana' })), kim = withHome(newHome(t), () => createIdentity({ name: 'kim' }));
+  withHome(laptop.home, () => {
+    redeemCode(createInvite(laptop.identity, team.teamId, { hours: 1, mine: true }), box.key, 'ana');
+    redeemCode(createInvite(laptop.identity, team.teamId, { hours: 1 }), kim.key, 'kim');
+    assert.deepEqual(mineRows(), [], 'the join itself marks nothing');
+    const ctx = context(laptop.identity), mine = viewMethods(ctx)['elu.mine'];
+    // A teammate from a plain invite says yes: that only waits for /mine here.
+    const fromKim = connection(kim.key); mine({ mine: true }, fromKim);
+    assert.equal(markedMine(kim.key), false); assert.deepEqual(fromKim.sent, []);
+    // A no from the machine the mine code admitted marks nothing either.
+    const fromBox = connection(box.key); mine({ mine: false }, fromBox);
+    assert.equal(markedMine(box.key), false);
+    // Its yes does: this side marks it back and says so.
+    mine({ mine: true }, fromBox);
+    assert.equal(bothMine(laptop.identity.key, box.key), true); assert.deepEqual(fromBox.sent, [['elu.mine', { mine: true }]]);
+    // Taken once: after /mine remove here, saying yes again does not bring it back.
+    unmarkMine(box.key); mine({ mine: false }, fromBox); mine({ mine: true }, fromBox);
+    assert.equal(markedMine(box.key), false);
+    // Not after a week.
+    redeemCode(createInvite(laptop.identity, team.teamId, { hours: 1, mine: true }), 'f'.repeat(64), 'eve');
+    assert.equal(takeMineOffer([team.teamId], 'f'.repeat(64), Date.now() + 8 * 86400000), false);
+    assert.equal(takeMineOffer([team.teamId], 'f'.repeat(64)), true);
+    void devbox;
   });
 });
 
@@ -250,5 +279,8 @@ test('the new session box starts a session on my computer by its @name, and a me
   assert.deepEqual(commands.at(-1), { type: 'remoteAnswer', id: START.id, approval: 'approval-1', decision: 'allow' });
   assert.match(glue.view({ ...row, remote: { ...row.remote, entries: [{ role: 'You', text: 'Make coupons upper case' }, { role: '@reviewer · review 1', text: 'Looks right.', bot: 'reviewer' }] } }, 80), /Looks right\.[\s\S]*Waiting for your approval on @devbox/);
   assert.equal(await glue.mine(['@devbox']), 'Waiting for @devbox to mark this machine too.');
+  // After joining with a code made for that, yes marks the inviter here.
+  assert.equal(await glue.agree('d'.repeat(64), 'ana'), 'Marked as yours. Once @devbox hears it, type @devbox first in the new session box to start a session there.');
+  assert.deepEqual(commands.at(-1), { type: 'mine', key: 'd'.repeat(64) });
   await assert.rejects(glue.mine(['@nobody']), { message: "No teammate's computer is called @nobody." });
 });

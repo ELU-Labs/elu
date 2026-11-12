@@ -17,7 +17,8 @@ const LONG = 'Could you check whether the retry budget in the uploader resets af
 const ago = minutes => new Date(Date.now() - minutes * 60000).toISOString();
 
 // teamless: this machine is on no team until /invite makes one (createTeam).
-function fakePeer({ items, running = true, refuse = () => null, remoteBots = [], teamless = false, access = { 'team-1': { handling: 'auto', rules: '', root: null, at: null } } } = {}) {
+// mine: mineRows(); remote: remoteSessions(); joined: what joinTeam answers.
+function fakePeer({ items, running = true, refuse = () => null, remoteBots = [], teamless = false, access = { 'team-1': { handling: 'auto', rules: '', root: null, at: null } }, mine = [], remote = [], joined = null } = {}) {
   const calls = [];
   const record = (name, value) => (...args) => { calls.push([name, ...args]); return typeof value === 'function' ? value(...args) : value; };
   const facade = {
@@ -63,7 +64,9 @@ function fakePeer({ items, running = true, refuse = () => null, remoteBots = [],
     share: record('share', (root, { handle }) => ({ handle: handle ?? 'sample', root, status: true })),
     createInvite: record('createInvite', () => ({ code: 'k7qm-x2pd-9fhw' })),
     createTeam: record('createTeam', name => { facade.made = true; return { id: 'team-1', name }; }),
-    joinTeam: record('joinTeam', async () => ({ id: 'team-2', name: 'Docs', inviter: { name: 'sara', fingerprint: 'bbbbbbbb' } })),
+    joinTeam: record('joinTeam', async () => joined ?? ({ id: 'team-2', name: 'Docs', inviter: { name: 'sara', fingerprint: 'bbbbbbbb' } })),
+    mineRows: () => mine,
+    remoteSessions: () => remote,
     // What teammates can do here, per team: team-1 was set before these tests start, unless a test says otherwise.
     access: { ...access },
     teamAccess: id => facade.access[id] ?? null,
@@ -676,6 +679,29 @@ test('/invite offers a code for someone new or which bots teammates may use, and
   await send(v, '/join k7qm-x2pd-9fhw'); await answerJoin(v);
   await until(() => /Joined Docs with sara\. Their messages start sessions here, as if you typed them\./.test(status()), 'joined');
   assert.equal(modal(v, title), undefined);
+});
+
+test('joining with a code made for another computer asks whether it is yours: No is first and marks nothing, Yes marks it', async t => {
+  const joined = { id: 'team-1', name: 'Core', inviter: { name: 'sara', fingerprint: 'bbbbbbbb' }, mineOffer: { key: SARA } };
+  const { v, peer } = await teamView(t, { peer: fakePeer({ joined }) }), status = () => v.panels.status.getText(), title = "Is sara's computer yours too?";
+  const marked = () => peer.sent().filter(row => row.type === 'mine');
+  // Enter on the first row is No.
+  await send(v, '/join k7qm-x2pd-9fhw'); await answerJoin(v);
+  await until(() => rowsOf(v, title).length === 2, 'the question');
+  assert.deepEqual(rowsOf(v, title), ['No', 'Yes, both are mine']);
+  await until(() => /Only say yes if you set up both computers\./.test(v.text()), 'the note under the question');
+  v.input.write('\r'); await until(() => /Joined Core with sara\..*Not marked as yours\./.test(status()), 'no');
+  assert.deepEqual(marked(), []);
+  // Esc is No too.
+  await send(v, '/join k7qm-x2pd-9fhw'); await answerJoin(v);
+  await until(() => modal(v, title), 'the question again'); v.input.write('\x1b');
+  await until(() => !modal(v, title) && /Not marked as yours\./.test(status()), 'esc');
+  assert.deepEqual(marked(), []);
+  // Yes marks the inviter's computer here, and says how to start a session there.
+  await send(v, '/join k7qm-x2pd-9fhw'); await answerJoin(v);
+  await choose(v, title, /^Yes/);
+  await until(() => /Marked as yours\. Once @sara-box hears it, type @sara-box first in the new session box to start a session there\./.test(status()), 'yes');
+  assert.deepEqual(marked(), [{ type: 'mine', key: SARA }]);
 });
 
 test('a thread shows under its channel, #general or its teammate, and a row counts what waits for me', () => {

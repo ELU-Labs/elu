@@ -255,6 +255,9 @@ limits teammates get. Treat it like a login to this machine.
 - An invite code for another computer of yours works once, for 1 hour unless you choose
   otherwise. Anyone who uses it first becomes one of your computers, so type it on the other
   machine yourself and check `/mine` afterwards; `elu peers` shows each machine's fingerprint.
+- Joining with such a code marks nothing on the joining machine until the person there says
+  yes ("Is <name>'s computer yours too?", or `elu join CODE --mine`). A teammate who sends you
+  one cannot make their computer yours: say No.
 - An approval waits on both machines. The first answer, from either one, is the one that counts.
 
 ## Leaving, removal and coming back

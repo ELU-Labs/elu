@@ -41,6 +41,7 @@ import { createAsk, dismissAsk, reconnect, reviewText, teammate, tickAsks, teamA
 import { RETRY_MS, checkInviterProof, inviteKeys, joinerProof, openInvites, parseInvite, redeemCode } from '../lib/peer/invite.mjs';
 import { base32, canonical } from '../lib/peer/canonical.mjs';
 import * as peer from '../lib/peer/index.mjs';
+import { bothMine, mineRows as readMine } from '../lib/peer/mine.mjs';
 import { boardRows } from '../lib/board.mjs';
 import { botKey, botVendors, botsFile, canShare, removeBot, saveBot } from '../lib/bots.mjs';
 import { dashboardSnapshot } from '../lib/projects.mjs';
@@ -754,6 +755,24 @@ test('a joiner whose reply was lost comes back with the same code and gets the s
     fs.writeFileSync(file, JSON.stringify(rows.map(row => row.usedBy ? { ...row, usedAt: new Date(Date.now() - RETRY_MS - 1000).toISOString() } : row)));
     daemon.inviteTopics(); assert.deepEqual(topics, [`+${keys.topic}`, `+${next.topic}`, `-${keys.topic}`]);
     const late = await exchange(li.key); assert.match(late.error, /not valid/); late.joiner.socket.destroy();
+  });
+});
+
+test('a code for another computer of mine is only offered: the inviter marks nothing at the join', async t => {
+  const anaHome = newHome(t), li = withHome(newHome(t), () => createIdentity({ name: 'li' }));
+  await withHome(anaHome, async () => {
+    const me = createIdentity({ name: 'ana' }), made = createTeam(me, 'core');
+    const { daemon } = inviterDaemon(me);
+    const exchange = async keys => {
+      const { joiner, reply, fields } = await startInvite(daemon, li.key, keys.topic);
+      joiner.say({ jsonrpc: '2.0', id: 2, method: 'elu.invite.prove', params: { proof: joinerProof(keys.seed, fields), name: 'li' } });
+      const proved = await until(() => joiner.frames().find(frame => frame.id === 2 && !Object.hasOwn(frame, 'method')), 'the prove reply', 5000);
+      joiner.socket.destroy(); void reply;
+      return { result: proved.result, error: proved.error?.message };
+    };
+    const first = await exchange(inviteKeys(createInvite(me, made.id, { hours: 1, mine: true })));
+    assert.equal(first.error, undefined); assert.equal(first.result.mineOffer, true); assert.equal('mine' in first.result, false);
+    assert.deepEqual(readMine(), [], 'nothing is marked until li says yes');
   });
 });
 
@@ -1555,6 +1574,28 @@ test('team create, invite and join over the network with a short code', async t 
   assert.ok(Array.isArray(routing) && routing.length && routing.every(node => node.host && node.port));
   assert.equal(withHome(ana, () => peer.peerStatus()).running, false);
   void s;
+});
+
+test('elu join with a code for another computer of mine marks nothing without --mine; with it, both computers count each other as mine', async t => {
+  const bootstrap = await testnet(t), ana = newHome(t), sara = newHome(t), box = newHome(t);
+  const { teamId, codes } = withHome(ana, () => { const me = createIdentity({ name: 'ana' }), made = createTeam(me, 'core'); return { teamId: made.id, codes: [createInvite(me, made.id, { hours: 1, mine: true }), createInvite(me, made.id, { hours: 1, mine: true })] }; });
+  const saraKey = withHome(sara, () => createIdentity({ name: 'sara' }).key), boxKey = withHome(box, () => createIdentity({ name: 'ana' }).key);
+  for (const home of [ana, sara, box]) enable(home, bootstrap);
+  const a = await daemon(t, ana, { conductor: false }); await daemon(t, sara, { conductor: false }); await daemon(t, box, { conductor: false });
+  const marks = home => withHome(home, () => readMine().filter(row => row.mine).map(row => row.key));
+  // Sara is a teammate. A mine code alone marks nothing on her machine, and she is told how to say yes if it were hers.
+  const plain = await withHome(sara, () => peerCli(['join', codes[0]], {}));
+  assert.equal(plain.team.mineOffer.key, a.key);
+  assert.match(plain.message, /ana made this code for another computer of theirs\. Nothing was marked as yours\. If you set up both computers, run elu mine @ana\./);
+  await until(() => online(ana, saraKey) && online(sara, a.key), 'sara online');
+  // The other computer of ana's says yes with --mine: it marks ana's laptop, and the laptop marks it back.
+  const yes = await withHome(box, () => peerCli(['join', codes[1]], { mine: true }));
+  assert.match(yes.message, /ana's computer and this one are yours: each can start sessions on the other\./);
+  await until(() => withHome(ana, () => bothMine(a.key, boxKey)) && withHome(box, () => bothMine(boxKey, a.key)), 'both mine');
+  // Sara, who never said yes, is mine on neither side.
+  assert.deepEqual(marks(sara), []); assert.deepEqual(marks(ana), [boxKey]);
+  assert.equal(withHome(ana, () => bothMine(a.key, saraKey)), false);
+  assert.deepEqual(withHome(ana, () => team(teamId)).members.map(m => m.name), ['ana', 'sara', 'ana']);
 });
 
 test('a long code from 0.1.3 still joins over the network', async t => {
