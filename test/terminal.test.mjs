@@ -2520,7 +2520,8 @@ test('a scheduled draft that follows the default gets Approve for me at most, an
   await send(v, '/kanban'); await until(() => v.current.view === 'kanban', 'Kanban');
   await send(v, '/permissions default full'); await until(() => /New sessions start with Full access\./.test(status()), 'default full');
   await send(v, '/new'); await until(() => !panels.compose.hidden && /Permissions {2}Full access/.test(text()), 'form');
-  pickRow(panels.composeList, /When/); v.input.write('\r'); await dialog(v, 'When', 'daily 9:00');
+  pickRow(panels.composeList, /When/); v.input.write('\r'); await until(() => modal(v, 'When'), 'the list of times');
+  dialogList(v, 'When').select(5); v.input.write('\r');
   await until(() => /Schedules run with Approve for me at most\./.test(status()) && /Permissions {2}Approve for me/.test(text()), 'capped');
   await send(v, '/permissions default ask'); await until(() => /New sessions start with Ask for approval, this one too\./.test(status()) && /Permissions {2}Ask for approval/.test(text()), 'follows down');
   await send(v, '/permissions default full');
@@ -2554,7 +2555,8 @@ test('a mode picked in a form opened from Kanban does not carry into the next ne
   // A scheduled form leaves nothing behind either.
   await send(v, '/kanban'); await until(() => v.current.view === 'kanban', 'Kanban again');
   await send(v, '/new'); await until(() => !panels.compose.hidden && /Permissions {2}Ask for approval/.test(text()), 'a fresh form');
-  pickRow(panels.composeList, /When/); v.input.write('\r'); await dialog(v, 'When', 'daily 9:00');
+  pickRow(panels.composeList, /When/); v.input.write('\r'); await until(() => modal(v, 'When'), 'the list of times');
+  dialogList(v, 'When').select(5); v.input.write('\r');
   await send(v, '/permissions auto'); await until(() => /Approve for me for this session\./.test(status()), 'auto picked');
   await send(v, 'Check dependencies for updates'); await until(() => /Scheduled daily 9:00/.test(status()), 'scheduled');
   assert.equal(listSchedules().find(row => row.goal === 'Check dependencies for updates')?.permissions, 'auto');

@@ -71,7 +71,7 @@ test('a schedule keeps its bots and branch and each run starts with them; an old
   fs.mkdirSync(path.join(dir, 'personal', 'elu-code'), { recursive: true });
   fs.writeFileSync(path.join(dir, 'personal', 'elu-code', 'schedules.json'), JSON.stringify({ version: 1, schedules: [{ id: 'schedule-0a1b2c3d', root: p.root, project: 'old', goal: 'Old schedule', when: parseWhen('every 1h', at(9, 8)), enabled: true, createdAt: at(9, 8).toISOString(), nextRunAt: at(9, 9).toISOString(), lastRunAt: null, lastRequestId: null, lastTaskId: null, runs: 0, note: null, permissions: null }] }));
   saveBot({ name: 'nightly', instructions: 'Check the nightly build.' });
-  const row = saveSchedule({ root: p.root, goal: 'Check the build', when: parseWhen('in 2m', at(9, 8)), permissions: 'auto', bots: ['reviewer', 'nightly'], place: { kind: 'branch', branch: 'nightly-checks' } }, at(9, 8));
+  const row = saveSchedule({ root: p.root, goal: 'Check the build', when: parseWhen('in 2m', at(9, 8)), permissions: 'auto', picked: true, bots: ['reviewer', 'nightly'], place: { kind: 'branch', branch: 'nightly-checks' } }, at(9, 8));
   assert.deepEqual([row.bots, row.place], [['reviewer', 'nightly'], { kind: 'branch', branch: 'nightly-checks' }]);
   assert.deepEqual(listSchedules().find(value => value.id === row.id).bots, ['reviewer', 'nightly']);
   // A new worktree is what every run gets anyway, so it is not stored. Your checkout as it is needs Full access, which a schedule never has.
