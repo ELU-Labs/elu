@@ -4,14 +4,14 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { temp, project, fakeClis, git, autoApprove } from './helpers.mjs';
 import { ProjectController } from '../lib/projects.mjs';
-import { projectFolder } from '../lib/workspace.mjs';
+import { projectFolder, pendingRequests, saveRequest, updateRequest } from '../lib/workspace.mjs';
 import { repository } from '../lib/git.mjs';
 import { taskDir, readTask, saveTask, lock } from '../lib/state.mjs';
 import { pinnedConfig, structuralChecks } from '../lib/checks.mjs';
 import { protectedPath } from '../lib/policy.mjs';
 import { sandboxArgs } from '../lib/sandbox.mjs';
 import { capMode, checkMode, defaultMode, saveDefaultMode } from '../lib/modes.mjs';
-import { enqueue } from '../lib/conductor.mjs';
+import { enqueue, retryRequest } from '../lib/conductor.mjs';
 import { saveSchedule, parseWhen } from '../lib/schedules.mjs';
 import { answerApproval, approvalsDir, awaitDecision, pendingApprovals, requestApproval } from '../lib/approvals.mjs';
 import { defaultConfig } from '../lib/config.mjs';
@@ -156,6 +156,24 @@ test('a schedule never runs with Full access; an automatic request is capped at 
   const request = enqueue(p.root, 'Normalize coupons', { permissions: capMode(defaultMode(), 'auto') });
   assert.equal(request.permissions, 'auto');
   assert.throws(() => enqueue(p.root, 'q', { origin: origin('ask'), readOnly: true, context: 'ctx', permissions: 'auto' }), /Teammate questions stay read-only/);
+});
+
+// A mode the owner picked for a new session is saved on its request, so every window and a
+// restart know a lower default leaves it. Only the owner's own new session with a mode has one.
+test('a picked mode is kept on the request through a rewrite and a retry', async t => {
+  const p = project(t), fake = fakeClis(p.parent); environment(t, fake.env);
+  const request = enqueue(p.root, 'Normalize coupons', { permissions: 'full', picked: true });
+  assert.equal(request.picked, true);
+  assert.equal('picked' in enqueue(p.root, 'Rename billing', { permissions: 'full' }), false);
+  updateRequest(p.root, request.id, { state: 'blocked', reason: 'Checks are still needed.' });
+  assert.equal(retryRequest(p.root, request.id).picked, true);
+  updateRequest(p.root, request.id, { state: 'blocked', reason: 'Checks are still needed.' });
+  assert.equal(enqueue(p.root, 'Normalize coupons, and trim them', { id: request.id, permissions: 'full' }).picked, true, 'sent again with new text');
+  assert.equal(pendingRequests(p.root).find(row => row.id === request.id).picked, true);
+  assert.equal(saveRequest(p.root, 'Normalize coupons', request.id, { state: 'blocked' }).picked, true);
+  assert.throws(() => enqueue(p.root, 'x', { picked: true }), /Only a mode the owner picked/);
+  assert.throws(() => enqueue(p.root, 'x', { permissions: 'auto', picked: 'yes' }), /Only a mode the owner picked/);
+  assert.throws(() => enqueue(p.root, 'q', { origin: origin('handoff'), context: 'ctx', permissions: 'auto', picked: true }), /Only a mode the owner picked/);
 });
 
 test('a handoff from a teammate runs the mode the owner picked; a teammate question never gets one', async t => {

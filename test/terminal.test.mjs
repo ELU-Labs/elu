@@ -2467,6 +2467,26 @@ test('a saved request goes again with no more access than the default now', { ti
   assert.equal(started('Rename billing').permissions, 'ask');
 });
 
+// The pick is saved on the request, so a window that did not send it, or ELU Code opened again,
+// keeps it too.
+test('a saved request whose mode was picked keeps it in any window, sent again or retried', { timeout: 40000 }, async t => {
+  const p = setup(t);
+  saveRequest(p.root, 'Add a retry budget', null, { state: 'blocked', reason: 'Checks are still needed.', permissions: 'full', picked: true });
+  saveRequest(p.root, 'Rename billing', null, { state: 'blocked', reason: 'Checks are still needed.', permissions: 'full', picked: true });
+  const v = await view(t, { repo: p.repo }), panels = v.current.panels, status = () => panels.status.getText();
+  const started = goal => { const row = v.current.snapshot.tasks.find(task => task.goal === goal); return row && readTask(p.repo, row.id); };
+  await send(v, '/kanban'); await until(() => v.current.view === 'kanban', 'Kanban');
+  await send(v, '/permissions default ask'); await until(() => /New sessions start with Ask for approval\./.test(status()), 'default ask');
+  await openTask(v, /Add a retry budget/); await until(() => panels.ask.getValue() === 'Add a retry budget' && /Saved request restored/.test(status()), 'restored');
+  await send(v, 'Add a retry budget, with jitter');
+  await until(() => started('Add a retry budget, with jitter'), 'session');
+  assert.equal(started('Add a retry budget, with jitter').permissions, 'full');
+  await selectRow(v, /Rename billing/); v.input.write('r');
+  await until(() => /Queued again\./.test(status()) && !/the default now/.test(status()), 'retried as it was');
+  await until(() => started('Rename billing'), 'second session');
+  assert.equal(started('Rename billing').permissions, 'full');
+});
+
 test('approvals wait under Needs you first; y allows, n denies, Enter shows one, and the chat answers too', { timeout: 30000 }, async t => {
   const p = setup(t), v = await view(t, { repo: p.repo }), panels = v.current.panels, status = () => panels.status.getText();
   liveTask(p.root, { id: '2', goal: 'Install the deps', state: 'needs_input' }); saveTask(p.repo, { ...readTask(p.repo, '2'), permissions: 'ask' });
