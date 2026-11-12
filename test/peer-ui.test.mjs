@@ -1321,8 +1321,8 @@ test('Kanban shows teammates\' Tasks as cards in the same columns with their nam
   let people = [
     { peer: SARA, name: 'sara', box: 'sara-box', online: true, heardAt: ago(0), tasks: [teamTask(), teamTask({ id: 't-2', title: '{red-fg}Loud{/} title', priority: 'low', severity: 'medium', who: '@scout', subtasks: [], met: [], approvedAt: ago(20), updatedAt: ago(5) })] },
     { peer: LI, name: 'li', online: false, heardAt: ago(180), tasks: [teamTask({ id: 't-3', title: 'Old cleanup', state: 'done', priority: 'low', severity: 'low', who: 'bot', subtasks: [], met: [1, 2], doneAt: ago(60), updatedAt: ago(60) })] },
-  ], sharing = 'board';
-  peer.teammateTasks = root => { asked.push(root); return people; }; peer.taskSharing = () => sharing;
+  ], sharing = 'on';
+  peer.teammateTasks = root => { asked.push(root); return people; }; peer.taskSharing = () => sharing; peer.taskBoardBy = () => ({ team: 'core', by: ['{red-fg}ana{/}'] });
   const v = await view(t, { repo: repository(p.root), peer }), panels = v.panels, focused = () => v.current.screen.focused;
   const column = index => panels.kanbanLists[index].items.map(item => plainItem(item).trimEnd()), label = index => panels.kanbanBoxes[index]._label.getText().trim();
   await send(v, '/kanban'); await until(() => v.current.view === 'kanban' && column(1).length === 2 && column(3).length === 1, 'the teammates\' cards');
@@ -1379,8 +1379,9 @@ test('Kanban shows teammates\' Tasks as cards in the same columns with their nam
   // Gone on their side: gone here.
   people = [];
   await until(() => column(1).length === 0 && column(3).length === 0, 'the cards leave', 8000);
-  // When this project's own Tasks do not reach the team, one line under the board says why.
-  const notes = { 'no-origin': /Your Tasks are not shown to teammates: this project has no origin remote\./, home: /from your home folder/, off: /kept off the team board\. \/share on puts them back\./, 'status-off': /status is off/, none: /nobody on your team has shared this repository/ };
+  // When this project's own Tasks do not reach the team, one line under the board says why; when they reach it through someone else's share, it says whose.
+  const notes = { 'no-origin': /Your Tasks are not shown to teammates: this project has no origin remote\./, home: /from your home folder/, off: /Kept off the team board: no Tasks go out or come in\. \/share on puts it back\./, 'status-off': /status is off/,
+    board: /Your Tasks here are on core's board: \{red-fg\}ana\{\/\} shares this repository\. \/share off keeps them off\./ };
   for (const [value, pattern] of Object.entries(notes)) {
     sharing = value;
     await until(() => !panels.kanbanTeam.hidden && pattern.test(panels.kanbanTeam.getText()), `the note for ${value}`, 8000);
@@ -1388,6 +1389,10 @@ test('Kanban shows teammates\' Tasks as cards in the same columns with their nam
   }
   sharing = 'on';
   await until(() => panels.kanbanTeam.hidden, 'no note while they are told', 8000);
+  // A project of a repository nobody on the team shares has no note, and never asks to be shared.
+  sharing = 'board'; await until(() => !panels.kanbanTeam.hidden, 'the board note', 8000);
+  sharing = 'none'; await until(() => panels.kanbanTeam.hidden, 'no note for an unrelated project', 8000);
+  await new Promise(resolve => setTimeout(resolve, 3500)); assert.equal(panels.kanbanTeam.hidden, true);
 });
 
 test('/share off keeps the open project\'s Tasks off the team board and /share on puts them back', async t => {
@@ -1395,7 +1400,7 @@ test('/share off keeps the open project\'s Tasks off the team board and /share o
   const peer = fakePeer(), calls = [];
   peer.taskBoard = (root, on) => { calls.push([root, on]); return null; };
   const v = await view(t, { repo: repository(p.root), peer });
-  await send(v, '/share off'); await until(() => /kept off the team board\. \/share on puts them back\./.test(v.panels.status.getText()), 'off');
+  await send(v, '/share off'); await until(() => /kept off the team board: your Tasks are not shown to teammates, and theirs are not shown here\. \/share on puts it back\./.test(v.panels.status.getText()), 'off');
   await send(v, '/share on'); await until(() => /on the team board again/.test(v.panels.status.getText()), 'on');
   assert.deepEqual(calls, [[p.root, false], [p.root, true]]);
 });

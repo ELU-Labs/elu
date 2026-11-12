@@ -41,7 +41,7 @@ as `.env`, stops it until `.gitignore` keeps that file out.
 | --- | --- |
 | Sessions | Every session across your projects. The selected one is open beside the list. |
 | Projects | Your projects. `n` makes one, `o` makes another the active one. |
-| Kanban | The open project's tasks: To do, In progress, Needs you, Done. On a team, everyone with a clone of the same repository shares one board: teammates' Tasks show in the same columns with their name, to read only. `/share off` keeps a project's own Tasks off it. |
+| Kanban | The open project's tasks: To do, In progress, Needs you, Done. On a team, everyone with a clone of the same repository shares one board: teammates' Tasks show in the same columns with their name, to read only. `/share off` keeps a project off it both ways. |
 | Chats | Your team's channels, your teammates and your bots. |
 | Bots | Your bots. `n` makes one, Enter opens one. |
 | Usage | Your vendor accounts and their plan usage. |
@@ -227,7 +227,9 @@ or `elu access`, shows and changes all of it.
 `elu share`, or `/share` in the app, shares the project you are in, so teammates can name it
 and see its live work. Inviting a teammate shares one too: `elu invite` shares the folder you
 run it in when it is an ELU Code project (`--project PATH` names another), and `/invite`
-the open project. Joining shares nothing of yours. The wire format is in
+the open project. Joining shares no project of yours, but your own clone of a repository a
+teammate shares with the team is on that team's board: its approved Tasks are shown to them,
+and the Kanban tab says so. `/share off` in that project keeps it off. The wire format is in
 [docs/peer-network.md](docs/peer-network.md).
 
 Teammates on a team a project is shared with also see the work in it: for each live

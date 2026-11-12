@@ -17,7 +17,7 @@ import { approveTask, proposeTask, sessionTasks } from '../lib/plan.mjs';
 import { BINDING } from '../lib/peer/a2a.mjs';
 import { PeerDaemon } from '../lib/peer/daemon.mjs';
 import { Session } from '../lib/peer/rpc.mjs';
-import { BOARDS_MAX, BYTES_MAX, CONTEXT_MAX, DONE_MS, KEEP_MS, PLANS_MAX, SHOWN_MAX, boardPlans, cleanBoards, cleanPlan, cleanPlans, fitPlans, heardPlans, planRows, planSharing, prunePlans, remoteBoards, remotePlans, saveRemoteBoards, saveRemotePlans, teammatePlanParts, teammatePlans, toldBoards } from '../lib/peer/plans.mjs';
+import { BOARDS_MAX, BYTES_MAX, CONTEXT_MAX, DONE_MS, KEEP_MS, PLANS_MAX, SHOWN_MAX, boardBy, boardPlans, boardWho, cleanBoards, firstCommit, cleanPlan, cleanPlans, fitPlans, heardPlans, planRows, planSharing, prunePlans, remoteBoards, remotePlans, saveRemoteBoards, saveRemotePlans, teammatePlanParts, teammatePlans, toldBoards } from '../lib/peer/plans.mjs';
 
 const ORIGIN = 'https://github.com/elu-labs/sample.git', OTHER = 'https://github.com/elu-labs/docs.git';
 const REPO = 'a'.repeat(64);
@@ -134,8 +134,10 @@ test('Tasks go only to teammates on a team the project is shared with, again whe
     assert.equal(daemon.hello(ana.key).plans, true, 'this build says in its hello that it reads Tasks');
     // elu.status names the repositories shared with the teams we are both on, and with which of them, so a teammate's own clone joins that team's board.
     const statusOf = side => side.wire.out.split('\n').flatMap(line => { try { const frame = JSON.parse(line); return frame.method === 'elu.status' ? [frame.params] : []; } catch { return []; } }).at(-1);
-    assert.deepEqual(statusOf(toAna).boards, [{ repoId: repoId(app.root), handle: 'app', teams: [crew.teamId] }]);
-    assert.deepEqual(statusOf(toBob).boards, [{ repoId: repoId(docs.root), handle: 'docs', teams: [second.id] }]);
+    // Each with the repository's first commit, which a teammate's clone must have for the claim to count there.
+    assert.match(firstCommit(app.root), /^[0-9a-f]{40}$/);
+    assert.deepEqual(statusOf(toAna).boards, [{ repoId: repoId(app.root), handle: 'app', commit: firstCommit(app.root), teams: [crew.teamId] }]);
+    assert.deepEqual(statusOf(toBob).boards, [{ repoId: repoId(docs.root), handle: 'docs', commit: firstCommit(docs.root), teams: [second.id] }]);
     // On connect each is told the Tasks of the projects open to them, and nothing of the other project.
     assert.deepEqual([toAna.titles(), toBob.titles()], [['Fix the login redirect'], ['Write the setup page']]);
     assert.equal(toAna.wire.out.includes('Write the setup page'), false); assert.equal(toBob.wire.out.includes('Fix the login redirect'), false);
@@ -283,24 +285,36 @@ test('same repository, same board: a member\'s clone of a repository a teammate 
     // Sara joined Ana's team and opened her own clone of Ana's repository. She shares nothing.
     const clone = registeredProject(t, { origin: ORIGIN }), other = registeredProject(t, { origin: OTHER }), bare = registeredProject(t);
     for (const project of [clone, other, bare]) writePlans(project.root, 1, [plan({ id: 't-00000001', title: `Work in ${path.basename(project.root)}` })]);
-    const shop = repoId(clone.root), mine = `Work in ${path.basename(clone.root)}`;
+    const shop = repoId(clone.root), first = firstCommit(clone.root), mine = `Work in ${path.basename(clone.root)}`;
     assert.deepEqual(planRows(now), [], 'nothing is told before a teammate says they share the repository');
-    assert.equal(planSharing(clone.root), 'none');
+    assert.equal(planSharing(clone.root), 'none'); assert.equal(boardBy(clone.root), null);
+    // Knowing the remote is not enough: a claim whose first commit Sara's clone does not have puts nothing on a board.
+    saveRemoteBoards(ana.key, [{ repoId: shop, handle: 'shop', commit: 'f'.repeat(40), teams: [crew.teamId] }], now);
+    assert.deepEqual(planRows(now), [], 'a guessed remote with a commit this clone does not have');
+    assert.equal(planSharing(clone.root), 'none'); assert.deepEqual(teammatePlans(clone.root, now), []);
     // Ana says she shares it with the team: Sara's clone is on that board, told to that team only, with Ana's handle.
-    saveRemoteBoards(ana.key, [{ repoId: shop, handle: 'shop', teams: [crew.teamId] }], now);
+    saveRemoteBoards(ana.key, [{ repoId: shop, handle: 'shop', commit: first, teams: [crew.teamId] }], now);
     const rows = boardPlans(now);
     assert.deepEqual(rows.map(row => [row.task.title, row.task.handle, row.task.repoId, row.teams]), [[mine, 'shop', shop, [crew.teamId]]]);
     assert.equal(planSharing(clone.root), 'board'); assert.equal(planSharing(other.root), 'none'); assert.equal(planSharing(bare.root), 'no-origin');
+    // Whose share puts it there, for the note on Sara's board.
+    assert.deepEqual(boardBy(clone.root), { team: 'core', by: ['ana'] }); assert.equal(boardBy(other.root), null);
+    assert.equal(boardWho(boardBy(clone.root)), "core's board: ana shares this repository");
+    assert.equal(boardWho({ team: 'crew', by: ['ana', 'li', 'bo'] }), "crew's board: ana, li and others share this repository");
     for (const word of [clone.root, '"edit"', 'fix the login redirect please']) assert.equal(JSON.stringify(rows).includes(word), false, word);
     // A claim counts only from someone on that team, and only for a team this machine is on.
     saveRemoteBoards(ana.key, [], now);
-    saveRemoteBoards(bob.key, [{ repoId: shop, handle: 'shop', teams: [crew.teamId] }], now);
+    saveRemoteBoards(bob.key, [{ repoId: shop, handle: 'shop', commit: first, teams: [crew.teamId] }], now);
     assert.deepEqual(planRows(now), [], 'bob is not on the team he names');
-    saveRemoteBoards(bob.key, [{ repoId: shop, handle: 'shop', teams: ['f'.repeat(64)] }], now);
+    saveRemoteBoards(bob.key, [{ repoId: shop, handle: 'shop', commit: first, teams: ['f'.repeat(64)] }], now);
     assert.deepEqual(planRows(now), [], 'a team this machine is not on');
-    saveRemoteBoards(bob.key, [{ repoId: shop, handle: 'shop', teams: [side.id] }], now);
+    saveRemoteBoards(bob.key, [{ repoId: shop, handle: 'shop', commit: first, teams: [side.id] }], now);
     assert.deepEqual(boardPlans(now).map(row => row.teams), [[side.id]], 'bob shares it with the side team');
-    saveRemoteBoards(bob.key, [], now); saveRemoteBoards(ana.key, [{ repoId: shop, handle: 'shop', teams: [crew.teamId] }], now);
+    // Shared from here with one team: only that team, though bob says he shares it with another. The share's teams are the owner's choice.
+    share(clone.root, { handle: 'mine', teams: [crew.teamId] });
+    assert.deepEqual(boardPlans(now).map(row => row.teams), [[crew.teamId]], 'a share limited to crew stays with crew');
+    unshare('mine');
+    saveRemoteBoards(bob.key, [], now); saveRemoteBoards(ana.key, [{ repoId: shop, handle: 'shop', commit: first, teams: [crew.teamId] }], now);
     // Kept off: told to nobody, and back on again.
     setBoardOff(clone.root, true);
     assert.deepEqual(planRows(now), []); assert.equal(planSharing(clone.root), 'off');
@@ -330,12 +344,12 @@ test('same repository, same board: a member\'s clone of a repository a teammate 
     toAna.say('elu.status', { rows: [], box: 'ana-mac', bots: [], boards: [] }); await settle();
     assert.deepEqual(remoteBoards(ana.key), []); assert.equal(daemon.plansAt, 0, 'a change in the boards tells again on the next tick');
     daemon.tellPlans(); assert.deepEqual(toAna.titles(), []);
-    toAna.say('elu.status', { rows: [], boards: [{ repoId: shop, handle: 'shop', teams: [crew.teamId] }, { repoId: 'x', handle: 'bad', teams: [crew.teamId] }] }); await settle();
-    assert.deepEqual(remoteBoards(ana.key), [{ repoId: shop, handle: 'shop', teams: [crew.teamId] }]);
+    toAna.say('elu.status', { rows: [], boards: [{ repoId: shop, handle: 'shop', commit: first, teams: [crew.teamId] }, { repoId: 'x', handle: 'bad', commit: first, teams: [crew.teamId] }, { repoId: 'b'.repeat(64), handle: 'nocommit', teams: [crew.teamId] }] }); await settle();
+    assert.deepEqual(remoteBoards(ana.key), [{ repoId: shop, handle: 'shop', commit: first, teams: [crew.teamId] }]);
     daemon.tellPlans(); assert.deepEqual(toAna.titles(), [mine]);
     // A build from before the board sends no boards: what was said stays, and nothing is added.
     toAna.say('elu.status', { rows: [] }); await settle();
-    assert.deepEqual(remoteBoards(ana.key), [{ repoId: shop, handle: 'shop', teams: [crew.teamId] }]);
+    assert.deepEqual(remoteBoards(ana.key), [{ repoId: shop, handle: 'shop', commit: first, teams: [crew.teamId] }]);
 
     // The other way: Ana's Tasks show in Sara's clone, and in no project of another repository.
     fs.writeFileSync(peerFile('state.json'), JSON.stringify({ running: true, at: new Date(now).toISOString(), key: me.key, teams: [{ id: crew.teamId, members: [{ key: me.key, online: true }, { key: ana.key, online: true, box: 'ana-mac' }] }, { id: side.id, members: [{ key: me.key, online: true }, { key: bob.key, online: true }] }] }));
@@ -344,6 +358,15 @@ test('same repository, same board: a member\'s clone of a repository a teammate 
     assert.deepEqual(teammatePlans(clone.root, now).map(person => [person.name, person.box, person.tasks.map(task => task.title)]), [['ana', 'ana-mac', ['Ana in the shop']]]);
     assert.deepEqual(teammatePlans(other.root, now), []); assert.deepEqual(teammatePlans(bare.root, now), []);
     assert.match(teammatePlanParts(clone.root, now)[0], /Ana in the shop/);
+    // Kept off the board: teammates' Tasks are neither shown nor given to the models there, and come back with it.
+    setBoardOff(clone.root, true);
+    assert.deepEqual(teammatePlans(clone.root, now), []); assert.deepEqual(teammatePlanParts(clone.root, now), []); assert.equal(boardBy(clone.root), null);
+    setBoardOff(clone.root, false);
+    assert.equal(teammatePlans(clone.root, now).length, 1);
+    // Shared from here with the side team only: Ana's claim for crew does not bring her Tasks in.
+    share(clone.root, { handle: 'mine', teams: [side.id] });
+    assert.deepEqual(teammatePlans(clone.root, now).map(person => person.name), ['bob']);
+    unshare('mine');
     // Sara leaves the team: Ana's claim and Ana's Tasks no longer count here.
     appendOp(crew.teamId, makeOp(me, crew.teamId, 'leave', {}));
     assert.deepEqual(teammatePlans(clone.root, now), []); assert.deepEqual(planRows(now), []);
@@ -354,9 +377,10 @@ test('same repository, same board: a member\'s clone of a repository a teammate 
 test('a teammate\'s list of shared repositories is checked field by field, and dropped with them', t => {
   withHome(newHome(t), () => {
     createIdentity({ name: 'sara' });
-    const good = { repoId: REPO, handle: 'app', teams: ['b'.repeat(64)] };
-    assert.deepEqual(cleanBoards([good, { ...good }, { ...good, repoId: 'c'.repeat(64), teams: [] }, { ...good, repoId: 'd'.repeat(64), handle: '../x' }, { ...good, repoId: 'e'.repeat(64), teams: ['nope', 'b'.repeat(64), 'b'.repeat(64)], extra: 1 }, 'junk']),
-      [good, { repoId: 'e'.repeat(64), handle: 'app', teams: ['b'.repeat(64)] }]);
+    const good = { repoId: REPO, handle: 'app', commit: '0'.repeat(40), teams: ['b'.repeat(64)] };
+    assert.deepEqual(cleanBoards([good, { ...good }, { ...good, repoId: 'c'.repeat(64), teams: [] }, { ...good, repoId: 'd'.repeat(64), handle: '../x' }, { ...good, repoId: 'e'.repeat(64), teams: ['nope', 'b'.repeat(64), 'b'.repeat(64)], extra: 1 },
+      { ...good, repoId: '1'.repeat(64), commit: undefined }, { ...good, repoId: '2'.repeat(64), commit: 'HEAD' }, { ...good, repoId: '3'.repeat(64), commit: '--all' }, { ...good, repoId: '4'.repeat(64), commit: 'a'.repeat(64) }, 'junk']),
+      [good, { repoId: 'e'.repeat(64), handle: 'app', commit: '0'.repeat(40), teams: ['b'.repeat(64)] }, { ...good, repoId: '4'.repeat(64), commit: 'a'.repeat(64) }], 'a claim names a commit id, or it is dropped');
     assert.equal(cleanBoards(Array.from({ length: 40 }, (_, n) => ({ ...good, repoId: n.toString(16).padStart(64, '0') }))).length, BOARDS_MAX);
     assert.deepEqual([cleanBoards(null), cleanBoards({})], [[], []]);
     assert.deepEqual(toldBoards(['b'.repeat(64)]), [], 'nothing shared, nothing named');

@@ -2063,8 +2063,9 @@ test('same repository, same board: a joiner\'s own clone tells its Tasks over th
   const bootstrap = await testnet(t), crew = makeTeam(t), ana = crew.founder, sara = crew.member;
   enable(ana.home, bootstrap); enable(sara.home, bootstrap);
   const mine = withHome(ana.home, () => { const p = registeredProject(t, { origin: ORIGIN }); share(p.root, { handle: 'shop' }); return p; });
-  // Sara's own clone of the same repository, written another way. She never shares it.
+  // Sara's own clone of the same repository, written another way, with its history. She never shares it.
   const clone = withHome(sara.home, () => registeredProject(t, { origin: 'git@github.com:elu-labs/sample.git' }));
+  const fetched = spawnSync('git', ['-C', clone.root, 'fetch', '-q', mine.root, 'HEAD'], { encoding: 'utf8' }); assert.equal(fetched.status, 0, fetched.stderr);
   const elsewhere = withHome(sara.home, () => registeredProject(t, { origin: 'https://github.com/elu-labs/docs.git' }));
   const task = (extra = {}) => ({ id: 't-5ab0c0de', session: '1', revision: 1, title: 'Fix the checkout total', description: 'The total skips the discount.', goal: 'The total includes the discount.', objectives: ['The discount is applied'],
     priority: 'high', severity: 'medium', state: 'approved', startedBy: 'owner', by: 'lead', approvedAt: new Date().toISOString(), subtasks: [{ id: 's1', text: 'Apply it in total()', state: 'doing' }], met: [], edit: { repository: clone.root, request: 'fix the total' }, ...extra });
@@ -2083,6 +2084,11 @@ test('same repository, same board: a joiner\'s own clone tells its Tasks over th
   // At Sara's: Ana's Task shows in her clone, which is on the board through Ana's share.
   await until(() => withHome(sara.home, () => peer.teammateTasks(clone.root))[0]?.tasks[0]?.title === 'Ana in the shop', 'Ana\'s Task in Sara\'s clone');
   assert.equal(withHome(sara.home, () => peer.taskSharing(clone.root)), 'board');
+  assert.deepEqual(withHome(sara.home, () => peer.taskBoardBy(clone.root)), { team: 'core', by: ['ana'] });
+  // Sara shares her clone and stops: elu unshare says Ana's share still keeps its Tasks on the board.
+  withHome(sara.home, () => shareWith(clone.root, { handle: 'mine' }));
+  const stopped = await withHome(sara.home, () => peerCli(['unshare', 'mine'], {}));
+  assert.equal(stopped.message, "Stopped sharing mine. Its Tasks are still on core's board: ana shares this repository. /share off in that project keeps them off.");
   assert.deepEqual(withHome(sara.home, () => peer.teammateTasks(elsewhere.root)), []);
   // Done at Sara's: done at Ana's.
   write(sara.home, clone.root, [task({ state: 'done', doneAt: new Date().toISOString(), subtasks: [{ id: 's1', text: 'Apply it in total()', state: 'done' }], met: [1] })]);
