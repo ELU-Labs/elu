@@ -111,10 +111,10 @@ test('two homes team up, ask, answer, route a local A2A call through the CLI, sh
   const asked = await ok(homes.a, ['ask', '@b', 'Where is coupon normalization?']);
   assert.match(asked.askId, /^[a-f0-9-]{36}$/);
 
-  // B approves through a facade command; the reply goes back into the thread with no second step.
+  // B accepts through a facade command; the reply goes back into the thread with no second step.
   const incoming = await until(() => items(homes.b).find(row => row.kind === 'incoming'), 'incoming ask at b');
   assert.equal(incoming.name, 'a'); assert.equal(incoming.project, 'app');
-  await command(homes.b, { type: 'approve', id: incoming.id });
+  await command(homes.b, { type: 'accept', id: incoming.id });
   const replied = await until(() => items(homes.b).find(row => row.kind === 'replied'), `reply sent at b\n${log(homes.b)}`, 240000);
   assert.match(replied.text, /add multiple agents/);
 
