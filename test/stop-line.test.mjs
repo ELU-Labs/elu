@@ -103,15 +103,16 @@ test('only a session that stopped and waits for the owner has the line', () => {
   assert.equal(stopLine(null), null);
 });
 
-test('in the Sessions list a stopped row keeps its name, then the action; its text is the whole line', () => {
+test('in the Sessions list a stopped row keeps its name, then the action where it fits; its text is the whole line', () => {
   const now = Date.parse(at) + 60000;
   const task = session({ title: 'Normalize coupons', error: { message: 'The model could not finish.', cause: 'unknown', timedOut: true } });
   const [row] = boardRows([{ name: 'shop', root: '/p/shop', activity: [], tasks: [task], queue: [] }], now);
   assert.equal(row.group, 3); assert.equal(row.label, 'blocked');
   assert.equal(row.now, 'Stopped before it finished. Your changes are kept. Type continue to carry on.');
   assert.equal(rowTitle(row, now), 'Normalize coupons · type continue');
-  // A narrow row cuts the name first, at a word.
-  assert.equal(rowTitle({ ...row, task: { ...task, title: 'Normalize coupon codes before checkout compares them' } }, now, 34), 'Normalize coupon… · type continue');
+  // A row too narrow for both keeps the whole name, which is how the session is found.
+  assert.equal(rowTitle(row, now, 33), 'Normalize coupons · type continue');
+  assert.equal(rowTitle(row, now, 32), 'Normalize coupons');
   // A finished session's row is its name alone, as before.
   const [done] = boardRows([{ name: 'shop', root: '/p/shop', activity: [], tasks: [{ ...task, state: 'answered', error: null, result: { summary: 'Done.' } }], queue: [] }], now);
   assert.equal(rowTitle(done, now), 'Normalize coupons');

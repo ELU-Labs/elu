@@ -1970,7 +1970,7 @@ test('a message sent after its session started and before the screen drew it wai
   assert.equal(pendingRequests(p.root).find(row => row.goal === 'Tidy the coupon module')?.state, 'running', 'its request is not cancelled');
   conductor.busy = false;
   await until(() => tasks().find(task => task.id === second)?.state === 'stopped', 'stopped');
-  await until(() => /Stopped by the owner\./.test(status()), 'and the line then says how it ended');
+  await until(() => /You stopped it\. Your changes are kept\. Type continue to carry on\./.test(status()), 'and the line then says how it ended, and what to do');
   assert.equal(tasks().find(task => task.id === id).state, 'running', 'the first session works on');
 });
 
@@ -2006,7 +2006,7 @@ test('/stop in an idle session whose next turn the conductor is starting stops t
   const conductor = resources(t).conductor, tasks = () => projectSnapshot(p.repo).tasks, row = goal => pendingRequests(p.root).find(value => value.goal === goal);
   await send(v, 'Keep working on the board'); await until(() => tasks()[0]?.state === 'running' && /is working/.test(panels.chat.getText()), 'the session works');
   await send(v, '/stop'); await until(() => tasks()[0].state === 'stopped' && row('Keep working on the board')?.state === 'done', 'the session is idle');
-  await until(() => /Stopped by the owner\./.test(status()), 'the screen says how it ended');
+  await until(() => /You stopped it\..*Type continue to carry on\./.test(status()), 'the screen says how it ended, and what to do');
   conductor.busy = true;
   await send(v, 'Now tidy the coupon module'); await until(() => row('Now tidy the coupon module'), 'the next message saved');
   const next = row('Now tidy the coupon module'); assert.equal(next.continuationTaskId, tasks()[0].id, 'it is for that session');
