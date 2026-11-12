@@ -472,17 +472,19 @@ test('a click on a Projects row behind a project\'s settings closes the dialog a
   v.input.write('\x1b'); await until(() => !modal(v, 'Project Shop') && v.current.screen.focused === list, 'Esc closes it');
 });
 
-test('the wheel moves the Projects list one row a step, and a trackpad burst one row', async t => {
+test('the wheel moves the Projects list one row a step, and every step of a trackpad burst', async t => {
   const one = setup(t); registerProject(one.repo);
   for (const name of ['Shop', 'Docs', 'Site']) nameProject(repository(project({ after: close => resources(t).files.push(close) }).root), name);
   const v = await view(t, { dashboard: true }), list = v.current.panels.projectsList;
   await send(v, '/projects'); await until(() => v.current.view === 'projects' && list.items.length === 4, 'four project rows');
   list.focus(); list.select(0); v.current.screen.render(); await pause(60);
   wheel(v, list.items[0]); await until(() => list.selected === 1, 'one step, one row'); await pause(60);
-  // Six steps in one read, as a trackpad sends them: one row, not twelve.
+  // Two steps in one read, as a trackpad sends them: two rows, not one and not four.
+  v.input.write(`\x1b[<65;${list.aleft + 2};${list.atop + 1}M`.repeat(2)); await pause();
+  assert.equal(list.selected, 3, 'a burst moves a row a step');
   v.input.write(`\x1b[<65;${list.aleft + 2};${list.atop + 1}M`.repeat(6)); await pause();
-  assert.equal(list.selected, 2, 'a burst moves one row');
-  v.input.write(`\x1b[<64;${list.aleft + 2};${list.atop + 1}M`); await until(() => list.selected === 1, 'up a row at once');
+  assert.equal(list.selected, 3, 'and stops at the last row');
+  v.input.write(`\x1b[<64;${list.aleft + 2};${list.atop + 1}M`); await until(() => list.selected === 2, 'up a row at once');
   assert.equal(v.current.view, 'projects'); assert.equal(modal(v, 'Project sample app'), undefined, 'the wheel opens nothing');
 });
 
