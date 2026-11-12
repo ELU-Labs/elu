@@ -32,6 +32,13 @@ message and press Enter. That starts a session: the model answers, or edits in a
 worktree on its own branch. Then the project's checks run and `@reviewer` reviews the
 change. Nothing is pushed until you type `/publish` and confirm.
 
+What installing and building leave in the worktree is not a change when Git ignores it:
+`node_modules`, `.venv`, `venv`, `__pycache__`, `.next`, `dist`, `build`, `coverage`,
+`.pytest_cache`, `.turbo`, `.cache`, `target` and the like. Nothing in those folders is read,
+so a link or a large file there never stops a session, and none of it is published. Any other
+ignored file the model writes fails the `no-ignored-output` check, and one that looks like a
+secret, such as `.env`, fails `secret-paths`; a link among them is never followed.
+
 A worktree sits beside its repository, in a folder named after it with `.elu-code` added
 (`shop.elu-code` beside `shop`). When a Task edits the project folder itself and the folder
 has no commits yet, ELU Code first commits its files there as `Start project history`,
@@ -191,6 +198,18 @@ Five come with the app. You can edit or remove any of them in the Bots tab.
 - `@lead plan the refund change` gives a bot work. `@lead`, `@qa`, `@elu` and each bot you
   make do the work you write to them, within the session's permissions; `@reviewer` and
   `@pair` read and answer.
+- After each edit, ELU Code runs the checks and every reviewing bot of the session reviews
+  the change. Its must-fix findings go to the model, which fixes each one or disputes it with
+  a reason; then the checks and the review run again, up to the policy's review rounds. The
+  chat shows each step, such as `@reviewer: 2 must-fix`, `Fixed 2` and `@reviewer: Passed.`
+  The model is told which bots review its change and that ELU Code runs the checks and
+  publishing, so it never asks you to wait for a bot, review, commit, push or merge.
+- Write to a reviewing bot about edits the session has not published, such as `@reviewer make
+  sure the fixes are real, not nitpicks`, and it reviews them with your words, in that same
+  loop. That holds when the session stopped after its edits (ready, blocked, not verified or
+  waiting for you) and the bot is one of its reviewers. A message that starts with `?`, or
+  ends with `?` and asks for no work (fix, check, review, verify, work with or on, go
+  through, look at, make sure), is a question: the bot answers it in the chat.
 - After you write to a bot, your next messages in that session go to it too, until you name
   another bot or start a message with `@model`. The title of the message box names who gets
   the message. A bot you stop picks up where it stopped on your next message when it runs on

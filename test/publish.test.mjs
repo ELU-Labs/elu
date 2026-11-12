@@ -8,9 +8,10 @@ import { repository } from '../lib/git.mjs';
 import { readTask } from '../lib/state.mjs';
 import { preparePublish, publish, destination } from '../lib/publish.mjs';
 
-function publishingFixture(t) {
+function publishingFixture(t, { ignore = null } = {}) {
   const p = project(t); const fake = fakeClis(p.parent);
   assert.equal(cli(p.root, ['init', '--yes'], fake.env).status, 0);
+  if (ignore) fs.writeFileSync(path.join(p.root, '.gitignore'), ignore);
   git(p.root, ['add', '.']); git(p.root, ['commit', '-m', 'Configure checks']);
   const r = cli(p.root, ['run', 'Normalize coupons', '--yes'], fake.env); assert.equal(r.json.state, 'ready', r.stdout);
   git(p.root, ['remote', 'add', 'origin', 'https://github.com/example/sample.git']);
@@ -43,4 +44,14 @@ test('a title change or a default-branch destination invalidates publication', a
   p.task.goal = 'Different title'; await assert.rejects(() => publish(p.repo, p.task, preview.confirmationId), /changed/);
   assert.throws(() => destination(p.repo, { ...p.task, branch: 'main' }), /default branch/);
   assert.equal(fs.readFileSync(p.calls, 'utf8').includes('"kind":"push"'), false);
+});
+test('an installed node_modules in the task worktree keeps the checks current and is never published', async (t) => {
+  const p = publishingFixture(t, { ignore: 'node_modules/\n' });
+  const modules = path.join(p.task.worktree, 'node_modules');
+  fs.mkdirSync(path.join(modules, '.bin'), { recursive: true }); fs.mkdirSync(path.join(modules, 'pkg'));
+  fs.writeFileSync(path.join(modules, 'pkg/cli.js'), '#!/usr/bin/env node\n'); fs.symlinkSync('../pkg/cli.js', path.join(modules, '.bin/pkg'));
+  fs.writeFileSync(path.join(modules, 'pkg/big.bin'), Buffer.alloc(5 * 1024 * 1024));
+  const preview = await preparePublish(p.repo, p.task);
+  assert.deepEqual(git(p.task.worktree, ['show', '--name-only', '--format=', preview.commit]).split('\n'), ['src/coupon.mjs']);
+  assert.equal(git(p.task.worktree, ['status', '--porcelain']), '');
 });
