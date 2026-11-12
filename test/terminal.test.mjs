@@ -2426,7 +2426,8 @@ test('a mode picked in a form opened from Kanban does not carry into the next ne
   const v = await view(t, { repo: p.repo, loginItem }), panels = v.current.panels, status = () => panels.status.getText(), text = () => composeText(v);
   const started = goal => { const row = v.current.snapshot.tasks.find(task => task.goal === goal); return row && readTask(p.repo, row.id); };
   await wide(v);
-  await selectRow(v, /Rename the helper/);
+  // A session is open in Sessions first, so the list last showed that session, not the form.
+  await selectRow(v, /Rename the helper/); await until(() => v.current.session === '3', 'that session shows');
   await send(v, '/kanban'); await until(() => v.current.view === 'kanban', 'Kanban');
   await send(v, '/new'); await until(() => !panels.compose.hidden && /Permissions {2}Ask for approval/.test(text()), 'the form with the default');
   await send(v, '/permissions full'); await dialog(v, 'Full access', 'y'); await until(() => /Full access for this session\./.test(status()), 'picked');
