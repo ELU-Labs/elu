@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { CLI, command, temp } from './helpers.mjs';
+import { CLI, temp } from './helpers.mjs';
 import { peerHome } from './peer-helpers.mjs';
 import { REGISTRY, latestVersion, noticeText, openApps, registryUrl, runUpdate, updateNotice } from '../lib/update.mjs';
 import { Conductor, conductorAlive } from '../lib/conductor.mjs';
@@ -33,9 +33,17 @@ async function registry(t, body = { name: NAME, version: '3.3.0' }) {
 }
 // The state folder of this test, so nothing reads or writes the real one.
 function personal(t) {
-  const dir = path.join(temp(t), 'personal'), previous = process.env.XDG_CONFIG_HOME; process.env.XDG_CONFIG_HOME = dir;
+  const config = path.join(temp(t), 'config'), previous = process.env.XDG_CONFIG_HOME; process.env.XDG_CONFIG_HOME = config;
   t.after(() => { if (previous === undefined) delete process.env.XDG_CONFIG_HOME; else process.env.XDG_CONFIG_HOME = previous; });
-  return dir;
+  return path.join(config, 'elu-code');
+}
+// The command line, run without blocking this process: the registry it asks is served here.
+function cli(args, cwd, env) {
+  return new Promise(resolve => {
+    const child = spawn(process.execPath, [CLI, ...args], { cwd, env: { ...process.env, ...env }, stdio: ['ignore', 'pipe', 'pipe'] });
+    let stdout = '', stderr = ''; child.stdout.on('data', data => { stdout += data; }); child.stderr.on('data', data => { stderr += data; });
+    child.once('close', status => resolve({ status, stdout, stderr }));
+  });
 }
 // A package under an npm prefix, linked from its bin folder the way npm links one.
 function place(prefix, { version, entry = '' }) {
@@ -147,17 +155,17 @@ test('elu update installs the newer version where elu is and says so; when curre
 test('elu update from the command line asks the registry and prints one line', async t => {
   const r = await registry(t, { version: VERSION }), home = temp(t);
   const env = { HOME: home, XDG_CONFIG_HOME: path.join(home, '.config'), PATH: `${path.dirname(process.execPath)}:/usr/bin:/bin`, ELU_UPDATE_REGISTRY: r.url };
-  const current = command(process.execPath, [CLI, 'update'], home, env);
+  const current = await cli(['update'], home, env);
   assert.equal(current.status, 0, current.stderr);
   assert.equal(current.stdout, `ELU Code ${VERSION} is the latest.\n`);
-  const json = command(process.execPath, [CLI, 'update', '--json'], home, env);
+  const json = await cli(['update', '--json'], home, env);
   assert.equal(JSON.parse(json.stdout).message, `ELU Code ${VERSION} is the latest.`);
-  const offline = command(process.execPath, [CLI, 'update'], home, { ...env, ELU_UPDATE_REGISTRY: 'http://127.0.0.1:9/x' });
+  const offline = await cli(['update'], home, { ...env, ELU_UPDATE_REGISTRY: 'http://127.0.0.1:9/x' });
   assert.equal(offline.status, 1);
   assert.match(offline.stdout + offline.stderr, /Could not reach the npm registry\./);
-  const extra = command(process.execPath, [CLI, 'update', 'now'], home, env);
+  const extra = await cli(['update', 'now'], home, env);
   assert.equal(extra.status, 1); assert.equal(extra.stderr, 'Use elu update.\n');
-  assert.match(command(process.execPath, [CLI, '--help'], home, env).stdout, /^ {2}update$/m);
+  assert.match((await cli(['--help'], home, env)).stdout, /^ {2}update$/m);
 });
 
 test('an open app counts only while its process lives, and this process never counts', t => {
@@ -226,7 +234,7 @@ test('elu update stops an idle conductor and leaves one with sessions running to
   assert.equal(fs.existsSync(path.join(dir, 'conductor', 'commands')) ? fs.readdirSync(path.join(dir, 'conductor', 'commands')).length : 0, 0);
   busy.kill('SIGKILL'); await gone; fs.rmSync(path.join(dir, 'conductor.lock'));
   // An idle conductor, the real one: stopped, and gone before elu update returns.
-  const conductor = spawn(process.execPath, [CLI, 'conductor', '--daemon'], { cwd: s.home, env: { ...process.env, HOME: s.home, XDG_CONFIG_HOME: dir }, stdio: 'ignore' }), ended = new Promise(resolve => conductor.once('exit', resolve));
+  const conductor = spawn(process.execPath, [CLI, 'conductor', '--daemon'], { cwd: s.home, env: { ...process.env, HOME: s.home, XDG_CONFIG_HOME: path.dirname(dir) }, stdio: 'ignore' }), ended = new Promise(resolve => conductor.once('exit', resolve));
   t.after(() => { conductor.kill('SIGKILL'); return ended; });
   await until(() => conductorAlive(), 'the conductor running');
   r.state.body = { version: '3.4.0' };
