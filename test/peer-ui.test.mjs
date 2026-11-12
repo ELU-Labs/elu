@@ -893,7 +893,7 @@ test('/join asks to join first, then what teammates can do here: Cancel or Esc j
   assert.deepEqual(rowsOf(v, 'What teammates can do here'), ['Auto: their message starts a session here, as if you typed it', 'Manual: each message waits for you to approve it']);
   assert.match(v.text(), /Push, merge, deploy and publish stay blocked either way\./);
   await choose(v, 'What teammates can do here', /^Auto/); await until(() => modal(v, 'Rules for teammates'), 'the rules');
-  assert.match(v.text(), /Optional, in plain English\. For example: Only work on the elu repo\. Don't write anything until I accept it\./);
+  assert.match(v.text(), /Optional, in plain English\. For example: Only work on the elu repo\. Don't write\s+(?:│\s+│)?anything until I accept it\./);
   modal(v, 'Rules for teammates').children.find(child => child.type === 'textbox').emit('cancel');
   await until(() => !modal(v, 'Rules for teammates'), 'closed');
   await new Promise(resolve => setTimeout(resolve, 100));
