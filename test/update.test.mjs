@@ -171,8 +171,12 @@ test('the line to update by hand installs under ~/.local when elu is there, afte
 });
 
 test('elu update from the command line asks the registry and prints one line', async t => {
-  const r = await registry(t, { version: VERSION }), home = temp(t);
-  const env = { HOME: home, XDG_CONFIG_HOME: path.join(home, '.config'), PATH: `${path.dirname(process.execPath)}:/usr/bin:/bin`, ELU_UPDATE_REGISTRY: r.url };
+  // elu at this version in a folder of the test's own, and nothing else of this computer on
+  // PATH: node's folder could hold the elu installed here, and an older one would be updated.
+  const r = await registry(t, { version: VERSION }), home = temp(t), prefix = path.join(temp(t), 'global');
+  place(prefix, { version: VERSION });
+  const files = () => fs.readdirSync(prefix, { recursive: true }).sort().map(name => { const stat = fs.lstatSync(path.join(prefix, name)); return [name, stat.size, stat.mtimeMs]; }), before = files();
+  const env = { HOME: home, XDG_CONFIG_HOME: path.join(home, '.config'), PATH: `${path.join(prefix, 'bin')}:/usr/bin:/bin`, ELU_UPDATE_REGISTRY: r.url };
   const current = await cli(['update'], home, env);
   assert.equal(current.status, 0, current.stderr);
   assert.equal(current.stdout, `ELU Code ${VERSION} is the latest.\n`);
@@ -184,6 +188,8 @@ test('elu update from the command line asks the registry and prints one line', a
   const extra = await cli(['update', 'now'], home, env);
   assert.equal(extra.status, 1); assert.equal(extra.stderr, 'Use elu update.\n');
   assert.match((await cli(['--help'], home, env)).stdout, /^ {2}update$/m);
+  // Nothing was installed.
+  assert.deepEqual(files(), before);
 });
 
 test('an open app counts only while its process lives, and this process never counts', t => {
