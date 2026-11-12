@@ -2628,6 +2628,8 @@ test('a saved request whose mode was picked keeps it in any window, sent again o
   await send(v, 'Add a retry budget, with jitter');
   await until(() => started('Add a retry budget, with jitter'), 'session');
   assert.equal(started('Add a retry budget, with jitter').permissions, 'full');
+  // Its turn ends first: the line it leaves would otherwise take the place of the retry's.
+  await until(() => /Opus answered/.test(status()), 'first turn done');
   await selectRow(v, /Rename billing/); v.input.write('r');
   await until(() => /Queued again\./.test(status()) && !/the default now/.test(status()), 'retried as it was');
   await until(() => started('Rename billing'), 'second session');
