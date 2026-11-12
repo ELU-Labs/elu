@@ -46,12 +46,18 @@ function fakePeer({ items, running = true, refuse = () => null, remoteBots = [],
     // The daemon's answer to the last command: refuse(command) returns a refusal or null. A channel change lands in the roster.
     awaitCommand: record('awaitCommand', async () => {
       const reason = refuse(facade.last), { type, id = 'c'.repeat(16), name, members } = facade.last; if (reason) throw new Error(reason);
-      // lastTeam: a leave takes this machine off its only team.
+      // lastTeam: a leave takes this machine off its only team, and a teammate took it, so the daemon stops.
       if (type === 'teamLeave' && facade.lastTeam) facade.left = true;
+      if (type === 'teamLeave') return { team: 'team-1', name: 'Core', told: true, stopping: facade.lastTeam === true };
       if (type !== 'channelSet') return {};
       facade.channels = [...facade.channels.filter(row => row.id !== id), ...(members.length ? [{ id, name, members }] : [])]; return { id };
     }),
     startPeer: record('startPeer', true),
+    // index.teamChange: the daemon is started when it is not running, then the change is sent to it.
+    teamChange: record('teamChange', async command => {
+      if (!facade.running) { await facade.startPeer(); facade.running = true; }
+      const { id } = facade.sendPeerCommand(command); return { told: true, ...await facade.awaitCommand(id, 30000), daemon: true };
+    }),
     // On no team, the app asks once for a daemon of another version to be stopped.
     restartStale: record('restartStale', false),
     share: record('share', (root, { handle }) => ({ handle: handle ?? 'sample', root, status: true })),
@@ -1084,7 +1090,35 @@ test('/leave and /remove start a daemon that is not running before they send', a
   await send(v, '/remove @sara'); await closeDialog(v, 'Remove @sara', 'y');
   await until(() => /Removed @sara from Core\./.test(status()), 'removed');
   assert.equal(started, 1, 'the daemon was started for it');
+  assert.deepEqual(peer.calls.filter(row => row[0] === 'teamChange').map(row => row[1]), [{ type: 'teamRemove', team: 'team-1', key: SARA }], 'through the facade the CLI uses');
   assert.deepEqual(peer.sent().filter(row => row.type === 'teamRemove'), [{ type: 'teamRemove', team: 'team-1', key: SARA }]);
+});
+
+test('/leave says when no teammate was online to hear it, and when the daemon could not start; a daemon of another version that will not stop refuses it', async t => {
+  const { v, peer } = await teamView(t), status = () => v.panels.status.getText();
+  await until(() => v.panels.teamLists[0].items.length, 'teammates');
+  const leave = async () => { await send(v, '/leave core'); await closeDialog(v, 'Leave Core', 'y'); };
+  peer.teamChange = async command => { peer.calls.push(['teamChange', command]); return { team: 'team-1', name: 'Core', told: false, daemon: true, stopping: false }; };
+  await leave();
+  await until(() => /You left Core\. No teammate was online, so the first one to connect is told\./.test(status()), 'nobody heard it');
+  peer.teamChange = async command => { peer.calls.push(['teamChange', command]); return { team: 'team-1', name: 'Core', told: false, daemon: false, stopping: false }; };
+  await leave();
+  await until(() => /You left Core\. Your teammates were not told, since the peer daemon could not start\. It tells them once it can\./.test(status()), 'written here');
+  const STALE = 'The peer daemon of another version of ELU Code did not stop. Wait a moment, then try again.';
+  peer.teamChange = async command => { peer.calls.push(['teamChange', command]); throw new Error(STALE); };
+  await leave();
+  await until(() => status().includes(STALE), 'refused');
+  assert.equal(peer.calls.filter(row => ['leaveTeam', 'removeMember'].includes(row[0])).length, 0, 'nothing is written here behind the facade');
+});
+
+test('on no team with a leave nobody heard yet, the app starts the daemon for it as it opens', async t => {
+  const p = project(later(t)); environment(t, p.parent);
+  const peer = fakePeer({ teamless: true, running: false });
+  peer.leaveUnheard = () => true;
+  await view(t, { repo: repository(p.root), peer });
+  await until(() => peer.calls.some(row => row[0] === 'startPeer'), 'started for the leave');
+  await new Promise(resolve => setTimeout(resolve, 300));
+  assert.deepEqual(peer.calls.filter(row => ['startPeer', 'restartStale'].includes(row[0])).map(row => row[0]), ['startPeer'], 'once');
 });
 
 test('typing @ in Chats offers teammates by name', async t => {
