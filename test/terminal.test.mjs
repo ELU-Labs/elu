@@ -2295,12 +2295,13 @@ test('the New session form picks Permissions, Where and Folders, and the session
   const flat = picker.replace(/\s+/g, ' ');
   assert.match(flat, /1 Ask for approval Edits the session's files; asks you for the rest and the internet\./);
   assert.match(flat, /2 Approve for me Edits the session's files; a reviewer model, not you, decides the rest\./);
-  assert.match(flat, /3 Full access Any file, any command, the internet\. Push and deploy stay blocked\./);
+  assert.match(flat, /3 Full access Any file, any command, the internet\./); assert.doesNotMatch(flat, /stay blocked/);
   assert.doesNotMatch(picker, /read-only/);
   v.input.write('3'); await until(() => modal(v, 'Full access'), 'confirm');
   const confirm = dialogText(v, 'Full access');
   assert.match(confirm.replace(/\s+/g, ' '), /Full access: the model changes any file, runs any command and uses the internet without asking\./);
-  assert.match(confirm.replace(/\s+/g, ' '), /Push, tag, merge, deploy and publish stay blocked\./); assert.match(confirm, /Use it\? y\/N/);
+  // Nothing but their names stops them in Full access, and the question says so.
+  assert.match(confirm.replace(/\s+/g, ' '), /Push, tag, merge, deploy and publish are refused by name only: a command that names them another way can get through\./); assert.doesNotMatch(confirm, /stay blocked/); assert.match(confirm, /Use it\? y\/N/);
   await dialog(v, 'Full access', 'n'); await until(() => !modal(v, 'Full access'), 'declined');
   assert.match(text(), /Permissions {2}Ask for approval/);
   pickRow(list, /Permissions/); v.input.write('\r'); await until(() => modal(v, 'Permissions'), 'picker again'); v.input.write('3'); await dialog(v, 'Full access', 'y');

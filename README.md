@@ -119,8 +119,8 @@ and `/permissions default auto` sets what new sessions start with.
 - **Approve for me** (`auto`): edits the session's files; a reviewer model, not you, decides
   the rest. Commands get no internet unless the reviewer lets one leave the sandbox.
   On Grok Build, what its reviewer refuses then asks you.
-- **Full access** (`full`): any file, any command, the internet. The never list below still
-  holds.
+- **Full access** (`full`): any file, any command, the internet, with no sandbox. The never
+  list below is refused by name only: a command that names it another way can get through.
 
 When the model asks, `y` allows and `n` denies; `f` allows and gives that session Full access.
 `a` allows and keeps a narrow rule, such as `npm test` or `git diff`, for this project or all
