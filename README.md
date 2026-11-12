@@ -345,10 +345,15 @@ Quit ELU Code with `/quit` in every terminal it is open in, then:
 elu update
 ```
 
-That installs the newest version where `elu` already is and restarts the peer daemon on
-it; sessions still running finish on the old version first. Once a day ELU Code checks for
-a newer version and says so in its status line; `ELU_NO_UPDATE_CHECK=1` turns that check
-off. Both ask the npm registry for the latest version number and send nothing else.
+On 0.1.11 or older, which have no `elu update`, update once with
+`cd ~ && npx -y @elu-labs/elu@0.1.12`. Name the version: `@latest` can reuse an old copy
+npx kept.
+
+`elu update` installs the newest version where `elu` already is and restarts the peer
+daemon on it; sessions still running finish on the old version first. Once a day ELU Code
+checks for a newer version and says so in its status line; `ELU_NO_UPDATE_CHECK=1` turns
+that check off. Both ask the npm registry for the latest version number and send nothing
+else.
 
 To remove ELU Code, first delete your schedules in the app (Sessions tab, under Scheduled:
 `x` on each one), so they no longer keep the Mac awake, and quit it with `/quit`.
