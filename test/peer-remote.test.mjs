@@ -17,7 +17,9 @@ import { boardRows, remoteRow, rowActions, rowTitle } from '../lib/board.mjs';
 import { remoteSessions as remoteGlue } from '../lib/terminal-remote.mjs';
 import { teamPath } from '../lib/peer/roster.mjs';
 import { readTask, saveTask } from '../lib/state.mjs';
-import { listEntries } from '../lib/permission-rules.mjs';
+import { listEntries, usesSavedRules } from '../lib/permission-rules.mjs';
+import { getRecord, records, saveRecord } from '../lib/peer/taskstore.mjs';
+import { task as a2aTask, TaskState } from '../lib/peer/a2a.mjs';
 
 // A connection as the daemon hands it to a method: admitted, on a build that has remote
 // sessions unless said otherwise, recording what is sent to it.
@@ -209,6 +211,43 @@ test('events stream to the viewer, a gap is caught up by seq, and approvals are 
   assert.deepEqual(await withHome(devbox.home, () => host['elu.remote.answer']({ id: started.id, approval: 'approval-2', decision: 'deny' }, toHost)), { answered: true });
   assert.deepEqual(await withHome(devbox.home, () => host['elu.remote.answer']({ id: started.id, approval: 'approval-2', decision: 'allow' }, toHost)), { answered: false });
   assert.throws(() => withHome(devbox.home, () => host['elu.remote.answer']({ id: started.id, approval: 'approval-2', decision: 'maybe' }, toHost)), { message: 'Answer allow or deny.' });
+});
+
+// A message I hand off from my laptop to my devbox and work on there as my own session is
+// followed from the laptop like one it started: its approval waits there too, and my rules apply.
+test('a handoff I work on as my own on my other computer shows there with its approvals, and uses my rules', async t => {
+  const { team, laptop, devbox } = machines(t);
+  const project = withHome(devbox.home, () => { const project = registeredProject(t); saveTeamAccess(team.teamId, { root: project.root }); markMine(devbox.identity.key, laptop.identity.key); noteTheirs(laptop.identity.key, true); return project; });
+  withHome(laptop.home, () => { markMine(laptop.identity.key, devbox.identity.key); noteTheirs(devbox.identity.key, true); });
+  const toHost = connection(laptop.identity.key), toViewer = connection(devbox.identity.key);
+  const hostCtx = context(devbox.identity, { [laptop.identity.key]: toHost }), viewCtx = context(laptop.identity, { [devbox.identity.key]: toViewer });
+  const host = hostMethods(hostCtx), viewer = viewMethods(viewCtx);
+  toViewer.request = (method, params) => withHome(devbox.home, () => host[method](params, toHost));
+  const taskId = '1', origin = { kind: 'handoff', peer: laptop.identity.key, name: 'ana', a2aTaskId: 'h-1', threadId: 'th-1', hop: 1, own: true };
+  withHome(devbox.home, () => {
+    const { repo } = liveTask(project.root, { id: taskId, goal: 'Run evals', state: 'running' });
+    saveTask(repo, { ...readTask(repo, taskId), origin });
+    enqueue(project.root, 'Run evals'); const [request] = pendingRequests(project.root); updateRequest(project.root, request.id, { state: 'running', taskId });
+    saveRecord({ task: a2aTask({ id: 'h-1', contextId: 'th-1', state: TaskState.WORKING }), peer: laptop.identity.key, name: 'ana', kind: 'handoff', threadId: 'th-1', root: project.root, requestId: request.id, localTaskId: taskId, text: 'Run evals', createdAt: new Date().toISOString() });
+    // A stranger's handoff is not followed from anywhere.
+    saveRecord({ task: a2aTask({ id: 'h-2', contextId: 'th-2', state: TaskState.WORKING }), peer: 'e'.repeat(64), name: 'eve', kind: 'handoff', threadId: 'th-2', root: project.root, requestId: 'req-x', localTaskId: '9', text: 'Other', createdAt: new Date().toISOString() });
+    assert.equal(usesSavedRules(origin), true, 'my own rules answer its approvals');
+    assert.equal(usesSavedRules({ ...origin, peer: 'e'.repeat(64) }), false, 'a teammate\'s handoff gets the defaults');
+    requestApproval({ id: 'approval-h1', root: project.root, taskId, role: 'lead', vendor: 'claude', tool: 'Bash', input: { command: 'npm install' } });
+    hostTick(hostCtx); hostTick(hostCtx);
+  });
+  const remoteId = withHome(devbox.home, () => getRecord('h-1').remoteId);
+  assert.ok(remoteId, 'the handoff is hosted');
+  assert.equal(withHome(devbox.home, () => getRecord('h-2').remoteId), undefined);
+  assert.equal(withHome(devbox.home, () => records().filter(record => record.remoteId).length), 1, 'once');
+  const pushed = toHost.sent.filter(([method]) => method === 'elu.remote.events');
+  assert.ok(pushed.length >= 1 && pushed.every(([, params]) => params.items.every(item => item.id === remoteId)));
+  withHome(laptop.home, () => viewer['elu.remote.events'](pushed[0][1], toViewer));
+  await withHome(laptop.home, () => viewTick(viewCtx));
+  const seen = withHome(laptop.home, () => remoteSessions().find(row => row.id === remoteId));
+  assert.ok(seen, 'the laptop shows it'); assert.equal(seen.title, 'Run evals');
+  assert.deepEqual(seen.approvals.map(item => item.id), ['approval-h1']);
+  assert.deepEqual(await withHome(devbox.home, () => host['elu.remote.answer']({ id: remoteId, approval: 'approval-h1', decision: 'allow' }, toHost)), { answered: true });
 });
 
 // a on an approval answered from the other computer keeps the rule where the session runs:
