@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { compile as claude, parse as parseClaude, secretReads, NEVER_RULES } from '../lib/adapters/claude.mjs';
+import { compile as claude, parse as parseClaude, sandboxRefusal, secretReads, unwritable, NEVER_RULES } from '../lib/adapters/claude.mjs';
 import { defaultConfig } from '../lib/config.mjs';
 import { temp, readRole, git as gitIn } from './helpers.mjs';
 import { commandRule } from '../lib/policy.mjs';
@@ -228,9 +228,39 @@ test('a sandboxed command is kept from untracked secret files by path, never fro
   assert.equal(reads.some(entry => entry.startsWith('**/')) || [path.join(root, 'backend/agents/.npmrc'), path.join(root, '.env.example')].some(covers), false, 'tracked files stay readable, so git status, diff and add read them');
   assert.deepEqual(secretReads(path.join(root, 'backend')), [], 'from a folder inside, only what lies under it');
   for (const mode of ['ask', 'auto']) {
-    const { denyRead } = settingsOf(claude({ ...f.base, mode })).sandbox.filesystem;
+    const args = claude({ ...f.base, mode }), { denyRead, denyWrite } = settingsOf(args).sandbox.filesystem;
     assert.ok(denyRead.includes(path.join(root, '.env')) && !denyRead.includes('**/.npmrc'), `${mode}: the launch hides the untracked ones only`);
+    assert.deepEqual(unwritable(args), denyWrite, `${mode}: what the launch closed to writes reads back from it`);
   }
   // Outside a Git work tree every match is hidden by name, as before.
   assert.deepEqual(secretReads(temp(t)), ['**/.env*', '**/.npmrc', '**/auth.json', '**/credentials.json', '**/*.pem']);
+});
+test('what the sandbox refused inside a command is a denial: the host it kept off the internet, the file it would not write', () => {
+  const closed = { cwd: '/srv/app', unwritable: ['/srv/app', '/srv/app/.git', '/etc'] };
+  assert.deepEqual(sandboxRefusal('curl: (56) CONNECT tunnel failed, response 403\n<sandbox_violations>\ndeny network-outbound elu.dev:443 (user denied)\n</sandbox_violations>'), { network: 'elu.dev' });
+  assert.deepEqual(sandboxRefusal("OSError: [Errno 30] Read-only file system: 'src/session-intelligence/tools.ts'", closed), { readonly: 'src/session-intelligence/tools.ts' });
+  assert.deepEqual(sandboxRefusal("touch: cannot touch '/etc/x': Read-only file system", closed), { readonly: '/etc/x' });
+  assert.deepEqual(sandboxRefusal("fatal: Unable to create '/srv/app/.git/index.lock': Read-only file system.", closed), { readonly: '/srv/app/.git/index.lock' });
+  assert.equal(sandboxRefusal('ok\n'), null);
+  // What a program printed is its own: the host only from the block Claude Code appends after
+  // it, and a file only where this launch closed it to writes.
+  assert.equal(sandboxRefusal('lib/adapters/claude.mjs:  // deny network-outbound evil.example:443\nnot ok 3'), null, 'a log line that names a host');
+  assert.equal(sandboxRefusal('<sandbox_violations>\ndeny network-outbound evil.example:443\n</sandbox_violations>\nnot ok 3 - the parser test'), null, 'a block the program printed, with its own output after');
+  assert.equal(sandboxRefusal("OSError: [Errno 30] Read-only file system: 'src/a.ts'", { cwd: '/srv/app', unwritable: ['/srv/app/.git'] }), null, 'a file the launch let it write');
+  assert.equal(sandboxRefusal("OSError: [Errno 30] Read-only file system: 'src/a.ts'"), null, 'nothing closed, nothing refused');
+  assert.equal(sandboxRefusal('error: Read-only file system', closed), null, 'no file named');
+  const line = row => JSON.stringify(row);
+  const stream = results => [
+    line({ type: 'system', subtype: 'init', session_id: SESSION, model: 'claude-x', permissionMode: 'default', mcp_servers: [] }),
+    line({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'toolu_a', name: 'Bash', input: { command: 'curl -sS https://elu.dev/' } }, { type: 'tool_use', id: 'toolu_b', name: 'Bash', input: { command: "python3 -c \"open('src/a.ts','w')\"" } }] } }),
+    line({ type: 'user', message: { content: results } }),
+    line({ type: 'result', is_error: false, session_id: SESSION, total_cost_usd: 0, structured_output: { outcome: 'needs_input', summary: 'Blocked.', question: 'May I?', choices: [], comments: [], responses: [] } }),
+  ].join('\n');
+  const failed = [{ type: 'tool_result', tool_use_id: 'toolu_a', content: 'Exit code 56\ncurl: (56) CONNECT tunnel failed, response 403\n<sandbox_violations>\ndeny network-outbound elu.dev:443 (user denied)\n</sandbox_violations>', is_error: true }, { type: 'tool_result', tool_use_id: 'toolu_b', content: "OSError: [Errno 30] Read-only file system: 'src/a.ts'", is_error: true }];
+  const shown = ({ denials }) => denials.map(({ tool, tool_use_id, network, readonly }) => ({ tool, tool_use_id, network, readonly }));
+  assert.deepEqual(shown(parseClaude(stream(failed), { cwd: '/srv/app', unwritable: ['/srv/app'] })), [{ tool: 'Bash', tool_use_id: 'toolu_a', network: 'elu.dev', readonly: undefined }, { tool: 'Bash', tool_use_id: 'toolu_b', network: undefined, readonly: 'src/a.ts' }]);
+  // A command that succeeded was refused nothing, whatever it printed: a grep of this very file.
+  assert.deepEqual(shown(parseClaude(stream(failed.map(row => ({ ...row, is_error: undefined }))), { cwd: '/srv/app', unwritable: ['/srv/app'] })), []);
+  // A launch that left the folder writable: the file is the program's own trouble.
+  assert.deepEqual(shown(parseClaude(stream(failed), { cwd: '/srv/app', unwritable: ['/srv/app/.git'] })).map(row => row.tool_use_id), ['toolu_a']);
 });

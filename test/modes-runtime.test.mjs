@@ -15,6 +15,7 @@ import { enqueue } from '../lib/conductor.mjs';
 import { saveSchedule, parseWhen } from '../lib/schedules.mjs';
 import { answerApproval, approvalsDir, awaitDecision, pendingApprovals, requestApproval } from '../lib/approvals.mjs';
 import { defaultConfig } from '../lib/config.mjs';
+import { READ_ONLY_REPLY } from '../lib/runner.mjs';
 import { ruleFor, saveRule } from '../lib/permission-rules.mjs';
 
 // Sessions with permissions, end to end against the fake CLIs.
@@ -117,6 +118,44 @@ test('an automatic edit task inherits the conversation mode; the reviewer and th
   const locked = f.leads().at(-1).args;
   assert.equal(valueOf(locked, '--permission-mode'), 'dontAsk'); assert.equal(valueOf(locked, '--permission-prompts'), 'none'); assert.ok(locked.includes('--restricted') && locked.includes('--safe-mode'));
   assert.equal(locked.includes('--permission-prompt-tool'), false); assert.match(f.inputs().at(-1).input, /install packages/);
+});
+
+// A reply in a session whose edit has run reads, while the Task the owner approved is open
+// too: it is told it cannot change files and that its edit intent goes on with edit access
+// (READ_ONLY_REPLY), so it never tries a write that only fails. A session whose Task is done,
+// one already published, and a conversation read as well.
+test('a reply in a working session reads and is told its edit goes on with edit access; a conversation reply reads', async t => {
+  const f = setup(t), fakeFile = path.join(f.fake.dir, 'fake.json'), fake = JSON.parse(fs.readFileSync(fakeFile, 'utf8'));
+  // The working turn meets one objective of two, so its Task stays open.
+  fs.writeFileSync(fakeFile, JSON.stringify({ ...fake, objectivesMet: [1] }));
+  const task = await f.controller.ask('Normalize coupon codes', null, { permissions: 'ask', place: 'worktree' }).finished;
+  assert.equal(task.state, 'ready'); const worktree = fs.realpathSync(task.worktree);
+  const replyPrompts = from => f.inputs().slice(from).map(row => row.input).filter(input => /Respond to the owner immediately/.test(input));
+  // Reads: an edit in the session's folder asks the owner, and nothing tells it to write there.
+  const reads = async (id, text, why, folder = worktree) => {
+    const from = f.inputs().length, calls = f.leads().length;
+    await f.controller.ask(text, id).finished.catch(() => null);
+    const [said] = replyPrompts(from), launch = f.leads()[calls];
+    assert.ok(said && launch, why); assert.doesNotMatch(said, /You may change files there in this turn/, why);
+    assert.ok((settingsOf(launch.args).permissions.ask ?? []).some(rule => rule.startsWith(`Edit(//${folder.slice(1)}`)), why);
+    return said;
+  };
+  const said = await reads(task.id, 'Also rename the helper', 'a reply while the Task is open reads');
+  assert.ok(said.includes(READ_ONLY_REPLY), 'it is told its edit goes on with edit access');
+  // Published work stays as it was published.
+  saveTask(f.controller.repo, { ...readTask(f.controller.repo, task.id), pushedCommit: readTask(f.controller.repo, task.id).commit ?? 'a'.repeat(40) });
+  await reads(task.id, 'One more rename', 'a published session reads');
+  // A session whose Task is done reads too: more work there starts as an edit of its own.
+  fs.writeFileSync(fakeFile, JSON.stringify(fake));
+  const done = await f.controller.ask('Uppercase the coupons', null, { permissions: 'ask', place: 'worktree' }).finished;
+  assert.equal(done.state, 'ready');
+  await reads(done.id, 'What did you change?', 'a done Task reads', fs.realpathSync(done.worktree));
+  // A conversation that has not started an edit reads, as before.
+  const before = f.inputs().length, calls = f.leads().length;
+  await f.controller.ask('Where is coupon normalization?', null, { permissions: 'ask' }).finished;
+  const [talk] = replyPrompts(before), first = f.leads()[calls];
+  assert.doesNotMatch(talk, /You may change files there in this turn/);
+  assert.ok((settingsOf(first.args).permissions.ask ?? []).some(rule => rule.startsWith('Edit(')), 'an edit in a conversation turn asks');
 });
 
 // The owner names the folder of all his code. The session edits a repository in it, in a
