@@ -762,6 +762,7 @@ test('a code for another computer of mine is only offered: the inviter marks not
   const anaHome = newHome(t), li = withHome(newHome(t), () => createIdentity({ name: 'li' }));
   await withHome(anaHome, async () => {
     const me = createIdentity({ name: 'ana' }), made = createTeam(me, 'core');
+    savePeerSettings({ box: 'ana-laptop' });
     const { daemon } = inviterDaemon(me);
     const exchange = async keys => {
       const { joiner, reply, fields } = await startInvite(daemon, li.key, keys.topic);
@@ -776,7 +777,7 @@ test('a code for another computer of mine is only offered: the inviter marks not
     // li is on the team now. Another mine code from li is refused, stays unused, and says what to do instead.
     const keys = inviteKeys(createInvite(me, made.id, { hours: 1, mine: true }));
     const again = await exchange(keys);
-    assert.equal(again.error, "This computer is already on ana's team. To make the two yours, type /mine @ana here, and /mine @li on the other one.");
+    assert.equal(again.error, "This computer is already on ana's team. To make the two yours, type /mine @ana-laptop here, and /mine @li on the other one.");
     assert.ok(openInvites([made.id]).some(row => row.topic === keys.topic), 'the code is still unused');
     assert.deepEqual(readMine(), []);
   });
