@@ -15,7 +15,9 @@ import { enqueue } from '../lib/conductor.mjs';
 import { saveSchedule, parseWhen } from '../lib/schedules.mjs';
 import { answerApproval, approvalsDir, awaitDecision, pendingApprovals, requestApproval } from '../lib/approvals.mjs';
 import { defaultConfig } from '../lib/config.mjs';
+import { READ_ONLY_REPLY } from '../lib/runner.mjs';
 import { ruleFor, saveRule } from '../lib/permission-rules.mjs';
+import { turnClock } from '../lib/turn-limits.mjs';
 
 // Sessions with permissions, end to end against the fake CLIs.
 // The personal directory (XDG_CONFIG_HOME) and HOME both point into the test folder, so a
@@ -69,7 +71,7 @@ test('a new session gets the personal default; a follow-up inherits mode, place 
   assert.match(prompt, /When an action is declined or blocked, do not retry it another way\. Return outcome needs_input and name the action you need\./);
   assert.match(prompt, /You may also read these folders: /); assert.doesNotMatch(prompt, /install packages/);
   // The never list by name, once, with the read-only way to list tags.
-  assert.equal(prompt.split('Never run these, alone or inside a longer command line, in any mode: git push, git tag, git merge, gh pr merge, gh release, npm publish, pnpm publish, yarn publish, cargo publish, firebase deploy, vercel deploy, gcloud run deploy, gcloud app deploy, fly deploy, kubectl apply, terraform apply. To list tags use git for-each-ref --sort=-creatordate refs/tags or git describe --tags, never git tag.').length, 2);
+  assert.equal(prompt.split('Never run these, alone or inside a longer command line, in any mode: git push, git tag, git merge, gh pr merge, gh release, npm publish, pnpm publish, yarn publish, cargo publish, firebase deploy, vercel deploy, gcloud run deploy, gcloud app deploy, fly deploy, kubectl apply, terraform apply, claude mcp add, claude mcp add-json, claude mcp add-from-claude-desktop, claude mcp remove, elu mcp add, elu mcp remove. To list tags use git for-each-ref --sort=-creatordate refs/tags or git describe --tags, never git tag.').length, 2);
   assert.match(prompt, /This session runs with Approve for me: you have a shell, the internet, and the MCP tools you were given; an action outside the project or the sandbox is reviewed before it runs\./);
   assert.match(prompt, /The repository's own ELU Code config \(roles, network, commands\) does not limit this session\./);
   const policy = fs.readFileSync(path.join(taskDir(f.controller.repo, first.id), 'policy.yaml'), 'utf8');
@@ -117,6 +119,44 @@ test('an automatic edit task inherits the conversation mode; the reviewer and th
   const locked = f.leads().at(-1).args;
   assert.equal(valueOf(locked, '--permission-mode'), 'dontAsk'); assert.equal(valueOf(locked, '--permission-prompts'), 'none'); assert.ok(locked.includes('--restricted') && locked.includes('--safe-mode'));
   assert.equal(locked.includes('--permission-prompt-tool'), false); assert.match(f.inputs().at(-1).input, /install packages/);
+});
+
+// A reply in a session whose edit has run reads, while the Task the owner approved is open
+// too: it is told it cannot change files and that its edit intent goes on with edit access
+// (READ_ONLY_REPLY), so it never tries a write that only fails. A session whose Task is done,
+// one already published, and a conversation read as well.
+test('a reply in a working session reads and is told its edit goes on with edit access; a conversation reply reads', async t => {
+  const f = setup(t), fakeFile = path.join(f.fake.dir, 'fake.json'), fake = JSON.parse(fs.readFileSync(fakeFile, 'utf8'));
+  // The working turn meets one objective of two, so its Task stays open.
+  fs.writeFileSync(fakeFile, JSON.stringify({ ...fake, objectivesMet: [1] }));
+  const task = await f.controller.ask('Normalize coupon codes', null, { permissions: 'ask', place: 'worktree' }).finished;
+  assert.equal(task.state, 'ready'); const worktree = fs.realpathSync(task.worktree);
+  const replyPrompts = from => f.inputs().slice(from).map(row => row.input).filter(input => /Respond to the owner immediately/.test(input));
+  // Reads: an edit in the session's folder asks the owner, and nothing tells it to write there.
+  const reads = async (id, text, why, folder = worktree) => {
+    const from = f.inputs().length, calls = f.leads().length;
+    await f.controller.ask(text, id).finished.catch(() => null);
+    const [said] = replyPrompts(from), launch = f.leads()[calls];
+    assert.ok(said && launch, why); assert.doesNotMatch(said, /You may change files there in this turn/, why);
+    assert.ok((settingsOf(launch.args).permissions.ask ?? []).some(rule => rule.startsWith(`Edit(//${folder.slice(1)}`)), why);
+    return said;
+  };
+  const said = await reads(task.id, 'Also rename the helper', 'a reply while the Task is open reads');
+  assert.ok(said.includes(READ_ONLY_REPLY), 'it is told its edit goes on with edit access');
+  // Published work stays as it was published.
+  saveTask(f.controller.repo, { ...readTask(f.controller.repo, task.id), pushedCommit: readTask(f.controller.repo, task.id).commit ?? 'a'.repeat(40) });
+  await reads(task.id, 'One more rename', 'a published session reads');
+  // A session whose Task is done reads too: more work there starts as an edit of its own.
+  fs.writeFileSync(fakeFile, JSON.stringify(fake));
+  const done = await f.controller.ask('Uppercase the coupons', null, { permissions: 'ask', place: 'worktree' }).finished;
+  assert.equal(done.state, 'ready');
+  await reads(done.id, 'What did you change?', 'a done Task reads', fs.realpathSync(done.worktree));
+  // A conversation that has not started an edit reads, as before.
+  const before = f.inputs().length, calls = f.leads().length;
+  await f.controller.ask('Where is coupon normalization?', null, { permissions: 'ask' }).finished;
+  const [talk] = replyPrompts(before), first = f.leads()[calls];
+  assert.doesNotMatch(talk, /You may change files there in this turn/);
+  assert.ok((settingsOf(first.args).permissions.ask ?? []).some(rule => rule.startsWith('Edit(')), 'an edit in a conversation turn asks');
 });
 
 // The owner names the folder of all his code. The session edits a repository in it, in a
@@ -316,6 +356,59 @@ test('the role time limit waits while an approval is pending', async t => {
   assert.ok(task.runs.filter(run => run.role === 'lead').every(run => run.code === 0), 'the run was not killed while it waited');
   assert.ok(['ready', 'unverified'].includes(task.state), task.error?.message);
   assert.equal(pendingApprovals().length, 0);
+});
+
+test('a session reads the .npmrc its repository tracks in Full and in Ask; an untracked one stays closed', async t => {
+  const f = setup(t, 'answer');
+  fs.mkdirSync(path.join(f.root, 'backend/agents'), { recursive: true }); fs.writeFileSync(path.join(f.root, 'backend/agents/.npmrc'), 'registry=https://registry.npmjs.org/\n');
+  git(f.root, ['add', 'backend/agents/.npmrc']); git(f.root, ['commit', '-m', 'Track npmrc']);
+  fs.writeFileSync(path.join(f.root, '.env'), 'API_KEY=secret\n');
+  for (const mode of ['full', 'ask']) {
+    const task = await f.controller.ask('What registry does the backend use?', null, { permissions: mode }).finished;
+    assert.equal(task.state, 'answered', task.error?.message);
+    const args = f.leads().at(-1).args, { deny } = settingsOf(args).permissions;
+    assert.equal(valueOf(args, '--permission-mode'), mode === 'full' ? 'bypassPermissions' : 'default');
+    assert.equal(deny.some(rule => rule.includes('backend') || rule.startsWith('Read(**/')), false, `${mode}: no rule closes the tracked .npmrc, by path or by name`);
+    assert.ok(deny.some(rule => rule === `Read(//${path.join(f.root, '.env').slice(1)})` || rule === `Read(//${path.join(fs.realpathSync(f.root), '.env').slice(1)})`), `${mode}: the untracked .env is not`);
+    if (mode === 'ask') assert.equal(settingsOf(args).sandbox.filesystem.denyRead.some(entry => entry.includes('backend') || entry.startsWith('**/')), false, 'nor does the sandbox hide it');
+  }
+});
+
+// The turn limits, shrunk for a test: a turn that prints nothing for quietSeconds stops.
+function quickClock(t, quietSeconds = 2, capSeconds = 7200) {
+  const before = { ...turnClock }; Object.assign(turnClock, { quietSeconds, capSeconds }); t.after(() => Object.assign(turnClock, before));
+}
+
+test('a turn that keeps printing is never cut by the clock, even past a timeoutSeconds the policy names', async t => {
+  const f = setup(t, 'chatty'); quickClock(t);
+  // One second, which as the old time limit would have stopped every turn here.
+  f.controller.draftConfig.roles.lead.timeoutSeconds = 1; f.controller.draftConfig.checks = [];
+  const started = Date.now(), task = await f.controller.ask('Normalize coupon codes', null, { permissions: 'full' }).finished;
+  assert.ok(['ready', 'unverified'].includes(task.state), task.error?.message);
+  assert.ok(Date.now() - started > 6000, 'each turn printed for three seconds');
+  assert.ok(task.runs.filter(run => run.role === 'lead').every(run => run.code === 0));
+});
+
+test('a turn that prints nothing for the quiet limit stops with one line, keeps its edits, and a frozen 900 reads as the default', async t => {
+  const f = setup(t, 'stall'); quickClock(t);
+  // A session from before: its policy was frozen with the old default, which nobody chose.
+  f.controller.draftConfig.roles.lead.timeoutSeconds = 900; f.controller.draftConfig.checks = [];
+  const started = Date.now(), run = f.controller.ask('Normalize coupon codes', null, { permissions: 'full' });
+  await assert.rejects(run.finished, /Stopped after 2 seconds with no output\. Your changes are kept\. Reply to carry on\.$/);
+  assert.ok(Date.now() - started < 30000, 'stopped by the quiet limit, not by the fake ending');
+  const task = readTask(f.controller.repo, run.id);
+  assert.match(fs.readFileSync(path.join(taskDir(f.controller.repo, task.id), 'policy.yaml'), 'utf8'), /timeoutSeconds: 900/, 'the frozen policy still says 900 and still loads');
+  assert.equal(task.state, 'blocked'); assert.equal(task.error.message, 'Stopped after 2 seconds with no output. Your changes are kept. Reply to carry on.');
+  assert.doesNotMatch(task.error.message, /could not finish/);
+  assert.equal(fs.readFileSync(path.join(task.worktree, 'src/coupon.mjs'), 'utf8'), 'export const normalize = (value) => value.toUpperCase();\n', 'the edit stays on disk');
+});
+
+test('an approval waiting for the owner is not quiet: the turn waits past the quiet limit', async t => {
+  const f = setup(t, 'relay'); quickClock(t); f.controller.draftConfig.checks = [];
+  const { task, answered } = await relay(f, 'allow', { delay: 4000 });
+  assert.ok(answered.length >= 1);
+  assert.ok(task.runs.filter(run => run.role === 'lead').every(run => run.code === 0), 'the run was not stopped while it waited');
+  assert.ok(['ready', 'unverified'].includes(task.state), task.error?.message);
 });
 
 test('bypassPermissions never asks: a full session touches without an approval', async t => {

@@ -6,7 +6,8 @@ import path from 'node:path';
 import { makeTeam, newHome, withHome, registeredProject, liveTask } from './peer-helpers.mjs';
 import { createIdentity } from '../lib/peer/identity.mjs';
 import { bothMine, dropStrangers, markMine, markedMine, mineRows, noteTheirs, unmarkMine } from '../lib/peer/mine.mjs';
-import { NOT_MINE, UPDATE, hostMethods, hostTick, remoteCommand, remoteConnected, remoteSessions, viewMethods, viewTick } from '../lib/peer/remote.mjs';
+import { NOT_MINE, UPDATE, UPDATE_LIST, hostMethods, hostTick, listTick, relist, remoteCommand, remoteConnected, remoteMachines, remoteSessions, viewMethods, viewTick, watchId } from '../lib/peer/remote.mjs';
+import { repository } from '../lib/git.mjs';
 import { saveTeamAccess } from '../lib/peer/access.mjs';
 import { leaveOp, merge } from '../lib/peer/roster.mjs';
 import { createInvite, redeemCode, takeMineOffer } from '../lib/peer/invite.mjs';
@@ -17,7 +18,9 @@ import { boardRows, remoteRow, rowActions, rowTitle } from '../lib/board.mjs';
 import { remoteSessions as remoteGlue } from '../lib/terminal-remote.mjs';
 import { teamPath } from '../lib/peer/roster.mjs';
 import { readTask, saveTask } from '../lib/state.mjs';
-import { listEntries } from '../lib/permission-rules.mjs';
+import { listEntries, usesSavedRules } from '../lib/permission-rules.mjs';
+import { getRecord, records, saveRecord } from '../lib/peer/taskstore.mjs';
+import { task as a2aTask, TaskState } from '../lib/peer/a2a.mjs';
 
 // A connection as the daemon hands it to a method: admitted, on a build that has remote
 // sessions unless said otherwise, recording what is sent to it.
@@ -31,7 +34,7 @@ function machines(t) {
   const team = makeTeam(t, { founderName: 'ana', memberName: 'box' });
   return { team, laptop: team.founder, devbox: team.member };
 }
-const METHODS = ['elu.remote.start', 'elu.remote.send', 'elu.remote.stop', 'elu.remote.answer', 'elu.remote.task', 'elu.remote.since'];
+const METHODS = ['elu.remote.start', 'elu.remote.send', 'elu.remote.stop', 'elu.remote.answer', 'elu.remote.task', 'elu.remote.since', 'elu.remote.list', 'elu.remote.watch'];
 const START = { id: crypto.randomUUID(), text: 'Make coupons upper case', permissions: 'ask', place: null, model: null, bots: ['reviewer'] };
 
 test('a machine is mine only when both machines mark each other, and either side ends it', t => {
@@ -211,6 +214,47 @@ test('events stream to the viewer, a gap is caught up by seq, and approvals are 
   assert.throws(() => withHome(devbox.home, () => host['elu.remote.answer']({ id: started.id, approval: 'approval-2', decision: 'maybe' }, toHost)), { message: 'Answer allow or deny.' });
 });
 
+// A message I hand off from my laptop to my devbox and work on there as my own session is
+// followed from the laptop like one it started: its approval waits there too, and my rules apply.
+test('a handoff I work on as my own on my other computer shows there with its approvals, and uses my rules', async t => {
+  const { team, laptop, devbox } = machines(t);
+  const project = withHome(devbox.home, () => { const project = registeredProject(t); saveTeamAccess(team.teamId, { root: project.root }); markMine(devbox.identity.key, laptop.identity.key); noteTheirs(laptop.identity.key, true); return project; });
+  withHome(laptop.home, () => { markMine(laptop.identity.key, devbox.identity.key); noteTheirs(devbox.identity.key, true); });
+  const toHost = connection(laptop.identity.key), toViewer = connection(devbox.identity.key);
+  const hostCtx = context(devbox.identity, { [laptop.identity.key]: toHost }), viewCtx = context(laptop.identity, { [devbox.identity.key]: toViewer });
+  const host = hostMethods(hostCtx), viewer = viewMethods(viewCtx);
+  toViewer.request = (method, params) => withHome(devbox.home, () => host[method](params, toHost));
+  const taskId = '1', origin = { kind: 'handoff', peer: laptop.identity.key, name: 'ana', a2aTaskId: 'h-1', threadId: 'th-1', hop: 1, own: true };
+  withHome(devbox.home, () => {
+    const { repo } = liveTask(project.root, { id: taskId, goal: 'Run evals', state: 'running' });
+    saveTask(repo, { ...readTask(repo, taskId), origin });
+    enqueue(project.root, 'Run evals'); const [request] = pendingRequests(project.root); updateRequest(project.root, request.id, { state: 'running', taskId });
+    saveRecord({ task: a2aTask({ id: 'h-1', contextId: 'th-1', state: TaskState.WORKING }), peer: laptop.identity.key, name: 'ana', kind: 'handoff', threadId: 'th-1', root: project.root, requestId: request.id, localTaskId: taskId, text: 'Run evals', createdAt: new Date().toISOString() });
+    // A stranger's handoff is not followed from anywhere.
+    saveRecord({ task: a2aTask({ id: 'h-2', contextId: 'th-2', state: TaskState.WORKING }), peer: 'e'.repeat(64), name: 'eve', kind: 'handoff', threadId: 'th-2', root: project.root, requestId: 'req-x', localTaskId: '9', text: 'Other', createdAt: new Date().toISOString() });
+    assert.equal(usesSavedRules(origin), true, 'my own rules answer its approvals');
+    assert.equal(usesSavedRules({ ...origin, peer: 'e'.repeat(64) }), false, 'a teammate\'s handoff gets the defaults');
+    // A mark this machine made alone is not enough: the other machine must mark it back.
+    noteTheirs(laptop.identity.key, false);
+    assert.equal(markedMine(laptop.identity.key), true); assert.equal(usesSavedRules(origin), false, 'one side alone gets the defaults');
+    noteTheirs(laptop.identity.key, true); assert.equal(usesSavedRules(origin), true);
+    requestApproval({ id: 'approval-h1', root: project.root, taskId, role: 'lead', vendor: 'claude', tool: 'Bash', input: { command: 'npm install' } });
+    hostTick(hostCtx); hostTick(hostCtx);
+  });
+  const remoteId = withHome(devbox.home, () => getRecord('h-1').remoteId);
+  assert.ok(remoteId, 'the handoff is hosted');
+  assert.equal(withHome(devbox.home, () => getRecord('h-2').remoteId), undefined);
+  assert.equal(withHome(devbox.home, () => records().filter(record => record.remoteId).length), 1, 'once');
+  const pushed = toHost.sent.filter(([method]) => method === 'elu.remote.events');
+  assert.ok(pushed.length >= 1 && pushed.every(([, params]) => params.items.every(item => item.id === remoteId)));
+  withHome(laptop.home, () => viewer['elu.remote.events'](pushed[0][1], toViewer));
+  await withHome(laptop.home, () => viewTick(viewCtx));
+  const seen = withHome(laptop.home, () => remoteSessions().find(row => row.id === remoteId));
+  assert.ok(seen, 'the laptop shows it'); assert.equal(seen.title, 'Run evals');
+  assert.deepEqual(seen.approvals.map(item => item.id), ['approval-h1']);
+  assert.deepEqual(await withHome(devbox.home, () => host['elu.remote.answer']({ id: remoteId, approval: 'approval-h1', decision: 'allow' }, toHost)), { answered: true });
+});
+
 // a on an approval answered from the other computer keeps the rule where the session runs:
 // its relay reads the rules there. The rule is made there from the request, never sent.
 test('a from my other computer keeps the rule on the computer the session runs on', async t => {
@@ -335,4 +379,284 @@ test('the new session box starts a session on my computer by its @name, and a me
   // Machines already on the team that are not both mine yet: the ones /invite offers to mark without a code.
   assert.deepEqual(glue.unmarked().map(row => row.name), ['kims-mac']);
   await assert.rejects(glue.mine(['@nobody']), { message: "No teammate's computer is called @nobody." });
+});
+
+// ---- Every session on a computer of mine ----
+
+// A chat session saved as the app saves one: by hand, or with the origin a teammate's message, a bot or my other computer gives it.
+function chat(root, id, { goal = `Session ${id}`, state = 'answered', minutes = 0, ...extra } = {}) {
+  const at = new Date(Date.now() - minutes * 60000).toISOString(), repo = repository(root);
+  saveTask(repo, { id: String(id), kind: 'conversation', goal, state, worktree: root, base: null, branch: null, createdAt: at, runs: [], reviews: [], responses: [], messages: [], sessions: {}, result: null, activeRole: state === 'running' ? 'lead' : null, ...extra });
+  return repo;
+}
+// Both machines mine, the devbox (host) with a project of the given origin; the two daemons joined by calls.
+function pair(t, { origin = 'https://github.com/acme/shop.git' } = {}) {
+  const { team, laptop, devbox } = machines(t);
+  const project = withHome(devbox.home, () => { const project = registeredProject(t, { origin }); saveTeamAccess(team.teamId, { root: project.root }); markMine(devbox.identity.key, laptop.identity.key); noteTheirs(laptop.identity.key, true); return project; });
+  withHome(laptop.home, () => { markMine(laptop.identity.key, devbox.identity.key); noteTheirs(devbox.identity.key, true); });
+  const toHost = connection(laptop.identity.key), toViewer = connection(devbox.identity.key);
+  const hostCtx = context(devbox.identity, { [laptop.identity.key]: toHost }), viewCtx = context(laptop.identity, { [devbox.identity.key]: toViewer });
+  const host = hostMethods(hostCtx), viewer = viewMethods(viewCtx);
+  toViewer.request = async (method, params) => withHome(devbox.home, () => host[method](params, toHost));
+  return { team, laptop, devbox, project, toHost, toViewer, hostCtx, viewCtx, host, viewer };
+}
+const pause = ms => new Promise(done => setTimeout(done, ms));
+
+test('a computer of mine lists every session here, whoever started it, a page at a time, and then only what changed', async t => {
+  const { laptop, devbox, project, toHost, host } = pair(t), kim = 'e'.repeat(64);
+  const other = withHome(devbox.home, () => {
+    chat(project.root, 1, { goal: 'Typed here by hand', minutes: 6 });
+    chat(project.root, 2, { goal: 'Nightly dependency check', minutes: 5 });
+    // A schedule started session 2.
+    fs.writeFileSync(path.join(process.env.XDG_CONFIG_HOME, 'elu-code', 'schedules.json'), JSON.stringify({ version: 1, schedules: [{ id: 'schedule-1', root: project.root, project: 'shop', goal: 'Nightly dependency check', when: { kind: 'once', at: new Date(Date.now() + 3600000).toISOString() }, enabled: true, lastTaskId: '2', runs: 1 }] }));
+    chat(project.root, 3, { goal: 'Fix the login redirect', minutes: 4, origin: { kind: 'handoff', peer: kim, name: 'kim', threadId: null } });
+    chat(project.root, 4, { goal: 'Which schema does the API use?', minutes: 3, origin: { kind: 'ask', peer: kim, name: 'kim', threadId: null } });
+    chat(project.root, 5, { goal: 'Started from the laptop', minutes: 2, origin: { kind: 'mine', mine: true, machine: laptop.identity.key, name: 'ana', remoteId: START.id } });
+    chat(project.root, 6, { goal: 'Notes for the week', minutes: 1, botChat: 'reviewer' });
+    chat(project.root, 7, { goal: 'Run the tests', state: 'running' });
+    // Finished a month ago: not listed. Waiting for an answer since then: listed.
+    chat(project.root, 8, { goal: 'Last month', minutes: 60 * 24 * 30 });
+    chat(project.root, 9, { goal: 'Asked last month', state: 'needs_input', minutes: 60 * 24 * 30 });
+    requestApproval({ id: 'approval-7a', root: project.root, taskId: '7', role: 'lead', vendor: 'claude', tool: 'Bash', input: { command: 'npm test' } });
+    // A second project here with no origin remote.
+    const other = registeredProject(t); chat(other.root, 1, { goal: 'Tidy my notes' }); relist();
+    return other;
+  });
+  const listed = withHome(devbox.home, () => host['elu.remote.list']({}, toHost));
+  assert.equal(listed.full, true); assert.equal(listed.next, null);
+  const by = Object.fromEntries(listed.sessions.map(row => [row.title, row.by]));
+  assert.deepEqual(by, { 'Run the tests': 'you', 'Tidy my notes': 'you', 'Notes for the week': 'bot', 'Started from the laptop': 'mine', 'Fix the login redirect': 'teammate', 'Nightly dependency check': 'schedule', 'Typed here by hand': 'you', 'Asked last month': 'you' });
+  assert.ok(!listed.sessions.some(row => row.title === 'Last month'), 'a session done with for more than a week is not listed');
+  assert.ok(!listed.sessions.some(row => row.title === 'Which schema does the API use?'), "a teammate's question is answered in Chats there, not listed");
+  const row = title => listed.sessions.find(item => item.title === title);
+  assert.equal(row('Fix the login redirect').who, 'kim'); assert.equal(row('Notes for the week').who, 'reviewer');
+  assert.equal(row('Started from the laptop').remoteId, START.id, 'the computer that started it learns which it is');
+  assert.deepEqual(row('Run the tests').approvals.map(item => [item.id, item.summary]), [['approval-7a', 'Run: npm test']]);
+  // The two projects: the one with an origin has its repository; the other has none.
+  const shop = listed.projects.find(item => item.id === row('Run the tests').project), notes = listed.projects.find(item => item.id === row('Tidy my notes').project);
+  assert.match(shop.repoId, /^[0-9a-f]{64}$/); assert.equal(notes.repoId, null);
+  assert.deepEqual(Object.keys(listed.sessions[0]).sort(), ['approvals', 'at', 'by', 'createdAt', 'error', 'plan', 'project', 'question', 'ref', 'state', 'title', 'who'].sort());
+  void other;
+  // A page at a time.
+  const first = withHome(devbox.home, () => host['elu.remote.list']({ limit: 3 }, toHost));
+  assert.deepEqual(first.sessions.map(item => item.title), listed.sessions.slice(0, 3).map(item => item.title));
+  const second = withHome(devbox.home, () => host['elu.remote.list']({ limit: 3, after: first.next }, toHost));
+  assert.deepEqual(second.sessions.map(item => item.title), listed.sessions.slice(3, 6).map(item => item.title));
+  // Since the cursor: only what changed, and what left.
+  await pause(5);
+  withHome(devbox.home, () => { chat(project.root, 1, { goal: 'Typed here by hand', minutes: 6, messages: [{ at: new Date().toISOString(), text: 'And the docs' }] }); fs.rmSync(path.join(repository(project.root).state, 'tasks', '6'), { recursive: true }); relist(); });
+  const since = withHome(devbox.home, () => host['elu.remote.list']({ since: listed.cursor }, toHost));
+  assert.equal(since.full, false);
+  assert.deepEqual(since.sessions.map(item => item.title), ['Typed here by hand']);
+  assert.deepEqual(since.gone, [row('Notes for the week').ref]);
+  // A cursor from before this daemon started lists everything again.
+  assert.equal(withHome(devbox.home, () => host['elu.remote.list']({ since: 1 }, toHost)).full, true);
+});
+
+test('a session started there by hand is watched from here: live, continued, stopped and answered as one started from here', async t => {
+  const { laptop, devbox, project, toHost, hostCtx, viewCtx, viewer } = pair(t);
+  withHome(devbox.home, () => { chat(project.root, 1, { goal: 'Make coupons upper case', state: 'answered', messages: [{ at: new Date().toISOString(), text: 'Make coupons upper case' }, { at: new Date().toISOString(), from: 'Lead', text: 'Done: codes are upper case now.' }] }); relist(); });
+  // The laptop lists what is there.
+  await withHome(laptop.home, () => listTick(viewCtx));
+  const [listedHere] = withHome(laptop.home, () => remoteMachines());
+  assert.equal(listedHere.key, devbox.identity.key); assert.equal(listedHere.older, false);
+  const item = listedHere.sessions[0];
+  assert.equal(item.title, 'Make coupons upper case'); assert.equal(item.by, 'you');
+  assert.equal(item.id, watchId(laptop.identity.key, devbox.identity.key, item.ref), 'the id both sides give it');
+  // Opened here: watched there, then caught up here.
+  assert.deepEqual(await withHome(laptop.home, () => remoteCommand(viewCtx, { type: 'remoteWatch', to: devbox.identity.key, ref: item.ref })), { id: item.id });
+  withHome(devbox.home, () => hostTick(hostCtx));
+  const pushed = toHost.sent.filter(([method]) => method === 'elu.remote.events').at(-1)[1];
+  withHome(laptop.home, () => viewer['elu.remote.events'](pushed, connection(devbox.identity.key)));
+  await withHome(laptop.home, () => viewTick(viewCtx));
+  const seen = () => withHome(laptop.home, () => remoteSessions().find(row => row.id === item.id));
+  assert.equal(seen().ref, item.ref); assert.equal(seen().state, 'answered');
+  assert.deepEqual(seen().entries.map(entry => entry.text), ['Make coupons upper case', 'Done: codes are upper case now.']);
+  // A reply from here continues it there, as typed there.
+  await withHome(laptop.home, () => remoteCommand(viewCtx, { type: 'remoteSend', id: item.id, to: devbox.identity.key, ref: item.ref, text: 'And the tests' }));
+  const [request] = withHome(devbox.home, () => pendingRequests(project.root));
+  assert.equal(request.goal, 'And the tests'); assert.equal(request.continuationTaskId, '1'); assert.equal(request.origin, undefined);
+  // It works there and asks for an approval: the laptop answers it, and the first answer wins.
+  withHome(devbox.home, () => { chat(project.root, 1, { goal: 'Make coupons upper case', state: 'running' }); requestApproval({ id: 'approval-3', root: project.root, taskId: '1', role: 'lead', vendor: 'claude', tool: 'Bash', input: { command: 'npm test' } }); hostTick(hostCtx, Date.now() + 1); });
+  withHome(laptop.home, () => viewer['elu.remote.events'](toHost.sent.filter(([method]) => method === 'elu.remote.events').at(-1)[1], connection(devbox.identity.key)));
+  assert.deepEqual(seen().approvals.map(entry => entry.summary), ['Run: npm test']);
+  assert.deepEqual(await withHome(laptop.home, () => remoteCommand(viewCtx, { type: 'remoteAnswer', id: item.id, approval: 'approval-3', decision: 'allow' })), { answered: true });
+  withHome(devbox.home, () => assert.deepEqual(pendingApprovals({ taskId: '1' }), []));
+  assert.deepEqual(seen().approvals, [], 'gone from Needs you here at once');
+  // Stop reaches it there.
+  assert.deepEqual(await withHome(laptop.home, () => remoteCommand(viewCtx, { type: 'remoteStop', id: item.id })), { stopping: true });
+  // Another key cannot read or act on the watch the laptop made, and gets no listing either.
+  const kim = connection('e'.repeat(64));
+  for (const method of ['elu.remote.since', 'elu.remote.send', 'elu.remote.answer', 'elu.remote.list', 'elu.remote.watch']) assert.throws(() => withHome(devbox.home, () => hostMethods(hostCtx)[method]({ id: item.id, ref: item.ref, text: 'x', approval: 'x', decision: 'allow' }, kim)), { message: NOT_MINE }, method);
+  assert.deepEqual(kim.sent, []);
+});
+
+test("a teammate's session there is watched and answered from here by its place, with no watch first", async t => {
+  const { laptop, devbox, project, hostCtx, viewCtx } = pair(t);
+  withHome(devbox.home, () => { chat(project.root, 2, { goal: 'Fix the login redirect', state: 'running', origin: { kind: 'handoff', peer: 'e'.repeat(64), name: 'kim', threadId: null } }); requestApproval({ id: 'approval-4', root: project.root, taskId: '2', role: 'lead', vendor: 'claude', tool: 'Bash', input: { command: 'git status' } }); relist(); });
+  await withHome(laptop.home, () => listTick(viewCtx));
+  const item = withHome(laptop.home, () => remoteMachines()[0].sessions.find(row => row.title === 'Fix the login redirect'));
+  assert.equal(item.by, 'teammate'); assert.equal(item.who, 'kim'); assert.deepEqual(item.approvals.map(row => row.id), ['approval-4']);
+  // y on its row under Needs you: watched there first, then answered.
+  assert.deepEqual(await withHome(laptop.home, () => remoteCommand(viewCtx, { type: 'remoteAnswer', id: item.id, to: devbox.identity.key, ref: item.ref, approval: 'approval-4', decision: 'deny' })), { answered: true });
+  withHome(devbox.home, () => { assert.deepEqual(pendingApprovals({ taskId: '2' }), []); hostTick(hostCtx); });
+  assert.ok(withHome(laptop.home, () => remoteSessions().some(row => row.id === item.id && row.ref === item.ref)), 'it is followed here now');
+  // A place that is not a session there is refused plainly.
+  await assert.rejects(withHome(laptop.home, () => remoteCommand(viewCtx, { type: 'remoteWatch', to: devbox.identity.key, ref: `${item.project}:99` })), /That session is not on this computer\./);
+});
+
+test('a watch its computer let go is made again: a reply still reaches the session, and a listing it never sent drops the old view', async t => {
+  const { laptop, devbox, project, hostCtx, viewCtx } = pair(t);
+  withHome(devbox.home, () => { chat(project.root, 1, { goal: 'Make coupons upper case', messages: [{ at: new Date().toISOString(), text: 'Make coupons upper case' }] }); relist(); });
+  await withHome(laptop.home, () => listTick(viewCtx));
+  const item = withHome(laptop.home, () => remoteMachines()[0].sessions[0]);
+  await withHome(laptop.home, () => remoteCommand(viewCtx, { type: 'remoteWatch', to: devbox.identity.key, ref: item.ref }));
+  withHome(devbox.home, () => hostTick(hostCtx));
+  await withHome(laptop.home, () => viewTick(viewCtx));
+  // A week with nothing new: the devbox lets the watch go.
+  withHome(devbox.home, () => hostTick(hostCtx, Date.now() + 8 * 86400000));
+  assert.throws(() => withHome(devbox.home, () => hostMethods(hostCtx)['elu.remote.since']({ id: item.id, after: 0 }, connection(laptop.identity.key))), /That session is not on this computer\./);
+  // A reply from here watches it again and goes through.
+  assert.deepEqual(await withHome(laptop.home, () => remoteCommand(viewCtx, { type: 'remoteSend', id: item.id, text: 'And the tests' })), { id: item.id });
+  assert.equal(withHome(devbox.home, () => pendingRequests(project.root)).at(-1).goal, 'And the tests');
+  // A view whose listing shows a change it never sent is dropped: the row shows what was listed until it is opened again.
+  withHome(laptop.home, () => {
+    const file = path.join(process.env.XDG_CONFIG_HOME, 'elu-code', 'peer', 'remote', 'view', `${item.id}.json`), hour = new Date(Date.now() - 3600000).toISOString();
+    fs.writeFileSync(file, JSON.stringify({ ...JSON.parse(fs.readFileSync(file, 'utf8')), behind: false, lastAt: hour, watchedAt: hour }));
+  });
+  withHome(devbox.home, () => { chat(project.root, 1, { goal: 'Make coupons upper case', messages: [{ at: new Date(Date.now() + 1000).toISOString(), text: 'Typed there later' }] }); relist(); });
+  await withHome(laptop.home, () => listTick(viewCtx, Date.now() + 3001));
+  assert.ok(!withHome(laptop.home, () => remoteSessions()).some(row => row.id === item.id));
+});
+
+test('a computer with many sessions is listed a page a tick, everything only on connect, and lists, catch-ups and watches share one budget', async t => {
+  const { laptop, devbox } = machines(t), key = devbox.identity.key, P = '1'.repeat(16);
+  await withHome(laptop.home, async () => {
+    markMine(laptop.identity.key, key); noteTheirs(key, true);
+    const base = Date.now(), row = n => ({ ref: `${P}:${n}`, project: P, title: `Session ${n}`, state: 'answered', at: new Date(base - n * 1000).toISOString(), approvals: [], by: 'you' });
+    const answer = (method, params) => method === 'elu.remote.watch' ? { id: watchId(laptop.identity.key, key, params.ref), project: 'shop', title: 'x' }
+      : method === 'elu.remote.since' ? { id: params.id, events: [], more: false, last: 0, first: 1 }
+      : params.after ? { full: params.since == null, cursor: 5, projects: [{ id: P, name: 'shop' }], sessions: [row(3)], gone: [], next: null }
+      : { full: params.since == null, cursor: 5, projects: [{ id: P, name: 'shop' }], sessions: params.since == null ? [row(1), row(2)] : [], gone: [], next: params.since == null ? `${row(2).at}|${P}:2` : null };
+    const link = connection(key, { answer }), ctx = context(laptop.identity, { [key]: link }), now = Date.now(), lists = () => link.sent.filter(([method]) => method === 'elu.remote.list');
+    await listTick(ctx, now);
+    assert.equal(lists().length, 1); assert.deepEqual(remoteMachines(), [], 'nothing is kept until the last page');
+    await listTick(ctx, now + 100);
+    assert.equal(lists().length, 2); assert.equal(lists()[1][1].after, `${row(2).at}|${P}:2`);
+    assert.deepEqual(remoteMachines()[0].sessions.map(item => item.title), ['Session 1', 'Session 2', 'Session 3']);
+    // Then only what changed, every few seconds, never everything again while it stays connected.
+    await listTick(ctx, now + 200); assert.equal(lists().length, 2);
+    for (let at = now + 3200; at < now + 140000; at += 12000) await listTick(ctx, at);
+    assert.ok(lists().slice(2).every(([, params]) => params.since === 5), 'only what changed since');
+    // On a new connection, everything once.
+    remoteConnected(ctx, link); await listTick(ctx, now + 150000);
+    assert.equal(lists().at(-1)[1].since, null);
+    // Ten sessions behind and a list due at once: no more than 8 requests in 10 s.
+    const views = path.join(process.env.XDG_CONFIG_HOME, 'elu-code', 'peer', 'remote', 'view'); fs.mkdirSync(views, { recursive: true });
+    for (let n = 0; n < 10; n++) { const id = crypto.randomUUID(); fs.writeFileSync(path.join(views, `${id}.json`), JSON.stringify({ id, machine: key, seq: 0, behind: true, createdAt: new Date().toISOString() })); }
+    link.sent.length = 0; ctx.sent = new Map(); ctx.listedAt = new Map(); ctx.paging = new Map(); const t0 = Date.now();
+    await listTick(ctx, t0 + 0);
+    for (let n = 0; n < 5; n++) await viewTick(ctx, t0);
+    assert.equal(link.sent.length, 8);
+    // A watch the cursor asks for still fits, up to 14; past that it waits a moment.
+    for (let n = 10; n < 16; n++) await remoteCommand(ctx, { type: 'remoteWatch', to: key, ref: `${P}:${n}`, cursor: true });
+    await assert.rejects(remoteCommand(ctx, { type: 'remoteWatch', to: key, ref: `${P}:16`, cursor: true }), /is busy\. It opens in a moment\./);
+    // What the owner does is never held back.
+    await remoteCommand(ctx, { type: 'remoteWatch', to: key, ref: `${P}:17` });
+    assert.equal(link.sent.length, 15);
+  });
+});
+
+test('a computer of mine on an older build is listed as one to update, and nothing is asked of one that is not mine', async t => {
+  const { laptop, devbox } = machines(t);
+  await withHome(laptop.home, async () => {
+    markMine(laptop.identity.key, devbox.identity.key); noteTheirs(devbox.identity.key, true);
+    // Sessions on other computers, but no list: Method not found.
+    const missing = connection(devbox.identity.key); missing.request = async method => { missing.sent.push([method]); const error = new Error('Method not found'); error.details = { rpc: { code: -32601 } }; throw error; };
+    await listTick(context(laptop.identity, { [devbox.identity.key]: missing }));
+    assert.equal(remoteMachines()[0].older, true);
+    assert.equal(UPDATE_LIST('devbox'), 'Update ELU Code on devbox to see its sessions here.');
+    // Not asked again for ten minutes.
+    await listTick(context(laptop.identity, { [devbox.identity.key]: missing })); assert.equal(missing.sent.length, 1);
+    // A build from before sessions on other computers is asked nothing at all.
+    fs.rmSync(path.join(process.env.XDG_CONFIG_HOME, 'elu-code', 'peer', 'remote', 'machines'), { recursive: true });
+    const old = connection(devbox.identity.key, { remote: 0 });
+    await listTick(context(laptop.identity, { [devbox.identity.key]: old }));
+    assert.deepEqual(old.sent, []); assert.equal(remoteMachines()[0].older, true);
+    // Marked here only: not listed, and no file is made for it.
+    fs.rmSync(path.join(process.env.XDG_CONFIG_HOME, 'elu-code', 'peer', 'remote', 'machines'), { recursive: true });
+    noteTheirs(devbox.identity.key, false);
+    const asked = connection(devbox.identity.key, { answer: () => ({ full: true, cursor: 1, projects: [], sessions: [] }) });
+    await listTick(context(laptop.identity, { [devbox.identity.key]: asked }));
+    assert.deepEqual(asked.sent, []); assert.deepEqual(remoteMachines(), []);
+  });
+});
+
+// The app's side: what Sessions and Projects show of each computer of mine.
+test("Sessions groups my computer's sessions of this repository under its name, newest first, and Projects lists its other projects", async () => {
+  const SHOP = 'a'.repeat(64), DOCS = 'f'.repeat(64), D = 'd'.repeat(64), K = 'e'.repeat(64), now = Date.now(), ago = minutes => new Date(now - minutes * 60000).toISOString();
+  const status = { key: 'k'.repeat(64), name: 'ana', box: 'laptop', teams: [{ members: [{ key: 'k'.repeat(64), name: 'ana' }, { key: D, name: 'ana', box: 'devbox', online: true }, { key: K, name: 'kim', box: 'kims-mac', online: true }] }] };
+  const session = (ref, title, minutes, extra = {}) => ({ id: crypto.randomUUID(), ref, project: ref.split(':')[0], title, state: 'answered', at: ago(minutes), createdAt: ago(minutes + 1), approvals: [], by: 'you', who: null, ...extra });
+  const p = { shop: '1'.repeat(16), home: '2'.repeat(16), docs: '3'.repeat(16) };
+  const started = { id: crypto.randomUUID(), machine: D, createdAt: ago(30), lastAt: ago(30), state: 'answered', title: 'Started from the laptop', entries: [], steps: [], approvals: [] };
+  const machinesFile = [{ key: D, listedAt: ago(0), older: false, projects: [{ id: p.shop, name: 'shop', repoId: SHOP, home: false }, { id: p.home, name: 'ana', repoId: null, home: true }, { id: p.docs, name: 'docs', repoId: DOCS, home: false }],
+    sessions: [session(`${p.shop}:3`, 'Fix the login redirect', 2, { by: 'teammate', who: 'kim', state: 'running', approvals: [{ id: 'approval-9', role: 'lead', summary: 'Run git push', at: ago(1) }] }), session(`${p.home}:1`, 'Tidy my notes', 3), session(`${p.shop}:1`, 'Typed there by hand', 5), session(`${p.shop}:2`, 'Nightly check', 9, { by: 'schedule' }), session(`${p.shop}:4`, 'Old one', 60 * 24 * 8), session(`${p.docs}:1`, 'Write the guide', 4),
+      // A question in the home folder of that computer, and a session finished five days ago that was opened here just now.
+      session(`${p.home}:2`, 'Pick a name', 7, { state: 'needs_input', question: 'Which name?' }), session(`${p.shop}:5`, 'Five days old', 60 * 24 * 5)] },
+    // Kim's computer is not mine: a list kept for it (it never is) shows nowhere.
+    { key: K, listedAt: ago(0), projects: [{ id: p.shop, name: 'shop', repoId: SHOP }], sessions: [session(`${p.shop}:8`, 'Kim private', 1)] }];
+  // Watching it stamped its first events with the moment it was watched.
+  const opened = { id: crypto.randomUUID(), machine: D, ref: `${p.shop}:5`, createdAt: ago(60 * 24 * 5 + 1), lastAt: ago(0), state: 'answered', title: 'Five days old', entries: [], steps: [], approvals: [] };
+  const facade = { mineRows: () => [{ key: D, mine: true, theirs: true }, { key: K, mine: true, theirs: false }], remoteSessions: () => [started, opened], remoteMachines: () => machinesFile, projectRepoId: root => root === '/work/shop' ? SHOP : null };
+  const commands = [], glue = remoteGlue({ facade, peerRead: () => status, peerCommand: async command => { commands.push(command); return { id: command.id ?? 'x', answered: true }; }, chatMessage: ({ title, text }) => `${title}: ${text}`, ink: text => text, colour: false, restMs: 0 });
+  const lines = glue.sections(now, '/work/shop'), text = line => line.header ?? line.note ?? (line.row ? rowTitle(line.row, now) : '');
+  assert.deepEqual(lines.filter(line => !line.spacer).map(text), ['On devbox · online', 'Fix the login redirect · wants to run git push', 'Typed there by hand', 'Nightly check', 'Started from the laptop', 'Five days old']);
+  // The one opened here keeps the place and the age its computer listed, not the moment it was watched.
+  const old = lines.find(line => line.row?.ref === `${p.shop}:5`).row;
+  assert.equal(old.watched, true); assert.equal(old.last, Date.parse(ago(60 * 24 * 5))); assert.equal(old.time, remoteRow({ ...opened, lastAt: ago(60 * 24 * 5) }, 'devbox', now).time);
+  assert.ok(lines.filter(line => line.row).every(line => line.row.key === `remote:${D}\0remote\0${line.row.id}`));
+  // Its approval also waits under Needs you here, marked with the computer, and so does the
+  // question in its home folder, which Sessions does not list under this project.
+  const wants = glue.rows(now);
+  assert.deepEqual(wants.map(row => rowTitle(row, now)).sort(), ['on devbox · Pick a name', 'on devbox · wants to run git push']);
+  assert.equal(boardRows([], now, { remote: wants })[0].key, `remote:${D}\0remote\0${wants.find(row => row.approval).id}/wants`);
+  // y there answers it on the devbox, by its place, as the session is not followed here yet.
+  const wanted = wants.find(row => row.approval);
+  assert.equal(await glue.action(wanted, 'accept'), 'Allowed.');
+  assert.deepEqual(commands.at(-1), { type: 'remoteAnswer', id: wanted.id, to: D, ref: `${p.shop}:3`, approval: 'approval-9', decision: 'allow' });
+  // A listed session is opened by watching it; until then what its computer listed shows.
+  const listedRow = lines.find(line => line.row?.ref === `${p.shop}:1`).row;
+  assert.match(glue.view(listedRow, 80), /Opening it on @devbox…/);
+  await pause(0); assert.deepEqual(commands.at(-1), { type: 'remoteWatch', to: D, ref: `${p.shop}:1`, cursor: true });
+  assert.deepEqual(rowActions(listedRow), [['enter', 'open']], 'it stays as long as it is there: nothing to remove');
+  // Another project open here, of no repository: only what was started from here.
+  assert.deepEqual(glue.sections(now, '/work/elsewhere').filter(line => line.row).map(line => rowTitle(line.row, now)), ['Started from the laptop']);
+  // Projects: its other projects, as "<project> on <name>".
+  assert.deepEqual(glue.projects(now, '/work/shop').map(row => [row.name, row.sessions]), [['ana on devbox', 2], ['docs on devbox', 1]]);
+  // Opened from Projects: that project's sessions under a heading of their own.
+  const first = glue.openProject(D, p.home);
+  const after = glue.sections(now, '/work/shop').filter(line => !line.spacer).map(text);
+  assert.deepEqual(after.slice(-3), ['ana on devbox', 'Tidy my notes', 'Pick a name']);
+  assert.equal(first, glue.sections(now, '/work/shop').find(line => line.row?.ref === `${p.home}:1`).row.key);
+  // The cursor has to rest on a row before it is watched: passing over it asks nothing.
+  const resting = [], slow = remoteGlue({ facade, peerRead: () => status, peerCommand: async command => { resting.push(command); return {}; }, chatMessage: () => '', ink: text => text, colour: false, restMs: 40 });
+  const restRow = slow.sections(now, '/work/shop').find(line => line.row?.ref === `${p.shop}:1`).row;
+  slow.view(restRow, 80); await pause(0); assert.deepEqual(resting, []);
+  await pause(50); slow.view(restRow, 80); assert.equal(resting.length, 1);
+  // A watch that fails says why, and is asked again only after a while, not on every draw.
+  const failing = [], refused = remoteGlue({ facade, peerRead: () => status, peerCommand: async command => { failing.push(command); throw new Error('@devbox: Not now.'); }, chatMessage: () => '', ink: text => text, colour: false, restMs: 0 });
+  const refusedRow = refused.sections(now, '/work/shop').find(line => line.row?.ref === `${p.shop}:1`).row;
+  refused.view(refusedRow, 80); await pause(0);
+  for (let i = 0; i < 5; i++) { assert.match(refused.view(refusedRow, 80), /@devbox: Not now\./); await pause(0); }
+  assert.equal(failing.length, 1);
+  // An offline computer is not asked at all: what it listed last shows, and says so.
+  status.teams[0].members[1].online = false;
+  const offline = [], away = remoteGlue({ facade, peerRead: () => status, peerCommand: async command => { offline.push(command); return {}; }, chatMessage: () => '', ink: text => text, colour: false, restMs: 0 });
+  const awayRow = away.sections(now, '/work/shop').find(line => line.row?.ref === `${p.shop}:1`).row;
+  for (let i = 0; i < 5; i++) { assert.match(away.view(awayRow, 80), /@devbox is offline\. What it listed last is shown\./); await pause(0); }
+  assert.deepEqual(offline, []);
+  // An offline computer keeps its last list, and says so; an older one says to update it.
+  machinesFile[0].older = true;
+  const older = remoteGlue({ facade, peerRead: () => status, peerCommand: async () => ({}), chatMessage: () => '', ink: text => text, colour: false }).sections(now, '/work/shop').filter(line => !line.spacer).map(text);
+  assert.deepEqual(older.slice(0, 2), ['On devbox · offline', 'Update ELU Code on devbox to see its sessions here.']);
 });

@@ -14,11 +14,14 @@ import { picturesRoot } from '../lib/pictures.mjs';
 
 // The locked profile is the Read only launch. fixtures/argv-locked.json was computed from the
 // adapters before permission modes existed, with every machine path replaced by a token;
-// compile({ mode: 'locked' }) must still produce it, argument for argument, with three changes
+// compile({ mode: 'locked' }) must still produce it, argument for argument, with four changes
 // since: every run, the owner's too, is denied ELU Code's own state folder; the file tools of
-// every run are denied ELU Code's records in the repository's Git folder; and a sandboxed
+// every run are denied ELU Code's records in the repository's Git folder; a sandboxed
 // command reads the rest of that folder, so git works there (a teammate's question reads none
-// of the folder, with the file tools or from a command). A config of
+// of the folder, with the file tools or from a command); and in a Git work tree the owner's
+// runs are kept from the secret-looking files Git does not track, by path, not from every
+// file of those names, so a tracked .npmrc reads as any other file (this repository has
+// none untracked, so no such rule shows; a teammate's question keeps the names). A config of
 // that time gave the model a $3 limit and named a reviewer, and a read-only run with no limit
 // of its own got $1. A run has no limit now unless the owner sets one, so the limits of
 // that time are set here by hand.

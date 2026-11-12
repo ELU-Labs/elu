@@ -207,8 +207,8 @@ test('teammates are told only about shared bots that can answer them', t => {
 
 test('a bot runs with a read-only role: no commands, no network, five minutes a turn, no budget of its own, its model and effort', t => {
   store(t);
-  assert.deepEqual(botRole(saveBot(CRITIC)), { vendor: 'codex', access: 'read', network: 'off', commands: [], writablePaths: [], timeoutSeconds: 300, maxCostUsd: null, model: 'big-model', effort: 'xhigh' });
-  assert.deepEqual(botRole(saveBot({ name: 'plain', instructions: 'x' })), { vendor: 'claude', access: 'read', network: 'off', commands: [], writablePaths: [], timeoutSeconds: 300, maxCostUsd: null });
+  assert.deepEqual(botRole(saveBot(CRITIC)), { vendor: 'codex', access: 'read', network: 'off', commands: [], writablePaths: [], timeoutSeconds: 600, maxCostUsd: null, model: 'big-model', effort: 'xhigh' });
+  assert.deepEqual(botRole(saveBot({ name: 'plain', instructions: 'x' })), { vendor: 'claude', access: 'read', network: 'off', commands: [], writablePaths: [], timeoutSeconds: 600, maxCostUsd: null });
   for (const vendor of botVendors()) assert.doesNotThrow(() => assertPolicy(botRole(saveBot({ name: 'any', vendor, model: 'some-model', instructions: 'x' }))), vendor);
   assert.equal(botKey('reviewer'), 'bot:reviewer'); assert.equal(botOfKey('bot:reviewer'), 'reviewer'); assert.equal(botOfKey('reviewer'), null); assert.equal(botOfKey(undefined), null);
 });

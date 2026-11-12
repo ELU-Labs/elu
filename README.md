@@ -97,7 +97,7 @@ You can send a message at any time. One sent while the session is working waits 
 | `/changes` | Shows what this session changed; `/chat` goes back |
 | `/publish` | Shows the exact push and draft pull request, then asks you |
 | `/stop` | Stops the running response. A message you sent while it ran is sent next; `/stop` again cancels that message |
-| `/schedule` | Starts a session later or on a schedule, such as `daily 9:00` or `every 2h` |
+| `/schedule in 1h check the build` | Starts a session later or on a schedule: `/schedule [when] [message]`. `/schedule ` lists times such as `in 5m`, `in 1h` and `daily 9:00`. Each run is a new session with the model, mode and bots of the form (a bot with its own schedule is left out); it does not see the chat it was made in |
 | `/budget 5` | Limits this session to 5 dollars; `/budget off` removes the limit |
 | `! git status` | Runs a shell command. In an open session the model gets the command and its output with your next message |
 | `/quit` | Closes ELU Code. Sessions that are running or queued go on in the background; `elu conductor stop` stops them |
@@ -106,25 +106,33 @@ A schedule also runs while ELU Code is closed, through a login item, once ELU Co
 installed (not run through `npx`). On macOS, while an agent works or a schedule is on, ELU
 Code stops the Mac from going to sleep on its own (`caffeinate -i`); the display can still
 sleep. Schedules show in the Sessions tab under Scheduled: `p` pauses one and `x` deletes
-it.
+it. A time is `in 30m`, `every 2h` (15 minutes to 7 days), `daily 9:00`, `weekdays 9am`,
+`mon,thu 14:30`, `tomorrow 15:00` or `2026-12-01 9:00`, in this computer's local time.
 
 ## Permissions
 
 Each session runs in one of three modes. `/permissions ask`, `auto` or `full` changes it,
 and `/permissions default auto` sets what new sessions start with.
 
-- **Ask for approval** (`ask`, the default): asks before outside edits, escapes, and internet.
+- **Ask for approval** (`ask`, the default): edits the session's files and asks you before
+  anything else, the internet included.
   Codex cannot ask you during a turn, so there these are refused and reported.
-- **Approve for me** (`auto`): a reviewer model, not you, decides on escapes and internet.
+- **Approve for me** (`auto`): edits the session's files; a reviewer model, not you, decides
+  the rest. Commands get no internet unless the reviewer lets one leave the sandbox.
   On Grok Build, what its reviewer refuses then asks you.
-- **Full access** (`full`): any file, any command, the internet.
+- **Full access** (`full`): any file, any command, the internet, with no sandbox. The never
+  list below is refused by name only: a command that names it another way can get through.
 
 When the model asks, `y` allows and `n` denies; `f` allows and gives that session Full access.
 `a` allows and keeps a narrow rule, such as `npm test` or `git diff`, for this project or all
 of them, so it is not asked again. Reads in the project, git reads and the project's own test,
 lint and build scripts run without asking from the start. `/permissions rules` or
 `elu permissions` lists them all and removes any. The never list always wins.
-You can change the mode while a turn runs.
+You can change the mode while a turn runs. When a turn stopped on something a wider mode
+allows, its Blocked line says which, and raising the mode continues the turn at once, with
+only what that mode allows. A turn that also stopped on your no, or on the never list, waits
+for your reply.
+A new approval rings the terminal bell once.
 
 Bots that review, and a teammate's question, always run read only.
 `/permissions folders add <path>` lets the model read one more folder of your home this
@@ -134,6 +142,20 @@ On Claude Code, your own MCP servers (`claude mcp list`) are on for the model an
 that work, and their tools run without asking in every mode. Neither the sandbox nor the
 never list below covers them, so a server can reach the internet and act on other services.
 `/mcp off NAME` turns one off for the project. A teammate's question never gets them.
+
+`/mcp add` adds a server: it asks for a name, the URL (or the command that starts it), the
+header that carries its key, such as `Authorization`, and then the key, in a field that
+shows only dots. Claude Code saves it for every folder (`claude mcp add-json --scope user`),
+and sessions get it from their next turn. `/mcp remove NAME` removes one after asking. From
+a shell, `elu mcp add NAME URL --header Authorization` asks for the key with echo off, or
+reads it from standard input; a command goes after `--`, as in
+`elu mcp add github --env GITHUB_TOKEN -- docker run -i --rm ghcr.io/github/github-mcp-server`.
+`elu mcp remove NAME` removes one. If you paste a server config, such as an `mcpServers`
+block, or a `claude mcp add` line (with `!` or without) into the message box, ELU Code does
+not send or run it: it offers to add the server, so the key stays out of the chat. The model
+is told to ask you to type `/mcp add` when it needs a server you do not have, and adding or
+removing one is on the never list; in Full access that is a rule on command text, not a
+boundary.
 
 ELU Code does not push, merge, tag, deploy or publish by itself. `/publish` shows the exact
 push and the draft pull request, waits for you, and refuses a default branch. The model is
@@ -260,8 +282,9 @@ laptop and `/mine @laptop` on the devbox. From then on, `@devbox fix the flaky t
 new session box starts the session on the devbox, with the mode, model and bots you picked.
 It shows in Sessions marked "on devbox", live, and its approvals wait on both machines. It is
 your own session there, so your rules apply, and `a` on its approval, from either machine,
-keeps the rule on the devbox, where it runs. `/mine` lists your computers and
-`/mine remove @devbox` ends it.
+keeps the rule on the devbox, where it runs.
+Sessions also lists every other session on the devbox in the same repository under "On devbox", and Projects lists its other projects as "<project> on devbox".
+`/mine` lists your computers and `/mine remove @devbox` ends it.
 [SECURITY.md](SECURITY.md#your-other-computers) says what that allows.
 
 In a channel, `/invite @kim` adds a teammate you already have. `/invite` alone makes a

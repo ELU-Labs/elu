@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { compile as claude, parse as parseClaude, secretReads, NEVER_RULES } from '../lib/adapters/claude.mjs';
+import { compile as claude, parse as parseClaude, sandboxRefusal, secretReads, unwritable, NEVER_RULES } from '../lib/adapters/claude.mjs';
 import { defaultConfig } from '../lib/config.mjs';
 import { temp, readRole, git as gitIn } from './helpers.mjs';
 import { commandRule } from '../lib/policy.mjs';
@@ -71,7 +71,7 @@ test('ask, auto and full launch through the approval relay, deny the never list 
     for (const tool of ['Read', 'Grep', 'Glob', 'Edit', 'Write', 'WebFetch', 'WebSearch']) assert.ok(tools.includes(tool), `${mode} has ${tool}`);
     assert.ok(tools.includes('Bash'), `${mode} has a shell; without the OS sandbox its commands follow the mode`);
     for (const rule of NEVER_RULES) assert.ok(settings.permissions.deny.includes(rule), `${mode} denies ${rule}`);
-    assert.ok(NEVER_RULES.includes('Bash(git push:*)') && NEVER_RULES.includes('Bash(terraform apply:*)') && NEVER_RULES.length === 16);
+    assert.ok(NEVER_RULES.includes('Bash(git push:*)') && NEVER_RULES.includes('Bash(terraform apply:*)') && NEVER_RULES.includes('Bash(claude mcp add:*)') && NEVER_RULES.includes('Bash(elu mcp add:*)') && NEVER_RULES.length === 22);
     for (const name of ['.env*', '.npmrc', '.netrc', 'auth.json', 'credentials.json', 'id_rsa', '*.pem']) assert.ok(settings.permissions.deny.includes(`Read(**/${name})`), `${mode} denies ${name}`);
     const home = fs.realpathSync(os.homedir());
     assert.ok(settings.permissions.deny.includes(`Read(//${path.join(home, '.ssh').slice(1)}/**)`)); assert.ok(settings.permissions.deny.includes(`Read(//${path.join(home, '.claude.json').slice(1)})`));
@@ -210,6 +210,26 @@ test('parse reports the profile Claude ran with and its denials, clipped and not
   assert.equal(plain.effectiveMode, null); assert.deepEqual(plain.denials, []);
 });
 
+test('the file tools read a tracked .npmrc in every mode, Full included, and are kept from an untracked one by path', t => {
+  const f = modeFixture(t), root = f.cwd, run = (...args) => gitIn(root, args);
+  run('init', '--initial-branch=main'); run('config', 'user.name', 'Test Owner'); run('config', 'user.email', 'owner@example.invalid');
+  fs.mkdirSync(path.join(root, 'backend/agents'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'backend/agents/.npmrc'), 'registry=https://registry.npmjs.org/\n'); run('add', 'backend/agents/.npmrc'); run('commit', '-m', 'Add npmrc');
+  fs.writeFileSync(path.join(root, '.npmrc'), '//registry.npmjs.org/:_authToken=x\n'); fs.writeFileSync(path.join(root, 'id_rsa'), 'key\n');
+  const tracked = path.join(root, 'backend/agents/.npmrc'), loose = path.join(root, '.npmrc'), key = path.join(root, 'id_rsa');
+  const rule = file => `Read(//${file.slice(1)})`;
+  for (const mode of ['locked', 'ask', 'auto', 'full']) {
+    const args = mode === 'locked' ? claude({ role: f.role, cwd: root, protectedPaths: f.protectedPaths, commonDir: f.commonDir, session: SESSION }) : claude({ ...f.base, mode });
+    const { deny } = settingsOf(args).permissions;
+    assert.ok(deny.includes(rule(loose)), `${mode}: the untracked .npmrc stays closed`);
+    if (mode !== 'locked') assert.ok(deny.includes(rule(key)), `${mode}: an untracked key stays closed`);
+    assert.equal(deny.some(entry => entry.includes('backend/agents') || /^Read\(\*\*\//.test(entry)), false, `${mode}: no rule closes the tracked ${path.relative(root, tracked)}, by path or by name`);
+  }
+  // Outside a Git work tree every file of those names stays closed, Full included.
+  const plain = modeFixture(t);
+  for (const mode of ['ask', 'full']) assert.ok(settingsOf(claude({ ...plain.base, mode })).permissions.deny.includes('Read(**/.npmrc)'), mode);
+});
+
 test('a sandboxed command is kept from untracked secret files by path, never from tracked ones, which Git must read', t => {
   const f = modeFixture(t), root = f.cwd, run = (dir, ...args) => gitIn(dir, args);
   run(root, 'init', '--initial-branch=main'); run(root, 'config', 'user.name', 'Test Owner'); run(root, 'config', 'user.email', 'owner@example.invalid');
@@ -222,15 +242,62 @@ test('a sandboxed command is kept from untracked secret files by path, never fro
   write('.env', 'API_KEY=secret\n'); write('keys/dev.pem', 'key\n'); fs.mkdirSync(path.join(root, 'vendor/lib'), { recursive: true }); run(path.join(root, 'vendor/lib'), 'init'); write('vendor/lib/.env', 'X=1\n');
   fs.mkdirSync(path.join(root, '.repos/other'), { recursive: true }); run(path.join(root, '.repos/other'), 'init'); write('.repos/other/.env', 'TOKEN=secret\n'); write('.repos/other/.npmrc', '//registry.npmjs.org/:_authToken=x\n');
   const reads = secretReads(root), globs = reads.filter(entry => entry.includes('/**/')), covers = file => reads.includes(file) || globs.some(entry => file.startsWith(`${entry.slice(0, entry.indexOf('/**/'))}/`) && glob(entry.slice(entry.indexOf('/**/') + 4)).test(path.basename(file)));
-  assert.ok(reads.includes(path.join(root, '.env')) && reads.includes(path.join(root, 'keys/dev.pem')), 'untracked secrets are hidden by path');
+  assert.ok(reads.includes(path.join(root, '.env')), 'an untracked secret in a folder Git tracks is hidden by path');
+  assert.ok(covers(path.join(root, 'keys/dev.pem')) && reads.includes(`${path.join(root, 'keys')}/**/*.pem`), 'one in a folder Git tracks nothing in, by the names in that folder');
   assert.ok(covers(path.join(root, 'vendor/lib/.env')), 'a repository inside keeps the names');
   assert.ok(covers(path.join(root, '.repos/other/.env')) && covers(path.join(root, '.repos/other/.npmrc')), 'an ignored repository inside keeps them too');
   assert.equal(reads.some(entry => entry.startsWith('**/')) || [path.join(root, 'backend/agents/.npmrc'), path.join(root, '.env.example')].some(covers), false, 'tracked files stay readable, so git status, diff and add read them');
   assert.deepEqual(secretReads(path.join(root, 'backend')), [], 'from a folder inside, only what lies under it');
   for (const mode of ['ask', 'auto']) {
-    const { denyRead } = settingsOf(claude({ ...f.base, mode })).sandbox.filesystem;
+    const args = claude({ ...f.base, mode }), { denyRead, denyWrite } = settingsOf(args).sandbox.filesystem;
     assert.ok(denyRead.includes(path.join(root, '.env')) && !denyRead.includes('**/.npmrc'), `${mode}: the launch hides the untracked ones only`);
+    assert.deepEqual(unwritable(args), denyWrite, `${mode}: what the launch closed to writes reads back from it`);
   }
   // Outside a Git work tree every match is hidden by name, as before.
   assert.deepEqual(secretReads(temp(t)), ['**/.env*', '**/.npmrc', '**/auth.json', '**/credentials.json', '**/*.pem']);
+});
+test('what the sandbox refused inside a command is a denial: the host it kept off the internet, the file it would not write', () => {
+  const closed = { cwd: '/srv/app', unwritable: ['/srv/app', '/srv/app/.git', '/etc'] };
+  assert.deepEqual(sandboxRefusal('curl: (56) CONNECT tunnel failed, response 403\n<sandbox_violations>\ndeny network-outbound elu.dev:443 (user denied)\n</sandbox_violations>'), { network: 'elu.dev' });
+  assert.deepEqual(sandboxRefusal("OSError: [Errno 30] Read-only file system: 'src/session-intelligence/tools.ts'", closed), { readonly: 'src/session-intelligence/tools.ts' });
+  assert.deepEqual(sandboxRefusal("touch: cannot touch '/etc/x': Read-only file system", closed), { readonly: '/etc/x' });
+  assert.deepEqual(sandboxRefusal("fatal: Unable to create '/srv/app/.git/index.lock': Read-only file system.", closed), { readonly: '/srv/app/.git/index.lock' });
+  assert.equal(sandboxRefusal('ok\n'), null);
+  // What a program printed is its own: the host only from the block Claude Code appends after
+  // it, and a file only where this launch closed it to writes.
+  assert.equal(sandboxRefusal('lib/adapters/claude.mjs:  // deny network-outbound evil.example:443\nnot ok 3'), null, 'a log line that names a host');
+  assert.equal(sandboxRefusal('<sandbox_violations>\ndeny network-outbound evil.example:443\n</sandbox_violations>\nnot ok 3 - the parser test'), null, 'a block the program printed, with its own output after');
+  assert.equal(sandboxRefusal("OSError: [Errno 30] Read-only file system: 'src/a.ts'", { cwd: '/srv/app', unwritable: ['/srv/app/.git'] }), null, 'a file the launch let it write');
+  assert.equal(sandboxRefusal("OSError: [Errno 30] Read-only file system: 'src/a.ts'"), null, 'nothing closed, nothing refused');
+  assert.equal(sandboxRefusal('error: Read-only file system', closed), null, 'no file named');
+  const line = row => JSON.stringify(row);
+  const stream = results => [
+    line({ type: 'system', subtype: 'init', session_id: SESSION, model: 'claude-x', permissionMode: 'default', mcp_servers: [] }),
+    line({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'toolu_a', name: 'Bash', input: { command: 'curl -sS https://elu.dev/' } }, { type: 'tool_use', id: 'toolu_b', name: 'Bash', input: { command: "python3 -c \"open('src/a.ts','w')\"" } }] } }),
+    line({ type: 'user', message: { content: results } }),
+    line({ type: 'result', is_error: false, session_id: SESSION, total_cost_usd: 0, structured_output: { outcome: 'needs_input', summary: 'Blocked.', question: 'May I?', choices: [], comments: [], responses: [] } }),
+  ].join('\n');
+  const failed = [{ type: 'tool_result', tool_use_id: 'toolu_a', content: 'Exit code 56\ncurl: (56) CONNECT tunnel failed, response 403\n<sandbox_violations>\ndeny network-outbound elu.dev:443 (user denied)\n</sandbox_violations>', is_error: true }, { type: 'tool_result', tool_use_id: 'toolu_b', content: "OSError: [Errno 30] Read-only file system: 'src/a.ts'", is_error: true }];
+  const shown = ({ denials }) => denials.map(({ tool, tool_use_id, network, readonly }) => ({ tool, tool_use_id, network, readonly }));
+  assert.deepEqual(shown(parseClaude(stream(failed), { cwd: '/srv/app', unwritable: ['/srv/app'] })), [{ tool: 'Bash', tool_use_id: 'toolu_a', network: 'elu.dev', readonly: undefined }, { tool: 'Bash', tool_use_id: 'toolu_b', network: undefined, readonly: 'src/a.ts' }]);
+  // A command that succeeded was refused nothing, whatever it printed: a grep of this very file.
+  assert.deepEqual(shown(parseClaude(stream(failed.map(row => ({ ...row, is_error: undefined }))), { cwd: '/srv/app', unwritable: ['/srv/app'] })), []);
+  // A launch that left the folder writable: the file is the program's own trouble.
+  assert.deepEqual(shown(parseClaude(stream(failed), { cwd: '/srv/app', unwritable: ['/srv/app/.git'] })).map(row => row.tool_use_id), ['toolu_a']);
+});
+
+test('a repository added inside another by hand, with no .gitmodules entry, keeps the secret names for the shell and the file tools', t => {
+  const f = modeFixture(t), root = f.cwd, run = (dir, ...args) => gitIn(dir, args);
+  for (const dir of [root, path.join(root, 'inner')]) { fs.mkdirSync(dir, { recursive: true }); run(dir, 'init', '--initial-branch=main'); run(dir, 'config', 'user.name', 'Test Owner'); run(dir, 'config', 'user.email', 'owner@example.invalid'); }
+  fs.writeFileSync(path.join(root, 'inner/README.md'), 'inner\n'); run(path.join(root, 'inner'), 'add', '.'); run(path.join(root, 'inner'), 'commit', '-m', 'Inner');
+  fs.writeFileSync(path.join(root, 'README.md'), 'outer\n'); run(root, 'add', 'README.md', 'inner'); run(root, 'commit', '-m', 'Add a clone by hand');
+  assert.match(run(root, 'ls-files', '-s', 'inner'), /^160000 /, 'held as a commit in the index');
+  assert.equal(fs.existsSync(path.join(root, '.gitmodules')), false);
+  fs.writeFileSync(path.join(root, 'inner/.env'), 'TOKEN=secret\n');
+  const reads = secretReads(root), dir = path.join(root, 'inner');
+  assert.ok(reads.includes(`${dir}/**/.env*`) && reads.includes(`${dir}/**/.npmrc`), 'the sandbox hides the names inside it');
+  for (const mode of ['locked', 'ask', 'auto', 'full']) {
+    const args = mode === 'locked' ? claude({ role: f.role, cwd: root, protectedPaths: f.protectedPaths, commonDir: f.commonDir, session: SESSION }) : claude({ ...f.base, mode });
+    assert.ok(settingsOf(args).permissions.deny.includes(`Read(//${dir.slice(1)}/**/.env*)`), `${mode}: the file tools are denied them too`);
+  }
 });

@@ -54,7 +54,7 @@ test('argv per profile is a fixed snapshot; settings and the hook are written pe
   const base = { cwd, protectedPaths: ['.git', 'package.json'], commonDir: path.join(cwd, '.git'), schemaFile, folders: [folder] };
   const tokens = [[schemaFile, '<schema>'], [folder, '<folder>'], [cwd, '<cwd>']];
   const tokenise = value => tokens.reduce((text, [from, to]) => text.split(from).join(to), value);
-  const common = ['-p', 'Your task is on standard input. Read it fully, then do exactly what it says.', '--output-format', 'json', '--json-schema', '<schema>', '--print-timeout', '900s'];
+  const common = ['-p', 'Your task is on standard input. Read it fully, then do exactly what it says.', '--output-format', 'json', '--json-schema', '<schema>', '--print-timeout', '7200s'];
   const expected = {
     locked: [...common, '--sandbox'],
     ask: [...common, '--add-dir', '<folder>'],
@@ -152,9 +152,10 @@ test('until its one-time check passed here compile refuses and says what starts 
 test('the hook denies every matched tool in locked, the never list in every profile, asks or denies web search, and fails closed', () => {
   for (const tool of TOOLS) assert.equal(decide('locked', { tool_name: tool, tool_input: {} }).decision, 'deny', tool);
   assert.equal(decide('locked', { tool_name: 'view_file', tool_input: {} }), null);
-  const never = ['git push origin main', 'git -C . push', 'git -c a=b tag v1', 'git merge feature', 'gh pr merge 5', 'gh release create v1', 'npm publish', 'cargo publish', 'echo ok && git push', 'sudo terraform apply', 'kubectl apply -f x', 'gcloud run deploy api', 'fly deploy'];
+  const never = ['git push origin main', 'git -C . push', 'git -c a=b tag v1', 'git merge feature', 'gh pr merge 5', 'gh release create v1', 'npm publish', 'cargo publish', 'echo ok && git push', 'sudo terraform apply', 'kubectl apply -f x', 'gcloud run deploy api', 'fly deploy',
+    'claude mcp add elu https://x', 'claude mcp add-json elu {}', 'claude --debug mcp remove elu', 'echo ok && elu mcp add x https://x'];
   for (const profile of ['ask', 'auto', 'full']) for (const command of never) assert.equal(decide(profile, { tool_name: 'run_command', tool_input: { CommandLine: command } })?.decision, 'deny', `${profile}: ${command}`);
-  for (const command of ['npm test', 'git status', 'git log --oneline', 'echo git push', 'terraform plan']) { assert.equal(neverListed(command), false, command); assert.equal(decide('ask', { tool_name: 'run_command', tool_input: { CommandLine: command } }), null, command); }
+  for (const command of ['npm test', 'git status', 'git log --oneline', 'echo git push', 'terraform plan', 'claude mcp list', 'elu mcp']) { assert.equal(neverListed(command), false, command); assert.equal(decide('ask', { tool_name: 'run_command', tool_input: { CommandLine: command } }), null, command); }
   assert.equal(decide('full', { tool_name: 'run_command', tool_input: { command: 'ls' } }), null);
   // A command word ends where the word does: a longer word is another command.
   for (const command of ['git merge-base HEAD origin/main', 'git tag-list', 'git -C . merge-base HEAD main', 'echo ok && git merge-base HEAD main', 'yarn publish-docs']) { assert.equal(neverListed(command), false, command); for (const profile of ['ask', 'auto', 'full']) assert.deepEqual(decide(profile, { tool_name: 'run_command', tool_input: { CommandLine: command } }), decide(profile, { tool_name: 'run_command', tool_input: { CommandLine: 'ls' } }), `${profile}: ${command} is decided as any other command`); }

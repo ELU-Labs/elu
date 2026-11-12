@@ -5,7 +5,37 @@
 import fs from 'node:fs'; import path from 'node:path'; import readline from 'node:readline';
 const vendor=path.basename(process.argv[1]); const args=process.argv.slice(2);
 let cfg={}; try{cfg=JSON.parse(fs.readFileSync(path.join(path.dirname(process.argv[1]),'fake.json'),'utf8'));}catch{}
+// byMode (fake.json): what a turn started in that --permission-mode does (default, auto,
+// bypassPermissions), over the rest of fake.json, so one session's turns can differ by mode.
+{const at=args.indexOf('--permission-mode');const started=at>=0?args[at+1]:'default';if(cfg.byMode?.[started])cfg={...cfg,...cfg.byMode[started]};}
 const mode=cfg.mode??'normal';
+// claude mcp add-json --scope user -- NAME JSON and claude mcp remove --scope SCOPE -- NAME, as the real 2.1.322 does them, on the
+// .claude.json in CLAUDE_CONFIG_DIR. The settings are recorded as <json>, so a test can look for a key everywhere else.
+// mode mcp-echo: add-json fails and prints the settings it was given, as an error may.
+if(args[0]==='mcp'){
+ const dir=process.env.CLAUDE_CONFIG_DIR??process.env.HOME,file=path.join(dir,'.claude.json');let data={};try{data=JSON.parse(fs.readFileSync(file,'utf8'));}catch{}
+ const scope=args.includes('--scope')?args[args.indexOf('--scope')+1]:null,dashed=args.indexOf('--'),words=args.slice(1).filter((arg,at,all)=>arg!=='--scope'&&all[at-1]!=='--scope'&&at+1!==dashed);
+ // A word that starts with - before -- is an option, as commander reads it.
+ if(args.slice(1,dashed<0?undefined:dashed).some((arg,at,all)=>arg.startsWith('-')&&arg!=='--scope'&&all[at-1]!=='--scope')){console.error(`error: unknown option '${args.slice(1).find(arg=>arg.startsWith('-')&&arg!=='--scope')}'`);process.exit(1);}
+ if(cfg.calls)fs.appendFileSync(cfg.calls,JSON.stringify({vendor,args:args.map((arg,at)=>args[1]==='add-json'&&at===args.length-1?'<json>':arg),cwd:process.cwd()})+'\n');
+ const save=()=>{fs.mkdirSync(dir,{recursive:true});fs.writeFileSync(file,JSON.stringify(data,null,2),{mode:0o600});};
+ if(words[0]==='add-json'){
+  const [,name,json]=words;
+  if(mode==='mcp-echo'){console.error(`Invalid configuration: ${json}`);process.exit(1);}
+  if(!/^[A-Za-z0-9_-]+$/.test(name??'')){console.error(`Invalid name ${name}. Names can only contain letters, numbers, hyphens, and underscores.`);process.exit(1);}
+  let entry;try{entry=JSON.parse(json);}catch{entry=null;}
+  if(!entry||entry.url&&!entry.type){console.error('Invalid configuration: : Invalid input');process.exit(1);}
+  if(scope!=='user'){console.error('The fake takes --scope user only.');process.exit(1);}
+  if(data.mcpServers?.[name]){console.error(`MCP server ${name} already exists in user config`);process.exit(1);}
+  data.mcpServers={...data.mcpServers,[name]:entry};save();console.log(`Added ${entry.type??'stdio'} MCP server ${name} to user config`);process.exit(0);
+ }
+ if(words[0]==='remove'){
+  const name=words[1],servers=scope==='local'?data.projects?.[process.cwd()]?.mcpServers:data.mcpServers;
+  if(!servers?.[name]){console.error(`No MCP server named "${name}" in ${scope} scope`);process.exit(1);}
+  delete servers[name];save();console.log(`Removed MCP server ${name} from ${scope} config`);process.exit(0);
+ }
+ console.error('The fake knows mcp add-json and mcp remove only.');process.exit(1);
+}
 if(cfg.calls)fs.appendFileSync(cfg.calls, JSON.stringify({vendor,args,...(cfg.note?{tmp:process.env.CLAUDE_CODE_TMPDIR??null}:{})})+'\n');
 if(args.includes('--version')){console.log('2.1.319');process.exit(0);}
 // The --model entry of the real --help, which is where the aliases a bot's Model step offers come from.
@@ -57,6 +87,11 @@ if(mode==='slow-answer')await new Promise(resolve=>setTimeout(resolve,250));
 if(edit&&mode==='protected')fs.appendFileSync('package.json',' ');
 else if(edit&&mode!=='no-change')fs.writeFileSync('src/coupon.mjs','export const normalize = (value) => value.toUpperCase();\n');
 if(edit&&input.includes('Trim spaces'))fs.writeFileSync('src/coupon.mjs','export const normalize = (value) => value.trim().toUpperCase();\n');
+// chatty: keeps printing, a line every 200 ms for ticks (fake.json, 15 by default), longer than
+// a test's quiet limit, then finishes. stall: an edit turn makes its edit, prints one line and
+// then prints nothing for a minute, as a turn that stopped working does.
+if(mode==='chatty')for(let n=0;n<(cfg.ticks??15);n++){console.log(JSON.stringify({type:'assistant',message:{content:[{type:'text',text:`Still working (${n}).`}]}}));await new Promise(resolve=>setTimeout(resolve,200));}
+if(mode==='stall'&&edit){console.log(JSON.stringify({type:'assistant',message:{content:[{type:'text',text:'Edited the file. Thinking.'}]}}));await new Promise(resolve=>setTimeout(resolve,60000));}
 if(mode==='question'&&!args.includes('--resume')&&!input.includes('Uppercase')){result.outcome='needs_input';result.question='Which format?';result.choices=['Uppercase','Lowercase'];}
 if((mode==='review-fix'||mode==='review-block')&&input.includes('Address the review')){result.responses=[{id:'R1',action:mode==='review-fix'?'fixed':'disputed',reason:mode==='review-fix'?'Handled the edge case.':'The finding still needs owner input.'}];}
 const mcpArg=args[args.indexOf('--mcp-config')+1];const servers=!args.includes('--safe-mode')&&mcpArg&&!mcpArg.startsWith('{')&&fs.existsSync(mcpArg)?JSON.parse(fs.readFileSync(mcpArg,'utf8')).mcpServers:{};const mcp=Object.keys(servers).map(name=>({name,status:'connected'}));
@@ -83,9 +118,31 @@ const promptTool=args.includes('--permission-prompt-tool')?args[args.indexOf('--
 // under /tmp: there the command ends 1 whatever it did.
 const uid=process.getuid?.()??0;const named=process.env.CLAUDE_CODE_TMPDIR;const own=named&&Buffer.byteLength(path.join(named,`claude-${uid}`))<=44?path.join(named,`claude-${uid}`):null;
 const noted=i=>{if(!cfg.note||permissionMode==='bypassPermissions')return '';if(!own)return `sh: operation not permitted: /tmp/claude-${uid}/cwd-${i}\n`;fs.mkdirSync(own,{recursive:true,mode:0o700});fs.writeFileSync(path.join(own,`cwd-${i}`),process.cwd());return '';};
+// fence (fake.json): where bwrap is installed, a command of a turn whose settings enable the
+// sandbox runs fenced as Claude Code's sandbox fences it on Linux: the disk read-only but for
+// the working folder and the run's temporary folder, less what denyWrite names; each file
+// denyRead names or matches by name hidden under an empty device, a folder under an empty
+// one; no network.
+const settingsAt=args.indexOf('--settings');const sandbox=settingsAt>=0?JSON.parse(args[settingsAt+1]).sandbox??null:null;
+function fenceArgs(fenced){
+ const home=process.env.HOME??'',cwd=process.cwd(),out=['--die-with-parent','--unshare-net','--ro-bind','/','/','--dev','/dev','--proc','/proc'];
+ const abs=p=>p.startsWith('~/')?path.join(home,p.slice(2)):path.isAbsolute(p)?p:path.join(cwd,p),under=(p,dir)=>p===dir||p.startsWith(`${dir}/`);
+ const denied=(fenced.denyWrite??[]).map(abs);
+ for(const dir of [cwd,process.env.CLAUDE_CODE_TMPDIR].filter(Boolean))if(fs.existsSync(dir)&&!denied.some(d=>under(dir,d)))out.push('--bind',dir,dir);
+ for(const p of denied)if(fs.existsSync(p))out.push('--ro-bind',p,p);
+ const hide=p=>{try{out.push(...(fs.lstatSync(p).isDirectory()?['--tmpfs',p]:['--ro-bind','/dev/null',p]));}catch{}};
+ const walk=(dir,test,depth=0)=>{if(depth>12)return;let names=[];try{names=fs.readdirSync(dir,{withFileTypes:true});}catch{return;}for(const entry of names){const p=path.join(dir,entry.name);if(entry.isDirectory()){if(entry.name!=='.git')walk(p,test,depth+1);}else if(test(entry.name))hide(p);}};
+ for(const entry of fenced.denyRead??[]){
+  if(!entry.includes('*')){hide(abs(entry));continue;}
+  const at=entry.indexOf('**/'),base=at>0?abs(entry.slice(0,at-1)):cwd,name=entry.slice(at+3),re=new RegExp(`^${name.replace(/[.+^$(){}|[\]\\]/g,'\\$&').replace(/\*/g,'.*')}$`);
+  walk(base,file=>re.test(file));
+ }
+ return [...out,'--chdir',cwd];
+}
 if(Array.isArray(cfg.commands)&&promptTool){
  const {spawnSync}=await import('node:child_process');const named=process.env.CLAUDE_ENV_FILE;const ahead=named&&fs.existsSync(named)?fs.readFileSync(named,'utf8').trim():'';
- cfg.commands.forEach((command,i)=>{const id=`toolu_fake_${i+1}`;const r=spawnSync('/bin/sh',['-c',`PATH="/usr/bin:/bin:$PATH"\n${ahead}\neval "$1"`,'sh',command],{env:process.env,encoding:'utf8'});const denied=noted(i+1);if(denied&&r.status===0)r.status=1;const out=`${r.stdout}${r.stderr}${denied}`;
+ const fenced=cfg.fence&&sandbox?.enabled===true&&spawnSync('bwrap',['--version']).status===0;
+ cfg.commands.forEach((command,i)=>{const id=`toolu_fake_${i+1}`;const script=['-c',`PATH="/usr/bin:/bin:$PATH"\n${ahead}\neval "$1"`,'sh',command];const r=fenced?spawnSync('bwrap',[...fenceArgs(sandbox.filesystem??{}),'/bin/sh',...script],{env:process.env,encoding:'utf8'}):spawnSync('/bin/sh',script,{env:process.env,encoding:'utf8'});const denied=noted(i+1);if(denied&&r.status===0)r.status=1;const out=`${r.stdout}${r.stderr}${denied}`;
   console.log(JSON.stringify({type:'assistant',message:{content:[{type:'tool_use',id,name:'Bash',input:{command,description:'Run it'}}]}}));
   console.log(JSON.stringify({type:'user',message:{content:[{type:'tool_result',tool_use_id:id,content:r.status===0?out:`Exit code ${r.status}\n${out}`,...(r.status===0?{}:{is_error:true})}]}}));});
 }
@@ -115,7 +172,8 @@ if(Array.isArray(cfg.network)){
 if(mode==='relay'&&promptTool&&permissionMode!=='bypassPermissions'){
  const {spawn}=await import('node:child_process');const readline=await import('node:readline');
  const server=servers[promptTool.split('__')[1]];if(!server)throw new Error('The approval relay is not in --mcp-config.');
- const child=spawn(server.command,server.args,{env:{...process.env,...(server.env??{})},stdio:['pipe','pipe','inherit']});
+ // wait (fake.json): how many seconds the relay waits for the owner, in place of its twenty minutes.
+ const child=spawn(server.command,[...server.args,...(cfg.wait?['--wait',String(cfg.wait)]:[])],{env:{...process.env,...(server.env??{})},stdio:['pipe','pipe','inherit']});
  const waiting=new Map();let next=1;const progress=[];
  readline.createInterface({input:child.stdout}).on('line',line=>{let row;try{row=JSON.parse(line);}catch{return;}if(row.method==='notifications/progress')progress.push(row.params);else if(waiting.has(row.id)){waiting.get(row.id)(row);waiting.delete(row.id);}});
  const call=(method,params)=>new Promise(resolve=>{const id=next++;waiting.set(id,resolve);child.stdin.write(JSON.stringify({jsonrpc:'2.0',id,method,params})+'\n');});
@@ -133,6 +191,8 @@ if(mode==='relay'&&promptTool&&permissionMode!=='bypassPermissions'){
  }
  child.stdin.end();
 }
+// blocked (fake.json): the question this turn ends on, as a model does when something it needed was refused.
+if(cfg.blocked){result.outcome='needs_input';result.question=cfg.blocked;result.choices=[];}
 console.log(JSON.stringify({type:'result',is_error:false,session_id:session,total_cost_usd:0,...(denials.length?{permission_denials:denials}:{}),structured_output:mode==='invalid'||badReply?{outcome:'nope'}:result}));
 // A stream-json run ends when its input does; one the runner never closes fails the test.
 if(streaming&&!inputEnded){const timer=setTimeout(()=>{console.error('The input was never closed after the result.');process.exit(3);},10000);while(await nextLine()!==null);clearTimeout(timer);}

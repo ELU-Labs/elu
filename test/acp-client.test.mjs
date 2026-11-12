@@ -52,13 +52,21 @@ test('a server that exits fails the requests in flight and every later one; exit
   assert.deepEqual(await client.close(), exit, 'close after exit returns the same result');
 });
 
+test('a server that writes nothing for the quiet limit is stopped unless the run is held; one that answers is not', async t => {
+  const [silent, held, talking] = await Promise.all([start(t, { quietSeconds: 1, timeoutSeconds: 60 }), start(t, { quietSeconds: 1, hold: () => true }), start(t, { quietSeconds: 2 })]);
+  for (let n = 0; n < 6; n++) { await talking.client.request('echo'); await sleep(500); }
+  assert.equal((await held.client.request('echo')).notifications, 0, 'a held run keeps running past the quiet limit');
+  const exit = await silent.client.exit; assert.equal(exit.timedOut, true); assert.equal(exit.stoppedBy, 'quiet');
+  assert.equal((await talking.client.request('echo')).notifications, 0, 'three seconds of replies, each within the quiet limit');
+});
+
 test('the time limit kills the server unless the run is held; an abort kills it at once', async t => {
   const [limited, held, aborted] = await Promise.all([
     start(t, { timeoutSeconds: 1 }),
     start(t, { timeoutSeconds: 1, hold: () => true }),
     (async () => { const controller = new AbortController(); const started = await start(t, { signal: controller.signal }); controller.abort(); return started; })(),
   ]);
-  const exit = await limited.client.exit; assert.equal(exit.timedOut, true); assert.equal(exit.signal, 'SIGKILL');
+  const exit = await limited.client.exit; assert.equal(exit.timedOut, true); assert.equal(exit.stoppedBy, 'cap'); assert.equal(exit.signal, 'SIGKILL');
   await sleep(1300);
   assert.equal((await held.client.request('echo')).notifications, 0, 'a held run keeps running past its limit');
   assert.equal((await aborted.client.exit).signal, 'SIGKILL');
