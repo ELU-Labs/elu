@@ -252,6 +252,12 @@ test('every vendor\'s way of asking is read the same', () => {
   assert.deepEqual(actionOf('fetch', { Url: 'https://x.test/' }), { kind: 'fetch', url: 'https://x.test/' });
   assert.deepEqual(actionOf('fetch', { url: 'https://x.test/' }), { kind: 'fetch', url: 'https://x.test/' });
   assert.deepEqual(actionOf('Bash', null), { kind: 'other', tool: 'Bash' });
+  // A read that keeps its path under a name this does not know asks; Grep and Glob search the working folder.
+  for (const [tool, input] of [['read', { target_file: '/etc/passwd' }], ['search', { SearchDirectory: '/' }], ['read', { uri: 'file:///etc/passwd' }], ['view_file', { File: '/etc/passwd' }], ['Read', {}]])
+    assert.deepEqual(actionOf(tool, input), { kind: 'other', tool }, `${tool} ${JSON.stringify(input)}`);
+  assert.deepEqual(actionOf('Grep', { pattern: 'x' }), { kind: 'read', file: null }); assert.deepEqual(actionOf('Glob', { pattern: '*.js' }), { kind: 'read', file: null });
+  assert.deepEqual(actionOf('read', { path: '/p/a' }), { kind: 'read', file: '/p/a' });
+  assert.equal(allowedBy('read', { target_file: '/etc/passwd' }, { project: '/p', cwd: '/p', sandboxed: true }), null);
   assert.deepEqual(commandShape('npm test 2>&1 | grep -c ok'), { main: ['npm', 'test'], filters: [['grep', '-c', 'ok']] });
   assert.deepEqual(commandShape('npm test 2>/dev/null | head -n 5'), { main: ['npm', 'test'], filters: [['head', '-n', '5']] });
   assert.equal(commandShape('npm test | grep -r x /'), null);
