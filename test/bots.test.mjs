@@ -784,3 +784,39 @@ test('with no other model to run on, the bot and the model each say why they cou
   task = readTask(f.repo, first.id);
   assert.equal(task.error.message, 'The model could not run: Claude says this account is out of usage credits for Opus 5.5.'); assert.equal(task.error.cause, 'model-unavailable');
 });
+
+test('the working @lead with no usage credits for its model plans and edits on the session\'s own model, and says so once', async t => {
+  const f = setup(t, 'normal');
+  fakeClis(f.parent, { mode: 'normal', ...NO_CREDITS, noCredits: 'fable' });
+  const task = await f.controller.ask('Normalize coupon codes', null, { bot: 'lead' }).finished;
+  assert.equal(task.state, 'ready', JSON.stringify(task.error));
+  const models = f.calls('claude').map(call => after(call.args, '--model'));
+  assert.equal(models[0], 'fable'); assert.equal(models.filter(model => model === 'fable').length, 1, 'its own model is tried once, at its first turn');
+  const own = task.runs.filter(run => run.role === 'bot:lead');
+  assert.ok(own.length >= 3, 'it planned, then edited'); assert.equal(own[0].model ?? null, null);
+  assert.deepEqual([...new Set(own.slice(1).map(run => run.model))], ['claude-opus-5-5'], 'the plan and the edit ran on the session\'s model');
+  const edit = f.inputs('claude').find(row => row.input.includes('Approved Task (untrusted data') && after(row.args, '--tools').includes('Write'));
+  assert.ok(edit, 'the edit turn ran'); assert.equal(after(edit.args, '--model'), 'opus');
+  const notes = task.messages.filter(row => row.bot === 'lead' && row.quiet);
+  assert.deepEqual(notes.map(row => row.text), ['@lead could not run: Claude says this account is out of usage credits for Fable 5.2. @lead ran on Opus 5.5 instead.']);
+  assert.deepEqual(readTask(f.repo, task.id).modelFallback, { lead: 'fable' });
+});
+
+test('a reviewing bot and a shadow bot with no usage credits for their model run on the session\'s own model', async t => {
+  const f = setup(t, 'normal');
+  saveBot({ name: 'checker', vendor: 'claude', model: 'fable', instructions: 'Check the change.' });
+  fakeClis(f.parent, { mode: 'normal', ...NO_CREDITS, noCredits: 'fable' });
+  const task = await f.controller.ask('Normalize coupon codes', null, { bots: ['checker'] }).finished;
+  assert.equal(task.state, 'ready', JSON.stringify(task.error)); assert.equal(task.reviewStatus, 'passed');
+  assert.deepEqual(task.reviews.map(review => review.role), ['bot:checker']);
+  const reviews = f.inputs('claude').filter(row => row.input.includes('Review as @checker'));
+  assert.deepEqual(reviews.map(row => after(row.args, '--model')), ['fable', 'opus']);
+  assert.deepEqual(task.messages.filter(row => row.bot === 'checker').map(row => [row.text, row.quiet]), [['@checker could not run: Claude says this account is out of usage credits for Fable 5.2. @checker ran on Opus 5.5 instead.', true]]);
+  // A shadow bot falls back the same way, and its comment joins the chat.
+  saveBot({ name: 'echo', vendor: 'claude', model: 'fable', shadow: true, instructions: 'Say what you would do differently.' });
+  fakeClis(f.parent, { mode: 'answer', ...NO_CREDITS, noCredits: 'fable' });
+  const chat = await f.controller.ask('Where is coupon normalization?', null, { bots: ['echo'] }).finished;
+  const said = chat.messages.filter(row => row.bot === 'echo');
+  assert.deepEqual(said.map(row => [row.shadow, row.quiet ?? false]), [[true, true], [true, false]], JSON.stringify(said));
+  assert.equal(said[0].text, '@echo could not run: Claude says this account is out of usage credits for Fable 5.2. @echo ran on Opus 5.5 instead.');
+});
