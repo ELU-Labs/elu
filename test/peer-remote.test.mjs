@@ -233,6 +233,10 @@ test('a handoff I work on as my own on my other computer shows there with its ap
     saveRecord({ task: a2aTask({ id: 'h-2', contextId: 'th-2', state: TaskState.WORKING }), peer: 'e'.repeat(64), name: 'eve', kind: 'handoff', threadId: 'th-2', root: project.root, requestId: 'req-x', localTaskId: '9', text: 'Other', createdAt: new Date().toISOString() });
     assert.equal(usesSavedRules(origin), true, 'my own rules answer its approvals');
     assert.equal(usesSavedRules({ ...origin, peer: 'e'.repeat(64) }), false, 'a teammate\'s handoff gets the defaults');
+    // A mark this machine made alone is not enough: the other machine must mark it back.
+    noteTheirs(laptop.identity.key, false);
+    assert.equal(markedMine(laptop.identity.key), true); assert.equal(usesSavedRules(origin), false, 'one side alone gets the defaults');
+    noteTheirs(laptop.identity.key, true); assert.equal(usesSavedRules(origin), true);
     requestApproval({ id: 'approval-h1', root: project.root, taskId, role: 'lead', vendor: 'claude', tool: 'Bash', input: { command: 'npm install' } });
     hostTick(hostCtx); hostTick(hostCtx);
   });
