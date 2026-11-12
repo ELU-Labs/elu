@@ -113,18 +113,23 @@ it.
 Each session runs in one of three modes. `/permissions ask`, `auto` or `full` changes it,
 and `/permissions default auto` sets what new sessions start with.
 
-- **Ask for approval** (`ask`, the default): asks before outside edits, escapes, and internet.
+- **Ask for approval** (`ask`, the default): edits the session's files and asks you before
+  anything else, the internet included.
   Codex cannot ask you during a turn, so there these are refused and reported.
-- **Approve for me** (`auto`): a reviewer model, not you, decides on escapes and internet.
+- **Approve for me** (`auto`): edits the session's files; a reviewer model, not you, decides
+  the rest. Commands get no internet unless the reviewer lets one leave the sandbox.
   On Grok Build, what its reviewer refuses then asks you.
-- **Full access** (`full`): any file, any command, the internet.
+- **Full access** (`full`): any file, any command, the internet. The never list below still
+  holds.
 
 When the model asks, `y` allows and `n` denies; `f` allows and gives that session Full access.
 `a` allows and keeps a narrow rule, such as `npm test` or `git diff`, for this project or all
 of them, so it is not asked again. Reads in the project, git reads and the project's own test,
 lint and build scripts run without asking from the start. `/permissions rules` or
 `elu permissions` lists them all and removes any. The never list always wins.
-You can change the mode while a turn runs.
+You can change the mode while a turn runs. When a turn stopped on something a wider mode
+allows, its Blocked line says which, and raising the mode continues the turn at once.
+A new approval rings the terminal bell once.
 
 Bots that review, and a teammate's question, always run read only.
 `/permissions folders add <path>` lets the model read one more folder of your home this

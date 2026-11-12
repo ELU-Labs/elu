@@ -2292,14 +2292,15 @@ test('the New session form picks Permissions, Where and Folders, and the session
   assert.match(text(), /^Folders {6}none {18}\S/m);
   pickRow(list, /Permissions/); v.input.write('\r'); await until(() => modal(v, 'Permissions'), 'picker');
   const picker = dialogText(v, 'Permissions');
-  assert.match(picker, /1 {2}Ask for approval {3}Asks before outside edits, escapes, and internet\./);
-  assert.match(picker, /2 {2}Approve for me {5}A reviewer model, not you, decides escapes and internet\./);
-  assert.match(picker, /3 {2}Full access {8}Any file, any command, the internet\./);
+  const flat = picker.replace(/\s+/g, ' ');
+  assert.match(flat, /1 Ask for approval Edits the session's files; asks you for the rest and the internet\./);
+  assert.match(flat, /2 Approve for me Edits the session's files; a reviewer model, not you, decides the rest\./);
+  assert.match(flat, /3 Full access Any file, any command, the internet\. Push and deploy stay blocked\./);
   assert.doesNotMatch(picker, /read-only/);
   v.input.write('3'); await until(() => modal(v, 'Full access'), 'confirm');
   const confirm = dialogText(v, 'Full access');
-  assert.match(confirm, /Full access: the model changes any file and uses the internet without asking\./);
-  assert.match(confirm, /Push, tag, merge and deploy are only asked of it, not blocked\./); assert.match(confirm, /Use it\? y\/N/);
+  assert.match(confirm.replace(/\s+/g, ' '), /Full access: the model changes any file, runs any command and uses the internet without asking\./);
+  assert.match(confirm.replace(/\s+/g, ' '), /Push, tag, merge, deploy and publish stay blocked\./); assert.match(confirm, /Use it\? y\/N/);
   await dialog(v, 'Full access', 'n'); await until(() => !modal(v, 'Full access'), 'declined');
   assert.match(text(), /Permissions {2}Ask for approval/);
   pickRow(list, /Permissions/); v.input.write('\r'); await until(() => modal(v, 'Permissions'), 'picker again'); v.input.write('3'); await dialog(v, 'Full access', 'y');
@@ -2647,14 +2648,16 @@ test('a command refused for a never-list part names that part and never points a
   blocked('7', 'Read the keys', 'full', [{ tool: 'Read', input: { file_path: path.join(os.homedir(), '.ssh', 'id_ed25519') } }, run('rm -rf /srv/app/old'), run('cat notes.txt')],
     [{ id: 'run-7-a', tool: 'Bash', summary: 'Run: rm -rf /srv/app/old', decision: 'deny', at: new Date().toISOString(), role: 'lead', session: 'session-1' }]);
   await openTask(v, /Read the keys/); await until(() => v.current.session === '7', 'the second session is open');
-  await until(() => /Blocked: Read ~\/\.ssh\/id_ed25519: files that may hold secrets stay closed in every mode\./.test(chat()), 'a secret says so');
-  assert.match(chat(), /Blocked: Run rm -rf \/srv\/app\/old: you denied it\./); assert.match(chat(), /Blocked: Run cat notes\.txt: refused by a rule that no mode lifts\./);
+  await until(() => /Blocked: Read ~\/\.ssh\/id_ed25519\. Files that may hold secrets stay closed: open it yourself\./.test(chat()), 'a secret says so');
+  assert.match(chat(), /Stopped: Run rm -rf \/srv\/app\/old\. You said no; reply with what to do instead\./); assert.match(chat(), /Blocked: Run cat notes\.txt\. A rule no mode lifts refused it\./);
   assert.doesNotMatch(chat(), /\/permissions to allow more/);
   // Ask for approval: the never list is named, and the hint stays for what a wider mode would allow.
   blocked('8', 'Ship it', 'ask', [run('git push origin main'), run('npm install'), { tool: 'Edit', input: { file_path: path.join(personalDirectory(), 'config.json') } }]);
   await openTask(v, /Ship it/); await until(() => v.current.session === '8', 'the third session is open');
-  await until(() => /Blocked: git push is never allowed, in any mode \(git push origin main\)\./.test(chat()), 'the never list by name');
-  assert.match(chat(), /Blocked: Run npm install\./); assert.match(chat(), /ELU Code's own files stay closed in every mode\./); assert.match(chat(), /\/permissions to allow more, then reply\./);
+  await until(() => /Blocked: git push is never allowed, in any mode \(git push origin main\)\. Run it yourself\./.test(chat()), 'the never list by name');
+  // What a wider mode lifts names the command that gives it.
+  assert.match(chat(), /Blocked: Run npm install\. Needs Full access: \/permissions full continues it\./); assert.match(chat(), /Blocked: Edit .+?config\.json\. ELU Code's own files stay closed in every mode\./);
+  assert.doesNotMatch(chat(), /\/permissions to allow more/);
   // A stand-in command refused a push, once inside a script, and the turn went on to answer: the chat still says so, each refusal once.
   const step = (command, never) => ({ tool: 'command_execution', summary: `Run: /bin/zsh -c '${command}'`, never });
   blocked('9', 'Sync the branch', 'full', [step('sh ./sync.sh', 'git push'), step('sh ./sync.sh', 'git push'), step('git push origin HEAD', 'git push')], [], { vendor: 'codex', state: 'answered' });
@@ -2698,11 +2701,64 @@ test('a blocked run shows what was blocked, and a lead that asked instead says s
   saveTask(p.repo, { ...readTask(p.repo, '5'), permissions: 'auto', runs: [{ role: 'lead', vendor: 'claude', at: new Date().toISOString(), logFile: log, permissions: 'auto', effectivePermissions: 'ask', denials: [{ tool: 'WebSearch', input: { query: 'docs' } }, { tool: 'Bash', input: { command: 'npm install' } }] }] });
   await openTask(v, /Find the docs/); await until(() => v.current.session === '5', 'that session is open');
   const chat = () => panels.chat.getText();
-  await until(() => /Blocked: Search the web\./.test(chat()), 'blocked line');
-  assert.match(chat(), /Blocked: Run npm install\./); assert.match(chat(), /\/permissions to allow more, then reply\./);
+  // The turn really ran in Ask for approval, so its refusals read as that mode's.
+  await until(() => /Blocked: Search the web\. Needs Full access: \/permissions full continues it\./.test(chat().replace(/\s+/g, ' ')), 'blocked line');
+  assert.match(chat().replace(/\s+/g, ' '), /Blocked: Run npm install\. Needs Full access: \/permissions full continues it\./);
   assert.match(chat().replace(/\s+/g, ' '), /Asked instead\. Approve for me is not available here\./);
   assert.equal(panels.chat._clines.length, panels.chat.getContent().split('\n').length, 'each line fits the pane beside the list');
   assert.match(panels.header.getText(), /Auto/); assert.match(panels.ask._label.getText(), /Message Claude · Approve for me/);
+});
+
+test('each Blocked line says why and the one thing to do, and raising the mode to one that lifts it continues the turn', { timeout: 30000 }, async t => {
+  const p = setup(t), v = await view(t, { repo: p.repo }), panels = v.current.panels, status = () => panels.status.getText(), chat = () => panels.chat.getText().replace(/\s+/g, ' ');
+  const at = new Date().toISOString();
+  const blocked = (id, goal, permissions, denials, approvals = []) => {
+    liveTask(p.root, { id, goal, state: 'needs_input' });
+    const log = path.join(taskDir(p.repo, id), 'lead-1.jsonl');
+    fs.writeFileSync(log, `${JSON.stringify({ type: 'result', structured_output: { summary: 'I stopped here.' } })}\n`);
+    // A resumed turn reports another session id than the one its approvals were stamped with.
+    saveTask(p.repo, { ...readTask(p.repo, id), permissions, approvals, runs: [{ role: 'lead', vendor: 'claude', session: 'resumed-1', launch: 'launch-1', at, logFile: log, permissions, denials }] });
+  };
+  // The continuation is a message to that session; the conductor may have started it already.
+  const continued = id => pendingRequests(p.root).filter(row => row.continuationTaskId === id).map(row => row.goal);
+  blocked('10', 'Fix the build', 'ask', [
+    { tool: 'Edit', tool_use_id: 'toolu_e', input: { file_path: '/srv/shared/app.ts' } },
+    { tool: 'Bash', tool_use_id: 'toolu_n', input: { command: 'curl -sS https://elu.dev/' }, network: 'elu.dev' },
+    { tool: 'Bash', tool_use_id: 'toolu_g', input: { command: 'git commit -am fix' }, readonly: '/srv/app/.git/index.lock' },
+  ], [{ id: 'launch-1-toolu_e', tool: 'Edit', summary: 'Edit: /srv/shared/app.ts', decision: 'timeout', wait: 1200, at, role: 'lead', session: 'launch-1' }]);
+  await openTask(v, /Fix the build/); await until(() => v.current.session === '10', 'the session is open');
+  await until(() => /Stopped: Edit \/srv\/shared\/app\.ts\. No answer in 20 minutes; reply to try again\./.test(chat()), 'an unanswered approval says so, matched across the resume');
+  assert.match(chat(), /Blocked: Connect to elu\.dev\. The internet is off for commands in Ask for approval: \/permissions full continues it\./);
+  assert.match(chat(), /Blocked: Run git commit -am fix\. ELU Code commits the changes when you publish: \/publish\./);
+  // Raising the mode to one that lifts what stopped it continues the turn at once.
+  await send(v, '/permissions full'); await dialog(v, 'Full access', 'y');
+  await until(() => /Full access\. Continuing where it stopped\./.test(status()), 'continues');
+  assert.deepEqual(continued('10'), ['Continue where you stopped: this session now has Full access. Try again what was blocked.']);
+  assert.equal(readTask(p.repo, '10').permissions, 'full');
+  // What the owner said no to is not lifted by Approve for me: the mode waits for the next message.
+  blocked('11', 'Clean the cache', 'ask', [{ tool: 'Bash', tool_use_id: 'toolu_r', input: { command: 'rm -rf /srv/cache' } }],
+    [{ id: 'launch-1-toolu_r', tool: 'Bash', summary: 'Run: rm -rf /srv/cache', decision: 'deny', at, role: 'lead', session: 'launch-1' }]);
+  await openTask(v, /Clean the cache/); await until(() => v.current.session === '11', 'the second session is open');
+  await until(() => /Stopped: Run rm -rf \/srv\/cache\. You said no; reply with what to do instead\./.test(chat()), 'the owner said no');
+  await send(v, '/permissions auto'); await until(() => /Approve for me from your next message\./.test(status()), 'from the next message');
+  assert.deepEqual(continued('11'), []);
+  // A session with no mode is read only, and Ask for approval continues it.
+  blocked('12', 'Rename the helper', undefined, [{ tool: 'Edit', input: { file_path: '/srv/app/src/a.ts' } }]);
+  await openTask(v, /Rename the helper/); await until(() => v.current.session === '12', 'the third session is open');
+  await until(() => /Blocked: Edit \/srv\/app\/src\/a\.ts\. This session is read only: \/permissions ask continues it\./.test(chat()), 'read only says which mode');
+});
+
+test('a new approval rings the terminal bell once', { timeout: 20000 }, async t => {
+  const p = setup(t), v = await view(t, { repo: p.repo }), bells = () => v.raw.split('\x07').length - 1;
+  liveTask(p.root, { id: '2', goal: 'Install the deps', state: 'needs_input' }); saveTask(p.repo, { ...readTask(p.repo, '2'), permissions: 'ask' });
+  await until(() => rows(v).some(row => /Install the deps/.test(row)), 'the session');
+  const before = bells();
+  requestApproval({ id: 'bell-a', root: p.root, taskId: '2', role: 'lead', vendor: 'claude', tool: 'Bash', input: { command: 'npm install' } });
+  await until(() => bells() === before + 1, 'one ring');
+  await new Promise(resolve => setTimeout(resolve, 300));
+  assert.equal(bells(), before + 1, 'redraws do not ring again');
+  requestApproval({ id: 'bell-b', root: p.root, taskId: '2', role: 'lead', vendor: 'claude', tool: 'Bash', input: { command: 'npm test' } });
+  await until(() => bells() === before + 2, 'the next approval rings once more');
 });
 
 test('a teammate message is approved as your own session, worked on in a mode picked now, or declined; y is preselected', { timeout: 40000 }, async t => {
@@ -2747,7 +2803,7 @@ test('a teammate message is approved as your own session, worked on in a mode pi
   v.input.write('w'); await until(() => modal(v, 'Accept'), 'accept picker for a task');
   const work = dialogText(v, 'Accept');
   assert.match(work, /Permissions {2}Ask for approval {6}1 to change/); assert.match(work, /Runs in {6}New worktree {10}2 to change/);
-  assert.match(work, /Asks before outside edits, escapes, and internet\./); assert.match(work, /A copy of this repo on a new branch\./); assert.match(work, /Other folders it may read\./); assert.doesNotMatch(work, /read-only/);
+  assert.match(work, /Edits the session's files; asks you for the rest and the internet\./); assert.match(work, /A copy of this repo on a new branch\./); assert.match(work, /Other folders it may read\./); assert.doesNotMatch(work, /read-only/);
   assert.match(work, /Folders {6}~\/evals {2}from their message · 3 to change/);
   v.input.write('1'); await until(() => modal(v, 'Permissions'), 'mode picker'); v.input.write('2');
   await until(() => modal(v, 'Accept') && /Permissions {2}Approve for me/.test(dialogText(v, 'Accept')), 'mode picked');
