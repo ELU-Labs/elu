@@ -1032,7 +1032,8 @@ test('/leave takes this machine off a team after a yes; leaving a team you made 
   // On no team now, so nothing starts the daemon again.
   await new Promise(resolve => setTimeout(resolve, 300));
   assert.equal(peer.calls.filter(row => row[0] === 'startPeer').length, 0);
-  await until(() => v.text().includes('No team yet.'), 'Chats shows no team');
+  // Read from its widget: the screen's rows show it only after the next full render.
+  await until(() => !v.panels.teamOff.hidden && v.panels.teamOff.getContent().startsWith('No team yet.\nInvite someone: /invite'), 'Chats shows no team');
 });
 
 test('typing @ in Chats offers teammates by name', async t => {
