@@ -15,7 +15,7 @@ import { validateResult, validateConversation, conversationSchema, resultSchema 
 import { protectedPath, protectedFiles } from '../lib/policy.mjs';
 import * as claude from '../lib/adapters/claude.mjs';
 import * as codex from '../lib/adapters/codex.mjs';
-import { READ_ONLY_REPLY, RULES_ACCEPTED, RULES_PROPOSE, setPermissions } from '../lib/runner.mjs';
+import { READ_ONLY_REPLY, RULES_ACCEPTED, RULES_PROPOSE, STUCK_LINE, STUCK_REPLY, setPermissions } from '../lib/runner.mjs';
 import { isPeerRun, saveDefaultMode } from '../lib/modes.mjs';
 import { peerFile } from '../lib/peer/paths.mjs';
 import { savePeerPolicy, savePeerSettings } from '../lib/peer/settings.mjs';
@@ -698,6 +698,33 @@ test('a session whose project is the home folder but that works in a repository 
   assert.ok(schemaOf(again.args).properties.intent && again.input.includes(READ_ONLY_REPLY), 'the reply turn first');
   assert.ok(goesOn, 'then the work turn'); assert.equal(schemaOf(goesOn.args).properties.intent, undefined);
   assert.ok(goesOn.args[goesOn.args.indexOf('--tools') + 1].split(',').includes('Edit'), 'with edit access');
+});
+test('the owner\'s reply to stopped work that cannot start again gets a read-only answer that says why, and his message is kept', async t => {
+  const p = setup(t, 'normal');
+  const owner = autoApprove(new ProjectController(p.repo));
+  p.extra({ workQuestion: true });
+  const first = await owner.ask('Fix the coupons', null, { permissions: 'ask' }).finished;
+  p.extra({});
+  assert.equal(first.state, 'needs_input'); assert.notEqual(first.kind, 'conversation');
+  // A Git hook appeared since the work started, so its work may not go on.
+  fs.writeFileSync(path.join(p.root, '.git/hooks/pre-commit'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  const why = 'Git hooks changed after the preview. Review the hooks before continuing.';
+  const controller = new ProjectController(p.repo), before = p.prompts().length;
+  // Even a model that asks to edit is kept to an answer.
+  p.extra({ intent: 'edit' });
+  const value = await controller.ask('What is left to do?', first.id).finished;
+  const turns = p.prompts().slice(before);
+  assert.equal(turns.length, 1, 'one reply turn, and no work turn');
+  assert.deepEqual(schemaOf(turns[0].args).properties.intent.enum, ['answer']);
+  assert.ok(turns[0].input.includes(STUCK_REPLY(why))); assert.equal(turns[0].input.includes(READ_ONLY_REPLY), false);
+  assert.equal(value.state, 'needs_input', 'the session rests where it was'); assert.equal(value.reply.intent, 'answer');
+  assert.ok(value.reply.summary.endsWith(`\n\n${STUCK_LINE(why)}`), value.reply.summary);
+  assert.ok(readTask(p.repo, first.id).messages.some(row => row.text === 'What is left to do?'), 'the message is kept');
+  // Once the hook is gone, the next reply continues the work again.
+  fs.rmSync(path.join(p.root, '.git/hooks/pre-commit')); p.extra({});
+  const after = p.prompts().length;
+  await controller.ask('Go on.', first.id).finished;
+  assert.equal(schemaOf(p.prompts()[after].args).properties.intent, undefined, 'a work turn');
 });
 test('a teammate\'s session that works in the home folder asks the owner once: y keeps the answer, the message runs, and an unattended message waits with the question', async t => {
   const p = setup(t, 'answer');
