@@ -2353,7 +2353,7 @@ test('/permissions sets the mode in compose, in a session, and as the default', 
   assert.equal(defaultMode(), 'auto');
   await send(v, '/sessions'); await until(() => v.current.view === 'tasks', 'Sessions');
   await send(v, '/new'); await until(() => !panels.compose.hidden && /Permissions {2}Approve for me/.test(text()), 'a new form starts with the default');
-  await send(v, '/permissions default ask'); await until(() => /New sessions start with Ask for approval\./.test(status()), 'default back');
+  await send(v, '/permissions default ask'); await until(() => /New sessions start with Ask for approval, this one too\./.test(status()) && /Permissions {2}Ask for approval/.test(text()), 'default back, and the open form with it');
   liveTask(p.root, { id: '3', goal: 'Rename the helper', state: 'ready' }); saveTask(p.repo, { ...readTask(p.repo, '3'), permissions: 'ask' });
   await openTask(v, /Rename the helper/); await until(() => v.current.session === '3', 'that session is open');
   await until(() => /Ask/.test(panels.header.getText()), 'badge');
@@ -2371,6 +2371,70 @@ test('/permissions sets the mode in compose, in a session, and as the default', 
   assert.equal(readTask(p.repo, '3').permissions, 'ask');
   await send(v, '/permissions full'); await dialog(v, 'Full access', 'y'); await until(() => /Full access from your next message\./.test(status()), 'full');
   assert.equal(readTask(p.repo, '3').permissions, 'full');
+});
+
+// A new session being written takes a new default, unless its mode was picked for it: a
+// session not sent yet never starts with more access than the default says.
+test('/permissions default changes the new session being written, unless its mode was picked', { timeout: 40000 }, async t => {
+  const p = setup(t), v = await view(t, { repo: p.repo }), panels = v.current.panels, status = () => panels.status.getText(), text = () => composeText(v);
+  const started = goal => { const row = v.current.snapshot.tasks.find(task => task.goal === goal); return row && readTask(p.repo, row.id); };
+  await send(v, '/kanban'); await until(() => v.current.view === 'kanban', 'Kanban');
+  await send(v, '/permissions default full'); await until(() => /New sessions start with Full access\./.test(status()) && !/this one/.test(status()), 'default full, no form open');
+  await send(v, '/new'); await until(() => !panels.compose.hidden && /Permissions {2}Full access/.test(text()), 'the form opens with Full access');
+  await send(v, '/permissions default ask'); await until(() => /New sessions start with Ask for approval, this one too\./.test(status()) && /Permissions {2}Ask for approval/.test(text()), 'the form follows');
+  await send(v, 'Where is coupon normalization?');
+  await until(() => started('Where is coupon normalization?'), 'session');
+  assert.equal(started('Where is coupon normalization?').permissions, 'ask');
+  // A mode picked for the session stays when the default changes after.
+  await send(v, '/permissions default full'); await send(v, '/new'); await until(() => !panels.compose.hidden && /Permissions {2}Full access/.test(text()), 'a new form with Full access');
+  await send(v, '/permissions full'); await dialog(v, 'Full access', 'y'); await until(() => /Full access for this session\./.test(status()), 'picked');
+  await send(v, '/permissions default ask'); await until(() => /New sessions start with Ask for approval\./.test(status()) && !/this one/.test(status()), 'the default alone');
+  assert.match(text(), /Permissions {2}Full access/);
+  await send(v, 'Rename the coupon helper');
+  await until(() => started('Rename the coupon helper'), 'second session');
+  assert.equal(started('Rename the coupon helper').permissions, 'full');
+  assert.equal(defaultMode(), 'ask');
+  // The picker counts as picking too.
+  await send(v, '/new'); await until(() => !panels.compose.hidden && /Permissions {2}Ask for approval/.test(text()), 'a fresh form with the default');
+  pickRow(panels.composeList, /Permissions/); v.input.write('\r'); await until(() => modal(v, 'Permissions'), 'picker'); v.input.write('2');
+  await until(() => /Approve for me for this session\./.test(status()), 'auto picked');
+  await send(v, '/permissions default full'); await until(() => /New sessions start with Full access\./.test(status()) && /Permissions {2}Approve for me/.test(text()), 'kept');
+});
+
+test('a scheduled draft that follows the default gets Approve for me at most, and says so', { timeout: 30000 }, async t => {
+  const p = setup(t), loginItem = { install: () => ({ installed: true }), uninstall: () => ({ removed: true }) };
+  const v = await view(t, { repo: p.repo, loginItem }), panels = v.current.panels, status = () => panels.status.getText(), text = () => composeText(v);
+  await wide(v);
+  await send(v, '/kanban'); await until(() => v.current.view === 'kanban', 'Kanban');
+  await send(v, '/permissions default full'); await until(() => /New sessions start with Full access\./.test(status()), 'default full');
+  await send(v, '/new'); await until(() => !panels.compose.hidden && /Permissions {2}Full access/.test(text()), 'form');
+  pickRow(panels.composeList, /When/); v.input.write('\r'); await dialog(v, 'When', 'daily 9:00');
+  await until(() => /Schedules run with Approve for me at most\./.test(status()) && /Permissions {2}Approve for me/.test(text()), 'capped');
+  await send(v, '/permissions default ask'); await until(() => /New sessions start with Ask for approval, this one too\./.test(status()) && /Permissions {2}Ask for approval/.test(text()), 'follows down');
+  await send(v, '/permissions default full');
+  await until(() => /New sessions start with Full access, this scheduled one with Approve for me\. Schedules run with Approve for me at most\./.test(status().replace(/\s+/g, ' ')) && /Permissions {2}Approve for me/.test(text()), 'never full');
+  await send(v, 'Check dependencies for updates'); await until(() => /Scheduled daily 9:00/.test(status()), 'scheduled');
+  assert.equal(listSchedules().find(row => row.goal === 'Check dependencies for updates')?.permissions, 'auto');
+});
+
+test('a saved request goes again with no more access than the default now', { timeout: 40000 }, async t => {
+  const p = setup(t);
+  saveRequest(p.root, 'Add a retry budget', null, { state: 'blocked', reason: 'Checks are still needed.', permissions: 'full', place: { kind: 'here' } });
+  saveRequest(p.root, 'Rename billing', null, { state: 'blocked', reason: 'Checks are still needed.', permissions: 'full' });
+  const v = await view(t, { repo: p.repo }), panels = v.current.panels, status = () => panels.status.getText();
+  const started = goal => { const row = v.current.snapshot.tasks.find(task => task.goal === goal); return row && readTask(p.repo, row.id); };
+  await send(v, '/kanban'); await until(() => v.current.view === 'kanban', 'Kanban');
+  await send(v, '/permissions default ask'); await until(() => /New sessions start with Ask for approval\./.test(status()), 'default ask');
+  // Enter brings its text back, and sending it starts the session in Ask for approval, in a new worktree.
+  await openTask(v, /Add a retry budget/); await until(() => panels.ask.getValue() === 'Add a retry budget' && /Saved request restored/.test(status()), 'restored');
+  await send(v, 'Add a retry budget');
+  await until(() => started('Add a retry budget'), 'session');
+  assert.equal(started('Add a retry budget').permissions, 'ask'); assert.notEqual(started('Add a retry budget').place?.kind, 'here');
+  // r queues it again with the default now.
+  await selectRow(v, /Rename billing/); v.input.write('r');
+  await until(() => /Queued again, with Ask for approval, the default now\./.test(status()), 'retried');
+  await until(() => started('Rename billing'), 'second session');
+  assert.equal(started('Rename billing').permissions, 'ask');
 });
 
 test('approvals wait under Needs you first; y allows, n denies, Enter shows one, and the chat answers too', { timeout: 30000 }, async t => {
