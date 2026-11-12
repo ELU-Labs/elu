@@ -2334,10 +2334,13 @@ test('/permissions sets the mode in compose, in a session, and as the default', 
   const p = setup(t), v = await view(t, { repo: p.repo }), panels = v.current.panels, status = () => panels.status.getText(), text = () => composeText(v);
   // Away from Sessions no session is open.
   await send(v, '/kanban'); await until(() => v.current.view === 'kanban', 'Kanban');
-  await send(v, '/permissions'); await until(() => /Open a session, or \/new\. \/permissions default <mode> sets new sessions\./.test(status()), 'needs a session');
+  // Bare, it lists what runs without asking; a mode needs a session.
+  await send(v, '/permissions');await until(() => modal(v, 'Allowed without asking'), 'the defaults and rules');
+  v.input.write('\x1b'); await until(() => !modal(v, 'Allowed without asking'), 'closed');
+  await send(v, '/permissions auto'); await until(() => /Open a session, or \/new\. \/permissions default <mode> sets new sessions\./.test(status()), 'needs a session');
   await send(v, '/new'); await until(() => !panels.compose.hidden && v.current.session === 'new', 'form');
   await send(v, '/permissions auto'); await until(() => /Approve for me for this session\./.test(status()) && /Permissions {2}Approve for me/.test(text()), 'compose mode');
-  await send(v, '/permissions nope'); await until(() => /Use \/permissions \[ask\|auto\|full\|default <mode>\|folders add <path>\]\./.test(status()), 'usage');
+  await send(v, '/permissions nope'); await until(() => /^› Use \/permissions \[ask\|auto\|full\|default <mode>\|folders add/.test(status()), 'usage');
   await send(v, '/permissions default auto'); await until(() => /New sessions start with Approve for me\./.test(status()), 'default saved');
   assert.equal(defaultMode(), 'auto');
   await send(v, '/sessions'); await until(() => v.current.view === 'tasks', 'Sessions');

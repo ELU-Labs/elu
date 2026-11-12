@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { argumentMatches, mentionMatches, botMatches, sessionMentions, commandMatches, parseCommand, COMMANDS } from '../lib/terminal-commands.mjs';
+import { argumentMatches, mentionMatches, botMatches, sessionMentions, commandMatches, parseCommand, COMMANDS, needsArgument } from '../lib/terminal-commands.mjs';
 
 const ctx = {
   models: () => [{ name: 'opus', vendor: 'Claude', note: 'most capable', current: true }, { name: 'gpt', vendor: 'Codex' }],
@@ -26,6 +26,7 @@ test('/permissions offers the modes, the default, and the folders the model may 
   assert.deepEqual(values('/permissions '), ['/permissions ask', '/permissions auto', '/permissions full', '/permissions default', '/permissions folders', '/permissions rules']);
   assert.deepEqual(argumentMatches('/permissions ru', ctx).map(row => `${row.value} · ${row.more}`), ['/permissions rules · false'], 'rules alone opens the list');
   assert.deepEqual(values('/permissions rules '), ['/permissions rules remove', '/permissions rules on']);
+  assert.equal(needsArgument(COMMANDS.find(row => row.name === 'permissions')), false, 'bare /permissions runs');
   assert.deepEqual(argumentMatches('/permissions fo', ctx).map(row => `${row.value} · ${row.description} · ${row.more}`), ['/permissions folders · Let the model read another folder this session · true'], 'add follows it');
   assert.deepEqual(argumentMatches('/permissions folders ', ctx).map(row => `${row.value} · ${row.description} · ${row.more}`), ['/permissions folders add · Add a folder the model may read this session · true'], 'a path follows it');
   assert.deepEqual(values('/permissions default '), ['/permissions default ask', '/permissions default auto', '/permissions default full']);
