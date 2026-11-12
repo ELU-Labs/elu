@@ -2358,6 +2358,23 @@ test('a long message keeps its bar on every row, and blessed does not wrap it ag
   assert.ok(body.some(row => /^┃ {3}\S/.test(row)), 'a wrapped list item keeps its indent');
 });
 
+test('a coloured line under the chat that would fill the pane to its last column is not wrapped again: a stop line keeps "carry on." on one row', async t => {
+  const p = setup(t); delete process.env.NO_COLOR;
+  const STOP = 'Stopped after 3 seconds with no output. Your changes are kept. Reply to carry on.', at = new Date().toISOString();
+  saveTask(p.repo, { id: '7', kind: 'conversation', goal: 'Fix the build on main', state: 'blocked', worktree: p.root, branch: null, base: null, createdAt: at, runs: [], reviews: [], responses: [], sessions: {}, result: null, messages: [{ at, text: 'Fix the build on main' }], error: { message: STOP } });
+  const v = await view(t, { repo: p.repo }), panels = v.current.panels;
+  v.output.columns = 120; v.output.rows = 30; v.output.emit('resize'); await until(() => v.current.screen.width === 120, 'a 120-column screen');
+  await openTask(v, /Fix the build on main/);
+  // At 120 columns the chat beside the list holds 77 columns, and "... Reply to carry" is 77
+  // characters: blessed wrapped that coloured row again at its last space, so "carry" and "on."
+  // each took a row of their own.
+  assert.equal(v.current.screen.width, 120);
+  const drawn = () => (panels.chat._clines ?? []).map(row => row.replace(/\x1b\[[0-9;]*m/g, '').trim()), first = () => drawn().findIndex(row => row.startsWith('Stopped after'));
+  await until(() => first() >= 0, 'the stop line, drawn');
+  assert.deepEqual(drawn().slice(first(), first() + 2), ['Stopped after 3 seconds with no output. Your changes are kept. Reply to', 'carry on.']);
+  assert.equal(panels.chat._clines.length, panels.chat.getContent().split('\n').length, 'no row was wrapped again');
+});
+
 // A peer daemon stand-in for the owner's decisions: what the TUI sent, who is trusted, and
 // what the daemon answers (results[type](command) is the awaitCommand result).
 const KEYS = { me: 'a'.repeat(64), sara: 'b'.repeat(64), li: 'c'.repeat(64) };
