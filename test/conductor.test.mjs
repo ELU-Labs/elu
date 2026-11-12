@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { project, fakeClis } from './helpers.mjs';
+import { project, fakeClis, config, approveProjectFiles } from './helpers.mjs';
 import { repository } from '../lib/git.mjs';
 import { projectSnapshot, registerProject } from '../lib/projects.mjs';
 import { saveTask } from '../lib/state.mjs';
@@ -13,6 +13,9 @@ import { boardRows, barCells } from '../lib/board.mjs';
 import { saveSchedule, runScheduleNow, parseWhen } from '../lib/schedules.mjs';
 import { saveBot } from '../lib/bots.mjs';
 import { runBotSchedules } from '../lib/bot-schedules.mjs';
+import { turnClock } from '../lib/turn-limits.mjs';
+import { ADAPTERS } from '../lib/adapters/index.mjs';
+import { atomic, personalDirectory } from '../lib/util.mjs';
 
 // A test's conductors, stopped before its folder is removed. The hooks of a test run in the
 // order they were registered and the first one that throws ends them, so setup registers
@@ -170,16 +173,49 @@ test('the agent limit and priority decide what starts, and stop frees the slot',
   await until(() => request(p.root, later.id)?.state === 'running', 'queued goal takes the free slot');
 });
 
-test('a run that stops making progress is stopped and retried once in the same chat', async t => {
-  const p = setup(t, 'slow');
+// The turn limits, shrunk for a test.
+function quickClock(t, quietSeconds, capSeconds) {
+  const before = { ...turnClock }; Object.assign(turnClock, { quietSeconds, capSeconds }); t.after(() => Object.assign(turnClock, before));
+}
+
+test('a check that stops making progress is stopped and retried once; a quiet model turn is left to its own limits', async t => {
+  const p = setup(t), conductor = new Conductor({ stallMs: 50 }), stops = [];
+  const controller = { repo: p.repo, stop: async (id, message) => { stops.push([id, message]); } };
+  const sent = enqueue(p.root, 'Run the checks'); updateRequest(p.root, sent.id, { state: 'running' });
+  for (const [id, activeRole] of [['1', 'checks'], ['2', 'lead'], ['3', 'bot:scout']]) {
+    const log = path.join(p.parent, `${id}.log`); fs.writeFileSync(log, 'started\n');
+    fs.mkdirSync(path.join(p.repo.state, 'tasks', id), { recursive: true });
+    saveTask(p.repo, { id, kind: 'conversation', base: null, branch: null, worktree: p.repo.root, goal: 'Run the checks', state: 'running', activeRole, activeLog: log, createdAt: new Date().toISOString(), owner: { pid: process.pid, identity: null }, runs: [], sessions: {}, reviews: [], responses: [], messages: [] });
+    conductor.runs.set(id, { root: p.root, requestId: id === '1' ? sent.id : null, taskId: id, goal: 'Run the checks', origin: null, attempts: 0, controller, quietSince: Date.now(), mark: null });
+  }
+  conductor.watch(); await new Promise(resolve => setTimeout(resolve, 120)); conductor.watch();
+  assert.deepEqual(stops, [['1', 'No progress for 1 minutes. Retrying.']], 'only the check; the model turns are the runner\'s to stop');
+  const checks = conductor.runs.get('1'); conductor.finish(checks, new Error('Stopped.'));
+  const retried = request(p.root, sent.id);
+  assert.deepEqual([retried.state, retried.attempts, retried.continuationTaskId, retried.reason], ['queued', 1, '1', 'It stopped making progress. Retrying.']);
+});
+
+test('a Claude turn that prints nothing is stopped by its quiet limit in one line, and not retried', async t => {
+  const p = setup(t, 'slow'); quickClock(t, 2, 7200);
   const sent = enqueue(p.root, 'Hang without output'); conduct(t, { stallMs: 300 });
-  await until(() => request(p.root, sent.id)?.attempts === 1, 'retry queued');
-  const retried = request(p.root, sent.id), id = retried.continuationTaskId;
-  assert.match(retried.reason, /stopped making progress/);
-  assert.match(task(p.repo, id).error.message, /No progress/);
-  await until(() => request(p.root, sent.id)?.state === 'done', 'second stall ends the retries', 20000);
-  assert.equal(task(p.repo, id).state, 'stopped');
-  assert.equal(task(p.repo, id).messages.filter(row => row.text === 'Hang without output').length, 2);
+  await until(() => request(p.root, sent.id)?.state === 'done', 'the stopped turn', 20000);
+  const done = request(p.root, sent.id), id = done.taskId;
+  assert.equal(done.attempts ?? 0, 0, 'not retried');
+  assert.equal(task(p.repo, id).error.message, 'Stopped after 2 seconds with no output. Reply to carry on.', 'an answer turn reads only, so it names no changes');
+  assert.equal(task(p.repo, id).messages.filter(row => row.text === 'Hang without output').length, 1);
+});
+
+test('a headless Antigravity turn, which prints only at the end, is not stopped before the cap', async t => {
+  const p = setup(t, 'slow'); quickClock(t, 1, 4);
+  config(p.root, value => { value.roles.lead.vendor = 'agy'; return value; }); approveProjectFiles(p.root);
+  const bin = path.join(p.dir, 'agy');
+  atomic(path.join(personalDirectory(), 'conformance', 'agy.json'), { v: 1, bin, version: '1.5.4', steps: Object.fromEntries(ADAPTERS.agy.conformance.map(step => [step.id, step.id === 'relay' ? 'fail' : 'pass'])), relay: false, at: new Date().toISOString() });
+  const started = Date.now(), sent = enqueue(p.root, 'Hang without output'); conduct(t, { stallMs: 300 });
+  await until(() => request(p.root, sent.id)?.state === 'done', 'the capped turn', 30000);
+  const done = request(p.root, sent.id);
+  assert.ok(Date.now() - started >= 4000, 'ran to the cap: neither a quiet limit nor the stall time stopped it');
+  assert.equal(done.attempts ?? 0, 0, 'not retried');
+  assert.equal(task(p.repo, done.taskId).error.message, 'Stopped after 4 seconds, the most one turn may run. Reply to carry on.');
 });
 
 test('a request cancelled before dispatch is never started or revived', async t => {

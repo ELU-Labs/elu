@@ -17,6 +17,7 @@ import { answerApproval, approvalsDir, awaitDecision, pendingApprovals, requestA
 import { defaultConfig } from '../lib/config.mjs';
 import { READ_ONLY_REPLY } from '../lib/runner.mjs';
 import { ruleFor, saveRule } from '../lib/permission-rules.mjs';
+import { turnClock } from '../lib/turn-limits.mjs';
 
 // Sessions with permissions, end to end against the fake CLIs.
 // The personal directory (XDG_CONFIG_HOME) and HOME both point into the test folder, so a
@@ -355,6 +356,59 @@ test('the role time limit waits while an approval is pending', async t => {
   assert.ok(task.runs.filter(run => run.role === 'lead').every(run => run.code === 0), 'the run was not killed while it waited');
   assert.ok(['ready', 'unverified'].includes(task.state), task.error?.message);
   assert.equal(pendingApprovals().length, 0);
+});
+
+test('a session reads the .npmrc its repository tracks in Full and in Ask; an untracked one stays closed', async t => {
+  const f = setup(t, 'answer');
+  fs.mkdirSync(path.join(f.root, 'backend/agents'), { recursive: true }); fs.writeFileSync(path.join(f.root, 'backend/agents/.npmrc'), 'registry=https://registry.npmjs.org/\n');
+  git(f.root, ['add', 'backend/agents/.npmrc']); git(f.root, ['commit', '-m', 'Track npmrc']);
+  fs.writeFileSync(path.join(f.root, '.env'), 'API_KEY=secret\n');
+  for (const mode of ['full', 'ask']) {
+    const task = await f.controller.ask('What registry does the backend use?', null, { permissions: mode }).finished;
+    assert.equal(task.state, 'answered', task.error?.message);
+    const args = f.leads().at(-1).args, { deny } = settingsOf(args).permissions;
+    assert.equal(valueOf(args, '--permission-mode'), mode === 'full' ? 'bypassPermissions' : 'default');
+    assert.equal(deny.some(rule => rule.includes('backend') || rule.startsWith('Read(**/')), false, `${mode}: no rule closes the tracked .npmrc, by path or by name`);
+    assert.ok(deny.some(rule => rule === `Read(//${path.join(f.root, '.env').slice(1)})` || rule === `Read(//${path.join(fs.realpathSync(f.root), '.env').slice(1)})`), `${mode}: the untracked .env is not`);
+    if (mode === 'ask') assert.equal(settingsOf(args).sandbox.filesystem.denyRead.some(entry => entry.includes('backend') || entry.startsWith('**/')), false, 'nor does the sandbox hide it');
+  }
+});
+
+// The turn limits, shrunk for a test: a turn that prints nothing for quietSeconds stops.
+function quickClock(t, quietSeconds = 2, capSeconds = 7200) {
+  const before = { ...turnClock }; Object.assign(turnClock, { quietSeconds, capSeconds }); t.after(() => Object.assign(turnClock, before));
+}
+
+test('a turn that keeps printing is never cut by the clock, even past a timeoutSeconds the policy names', async t => {
+  const f = setup(t, 'chatty'); quickClock(t);
+  // One second, which as the old time limit would have stopped every turn here.
+  f.controller.draftConfig.roles.lead.timeoutSeconds = 1; f.controller.draftConfig.checks = [];
+  const started = Date.now(), task = await f.controller.ask('Normalize coupon codes', null, { permissions: 'full' }).finished;
+  assert.ok(['ready', 'unverified'].includes(task.state), task.error?.message);
+  assert.ok(Date.now() - started > 6000, 'each turn printed for three seconds');
+  assert.ok(task.runs.filter(run => run.role === 'lead').every(run => run.code === 0));
+});
+
+test('a turn that prints nothing for the quiet limit stops with one line, keeps its edits, and a frozen 900 reads as the default', async t => {
+  const f = setup(t, 'stall'); quickClock(t);
+  // A session from before: its policy was frozen with the old default, which nobody chose.
+  f.controller.draftConfig.roles.lead.timeoutSeconds = 900; f.controller.draftConfig.checks = [];
+  const started = Date.now(), run = f.controller.ask('Normalize coupon codes', null, { permissions: 'full' });
+  await assert.rejects(run.finished, /Stopped after 2 seconds with no output\. Your changes are kept\. Reply to carry on\.$/);
+  assert.ok(Date.now() - started < 30000, 'stopped by the quiet limit, not by the fake ending');
+  const task = readTask(f.controller.repo, run.id);
+  assert.match(fs.readFileSync(path.join(taskDir(f.controller.repo, task.id), 'policy.yaml'), 'utf8'), /timeoutSeconds: 900/, 'the frozen policy still says 900 and still loads');
+  assert.equal(task.state, 'blocked'); assert.equal(task.error.message, 'Stopped after 2 seconds with no output. Your changes are kept. Reply to carry on.');
+  assert.doesNotMatch(task.error.message, /could not finish/);
+  assert.equal(fs.readFileSync(path.join(task.worktree, 'src/coupon.mjs'), 'utf8'), 'export const normalize = (value) => value.toUpperCase();\n', 'the edit stays on disk');
+});
+
+test('an approval waiting for the owner is not quiet: the turn waits past the quiet limit', async t => {
+  const f = setup(t, 'relay'); quickClock(t); f.controller.draftConfig.checks = [];
+  const { task, answered } = await relay(f, 'allow', { delay: 4000 });
+  assert.ok(answered.length >= 1);
+  assert.ok(task.runs.filter(run => run.role === 'lead').every(run => run.code === 0), 'the run was not stopped while it waited');
+  assert.ok(['ready', 'unverified'].includes(task.state), task.error?.message);
 });
 
 test('bypassPermissions never asks: a full session touches without an approval', async t => {

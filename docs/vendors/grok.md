@@ -71,7 +71,9 @@ no shell and no web tools, not because the sandbox blocks the network.
 Headless runs have no schema flag, so ELU Code puts the output schema in the prompt and
 validates the answer. Sessions resume with `-r`; a mode switch that changes the sandbox
 profile cannot resume (Grok keeps a session's sandbox), so that turn's retry starts a fresh
-session without the earlier context. The time limit is the role's; `--max-turns` (40 for
+session without the earlier context. A headless run prints its answer only at the end, so
+it has the two-hour cap of a turn and no quiet limit (see How long a turn runs in
+[permissions](../permissions.md)); `--max-turns` (40 for
 read-only turns, 120 for edit turns) bounds the model rounds. Cost is not reported under a
 subscription; the role's `maxCostUsd` must be `null`.
 

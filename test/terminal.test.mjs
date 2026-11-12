@@ -472,6 +472,20 @@ test('a click on a Projects row behind a project\'s settings closes the dialog a
   v.input.write('\x1b'); await until(() => !modal(v, 'Project Shop') && v.current.screen.focused === list, 'Esc closes it');
 });
 
+test('the wheel moves the Projects list one row a step, and a trackpad burst one row', async t => {
+  const one = setup(t); registerProject(one.repo);
+  for (const name of ['Shop', 'Docs', 'Site']) nameProject(repository(project({ after: close => resources(t).files.push(close) }).root), name);
+  const v = await view(t, { dashboard: true }), list = v.current.panels.projectsList;
+  await send(v, '/projects'); await until(() => v.current.view === 'projects' && list.items.length === 4, 'four project rows');
+  list.focus(); list.select(0); v.current.screen.render(); await pause(60);
+  wheel(v, list.items[0]); await until(() => list.selected === 1, 'one step, one row'); await pause(60);
+  // Six steps in one read, as a trackpad sends them: one row, not twelve.
+  v.input.write(`\x1b[<65;${list.aleft + 2};${list.atop + 1}M`.repeat(6)); await pause();
+  assert.equal(list.selected, 2, 'a burst moves one row');
+  v.input.write(`\x1b[<64;${list.aleft + 2};${list.atop + 1}M`); await until(() => list.selected === 1, 'up a row at once');
+  assert.equal(v.current.view, 'projects'); assert.equal(modal(v, 'Project sample app'), undefined, 'the wheel opens nothing');
+});
+
 test('a click on another tab while a dialog is open does not switch the view', async t => {
   const p = setup(t), v = await view(t, { repo: p.repo }), panels = v.current.panels, title = 'Project sample app';
   await send(v, '/projects'); await until(() => v.current.view === 'projects' && panels.projectsList.items.length === 1, 'Projects');

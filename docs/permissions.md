@@ -18,6 +18,13 @@ session; a turn that is not your own session's runs read only.
 | Runs in | worktree | worktree or a named branch | same | also here |
 | Checks | sandboxed, no network, structural limits | same | no network; dependency files may change | network on; only secret paths and deleted tests block |
 
+Secrets here are files Git does not track whose names look like secrets: `.env*`, `.npmrc`,
+`.netrc`, `.pypirc`, `auth.json`, `credentials`, `credentials.json`, `id_rsa`, `id_ed25519`,
+`*.pem`, and the secret folders in your home. On Claude Code a file of that name that the
+repository tracks is read in every mode, as any other tracked file: it is in the repository
+already. A teammate's question is denied the names whatever Git says. Outside a Git work
+tree every file of those names is denied.
+
 "Asks" is a live approval in your terminal where the vendor has a relay: Claude
 Code, and Antigravity and Grok Build once the `relay` step of their one-time check
 has passed on this machine. Elsewhere the action is denied and reported, and the
@@ -147,9 +154,9 @@ are refused in the sandbox.
 What a sandboxed command can read that way:
 
 - The repository's history through git: every committed version of every file. That
-  includes a file committed once and later removed, and committed files the sandbox
-  hides by name in the worktree (`.env*`, `*.pem`, `.npmrc`): `git show HEAD:.env`
-  prints one.
+  includes a file committed once and later removed. A secret-looking file the
+  repository tracks (an `.npmrc`, an `.env.example`) is not hidden at all: every clone
+  has it, and the sandbox and the file tools read it as any other tracked file.
 - The Git settings file: remote URLs, and a token if one is written into a URL.
 - The stash and the reflog.
 
@@ -166,10 +173,21 @@ tool: a small MCP server over stdio, started from the same private config file
 as your own servers, with one tool. When Claude would prompt, the call becomes a
 request under ELU Code's personal directory and the terminal shows it under
 Needs you. Allow lets the action run; deny tells the model not to retry it
-another way; no answer within 20 minutes counts as a denial. The role's time
-limit waits while a request is open, and the conductor does not treat the wait
+another way; no answer within 20 minutes counts as a denial. The turn's limits
+(below) wait while a request is open, and the conductor does not treat the wait
 as a stall. Every decision is kept with the task, and blocked actions are kept
 on the run.
+
+### How long a turn runs
+
+A turn that is still working is never cut by the clock. It is stopped only when the vendor
+has printed nothing for 10 minutes, or after 2 hours, a safety cap. Time a request waits for
+you counts toward neither, and the 10 minutes start again once it is answered. A stopped turn
+says so in the chat in one line, such as "Stopped after 10 minutes with no output. Your
+changes are kept. Reply to carry on." Its edits stay on disk, and your next message carries
+on. `roles.lead.timeoutSeconds` in `.elu-code/config.yaml` sets the 10 minutes; the 900 it
+says by default means the default, as 600 does. A vendor that prints its answer only at
+the end (Antigravity and Grok Build without the live relay) has the cap alone.
 
 The keys are `y` allow and `n` deny. Where the session can be given Full access
 there is a third, `f`: it asks what `/permissions full` asks, then allows the
