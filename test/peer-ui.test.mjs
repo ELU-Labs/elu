@@ -794,12 +794,12 @@ test('a typed @name and the peer commands call the facade and report in the stat
   assert.equal(peer.sent().length, 2, 'only the two questions went out; refused and unknown commands send nothing');
 });
 
-test('a first /join asks for your name, then joins; the join starts the daemon itself', async t => {
+test('a first /join asks to join and what teammates can do, then your name, then joins; the join starts the daemon itself', async t => {
   const p = project(later(t)); environment(t, p.parent);
   const peer = fakePeer({ teamless: true, running: false }); let me = null;
   peer.identity = ({ create, name } = {}) => { if (create) { peer.calls.push(['identity', name]); me = { name }; return me; } if (!me) throw new Error('Create your peer identity first with elu id --name NAME.'); return me; };
   const v = await view(t, { repo: repository(p.root), peer });
-  await send(v, '/join k7qm-x2pd-9fhw'); await until(() => modal(v, 'Your name'), 'name prompt');
+  await send(v, '/join k7qm-x2pd-9fhw'); await answerJoin(v); await until(() => modal(v, 'Your name'), 'name prompt');
   const field = modal(v, 'Your name').children.find(child => child.type === 'textbox');
   await until(() => field.__listener, 'name input'); field.setValue('ana'); field.submit();
   await until(() => /Joined Docs with sara\./.test(v.panels.status.getText()), 'joined after the name');

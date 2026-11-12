@@ -1452,7 +1452,12 @@ test('elu team leave and elu team remove: plain refusals, and the op written her
   await withHome(crew.member.home, async () => {
     await assert.rejects(peerCli(['team', 'remove', 'ana'], {}), /Only an admin of core can remove a teammate\./);
     // Without the networking packages the CLI and the app write the op here: what they call then.
+    // Leaving forgets what teammates could do here, and only for that team.
+    const other = 'e'.repeat(64);
+    saveTeamAccess(teamId, { handling: 'auto', rules: 'Be brief.' }); saveTeamAccess(other, { handling: 'manual' });
     assert.deepEqual(peer.leaveTeam(teamId), { team: teamId, name: 'core' });
+    assert.equal(teamAccess(teamId), null, 'the leave forgot its setting');
+    assert.equal(teamAccess(other)?.handling, 'manual', 'another team keeps its setting');
     assert.equal(team(teamId).members.find(m => m.key === sara.key).left, true);
     assert.equal(peer.leaveUnheard(), true, 'noted, so the daemon tells them once it can start');
     assert.equal(peer.peerWanted(), true);
