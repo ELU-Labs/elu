@@ -4,6 +4,7 @@ import { defaultConfig, parseConfig, validateConfig, validateResult } from '../l
 import { MODEL_NAME } from '../lib/vendors.mjs';
 import { parseYaml, stringifyYaml } from '../lib/yaml.mjs';
 import { readRole } from './helpers.mjs';
+import { checkSeconds, stoppedLine, turnClock, turnLimits } from '../lib/turn-limits.mjs';
 import { allowRuleProblem, allowRuleRisk, assertPolicy, commandRule, policyReport, protectedFiles, protectedPath } from '../lib/policy.mjs';
 
 test('configuration round trips, rejects unknown fields, and keeps fixed prohibitions', () => {
@@ -68,4 +69,19 @@ test('YAML rejects aliases, duplicate keys, executable tags, and malformed inden
   assert.deepEqual(parseYaml(stringifyYaml(input)), input);
   assert.equal(Object.getPrototypeOf(parseYaml('__proto__: {polluted: true}')), Object.prototype);
   assert.equal({}.polluted, undefined);
+});
+
+test('timeoutSeconds is how long a turn may print nothing: the old 900 and the new 600 are the default, the cap is two hours', () => {
+  const lead = timeoutSeconds => ({ ...defaultConfig().roles.lead, timeoutSeconds });
+  assert.equal(defaultConfig().roles.lead.timeoutSeconds, 600);
+  for (const seconds of [1, 600, 900, 3600, 7200]) assert.doesNotThrow(() => validateConfig({ ...defaultConfig(), roles: { lead: lead(seconds) } }), String(seconds));
+  assert.throws(() => validateConfig({ ...defaultConfig(), roles: { lead: lead(7201) } }), /from 1 to 7200/);
+  assert.deepEqual(turnLimits(lead(900)), { quietSeconds: turnClock.quietSeconds, capSeconds: turnClock.capSeconds }, 'a policy frozen with the old default gets the default');
+  assert.deepEqual(turnLimits(lead(600)), { quietSeconds: 600, capSeconds: 7200 });
+  assert.deepEqual(turnLimits(lead(120)), { quietSeconds: 120, capSeconds: 7200 }, 'one the owner chose is kept');
+  assert.deepEqual(turnLimits(lead(7200)), { quietSeconds: 7200, capSeconds: 7200 });
+  assert.deepEqual(turnLimits(lead(900), { streams: false }), { quietSeconds: null, capSeconds: 7200 }, 'a vendor that prints only at the end has the cap alone');
+  assert.equal(checkSeconds(lead(900)), 900); assert.equal(checkSeconds(lead(600)), 900); assert.equal(checkSeconds(lead(120)), 120);
+  assert.equal(stoppedLine('quiet', turnLimits(lead(900))), 'Stopped after 10 minutes with no output. Your changes are kept. Reply to carry on.');
+  assert.equal(stoppedLine('cap', turnLimits(lead(900)), { edits: false }), 'Stopped after 2 hours, the most one turn may run. Reply to carry on.');
 });

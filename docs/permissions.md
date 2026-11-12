@@ -166,10 +166,21 @@ tool: a small MCP server over stdio, started from the same private config file
 as your own servers, with one tool. When Claude would prompt, the call becomes a
 request under ELU Code's personal directory and the terminal shows it under
 Needs you. Allow lets the action run; deny tells the model not to retry it
-another way; no answer within 20 minutes counts as a denial. The role's time
-limit waits while a request is open, and the conductor does not treat the wait
+another way; no answer within 20 minutes counts as a denial. The turn's limits
+(below) wait while a request is open, and the conductor does not treat the wait
 as a stall. Every decision is kept with the task, and blocked actions are kept
 on the run.
+
+### How long a turn runs
+
+A turn that is still working is never cut by the clock. It is stopped only when the vendor
+has printed nothing for 10 minutes, or after 2 hours, a safety cap. Time a request waits for
+you counts toward neither, and the 10 minutes start again once it is answered. A stopped turn
+says so in the chat in one line, such as "Stopped after 10 minutes with no output. Your
+changes are kept. Reply to carry on." Its edits stay on disk, and your next message carries
+on. `roles.lead.timeoutSeconds` in `.elu-code/config.yaml` sets the 10 minutes (600, or 900
+as older settings files say, both mean the default). A vendor that prints its answer only at
+the end (Antigravity and Grok Build without the live relay) has the cap alone.
 
 The keys are `y` allow and `n` deny. Where the session can be given Full access
 there is a third, `f`: it asks what `/permissions full` asks, then allows the
