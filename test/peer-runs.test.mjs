@@ -7,9 +7,9 @@ import { spawnSync } from 'node:child_process';
 import { project, fakeClis, config, keyLike, approveProjectFiles, git } from './helpers.mjs';
 import { approveTask, sessionTasks } from '../lib/plan.mjs';
 import { repository } from '../lib/git.mjs';
-import { projectSnapshot, registerProject, personalDirectory } from '../lib/projects.mjs';
-import { readTask, saveTask } from '../lib/state.mjs';
-import { pendingRequests, saveRequest, updateRequest } from '../lib/workspace.mjs';
+import { ProjectController, conversationEntries, projectSnapshot, registerProject, personalDirectory } from '../lib/projects.mjs';
+import { readTask, saveTask, requestGoal, sessionGoal, taskTitle } from '../lib/state.mjs';
+import { pendingRequests, projectFolder, saveRequest, updateRequest } from '../lib/workspace.mjs';
 import { Conductor, PLAN_WAITS, enqueue, retryRequest, conductorSettings } from '../lib/conductor.mjs';
 import { validateResult, validateConversation, conversationSchema, resultSchema } from '../lib/config.mjs';
 import { protectedPath, protectedFiles } from '../lib/policy.mjs';
@@ -30,7 +30,8 @@ const share = (root, options = {}) => shareWith(root, { teams: everyTeam().map(s
 import { message, TaskState } from '../lib/peer/a2a.mjs';
 import { intakeMethods, readCaps } from '../lib/peer/intake.mjs';
 import { acceptIncoming, processOutbox } from '../lib/peer/replies.mjs';
-import { saveTeamAccess } from '../lib/peer/access.mjs';
+import { checkRoot, saveTeamAccess } from '../lib/peer/access.mjs';
+import { homeOrAbove } from '../lib/util.mjs';
 import { getRecord, thread } from '../lib/peer/taskstore.mjs';
 
 const SARA = 'b'.repeat(64), ME = 'a'.repeat(64);
@@ -570,4 +571,61 @@ test('the owner\'s lead and bots are told what teammates are working on in the p
   const later = enqueue(p.root, 'And where are the tests?');
   await until(() => request(p.root, later.id)?.state === 'done', 'the turn after the share ended');
   assert.equal(given('And where are the tests?')[0].includes('Rework coupon parsing'), false);
+});
+
+// A folder made the home folder for one test: HOME is put back after it.
+function homeAt(t, folder) {
+  const previous = process.env.HOME; fs.mkdirSync(folder, { recursive: true }); process.env.HOME = folder;
+  t.after(() => { if (previous === undefined) delete process.env.HOME; else process.env.HOME = previous; });
+  return fs.realpathSync(folder);
+}
+const HOME_NOTE = /^Open ELU Code in the project folder for core, not your home folder, then approve again\.$/;
+test('a teammate\'s message never runs in the home folder: y, w and an older Auto setting leave it waiting with a plain line, and approving from the project runs it as their words', async t => {
+  const p = setup(t, 'answer'), sara = teammate(p), teamId = everyTeam()[0].id;
+  unshare('app');
+  const home = homeAt(t, path.join(p.parent, 'home'));
+  registerProject(projectFolder(home));
+  assert.equal(homeOrAbove(home), true); assert.equal(homeOrAbove(path.dirname(home)), true, 'a folder above home counts too'); assert.equal(homeOrAbove(p.root), false);
+  // A message that names no project waits for the owner, with nothing queued anywhere.
+  const methods = intakeMethods(sara.ctx), WORDS = 'Get the issues from ELU, close the old ones';
+  const sendBare = (text, threadId) => getRecord(methods.SendMessage({ message: message({ text, contextId: threadId, ext: { kind: 'handoff', hop: 1, from: { key: SARA, name: 'sara' } } }) }, { key: SARA }).id);
+  const record = sendBare(WORDS, 'thread-home');
+  assert.equal(record.waiting, true); assert.equal(record.root, null);
+  // y with the app open in the home folder, and w with any mode, are refused and change nothing.
+  assert.throws(() => acceptIncoming(sara.ctx, record.task.id, { how: 'own', root: home }), HOME_NOTE);
+  assert.throws(() => acceptIncoming(sara.ctx, record.task.id, { how: 'work', permissions: 'full', place: { kind: 'worktree' }, folders: [], root: home }), HOME_NOTE);
+  assert.equal(getRecord(record.task.id).waiting, true); assert.equal(getRecord(record.task.id).requestId, null);
+  assert.deepEqual(pendingRequests(home), []); assert.deepEqual(pendingRequests(p.root), []);
+  // /access and elu access never take the home folder, or one above it.
+  assert.throws(() => saveTeamAccess(teamId, { handling: 'auto', root: home }), /Your home folder cannot be the project teammates work in\./);
+  assert.throws(() => checkRoot(path.dirname(home)), /Your home folder cannot be the project teammates work in\./);
+  // An older Auto setting that names the home folder does not start it: the message waits.
+  fs.writeFileSync(peerFile('access.json'), JSON.stringify({ [teamId]: { handling: 'auto', rules: '', root: home, at: new Date().toISOString() } }));
+  const auto = sendBare('Tidy the README', 'thread-auto');
+  assert.equal(auto.waiting, true); assert.equal(auto.root, null); assert.equal(auto.requestId, null); assert.deepEqual(pendingRequests(home), []);
+  // A record saved with the home folder as its root takes the project open now instead.
+  const legacy = sendBare('Fix the build', 'thread-legacy'); fs.writeFileSync(peerFile('tasks', `${legacy.task.id}.json`), JSON.stringify({ ...getRecord(legacy.task.id), root: home }));
+  assert.throws(() => acceptIncoming(sara.ctx, legacy.task.id, { how: 'own' }), HOME_NOTE);
+  // The conductor and the session refuse it too, whatever path reaches them.
+  assert.throws(() => enqueue(home, 'Work on the handoff from @sara shown in the peer data block.', { origin: origin('handoff', { own: true }), context: WORDS, permissions: 'ask' }), /never runs in your home folder/);
+  const inHome = new ProjectController(projectFolder(home));
+  assert.throws(() => inHome.ask('Work on the handoff from @sara shown in the peer data block.', null, { origin: origin('handoff', { own: true }), context: WORDS, permissions: 'ask' }), /never runs in your home folder/);
+  // The owner's own session in the home folder is unchanged.
+  const mine = await inHome.ask('Where is coupon normalization?').finished;
+  assert.equal(mine.state, 'answered');
+  // Approved with the project open, it runs there, and the chat and lists show the teammate's own words.
+  acceptIncoming(sara.ctx, record.task.id, { how: 'own', root: p.root });
+  const row = sara.rowOf(getRecord(record.task.id));
+  assert.equal(row.state, 'queued'); assert.equal(row.context, WORDS); assert.match(row.goal, /^Work on the handoff from @sara/);
+  assert.equal(requestGoal(row), WORDS, 'a queued request reads as their words');
+  conduct(t);
+  await until(() => request(p.root, row.id)?.state === 'done', 'the approved message', 60000);
+  const value = readTask(p.repo, request(p.root, row.id).taskId);
+  assert.equal(value.worktree, p.root); assert.equal(value.origin.own, true);
+  assert.equal(value.messages[0].text, row.goal, 'the model\'s sentence is kept for the model'); assert.equal(value.messages[0].context, WORDS);
+  const first = conversationEntries(p.repo, value)[0];
+  assert.equal(first.role, '@sara'); assert.equal(first.text, WORDS);
+  assert.equal(sessionGoal(value), WORDS); assert.equal(taskTitle({ ...value, title: undefined }), WORDS);
+  const lead = p.prompts().at(-1).input;
+  assert.match(lead, /Work on the handoff from @sara shown in the peer data block/); assert.match(lead, /<<peer-data-[0-9a-f]{16} from="@sara"[^]*Get the issues from ELU, close the old ones/);
 });

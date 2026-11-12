@@ -735,3 +735,52 @@ test('typing narrows the models: names that start with the text, then names that
   assert.deepEqual(names('model'), ['model-mini', 'big-model', 'quick-model']); assert.deepEqual(names('QUICK'), ['quick-model']); assert.deepEqual(names(' mini '), ['model-mini']);
   assert.deepEqual(names('opu'), []); assert.deepEqual(names('big-model-2'), []);
 });
+
+// The result line Claude Code ends with when the account has no usage credits for the model asked for.
+const NO_CREDITS = { models: { fable: 'claude-fable-5-2', opus: 'claude-opus-5-5' } };
+test('Claude\'s API error on a result line is read in plain words, and no credits for a model is told apart from a spent limit', () => {
+  const init = model => JSON.stringify({ type: 'system', subtype: 'init', model }), result = extra => JSON.stringify({ type: 'result', subtype: 'success', is_error: true, ...extra });
+  const credits = [init('claude-fable-5-2'), result({ api_error_status: 429, api_error: 'model_requires_usage_credits', result: "You're out of usage credits. Switch to another model, or manage usage credits at https://claude.ai/settings/usage?from=cc_cli_limit_message, to continue." })].join('\n');
+  assert.deepEqual(claude.vendorError(credits, { name: id => id === 'claude-fable-5-2' ? 'Fable 5.2' : id }), { status: 429, code: 'model_requires_usage_credits', model: 'claude-fable-5-2', cause: 'model-unavailable', text: 'Claude says this account is out of usage credits for Fable 5.2.' });
+  assert.equal(claude.classify(credits), 'model-unavailable');
+  // Another API error is said as Claude said it, on one line; a run with none has nothing to say.
+  assert.equal(claude.vendorError(result({ api_error_status: 500, api_error: 'api_error', result: 'Internal\nserver error' })).text, 'Claude says: Internal server error');
+  assert.equal(claude.vendorError(result({ api_error_status: 529 })).text, 'Claude refused it (error 529).');
+  assert.equal(claude.vendorError([init('claude-opus-5-5'), result({ result: 'Something failed' })].join('\n')), null);
+  assert.equal(claude.vendorError(''), null);
+});
+
+test('a bot whose model has no usage credits says why in plain words and runs once more on the session\'s own model', async t => {
+  const f = setup(t);
+  saveBot({ name: 'planner', vendor: 'claude', model: 'fable', instructions: 'Plan the work.' });
+  const first = await f.controller.ask('Where is coupon normalization?').finished;
+  fakeClis(f.parent, { mode: 'answer', ...NO_CREDITS, noCredits: 'fable' });
+  const before = f.calls('claude').length;
+  const task = await f.controller.ask('What would you change?', first.id, { bot: 'planner' }).finished;
+  const models = f.calls('claude').slice(before).map(call => after(call.args, '--model'));
+  assert.deepEqual(models, ['fable', 'opus'], 'tried on its own model, then once on the session\'s');
+  assert.equal(task.state, 'answered');
+  const [asked, note, reply] = task.messages.slice(-3);
+  assert.equal(asked.to, '@planner');
+  assert.deepEqual({ ...note, at: null }, { at: null, text: '@planner could not run: Claude says this account is out of usage credits for Fable 5.2. @planner ran on Opus 5.5 instead.', from: '@planner', bot: 'planner', quiet: true });
+  assert.equal(reply.bot, 'planner'); assert.equal(reply.failed, undefined); assert.equal(reply.text, first.result.summary);
+  assert.deepEqual(task.runs.slice(-2).map(run => run.model ?? null), [null, 'claude-opus-5-5']);
+});
+
+test('with no other model to run on, the bot and the model each say why they could not run, and nothing is tried again', async t => {
+  const f = setup(t);
+  saveBot({ name: 'planner', vendor: 'claude', model: 'opus', instructions: 'Plan the work.' });
+  const first = await f.controller.ask('Where is coupon normalization?').finished;
+  fakeClis(f.parent, { mode: 'answer', ...NO_CREDITS, noCredits: 'opus' });
+  const before = f.calls('claude').length;
+  await assert.rejects(f.controller.ask('What would you change?', first.id, { bot: 'planner' }).finished, /@planner could not run: Claude says this account is out of usage credits for Opus 5\.5\./);
+  assert.equal(f.calls('claude').length - before, 1, 'the same model is not asked again');
+  let task = readTask(f.repo, first.id);
+  assert.equal(task.state, 'answered');
+  const note = task.messages.at(-1);
+  assert.equal(note.text, '@planner could not run: Claude says this account is out of usage credits for Opus 5.5.'); assert.equal(note.failed, true);
+  // The session's own model says the same about itself.
+  await assert.rejects(f.controller.ask('And the tests?', first.id).finished, /The model could not run: Claude says this account is out of usage credits for Opus 5\.5\./);
+  task = readTask(f.repo, first.id);
+  assert.equal(task.error.message, 'The model could not run: Claude says this account is out of usage credits for Opus 5.5.'); assert.equal(task.error.cause, 'model-unavailable');
+});
