@@ -2109,7 +2109,7 @@ test('/schedule offers times in the command list, saves a time and message typed
   v.input.write('check the build\r');
   await until(() => saved('check the build'), 'saved at once');
   assert.equal(saved('check the build').when.kind, 'once'); assert.deepEqual(saved('check the build').bots, ['reviewer']); assert.equal('place' in saved('check the build'), false);
-  assert.match(status(), new RegExp(`^› Scheduled once \\w{3} \\w{3} \\d+ \\d+:\\d\\d, next \\w{3} \\w{3} \\d+ \\d+:\\d\\d\\. ${RUNS.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`));
+  assert.match(status(), new RegExp(`^› Scheduled once \\w{3} \\w{3} \\d+ \\d+:\\d\\d\\. ${RUNS.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`));
   assert.equal(pendingRequests(p.root).length, 0, 'nothing runs now');
   // A time and a message typed together are saved at once; the message keeps its apostrophes.
   await send(v, "/schedule daily 9:00 triage new issues, don't close any");
