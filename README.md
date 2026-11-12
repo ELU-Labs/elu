@@ -136,10 +136,14 @@ header that carries its key, such as `Authorization`, and then the key, in a fie
 shows only dots. Claude Code saves it for every folder (`claude mcp add-json --scope user`),
 and sessions get it from their next turn. `/mcp remove NAME` removes one after asking. From
 a shell, `elu mcp add NAME URL --header Authorization` asks for the key with echo off, or
-reads it from standard input, and `elu mcp remove NAME` removes one. If you paste a server
-config, such as an `mcpServers` block, into the message box, ELU Code does not send it:
-it offers to add the server, so the key stays out of the chat. The model cannot add a
-server; when it needs one you do not have, it asks you to type `/mcp add`.
+reads it from standard input; a command goes after `--`, as in
+`elu mcp add github --env GITHUB_TOKEN -- docker run -i --rm ghcr.io/github/github-mcp-server`.
+`elu mcp remove NAME` removes one. If you paste a server config, such as an `mcpServers`
+block, or a `claude mcp add` line (with `!` or without) into the message box, ELU Code does
+not send or run it: it offers to add the server, so the key stays out of the chat. The model
+is told to ask you to type `/mcp add` when it needs a server you do not have, and adding or
+removing one is on the never list; in Full access that is a rule on command text, not a
+boundary.
 
 ELU Code does not push, merge, tag, deploy or publish by itself. `/publish` shows the exact
 push and the draft pull request, waits for you, and refuses a default branch. The model is

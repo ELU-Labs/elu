@@ -23,11 +23,11 @@ addUserBin();
 sweepServers();
 // Peer commands load lib/peer/ only when used; it never imports the optional packages at load time.
 const PEER_COMMANDS = new Set(['id', 'team', 'invite', 'join', 'access', 'share', 'unshare', 'peers', 'peer', 'ask', 'relay']);
-const HELP = `ELU Code — terminal coding workspace\n\nRun elu anywhere to open the terminal app.\nThe first start asks for a project name; later starts open your last project.\nSessions lists every session; type a message to start one.\nKanban shows the open project's tasks. Chats holds your channels and direct messages. Type / for commands and help.\nEditing workspaces are prepared automatically. Pushes require separate approval.\n\nCommands:\n  conductor [stop]\n  schedule [list]\n  dashboard\n  init [--yes] [--dry-run]\n  run <goal> [--yes] [--dry-run] [--permissions auto|full] [--place here|branch:NAME] [--folder PATH]...\n  run <id> --publish [--approve-push <confirmationId>]\n  status [id] [--recover]\n  open <id> [--bot NAME] [--exec]\n  check <id>\n  policy show\n  uninstall [--yes] [--dry-run]\n\nMCP servers (Claude Code's own; a key is asked for, never an argument):\n  mcp [list]\n  mcp add NAME URL [--header NAME] | mcp add NAME COMMAND [ARGS]... [--env NAME]\n  mcp remove NAME [--yes]\n\nPeer network:\n  id [--name N] [--export] [--import CODE]\n  team create NAME | team | team leave [TEAM] | team remove NAME [--team ID]\n  invite [--team ID] [--hours N] [--project PATH] [--auto|--manual] [--rules TEXT]\n  join CODE [--project PATH] [--auto|--manual] [--rules TEXT]\n  access [--team ID] [--auto|--manual] [--rules TEXT] [--project PATH]\n  share [PATH] [--as HANDLE] [--no-status] | unshare HANDLE\n  peers\n  peer install|uninstall | peer trust|untrust @NAME\n  ask [@NAME] [--project H] TEXT\n  relay [--team ID]\n\nEvery command accepts --json. --dry-run prints the proposed task setup;\nit does not execute the task or verify the resulting implementation.\n`;
+const HELP = `ELU Code — terminal coding workspace\n\nRun elu anywhere to open the terminal app.\nThe first start asks for a project name; later starts open your last project.\nSessions lists every session; type a message to start one.\nKanban shows the open project's tasks. Chats holds your channels and direct messages. Type / for commands and help.\nEditing workspaces are prepared automatically. Pushes require separate approval.\n\nCommands:\n  conductor [stop]\n  schedule [list]\n  dashboard\n  init [--yes] [--dry-run]\n  run <goal> [--yes] [--dry-run] [--permissions auto|full] [--place here|branch:NAME] [--folder PATH]...\n  run <id> --publish [--approve-push <confirmationId>]\n  status [id] [--recover]\n  open <id> [--bot NAME] [--exec]\n  check <id>\n  policy show\n  uninstall [--yes] [--dry-run]\n\nMCP servers (Claude Code's own; a key is asked for, never an argument):\n  mcp [list]\n  mcp add NAME URL [--header NAME] | mcp add NAME [--env NAME] -- COMMAND [ARGS]...\n  mcp remove NAME [--yes]\n\nPeer network:\n  id [--name N] [--export] [--import CODE]\n  team create NAME | team | team leave [TEAM] | team remove NAME [--team ID]\n  invite [--team ID] [--hours N] [--project PATH] [--auto|--manual] [--rules TEXT]\n  join CODE [--project PATH] [--auto|--manual] [--rules TEXT]\n  access [--team ID] [--auto|--manual] [--rules TEXT] [--project PATH]\n  share [PATH] [--as HANDLE] [--no-status] | unshare HANDLE\n  peers\n  peer install|uninstall | peer trust|untrust @NAME\n  ask [@NAME] [--project H] TEXT\n  relay [--team ID]\n\nEvery command accepts --json. --dry-run prints the proposed task setup;\nit does not execute the task or verify the resulting implementation.\n`;
 function argumentsOf(argv) {
   const flags = {}; const words = [];
   const boolean = new Set(['json', 'yes', 'dry-run', 'publish', 'recover', 'exec', 'help', 'version', 'daemon', 'export', 'no-status', 'auto', 'manual']);
-  const values = new Set(['role', 'bot', 'approve-push', 'name', 'import', 'team', 'hours', 'as', 'project', 'permissions', 'place', 'rules', 'header', 'env']);
+  const values = new Set(['role', 'bot', 'approve-push', 'name', 'import', 'team', 'hours', 'as', 'project', 'permissions', 'place', 'rules']);
   const repeatable = new Set(['folder']);
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -55,7 +55,16 @@ async function confirm(plan, flags) {
   try { const answer=await Promise.race([prompt.question('Make these writes? [y/N] ').catch(error=>{if(error.code==='ERR_USE_AFTER_CLOSE'||error.code==='ABORT_ERR')return'';throw error;}),closed]);return /^y(?:es)?$/i.test(answer.trim()); }
   finally { prompt.close(); }
 }
+// elu mcp reads its own arguments: what follows its -- is a command's, untouched.
+const mcpAt = argv => { const at = argv.findIndex(arg => !arg.startsWith('--')); return argv[at] === 'mcp' ? at : -1; };
+const ownArgs = argv => mcpAt(argv) >= 0 && argv.includes('--') ? argv.slice(0, argv.indexOf('--')) : argv;
 export async function main(argv = process.argv.slice(2)) {
+  // Your Claude Code MCP servers: the key is asked for with echo off, or read from stdin.
+  if (mcpAt(argv) >= 0) {
+    const { mcpArguments, mcpCli } = await import('../lib/mcp.mjs'), at = mcpAt(argv), { flags, words } = mcpArguments([...argv.slice(0, at), ...argv.slice(at + 1)]);
+    if (flags.help) return { help: HELP };
+    return mcpCli(words, flags, { root: findRepository(process.cwd())?.root ?? null });
+  }
   const { flags, words } = argumentsOf(argv);
   if (flags.help || words[0] === 'help') return { help: `${HELP}\nOptions:\n  --help, -h\n  --version\n` };
   if (flags.version) return { version: readJson(fileURLToPath(new URL('../package.json', import.meta.url))).version };
@@ -107,8 +116,6 @@ export async function main(argv = process.argv.slice(2)) {
     if (flags.json) { const { dashboardSnapshot } = await import('../lib/projects.mjs'); return dashboardSnapshot(); }
     const { launchTerminal } = await import('../lib/terminal.mjs'); return launchTerminal();
   }
-  // Your Claude Code MCP servers: the key is asked for with echo off, or read from stdin.
-  if (words[0] === 'mcp') { const { mcpCli } = await import('../lib/mcp.mjs'); return mcpCli(words.slice(1), flags, { root: findRepository(process.cwd())?.root ?? null }); }
   if (!words.length && !flags.json && (!process.stdin.isTTY || !process.stdout.isTTY)) return { help: HELP };
   if (!words.length) {
     const repo = findRepository(process.cwd());
@@ -202,16 +209,16 @@ export async function main(argv = process.argv.slice(2)) {
 }
 if (process.argv[1] && fs.realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
-    const result = await main();
-    if (process.argv.includes('--json')) process.stdout.write(`${JSON.stringify({ success: true, ...result })}\n`);
+    const result = await main(), own = ownArgs(process.argv.slice(2));
+    if (own.includes('--json')) process.stdout.write(`${JSON.stringify({ success: true, ...result })}\n`);
     else if (result.help) process.stdout.write(result.help);
-    else if (process.argv.includes('--version')) process.stdout.write(`${result.version}\n`);
+    else if (own.includes('--version')) process.stdout.write(`${result.version}\n`);
     else if (result.quiet) { /* Nothing to report. */ }
     else process.stdout.write(formatResult(result,process.argv[2]));
     if (result.results?.some((row) => row.status !== 'passed') || result.state === 'blocked'||result.sandboxHelper?.working===false||result.success===false) process.exitCode = 1;
   } catch (error) {
     const output = { success: false, message: error.message, ...error.details };
-    if (process.argv.includes('--json')) process.stdout.write(`${JSON.stringify(output)}\n`);
+    if (ownArgs(process.argv.slice(2)).includes('--json')) process.stdout.write(`${JSON.stringify(output)}\n`);
     else process.stderr.write(`${error.message}\n${error.details&&Object.keys(error.details).length?Object.entries(error.details).map(([key,value])=>`${key}: ${typeof value==='object'?JSON.stringify(value):value}`).join('\n')+'\n':''}`);
     process.exitCode = 1;
   }

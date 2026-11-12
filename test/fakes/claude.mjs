@@ -6,12 +6,14 @@ import fs from 'node:fs'; import path from 'node:path';
 const vendor=path.basename(process.argv[1]); const args=process.argv.slice(2);
 let cfg={}; try{cfg=JSON.parse(fs.readFileSync(path.join(path.dirname(process.argv[1]),'fake.json'),'utf8'));}catch{}
 const mode=cfg.mode??'normal';
-// claude mcp add-json --scope user NAME JSON and claude mcp remove --scope SCOPE NAME, as the real 2.1.322 does them, on the
+// claude mcp add-json --scope user -- NAME JSON and claude mcp remove --scope SCOPE -- NAME, as the real 2.1.322 does them, on the
 // .claude.json in CLAUDE_CONFIG_DIR. The settings are recorded as <json>, so a test can look for a key everywhere else.
 // mode mcp-echo: add-json fails and prints the settings it was given, as an error may.
 if(args[0]==='mcp'){
  const dir=process.env.CLAUDE_CONFIG_DIR??process.env.HOME,file=path.join(dir,'.claude.json');let data={};try{data=JSON.parse(fs.readFileSync(file,'utf8'));}catch{}
- const scope=args.includes('--scope')?args[args.indexOf('--scope')+1]:null,words=args.slice(1).filter((arg,at,all)=>arg!=='--scope'&&all[at-1]!=='--scope');
+ const scope=args.includes('--scope')?args[args.indexOf('--scope')+1]:null,dashed=args.indexOf('--'),words=args.slice(1).filter((arg,at,all)=>arg!=='--scope'&&all[at-1]!=='--scope'&&at+1!==dashed);
+ // A word that starts with - before -- is an option, as commander reads it.
+ if(args.slice(1,dashed<0?undefined:dashed).some((arg,at,all)=>arg.startsWith('-')&&arg!=='--scope'&&all[at-1]!=='--scope')){console.error(`error: unknown option '${args.slice(1).find(arg=>arg.startsWith('-')&&arg!=='--scope')}'`);process.exit(1);}
  if(cfg.calls)fs.appendFileSync(cfg.calls,JSON.stringify({vendor,args:args.map((arg,at)=>args[1]==='add-json'&&at===args.length-1?'<json>':arg),cwd:process.cwd()})+'\n');
  const save=()=>{fs.mkdirSync(dir,{recursive:true});fs.writeFileSync(file,JSON.stringify(data,null,2),{mode:0o600});};
  if(words[0]==='add-json'){

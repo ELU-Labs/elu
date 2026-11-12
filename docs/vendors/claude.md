@@ -52,7 +52,9 @@ service yet.
 The never list as deny rules: `git push`, `git tag`, `git merge`, `gh pr merge`,
 `gh release`, `npm publish`, `pnpm publish`, `yarn publish`, `cargo publish`,
 `firebase deploy`, `vercel deploy`, `gcloud run deploy`, `gcloud app deploy`,
-`fly deploy`, `kubectl apply`, `terraform apply`. They match command text, so
+`fly deploy`, `kubectl apply`, `terraform apply`, `claude mcp add`,
+`claude mcp add-json`, `claude mcp add-from-claude-desktop`, `claude mcp remove`,
+`elu mcp add`, `elu mcp remove`. They match command text, so
 `git -C . push` or a shell wrapper gets past them; in Ask the sandbox has no
 network and the common directory is read-only, which is what holds. A bot that is
 allowed to merge pull requests (`@elu` comes allowed; a bot you make is not) runs its

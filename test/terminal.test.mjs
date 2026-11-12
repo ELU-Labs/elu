@@ -3152,7 +3152,7 @@ test('/mcp add asks for a name, the URL, the header and the key in a hidden fiel
   assert.equal(field('Authorization · elu').getValue(), ''); assert.ok(!v.raw.includes(key.slice(0, 12)) && !v.raw.includes('Hidden9Key'), 'never drawn');
   v.input.write('\r'); await until(() => /Added elu\. Sessions get it from their next turn\./.test(status()), 'added');
   assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')).mcpServers.elu, { type: 'http', url: 'https://app.example.invalid/api/mcp', headers: { Authorization: `Bearer ${key}` } }, 'a key alone is sent as Bearer KEY');
-  assert.deepEqual(mcpCalls(p), ['mcp add-json --scope user elu <json>'], 'Claude Code\'s own command saved it');
+  assert.deepEqual(mcpCalls(p), ['mcp add-json --scope user -- elu <json>'], 'Claude Code\'s own command saved it');
   // /mcp lists it, on for this project; the list shows names only.
   await send(v, '/mcp'); await until(() => modal(v, 'MCP servers'), 'the list');
   assert.match(dialogText(v, 'MCP servers'), /● on +elu/); assert.match(dialogText(v, 'MCP servers'), /\/mcp add adds one, and keeps its key out of the chat\. \/mcp remove NAME removes one\./);
@@ -3172,7 +3172,7 @@ test('/mcp add asks for a name, the URL, the header and the key in a hidden fiel
   assert.ok(JSON.parse(fs.readFileSync(file, 'utf8')).mcpServers.elu);
   await send(v, '/mcp remove elu'); await until(() => modal(v, 'Remove an MCP server'), 'the question again');
   v.input.write('y'); await until(() => /Removed elu\. Sessions stop getting it from their next turn\./.test(status()), 'removed');
-  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')).mcpServers, {}); assert.deepEqual(mcpCalls(p).at(-1), 'mcp remove --scope user elu');
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')).mcpServers, {}); assert.deepEqual(mcpCalls(p).at(-1), 'mcp remove --scope user -- elu');
   await send(v, '/mcp remove elu'); await until(() => /No MCP server named elu\. \/mcp lists yours\./.test(status()), 'gone');
   assert.deepEqual(filesHolding(p.parent, key), [], 'the key is in no file once removed: not in task files, logs or what the fake recorded');
   assert.ok(!v.raw.includes(key), 'and never on screen');
@@ -3200,7 +3200,7 @@ test('a pasted MCP config is never sent: ELU Code offers to add it, n leaves it 
   v.input.write('y'); await until(() => /Added elu\. Sessions get it from their next turn\./.test(status()), 'added');
   assert.equal(panels.ask.getValue(), 'Connect ELU please', 'the box keeps only the other words, for the owner to send');
   assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')).mcpServers.elu, { type: 'http', url: 'https://app.example.invalid/api/mcp', headers: { Authorization: `Bearer ${key}` } });
-  assert.deepEqual(mcpCalls(p), ['mcp add-json --scope user elu <json>']); assert.equal(tasks().length, 0, 'still nothing sent');
+  assert.deepEqual(mcpCalls(p), ['mcp add-json --scope user -- elu <json>']); assert.equal(tasks().length, 0, 'still nothing sent');
   assert.ok(!v.frame().includes(key), 'the key left the screen with the box');
   // Sent now, the words reach the model with the new server on and the note on /mcp add; the key never does.
   await typing(); v.input.write('\r'); await until(() => tasks()[0]?.state === 'answered', 'answered', 20000);
@@ -3213,7 +3213,7 @@ test('a pasted MCP config is never sent: ELU Code offers to add it, n leaves it 
   v.input.write('\r'); await until(() => offer(), 'the offer in the session'); v.input.write('y');
   await until(() => offer() && /elu is already one of your Claude Code servers\. Replace it\?/.test(dialogText(v, 'MCP server')), 'asked before replacing');
   v.input.write('y'); await until(() => /Added elu\. Sessions get it from their next turn\./.test(status()) && panels.ask.getValue() === '', 'replaced, and the box is empty');
-  assert.deepEqual(mcpCalls(p).slice(1), ['mcp remove --scope user elu', 'mcp add-json --scope user elu <json>']);
+  assert.deepEqual(mcpCalls(p).slice(1), ['mcp remove --scope user -- elu', 'mcp add-json --scope user -- elu <json>']);
   assert.equal(tasks().length, 1); assert.ok(!JSON.stringify(readTask(p.repo, id)).includes(key), 'the session\'s history holds no key');
   // A config without a key is offered too; n leaves it, and Enter again sends it as it is.
   await typing(); v.input.write('\x1b[200~{"gmail": {"command": "npx", "args": ["-y", "gmail-mcp"]}}\x1b[201~'); v.input.write('\r');
@@ -3223,4 +3223,62 @@ test('a pasted MCP config is never sent: ELU Code offers to add it, n leaves it 
   // The key is in Claude Code's own file and nowhere else: not in task files, logs, prompts or what was recorded.
   await until(() => tasks()[0].state === 'answered', 'the turn ended', 20000);
   assert.deepEqual(filesHolding(p.parent, key, [file]), []);
+});
+
+test('a claude mcp add line with a key is never run or sent: with ! in an open session it is offered as a server, and no ! command with a key runs there', { timeout: 60000 }, async t => {
+  const p = setup(t, 'answer'), key = keyLike('elu_live_', 'Typed4Cli', 'Never9Run1'), file = path.join(p.parent, 'claude', '.claude.json');
+  liveTask(p.root, { id: '4', goal: 'Trim coupon codes', state: 'answered' });
+  const v = await view(t, { repo: p.repo }), panels = v.current.panels, status = () => panels.status.getText(), offer = () => modal(v, 'MCP server');
+  const ran = () => { try { return fs.readFileSync(path.join(taskDir(p.repo, '4'), 'shell.jsonl'), 'utf8'); } catch { return ''; } };
+  const sent = () => fs.existsSync(path.join(p.parent, 'inputs.jsonl')) ? fs.readFileSync(path.join(p.parent, 'inputs.jsonl'), 'utf8') : '';
+  await openTask(v, /Trim coupon codes/);
+  // The line as Claude Code's own docs give it, typed after ! in the session's message box.
+  const line = `!claude mcp add --transport http elu https://app.example.invalid/api/mcp --header "Authorization: Bearer ${key}"`;
+  await send(v, line); await until(() => offer(), 'the offer');
+  assert.match(dialogText(v, 'MCP server').replace(/\s+/g, ' '), /This adds an MCP server\. Add elu to your Claude Code servers\? The key stays out of the chat\. y adds it · n leaves your text in the box, not run/);
+  assert.ok(!dialogText(v, 'MCP server').includes(key));
+  v.input.write('n'); await until(() => !offer() && /Not run\. It holds a key: take the key out to send the rest, or use \/mcp add\./.test(status()), 'kept, not run');
+  assert.equal(panels.ask.getValue(), line); assert.equal(ran(), '', 'nothing ran');
+  // Enter again offers again: a line with a key is never run as it is. y adds it.
+  await send(v, line); await until(() => offer(), 'the offer again');
+  v.input.write('y'); await until(() => /Added elu\. Sessions get it from their next turn\./.test(status()) && panels.ask.getValue() === '', 'added, and the box is empty');
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')).mcpServers.elu, { type: 'http', url: 'https://app.example.invalid/api/mcp', headers: { Authorization: `Bearer ${key}` } });
+  assert.deepEqual(mcpCalls(p), ['mcp add-json --scope user -- elu <json>'], 'Claude Code\'s own command saved it, not the line');
+  // A line that does not read is not run when it holds a key, and nor is any ! command with a key in an open session.
+  await send(v, `!claude mcp add --frobnicate elu https://x.example.invalid -H "Authorization: Bearer ${key}"`);
+  await until(() => /Not run\. It holds an MCP server's key: take the key out to send the rest, or use \/mcp add\./.test(status()), 'not run');
+  for (const round of ['once', 'twice']) {
+    await send(v, `!curl -s -H "Authorization: Bearer ${key}" https://x.example.invalid`);
+    await until(() => /Not run\. It holds a key, and a command run in a session joins its chat, which the model reads\. Run it with no session open\./.test(status()), `not run ${round}`);
+  }
+  await new Promise(resolve => setTimeout(resolve, 300)); assert.equal(ran(), '', 'nothing joined the session\'s shell file');
+  // The next turn gets the words and the new server, never the key.
+  await send(v, 'Is ELU connected now?'); await until(() => sent().includes('Is ELU connected now?'), 'the next turn', 20000);
+  await until(() => readTask(p.repo, '4').state === 'answered' && !readTask(p.repo, '4').activeRole, 'the turn ended', 20000);
+  assert.ok(!sent().includes(key), 'the key is in no prompt'); assert.match(sent(), /MCP servers on for you \(tools named mcp__NAME__\*\): elu\./);
+  assert.ok(!JSON.stringify(readTask(p.repo, '4')).includes(key), 'nor in the session');
+  assert.deepEqual(filesHolding(p.parent, key, [file]), [], 'the key is only in Claude Code\'s own file');
+});
+
+test('a pasted server config whose key does not read, or whose URL holds the key, is never sent however often Enter is pressed', { timeout: 40000 }, async t => {
+  const p = setup(t, 'answer'), key = keyLike('elu_live_', 'Comma3Key', 'Stays0Home5'), file = path.join(p.parent, 'claude', '.claude.json');
+  const v = await view(t, { repo: p.repo }), panels = v.current.panels, status = () => panels.status.getText(), offer = () => modal(v, 'MCP server');
+  const sent = () => fs.existsSync(path.join(p.parent, 'inputs.jsonl')) ? fs.readFileSync(path.join(p.parent, 'inputs.jsonl'), 'utf8') : '';
+  const nothingSent = () => { assert.equal(v.current.controller.snapshot().tasks.length, 0); assert.deepEqual(pendingRequests(p.root), []); assert.ok(!sent().includes(key)); };
+  // A trailing comma inside the server's object: it does not read as JSON, and it holds a key.
+  const comma = `Use this {"mcpServers": {"elu": {"url": "https://x.example.invalid/mcp", "headers": {"Authorization": "Bearer ${key}"},}}}`;
+  await send(v, comma); await until(() => /Not sent\. It holds an MCP server's key: take the key out to send the rest, or use \/mcp add\./.test(status()) && panels.ask.getValue() === comma, 'held');
+  await send(v, comma); await new Promise(resolve => setTimeout(resolve, 300));
+  assert.match(status(), /Not sent\. It holds an MCP server's key/); assert.equal(panels.ask.getValue(), comma, 'still in the box after the second Enter'); nothingSent();
+  // A key in the URL's path: offered with the key kept out, and n never makes it sendable.
+  const secret = 'a8Kd93LmQz0Xw7Rt2Vb' + key.slice(-4), zap = `{"zap": {"url": "https://mcp.zapier.example.invalid/api/mcp/s/${secret}/mcp"}}`;
+  await send(v, zap); await until(() => offer(), 'the offer');
+  assert.match(dialogText(v, 'MCP server').replace(/\s+/g, ' '), /Add zap to your Claude Code servers\? The key stays out of the chat\./);
+  v.input.write('n'); await until(() => !offer() && /Not sent\. It holds a key: take the key out to send the rest, or use \/mcp add\./.test(status()), 'kept');
+  await send(v, zap); await until(() => offer(), 'offered again, not sent'); v.input.write('n'); await until(() => !offer(), 'closed');
+  nothingSent(); assert.ok(!sent().includes(secret)); assert.equal(fs.existsSync(file), false, 'nothing was added');
+  // A log line with a url is not a config: it is sent at once.
+  await send(v, '{"level":"error","url":"https://api.x.example.invalid/v1","status":500}'); await until(() => sent().includes('upstream') || sent().includes('api.x.example.invalid'), 'sent', 20000);
+  await until(() => v.current.controller.snapshot().tasks[0]?.state === 'answered', 'the turn ended', 20000);
+  assert.deepEqual(filesHolding(p.parent, key), []);
 });

@@ -187,7 +187,7 @@ test('the lead\'s MCP note names the servers that are off', t => {
   t.after(() => { if (previous === undefined) delete process.env.CLAUDE_CONFIG_DIR; else process.env.CLAUDE_CONFIG_DIR = previous; });
   // With no servers the note still says how the owner adds one, and that a key never goes through the chat.
   assert.equal(serverNote(folder, []), ADD_NOTE, 'no servers: only how to add one');
-  assert.match(ADD_NOTE, /type \/mcp add in the message box/); assert.match(ADD_NOTE, /Never ask for a key, token or password in the chat\./); assert.match(ADD_NOTE, /You cannot add a server yourself\./);
+  assert.match(ADD_NOTE, /type \/mcp add in the message box/); assert.match(ADD_NOTE, /Never ask for a key, token or password in the chat\./); assert.match(ADD_NOTE, /Never add or remove a server yourself\./);
   fs.writeFileSync(path.join(folder, '.claude.json'), JSON.stringify({ mcpServers: { elu: { type: 'http', url: 'https://elu.example/mcp' }, gmail: { command: 'gmail' } } }));
   assert.equal(serverNote(folder, []), `The owner's other Claude Code MCP servers are off for you: elu, gmail. When a request needs one of them, tell the owner to type /mcp on NAME in the message box, with that server's name, and then ask again. ${ADD_NOTE}`);
   assert.equal(serverNote(folder, ['elu', 'gmail']), `MCP servers on for you (tools named mcp__NAME__*): elu, gmail. ${ADD_NOTE}`);

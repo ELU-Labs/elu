@@ -11,7 +11,7 @@ test('the never list in words is the list the rules refuse, and the line for the
   const line = neverLine();
   assert.ok(line.startsWith(`Never run these, alone or inside a longer command line, in any mode: ${NEVER_COMMANDS.join(', ')}. To list tags`));
   assert.match(line, /To list tags use git for-each-ref --sort=-creatordate refs\/tags or git describe --tags, never git tag\.$/);
-  assert.ok(line.length <= 400, `${line.length} characters`);
+  assert.ok(line.length <= 520, `${line.length} characters`);
   // A bot the owner lets merge pull requests is not told gh pr merge is off its list.
   assert.equal(neverCommands({ merge: true }).includes('gh pr merge'), false); assert.doesNotMatch(neverLine({ merge: true }), /gh pr merge/); assert.match(neverLine({ merge: true }), /git merge,/);
 });

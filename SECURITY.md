@@ -161,7 +161,7 @@ of every team its project belongs to here, so the sender cannot pick a team with
 ones. Once you approve a Task, that approval counts as your acceptance of the work inside
 its goal. What is enforced is the permission mode, the Task approval before an edit, and
 the per-teammate and per-team message and spending caps. The never list (push, merge, tag,
-deploy and publish) holds for every session a teammate starts as it does in that mode for
+deploy, publish, and adding or removing an MCP server) holds for every session a teammate starts as it does in that mode for
 your own (`docs/permissions.md`): in Ask for approval and Approve for me it is backed by
 the sandbox and deny rules; in Full access, which only a session you approve can have, it
 is stand-in commands, prompt text and deny rules with no sandbox behind them, and a
@@ -253,8 +253,9 @@ leave it or be removed.
 
 ## The never list
 
-The never list (push, tag, merge, deploy, publish) is enforced only where the means are
-missing: Read only and Ask for approval, with the one exception below. In Approve for me
+The never list (push, tag, merge, deploy, publish, and adding or removing an MCP server
+with `claude mcp add`, `add-json`, `add-from-claude-desktop`, `remove`, `elu mcp add` or
+`elu mcp remove`) is enforced only where the means are missing: Read only and Ask for approval, with the one exception below. In Approve for me
 and Full access it is prompt text plus the vendor's deny rules, which match command text
 and can be sidestepped by an obscured command. ELU Code's own publish step still needs
 your confirmation and still refuses a default branch in every mode.
@@ -333,24 +334,37 @@ never list covers them: a server that can push, merge, post or send mail can do 
 without asking you. Their settings, which can hold tokens, are copied for each run into a
 private file in ELU Code's state folder and removed when the run ends.
 
-Only you add a server, and a key never goes through the chat. No session may read or write
-`~/.claude.json`, and the model is told to ask you to type `/mcp add` when it needs a
-server you do not have, and never to ask for a key in the chat. `/mcp add` takes the key in
+You add a server, and a key never goes through the chat. The model is told to ask you to
+type `/mcp add` when it needs a server you do not have, never to ask for a key in the chat,
+and never to add or remove a server itself. Adding and removing one (`claude mcp add`,
+`add-json`, `add-from-claude-desktop`, `remove`, `elu mcp add`, `elu mcp remove`) is on the
+never list, and no session's file tools may read `~/.claude.json`. In Full access these
+are rules on command text, stand-in commands and prompt text, not a boundary: a model there
+runs as you, with no sandbox, and a full path to `claude`, a script, or a program or file
+tool that writes `~/.claude.json` itself can still add a server. `/mcp add` takes the key in
 a field that shows one dot for each character; the key is not drawn, kept in the message
 box or its history, sent to a model or a teammate, or written to a log or a session's files.
-`elu mcp add` refuses a key on its own command line, so none lands in your shell history,
-and asks for it with echo off or reads it from standard input. Claude Code's own command
+`elu mcp add` refuses a key on its own command line, in a header, a variable or the URL, so
+it never has you put one in your shell history, and asks for it with echo off or reads it
+from standard input. Claude Code's own command
 saves the server (`claude mcp add-json --scope user`); ELU Code never writes that file.
-That command takes the settings only on its command line, so for the second it runs,
-another account on the same computer that can list its processes could see the key.
-What it prints back is shown with the key taken out. A message from the message box
-that holds a server config (an `mcpServers` block, or one server with a `url` or a
-`command`) is not sent, wherever it was written: ELU Code offers to add the server, and the
-box keeps only your other words. A config that holds a key is never sent as it is; one
-without a key is sent if you press Enter on it again. Text that looks like a server's
-settings with a key in it but does not read as a config is held once, and sent if you
-press Enter on it again. Text you paste into the message box
-still shows on your screen until you send it or clear it.
+That command takes the settings only on its command line, so for the second it runs, any
+process on this computer that runs as you, a Full access session included, or as another
+account that can list processes could read the key. What it prints back is shown with the
+key taken out. A key counts wherever a server's settings hold one: a header, a variable, a
+bearer token among its arguments, or its URL (a password before the `@`, a query value such
+as `api_key=`, or a long path segment of letters and digits). A message from the message box
+that holds a server config (an `mcpServers` block, or one server with only a server's
+fields, such as a `url` or a `command`) is not sent, wherever it was written: ELU Code
+offers to add the server, and the box keeps only your other words. So is a
+`claude mcp add` or `claude mcp add-json` line, typed with `!` in front or without: it is
+not run, since in an open session a command's line joins the chat the model reads, and
+ELU Code offers to add the server instead. A config or line that holds a key is never sent
+or run as it is; one without a key is sent, or run, if you press Enter on it again. Text
+that looks like a server's settings with a key in it but does not read as one is never sent
+either: take the key out, or use `/mcp add`. In an open session, a `!` command that holds a
+key (a bearer token, an `Authorization` header, a `..._TOKEN=` value) is not run. Text you
+paste into the message box still shows on your screen until you send it or clear it.
 
 On Claude Code, the model of your sessions and each bot that works there also get your
 Claude Code instructions and memory for the project folder, as Claude Code itself would
