@@ -16,6 +16,7 @@ import { PAIRED_BY_GITHUB, bothMine, markMine, markedMine, mineRows, unmarkMine 
 import { viewMethods } from '../lib/peer/remote.mjs';
 import { GIST, HINT, checkGithub, githubPairing, githubStatus, pairingHint, runGh } from '../lib/peer/github.mjs';
 import { PeerDaemon } from '../lib/peer/daemon.mjs';
+import * as peer from '../lib/peer/index.mjs';
 import { remoteSessions as remoteGlue } from '../lib/terminal-remote.mjs';
 
 // GitHub pairing (docs/peer-network.md, "Your other computers"): a fake gh first on PATH keeps
@@ -243,12 +244,14 @@ test('ELU_NO_GITHUB_PAIRING, /mine auto off and a test run that did not ask make
   assert.equal(await glue.mine(['auto', 'off']), 'Computers no longer pair by GitHub account. The ones already yours stay yours; /mine remove @name ends one.');
   assert.deepEqual(commands, [{ type: 'mineAuto', on: false }]);
   await assert.rejects(glue.mine(['auto']), { message: 'Use /mine [@name | remove @name | auto on | auto off].' });
-  const daemon = new PeerDaemon();
-  await laptop.read(() => daemon.command({ type: 'mineAuto', on: false }));
+  // The app and elu mine auto send it the way every peer command goes: a file in peer/commands
+  // that the daemon answers.
+  const daemon = new PeerDaemon(), viaDaemon = command => laptop.read(async () => { const { id } = peer.sendPeerCommand(command); daemon.commands(); return peer.awaitCommand(id, 5000); });
+  assert.deepEqual(await viaDaemon({ type: 'mineAuto', on: false }), { on: false });
   assert.equal(laptop.read(() => peerSettings()).githubPairing, false);
   assert.deepEqual(await laptop.check(), { state: 'off', why: 'setting' });
   assert.deepEqual(gh.calls(), [], 'no gh call at all');
-  await laptop.read(() => daemon.command({ type: 'mineAuto', on: true }));
+  assert.deepEqual(await viaDaemon({ type: 'mineAuto', on: true }), { on: true });
   assert.equal((await laptop.check()).state, 'ok');
   laptop.read(() => savePeerSettings({ githubPairing: false }));
   assert.equal((await laptop.check()).state, 'off');
