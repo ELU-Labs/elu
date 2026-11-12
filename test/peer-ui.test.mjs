@@ -733,7 +733,7 @@ test('a session on my other computer that waits for y or n shows n once in the k
   board.focus(); selectRow(board, /wants to run ls/);
   await until(() => /y allow {2}n deny {2}enter open {2}tab next/.test(keys()), 'approval keys');
   assert.doesNotMatch(keys(), /new session/);
-  selectRow(board, /Task to approve/);
+  selectRow(board, /on sara-box · Uppercase plan/);
   await until(() => /y approve {2}n reject {2}enter open {2}tab next/.test(keys()), 'Task keys');
   assert.doesNotMatch(keys(), /new session/);
 });
