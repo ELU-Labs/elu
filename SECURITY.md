@@ -301,6 +301,13 @@ limits teammates get. Treat it like a login to this machine.
 - Joining with such a code marks nothing on the joining machine until the person there says
   yes ("Is <name>'s computer yours too?", or `elu join CODE --mine`). A teammate who sends you
   one cannot make their computer yours: say No.
+- Two machines on a team together that are both signed in to GitHub (with `gh`) as the same
+  account mark each other by themselves. Each keeps its public peer key and box name in one
+  secret gist of that account; only `gh` talks to GitHub, and the token is never read. Anyone
+  signed in to that GitHub account counts as you, so sign in to it only on your own machines,
+  or turn this off with `/mine auto off` or `ELU_NO_GITHUB_PAIRING=1`. A teammate signed in as
+  someone else cannot write to your gist. A machine you `/mine remove` is not paired by GitHub
+  again until you mark it yourself.
 - An approval waits on both machines. The first answer, from either one, is the one that counts.
 - A session your other computer starts is your own, not a teammate's: your rules (`a`,
   `/permissions rules`) and the defaults answer for it, it may run in your home folder as your
