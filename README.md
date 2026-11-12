@@ -120,6 +120,10 @@ and `/permissions default auto` sets what new sessions start with.
 - **Full access** (`full`): any file, any command, the internet.
 
 When the model asks, `y` allows and `n` denies; `f` allows and gives that session Full access.
+`a` allows and keeps a narrow rule, such as `npm test` or `git diff`, for this project or all
+of them, so it is not asked again. Reads in the project, git reads and the project's own test,
+lint and build scripts run without asking from the start. `/permissions rules` or
+`elu permissions` lists them all and removes any. The never list always wins.
 You can change the mode while a turn runs.
 
 Bots that review, and a teammate's question, always run read only.

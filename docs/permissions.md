@@ -170,6 +170,65 @@ there is a third, `f`: it asks what `/permissions full` asks, then allows the
 action and switches the session to Full access, so that session stops asking.
 It is not offered for a bot's scheduled turn or a turn that runs read only.
 
+### Allowed without asking
+
+`a` (always) beside `y` and `n` keeps the kind of action as a rule and allows it now. It
+shows the rule in plain words, then asks where: **This project** (the default) or **All my
+projects**. A rule is kept narrow:
+
+- A command keeps its program and subcommand: `npm test`, `git diff`, `pytest`,
+  `python -m pytest`, `npm run lint`, `gh pr view`. Arguments may change.
+- A program that does too much as a word, such as `npm install`, `curl`, `docker`, `find`
+  or `git branch`, keeps the exact command.
+- A line that joins or wraps commands (`;`, `&&`, `||`, `$( )`, backticks, a redirect, a
+  leading `NAME=value`) gets no `a`; it can only be allowed once. A pipe into `head`,
+  `tail`, `wc` or `grep`, and `2>&1`, are read through.
+- No rule for the never list, removals (`rm`, `rmdir`), `sudo`, `env`, `xargs`, `ssh`,
+  `chmod`, inline code (`node -e`, `python -c`, `sh -c`), a full path to a program, a
+  secret (`.env`, keys, credentials, `~/.ssh`, `~/.aws`), an MCP tool or a web search.
+- A rule asked inside the sandbox applies inside it only; one asked outside it says so.
+- An edit becomes edits in the session's own workspace, in turns that edit (a Task you
+  approved). Outside the project it is that one file. `.git`, `.elu-code` and secrets are
+  asked each time.
+- A web fetch becomes that host.
+
+Rules are kept in your personal directory (`permission-rules.json`), never in the repo.
+
+These are on from the first run and apply in every mode:
+
+1. Read and search files in the project: `ls`, `cat`, `grep`, `rg`, `find` without
+   `-exec` or `-delete`, and the like, on paths inside the project that are not secrets.
+2. Git read commands: `status`, `diff`, `log`, `show`, `branch` (listing only), `blame`.
+3. The project's own `test`, `lint`, `typecheck`, `format` and `build` scripts
+   by name from `package.json` or the `Makefile`, and `cargo`, `go` and `pytest` checks where
+   the project has `Cargo.toml`, `go.mod` or a Python project file, plus `node --test`. Inside
+   the sandbox only.
+
+They never cover installs, removals, network writes or secrets. In Ask for approval this
+means the reads and checks a session runs most no longer wait for you, while anything that
+leaves the sandbox, edits outside the project or reaches the internet still asks, unless a
+rule of yours covers it.
+
+`/permissions rules` lists the defaults and your rules, numbered, with where each applies:
+`x` removes a rule or turns a default off, `o` turns a default on. `/permissions rules remove
+N` and `/permissions rules on N` do the same by number, and so do `elu permissions`,
+`elu permissions remove N` and `elu permissions on N`. A file that cannot be read turns
+every rule and default off until it is fixed.
+
+When a rule or a default answers, nothing waits under Needs you; the decision is kept with
+the task as allowed by your rule or by default, and the session shows "Allowed by your rule:
+npm test".
+
+Your rules apply in your own sessions and your bots' sessions, and in a session started from
+one of your own machines. A session a teammate started uses the defaults only, and `a` is
+not offered there.
+
+Every vendor that asks goes through the relay: Claude Code through its permission prompt
+tool, Antigravity and Grok Build over ACP. The relay checks the never list, then your
+rules, then the defaults, before it writes a request. Claude Code's own allow rules are not
+used, so a rule never lets a command leave the sandbox without the relay seeing it. Codex
+does not ask during a turn, so rules change nothing there.
+
 ## Plan first
 
 A message that asks for a change to code or files, or for work that needs planning, comes

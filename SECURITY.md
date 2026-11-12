@@ -297,6 +297,17 @@ for approval keeps the agent inside the sandbox until you say yes; Approve for m
 the vendor's reviewer model; Full access trusts your choice. Request text is model output:
 control characters are stripped, otherwise the command, path or URL is shown exactly.
 
+A rule you keep with `a`, and the defaults, answer for you in the relay; they are not a
+sandbox either. What a rule can do: allow one program and subcommand with any arguments
+(`npm test`), one exact command, edits in the session's own workspace in turns that edit, one
+file outside the project, or pages on one host, in one project or all of them. What it
+cannot do: allow anything on the never list, joined or wrapped commands, removals, `sudo`,
+inline code, a secret file, `.git`, an MCP tool or a web search; leave the sandbox unless it
+was kept from a request that left it; or apply in a session a teammate started. Arguments
+are not checked, so `npm test` allows `npm test -- anything`, and a script the rule allows
+runs whatever the project put in it. Rules live in your personal directory, mode 0600, and
+are read again on every request; a file that cannot be read allows nothing.
+
 ## Configuration, MCP servers and hooks
 
 A project's own settings and instructions (`.elu-code/config.yaml`, `instructions.md` and
