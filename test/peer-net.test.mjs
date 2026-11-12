@@ -1546,8 +1546,11 @@ test('elu team leave and remove start the daemon for them, and a member on no te
     assert.equal(peer.onTeam(), false); assert.equal(peer.peerWanted(), false);
     await assert.rejects(peerCli(['team', 'leave'], {}), /Create a team first/);
   });
-  // elu team remove: the founder's daemon is started for it, and keeps running on the team.
+  // elu team remove: the founder's daemon is started for it, and keeps running on the team. The
+  // founder was offline for the leave, so it is taken in here, and sara is let back in first.
   await withHome(founderHome, async () => {
+    merge(crew.teamId, withHome(home, () => readLog(crew.teamId).ops));
+    assert.equal(team(crew.teamId).members.find(m => m.key === crew.member.identity.key).left, true);
     redeemCode(createInvite(crew.founder.identity, crew.teamId, { hours: 1 }), crew.member.identity.key, 'sara');
     const removed = await peerCli(['team', 'remove', 'sara'], {});
     assert.equal(removed.message, 'Removed sara from core. A new invite brings them back.');
