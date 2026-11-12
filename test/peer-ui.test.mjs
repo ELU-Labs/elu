@@ -17,7 +17,8 @@ const LONG = 'Could you check whether the retry budget in the uploader resets af
 const ago = minutes => new Date(Date.now() - minutes * 60000).toISOString();
 
 // teamless: this machine is on no team until /invite makes one (createTeam).
-function fakePeer({ items, running = true, refuse = () => null, remoteBots = [], teamless = false, access = { 'team-1': { handling: 'auto', rules: '', root: null, at: null } } } = {}) {
+// mine: mineRows(); remote: remoteSessions(); joined: what joinTeam answers.
+function fakePeer({ items, running = true, refuse = () => null, remoteBots = [], teamless = false, access = { 'team-1': { handling: 'auto', rules: '', root: null, at: null } }, mine = [], remote = [], joined = null } = {}) {
   const calls = [];
   const record = (name, value) => (...args) => { calls.push([name, ...args]); return typeof value === 'function' ? value(...args) : value; };
   const facade = {
@@ -63,7 +64,9 @@ function fakePeer({ items, running = true, refuse = () => null, remoteBots = [],
     share: record('share', (root, { handle }) => ({ handle: handle ?? 'sample', root, status: true })),
     createInvite: record('createInvite', () => ({ code: 'k7qm-x2pd-9fhw' })),
     createTeam: record('createTeam', name => { facade.made = true; return { id: 'team-1', name }; }),
-    joinTeam: record('joinTeam', async () => ({ id: 'team-2', name: 'Docs', inviter: { name: 'sara', fingerprint: 'bbbbbbbb' } })),
+    joinTeam: record('joinTeam', async () => joined ?? ({ id: 'team-2', name: 'Docs', inviter: { name: 'sara', fingerprint: 'bbbbbbbb' } })),
+    mineRows: () => mine,
+    remoteSessions: () => remote,
     // What teammates can do here, per team: team-1 was set before these tests start, unless a test says otherwise.
     access: { ...access },
     teamAccess: id => facade.access[id] ?? null,
@@ -643,22 +646,27 @@ test('/invite offers a code for someone new or which bots teammates may use, and
   const invite = () => modal(v, 'Team invite').children.find(child => child.options?.scrollable).getText();
   // Plain /invite says what it can do first.
   await send(v, '/invite');
-  await until(() => rowsOf(v, 'Invite').length === 2, 'the invite menu');
-  assert.deepEqual(rowsOf(v, 'Invite'), ['Someone new: get an invite code to send them', 'Choose which of your bots teammates can use']);
+  await until(() => rowsOf(v, 'Invite').length === 3, 'the invite menu');
+  assert.deepEqual(rowsOf(v, 'Invite'), ['Someone new: get an invite code to send them', 'Another computer of mine: start sessions on it from here', 'Choose which of your bots teammates can use']);
   // Someone new goes straight to the code. A new home has the bots the app comes with, none shared.
   await choose(v, 'Invite', /^Someone new/); await until(() => modal(v, 'Team invite'), 'the invite');
   assert.equal(modal(v, title), undefined, 'no bots question on the way to the code');
   assert.match(invite(), /No bot is shared, so a teammate’s message comes to you\./); assert.ok(shared().every(([, on]) => !on), 'none shared');
   await closeDialog(v, 'Team invite');
+  // Another computer of mine: a code for one hour, which says what it allows.
+  await send(v, '/invite'); await choose(v, 'Invite', /^Another computer of mine/);
+  await choose(v, 'Which computer', /^A computer not on your team yet/); await until(() => modal(v, 'Another computer of mine'), 'the code for my computer');
+  assert.match(modal(v, 'Another computer of mine').children.find(child => child.options?.scrollable).getText(), /One use, expires in 1 h\. Anyone with this code can start sessions on this computer, so keep it to yourself\./);
+  await closeDialog(v, 'Another computer of mine');
   // The bots choice lists the bots a teammate can use. @pair is not offered: it runs on Codex, and a teammate's question cannot run there.
   await send(v, '/invite'); await choose(v, 'Invite', /^Choose which of your bots/);
   await until(() => rowsOf(v, title).includes('Done'), 'the bots the app comes with');
   assert.deepEqual(rowsOf(v, title), ['[ ] @reviewer', '[ ] @lead', '[ ] @qa', '[ ] @elu', 'Done']);
   await choose(v, title, /^Done$/); await until(() => /No bot is shared, so a teammate’s message comes to you\./.test(status()), 'none shared');
   assert.equal(modal(v, 'Team invite'), undefined, 'choosing bots makes no code');
-  // With no bots to share the menu offers only the code, and the code says nothing about bots.
+  // With no bots to share the menu offers only the codes, and the code says nothing about bots.
   for (const bot of listBots()) removeBot(bot.name);
-  await send(v, '/invite'); await until(() => rowsOf(v, 'Invite').length === 1, 'one choice');
+  await send(v, '/invite'); await until(() => rowsOf(v, 'Invite').length === 2, 'the two codes');
   await choose(v, 'Invite', /^Someone new/); await until(() => modal(v, 'Team invite'), 'the invite');
   assert.ok(!/bot/i.test(invite()), 'the invite says nothing about bots'); await closeDialog(v, 'Team invite');
   saveBot({ name: 'notes', vendor: 'claude', instructions: 'Keep notes.' }); saveBot({ name: 'docs', vendor: 'claude', instructions: 'Write docs.', shared: true });
@@ -672,6 +680,62 @@ test('/invite offers a code for someone new or which bots teammates may use, and
   await send(v, '/join k7qm-x2pd-9fhw'); await answerJoin(v);
   await until(() => /Joined Docs with sara\. Their messages start sessions here, as if you typed them\./.test(status()), 'joined');
   assert.equal(modal(v, title), undefined);
+});
+
+test('joining with a code made for another computer asks whether it is yours: No is first and marks nothing, Yes marks it', async t => {
+  const joined = { id: 'team-1', name: 'Core', inviter: { name: 'sara', fingerprint: 'bbbbbbbb' }, mineOffer: { key: SARA } };
+  const { v, peer } = await teamView(t, { peer: fakePeer({ joined }) }), status = () => v.panels.status.getText(), title = "Is sara's computer yours too?";
+  const marked = () => peer.sent().filter(row => row.type === 'mine');
+  // Enter on the first row is No.
+  await send(v, '/join k7qm-x2pd-9fhw'); await answerJoin(v);
+  await until(() => rowsOf(v, title).length === 2, 'the question');
+  assert.deepEqual(rowsOf(v, title), ['No', 'Yes, both are mine']);
+  await until(() => /Only say yes if you set up both computers\./.test(v.text()), 'the note under the question');
+  v.input.write('\r'); await until(() => /Joined Core with sara\..*Not marked as yours\./.test(status()), 'no');
+  assert.deepEqual(marked(), []);
+  // Esc is No too.
+  await send(v, '/join k7qm-x2pd-9fhw'); await answerJoin(v);
+  await until(() => modal(v, title), 'the question again'); v.input.write('\x1b');
+  await until(() => !modal(v, title) && /Not marked as yours\./.test(status()), 'esc');
+  assert.deepEqual(marked(), []);
+  // Yes marks the inviter's computer here, and says how to start a session there.
+  await send(v, '/join k7qm-x2pd-9fhw'); await answerJoin(v);
+  await choose(v, title, /^Yes/);
+  await until(() => /Joined Core with sara\. Marked as yours\. Type @sara-box first in the new session box to start a session there\./.test(status()), 'yes');
+  assert.deepEqual(marked(), [{ type: 'mine', key: SARA }]);
+});
+
+test('/invite, Another computer of mine, offers a computer already on the team, and /mine says what to type on it', async t => {
+  const { v, peer } = await teamView(t, { peer: fakePeer({ mine: [{ key: LI, mine: true, theirs: true }] }) }), status = () => v.panels.status.getText();
+  await send(v, '/invite'); await choose(v, 'Invite', /^Another computer of mine/);
+  // li is mine already, so only sara-box is offered, then a code for a new one.
+  await until(() => rowsOf(v, 'Which computer').length === 2, 'the computers');
+  assert.deepEqual(rowsOf(v, 'Which computer'), ['@sara-box (sara): already on your team, mark it as yours', 'A computer not on your team yet: get a code']);
+  await choose(v, 'Which computer', /^@sara-box/);
+  await until(() => /Waiting for @sara-box to mark this machine too\. On @sara-box, type \/mine @ana\./.test(status()), 'what to type there');
+  assert.deepEqual(peer.sent().at(-1), { type: 'mine', key: SARA });
+  assert.equal(peer.calls.some(row => row[0] === 'createInvite'), false, 'no code was made');
+});
+
+test('a session on my other computer that waits for y or n shows n once in the key bar, and @name of that computer names it in the new session box', async t => {
+  const at = new Date().toISOString(), base = { machine: SARA, createdAt: at, lastAt: at, title: 'Make coupons upper case', steps: [], entries: [] };
+  const remote = [{ ...base, id: '11111111-1111-4111-8111-111111111111', state: 'running', approvals: [{ id: 'approval-1', summary: 'Run ls', at }] },
+    { ...base, id: '22222222-2222-4222-8222-222222222222', state: 'answered', title: 'Uppercase plan', plan: { title: 'Uppercase coupons', description: 'Make coupon codes upper case.', goal: 'Codes match in any case.', objectives: ['Codes are upper case'], priority: 'low', severity: 'low', state: 'proposed', subtasks: [], met: [] }, approvals: [] }];
+  const p = project(later(t)); environment(t, p.parent);
+  const peer = fakePeer({ items: [], mine: [{ key: SARA, mine: true, theirs: true }], remote }), v = await view(t, { repo: repository(p.root), dashboard: true, peer });
+  const board = v.panels.board, keys = () => v.panels.keys.getText();
+  await until(() => board.items.map(plainItem).some(row => /wants to run ls/.test(row)), 'the remote rows');
+  // In the new session box, @sara-box first says the session starts there.
+  const ask = v.panels.ask; ask.focus(); ask.readInput(); await until(() => ask.__listener, 'message box');
+  v.input.write('@sara-box fix the flaky test');
+  await until(() => /New session on @sara-box/.test(ask._label.getText()), 'the label names the computer');
+  ask.clearValue(); ask.cancel();
+  board.focus(); selectRow(board, /wants to run ls/);
+  await until(() => /y allow {2}n deny {2}enter open {2}tab next/.test(keys()), 'approval keys');
+  assert.doesNotMatch(keys(), /new session/);
+  selectRow(board, /on sara-box · Uppercase plan/);
+  await until(() => /y approve {2}n reject {2}enter open {2}tab next/.test(keys()), 'Task keys');
+  assert.doesNotMatch(keys(), /new session/);
 });
 
 test('a thread shows under its channel, #general or its teammate, and a row counts what waits for me', () => {

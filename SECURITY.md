@@ -32,9 +32,10 @@ It depends on the session's permission mode ([docs/permissions.md](docs/permissi
   have only read-only file tools, with no shell, workspace creation, or check execution.
 - **Ask for approval** and **Approve for me** give the session's model, and a bot that
   works in the session, a shell inside the vendor's own sandbox, with no network. In Ask
-  for approval an action outside it asks you where the vendor can ask during a turn
-  (Claude Code, and Antigravity and Grok Build once their one-time check has proven it);
-  on Codex, which cannot, it is refused and reported. In Approve for me a reviewer model
+  for approval Claude Code's sandbox reaches a host only once you allow it when asked, for
+  the rest of that session. An action outside the sandbox asks you where the vendor can ask
+  during a turn (Claude Code, and Antigravity and Grok Build once their one-time check has
+  proven it); on Codex, which cannot, it is refused and reported. In Approve for me a reviewer model
   decides instead of you. The sandbox differs by vendor: Antigravity in Ask for approval
   has none, so every command needs your approval and one you approve runs outside any
   sandbox, and Grok Build's sandbox blocks the network on Linux only. The vendor pages in
@@ -81,11 +82,11 @@ A sandboxed command reads the rest of the Git folder, so `git status`, `git diff
 history: every committed version of every file, including a file committed once and later
 removed, and committed files the sandbox hides by name in the worktree (`.env*`, `*.pem`,
 `.npmrc`). It can read the Git settings file, with its remote URLs and any token written
-into one, and the stash and the reflog. The sandbox has no network, so a sandboxed
-command cannot send what it reads anywhere; what it prints goes to the model, as all
-output does, and into the session's record. `git add`, `git commit` and anything else
-that writes in the folder stay refused. A teammate's question is given tracked files
-only: its commands read none of the folder.
+into one, and the stash and the reflog. The sandbox has no network beyond the hosts you
+allowed when asked, so a sandboxed command cannot send what it reads anywhere else; what
+it prints goes to the model, as all output does, and into the session's record. `git add`,
+`git commit` and anything else that writes in the folder stay refused. A teammate's
+question is given tracked files only: its commands read none of the folder.
 
 Vendor tool permissions restrict direct file tools. Claude Code's own sandbox fences only
 shell commands and is never required: where it cannot start, commands run outside it under
@@ -143,6 +144,11 @@ that team, and changed with `/access` or `elu access`:
 - **Manual**: each message waits until you approve it (y), then starts that same session,
   in your default mode, Full access included, since you started it. w picks the mode, place
   and folders first; n declines.
+- A teammate's message never runs in your home folder, or a folder above it, and its session
+  never edits a repository there, in any mode: that would reach every file of yours. When the
+  only project it could run in is your home folder, it waits, and y says to open ELU Code in
+  the project folder and approve it again. Its session shows the teammate's own words, under
+  their name, and is never sent again as yours.
 - A team whose setting was never set (joined with an earlier version) is Manual with no
   rules: its messages arrive as chat and wait for you. Nothing turns Auto on by itself:
   `elu invite` on such a team saves Manual unless you pass `--auto`, and `/invite` and
@@ -261,6 +267,34 @@ What others learn:
   `/share off` keeps one off every board, the Kanban tab says when a project's Tasks go out
   through someone else's share, and `elu peers` shows each member's fingerprint.
 
+## Your other computers
+
+Marking another machine as yours (`/mine`, `elu mine`, or an invite for "Another computer of
+mine") lets it start sessions on this machine as if you typed them here: in your default or
+chosen mode, Full access included, with your bots and your MCP servers, and without the
+limits teammates get. Treat it like a login to this machine.
+
+- A machine counts as yours only when both machines marked each other, and only while they
+  share a team. The mark is kept on each machine and keyed by its peer key. Either side ends
+  it with `/mine remove @name`; leaving or being removed from the last shared team ends it too.
+- Only such a machine can start, continue, stop or answer a session here, or read its events.
+  Everyone else, teammates included, is refused, and is never sent a session's events.
+- The never list, the sandbox, approvals and this machine's limits still apply to those
+  sessions, and push, merge and deploy stay blocked as they are for your own.
+- An invite code for another computer of yours works once, for 1 hour unless you choose
+  otherwise. Anyone who uses it first becomes one of your computers, so type it on the other
+  machine yourself and check `/mine` afterwards; `elu peers` shows each machine's fingerprint.
+- Joining with such a code marks nothing on the joining machine until the person there says
+  yes ("Is <name>'s computer yours too?", or `elu join CODE --mine`). A teammate who sends you
+  one cannot make their computer yours: say No.
+- An approval waits on both machines. The first answer, from either one, is the one that counts.
+- A session your other computer starts is your own, not a teammate's: your rules (`a`,
+  `/permissions rules`) and the defaults answer for it, it may run in your home folder as your
+  own sessions do, and its messages read as yours. `a` on its approval, from either machine,
+  keeps the rule on the machine where the session runs, since that is where its approvals are
+  answered. That machine makes the rule from its own copy of the request, never from what the
+  other one sends, so the never list and the limits on rules hold there too.
+
 ## Leaving, removal and coming back
 
 A teammate who leaves, or whom an admin removes, is out of the team from that op on: their
@@ -319,6 +353,21 @@ already outside the sandbox: a process running as your user can forge an answer 
 for approval keeps the agent inside the sandbox until you say yes; Approve for me trusts
 the vendor's reviewer model; Full access trusts your choice. Request text is model output:
 control characters are stripped, otherwise the command, path or URL is shown exactly.
+
+A rule you keep with `a`, and the defaults, answer for you in the relay; they are not a
+sandbox either. What a rule can do: allow one program and subcommand with any arguments
+(`npm test`), one exact command, edits in the session's own workspace in turns that edit, one
+file outside the project, or pages on one host, in one project or all of them. What it
+cannot do: allow anything on the never list, joined or wrapped commands, removals, `sudo`,
+inline code, a secret file, `.git`, an MCP tool or a web search; leave the sandbox unless it
+was kept from a request that left it; or apply in a session a teammate started. A session
+your other computer started is yours, so they apply there, from that machine's own rules. Where a
+vendor runs commands with no sandbox (Antigravity, Grok Build, Claude Code where its sandbox
+cannot start), every command counts as leaving it. Arguments are checked each time only for
+secrets, ELU Code's own files and git options that run a program or write a file, so `npm
+test` allows `npm test -- anything else`, and a script the rule allows runs whatever the
+project put in it. The read and git defaults answer a command only inside the sandbox. Rules live in your personal directory, mode 0600, and
+are read again on every request; a file that cannot be read allows nothing.
 
 ## Configuration, MCP servers and hooks
 

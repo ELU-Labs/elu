@@ -23,6 +23,8 @@ import { RETAIN_MS, getRecord, prune } from '../lib/peer/taskstore.mjs';
 import { autoDrafts, createAsk, getAsk, sendDraft } from '../lib/peer/asks.mjs';
 import { FLIGHT_COUNT, FLIGHT_MAX, KEPT_MAX, KEPT_PEER_MAX, MESSAGE_MAX, PICTURE_MAX, PICTURES_MAX, PIECE, attachPictures, pictureMethods, picturesForRun, sizeText, stagedPictures, sweepPictures, unsentLine } from '../lib/peer/pictures.mjs';
 import * as peer from '../lib/peer/index.mjs';
+import { sessionGoal, tasks, teammateText } from '../lib/state.mjs';
+import { repository } from '../lib/git.mjs';
 import { teamPanes, visible } from '../lib/terminal-visuals.mjs';
 
 const require = createRequire(import.meta.url);
@@ -460,4 +462,11 @@ test('a picture typed into a message reaches the teammate whole, shows on both s
   // The copy made for the run goes when the run ends; the kept one stays with the record.
   await until(() => !fs.existsSync(folder), 'the run\'s copy to be removed');
   assert.ok(fs.existsSync(path.join(kept, '1.png')));
+  // Sara's session shows Ana's words alone: the note on where the picture was saved is for the model.
+  const session = withHome(sara.home, () => tasks(repository(root)).find(row => row.origin?.peer === ana.identity.key));
+  const first = session.messages.find(row => row.peer);
+  assert.match(first.context, /Pictures sent with this message, saved as files on this machine:/);
+  for (const shown of [teammateText(first), sessionGoal(session)]) {
+    assert.match(shown, /What is wrong in .+ here\?/); assert.doesNotMatch(shown, /Pictures sent|saved as files|elu-code-pictures|1\.png/);
+  }
 });
