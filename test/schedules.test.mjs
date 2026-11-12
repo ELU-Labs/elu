@@ -46,9 +46,19 @@ test('/schedule reads the longest start that is a time, and the rest is the mess
   assert.deepEqual(read('mon,thu 14:30 5 tests to fix'), ['every Mon, Thu 14:30', 'mon,thu 14:30', '5 tests to fix'], 'a number after the time stays in the message');
   assert.deepEqual(read('every 2h'), ['every 2h', 'every 2h', ''], 'a time alone waits for the message');
   assert.deepEqual(read("in 5m don't stop\nsecond line"), ['once Mon Nov 9 13:35', 'in 5m', "don't stop\nsecond line"], 'the message is kept as typed');
+  // A message that starts with at or on keeps it: the time does not take that word.
+  assert.deepEqual(read('in 1h at least check the build'), ['once Mon Nov 9 14:30', 'in 1h', 'at least check the build']);
+  assert.deepEqual(read('daily 9:00 on main, run the tests'), ['daily 9:00', 'daily 9:00', 'on main, run the tests']);
+  assert.deepEqual(read('in 2h on second thought, skip'), ['once Mon Nov 9 15:30', 'in 2h', 'on second thought, skip']);
+  assert.deepEqual(read('every day at 9:30pm wrap up'), ['daily 21:30', 'every day at 9:30pm', 'wrap up'], 'at inside the time still reads');
+  // An hour alone is a time only with am or pm, or after the days.
+  assert.deepEqual(read('9am triage'), ['daily 9:00', '9am', 'triage']); assert.deepEqual(read('daily 9 triage'), ['daily 9:00', 'daily 9', 'triage']);
   // No start reads as a time: the forms that work are named. A time that is refused says why.
   assert.throws(() => splitWhen('check the build', now), { message: 'Could not read when it runs. Start with when it runs, such as in 30m, every 2h, daily 9:00, weekdays 9am or tomorrow 15:00, then your message.' });
   assert.throws(() => splitWhen('now check the build', now), /Could not read when it runs\./);
+  for (const text of ['5 tests to fix', 'at 5 tests to fix']) assert.throws(() => splitWhen(text, now), { message: /^Could not read when it runs\./ }, text);
+  // A time in two parts would be read as its first part, with the rest put in the message.
+  for (const text of ['in 1h 30m later', 'in 1 hour 30 minutes check', 'every 1h 30m ping']) assert.throws(() => splitWhen(text, now), { message: 'Use one unit for the time, such as in 90m, then your message.' }, text);
   assert.throws(() => splitWhen('every 5m ping', now), /Choose every 15m to every 7d\./);
   assert.throws(() => splitWhen('daily triage', now), /Add a time, for example daily 9:00\./);
   assert.throws(() => splitWhen('today 9:00 report', now), /That time has passed/);
@@ -60,12 +70,14 @@ test('a schedule keeps its bots and branch and each run starts with them; an old
   fs.mkdirSync(path.join(dir, 'personal', 'elu-code'), { recursive: true });
   fs.writeFileSync(path.join(dir, 'personal', 'elu-code', 'schedules.json'), JSON.stringify({ version: 1, schedules: [{ id: 'schedule-0a1b2c3d', root: p.root, project: 'old', goal: 'Old schedule', when: parseWhen('every 1h', at(9, 8)), enabled: true, createdAt: at(9, 8).toISOString(), nextRunAt: at(9, 9).toISOString(), lastRunAt: null, lastRequestId: null, lastTaskId: null, runs: 0, note: null, permissions: null }] }));
   saveBot({ name: 'nightly', instructions: 'Check the nightly build.' });
-  const row = saveSchedule({ root: p.root, goal: 'Check the build', when: parseWhen('every 1h', at(9, 8)), permissions: 'auto', bots: ['reviewer', 'nightly'], place: { kind: 'branch', branch: 'nightly-checks' } }, at(9, 8));
+  const row = saveSchedule({ root: p.root, goal: 'Check the build', when: parseWhen('in 2m', at(9, 8)), permissions: 'auto', bots: ['reviewer', 'nightly'], place: { kind: 'branch', branch: 'nightly-checks' } }, at(9, 8));
   assert.deepEqual([row.bots, row.place], [['reviewer', 'nightly'], { kind: 'branch', branch: 'nightly-checks' }]);
   assert.deepEqual(listSchedules().find(value => value.id === row.id).bots, ['reviewer', 'nightly']);
   // A new worktree is what every run gets anyway, so it is not stored. Your checkout as it is needs Full access, which a schedule never has.
   assert.equal('place' in saveSchedule({ root: p.root, goal: 'Plain', when: parseWhen('every 1h', at(9, 8)), bots: [], place: { kind: 'worktree' } }, at(9, 8)), false);
   assert.throws(() => saveSchedule({ root: p.root, goal: 'Here', when: parseWhen('every 1h', at(9, 8)), place: { kind: 'here' } }, at(9, 8)), /Here needs Full access/);
+  // Worktrees stay after a run, and a branch is checked out in one, so only a one-time schedule keeps a branch.
+  assert.throws(() => saveSchedule({ root: p.root, goal: 'Nightly', when: parseWhen('every 1h', at(9, 8)), place: { kind: 'branch', branch: 'nightly-checks' } }, at(9, 8)), { message: 'A branch is checked out in one place at a time, so a repeating schedule runs in a new worktree. Set Runs in to New worktree, or schedule it once.' });
   assert.throws(() => saveSchedule({ root: p.root, goal: 'Gone', when: parseWhen('every 1h', at(9, 8)), bots: ['nobody'] }, at(9, 8)), /There is no bot named nobody/);
   assert.equal(listSchedules().length, 3, 'the older schedule loads beside them');
   assert.equal(runDue(at(9, 10), { start }), 3);
@@ -77,6 +89,12 @@ test('a schedule keeps its bots and branch and each run starts with them; an old
   for (const request of requests) updateRequest(p.root, request.id, { state: 'done' });
   removeBot('nightly');
   assert.equal(runScheduleNow(row.id, at(9, 11), { start }), true);
+  assert.deepEqual(pendingRequests(p.root).find(request => request.goal === 'Check the build' && request.state === 'queued').bots, ['reviewer']);
+  // A bot with its own schedule is kept by the schedule but left out of its runs, so no run starts that bot's schedule.
+  for (const request of pendingRequests(p.root)) updateRequest(p.root, request.id, { state: 'done' });
+  saveBot({ name: 'nightly', instructions: 'Check the nightly build.', schedule: 'every 1h' });
+  assert.equal(runScheduleNow(row.id, at(9, 12), { start }), true);
+  assert.deepEqual(listSchedules().find(value => value.id === row.id).bots, ['reviewer', 'nightly']);
   assert.deepEqual(pendingRequests(p.root).find(request => request.goal === 'Check the build' && request.state === 'queued').bots, ['reviewer']);
 });
 

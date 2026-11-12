@@ -2147,6 +2147,28 @@ test('/schedule offers times in the command list, saves a time and message typed
   v.input.write('\r'); await until(() => /^› Write the message after the time\. Each run starts a new session in sample app with your message, Opus,/.test(status()), 'the project named');
 });
 
+test('/schedule typed in a session saves that session\'s bots, and the form keeps its draft', { timeout: 30000 }, async t => {
+  const p = setup(t), loginItem = { install: () => ({ installed: true }), uninstall: () => ({ removed: true }) };
+  const { repo } = liveTask(p.root, { id: '4', goal: 'Trim coupon codes', state: 'answered' });
+  saveTask(repo, { ...readTask(repo, '4'), bots: ['reviewer', 'qa'] });
+  const v = await view(t, { repo: p.repo, loginItem }), panels = v.current.panels, status = () => panels.status.getText().replace(/\s+/g, ' ');
+  const saved = goal => listSchedules().find(row => row.goal === goal);
+  await wide(v);
+  // Something typed in + New session, and not sent.
+  await selectRow(v, /\+ New session/); await until(() => v.current.session === 'new' && !panels.compose.hidden, 'the form');
+  panels.ask.setValue('Keep this draft');
+  await openTask(v, /Trim coupon codes/); await until(() => /with @reviewer @qa $/.test(panels.ask._label.getText()), 'the session names its bots');
+  await send(v, '/schedule in 1h check'); await until(() => saved('check'), 'saved');
+  assert.deepEqual(saved('check').bots, ['reviewer', 'qa']);
+  assert.match(status(), /Ask for approval and @reviewer @qa\. It does not see this chat\.$/);
+  // The schedule's message came with the command, so the form's draft is still there.
+  await selectRow(v, /\+ New session/); await until(() => v.current.session === 'new' && panels.ask.getValue() === 'Keep this draft', 'the draft is still there');
+  // A bot with its own schedule would start it in every session a run makes, so the runs leave it out, and the form says so.
+  await send(v, '/bots add elu'); await until(() => /Bots\s+@reviewer @elu/.test(composeText(v)), 'elu in the form');
+  await send(v, '/schedule every 2h'); await until(() => /When\s+every 2h/.test(composeText(v)), 'the time is set');
+  assert.match(panels.composeHint.getContent().replace(/\s+/g, ' '), /Ask for approval and @reviewer\. @elu runs on its own schedule, so it is left out\. It does not see this chat\./);
+});
+
 test('the first start in a new folder asks for a project name and saves it there', async t => {
   const folder = temp({ after: close => resources(t).files.push(close) }), fake = fakeClis(folder), root = path.join(folder, 'shop');
   environment(t, { ...fake.env, XDG_CONFIG_HOME: path.join(folder, 'personal'), NO_COLOR: '1' });

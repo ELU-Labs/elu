@@ -11,6 +11,8 @@ import { pendingRequests, removeRequest, updateRequest, takeRequest } from '../l
 import { Conductor, enqueue, sendCommand, saveConductorSettings, conductorStatus, retryRequest } from '../lib/conductor.mjs';
 import { boardRows, barCells } from '../lib/board.mjs';
 import { saveSchedule, runScheduleNow, parseWhen } from '../lib/schedules.mjs';
+import { saveBot } from '../lib/bots.mjs';
+import { runBotSchedules } from '../lib/bot-schedules.mjs';
 
 // A test's conductors, stopped before its folder is removed. The hooks of a test run in the
 // order they were registered and the first one that throws ends them, so setup registers
@@ -64,6 +66,21 @@ test('a session that a schedule starts has the bots the schedule kept', async t 
   runScheduleNow(row.id, new Date(), { start: () => true }); conduct(t);
   await until(() => projectSnapshot(p.repo).tasks[0]?.state === 'answered', 'the scheduled run');
   assert.deepEqual(projectSnapshot(p.repo).tasks[0].bots, ['reviewer', 'qa']);
+});
+
+test('a bot with its own schedule is left out of the sessions a schedule starts, so its schedule never runs there', async t => {
+  const p = setup(t);
+  saveBot({ name: 'nightly', instructions: 'Check the nightly build.', schedule: 'every 1h' });
+  const row = saveSchedule({ root: p.root, goal: 'Check the build', when: parseWhen('every 1h'), bots: ['reviewer', 'nightly'] });
+  conduct(t);
+  const runs = () => pendingRequests(p.root).filter(value => value.scheduleId === row.id);
+  for (const count of [1, 2]) {
+    runScheduleNow(row.id, new Date(), { start: () => true });
+    await until(() => runs().length === count && runs().every(value => value.state === 'done') && projectSnapshot(p.repo).tasks.length === count, `run ${count}`);
+  }
+  assert.deepEqual(projectSnapshot(p.repo).tasks.map(task => task.bots), [['reviewer'], ['reviewer']]);
+  assert.equal(runBotSchedules(new Date(), { start: () => true }), 0);
+  assert.equal(pendingRequests(p.root).filter(value => value.bot === 'nightly').length, 0, 'nothing queued for the bot in those sessions');
 });
 
 test('a queued message runs in the background and its request records the chat', async t => {
