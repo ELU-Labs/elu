@@ -3152,15 +3152,17 @@ test('a session a teammate\'s message started shows their own words under their 
   const DETAILS = 'Session details: diff / checks / review / log', flat = text => text.replace(/\s+/g, ' ').trim();
   await send(v, '/details'); await until(() => modal(v, DETAILS), 'the details');
   assert.ok(flat(dialogText(v, DETAILS)).startsWith(`${WORDS} State: answered`), dialogText(v, DETAILS)); assert.doesNotMatch(dialogText(v, DETAILS), /Work on the handoff/);
+  // A closed dialog gives the focus back on the next turn of the loop; the keys below go to the list after that.
+  const settled = () => new Promise(resolve => setImmediate(resolve)), onList = async (pattern, keys) => { await settled(); await selectRow(v, pattern); await until(() => v.current.screen.focused === v.current.panels.board && keys.test(v.current.panels.keys.getText()), `${keys} in the key bar`); };
   await dialog(v, DETAILS, '');
   // a on its row opens the follow-up box, which names their words.
   const answer = () => v.current.screen.children.find(child => !child.destroyed && /^Answer "/.test(child.options?.label?.trim() ?? ''));
-  await selectRow(v, /✓ Get the issues…/); v.input.write('a'); await until(answer, 'the follow-up box');
+  await onList(/✓ Get the issues…/, /a follow up/); v.input.write('a'); await until(answer, 'the follow-up box').catch(error => { throw new Error(`${error.message}: ${v.current.panels.status.getText()}`); });
   const label = answer().options.label.trim();
   assert.ok(flat(dialogText(v, label)).includes(WORDS), dialogText(v, label)); assert.doesNotMatch(dialogText(v, label), /Work on the handoff/);
   await dialog(v, label, '');
   // r on a blocked one says whose message it is and sends nothing.
-  await selectRow(v, /✗ Fix the build/); v.input.write('r');
+  await onList(/✗ Fix the build/, /r retry/); v.input.write('r');
   await until(() => /That message is from @sara\. Ask them to send it again, or write your own in the session\./.test(v.current.panels.status.getText()), 'the retry is refused');
   assert.deepEqual(pendingRequests(p.root), []); assert.equal(readTask(p.repo, '7').messages.length, 1);
 });
