@@ -238,6 +238,25 @@ What others learn:
   joiner's, so all they would get is the joiner's questions. The joiner shares a project
   only with `/share` or `elu share`, and `elu peers` shows each member's fingerprint.
 
+## Your other computers
+
+Marking another machine as yours (`/mine`, `elu mine`, or an invite for "Another computer of
+mine") lets it start sessions on this machine as if you typed them here: in your default or
+chosen mode, Full access included, with your bots and your MCP servers, and without the
+limits teammates get. Treat it like a login to this machine.
+
+- A machine counts as yours only when both machines marked each other, and only while they
+  share a team. The mark is kept on each machine and keyed by its peer key. Either side ends
+  it with `/mine remove @name`; leaving or being removed from the last shared team ends it too.
+- Only such a machine can start, continue, stop or answer a session here, or read its events.
+  Everyone else, teammates included, is refused, and is never sent a session's events.
+- The never list, the sandbox, approvals and this machine's limits still apply to those
+  sessions, and push, merge and deploy stay blocked as they are for your own.
+- An invite code for another computer of yours works once, for 1 hour unless you choose
+  otherwise. Anyone who uses it first becomes one of your computers, so type it on the other
+  machine yourself and check `/mine` afterwards; `elu peers` shows each machine's fingerprint.
+- An approval waits on both machines. The first answer, from either one, is the one that counts.
+
 ## Leaving, removal and coming back
 
 A teammate who leaves, or whom an admin removes, is out of the team from that op on: their

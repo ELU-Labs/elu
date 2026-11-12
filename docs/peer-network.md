@@ -137,6 +137,33 @@ Task state mapping:
 | run failed | FAILED |
 | asker cancelled | CANCELED |
 
+## Your other computers
+
+Two machines of the same owner (a laptop and a devbox, say) can each start and watch sessions on the other. Each is an ordinary member of a team the two share; what makes them the owner's is a mark on both sides.
+
+- Each machine keeps `peer/mine.json` = `{key: {at, theirs, theirsAt}}`. `at` is when this machine marked `key` as its own (`/mine @name`, `elu mine @NAME`). `theirs` is what `key` last said about this machine. A key is mine only when `at` is set, `theirs` is true, and the two still share a team. `/mine remove @name` (or `elu mine remove @NAME`) clears `at`. Leaving, or being removed from, the last team the two share drops the row on the next roster check.
+- An invite made with `mine: true` (`/invite`, then "Another computer of mine", or `elu invite --mine`; good for 1 hour by default) marks the joiner on the inviter as the admit is written. The `elu.invite.prove` result then carries `mine: true`, and the joiner marks the inviter. Each side's first `elu.mine` after that completes the pair.
+- `hello` carries `remote: 1`. A build without it is older: it is never sent the methods below, and every action toward it says "@name needs to update ELU Code to run sessions from here." Nothing falls back to an ask.
+
+Wire, on the existing connection:
+
+| Method | Direction | Params | Result |
+|---|---|---|---|
+| `elu.mine` (notification) | both | `{mine: boolean}`: whether the sender marks the receiver as its own. Sent on every admitted connection with `remote: 1`, and on each change. | none |
+| `elu.remote.start` | viewer to host | `{id, text, permissions, place, model, bots}` | `{id, project}` |
+| `elu.remote.send` | viewer to host | `{id, text}` (a leading `@bot` writes to that bot of the host's) | `{id}` |
+| `elu.remote.stop` | viewer to host | `{id}` | `{stopping}` |
+| `elu.remote.answer` | viewer to host | `{id, approval, decision: "allow"\|"deny"}` | `{answered}`: false when it was already answered |
+| `elu.remote.task` | viewer to host | `{id, decision: "approve"\|"reject"}` | `{answered}` |
+| `elu.remote.since` | viewer to host | `{id, after}` | `{id, events, more, last, first}` |
+| `elu.remote.events` (notification) | host to viewer | `{items: [{id, events}]}` | none |
+
+- Every request and notification above except `elu.mine` is refused with "Only your own computers can do this." unless the sender's key is mine on the receiver, and the host sends events only to such a key. An `id` (a UUID the viewer chose) belongs to the key that started it; to any other key it is "That session is not on this computer."
+- `start` runs the message as the host owner's own new session: `permissions` is `ask`, `auto` or `full`, `place` is as for a local session, `model` is `{vendor, model}` or null, and `bots` are names of the host's own bots (one it lacks is refused). Teammate rules, Auto/Manual and teammate caps do not apply; the never list, the sandbox and the host's limits do. It runs in the registered `root` of the first team the two share that has one (`/access`); with none it is refused with what to do on the host. The task's `origin` is `{kind: "mine", mine: true, machine, name, remoteId}`.
+- Events are numbered per session from 1 and kept on the host (the newest 4000) in `peer/remote/host/<id>.jsonl`. Each is `{seq, at, type, ...}`, with `type` one of `state` (`state, title, mode, place, bots, activeRole, error, question, choices`), `entry` (a chat message: `role, at, text, lead?, bot?, failed?, quiet?, shell?`), `step` (`at, text`), `approvals` (`list: [{id, role, summary, at}]`, all that wait now), `plan` (the shared Task, or null) and `diff` (`summary, patch`, the patch cut at 60,000 characters). A notification stays under 400 KB.
+- The viewer folds them, in order, into `peer/remote/view/<id>.json`. On a gap, and on each new connection, it asks `elu.remote.since` from its last `seq`, a few sessions at a time. When `first` is past its `seq`, the older events are gone and it continues from `first`.
+- An approval answered on either machine is answered once: the approval file takes the first answer, and the next `approvals` event drops it on the viewer.
+
 ## Pictures
 
 A message you type to a teammate or a channel takes along the pictures it names.
