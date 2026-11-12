@@ -229,16 +229,21 @@ test('elu update stops an idle conductor and leaves one with sessions running to
   fs.writeFileSync(path.join(dir, 'conductor', 'state.json'), JSON.stringify({ pid: busy.pid, stopped: false, heartbeatAt: new Date().toISOString(), runs: [{ root: '/x', taskId: '1' }] }));
   assert.equal(conductorAlive(), true);
   const kept = await s.update({ env });
-  assert.equal(kept.message, 'Updated ELU Code 3.2.1 → 3.3.0. Open it again with elu.\n1 session is still running on 3.2.1. New sessions start on the new version once it ends.');
+  assert.equal(kept.message, 'Updated ELU Code 3.2.1 → 3.3.0. Open it again with elu.\n1 session is still running or queued on 3.2.1. New sessions start on the new version once it ends.');
   assert.equal(busy.exitCode, null);
   assert.equal(fs.existsSync(path.join(dir, 'conductor', 'commands')) ? fs.readdirSync(path.join(dir, 'conductor', 'commands')).length : 0, 0);
+  // Sessions only queued keep it too.
+  fs.writeFileSync(path.join(dir, 'conductor', 'state.json'), JSON.stringify({ pid: busy.pid, stopped: false, heartbeatAt: new Date().toISOString(), runs: [], queued: 2 }));
+  r.state.body = { version: '3.3.1' };
+  assert.equal((await s.update({ env })).message, 'Updated ELU Code 3.3.0 → 3.3.1. Open it again with elu.\n2 sessions are still running or queued on 3.3.0. New sessions start on the new version once they end.');
+  assert.equal(busy.exitCode, null);
   busy.kill('SIGKILL'); await gone; fs.rmSync(path.join(dir, 'conductor.lock'));
   // An idle conductor, the real one: stopped, and gone before elu update returns.
   const conductor = spawn(process.execPath, [CLI, 'conductor', '--daemon'], { cwd: s.home, env: { ...process.env, HOME: s.home, XDG_CONFIG_HOME: path.dirname(dir) }, stdio: 'ignore' }), ended = new Promise(resolve => conductor.once('exit', resolve));
   t.after(() => { conductor.kill('SIGKILL'); return ended; });
   await until(() => conductorAlive(), 'the conductor running');
   r.state.body = { version: '3.4.0' };
-  assert.equal((await s.update({ env })).message, 'Updated ELU Code 3.3.0 → 3.4.0. Open it again with elu.');
+  assert.equal((await s.update({ env })).message, 'Updated ELU Code 3.3.1 → 3.4.0. Open it again with elu.');
   assert.equal(conductorAlive(), false);
   await ended;
 });
