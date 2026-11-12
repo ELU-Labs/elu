@@ -1459,7 +1459,7 @@ test('Kanban shows every session teammates run in the same repository, with who 
   const p = project(later(t)); environment(t, p.parent);
   const peer = fakePeer();
   let people = [{ peer: SARA, name: 'sara', box: 'sara-box', online: true, heardAt: ago(0), sessions: [
-    teamSession(), teamSession({ id: '1123456789abcdef', title: 'Which tax rate applies?', column: 'needs', by: 'li', at: ago(3) }),
+    teamSession(), teamSession({ id: '1123456789abcdef', title: 'Which tax rate?', column: 'needs', by: 'li', at: ago(3) }),
     teamSession({ repoId: API, id: '2123456789abcdef', title: 'Document the v2 endpoint', column: 'done', at: ago(20) }) ] }];
   // The Task of a session they also told goes with its card, as one.
   const tasks = [{ peer: SARA, name: 'sara', box: 'sara-box', online: true, heardAt: ago(0), tasks: [teamTask({ repoId: WEB, id: 't-cart' })] }];
@@ -1470,7 +1470,7 @@ test('Kanban shows every session teammates run in the same repository, with who 
   const column = index => panels.kanbanLists[index].items.map(item => plainItem(item).trimEnd()), label = index => panels.kanbanBoxes[index]._label.getText().trim();
   await send(v, '/kanban'); await until(() => v.current.view === 'kanban' && column(1).length === 1 && column(2).length === 1, 'the teammates\' sessions');
   // The board with the latest work leads. Each card says who started it and on which machine; the Task is not a second card.
-  assert.match(column(1)[0], /^Fix the cart total  @sara · sara-box/); assert.match(column(2)[0], /^Which tax rate applies\?  @li · sara-box/);
+  assert.match(column(1)[0], /^Fix the cart total  @sara · sara-box/); assert.match(column(2)[0], /^Which tax rate\?  @li · sara-box/);
   assert.deepEqual([label(0), label(1), label(2), label(3)], ['To do 0', 'In progress 1', 'Needs you 1', 'Done 0']);
   await until(() => !panels.kanbanPick.hidden && /Board: acme\/web ▾/.test(panels.kanbanPick.getText()), 'the board picker');
   // Read-only: Enter reads it, no key moves it.
