@@ -1144,7 +1144,7 @@ test('arrows move between the tabs, the session list, the chat and the message b
   assert.match(panels.keys.getText(), /enter new session {2}↑↓ choose/);
   await press('\x1b[B', () => focused() === panels.board && /Add a retry budget/.test(cursor(v)), 'Down reaches the blocked request');
   // Its chat shows beside the list at once, and the list keeps the focus.
-  await until(() => v.current.session === 'request' && /Saved request/.test(panels.chat.getText()) && /enter open {2}r retry {2}s cancel {2}n new session/.test(panels.keys.getText()), 'the request beside the list');
+  await until(() => v.current.session === 'request' && /Saved request/.test(panels.chat.getText()) && /enter open {2}r retry {2}c remove {2}n new session/.test(panels.keys.getText()), 'the request beside the list');
   assert.equal(panels.ask.getValue(), '', 'only Enter brings the text back'); assert.equal(focused(), panels.board);
   await press('\x1b[A', () => /\+ New session/.test(cursor(v)) && v.current.session === 'new', 'Up returns to + New session, and the form shows');
   await press('\x1b[A', () => focused() === panels.tabs[0], 'Up from the first row reaches the tabs');
@@ -2764,7 +2764,7 @@ test('a teammate message is approved as your own session, worked on in a mode pi
   assert.deepEqual(peer.sent.find(c => c.type === 'work' && c.id === 'in-2'), { type: 'work', id: 'in-2', permissions: 'auto', place: { kind: 'worktree' }, folders: [fs.realpathSync(evals)], root: p.repo.root });
   await until(() => /Accepted @li\. It runs as your session; the reply goes back to this thread\./.test(status()), 'accept line for a task');
   await open('sara'); v.input.write('n');
-  await until(() => peer.sent.some(c => c.type === 'discard' && c.id === 'in-1') && /Declined @sara\./.test(status()), 'n declines');
+  await until(() => peer.sent.some(c => c.type === 'discard' && c.id === 'in-1') && /Declined @sara's message\./.test(status()), 'n declines');
   // Enter reads a message; y is preselected, so Enter again approves it. w on the list opens nothing.
   const field = title => modal(v, title).children.find(child => child.type === 'textbox');
   await open('li'); v.input.write('\r'); await until(() => modal(v, 'Thread with @li'), 'task dialog');
@@ -3387,4 +3387,130 @@ test('the app open in the home folder: y on a teammate\'s new task asks the home
   await until(() => queued()?.state === 'done', 'it ran', 30000);
   const session = readTask(p.homeRepo, queued().taskId);
   assert.equal(session.homeAllowed, true); assert.equal(session.worktree, p.home); assert.equal(session.state, 'answered');
+});
+
+// The owner's list on 2026-11-12, as his files had it: session 3 runs his newest message, two
+// older "I approve" were refused before he updated, and a teammate's question waits for him.
+const REFUSED = "A teammate's message never runs in your home folder. Open ELU Code in the project folder, then approve again.";
+function ownerState(p) {
+  const began = ago(11 * 3600), latest = ago(60);
+  liveTask(p.root, { id: '3', goal: 'ELU Issues', state: 'ready' });
+  saveTask(p.repo, { ...readTask(p.repo, '3'), state: 'running', activeRole: 'lead', activeSince: latest, owner: { pid: process.pid, identity: processIdentity(process.pid) }, messages: [{ at: began, text: 'ELU Issues' }, { at: latest, text: 'you have my approval' }] });
+  const blocked = createdAt => saveRequest(p.root, 'I approve', null, { state: 'blocked', reason: REFUSED, priority: 0, continuationTaskId: '3', taskId: null, attempts: 0, notBefore: null, queuedAt: createdAt, createdAt });
+  const old = [blocked(ago(10 * 3600 + 170)), blocked(ago(10 * 3600))];
+  const newest = saveRequest(p.root, 'you have my approval', null, { state: 'running', priority: 0, continuationTaskId: '3', taskId: '3', attempts: 0, notBefore: null, queuedAt: latest, createdAt: latest });
+  return { old, newest };
+}
+const ownerAsk = () => ({ id: 'in-ali', kind: 'incoming', peer: KEYS.li, name: 'ali', project: null, text: 'testing if u get my messages', at: ago(10 * 3600 + 100), state: 'submitted', threadId: 'th-ali', request: 'ask' });
+
+test("the owner's list: his one running session is one row, its spent messages leave the queue, and n in the pane beside the list declines the teammate's question", { timeout: 40000 }, async t => {
+  const p = setup(t), { newest } = ownerState(p);
+  const peer = fakePeer({ items: [ownerAsk()] }), v = await view(t, { repo: p.repo, peer }), panels = v.current.panels, status = () => panels.status.getText();
+  await wide(v);
+  await until(() => rows(v).some(row => /@ali question/.test(row)) && rows(v).some(row => /ELU Issues/.test(row)), 'his rows');
+  // The first load takes the two old messages out of the queue for good; nothing else is touched.
+  await until(() => pendingRequests(p.root).map(row => row.id).join() === newest.id, 'the spent messages leave the queue');
+  const list = rows(v).join('\n');
+  assert.match(list, /NEEDS YOU 1 /); assert.match(list, /RUNNING 1 /); assert.doesNotMatch(list, /I approve|NEEDS YOU [2-9]/);
+  assert.equal(rows(v).filter(row => /ELU Issues/.test(row)).length, 1, 'one session, one row');
+  // The question beside the list names its keys, and they work there: n declines it and starts nothing.
+  await selectRow(v, /@ali question/);
+  await until(() => /y accept · n decline · enter read/.test(panels.chat.getText()), 'its keys beside the list');
+  panels.chat.focus();
+  await until(() => /y accept {2}n decline {2}↑↓ scroll {2}esc sessions {2}i type/.test(panels.keys.getText()), 'the same keys while the pane has the focus');
+  v.input.write('n');
+  await until(() => peer.sent.some(c => c.type === 'discard' && c.id === 'in-ali') && /Declined @ali's message\./.test(status()), 'n declines it from the pane');
+  assert.equal(panels.ask.getValue(), ''); assert.deepEqual(pendingRequests(p.root).map(row => row.goal), ['you have my approval'], 'no session was started');
+  assert.deepEqual(projectSnapshot(p.repo).tasks.map(task => task.id), ['3']);
+  // y works there too.
+  v.input.write('y');
+  await until(() => peer.sent.some(c => c.type === 'approve' && c.id === 'in-ali'), 'y accepts it from the pane');
+});
+
+test('c takes away whatever the list shows: a blocked message is removed, a teammate\'s message is declined, and a session with a message that did not run is archived with it', { timeout: 40000 }, async t => {
+  const p = setup(t), status = () => v.current.panels.status.getText();
+  saveRequest(p.root, 'Add a retry budget', null, { state: 'blocked', reason: 'Project checks are still needed.' });
+  liveTask(p.root, { id: '4', goal: 'Release notes', state: 'answered' });
+  saveTask(p.repo, { ...readTask(p.repo, '4'), messages: [{ at: ago(600), text: 'Release notes' }] });
+  const held = saveRequest(p.root, 'Add the migration step', null, { state: 'blocked', reason: 'The model was not available.', priority: 0, continuationTaskId: '4', taskId: null, attempts: 0, notBefore: null, queuedAt: ago(60), createdAt: ago(60) });
+  const items = [{ id: 'in-1', kind: 'incoming', peer: KEYS.sara, name: 'sara', project: null, text: 'Can you look at the flaky test?', at: ago(30), state: 'submitted', threadId: 'th-1', request: 'ask' }];
+  const peer = fakePeer({ items }), v = await view(t, { repo: p.repo, peer }), panels = v.current.panels;
+  await wide(v);
+  await until(() => rows(v).some(row => /Add a retry budget/.test(row)) && rows(v).some(row => /Release notes/.test(row)) && rows(v).some(row => /@sara question/.test(row)), 'the rows');
+  // The session and its message are one row, under Needs you, with the keys that act on the message.
+  assert.equal(rows(v).filter(row => /Add the migration step|Release notes/.test(row)).length, 1);
+  await selectRow(v, /Release notes/);
+  await until(() => /enter open {2}r retry {2}s remove {2}e rename {2}c archive/.test(panels.keys.getText()), 'its keys');
+  await until(() => /You \(blocked\)[^]*Add the migration step[^]*The model was not available\. In Sessions, r sends it again and s removes it\./.test(panels.chat.getText().replace(/\n┃ /g, ' ').replace(/\s+/g, ' ')), 'its chat says why');
+  // A blocked message of a new session: c removes it.
+  await selectRow(v, /Add a retry budget/);
+  await until(() => /enter open {2}r retry {2}c remove/.test(panels.keys.getText()), 'c in its keys');
+  v.input.write('c');
+  await until(() => /^Removed\./.test(status()) && !pendingRequests(p.root).some(row => row.goal === 'Add a retry budget'), 'c removes it');
+  // A teammate's message: c declines it, and they are told.
+  await selectRow(v, /@sara question/); v.input.write('c');
+  await until(() => peer.sent.some(c => c.type === 'discard' && c.id === 'in-1') && /Declined @sara's message\./.test(status()), 'c declines it');
+  assert.doesNotMatch(status(), /c archives a session/);
+  // The session with its message: c archives it, and its message goes with it.
+  await selectRow(v, /Release notes/); v.input.write('c');
+  await until(() => /Archived "Release notes"/.test(status()) && !pendingRequests(p.root).some(row => row.id === held.id), 'c archives the session and drops its message');
+  assert.ok(projectSnapshot(p.repo).closed.includes('4'));
+  await until(() => !rows(v).some(row => /Release notes|Add the migration step/.test(row)), 'neither is listed');
+});
+
+test('s on a session removes its message that did not run, and the session is listed as it was', { timeout: 30000 }, async t => {
+  const p = setup(t), v = await view(t, { repo: p.repo }), panels = v.current.panels;
+  liveTask(p.root, { id: '4', goal: 'Release notes', state: 'answered' });
+  saveTask(p.repo, { ...readTask(p.repo, '4'), messages: [{ at: ago(600), text: 'Release notes' }] });
+  saveRequest(p.root, 'Add the migration step', null, { state: 'blocked', reason: 'The model was not available.', priority: 0, continuationTaskId: '4', taskId: null, attempts: 0, notBefore: null, queuedAt: ago(60), createdAt: ago(60) });
+  await wide(v);
+  await until(() => rows(v).some(row => /✗ Release notes/.test(row)), 'the session under Needs you, blocked');
+  await selectRow(v, /Release notes/); v.input.write('s');
+  await until(() => /^Removed\./.test(panels.status.getText()) && pendingRequests(p.root).length === 0, 's removes the message');
+  await until(() => rows(v).some(row => /✓ Release notes/.test(row)) && !/NEEDS YOU/.test(rows(v).join('\n')), 'the session is answered again, under Recent');
+});
+
+test('y or n alone in the message box answers the selected item, and never starts a session', { timeout: 40000 }, async t => {
+  const p = setup(t), status = () => v.current.panels.status.getText();
+  const items = [{ id: 'in-1', kind: 'incoming', peer: KEYS.sara, name: 'sara', project: null, text: 'Can you look at the flaky test?', at: ago(30), state: 'submitted', threadId: 'th-1', request: 'ask' }];
+  saveRequest(p.root, 'Add a retry budget', null, { state: 'blocked', reason: 'Project checks are still needed.' });
+  const peer = fakePeer({ items }), v = await view(t, { repo: p.repo, peer }), panels = v.current.panels;
+  await wide(v);
+  const requests = () => pendingRequests(p.root).map(row => row.goal).sort().join('|');
+  // On a teammate's question, N sent alone declines it.
+  await selectRow(v, /@sara question/);
+  await send(v, ' N ');
+  await until(() => peer.sent.some(c => c.type === 'discard' && c.id === 'in-1') && /Declined @sara's message\./.test(status()), 'a lone N declines');
+  assert.equal(panels.ask.getValue(), ''); assert.equal(requests(), 'Add a retry budget'); assert.deepEqual(projectSnapshot(p.repo).tasks, []);
+  await send(v, 'y');
+  await until(() => peer.sent.some(c => c.type === 'approve' && c.id === 'in-1'), 'a lone y accepts');
+  // On a row that waits on neither, it starts nothing and says how.
+  await selectRow(v, /Add a retry budget/);
+  await send(v, 'n');
+  await until(() => /^y and n answer the selected item\. Choose one in the list first\./.test(status()), 'refused');
+  assert.equal(requests(), 'Add a retry budget'); assert.deepEqual(projectSnapshot(p.repo).tasks, []);
+  // Anything else typed goes as it always did.
+  await selectRow(v, /\+ New session/);
+  await send(v, 'no');
+  await until(() => pendingRequests(p.root).some(row => row.goal === 'no') || projectSnapshot(p.repo).tasks.some(task => task.goal === 'no'), 'a longer message starts a session');
+});
+
+test('y or n alone in an open session answers what it waits on; with nothing waiting it is a reply', { timeout: 40000 }, async t => {
+  const p = setup(t), v = await view(t, { repo: p.repo }), panels = v.current.panels;
+  const answer = id => { const file = path.join(approvalsDir(), `${id}.answer.json`); return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')).decision : null; };
+  const began = new Date().toISOString();
+  liveTask(p.root, { id: '3', goal: 'List the models', state: 'ready' });
+  saveTask(p.repo, { ...readTask(p.repo, '3'), permissions: 'ask', state: 'running', activeRole: 'lead', activeSince: began, owner: { pid: process.pid, identity: processIdentity(process.pid) }, messages: [{ at: began, text: 'List the models' }] });
+  liveTask(p.root, { id: '4', goal: 'Release notes', state: 'answered' });
+  await openTask(v, /List the mod/); await until(() => v.current.session === '3', 'his session is open');
+  requestApproval({ id: 'run-3-a', root: p.root, taskId: '3', role: 'lead', vendor: 'claude', tool: 'Bash', input: { command: 'grep -rn model src' } });
+  await until(() => /Waiting for your approval/.test(panels.chat.getText()), 'it waits on him');
+  await send(v, 'Y');
+  await until(() => answer('run-3-a') === 'allow' && /^Allowed\./.test(panels.status.getText()), 'a lone Y allows it');
+  assert.ok(!pendingRequests(p.root).some(row => /^y$/i.test(row.goal)), 'nothing was queued');
+  // A session that waits on nothing takes it as a reply.
+  await openTask(v, /Release notes/); await until(() => v.current.session === '4', 'the other session is open');
+  await send(v, 'n');
+  await until(() => pendingRequests(p.root).some(row => row.goal === 'n' && row.continuationTaskId === '4') || readTask(p.repo, '4').messages.some(row => row.text === 'n'), 'n goes to the session');
+  assert.doesNotMatch(panels.status.getText(), /y and n answer/);
 });
