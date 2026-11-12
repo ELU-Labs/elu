@@ -210,6 +210,26 @@ test('parse reports the profile Claude ran with and its denials, clipped and not
   assert.equal(plain.effectiveMode, null); assert.deepEqual(plain.denials, []);
 });
 
+test('the file tools read a tracked .npmrc in every mode, Full included, and are kept from an untracked one by path', t => {
+  const f = modeFixture(t), root = f.cwd, run = (...args) => gitIn(root, args);
+  run('init', '--initial-branch=main'); run('config', 'user.name', 'Test Owner'); run('config', 'user.email', 'owner@example.invalid');
+  fs.mkdirSync(path.join(root, 'backend/agents'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'backend/agents/.npmrc'), 'registry=https://registry.npmjs.org/\n'); run('add', 'backend/agents/.npmrc'); run('commit', '-m', 'Add npmrc');
+  fs.writeFileSync(path.join(root, '.npmrc'), '//registry.npmjs.org/:_authToken=x\n'); fs.writeFileSync(path.join(root, 'id_rsa'), 'key\n');
+  const tracked = path.join(root, 'backend/agents/.npmrc'), loose = path.join(root, '.npmrc'), key = path.join(root, 'id_rsa');
+  const rule = file => `Read(//${file.slice(1)})`;
+  for (const mode of ['locked', 'ask', 'auto', 'full']) {
+    const args = mode === 'locked' ? claude({ role: f.role, cwd: root, protectedPaths: f.protectedPaths, commonDir: f.commonDir, session: SESSION }) : claude({ ...f.base, mode });
+    const { deny } = settingsOf(args).permissions;
+    assert.ok(deny.includes(rule(loose)), `${mode}: the untracked .npmrc stays closed`);
+    if (mode !== 'locked') assert.ok(deny.includes(rule(key)), `${mode}: an untracked key stays closed`);
+    assert.equal(deny.some(entry => entry.includes('backend/agents') || /^Read\(\*\*\//.test(entry)), false, `${mode}: no rule closes the tracked ${path.relative(root, tracked)}, by path or by name`);
+  }
+  // Outside a Git work tree every file of those names stays closed, Full included.
+  const plain = modeFixture(t);
+  for (const mode of ['ask', 'full']) assert.ok(settingsOf(claude({ ...plain.base, mode })).permissions.deny.includes('Read(**/.npmrc)'), mode);
+});
+
 test('a sandboxed command is kept from untracked secret files by path, never from tracked ones, which Git must read', t => {
   const f = modeFixture(t), root = f.cwd, run = (dir, ...args) => gitIn(dir, args);
   run(root, 'init', '--initial-branch=main'); run(root, 'config', 'user.name', 'Test Owner'); run(root, 'config', 'user.email', 'owner@example.invalid');

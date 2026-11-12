@@ -14,6 +14,13 @@ session; a turn that is not your own session's runs read only.
 | Shell inside the vendor sandbox | no | yes; Antigravity runs no sandbox, so every command asks | yes | yes, no sandbox |
 | Shell outside it, network, web tools | no | asks | a reviewer model decides | yes |
 | Secrets and ELU Code state | no | no | no | file tools denied; a shell can read |
+
+Secrets here are files Git does not track whose names look like secrets: `.env*`, `.npmrc`,
+`.netrc`, `.pypirc`, `auth.json`, `credentials`, `credentials.json`, `id_rsa`, `id_ed25519`,
+`*.pem`, and the secret folders in your home. On Claude Code a file of that name that the
+repository tracks is read in every mode, as any other tracked file: it is in the repository
+already. A teammate's question is denied the names whatever Git says. Outside a Git work
+tree every file of those names is denied.
 | Never list (push, tag, merge, deploy, publish) | blocked | blocked; every escape asks | stand-in commands and, except on Codex, deny rules; a command that gets past them gets through if the reviewer allows it | stand-in commands, prompt text and, except on Codex, deny rules; no sandbox behind them |
 | Runs in | worktree | worktree or a named branch | same | also here |
 | Checks | sandboxed, no network, structural limits | same | no network; dependency files may change | network on; only secret paths and deleted tests block |
@@ -147,9 +154,9 @@ are refused in the sandbox.
 What a sandboxed command can read that way:
 
 - The repository's history through git: every committed version of every file. That
-  includes a file committed once and later removed, and committed files the sandbox
-  hides by name in the worktree (`.env*`, `*.pem`, `.npmrc`): `git show HEAD:.env`
-  prints one.
+  includes a file committed once and later removed. A secret-looking file the
+  repository tracks (an `.npmrc`, an `.env.example`) is not hidden at all: every clone
+  has it, and the sandbox and the file tools read it as any other tracked file.
 - The Git settings file: remote URLs, and a token if one is written into a URL.
 - The stash and the reflog.
 
