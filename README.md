@@ -203,12 +203,16 @@ type `@kim where are the tax rates?` in any session. A message always reaches th
 they can reply in the same thread.
 
 What a teammate's message does on your machine is yours to choose, once per team: `/join`
-asks, and so does your first `/invite` for a team. **Auto** (the default) starts a session
-in your project as if you had typed the message yourself: your default permission mode, a
-new worktree, and any Task it proposes still waits for your approval. **Manual** keeps each
-message waiting until you press y. You can also write rules in plain English, such as "Only
-work on the elu repo. Don't write anything until I accept it.", and every session a teammate
-starts is told them. Push, merge, tag, deploy and publish stay blocked either way. `/access`,
+asks, and so does your first `/invite` for a team. **Auto** (the default for a new team)
+starts a session in your project as if you had typed the message yourself: it runs in the
+project folder, reads your home folder (not the secret folders) and uses your MCP servers,
+in your default permission mode but never Full access, and its answer goes back without you
+reading it unless it looks like a secret. Any Task it proposes waits for your approval, and
+only an approved Task's edit runs in a new worktree. **Manual** keeps each message waiting
+until you press y. You can also write rules in plain English, such as "Only work on the elu
+repo. Don't write anything until I accept it.", and every session a teammate starts is told
+them. Push, merge, tag, deploy and publish stay blocked as they are for your own sessions in
+that mode. [SECURITY.md](SECURITY.md#what-teammates-can-do-here) has the details. `/access`,
 or `elu access`, shows and changes all of it.
 
 `elu share`, or `/share` in the app, shares the project you are in, so teammates can name it

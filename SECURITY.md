@@ -104,28 +104,48 @@ too long, made for the run and removed when it ends (`docs/vendors/claude.md`).
 Each team has one setting on your machine, asked by `/join` and by your first `/invite` for
 that team, and changed with `/access` or `elu access`:
 
-- **Auto** (the default): a teammate's message starts a session at once, as if you had
-  typed it into ELU Code: in the project you joined or invited from, in your default
-  permission mode, in a new worktree. That mode is enforced as it is for your own sessions:
-  with Full access, a teammate's message can make the model run any command in that
-  project's worktree without asking you. Any Task it proposes waits for your approval
-  before an edit starts, as your own do.
-- **Manual**: each message waits until you approve it (y), then starts that same session.
-  w picks the mode, place and folders first; n declines.
+- **Auto** (the default for a new team): a teammate's message starts a session at once, as
+  if you had typed it into ELU Code, in the project you joined or invited from. Its first
+  turn runs in that project folder itself, not in a worktree. Like your own turns it reads
+  your home folder (not the secret folders) and uses your MCP servers and Claude Code
+  memory. It runs in your default permission mode, except that a session nobody started by
+  hand never gets Full access: from Full it runs with Approve for me, as a schedule does.
+  Its answer goes back to the teammate without you reading it, unless it looks like a
+  secret or you hold that teammate's replies. Any Task it proposes waits for your approval,
+  as your own do; only an approved Task's edit runs in a new worktree, and the teammate is
+  told that the plan waits for you and that no further reply comes in the thread.
+- Auto applies only when every team the project belongs to here (the teams it is shared
+  with that you and the sender are both on, and the teams whose setting names it) is set
+  to Auto for that project. Otherwise the message waits. A team ask (`#general` or a
+  channel) always waits, so one message never starts a session on every member's machine.
+  A later message in the same thread continues its session in the mode the session has
+  now; if that is Full access, it waits for you.
+- **Manual**: each message waits until you approve it (y), then starts that same session,
+  in your default mode, Full access included, since you started it. w picks the mode, place
+  and folders first; n declines.
 - A team whose setting was never set (joined with an earlier version) is Manual with no
-  rules: its messages arrive as chat and wait for you. Nothing turns Auto on by itself.
+  rules: its messages arrive as chat and wait for you. Nothing turns Auto on by itself:
+  `elu invite` on such a team saves Manual unless you pass `--auto`, and `/invite` and
+  `/access` offer Manual first.
 
 **Rules** are plain English you write, up to 1000 characters, such as "Only answer
 questions, do not edit files." They go, under the heading "The owner's rules for
 teammates", into the prompt of every turn of every session a teammate starts here, and the
 model is told to follow them, to refuse what they forbid and say so, and to only propose
 when they say to change nothing until you accept. They are a guard in what the model is
-told, not a limit ELU Code enforces: a model can get them wrong. What is enforced is the
-permission mode, the never list (push, merge, tag, deploy and publish stay blocked for
-every session a teammate starts, in every mode), the Task approval before an edit, and the
-per-teammate and per-team message and spending caps, which count each such session's real
-cost when it ends. A session a teammate starts has no dollar limit of its own beyond those
-caps unless you set one with `/budget`.
+told, not a limit ELU Code enforces: a model can get them wrong. A session gets the rules
+of every team its project belongs to here, so the sender cannot pick a team with laxer
+ones. Once you approve a Task, that approval counts as your acceptance of the work inside
+its goal. What is enforced is the permission mode, the Task approval before an edit, and
+the per-teammate and per-team message and spending caps. The never list (push, merge, tag,
+deploy and publish) holds for every session a teammate starts as it does in that mode for
+your own (`docs/permissions.md`): in Ask for approval and Approve for me it is backed by
+the sandbox and deny rules; in Full access, which only a session you approve can have, it
+is stand-in commands, prompt text and deny rules with no sandbox behind them, and a
+teammate's message can then reach any file you can. Each turn a teammate's message starts
+may spend at most the per-request cap (`caps.runUsd`), which intake reserved for it; a
+cost a vendor does not report counts as that whole amount. These sessions share the peer
+slots with teammates' questions, so they never fill every slot of yours.
 
 A question for one of your shared bots is answered by that bot, read only, after you
 accept it, as before. A machine on ELU Code 0.1.5 or earlier refuses a message when its

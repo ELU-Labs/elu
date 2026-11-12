@@ -219,7 +219,8 @@ Some turns wait for nobody:
 
 A teammate's message that starts a session by itself (Auto) or that you approve with y is
 not among them: that session runs in your default mode, and its Task waits for your
-approval as one you asked for would.
+approval as one you asked for would. One started by Auto has nobody watching it, so, like a
+schedule, it never runs with Full access: from Full it runs with Approve for me.
 
 ## Lifecycle
 
