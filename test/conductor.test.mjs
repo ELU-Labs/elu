@@ -58,6 +58,14 @@ test('a session that a schedule starts is named by its first reply', async t => 
   assert.match(boardRows([projectSnapshot(p.repo)], Date.now()).map(row => barCells(row, 60, Date.now()).map(cell => cell.text).join('')).join('\n'), /Dependency update check/);
 });
 
+test('a session that a schedule starts has the bots the schedule kept', async t => {
+  const p = setup(t);
+  const row = saveSchedule({ root: p.root, goal: 'Check the build', when: parseWhen('daily 9:00'), bots: ['reviewer', 'qa'] });
+  runScheduleNow(row.id, new Date(), { start: () => true }); conduct(t);
+  await until(() => projectSnapshot(p.repo).tasks[0]?.state === 'answered', 'the scheduled run');
+  assert.deepEqual(projectSnapshot(p.repo).tasks[0].bots, ['reviewer', 'qa']);
+});
+
 test('a queued message runs in the background and its request records the chat', async t => {
   const p = setup(t), conductor = conduct(t);
   const sent = enqueue(p.root, 'Can I add multiple agents?');

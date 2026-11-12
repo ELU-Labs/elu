@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { parseWhen, nextRun, saveSchedule, listSchedules, runDue, runScheduleNow, pauseSchedule, removeSchedule, installScheduler, uninstallScheduler } from '../lib/schedules.mjs';
+import { parseWhen, splitWhen, nextRun, saveSchedule, listSchedules, runDue, runScheduleNow, pauseSchedule, removeSchedule, installScheduler, uninstallScheduler } from '../lib/schedules.mjs';
+import { saveBot, removeBot } from '../lib/bots.mjs';
 import { enqueue } from '../lib/conductor.mjs';
 import { pendingRequests, updateRequest } from '../lib/workspace.mjs';
 import { project } from './helpers.mjs';
@@ -35,6 +36,49 @@ test('When reads days, times, intervals, and one-time runs in local time', () =>
   assert.throws(() => parseWhen('daily', now), /Add a time, for example daily 9:00/);
   assert.throws(() => parseWhen('today 9:00', now), /has passed/);
   for (const text of ['fri 25:00', 'yesterday 9', '2026-02-30 9:00', 'sometimes']) assert.throws(() => parseWhen(text, now), /Could not read/, text);
+});
+
+test('/schedule reads the longest start that is a time, and the rest is the message', () => {
+  const now = at(9, 13, 30), read = text => { const value = splitWhen(text, now); return [value.when.label, value.text, value.rest]; };
+  assert.deepEqual(read('in 1h check the build'), ['once Mon Nov 9 14:30', 'in 1h', 'check the build']);
+  assert.deepEqual(read('daily 9:00 triage new issues'), ['daily 9:00', 'daily 9:00', 'triage new issues']);
+  assert.deepEqual(read('weekdays 9 am  write the notes'), ['weekdays 9:00', 'weekdays 9 am', 'write the notes']);
+  assert.deepEqual(read('mon,thu 14:30 5 tests to fix'), ['every Mon, Thu 14:30', 'mon,thu 14:30', '5 tests to fix'], 'a number after the time stays in the message');
+  assert.deepEqual(read('every 2h'), ['every 2h', 'every 2h', ''], 'a time alone waits for the message');
+  assert.deepEqual(read("in 5m don't stop\nsecond line"), ['once Mon Nov 9 13:35', 'in 5m', "don't stop\nsecond line"], 'the message is kept as typed');
+  // No start reads as a time: the forms that work are named. A time that is refused says why.
+  assert.throws(() => splitWhen('check the build', now), { message: 'Could not read when it runs. Start with when it runs, such as in 30m, every 2h, daily 9:00, weekdays 9am or tomorrow 15:00, then your message.' });
+  assert.throws(() => splitWhen('now check the build', now), /Could not read when it runs\./);
+  assert.throws(() => splitWhen('every 5m ping', now), /Choose every 15m to every 7d\./);
+  assert.throws(() => splitWhen('daily triage', now), /Add a time, for example daily 9:00\./);
+  assert.throws(() => splitWhen('today 9:00 report', now), /That time has passed/);
+});
+
+test('a schedule keeps its bots and branch and each run starts with them; an older schedule without them still runs', t => {
+  home(t); const p = project(t), start = () => true;
+  saveBot({ name: 'nightly', instructions: 'Check the nightly build.' });
+  const row = saveSchedule({ root: p.root, goal: 'Check the build', when: parseWhen('every 1h', at(9, 8)), permissions: 'auto', bots: ['reviewer', 'nightly'], place: { kind: 'branch', branch: 'nightly-checks' } }, at(9, 8));
+  assert.deepEqual([row.bots, row.place], [['reviewer', 'nightly'], { kind: 'branch', branch: 'nightly-checks' }]);
+  assert.deepEqual(listSchedules()[0].bots, ['reviewer', 'nightly']);
+  // A new worktree is what every run gets anyway, so it is not stored. Your checkout as it is needs Full access, which a schedule never has.
+  assert.equal('place' in saveSchedule({ root: p.root, goal: 'Plain', when: parseWhen('every 1h', at(9, 8)), bots: [], place: { kind: 'worktree' } }, at(9, 8)), false);
+  assert.throws(() => saveSchedule({ root: p.root, goal: 'Here', when: parseWhen('every 1h', at(9, 8)), place: { kind: 'here' } }, at(9, 8)), /Here needs Full access/);
+  assert.throws(() => saveSchedule({ root: p.root, goal: 'Gone', when: parseWhen('every 1h', at(9, 8)), bots: ['nobody'] }, at(9, 8)), /There is no bot named nobody/);
+  // A schedule saved before bots and places were kept: no such fields in the file.
+  const file = path.join(process.env.XDG_CONFIG_HOME, 'elu-code', 'schedules.json'), saved = JSON.parse(fs.readFileSync(file, 'utf8'));
+  saved.schedules.push({ id: 'schedule-0ld0ld00', root: p.root, project: 'old', goal: 'Old schedule', when: parseWhen('every 1h', at(9, 8)), enabled: true, createdAt: at(9, 8).toISOString(), nextRunAt: at(9, 9).toISOString(), lastRunAt: null, lastRequestId: null, lastTaskId: null, runs: 0, note: null, permissions: null });
+  fs.writeFileSync(file, JSON.stringify(saved));
+  assert.equal(listSchedules().length, 3, 'the older schedule loads');
+  assert.equal(runDue(at(9, 10), { start }), 3);
+  const requests = pendingRequests(p.root), of = goal => requests.find(request => request.goal === goal);
+  assert.deepEqual([of('Check the build').bots, of('Check the build').place, of('Check the build').permissions], [['reviewer', 'nightly'], { kind: 'branch', branch: 'nightly-checks' }, 'auto']);
+  assert.deepEqual(of('Plain').bots, [], 'no bots, as the form had none');
+  assert.equal('bots' in of('Old schedule'), false); assert.equal('place' in of('Old schedule'), false);
+  // A bot deleted since is left out of the next run; the run still starts.
+  for (const request of requests) updateRequest(p.root, request.id, { state: 'done' });
+  removeBot('nightly');
+  assert.equal(runScheduleNow(row.id, at(9, 11), { start }), true);
+  assert.deepEqual(pendingRequests(p.root).find(request => request.goal === 'Check the build' && request.state === 'queued').bots, ['reviewer']);
 });
 
 test('a due schedule queues one run, skips while it is still pending, and catches up once after sleep', t => {

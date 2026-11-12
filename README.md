@@ -97,7 +97,7 @@ You can send a message at any time. One sent while the session is working waits 
 | `/changes` | Shows what this session changed; `/chat` goes back |
 | `/publish` | Shows the exact push and draft pull request, then asks you |
 | `/stop` | Stops the running response. A message you sent while it ran is sent next; `/stop` again cancels that message |
-| `/schedule` | Starts a session later or on a schedule, such as `daily 9:00` or `every 2h` |
+| `/schedule in 1h check the build` | Starts a session later or on a schedule: `/schedule [when] [message]`. `/schedule ` lists times such as `in 5m`, `in 1h` and `daily 9:00`. Each run is a new session with the model, mode and bots of the form; it does not see the chat it was made in |
 | `/budget 5` | Limits this session to 5 dollars; `/budget off` removes the limit |
 | `! git status` | Runs a shell command. In an open session the model gets the command and its output with your next message |
 | `/quit` | Closes ELU Code. Sessions that are running or queued go on in the background; `elu conductor stop` stops them |
@@ -106,7 +106,8 @@ A schedule also runs while ELU Code is closed, through a login item, once ELU Co
 installed (not run through `npx`). On macOS, while an agent works or a schedule is on, ELU
 Code stops the Mac from going to sleep on its own (`caffeinate -i`); the display can still
 sleep. Schedules show in the Sessions tab under Scheduled: `p` pauses one and `x` deletes
-it.
+it. A time is `in 30m`, `every 2h` (15 minutes to 7 days), `daily 9:00`, `weekdays 9am`,
+`mon,thu 14:30`, `tomorrow 15:00` or `2026-12-01 9:00`, in this computer's local time.
 
 ## Permissions
 

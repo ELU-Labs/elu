@@ -241,8 +241,9 @@ schedule, it never runs with Full access: from Full it runs with Approve for me.
   asks, its vendor asks in every mode (Claude Code asks before `rm` or `rmdir`
   on your home, the working folder or a top-level folder), and you answer it.
 - The automatic edit task of a conversation inherits the conversation's choices.
-- A schedule stores `ask` or `auto`; it never runs with Full access. An
-  unanswered approval times out and the task asks you.
+- A schedule stores `ask` or `auto`; it never runs with Full access. It also
+  keeps the bots of the form it was made in, and a branch if one was set; a
+  schedule never runs `here`. An unanswered approval times out and the task asks you.
 - A request sent to the local A2A endpoint, which is off by default, runs your
   personal default, capped at `auto`.
 - A teammate's message you answer runs read only and never gets a mode. One you
