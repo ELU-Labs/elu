@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { makeTeam, newHome, withHome, registeredProject, liveTask } from './peer-helpers.mjs';
 import { createIdentity } from '../lib/peer/identity.mjs';
@@ -17,7 +18,14 @@ import { enqueue } from '../lib/conductor.mjs';
 import { boardRows, remoteRow, rowActions, rowTitle } from '../lib/board.mjs';
 import { remoteSessions as remoteGlue } from '../lib/terminal-remote.mjs';
 import { teamPath } from '../lib/peer/roster.mjs';
-import { readTask, saveTask } from '../lib/state.mjs';
+import { readTask, saveTask, taskPlace } from '../lib/state.mjs';
+import { spawnSync } from 'node:child_process';
+import { projectFolder } from '../lib/workspace.mjs';
+import { registerProject } from '../lib/projects.mjs';
+import { localRepos, saveLocalRepos } from '../lib/peer/cards.mjs';
+import { folderRemote } from '../lib/kanban-repos.mjs';
+import { closeSession } from '../lib/kanban.mjs';
+import * as peerFacade from '../lib/peer/index.mjs';
 import { listEntries, usesSavedRules } from '../lib/permission-rules.mjs';
 import { getRecord, records, saveRecord } from '../lib/peer/taskstore.mjs';
 import { task as a2aTask, TaskState } from '../lib/peer/a2a.mjs';
@@ -435,7 +443,9 @@ test('a computer of mine lists every session here, whoever started it, a page at
   // The two projects: the one with an origin has its repository; the other has none.
   const shop = listed.projects.find(item => item.id === row('Run the tests').project), notes = listed.projects.find(item => item.id === row('Tidy my notes').project);
   assert.match(shop.repoId, /^[0-9a-f]{64}$/); assert.equal(notes.repoId, null);
-  assert.deepEqual(Object.keys(listed.sessions[0]).sort(), ['approvals', 'at', 'by', 'createdAt', 'error', 'plan', 'project', 'question', 'ref', 'state', 'title', 'who'].sort());
+  // Each session names the repository it works in: here the project's own, or none.
+  assert.equal(row('Run the tests').repoId, shop.repoId); assert.equal(row('Tidy my notes').repoId, null);
+  assert.deepEqual(Object.keys(listed.sessions[0]).sort(), ['approvals', 'at', 'by', 'createdAt', 'error', 'plan', 'project', 'question', 'ref', 'repoId', 'state', 'title', 'who'].sort());
   void other;
   // A page at a time.
   const first = withHome(devbox.home, () => host['elu.remote.list']({ limit: 3 }, toHost));
@@ -659,4 +669,125 @@ test("Sessions groups my computer's sessions of this repository under its name, 
   machinesFile[0].older = true;
   const older = remoteGlue({ facade, peerRead: () => status, peerCommand: async () => ({}), chatMessage: () => '', ink: text => text, colour: false }).sections(now, '/work/shop').filter(line => !line.spacer).map(text);
   assert.deepEqual(older.slice(0, 2), ['On devbox · offline', 'Update ELU Code on devbox to see its sessions here.']);
+});
+
+// The owner's two computers as they are: projects that are folders holding clones, with no
+// origin of their own. A session there shows here when it works in a repository this project
+// holds, found as the Kanban finds it.
+function folderAt(t, name) {
+  const parent = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'elu-code-mine-'))); t.after(() => fs.rmSync(parent, { recursive: true, force: true }));
+  const root = path.join(parent, name); fs.mkdirSync(root);
+  const repo = projectFolder(root); registerProject(repo); return repo;
+}
+function cloneAt(folder, name, origin) {
+  const target = path.join(folder, name), run = args => { const r = spawnSync('git', ['-C', target, ...args], { encoding: 'utf8' }); if (r.status !== 0) throw new Error(r.stderr); };
+  fs.mkdirSync(target); run(['init', '-q']); run(['-c', 'user.name=T', '-c', 'user.email=t@example.invalid', 'commit', '-q', '--allow-empty', '-m', `start ${name}`]); run(['remote', 'add', 'origin', origin]);
+  return target;
+}
+// A session whose edit runs in a clone (task.repository), as a Task's edit does.
+function editIn(repo, id, repository, goal, minutes = 0) {
+  const place = taskPlace(repo, id, repository);
+  saveTask(repo, { id: String(id), goal, state: 'answered', repository, worktree: place.worktree, branch: place.branch, base: 'a'.repeat(40), createdAt: new Date(Date.now() - minutes * 60000).toISOString(), runs: [], reviews: [], messages: [], sessions: {} });
+}
+
+test("my other computer's sessions show here by the repository each works in, from a folder holding several clones, as on the Kanban", async t => {
+  const { laptop, devbox } = machines(t), X = 'https://github.com/acme/shop.git', Y = 'https://github.com/acme/docs.git', Z = 'https://github.com/acme/other.git', W = 'https://github.com/acme/tools.git';
+  // The laptop: a folder holding a clone of X and one of Y, with no origin of its own, and a
+  // session there that edited a clone of W outside it. Its Kanban has a board for each, as the
+  // daemon found them (repos.json).
+  const here = withHome(laptop.home, () => {
+    const repo = folderAt(t, 'projects'); cloneAt(repo.root, 'shop', X); cloneAt(repo.root, 'docs', Y);
+    editIn(repo, 1, cloneAt(path.dirname(repo.root), 'tools', W), 'Add a flag', 5);
+    saveLocalRepos(localRepos()); markMine(laptop.identity.key, devbox.identity.key); noteTheirs(devbox.identity.key, true);
+    return repo;
+  });
+  // The devbox: a home-like folder with no origin, holding a clone of X and one of Z. A session
+  // whose Task works in X, one in Z. Another project folder holding one clone of X, with a
+  // session that has no Task yet: it works in that project's main repository.
+  withHome(devbox.home, () => {
+    const home = folderAt(t, 'ana'), shop = cloneAt(home.root, 'shop-web', X), other = cloneAt(home.root, 'other', Z);
+    editIn(home, 1, shop, 'Fix the cart total', 3); editIn(home, 2, other, 'Tidy the other one', 2); editIn(home, 3, cloneAt(home.root, 'tools', W), 'Speed up the build', 0.5);
+    const hub = folderAt(t, 'hub'); cloneAt(hub.root, 'shop', X);
+    saveTask(hub, { id: '1', kind: 'conversation', goal: 'Where is the cart?', state: 'answered', worktree: hub.root, base: null, branch: null, createdAt: new Date(Date.now() - 60000).toISOString(), runs: [], reviews: [], responses: [], messages: [], sessions: {}, result: null });
+    markMine(devbox.identity.key, laptop.identity.key); noteTheirs(laptop.identity.key, true); relist();
+  });
+  const toHost = connection(laptop.identity.key), hostCtx = context(devbox.identity, { [laptop.identity.key]: toHost }), host = hostMethods(hostCtx);
+  let strip = false;
+  const toViewer = connection(devbox.identity.key, { answer: (method, params) => {
+    const result = withHome(devbox.home, () => host[method](params, toHost));
+    // A host on the build before: its sessions name no repository.
+    return strip && method === 'elu.remote.list' ? { ...result, sessions: result.sessions.map(({ repoId, ...rest }) => rest) } : result;
+  } });
+  const status = { key: laptop.identity.key, name: 'ana', box: 'laptop', teams: [{ members: [{ key: laptop.identity.key, name: 'ana' }, { key: devbox.identity.key, name: 'ana', box: 'devbox', online: true }] }] };
+  const shown = () => withHome(laptop.home, () => {
+    const glue = remoteGlue({ facade: peerFacade, peerRead: () => status, peerCommand: async () => ({}), chatMessage: () => '', ink: text => text, colour: false });
+    return glue.sections(Date.now(), here.root).filter(line => !line.spacer).map(line => line.header ?? line.note ?? line.row.remote.title);
+  });
+  const listed = async () => { withHome(laptop.home, () => fs.rmSync(path.join(process.env.XDG_CONFIG_HOME, 'elu-code', 'peer', 'remote', 'machines'), { recursive: true, force: true })); await withHome(laptop.home, () => listTick(context(laptop.identity, { [devbox.identity.key]: toViewer }))); };
+  await listed();
+  const kept = withHome(laptop.home, () => remoteMachines()[0]);
+  const repoOf = title => kept.sessions.find(row => row.title === title).repoId;
+  assert.equal(repoOf('Fix the cart total'), repoOf('Where is the cart?'), 'both work in X');
+  assert.match(repoOf('Fix the cart total'), /^[0-9a-f]{64}$/); assert.notEqual(repoOf('Tidy the other one'), repoOf('Fix the cart total'));
+  assert.deepEqual(kept.projects.map(row => row.repoId), [null, null], 'neither project folder has an origin');
+  // Under its heading: the ones in X, which this folder holds, and the one in W, which a session
+  // here works in, as on its Kanban; not the one in Z.
+  assert.deepEqual(shown(), ['On devbox · online', 'Speed up the build', 'Where is the cart?', 'Fix the cart total']);
+  // The host on the build before: each goes by its project's repository, and neither project has one.
+  strip = true; await listed();
+  assert.equal(withHome(laptop.home, () => remoteMachines()[0].sessions.every(row => row.repoId === null)), true);
+  assert.deepEqual(shown(), ['On devbox · online', 'No sessions of this project. Projects lists its others.']);
+  // A teammate's computer not marked mine: nothing is listed there, and nothing shows here.
+  strip = false; await listed();
+  withHome(devbox.home, () => unmarkMine(laptop.identity.key));
+  assert.throws(() => withHome(devbox.home, () => host['elu.remote.list']({}, toHost)), { message: NOT_MINE });
+  withHome(laptop.home, () => noteTheirs(devbox.identity.key, false));
+  assert.deepEqual(shown(), []);
+});
+
+test("a session with no repository of its own goes with the main repository picked from every session of its project, archived and older ones too, as on the Kanban", t => {
+  const { laptop, devbox } = machines(t), X = 'https://github.com/acme/shop.git', Z = 'https://github.com/acme/other.git';
+  const toHost = connection(laptop.identity.key), host = hostMethods(context(devbox.identity, { [laptop.identity.key]: toHost }));
+  withHome(devbox.home, () => {
+    // The home-like folder holds a clone of X and one of Z. The newest session with a
+    // repository of its own worked in X nine days ago, one in Z before it; neither is listed.
+    // A conversation started there now has no Task.
+    const home = folderAt(t, 'ana'), shop = cloneAt(home.root, 'shop-web', X), other = cloneAt(home.root, 'other', Z);
+    editIn(home, 1, other, 'Tidy the other one', 60 * 24 * 12); editIn(home, 2, shop, 'Fix the cart total', 60 * 24 * 9);
+    saveTask(home, { id: '3', kind: 'conversation', goal: 'Where is the cart?', state: 'answered', worktree: home.root, base: null, branch: null, createdAt: new Date(Date.now() - 60000).toISOString(), runs: [], reviews: [], responses: [], messages: [], sessions: {}, result: null });
+    markMine(devbox.identity.key, laptop.identity.key); noteTheirs(laptop.identity.key, true);
+    const listed = () => { relist(); return host['elu.remote.list']({}, toHost).sessions.map(row => [row.title, row.repoId]); };
+    assert.deepEqual(listed(), [['Where is the cart?', folderRemote(shop).repoId]]);
+    // A session in Z, newer, archived: not listed, and now the conversation goes with Z.
+    editIn(home, 4, other, 'Rename the other one', 30); closeSession(home, '4');
+    assert.deepEqual(listed(), [['Where is the cart?', folderRemote(other).repoId]]);
+  });
+});
+
+test("Projects lists my computer's project of this repository while Sessions leaves out one of its sessions, and with no computer of mine nothing is read", () => {
+  const SHOP = 'a'.repeat(64), DOCS = 'f'.repeat(64), D = 'd'.repeat(64), now = Date.now(), ago = minutes => new Date(now - minutes * 60000).toISOString();
+  const status = { key: 'k'.repeat(64), name: 'ana', box: 'laptop', teams: [{ members: [{ key: 'k'.repeat(64), name: 'ana' }, { key: D, name: 'ana', box: 'devbox', online: true }] }] };
+  const session = (ref, title, minutes, repoId) => ({ id: crypto.randomUUID(), ref, project: ref.split(':')[0], title, state: 'answered', at: ago(minutes), createdAt: ago(minutes + 1), approvals: [], by: 'you', who: null, repoId });
+  const p = { shop: '1'.repeat(16), clone: '4'.repeat(16) };
+  // Two clones of the shop there. A session in the second edited the docs, another clone in
+  // that computer's home folder.
+  const machinesFile = [{ key: D, listedAt: ago(0), older: false, projects: [{ id: p.shop, name: 'shop', repoId: SHOP, home: false }, { id: p.clone, name: 'shop-2', repoId: SHOP, home: false }],
+    sessions: [session(`${p.shop}:1`, 'Fix the cart', 2, SHOP), session(`${p.clone}:1`, 'Edit the docs', 3, DOCS), session(`${p.clone}:2`, 'Fix the total', 4, SHOP)] }];
+  let mine = [{ key: D, mine: true, theirs: true }], holds = [], asked = 0;
+  const facade = { mineRows: () => mine, remoteSessions: () => [], remoteMachines: () => machinesFile, projectRepoId: root => root === '/work/shop' ? SHOP : null, projectRepoIds: () => { asked += 1; return holds; } };
+  const glue = () => remoteGlue({ facade, peerRead: () => status, peerCommand: async () => ({}), chatMessage: () => '', ink: text => text, colour: false });
+  const shown = view => view.sections(now, '/work/shop').filter(line => !line.spacer).map(line => line.header ?? line.note ?? line.row.remote.title);
+  let view = glue();
+  assert.deepEqual(shown(view), ['On devbox · online', 'Fix the cart', 'Fix the total']);
+  // The shop there shows whole; its other clone does not, so Projects lists it.
+  assert.deepEqual(view.projects(now, '/work/shop').map(row => [row.name, row.sessions]), [['shop-2 on devbox', 2]]);
+  view.openProject(D, p.clone);
+  assert.deepEqual(shown(view).slice(-2), ['shop-2 on devbox', 'Edit the docs']);
+  // This project's Kanban has a board for the docs too: the session shows, and Projects leaves the clone out.
+  holds = [DOCS]; view = glue();
+  assert.deepEqual(shown(view), ['On devbox · online', 'Fix the cart', 'Edit the docs', 'Fix the total']);
+  assert.deepEqual(view.projects(now, '/work/shop'), []);
+  // With no computer of mine, what this project holds is not read.
+  mine = []; asked = 0; view = glue();
+  assert.deepEqual(shown(view), []); assert.deepEqual(view.projects(now, '/work/shop'), []); assert.equal(asked, 0);
 });
