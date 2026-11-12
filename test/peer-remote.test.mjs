@@ -8,7 +8,6 @@ import { createIdentity } from '../lib/peer/identity.mjs';
 import { bothMine, dropStrangers, markMine, markedMine, mineRows, noteTheirs, unmarkMine } from '../lib/peer/mine.mjs';
 import { NOT_MINE, UPDATE, UPDATE_LIST, hostMethods, hostTick, listTick, relist, remoteCommand, remoteConnected, remoteMachines, remoteSessions, viewMethods, viewTick, watchId } from '../lib/peer/remote.mjs';
 import { repository } from '../lib/git.mjs';
-import { saveTask } from '../lib/state.mjs';
 import { saveTeamAccess } from '../lib/peer/access.mjs';
 import { leaveOp, merge } from '../lib/peer/roster.mjs';
 import { createInvite, redeemCode, takeMineOffer } from '../lib/peer/invite.mjs';
