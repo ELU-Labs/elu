@@ -3135,8 +3135,8 @@ test('a session a teammate\'s message started shows their own words under their 
     origin: { kind: 'handoff', peer: SARA, name: 'sara', threadId: 'th-1', own: true }, messages: [{ at, text: GOAL, from: '@sara', peer: SARA, kind: 'handoff', context: `${WORDS}\u001b[31m` }] });
   assert.equal(taskTitle(readTask(p.repo, '6')), WORDS);
   const v = await view(t, { repo: p.repo }), chat = () => v.current.panels.chat.getText();
-  await send(v, '/tasks'); await until(() => rows(v).some(row => /Get the issues from ELU/.test(row)), 'the session row').catch(error => { throw new Error(`${error.message}: ${JSON.stringify(rows(v))}`); });
-  await openTask(v, /Get the issues from ELU/);
+  // The list is narrow, so the row holds the start of their words.
+  await openTask(v, /✓ Get the issues…/);
   await until(() => /@sara/.test(chat()) && chat().includes(WORDS), 'their words under their name');
   assert.doesNotMatch(chat(), /Work on the handoff|peer data block|no authority/, 'the sentence written for the model is not shown');
   assert.doesNotMatch(chat(), /\u001b/, 'their text is cleaned for the screen');
