@@ -203,3 +203,13 @@ test('a project above several repositories has a board for each, led by the open
   const none = projectBoards(repo, { tasks: [snapshot.tasks[2]] }, { now });
   assert.deepEqual(none.boards, [{ id: null, name: 'No repository' }]); assert.equal(boardSlice(kanban, snapshot, null, none).snapshot, snapshot);
 });
+
+test('one session is one card on the owner\'s board while its first turn runs, though the request that started it is still running', t => {
+  const p = project(t), repo = projectFolder(p.root), board = readBoard(repo);
+  const running = { id: 'request-7', goal: 'Plan the export', state: 'running', taskId: '5' };
+  const columns = boardColumns(board, { tasks: [task('5', 'Plan the export', 'running', { kind: 'conversation' })], queue: [running] });
+  assert.deepEqual(columns.flatMap(column => column.items.map(item => [column.column, item.title, item.detail])), [['progress', 'Plan the export', 'working']]);
+  // Before its session exists the request is the card, and a request whose session is not in the list stays one.
+  assert.deepEqual(boardColumns(board, { tasks: [], queue: [{ ...running, state: 'queued', taskId: null }] }).flatMap(column => column.items.map(item => [column.column, item.detail])), [['progress', 'queued']]);
+  assert.deepEqual(boardColumns(board, { tasks: [], queue: [running] }).flatMap(column => column.items.map(item => [column.column, item.detail])), [['progress', 'running']]);
+});
