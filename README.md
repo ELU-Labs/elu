@@ -198,7 +198,10 @@ elu join CODE            # joins their team, to ask about their project
 
 There is nothing to turn on. Once your computer is on a team, a background process (the
 peer daemon) keeps it reachable by your teammates, also while ELU Code is closed. Until you
-invite someone or join a team, nothing starts and nothing connects.
+invite someone or join a team, nothing starts and nothing connects. There is no off switch
+while you stay on a team: `/leave` (or `elu team leave`) takes you off one, and once you are
+on no team the daemon stops. A team you made stays with your teammates when you leave it,
+and is gone from your computer.
 
 `elu peers` shows who is online. In the app, write to a teammate in the Chats tab, or
 type `@kim where are the tax rates?` in any session. A teammate's question is answered
@@ -284,11 +287,9 @@ and delete `elu-code-scheduler.service` and `elu-code-scheduler.timer` in
 Stop what still runs in the background:
 
 ```sh
-elu peer uninstall          # if you made the peer daemon start at login
+elu peer uninstall          # stops the peer daemon and removes its login item
 elu conductor stop          # stops sessions that are still running
 ```
-
-`elu uninstall`, below, also stops the peer daemon.
 
 In each project folder that is a Git repository, see what ELU Code would remove there,
 then remove it:

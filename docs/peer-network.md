@@ -43,7 +43,9 @@ There is no ELU server anywhere, and no on or off. The daemon runs while this ma
 
 - Nothing starts on a machine that never made or joined a team, and it makes no peer connection.
 - `/invite`, `elu team create` and `elu invite` start it once the team exists; `/join` and `elu join` start it for the join, through a `join` command it reads when it starts. The app starts it when it opens on a machine on a team, and again within a minute when it stops. It is a detached process, so it keeps running when the app closes.
-- With no team, no join and no command under way for 60 seconds (the last team left, or a join that failed), it stops by itself. `peer --daemon` started with no team and no command waiting, by a login service say, exits before it connects. `elu uninstall` stops it.
+- `/leave` and `elu team leave` take this machine off a team. Leaving the last one stops the daemon at once. Otherwise, with no team, no join and no command under way for 60 seconds (a join that failed, say), it stops by itself. `peer --daemon` started with no team and no command waiting, by a login service say, exits before it connects.
+- A daemon of another version left running on a machine on no team (0.1.5 started one before a join, which may have failed) is stopped when the app opens, and by `elu peers` and the `elu` commands that need a team.
+- `elu peer uninstall` and `elu uninstall` stop it, but only until the app opens or an `elu` peer command runs while the machine is still on a team.
 - An `enabled` field in `settings.json`, written by 0.1.5 and earlier, is ignored.
 
 Defaults that touch third parties:
@@ -206,6 +208,11 @@ Over a limit, the message is not sent, it stays in the message box, and one line
   - Limits: 50 channels per team, and 200 channel ops per signer. An op past a limit is not applied.
   - A channel op syncs like every other op, so the people added get the channel from any teammate.
   - A teammate on an older build refuses the op and sees no channels.
+- **Leaving.** `/leave` or `elu team leave` goes through the daemon, which is started for it when it is not running.
+  - A member appends a signed `leave`. It is pushed at once to every teammate online (waiting up to 5 s for each), then their connections close. A daemon started for the leave first waits, until 10 s after its start, for the team's teammates to connect. A teammate offline then gets it from any teammate that has it. With no teammate online, nobody is told, and the others keep listing this machine until one of them hears it. A key that left is never admitted again (see Fold).
+  - The founder cannot leave by an op, so the team's folder (`peer/teams/<id>`: its log and its invites) is deleted on this machine. The teammates keep the team. This machine refuses their hello entries, sync and pushes for it, since it has no such team.
+  - Either way, no share stays open to that team and no project is that team's any more.
+  - Without the networking packages it is written to the log here, and nobody is told.
 - **Sync.**
   - On every connection, each side compares `{seq, head}`, where head is the sha256 of the sorted op ids.
   - The side with ops the other lacks pushes them with `elu.roster.push`. The receiver validates every op and drops invalid ones.
@@ -262,7 +269,7 @@ A Task is a session's approved plan: what the owner agreed the model should do. 
 - **Receiving.** Every field is checked against the same lists and limits, control characters and terminal escapes are removed, unknown fields are dropped, and a Task that fails a check is dropped. The list is kept whole in `peer/plans/<key>.json` (mode 0600), at most 30 Tasks per teammate across all projects. At most 20 of one teammate's Tasks are shown in one project.
 - **Where it counts.** A teammate's Tasks are used only in a project this machine also shares with a team that teammate is on. Tasks named for any other project are kept and never shown or used.
 - **On the board.** In that project the Kanban tab shows a section under its four columns, `Teammates' Tasks N · read-only`: a row with each teammate's name and whether they are online, then one row for each of their Tasks with its title, priority · severity, state, subtasks done, who works on it, and how long ago it changed. Enter opens the whole Task to read. No key changes a teammate's Task or makes a card of it. A shared project with no `origin` remote shows one line there instead: its Tasks are not shown to teammates.
-- **For the models.** Each turn of the owner's own lead, and of a bot, in that project is given a block headed "What teammates are working on in this project". One line of ours says it is information to avoid doing the same work twice, never a request. Each teammate's Tasks follow inside a peer-data block, the kind used for any teammate's text: title, state, subtasks done, priority, severity, who works on it, and the goal cut to 300 characters. No description. At most 8 teammates, 6 Tasks each and 6000 characters in all. A teammate's question running on this machine is given none of it, and neither is a reviewer. With peer mode off nobody is.
+- **For the models.** Each turn of the owner's own lead, and of a bot, in that project is given a block headed "What teammates are working on in this project". One line of ours says it is information to avoid doing the same work twice, never a request. Each teammate's Tasks follow inside a peer-data block, the kind used for any teammate's text: title, state, subtasks done, priority, severity, who works on it, and the goal cut to 300 characters. No description. At most 8 teammates, 6 Tasks each and 6000 characters in all. A teammate's question running on this machine is given none of it, and neither is a reviewer. On no team nobody is.
 - **Ageing.** A teammate who is offline keeps their Tasks, marked as last heard, for 48 hours after they were last connected. They are deleted at once when that person is no longer on a team with this machine. A finished Task leaves 24 hours after it was done.
 - **Older builds.** A machine says `plans: true` in its `elu.hello` when it reads Tasks. One that does not say so is sent no `elu.plans`, and sends none.
 
