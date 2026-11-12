@@ -1251,6 +1251,32 @@ test('an a2a refusal keeps its paths for a trusted caller and cuts them for anyo
   });
 });
 
+test('elu team leave and elu team remove: plain refusals, and with peer mode off the op is written here', async t => {
+  const crew = makeTeam(t), ana = crew.founder.identity, sara = crew.member.identity, teamId = crew.teamId;
+  await withHome(crew.founder.home, async () => {
+    await assert.rejects(peerCli(['team', 'leave'], {}), /^.*You made core, so you cannot leave it\. elu team remove NAME removes a teammate\.$/);
+    await assert.rejects(peerCli(['team', 'remove'], {}), /Use elu team remove NAME \[--team TEAM\]\./);
+    await assert.rejects(peerCli(['team', 'remove', 'kim'], {}), /No teammate kim on core\./);
+    await assert.rejects(peerCli(['team', 'remove', 'sara'], { team: 'nope' }), /No team of yours matches --team\./);
+  });
+  await withHome(crew.member.home, async () => {
+    await assert.rejects(peerCli(['team', 'remove', 'ana'], {}), /Only an admin of core can remove a teammate\./);
+    const left = await peerCli(['team', 'leave', 'core'], {});
+    assert.equal(left.message, 'You left core. Your teammates hear it when peer mode is on for you and them.');
+    assert.equal(withHome(crew.member.home, () => team(teamId)).members.find(m => m.key === sara.key).left, true);
+    await assert.rejects(peerCli(['team', 'leave'], {}), /Create a team first/);
+  });
+  await withHome(crew.founder.home, async () => {
+    // The founder's log has not heard yet; once it has, sara is no longer there to remove.
+    merge(teamId, withHome(crew.member.home, () => readLog(teamId).ops));
+    await assert.rejects(peerCli(['team', 'remove', '@sara'], {}), /No teammate sara on core\./);
+    redeemCode(createInvite(ana, teamId, { hours: 1 }), sara.key, 'sara');
+    const result = await peerCli(['team', 'remove', '@Sara'], {});
+    assert.equal(result.message, 'Removed sara from core. They and your other teammates hear it when peer mode is on for you and them. A new invite brings them back.');
+    assert.deepEqual(result.removed, { key: sara.key, name: 'sara' });
+  });
+});
+
 test('elu peer trust and untrust resolve a roster name, refuse unknown and ambiguous names, and show in peer status', async t => {
   const crew = makeTeam(t), ana = crew.founder.identity, sara = crew.member.identity;
   await withHome(crew.founder.home, async () => {
@@ -1265,6 +1291,7 @@ test('elu peer trust and untrust resolve a roster name, refuse unknown and ambig
     await assert.rejects(peerCli(['peer', 'trust'], {}), /Use elu peer trust @NAME\./);
     await assert.rejects(peerCli(['peer', 'untrust', '@sara', 'extra'], {}), /Use elu peer untrust @NAME\./);
     await assert.rejects(peerCli(['peer', 'bogus'], {}), /trust @NAME\|untrust @NAME/);
+    await assert.rejects(peerCli(['team', 'bogus'], {}), /Use elu team create NAME, elu team leave \[TEAM\] or elu team remove NAME \[--team TEAM\]\./);
     redeemCode(createInvite(ana, crew.teamId, { hours: 1 }), 'c'.repeat(64), 'sara');
     await assert.rejects(peerCli(['peer', 'trust', '@sara'], {}), /More than one teammate is named @sara\./);
     const untrusted = await peerCli(['peer', 'untrust', sara.key.slice(0, 8)], {});
@@ -1531,18 +1558,60 @@ test('an asker offline during the run gets the answer through GetTask on reconne
   assert.equal(item(ana.home, 'answer').id, `answer:${askId}`);
 });
 
-test('a removed member is refused at admission', async t => {
+test('a member removed while away is told so at admission, and served nothing', async t => {
   const { crew, ana, sara, side } = await pair(t);
   // Sara is removed while she is away, so her log still says she is a member.
   withHome(ana.home, () => appendOp(crew.teamId, makeOp(loadIdentity(), crew.teamId, 'remove', { key: sara.identity.key })));
+  // After it, dan joins and gets a channel: Sara is told she is out, and nothing written since.
+  const dan = 'd'.repeat(64);
+  const later = withHome(ana.home, () => { const op = redeemCode(createInvite(loadIdentity(), crew.teamId, { hours: 1 }), dan, 'dan'); return [op.id, setChannel(loadIdentity(), crew.teamId, { name: 'later', members: [ana.identity.key, dan] }).op.id]; });
   await daemon(t, ana.home, { conductor: false }); await daemon(t, sara.home, { env: side.env });
-  const { askId } = await run(sara.home, { type: 'ask', to: 'ana', text: 'Can I still ask?' });
-  await until(() => withHome(ana.home, () => fs.readFileSync(peerFile('daemon.log'), 'utf8')).includes(`admission ${sara.identity.key.slice(0, 8)}: refused`), 'refused admission');
-  assert.equal(askRecord(sara.home, askId).state, 'pending');
+  // Ana's machine pushes her the removal on that connection and nothing else: her machine then shows no team.
+  await until(() => withHome(sara.home, () => team(crew.teamId)).members.find(m => m.key === sara.identity.key).removed, 'the removal at sara');
+  await until(() => state(sara.home)?.teams?.length === 0, 'no team at sara');
+  const log = withHome(ana.home, () => fs.readFileSync(peerFile('daemon.log'), 'utf8'));
+  assert.ok(log.includes(`telling ${sara.identity.key.slice(0, 8)} about a team`), log);
   assert.equal(records(ana.home).length, 0);
-  // Ana's state.json never lists removed members, so the proof is the log and Sara's side.
-  assert.ok(!withHome(ana.home, () => fs.readFileSync(peerFile('daemon.log'), 'utf8')).includes(`admission ${sara.identity.key.slice(0, 8)}: member`));
-  assert.equal(online(sara.home, ana.identity.key), false);
+  assert.equal(online(sara.home, ana.identity.key), false); assert.equal(online(ana.home, sara.identity.key), false);
+  assert.ok(!withHome(ana.home, () => team(crew.teamId)).members.find(m => m.key === sara.identity.key && !m.removed));
+  const hers = withHome(sara.home, () => readLog(crew.teamId).ops.map(op => op.id));
+  for (const id of later) assert.ok(!hers.includes(id), 'nothing after her removal');
+  assert.ok(!withHome(sara.home, () => team(crew.teamId)).members.some(m => m.key === dan));
+});
+
+test('leaving and removing reach the teammates online, and the same key joins again with a new code', async t => {
+  const { crew, ana, sara, side } = await pair(t);
+  const a = await daemon(t, ana.home, { conductor: false }); await daemon(t, sara.home, { env: side.env });
+  await connected(ana, sara);
+  // The founder cannot leave; Sara cannot remove anyone.
+  await assert.rejects(run(ana.home, { type: 'teamLeave', team: crew.teamId }), /You made core, so you cannot leave it\./);
+  await assert.rejects(run(sara.home, { type: 'teamRemove', team: crew.teamId, key: ana.identity.key }), /Only an admin of core/);
+  // Sara leaves: Ana's machine gets the op at once, and Sara's no longer lists the team or its project.
+  withHome(sara.home, () => setTeamProject(crew.teamId, 'app'));
+  assert.deepEqual(await run(sara.home, { type: 'teamLeave', team: crew.teamId }), { team: crew.teamId, name: 'core' });
+  await until(() => withHome(ana.home, () => team(crew.teamId)).members.find(m => m.key === sara.identity.key)?.left, `the leave at ana\n${a.log()}`);
+  await until(() => state(sara.home)?.teams?.length === 0 && !state(ana.home)?.teams[0].members.some(m => m.key === sara.identity.key), 'both heartbeats');
+  assert.deepEqual(read(sara.home, 'team-projects.json'), {});
+  // A new code brings the same key back.
+  const code = withHome(ana.home, () => createInvite(ana.identity, crew.teamId, { hours: 1 }));
+  assert.deepEqual(await run(sara.home, { type: 'join', code }, 120000), { id: crew.teamId, name: 'core', inviter: { name: 'ana', fingerprint: ana.identity.key.slice(0, 8) } });
+  await until(() => online(ana.home, sara.identity.key) && online(sara.home, ana.identity.key), 'online again');
+  assert.equal(read(sara.home, 'team-projects.json')?.[crew.teamId], undefined, 'coming back shares nothing');
+  // Ana removes her: Sara's machine gets it too, and then she joins once more.
+  const removed = await run(ana.home, { type: 'teamRemove', team: crew.teamId, key: sara.identity.key });
+  assert.deepEqual(removed, { team: crew.teamId, name: 'core', key: sara.identity.key, member: 'sara' });
+  await until(() => withHome(sara.home, () => team(crew.teamId)).members.find(m => m.key === sara.identity.key)?.removed && state(sara.home)?.teams?.length === 0, 'the removal at sara');
+  const again = withHome(ana.home, () => createInvite(ana.identity, crew.teamId, { hours: 1 }));
+  // The code she came back with is still in its retry window, but its admit no longer stands.
+  // The refusal is followed at once by the close, so her side may see either.
+  await assert.rejects(run(sara.home, { type: 'join', code }, 120000), /already used|disconnected/);
+  assert.equal(withHome(ana.home, () => readLog(crew.teamId)).ops.at(-1).type, 'remove', 'nothing written for the old code');
+  assert.ok(withHome(ana.home, () => team(crew.teamId)).members.find(m => m.key === sara.identity.key).removed);
+  assert.equal(online(ana.home, sara.identity.key), false);
+  await run(sara.home, { type: 'join', code: again }, 120000);
+  await until(() => online(ana.home, sara.identity.key) && online(sara.home, ana.identity.key), 'online after the second return');
+  assert.deepEqual(withHome(ana.home, () => team(crew.teamId)).members.map(m => [m.name, m.removed]), [['ana', false], ['sara', false]]);
+  await until(() => JSON.stringify(withHome(ana.home, () => head(crew.teamId))) === JSON.stringify(withHome(sara.home, () => head(crew.teamId))), 'the same log on both');
 });
 
 test('review over the network, a handoff that waits for accept, and status rows with an overlap', async t => {
