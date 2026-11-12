@@ -264,7 +264,7 @@ test('a handoff waits with nothing queued; w with Ask runs it as the owner\'s se
   const row = sara.rowOf(getRecord(record.task.id));
   assert.equal(row.state, 'queued'); assert.equal(row.permissions, 'ask'); assert.equal(row.readOnly, false); assert.equal(row.context, HANDOFF);
   assert.match(row.goal, /^Work on the handoff from @sara shown in the peer data block\./); assert.doesNotMatch(row.goal, /uppercase/i);
-  assert.deepEqual(row.origin, { kind: 'handoff', peer: SARA, name: 'sara', a2aTaskId: record.task.id, threadId: 'thread-1', hop: 1 });
+  assert.deepEqual(row.origin, { kind: 'handoff', peer: SARA, name: 'sara', a2aTaskId: record.task.id, threadId: 'thread-1', hop: 1, teams: everyTeam().map(state => state.id) });
   assert.equal(isPeerRun(row.origin), false, 'a work session is the owner\'s, not a hardened peer run');
   assert.equal(getRecord(record.task.id).requestId, row.id);
   conduct(t);
