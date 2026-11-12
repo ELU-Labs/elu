@@ -2712,12 +2712,13 @@ test('a blocked run shows what was blocked, and a lead that asked instead says s
 test('each Blocked line says why and the one thing to do, and raising the mode to one that lifts it continues the turn', { timeout: 30000 }, async t => {
   const p = setup(t), v = await view(t, { repo: p.repo }), panels = v.current.panels, status = () => panels.status.getText(), chat = () => panels.chat.getText().replace(/\s+/g, ' ');
   const at = new Date().toISOString();
-  const blocked = (id, goal, permissions, denials, approvals = []) => {
+  // run: what the turn's run row says over the default, which ran in the session's mode.
+  const blocked = (id, goal, permissions, denials, approvals = [], run = {}) => {
     liveTask(p.root, { id, goal, state: 'needs_input' });
     const log = path.join(taskDir(p.repo, id), 'lead-1.jsonl');
     fs.writeFileSync(log, `${JSON.stringify({ type: 'result', structured_output: { summary: 'I stopped here.' } })}\n`);
     // A resumed turn reports another session id than the one its approvals were stamped with.
-    saveTask(p.repo, { ...readTask(p.repo, id), permissions, approvals, runs: [{ role: 'lead', vendor: 'claude', session: 'resumed-1', launch: 'launch-1', at, logFile: log, permissions, denials }] });
+    saveTask(p.repo, { ...readTask(p.repo, id), permissions, approvals, runs: [{ role: 'lead', vendor: 'claude', session: 'resumed-1', launch: 'launch-1', at, logFile: log, permissions, denials, ...run }] });
   };
   // The continuation is a message to that session; the conductor may have started it already.
   const continued = id => pendingRequests(p.root).filter(row => row.continuationTaskId === id).map(row => row.goal);
@@ -2729,11 +2730,14 @@ test('each Blocked line says why and the one thing to do, and raising the mode t
   await openTask(v, /Fix the build/); await until(() => v.current.session === '10', 'the session is open');
   await until(() => /Stopped: Edit \/srv\/shared\/app\.ts\. No answer in 20 minutes; reply to try again\./.test(chat()), 'an unanswered approval says so, matched across the resume');
   assert.match(chat(), /Blocked: Connect to elu\.dev\. The internet is off for commands in Ask for approval: \/permissions full continues it\./);
-  assert.match(chat(), /Blocked: Run git commit -am fix\. ELU Code commits the changes when you publish: \/publish\./);
+  // Publishing waits for checks, so the line asks for a reply, not for /publish.
+  assert.match(chat(), /Blocked: Run git commit -am fix\. No commit is needed: ELU Code commits when you publish\. Reply to go on\./);
+  assert.doesNotMatch(chat(), /\/publish/);
   // Raising the mode to one that lifts what stopped it continues the turn at once.
   await send(v, '/permissions full'); await dialog(v, 'Full access', 'y');
   await until(() => /Full access\. Continuing where it stopped\./.test(status()), 'continues');
-  assert.deepEqual(continued('10'), ['Continue where you stopped: this session now has Full access. Try again what was blocked.']);
+  // It names only what Full access lifts: not the commit.
+  assert.deepEqual(continued('10'), ['Continue where you stopped: this session now has Full access. Try again only this: Edit /srv/shared/app.ts; Connect to elu.dev. Do not retry anything the owner said no to or that is never allowed.']);
   assert.equal(readTask(p.repo, '10').permissions, 'full');
   // What the owner said no to is not lifted by Approve for me: the mode waits for the next message.
   blocked('11', 'Clean the cache', 'ask', [{ tool: 'Bash', tool_use_id: 'toolu_r', input: { command: 'rm -rf /srv/cache' } }],
@@ -2742,6 +2746,33 @@ test('each Blocked line says why and the one thing to do, and raising the mode t
   await until(() => /Stopped: Run rm -rf \/srv\/cache\. You said no; reply with what to do instead\./.test(chat()), 'the owner said no');
   await send(v, '/permissions auto'); await until(() => /Approve for me from your next message\./.test(status()), 'from the next message');
   assert.deepEqual(continued('11'), []);
+  // Nor by Full access, even beside something Full access lifts: a turn that stopped on his no waits for him.
+  blocked('13', 'Tidy the server', 'ask', [{ tool: 'Bash', tool_use_id: 'toolu_x', input: { command: 'rm -rf /srv/app/old' } }, { tool: 'Bash', tool_use_id: 'toolu_y', input: { command: 'curl -sS https://elu.dev/' }, network: 'elu.dev' }],
+    [{ id: 'launch-1-toolu_x', tool: 'Bash', summary: 'Run: rm -rf /srv/app/old', decision: 'deny', at, role: 'lead', session: 'launch-1' }]);
+  await openTask(v, /Tidy the server/); await until(() => v.current.session === '13', 'that session is open');
+  await until(() => /Stopped: Run rm -rf \/srv\/app\/old\. You said no/.test(chat()), 'the no is shown');
+  await send(v, '/permissions full'); await dialog(v, 'Full access', 'y');
+  await until(() => /Full access from your next message\./.test(status()), 'waits for him');
+  assert.deepEqual(continued('13'), []);
+  // A never-list command in the turn waits for him too.
+  blocked('14', 'Ship the fix', 'ask', [{ tool: 'Bash', input: { command: 'git push origin main' } }, { tool: 'Bash', input: { command: 'npm install' } }]);
+  await openTask(v, /Ship the fix/); await until(() => v.current.session === '14', 'the push session is open');
+  await until(() => /git push is never allowed/.test(chat()), 'the never list');
+  await send(v, '/permissions full'); await dialog(v, 'Full access', 'y');
+  await until(() => /Full access from your next message\./.test(status()), 'no retry of the push');
+  assert.deepEqual(continued('14'), []);
+  // The session is already Full access while its last turn ran in Ask for approval (f on an
+  // approval, or a turn kept before this build, with no launch id: its approvals are found by
+  // the tool call). The line says Full access is on, and /permissions full still continues it.
+  blocked('15', 'Upgrade the deps', 'full', [{ tool: 'Edit', tool_use_id: 'toolu_t', input: { file_path: '/srv/shared/deps.json' } }, { tool: 'Bash', tool_use_id: 'toolu_i', input: { command: 'npm install' } }],
+    [{ id: 'launch-9-toolu_t', tool: 'Edit', summary: 'Edit: /srv/shared/deps.json', decision: 'timeout', wait: 1200, at, role: 'lead', session: 'launch-9' }], { permissions: 'ask', launch: undefined });
+  await openTask(v, /Upgrade the deps/); await until(() => v.current.session === '15', 'the full session is open');
+  await until(() => /Blocked: Run npm install\. Full access is on now: reply to continue\./.test(chat()), 'Full access is on now');
+  assert.match(chat(), /Stopped: Edit \/srv\/shared\/deps\.json\. No answer in 20 minutes; reply to try again\./);
+  assert.doesNotMatch(chat(), /Needs Full access/);
+  await send(v, '/permissions full'); await dialog(v, 'Full access', 'y');
+  await until(() => /Full access\. Continuing where it stopped\./.test(status()), 'continues in the mode it has');
+  assert.deepEqual(continued('15'), ['Continue where you stopped: this session now has Full access. Try again only this: Edit /srv/shared/deps.json; Run npm install. Do not retry anything the owner said no to or that is never allowed.']);
   // A session with no mode is read only, and Ask for approval continues it.
   blocked('12', 'Rename the helper', undefined, [{ tool: 'Edit', input: { file_path: '/srv/app/src/a.ts' } }]);
   await openTask(v, /Rename the helper/); await until(() => v.current.session === '12', 'the third session is open');

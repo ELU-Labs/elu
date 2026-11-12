@@ -128,7 +128,9 @@ of them, so it is not asked again. Reads in the project, git reads and the proje
 lint and build scripts run without asking from the start. `/permissions rules` or
 `elu permissions` lists them all and removes any. The never list always wins.
 You can change the mode while a turn runs. When a turn stopped on something a wider mode
-allows, its Blocked line says which, and raising the mode continues the turn at once.
+allows, its Blocked line says which, and raising the mode continues the turn at once, with
+only what that mode allows. A turn that also stopped on your no, or on the never list, waits
+for your reply.
 A new approval rings the terminal bell once.
 
 Bots that review, and a teammate's question, always run read only.

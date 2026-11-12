@@ -82,5 +82,7 @@ test('why an action was refused, in every mode: the never list, a closed file, t
   // Which raised mode lifts which refusal, so the turn goes on by itself.
   assert.ok(liftedBy('full', 'full') && liftedBy('timeout', 'full') && liftedBy('network', 'full') && liftedBy('ask', 'ask') && liftedBy('reviewer', 'ask'));
   for (const kind of ['never', 'secret', 'own', 'git', 'rule']) assert.equal(liftedBy(kind, 'full'), false, `${kind} is not lifted`);
+  // The owner's own no stands in every mode: only he says what comes after it.
+  for (const mode of ['ask', 'auto', 'full']) assert.equal(liftedBy('owner', mode), false, `${mode} does not lift the owner's no`);
   assert.equal(liftedBy('network', 'auto'), false, 'Approve for me keeps commands off the internet');
 });
