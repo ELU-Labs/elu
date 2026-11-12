@@ -689,6 +689,15 @@ test('a session whose project is the home folder but that works in a repository 
   const reply = p.prompts().at(-1);
   assert.ok(schemaOf(reply.args).properties.intent, 'a reply turn'); assert.ok(reply.input.includes(READ_ONLY_REPLY));
   assert.notEqual(asked.state, 'blocked');
+  // As that turn is told: when it sets intent to edit, the work goes on with edit access, and nobody is asked to do it.
+  assert.doesNotMatch(READ_ONLY_REPLY, /tell the owner|how to continue/); assert.match(READ_ONLY_REPLY, /set intent to edit; the work then goes on with edit access\.$/);
+  p.extra({ intent: 'edit' });
+  const more = p.prompts().length;
+  await s.controller.ask('Also trim the codes.', s.id).finished;
+  const [again, goesOn] = p.prompts().slice(more);
+  assert.ok(schemaOf(again.args).properties.intent && again.input.includes(READ_ONLY_REPLY), 'the reply turn first');
+  assert.ok(goesOn, 'then the work turn'); assert.equal(schemaOf(goesOn.args).properties.intent, undefined);
+  assert.ok(goesOn.args[goesOn.args.indexOf('--tools') + 1].split(',').includes('Edit'), 'with edit access');
 });
 test('a teammate\'s session that works in the home folder asks the owner once: y keeps the answer, the message runs, and an unattended message waits with the question', async t => {
   const p = setup(t, 'answer');
