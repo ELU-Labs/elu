@@ -8,7 +8,7 @@ import { project, fakeClis, config, keyLike, approveProjectFiles, git, autoAppro
 import { approveTask, sessionTasks } from '../lib/plan.mjs';
 import { repository } from '../lib/git.mjs';
 import { ProjectController, conversationEntries, projectSnapshot, registerProject, personalDirectory } from '../lib/projects.mjs';
-import { readTask, saveTask, requestGoal, sessionGoal, taskTitle } from '../lib/state.mjs';
+import { readTask, saveTask, requestGoal, sessionGoal, taskTitle, taskPlace } from '../lib/state.mjs';
 import { pendingRequests, projectFolder, saveRequest, updateRequest } from '../lib/workspace.mjs';
 import { Conductor, PLAN_WAITS, enqueue, retryRequest, conductorSettings } from '../lib/conductor.mjs';
 import { validateResult, validateConversation, conversationSchema, resultSchema } from '../lib/config.mjs';
@@ -646,6 +646,6 @@ test('a teammate\'s session never edits a repository in the home folder, even wh
   assert.equal(git(home, ['status', '--porcelain']), '');
   // A session that already edits a repository there is refused at its next message, before anything runs.
   const { kind: _conversation, ...rest } = value;
-  saveTask(p.repo, { ...rest, repository: home });
+  saveTask(p.repo, { ...rest, repository: home, ...taskPlace(p.repo, value.id, home), base: git(home, ['rev-parse', 'HEAD']).trim() });
   assert.throws(() => controller.ask('Try again.', run.id), { message: HOME_TARGET });
 });
