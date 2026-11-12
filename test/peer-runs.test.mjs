@@ -670,7 +670,7 @@ test('a session whose project is the home folder but that works in a repository 
   const value = await s.controller.ask('I approve', s.id).finished;
   assert.notEqual(value.state, 'blocked', JSON.stringify(value.error));
   const turns = p.prompts().slice(before);
-  assert.equal(turns.length, 1, `one turn: the work goes on, with no read-only reply turn first: ${JSON.stringify(turns.map(row => [Boolean(schemaOf(row.args).properties.intent), row.args.includes('--resume'), row.input.slice(-400)]))}`);
+  assert.ok(turns.length >= 1 && turns.every(row => !schemaOf(row.args).properties.intent), 'the work goes on, with no read-only reply turn: then the review');
   const [work] = turns, settings = settingsOf(work.args);
   assert.equal(schemaOf(work.args).properties.intent, undefined, 'a working turn, not a reply turn');
   assert.ok(work.input.includes('I approve')); assert.match(work.input, /this turn does its work/);
