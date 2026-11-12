@@ -131,6 +131,16 @@ that work, and their tools run without asking in every mode. Neither the sandbox
 never list below covers them, so a server can reach the internet and act on other services.
 `/mcp off NAME` turns one off for the project. A teammate's question never gets them.
 
+`/mcp add` adds a server: it asks for a name, the URL (or the command that starts it), the
+header that carries its key, such as `Authorization`, and then the key, in a field that
+shows only dots. Claude Code saves it for every folder (`claude mcp add-json --scope user`),
+and sessions get it from their next turn. `/mcp remove NAME` removes one after asking. From
+a shell, `elu mcp add NAME URL --header Authorization` asks for the key with echo off, or
+reads it from standard input, and `elu mcp remove NAME` removes one. If you paste a server
+config, such as an `mcpServers` block, into the message box, ELU Code does not send it:
+it offers to add the server, so the key stays out of the chat. The model cannot add a
+server; when it needs one you do not have, it asks you to type `/mcp add`.
+
 ELU Code does not push, merge, tag, deploy or publish by itself. `/publish` shows the exact
 push and the draft pull request, waits for you, and refuses a default branch. The model is
 told never to run those commands, and on Claude Code they are denied by rule; in Full access

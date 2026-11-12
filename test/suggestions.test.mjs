@@ -17,6 +17,8 @@ test('the command list offers each next word of a command', () => {
   assert.deepEqual(values('/agents add G'), ['/agents add gpt']);
   assert.deepEqual(values('/agents remove '), ['/agents remove sec'], 'the bots of this session');
   assert.deepEqual(values('/mcp on '), ['/mcp on gmail']); assert.deepEqual(values('/mcp off '), ['/mcp off elu']);
+  assert.deepEqual(values('/mcp '), ['/mcp add', '/mcp remove', '/mcp on', '/mcp off']); assert.deepEqual(values('/mcp remove '), ['/mcp remove elu', '/mcp remove gmail']);
+  assert.deepEqual(values('/mcp add '), [], 'add asks for the rest in dialogs');
   for (const done of ['/agents add opus ', '/agents', '/help ', '/unknown x']) assert.deepEqual(values(done), [], done);
   assert.deepEqual(values('/agents add ', {}), [], 'no models known, nothing to offer');
   assert.deepEqual(values('/agents add ', { models: () => { throw new Error('no project'); } }), []);

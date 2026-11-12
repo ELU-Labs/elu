@@ -333,6 +333,25 @@ never list covers them: a server that can push, merge, post or send mail can do 
 without asking you. Their settings, which can hold tokens, are copied for each run into a
 private file in ELU Code's state folder and removed when the run ends.
 
+Only you add a server, and a key never goes through the chat. No session may read or write
+`~/.claude.json`, and the model is told to ask you to type `/mcp add` when it needs a
+server you do not have, and never to ask for a key in the chat. `/mcp add` takes the key in
+a field that shows one dot for each character; the key is not drawn, kept in the message
+box or its history, sent to a model or a teammate, or written to a log or a session's files.
+`elu mcp add` refuses a key on its own command line, so none lands in your shell history,
+and asks for it with echo off or reads it from standard input. Claude Code's own command
+saves the server (`claude mcp add-json --scope user`); ELU Code never writes that file.
+That command takes the settings only on its command line, so for the second it runs,
+another account on the same computer that can list its processes could see the key.
+What it prints back is shown with the key taken out. A message from the message box
+that holds a server config (an `mcpServers` block, or one server with a `url` or a
+`command`) is not sent, wherever it was written: ELU Code offers to add the server, and the
+box keeps only your other words. A config that holds a key is never sent as it is; one
+without a key is sent if you press Enter on it again. Text that looks like a server's
+settings with a key in it but does not read as a config is held once, and sent if you
+press Enter on it again. Text you paste into the message box
+still shows on your screen until you send it or clear it.
+
 On Claude Code, the model of your sessions and each bot that works there also get your
 Claude Code instructions and memory for the project folder, as Claude Code itself would
 load them: `~/.claude/CLAUDE.md`, the folder's `CLAUDE.md`, and the notes in
