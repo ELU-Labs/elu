@@ -200,7 +200,8 @@ There is nothing to turn on. Once your computer is on a team, a background proce
 peer daemon) keeps it reachable by your teammates, also while ELU Code is closed. Until you
 invite someone or join a team, nothing starts and nothing connects. There is no off switch
 while you stay on a team: `/leave` (or `elu team leave`) takes you off one, and once you are
-on no team the daemon stops. The person who made a team cannot leave it.
+on no team the daemon stops. If no teammate was online to hear that you left, it keeps
+running until one of them connects and is told. The person who made a team cannot leave it.
 
 `elu peers` shows who is online. In the app, write to a teammate in the Chats tab, or
 type `@kim where are the tax rates?` in any session. A teammate's question is answered
@@ -222,7 +223,8 @@ sees them when it answers.
 
 `/leave` (or `elu team leave`) takes you off a team. An admin's `/remove @kim` (or
 `elu team remove kim`) takes kim off it, and kim's daemon stops when kim is on no other
-team. Either way, a new invite brings them back.
+team. Either way, a new invite brings them back, also when nobody heard the leave yet: the
+leave goes along with the invite.
 
 In a channel, `/invite @kim` adds a teammate you already have. `/invite` alone makes a
 code for someone new; the first time, it also makes your team, named after the open project.
