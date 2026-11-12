@@ -199,6 +199,9 @@ projects**. A rule is kept narrow:
   asked each time.
 - A web fetch becomes that host.
 
+A path is judged where it really leads: a link in the project to a secret, to your home or
+to another folder is not a path in the project, for a rule or a default.
+
 Rules are kept in your personal directory (`permission-rules.json`), never in the repo.
 
 These are on from the first run and apply in every mode:

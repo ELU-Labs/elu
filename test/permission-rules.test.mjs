@@ -219,6 +219,30 @@ test('the read and git defaults answer a command only inside the sandbox, and ne
   assert.equal(allowedBy('read_file', { path: path.join(project, 'package.json') }, { project, cwd: project, saved: false })?.by, 'default');
 });
 
+// A link in the workspace can lead anywhere: a path is judged where it really leads.
+test('a path is judged where it really leads: a link in the workspace to a secret or out of the project is not in the project', t => {
+  const { dir, project, other } = home(t), previous = process.env.HOME;
+  process.env.HOME = path.join(dir, 'home'); t.after(() => { if (previous === undefined) delete process.env.HOME; else process.env.HOME = previous; });
+  fs.mkdirSync(path.join(dir, 'home', '.aws'), { recursive: true }); fs.writeFileSync(path.join(dir, 'home', '.aws', 'config'), 'x');
+  fs.symlinkSync(path.join(dir, 'home', '.aws', 'config'), path.join(project, 'notes.txt'));
+  fs.symlinkSync(other, path.join(project, 'elsewhere')); fs.writeFileSync(path.join(other, 'x.md'), 'x');
+  fs.symlinkSync(path.join(dir, 'home'), path.join(project, 'homelink'));
+  fs.mkdirSync(path.join(project, '.git', 'elu-code', 'tasks'), { recursive: true }); fs.writeFileSync(path.join(project, '.git', 'elu-code', 'tasks', 'run.log'), 'x');
+  fs.writeFileSync(path.join(project, 'plain.md'), 'x');
+  const ctx = { project, cwd: project, access: 'edit', saved: true, sandboxed: true };
+  assert.equal(allowedBy('Read', { file_path: path.join(project, 'plain.md') }, ctx)?.by, 'default');
+  for (const file of [path.join(project, 'notes.txt'), path.join(project, 'elsewhere', 'x.md'), path.join(project, 'homelink', '.aws', 'config'), path.join(project, '.git', '/elu-code', 'tasks', 'run.log'), `${project}/.git//elu-code/tasks/run.log`])
+    assert.equal(allowedBy('read_file', { path: file }, ctx), null, file);
+  for (const command of ['cat notes.txt', 'grep -R x homelink', 'cat elsewhere/x.md', 'ls elsewhere']) assert.equal(allowedBy(...bash(command), ctx), null, command);
+  // An edit through a link to elsewhere is not an edit in the workspace; one kept for a file outside is kept where it leads.
+  saveRule({ kind: 'edit', workspace: true }, { scope: 'project', project });
+  assert.equal(allowedBy('Edit', { file_path: path.join(project, 'plain.md') }, ctx)?.by, 'rule');
+  assert.equal(allowedBy('Edit', { file_path: path.join(project, 'elsewhere', 'new.md') }, ctx), null);
+  assert.deepEqual(ruleFor('Edit', { file_path: path.join(project, 'elsewhere', 'new.md') }, ctx).rule, { kind: 'edit', file: path.join(other, 'new.md') });
+  assert.match(ruleFor('Edit', { file_path: path.join(project, 'notes.txt') }, ctx).refused, /protected/);
+  assert.match(rule('npm test Library/Keychains/login.keychain-db').refused, /secrets/, 'relative to a shell in the home folder');
+});
+
 test('every vendor\'s way of asking is read the same', () => {
   assert.deepEqual(actionOf('Bash', { command: 'npm test', dangerouslyDisableSandbox: true }), { kind: 'command', line: 'npm test', outside: true });
   assert.deepEqual(actionOf('execute', { CommandLine: 'npm test', Cwd: '/p' }), { kind: 'command', line: 'npm test', outside: false }, 'Antigravity');
