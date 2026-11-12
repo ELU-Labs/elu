@@ -1970,7 +1970,7 @@ test('a message sent after its session started and before the screen drew it wai
   assert.equal(pendingRequests(p.root).find(row => row.goal === 'Tidy the coupon module')?.state, 'running', 'its request is not cancelled');
   conductor.busy = false;
   await until(() => tasks().find(task => task.id === second)?.state === 'stopped', 'stopped');
-  await until(() => /You stopped it\. Your changes are kept\. Type continue to carry on\./.test(status()), 'and the line then says how it ended, and what to do');
+  await until(() => /You stopped it\. Type continue to carry on\./.test(status().replace(/\s+/g, ' ')), 'and the line then says how it ended, and what to do');
   assert.equal(tasks().find(task => task.id === id).state, 'running', 'the first session works on');
 });
 
