@@ -2417,6 +2417,36 @@ test('a scheduled draft that follows the default gets Approve for me at most, an
   assert.equal(listSchedules().find(row => row.goal === 'Check dependencies for updates')?.permissions, 'auto');
 });
 
+// A message sent from the form uses its settings up wherever the form was opened. One opened
+// from Kanban leaves no picked mode behind for the next new session in Sessions.
+test('a mode picked in a form opened from Kanban does not carry into the next new session', { timeout: 40000 }, async t => {
+  const p = setup(t), loginItem = { install: () => ({ installed: true }), uninstall: () => ({ removed: true }) };
+  liveTask(p.root, { id: '3', goal: 'Rename the helper', state: 'ready' });
+  const v = await view(t, { repo: p.repo, loginItem }), panels = v.current.panels, status = () => panels.status.getText(), text = () => composeText(v);
+  const started = goal => { const row = v.current.snapshot.tasks.find(task => task.goal === goal); return row && readTask(p.repo, row.id); };
+  await wide(v);
+  await selectRow(v, /Rename the helper/);
+  await send(v, '/kanban'); await until(() => v.current.view === 'kanban', 'Kanban');
+  await send(v, '/new'); await until(() => !panels.compose.hidden && /Permissions {2}Ask for approval/.test(text()), 'the form with the default');
+  await send(v, '/permissions full'); await dialog(v, 'Full access', 'y'); await until(() => /Full access for this session\./.test(status()), 'picked');
+  await send(v, 'Where is coupon normalization?');
+  await until(() => started('Where is coupon normalization?'), 'session');
+  assert.equal(started('Where is coupon normalization?').permissions, 'full');
+  await send(v, '/sessions'); await until(() => v.current.session === '3', 'Sessions, on the session opened before');
+  await selectRow(v, /\+ New session/); await until(() => /Permissions {2}Ask for approval/.test(text()), 'the next form starts with the default');
+  await send(v, 'Rename the coupon helper');
+  await until(() => started('Rename the coupon helper'), 'second session');
+  assert.equal(started('Rename the coupon helper').permissions, 'ask');
+  // A scheduled form leaves nothing behind either.
+  await send(v, '/kanban'); await until(() => v.current.view === 'kanban', 'Kanban again');
+  await send(v, '/new'); await until(() => !panels.compose.hidden && /Permissions {2}Ask for approval/.test(text()), 'a fresh form');
+  pickRow(panels.composeList, /When/); v.input.write('\r'); await dialog(v, 'When', 'daily 9:00');
+  await send(v, '/permissions auto'); await until(() => /Approve for me for this session\./.test(status()), 'auto picked');
+  await send(v, 'Check dependencies for updates'); await until(() => /Scheduled daily 9:00/.test(status()), 'scheduled');
+  assert.equal(listSchedules().find(row => row.goal === 'Check dependencies for updates')?.permissions, 'auto');
+  await selectRow(v, /\+ New session/); await until(() => /Permissions {2}Ask for approval/.test(text()) && /When\s+now/.test(text()), 'the next form has no schedule and the default');
+});
+
 test('a saved request goes again with no more access than the default now', { timeout: 40000 }, async t => {
   const p = setup(t);
   saveRequest(p.root, 'Add a retry budget', null, { state: 'blocked', reason: 'Checks are still needed.', permissions: 'full', place: { kind: 'here' } });
