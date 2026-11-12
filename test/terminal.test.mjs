@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { PassThrough } from 'node:stream';
-import { project, fakeClis, cli, git, temp, approveProjectFiles } from './helpers.mjs';
+import { project, fakeClis, cli, git, temp, approveProjectFiles, autoApprove } from './helpers.mjs';
 import { repository } from '../lib/git.mjs';
 import { ProjectController, projectSnapshot, dashboardSnapshot, claimView, registerProject, registeredProjects, nameProject, savedProjectName, personalDirectory, setupCommitPlan, commitSetup, taskDetails } from '../lib/projects.mjs';
 import { LIMIT } from '../lib/project-settings.mjs';
@@ -14,10 +14,10 @@ import { projectFolder, saveRequest, pendingRequests, updateRequest } from '../l
 import { displayText } from '../lib/terminal-visuals.mjs';
 import { vendorText } from '../lib/terminal-commands.mjs';
 import { formatResult } from '../lib/format.mjs';
-import { Conductor } from '../lib/conductor.mjs';
+import { Conductor, enqueue } from '../lib/conductor.mjs';
 import { liveTask } from './peer-helpers.mjs';
 import { readBoard, sessionClosed, closeSession } from '../lib/kanban.mjs';
-import { proposeTask, approveTask as approvePlan, reportProgress, finishTask } from '../lib/plan.mjs';
+import { proposeTask, approveTask as approvePlan, reportProgress, finishTask, reopenTask } from '../lib/plan.mjs';
 import { saveTask, readTask, taskDir, taskTitle, setTitle, lock } from '../lib/state.mjs';
 import { processIdentity } from '../lib/process.mjs';
 import { approvalsDir, requestApproval, answerApproval } from '../lib/approvals.mjs';
@@ -27,6 +27,14 @@ import { shellSandboxLine } from '../lib/sandbox.mjs';
 import { listSchedules, saveSchedule, parseWhen } from '../lib/schedules.mjs';
 import { listBots, getBot, saveBot, removeBot, botVendors, botEfforts } from '../lib/bots.mjs';
 import { botModels } from '../lib/bot-models.mjs';
+import { HOME_QUESTION } from '../lib/util.mjs';
+import { PeerDaemon } from '../lib/peer/daemon.mjs';
+import { createIdentity } from '../lib/peer/identity.mjs';
+import { createTeam } from '../lib/peer/roster.mjs';
+import { createInvite, redeemCode } from '../lib/peer/invite.mjs';
+import { intakeMethods } from '../lib/peer/intake.mjs';
+import { message as peerMessage } from '../lib/peer/a2a.mjs';
+import { getRecord } from '../lib/peer/taskstore.mjs';
 
 const cleanups = new WeakMap();
 function resources(t) {
@@ -3237,4 +3245,146 @@ test('a session a teammate\'s message started shows their own words under their 
   await onList(/✗ Fix the build/, /r retry/); v.input.write('r');
   await until(() => /That message is from @sara\. Ask them to send it again, or write your own in the session\./.test(v.current.panels.status.getText()), 'the retry is refused');
   assert.deepEqual(pendingRequests(p.root), []); assert.equal(readTask(p.repo, '7').messages.length, 1);
+});
+
+// The owner's layout: his home folder is the project, a repository in it is where the
+// session edits, and a message from his other computer, joined as a teammate, started it.
+async function homeLayout(t, mode = 'normal') {
+  const p = setup(t, mode), home = path.join(p.parent, 'home'); fs.mkdirSync(home);
+  environment(t, { HOME: fs.realpathSync(home) });
+  const web = path.join(fs.realpathSync(home), 'web');
+  git(p.parent, ['clone', '-q', p.root, web]); git(web, ['config', 'user.name', 'Test Owner']); git(web, ['config', 'user.email', 'owner@example.invalid']);
+  fs.mkdirSync(path.join(web, 'backend/agents'), { recursive: true }); fs.writeFileSync(path.join(web, 'backend/agents/.npmrc'), 'engine-strict=true\n');
+  git(web, ['add', '.']); git(web, ['commit', '-q', '-m', 'Track .npmrc']); approveProjectFiles(web);
+  fs.writeFileSync(path.join(p.parent, 'repository.txt'), web);
+  const repo = projectFolder(fs.realpathSync(home)); registerProject(repo);
+  return { ...p, home: repo.root, web, homeRepo: repo };
+}
+const TEAMMATE = { kind: 'handoff', peer: 'b'.repeat(64), name: 'ali', threadId: 'thread-1', own: true };
+const lastClaude = p => fs.readFileSync(p.calls, 'utf8').trim().split('\n').map(line => JSON.parse(line)).filter(row => row.vendor === 'claude' && row.args.includes('-p')).at(-1).args;
+
+// "I approve" in a teammate-started session whose Task stopped, with the app opened at start.
+async function approveFrom(t, opened) {
+  const p = await homeLayout(t);
+  // The session's Task ran, as the owner's other computer started it: then it stopped on a question.
+  const owner = autoApprove(new ProjectController(p.homeRepo));
+  const done = await owner.ask('Fix the issues in web', null, { permissions: 'full' }).finished;
+  assert.notEqual(done.kind, 'conversation'); assert.ok(done.worktree.startsWith(`${p.web}.elu-code${path.sep}`));
+  await owner.close();
+  reopenTask(p.homeRepo, done.id);
+  saveTask(p.homeRepo, { ...readTask(p.homeRepo, done.id), origin: TEAMMATE, state: 'needs_input', result: { outcome: 'needs_input', summary: 'Part done.', question: 'Go on?', choices: [], comments: [], responses: [] } });
+  fs.writeFileSync(path.join(done.worktree, 'src/coupon.mjs'), 'export const normalize = (value) => value;\n');
+  const v = await view(t, { repo: opened === 'home' ? p.homeRepo : repository(p.web) });
+  await openTask(v, /Uppercase coupons/);
+  const runs = readTask(p.homeRepo, done.id).runs.length;
+  await send(v, 'I approve');
+  await until(() => readTask(p.homeRepo, done.id).runs.length > runs && !['running', 'preparing'].includes(readTask(p.homeRepo, done.id).state), 'the work turn', 60000);
+  assert.equal(modal(v, 'Home folder'), undefined, 'no question: the session works in the repository');
+  const value = readTask(p.homeRepo, done.id), args = lastClaude(p), settings = JSON.parse(args[args.indexOf('--settings') + 1]);
+  assert.equal(value.error, null, JSON.stringify(value.error));
+  assert.ok(value.messages.some(row => row.text === 'I approve'));
+  assert.equal(JSON.parse(args[args.indexOf('--json-schema') + 1]).properties.intent, undefined, 'the work turn, not a read-only reply');
+  assert.equal((settings.permissions.ask ?? []).some(rule => /^(Edit|Write)\(/.test(rule)), false);
+  assert.equal(fs.readFileSync(path.join(done.worktree, 'src/coupon.mjs'), 'utf8'), 'export const normalize = (value) => value.toUpperCase();\n', 'the edit landed');
+  git(done.worktree, ['add', '-A']); git(done.worktree, ['commit', '-q', '-m', 'Uppercase']);
+  assert.equal(git(done.worktree, ['status', '--porcelain']), '');
+}
+test('the app opened in the home folder: "I approve" in a teammate-started session whose Task stopped runs its work with edit access, with no home question', { timeout: 120000 }, t => approveFrom(t, 'home'));
+test('the app opened in the repository: the same "I approve" runs the same way', { timeout: 120000 }, t => approveFrom(t, 'web'));
+
+test('the app: a teammate-started session that works in the home folder asks once before the owner\'s message goes; y keeps it and the message runs, n sends nothing', { timeout: 60000 }, async t => {
+  const p = await homeLayout(t, 'answer');
+  const controller = new ProjectController(p.homeRepo);
+  const first = await controller.ask('Work on the handoff from @ali shown in the peer data block.', null, { origin: { ...TEAMMATE, a2aTaskId: 'task-1', hop: 1 }, context: 'Where are the tests?', permissions: 'ask', home: true }).finished;
+  await controller.close();
+  const { homeAllowed: _allowed, ...rest } = readTask(p.homeRepo, first.id); saveTask(p.homeRepo, rest);
+  const v = await view(t, { repo: p.homeRepo });
+  await openTask(v, /Where are the/);
+  await send(v, 'Go on.');
+  await until(() => modal(v, 'Home folder'), 'the question');
+  assert.match(dialogText(v, 'Home folder'), /This session's project is your home folder\. Let it run here\?\n\ny yes · n no/);
+  await dialog(v, 'Home folder', 'n');
+  await until(() => /Nothing was sent/.test(v.current.panels.status.getText()), 'n sends nothing');
+  assert.deepEqual(pendingRequests(p.home), []); assert.equal(readTask(p.homeRepo, first.id).homeAllowed, undefined);
+  await send(v, 'Go on.');
+  await dialog(v, 'Home folder', 'y');
+  await until(() => readTask(p.homeRepo, first.id).messages.some(row => row.text === 'Go on.') && readTask(p.homeRepo, first.id).state === 'answered', 'the message ran', 30000);
+  assert.equal(readTask(p.homeRepo, first.id).homeAllowed, true);
+  // Asked once: the next message goes with no question.
+  await send(v, 'And the docs?');
+  await until(() => readTask(p.homeRepo, first.id).messages.some(row => row.text === 'And the docs?') && readTask(p.homeRepo, first.id).state === 'answered', 'the next message ran', 30000);
+  assert.equal(modal(v, 'Home folder'), undefined);
+});
+
+// A teammate's session in the home folder, started with the owner's y, then without it on
+// record, as one from before 0.1.9 is. Returns its id.
+async function homeTeammateSession(p) {
+  const controller = new ProjectController(p.homeRepo);
+  const first = await controller.ask('Work on the handoff from @ali shown in the peer data block.', null, { origin: { ...TEAMMATE, a2aTaskId: 'task-1', hop: 1 }, context: 'Where are the tests?', permissions: 'ask', home: true }).finished;
+  await controller.close();
+  const { homeAllowed: _allowed, ...rest } = readTask(p.homeRepo, first.id); saveTask(p.homeRepo, rest);
+  return first.id;
+}
+test('the app: a teammate\'s message held for a session in the home folder waits under Needs you with the question; n leaves it waiting, y lets the session run there and the message goes', { timeout: 60000 }, async t => {
+  const p = await homeLayout(t, 'answer'), id = await homeTeammateSession(p);
+  const v = await view(t, { repo: p.homeRepo }), status = () => v.current.panels.status.getText();
+  await wide(v);
+  const row = enqueue(p.home, 'Work on the handoff from @ali shown in the peer data block.', { continuationTaskId: id, origin: { ...TEAMMATE, a2aTaskId: 'task-2', hop: 1 }, context: 'And the docs?', permissions: 'ask' });
+  const held = () => pendingRequests(p.home).find(value => value.id === row.id);
+  await until(() => held()?.state === 'waiting', 'the conductor holds the message', 20000);
+  assert.equal(held().reason, HOME_QUESTION);
+  // Its row is under Needs you and says what it waits for.
+  await until(() => /NEEDS YOU/.test(rows(v).join('\n')) && rows(v).some(text => /@ali task/.test(text)), 'the row under Needs you').catch(error => { throw new Error(`${error.message}: ${rows(v).join(' | ')}`); });
+  await selectRow(v, /@ali task/);
+  await until(() => /This session's project is your home folder\. Let it run here\?/.test(v.current.panels.chat.getText().replace(/\n┃ /g, ' ').replace(/\s+/g, ' ')), 'the question beside the list');
+  // n: nothing changes, and it waits.
+  v.input.write('y'); await dialog(v, 'Home folder', 'n');
+  await until(() => /It waits for you\./.test(status()), 'n leaves it');
+  assert.equal(held().state, 'waiting'); assert.equal(readTask(p.homeRepo, id).homeAllowed, undefined);
+  // y: kept on the session, and the message runs.
+  await selectRow(v, /@ali task/);
+  v.input.write('y');
+  await until(() => modal(v, 'Home folder'), 'the question again');
+  assert.match(dialogText(v, 'Home folder'), /This session's project is your home folder\. Let it run here\?\n\ny yes · n no/);
+  await dialog(v, 'Home folder', 'y');
+  await until(() => /Approved @ali\. It runs in your home folder\./.test(status()), 'the approve line');
+  assert.equal(readTask(p.homeRepo, id).homeAllowed, true);
+  await until(() => held()?.state === 'done', 'the message ran', 30000);
+  const value = readTask(p.homeRepo, id);
+  assert.equal(value.state, 'answered'); assert.ok(value.messages.some(entry => entry.context === 'And the docs?'), 'their message reached the session');
+});
+
+test('the app open in the home folder: y on a teammate\'s new task asks the home question first; n sends nothing, y sends it with the answer and the session runs there', { timeout: 60000 }, async t => {
+  const p = await homeLayout(t, 'answer');
+  // Sara on this machine's team; her message names no project, so it waits for the owner.
+  const me = createIdentity({ name: 'ana' }), team = createTeam(me, 'core');
+  redeemCode(createInvite(me, team.id, { hours: 1 }), KEYS.sara, 'sara');
+  const ctx = { me, kick: () => {}, event: () => {}, push: () => {} };
+  const record = getRecord(intakeMethods(ctx).SendMessage({ message: peerMessage({ text: 'Fix the build', contextId: 'th-home', ext: { kind: 'handoff', hop: 1, from: { key: KEYS.sara, name: 'sara' } } }) }, { key: KEYS.sara }).id);
+  assert.equal(record.waiting, true); assert.equal(record.root, null);
+  // What the app sends goes to the daemon's own command handling.
+  const peer = fakePeer({
+    items: [{ id: record.task.id, kind: 'incoming', peer: KEYS.sara, name: 'sara', project: null, text: 'Fix the build', at: ago(1), state: 'submitted', threadId: 'th-home', request: 'handoff' }],
+    results: { approve: command => PeerDaemon.prototype.command.call({ ctx }, command) },
+  });
+  const v = await view(t, { repo: p.homeRepo, peer }), status = () => v.current.panels.status.getText();
+  await wide(v);
+  await until(() => rows(v).some(text => /@sara/.test(text) && /Fix the build/.test(text)), 'her message under Needs you');
+  await selectRow(v, /Fix the build/);
+  v.input.write('y'); await until(() => modal(v, 'Home folder'), 'the home question');
+  assert.match(dialogText(v, 'Home folder'), /This session's project is your home folder\. Let it run here\?\n\ny yes · n no/);
+  await dialog(v, 'Home folder', 'n');
+  await until(() => /It waits for you\./.test(status()), 'n leaves it');
+  assert.equal(peer.sent.length, 0, 'nothing went to the daemon');
+  assert.equal(getRecord(record.task.id).waiting, true); assert.deepEqual(pendingRequests(p.home), []);
+  await selectRow(v, /Fix the build/);
+  v.input.write('y'); await dialog(v, 'Home folder', 'y');
+  await until(() => peer.sent.some(command => command.type === 'approve'), 'y sends it');
+  assert.deepEqual(peer.sent.find(command => command.type === 'approve'), { type: 'approve', id: record.task.id, root: p.home, home: true });
+  await until(() => /Approved @sara\./.test(status()), 'the approve line');
+  const queued = () => pendingRequests(p.home).find(value => value.origin?.a2aTaskId === record.task.id);
+  assert.ok(queued(), 'the daemon queued it'); assert.equal(queued().home, true);
+  await until(() => queued()?.state === 'done', 'it ran', 30000);
+  const session = readTask(p.homeRepo, queued().taskId);
+  assert.equal(session.homeAllowed, true); assert.equal(session.worktree, p.home); assert.equal(session.state, 'answered');
 });

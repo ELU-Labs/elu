@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { project, fakeClis, config, keyLike, approveProjectFiles, git, autoApprove } from './helpers.mjs';
+import { project, fakeClis, config, keyLike, approveProjectFiles, git, autoApprove, cli } from './helpers.mjs';
 import { approveTask, sessionTasks } from '../lib/plan.mjs';
 import { repository } from '../lib/git.mjs';
 import { ProjectController, conversationEntries, projectSnapshot, registerProject, personalDirectory } from '../lib/projects.mjs';
@@ -15,7 +15,7 @@ import { validateResult, validateConversation, conversationSchema, resultSchema 
 import { protectedPath, protectedFiles } from '../lib/policy.mjs';
 import * as claude from '../lib/adapters/claude.mjs';
 import * as codex from '../lib/adapters/codex.mjs';
-import { RULES_ACCEPTED, RULES_PROPOSE, setPermissions } from '../lib/runner.mjs';
+import { READ_ONLY_REPLY, RULES_ACCEPTED, RULES_PROPOSE, STUCK_LINE, STUCK_REPLY, setPermissions } from '../lib/runner.mjs';
 import { isPeerRun, saveDefaultMode } from '../lib/modes.mjs';
 import { peerFile } from '../lib/peer/paths.mjs';
 import { savePeerPolicy, savePeerSettings } from '../lib/peer/settings.mjs';
@@ -31,7 +31,7 @@ import { message, TaskState } from '../lib/peer/a2a.mjs';
 import { intakeMethods, readCaps } from '../lib/peer/intake.mjs';
 import { acceptIncoming, processOutbox } from '../lib/peer/replies.mjs';
 import { checkRoot, saveTeamAccess } from '../lib/peer/access.mjs';
-import { HOME_TARGET, homeOrAbove } from '../lib/util.mjs';
+import { HOME_QUESTION, HOME_TARGET, homeOrAbove, homeRefusal } from '../lib/util.mjs';
 import { getRecord, thread } from '../lib/peer/taskstore.mjs';
 
 const SARA = 'b'.repeat(64), ME = 'a'.repeat(64);
@@ -64,7 +64,7 @@ function setup(t, mode = 'normal') {
   const read = 'else for await (const chunk of process.stdin) input+=chunk;', mark = "const session='12345678";
   assert.ok(script.includes(read) && script.includes(mark), 'helpers.mjs fake CLI changed shape');
   script = script.replace(read, `${read}\nconst extra=fs.existsSync(${JSON.stringify(extra)})?JSON.parse(fs.readFileSync(${JSON.stringify(extra)},'utf8')):{};`)
-    .replace('total_cost_usd:0', 'total_cost_usd:extra.cost??0').replace(mark, `if(extra.slow)await new Promise(resolve=>setTimeout(resolve,extra.slow));if(extra.intent&&schema?.properties?.intent)result.intent=extra.intent;if(schema?.properties?.asks)result.asks=extra.asks??[];if(extra.summary)result.summary=extra.summary;\n${mark}`);
+    .replace('total_cost_usd:0', 'total_cost_usd:extra.cost??0').replace(mark, `if(extra.slow)await new Promise(resolve=>setTimeout(resolve,extra.slow));if(extra.intent&&schema?.properties?.intent)result.intent=extra.intent;if(schema?.properties?.asks)result.asks=extra.asks??[];if(extra.summary)result.summary=extra.summary;if(extra.workQuestion&&!conversation){result.outcome='needs_input';result.question='Shall I go on?';result.choices=[];}\n${mark}`);
   fs.writeFileSync(file, script, { mode: 0o755 });
   const previous = { PATH: process.env.PATH, XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME };
   Object.assign(process.env, fake.env);
@@ -579,7 +579,7 @@ function homeAt(t, folder) {
   t.after(() => { if (previous === undefined) delete process.env.HOME; else process.env.HOME = previous; });
   return fs.realpathSync(folder);
 }
-const HOME_NOTE = /Open ELU Code in the project folder for core, not your home folder, then approve again\.$/;
+const HOME_NOTE = /This message would run in your home folder\. Answer y when ELU Code asks, or open ELU Code in the project folder for core and approve it there\.$/;
 test('a teammate\'s message never runs in the home folder: y, w and an older Auto setting leave it waiting with a plain line, and approving from the project runs it as their words', async t => {
   const p = setup(t, 'answer'), sara = teammate(p), teamId = everyTeam()[0].id;
   unshare('app');
@@ -606,10 +606,15 @@ test('a teammate\'s message never runs in the home folder: y, w and an older Aut
   // A record saved with the home folder as its root takes the project open now instead.
   const legacy = sendBare('Fix the build', 'thread-legacy'); fs.writeFileSync(peerFile('tasks', `${legacy.task.id}.json`), JSON.stringify({ ...getRecord(legacy.task.id), root: home }));
   assert.throws(() => acceptIncoming(sara.ctx, legacy.task.id, { how: 'own' }), HOME_NOTE);
-  // The conductor and the session refuse it too, whatever path reaches them.
-  assert.throws(() => enqueue(home, 'Work on the handoff from @sara shown in the peer data block.', { origin: origin('handoff', { own: true }), context: WORDS, permissions: 'ask' }), /never runs in your home folder/);
+  // The owner's y to the home question lets it run there: the request carries it.
+  acceptIncoming(sara.ctx, legacy.task.id, { how: 'own', home: true });
+  const allowedRow = pendingRequests(home).find(row => row.origin?.a2aTaskId === legacy.task.id);
+  assert.equal(allowedRow.home, true); assert.equal(allowedRow.state, 'queued'); removeRequest(home, allowedRow.id);
+  // The conductor and the session refuse it too, whatever path reaches them, unless he said y.
+  assert.throws(() => enqueue(home, 'Work on the handoff from @sara shown in the peer data block.', { origin: origin('handoff', { own: true }), context: WORDS, permissions: 'ask' }), { message: homeRefusal(null) });
   const inHome = new ProjectController(projectFolder(home));
-  assert.throws(() => inHome.ask('Work on the handoff from @sara shown in the peer data block.', null, { origin: origin('handoff', { own: true }), context: WORDS, permissions: 'ask' }), /never runs in your home folder/);
+  assert.throws(() => inHome.ask('Work on the handoff from @sara shown in the peer data block.', null, { origin: origin('handoff', { own: true }), context: WORDS, permissions: 'ask' }), { message: homeRefusal(null) });
+  assert.throws(() => enqueue(home, 'Hi', { home: true }), /Only a teammate's new session/);
   // The owner's own session in the home folder is unchanged.
   const mine = await inHome.ask('Where is coupon normalization?').finished;
   assert.equal(mine.state, 'answered');
@@ -636,6 +641,144 @@ test('a teammate\'s message never runs in the home folder: y, w and an older Aut
   assert.equal(sessionGoal(value), WORDS); assert.equal(taskTitle({ ...value, title: undefined }), WORDS);
   const lead = p.prompts().at(-1).input;
   assert.match(lead, /Work on the handoff from @sara shown in the peer data block/); assert.match(lead, /<<peer-data-[0-9a-f]{16} from="@sara"[^]*Get the issues from ELU, close the old ones/);
+});
+
+// The owner's layout: the project is his home folder, and the session, started by a message
+// from his other computer as a teammate, edits in a repository there. Its approved Task's work
+// stopped on a question. Returns the project, the session and its editing workspace.
+async function homeSession(t, p) {
+  const home = homeAt(t, path.join(p.parent, 'home')), web = path.join(home, 'web');
+  const cloned = spawnSync('git', ['clone', '-q', p.root, web], { encoding: 'utf8' }); assert.equal(cloned.status, 0, cloned.stderr);
+  git(web, ['config', 'user.name', 'Test Owner']); git(web, ['config', 'user.email', 'owner@example.invalid']);
+  fs.mkdirSync(path.join(web, 'backend/agents'), { recursive: true }); fs.writeFileSync(path.join(web, 'backend/agents/.npmrc'), 'engine-strict=true\n');
+  git(web, ['add', '.']); git(web, ['commit', '-q', '-m', 'Track .npmrc']);
+  fs.writeFileSync(path.join(p.parent, 'repository.txt'), web);
+  const repo = projectFolder(home); registerProject(repo);
+  const owner = autoApprove(new ProjectController(repo));
+  p.extra({ workQuestion: true });
+  const first = await owner.ask('Fix the issues in web', null, { permissions: 'ask' }).finished;
+  p.extra({});
+  assert.equal(first.state, 'needs_input'); assert.notEqual(first.kind, 'conversation');
+  assert.ok(first.worktree.startsWith(`${web}.elu-code${path.sep}`), first.worktree);
+  saveTask(repo, { ...readTask(repo, first.id), origin: { kind: 'handoff', peer: SARA, name: 'ali', threadId: 'thread-1', own: true } });
+  return { home, web, repo, id: first.id, worktree: first.worktree, controller: new ProjectController(repo) };
+}
+test('a session whose project is the home folder but that works in a repository runs the owner\'s reply, and the reply continues its Task\'s work with edit access', async t => {
+  const p = setup(t, 'normal'), s = await homeSession(t, p);
+  fs.writeFileSync(path.join(s.worktree, 'src/coupon.mjs'), 'export const normalize = (value) => value;\n');
+  const before = p.prompts().length;
+  const value = await s.controller.ask('I approve', s.id).finished;
+  assert.notEqual(value.state, 'blocked', JSON.stringify(value.error));
+  const turns = p.prompts().slice(before);
+  assert.ok(turns.length >= 1 && turns.every(row => !schemaOf(row.args).properties.intent), 'the work goes on, with no read-only reply turn: then the review');
+  const [work] = turns, settings = settingsOf(work.args);
+  assert.equal(schemaOf(work.args).properties.intent, undefined, 'a working turn, not a reply turn');
+  assert.ok(work.input.includes('I approve')); assert.match(work.input, /this turn does its work/);
+  assert.ok(work.args[work.args.indexOf('--tools') + 1].split(',').includes('Edit'));
+  assert.equal(settings.sandbox.filesystem.denyWrite.includes(s.worktree), false, 'the shell may write in the session\'s folder');
+  assert.equal((settings.permissions.ask ?? []).some(rule => /^(Edit|Write)\(/.test(rule)), false, 'an edit there asks nobody');
+  assert.equal(work.args.includes('--resume'), true, 'it resumes the working turn');
+  assert.equal(fs.readFileSync(path.join(s.worktree, 'src/coupon.mjs'), 'utf8'), 'export const normalize = (value) => value.toUpperCase();\n');
+  // Git works in it, with the tracked .npmrc.
+  git(s.worktree, ['add', '-A']); git(s.worktree, ['commit', '-q', '-m', 'Uppercase']);
+  assert.equal(git(s.worktree, ['status', '--porcelain']), '');
+  // Once the Task is done, a question gets a read-only turn that is told it cannot edit.
+  assert.ok(['ready', 'unverified', 'answered'].includes(readTask(s.repo, s.id).state), readTask(s.repo, s.id).state);
+  p.extra({ intent: 'answer' });
+  const asked = await s.controller.ask('What did you change?', s.id).finished;
+  const reply = p.prompts().at(-1);
+  assert.ok(schemaOf(reply.args).properties.intent, 'a reply turn'); assert.ok(reply.input.includes(READ_ONLY_REPLY));
+  assert.notEqual(asked.state, 'blocked');
+});
+test('the owner\'s reply to stopped work that cannot start again gets a read-only answer that says why, and his message is kept', async t => {
+  const p = setup(t, 'normal');
+  const owner = autoApprove(new ProjectController(p.repo));
+  p.extra({ workQuestion: true });
+  const first = await owner.ask('Fix the coupons', null, { permissions: 'ask' }).finished;
+  p.extra({});
+  assert.equal(first.state, 'needs_input'); assert.notEqual(first.kind, 'conversation');
+  // A Git hook appeared since the work started, so its work may not go on.
+  fs.writeFileSync(path.join(p.root, '.git/hooks/pre-commit'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  const why = 'Git hooks changed after the preview. Review the hooks before continuing.';
+  const controller = new ProjectController(p.repo), before = p.prompts().length;
+  // Even a model that asks to edit is kept to an answer.
+  p.extra({ intent: 'edit' });
+  const value = await controller.ask('What is left to do?', first.id).finished;
+  const turns = p.prompts().slice(before);
+  assert.equal(turns.length, 1, 'one reply turn, and no work turn');
+  assert.deepEqual(schemaOf(turns[0].args).properties.intent.enum, ['answer']);
+  assert.ok(turns[0].input.includes(STUCK_REPLY(why))); assert.equal(turns[0].input.includes(READ_ONLY_REPLY), false);
+  assert.equal(value.state, 'needs_input', 'the session rests where it was'); assert.equal(value.reply.intent, 'answer');
+  assert.ok(value.reply.summary.endsWith(`\n\n${STUCK_LINE(why)}`), value.reply.summary);
+  assert.ok(readTask(p.repo, first.id).messages.some(row => row.text === 'What is left to do?'), 'the message is kept');
+  // Once the hook is gone, the next reply continues the work again.
+  fs.rmSync(path.join(p.root, '.git/hooks/pre-commit')); p.extra({});
+  const after = p.prompts().length;
+  const done = await controller.ask('Go on.', first.id).finished;
+  assert.equal(schemaOf(p.prompts()[after].args).properties.intent, undefined, 'a work turn');
+  // A reply once the work has ended is read-only. As it is told, its intent edit is what goes
+  // on: the work continues with edit access, and nobody is asked to do it.
+  assert.ok(['ready', 'unverified', 'answered'].includes(done.state), done.state);
+  assert.doesNotMatch(READ_ONLY_REPLY, /tell the owner|how to continue/); assert.match(READ_ONLY_REPLY, /set intent to edit; the work then goes on with edit access\.$/);
+  p.extra({ intent: 'edit' });
+  const more = p.prompts().length;
+  await controller.ask('Also trim the codes.', first.id).finished;
+  const [again, goesOn] = p.prompts().slice(more);
+  assert.ok(schemaOf(again.args).properties.intent && again.input.includes(READ_ONLY_REPLY), 'the reply turn first');
+  assert.ok(goesOn, 'then the work turn'); assert.equal(schemaOf(goesOn.args).properties.intent, undefined);
+  assert.ok(goesOn.args[goesOn.args.indexOf('--tools') + 1].split(',').includes('Edit'), 'with edit access');
+});
+test('a teammate\'s session that works in the home folder asks the owner once: y keeps the answer, the message runs, and an unattended message waits with the question', async t => {
+  const p = setup(t, 'answer');
+  const home = homeAt(t, path.join(p.parent, 'home')), repo = projectFolder(home); registerProject(repo);
+  const inHome = new ProjectController(repo), WORDS = 'Where are the tests?';
+  // A new session there runs only with the owner's y, which it keeps.
+  const allowed = await inHome.ask('Work on the handoff from @sara shown in the peer data block.', null, { origin: origin('handoff', { own: true }), context: WORDS, permissions: 'ask', home: true }).finished;
+  assert.equal(allowed.homeAllowed, true); assert.equal(allowed.worktree, home);
+  // The same session without that answer: the owner's own message there is refused with what to do.
+  const { homeAllowed: _allowed, ...rest } = readTask(repo, allowed.id); saveTask(repo, rest);
+  assert.throws(() => inHome.ask('Go on.', allowed.id), { message: homeRefusal(allowed.id) });
+  assert.match(homeRefusal(allowed.id), /elu allow-home \d+$/);
+  // A teammate's later message, unattended: it waits under Needs you with the question.
+  const row = enqueue(home, 'Work on the handoff from @sara shown in the peer data block.', { continuationTaskId: allowed.id, origin: origin('handoff', { own: true }), context: 'And the docs?', permissions: 'ask' });
+  conduct(t);
+  await until(() => request(home, row.id)?.state === 'waiting', 'the held message');
+  assert.equal(request(home, row.id).reason, HOME_QUESTION); assert.equal(outbox(row.id), null, 'nothing is sent back');
+  // y: kept on the session, and the message goes at once.
+  inHome.allowHome(allowed.id);
+  assert.equal(readTask(repo, allowed.id).homeAllowed, true);
+  retryRequest(home, row.id);
+  await until(() => request(home, row.id)?.state === 'done', 'the allowed message', 60000);
+  assert.equal(readTask(repo, allowed.id).state, 'answered');
+  const mine = await inHome.ask('Go on.', allowed.id).finished;
+  assert.equal(mine.state, 'answered');
+});
+
+test('elu allow-home lets a teammate\'s session in the home folder run there, and the message it held goes again', async t => {
+  const p = setup(t, 'answer');
+  const home = homeAt(t, path.join(p.parent, 'home')), repo = projectFolder(home); registerProject(repo);
+  const inHome = new ProjectController(repo);
+  const started = await inHome.ask('Work on the handoff from @sara shown in the peer data block.', null, { origin: origin('handoff', { own: true }), context: 'Where are the tests?', permissions: 'ask', home: true }).finished;
+  const { homeAllowed: _allowed, ...rest } = readTask(repo, started.id); saveTask(repo, rest);
+  // A teammate's later message is held with the question.
+  const row = enqueue(home, 'Work on the handoff from @sara shown in the peer data block.', { continuationTaskId: started.id, origin: origin('handoff', { own: true }), context: 'And the docs?', permissions: 'ask' });
+  conduct(t);
+  await until(() => request(home, row.id)?.state === 'waiting', 'the held message');
+  assert.equal(request(home, row.id).reason, HOME_QUESTION);
+  // Asked wrongly, it says how, and changes nothing.
+  for (const [args, line] of [[['allow-home'], 'Use elu allow-home <session>.'], [['allow-home', 'one'], 'Use elu allow-home <session>.'], [['allow-home', '99'], 'No session 99 in a project at your home folder.']]) {
+    const refused = cli(home, args); assert.equal(refused.status, 1, refused.stdout); assert.equal(refused.json.message, line);
+  }
+  // The session's id: kept on the session, and the held message is queued again and runs.
+  const allowed = cli(home, ['allow-home', started.id]);
+  assert.equal(allowed.status, 0, allowed.stdout + allowed.stderr); assert.equal(allowed.json.message, `Session ${started.id} may run in your home folder now. Its message is on its way.`);
+  assert.equal(readTask(repo, started.id).homeAllowed, true);
+  await until(() => request(home, row.id)?.state === 'done', 'the message ran', 60000);
+  const value = readTask(repo, started.id);
+  assert.equal(value.state, 'answered'); assert.ok(value.messages.some(entry => entry.context === 'And the docs?'));
+  // Again, with nothing held: it says to send the message again.
+  const again = cli(home, ['allow-home', started.id]);
+  assert.equal(again.status, 0, again.stdout); assert.equal(again.json.message, `Session ${started.id} may run in your home folder now. Send your message again.`);
 });
 
 test('a teammate\'s session never edits a repository in the home folder, even when the model names the home folder', async t => {

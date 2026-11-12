@@ -73,6 +73,11 @@ In order: a bot that reviews or answers runs read only; a teammate's question or
 review, or a read-only turn, runs read only; otherwise the session's mode. A task
 saved without a mode runs read only.
 
+Your message to a session whose approved Task stopped (on a question, a block or your
+stop) continues that work with the Task's edit access, in the session's mode now. Only a
+session whose Task is done answers in a read-only turn, and that turn is told it cannot
+change files.
+
 A bot that works (one with a schedule, and `@lead`, `@qa` and each bot you make) runs in
 the session's mode when you write to it, and so do the helpers it hands work to. On Claude
 Code a working bot can start helpers when its instructions ask for them. They run on the
