@@ -7,11 +7,11 @@ custom binding). The commands a person types are in the [README](../README.md#te
 ## What it does
 
 1. Your agents talk to your teammates' agents, machine to machine, with no company server.
-   - **ask:** a question, answered by a read-only run in a project they shared.
+   - **ask:** a message to a teammate. It always reaches them; what it does on their machine is their setting for the team (see [What teammates can do here](#what-teammates-can-do-here)).
    - **ask a bot:** a question to one teammate can name a bot they share. That bot answers it in place of their model.
    - **review:** a diff sent for a read-only review.
    - **pictures:** a message you type to a teammate or a channel takes along the pictures it names. See [Pictures](#pictures).
-   - **handoff:** a goal for their machine. Any message can be answered (read-only) or worked on in a mode the owner picks; work never starts on its own.
+   - **handoff:** a goal for their machine, handled like any other message.
    - **status and overlap:** teammates see each other's live agents and get a warning when two agents edit the same file.
    - Agents can draft asks themselves. A draft is sent only when you approve it, or automatically to teammates you set to auto.
 2. A2A v1.0 data model end to end. A local A2A JSON-RPC endpoint on 127.0.0.1, off by default, lets other A2A tools reach your agent and, through it, your teammates.
@@ -101,7 +101,8 @@ Extension `urn:elu-code:a2a-ext:peer:v1`:
 - Its data lives in `metadata["urn:elu-code:a2a-ext:peer:v1"]` = `{kind, project, hop, from: {key, name}, team?, room?, bot?}`. `team: true` marks a team ask; older peers drop it and show a plain ask.
 - `kind` is one of `ask`, `review`, `handoff`, `answer`.
 - `project` is a share handle or repository id, or null for the team's project.
-  - The receiver takes it only for a project it shared with a team both machines are on. A project shared with another team is refused in the same words as one that is not shared.
+  - The receiver takes a named project only when it shared it with a team both machines are on. A project shared with another team is refused in the same words as one that is not shared.
+  - With null, the receiver uses the project of its [setting](#what-teammates-can-do-here) for the team, else the share chosen for the team, else its one share. Without any, the message is still taken (SUBMITTED) and waits for the owner, who approves it in a project he has open. ELU Code 0.1.6 and earlier refuse it instead, with "They have not shared a project, so there is nothing of theirs to ask about yet."; a newer sender shows that refusal as a line saying the teammate needs to update.
   - A share saved by a build from before shares kept their teams is open to every team of the receiver's until it is shared again.
 - `room: {team, channel}` says where a team ask was sent. `team` is the team id. `channel` is the channel id, or null for `#general`.
   - The receiver keeps the room only when both machines are on that team and, for a channel, both are in it. Otherwise it drops the room and shows a team ask with no channel.
@@ -112,11 +113,23 @@ Extension `urn:elu-code:a2a-ext:peer:v1`:
   - Only an `ask` to one teammate may carry it. With another kind, or with `team: true`, the message is refused as invalid params.
   - Older peers drop the field. There the question reaches the person as a plain ask.
 
+## What teammates can do here
+
+Each machine keeps one setting per team in `peer/access.json` = `{teamId: {handling, rules, root, at}}`. It is never sent; nothing on the wire changed for it.
+
+- `handling` is `auto` or `manual`. The teams that decide a message are the teams of the project it runs in: those the project is shared with that both machines are on (every common team for a share without teams), plus the common teams whose `root` is that project. The sender's `room` never chooses among them. When every one of them is `auto` with that project as its `root`, an incoming `ask`, `review` or `handoff` (not one for a shared bot, and not a team ask) is queued at once as the owner's own kind of session: a request with `origin.kind` `handoff`, `origin.own: true`, `origin.teams` those teams, the owner's default permission mode (`auto` in place of `full`), place `worktree` and no extra folders. A later message in the thread continues the session in its current mode, and waits when that is `full`. Its Task waits for the owner's approval as one he asked for would, and the reply says so. Otherwise it waits (SUBMITTED) until the owner's y, which queues the same request in his default mode. A team with no entry is `manual` with no rules.
+- These sessions count toward `peerSlots`. Each turn a message starts is capped at `caps.runUsd`; an outbox entry with no cost (`costUsd: null`) is charged the whole reservation.
+- `rules` is the owner's plain-English text, up to 1000 characters. Every turn of a session a teammate started (`task.origin.peer` set) is told it under "The owner's rules for teammates", read when the turn starts. It gets the rules of every team in `origin.teams`; a session without them gets the rules of every team the teammate is on.
+- `root` is the project those sessions run in: the folder `/join` (or `elu join`) ran in, or the one `/invite` shared. It is used when it is a registered project, and is never the home folder or above it.
+- Asked by `/join` before the join, by the first `/invite` for a team before its code, and changed with `/access` or `elu access [--auto|--manual] [--rules TEXT] [--project PATH]`. `elu join` and `elu invite` take `--auto`, `--manual` and `--rules` too. Without either, `elu invite` on a team that already has other members saves `manual`.
+- Leaving a team (`teamLeave`, or the leave written here when the daemon cannot start) and coming back to it with a new invite drop its entry along with its shares. Hearing that this machine was removed from it drops its entry only; its shares are dropped when it comes back. Joining again sets the entry again: `/join` asks, and `elu join` saves its flags or the defaults (`auto`, no rules).
+- A question for a shared bot (`bot` in the extension) waits for the owner as before, and is refused when the receiver has no project for it. A teammate set to `autoAccept` in `peers.json` still has its asks and reviews answered read-only while the team has no setting.
+
 Task state mapping:
 
 | ELU Code | A2A |
 |---|---|
-| waiting for the owner to accept | SUBMITTED |
+| waiting for the owner to approve | SUBMITTED |
 | run in progress | WORKING |
 | reply held for the owner's approval | WORKING, with ext metadata `{substate: "awaiting-owner"}` |
 | reply sent | COMPLETED, with the reply as one Artifact (text part) |

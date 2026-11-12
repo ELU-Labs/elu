@@ -191,9 +191,9 @@ elu id --name sam        # once: your name on the team
 elu team create shop
 elu invite               # prints a code like k7qm-x2pd-9fhw; it works once, within 24 hours
 
-# on your teammate's computer, in the project you may ask about
+# on your teammate's computer, in their copy of the project
 elu id --name kim
-elu join CODE            # joins their team, to ask about their project
+elu join CODE            # joins their team; your messages start sessions here
 ```
 
 There is nothing to turn on. Once your computer is on a team, a background process (the
@@ -202,14 +202,32 @@ invite someone or join a team, nothing starts and nothing connects. There is no 
 while you stay on a team: `/leave` (or `elu team leave`) takes you off one, and once you are
 on no team the daemon stops. If no teammate was online to hear that you left, it keeps
 running until one of them connects and is told. The person who made a team cannot leave it.
+An admin removes a teammate with `/remove @kim` (or `elu team remove kim`). Leaving, or being
+removed, also forgets what that team's messages could do on your machine. A new invite
+brings you back and sets it again: `/join` asks, and `elu join` saves its flags, Auto with
+no rules when there are none.
 
 `elu peers` shows who is online. In the app, write to a teammate in the Chats tab, or
-type `@kim where are the tax rates?` in any session. A teammate's question is answered
-read only, from a project you shared. `elu share`, or `/share` in the app, shares the
-project you are in. Inviting a teammate shares one too: `elu invite` shares the folder you
+type `@kim where are the tax rates?` in any session. A message always reaches them, and
+they can reply in the same thread.
+
+What a teammate's message does on your machine is yours to choose, once per team: `/join`
+asks, and so does your first `/invite` for a team. **Auto** (the default for a new team)
+starts a session in your project as if you had typed the message yourself: it runs in the
+project folder, reads your home folder (not the secret folders) and uses your MCP servers,
+in your default permission mode but never Full access, and its answer goes back without you
+reading it unless it looks like a secret. Any Task it proposes waits for your approval, and
+only an approved Task's edit runs in a new worktree. **Manual** keeps each message waiting
+until you press y. You can also write rules in plain English, such as "Only work on the elu
+repo. Don't write anything until I accept it.", and every session a teammate starts is told
+them. Push, merge, tag, deploy and publish stay blocked as they are for your own sessions in
+that mode. [SECURITY.md](SECURITY.md#what-teammates-can-do-here) has the details. `/access`,
+or `elu access`, shows and changes all of it.
+
+`elu share`, or `/share` in the app, shares the project you are in, so teammates can name it
+and see its live work. Inviting a teammate shares one too: `elu invite` shares the folder you
 run it in when it is an ELU Code project (`--project PATH` names another), and `/invite`
-the open project. Joining only joins: it shares nothing of yours, and you can `/share` a
-project later. The wire format is in
+the open project. Joining shares nothing of yours. The wire format is in
 [docs/peer-network.md](docs/peer-network.md).
 
 Teammates on a team a project is shared with also see the work in it: for each live
