@@ -689,15 +689,6 @@ test('a session whose project is the home folder but that works in a repository 
   const reply = p.prompts().at(-1);
   assert.ok(schemaOf(reply.args).properties.intent, 'a reply turn'); assert.ok(reply.input.includes(READ_ONLY_REPLY));
   assert.notEqual(asked.state, 'blocked');
-  // As that turn is told: when it sets intent to edit, the work goes on with edit access, and nobody is asked to do it.
-  assert.doesNotMatch(READ_ONLY_REPLY, /tell the owner|how to continue/); assert.match(READ_ONLY_REPLY, /set intent to edit; the work then goes on with edit access\.$/);
-  p.extra({ intent: 'edit' });
-  const more = p.prompts().length;
-  await s.controller.ask('Also trim the codes.', s.id).finished;
-  const [again, goesOn] = p.prompts().slice(more);
-  assert.ok(schemaOf(again.args).properties.intent && again.input.includes(READ_ONLY_REPLY), 'the reply turn first');
-  assert.ok(goesOn, 'then the work turn'); assert.equal(schemaOf(goesOn.args).properties.intent, undefined);
-  assert.ok(goesOn.args[goesOn.args.indexOf('--tools') + 1].split(',').includes('Edit'), 'with edit access');
 });
 test('the owner\'s reply to stopped work that cannot start again gets a read-only answer that says why, and his message is kept', async t => {
   const p = setup(t, 'normal');
@@ -723,8 +714,19 @@ test('the owner\'s reply to stopped work that cannot start again gets a read-onl
   // Once the hook is gone, the next reply continues the work again.
   fs.rmSync(path.join(p.root, '.git/hooks/pre-commit')); p.extra({});
   const after = p.prompts().length;
-  await controller.ask('Go on.', first.id).finished;
+  const done = await controller.ask('Go on.', first.id).finished;
   assert.equal(schemaOf(p.prompts()[after].args).properties.intent, undefined, 'a work turn');
+  // A reply once the work has ended is read-only. As it is told, its intent edit is what goes
+  // on: the work continues with edit access, and nobody is asked to do it.
+  assert.ok(['ready', 'unverified', 'answered'].includes(done.state), done.state);
+  assert.doesNotMatch(READ_ONLY_REPLY, /tell the owner|how to continue/); assert.match(READ_ONLY_REPLY, /set intent to edit; the work then goes on with edit access\.$/);
+  p.extra({ intent: 'edit' });
+  const more = p.prompts().length;
+  await controller.ask('Also trim the codes.', first.id).finished;
+  const [again, goesOn] = p.prompts().slice(more);
+  assert.ok(schemaOf(again.args).properties.intent && again.input.includes(READ_ONLY_REPLY), 'the reply turn first');
+  assert.ok(goesOn, 'then the work turn'); assert.equal(schemaOf(goesOn.args).properties.intent, undefined);
+  assert.ok(goesOn.args[goesOn.args.indexOf('--tools') + 1].split(',').includes('Edit'), 'with edit access');
 });
 test('a teammate\'s session that works in the home folder asks the owner once: y keeps the answer, the message runs, and an unattended message waits with the question', async t => {
   const p = setup(t, 'answer');

@@ -3334,15 +3334,15 @@ test('the app: a teammate\'s message held for a session in the home folder waits
   await until(() => held()?.state === 'waiting', 'the conductor holds the message', 20000);
   assert.equal(held().reason, HOME_QUESTION);
   // Its row is under Needs you and says what it waits for.
-  await until(() => /NEEDS YOU/.test(rows(v).join('\n')) && rows(v).some(text => /This session's project/.test(text)), 'the row under Needs you');
-  await selectRow(v, /This session's project/);
+  await until(() => /NEEDS YOU/.test(rows(v).join('\n')) && rows(v).some(text => /@ali task/.test(text)), 'the row under Needs you').catch(error => { throw new Error(`${error.message}: ${rows(v).join(' | ')}`); });
+  await selectRow(v, /@ali task/);
   await until(() => /This session's project is your home folder\. Let it run here\?/.test(v.current.panels.chat.getText().replace(/\n┃ /g, ' ').replace(/\s+/g, ' ')), 'the question beside the list');
   // n: nothing changes, and it waits.
   v.input.write('y'); await dialog(v, 'Home folder', 'n');
   await until(() => /It waits for you\./.test(status()), 'n leaves it');
   assert.equal(held().state, 'waiting'); assert.equal(readTask(p.homeRepo, id).homeAllowed, undefined);
   // y: kept on the session, and the message runs.
-  await selectRow(v, /This session's project/);
+  await selectRow(v, /@ali task/);
   v.input.write('y');
   await until(() => modal(v, 'Home folder'), 'the question again');
   assert.match(dialogText(v, 'Home folder'), /This session's project is your home folder\. Let it run here\?\n\ny yes · n no/);
