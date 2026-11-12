@@ -717,6 +717,27 @@ test('/invite, Another computer of mine, offers a computer already on the team, 
   assert.equal(peer.calls.some(row => row[0] === 'createInvite'), false, 'no code was made');
 });
 
+test('a session on my other computer that waits for y or n shows n once in the key bar, and @name of that computer names it in the new session box', async t => {
+  const at = new Date().toISOString(), base = { machine: SARA, createdAt: at, lastAt: at, title: 'Make coupons upper case', steps: [], entries: [] };
+  const remote = [{ ...base, id: '11111111-1111-4111-8111-111111111111', state: 'running', approvals: [{ id: 'approval-1', summary: 'Run ls', at }] },
+    { ...base, id: '22222222-2222-4222-8222-222222222222', state: 'answered', title: 'Uppercase plan', plan: { title: 'Uppercase coupons', state: 'proposed', subtasks: [] }, approvals: [] }];
+  const p = project(later(t)); environment(t, p.parent);
+  const peer = fakePeer({ items: [], mine: [{ key: SARA, mine: true, theirs: true }], remote }), v = await view(t, { repo: repository(p.root), dashboard: true, peer });
+  const board = v.panels.board, keys = () => v.panels.keys.getText();
+  await until(() => board.items.map(plainItem).some(row => /wants to run ls/.test(row)), 'the remote rows');
+  // In the new session box, @sara-box first says the session starts there.
+  const ask = v.panels.ask; ask.focus(); ask.readInput(); await until(() => ask.__listener, 'message box');
+  v.input.write('@sara-box fix the flaky test');
+  await until(() => /New session on @sara-box/.test(ask._label.getText()), 'the label names the computer');
+  ask.clearValue(); ask.cancel();
+  board.focus(); selectRow(board, /wants to run ls/);
+  await until(() => /y allow {2}n deny {2}enter open {2}tab next/.test(keys()), 'approval keys');
+  assert.doesNotMatch(keys(), /new session/);
+  selectRow(board, /Uppercase plan/);
+  await until(() => /y approve {2}n reject {2}enter open {2}tab next/.test(keys()), 'Task keys');
+  assert.doesNotMatch(keys(), /new session/);
+});
+
 test('a thread shows under its channel, #general or its teammate, and a row counts what waits for me', () => {
   const core = { id: 'team-1', name: 'Core', members: [{ key: ME, name: 'ana' }, { key: SARA, name: 'sara', online: true }, { key: LI, name: 'li' }], channels: [{ id: 'c1', name: 'design', members: [ME, SARA] }] };
   const status = { key: ME, teams: [core] }, general = roomTarget('team-1', null), design = roomTarget('team-1', 'c1');
