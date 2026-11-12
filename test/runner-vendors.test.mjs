@@ -259,7 +259,13 @@ test('a Grok lead over ACP: a kept rule allows its command without asking, and t
   fs.mkdirSync(path.join(f.parent, '.grok')); fs.writeFileSync(path.join(f.parent, '.grok', 'auth.json'), '{}\n', { mode: 0o600 });
   proven('grok', f.bin, '1.0.77', { relay: true });
   fs.writeFileSync(path.join(f.fake.dir, 'elu-marker'), `#!/bin/sh\nprintf ran > ${JSON.stringify(f.ran)}\n`, { mode: 0o755 });
+  // Grok Build over ACP runs no sandbox: a rule kept inside one does not answer, and the command waits for the owner.
   saveRule({ kind: 'command', words: ['elu-marker'], exact: false }, { scope: 'project', project: f.controller.repo.project ?? f.controller.repo.root });
+  const waits = f.controller.ask('Run the command elu-marker then reply done with the summary "asked".', null, { permissions: 'ask' }).finished;
+  const first = await answer('deny', { vendor: 'grok' });
+  assert.equal(first.summary, 'Run elu-marker'); assert.equal(first.sandboxed, undefined);
+  await waits; assert.equal(fs.existsSync(f.ran), false, 'nothing ran');
+  saveRule({ kind: 'command', words: ['elu-marker'], exact: false, outside: true }, { scope: 'project', project: f.controller.repo.project ?? f.controller.repo.root });
   const task = await f.controller.ask('Run the command elu-marker then reply done with the summary "ran it".', null, { permissions: 'ask' }).finished;
   assert.equal(task.state, 'answered', JSON.stringify(task.error)); assert.equal(fs.readFileSync(f.ran, 'utf8'), 'ran', 'the command ran');
   assert.deepEqual(pendingApprovals(), [], 'nothing waited for the owner');

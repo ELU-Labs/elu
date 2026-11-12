@@ -19,7 +19,7 @@ function home(t) {
   return { dir, project, other };
 }
 const bash = (command, extra = {}) => ['Bash', { command, ...extra }];
-const rule = (command, ctx = {}) => ruleFor(...bash(command), ctx);
+const rule = (command, ctx = {}) => ruleFor(...bash(command), { sandboxed: true, ...ctx });
 const words = command => rule(command).rule?.words?.join(' ') ?? null;
 
 test('a command becomes its program and subcommand; wide programs keep the exact command', () => {
@@ -42,7 +42,7 @@ test('a command becomes its program and subcommand; wide programs keep the exact
   }
   assert.match(rule('npm install lodash').line, /^Run exactly npm install lodash, without asking\.$/);
   // Asked outside the sandbox, the rule says so.
-  const outside = ruleFor(...bash('npm test', { dangerouslyDisableSandbox: true }));
+  const outside = ruleFor(...bash('npm test', { dangerouslyDisableSandbox: true }), { sandboxed: true });
   assert.equal(outside.rule.outside, true); assert.match(outside.line, /also outside the sandbox/);
 });
 
@@ -69,7 +69,7 @@ test('the never list always wins: no rule for it, a is never offered, and a save
   // A rule that is a prefix of a never-list command never answers that command.
   saveRule({ kind: 'command', words: ['git'], exact: true }, { scope: 'all' });
   saveRule({ kind: 'command', words: ['gh', 'pr'], exact: false }, { scope: 'all' });
-  const ctx = { project, cwd: project, saved: true };
+  const ctx = { project, cwd: project, saved: true, sandboxed: true };
   for (const command of ['git push', 'git -C . push', 'gh pr merge 3', 'git commit -m x && git push']) assert.equal(allowedBy(...bash(command), ctx), null, command);
   assert.deepEqual(allowedBy(...bash('gh pr view 3'), ctx), { by: 'rule', text: 'gh pr' });
 });
@@ -102,7 +102,7 @@ test('an edit becomes edits in the workspace in an editing turn, or one exact fi
 
 test('defaults are on from the first run, listed, and each can be turned off and on', t => {
   const { project } = home(t);
-  const ctx = { project, cwd: project, saved: false };
+  const ctx = { project, cwd: project, saved: false, sandboxed: true };
   assert.deepEqual(DEFAULTS.map(row => row.id), ['read', 'git-read', 'checks']);
   assert.deepEqual(listEntries().map(entryLine), ['1. on   Read and search files in the project (default, all projects)', '2. on   Git read commands: status, diff, log, show, branch, blame (default, all projects)', "3. on   The project's own test, lint, typecheck, format and build scripts, inside the sandbox (default, all projects)"]);
   // Reading and searching in the project.
@@ -135,7 +135,7 @@ test('scope: a rule for this project answers only there, one for all projects ev
   const npmTest = rule('npm test', { cwd: project }).rule;
   saveRule({ ...npmTest, outside: true }, { scope: 'project', project });
   saveRule(rule('cargo build').rule, { scope: 'all' });
-  const here = { project, cwd: project, saved: true }, there = { project: other, cwd: other, saved: true };
+  const here = { project, cwd: project, saved: true, sandboxed: true }, there = { project: other, cwd: other, saved: true, sandboxed: true };
   const outside = bash('npm test', { dangerouslyDisableSandbox: true });
   assert.deepEqual(allowedBy(...outside, here), { by: 'rule', text: 'npm test' });
   assert.equal(allowedBy(...outside, there), null, 'another project asks');
@@ -162,6 +162,24 @@ test('scope: a rule for this project answers only there, one for all projects ev
   assert.equal(removeEntry(5), 'Removed: Run cargo build, with any arguments.');
   assert.equal(allowedBy(...bash('cargo build'), there), null);
   assert.equal(fs.statSync(path.join(process.env.XDG_CONFIG_HOME, 'elu-code', 'permission-rules.json')).mode & 0o777, 0o600);
+});
+
+// Antigravity runs no sandbox, Grok Build over ACP starts none, and Claude Code goes on without
+// one where it cannot start (Linux without bwrap). There every command leaves the sandbox.
+test('where the turn has no working sandbox, every command counts as outside it', t => {
+  const { project } = home(t);
+  const bare = { project, cwd: project, saved: true, sandboxed: false };
+  for (const command of ['npm test', 'npm run lint', 'make test', 'node --test']) assert.equal(allowedBy(...bash(command), bare), null, command);
+  assert.equal(allowedBy('execute', { command: 'npm test' }, bare), null, 'Grok Build or Antigravity over ACP');
+  assert.equal(allowedBy('execute', { command: 'npm test' }, { project, cwd: project, saved: true }), null, 'a turn that does not say asks');
+  assert.equal(allowedBy(...bash('npm test'), { ...bare, sandboxed: true })?.by, 'default');
+  const made = ruleFor(...bash('npm test'), { cwd: project, sandboxed: false });
+  assert.equal(made.rule.outside, true); assert.match(made.line, /also outside the sandbox/);
+  saveRule(rule('cargo build').rule, { scope: 'all' });
+  assert.equal(allowedBy(...bash('cargo build'), bare), null, 'a rule kept inside the sandbox does not answer where there is none');
+  assert.equal(allowedBy(...bash('cargo build'), { ...bare, sandboxed: true })?.by, 'rule');
+  saveRule(made.rule, { scope: 'all' });
+  assert.deepEqual(allowedBy('execute', { command: 'npm test' }, bare), { by: 'rule', text: 'npm test' }, 'one kept there says so and answers there');
 });
 
 test('every vendor\'s way of asking is read the same', () => {

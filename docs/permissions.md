@@ -187,6 +187,8 @@ projects**. A rule is kept narrow:
   `chmod`, inline code (`node -e`, `python -c`, `sh -c`), a full path to a program, a
   secret (`.env`, keys, credentials, `~/.ssh`, `~/.aws`), an MCP tool or a web search.
 - A rule asked inside the sandbox applies inside it only; one asked outside it says so.
+  Where commands run with no sandbox at all (Antigravity, Grok Build, or Claude Code where
+  its sandbox cannot start), every command counts as outside it.
 - An edit becomes edits in the session's own workspace, in turns that edit (a Task you
   approved). Outside the project it is that one file. `.git`, `.elu-code` and secrets are
   asked each time.
@@ -202,7 +204,7 @@ These are on from the first run and apply in every mode:
 3. The project's own `test`, `lint`, `typecheck`, `format` and `build` scripts
    by name from `package.json` or the `Makefile`, and `cargo`, `go` and `pytest` checks where
    the project has `Cargo.toml`, `go.mod` or a Python project file, plus `node --test`. Inside
-   the sandbox only.
+   the sandbox only, so never on Antigravity or Grok Build, which run commands without one.
 
 They never cover installs, removals, network writes or secrets. In Ask for approval this
 means the reads and checks a session runs most no longer wait for you, while anything that

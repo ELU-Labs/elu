@@ -467,7 +467,8 @@ test('a rule kept once answers the next session; defaults never ask; the never l
   const first = await settle(f.controller.ask('Run the tests', null, { permissions: 'ask' }), row => {
     if (offered) return false;
     assert.equal(row.rules, 'saved'); assert.equal(row.access, 'read'); assert.deepEqual(row.input, { command: 'npm test', dangerouslyDisableSandbox: true });
-    offered = ruleFor(row.tool, row.input, { project: row.root, cwd: row.cwd, access: row.access });
+    assert.equal(row.sandboxed, true, 'the fake runs where the sandbox starts');
+    offered = ruleFor(row.tool, row.input, { project: row.root, cwd: row.cwd, access: row.access, sandboxed: row.sandboxed });
     assert.equal(offered.summary, 'Run npm test, with any arguments, also outside the sandbox');
     saveRule(offered.rule, { scope: 'project', project: row.root }); answerApproval(row.id, 'allow'); return true;
   });
