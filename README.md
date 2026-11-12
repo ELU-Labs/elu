@@ -41,7 +41,7 @@ as `.env`, stops it until `.gitignore` keeps that file out.
 | --- | --- |
 | Sessions | Every session across your projects. The selected one is open beside the list. |
 | Projects | Your projects. `n` makes one, `o` makes another the active one. |
-| Kanban | The open project's tasks: To do, In progress, Needs you, Done. In a project shared with a team, the Tasks teammates' sessions are working on show under them, by teammate, to read only. |
+| Kanban | The open project's tasks and sessions: To do, In progress, Needs you, Done. On a team, everyone with a clone of the same repository shares one board: every session a teammate, or another computer of yours, runs in it shows in the same columns with who started it and on which machine, to read only. A project whose folder holds several repositories has a board for each. `/share off` keeps a project off it both ways. |
 | Chats | Your team's channels, your teammates and your bots. |
 | Bots | Your bots. `n` makes one, Enter opens one. |
 | Usage | Your vendor accounts and their plan usage. |
@@ -257,8 +257,11 @@ or `elu access`, shows and changes all of it.
 `elu share`, or `/share` in the app, shares the project you are in, so teammates can name it
 and see its live work. Inviting a teammate shares one too: `elu invite` shares the folder you
 run it in when it is an ELU Code project (`--project PATH` names another), and `/invite`
-the open project. Joining shares nothing of yours. The wire format is in
-[docs/peer-network.md](docs/peer-network.md).
+the open project. Joining shares no project of yours, but the Kanban board needs no share:
+every session you run in a repository a teammate also has is on their Kanban, with its title,
+its column, who started it and which machine, and theirs are on yours. Nothing else about it
+is sent: no chat, file or path. `/share off` in a project keeps it off both ways. The wire
+format is in [docs/peer-network.md](docs/peer-network.md).
 
 Teammates on a team a project is shared with also see the work in it: for each live
 editing task, the first line of its request and the paths of the files it changed, and the

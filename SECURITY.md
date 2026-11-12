@@ -205,15 +205,47 @@ for secrets:
   subtasks, which objectives are met, who works on it, and its times. They are sent within
   5 seconds of a change, and to each teammate when they connect.
 
+**Without sharing.** A team has one board for each repository a member shared with it. A
+project of yours whose `origin` remote is that same repository is on that board too, though
+you never shared it, so the teammates on that team are told its Tasks as above (not its status
+rows, and nothing else about it). This needs no step on your machine, joining a team included,
+and your Manual or Auto setting does not change it. It never applies to your home folder or a
+folder that holds it, to a project with no `origin` remote, or to a project you share yourself:
+that one goes only to the teams you shared it with. Any member of the team can put a
+repository on its board by saying they share it. Their claim counts on your machine only
+when it names the repository's first commit and your clone has that commit, so knowing the
+remote is not enough. For a public repository both are public, so any teammate, or anyone
+posing as your inviter (see Invite codes), can bring your clone of it onto their board.
+`/share off` in a project keeps it off every board both ways: its Tasks are told to nobody,
+and teammates' Tasks are not shown in it or given to its models. `/share on` puts it back.
+
+**Sessions on the Kanban.** Every session you run in a repository is a card on the Kanban of
+each teammate, and each other computer of yours, who has a clone of that same repository.
+No share is needed. A card holds only the session's title (its name, or the first line of
+what was asked, up to 80 characters), its column (In progress, Needs you or Done), who
+started it, the time it last moved, and the id of its Task when it has one. Never the chat,
+a file, a diff or a path: a path in the title reads [path], and a title with a secret in it
+goes as "Session". A session a teammate's message started shows what they asked and their
+name only to teammates on a team that message came through; anyone else sees "Session". To know who has which repository, each machine sends each teammate
+one proof per repository: a hash of the two machines' keys, the repository id and its first
+commit. A teammate without a clone of that history cannot make the proof, and a proof made
+for one pair of machines counts for no other, so a card goes only to someone who has the
+repository, and is kept only from someone who proved it. For a public repository anyone can
+get the history, so any teammate can. `/share off` in a project keeps its sessions and its
+repositories to itself, and shows no teammate's session in it.
+
 Every teammate on any of your teams is also told, whatever the status of your shares, this
 machine's name (the peer setting `box`, by default the first part of its host name), the
-bots you share and what each is for, and the names of the projects shared with their team.
+bots you share and what each is for, the names of the projects shared with their team, and
+the repository ids (a hash of the `origin` remote) and first commit ids of those projects.
 Nothing else about your work is told: not a Task you have not approved or a rejected one,
 the rest of your request, the chat, file contents or absolute paths. A teammate's question
 and its answer are another matter, covered above.
 
 What a teammate tells is untrusted text: each field is checked and cut to its limit before
-it is kept, and it counts only in a project you share with a team that teammate is on. Your
+it is kept, and it counts only in your project of the same repository, when that repository
+is on the board of a team that teammate is on, and never in a project kept off with
+`/share off`. Your
 own model and bots in that project are given the titles and goals as data, marked as a
 teammate's text and never as a request; a teammate's question running on your machine is
 given none of it.
@@ -240,9 +272,14 @@ What others learn:
   the public key a joiner's proof is checked against. Not the code: a copy of the file
   cannot be used to join.
 - Whoever holds the code, or a copy of your `invites.json`, can also answer as you: wait on
-  the topic and admit the joiner to a team of their own. Joining shares nothing of the
-  joiner's, so all they would get is the joiner's questions. The joiner shares a project
-  only with `/share` or `elu share`, and `elu peers` shows each member's fingerprint.
+  the topic and admit the joiner to a team of their own. Joining shares no project of the
+  joiner's, so they would get the joiner's questions, and one more thing: the approved
+  Tasks of the joiner's clone of a repository they say they share, when they name its first
+  commit too (see Without sharing). For a private repository that takes a copy of it; for a
+  public one it does not. The joiner shares a project only with `/share` or `elu share`,
+  `/share off` keeps one off every board, and `elu peers` shows each member's fingerprint.
+  The titles and columns of the joiner's sessions in a repository the other side proves it
+  has go to them too (see Sessions on the Kanban).
 
 ## Your other computers
 
