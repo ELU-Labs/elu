@@ -3,9 +3,9 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { compile as claude, parse as parseClaude, NEVER_RULES } from '../lib/adapters/claude.mjs';
+import { compile as claude, parse as parseClaude, sandboxRefusal, secretReads, NEVER_RULES } from '../lib/adapters/claude.mjs';
 import { defaultConfig } from '../lib/config.mjs';
-import { temp, readRole } from './helpers.mjs';
+import { temp, readRole, git as gitIn } from './helpers.mjs';
 import { commandRule } from '../lib/policy.mjs';
 import { APPROVAL_TOOL } from '../lib/mcp.mjs';
 
@@ -206,4 +206,42 @@ test('parse reports the profile Claude ran with and its denials, clipped and not
   }
   const plain = parseClaude([{ ...init, permissionMode: undefined }, { ...result, permission_denials: undefined }].map(row => JSON.stringify(row)).join('\n'), { servers: ['elu-code-approval'] });
   assert.equal(plain.effectiveMode, null); assert.deepEqual(plain.denials, []);
+});
+
+test('a sandboxed command is kept from untracked secret files by path, never from tracked ones, which Git must read', t => {
+  const f = modeFixture(t), root = f.cwd, run = (dir, ...args) => gitIn(dir, args);
+  run(root, 'init', '--initial-branch=main'); run(root, 'config', 'user.name', 'Test Owner'); run(root, 'config', 'user.email', 'owner@example.invalid');
+  const write = (name, text) => { fs.mkdirSync(path.dirname(path.join(root, name)), { recursive: true }); fs.writeFileSync(path.join(root, name), text); };
+  // Tracked: an .npmrc and an .env.example the repository keeps, which every clone has.
+  write('backend/agents/.npmrc', 'registry=https://registry.npmjs.org/\n'); write('.env.example', 'API_KEY=\n'); write('.gitignore', '.env\n');
+  run(root, 'add', '.'); run(root, 'commit', '-m', 'Add sample');
+  // Untracked: an ignored .env, a key nobody added, and another repository inside this one.
+  write('.env', 'API_KEY=secret\n'); write('keys/dev.pem', 'key\n'); fs.mkdirSync(path.join(root, 'vendor/lib'), { recursive: true }); run(path.join(root, 'vendor/lib'), 'init'); write('vendor/lib/.env', 'X=1\n');
+  const reads = secretReads(root);
+  assert.ok(reads.includes(path.join(root, '.env')) && reads.includes(path.join(root, 'keys/dev.pem')), 'untracked secrets are hidden by path');
+  assert.ok(reads.includes(`${path.join(root, 'vendor/lib')}/**/.env*`), 'a repository inside keeps the names');
+  assert.equal(reads.filter(entry => !entry.startsWith(path.join(root, 'vendor/lib'))).some(entry => entry.endsWith('.npmrc') || entry.endsWith('.env.example') || entry.startsWith('**/')), false, 'tracked files stay readable, so git status, diff and add read them');
+  assert.deepEqual(secretReads(path.join(root, 'backend')), [], 'from a folder inside, only what lies under it');
+  for (const mode of ['ask', 'auto']) {
+    const { denyRead } = settingsOf(claude({ ...f.base, mode })).sandbox.filesystem;
+    assert.ok(denyRead.includes(path.join(root, '.env')) && !denyRead.includes('**/.npmrc'), `${mode}: the launch hides the untracked ones only`);
+  }
+  // Outside a Git work tree every match is hidden by name, as before.
+  assert.deepEqual(secretReads(temp(t)), ['**/.env*', '**/.npmrc', '**/auth.json', '**/credentials.json', '**/*.pem']);
+});
+test('what the sandbox refused inside a command is a denial: the host it kept off the internet, the file it would not write', () => {
+  assert.deepEqual(sandboxRefusal('curl: (56) CONNECT tunnel failed, response 403\n<sandbox_violations>\ndeny network-outbound elu.dev:443 (user denied)\n</sandbox_violations>'), { network: 'elu.dev' });
+  assert.deepEqual(sandboxRefusal("OSError: [Errno 30] Read-only file system: 'src/session-intelligence/tools.ts'"), { readonly: 'src/session-intelligence/tools.ts' });
+  assert.deepEqual(sandboxRefusal("touch: cannot touch '/etc/x': Read-only file system"), { readonly: '/etc/x' });
+  assert.deepEqual(sandboxRefusal("fatal: Unable to create '/srv/app/.git/index.lock': Read-only file system."), { readonly: '/srv/app/.git/index.lock' });
+  assert.equal(sandboxRefusal('ok\n'), null);
+  const line = row => JSON.stringify(row);
+  const stream = [
+    line({ type: 'system', subtype: 'init', session_id: SESSION, model: 'claude-x', permissionMode: 'default', mcp_servers: [] }),
+    line({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'toolu_a', name: 'Bash', input: { command: 'curl -sS https://elu.dev/' } }, { type: 'tool_use', id: 'toolu_b', name: 'Bash', input: { command: "python3 -c \"open('src/a.ts','w')\"" } }] } }),
+    line({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'toolu_a', content: 'Exit code 56\ndeny network-outbound elu.dev:443 (user denied)', is_error: true }, { type: 'tool_result', tool_use_id: 'toolu_b', content: "OSError: [Errno 30] Read-only file system: 'src/a.ts'", is_error: true }] } }),
+    line({ type: 'result', is_error: false, session_id: SESSION, total_cost_usd: 0, structured_output: { outcome: 'needs_input', summary: 'Blocked.', question: 'May I?', choices: [], comments: [], responses: [] } }),
+  ].join('\n');
+  const { denials } = parseClaude(stream);
+  assert.deepEqual(denials.map(({ tool, tool_use_id, network, readonly }) => ({ tool, tool_use_id, network, readonly })), [{ tool: 'Bash', tool_use_id: 'toolu_a', network: 'elu.dev', readonly: undefined }, { tool: 'Bash', tool_use_id: 'toolu_b', network: undefined, readonly: 'src/a.ts' }]);
 });

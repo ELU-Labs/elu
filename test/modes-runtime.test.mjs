@@ -119,6 +119,31 @@ test('an automatic edit task inherits the conversation mode; the reviewer and th
   assert.equal(locked.includes('--permission-prompt-tool'), false); assert.match(f.inputs().at(-1).input, /install packages/);
 });
 
+// A reply in a session whose edit has run resumes the working model in the session's own
+// folder: it may go on changing that folder, and asks nobody to write there. A session
+// still talking, and a read only one, keep the reading launch.
+test('a reply in a working session may change the session\'s own folder; a conversation reply reads', async t => {
+  const f = setup(t);
+  const task = await f.controller.ask('Normalize coupon codes', null, { permissions: 'ask', place: 'worktree' }).finished;
+  assert.equal(task.state, 'ready'); const worktree = fs.realpathSync(task.worktree), count = f.leads().length, asked = f.inputs().length;
+  const replyPrompts = from => f.inputs().slice(from).map(row => row.input).filter(input => /Respond to the owner immediately/.test(input));
+  const replied = await f.controller.ask('Also rename the helper', task.id).finished;
+  const reply = f.leads().slice(count).find(call => valueOf(call.args, '--permission-mode') === 'default');
+  assert.ok(reply, JSON.stringify(replied.runs.map(run => run.role)));
+  const settings = settingsOf(reply.args);
+  assert.equal(settings.sandbox.filesystem.denyWrite.includes(worktree), false, 'a command may write the session\'s folder');
+  assert.equal((settings.permissions.ask ?? []).some(rule => rule.includes(worktree.slice(1))), false, 'an edit there asks nobody');
+  assert.ok(settings.permissions.deny.includes('Bash(git push:*)'), 'the never list stays');
+  const [prompt] = replyPrompts(asked);
+  assert.match(prompt, /You may change files there in this turn/); assert.match(prompt, /Do not run git add or git commit/);
+  // A conversation that has not started an edit reads, as before.
+  const before = f.inputs().length, calls = f.leads().length;
+  await f.controller.ask('Where is coupon normalization?', null, { permissions: 'ask' }).finished;
+  const [talk] = replyPrompts(before), first = f.leads()[calls];
+  assert.doesNotMatch(talk, /You may change files there in this turn/);
+  assert.ok((settingsOf(first.args).permissions.ask ?? []).some(rule => rule.startsWith('Edit(')), 'an edit in a conversation turn asks');
+});
+
 // The owner names the folder of all his code. The session edits a repository in it, in a
 // worktree beside that repository: inside the named folder. A deny wins over an allow in the
 // vendor, so the edit's launch leaves the folder to the workspace's rules; the conversation,
