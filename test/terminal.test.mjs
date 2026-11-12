@@ -2718,7 +2718,7 @@ test('trust is set from the teammate screen; a cut path is reported after a send
   assert.match(dialogText(v, 'Teammate @li'), /Trust: trusted · paths go out as they are\./); assert.match(dialogText(v, 'Teammate @li'), /t removes trust/);
   v.input.write('t'); await until(() => modal(v, 'Trust @li'), 'remove confirm'); assert.match(dialogText(v, 'Trust @li'), /Remove trust for @li\?/);
   await dialog(v, 'Trust @li', 'y'); await until(() => peer.sent.some(c => c.type === 'untrust' && c.key === KEYS.li) && /Removed trust for @li\./.test(status()), 'untrust sent');
-  await send(v, '@li anything'); await until(() => /Sent to @li\. It runs after they accept it\./.test(status()), 'plain line');
+  await send(v, '@li anything'); await until(() => /Sent to @li\. Their reply shows in this thread\./.test(status()), 'plain line');
   await send(v, '@sara where is /Users/me/evals'); await until(() => /Paths outside the repo were replaced with \[path\]\. Trust @sara to keep them\./.test(status()), 'cut line');
   assert.deepEqual(peer.sent.filter(c => ['ask', 'handoff'].includes(c.type)).map(c => [c.type, c.to]), [['ask', 'li'], ['ask', 'sara']]);
 });

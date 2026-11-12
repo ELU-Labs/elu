@@ -366,14 +366,14 @@ test('typing in Chats writes to the open channel or person, and @name to one tea
   await send(v, '@sara web How do we deploy?');
   await until(() => peer.sent().some(row => row.type === 'ask'), 'ask');
   assert.deepEqual(peer.sent().at(-1), { type: 'ask', to: 'sara', project: 'web', text: 'How do we deploy?' });
-  await until(() => /Sent to @sara\. It runs after they accept it\./.test(status()) && v.panels.ask.getValue() === '', 'sent');
+  await until(() => /Sent to @sara\. Their reply shows in this thread\./.test(status()) && v.panels.ask.getValue() === '', 'sent');
   // A person: every word is the message, even one that is a project they share.
   await openRow(v, /@li\s+offline/, '@li');
   await until(() => /Message @li/.test(label()), 'the box names the person');
   await send(v, 'api tests fail on my machine');
   await until(() => peer.sent().at(-1).to === LI, 'direct message');
   assert.deepEqual(peer.sent().at(-1), { type: 'ask', to: LI, project: null, text: 'api tests fail on my machine' });
-  await until(() => /Sent to @li\. It runs after they accept it\./.test(status()) && v.panels.ask.getValue() === '', 'sent to the person');
+  await until(() => /Sent to @li\. Their reply shows in this thread\./.test(status()) && v.panels.ask.getValue() === '', 'sent to the person');
 });
 
 test('a channel is made from teammates on the team; typing writes to it, m changes who is in it, x leaves it', { timeout: 20000 }, async t => {
@@ -947,6 +947,37 @@ test('/access shows what teammates can do here and changes it; Esc changes nothi
   await send(v, '/access'); await until(() => modal(v, 'What teammates can do here') && list().selected === 1, 'Manual first');
   v.input.write('\x1b'); await until(() => /Nothing was changed\./.test(status()), 'Esc');
   assert.equal(peer.calls.filter(row => row[0] === 'saveTeamAccess').length, 1);
+});
+
+test('/access on a team with teammates and no setting offers Manual first, so Enter keeps their messages waiting', async t => {
+  const p = project(later(t)); environment(t, p.parent);
+  const peer = fakePeer({ access: {} }), v = await view(t, { repo: repository(p.root), peer }), status = () => v.panels.status.getText();
+  const list = () => modal(v, 'What teammates can do here').children.find(child => child.type === 'list');
+  await send(v, '/access'); await until(() => modal(v, 'What teammates can do here'), 'the handling');
+  assert.match(status(), /Core now: Not set: messages wait for you to approve them\./); assert.equal(list().selected, 1);
+  v.input.write('\r'); await closeDialog(v, 'Rules for teammates', '');
+  await until(() => /Saved for Core: messages wait for you to approve them/.test(status()), 'saved');
+  assert.equal(peer.access['team-1'].handling, 'manual');
+});
+
+test('a project that cannot hold teammates\' sessions is left out, and the last status line of /join, /invite and /access says why', async t => {
+  const p = project(later(t)); environment(t, p.parent);
+  const peer = fakePeer({ access: {} }), status = () => v.panels.status.getText();
+  const save = peer.saveTeamAccess;
+  peer.saveTeamAccess = (id, update) => { if (update.root) throw new Error('Your home folder cannot be the project teammates work in.'); return save(id, update); };
+  const v = await view(t, { repo: repository(p.root), peer });
+  const NOTE = /No project was saved for their sessions: Your home folder cannot be the project teammates work in\. Until one is, their messages wait for you\./;
+  await send(v, '/join k7qm-x2pd-9fhw'); await answerJoin(v);
+  await until(() => /Joined Docs with sara\./.test(status()), 'joined');
+  assert.match(status(), NOTE); assert.doesNotMatch(status(), /start sessions here/);
+  assert.deepEqual(peer.access['team-2'], { handling: 'auto', rules: '', root: null, at: 'now' });
+  await send(v, '/access'); await choose(v, 'What teammates can do here', /^Manual/); await closeDialog(v, 'Rules for teammates', '');
+  await until(() => /Saved for Core/.test(status()), 'access saved'); assert.match(status(), NOTE);
+  delete peer.access['team-1'];
+  await send(v, '/invite'); await choose(v, 'Invite', /^Someone new/);
+  await choose(v, 'What teammates can do here', /^Manual/); await closeDialog(v, 'Rules for teammates', '');
+  await until(() => modal(v, 'Team invite'), 'the code'); assert.match(status(), NOTE);
+  await closeDialog(v, 'Team invite');
 });
 
 test('a peer daemon an update left running is restarted before /join', async t => {
