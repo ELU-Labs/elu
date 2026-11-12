@@ -6,6 +6,33 @@ import fs from 'node:fs'; import path from 'node:path'; import readline from 'no
 const vendor=path.basename(process.argv[1]); const args=process.argv.slice(2);
 let cfg={}; try{cfg=JSON.parse(fs.readFileSync(path.join(path.dirname(process.argv[1]),'fake.json'),'utf8'));}catch{}
 const mode=cfg.mode??'normal';
+// claude mcp add-json --scope user -- NAME JSON and claude mcp remove --scope SCOPE -- NAME, as the real 2.1.322 does them, on the
+// .claude.json in CLAUDE_CONFIG_DIR. The settings are recorded as <json>, so a test can look for a key everywhere else.
+// mode mcp-echo: add-json fails and prints the settings it was given, as an error may.
+if(args[0]==='mcp'){
+ const dir=process.env.CLAUDE_CONFIG_DIR??process.env.HOME,file=path.join(dir,'.claude.json');let data={};try{data=JSON.parse(fs.readFileSync(file,'utf8'));}catch{}
+ const scope=args.includes('--scope')?args[args.indexOf('--scope')+1]:null,dashed=args.indexOf('--'),words=args.slice(1).filter((arg,at,all)=>arg!=='--scope'&&all[at-1]!=='--scope'&&at+1!==dashed);
+ // A word that starts with - before -- is an option, as commander reads it.
+ if(args.slice(1,dashed<0?undefined:dashed).some((arg,at,all)=>arg.startsWith('-')&&arg!=='--scope'&&all[at-1]!=='--scope')){console.error(`error: unknown option '${args.slice(1).find(arg=>arg.startsWith('-')&&arg!=='--scope')}'`);process.exit(1);}
+ if(cfg.calls)fs.appendFileSync(cfg.calls,JSON.stringify({vendor,args:args.map((arg,at)=>args[1]==='add-json'&&at===args.length-1?'<json>':arg),cwd:process.cwd()})+'\n');
+ const save=()=>{fs.mkdirSync(dir,{recursive:true});fs.writeFileSync(file,JSON.stringify(data,null,2),{mode:0o600});};
+ if(words[0]==='add-json'){
+  const [,name,json]=words;
+  if(mode==='mcp-echo'){console.error(`Invalid configuration: ${json}`);process.exit(1);}
+  if(!/^[A-Za-z0-9_-]+$/.test(name??'')){console.error(`Invalid name ${name}. Names can only contain letters, numbers, hyphens, and underscores.`);process.exit(1);}
+  let entry;try{entry=JSON.parse(json);}catch{entry=null;}
+  if(!entry||entry.url&&!entry.type){console.error('Invalid configuration: : Invalid input');process.exit(1);}
+  if(scope!=='user'){console.error('The fake takes --scope user only.');process.exit(1);}
+  if(data.mcpServers?.[name]){console.error(`MCP server ${name} already exists in user config`);process.exit(1);}
+  data.mcpServers={...data.mcpServers,[name]:entry};save();console.log(`Added ${entry.type??'stdio'} MCP server ${name} to user config`);process.exit(0);
+ }
+ if(words[0]==='remove'){
+  const name=words[1],servers=scope==='local'?data.projects?.[process.cwd()]?.mcpServers:data.mcpServers;
+  if(!servers?.[name]){console.error(`No MCP server named "${name}" in ${scope} scope`);process.exit(1);}
+  delete servers[name];save();console.log(`Removed MCP server ${name} from ${scope} config`);process.exit(0);
+ }
+ console.error('The fake knows mcp add-json and mcp remove only.');process.exit(1);
+}
 if(cfg.calls)fs.appendFileSync(cfg.calls, JSON.stringify({vendor,args,...(cfg.note?{tmp:process.env.CLAUDE_CODE_TMPDIR??null}:{})})+'\n');
 if(args.includes('--version')){console.log('2.1.319');process.exit(0);}
 // The --model entry of the real --help, which is where the aliases a bot's Model step offers come from.

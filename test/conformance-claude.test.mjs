@@ -71,7 +71,7 @@ test('ask, auto and full launch through the approval relay, deny the never list 
     for (const tool of ['Read', 'Grep', 'Glob', 'Edit', 'Write', 'WebFetch', 'WebSearch']) assert.ok(tools.includes(tool), `${mode} has ${tool}`);
     assert.ok(tools.includes('Bash'), `${mode} has a shell; without the OS sandbox its commands follow the mode`);
     for (const rule of NEVER_RULES) assert.ok(settings.permissions.deny.includes(rule), `${mode} denies ${rule}`);
-    assert.ok(NEVER_RULES.includes('Bash(git push:*)') && NEVER_RULES.includes('Bash(terraform apply:*)') && NEVER_RULES.length === 16);
+    assert.ok(NEVER_RULES.includes('Bash(git push:*)') && NEVER_RULES.includes('Bash(terraform apply:*)') && NEVER_RULES.includes('Bash(claude mcp add:*)') && NEVER_RULES.includes('Bash(elu mcp add:*)') && NEVER_RULES.length === 22);
     for (const name of ['.env*', '.npmrc', '.netrc', 'auth.json', 'credentials.json', 'id_rsa', '*.pem']) assert.ok(settings.permissions.deny.includes(`Read(**/${name})`), `${mode} denies ${name}`);
     const home = fs.realpathSync(os.homedir());
     assert.ok(settings.permissions.deny.includes(`Read(//${path.join(home, '.ssh').slice(1)}/**)`)); assert.ok(settings.permissions.deny.includes(`Read(//${path.join(home, '.claude.json').slice(1)})`));

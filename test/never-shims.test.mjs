@@ -47,11 +47,13 @@ test('a stand-in reads the command the way the tool does, not as text', t => {
     'npm --registry x publish': 'npm publish', 'pnpm -r publish': 'pnpm publish', 'cargo +nightly publish': 'cargo publish',
     'gcloud --project p run deploy': 'gcloud run deploy', 'gcloud run --region x deploy svc': 'gcloud run deploy', 'gcloud beta run deploy svc': 'gcloud run deploy', 'gcloud --quiet app deploy': 'gcloud app deploy',
     'kubectl -n ns apply -f x': 'kubectl apply', 'terraform -chdir=x apply': 'terraform apply', 'firebase --project p deploy --only hosting': 'firebase deploy',
+    'claude mcp --scope user add x https://x': 'claude mcp add', 'claude --debug mcp add-json x {}': 'claude mcp add-json', 'claude mcp remove -s user x': 'claude mcp remove', 'elu mcp add x https://x': 'elu mcp add',
   };
   for (const [line, command] of Object.entries(refused)) assert.deepEqual(f.call(f.all, words(line)), { code: REFUSED, out: `${neverSentence(command)}.` }, line);
   for (const line of ['git merge-base HEAD main', 'git tag-list', 'git log --grep push', 'git stash push', 'git -C push status', 'git status', 'git',
     'gh pr view 5', 'gh pr list --search merge', 'gh issue list release', 'npm run publish', 'npm install publish', 'npm --prefix dir run test', 'yarn publish-docs', 'cargo build',
-    'gcloud run services list', 'kubectl get pods', 'terraform plan', 'vercel ls', 'fly status', 'firebase emulators:start']) assert.deepEqual(f.call(f.all, words(line)), f.passed(words(line)), line);
+    'gcloud run services list', 'kubectl get pods', 'terraform plan', 'vercel ls', 'fly status', 'firebase emulators:start',
+    'claude mcp list', 'claude mcp get elu', 'claude -p hello', 'elu mcp', 'elu status']) assert.deepEqual(f.call(f.all, words(line)), f.passed(words(line)), line);
   // The arguments reach the real command as they were written.
   for (const line of [['git', 'commit', '-m', 'git push'], ['git', 'status', '', 'a b', '*', "it's", '$HOME', '-C']]) assert.deepEqual(f.call(f.all, line), f.passed(line), line.join(' '));
 });
