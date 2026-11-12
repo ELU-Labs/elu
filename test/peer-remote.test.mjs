@@ -442,7 +442,7 @@ test('a computer with many sessions is listed a page a tick, everything only on 
   const { laptop, devbox } = machines(t), key = devbox.identity.key, P = '1'.repeat(16);
   await withHome(laptop.home, async () => {
     markMine(laptop.identity.key, key); noteTheirs(key, true);
-    const row = n => ({ ref: `${P}:${n}`, project: P, title: `Session ${n}`, state: 'answered', at: new Date(Date.now() - n * 1000).toISOString(), approvals: [], by: 'you' });
+    const base = Date.now(), row = n => ({ ref: `${P}:${n}`, project: P, title: `Session ${n}`, state: 'answered', at: new Date(base - n * 1000).toISOString(), approvals: [], by: 'you' });
     const answer = (method, params) => method === 'elu.remote.watch' ? { id: watchId(laptop.identity.key, key, params.ref), project: 'shop', title: 'x' }
       : method === 'elu.remote.since' ? { id: params.id, events: [], more: false, last: 0, first: 1 }
       : params.after ? { full: params.since == null, cursor: 5, projects: [{ id: P, name: 'shop' }], sessions: [row(3)], gone: [], next: null }
