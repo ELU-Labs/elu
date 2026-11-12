@@ -32,12 +32,15 @@ message and press Enter. That starts a session: the model answers, or edits in a
 worktree on its own branch. Then the project's checks run and `@reviewer` reviews the
 change. Nothing is pushed until you type `/publish` and confirm.
 
-What installing and building leave in the worktree is not a change when Git ignores it:
-`node_modules`, `.venv`, `venv`, `__pycache__`, `.next`, `dist`, `build`, `coverage`,
-`.pytest_cache`, `.turbo`, `.cache`, `target` and the like. Nothing in those folders is read,
-so a link or a large file there never stops a session, and none of it is published. Any other
-ignored file the model writes fails the `no-ignored-output` check, and one that looks like a
-secret, such as `.env`, fails `secret-paths`; a link among them is never followed.
+What installing, building and testing leave in the worktree is not a change when Git ignores
+the folder itself: `node_modules`, `vendor`, `.venv`, `venv`, `__pycache__`, `*.egg-info`,
+`.eggs`, `.next`, `dist`, `build`, `coverage`, `htmlcov`, `.pytest_cache`, `.hypothesis`,
+`.turbo`, `.cache`, `target` and the like, and an ignored `.coverage` file. Nothing in those
+folders is read, so a link or a large file there never stops a session, and none of it is
+published. A folder of one of those names that Git does not ignore, such as a tracked
+`src/build`, is an ordinary folder. Any other ignored file the model writes fails the
+`no-ignored-output` check, and one that looks like a secret, such as `.env` or
+`src/build/.env`, fails `secret-paths`; a link among them is never followed.
 
 A worktree sits beside its repository, in a folder named after it with `.elu-code` added
 (`shop.elu-code` beside `shop`). When a Task edits the project folder itself and the folder
@@ -206,9 +209,13 @@ Five come with the app. You can edit or remove any of them in the Bots tab.
   publishing, so it never asks you to wait for a bot, review, commit, push or merge.
 - Write to a reviewing bot about edits the session has not published, such as `@reviewer make
   sure the fixes are real, not nitpicks`, and it reviews them with your words, in that same
-  loop. That holds when the session stopped after its edits (ready, blocked, not verified or
-  waiting for you) and the bot is one of its reviewers. A message that starts with `?`, or
-  ends with `?` and asks for no work (fix, check, review, verify, work with or on, go
+  loop. That holds when the session's own editing turn finished, it changed files and stopped
+  after that (ready, blocked, not verified or waiting for you), and the bot is one of its
+  reviewers. Edits you had in your checkout before the session started are not its own. The
+  fixes are work on the session's approved Task: a Task that was done opens again for them
+  and closes again when the review passes. The bot's must-fix findings stay within that Task;
+  new work is at most a suggestion, and you ask the agent for it. A message that starts with
+  `?`, or ends with `?` and asks for no work (fix, check, review, verify, work with or on, go
   through, look at, make sure), is a question: the bot answers it in the chat.
 - After you write to a bot, your next messages in that session go to it too, until you name
   another bot or start a message with `@model`. The title of the message box names who gets

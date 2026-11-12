@@ -87,13 +87,16 @@ if(mode==='slow-answer')await new Promise(resolve=>setTimeout(resolve,250));
 if(edit&&mode==='protected')fs.appendFileSync('package.json',' ');
 else if(edit&&mode!=='no-change')fs.writeFileSync('src/coupon.mjs','export const normalize = (value) => value.toUpperCase();\n');
 // install (fake.json): what an editing turn also leaves in its worktree. true: what npm install
-// leaves, an ignored node_modules with a link in .bin, a 5 MB file and 20,000 small files, and a
-// Python cache; 'link': a link that is not ignored.
+// leaves, an ignored node_modules with a link in .bin, a 5 MB file and 20,000 small files, a
+// Python cache, and what pip install -e and pytest-cov leave (egg-info, .coverage, htmlcov);
+// 'link': a link that is not ignored.
 if(edit&&cfg.install===true&&!fs.existsSync('node_modules/pkg')){
  fs.mkdirSync('node_modules/.bin',{recursive:true});fs.mkdirSync('node_modules/pkg',{recursive:true});fs.writeFileSync('node_modules/pkg/cli.js','#!/usr/bin/env node\n');fs.symlinkSync('../pkg/cli.js','node_modules/.bin/pkg');
  fs.writeFileSync('node_modules/pkg/big.bin',Buffer.alloc(5*1024*1024,1));
  for(let dir=0;dir<20;dir++){fs.mkdirSync(`node_modules/pkg/files/${dir}`,{recursive:true});for(let n=0;n<1000;n++)fs.writeFileSync(`node_modules/pkg/files/${dir}/${n}.js`,`module.exports=${n};\n`);}
  fs.mkdirSync('src/__pycache__',{recursive:true});fs.writeFileSync('src/__pycache__/coupon.cpython-313.pyc',Buffer.from([0,1,2]));
+ fs.mkdirSync('coupon.egg-info',{recursive:true});fs.writeFileSync('coupon.egg-info/PKG-INFO','Name: coupon\n');
+ fs.writeFileSync('.coverage',Buffer.from([0,1,2]));fs.mkdirSync('htmlcov',{recursive:true});fs.writeFileSync('htmlcov/index.html','<p>100%</p>\n');
 }
 if(edit&&cfg.install==='link'){try{fs.lstatSync('tool-link');}catch{fs.symlinkSync('src/coupon.mjs','tool-link');}}
 if(edit&&input.includes('Trim spaces'))fs.writeFileSync('src/coupon.mjs','export const normalize = (value) => value.trim().toUpperCase();\n');
