@@ -242,7 +242,8 @@ test('a sandboxed command is kept from untracked secret files by path, never fro
   write('.env', 'API_KEY=secret\n'); write('keys/dev.pem', 'key\n'); fs.mkdirSync(path.join(root, 'vendor/lib'), { recursive: true }); run(path.join(root, 'vendor/lib'), 'init'); write('vendor/lib/.env', 'X=1\n');
   fs.mkdirSync(path.join(root, '.repos/other'), { recursive: true }); run(path.join(root, '.repos/other'), 'init'); write('.repos/other/.env', 'TOKEN=secret\n'); write('.repos/other/.npmrc', '//registry.npmjs.org/:_authToken=x\n');
   const reads = secretReads(root), globs = reads.filter(entry => entry.includes('/**/')), covers = file => reads.includes(file) || globs.some(entry => file.startsWith(`${entry.slice(0, entry.indexOf('/**/'))}/`) && glob(entry.slice(entry.indexOf('/**/') + 4)).test(path.basename(file)));
-  assert.ok(reads.includes(path.join(root, '.env')) && reads.includes(path.join(root, 'keys/dev.pem')), 'untracked secrets are hidden by path');
+  assert.ok(reads.includes(path.join(root, '.env')), 'an untracked secret in a folder Git tracks is hidden by path');
+  assert.ok(covers(path.join(root, 'keys/dev.pem')) && reads.includes(`${path.join(root, 'keys')}/**/*.pem`), 'one in a folder Git tracks nothing in, by the names in that folder');
   assert.ok(covers(path.join(root, 'vendor/lib/.env')), 'a repository inside keeps the names');
   assert.ok(covers(path.join(root, '.repos/other/.env')) && covers(path.join(root, '.repos/other/.npmrc')), 'an ignored repository inside keeps them too');
   assert.equal(reads.some(entry => entry.startsWith('**/')) || [path.join(root, 'backend/agents/.npmrc'), path.join(root, '.env.example')].some(covers), false, 'tracked files stay readable, so git status, diff and add read them');
@@ -253,4 +254,20 @@ test('a sandboxed command is kept from untracked secret files by path, never fro
   }
   // Outside a Git work tree every match is hidden by name, as before.
   assert.deepEqual(secretReads(temp(t)), ['**/.env*', '**/.npmrc', '**/auth.json', '**/credentials.json', '**/*.pem']);
+});
+
+test('a repository added inside another by hand, with no .gitmodules entry, keeps the secret names for the shell and the file tools', t => {
+  const f = modeFixture(t), root = f.cwd, run = (dir, ...args) => gitIn(dir, args);
+  for (const dir of [root, path.join(root, 'inner')]) { fs.mkdirSync(dir, { recursive: true }); run(dir, 'init', '--initial-branch=main'); run(dir, 'config', 'user.name', 'Test Owner'); run(dir, 'config', 'user.email', 'owner@example.invalid'); }
+  fs.writeFileSync(path.join(root, 'inner/README.md'), 'inner\n'); run(path.join(root, 'inner'), 'add', '.'); run(path.join(root, 'inner'), 'commit', '-m', 'Inner');
+  fs.writeFileSync(path.join(root, 'README.md'), 'outer\n'); run(root, 'add', 'README.md', 'inner'); run(root, 'commit', '-m', 'Add a clone by hand');
+  assert.match(run(root, 'ls-files', '-s', 'inner'), /^160000 /, 'held as a commit in the index');
+  assert.equal(fs.existsSync(path.join(root, '.gitmodules')), false);
+  fs.writeFileSync(path.join(root, 'inner/.env'), 'TOKEN=secret\n');
+  const reads = secretReads(root), dir = path.join(root, 'inner');
+  assert.ok(reads.includes(`${dir}/**/.env*`) && reads.includes(`${dir}/**/.npmrc`), 'the sandbox hides the names inside it');
+  for (const mode of ['locked', 'ask', 'auto', 'full']) {
+    const args = mode === 'locked' ? claude({ role: f.role, cwd: root, protectedPaths: f.protectedPaths, commonDir: f.commonDir, session: SESSION }) : claude({ ...f.base, mode });
+    assert.ok(settingsOf(args).permissions.deny.includes(`Read(//${dir.slice(1)}/**/.env*)`), `${mode}: the file tools are denied them too`);
+  }
 });
