@@ -177,6 +177,9 @@ test('teammates\' sessions are cards in the column their board has them, with wh
   assert.equal(Boolean(cart.card || cart.task || cart.request), false);
   // The name stays beside the title when the column is narrow.
   assert.deepEqual(fitTeammateCard('Fix the cart total for every coupon there is', cart.detail, 30), { title: 'Fix the cart total…', detail: '@sara' });
+  // A session's card keeps who and where: the title is cut for both.
+  assert.deepEqual(fitTeammateCard('Document the v2 endpoint', cart.detail, 38, 2), { title: 'Document the v2…', detail: '@sara · devbox' });
+  assert.deepEqual(fitTeammateCard('Short', cart.detail, 38, 2), { title: 'Short', detail: '@sara · devbox' });
 });
 
 test('a project above several repositories has a board for each, led by the open session\'s; a session in no repository is on each', t => {

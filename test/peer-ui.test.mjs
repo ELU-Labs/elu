@@ -1488,7 +1488,8 @@ test('Kanban shows every session teammates run in the same repository, with who 
   await until(() => modal(v, 'Kanban board'), 'the picker');
   v.input.write('\x1b[B'); v.input.write('\r');
   await until(() => column(3).length === 1 && column(1).length === 0 && column(2).length === 0, 'the api board');
-  assert.match(column(3)[0], /^Document the v2 endpoint  @sara · sara-box/);
+  // A title too long for the column is cut so who and where stay beside it.
+  assert.match(column(3)[0], /^Document the v2…  @sara · sara-box/);
   assert.match(panels.kanbanPick.getText(), /Board: acme\/api ▾/);
   // Moved on their machine: moved here; gone there: gone here.
   people = [{ ...people[0], sessions: [teamSession({ repoId: API, id: '2123456789abcdef', title: 'Document the v2 endpoint', column: 'needs', at: ago(0) })] }];
