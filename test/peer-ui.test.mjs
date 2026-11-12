@@ -735,7 +735,8 @@ test('a session on my other computer that waits for y or n shows n once in the k
   board.focus(); selectRow(board, /wants to run ls/);
   await until(() => /y allow {2}n deny {2}enter open {2}tab next/.test(keys()), 'approval keys');
   assert.doesNotMatch(keys(), /new session/);
-  selectRow(board, /Uppercase plan/);
+  // A Task waiting in a session started from here waits under Needs you, marked with the computer.
+  selectRow(board, /on sara-box · Uppercase plan/);
   await until(() => /y approve {2}n reject {2}enter open {2}tab next/.test(keys()), 'Task keys');
   assert.doesNotMatch(keys(), /new session/);
 });
@@ -745,7 +746,7 @@ test('Sessions lists every session of my other computer in this repository under
   const p1 = '1'.repeat(16), p2 = '2'.repeat(16);
   const session = (ref, title, minutes, extra = {}) => ({ id: `${ref.slice(-1)}1111111-1111-4111-8111-11111111111${ref.slice(-1)}`, ref, project: ref.split(':')[0], title, state: 'answered', at: at(minutes), createdAt: at(minutes + 1), approvals: [], by: 'you', who: null, ...extra });
   const machines = [{ key: SARA, listedAt: at(0), older: false, projects: [{ id: p1, name: 'shop', repoId: SHOP, home: false }, { id: p2, name: 'ana', repoId: null, home: true }],
-    sessions: [session(`${p1}:1`, 'Typed there by hand', 5), session(`${p1}:2`, 'Kim asked for a fix', 2, { by: 'teammate', who: 'kim', state: 'running', approvals: [{ id: 'approval-1', role: 'lead', summary: 'Run npm test', at: at(1) }] }), session(`${p2}:3`, 'Tidy my notes', 3)] },
+    sessions: [session(`${p1}:1`, 'Typed there by hand', 5), session(`${p1}:2`, 'Kim asked for a fix', 2, { by: 'teammate', who: 'kim', state: 'running', approvals: [{ id: 'approval-1', role: 'lead', summary: 'Run npm test', at: at(1) }] }), session(`${p2}:3`, 'Tidy my notes', 3, { state: 'running', approvals: [{ id: 'approval-2', role: 'lead', summary: 'Run rm notes.tmp', at: at(2) }] })] },
     // li is not mine: what is kept for li shows nowhere.
     { key: LI, listedAt: at(0), projects: [{ id: p1, name: 'shop', repoId: SHOP }], sessions: [session(`${p1}:4`, 'Li private', 1)] }];
   const p = project(later(t)); environment(t, p.parent);
@@ -756,7 +757,9 @@ test('Sessions lists every session of my other computer in this repository under
   assert.match(at2[heading + 1], /Kim asked for a fix/); assert.match(at2[heading + 2], /Typed there by hand/);
   assert.ok(!at2.some(row => /Tidy my notes|Li private/.test(row)), 'another project of it, and a computer that is not mine, are not listed here');
   // Its approval also waits under Needs you, marked with the computer.
-  assert.ok(at2.findIndex(row => /on sara-box · wants to/.test(row)) >= 0 && at2.findIndex(row => /on sara-box · wants to/.test(row)) < heading);
+  assert.ok(at2.findIndex(row => /on sara-box · wants to run npm test/.test(row)) >= 0 && at2.findIndex(row => /on sara-box · wants to run npm test/.test(row)) < heading);
+  // So does one in its home folder, which Sessions does not list under this project.
+  assert.ok(at2.findIndex(row => /on sara-box · wants to run rm notes\.tmp/.test(row)) >= 0 && at2.findIndex(row => /on sara-box · wants to run rm notes\.tmp/.test(row)) < heading);
   // Projects lists its other project; Enter opens it in Sessions under a heading of its own.
   await send(v, '/projects'); await until(() => v.current.view === 'projects' && v.panels.projectsList.items.some(item => /ana on sara-box/.test(plainItem(item))), 'the other project');
   assert.ok(!v.panels.projectsList.items.some(item => /shop on sara-box/.test(plainItem(item))), 'the project of this repository is in Sessions');
