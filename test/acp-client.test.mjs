@@ -60,6 +60,18 @@ test('a server that writes nothing for the quiet limit is stopped unless the run
   assert.equal((await talking.client.request('echo')).notifications, 0, 'three seconds of replies, each within the quiet limit');
 });
 
+// The owner's case: a long test run inside a turn prints nothing until it ends.
+test('a tool call that runs silently past the quiet limit does not stop the server; the cap still does', async t => {
+  const [working, endless] = await Promise.all([start(t, { quietSeconds: 1, timeoutSeconds: 60 }), start(t, { quietSeconds: 1, timeoutSeconds: 3 })]);
+  endless.client.request('command', { ms: null }, { timeoutMs: 10000 }).catch(() => {});
+  const started = Date.now();
+  assert.deepEqual(await working.client.request('command', { ms: 2500 }, { timeoutMs: 10000 }), { ran: true }, 'two and a half seconds of silence with a 1 second quiet limit');
+  assert.ok(Date.now() - started >= 2500);
+  await sleep(1500);
+  const quiet = await working.client.exit; assert.equal(quiet.stoppedBy, 'quiet', 'once the call ended, silence counts again');
+  const capped = await endless.client.exit; assert.equal(capped.timedOut, true); assert.equal(capped.stoppedBy, 'cap', 'a call that never ends still stops at the cap');
+});
+
 test('the time limit kills the server unless the run is held; an abort kills it at once', async t => {
   const [limited, held, aborted] = await Promise.all([
     start(t, { timeoutSeconds: 1 }),

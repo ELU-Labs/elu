@@ -190,13 +190,17 @@ on the run.
 ### How long a turn runs
 
 A turn that is still working is never cut by the clock. It is stopped only when the vendor
-has printed nothing for 10 minutes, or after 2 hours, a safety cap. Time a request waits for
-you counts toward neither, and the 10 minutes start again once it is answered. A stopped turn
+has printed nothing for 10 minutes, or after 2 hours, a safety cap. A command the model runs
+counts as working for as long as it runs, even when it prints nothing, such as a long test
+run: the 10 minutes count only while no command is running. Time a request waits for you
+counts toward neither, and the 10 minutes start again once it is answered. A stopped turn
 says so in the chat in one line, such as "Stopped after 10 minutes with no output. Your
 changes are kept. Reply to carry on." Its edits stay on disk, and your next message carries
 on. `roles.lead.timeoutSeconds` in `.elu-code/config.yaml` sets the 10 minutes; the 900 it
 says by default means the default, as 600 does. A vendor that prints its answer only at
-the end (Antigravity and Grok Build without the live relay) has the cap alone.
+the end (Antigravity and Grok Build without the live relay) has the cap alone. So does each
+of the project's checks: a check runs until it ends, up to the same 2 hours, however long it
+prints nothing.
 
 The keys are `y` allow and `n` deny. Where the session can be given Full access
 there is a third, `f`: it asks what `/permissions full` asks, then allows the

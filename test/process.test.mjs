@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { runProcess, processIdentity, recoverProcess, agentEnv } from '../lib/process.mjs';
+import { commandWatch } from '../lib/turn-limits.mjs';
 import { temp } from './helpers.mjs';
 
 test('timeouts terminate the process group and preserve a local diagnostic', async (t) => {
@@ -27,6 +28,25 @@ test('a process that keeps printing outlives the quiet limit; a silent one is st
   // Held for two seconds of silence (an approval waiting), then quiet for less than the limit: it ends by itself.
   const until = Date.now() + 2000, held = await runProcess({ bin: process.execPath, args: ['-e', 'setTimeout(()=>{console.log("answered")},2600)'], cwd, env: agentEnv(), logFile: log('held'), timeoutSeconds: 60, quietSeconds: 1, hold: () => Date.now() < until });
   assert.deepEqual([held.code, held.timedOut, held.stoppedBy], [0, false, null]); assert.match(fs.readFileSync(log('held'), 'utf8'), /answered/);
+});
+// The owner's case: a long test run inside a turn prints nothing until it ends.
+test('a command the vendor runs is working while it runs: its silence does not stop the process, and the cap still does', async (t) => {
+  const cwd = temp(t), log = name => path.join(cwd, `${name}.log`), print = value => `console.log(${JSON.stringify(JSON.stringify(value))})`;
+  const claude = [{ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'toolu_1', name: 'Bash', input: { command: 'npm test' } }] } }, { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'ok' }] } }];
+  const codex = [{ type: 'item.started', item: { id: 'item_1', type: 'command_execution', command: 'npm test', status: 'in_progress' } }, { type: 'item.completed', item: { id: 'item_1', type: 'command_execution', command: 'npm test', status: 'completed' } }];
+  // The call, two and a half seconds of nothing while it runs, its result, then silence.
+  const script = ([call, done]) => `${print(call)};setTimeout(()=>{${print(done)};setInterval(()=>{},1000)},2500)`;
+  const run = (name, args, extra) => runProcess({ bin: process.execPath, args: ['-e', args], cwd, env: agentEnv(), logFile: log(name), timeoutSeconds: 60, quietSeconds: 1, ...extra });
+  const [fromClaude, fromCodex, unread, endless] = await Promise.all([
+    run('claude', script(claude), { working: commandWatch('claude') }), run('codex', script(codex), { working: commandWatch('codex') }),
+    run('unread', script(claude)), run('endless', `${print(claude[0])};setInterval(()=>{},1000)`, { timeoutSeconds: 3, working: commandWatch('claude') }),
+  ]);
+  for (const [name, value] of [['claude', fromClaude], ['codex', fromCodex]]) {
+    assert.match(fs.readFileSync(log(name), 'utf8'), /tool_result|item\.completed/, `${name}: the command ran its two and a half silent seconds to the end`);
+    assert.equal(value.stoppedBy, 'quiet', `${name}: once it ended, silence counts again`);
+  }
+  assert.equal(unread.stoppedBy, 'quiet'); assert.doesNotMatch(fs.readFileSync(log('unread'), 'utf8'), /tool_result/, 'a stream nobody reads has the quiet limit alone');
+  assert.deepEqual([endless.timedOut, endless.stoppedBy], [true, 'cap'], 'a command that never ends stops at the cap');
 });
 test('recovery stops only the exact recorded process, never a reused PID', async (t) => {
   const child = spawn(process.execPath, ['-e', 'setInterval(()=>{},1000)'], { detached: true, stdio: 'ignore' });
