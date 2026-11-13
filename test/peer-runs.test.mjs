@@ -33,7 +33,7 @@ import { acceptIncoming, discardReply, processOutbox } from '../lib/peer/replies
 import { checkRoot, saveTeamAccess } from '../lib/peer/access.mjs';
 import { HOME_QUESTION, HOME_TARGET, homeOrAbove, homeRefusal } from '../lib/util.mjs';
 import { getRecord, thread } from '../lib/peer/taskstore.mjs';
-import { applyTask, asks as sentAsks, continueAnswer, createAsk, dropHeldResult, getAsk, sendHeldResult } from '../lib/peer/asks.mjs';
+import { applyTask, asks as sentAsks, continueAnswer, createAsk, dismissAsk, dropHeldResult, getAsk, sendHeldResult } from '../lib/peer/asks.mjs';
 import { heldText, peerItems, threadMessages } from '../lib/peer/index.mjs';
 
 const SARA = 'b'.repeat(64), ME = 'a'.repeat(64);
@@ -597,19 +597,27 @@ test('c on a thread that shows a result continues the chat with that result, onc
   const asked = createAsk(saraCtx, { to: sara.me.key, kind: 'ask', text: HANDOFF, threadId: 'thread-9', root: p.root, chatTaskId: '7' });
   const row = () => peerItems().find(item => item.id === `answer:${asked.id}`);
   const continued = () => pendingRequests(p.root).filter(item => item.continuationTaskId === '7' && item.origin?.threadId === 'thread-9');
-  // The plan is answered and the chat goes on with it: the row leaves the list.
+  // The plan is answered and the chat goes on with it: its thread stays listed, marked as continued.
   applyTask(saraCtx, sara.me.key, a2aTask({ contextId: 'thread-9', state: TaskState.COMPLETED, artifacts: [artifact({ name: 'Answer', text: 'The plan waits for my approval.' })] }), asked.id);
-  assert.equal(row().result, undefined);
+  assert.equal(row().result, undefined); assert.equal(row().continued, undefined);
   continueAnswer(saraCtx, asked.id);
-  assert.equal(row(), undefined); assert.equal(continued().at(-1).context, 'The plan waits for my approval.');
-  // The result comes later, with auto-continue off: the row is back and shows it, as a result.
+  assert.deepEqual([row()?.kind, row()?.continued, row()?.text, row()?.question, row()?.threadId], ['answer', true, 'The plan waits for my approval.', HANDOFF, 'thread-9']);
+  assert.equal(continued().at(-1).context, 'The plan waits for my approval.');
+  // The result comes later, with auto-continue off: the row shows it, as a result that waits for c.
   saraSide.SendMessage({ message: message({ text: 'Coupon codes are uppercase now.', contextId: 'thread-9', messageId: crypto.randomUUID(), ext: { kind: 'result', project: null, hop: 1, from: { key: sara.me.key, name: 'ana' } } }) }, { key: sara.me.key });
-  assert.equal(row().text, 'Coupon codes are uppercase now.'); assert.equal(row().result, true); assert.equal(continued().length, 1);
-  // c continues the chat with the result, not with the plan again.
+  assert.equal(row().text, 'Coupon codes are uppercase now.'); assert.equal(row().result, true); assert.equal(row().continued, undefined); assert.equal(continued().length, 1);
+  // c continues the chat with the result, not with the plan again, and the thread still shows.
   const next = continueAnswer(saraCtx, asked.id);
   assert.match(next.goal, /^Continue with the result from @ana shown in the peer data block\.$/); assert.equal(next.context, 'Coupon codes are uppercase now.');
-  assert.equal(continued().length, 2); assert.equal(row(), undefined);
+  assert.equal(continued().length, 2);
+  assert.deepEqual([row()?.continued, row()?.result, row()?.text], [true, true, 'Coupon codes are uppercase now.']);
   assert.throws(() => continueAnswer(saraCtx, asked.id), /already continued/);
+  // Like a question I answered, it stays for a week after the chat went on with it; n dismisses it sooner.
+  const file = peerFile('asks', `${asked.id}.json`), saved = JSON.parse(fs.readFileSync(file, 'utf8')), old = new Date(Date.now() - 8 * 24 * 3600 * 1000).toISOString();
+  fs.writeFileSync(file, JSON.stringify({ ...saved, continuedAt: old, resultContinuedAt: old }));
+  assert.equal(row(), undefined, 'gone a week after it continued');
+  fs.writeFileSync(file, JSON.stringify(saved)); assert.equal(row().continued, true);
+  dismissAsk(saraCtx, asked.id); assert.equal(row(), undefined, 'dismissed');
 });
 
 // The approval of the Task Sara's message led to, queued as the terminal queues it, without

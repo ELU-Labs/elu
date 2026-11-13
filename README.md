@@ -282,7 +282,8 @@ messages open. `h` holds your replies and results to them: each one waits in the
 until you press `y` to send it, `e` to edit its text first, or `n` to drop it. One that may
 hold a secret always waits, and is sent only after you take the secret out. `o` turns on
 auto-continue: their answer, or the result of work they approved, continues the session you
-asked from. The line over their thread says which of the two are on.
+asked from. Its thread stays in Chats for a week, marked "continued in your session"; `n`
+dismisses it sooner. The line over their thread says which of the two are on.
 
 What a teammate's message does on your machine is yours to choose, once per team: `/join`
 asks, and so does your first `/invite` for a team. **Auto** (the default for a new team)

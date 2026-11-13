@@ -2245,7 +2245,7 @@ test('autoAccept answers end to end, autoContinue queues the chat, and a secret 
   assert.match(answered.answer.text, /add multiple agents/);
   const follow = withHome(ana.home, () => pendingRequests(mine.root)).find(r => r.origin?.kind === 'answer');
   assert.equal(follow.continuationTaskId, '7'); assert.equal(follow.priority, 0); assert.equal(follow.context, answered.answer.text);
-  assert.equal(item(ana.home, 'answer'), undefined, 'a continued answer leaves the list');
+  assert.deepEqual([item(ana.home, 'answer')?.id, item(ana.home, 'answer')?.continued], [`answer:${askId}`, true], 'a continued answer stays in its thread, marked as continued');
 
   // The local A2A endpoint turns SendMessage at /a2a/peer/sara into an ask; GetTask follows it.
   const local = await until(() => read(ana.home, 'local-a2a.json'), 'local A2A endpoint');

@@ -213,9 +213,11 @@ test('board rows put peer work that needs the owner first and keep lines within 
     { id: 'expired-1', kind: 'expired', peer: LI, name: 'li', text: 'Old ask', at: at(8) },
     { id: 'rejected-1', kind: 'rejected', peer: LI, name: 'li', text: 'Over the cap', at: at(9) },
     { id: 'ancient', kind: 'answer', peer: LI, name: 'li', text: 'Too old', at: at(3000) },
+    { id: 'went-on', kind: 'answer', continued: true, peer: SARA, name: 'sara', text: 'Already in the session.', at: at(2) },
     { kind: 'held', text: 'no id' },
   ];
   const rows = boardRows(projects, now, { items, online: new Set([SARA]) });
+  assert.ok(!rows.some(row => row.item?.id === 'went-on'), 'an answer the chat went on with is in Chats only, not a row in Sessions');
   // Like questions, the longest-waiting peer row comes first.
   assert.deepEqual(rows.filter(row => row.group === 0).map(row => row.label), ['SEND @li?', 'REPLY @sara', 'TASK @li', 'ASK @sara']);
   const [draft, held, handoff, ask] = rows;
@@ -1853,6 +1855,46 @@ test('my question shows the answer, rejection or wait under it', () => {
   assert.match(text, /→ you asked @sara · Where is the cache\?\n {3}↳ @sara answered · In src\/cache\.js\./);
   assert.match(text, /→ you asked @li · Which port\?\n {3}↳ working/);
   assert.match(text, /→ you asked your team · Who owns CI\?\n {3}↳ rejected · The owner declined this request\./);
+  // One the chat went on with stays, and says so: an answer, and a result.
+  const went = teamPanes({ status: { key: ME, teams: [] }, agents: [], items: [
+    { id: 'answer:4', kind: 'answer', continued: true, peer: SARA, name: 'sara', question: 'Where is the cache?', text: 'In src/cache.js.', at },
+    { id: 'answer:5', kind: 'answer', continued: true, result: true, peer: SARA, name: 'sara', question: 'Make coupon codes uppercase.', text: 'Coupon codes are uppercase now.', at: ago(2) },
+  ] }, [60, 60, 120], false)[2].map(row => visible(row.line)).join('\n');
+  assert.match(went, /→ you asked @sara · Where is the cache\?\n {3}↳ @sara answered · continued in your session · In src\/cache\.js\./);
+  assert.match(went, /→ you asked @sara · Make coupon codes uppercase\.\n {3}↳ result from @sara · continued in your session · Coupon codes are uppercase now\./);
+});
+
+test('a thread whose answer or result continued the chat stays in Chats, marked as continued: Enter reads it, c says it already went on, n dismisses it', { timeout: 30000 }, async t => {
+  const peer = fakePeer({ items: [
+    { id: 'answer:r1', kind: 'answer', continued: true, result: true, peer: SARA, name: 'sara', project: null, text: 'Coupon codes are uppercase now.', question: 'Make coupon codes uppercase.', at: ago(2), state: 'answered', threadId: 'th-2' },
+  ] });
+  peer.threadMessages = id => id === 'th-2' ? [
+    { from: 'me', peer: SARA, name: 'sara', kind: 'ask', text: 'Make coupon codes uppercase.', at: ago(9) },
+    { from: 'peer', peer: SARA, name: 'sara', kind: 'answer', text: 'The plan waits for my approval.', at: ago(8) },
+    { from: 'peer', peer: SARA, name: 'sara', kind: 'result', text: 'Coupon codes are uppercase now.', at: ago(2) },
+  ] : [];
+  const { v } = await teamView(t, { peer });
+  const [, threads] = v.panels.teamLists, status = () => v.panels.status.getText().trim(), rows = () => threads.items.map(plainItem).map(row => row.trim());
+  await openRow(v, /@sara\s+direct/, '@sara');
+  // Her thread is there, not "Nothing in @sara yet.", and its row says the chat went on with it.
+  await until(() => rows().length === 2, 'the thread');
+  assert.deepEqual(rows(), ['→ you asked @sara · Make coupon codes uppercase.', '↳ result from @sara · continued in your session · Coupon codes are uppercase now.']);
+  assert.doesNotMatch(v.text(), /Nothing in @sara yet/);
+  // Enter reads the whole thread; it offers no c, since the chat already went on with it.
+  threads.focus(); selectRow(threads, /continued in your session/); v.input.write('\r');
+  await until(() => modal(v, 'Thread with @sara'), 'the thread screen');
+  const said = modal(v, 'Thread with @sara').children.find(child => child.options?.scrollable).getContent();
+  assert.match(said, /you · question · \d\d:\d\d\nMake coupon codes uppercase\.[^]*↳ @sara · answer · \d\d:\d\d\nThe plan waits for my approval\.[^]*@sara · result · \d\d:\d\d\nCoupon codes are uppercase now\.\n\nYour session already continued with this result\.$/);
+  assert.doesNotMatch(said, /c continues/);
+  v.input.write('c'); await new Promise(resolve => setTimeout(resolve, 100));
+  await closeDialog(v, 'Thread with @sara');
+  // c on its row sends nothing to the daemon and says why.
+  threads.focus(); selectRow(threads, /continued in your session/); v.input.write('c');
+  await until(() => /Your session already continued with this result\./.test(status()), 'c on a continued thread');
+  assert.ok(!peer.sent().some(row => row.type === 'continue'), 'nothing was continued twice');
+  // n dismisses it, as any thread that waits for nothing.
+  v.input.write('n');
+  await until(() => peer.sent().some(row => row.type === 'discard' && row.id === 'answer:r1') && /Dismissed\./.test(status()), 'dismissed');
 });
 
 // --- Kanban: teammates' Tasks ---
