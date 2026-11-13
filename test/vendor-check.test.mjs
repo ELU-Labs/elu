@@ -220,6 +220,8 @@ test('Grok Build: s runs grok login under the HOME and GROK_HOME ELU runs it wit
   const command = grok.signInTerminal({ env: m.env }), row = await m.row('grok');
   assert.equal(fs.statSync(path.join(m.home, '.grok')).mode & 0o777, 0o700, 'his ~/.grok, made as grok makes it');
   assert.deepEqual(command.args, ['login']);
+  // On a computer with no browser it is the sign-in grok names for one.
+  assert.deepEqual(grok.signInTerminal({ env: m.env, browser: false }).args, ['login', '--device-auth']);
   assert.equal(command.env.HOME, grok.privateHome()); assert.equal(command.env.GROK_HOME, grok.grokHome());
   // grok prints a link and a code, and waits until the owner confirms the code on that page; it reads no input.
   const signIn = await new Promise(resolve => {

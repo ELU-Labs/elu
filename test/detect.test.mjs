@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { detect, unsupportedVendors, vendorProblem } from '../lib/detect.mjs';
+import { hasBrowser } from '../lib/vendors.mjs';
 import { defaultConfig, validateConfig } from '../lib/config.mjs';
 import { assertPolicy } from '../lib/policy.mjs';
 import { project, fakeClis, cli, git, readRole } from './helpers.mjs';
@@ -102,7 +103,8 @@ test('the lead error names what is wrong', () => {
   assert.equal(vendorProblem('claude', [{ vendor: 'claude', available: true, supported: true, signedIn: false }]), 'Claude Code is signed out. Run claude to sign in, then send again.');
   // The command is the one that signs in, which is not always the vendor's name.
   const signedOut = vendor => vendorProblem(vendor, [{ vendor, available: true, supported: true, signedIn: false }]);
-  assert.equal(signedOut('codex'), 'Codex is signed out. Run codex login to sign in, then send again.');
+  // Where no browser can open (an SSH session, Linux with no display), the device code sign-in.
+  assert.equal(signedOut('codex'), `Codex is signed out. Run ${hasBrowser() ? 'codex login' : 'codex login --device-auth'} to sign in, then send again.`);
   // Antigravity and Grok Build sign in from ELU itself: agy's sign-in for ELU is not the one in the owner's terminal.
   assert.equal(signedOut('grok'), 'Grok Build is signed out. Sign it in with s on its line in the Usage tab, then send again.');
   assert.equal(signedOut('agy'), 'Antigravity CLI is signed out. Sign it in with s on its line in the Usage tab, then send again.');

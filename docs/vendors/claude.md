@@ -6,9 +6,13 @@ plan and rate limit tier) and shows only the five-hour and weekly usage windows 
 Claude Code prints during sessions. An account you add there runs with `CLAUDE_CONFIG_DIR`
 set to a folder of its own that links to your `~/.claude` for everything but the sign-in
 ([../../SECURITY.md](../../SECURITY.md#several-accounts)); `claude auth login` signs it in on a
-cleared screen under one line of ELU's, which on a computer with no browser (an SSH session,
-or Linux with no display) says to open the link Claude Code prints, since `claude auth login`
-has no device code sign-in (`--help`, 2.1.322). Tested releases:
+cleared screen under one line of ELU's. On a computer with no browser (an SSH session, or
+Linux with no display) `claude auth login` has no device code sign-in (`--help`, 2.1.322): it
+prints a link and waits for the code that page shows, so ELU's lines say to open the link on
+any computer and paste its code there, and that nothing shows as you paste: Claude Code reads
+the code without showing it, and sends it as it came. ELU turns its paste marks off while a
+sign-in has the terminal, or Claude Code would send them as part of the code. ELU waits as long
+as the sign-in takes; Ctrl-C ends it and ELU comes back. Tested releases:
 2.1.319 and 2.1.322. The modes are described in
 [../permissions.md](../permissions.md); this page is how `claude` is launched
 for each.

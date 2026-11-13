@@ -26,6 +26,7 @@ import { saveTask, readTask, taskDir, taskTitle, setTitle, lock } from '../lib/s
 import { processIdentity } from '../lib/process.mjs';
 import { activeLogin, listLogins } from '../lib/logins.mjs';
 import { detect } from '../lib/detect.mjs';
+import { signInCommand } from '../lib/vendors.mjs';
 import { ADAPTERS } from '../lib/adapters/index.mjs';
 import { conformanceState } from '../lib/conformance.mjs';
 import { spawn, spawnSync } from 'node:child_process';
@@ -3388,7 +3389,7 @@ test('vendor rows say how to sign in, Google’s FAQ under agy, and that a vendo
   assert.ok(agy > 0, 'the agy sign-in line');
   assert.equal(lines[agy + 1], "  Google's FAQ: wrapping agy in third-party agents is not supported on consumer plans. antigravity.google/docs/faq");
   assert.ok(lines.includes('  Grok Build has not been checked on this machine yet. Your first message to it runs the check.'));
-  assert.ok(lines.includes('  Codex: sign in with ChatGPT. Run: codex login'));
+  assert.ok(lines.includes(`  Codex: sign in with ChatGPT. Run: ${signInCommand('codex')}`));
   assert.equal(lines.filter(line => /Google's FAQ/.test(line)).length, 1);
   assert.ok(!lines.some(line => /Claude Code: not signed in|Claude Code has not been checked/.test(line)));
   assert.equal(vendorText({ vendor: 'grok', support: 'lead', available: true, supported: true, signedIn: true, conformant: false }), 'lead · checked on your next message to it');
@@ -3562,8 +3563,48 @@ test('Usage: a leaves ELU\'s screen for a cleared one with one line of ELU\'s, d
   signInAs('third@example.com'); panels.usageList.select(0); v.input.write('a');
   await until(() => /Added third@example\.com\./.test(status()), 'added over SSH');
   assert.deepEqual(started[1].args, ['auth', 'login']);
-  assert.ok(v.raw.slice(0, started[1].before).endsWith('\x1b[H\x1b[2JSigning in a new Claude Code account. ELU comes back when it ends.\r\nThis computer has no browser: open the link Claude Code prints in a browser, then follow its steps.\r\n\r\n'));
+  // Paste marks are off while the sign-in has the terminal, so a pasted code arrives as typed, and on again after.
+  assert.ok(v.raw.slice(0, started[1].before).endsWith('\x1b[?2004l\x1b[H\x1b[2JSigning in a new Claude Code account. ELU comes back when it ends.\r\nNo browser here: open the link below on any computer, then paste its code here.\r\nNothing shows as you paste. Press Enter after the code.\r\n\r\n'), JSON.stringify(v.raw.slice(started[1].before - 300, started[1].before))); assert.ok(v.raw.slice(started[1].before).includes('\x1b[?1049h\x1b[?2004h'));
   assert.equal(started[1].during, started[1].before);
+});
+
+// The owner's computer with no browser: a on Claude Code, the link opened on another computer,
+// the code that page shows pasted at "Paste code here if prompted >". A terminal wraps a paste in
+// ESC[200~ … ESC[201~ while the app that has it asked for paste marks, and Claude Code 2.1.322
+// sends the line as it came: with ELU's marks left on, the code was refused and no account added.
+test('Usage: a code pasted on the sign-in screen reaches Claude Code as it was copied, and the account is added', { timeout: 30000 }, async t => {
+  const p = setup(t), fakeFile = path.join(p.dir, 'fake.json'), pasted = path.join(p.parent, 'pasted.json'), code = 'FAKEcode-abc123#FAKEstate-xyz789';
+  fs.writeFileSync(fakeFile, JSON.stringify({ ...JSON.parse(fs.readFileSync(fakeFile, 'utf8')), accounts: { loginAs: 'second@example.com', plan: 'Pro', pasted, terminal: true } }));
+  environment(t, { SSH_CONNECTION: '10.0.0.2 52000 10.0.0.3 22', SSH_TTY: '', SSH_CLIENT: '' });
+  const started = []; let v = null;
+  // The terminal: whether the app that has it asked for paste marks, by the last word ELU wrote about them.
+  const marks = () => v.raw.lastIndexOf('\x1b[?2004h') > v.raw.lastIndexOf('\x1b[?2004l');
+  const fake = fakeUsage(t, { platform: 'linux', spawn: (bin, args, options) => {
+    const row = { args, printed: '', marks: null }; started.push(row);
+    const child = spawn(bin, args, { env: options.env, stdio: ['pipe', 'pipe', 'pipe'] });
+    // The owner pastes the code once the sign-in asks for it, then presses Enter.
+    const read = chunk => {
+      row.printed += chunk; if (row.marks !== null || !/Paste code here if prompted > $/.test(row.printed)) return;
+      row.marks = marks(); child.stdin.write(`${row.marks ? `\x1b[200~${code}\x1b[201~` : code}\r`);
+    };
+    child.stdout.on('data', read); child.stderr.on('data', read);
+    return child;
+  } });
+  v = await view(t, { repo: p.repo, usage: fake });
+  const panels = v.current.panels, status = () => panels.status.getText(), text = () => panels.usageList.items.map(item => item.getText()).join('\n');
+  await send(v, '/usage'); await until(() => v.current.view === 'usage' && !panels.usageBox.hidden, 'Usage tab');
+  await until(() => /Usage updated \d\d:\d\d/.test(status()), 'first check');
+  assert.equal(marks(), true, 'ELU takes pastes in marks');
+  panels.usageList.focus(); await until(() => v.current.screen.focused === panels.usageList, 'list focused');
+  panels.usageList.select(0); v.input.write('a');
+  await until(() => /Added second@example\.com\.|No account was added/.test(status()), 'the sign-in ended');
+  assert.deepEqual([started[0].args, started[0].marks], [['auth', 'login'], false], 'no paste marks while the sign-in has the terminal');
+  assert.equal(JSON.parse(fs.readFileSync(pasted, 'utf8')), code);
+  assert.match(started[0].printed, /Paste code here if prompted > Login successful\.\n$/);
+  assert.match(status(), /Added second@example\.com\. Enter on it uses it\./);
+  await until(() => /second@example\.com · Pro/.test(text()), 'the account listed');
+  // Back in ELU, a paste into the message box comes in marks again.
+  assert.equal(marks(), true);
 });
 
 test('Usage: a on a computer with no browser signs a new Codex account in with its device code', { timeout: 30000 }, async t => {
@@ -3580,13 +3621,14 @@ test('Usage: a on a computer with no browser signs a new Codex account in with i
   signInAs('second@example.com'); panels.usageList.select(rowOf(/^Codex/)); v.input.write('a');
   await until(() => /Added second@example\.com\./.test(status()), 'added with a device code');
   assert.deepEqual([started[0].vendor, started[0].args], ['codex', ['login', '--device-auth']]);
-  assert.deepEqual(started[0].lines, ['Signing in a new Codex account. ELU comes back when it ends.', 'No browser here: open the link Codex prints on any computer and enter its code.']);
+  assert.deepEqual(started[0].lines, ['Signing in a new Codex account. ELU comes back when it ends.', 'No browser here: open the link below on any computer and use the code under it.']);
   assert.match(started[0].out, /Enter this one-time code/);
   // Claude Code has no device code sign-in: its own, with where its link goes.
   signInAs('third@example.com'); panels.usageList.select(0); v.input.write('a');
   await until(() => /Added third@example\.com\./.test(status()), 'Claude Code added');
   assert.deepEqual(started[1].args, ['auth', 'login']);
-  assert.equal(started[1].lines[1], 'This computer has no browser: open the link Claude Code prints in a browser, then follow its steps.');
+  assert.deepEqual(started[1].lines.slice(1), ['No browser here: open the link below on any computer, then paste its code here.', 'Nothing shows as you paste. Press Enter after the code.']);
+  assert.ok([...started[0].lines, ...started[1].lines].every(line => line.length <= 80), 'every line fits 80 columns');
   // With a browser here, Codex signs in through it.
   process.env.SSH_CONNECTION = ''; fake.platform = 'darwin';
   signInAs('fourth@example.com'); panels.usageList.select(rowOf(/^Codex/)); v.input.write('a');
@@ -3734,6 +3776,60 @@ test('Usage on a Mac: Antigravity says it is not signed in for ELU at once, c of
   assert.doesNotMatch(text(), /symbolic link/);
   // Signed in now, s still runs the sign-in again (a lapsed one): the key bar keeps it, without c.
   await until(() => /^s sign in {2}d details {2}r refresh/.test(panels.keys.getText().trim()), 'key bar once ready');
+});
+
+// The owner's devbox over SSH, where no browser opens: s on Grok Build runs its device code
+// sign-in, and s on Antigravity CLI the sign-in that takes the code its page shows, pasted
+// here as a terminal pastes it. ELU's lines on both screens say what the link is for.
+test('Usage on a computer with no browser: s signs Grok Build in with its device code, and Antigravity CLI with the code pasted on its sign-in screen', { timeout: 90000 }, async t => {
+  const p = setup(t), fake = fakeUsage(t), fakeFile = path.join(p.dir, 'fake.json');
+  environment(t, { SSH_CONNECTION: '10.0.0.2 52000 10.0.0.3 22', SSH_TTY: '', SSH_CLIENT: '' });
+  // No browser: the openers agy tries do nothing.
+  const openers = path.join(p.parent, 'openers'); fs.mkdirSync(openers);
+  for (const name of ['open', 'xdg-open']) fs.writeFileSync(path.join(openers, name), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  environment(t, { PATH: `${openers}${path.delimiter}${process.env.PATH}` });
+  fs.writeFileSync(fakeFile, JSON.stringify({ ...JSON.parse(fs.readFileSync(fakeFile, 'utf8')), agy: { signedIn: false, auth: 'prompt' }, grok: { login: true } }));
+  fake.vendors = () => detect(p.root, { ...process.env, HOME: fake.home }); fake.platform = 'linux';
+  const started = []; let v = null;
+  // The terminal: a paste comes in marks while the app that has it asked for them.
+  const marks = () => v.raw.lastIndexOf('\x1b[?2004h') > v.raw.lastIndexOf('\x1b[?2004l'), code = '4/0AeanS0b-fake-code';
+  fake.spawn = (bin, args, options) => {
+    const row = { args, before: v.raw.length, printed: '', done: false, marks: null }; started.push(row);
+    const child = spawn(bin, args, { env: options.env, stdio: ['pipe', 'pipe', 'pipe'] });
+    // Grok Build: the owner confirms its code on the page. Antigravity CLI: he pastes the code the page shows.
+    const read = chunk => {
+      row.printed += chunk; if (row.done) return;
+      if (/Waiting for authorization\.\.\./.test(row.printed)) { row.done = true; fs.writeFileSync(path.join(p.dir, 'grok-approved'), ''); }
+      else if (/paste the authorization code here and press Enter:/.test(row.printed)) { row.done = true; row.marks = marks(); child.stdin.write(`${row.marks ? `\x1b[200~${code}\x1b[201~` : code}\n`); }
+    };
+    child.stdout.on('data', read); child.stderr.on('data', read);
+    return child;
+  };
+  v = await view(t, { repo: p.repo, usage: fake });
+  const panels = v.current.panels, text = () => panels.usageList.items.map(item => item.getText()).join('\n'), status = () => panels.status.getText();
+  const rowOf = pattern => panels.usageList.items.findIndex(item => pattern.test(item.getText()));
+  const screenBefore = row => v.raw.slice(Math.max(0, row.before - 400), row.before);
+  await send(v, '/usage'); await until(() => v.current.view === 'usage' && !panels.usageBox.hidden, 'Usage tab');
+  await until(() => /^Antigravity not signed in for ELU · s signs in$/m.test(text()), 'Antigravity not signed in for ELU', 15000);
+  assert.match(text(), /^Grok Build {2}not signed in for ELU · s signs in$/m);
+  panels.usageList.focus(); await until(() => v.current.screen.focused === panels.usageList, 'list focused');
+  // Grok Build: grok login --device-auth, which needs no browser here.
+  panels.usageList.select(rowOf(/^Grok Build/)); await until(() => /s sign in/.test(panels.keys.getText()), 's in the key bar');
+  v.input.write('s');
+  await until(() => /^Grok Build {2}signed in · needs a one-time check \(c runs it now\)$/m.test(text()), 'Grok Build signed in', 30000);
+  assert.deepEqual(started[0].args, ['login', '--device-auth']);
+  assert.ok(screenBefore(started[0]).endsWith('\x1b[?2004l\x1b[H\x1b[2JSigning in to Grok Build. ELU comes back when it ends.\r\nNo browser here: open the link below on any computer and use the code under it.\r\n\r\n'), JSON.stringify(screenBefore(started[0])));
+  assert.match(started[0].printed, /open this URL in your browser:\n\n {2}https:\/\/accounts\.x\.ai\/oauth2\/device\?user_code=FAKE-CODE\n[\s\S]*Confirm this code in your browser:\n\n {2}FAKE-CODE\n[\s\S]*Waiting for authorization\.\.\.\nSigned in\.\n$/);
+  assert.equal(fs.statSync(path.join(fake.home, '.grok', 'auth.json')).isFile(), true);
+  await until(() => /Grok Build is signed in for ELU\./.test(status()), 'status');
+  // Antigravity CLI: its sign-in prints the link and takes the code pasted under ELU's lines.
+  panels.usageList.select(rowOf(/^Antigravity/)); v.input.write('s');
+  await until(() => /^Antigravity signed in · needs a one-time check \(c runs it now\)$/m.test(text()), 'Antigravity signed in', 30000);
+  assert.deepEqual([started[1].args, started[1].marks], [['-p', '/usage'], false], 'no paste marks while the sign-in has the terminal');
+  assert.ok(screenBefore(started[1]).endsWith('\x1b[?2004l\x1b[H\x1b[2JSigning in to Antigravity CLI for ELU. ELU comes back when it ends.\r\nNo browser here: open the link below on any computer, then paste its code here.\r\nPress Enter after it. It waits 60 seconds for the code.\r\nIf the 60 seconds pass, it stops. Press s again for a new link and a new code.\r\n\r\n'), JSON.stringify(screenBefore(started[1])));
+  assert.match(started[1].printed, /Or, paste the authorization code here and press Enter:\nSigned in\./);
+  await until(() => /Antigravity CLI is signed in for ELU\./.test(status()), 'status');
+  assert.equal(marks(), true, 'ELU takes pastes in marks again');
 });
 
 // Antigravity CLI waits 60 seconds for the code and then ends by itself. An owner who took

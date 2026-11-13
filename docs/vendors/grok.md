@@ -15,9 +15,12 @@ Install into a user-writable npm prefix; nothing here needs sudo. `grok login` o
 browser (`grok login --device-auth` on a remote machine) and keeps the token in
 `~/.grok/auth.json`. ELU never reads that file, never copies it, and reads no API key
 variable. You can also sign in from ELU: `s` on the Grok Build line in the Usage tab leaves
-ELU's screen and runs `grok login` there, under the HOME and Grok home ELU runs `grok` with,
-so the token lands in your own `~/.grok/auth.json` through the link below; ELU comes back when
-it ends. If `grok` is signed out, the session says
+ELU's screen and runs `grok login` there (`grok login --device-auth` on a computer with no
+browser: an SSH session, or Linux with no display), under the HOME and Grok home ELU runs
+`grok` with, so the token lands in your own `~/.grok/auth.json` through the link below; ELU
+comes back when it ends. `grok` 1.0.77 prints a link and a code to confirm on that page, on any
+computer, and waits for it; with no browser ELU's second line says so. If `grok` is signed
+out, the session says
 `Grok Build: not signed in. Sign it in with s on its line in the Usage tab.`
 
 ## The one-time check

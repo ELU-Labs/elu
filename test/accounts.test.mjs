@@ -14,6 +14,7 @@ import * as logins from '../lib/logins.mjs';
 import { SIGN_IN, SHARED, activeLogin, finishLogin, hasBrowser, linkShared, listLogins, loginEnv, loginFolder, newLogin, removeLogin, useLogin } from '../lib/logins.mjs';
 import { addServer, removeServer } from '../lib/mcp.mjs';
 import { accountOf, forgetAccount, readAccounts, refreshUsage, usageTab } from '../lib/usage.mjs';
+import { signInCommand, signInHintHere } from '../lib/vendors.mjs';
 import { stopLine } from '../lib/stop-line.mjs';
 import { usageBlocks } from '../lib/terminal.mjs';
 
@@ -134,6 +135,22 @@ test('Claude: a run that hits the account limit names that account, the limit it
   assert.equal(again.state, 'answered', JSON.stringify(again.error)); assert.equal(f.runs().at(-1).account, 'first@example.com');
 });
 
+// The owner's devbox over SSH: Codex was signed in, and its sign-in lapsed while a session ran.
+// The line under the session names the sign-in that works with no browser.
+test('Codex: a turn that fails because the sign-in lapsed says Codex is signed out and names the sign-in for this computer; signed in again, continue carries on', { timeout: 60000 }, async t => {
+  const f = setup(t, 'codex', { lapsed: ['codex-first@example.com'] });
+  environment(t, { SSH_CONNECTION: '10.0.0.2 52000 10.0.0.3 22', SSH_TTY: '', SSH_CLIENT: '' });
+  const { id, finished } = f.controller.ask('Where is coupon normalization?');
+  await assert.rejects(finished, /The model could not finish/);
+  const task = readTask(f.controller.repo, id), stop = stopLine(task);
+  assert.equal(stop.text, 'The model could not finish: Codex is signed out. Sign in again with codex login --device-auth, then type continue.');
+  assert.equal(stop.short, 'sign in again with codex login --device-auth, then type continue');
+  // He signs in again in his terminal; the same session carries on.
+  f.setFake(value => { value.accounts.lapsed = []; });
+  const again = await f.controller.ask('continue', id).finished;
+  assert.equal(again.state, 'answered', JSON.stringify(again.error)); assert.equal(f.runs().at(-1).account, 'codex-first@example.com');
+});
+
 test('forget removes only ELU\'s copy of an added account, after which new turns use the owner\'s own; nothing is signed out', { timeout: 60000 }, async t => {
   const f = setup(t, 'claude', { loginAs: 'second@example.com' });
   const slot = addAccount(f, 'claude'); f.setFake(value => { value.accounts.loginAs = 'third@example.com'; });
@@ -204,6 +221,11 @@ test('a computer has a browser for a sign-in unless it is reached over SSH, or i
   assert.equal(hasBrowser({ SSH_TTY: '/dev/pts/1', DISPLAY: ':0' }, 'linux'), false);
   assert.equal(hasBrowser({}, 'linux'), false); assert.equal(hasBrowser({ DISPLAY: '' }, 'linux'), false);
   assert.equal(hasBrowser({ DISPLAY: ':0' }, 'linux'), true); assert.equal(hasBrowser({ WAYLAND_DISPLAY: 'wayland-0' }, 'linux'), true);
+  // What the owner is told to type follows it: the device code sign-in where the command has one.
+  assert.deepEqual(['claude', 'codex', 'agy', 'grok'].map(vendor => signInCommand(vendor, true)), ['claude', 'codex login', 'agy', 'grok login']);
+  assert.deepEqual(['claude', 'codex', 'agy', 'grok'].map(vendor => signInCommand(vendor, false)), ['claude', 'codex login --device-auth', 'agy', 'grok login --device-auth']);
+  assert.equal(signInHintHere('codex', 'Codex: sign in with ChatGPT. Run: codex login', false), 'Codex: sign in with ChatGPT. Run: codex login --device-auth');
+  assert.equal(signInHintHere('grok', 'Grok Build: not signed in. Run: grok login', true), 'Grok Build: not signed in. Run: grok login');
   // The sign-in is the vendor's same command either way: it prints the link the owner opens.
   assert.deepEqual(SIGN_IN, { claude: ['auth', 'login'], codex: ['login'] });
 });
