@@ -152,7 +152,7 @@ export async function main(argv = process.argv.slice(2)) {
   const repo = repository(process.cwd());
   const command = words[0];
   if (command === 'init') {
-    const plan = initPlan(repo);
+    const plan = await initPlan(repo);
     if (plan.initialized) return plan;
     return await confirm(plan, flags) ? applyInit(repo, plan) : { ...plan, needsConfirmation: !flags['dry-run'] };
   }

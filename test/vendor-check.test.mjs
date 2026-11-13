@@ -8,7 +8,7 @@ import { temp, fakeClis } from './helpers.mjs';
 import * as agy from '../lib/adapters/agy.mjs';
 import * as grok from '../lib/adapters/grok.mjs';
 import { checkOnFirstUse, notSignedInText, readSignInsBeforeCheck, withCheck } from '../lib/vendor-check.mjs';
-import { watchSignIn, watchSignInSync } from '../lib/sign-in-watch.mjs';
+import { watchSignIn } from '../lib/sign-in-watch.mjs';
 import { conformanceState } from '../lib/conformance.mjs';
 import { detect } from '../lib/detect.mjs';
 import { personalDirectory, savedSignIn, usageTab } from '../lib/usage.mjs';
@@ -36,7 +36,7 @@ function machine(t, { agy: agyConfig = {}, grok: grokConfig = undefined } = {}) 
   for (const name of ['open', 'xdg-open']) fs.writeFileSync(path.join(openers, name), `#!/bin/sh\necho "$@" >> ${JSON.stringify(opened)}\n`, { mode: 0o755 });
   const env = { ...process.env, ...fake.env, PATH: `${fake.env.PATH}${path.delimiter}${openers}`, HOME: home };
   environment(t, { XDG_CONFIG_HOME: fake.env.XDG_CONFIG_HOME });
-  const row = vendor => detect(home, env, { only: vendor })[0];
+  const row = async vendor => (await detect(home, env, { only: vendor }))[0];
   return { root, home, fake, env, row, opened: () => fs.existsSync(opened) ? fs.readFileSync(opened, 'utf8').trim().split('\n') : [] };
 }
 // The longest the event loop went without running a timer while fn ran: what the screen froze for.
@@ -56,7 +56,7 @@ test('the one-time check runs when the temp folder is under a link, as macOS\'s 
   // Before: the check's folder was made under /var/folders/… as written, and its first step refused it.
   for (const vendor of ['grok', 'agy']) {
     const said = [];
-    assert.equal(await checkOnFirstUse(m.row(vendor), { cwd: m.home, environment: m.env, say: text => said.push(text) }), true, vendor);
+    assert.equal(await checkOnFirstUse(await m.row(vendor), { cwd: m.home, environment: m.env, say: text => said.push(text) }), true, vendor);
     assert.ok(!said.some(line => /symbolic link/.test(line)), said.join('\n'));
     assert.deepEqual(Object.entries(conformanceState(vendor).steps).filter(([, status]) => status !== 'pass').map(([id]) => id), [], vendor);
   }
@@ -65,7 +65,7 @@ test('the one-time check runs when the temp folder is under a link, as macOS\'s 
 });
 
 test('Antigravity CLI signed out asks for a sign-in and waits a minute for a code: the Usage read, the check and detect say "not signed in for ELU" within seconds, open no browser, and never hold the app', { timeout: 120000 }, async t => {
-  const m = machine(t, { agy: { signedIn: false, auth: 'prompt' } }), row = m.row('agy');
+  const m = machine(t, { agy: { signedIn: false, auth: 'prompt' } }), row = await m.row('agy');
   // The Usage tab's read, before the check: it was 30 silent seconds, then "did not say".
   const read = await held(() => readSignInsBeforeCheck([row], { env: m.env }));
   assert.ok(read.took < 15000, `the read took ${read.took} ms`);
@@ -79,10 +79,9 @@ test('Antigravity CLI signed out asks for a sign-in and waits a minute for a cod
   assert.deepEqual([check.value.details.cause, check.value.details.signedIn], ['signin', false]);
   assert.ok(check.took < 15000, `the check took ${check.took} ms`); assert.ok(check.most < 3000, `the app was held ${check.most} ms`);
   assert.equal(conformanceState('agy'), null, 'no step ran');
-  // detect(), which cannot wait, gets the same answer as fast.
-  const started = Date.now();
-  assert.equal(agy.probeSignIn({ bin: row.bin, cwd: m.home, env: m.env }), false);
-  assert.ok(Date.now() - started < 15000);
+  // detect() gets the same answer as fast, and the app is never held for it.
+  const probe = await held(() => agy.signedIn({ bin: row.bin, cwd: m.home, env: m.env }));
+  assert.equal(probe.value, false); assert.ok(probe.took < 15000, `the read took ${probe.took} ms`); assert.ok(probe.most < 3000, `the app was held ${probe.most} ms`);
   // No read opened a browser: the `open` agy runs is ELU's, which does nothing.
   assert.deepEqual(m.opened(), []);
   // s: agy's own sign-in, in the HOME every ELU run of agy shares, with the real PATH and the
@@ -108,7 +107,6 @@ test('a sign-in read that gets no answer says so after its time, one that is sto
   assert.deepEqual(quiet, { signedIn: null, reason: 'gave no answer within 1 seconds' });
   const stop = new AbortController(); setTimeout(() => stop.abort(), 200);
   assert.equal(await watchSignIn({ bin: silent, args: [], env: process.env, cwd: root, timeoutMs: 30000, signal: stop.signal }), undefined);
-  assert.deepEqual(watchSignInSync({ bin: silent, args: [], env: process.env, cwd: root, timeoutMs: 1000 }), { signedIn: null, reason: 'gave no answer within 1 seconds' });
   await new Promise(resolve => setTimeout(resolve, 3500));
   assert.equal(fs.existsSync(marker), false, 'every run was stopped');
   // What the check says then: the reason, and the key that reads it again.
@@ -135,7 +133,7 @@ test('Grok Build: s runs grok login under the HOME and GROK_HOME ELU runs it wit
   const m = machine(t, { grok: { login: true } });
   fs.rmSync(path.join(m.home, '.grok'), { recursive: true });
   assert.deepEqual(await grok.readSignIn({ env: m.env }), { signedIn: false, reason: null });
-  const command = grok.signInTerminal({ env: m.env }), row = m.row('grok');
+  const command = grok.signInTerminal({ env: m.env }), row = await m.row('grok');
   assert.equal(fs.statSync(path.join(m.home, '.grok')).mode & 0o777, 0o700, 'his ~/.grok, made as grok makes it');
   assert.deepEqual(command.args, ['login']);
   assert.equal(command.env.HOME, grok.privateHome()); assert.equal(command.env.GROK_HOME, grok.grokHome());

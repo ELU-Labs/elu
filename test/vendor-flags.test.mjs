@@ -23,41 +23,41 @@ process.exit(1);
 }
 const listing = (flags) => `Usage:\n${flags.map((flag) => `  ${flag} <value>\n`).join('')}`;
 
-test('Antigravity CLI help printed on stderr is read: 1.5.8 has every required flag', (t) => {
+test('Antigravity CLI help printed on stderr is read: 1.5.8 has every required flag', async (t) => {
   const { file, cwd } = program(t, { version: '1.5.8', help: listing(ADAPTERS.agy.meta.flags), stream: 'stderr', loose: true });
-  const row = probeVersion('agy', file, cwd, process.env, { check: true });
+  const row = await probeVersion('agy', file, cwd, process.env, { check: true });
   assert.equal(row.supported, true, row.reason);
   assert.equal(row.release, '1.5.8');
   assert.equal(row.versionStatus, 'untested version');
 });
 
-test('Antigravity CLI help still lacking a flag on either stream is reported missing', (t) => {
+test('Antigravity CLI help still lacking a flag on either stream is reported missing', async (t) => {
   const { file, cwd } = program(t, { version: '1.5.8', help: listing(ADAPTERS.agy.meta.flags.filter((flag) => flag !== '--print-timeout')), stream: 'stderr', loose: true });
-  const row = probeVersion('agy', file, cwd, process.env, { check: true });
+  const row = await probeVersion('agy', file, cwd, process.env, { check: true });
   assert.equal(row.supported, false);
   assert.match(row.reason, /missing required flags: --print-timeout\.$/);
 });
 
-test('Grok Build 1.0.77 takes --no-auto-update without listing it in its help', (t) => {
+test('Grok Build 1.0.77 takes --no-auto-update without listing it in its help', async (t) => {
   const listed = ADAPTERS.grok.meta.flags.filter((flag) => flag !== '--no-auto-update');
   const { file, cwd } = program(t, { version: 'grok 1.0.77 (50ca579fa996)', help: listing(listed), stream: 'stdout', takes: ['--no-auto-update'] });
-  const row = probeVersion('grok', file, cwd, process.env, { check: true });
+  const row = await probeVersion('grok', file, cwd, process.env, { check: true });
   assert.equal(row.supported, true, row.reason);
   assert.equal(row.release, '1.0.77');
 });
 
-test('a Grok Build that refuses --no-auto-update is still reported missing it', (t) => {
+test('a Grok Build that refuses --no-auto-update is still reported missing it', async (t) => {
   const listed = ADAPTERS.grok.meta.flags.filter((flag) => flag !== '--no-auto-update');
   const { file, cwd } = program(t, { version: 'grok 1.0.99 (x)', help: listing(listed), stream: 'stdout' });
-  const row = probeVersion('grok', file, cwd, process.env, { check: true });
+  const row = await probeVersion('grok', file, cwd, process.env, { check: true });
   assert.equal(row.supported, false);
   assert.match(row.reason, /missing required flags: --no-auto-update\.$/);
 });
 
-test('only a flag named unlisted is tried by running it: another missing Grok flag stays missing', (t) => {
+test('only a flag named unlisted is tried by running it: another missing Grok flag stays missing', async (t) => {
   const listed = ADAPTERS.grok.meta.flags.filter((flag) => flag !== '--prompt-file' && flag !== '--no-auto-update');
   const { file, cwd } = program(t, { version: 'grok 1.0.77 (x)', help: listing(listed), stream: 'stdout', takes: ['--no-auto-update', '--prompt-file'] });
-  const row = probeVersion('grok', file, cwd, process.env, { check: true });
+  const row = await probeVersion('grok', file, cwd, process.env, { check: true });
   assert.equal(row.supported, false);
   assert.match(row.reason, /missing required flags: --prompt-file\.$/);
 });

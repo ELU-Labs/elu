@@ -16,6 +16,8 @@
 // (agy.code) signs it in: a file standing in for the system keyring, outside every HOME
 // (agy.keyring, or agy-keyring beside fake.json), so every HOME is signed in after it, and the
 // command goes on. Otherwise it ends: "error: authentication failed or timed out", exit 1.
+// usageSeconds: `-p /usage` prints nothing for that long before its answer, as a program does
+// that waits on a keyring to be unlocked or on a network that does not answer.
 import fs from 'node:fs'; import path from 'node:path'; import crypto from 'node:crypto'; import readline from 'node:readline'; import { spawnSync } from 'node:child_process';
 const args = process.argv.slice(2);
 let cfg = null; try { cfg = JSON.parse(fs.readFileSync(path.join(path.dirname(process.argv[1]), 'fake.json'), 'utf8')); } catch { /* Not installed as a test CLI. */ }
@@ -125,7 +127,7 @@ async function headless() {
     process.exit(1);
   }
   if (signedOut()) { console.error('authentication required: run agy to sign in'); process.exit(1); }
-  if (prompt === '/usage') { console.log(flag('--output-format') === 'json' ? JSON.stringify({ usage: { plan: 'fake' } }) : 'Plan: fake\nUsage: 0%'); process.exit(0); }
+  if (prompt === '/usage') { if (agy.usageSeconds) await new Promise(resolve => setTimeout(resolve, agy.usageSeconds * 1000)); console.log(flag('--output-format') === 'json' ? JSON.stringify({ usage: { plan: 'fake' } }) : 'Plan: fake\nUsage: 0%'); process.exit(0); }
   let input = ''; for await (const chunk of process.stdin) input += chunk;
   if (cfg.inputs) fs.appendFileSync(cfg.inputs, JSON.stringify({ vendor: 'agy', args, input }) + '\n');
   const text = `${prompt}\n${input}`, cwd = process.cwd(), conversation = flag('--conversation'), id = conversation ?? crypto.randomUUID(), dir = path.join(brain, id);
