@@ -102,6 +102,9 @@ test('what leaves for a teammate: paths cut, and an update that may hold a secre
   // A random temporary folder in a path is not a secret: the update goes, with the path cut.
   const temp = teammateAnswer('Fixed the round in /tmp/su2-9SAVeT/x-link/tmp/elu-Qw8RtZ/project/notes/round.mjs, tests next.', { root: '/srv/shop' });
   assert.deepEqual(temp, { text: 'Fixed the round in [path], tests next.', held: false });
+  // Nor is a relative path, such as what is left of a path after a space in a folder name.
+  const shot = teammateAnswer('Screenshot saved in ~/Library/Application Support/CleanShot/media/media_8Qw4Rt2LmZ/CleanShot 2026-11-12 at 10.14.07@2x.png, tests next.', { root: '/srv/shop' });
+  assert.deepEqual(shot, { text: 'Screenshot saved in [path] Support/CleanShot/media/media_8Qw4Rt2LmZ/CleanShot 2026-11-12 at 10.14.07@2x.png, tests next.', held: false });
 });
 
 test("the Standup's model reads a bounded set of updates, newest first", () => {

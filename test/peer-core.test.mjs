@@ -976,6 +976,32 @@ test('a file path with random-named temp folders is not read as a secret, but a 
   assert.deepEqual(scanSecrets(`Read /run/secrets/${key} now.`), [{ kind: 'high-entropy', index: 'Read /run/secrets/'.length }]);
   assert.deepEqual(scanSecrets(`Key /${key.slice(0, 20)}/${key.slice(20)}.`), [{ kind: 'high-entropy', index: 4 }]);
 });
+test('a relative path with a random-looking name is not read as a secret, but a real secret in one is', () => {
+  const relative = [
+    'Support/CleanShot/media/media_8Qw4Rt2LmZ/CleanShot',
+    '~/Library/Application Support/CleanShot/media/media_8Qw4Rt2LmZ/CleanShot 2026-11-12 at 10.14.07@2x.png',
+    'private/var/folders/7k/xq2m3h1d5gs0qfz8r9t2wvbr0000gn/T/elu-Ab3xYz/r/x',
+    './tmp/su2-9SAVeT/x-link/tmp/elu-Qw8RtZ/project/notes/round.mjs',
+    '../build/cache-Zx8Qp3Lm9kRt/T/su2-9SAVeT/elu-Qw8RtZ/round.mjs',
+    'Downloads/Zx8Qp3Lm9kRt2wVb7Nc4Hs6Jd1F/report-Qw8RtZ/notes',
+  ];
+  for (const file of relative) {
+    assert.deepEqual(scanSecrets(`Fixing billing from ${file} next.`), [], file);
+    assert.equal(prepareOutgoing(`Fixing billing from ${file} next.`).ok, true, file);
+  }
+  // A real secret inside such a path is still caught: a key-long random name, a token after = or :,
+  // a named KEY=value, and a base64 key that holds a "/" (no plain word in it, so judged whole).
+  const key = 'vAmVbhHlMdBWbegcq1jSMy0NM7XTN0nj5m_5p41Ww08', folder = 'Support/CleanShot/media/media_8Qw4Rt2LmZ';
+  const caught = [
+    ['high-entropy', `Read ${folder}/`, key], ['high-entropy', `Open ${folder}/upload?sig=`, key], ['high-entropy', `Open ${folder}/CleanShot:`, key],
+    ['assignment', `In ${folder}/.env there is `, `API_KEY=${key.slice(0, 16)}`], ['high-entropy', 'Key ', `${key.slice(0, 20)}/${key.slice(20)}`],
+    ['high-entropy', 'Key ', `${'wJalrXUtnFEMI/K7MDENG/'}${'bPxRfiCYEXAMPLEKEY'}`],
+  ];
+  for (const [kind, before, secret] of caught) assert.deepEqual(scanSecrets(`${before}${secret} now.`), [{ kind, index: before.length }], `${before}${secret}`);
+  // A URL is judged whole, as before: a key split over its path is still caught.
+  const hook = `https://hooks.example.com/services/T0A1B2C3D/B4E5F6G7H/${key.slice(0, 24)}`;
+  assert.deepEqual(scanSecrets(`Post to ${hook} now.`).map(x => x.kind), ['high-entropy']);
+});
 test('paths are redacted outside the project and the home folder becomes ~', () => {
   const home = os.homedir(), root = path.join(home, 'work', 'sample app');
   const text = `Edit ${root}/src/coupon.mjs, not ${home}/.ssh/id_ed25519 or /etc/passwd or ${root}-old/x.js. See https://github.com/elu/app/blob/main/a.js, src/a/b.js, ~/notes/x and /ask @sara.`;
