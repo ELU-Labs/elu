@@ -1261,11 +1261,11 @@ test('/join says when it has found the inviter and what it is trying; a reason t
   const why = noRoute({ theirs: 3, mine: 2 });
   held.reject(new Error(why));
   await until(() => modal(v, 'Could not join'), 'the window');
-  assert.deepEqual(rowsOf(v, 'Could not join').map(line => line.trim()), ['Found their computer, but could not connect to it: their network gives every', 'connection a new port, as a phone hotspot does.', 'No other computer was online to pass it along.', 'Join again from another network, or while ELU is open on another computer on your', 'team or theirs.']);
+  assert.deepEqual(rowsOf(v, 'Could not join').map(line => line.trim()), ['Found their computer, but could not connect: their network gives every connection a', 'new port, as a phone hotspot does.', 'No other computer was online to pass it along.', 'Join again from another network, or while ELU is open on another computer on your', 'team or theirs.']);
   assert.doesNotMatch(v.text(), /Nobody/);
   v.input.write('\x1b');
   await until(() => !modal(v, 'Could not join'), 'closed with Esc');
-  assert.match(status(), /^› Found their computer, but could not connect to it: their network gives every connection a new port/, 'the row keeps the start of it');
+  assert.match(status(), /^› Found their computer, but could not connect: their network gives every connection a new port/, 'the row keeps the start of it');
   // A reason the row holds whole stays in the row, with no window.
   await send(v, '/join k7qm-x2pd-9fhw'); await answerJoin(v);
   await until(() => /Looking for the person who invited you…/.test(status()), 'a third search');

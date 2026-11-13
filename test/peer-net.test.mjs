@@ -2386,7 +2386,7 @@ test('a join that finds the inviter but cannot connect keeps trying, then says i
   // While it tries, the line the app counts with says the inviter was found.
   let line = null; const watch = setInterval(() => { if (state(sara)?.join?.stage === 'retrying') line ??= withHome(sara, () => peer.joinLine?.(12, 'Esc')); }, 200);
   const error = await joining; clearInterval(watch);
-  assert.equal(error?.message, 'Found their computer, but could not connect to it: the networks between you blocked it. No other computer was online to pass it along. Join again from another network, or while ELU is open on another computer on your team or theirs.');
+  assert.equal(error?.message, 'Found their computer, but could not connect: the networks between you blocked it. No other computer was online to pass it along. Join again from another network, or while ELU is open on another computer on your team or theirs.');
   assert.doesNotMatch(error.message, /Nobody/, 'the inviter was there, so it never says nobody was');
   assert.equal(line, 'Found them, but could not connect yet. Trying again… 12 s. Esc cancels.');
   assert.ok(Date.now() - started >= quick.connectMs - 1000, 'it kept trying for the whole wait');
@@ -2502,8 +2502,8 @@ test('what a join says: the line while it waits, and the reason when the two com
   // Every line that counts fits the two rows an 80-column app has for it, a long name and three digits of seconds included.
   for (const progress of [null, { stage: 'connecting' }, { stage: 'retrying' }, { stage: 'relay', via: `your computer ${'m'.repeat(32)}` }]) assert.ok(joinWait(progress, 180, 'Esc').length <= 92, joinWait(progress, 180, 'Esc'));
   const end = ' Join again from another network, or while ELU is open on another computer on your team or theirs.';
-  assert.equal(noRoute({ theirs: 3, mine: 2 }), `Found their computer, but could not connect to it: their network gives every connection a new port, as a phone hotspot does. No other computer was online to pass it along.${end}`);
-  assert.equal(noRoute({ theirs: 2, mine: 3, tried: ['your computer studio'] }), `Found their computer, but could not connect to it: your network gives every connection a new port, as a phone hotspot does. Your computer studio could not pass it along either.${end}`);
-  assert.equal(noRoute({ theirs: 3, mine: 3, tried: ['li\'s computer', 'a computer on their side'] }), `Found their computer, but could not connect to it: both networks give every connection a new port. Li\'s computer and a computer on their side could not pass it along either.${end}`);
-  assert.equal(noRoute(), `Found their computer, but could not connect to it: the networks between you blocked it. No other computer was online to pass it along.${end}`);
+  assert.equal(noRoute({ theirs: 3, mine: 2 }), `Found their computer, but could not connect: their network gives every connection a new port, as a phone hotspot does. No other computer was online to pass it along.${end}`);
+  assert.equal(noRoute({ theirs: 2, mine: 3, tried: ['your computer studio'] }), `Found their computer, but could not connect: your network gives every connection a new port, as a phone hotspot does. Your computer studio could not pass it along either.${end}`);
+  assert.equal(noRoute({ theirs: 3, mine: 3, tried: ['li\'s computer', 'a computer on their side'] }), `Found their computer, but could not connect: both networks give every connection a new port. Li\'s computer and a computer on their side could not pass it along either.${end}`);
+  assert.equal(noRoute(), `Found their computer, but could not connect: the networks between you blocked it. No other computer was online to pass it along.${end}`);
 });
