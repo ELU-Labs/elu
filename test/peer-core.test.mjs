@@ -960,6 +960,22 @@ test('secret scanning leaves ordinary text alone', () => {
   for (const text of fine) assert.deepEqual(scanSecrets(text), [], text);
   assert.deepEqual(scanSecrets(''), []); assert.deepEqual(scanSecrets(null), []);
 });
+test('a file path with random-named temp folders is not read as a secret, but a key-long random name in one is', () => {
+  const temps = [
+    '/var/folders/7k/xq2m3h1d5gs0qfz8r9t2wvbr0000gn/T/x',
+    '/private/var/folders/zz/zyxvpxvq6csfxvn_n0000000000000/T/elu-Ab3xYz/r/x',
+    '/tmp/su2-9SAVeT/x-link/tmp/elu-Qw8RtZ/project/notes/round.mjs',
+    '/tmp/usage-signin-FnsHbp/x-link/tmp/elu-Qw8RtZ/a/src/billing.mjs',
+    '~/Library/Caches/elu-Zx8Qp3Lm9kRt/T/su2-9SAVeT/round.mjs',
+  ];
+  for (const temp of temps) {
+    assert.deepEqual(scanSecrets(`Fixing billing from ${temp} next.`), [], temp);
+    assert.equal(prepareOutgoing(`Fixing billing from ${temp} next.`).ok, true, temp);
+  }
+  const key = 'vAmVbhHlMdBWbegcq1jSMy0NM7XTN0nj5m_5p41Ww08';
+  assert.deepEqual(scanSecrets(`Read /run/secrets/${key} now.`), [{ kind: 'high-entropy', index: 'Read /run/secrets/'.length }]);
+  assert.deepEqual(scanSecrets(`Key /${key.slice(0, 20)}/${key.slice(20)}.`), [{ kind: 'high-entropy', index: 4 }]);
+});
 test('paths are redacted outside the project and the home folder becomes ~', () => {
   const home = os.homedir(), root = path.join(home, 'work', 'sample app');
   const text = `Edit ${root}/src/coupon.mjs, not ${home}/.ssh/id_ed25519 or /etc/passwd or ${root}-old/x.js. See https://github.com/elu/app/blob/main/a.js, src/a/b.js, ~/notes/x and /ask @sara.`;
