@@ -410,7 +410,7 @@ test('the role time limit waits while an approval is pending', async t => {
   assert.equal(pendingApprovals().length, 0);
 });
 
-test('a session reads the .npmrc its repository tracks in Full and in Ask; an untracked one stays closed', async t => {
+test('a session reads the .npmrc its repository tracks in Full and in Ask; an untracked .env stays closed in Ask, and Full access denies nothing', async t => {
   const f = setup(t, 'answer');
   fs.mkdirSync(path.join(f.root, 'backend/agents'), { recursive: true }); fs.writeFileSync(path.join(f.root, 'backend/agents/.npmrc'), 'registry=https://registry.npmjs.org/\n');
   git(f.root, ['add', 'backend/agents/.npmrc']); git(f.root, ['commit', '-m', 'Track npmrc']);
@@ -421,7 +421,9 @@ test('a session reads the .npmrc its repository tracks in Full and in Ask; an un
     const args = f.leads().at(-1).args, { deny } = settingsOf(args).permissions;
     assert.equal(valueOf(args, '--permission-mode'), mode === 'full' ? 'bypassPermissions' : 'default');
     assert.equal(deny.some(rule => rule.includes('backend') || rule.startsWith('Read(**/')), false, `${mode}: no rule closes the tracked .npmrc, by path or by name`);
-    assert.ok(deny.some(rule => rule === `Read(//${path.join(f.root, '.env').slice(1)})` || rule === `Read(//${path.join(fs.realpathSync(f.root), '.env').slice(1)})`), `${mode}: the untracked .env is not`);
+    // Full access denies nothing, an untracked .env included; Ask keeps it closed.
+    if (mode === 'full') assert.deepEqual(deny, [], 'full: nothing is denied');
+    else assert.ok(deny.some(rule => rule === `Read(//${path.join(f.root, '.env').slice(1)})` || rule === `Read(//${path.join(fs.realpathSync(f.root), '.env').slice(1)})`), `${mode}: the untracked .env is not`);
     if (mode === 'ask') assert.equal(settingsOf(args).sandbox.filesystem.denyRead.some(entry => entry.includes('backend') || entry.startsWith('**/')), false, 'nor does the sandbox hide it');
   }
 });
