@@ -2109,7 +2109,9 @@ test('moving to the list, and on to another row, keeps the lead working and keep
 // and nothing needs /stop. On a vendor that cannot take it during the turn (Codex here) it
 // waits in the chat and is the next turn by itself, and Enter sends it now.
 test('a message sent while the session works waits in its chat; Up takes it back and /stop sends it next', { timeout: 40000 }, async t => {
-  const p = setup(t, 'slow'), v = await view(t, { repo: p.repo }), panels = v.current.panels, chat = () => panels.chat.getText();
+  // resumeMs: the turn the waiting message starts goes on in the stopped thread, and is still
+  // working when the last /stop comes. One that had answered by then would keep its answer.
+  const p = setup(t, 'slow', { resumeMs: 30000 }), v = await view(t, { repo: p.repo }), panels = v.current.panels, chat = () => panels.chat.getText();
   const waiting = () => pendingRequests(p.root).filter(row => row.state === 'queued').map(row => row.goal), sent = () => projectSnapshot(p.repo).tasks[0]?.messages.map(row => row.text) ?? [];
   await send(v, '/model default codex'); await until(() => /New sessions in .+ start with Codex/.test(panels.status.getText()), 'Codex for new sessions');
   await send(v, 'Keep working on the board');
