@@ -610,6 +610,76 @@ test('a watch its computer let go is made again: a reply still reaches the sessi
   assert.ok(!withHome(laptop.home, () => remoteSessions()).some(row => row.id === item.id));
 });
 
+test('a watch whose view here went while its computer still sends its events keeps its listed place, and a view saved without one takes it at the next list', async t => {
+  const { laptop, devbox, project, toHost, hostCtx, viewCtx, viewer } = pair(t);
+  withHome(devbox.home, () => { chat(project.root, 1, { goal: 'Roll the release', state: 'running', messages: [{ at: new Date().toISOString(), text: 'Roll the release' }] }); relist(); });
+  await withHome(laptop.home, () => listTick(viewCtx));
+  const item = withHome(laptop.home, () => remoteMachines()[0].sessions[0]);
+  await withHome(laptop.home, () => remoteCommand(viewCtx, { type: 'remoteWatch', to: devbox.identity.key, ref: item.ref }));
+  const viewPath = () => path.join(process.env.XDG_CONFIG_HOME, 'elu-code', 'peer', 'remote', 'view', `${item.id}.json`);
+  // The view here goes; the devbox keeps the watch and sends its events on.
+  withHome(laptop.home, () => fs.rmSync(viewPath()));
+  withHome(devbox.home, () => hostTick(hostCtx));
+  withHome(laptop.home, () => viewer['elu.remote.events'](toHost.sent.filter(([method]) => method === 'elu.remote.events').at(-1)[1], connection(devbox.identity.key)));
+  const seen = () => withHome(laptop.home, () => remoteSessions().filter(row => row.id === item.id));
+  assert.equal(seen().length, 1);
+  assert.equal(seen()[0].ref, item.ref, 'the place its computer listed');
+  assert.equal(seen()[0].handoff, undefined, 'not taken for a handoff');
+  assert.equal(seen()[0].title, 'Roll the release');
+  // A view an earlier build saved with no place takes the listed one at the next list.
+  withHome(laptop.home, () => { const row = JSON.parse(fs.readFileSync(viewPath(), 'utf8')); delete row.ref; fs.writeFileSync(viewPath(), JSON.stringify({ ...row, project: null, handoff: true, title: 'Your handoff' })); });
+  await withHome(laptop.home, () => listTick(viewCtx, Date.now() + 3001));
+  assert.equal(seen()[0].ref, item.ref); assert.equal(seen()[0].handoff, undefined); assert.equal(seen()[0].project, withHome(laptop.home, () => remoteMachines()[0].projects.find(row => row.id === item.project).name));
+  // A handoff whose id no listing has keeps no place and stays one of its own.
+  const handoff = crypto.randomUUID();
+  withHome(laptop.home, () => viewer['elu.remote.events']({ items: [{ id: handoff, events: [] }] }, connection(devbox.identity.key)));
+  await withHome(laptop.home, () => listTick(viewCtx, Date.now() + 6002));
+  const kept = withHome(laptop.home, () => remoteSessions().find(row => row.id === handoff));
+  assert.equal(kept.ref, undefined); assert.equal(kept.handoff, true); assert.equal(kept.title, 'Your handoff');
+});
+
+test('a session followed here by the id both machines give it shows once in Sessions and under Needs you, and a handoff not listed yet shows once', async () => {
+  const D = 'd'.repeat(64), SHOP = 'a'.repeat(64), p = '1'.repeat(16), now = Date.now(), ago = minutes => new Date(now - minutes * 60000).toISOString();
+  const status = { key: 'k'.repeat(64), name: 'ana', box: 'laptop', teams: [{ members: [{ key: 'k'.repeat(64), name: 'ana' }, { key: D, name: 'ana', box: 'devbox', online: true }] }] };
+  const listed = (task, title, minutes, extra = {}) => ({ id: crypto.randomUUID(), ref: `${p}:${task}`, project: p, title, state: 'running', at: ago(minutes), createdAt: ago(minutes + 1), approvals: [], by: 'you', who: null, repoId: SHOP, ...extra });
+  const view = (id, title, minutes, extra = {}) => ({ id, machine: D, createdAt: ago(minutes + 1), lastAt: ago(minutes), state: 'running', title, project: null, entries: [], steps: [], approvals: [], ...extra });
+  const wants = [{ id: 'approval-1', role: 'lead', summary: 'Run npm test', at: ago(1) }];
+  const roll = listed(10, 'Roll', 1, { state: 'needs_input', question: 'Roll now?' }), backlog = listed(9, 'Session backlog', 2, { by: 'teammate', who: 'kim', approvals: wants });
+  const healing = listed(7, 'Self healing', 3), mine = crypto.randomUUID(), started = listed(6, 'Started from the laptop', 4, { by: 'mine', remoteId: mine });
+  const fresh = crypto.randomUUID();
+  const views = [
+    // Followed here under the listed id, with no place there: an earlier build made these.
+    view(roll.id, 'Roll', 1, { state: 'needs_input', question: 'Roll now?', handoff: true }), view(backlog.id, 'Session backlog', 2, { approvals: wants, handoff: true }),
+    // Paired by its place, and by the id it has here: as before.
+    view(crypto.randomUUID(), 'Self healing', 3, { ref: healing.ref, project: 'shop' }), view(mine, 'Started from the laptop', 4),
+    // Handed off just now: not listed yet.
+    view(fresh, 'Your handoff', 0, { state: 'starting', handoff: true })];
+  const machinesFile = [{ key: D, listedAt: ago(0), older: false, projects: [{ id: p, name: 'shop', repoId: SHOP, home: false }], sessions: [roll, backlog, healing, started] }];
+  const facade = { mineRows: () => [{ key: D, mine: true, theirs: true }], remoteSessions: () => views, remoteMachines: () => machinesFile, projectRepoId: root => root === '/work/shop' ? SHOP : null };
+  const commands = [], glue = remoteGlue({ facade, peerRead: () => status, peerCommand: async command => { commands.push(command); return { answered: true }; }, chatMessage: () => '', ink: text => text, colour: false, restMs: 0 });
+  const rows = glue.sections(now, '/work/shop').filter(line => line.row).map(line => line.row);
+  assert.deepEqual(rows.map(row => row.remote.title), ['Your handoff', 'Roll', 'Session backlog', 'Self healing', 'Started from the laptop'], 'each once');
+  const by = title => rows.find(row => row.remote.title === title);
+  for (const [title, item] of [['Roll', roll], ['Session backlog', backlog]]) { assert.equal(by(title).id, item.id); assert.equal(by(title).ref, item.ref, 'the view takes the listed place'); assert.equal(by(title).watched, true); assert.equal(by(title).listed, true); }
+  assert.equal(by('Session backlog').by, 'teammate');
+  assert.equal(by('Your handoff').listed, false); assert.equal(by('Your handoff').by, 'here');
+  assert.equal(by('Self healing').ref, healing.ref); assert.equal(by('Self healing').id, views[2].id);
+  assert.equal(by('Started from the laptop').id, mine); assert.equal(by('Started from the laptop').ref, started.ref); assert.equal(by('Started from the laptop').by, 'mine');
+  // Needs you: each waiting session once, and the board lists it once.
+  const waiting = glue.rows(now);
+  assert.deepEqual(waiting.map(row => row.remote.title).sort(), ['Roll', 'Session backlog']);
+  assert.equal(boardRows([], now, { remote: waiting }).filter(row => row.kind === 'remote').length, 2);
+  // y answers it by the id it is followed by here: no second watch.
+  await glue.action(waiting.find(row => row.approval), 'accept');
+  assert.deepEqual(commands.at(-1), { type: 'remoteAnswer', id: backlog.id, approval: 'approval-1', decision: 'allow' });
+  // Once listed, the fresh handoff is that one row too.
+  const listedFresh = listed(11, 'Your handoff', 0, { id: fresh, state: 'starting' });
+  machinesFile[0].sessions = [listedFresh, ...machinesFile[0].sessions];
+  const later = remoteGlue({ facade, peerRead: () => status, peerCommand: async () => ({}), chatMessage: () => '', ink: text => text, colour: false }).sections(now, '/work/shop').filter(line => line.row).map(line => line.row);
+  assert.equal(later.filter(row => row.id === fresh).length, 1); assert.equal(later.find(row => row.id === fresh).ref, listedFresh.ref);
+  assert.equal(later.length, 5);
+});
+
 test('a computer with many sessions is listed a page a tick, everything only on connect, and lists, catch-ups and watches share one budget', async t => {
   const { laptop, devbox } = machines(t), key = devbox.identity.key, P = '1'.repeat(16);
   await withHome(laptop.home, async () => {
