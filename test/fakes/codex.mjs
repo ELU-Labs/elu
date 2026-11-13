@@ -19,6 +19,8 @@ if(args.includes('--help')){console.log('--print --add-dir --restricted --safe-m
 if(args[0]==='debug'&&args[1]==='models'){console.log(JSON.stringify({models:cfg.models??[{slug:'big-model',display_name:'Big Model',description:'Frontier model for the most demanding work.',visibility:'list',priority:2},{slug:'quick-model',display_name:'Quick Model',description:'Fast and affordable model for easier tasks.',visibility:'list',priority:1},{slug:'review-model',display_name:'Review Model',description:'Automatic approval review model.',visibility:'hide',priority:9}]}));process.exit(0);}
 // `login status` as the real CLI prints it: a ChatGPT sign-in, an API key (exit 0 too, with a masked key), or nothing.
 if(args[0]==='login'&&args[1]!=='status'){
+ // --device-auth prints the link and a one-time code first, as the real CLI does, then waits for the sign-in.
+ if(args.includes('--device-auth'))console.log('Follow these steps to sign in with ChatGPT using device code authorization:\n\n1. Open this link in your browser and sign in to your account\n   https://auth.openai.com/codex/device\n\n2. Enter this one-time code (expires in 15 minutes)\n   FAKE-CODE\n');
  const as=cfg.accounts?.loginAs;if(!as){console.error('Login cancelled.');process.exit(1);}
  const payload=Buffer.from(JSON.stringify({email:as,'https://api.openai.com/auth':{chatgpt_plan_type:cfg.accounts.plan??'plus'}})).toString('base64url');
  fs.mkdirSync(codexHome,{recursive:true});fs.writeFileSync(path.join(codexHome,'auth.json'),JSON.stringify({auth_mode:'chatgpt',tokens:{id_token:`h.${payload}.s`,access_token:'access-never-shown',refresh_token:'refresh-never-shown'}}),{mode:0o600});

@@ -3436,6 +3436,34 @@ test('Usage: a leaves ELU\'s screen for a cleared one with one line of ELU\'s, d
   assert.equal(started[1].during, started[1].before);
 });
 
+test('Usage: a on a computer with no browser signs a new Codex account in with its device code', { timeout: 30000 }, async t => {
+  const p = setup(t), fakeFile = path.join(p.dir, 'fake.json'), started = [];
+  const signInAs = loginAs => fs.writeFileSync(fakeFile, JSON.stringify({ ...JSON.parse(fs.readFileSync(fakeFile, 'utf8')), accounts: { loginAs, plan: 'plus' } }));
+  environment(t, { SSH_CONNECTION: '10.0.0.2 52000 10.0.0.3 22', SSH_TTY: '', SSH_CLIENT: '' });
+  const fake = fakeUsage(t, { platform: 'linux', signIn: async ({ vendor, bin, args, env, lines }) => { const run = spawnSync(bin, args, { env, encoding: 'utf8' }); started.push({ vendor, args, lines, out: run.stdout }); return run.status; } });
+  const v = await view(t, { repo: p.repo, usage: fake }), panels = v.current.panels, status = () => panels.status.getText();
+  const rowOf = pattern => panels.usageList.items.findIndex(item => pattern.test(item.getText()));
+  await send(v, '/usage'); await until(() => v.current.view === 'usage' && !panels.usageBox.hidden, 'Usage tab');
+  await until(() => /Usage updated \d\d:\d\d/.test(status()), 'first check');
+  panels.usageList.focus(); await until(() => v.current.screen.focused === panels.usageList, 'list focused');
+  // Over SSH: Codex's own device code sign-in, and ELU's line says where the link and code go.
+  signInAs('second@example.com'); panels.usageList.select(rowOf(/^Codex/)); v.input.write('a');
+  await until(() => /Added second@example\.com\./.test(status()), 'added with a device code');
+  assert.deepEqual([started[0].vendor, started[0].args], ['codex', ['login', '--device-auth']]);
+  assert.deepEqual(started[0].lines, ['Signing in a new Codex account. ELU comes back when it ends.', 'This computer has no browser: open the link Codex prints on any computer and enter the code it shows.']);
+  assert.match(started[0].out, /Enter this one-time code/);
+  // Claude Code has no device code sign-in: its own, with where its link goes.
+  signInAs('third@example.com'); panels.usageList.select(0); v.input.write('a');
+  await until(() => /Added third@example\.com\./.test(status()), 'Claude Code added');
+  assert.deepEqual(started[1].args, ['auth', 'login']);
+  assert.equal(started[1].lines[1], 'This computer has no browser: open the link Claude Code prints in a browser, then follow its steps.');
+  // With a browser here, Codex signs in through it.
+  process.env.SSH_CONNECTION = ''; fake.platform = 'darwin';
+  signInAs('fourth@example.com'); panels.usageList.select(rowOf(/^Codex/)); v.input.write('a');
+  await until(() => /Added fourth@example\.com\./.test(status()), 'added with a browser');
+  assert.deepEqual([started[2].args, started[2].lines.length], [['login'], 1]);
+});
+
 // Sessions in two panes: the list on the left, and what its cursor is on, on the right.
 const barOf = width => Math.min(44, Math.max(30, Math.floor(width * 0.3)));
 const sized = async (v, width, height) => { v.output.columns = width; v.output.rows = height; v.output.emit('resize'); await until(() => v.current.screen.width === width && v.current.screen.height === height, `${width} by ${height}`); };
