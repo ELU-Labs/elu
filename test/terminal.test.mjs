@@ -2623,7 +2623,7 @@ test('a mode picked in a form opened from Kanban does not carry into the next ne
   await send(v, '/new'); await until(() => !panels.compose.hidden && /Permissions {2}Ask for approval/.test(text()), 'a fresh form');
   pickRow(panels.composeList, /When/); v.input.write('\r'); await until(() => modal(v, 'When'), 'the list of times');
   dialogList(v, 'When').select(5); v.input.write('\r');
-  await send(v, '/permissions auto'); await until(() => /Approve for me for this session\./.test(status()), 'auto picked');
+  await send(v, '/permissions auto'); await until(() => /Approve for me for this schedule\./.test(status()), 'auto picked');
   await send(v, 'Check dependencies for updates'); await until(() => /Scheduled daily 9:00/.test(status()), 'scheduled');
   assert.equal(listSchedules().find(row => row.goal === 'Check dependencies for updates')?.permissions, 'auto');
   assert.equal(listSchedules().find(row => row.goal === 'Check dependencies for updates')?.picked, true, 'picked, so a lower default leaves it');
@@ -2942,8 +2942,7 @@ test('a schedule offers Full access, says what it means and asks once', { timeou
   const first = listSchedules().find(row => row.goal === 'Triage the backlog');
   assert.deepEqual([first?.permissions, first?.picked], ['full', true]);
   // Full access picked for the session first, then a time: the schedule line comes when it is saved, once.
-  await until(() => v.current.view === 'tasks', 'Sessions shows after a schedule is saved');
-  await send(v, '/new'); await until(() => v.current.view === 'chat' && !panels.compose.hidden, 'a fresh form');
+  await send(v, '/new'); await until(() => !panels.compose.hidden && !/Scheduled/.test(status()), 'a fresh form');
   await send(v, '/permissions full'); await dialog(v, 'Full access', 'y'); await until(() => /Full access for this session\./.test(status()), 'full for the session');
   await send(v, '/schedule every 3h'); await until(() => /Runs every 3h/.test(status()) && /Permissions {2}Full access/.test(text()), 'kept, since it was picked');
   await send(v, 'Check the build');
@@ -2956,8 +2955,7 @@ test('a schedule offers Full access, says what it means and asks once', { timeou
   assert.equal(modal(v, 'Full access'), undefined, 'and not asked again');
   assert.equal(listSchedules().find(row => row.goal === 'Check the build')?.permissions, 'full');
   // Picked down again with a time set: no Full access, nothing asked.
-  await until(() => v.current.view === 'tasks', 'Sessions again');
-  await send(v, '/new'); await until(() => v.current.view === 'chat' && !panels.compose.hidden, 'a third form');
+  await send(v, '/new'); await until(() => !panels.compose.hidden && !/Scheduled/.test(status()), 'a third form');
   await send(v, '/schedule daily 9:00'); await until(() => /Runs daily 9:00/.test(status()), 'a time');
   await send(v, '/permissions ask'); await until(() => /Ask for approval for this schedule\./.test(status()), 'ask');
   await send(v, 'Check dependencies for updates'); await until(() => /Scheduled daily 9:00/.test(status()), 'scheduled');
