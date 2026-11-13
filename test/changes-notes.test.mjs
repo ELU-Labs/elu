@@ -39,8 +39,10 @@ function session(t, { colour = false } = {}) {
   saveTask(repo, { id: '1', goal: 'Add tax to prices', state: 'ready', worktree, branch: 'feat/task-1', base, createdAt: new Date().toISOString(), runs: [], reviews: [], messages: [], sessions: {} });
   return { repo, worktree, notes: path.join(taskDir(repo, '1'), 'line-notes.json') };
 }
-// shows: text the view holds once the session's changes are read.
-async function view(t, repo, { columns = 100, rows = 30, shows = OLD } = {}) {
+// shows: text the view holds once the session's changes are read. waits: the session's Task
+// waits for approval, so its row keeps y and n and any other letter typed on it starts a
+// message: its Changes open with a click on their name over the chat.
+async function view(t, repo, { columns = 100, rows = 30, shows = OLD, waits = false } = {}) {
   const input = new PassThrough(), output = new PassThrough();
   input.isTTY = output.isTTY = true; input.setRawMode = () => {}; output.columns = columns; output.rows = rows;
   output.on('data', () => {});
@@ -72,7 +74,8 @@ async function view(t, repo, { columns = 100, rows = 30, shows = OLD } = {}) {
         if (Date.now() - started > 10000) throw new Error('The view did not close.');
         rendered.panels.ask.cancel();
         for (const child of [...rendered.screen.children]) { child.dismiss?.(); child.children?.find(item => item.type === 'textbox')?.emit('cancel'); }
-        rendered.panels.chat.focus(); rendered.screen.emit('keypress', 'q', { name: 'q' });
+        // q on a tab quits; on a row or in its chat it starts a message.
+        rendered.panels.tabs[0].focus(); rendered.screen.emit('keypress', 'q', { name: 'q' });
         await new Promise(resolve => setTimeout(resolve, 20));
       }
       input.destroy(); output.destroy();
@@ -83,7 +86,9 @@ async function view(t, repo, { columns = 100, rows = 30, shows = OLD } = {}) {
   const board = rendered.panels.board, named = () => board.items.findIndex(item => /Add tax to prices/.test(item.getText()));
   await until(() => named() >= 0, 'the session in the list');
   board.focus(); board.select(named()); await until(() => rendered.session === '1', 'the session shown');
-  input.write('d'); await until(() => rendered.sessionView === 'changes' && rendered.screen.focused === rendered.panels.changes && v.lines().some(line => line.includes(shows)), 'its changes');
+  if (waits) { const names = rendered.panels.sessionTabs; await until(() => !names.hidden && names.width > 9, 'Chat and Changes over the chat'); v.click(names.aleft + 8, names.atop); }
+  else input.write('d');
+  await until(() => rendered.sessionView === 'changes' && rendered.screen.focused === rendered.panels.changes && v.lines().some(line => line.includes(shows)), 'its changes');
   return v;
 }
 
@@ -147,7 +152,7 @@ test('Changes: the line under the mouse shows a +, and one click on that + opens
 test('Changes: at 80 columns in colour, under a Task that waits for approval, the row under it says the note was sent', async t => {
   const s = session(t, { colour: true });
   proposeTask(s.repo, '1', { title: 'Uppercase coupons', description: 'One file changes.', goal: 'Codes compare equal whatever their case.', objectives: ['It works'], priority: 'medium', severity: 'low' });
-  const v = await view(t, s.repo, { columns: 80, rows: 24 }), removed = v.row(OLD);
+  const v = await view(t, s.repo, { columns: 80, rows: 24, waits: true }), removed = v.row(OLD);
   v.click(removed.mark, removed.y); await v.type('Note', 'Say why this went');
   await until(() => v.lines().some(line => /✎ Say why this went/.test(line)), 'the note under its line');
   v.input.write('s'); await until(() => /Sent your note to the model\./.test(v.status()), 'the note is sent');
