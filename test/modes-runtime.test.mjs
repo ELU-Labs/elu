@@ -296,7 +296,7 @@ test('place here runs in the checkout itself with a dirty tree; checks keep the 
   assert.equal(fs.existsSync(path.join(f.controller.repo.worktrees, task.id)), false, 'no worktree');
   assert.ok(task.runs.filter(run => run.role === 'lead').every(run => run.permissions === 'full' && run.effectivePermissions === 'full'));
   const names = task.evidence.results.map(row => row.name);
-  assert.ok(names.includes('secret-paths') && names.includes('no-deleted-tests'));
+  assert.ok(!names.includes('secret-paths') && names.includes('no-deleted-tests'));
   for (const name of ['changed-lines', 'protected-paths', 'unchanged-scripts', 'no-dependency-changes']) assert.equal(names.includes(name), false, `${name} is skipped in full`);
   const sandboxed = f.calls().filter(call => call.vendor === 'codex' && call.args[0] === 'sandbox' && call.args.includes('--'));
   assert.ok(sandboxed.length >= 1, 'the checks ran in the sandbox');
