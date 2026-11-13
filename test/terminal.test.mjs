@@ -1852,6 +1852,20 @@ test('on a row that waits on an approval y, n, f and a act with Enter, and a mes
   answerApproval('run-c', 'deny');
 });
 
+test('in colour, the key bar of a row keeps the note whole where the keys and the note are exactly as wide as the bar', { timeout: 30000 }, async t => {
+  // In colour, as the app runs: a coloured line as wide as its row loses its last word to the next row.
+  const p = setup(t); delete process.env.NO_COLOR;
+  liveTask(p.root, { id: '4', goal: 'Trim coupon codes', state: 'answered' }); liveTask(p.root, { id: '5', goal: 'Rename billing', state: 'ready' });
+  const v = await view(t, { repo: p.repo }), panels = v.current.panels, bar = () => panels.keys.getScreenLines().map(line => line.replace(/\x1b\[[^m]*m/g, '').trimEnd());
+  await selectRow(v, /Trim coupon/);
+  await until(() => bar()[0] === 'enter open  a follow up  e rename  c archive  n new session  letter then enter', 'the whole note at 80 columns');
+  assert.deepEqual([bar().length, bar()[0].length], [1, panels.keys.width]);
+  // The same with the short note, on a row with one more key.
+  await selectRow(v, /Rename billing/);
+  await until(() => bar()[0] === 'enter open  p publish  d changes  e rename  c archive  n new session  letter ⏎', 'the whole short note at 80 columns');
+  assert.deepEqual([bar().length, bar()[0].length], [1, panels.keys.width]);
+});
+
 test('in colour, the line of a session that waits on an approval keeps to one row and ends at Enter, with the last message under it', { timeout: 30000 }, async t => {
   // In colour, as the app runs: a coloured line as wide as its row loses its last word to the next row.
   const p = setup(t); delete process.env.NO_COLOR;
