@@ -128,6 +128,82 @@ test('each private HOME of Antigravity CLI finds the owner\'s login keychain on 
   assert.equal(agy.shareKeychain(path.join(root, 'none'), { platform: 'darwin', home: path.join(root, 'nobody') }), false);
 });
 
+test('Antigravity CLI with no keyring keeps a token file under HOME: each private HOME is linked to the owner\'s file, and a file written over the link is moved there', t => {
+  const root = temp(t), home = path.join(root, 'owner'), dir = path.join(root, 'private-home'), other = path.join(root, 'other-home');
+  for (const folder of [home, dir, other]) fs.mkdirSync(folder);
+  const [inCli, inGemini] = agy.TOKEN_FILES.map(parts => path.join(...parts)), linux = { platform: 'linux', home };
+  assert.deepEqual([inCli, inGemini], [path.join('.gemini', 'antigravity-cli', 'antigravity-oauth-token'), path.join('.gemini', 'antigravity-oauth-token')]);
+  // macOS has the link to the login keychain: no file is linked there.
+  assert.equal(agy.shareTokenFile(dir, { platform: 'darwin', home }), false); assert.equal(fs.existsSync(path.join(dir, '.gemini')), false);
+  // Linux: both places the file is reported at, each a link to the same place in the owner's home.
+  assert.equal(agy.shareTokenFile(dir, linux), true);
+  for (const name of [inCli, inGemini]) assert.equal(fs.readlinkSync(path.join(dir, name)), path.join(home, name));
+  assert.deepEqual(fs.readdirSync(home), [], 'nothing is made in the owner\'s home');
+  assert.equal(fs.existsSync(path.join(dir, inCli)), false, 'a link that leads nowhere reads as no file: signed out');
+  assert.equal(agy.shareTokenFile(dir, linux), true, 'again: kept');
+  // The owner signs in in his terminal: every HOME of ELU's has that sign-in.
+  fs.mkdirSync(path.join(home, '.gemini', 'antigravity-cli'), { recursive: true }); fs.writeFileSync(path.join(home, inCli), 'owner\n', { mode: 0o600 });
+  agy.shareTokenFile(other, linux);
+  for (const folder of [dir, other]) assert.equal(fs.readFileSync(path.join(folder, inCli), 'utf8'), 'owner\n');
+  // Written in place under a HOME of ELU's: it is the owner's file that changes, and the link stays.
+  fs.writeFileSync(path.join(dir, inCli), 'in place\n');
+  assert.equal(fs.readFileSync(path.join(home, inCli), 'utf8'), 'in place\n'); assert.equal(fs.lstatSync(path.join(dir, inCli)).isSymbolicLink(), true);
+  // Written over the link, as a new file moved into its place: that HOME has a file of its own,
+  // and the other HOME does not have the new sign-in.
+  const over = (file, text, at) => { fs.writeFileSync(`${file}.new`, text, { mode: 0o600 }); fs.renameSync(`${file}.new`, file); fs.utimesSync(file, at, at); };
+  const now = Math.floor(Date.now() / 1000);
+  fs.utimesSync(path.join(home, inCli), now - 100, now - 100);
+  over(path.join(dir, inCli), 'by rename\n', now);
+  assert.equal(fs.lstatSync(path.join(dir, inCli)).isFile(), true); assert.equal(fs.readFileSync(path.join(other, inCli), 'utf8'), 'in place\n');
+  // The next time ELU prepares that HOME the newer file becomes the owner's, for him alone, and the link is back.
+  assert.equal(agy.shareTokenFile(dir, linux), true);
+  assert.equal(fs.readlinkSync(path.join(dir, inCli)), path.join(home, inCli));
+  for (const folder of [home, dir, other]) assert.equal(fs.readFileSync(path.join(folder, inCli), 'utf8'), 'by rename\n');
+  assert.equal(fs.statSync(path.join(home, inCli)).mode & 0o777, 0o600);
+  assert.deepEqual(fs.readdirSync(path.join(dir, '.gemini', 'antigravity-cli')), ['antigravity-oauth-token'], 'ELU keeps no copy');
+  // An older file written over the link is dropped: the owner signed in again since.
+  over(path.join(dir, inCli), 'old\n', now - 50); agy.shareTokenFile(dir, linux);
+  assert.equal(fs.lstatSync(path.join(dir, inCli)).isSymbolicLink(), true); assert.equal(fs.readFileSync(path.join(dir, inCli), 'utf8'), 'by rename\n');
+  // An owner who never ran agy has no ~/.gemini: a file written over the link is moved there, into folders made for him alone.
+  const fresh = path.join(root, 'fresh-owner'), mine = path.join(root, 'mine'); fs.mkdirSync(fresh); fs.mkdirSync(mine);
+  agy.shareTokenFile(mine, { platform: 'linux', home: fresh }); over(path.join(mine, inGemini), 'first\n', now); agy.shareTokenFile(mine, { platform: 'linux', home: fresh });
+  assert.equal(fs.readFileSync(path.join(fresh, inGemini), 'utf8'), 'first\n'); assert.equal(fs.statSync(path.join(fresh, '.gemini')).mode & 0o777, 0o700);
+  assert.equal(fs.readlinkSync(path.join(mine, inGemini)), path.join(fresh, inGemini));
+  // A link to another place (the owner's home moved) is made again; a folder where the file would be is left alone.
+  fs.unlinkSync(path.join(mine, inCli)); fs.symlinkSync(path.join(root, 'elsewhere'), path.join(mine, inCli)); agy.shareTokenFile(mine, { platform: 'linux', home: fresh });
+  assert.equal(fs.readlinkSync(path.join(mine, inCli)), path.join(fresh, inCli));
+  fs.unlinkSync(path.join(mine, inCli)); fs.mkdirSync(path.join(mine, inCli)); agy.shareTokenFile(mine, { platform: 'linux', home: fresh });
+  assert.equal(fs.lstatSync(path.join(mine, inCli)).isDirectory(), true);
+});
+
+// A Linux server with no keyring (ssh, a container): agy 1.5.8 keeps its sign-in in a token file
+// under HOME. ELU runs agy under a HOME of its own for each workspace, so a sign-in made with s
+// reached the sign-in HOME alone: the check, and every turn after it, found agy signed out.
+for (const [how, tokenWrite] of [['in place', undefined], ['as a new file moved over the old one', 'rename']]) {
+  test(`Antigravity CLI where it keeps a token file, written ${how}: s signs it in for every HOME ELU runs it under, and the check passes`, { timeout: 120000, skip: process.platform === 'darwin' ? 'on macOS every HOME is linked to the login keychain instead' : false }, async t => {
+    const m = machine(t, { agy: { storage: 'file', auth: 'prompt', authSeconds: 3, tokenWrite } });
+    // The owner's home, where his own agy keeps the file.
+    environment(t, { HOME: m.home });
+    const row = await m.row('agy'), token = path.join('.gemini', 'antigravity-cli', 'antigravity-oauth-token');
+    assert.equal((await agy.readSignIn({ bin: row.bin, cwd: m.home, env: m.env })).signedIn, false);
+    // s: agy's own sign-in, in ELU's sign-in HOME.
+    const command = agy.signInTerminal({ env: m.env });
+    const signIn = spawnSync(row.bin, command.args, { env: command.env, input: '4/0AeanS0b-fake-code\n', encoding: 'utf8' });
+    assert.equal(signIn.status, 0, signIn.stderr); assert.match(signIn.stderr, /Signed in\./);
+    // The check: it reads the sign-in, then runs its steps under HOMEs of their own. All pass.
+    assert.equal(await checkOnFirstUse(row, { cwd: m.home, environment: m.env }), true);
+    assert.deepEqual(Object.values(conformanceState('agy').steps).filter(status => status !== 'pass'), []);
+    // One token file, the owner's own, which his own agy reads too; ELU's HOMEs hold links to it.
+    assert.equal(fs.lstatSync(path.join(m.home, token)).isFile(), true);
+    const work = agy.childEnv({ mode: 'ask', cwd: m.home }).HOME; assert.notEqual(work, command.env.HOME);
+    for (const home of [command.env.HOME, work]) assert.equal(fs.readlinkSync(path.join(home, token)), path.join(m.home, token));
+    assert.deepEqual(await agy.readSignIn({ bin: row.bin, cwd: m.home, env: m.env }), { signedIn: true, reason: null });
+    // Signed in in his terminal instead (ELU's state is new): ELU finds agy signed in, with no s.
+    fs.rmSync(path.join(personalDirectory(), 'agy-home'), { recursive: true });
+    assert.deepEqual(await agy.readSignIn({ bin: row.bin, cwd: m.home, env: m.env }), { signedIn: true, reason: null });
+  });
+}
+
 test('Grok Build: s runs grok login under the HOME and GROK_HOME ELU runs it with, and its token lands where those runs read it', { timeout: 60000 }, async t => {
   // An owner who never ran grok: no ~/.grok at all, so ELU's link to his token file leads nowhere yet.
   const m = machine(t, { grok: { login: true } });

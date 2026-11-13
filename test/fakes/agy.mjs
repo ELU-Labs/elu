@@ -18,13 +18,20 @@
 // command goes on. Otherwise it ends: "error: authentication failed or timed out", exit 1.
 // usageSeconds: `-p /usage` prints nothing for that long before its answer, as a program does
 // that waits on a keyring to be unlocked or on a network that does not answer.
+// storage: 'file' is agy where it finds no keyring (Linux with no Secret Service): its sign-in
+// is a token file under HOME (agy.tokenFile, else .gemini/antigravity-cli/antigravity-oauth-token),
+// so every HOME has its own unless they are linked. Signing in makes the file's folder and
+// writes the file in place, through a link that is there, or with tokenWrite: 'rename' as a
+// new file moved over whatever is there. A write that cannot be made ends the sign-in with
+// "failed to write token to file" (agy 1.5.8's own words for it).
 import fs from 'node:fs'; import path from 'node:path'; import crypto from 'node:crypto'; import readline from 'node:readline'; import { spawnSync } from 'node:child_process';
 const args = process.argv.slice(2);
 let cfg = null; try { cfg = JSON.parse(fs.readFileSync(path.join(path.dirname(process.argv[1]), 'fake.json'), 'utf8')); } catch { /* Not installed as a test CLI. */ }
 if (!cfg) { console.error('fake agy: not installed as a test CLI (no fake.json beside it)'); process.exit(2); }
 const agy = cfg.agy ?? {};
 const KEYRING = agy.keyring ?? path.join(path.dirname(process.argv[1]), 'agy-keyring');
-const signedOut = () => agy.signedIn === false && !fs.existsSync(KEYRING);
+const tokenFile = () => path.join(process.env.HOME ?? '', ...(agy.tokenFile ?? '.gemini/antigravity-cli/antigravity-oauth-token').split('/'));
+const signedOut = () => agy.storage === 'file' ? !fs.existsSync(tokenFile()) : agy.signedIn === false && !fs.existsSync(KEYRING);
 // The sign-in agy runs when it is signed out (auth: 'prompt'): true once the code came.
 async function signIn() {
   const url = `https://accounts.google.com/o/oauth2/auth?client_id=fake-client&state=${crypto.randomUUID().slice(0, 8)}`, seconds = agy.authSeconds ?? 60;
@@ -41,7 +48,14 @@ async function signIn() {
     process.stdin.on('error', () => {});
   });
   if (!signed) { process.stderr.write('Error: authentication timed out.\nerror: authentication failed or timed out\n'); return false; }
-  fs.writeFileSync(KEYRING, 'signed-in\n', { mode: 0o600 });
+  if (agy.storage === 'file') {
+    const file = tokenFile();
+    try {
+      fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+      if (agy.tokenWrite === 'rename') { const fresh = `${file}.${process.pid}.tmp`; fs.writeFileSync(fresh, 'signed-in\n', { mode: 0o600 }); fs.renameSync(fresh, file); }
+      else fs.writeFileSync(file, 'signed-in\n', { mode: 0o600 });
+    } catch (error) { process.stderr.write(`Error: failed to write token to file: ${error.message}\n`); return false; }
+  } else fs.writeFileSync(KEYRING, 'signed-in\n', { mode: 0o600 });
   process.stderr.write('Signed in.\n');
   return true;
 }
