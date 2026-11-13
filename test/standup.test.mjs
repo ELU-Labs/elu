@@ -218,7 +218,7 @@ test("teammates' shared sessions are asked when online; offline and Done ones ar
   const f = setup(t);
   const kim = 'f'.repeat(64), lee = '1'.repeat(64), now = new Date().toISOString();
   const people = () => [
-    { peer: kim, name: 'kim', online: true, sessions: [{ id: '0123456789abcdef', title: 'Billing', column: 'progress', by: 'kim', at: now }, { id: '1123456789abcdef', title: 'Old work', column: 'done', by: 'kim', at: now }] },
+    { peer: kim, name: 'kim', online: true, sessions: [{ id: '0123456789abcdef', title: 'Billing', column: 'progress', by: 'kim', at: now }, { id: '1123456789abcdef', title: 'Old work', column: 'done', by: 'kim', at: now, standup: false }] },
     { peer: lee, name: 'lee', online: false, sessions: [{ id: '2123456789abcdef', title: 'Search', column: 'needs', by: 'lee', at: now }] },
   ];
   const plan = await standupPlan({ root: f.root, id: '999' }, { sources: { computers: () => [], teammates: people } });
