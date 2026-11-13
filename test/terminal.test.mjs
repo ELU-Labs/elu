@@ -4511,3 +4511,13 @@ test('kill -TERM puts the terminal back at once, before the sessions have stoppe
   } finally { release(); }
   await v.finished;
 });
+
+test('/help says c archives a session and names /archive, as the key bar does', { timeout: 15000 }, async t => {
+  const p = setup(t), v = await view(t, { repo: p.repo });
+  await send(v, '/help'); await until(() => modal(v, 'Commands'), 'help');
+  const help = dialogText(v, 'Commands').replace(/\s+/g, ' ');
+  assert.match(help, /c \(or \/archive\) archives one; \/archived lists them, and a new message brings one back\./);
+  assert.doesNotMatch(help, /\/close|closes one/);
+  assert.match(help, /Examples: \/model sonnet .*\/permissions folders add ~\/evals \/archive\b/);
+  await dialog(v, 'Commands', '');
+});
