@@ -13,10 +13,25 @@ own runs keep the vendor's default.
 
 ## Sign in
 
-Run `agy` once and sign in with your Google account. The token lives in the OS keychain
-(on Linux, the keyring reached over `DBUS_SESSION_BUS_ADDRESS`, which ELU passes
-through). ELU checks sign-in with `agy -p /usage --output-format json`: exit code only,
-no model turn, no quota spent. Signed out, ELU says: `Antigravity: not signed in. Run: agy`.
+`agy` keeps its token in the system keyring: on macOS the login keychain, on Linux the
+Secret Service reached over `DBUS_SESSION_BUS_ADDRESS`, which ELU passes through. With no
+keyring it keeps a file under its HOME. ELU runs `agy` under a HOME of its own (below), so on
+macOS each of those HOMEs holds one link, `Library/Keychains`, to your own
+`~/Library/Keychains`: `agy` in ELU then uses the sign-in `agy` has in your terminal. Nothing
+else of your home is linked, and no turn may write ELU's state.
+
+Sign it in from ELU: `s` on the Antigravity line in the Usage tab. ELU leaves its screen and
+runs `agy -p /usage` under its sign-in HOME, with your terminal as its input: the browser opens
+Google sign-in, you copy the code it shows, paste it there and press Enter. `agy` waits 60
+seconds for the code. On a computer with no browser, open the link it prints on any other. ELU comes back when it ends and reads the sign-in again. `c` on a
+signed-out line offers the same sign-in first.
+
+ELU reads the sign-in with `agy -p /usage --output-format json`: no model turn, no quota
+spent. Signed in, it exits 0. Signed out, `agy` 1.5.8 prints a sign-in link, opens the browser
+and waits a minute for a code; ELU stops it the moment it asks, and runs it with a stand-in
+`open` first on its PATH (`agy-home/no-browser/`, which does nothing), so a read never opens a
+browser or waits. Signed out, ELU says:
+`Antigravity: not signed in for ELU. Sign it in with s on its line in the Usage tab.`
 
 Google's FAQ at [antigravity.google/docs/faq](https://antigravity.google/docs/faq) says,
 verbatim: "Using third-party software, tools, or services to access Antigravity is a
@@ -40,7 +55,7 @@ listener and a marker command:
 
 | Step | Proves |
 | --- | --- |
-| `signin` | the sign-in probe passes under ELU's private HOME |
+| `signin` | the sign-in read passes under ELU's private HOME |
 | `locked-no-write` | a read-only run told to create files creates nothing, inside or outside |
 | `locked-no-shell` | told to run the marker command, the marker never runs |
 | `locked-no-network` | told to fetch the local URL, the listener sees nothing |
@@ -59,12 +74,13 @@ the permissions picker says so.
 
 The Usage tab shows whether Antigravity is signed in before the check has run. It asks
 `agy` what the check asks first, its release (`agy --version`) and its flags (`agy --help`),
-then runs the sign-in probe above, `agy -p /usage --output-format json` under ELU's private
-HOME: exit code only, no model turn, no quota spent. It does this when the tab opens and it
-has not read this `agy` yet, when the tab's usage check is due, and on `r`. The line then
-says `signed in · needs a one-time check (c runs it now)`, or `not signed in. Run: agy`. `c` on
-that line runs the same check there, with each step under the line as it ends, and the line
-then says `ready`, or that the check failed and which step was not proven.
+then the sign-in read above, under ELU's private HOME: no model turn, no quota spent, no
+browser. It does this when the tab opens and it has not read this `agy` yet, when the tab's
+usage check is due, and on `r`. The line then says
+`signed in · needs a one-time check (c runs it now)`, or `not signed in for ELU · s signs in`.
+`c` on that line runs the same check there, with each step under the line as it ends, and the
+line then says `ready`, or that the check failed and which step was not proven. Signed out,
+`c` asks first whether to sign in, then runs the check after the sign-in.
 
 ## The private HOME
 

@@ -189,7 +189,7 @@ test('the Usage tab names the active account per vendor, lists the others, and h
   assert.equal(claude.keysHint, 'enter use · a add account · x forget');
   assert.deepEqual(claude.accounts.map(row => [row.login, row.account, row.active]), [['default', 'owner@example.invalid', true]]);
   assert.deepEqual(codex.active, { account: 'owner@example.invalid', plan: 'Team', tier: null }); assert.equal(codex.usage.fiveHour.usedPercent, 34);
-  assert.deepEqual([agy.installed, agy.signedIn, agy.usage, agy.signInHint], [true, false, null, 'Run: agy']);
+  assert.deepEqual([agy.installed, agy.signedIn, agy.usage, agy.signInHint], [true, false, null, 's signs in']);
   assert.deepEqual([grok.installed, grok.signedIn, grok.active], [false, false, null]);
   const signedOut = usageTab({ vendors: vendors.map(row => ({ ...row, signedIn: false })), env, now });
   assert.equal(signedOut[0].usage, null); assert.equal(signedOut[0].active, null);
@@ -200,10 +200,10 @@ test('the Usage tab names the active account per vendor, lists the others, and h
   assert.match(text, /^ {12}5h  \[------\]    —   not reported$/m); assert.match(text, /^ {12}wk  \[#-----\]   12%  resets /m);
   assert.match(text, /^ {12}old@example.invalid · last seen \w{3} \d+ · wk 100% then$/m);
   assert.match(text, /^ {12}old@example.invalid · last seen \w{3} \d+ · wk 100% then\n {12}enter use · a add account · x forget$/m); assert.match(text, /^Codex {7}owner@example.invalid · Team · active$/m); assert.match(text, /^ {12}5h  \[##----\]   34%  resets /m);
-  assert.match(text, /^Antigravity not signed in. Run: agy$/m); assert.match(text, /^Grok Build {2}not installed$/m);
+  assert.match(text, /^Antigravity not signed in for ELU · s signs in$/m); assert.match(text, /^Grok Build {2}not installed$/m);
   const details = usageDetailLines(claude, new Date(now)).join('\n');
   assert.match(details, /owner@example.invalid · Max 20x · default_claude_max_20x\nReported \d\d:\d\d\n\n5h  \[------\]    —   not reported\nwk  \[#-----\]   12%  resets /); assert.match(details, /Other accounts\nold@example.invalid · Pro · first seen/);
-  assert.deepEqual(usageDetailLines(grok), ['Not installed.']); assert.deepEqual(usageDetailLines(agy), ['Not signed in. Run: agy']);
+  assert.deepEqual(usageDetailLines(grok), ['Not installed.']); assert.deepEqual(usageDetailLines(agy), ['Not signed in for ELU. s signs it in.']);
   // Before a session on Claude Code has reported a window, or once every window it reported
   // has reset, the Claude block and its details say when usage shows.
   for (const seen of [null, { observedAt, fiveHour: { usedPercent: 99, resetsAt: Math.floor(now / 1000) - 1 }, weekly: null }]) {
@@ -227,7 +227,7 @@ test('the Usage tab reads Antigravity and Grok Build sign-in before their one-ti
   let { agy, grok } = tab();
   assert.deepEqual([agy.unchecked, agy.check, agy.signInRead, grok.check, grok.signInRead], [true, 'needed', null, 'needed', false]);
   assert.deepEqual(text(agy), ['Antigravity sign-in not read yet · needs a one-time check (c runs it now)']);
-  assert.deepEqual(text(grok), ['Grok Build  not signed in. Run: grok login']);
+  assert.deepEqual(text(grok), ['Grok Build  not signed in for ELU · s signs in']);
   assert.equal(signInsUnread(rows), true);
   fs.mkdirSync(path.join(env.HOME, '.grok')); fs.writeFileSync(path.join(env.HOME, '.grok', 'auth.json'), '{"token":"never-read"}\n', { mode: 0o600 });
   assert.deepEqual(text(tab().grok), ['Grok Build  signed in · needs a one-time check (c runs it now)']);
@@ -247,8 +247,8 @@ test('the Usage tab reads Antigravity and Grok Build sign-in before their one-ti
   fs.writeFileSync(config, JSON.stringify({ ...JSON.parse(fs.readFileSync(config, 'utf8')), agy: { signedIn: false } }));
   await readSignInsBeforeCheck(rows, { env: { ...process.env, ...env }, all: true }); assert.equal(calls().length, 6);
   ({ agy } = tab());
-  assert.deepEqual(text(agy), ['Antigravity not signed in. Run: agy']);
-  assert.deepEqual(usageDetailLines(agy), ['Not signed in. Run: agy', '', 'Antigravity CLI has not been checked on this machine yet. Your first message to it runs the check.', 'c runs it now.']);
+  assert.deepEqual(text(agy), ['Antigravity not signed in for ELU · s signs in']);
+  assert.deepEqual(usageDetailLines(agy), ['Not signed in for ELU. s signs it in.', '', 'Antigravity CLI has not been checked on this machine yet. Your first message to it runs the check.', 'c runs it now.']);
   // A release that cannot run here is not asked for its sign-in.
   fs.writeFileSync(path.join(fake.dir, 'agy'), `#!${process.execPath}\nif (process.argv.includes('--version')) console.log('agy version 1.5.4'); else if (process.argv.includes('--help')) console.log('--output-format'); else { require('node:fs').writeFileSync(${JSON.stringify(path.join(folder, 'asked'))}, 'x'); process.exit(0); }\n`, { mode: 0o755 });
   await readSignInsBeforeCheck(rows, { env: { ...process.env, ...env }, all: true });

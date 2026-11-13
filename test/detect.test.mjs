@@ -103,8 +103,9 @@ test('the lead error names what is wrong', () => {
   // The command is the one that signs in, which is not always the vendor's name.
   const signedOut = vendor => vendorProblem(vendor, [{ vendor, available: true, supported: true, signedIn: false }]);
   assert.equal(signedOut('codex'), 'Codex is signed out. Run codex login to sign in, then send again.');
-  assert.equal(signedOut('grok'), 'Grok Build is signed out. Run grok login to sign in, then send again.');
-  assert.equal(signedOut('agy'), 'Antigravity CLI is signed out. Run agy to sign in, then send again.');
+  // Antigravity and Grok Build sign in from ELU itself: agy's sign-in for ELU is not the one in the owner's terminal.
+  assert.equal(signedOut('grok'), 'Grok Build is signed out. Sign it in with s on its line in the Usage tab, then send again.');
+  assert.equal(signedOut('agy'), 'Antigravity CLI is signed out. Sign it in with s on its line in the Usage tab, then send again.');
   assert.equal(vendorProblem('claude', [{ vendor: 'claude', available: true, supported: false, signedIn: true, release: '2.1.321', reason: 'This untested version is missing required flags: --verbose.' }]), 'Claude Code 2.1.321: This untested version is missing required flags: --verbose.');
 });
 
