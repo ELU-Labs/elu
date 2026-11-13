@@ -16,8 +16,7 @@ own runs keep the vendor's default.
 Run `agy` once and sign in with your Google account. The token lives in the OS keychain
 (on Linux, the keyring reached over `DBUS_SESSION_BUS_ADDRESS`, which ELU passes
 through). ELU checks sign-in with `agy -p /usage --output-format json`: exit code only,
-no model turn, no quota spent. Signed out, ELU says: `Antigravity: not signed in. Run: agy`,
-the same on a computer with no browser: `agy` has one sign-in, started by running it.
+no model turn, no quota spent. Signed out, ELU says: `Antigravity: not signed in. Run: agy`.
 
 Google's FAQ at [antigravity.google/docs/faq](https://antigravity.google/docs/faq) says,
 verbatim: "Using third-party software, tools, or services to access Antigravity is a
