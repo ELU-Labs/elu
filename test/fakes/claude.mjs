@@ -80,6 +80,8 @@ if(cfg.name!==undefined&&schema?.properties?.name)result.name=cfg.name;
 if(cfg.learned!==undefined&&schema?.properties?.learned)result.learned=cfg.learned;
 // intent (fake.json): answer makes every conversation turn an answer, so a relay test needs no Task.
 if(conversation&&cfg.intent==='answer'){result.intent='answer';result.summary='Looked.';}
+// answer (fake.json): what an answering turn says.
+if(conversation&&result.intent==='answer'&&typeof cfg.answer==='string')result.summary=cfg.answer;
 // A request for an edit plans first (lib/plan.mjs): it comes back with a Task unless the prompt
 // carries one the owner approved. fake.json may give its own Task, or none with mode no-task;
 // mode bad-task returns one that does not read. A turn that reports progress ticks every subtask.
