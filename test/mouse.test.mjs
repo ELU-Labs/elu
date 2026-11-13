@@ -611,3 +611,43 @@ test('Ctrl-C copies a highlight in the message box and keeps it: typing then rep
   assert.equal(v.ask.cursor, 4); assert.equal(v.ask.getValue(), 'Z 19\n');
   assert.ok(!v.current.screen.destroyed, 'Ctrl-C with a highlight never quits');
 });
+
+// The message box as it is on the screen: its top border, and the text of each of its rows.
+function drawnBox(v) {
+  v.current.screen.render();
+  const ask = v.ask, pos = ask.lpos, cells = row => v.current.screen.lines[row].map(cell => cell[1]).join('');
+  const rows = [];
+  for (let y = pos.yi + ask.itop; y < pos.yl - ask.ibottom; y++) rows.push(cells(y).slice(pos.xi + ask.ileft, pos.xl - ask.iright).trimEnd());
+  return { border: cells(pos.yi).slice(pos.xi, pos.xl), rows };
+}
+// The rows of the message the box shows, from the first one in view.
+function rowsInView(v) {
+  const ask = v.ask, value = ask.getValue(), height = ask.height - ask.iheight;
+  return ask.editorView().rows.slice(ask.childBase || 0, (ask.childBase || 0) + height).map(row => value.slice(row.start, row.end));
+}
+
+test('after typing over a highlight in a scrolled message box, or Backspace, Delete or a paste on one, its title stays on its top border', async t => {
+  const v = await view(t), value = numbered(12), title = () => v.ask._label.getText().trim();
+  const holds = (step, expected) => {
+    assert.equal(v.ask.getValue(), expected, step);
+    const { border, rows } = drawnBox(v);
+    assert.match(title(), /^New session → /, step);
+    assert.ok(border.includes(title()), `${step}: the title on the border: ${border}`);
+    assert.deepEqual(rows, rowsInView(v), `${step}: every row holds the message`);
+    assert.ok(rows.every(row => /^line \d\d/.test(row)), `${step}: ${rows.join(' | ')}`);
+  };
+  for (const [step, key, after] of [['typing', 'X', 'X'], ['Backspace', '\x7f', ''], ['Delete', '\x1b[3~', ''], ['a paste', '\x1b[200~ and more\x1b[201~', ' and more']]) {
+    await typing(v, value);
+    holds(`${step}: scrolled to its end`, value);
+    // Five lines up: the box scrolls up with the cursor, and the highlight runs to the end.
+    v.input.write(SHIFT.up.repeat(5));
+    await until(() => v.ask.cursor === 6 * 8 + 7 && v.current.selection.text() === value.slice(6 * 8 + 7), `${step}: five lines highlighted`);
+    holds(`${step}: highlighted`, value);
+    // The text is five lines shorter, so the box shows its first lines again.
+    v.input.write(key);
+    const expected = value.slice(0, 6 * 8 + 7) + after;
+    await until(() => v.ask.getValue() === expected, `${step}: the highlight replaced`);
+    assert.equal(v.current.selection.active, false);
+    holds(`${step}: replaced`, expected);
+  }
+});
