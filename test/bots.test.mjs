@@ -986,3 +986,23 @@ test('a reviewing bot and a shadow bot with no usage credits for their model run
   assert.deepEqual(said.map(row => [row.shadow, row.quiet ?? false]), [[true, true], [true, false]], JSON.stringify(said));
   assert.equal(said[0].text, '@echo could not run: Claude says this account is out of usage credits for Fable 5.2. @echo ran on Opus 5.5 instead.');
 });
+
+// Before a turn the vendor is read (its release, its sign-in), which a slow program holds for
+// seconds. The reading no longer holds the app, so the owner's stop arrives while it runs.
+test('a bot stopped while its vendor is still being read stops at once, and its turn never starts', { timeout: 30000 }, async t => {
+  const f = setup(t);
+  const first = await f.controller.ask('Where is coupon normalization?').finished;
+  // Codex takes five seconds to answer anything here, its release first.
+  const file = path.join(f.fake.dir, 'codex'), text = fs.readFileSync(file, 'utf8'), at = "const mode=cfg.mode??'normal';"; assert.equal(text.includes(at), true);
+  fs.writeFileSync(file, text.replace(at, at + 'await new Promise(resolve=>setTimeout(resolve,5000));'));
+  const run = f.controller.ask('Take your time.', first.id, { bot: 'critic' });
+  await until(() => readTask(f.repo, first.id).activeRole === 'bot:critic', 'the bot named as at work');
+  await new Promise(resolve => setTimeout(resolve, 300));
+  const stopped = Date.now();
+  await f.controller.stop(first.id); await assert.rejects(run.finished);
+  assert.ok(Date.now() - stopped < 2000, `the stop took ${Date.now() - stopped} ms`);
+  const task = readTask(f.repo, first.id);
+  assert.equal(task.messages.at(-1).text, 'Stopped before answering. The next message to @critic starts from the chat.'); assert.notEqual(task.state, 'running');
+  await new Promise(resolve => setTimeout(resolve, 6000));
+  assert.equal(f.calls('codex').length, 0, 'no turn of the bot started');
+});

@@ -41,7 +41,12 @@ if (args[0] === 'login') {
   const until = Date.now() + (cfg.grok.seconds ?? 60) * 1000;
   while (!fs.existsSync(approved)) { if (Date.now() > until) { process.stderr.write('Error: the sign-in was not approved in time.\n'); process.exit(1); } await new Promise(resolve => setTimeout(resolve, 50)); }
   fs.rmSync(approved, { force: true });
-  fs.mkdirSync(home, { recursive: true }); fs.writeFileSync(path.join(home, 'auth.json'), '{"token":"never-read"}\n', { mode: 0o600 });
+  // grok.tokenWrite 'rename': auth.json is a new file moved over what is there, so a link of
+  // ELU's there becomes a file. Otherwise it is written in place, through the link. Which of
+  // the two grok does was not watched: ELU has to be right for both.
+  const auth = path.join(home, 'auth.json'), token = '{"token":"never-read"}\n'; fs.mkdirSync(home, { recursive: true });
+  if (cfg.grok.tokenWrite === 'rename') { fs.writeFileSync(`${auth}.${process.pid}.tmp`, token, { mode: 0o600 }); fs.renameSync(`${auth}.${process.pid}.tmp`, auth); }
+  else fs.writeFileSync(auth, token, { mode: 0o600 });
   process.stderr.write('Signed in.\n'); process.exit(0);
 }
 

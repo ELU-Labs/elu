@@ -26,6 +26,7 @@ import { processIdentity } from '../lib/process.mjs';
 import { activeLogin, listLogins } from '../lib/logins.mjs';
 import { detect } from '../lib/detect.mjs';
 import { signInCommand } from '../lib/vendors.mjs';
+import { ADAPTERS } from '../lib/adapters/index.mjs';
 import { conformanceState } from '../lib/conformance.mjs';
 import { spawn, spawnSync } from 'node:child_process';
 import { approvalsDir, requestApproval, answerApproval } from '../lib/approvals.mjs';
@@ -1112,7 +1113,11 @@ test('a message with no @name goes to whoever the owner last wrote to in the ses
   panels.ask.setValue(''); assert.equal(roles().length, 5);
   // A message that waits behind a working bot is named for the bot it will go to.
   answers('slow');
+  const turns = () => fs.readFileSync(p.calls, 'utf8').trim().split('\n').filter(line => JSON.parse(line).args.includes('-p')).length, before = turns();
   await send(v, '@sec Still there?'); await until(() => /@sec is working/.test(chat()), 'the bot at work');
+  // Its turn has reached Claude Code: only from then on is there a turn to pick up after a stop.
+  // (Reading the vendor before a turn no longer holds the app, so this test runs on meanwhile.)
+  await until(() => turns() > before, 'the bot\'s turn started');
   await send(v, 'and the deploy key?');
   await until(() => /You → @sec \(waiting\) {2}\d{1,2}:\d\d [AP]M\n┃ and the deploy key\? *\nSent when this turn ends\./.test(chat()), 'the waiting message names the bot');
   assert.equal(pendingRequests(p.root).find(row => row.state === 'queued').bot, 'sec');
@@ -3697,6 +3702,46 @@ test('Usage on a computer with no browser: s signs Grok Build in with its device
   assert.match(started[1].printed, /Or, paste the authorization code here and press Enter:\nSigned in\./);
   await until(() => /Antigravity CLI is signed in for ELU\./.test(status()), 'status');
   assert.equal(marks(), true, 'ELU takes pastes in marks again');
+});
+
+// Antigravity CLI passed its check on this machine, so reading the vendors asks it for its
+// sign-in, and it gives no answer for half a minute: a keyring that waits to be unlocked, a
+// network that does not answer. On 0.1.19 that reading ran inside the draw: the app drew
+// nothing and took no key until the read gave up.
+test('Usage with a vendor that says nothing for 30 seconds: the tab opens at once, keys work all the while, and the vendors show when the reading ends', { timeout: 120000 }, async t => {
+  const p = setup(t), fake = fakeUsage(t), fakeFile = path.join(p.dir, 'fake.json');
+  fs.writeFileSync(fakeFile, JSON.stringify({ ...JSON.parse(fs.readFileSync(fakeFile, 'utf8')), agy: { usageSeconds: 30 } }));
+  const record = path.join(personalDirectory(), 'conformance', 'agy.json'); fs.mkdirSync(path.dirname(record), { recursive: true });
+  fs.writeFileSync(record, JSON.stringify({ v: 1, bin: fs.realpathSync(path.join(p.dir, 'agy')), version: '1.5.4', steps: Object.fromEntries(ADAPTERS.agy.conformance.map(step => [step.id, 'pass'])), relay: false, at: new Date().toISOString() }), { mode: 0o600 });
+  // The real reading of the vendors, with the fake CLIs on PATH.
+  fake.vendors = () => detect(p.root, { ...process.env, HOME: fake.home });
+  const v = await view(t, { repo: p.repo, usage: fake }), panels = v.current.panels, text = () => panels.usageList.items.map(item => item.getText()).join('\n');
+  const calls = () => fs.readFileSync(p.calls, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+  // The longest the app went without running a timer: what the screen froze for.
+  let most = 0, last = Date.now(); const ticker = setInterval(() => { most = Math.max(most, Date.now() - last); last = Date.now(); }, 10); t.after(() => clearInterval(ticker));
+  const opened = Date.now();
+  await send(v, '/usage'); await until(() => v.current.view === 'usage' && !panels.usageBox.hidden, 'Usage tab');
+  await until(() => /^Reading what is installed and signed in here…$/m.test(text()), 'the tab says it is reading', 5000);
+  assert.ok(Date.now() - opened < 5000, `the tab took ${Date.now() - opened} ms to open`);
+  // The agents and today's spend are there already, under the line that says what is being read.
+  assert.match(text(), /^Reading what is installed and signed in here…\n\nTop agents today\nNo agent has run today\.\nELU spend today not reported$/);
+  // Keys work while it reads: t changes the period of the agents list, and back.
+  panels.usageList.focus(); await until(() => v.current.screen.focused === panels.usageList, 'list focused');
+  v.input.write('t'); await until(() => /^Top agents, last 7 days$/m.test(text()), 't shows 7 days', 2000);
+  await until(() => calls().some(call => call.vendor === 'agy' && call.args.includes('/usage')), 'Antigravity CLI asked for its sign-in', 20000);
+  // Ten seconds into its silence they still do, and so does another tab and the way back.
+  await new Promise(resolve => setTimeout(resolve, 10000));
+  assert.match(text(), /^Reading what is installed and signed in here…$/m);
+  v.input.write('t'); await until(() => /^Top agents today$/m.test(text()), 't shows today', 2000);
+  await send(v, '/projects'); await until(() => v.current.view === 'projects', 'Projects tab', 2000);
+  await send(v, '/usage'); await until(() => v.current.view === 'usage' && !panels.usageBox.hidden, 'Usage tab again', 2000);
+  assert.match(text(), /^Reading what is installed and signed in here…$/m);
+  assert.equal(calls().filter(call => call.vendor === 'agy' && call.args.includes('/usage')).length, 1, 'one reading, not one for each draw');
+  // When Antigravity CLI's half minute is up the vendors show: a read that got no answer is not a sign-out.
+  await until(() => /^Antigravity signed in · ready$/m.test(text()), 'the vendors show', 60000);
+  assert.ok(Date.now() - opened > 25000, `the reading took ${Date.now() - opened} ms`);
+  assert.doesNotMatch(text(), /Reading what is installed/);
+  assert.ok(most < 3000, `the app was held ${most} ms`);
 });
 
 test('Sessions shows the list on the left and the open session on the right, at 100 columns and at 80', { timeout: 30000 }, async t => {
