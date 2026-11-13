@@ -92,11 +92,12 @@ export const FAKES = fileURLToPath(new URL('./fakes/', import.meta.url));
 // badReply: 'once' or 'lost', a first reply of the fake Claude Code that cannot be read (see the fake).
 // install: what an editing turn of the fake Claude Code leaves beside its edit (see the fake).
 // insert: lines an editing turn of the fake Claude Code also puts in a file (see the fake).
-// tooLong: the reviews the fake Claude Code and Codex refuse as too long for the model (see the fakes).
-export function fakeClis(parent, { mode = 'normal', sandboxBin = null, name = undefined, commands = undefined, replay = undefined, note = undefined, permissionMode = undefined, badReply = undefined, asks = undefined, intent = undefined, network = undefined, models = undefined, noCredits = undefined, fence = undefined, byMode = undefined, wait = undefined, blocked = undefined, install = undefined, insert = undefined, tooLong = undefined, learned = undefined, accounts = undefined } = {}) {
+// tooLong: the reviews the fake Claude Code and Codex refuse as too long for the model (see the fakes);
+// tooLongOn: the texts that mark a turn they refuse that way, when not only reviews.
+export function fakeClis(parent, { mode = 'normal', sandboxBin = null, name = undefined, commands = undefined, replay = undefined, note = undefined, permissionMode = undefined, badReply = undefined, asks = undefined, intent = undefined, network = undefined, models = undefined, noCredits = undefined, fence = undefined, byMode = undefined, wait = undefined, blocked = undefined, install = undefined, insert = undefined, tooLong = undefined, tooLongOn = undefined, learned = undefined, accounts = undefined } = {}) {
   const dir = path.join(parent, 'bin'); fs.mkdirSync(dir, { recursive: true });
   const calls = path.join(parent, 'calls.jsonl');
-  fs.writeFileSync(path.join(dir, 'fake.json'), JSON.stringify({ mode, calls, inputs: path.join(parent, 'inputs.jsonl'), repository: path.join(parent, 'repository.txt'), sandboxBin, name, commands, replay, note, permissionMode, badReply, asks, intent, network, models, noCredits, fence, byMode, wait, blocked, install, insert, tooLong, learned, accounts }));
+  fs.writeFileSync(path.join(dir, 'fake.json'), JSON.stringify({ mode, calls, inputs: path.join(parent, 'inputs.jsonl'), repository: path.join(parent, 'repository.txt'), sandboxBin, name, commands, replay, note, permissionMode, badReply, asks, intent, network, models, noCredits, fence, byMode, wait, blocked, install, insert, tooLong, tooLongOn, learned, accounts }));
   for (const vendor of ['claude', 'codex', 'agy', 'grok']) {
     fs.writeFileSync(path.join(dir, vendor), `#!${process.execPath}\n${fs.readFileSync(path.join(FAKES, `${vendor}.mjs`), 'utf8')}`, { mode: 0o755 });
   }
