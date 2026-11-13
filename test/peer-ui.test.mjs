@@ -604,6 +604,38 @@ test('e on a held reply or a held result opens its whole text in the message box
   await until(() => /Dropped the result\. Nothing was sent to @sara\./.test(status()), 'what n did');
 });
 
+test('@name in an open session asks that teammate from the session, and /ask says so and leaves the question ready to send', { timeout: 30000 }, async t => {
+  const p = project(later(t)); environment(t, p.parent);
+  const repo = repository(p.root), at = new Date().toISOString();
+  saveTask(repo, { id: '1', kind: 'conversation', goal: 'Find the tax rates', state: 'answered', worktree: repo.root, base: null, branch: null, createdAt: at, runs: [], reviews: [], responses: [], messages: [{ at, text: 'Find the tax rates' }], sessions: {}, result: null });
+  const peer = fakePeer({ items: [] }), v = await view(t, { repo, dashboard: true, peer });
+  const board = v.panels.board, ask = v.panels.ask, status = () => v.panels.status.getText(), keys = () => v.panels.keys.getText().trim(), label = () => ask._label.getText().trim();
+  await until(() => board.items.map(plainItem).some(row => /Find the tax rates/.test(row)), 'the session row');
+  board.focus(); selectRow(board, /Find the tax rates/); v.input.write('\r');
+  await until(() => v.current.session === '1', 'the session is open');
+  // The key bar says @name reaches a teammate too, not only a bot.
+  ask.focus(); await until(() => /@name ask a bot or a teammate/.test(keys()), 'the key bar names teammates');
+  // /ask is not a command. With a teammate of that name the box keeps the part that asks them.
+  await send(v, '/ask @sara where are the tax rates?');
+  await until(() => /Unknown command: \/ask\. A teammate is asked by name: Enter sends this to @sara\./.test(status()), 'what to do instead');
+  assert.equal(ask.getValue(), '@sara where are the tax rates?'); assert.deepEqual(peer.sent(), [], 'nothing was sent yet');
+  await until(() => label() === 'Ask @sara · teammate', 'the box says who gets it');
+  // Enter sends it to her from this session: her answer can continue it.
+  await until(() => ask.__listener, 'the box reads'); ask.submit();
+  await until(() => peer.sent().some(row => row.type === 'ask'), 'the ask');
+  assert.deepEqual(peer.sent().at(-1), { type: 'ask', to: 'sara', project: null, text: 'where are the tax rates?', root: repo.root, taskId: '1' });
+  await until(() => /Sent to @sara\. Their reply shows in this thread\./.test(status()) && ask.getValue() === '', 'sent');
+  assert.equal(pendingRequests(p.root).length, 0, 'the session model got nothing');
+  // @name typed straight away does the same, also in another case.
+  await send(v, '@Sara and the VAT ones?');
+  await until(() => peer.sent().filter(row => row.type === 'ask').length === 2, 'the second ask');
+  assert.deepEqual(peer.sent().at(-1), { type: 'ask', to: 'sara', project: null, text: 'and the VAT ones?', root: repo.root, taskId: '1' });
+  // With no teammate of that name the text stays as typed, and nothing goes to the model.
+  await send(v, '/ask @nobody hello');
+  await until(() => /Unknown command: \/ask\. Write @name and your question to ask a teammate\./.test(status()), 'no such teammate');
+  assert.equal(ask.getValue(), '/ask @nobody hello'); assert.equal(pendingRequests(p.root).length, 0); assert.equal(peer.sent().length, 2);
+});
+
 test('m and x on a created channel also work from its threads, and nothing is cut at 80 columns', { timeout: 20000 }, async t => {
   const peer = fakePeer({ items: [] }), id = 'd'.repeat(16); peer.channels = [{ id, name: 'design', members: [ME, SARA] }];
   const { v } = await teamView(t, { peer, columns: 80, rows: 24 });
