@@ -482,3 +482,62 @@ test('a drag held above a session chat scrolls it up, copies the lines scrolled 
   assert.ok(v.copied[0].endsWith(`${numbered(37)}\nli`), v.copied[0]);
   await pause(300); assert.equal(chat().childBase, 0, 'the chat stays where the drag took it');
 });
+
+// Shift and an arrow, Home or End, as terminals send them.
+const SHIFT = { up: '\x1b[1;2A', down: '\x1b[1;2B', right: '\x1b[1;2C', left: '\x1b[1;2D', home: '\x1b[1;2H', end: '\x1b[1;2F' };
+
+test('Shift and Up or Down highlight in the message box by lines, scroll it to the cursor, and Ctrl-C copies the highlight', async t => {
+  const v = await view(t), value = numbered(12);
+  await typing(v, value);
+  v.input.write(SHIFT.up.repeat(3));
+  await until(() => v.ask.cursor === 8 * 8 + 7, 'three lines up');
+  assert.equal(v.current.selection.text(), '\nline 10\nline 11\nline 12', 'the last three line breaks and what follows them');
+  assert.equal(v.current.selection.range().el, v.ask);
+  v.input.write(SHIFT.up.repeat(2));
+  await until(() => v.ask.cursor === 6 * 8 + 7, 'two more');
+  assert.ok(v.ask.childBase <= 6 && v.ask.childBase > 2, 'the box scrolled to the cursor, on a line that was hidden');
+  assert.equal(v.current.selection.text(), value.slice(6 * 8 + 7));
+  v.input.write(SHIFT.down);
+  await until(() => v.ask.cursor === 7 * 8 + 7, 'one back down');
+  const expected = value.slice(7 * 8 + 7);
+  v.input.write('\x03');
+  await until(() => v.copied.length === 1, 'copied on Ctrl-C');
+  assert.equal(v.copied[0], expected);
+  await until(() => v.current.panels.status.getText().includes(`Copied ${expected.length} characters.`), 'the status line says so');
+  assert.equal(v.ask.getValue(), value, 'the text stays');
+  assert.ok(!v.current.screen.destroyed, 'Ctrl-C with a highlight does not quit');
+});
+
+test('with a highlight made by the keys, typing or a paste replaces it, Backspace removes it, and a plain arrow ends it', async t => {
+  const v = await view(t);
+  await typing(v, 'hello world');
+  const text = () => v.current.selection.text();
+  v.input.write(SHIFT.left.repeat(5)); await until(() => text() === 'world', 'five characters');
+  v.input.write(SHIFT.right.repeat(2)); await until(() => text() === 'rld', 'two back');
+  assert.equal(v.ask.cursor, 8);
+  v.input.write('X'); await until(() => v.ask.getValue() === 'hello woX', 'typing replaces it');
+  assert.equal(v.ask.cursor, 9); assert.equal(v.current.selection.active, false);
+  v.input.write(SHIFT.left.repeat(2)); await until(() => text() === 'oX', 'two');
+  v.input.write('\x7f'); await until(() => v.ask.getValue() === 'hello w', 'Backspace removes it');
+  assert.equal(v.ask.cursor, 7); assert.equal(v.current.selection.active, false);
+  v.input.write(SHIFT.left.repeat(3)); await until(() => text() === 'o w', 'three');
+  v.input.write('\x1b[200~AB\x1b[201~'); await until(() => v.ask.getValue() === 'hellAB', 'a paste replaces it');
+  assert.equal(v.ask.cursor, 6); assert.equal(v.current.selection.active, false);
+  v.input.write(SHIFT.left.repeat(2)); await until(() => text() === 'AB', 'two again');
+  v.input.write('\x1b[D'); await until(() => !v.current.selection.active, 'Left ends it');
+  assert.equal(v.ask.cursor, 4, 'at its start');
+  v.input.write(SHIFT.right.repeat(2)); await until(() => text() === 'AB', 'forward');
+  v.input.write('\x1b[C'); await until(() => !v.current.selection.active, 'Right ends it');
+  assert.equal(v.ask.cursor, 6, 'at its end');
+  v.input.write(SHIFT.home); await until(() => text() === 'hellAB', 'Shift+Home');
+  assert.equal(v.ask.cursor, 0);
+  v.input.write('\x1b[H'); await until(() => !v.current.selection.active, 'Home ends it');
+  v.input.write(SHIFT.end); await until(() => text() === 'hellAB', 'Shift+End');
+  // A drag starts a new highlight, which Backspace then removes.
+  const a = v.cell(0, 1), b = v.cell(0, 3);
+  v.press(a.x, a.y); v.drag(b.x, b.y); v.release(b.x, b.y);
+  await until(() => v.copied.length === 1, 'copied');
+  assert.equal(v.copied[0], 'ell');
+  v.input.write('\x7f'); await until(() => v.ask.getValue() === 'hAB', 'the drag highlight removed');
+  assert.equal(v.copied.length, 1, 'the keys copy nothing by themselves');
+});
