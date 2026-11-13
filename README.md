@@ -50,7 +50,7 @@ as `.env`, stops it until `.gitignore` keeps that file out.
 
 | Tab | What it shows |
 | --- | --- |
-| Sessions | Every session across your projects. The selected one is open beside the list. |
+| Sessions | Every session across your projects. The selected one is open beside the list. Typing on a row writes a message to it; a row's key is its letter, then Enter. |
 | Projects | Your projects. `n` makes one, `o` makes another the active one. |
 | Kanban | The open project's tasks and sessions: To do, In progress, Needs you, Done. On a team, everyone with a clone of the same repository shares one board: every session a teammate, or another computer of yours, runs in it shows in the same columns with who started it and on which machine, to read only. A project whose folder holds several repositories has a board for each. `/share off` keeps a project off it both ways. |
 | Chats | Your team's channels, your teammates and your bots. |
@@ -69,8 +69,8 @@ of the work. Nothing is edited yet.
 
 | Do | What happens |
 | --- | --- |
-| Esc, then `y` | Approves the Task. The work starts by itself. |
-| Esc, then `n` | Rejects it. Nothing is changed. |
+| Esc, `y`, then Enter | Approves the Task. The work starts by itself. |
+| Esc, `n`, then Enter | Rejects it. Nothing is changed. |
 | Type a message | Changes the Task. The card shows the new revision. |
 
 Typing `yes` and Enter approves too. A question gets a plain answer and no Task. A follow-up
@@ -124,7 +124,7 @@ A schedule also runs while ELU is closed, through a login item, once ELU is
 installed (not run through `npx`). On macOS, while an agent works or a schedule is on, ELU
 stops the Mac from going to sleep on its own (`caffeinate -i`); the display can still
 sleep. Schedules show in the Sessions tab under Scheduled: `p` pauses one and `x` deletes
-it. A time is `in 30m`, `every 2h` (15 minutes to 7 days), `daily 9:00`, `weekdays 9am`,
+it, each followed by Enter. A time is `in 30m`, `every 2h` (15 minutes to 7 days), `daily 9:00`, `weekdays 9am`,
 `mon,thu 14:30`, `tomorrow 15:00` or `2026-12-01 9:00`, in this computer's local time.
 The model cannot make a schedule itself: asked to repeat work, it gives you the
 `/schedule` line to type.
@@ -144,6 +144,8 @@ and `/permissions default auto` sets what new sessions start with.
   includes push, tags, merges, publishing and deploys: the never list below does not apply.
 
 When the model asks, `y` allows and `n` denies; `f` allows and gives that session Full access.
+On the session's row or in its chat each is the letter, then Enter, so a message that starts
+with one of them is only a message.
 `a` allows and keeps a narrow rule, such as `npm test` or `git diff`, for this project or all
 of them, so it is not asked again. Reads in the project, git reads and the project's own test,
 lint and build scripts run without asking from the start. `/permissions rules` or
@@ -336,7 +338,7 @@ or something only you can do. Its approvals wait on its own row in Sessions, and
 session's pane says so. Both agents show in the same pane, the devbox's as "Opus 5.5 on
 @devbox" and yours as "Opus 5.5 here", and the helper is also a session of its own in
 Sessions. Start a message with `@devbox` to write to the devbox session itself, and answer its
-question there the same way: `@devbox 1`. `y`, `n` and `a` still answer its approvals. A
+question there the same way: `@devbox 1`. `y`, `n` and `a`, each followed by Enter, still answer its approvals. A
 teammate's session on the devbox, such as a handoff you accepted there, has no agent here:
 what you type goes to it. A message to a devbox session that names files or folders on the laptop asks
 "Send 14 files (2.1 MB) from this computer with this message?": y sends them along, n sends
@@ -480,7 +482,7 @@ that check off. Both ask the npm registry for the latest version number and send
 else.
 
 To remove ELU, first delete your schedules in the app (Sessions tab, under Scheduled:
-`x` on each one), so they no longer keep the Mac awake, and quit it with `/quit`.
+`x`, then Enter, on each one), so they no longer keep the Mac awake, and quit it with `/quit`.
 
 Then remove the login item that runs schedules, and bots with a schedule such as `@elu`,
 while ELU is closed, if there is one. On macOS, run
