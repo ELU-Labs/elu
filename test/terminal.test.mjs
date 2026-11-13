@@ -1192,16 +1192,41 @@ test('a second project view is read-only and releases no writer lock', async t =
   const calls = fs.readFileSync(p.calls, 'utf8');
   const second = await view(t, { repo: p.repo });
   // The form shows beside the list from the start, and says it is read only. /new opens it again, the same.
-  await until(() => second.current.session === 'new' && /READ ONLY/.test(second.current.panels.header.getContent()), 'read-only header');
-  await send(second, '/new'); await until(() => second.current.panels.ask.__listener && /READ ONLY/.test(second.current.panels.header.getContent()), 'read-only form');
-  assert.match(second.current.panels.ask._label.getText(), /Read only/);
+  await until(() => second.current.session === 'new' && /View only/.test(second.current.panels.ask._label.getText()), 'view-only form');
+  await send(second, '/new'); await until(() => second.current.panels.ask.__listener && /View only/.test(second.current.panels.ask._label.getText()), 'view-only form again');
+  assert.doesNotMatch(second.current.panels.header.getContent(), /READ ONLY|View only/, 'the header names the session, not the window');
   assert.equal(fs.readFileSync(p.calls, 'utf8'), calls, 'a second view must not query a vendor');
-  assert.throws(() => second.current.controller.plan('Change text'), /read-only/);
+  assert.throws(() => second.current.controller.plan('Change text'), { message: 'View only: another ELU window has this project. Close it, or /takeover here.' });
   const claim = claimView(p.repo); assert.equal(claim.readOnly, true);
   key(second, 'q'); await second.finished;
   assert.equal(claimView(p.repo).readOnly, true);
   key(first, 'q'); await first.finished;
   const next = claimView(p.repo); assert.equal(next.readOnly, false); next.release();
+});
+
+// The owner's case: a window opened while an older one had the project stayed view-only after
+// that one closed, and /stop was refused. It takes the project by itself, and /takeover moves it.
+test('a view-only window takes the project once the other window is gone, and /takeover moves it', async t => {
+  const p = setup(t), first = await view(t, { repo: p.repo }), second = await view(t, { repo: p.repo });
+  const label = v => v.current.panels.ask._label.getText(), status = v => v.current.panels.status.getText().replace(/\s+/g, ' ');
+  await until(() => /View only: another ELU window has it/.test(label(second)) && status(second).includes('View only: another ELU window has this project. Close it, or /takeover here.'), 'view-only line');
+  assert.throws(() => second.current.controller.queue('Rename billing'), /View only/);
+  key(first, 'q'); await first.finished;
+  // The first write after the other window is gone goes through, without reopening.
+  assert.doesNotThrow(() => second.current.controller.queue('Rename billing'));
+  assert.equal(second.current.controller.readOnly, false); assert.match(status(second), /This window can make changes now\./);
+  await until(() => !/View only/.test(label(second)), 'writable form');
+  // A third window asks the second to let go: it can make changes, and the second says it is view-only.
+  const third = await view(t, { repo: p.repo });
+  await until(() => /View only/.test(label(third)), 'third is view-only');
+  await send(third, '/takeover');
+  await until(() => third.current.controller.readOnly === false && second.current.controller.readOnly === true, 'taken over');
+  await until(() => /View only: another ELU window took this project/.test(status(second)) && /View only/.test(label(second)) && !/View only/.test(label(third)), 'both say so');
+  assert.throws(() => second.current.controller.queue('Rename billing'), /View only/);
+  // Once the third window closes, the second takes the project back by itself on its timer.
+  key(third, 'q'); await third.finished;
+  await until(() => second.current.controller.readOnly === false && !/View only/.test(label(second)), 'the second has it again');
+  key(second, 'q'); await second.finished;
 });
 
 test('Tasks reads every project without writing or starting a vendor', async t => {
@@ -1819,7 +1844,7 @@ test('the first screen creates a project in its folder, and the form picks one b
   assert.equal(fs.existsSync(fake.calls), false); assert.equal(v.current.snapshot.initialized, false);
   frames.push({ title: 'New project without Git or settings', text: v.frame() });
   const second = await view(t, { repo: projectFolder(root) });
-  await send(second, '/new'); await until(() => second.current.panels.ask.__listener && /READ ONLY/.test(second.current.panels.header.getContent()), 'read-only second view');
+  await send(second, '/new'); await until(() => second.current.panels.ask.__listener && /View only/.test(second.current.panels.ask._label.getText()), 'view-only second view');
   // Project in the form: a number picks a known project.
   const other = path.join(folder, 'other'); fs.mkdirSync(other); registerProject(projectFolder(other));
   panels.composeList.focus(); panels.composeList.select(0); v.input.write('\r');
@@ -1865,7 +1890,7 @@ test('a coding prompt in a fresh folder starts without setup dialogs, and /publi
   assert.equal(fs.existsSync(path.join(root, 'src')), false);
   assert.equal(fs.existsSync(path.join(v.current.snapshot.tasks[0].worktree, 'src/coupon.mjs')), true);
   const second = await view(t, { repo: projectFolder(root) });
-  await send(second, '/new'); await until(() => second.current.panels.ask.__listener && /READ ONLY/.test(second.current.panels.header.getContent()), 'read-only second view');
+  await send(second, '/new'); await until(() => second.current.panels.ask.__listener && /View only/.test(second.current.panels.ask._label.getText()), 'view-only second view');
   captureFrames('fresh-task-frames', [{ title: 'First task checked in a fresh project', text: v.frame() }]);
 });
 
