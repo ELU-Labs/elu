@@ -589,6 +589,14 @@ test('a session started there by hand is watched from here: live, continued, sto
   assert.deepEqual(await withHome(laptop.home, () => remoteCommand(viewCtx, { type: 'remoteAnswer', id: item.id, approval: 'approval-3', decision: 'allow' })), { answered: true });
   withHome(devbox.home, () => assert.deepEqual(pendingApprovals({ taskId: '1' }), []));
   assert.deepEqual(seen().approvals, [], 'gone from Needs you here at once');
+  // Sent now from here (Enter in the empty box): a turn there that takes its messages and can
+  // be told to take one now is told, and goes on. Nothing is stopped.
+  withHome(devbox.home, () => chat(project.root, 1, { goal: 'Make coupons upper case', state: 'running', activeInbox: true, activeSendNow: true }));
+  assert.deepEqual(await withHome(laptop.home, () => remoteCommand(viewCtx, { type: 'remoteStop', id: item.id, now: true })), { stopping: false, now: 1 });
+  withHome(devbox.home, () => { const [row] = pendingRequests(project.root); assert.deepEqual([row.goal, row.state, typeof row.now, row.reason], ['And the tests', 'queued', 'string', 'Sending it now.']); });
+  // A turn there that takes no message while it works stops, and what waits starts the next one.
+  withHome(devbox.home, () => chat(project.root, 1, { goal: 'Make coupons upper case', state: 'running' }));
+  assert.deepEqual(await withHome(laptop.home, () => remoteCommand(viewCtx, { type: 'remoteStop', id: item.id, now: true })), { stopping: true });
   // Stop reaches it there.
   assert.deepEqual(await withHome(laptop.home, () => remoteCommand(viewCtx, { type: 'remoteStop', id: item.id })), { stopping: true });
   // Another key cannot read or act on the watch the laptop made, and gets no listing either.

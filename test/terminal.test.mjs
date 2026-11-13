@@ -2086,7 +2086,7 @@ test('a message sent while Claude Code runs a long command waits for the command
   panels.ask.focus(); panels.ask.readInput(); await until(() => panels.ask.__listener, 'message box');
   await until(() => /^enter send it now {2}↑ take it back/.test(panels.keys.getText().trim()), 'the key bar names it');
   v.input.write('\r');
-  await until(() => /Sending now\. The running turn takes your message and goes on\./.test(panels.status.getText()), 'what Enter says');
+  await until(() => /› Sending now\. The turn goes on with it\.$/m.test(panels.status.getText()), 'what Enter says');
   await until(() => /You {2}\d{1,2}:\d\d [AP]M\n┃ Also cover refunds *\nSent to the running turn\./.test(chat()), 'the turn took it');
   assert.doesNotMatch(chat(), /\(waiting\)/);
   assert.deepEqual(controls().map(row => [row.subtype, row.send_now]), [['interrupt', true]]);
