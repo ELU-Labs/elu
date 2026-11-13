@@ -2027,11 +2027,10 @@ test('a long turn shows its thought as a token count, how long its silent comman
   const gate = path.join(temp(t), 'gate'), p = setup(t, 'live', { intent: 'answer', gate, live: { speed: 600, seconds: 180, think: 200 } }), v = await view(t, { repo: p.repo }), panels = v.current.panels;
   const flat = () => panels.chat.getText().replace(/\s+/g, ' ');
   await send(v, 'Run the coupon tests');
-  await until(() => /Opus is working ✻ thought · 1\.2k tokens • Starting the watcher, then the tests\. ✓ Run: npm run watch ● Run: npm test · 3m \d+s ● 1 background command: npm run watch(?: · \d+s)? type a message any time/.test(flat()), 'the count, the command three minutes in, and the background command', 15000);
+  await until(() => /Opus is working ✻ thought · 1\.2k tokens • Starting the watcher, then the tests\. ✓ Run: npm run watch ● Run: npm test · 3m \d+s ● 1 background command: npm run watch · 3m \d+s type a message any time/.test(flat()), 'the count, the command three minutes in, and the background command that started before it', 15000);
   // The command prints nothing more, and its line still counts every second.
   const ran = () => Number(/● Run: npm test · 3m (\d+)s/.exec(flat())?.[1]), first = ran();
   await until(() => ran() > first, 'the line counts on between heartbeats', 5000);
-  await until(() => /● 1 background command: npm run watch · \d+s/.test(flat()), 'the background command says how long', 5000);
   const frames = [{ step: 'working', text: v.frame() }];
   // Stopped: the turn's steps fold into its line, which says so, above the stop line.
   await send(v, '/stop');

@@ -201,6 +201,21 @@ test('a log first read while its command runs takes the start from the last hear
   assert.deepEqual(drawn(runSteps(codex), T + 900000), ['✗ Run: npm test · exit 1 · 1m 20s']);
 });
 
+// Seen in the real app, on the owner's other computer: the session was opened there a while
+// into its turn, so its log was read all at once, and the background command said 15s beside
+// a command of 45s that started after it.
+test('a log read late: what started before a command started no later than that command\'s heartbeat says it did', t => {
+  const dir = temp(t), file = path.join(dir, 'lead.log'), T = Date.now() - 3600000;
+  writeAt(file, T, [real.say({ type: 'tool_use', id: WATCH, name: 'Bash', input: { command: 'npm run watch', run_in_background: true } }), real.started('bd27w0ond', WATCH, 'npm run watch', true), real.result(WATCH, 'Command running in background with ID: bd27w0ond'), real.background([['bd27w0ond', 'npm run watch']]),
+    real.say({ type: 'tool_use', id: 'toolu_01Hx3LmPq8RsTv2WyZa5BcDe', name: 'Read', input: { file_path: '/srv/shop/src/coupon.mjs' } }), real.say({ type: 'tool_use', id: TEST, name: 'Bash', input: { command: 'npm test' } }), real.started('bumf0lxl0', TEST, 'npm test'), real.beat(TEST, 0)]);
+  assert.deepEqual(runSteps(file).map(({ kind, text, since }) => [kind, text, since]), [['tool', 'Run: npm run watch', undefined], ['tool', 'Read: /srv/shop/src/coupon.mjs', T - 30000], ['tool', 'Run: npm test', T - 30000], ['background', 'npm run watch', T - 30000]]);
+  assert.deepEqual(drawn(runSteps(file), T + 15000).slice(-2), ['● Run: npm test · 45s', '● 1 background command: npm run watch · 45s']);
+  // What starts after it is timed from its own row.
+  writeAt(file, T + 20000, [real.say({ type: 'tool_use', id: 'toolu_01Kp9NvRt4UwXy7ZaBc2DeFg', name: 'Bash', input: { command: 'npm run lint', run_in_background: true } }), real.started('bq4t7m2ks', 'toolu_01Kp9NvRt4UwXy7ZaBc2DeFg', 'npm run lint', true)]);
+  assert.equal(runSteps(file).at(-2).since, T + 20000);
+  assert.equal(runSteps(file).at(-1).since, T - 30000, 'the line counts from its oldest command');
+});
+
 test('the commands a turn has running in the background are one line, with how long, until they end', t => {
   const dir = temp(t), file = path.join(dir, 'lead.log'), T = Date.now() - 3600000, minute = 60000;
   writeAt(file, T, [real.say({ type: 'tool_use', id: WATCH, name: 'Bash', input: { command: 'while true; do gh run list -L 1; sleep 60; done', description: 'Watch the build', run_in_background: true } }),
@@ -250,4 +265,7 @@ test('a turn that ended with no reply stays where it happened: before the messag
   assert.deepEqual(after, [last], 'the newest one, after everything');
   assert.deepEqual(left, [old, stopped, last]);
   assert.deepEqual(runsOfEntries([], [stopped]).after, [stopped]);
+  // Ended in the very millisecond of the first message: not older than it.
+  assert.deepEqual(runsOfEntries([first], [run('lead', 2, 3, { stopped: true })]).after.length, 1);
+  assert.deepEqual(runsOfEntries([first], [run('lead', 1, 2, { stopped: true })]).after, []);
 });
