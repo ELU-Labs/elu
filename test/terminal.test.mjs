@@ -647,7 +647,7 @@ test("a computer with only Grok Build: the project's settings show its default m
   await page();
   assert.deepEqual(dialogRows(v, PAGE).slice(3, 5), ['Default model Grok · not chosen, so the first installed here', 'This computer Grok · Opus is chosen, but Claude Code is not installed']);
   v.input.write('\x1b'); await until(() => !modal(v, PAGE), 'closed');
-  await send(v, '/new'); await until(() => /Your message goes to Grok\. Opus is this computer's default, but Claude Code is not installed here\./.test(v.frame().replace(/\s+/g, ' ')), 'said on the new session form');
+  await send(v, '/new'); await until(() => /Your message goes to Grok\. Opus is this computer's default, but Claude Code is not installed here\. Bots review/.test(panels.composeHint.getText().replace(/\s+/g, ' ')), 'said on the new session form');
 });
 
 test('the default model of a project that is not the active one is set from its settings too', { timeout: 60000 }, async t => {
