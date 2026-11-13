@@ -568,7 +568,9 @@ test('the lead reads a bot\'s reply to the owner, under its name and time, in it
   assert.ok(turns.at(-1).input.includes('Address the review'), 'the last lead run was a fix turn');
   await f.controller.ask('Does it look right now?', blocked.id, { bot: 'critic' }).finished;
   const chat = contextOf(f.inputs('codex').at(-1).input).chat;
-  assert.deepEqual(chat.filter(row => row.from === 'agent').at(-1), { at: fixRun.at, from: 'agent', text: 'Updated coupon normalization.' });
+  assert.deepEqual(chat.find(row => row.from === 'agent' && row.at === fixRun.at), { at: fixRun.at, from: 'agent', text: 'Updated coupon normalization.' });
+  // After it comes only the review loop's line about that fix, which the chat shows as the agent's.
+  assert.deepEqual(chat.filter(row => row.from === 'agent' && Date.parse(row.at) > Date.parse(fixRun.at)).map(row => row.text), ['Fixed 1.']);
   assert.deepEqual(chat.at(-1).from, 'owner → @critic');
 });
 
