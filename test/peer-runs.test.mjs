@@ -66,7 +66,7 @@ function setup(t, mode = 'normal') {
   const read = 'else for await (const chunk of process.stdin) input+=chunk;', mark = "const session='12345678";
   assert.ok(script.includes(read) && script.includes(mark), 'helpers.mjs fake CLI changed shape');
   script = script.replace(read, `${read}\nconst extra=fs.existsSync(${JSON.stringify(extra)})?JSON.parse(fs.readFileSync(${JSON.stringify(extra)},'utf8')):{};`)
-    .replace('total_cost_usd:0', 'total_cost_usd:extra.cost??0').replace(mark, `if(extra.slow)await new Promise(resolve=>setTimeout(resolve,extra.slow));if(extra.intent&&schema?.properties?.intent)result.intent=extra.intent;if(schema?.properties?.asks)result.asks=extra.asks??[];if(extra.summary)result.summary=extra.summary;if(extra.workQuestion&&!conversation){result.outcome='needs_input';result.question='Shall I go on?';result.choices=[];}\n${mark}`);
+    .replace('total_cost_usd:0', 'total_cost_usd:extra.cost??0').replace(mark, `if(extra.slow)await new Promise(resolve=>setTimeout(resolve,extra.slow));if(extra.intent&&schema?.properties?.intent)result.intent=extra.intent;if(schema?.properties?.asks)result.asks=extra.asks??[];if(extra.summary)result.summary=extra.summary;if(extra.workQuestion&&!conversation){result.outcome='needs_input';result.question='Shall I go on?';result.choices=[];}if(extra.workFail&&!conversation){console.error('The model stopped.');process.exit(1);}\n${mark}`);
   fs.writeFileSync(file, script, { mode: 0o755 });
   const previous = { PATH: process.env.PATH, XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME };
   Object.assign(process.env, fake.env);
@@ -517,6 +517,35 @@ test('approved work that stops on a question sends its result once the owner\'s 
   processOutbox(s.ctx);
   await new Promise(resolve => setTimeout(resolve, 200));
   assert.deepEqual(s.sent, ['SendMessage']); assert.equal(s.results().length, 2);
+});
+
+test('approved work that fails again and again tells the teammate once for its Task, and its result still follows', async t => {
+  const s = await plannedBySara(t), STOPPED = 'The approved work stopped before it was done.';
+  createAsk(s.saraCtx, { to: s.sara.me.key, kind: 'ask', text: HANDOFF, threadId: 'thread-1' });
+  const told = () => s.results('in').filter(line => line.text === STOPPED).length;
+  // The approved work fails: Sara is told it stopped.
+  s.p.extra({ workFail: true });
+  await s.approve();
+  processOutbox(s.ctx);
+  await until(() => told() === 1, 'the stop at sara');
+  assert.equal(sessionTasks(s.p.repo, s.id).at(-1).state, 'approved'); assert.deepEqual(s.sent, ['SendMessage']);
+  // The approved work of the same Task ends without being done again, failed and then
+  // stopped, as the conductor ends such a run: she is not told a second or a third time.
+  const [conductor] = LIVE.get(t);
+  for (const [n, stopped] of [[1, false], [2, true]]) {
+    conductor.result({ root: s.p.root, requestId: `request-00000000-0000-4000-8000-00000000000${n}`, taskId: s.id, approved: true, stopped, controller: conductor.controller(s.p.repo) }, new Error('The model stopped.'), new Date().toISOString());
+    assert.equal(fs.readdirSync(peerFile('outbox')).filter(name => name.startsWith('result-')).length, 0, `nothing to send after stop ${n}`);
+    processOutbox(s.ctx);
+  }
+  await new Promise(resolve => setTimeout(resolve, 200));
+  assert.equal(told(), 1, thread('thread-1').map(line => `${line.dir} ${line.kind} ${line.text}`).join('\n')); assert.deepEqual(s.sent, ['SendMessage']);
+  // The owner's next message continues the work; once it is done, what it did goes to her as before.
+  s.p.extra({ summary: 'Coupon codes are uppercase now.' });
+  await s.turn('Go on.');
+  assert.equal(sessionTasks(s.p.repo, s.id).at(-1).state, 'done');
+  processOutbox(s.ctx);
+  await until(() => s.results('in').some(line => line.text === 'Coupon codes are uppercase now.'), 'the result at sara');
+  assert.equal(told(), 1); assert.deepEqual(s.sent, ['SendMessage', 'SendMessage']);
 });
 
 test('a result continues the chat the message came from when answers from that teammate continue it', t => {
