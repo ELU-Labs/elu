@@ -152,7 +152,8 @@ test("a teammate's standup is told the owner's rules, gets the question as a tea
   const controller = new ProjectController(projectFolder(p.root)); controller.draftConfig.checks = []; registerProject(controller.repo);
   const task = await controller.ask('Where is billing?').finished;
   const team = 'b'.repeat(64), peer = 'c'.repeat(64); saveTeamAccess(team, { handling: 'manual', rules: 'Never share invoice totals.' });
-  fake.summary(`Fixing billing from ${path.join(p.parent, 'notes', 'billing.txt')} next.`);
+  // A fixed path: a random temporary folder name can read as a secret to the check and be held.
+  fake.summary('Fixing billing from /srv/notes/billing.txt next.');
   const round = newRound();
   await controller.ask(STANDUP_QUESTION, task.id, { standupFor: { round, by: '@kim', question: 'Is billing done?', peer, teams: [team] } }).finished;
   const turn = inputs(fake).at(-1).input;
