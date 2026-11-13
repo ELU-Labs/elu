@@ -1229,6 +1229,19 @@ test('a view-only window takes the project once the other window is gone, and /t
   key(second, 'q'); await second.finished;
 });
 
+// A window from before the update never lets go when asked: /takeover says so, and the
+// project is taken once that window closes.
+test('/takeover says so when the other window does not let go', async t => {
+  const p = setup(t), older = claimView(p.repo); t.after(() => older.release());
+  const v = await view(t, { repo: p.repo });
+  await until(() => /View only/.test(v.current.panels.ask._label.getText()), 'view-only');
+  await send(v, '/takeover');
+  await until(() => /The other ELU window did not let go\. Close it to make changes here\./.test(v.current.panels.status.getText().replace(/\s+/g, ' ')), 'not let go', 20000);
+  assert.equal(v.current.controller.readOnly, true);
+  older.release(); await until(() => v.current.controller.readOnly === false, 'taken once the older window closed');
+  key(v, 'q'); await v.finished;
+});
+
 test('Tasks reads every project without writing or starting a vendor', async t => {
   const one = setup(t), two = project(t); assert.equal(cli(two.root, ['init', '--yes'], one.env).status, 0);
   registerProject(one.repo); registerProject(repository(two.root));
