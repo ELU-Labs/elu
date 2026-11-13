@@ -536,9 +536,10 @@ test('the lead reads a bot\'s reply to the owner, under its name and time, in it
   const f = setup(t, 'review-block');
   const blocked = await f.controller.ask('Normalize coupon codes', null, { bots: ['critic'] }).finished;
   assert.equal(blocked.state, 'blocked', JSON.stringify(blocked.error));
-  // The owner writes to the bot; its reply asks for changes, with a finding that must be fixed.
+  // The owner asks the bot a question (a message about the work would run a review round
+  // instead); its reply asks for changes, with a finding that must be fixed.
   f.mode('answer');
-  const asked = await f.controller.ask('Work with the agent on the fixes.', blocked.id, { bot: 'critic' }).finished;
+  const asked = await f.controller.ask('What is still wrong with it?', blocked.id, { bot: 'critic' }).finished;
   assert.equal(asked.state, 'blocked', 'the session stays where the lead left it');
   const FINDING = 'Request changes.\nmust_fix: src/coupon.mjs drops the trim; add it back.';
   const saved = readTask(f.repo, blocked.id), reply = saved.messages.at(-1);
@@ -553,7 +554,7 @@ test('the lead reads a bot\'s reply to the owner, under its name and time, in it
   const messages = contextOf(implement.input).messages;
   assert.deepEqual(messages.find(row => row.bot === 'critic'), { at: reply.at, from: '@critic', bot: 'critic', text: FINDING });
   // In time order with the owner's own messages: his message to the bot, its reply, his continue.
-  assert.deepEqual(messages.slice(-3).map(row => [row.to ?? row.from ?? 'owner', row.text]), [['@critic', 'Work with the agent on the fixes.'], ['@critic', FINDING], ['owner', 'continue']]);
+  assert.deepEqual(messages.slice(-3).map(row => [row.to ?? row.from ?? 'owner', row.text]), [['@critic', 'What is still wrong with it?'], ['@critic', FINDING], ['owner', 'continue']]);
   assert.ok(implement.input.includes(BOT_FINDINGS), 'the lead is told a bot\'s must-fix finding is its to fix or dispute');
   // A fix turn the review sends it back to carries the chat too.
   const fix = turns.find(row => row.input.includes('Address the review'));
