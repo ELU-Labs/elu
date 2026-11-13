@@ -83,6 +83,9 @@ test('a teammate is told each project shared with a team they are on: its handle
     daemon.retell(); assert.equal(wire.out.length, before, 'nothing is sent again while nothing changed');
     nameProject(projectFolder(shop.root), 'Store'); unshare('notes'); daemon.retell();
     assert.deepEqual(status().projects.map(row => [row.handle, row.name]), [['shop', 'Store'], ['tools', 'sample app']]);
+    // /share off takes the project out of what teammates are told, and /share on puts it back.
+    setBoardOff(shop.root, true); daemon.retell(); assert.deepEqual(status().projects.map(row => row.handle), ['tools']);
+    setBoardOff(shop.root, false); daemon.retell(); assert.deepEqual(status().projects.map(row => row.handle), ['shop', 'tools']);
     // Someone on none of my teams is told nothing.
     assert.deepEqual(daemon.hello('f'.repeat(64)).handles, []);
   });

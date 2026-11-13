@@ -821,6 +821,123 @@ test("Projects says how many sessions of my other computer's project are not in 
   }
 });
 
+// --- Projects: what a teammate shares that this computer does not have ---
+// As lib/peer/shared.mjs lists one (teammateProjects) and its team board (teammateProjectBoard).
+const SHARED = '9'.repeat(64);
+const sharedRow = (extra = {}, sharer = {}) => ({ id: SHARED, name: 'Shop', handle: 'shop', repoId: SHARED, address: 'https://github.com/acme/shop.git', teams: [{ id: 'team-1', name: 'Core' }],
+  sharers: [{ key: SARA, name: 'sara', box: 'sara-box', online: true, mine: false, handle: 'shop', title: 'Shop', older: false, ...sharer }], ...extra });
+function sharing(peer, rows, board = {}) {
+  peer.shared = rows; peer.teammateProjects = () => peer.shared;
+  peer.teammateProjectBoard = id => { const row = peer.shared.find(value => value.id === id); return row ? { row, plans: board.plans ?? [], sessions: board.sessions ?? [] } : null; };
+  return peer;
+}
+
+test('Projects lists a project a teammate shares that is not on this computer: Enter opens its team board, the box there writes to whoever shares it, and c brings it here as the one row', async t => {
+  const { git } = await import('./helpers.mjs'), fs = await import('node:fs');
+  const p = project(later(t)), source = project(later(t)); environment(t, p.parent);
+  const task = { repoId: SHARED, handle: 'shop', id: 't-0a1b2c3d', revision: 1, title: 'Fix the login redirect', description: '', goal: 'Sign-in returns to the page that asked for it.', objectives: [], priority: 'high', severity: 'high', state: 'approved', startedBy: 'owner', who: 'Opus 5.5', subtasks: [], met: [], approvedAt: ago(30), doneAt: null, updatedAt: ago(2) };
+  const peer = sharing(fakePeer({ items: [] }), [sharedRow()], {
+    plans: [{ peer: SARA, name: 'sara', box: 'sara-box', online: true, heardAt: ago(0), tasks: [task] }],
+    sessions: [{ peer: SARA, name: 'sara', box: 'sara-box', online: true, heardAt: ago(0), sessions: [{ repoId: SHARED, id: '0123456789abcdef', title: 'Fix the cart total', column: 'needs', by: 'sara', at: ago(1) }] }] });
+  // The clone, as git makes it. From then on the project is here, so nothing lists it as shared.
+  peer.cloneProject = async (address, folder) => { peer.calls.push(['cloneProject', address, folder]); git(source.root, ['clone', '--quiet', source.root, folder]); peer.shared = []; return { root: folder }; };
+  const v = await view(t, { repo: repository(p.root), dashboard: true, peer }), panels = v.panels, list = panels.projectsList;
+  const rows = () => list.items.map(plainItem).map(row => row.trimEnd()), status = () => panels.status.getText(), keys = () => panels.keys.getText(), label = () => panels.ask._label.getText();
+  const column = index => panels.kanbanLists[index].items.map(item => plainItem(item).trimEnd());
+  await send(v, '/projects'); await until(() => v.current.view === 'projects' && rows().some(row => /Shop/.test(row)), 'the shared project');
+  assert.equal(rows().length, 2, 'this computer\'s project, then the shared one');
+  assert.match(rows()[1], /^ {2}Shop\s+shared by @sara {3}on @sara-box\s+online$/);
+  list.focus(); selectRow(list, /shared by @sara/);
+  await until(() => /enter team board/.test(keys()), 'its keys'); assert.match(keys(), /c bring here/); assert.doesNotMatch(keys(), /archive|make active/);
+  // o and x are for a project of this computer.
+  v.input.write('x'); await until(() => /Shop is not on this computer\. Enter opens its team board; c brings it here\./.test(status()), 'x does nothing to it');
+  // Enter: its team board, read-only, under its name and who shares it.
+  v.input.write('\r'); await until(() => v.current.view === 'kanban' && column(1).length === 1 && column(2).length === 1, 'the team board');
+  assert.match(panels.header.getText(), /Shop {2}· {2}shared by @sara {2}· {2}on @sara-box/);
+  assert.match(column(1)[0], /^Fix the login.*sara on sara-box$/); assert.match(column(2)[0], /^Fix the cart total\s+@sara · sara-box$/);
+  assert.equal(panels.newCard.hidden, true, 'no task is added to a project that is not here'); assert.equal(panels.back.hidden, false); assert.equal(panels.back.content, ' ‹ Projects ');
+  assert.equal(panels.kanbanTeam.getText(), "Shop is @sara's project, on @sara-box, not on this computer. A message here starts a session there. c in Projects brings it here.");
+  assert.match(label(), /^ Message @sara about Shop · starts a session on their computer, under the access they chose $/);
+  // n goes to the box; what is typed there is sent to the sharer about that project, and no card or session is made here.
+  v.input.write('n'); await until(() => v.current.screen.focused === panels.ask, 'the message box');
+  assert.match(keys(), /enter send to @sara/);
+  await send(v, 'Can you rebase the cart branch?');
+  await until(() => peer.sent().some(row => row.type === 'ask'), 'the message');
+  assert.deepEqual(peer.sent().filter(row => row.type === 'ask'), [{ type: 'ask', to: SARA, project: 'shop', text: 'Can you rebase the cart branch?' }]);
+  await until(() => /Sent to @sara\. It starts a session on their computer, under the access they chose\. The reply shows in Chats\./.test(status()), 'what happened to it');
+  assert.deepEqual(readBoard(repository(p.root)).cards, []); assert.deepEqual(pendingRequests(p.root), []);
+  assert.equal(v.current.view, 'kanban', 'the board stays open');
+  // Back to Projects, and c: where to put it, then the clone, registered under its name and made active.
+  panels.back.focus(); v.input.write('\r'); await until(() => v.current.view === 'projects', 'Projects again');
+  list.focus(); selectRow(list, /shared by @sara/); v.input.write('c');
+  await until(() => modal(v, 'Bring Shop here'), 'where to put it');
+  assert.match(v.text(), /https:\/\/github\.com\/acme\/shop\.git/); assert.equal(modal(v, 'Bring Shop here').children.find(child => child.type === 'textbox').getValue(), '~/shop');
+  const here = path.join(p.parent, 'shop here'); await closeDialog(v, 'Bring Shop here', here);
+  await until(() => /Shop is here now, in \S.*shop here\. It is the active project\./.test(status()), 'brought here');
+  assert.deepEqual(peer.calls.filter(row => row[0] === 'cloneProject').map(row => row.slice(1)), [['https://github.com/acme/shop.git', here]]);
+  assert.ok(fs.existsSync(path.join(here, '.git')));
+  await until(() => rows().length === 2 && rows().some(row => /^● Shop\s/.test(row)), 'one row for it: the project here');
+  assert.ok(!rows().some(row => /shared by/.test(row)), 'never a second row for the same project');
+});
+
+test('a shared project with no git address says how to get it here, the board of one that is no longer shared closes, and its row fits at 80 columns', async t => {
+  const p = project(later(t)); environment(t, p.parent);
+  const peer = sharing(fakePeer({ items: [] }), [sharedRow({ address: null, name: 'A much longer project name than fits' }, { name: 'a-teammate-with-a-long-name', box: 'their-very-long-machine-name' }), sharedRow({ id: '8'.repeat(64), repoId: '8'.repeat(64), name: 'Old one', handle: 'old', address: null }, { older: true, online: false })]);
+  // The status line is one row here: each line is the longest form of it that fits.
+  const v = await view(t, { repo: repository(p.root), dashboard: true, peer, columns: 80, rows: 24 }), panels = v.panels, list = panels.projectsList, status = () => panels.status.getText().trimEnd();
+  const rows = () => list.items.map(plainItem).map(row => row.trimEnd());
+  await send(v, '/projects'); await until(() => v.current.view === 'projects' && rows().length === 3, 'both shared projects');
+  for (const row of rows()) assert.ok(row.length <= list.width - 2, `it fits at 80: ${row}`);
+  assert.match(rows()[1], /^ {2}A much longer proje\.\.\.\s+shared by @a-teammate-with-a-long-name/); assert.match(rows()[2], /Old one\s+shared by @sara {3}on @sara-box\s+offline$/);
+  // c with no address: nothing to clone, and what to do instead.
+  list.focus(); selectRow(list, /A much longer/); v.input.write('c');
+  await until(() => /› No git address\. Copy its folder here, open a terminal in it and run ELU\.$/.test(status()), 'no address');
+  // A teammate on an older ELU sends no address: the line says which side needs the update.
+  selectRow(list, /Old one/); v.input.write('c');
+  await until(() => /› No git address: @sara needs ELU 0\.1\.20\. Or copy its folder here and run ELU\.$/.test(status()), 'an older teammate');
+  // Its board at 80 columns: the box's title is the longest form that fits.
+  v.input.write('\r'); await until(() => v.current.view === 'kanban' && /Message @sara/.test(panels.ask._label.getText()), 'the team board');
+  assert.match(status(), /› Old one, shared by @sara on @sara-box\. The box below writes to @sara\.$/);
+  await send(v, 'Is the old one still used?');
+  await until(() => /› Sent to @sara\. It starts a session there\. The reply shows in Chats\.$/.test(status()), 'sent, in a line that fits');
+  assert.deepEqual(peer.sent().filter(row => row.type === 'ask'), [{ type: 'ask', to: SARA, project: 'old', text: 'Is the old one still used?' }]);
+  assert.ok(panels.ask._label.getText().length <= panels.ask.width - 2, panels.ask._label.getText());
+  assert.match(panels.ask._label.getText(), /^ Message @sara about Old one · starts a session there $/);
+  // No longer shared (unshared, or the team left): Kanban is this computer's again, and Projects lists it no more.
+  peer.shared = [];
+  await until(() => /That project is no longer shared with this computer\./.test(status()), 'it says so', 15000);
+  assert.equal(panels.newCard.hidden, false); assert.doesNotMatch(panels.ask._label.getText(), /Message @sara/);
+  await send(v, '/projects'); await until(() => v.current.view === 'projects' && rows().length === 1, 'only this computer\'s project');
+});
+
+test('a project my other computer shares opens as that computer lists it, and is one row beside its sessions there', async t => {
+  const now = Date.now(), at = minutes => new Date(now - minutes * 60000).toISOString(), p1 = '1'.repeat(16);
+  const session = { id: '11111111-1111-4111-8111-111111111111', ref: `${p1}:1`, project: p1, title: 'Typed there by hand', state: 'answered', at: at(5), createdAt: at(6), approvals: [], by: 'you', who: null };
+  const machines = [{ key: SARA, listedAt: at(0), older: false, projects: [{ id: p1, name: 'Shop', repoId: SHARED, home: false }], sessions: [] }];
+  const p = project(later(t)); environment(t, p.parent);
+  const peer = sharing(fakePeer({ items: [], mine: [{ key: SARA, mine: true, theirs: true }], machines }), [sharedRow({}, { mine: true })]);
+  const v = await view(t, { repo: repository(p.root), dashboard: true, peer }), list = v.panels.projectsList, rows = () => list.items.map(plainItem).map(row => row.trimEnd());
+  await send(v, '/projects'); await until(() => v.current.view === 'projects' && rows().some(row => /Shop\s+shared by you {3}on @sara-box/.test(row)), 'the project of my other computer');
+  // Enter: its sessions there, as for any project of that computer.
+  list.focus(); selectRow(list, /shared by you/); await until(() => /enter open/.test(v.panels.keys.getText()), 'its keys');
+  v.input.write('\r'); await until(() => v.current.view === 'tasks' && /Sessions of Shop on @sara-box: none yet\./.test(v.panels.status.getText()), 'the view of its sessions there');
+  // Once that computer has a session in it, Projects lists the project as that computer's: one row, not two.
+  machines[0].sessions = [session];
+  await send(v, '/projects'); await until(() => v.current.view === 'projects' && rows().some(row => /Shop on sara-box/.test(row)), 'its row as my other computer\'s');
+  assert.ok(!rows().some(row => /shared by/.test(row)), `one row for it: ${rows().join(' | ')}`);
+});
+
+test('/join names the project the team shares once it is in Projects', async t => {
+  const p = project(later(t)); environment(t, p.parent);
+  const peer = sharing(fakePeer({ joined: { id: 'team-2', name: 'ELU', inviter: { name: 'sara', fingerprint: 'bbbbbbbb' } } }), []), v = await view(t, { repo: repository(p.root), peer }), status = () => v.panels.status.getText();
+  await send(v, '/join k7qm-x2pd-9fhw'); await answerJoin(v);
+  await until(() => /Joined ELU with sara\. Their messages start sessions here, as if you typed them\./.test(status()), 'joined');
+  // What the inviter shares arrives a moment later; a project of another team is not named.
+  peer.shared = [sharedRow({ id: '7'.repeat(64), name: 'Other' }), sharedRow({ name: 'ELU', teams: [{ id: 'team-2', name: 'ELU' }] })];
+  await until(() => /Joined ELU with sara\. Its project ELU is in Projects\. Their messages start sessions here, as if you typed them\./.test(status()), 'the line names it');
+  await send(v, '/projects'); await until(() => v.current.view === 'projects' && v.panels.projectsList.items.some(item => /ELU\s+shared by @sara {3}on @sara-box/.test(plainItem(item))), 'and it is there');
+});
+
 // The wheel at a pane, as SGR reports in one read: up or down, a step each.
 const wheelAt = (v, widget, step, times = 1) => v.input.write(`\x1b[<${step < 0 ? 64 : 65};${widget.aleft + 3};${widget.atop + 3}M`.repeat(times));
 const pause = (ms = 150) => new Promise(resolve => setTimeout(resolve, ms));
