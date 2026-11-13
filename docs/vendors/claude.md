@@ -104,8 +104,12 @@ is tried, `XDG_RUNTIME_DIR` (`/run/user/<uid>` on Linux): the run's folder there
 `<runtime folder>/elu<two letters>`, which fits a ten-digit user number. Where
 neither fits none is named, and commands there still end 1. Seen on 2.1.322 in Ask
 for approval: `npm test` ended 0 with `TMPDIR` in the cache folder's place, and the
-folder was gone after the run. Not seen with the real service: Approve for me, Read
-only, Linux, the runtime folder.
+folder was gone after the run. Seen on 2.1.322 on Linux in Ask for approval, with the
+sandbox starting, a home folder too long for the cache place and a ten-digit user
+number: the sandboxed `npm test` was given `TMPDIR` as
+`<runtime folder>/elu<two letters>/claude-<uid>`, could make a file there, and ended
+0 with no "operation not permitted" note. Not seen with the real service: Approve
+for me, Read only.
 
 A sandboxed command reads the repository's Git folder. The sandbox's `denyRead`
 holds only ELU's records in it (`<Git folder>/elu-code`) and `denyWrite` holds
@@ -128,7 +132,11 @@ runs commands without one: Ask for approval asks you for each, and Approve for m
 sends each to the reviewer. The Permissions picker says "No OS sandbox here" when a
 tool is missing. Where both are installed and `bwrap` cannot start, Claude Code says
 its sandbox is disabled; seen on 2.1.322, `npm test` then came to the owner as an
-approval. Nothing is installed for you.
+approval. The picker and `elu policy show` then say "The OS sandbox cannot start
+here". Claude Code's sandbox always makes a user namespace, so ELU's start check
+makes one too: where user namespaces are turned off, a `bwrap` run as root or
+installed setuid still starts without one, and the sandbox does not. Nothing is
+installed for you.
 
 Not enforced or not verified on these releases: Bash rules match text only;
 WebFetch runs outside the sandbox; a `bypassPermissions` run does not check

@@ -2629,6 +2629,21 @@ test('/permissions sets the mode in compose, in a session, and as the default', 
   assert.equal(readTask(p.repo, '3').permissions, 'full');
 });
 
+// Where bwrap is installed and cannot start, the picker says so and links the fix. At 80
+// columns the link stays whole on a line of its own, so it can be copied or clicked.
+test('the Permissions picker says when the OS sandbox cannot start, with its link whole at 80 columns', { skip: process.platform !== 'linux', timeout: 30000 }, async t => {
+  const p = setup(t), tools = path.join(p.parent, 'sandbox-tools'); fs.mkdirSync(tools);
+  fs.writeFileSync(path.join(tools, 'bwrap'), '#!/bin/sh\necho "bwrap: setting up uid map: Permission denied" >&2\nexit 1\n', { mode: 0o755 }); fs.writeFileSync(path.join(tools, 'socat'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  environment(t, { PATH: `${tools}${path.delimiter}${process.env.PATH}` });
+  const v = await view(t, { repo: p.repo }), panels = v.current.panels;
+  await send(v, '/new'); await until(() => !panels.compose.hidden && v.current.session === 'new', 'form');
+  await send(v, '/permissions'); await until(() => modal(v, 'Permissions'), 'picker');
+  assert.match(dialogText(v, 'Permissions').replace(/\s+/g, ' '), /The OS sandbox cannot start here, so commands ask you \(Ask\) or are reviewed \(Approve for me\)\./);
+  await until(() => /│https:\/\/github\.com\/ELU-Labs\/elu\/blob\/main\/docs\/permissions\.md#linux +│/.test(plainFrame(v)), 'the link whole on one line');
+  assert.ok(plainFrame(v).split('\n').every(line => line.length <= 80));
+  v.input.write('\x1b'); await until(() => !modal(v, 'Permissions'), 'closed');
+});
+
 // A new session being written takes a new default, unless its mode was picked for it: a
 // session not sent yet never starts with more access than the default says.
 test('/permissions default changes the new session being written, unless its mode was picked', { timeout: 40000 }, async t => {

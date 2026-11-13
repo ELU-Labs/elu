@@ -161,7 +161,9 @@ export async function main(argv = process.argv.slice(2)) {
     const { config } = pinnedConfig(repo, head(repo.root));
     // Only the lead entry runs. Bots do the reviews, read-only, whatever an older config lists.
     const role = config.roles.lead; let refusal = null; try { assertPolicy(role); } catch (e) { refusal = e.message; }
-    return { roles: [{ name: 'lead', ...policyReport(role), refusal }], unsupportedVendors: unsupportedVendors().map(({ bin, ...value }) => value) };
+    // The table names the OS sandbox among what enforces a rule; where it cannot start, say so.
+    const { shellSandboxLine } = await import('../lib/sandbox.mjs'), lines = shellSandboxLine();
+    return { ...(lines.length ? { lines } : {}), roles: [{ name: 'lead', ...policyReport(role), refusal }], unsupportedVendors: unsupportedVendors().map(({ bin, ...value }) => value) };
   }
   if (command === 'run') {
     if (flags.publish) {
