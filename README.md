@@ -343,7 +343,8 @@ code for someone new; the first time, it also makes your team, named after the o
 time, and asks each open session for an update: what it is working on, what is done, what is
 next, and what blocks it. Open means not archived and not moved to Done (a chat that has
 answered is asked), and working, waiting for you, or active in the last 7 days. The same rule
-holds for your teammates' sessions, as their computers apply it. That is every such session of yours in every project on
+holds for your teammates' sessions, as their computers apply it; a teammate's computer on an
+older build does not say which of its sessions in Done answered, so those are listed, not asked. That is every such session of yours in every project on
 this computer, those on your other computers that are online (`/mine`), and your teammates'
 sessions on the shared Kanban whose computers are online. A project kept off the Kanban
 (`/share off`) is never asked. At most 20 of yours and 20 of your teammates' are asked,

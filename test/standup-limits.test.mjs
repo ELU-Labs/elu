@@ -148,18 +148,25 @@ test('the same rule says which sessions are open everywhere: an answered chat is
   assert.equal(standupOpen(readBoard(f.repo), readTask(f.repo, task.id)), true);
   setDone(f.repo, { task: readTask(f.repo, task.id) }, true);
   assert.equal(standupOpen(readBoard(f.repo), readTask(f.repo, task.id)), false);
-  // On the asker's side a teammate's card is asked by what their computer says, in any column;
-  // a card of an older build in Done is left out, as before. None of those is listed.
+  // On the asker's side a teammate's card is asked by what their computer says, in any column,
+  // and one moved to Done is not, as his own. A card of an older build in Done may have
+  // answered: it is listed with why, never dropped. A withheld card is never one to ask.
   const kim = 'f'.repeat(64), now = new Date().toISOString();
   const people = () => [{ peer: kim, name: 'kim', online: true, sessions: [
     { id: '0123456789abcdef', title: 'Answered chat', column: 'done', by: 'kim', at: now, standup: true },
     { id: '1123456789abcdef', title: 'Moved to Done', column: 'done', by: 'kim', at: now, standup: false },
     { id: '2123456789abcdef', title: 'Older card', column: 'done', by: 'kim', at: now },
     { id: '3123456789abcdef', title: 'Older open card', column: 'progress', by: 'kim', at: now },
+    { id: '4123456789abcdef', title: 'Session', column: 'done', by: 'teammate', at: now },
   ] }];
   const plan = await standupPlan({ root: f.root, id: '999' }, { sources: { computers: () => [], teammates: people } });
   assert.deepEqual(plan.asked.map(row => row.title).sort(), ['Answered chat', 'Older open card']);
-  assert.deepEqual(plan.notAsked, []);
+  assert.deepEqual(plan.notAsked.map(row => [row.title, row.where, row.why]), [['Older card', '@kim', '@kim runs an older ELU Code, which does not say whether it answered']]);
+  // The round says so in its list of sessions not asked.
+  const peer = { peerStatus: () => ({ running: true }), sendPeerCommand: body => ({ id: body.type }), awaitCommand: async () => ({ state: 'declined', asked: [], skipped: [] }) };
+  const standup = createConversation(f.repo, f.controller.draftConfig, '/standup');
+  const { task: round } = await runStandupRound(f.repo, standup.id, { sources: { computers: () => [], teammates: people, peer }, times: TIMES });
+  assert.match(round.messages.map(row => row.text).join('\n'), /- Older card · on @kim · Done · @kim runs an older ELU Code, which does not say whether it answered/);
 });
 
 test('a session another computer would not ask is dropped without a word, and not counted as not asked', async t => {
