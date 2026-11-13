@@ -566,7 +566,7 @@ test('the lead reads a bot\'s reply to the owner, under its name and time, in it
   const fixed = readTask(f.repo, done.id), fixRun = fixed.runs.findLast(run => run.role === 'lead');
   assert.equal(fixed.result.summary, 'Updated coupon normalization.');
   assert.ok(turns.at(-1).input.includes('Address the review'), 'the last lead run was a fix turn');
-  await f.controller.ask('Is it fixed now?', blocked.id, { bot: 'critic' }).finished;
+  await f.controller.ask('Does it look right now?', blocked.id, { bot: 'critic' }).finished;
   const chat = contextOf(f.inputs('codex').at(-1).input).chat;
   assert.deepEqual(chat.filter(row => row.from === 'agent').at(-1), { at: fixRun.at, from: 'agent', text: 'Updated coupon normalization.' });
   assert.deepEqual(chat.at(-1).from, 'owner → @critic');
