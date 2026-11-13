@@ -111,7 +111,7 @@ You can send a message at any time. On Claude Code, one sent while the session i
 | `@model and what do you think?` | Writes to the session's model again |
 | `/changes` | Shows what this session changed; `/chat` goes back |
 | `/publish` | Shows the exact push and draft pull request, then asks you |
-| `/stop` | Stops the running response. A message you sent while it ran is sent next; `/stop` again cancels that message |
+| `/stop` | Stops the running response. Messages you sent while it ran then go at once, in order; `↑` takes one back first. Over a session on your other computer, it stops that session there |
 | Enter (empty box) | While a turn works and a message of yours waits for it to end, sends that message now: the turn stops as `/stop` stops it and the message starts the next turn, in the same vendor session where it can go on. Claude Code needs none of this: a message you send while it works goes to that turn at once |
 | `/schedule in 1h check the build` | Starts a session later or on a schedule: `/schedule [when] [message]`. `/schedule ` lists times such as `in 5m`, `in 1h` and `daily 9:00`. Each run is a new session with the model, mode and bots of the form (a bot with its own schedule is left out); it does not see the chat it was made in. A schedule gets Full access only when you pick it for that schedule, and the form asks you once before saving it |
 | `/budget 5` | Limits this session to 5 dollars; `/budget off` removes the limit |
