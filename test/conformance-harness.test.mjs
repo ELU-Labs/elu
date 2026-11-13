@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { conformanceHarness, conformanceState, conformant, requireConformance, runConformance, vendorReading } from '../lib/conformance.mjs';
+import { checkResult, conformanceHarness, conformanceState, conformant, failedText, requireConformance, runConformance, vendorReading } from '../lib/conformance.mjs';
 import { ADAPTERS } from '../lib/adapters/index.mjs';
 import { atomic, personalDirectory } from '../lib/util.mjs';
 
@@ -30,7 +30,7 @@ test('the harness gives a step a repository, a planted secret, a listener and a 
   await assert.rejects(conformanceHarness({ scratch: 'relative' }), /absolute scratch folder/);
 });
 
-test('a gated vendor refuses to run until its one-time check passed here, for this exact binary and version', async t => {
+test('a gated vendor refuses to run until its one-time check ran here, for this exact binary and version; a step not proven leaves it Full access only', async t => {
   const dir = home(t), log = [];
   assert.equal(requireConformance('claude', { bin: '/x/claude', version: '2.1.319' }), true, 'Claude is not gated');
   assert.equal(requireConformance('codex', { bin: '/x/codex', version: '0.166.0-alpha.5.1' }), true, 'Codex is not gated');
@@ -54,12 +54,32 @@ test('a gated vendor refuses to run until its one-time check passed here, for th
   assert.throws(() => requireConformance('agy', { bin: '/x/agy', version: '1.0.0' }), /Antigravity CLI has not been checked on this machine yet/, 'one vendor never vouches for another');
   const optional = ADAPTERS.grok.conformance.find(step => !step.required).id, required = ADAPTERS.grok.conformance.find(step => step.required).id;
   record({ steps: { ...steps, [optional]: 'fail' } }); assert.equal(requireConformance('grok', { bin: '/x/grok', version: '1.0.0' }), true, 'an optional step may fail');
-  record({ steps: { ...steps, [required]: 'fail' } }); assert.throws(() => requireConformance('grok', { bin: '/x/grok', version: '1.0.0' }), /^EluCodeError: Grok Build did not pass its check on this machine \(not proven: it is signed in\)\. Your next message to it runs the check again\.$/, 'a failed required step keeps the gate shut, and the refusal names it');
-  record({ steps: { ...steps, [required]: 'skip' } }); assert.throws(() => requireConformance('grok', { bin: '/x/grok', version: '1.0.0' }), /Grok Build did not pass its check on this machine \(not proven: it is signed in\)/, 'a skipped required step too');
+  // A required step that is not proven turns off Read only, Ask for approval and Approve for me, and never Full access.
+  const at = { bin: '/x/grok', version: '1.0.0' };
+  record({ steps: { ...steps, [required]: 'fail' } });
+  for (const mode of ['locked', 'ask', 'auto']) assert.throws(() => requireConformance('grok', { ...at, mode }), /^EluCodeError: Grok Build did not pass its check on this machine, so it runs in Full access only here\. Not proven: it is signed in\. Your next message to it runs the check again\.$/, `a failed required step keeps ${mode} off, and the refusal names it`);
+  assert.throws(() => requireConformance('grok', at), /so it runs in Full access only here/, 'a turn that names no mode is read-only');
+  assert.equal(requireConformance('grok', { ...at, mode: 'full' }), true, 'Full access runs the vendor as it is');
+  assert.throws(() => requireConformance('grok', { bin: '/x/grok', version: '1.0.1', mode: 'full' }), /Grok Build has not been checked on this machine yet/, 'Full access too runs only the release the check ran on');
+  // The record says why, and whether checking again can change it.
+  record({ steps: { ...steps, [required]: 'fail' }, why: { [required]: 'the agent offers no cached token' }, stable: [] });
+  assert.throws(() => requireConformance('grok', at), /^EluCodeError: Grok Build did not pass its check on this machine, so it runs in Full access only here\. Not proven: it is signed in \(the agent offers no cached token\)\. Your next message to it runs the check again\.$/);
+  record({ steps: { ...steps, 'locked-no-shell': 'fail', 'locked-no-network': 'fail' }, why: { 'locked-no-shell': 'locked run ran a shell command' }, stable: ['locked-no-shell'] });
+  assert.throws(() => requireConformance('grok', at), /^EluCodeError: Grok Build did not pass its check on this machine, so it runs in Full access only here\. Not proven: a read-only turn runs no command \(locked run ran a shell command\), and 1 more\. Switch this session to Full access to use it; c on its line in the Usage tab runs the check again\.$/, 'a step that cannot pass on a second try promises no second try');
+  assert.deepEqual(checkResult('grok', at).failed, [{ id: 'locked-no-shell', text: 'a read-only turn runs no command', why: 'locked run ran a shell command', stable: true }, { id: 'locked-no-network', text: 'a read-only turn reaches no network', why: null, stable: false }]);
+  assert.equal(failedText('grok', checkResult('grok', at), { full: true }), 'Grok Build did not pass its check on this machine. Not proven: a read-only turn runs no command (locked run ran a shell command), and 1 more. Full access runs it anyway; Read only, Ask for approval and Approve for me stay off.');
+  record({ steps: { ...steps, [required]: 'skip' } }); assert.throws(() => requireConformance('grok', at), /Grok Build did not pass its check on this machine, so it runs in Full access only here\. Not proven: it is signed in\./, 'a skipped required step too');
+  // A record from before 0.1.20 whose step about other tools failed is not kept: that step failed on every computer.
+  record({ steps: { ...steps, isolation: 'fail' } }); assert.equal(conformanceState('grok'), null); assert.throws(() => requireConformance('grok', at), /Grok Build has not been checked on this machine yet\. Your first message to it runs the check\./);
+  record({ steps: { ...steps, isolation: 'fail' }, loads: [{ what: 'Cursor rule', from: '/x/home/.cursor/rules/style.md', runs: false }] });
+  assert.equal(requireConformance('grok', at), true, 'what it also loads is recorded and stops nothing'); assert.deepEqual(checkResult('grok', at).loads, [{ what: 'Cursor rule', from: '/x/home/.cursor/rules/style.md', runs: false }]);
   assert.equal(log.length, 0, 'no step ran');
   // The state file is read strictly: unknown shapes mean no check passed.
   fs.writeFileSync(file, JSON.stringify({ v: 1, bin: '/x/grok', version: '1.0.0', steps: { ok: 'pass', 'Bad Id': 'pass', odd: 'maybe' }, relay: 'yes' }));
-  assert.deepEqual(conformanceState('grok'), { bin: '/x/grok', version: '1.0.0', steps: { ok: 'pass' }, relay: false, at: null });
+  assert.deepEqual(conformanceState('grok'), { bin: '/x/grok', version: '1.0.0', steps: { ok: 'pass' }, relay: false, at: null, why: {}, stable: [], loads: [], answer: null });
+  // What it holds beside the steps is read as strictly: a reason is one plain line, a load has a name, an answer is allow or deny.
+  fs.writeFileSync(file, JSON.stringify({ v: 1, bin: '/x/grok', version: '1.0.0', steps: { ok: 'fail' }, why: { ok: 'line\u001b[31m one', 'Bad Id': 'x', odd: 7 }, stable: ['ok', 'Bad Id'], loads: [{ what: 'Cursor hook', from: '/x', runs: true }, { from: '/y' }, 'text', { what: 'Cursor rule', runs: 'yes' }], answer: { decision: 'perhaps', for: [] } }));
+  assert.deepEqual(conformanceState('grok'), { bin: '/x/grok', version: '1.0.0', steps: { ok: 'fail' }, relay: false, at: null, why: { ok: 'line [31m one' }, stable: ['ok'], loads: [{ what: 'Cursor hook', from: '/x', runs: true }, { what: 'Cursor rule', from: null, runs: false }], answer: null });
   for (const text of ['{"v":2}', '{"v":1,"bin":"/x/grok","version":"1.0.0"}', 'not json']) { fs.writeFileSync(file, text); assert.equal(conformanceState('grok'), null, text); }
   assert.throws(() => requireConformance('grok', { bin: '/x/grok', version: '1.0.0' }), /Grok Build has not been checked on this machine yet/);
 });

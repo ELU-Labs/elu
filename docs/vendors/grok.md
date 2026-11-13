@@ -35,10 +35,10 @@ The Usage tab shows whether Grok is signed in before the check has run: it looks
 `~/.grok/auth.json`, never opens it, and runs nothing. Its line then says
 `signed in · needs a one-time check (c runs it now)`, or `not signed in for ELU · s signs in`.
 `c` on that line runs the same check there, with each step under the line as it ends, and the
-line then says `ready`, or that the check failed and which step was not proven. Signed out,
-`c` asks first whether to sign in. The check's folders are made in the system temp folder as
-it is on disk: on macOS `/var` is a link to `/private/var`, and ELU follows a link like that
-one, above what it writes, and refuses one inside it.
+line then says `ready`, or `Full access only (c checks again)` with the step that was not
+proven and why. Signed out, `c` asks first whether to sign in. The check's folders are made
+in the system temp folder as it is on disk: on macOS `/var` is a link to `/private/var`, and
+ELU follows a link like that one, above what it writes, and refuses one inside it.
 
 The check runs eight steps against the installed binary in a throwaway repository, with a
 planted file outside it, a local web listener and a marker command:
@@ -52,16 +52,36 @@ planted file outside it, a local web listener and a marker command:
 | `json` | the headless result parses and follows ELU's schema |
 | `resume` | a second run with the session id continues the first |
 | `relay` | over ACP, a write outside the workspace asks first; denied, nothing is written |
-| `isolation` | `grok inspect --json` shows no Claude or Cursor instructions, hooks or servers |
+| `isolation` | what `grok inspect --json` lists as loaded from another tool (Cursor, Claude Code, Codex), by name |
 
-Every step but `relay` must pass. The result is stored per binary and version; a new
-release proves itself again, on your next message to it. Until the check passes, no Grok
-run starts, and a turn you did not send yourself says
+The first six are required. The result is stored per binary and version; a new release
+proves itself again, on your next message to it. Until the check has run, no Grok run
+starts, and a turn you did not send yourself says
 `Grok Build has not been checked on this machine yet. Your first message to it runs the check.`
-If a required step fails, Grok stays off here, the session says which step was not proven,
-and your next message to it runs the check again. If `relay` fails, Ask and
-Auto still work, but a blocked action is reported instead of asked:
-`Grok can't ask live here. Blocked actions are reported.`
+
+What a result turns off:
+
+- **A required step is not proven.** Read only, Ask and Auto are off, and the session says
+  which step and why, for example
+  `Grok Build did not pass its check on this machine, so it runs in Full access only here. Not proven: a read-only turn runs no command (locked run ran a shell command).`
+  Full access is never turned off by the check: it runs Grok as it is, and says the result
+  once. Your next message runs the check again only when that can change the result (you
+  signed in, say). A step that failed because Grok did what the step forbids stays failed
+  until `c` in the Usage tab checks again.
+- **`relay` fails.** Ask and Auto still work, but a blocked action is reported instead of
+  asked: `Grok can't ask live here. Blocked actions are reported.`
+- **`isolation` finds something.** Nothing is turned off by that alone. Text the model reads
+  (instructions, a rule, a skill, an agent) is named once after the check and under Grok's
+  line in the Usage tab, with its file. A hook, an MCP server or a plugin, which would run,
+  is asked about once before your first message outside Full access, by name: `y` lets it
+  run and is kept for that release, `n` leaves Grok to Full access until `c` in the Usage tab
+  asks again. Full access is not asked.
+
+`grok inspect --json` lists a row for every Cursor, Claude Code and Codex switch on every
+computer, on or off, and lists another tool's files with their paths even when their switch
+is off (marked `disabled`). Only an entry it marks as loaded counts, or a switch that is on
+with nothing listed under it. Grok's own built-in skills and a project's `CLAUDE.md`, which
+Grok reads as it reads `AGENTS.md`, are Grok's and do not count.
 
 ## How each mode runs
 
@@ -108,8 +128,8 @@ the tree, `.envrc`, and your Claude Code configuration: `~/.claude/settings.json
 `settings.local.json` (hooks and permission rules), `~/.claude/CLAUDE.md`,
 `~/.claude/rules/*.md`, `~/.claude/agents/*.md`, `~/.claude/skills/`, `~/.claude.json`
 (MCP servers), plus the same Cursor files. The switches
-`GROK_CLAUDE_{SKILLS,RULES,AGENTS,MCPS,HOOKS}_ENABLED=0` and `GROK_CURSOR_*_ENABLED=0`
-exist, and ELU sets all ten, but
+`GROK_{CLAUDE,CURSOR,CODEX}_{SKILLS,RULES,AGENTS,MCPS,HOOKS,SESSIONS}_ENABLED=0` exist, and
+ELU sets all eighteen, in the environment and again in `config.toml`, but
 [xai-org/grok-build-plugin-cc#34](https://github.com/xai-org/grok-build-plugin-cc/issues/34)
 (open, filed against CLI 1.0.5) reports `~/.claude/CLAUDE.md`, `rules` and `agents` still
 loading with every switch off, and the `~/.claude` scan is anchored on `HOME`, which
@@ -118,7 +138,7 @@ loading with every switch off, and the `~/.claude` scan is anchored on `HOME`, w
 So every run gets a private `HOME` under ELU's state (`grok-home` in your personal
 directory) and a `GROK_HOME` inside it holding only what ELU wrote:
 
-- `config.toml`: Claude and Cursor compatibility off, telemetry, trace upload, Mixpanel,
+- `config.toml`: Claude, Cursor and Codex compatibility off, telemetry, trace upload, Mixpanel,
   feedback, managed config, campaigns, remote fetch and server-side search off, workspace
   snapshots and codebase uploads off, auto-update off, session relay off, `.envrc` off,
   and, in every profile but Full, server-side search off, subagents off and the never list
@@ -139,8 +159,8 @@ directory) and a `GROK_HOME` inside it holding only what ELU wrote:
   Grok home, ELU's runs are signed in, and your own `grok` is signed in only by its own
   `grok login`.
 
-There is no `~/.claude` under that home, so the `isolation` step shows what actually
-reaches a run on your machine. If it fails, Grok stays off here and the session says why.
+There is no `~/.claude` or `~/.cursor` under that home, so the `isolation` step shows what
+actually reaches a run on your machine, and the session names anything it finds.
 
 ## Telemetry and uploads
 

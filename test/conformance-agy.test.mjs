@@ -289,7 +289,10 @@ test('the conformance steps pass against the fake and record relay; a vendor tha
   const broken = await runConformance('agy', { bin: fake.bin, version: '1.5.4', scratch: scratch('s2'), env: process.env, log: line => log.push(line) });
   assert.deepEqual(broken.steps, { signin: 'pass', 'locked-no-write': 'fail', 'locked-no-shell': 'fail', 'locked-no-network': 'fail', json: 'pass', resume: 'pass', relay: 'fail' }); assert.equal(broken.relay, false);
   assert.ok(log.some(line => /^locked-no-write: fail: locked run: wrote /.test(line))); assert.ok(log.some(line => line === 'locked-no-shell: fail: locked run ran a command')); assert.ok(log.some(line => line === 'locked-no-network: fail: locked run reached the network'));
-  assert.throws(() => requireConformance('agy', { bin: fake.bin, version: '1.5.4' }), /^EluCodeError: Antigravity CLI did not pass its check on this machine \(not proven: a read-only turn writes no file, and 2 more\)\. Your next message to it runs the check again\.$/);
+  // It wrote in a read-only turn: Read only and the two asking modes stay off, with no promise that checking again changes it; Full access runs it.
+  assert.throws(() => requireConformance('agy', { bin: fake.bin, version: '1.5.4' }), /^EluCodeError: Antigravity CLI did not pass its check on this machine, so it runs in Full access only here\. Not proven: a read-only turn writes no file \(locked run: wrote [^)]+\), and 2 more\. Switch this session to Full access to use it; c on its line in the Usage tab runs the check again\.$/);
+  for (const mode of ['ask', 'auto']) assert.throws(() => requireConformance('agy', { bin: fake.bin, version: '1.5.4', mode }), /so it runs in Full access only here/, mode);
+  assert.equal(requireConformance('agy', { bin: fake.bin, version: '1.5.4', mode: 'full' }), true);
   fake.set({ noPermissionRequest: true });
   const silent = await runConformance('agy', { bin: fake.bin, version: '1.5.4', scratch: scratch('s3'), env: process.env, log: line => log.push(line) });
   assert.deepEqual(silent, { steps: { signin: 'pass', 'locked-no-write': 'pass', 'locked-no-shell': 'pass', 'locked-no-network': 'pass', json: 'pass', resume: 'pass', relay: 'fail' }, relay: false });
@@ -298,5 +301,5 @@ test('the conformance steps pass against the fake and record relay; a vendor tha
   fake.set({ signedIn: false });
   const out = await runConformance('agy', { bin: fake.bin, version: '1.5.4', scratch: scratch('s4'), env: process.env, log: line => log.push(line) });
   assert.equal(out.steps.signin, 'fail'); assert.ok(log.some(line => line === 'signin: fail: not signed in for ELU; sign it in with s on its line in the Usage tab'));
-  assert.throws(() => requireConformance('agy', { bin: fake.bin, version: '1.5.4' }), /Antigravity CLI did not pass its check on this machine \(not proven: it is signed in/);
+  assert.throws(() => requireConformance('agy', { bin: fake.bin, version: '1.5.4' }), /^EluCodeError: Antigravity CLI did not pass its check on this machine, so it runs in Full access only here\. Not proven: it is signed in \(not signed in for ELU; sign it in with s on its line in the Usage tab\), and \d more\. Your next message to it runs the check again\.$/);
 });
