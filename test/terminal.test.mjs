@@ -5,7 +5,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { PassThrough } from 'node:stream';
 import { EventEmitter } from 'node:events';
-import { project, fakeClis, cli, git, temp, approveProjectFiles, autoApprove, keyLike } from './helpers.mjs';
+import { project, fakeClis, fakeKeychain, claudeKeychainNames, cli, git, temp, approveProjectFiles, autoApprove, keyLike } from './helpers.mjs';
 import { repository } from '../lib/git.mjs';
 import { ProjectController, projectSnapshot, dashboardSnapshot, claimView, registerProject, registeredProjects, nameProject, savedProjectName, personalDirectory, setupCommitPlan, commitSetup, taskDetails } from '../lib/projects.mjs';
 import { LIMIT } from '../lib/project-settings.mjs';
@@ -3426,6 +3426,46 @@ test('Usage: a signs another account in with the vendor\'s own sign-in, Enter ma
   assert.equal(fs.existsSync(path.join(personalDirectory(), 'logins', 'claude', id)), false); assert.equal(fs.readFileSync(own, 'utf8'), signedIn);
   await until(() => /^Claude {6}owner@example.invalid · Max 20x · active$/m.test(text()) && !/second@example/.test(text()), 'one account again');
   assert.doesNotMatch(v.raw, /never-shown/); assert.doesNotMatch(v.frame(), /never-shown/);
+});
+
+test('Usage on macOS: x forgets an added Claude Code account with its Keychain item, keeps every other, and names an item a locked Keychain kept', { timeout: 30000 }, async t => {
+  const p = setup(t), fakeFile = path.join(p.dir, 'fake.json');
+  environment(t, { USER: 'owner' });
+  const signInAs = loginAs => fs.writeFileSync(fakeFile, JSON.stringify({ ...JSON.parse(fs.readFileSync(fakeFile, 'utf8')), accounts: { loginAs, plan: 'Pro', keychain: true } }));
+  const fake = fakeUsage(t, { platform: 'darwin', signIn: async ({ bin, args, env }) => spawnSync(bin, args, { env, encoding: 'utf8' }).status });
+  fs.writeFileSync(path.join(fake.home, 'claude', '.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'owner@example.invalid', planDisplayName: 'Max 20x' } }));
+  const others = [{ account: 'owner', service: 'Claude Code-credentials' }, { account: 'owner', service: claudeKeychainNames(path.join(fake.home, 'claude')).credentials }, { account: 'owner', service: 'Another App' }];
+  const keychain = fakeKeychain(p.dir, others), services = () => keychain.items().map(item => item.service).sort();
+  const v = await view(t, { repo: p.repo, usage: fake }), panels = v.current.panels, status = () => panels.status.getText();
+  const rowOf = pattern => panels.usageList.items.findIndex(item => pattern.test(item.getText()));
+  await send(v, '/usage'); await until(() => v.current.view === 'usage' && !panels.usageBox.hidden, 'Usage tab');
+  await until(() => /Usage updated \d\d:\d\d/.test(status()), 'first check');
+  panels.usageList.focus(); await until(() => v.current.screen.focused === panels.usageList, 'list focused');
+  signInAs('second@example.com'); panels.usageList.select(0); v.input.write('a');
+  await until(() => /Added second@example\.com\./.test(status()), 'second added');
+  signInAs('third@example.com'); v.input.write('a');
+  await until(() => /Added third@example\.com\./.test(status()), 'third added');
+  const [, second, third] = listLogins('claude'), names = id => claudeKeychainNames(path.join(personalDirectory(), 'logins', 'claude', id, '.claude'));
+  assert.deepEqual(services(), [...others.map(item => item.service), names(second).credentials, names(third).credentials].sort());
+  // x, y: that account's item goes with ELU's folder; the owner's, the third account's and another app's stay.
+  await until(() => rowOf(/^ {12}second@example\.com · Pro/) >= 0, 'second row');
+  panels.usageList.select(rowOf(/^ {12}second@example\.com · Pro/)); v.input.write('x');
+  await dialog(v, 'Forget second@example.com', 'y');
+  await until(() => /Forgot second@example\.com\.$/.test(status()), 'forgotten');
+  assert.deepEqual(services(), [...others.map(item => item.service), names(third).credentials].sort());
+  assert.deepEqual(listLogins('claude'), ['default', third]);
+  // With the Keychain locked the account is still forgotten, and a dialog names the item to delete.
+  keychain.lock(true);
+  panels.usageList.focus(); await until(() => rowOf(/^ {12}third@example\.com · Pro/) >= 0, 'third row');
+  panels.usageList.select(rowOf(/^ {12}third@example\.com · Pro/)); v.input.write('x');
+  await dialog(v, 'Forget third@example.com', 'y');
+  await until(() => modal(v, 'Forgot third@example.com'), 'the Keychain dialog');
+  assert.equal(dialogText(v, 'Forgot third@example.com'), `The Keychain kept its sign-in. Delete "${names(third).credentials}" in Keychain Access.`);
+  assert.match(status(), /Forgot third@example\.com\.$/);
+  await dialog(v, 'Forgot third@example.com', '');
+  assert.deepEqual(listLogins('claude'), ['default']);
+  assert.ok(services().includes(names(third).credentials));
+  assert.doesNotMatch(v.raw, /never-shown/);
 });
 
 test('Usage: a leaves ELU\'s screen for a cleared one with one line of ELU\'s, draws nothing over the sign-in, and draws ELU again in full after it', { timeout: 30000 }, async t => {

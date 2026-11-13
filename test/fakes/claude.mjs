@@ -37,17 +37,27 @@ if(args[0]==='mcp'){
   if(!servers?.[name]){console.error(`No MCP server named "${name}" in ${scope} scope`);process.exit(1);}
   delete servers[name];save();console.log(`Removed MCP server ${name} from ${scope} config`);process.exit(0);
  }
- console.error('The fake knows mcp add-json and mcp remove only.');process.exit(1);
+ // claude mcp list: the user-scope servers of that .claude.json, then the folder's local ones, by name and target.
+ if(words[0]==='list'){
+  const rows=Object.entries({...data.mcpServers,...data.projects?.[process.cwd()]?.mcpServers});
+  if(!rows.length){console.log('No MCP servers configured. Use `claude mcp add` to add a server.');process.exit(0);}
+  console.log('Checking MCP server health...\n');for(const [name,entry] of rows)console.log(`${name}: ${entry.url??[entry.command,...(entry.args??[])].join(' ')}`);process.exit(0);
+ }
+ console.error('The fake knows mcp add-json, mcp remove and mcp list only.');process.exit(1);
 }
 // accounts (fake.json): the account a run is on is the one .claude.json names in its config
 // folder, CLAUDE_CONFIG_DIR, as the real CLI reads it (HOME without it); a call records it and
 // what it sees there of the owner's settings and memory. accounts.loginAs: the account
 // `auth login` signs in, into that folder; none ends it as cancelled. accounts.limited: accounts
 // whose runs end as the real CLI ends one at its session limit. accounts.usage: per account,
-// the fractions of the windows a run reports.
+// the fractions of the windows a run reports. accounts.keychain: `auth login` keeps the sign-in
+// where the real CLI keeps it on macOS, in the Keychain (the stand-in security first on PATH),
+// as a generic password for $USER named "Claude Code-credentials", then, when
+// CLAUDE_CONFIG_DIR is set, "-" and the first 8 hex digits of the SHA-256 of that value.
+// A run records userMcp: the user-scope servers it would read from its own .claude.json.
 const home=process.env.CLAUDE_CONFIG_DIR??process.env.HOME??'';const readIn=name=>{try{return fs.readFileSync(path.join(home,name),'utf8');}catch{return null;}};
 let account=null;try{account=JSON.parse(readIn('.claude.json')).oauthAccount?.emailAddress??null;}catch{}
-const seen=()=>{const list=dir=>{try{return fs.readdirSync(path.join(home,dir)).sort();}catch{return null;}};const mcpAt=args.indexOf('--mcp-config');let mcp=null;try{const value=mcpAt>=0?args[mcpAt+1]:null;mcp=Object.keys(JSON.parse(value.trim().startsWith('{')?value:fs.readFileSync(value,'utf8')).mcpServers??{}).sort();}catch{}const memory=args.flatMap((arg,at)=>arg==='--add-dir'&&/memory$/.test(args[at+1]??'')?[args[at+1]]:[]).flatMap(dir=>{try{return fs.readdirSync(dir).sort().map(name=>`${name}:${fs.readFileSync(path.join(dir,name),'utf8')}`);}catch{return [];}});return {settings:readIn('settings.json'),claudeMd:readIn('CLAUDE.md'),skills:list('skills'),projects:list('projects'),mcp,memory};};
+const seen=()=>{const list=dir=>{try{return fs.readdirSync(path.join(home,dir)).sort();}catch{return null;}};const mcpAt=args.indexOf('--mcp-config');let mcp=null;try{const value=mcpAt>=0?args[mcpAt+1]:null;mcp=Object.keys(JSON.parse(value.trim().startsWith('{')?value:fs.readFileSync(value,'utf8')).mcpServers??{}).sort();}catch{}let userMcp=null;try{userMcp=Object.keys(JSON.parse(readIn('.claude.json')).mcpServers??{}).sort();}catch{}const memory=args.flatMap((arg,at)=>arg==='--add-dir'&&/memory$/.test(args[at+1]??'')?[args[at+1]]:[]).flatMap(dir=>{try{return fs.readdirSync(dir).sort().map(name=>`${name}:${fs.readFileSync(path.join(dir,name),'utf8')}`);}catch{return [];}});return {settings:readIn('settings.json'),claudeMd:readIn('CLAUDE.md'),skills:list('skills'),projects:list('projects'),mcp,userMcp,memory};};
 if(cfg.calls)fs.appendFileSync(cfg.calls, JSON.stringify({vendor,args,...(cfg.note?{tmp:process.env.CLAUDE_CODE_TMPDIR??null}:{}),...(cfg.accounts&&args[0]!=='auth'&&!args.includes('--version')&&!args.includes('--help')?{account,config:process.env.CLAUDE_CONFIG_DIR??null,...seen()}:{})})+'\n');
 if(args.includes('--version')){console.log('2.1.319');process.exit(0);}
 // The --model entry of the real --help, which is where the aliases a bot's Model step offers come from.
@@ -56,7 +66,9 @@ if(args.includes('--help')){console.log('--print --add-dir --restricted --safe-m
 if(args[0]==='auth'&&args[1]==='login'){
  const as=cfg.accounts?.loginAs;if(!as){console.error('Login cancelled.');process.exit(1);}
  fs.mkdirSync(home,{recursive:true});fs.writeFileSync(path.join(home,'.claude.json'),JSON.stringify({oauthAccount:{accountUuid:'uuid-never-shown',emailAddress:as,organizationName:'Example',planDisplayName:cfg.accounts.plan??'Pro'}}),{mode:0o600});
- fs.writeFileSync(path.join(home,'.credentials.json'),JSON.stringify({claudeAiOauth:{accessToken:'access-never-shown',refreshToken:'refresh-never-shown'}}),{mode:0o600});
+ const signIn=JSON.stringify({claudeAiOauth:{accessToken:'access-never-shown',refreshToken:'refresh-never-shown'}});
+ if(cfg.accounts.keychain){const {createHash}=await import('node:crypto'),{spawnSync}=await import('node:child_process');const dir=process.env.CLAUDE_CONFIG_DIR;const service=`Claude Code-credentials${dir?`-${createHash('sha256').update(dir.normalize('NFC')).digest('hex').substring(0,8)}`:''}`;const saved=spawnSync('security',['add-generic-password','-U','-a',process.env.USER||'claude-code-user','-s',service,'-X',Buffer.from(signIn).toString('hex')],{stdio:'ignore'});if(saved.status!==0){console.error('Could not save the sign-in in the Keychain.');process.exit(1);}}
+ else fs.writeFileSync(path.join(home,'.credentials.json'),signIn,{mode:0o600});
  console.log('Login successful.');process.exit(0);
 }
 if(args[0]==='auth'){console.log(JSON.stringify({loggedIn:mode!=='signed-out'&&(!cfg.accounts||Boolean(account))}));process.exit(0);}

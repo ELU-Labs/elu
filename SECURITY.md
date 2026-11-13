@@ -564,12 +564,31 @@ the sessions a later turn resumes, skills, agents, commands, plugins and hooks (
 the same setup, and only the sign-in differs. The MCP servers and memory a run gets come from
 your own home on every account.
 
+Your own MCP servers are also there when you run the vendor by hand on an account's folder.
+Codex keeps them in `config.toml`, which every account links, even before you have one.
+Claude Code keeps them in `.claude.json`, which also names the account, so that file is
+never linked: ELU writes the `mcpServers` of your own `~/.claude.json` into each account's
+`.claude.json`, under Claude Code's own lock on that file, and nothing else of yours (no
+sign-in, account, setting or project). It does so when an account is added, before each run
+on it, after `/mcp add` and `/mcp remove`, and every few seconds while ELU is open, so a
+server you add or remove with `claude mcp` is in every account too. A server added on an
+account's own folder stays there; one of yours of the same name replaces it. Those entries
+can hold a server's key, as yours do, and the account's file is private to you (`0600`, in
+ELU's private folder). A server's own OAuth sign-in lives in the account's sign-in store,
+not in that file, so each account signs in to such a server once on its own.
+
 `logins.json` records which accounts were added and which one new runs use; it holds no
 email, token or path. Switching (Enter on an account) changes the account of the next run
 only: a run keeps the account it started on. When a run stops at an account's limit, the
 chat names that account and says to switch in Usage; ELU never switches by itself.
 Forgetting an account (`x`) deletes its folder after you confirm. It is not signed out, so
-nothing is revoked; on macOS its Keychain item stays until you delete it in Keychain Access.
+nothing is revoked. On macOS ELU also deletes the Keychain items Claude Code keeps for that
+folder, with macOS's `security delete-generic-password`, for your user and by exact name:
+the names Claude Code gives that folder's sign-in and an API key it saved there ("Claude
+Code-credentials-" or "Claude Code-" and the folder's eight hex digits, each also with
+Claude Code's OAuth suffixes). Your own sign-in, every other account's, and everything else
+in the Keychain stay. When the Keychain is locked or refuses, the account is still
+forgotten, and ELU names the item for you to delete in Keychain Access.
 Accounts belong to the machine they were added on and are never sent to a teammate or to
 another of your machines.
 
