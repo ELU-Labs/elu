@@ -2956,7 +2956,8 @@ test('a schedule offers Full access, says what it means and asks once', { timeou
   assert.equal(listSchedules().find(row => row.goal === 'Check the build')?.permissions, 'full');
   // Picked down again with a time set: no Full access, nothing asked.
   await send(v, '/new'); await until(() => !panels.compose.hidden && !/Scheduled/.test(status()), 'a third form');
-  await send(v, '/schedule daily 9:00'); await until(() => /Runs daily 9:00/.test(status()), 'a time');
+  pickRow(panels.composeList, /When/); v.input.write('\r'); await until(() => modal(v, 'When'), 'the list of times, again');
+  dialogList(v, 'When').select(5); v.input.write('\r'); await until(() => /Runs daily 9:00/.test(status()), 'a time');
   await send(v, '/permissions ask'); await until(() => /Ask for approval for this schedule\./.test(status()), 'ask');
   await send(v, 'Check dependencies for updates'); await until(() => /Scheduled daily 9:00/.test(status()), 'scheduled');
   assert.equal(listSchedules().find(row => row.goal === 'Check dependencies for updates')?.permissions, 'ask');
