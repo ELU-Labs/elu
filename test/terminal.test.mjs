@@ -3496,7 +3496,8 @@ test('Sessions shows the list on the left and the open session on the right, at 
     assert.deepEqual([panels.status.aleft, panels.status.width], [bar + 1, width - bar - 2]); assert.deepEqual([panels.header.aleft, panels.header.width], [bar + 1, width - bar - 2]);
     assert.equal(panels.boardBox.atop, panels.chat.atop); assert.equal(panels.boardBox.atop + panels.boardBox.height, panels.keys.atop);
     assert.equal(panels.chat.atop + panels.chat.height, panels.status.atop); assert.equal(panels.status.atop + 1, panels.ask.atop); assert.equal(panels.ask.atop + panels.ask.height, panels.keys.atop);
-    assert.deepEqual([panels.ask.height, panels.keys.atop, panels.keys.aleft, panels.keys.width], [6, height - 1, 1, width - 2], 'a four-line message box, and the key bar across the bottom');
+    // The key bar is one column wider than its hints, so a line of hints that fills it keeps its last word.
+    assert.deepEqual([panels.ask.height, panels.keys.atop, panels.keys.aleft, panels.keys.width], [6, height - 1, 1, width - 1], 'a four-line message box, and the key bar across the bottom');
     // No button stands in for the list: ‹ Sessions and the + New session button are gone.
     assert.equal(panels.back.hidden, true); assert.equal(panels.newTask, undefined); assert.equal(panels.boardBox.hidden, false); assert.equal(panels.compose.hidden, true); assert.equal(panels.chat.hidden, false);
     // The list: + New session first, then each group with its count. One line per row: mark, title, age. No row has a session number.
