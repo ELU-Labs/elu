@@ -317,7 +317,20 @@ It shows in Sessions marked "on devbox", live, and its approvals wait on both ma
 your own session there, so your rules apply, and `a` on its approval, from either machine,
 keeps the rule on the devbox, where it runs.
 Sessions also lists every other session on the devbox in the same repository under "On devbox", and Projects lists its other projects as "<project> on devbox".
-A message you type to a devbox session that names files or folders on the laptop asks
+With a devbox session under the cursor, what you type goes to your agent here, on the laptop:
+the first message starts a session in the project open on the laptop, named "Help: " and the
+devbox session's title, and the next ones continue it. It is told which session it helps, what
+that session waits on and what it said last, and it reaches only that session, by sending it
+files with a message or a message alone (Claude Code; another model says what you should
+send). When the devbox session answers, your agent here goes on by itself, up to 4 times for
+each message of yours, unless you stopped it, and asks you when it needs a decision, a secret,
+or something only you can do. Its approvals wait on its own row in Sessions, and the devbox
+session's pane says so. Both agents show in the same pane, the devbox's as "Opus 5.5 on
+@devbox" and yours as "Opus 5.5 here", and the helper is also a session of its own in
+Sessions. Start a message with `@devbox` to write to the devbox session itself, and answer its
+question there the same way: `@devbox 1`. `y`, `n` and `a` still answer its approvals. A
+teammate's session on the devbox, such as a handoff you accepted there, has no agent here:
+what you type goes to it. A message to a devbox session that names files or folders on the laptop asks
 "Send 14 files (2.1 MB) from this computer with this message?": y sends them along, n sends
 the text alone. `/send PATH...` sends files without a message. They land in that session's
 inbox on the devbox, which it may read in every mode, and each path in your message points

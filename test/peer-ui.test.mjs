@@ -10,6 +10,8 @@ import { launchTerminal } from '../lib/terminal.mjs';
 import { listBots, removeBot, saveBot } from '../lib/bots.mjs';
 import { boardRows, barCells, barColumns } from '../lib/board.mjs';
 import { readBoard } from '../lib/kanban.mjs';
+import { saveTask } from '../lib/state.mjs';
+import { helperLink } from '../lib/remote-helper.mjs';
 import { botTarget, chatBar, dmTarget, fitWords, ink, membersLine, peerName, roomTarget, teamPanes, threadTarget, visible } from '../lib/terminal-visuals.mjs';
 
 const ME = 'a'.repeat(64), SARA = 'b'.repeat(64), LI = 'c'.repeat(64);
@@ -739,6 +741,54 @@ test('a session on my other computer that waits for y or n shows n once in the k
   selectRow(board, /on sara-box · Uppercase plan/);
   await until(() => /y approve {2}n reject {2}enter open {2}tab next/.test(keys()), 'Task keys');
   assert.doesNotMatch(keys(), /new session/);
+});
+
+test('over a session on my other computer the box writes to my agent here, started once and then continued, and @ that computer writes there', async t => {
+  const at = new Date().toISOString(), id = '44444444-4444-4444-8444-444444444444';
+  const remote = [{ id, machine: SARA, createdAt: at, lastAt: at, title: 'Native replay e2e handoff', state: 'needs_input', question: 'Which batch results?', choices: ['Mine', 'New ones'], steps: [], entries: [{ role: 'You', at, text: 'Start the handoff' }], approvals: [] }];
+  const p = project(later(t)); environment(t, p.parent);
+  const peer = fakePeer({ items: [], mine: [{ key: SARA, mine: true, theirs: true }], remote }), v = await view(t, { repo: repository(p.root), dashboard: true, peer });
+  const board = v.panels.board, ask = v.panels.ask, sentThere = () => peer.sent().filter(row => row.type === 'remoteSend');
+  await until(() => board.items.map(plainItem).some(row => /Native replay e2e handoff/.test(row)), 'the row of the session there');
+  board.focus(); selectRow(board, /on sara-box/);
+  await until(() => /Message your agent here/.test(ask._label.getText()), 'the box says where a message goes');
+  await until(() => /Answer it there: @sara-box 1/.test(v.panels.chat.getText()), 'how to answer the question there');
+  assert.match(v.panels.chat.getText(), /You → @sara-box/);
+  // No @name: the first message starts my agent here, in this project, as a new session that helps that one.
+  await send(v, 'can you help this remote agent with the files it needs');
+  await until(() => pendingRequests(p.root).some(row => row.helps), 'my agent here starts');
+  const first = pendingRequests(p.root).find(row => row.helps);
+  assert.deepEqual(first.helps, { machine: SARA, remoteId: id, name: 'sara-box', title: 'Native replay e2e handoff' });
+  assert.equal(first.goal, 'can you help this remote agent with the files it needs'); assert.equal(first.continuationTaskId, null);
+  assert.equal(helperLink(SARA, id).requestId, first.id);
+  assert.deepEqual(sentThere(), [], 'nothing went to the session there');
+  // Before it started, the next message goes with the first.
+  await send(v, 'and the logs');
+  await until(() => pendingRequests(p.root).find(row => row.id === first.id)?.goal === `${first.goal}\n\nand the logs`, 'with the first message');
+  // Once it started, the next one continues it: one helper for that session.
+  const repo = repository(p.root);
+  saveTask(repo, { id: '1', kind: 'conversation', goal: first.goal, state: 'answered', worktree: repo.root, base: null, branch: null, createdAt: at, runs: [], reviews: [], responses: [], messages: [{ at, text: first.goal }], sessions: {}, result: null, helps: first.helps });
+  updateRequest(p.root, first.id, { taskId: '1', state: 'done' });
+  board.focus(); selectRow(board, /on sara-box/);
+  await send(v, 'what does it still need?');
+  await until(() => pendingRequests(p.root).some(row => row.continuationTaskId === '1' && row.goal === 'what does it still need?'), 'the helper is continued');
+  assert.equal(pendingRequests(p.root).filter(row => row.helps).length, 1);
+  await until(() => /You \(waiting\)/.test(v.panels.chat.getText()), 'the message to it shows beside the session there');
+  // @ that computer, by its row's name or its owner's there, writes to the session there without it.
+  board.focus(); selectRow(board, /on sara-box/);
+  ask.focus(); ask.readInput(); await until(() => ask.__listener, 'message box');
+  // The key bar says the same: Enter writes to my agent here, @sara-box writes there.
+  await until(() => /enter send to your agent here {2}@sara-box writes there/.test(v.panels.keys.getText()), 'the keys say where Enter sends');
+  v.input.write('@sara-box 1');
+  await until(() => /Message the session on @sara-box/.test(ask._label.getText()), 'the box says it goes there');
+  await until(() => /enter send to @sara-box/.test(v.panels.keys.getText()), 'and the keys');
+  ask.submit();
+  await until(() => sentThere().length === 1, 'sent there');
+  assert.deepEqual(sentThere()[0], { type: 'remoteSend', id, text: '1' });
+  await send(v, '@sara Mine');
+  await until(() => sentThere().length === 2, 'sent there again');
+  assert.deepEqual(sentThere()[1], { type: 'remoteSend', id, text: 'Mine' });
+  assert.equal(pendingRequests(p.root).filter(row => row.continuationTaskId === '1').length, 1, 'neither went to my agent here');
 });
 
 test('Sessions lists every session of my other computer in this repository under its name, and Projects opens its other projects', async t => {
