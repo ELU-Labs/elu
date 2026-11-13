@@ -910,6 +910,21 @@ test('a shared project with no git address says how to get it here, the board of
   await send(v, '/projects'); await until(() => v.current.view === 'projects' && rows().length === 1, 'only this computer\'s project');
 });
 
+test('leaving the team while the board of a project it shares is open closes that board, and the line still says the leave', async t => {
+  const p = project(later(t)); environment(t, p.parent);
+  // The only team: leaving it takes this machine off every team.
+  const peer = sharing(fakePeer({ items: [] }), [sharedRow()]); peer.lastTeam = true;
+  const v = await view(t, { repo: repository(p.root), dashboard: true, peer }), panels = v.panels, list = panels.projectsList, status = () => panels.status.getText().trimEnd();
+  await send(v, '/projects'); await until(() => v.current.view === 'projects' && list.items.length === 2, 'the shared project');
+  list.focus(); selectRow(list, /Shop/); v.input.write('\r');
+  await until(() => v.current.view === 'kanban' && /Message @sara/.test(panels.ask._label.getText()), 'its team board');
+  await send(v, '/leave'); await closeDialog(v, 'Leave Core', 'y');
+  await until(() => panels.newCard.hidden === false && !/Message @sara/.test(panels.ask._label.getText()), 'Kanban is this computer\'s again');
+  assert.match(status(), /› You left Core\. You are on no team now, so the peer daemon stops\./);
+  // It stays the line: the board closing does not replace it.
+  await new Promise(resolve => setTimeout(resolve, 3500)); assert.match(status(), /› You left Core\./);
+});
+
 test('a project my other computer shares opens as that computer lists it, and is one row beside its sessions there', async t => {
   const now = Date.now(), at = minutes => new Date(now - minutes * 60000).toISOString(), p1 = '1'.repeat(16);
   const session = { id: '11111111-1111-4111-8111-111111111111', ref: `${p1}:1`, project: p1, title: 'Typed there by hand', state: 'answered', at: at(5), createdAt: at(6), approvals: [], by: 'you', who: null };
