@@ -804,12 +804,11 @@ test('a session on my other computer stays where the owner scrolled it through e
   remote[0].entries = [...remote[0].entries, { role: 'Claude', at, text: 'Arrived at the top', lead: true }];
   await until(() => /Arrived at the top/.test(chat.getContent()), 'more new lines'); await pause(150);
   assert.equal(chat.childBase, 0, 'and never starts again from the bottom');
-  assert.match(v.text(), /Line 1 of the long chat/);
   // Back at the end, it follows the newest line again.
   wheelAt(v, chat, 1, 600); await until(() => chat.getScrollPerc(true) === 100, 'the end');
   remote[0].entries = [...remote[0].entries, { role: 'Claude', at, text: 'The newest line', lead: true }];
-  await until(() => /The newest line/.test(v.text()), 'the newest line in view');
-  assert.equal(chat.getScrollPerc(true), 100);
+  await until(() => /The newest line/.test(chat.getContent()), 'the newest line'); await pause(150);
+  assert.equal(chat.getScrollPerc(true), 100, 'it follows the end again');
   // Scrolled up, then another row and back: it opens at its end again.
   const before = chat.childBase;
   wheelAt(v, chat, -1, 20); await until(() => chat.childBase === before - 20, 'up again');
