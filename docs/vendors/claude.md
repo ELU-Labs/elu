@@ -31,9 +31,11 @@ its next tool step; one that comes after the last step runs as one more turn of 
 run, with a `result` line of its own, after the input closes) and from its change log
 ("queued prompts sent as content blocks over --input-format stream-json ... merged into one
 turn"). When a message comes after the last step, ELU shows both replies, in order. A
-question of Claude Code's on that input outside Ask for approval is refused at once, as a
-closed input refused it before. A teammate's question never takes messages. Driven with the
-stand-in CLI; not yet seen with the real service.
+question of Claude Code's on that input (a tool call, a host, a form from an MCP server) is
+answered by the session's mode: allowed at once in Full access, answered by your rules and
+then by you in Ask for approval and Approve for me, refused in Read only
+([../permissions.md](../permissions.md)). A teammate's question never takes messages.
+Driven with the stand-in CLI; not yet seen with the real service.
 
 ## Read only
 

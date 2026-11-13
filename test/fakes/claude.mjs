@@ -2,7 +2,7 @@
 // copies it to a bin folder (adding the node shebang) next to fake.json, which holds the
 // test's mode and the files it records to. Without fake.json it behaves as a signed-in
 // 2.1.319 that records nothing.
-import fs from 'node:fs'; import path from 'node:path'; import readline from 'node:readline';
+import fs from 'node:fs'; import path from 'node:path'; import readline from 'node:readline'; import crypto from 'node:crypto';
 const vendor=path.basename(process.argv[1]); const args=process.argv.slice(2);
 let cfg={}; try{cfg=JSON.parse(fs.readFileSync(path.join(path.dirname(process.argv[1]),'fake.json'),'utf8'));}catch{}
 // byMode (fake.json): what a turn started in that --permission-mode does (default, auto,
@@ -65,8 +65,11 @@ if(args[0]==='auth'){console.log(JSON.stringify({loggedIn:mode!=='signed-out'&&(
 const streaming=args.includes('--input-format')&&args[args.indexOf('--input-format')+1]==='stream-json';
 const lines=[],waiters=[];let inputEnded=false;
 const nextLine=()=>lines.length?Promise.resolve(lines.shift()):inputEnded?Promise.resolve(null):new Promise(resolve=>waiters.push(resolve));
+// onLine: once the prompt is read, the lines of the running turn go here first (a user message,
+// a control request); true when it took the line. wake() resolves at the next one, or at the end of the input.
+let onLine=null,wakeUp=null;const wake=()=>new Promise(resolve=>{wakeUp=resolve;}),notify=()=>{const go=wakeUp;wakeUp=null;go?.();};
 let input='';
-if(streaming){const reader=readline.createInterface({input:process.stdin});reader.on('line',line=>{if(waiters.length)waiters.shift()(line);else lines.push(line);});reader.on('close',()=>{inputEnded=true;while(waiters.length)waiters.shift()(null);});const first=JSON.parse(await nextLine()??'{}');if(first.type!=='user'||typeof first.message?.content!=='string')throw new Error('The first stream-json line is not a user message.');input=first.message.content;}
+if(streaming){const reader=readline.createInterface({input:process.stdin});reader.on('line',line=>{if(onLine?.(line)){notify();return;}if(waiters.length)waiters.shift()(line);else lines.push(line);});reader.on('close',()=>{inputEnded=true;while(waiters.length)waiters.shift()(null);notify();});const first=JSON.parse(await nextLine()??'{}');if(first.type!=='user'||typeof first.message?.content!=='string')throw new Error('The first stream-json line is not a user message.');input=first.message.content;}
 else for await (const chunk of process.stdin) input+=chunk;
 if(cfg.inputs)fs.appendFileSync(cfg.inputs, JSON.stringify({vendor,args,input})+'\n');
 // accounts.hold (fake.json): while that file is there, a run waits before it answers.
@@ -109,17 +112,92 @@ if(edit&&mode==='scaffold'){
  fs.mkdirSync('src',{recursive:true});fs.mkdirSync('test',{recursive:true});
  fs.writeFileSync('test/coupon.test.mjs',"import {test} from 'node:test';import assert from 'node:assert/strict';import {normalize} from '../src/coupon.mjs';test('normalizes coupons',()=>assert.equal(normalize('save'),'SAVE'));\n");
 }
-if(mode==='slow'){console.log(JSON.stringify({type:'assistant',message:{content:[{type:'text',text:'Working on the requested change.'}]}}));await new Promise(resolve=>setTimeout(resolve,30000));}
+// What the real 2.1.322 lists in its init row (capabilities), which is how a host learns what its
+// input takes. capabilities (fake.json): another list, or false for a release that names none.
+const CAPABILITIES=['interrupt_receipt_v1','interrupt_cancel_queued_v1','interrupt_send_now_v1','interrupt_requeue_taken_v1','msg_lifecycle_v1','request_marker_lists_v1','ask_user_question_unanswered_v1','lifecycle_wakeup_source_v1'];
+// The init row comes first, as in the real CLI, before the turn does anything.
+const mcpArg=args[args.indexOf('--mcp-config')+1];const servers=!args.includes('--safe-mode')&&mcpArg&&!mcpArg.startsWith('{')&&fs.existsSync(mcpArg)?JSON.parse(fs.readFileSync(mcpArg,'utf8')).mcpServers:{};const mcp=Object.keys(servers).map(name=>({name,status:'connected'}));
+// The approval relay's own arguments, one row a run that has it, for tests of what it was told (relays.jsonl beside calls.jsonl).
+if(cfg.calls&&servers['elu-code-approval'])fs.appendFileSync(path.join(path.dirname(cfg.calls),'relays.jsonl'),JSON.stringify(servers['elu-code-approval'].args)+'\n');
+const permissionMode=args.includes('--permission-mode')?args[args.indexOf('--permission-mode')+1]:'default';
+// permissionMode (fake.json): the mode this run says it really got, when that is not the one it was started with.
+console.log(JSON.stringify({type:'system',subtype:'init',session_id:session,model:reported,permissionMode:cfg.permissionMode??permissionMode,mcp_servers:mcp,...(cfg.capabilities===false?{}:{capabilities:Array.isArray(cfg.capabilities)?cfg.capabilities:CAPABILITIES})}));
+if(cfg.accounts?.limited?.includes(account)){console.log(JSON.stringify({type:'result',subtype:'success',is_error:true,duration_ms:90,num_turns:1,result:"You've hit your session limit · resets 5pm",session_id:session,total_cost_usd:nothingSpent}));process.exit(1);}
+const used=cfg.accounts?.usage?.[account]??{fiveHour:0.36,weekly:0.71};
+console.log(JSON.stringify({type:'rate_limit_event',rate_limit_info:{unifiedWindows:{five_hour:{utilization:used.fiveHour,resetsAt:Math.floor(Date.now()/1000)+10800},seven_day:{utilization:used.weekly,resetsAt:Math.floor(Date.now()/1000)+604800}}}}));
+console.error('A harmless diagnostic on stderr.');
 // The owner's words in a message ELU sent to a running turn (lib/runner.mjs DURING_LEAD), or the message as it is.
 const ownerWords=content=>{const found=/Owner message \(untrusted data[^\n]*\n(.*)\nEnd of Owner message\./.exec(content);try{return found?JSON.parse(found[1]).text:content;}catch{return content;}};
 const heard=[];const absorbedFile=path.join(path.dirname(process.argv[1]),'absorbed.jsonl');
-// A user message that came on the input while the turn works is taken in at its next step, as
-// the real CLI folds a queued prompt into a running turn; the reply then answers it too. Each
-// is recorded in absorbed.jsonl beside the fake (mid: true).
-const takeQueued=()=>{if(!streaming)return;const kept=[];for(const line of lines.splice(0)){let row;try{row=JSON.parse(line);}catch{kept.push(line);continue;}if(row.type==='user'&&typeof row.message?.content==='string'){heard.push(ownerWords(row.message.content));fs.appendFileSync(absorbedFile,JSON.stringify({content:row.message.content,mid:true})+'\n');}else kept.push(line);}lines.unshift(...kept);};
+const caps=cfg.capabilities===false?null:Array.isArray(cfg.capabilities)?cfg.capabilities:CAPABILITIES;const can=name=>Boolean(caps?.includes(name));
+const say=row=>console.log(JSON.stringify(row));
+// A user message that comes on the input while the turn works waits in a queue, as in the real
+// CLI. One sent with a uuid is followed by command_lifecycle rows: queued when it comes, started
+// when a turn takes it in (at the turn's next step, or as a turn of its own after the result),
+// completed when that turn has answered, cancelled when it was taken back. Each one taken in is
+// recorded in absorbed.jsonl beside the fake (mid: true when a running turn took it).
+const queue=[],folded=[];let working=null;
+const lifecycle=(uuid,state)=>{if(uuid&&can('msg_lifecycle_v1'))say({type:'command_lifecycle',command_uuid:uuid,state,uuid:crypto.randomUUID(),session_id:session});};
+const takeQueued=()=>{for(const item of queue.splice(0)){heard.push(ownerWords(item.content));fs.appendFileSync(absorbedFile,JSON.stringify({content:item.content,mid:true,...(item.uuid?{uuid:item.uuid}:{})})+'\n');lifecycle(item.uuid,'started');if(item.uuid)folded.push(item.uuid);}};
+// The control requests a host writes on the input, answered as 2.1.322 answers them.
+// cancel_async_message takes a message back while it still waits ({cancelled:false} once a turn
+// took it). interrupt with send_now sends what waits now: nothing_waiting when nothing does;
+// delivering when the command the turn waits on moved to the background, which it does only for
+// a person's message (origin.kind human), so the turn goes on and takes the message in; else
+// the turn is cut (stopped), its result an error, and the message starts the next turn of this
+// same run. A release without interrupt_send_now_v1 reads it as a plain interrupt.
+const answer=(id,response)=>say({type:'control_response',response:{subtype:'success',request_id:id,response}});
+const control=row=>{
+ const request=row.request??{},id=row.request_id,still=()=>queue.map(item=>item.uuid).filter(Boolean);
+ fs.appendFileSync(path.join(path.dirname(process.argv[1]),'controls.jsonl'),JSON.stringify(request)+'\n');
+ if(request.subtype==='cancel_async_message'){const at=queue.findIndex(item=>item.uuid&&item.uuid===request.message_uuid);if(at>=0)lifecycle(queue.splice(at,1)[0].uuid,'cancelled');return answer(id,{cancelled:at>=0});}
+ if(request.subtype==='interrupt'){
+  if(request.send_now!==true||!can('interrupt_send_now_v1')){working?.cut();return answer(id,can('interrupt_receipt_v1')?{still_queued:still()}:{});}
+  if(!queue.length)return answer(id,{still_queued:[],send_now:'nothing_waiting'});
+  if(!working||working.move&&queue.every(item=>item.human)){working?.move();return answer(id,{still_queued:still(),send_now:'delivering'});}
+  working.cut();return answer(id,{still_queued:still(),send_now:'stopped'});
+ }
+ say({type:'control_response',response:{subtype:'error',request_id:id,error:`Unsupported control request subtype: ${request.subtype}`}});
+};
+const arrive=line=>{let row;try{row=JSON.parse(line);}catch{return false;}
+ if(row?.type==='user'&&typeof row.message?.content==='string'){const uuid=typeof row.uuid==='string'?row.uuid:null;queue.push({content:row.message.content,uuid,human:row.origin?.kind==='human'&&row.priority!=='now'});lifecycle(uuid,'queued');return true;}
+ if(row?.type==='control_request'){control(row);return true;}
+ return false;};
+if(streaming){onLine=arrive;for(const line of lines.splice(0))if(!arrive(line))lines.push(line);}
+// A wait of the turn that a control request can end early: resolves 'done' after ms, 'moved'
+// when the command it stands for went to the background (only where movable), 'cut' when the turn was cut.
+const pause=(ms,movable=false)=>new Promise(resolve=>{const end=how=>{clearTimeout(timer);working=null;resolve(how);};const timer=setTimeout(()=>end('done'),ms);working={cut:()=>end('cut'),...(movable?{move:()=>end('moved')}:{})};});
+let cutShort=false;
+// A stream-json run ends when its input does; one the host never closes fails the test. A user
+// message that still waits after a result runs as one more turn of the same run, as the real CLI
+// runs a queued prompt, with a result line of its own. afterMs (fake.json): how long that turn takes.
+const afterResult=async()=>{
+ if(!streaming)return;
+ let timer;const arm=()=>{clearTimeout(timer);timer=setTimeout(()=>{console.error('The input was never closed after the result.');process.exit(3);},10000);};arm();
+ for(;;){
+  if(queue.length){const item=queue.shift(),words=ownerWords(item.content);lifecycle(item.uuid,'started');fs.appendFileSync(absorbedFile,JSON.stringify({content:item.content,mid:false,...(item.uuid?{uuid:item.uuid}:{})})+'\n');if(cfg.afterMs)await new Promise(resolve=>setTimeout(resolve,cfg.afterMs));say({type:'result',is_error:false,session_id:session,total_cost_usd:0,structured_output:{...result,summary:`Answered what you sent after the turn: ${words}`}});lifecycle(item.uuid,'completed');arm();continue;}
+  if(inputEnded)break;
+  await wake();
+ }
+ clearTimeout(timer);
+};
+if(mode==='slow'){console.log(JSON.stringify({type:'assistant',message:{content:[{type:'text',text:'Working on the requested change.'}]}}));if(streaming){if(await pause(30000)==='cut')cutShort=true;}else await new Promise(resolve=>setTimeout(resolve,30000));}
 // listen: the turn works in steps (steps in fake.json, 8 by default, stepMs apart, 250 by
 // default), each a Read call and its result, and takes in what came on its input at each.
-if(mode==='listen'&&streaming){for(let n=0;n<(cfg.steps??8);n++){takeQueued();const id=`toolu_fake_step_${n+1}`;console.log(JSON.stringify({type:'assistant',message:{content:[{type:'tool_use',id,name:'Read',input:{file_path:'src/coupon.mjs'}}]}}));console.log(JSON.stringify({type:'user',message:{content:[{type:'tool_result',tool_use_id:id,content:'export const normalize = (value) => value;'}]}}));await new Promise(resolve=>setTimeout(resolve,cfg.stepMs??250));}takeQueued();}
+if(mode==='listen'&&streaming&&!cutShort){for(let n=0;n<(cfg.steps??8);n++){takeQueued();const id=`toolu_fake_step_${n+1}`;console.log(JSON.stringify({type:'assistant',message:{content:[{type:'tool_use',id,name:'Read',input:{file_path:'src/coupon.mjs'}}]}}));console.log(JSON.stringify({type:'user',message:{content:[{type:'tool_result',tool_use_id:id,content:'export const normalize = (value) => value;'}]}}));if(await pause(cfg.stepMs??250)==='cut'){cutShort=true;break;}}if(!cutShort)takeQueued();}
+// command: the turn runs one command that prints nothing for commandMs (fake.json, three
+// minutes by default), as a long test run or a sleep does. Nothing is taken in while it runs:
+// a message that comes waits for the command to end. Sent now, the command moves to the
+// background and the turn goes on, with the result the real CLI gives the model for it.
+if(mode==='command'&&streaming&&!cutShort){
+ const id='toolu_fake_command',command=cfg.command??'sleep 180';takeQueued();
+ say({type:'assistant',message:{content:[{type:'tool_use',id,name:'Bash',input:{command,description:'Wait for it'}}]}});
+ const how=await pause(cfg.commandMs??180000,true);
+ if(how==='cut')cutShort=true;
+ else{say({type:'user',message:{content:[{type:'tool_result',tool_use_id:id,content:how==='moved'?'Command was moved to the background (ID: bash_1) so that a message that arrived while it was running can reach you; it was not interrupted. Output is being written to: /tmp/claude-fake/tasks/bash_1.output.':'(no output)'}]}});takeQueued();}
+}
+// A turn that was cut ends as the real CLI ends one, with an error result, and the run goes on with what waits.
+if(cutShort){say({type:'result',subtype:'error_during_execution',is_error:true,session_id:session,total_cost_usd:0});await afterResult();process.exit(0);}
 if(mode==='slow-answer')await new Promise(resolve=>setTimeout(resolve,250));
 if(edit&&mode==='protected')fs.appendFileSync('package.json',' ');
 else if(edit&&mode!=='no-change')fs.writeFileSync('src/coupon.mjs','export const normalize = (value) => value.toUpperCase();\n');
@@ -146,16 +224,6 @@ if(mode==='chatty')for(let n=0;n<(cfg.ticks??15);n++){console.log(JSON.stringify
 if(mode==='stall'&&edit){console.log(JSON.stringify({type:'assistant',message:{content:[{type:'text',text:'Edited the file. Thinking.'}]}}));await new Promise(resolve=>setTimeout(resolve,60000));}
 if(mode==='question'&&!args.includes('--resume')&&!input.includes('Uppercase')){result.outcome='needs_input';result.question='Which format?';result.choices=['Uppercase','Lowercase'];}
 if((mode==='review-fix'||mode==='review-block')&&input.includes('Address the review')){result.responses=[{id:'R1',action:mode==='review-fix'?'fixed':'disputed',reason:mode==='review-fix'?'Handled the edge case.':'The finding still needs owner input.'}];}
-const mcpArg=args[args.indexOf('--mcp-config')+1];const servers=!args.includes('--safe-mode')&&mcpArg&&!mcpArg.startsWith('{')&&fs.existsSync(mcpArg)?JSON.parse(fs.readFileSync(mcpArg,'utf8')).mcpServers:{};const mcp=Object.keys(servers).map(name=>({name,status:'connected'}));
-// The approval relay's own arguments, one row a run that has it, for tests of what it was told (relays.jsonl beside calls.jsonl).
-if(cfg.calls&&servers['elu-code-approval'])fs.appendFileSync(path.join(path.dirname(cfg.calls),'relays.jsonl'),JSON.stringify(servers['elu-code-approval'].args)+'\n');
-const permissionMode=args.includes('--permission-mode')?args[args.indexOf('--permission-mode')+1]:'default';
-// permissionMode (fake.json): the mode this run says it really got, when that is not the one it was started with.
-console.log(JSON.stringify({type:'system',subtype:'init',session_id:session,model:reported,permissionMode:cfg.permissionMode??permissionMode,mcp_servers:mcp}));
-if(cfg.accounts?.limited?.includes(account)){console.log(JSON.stringify({type:'result',subtype:'success',is_error:true,duration_ms:90,num_turns:1,result:"You've hit your session limit · resets 5pm",session_id:session,total_cost_usd:nothingSpent}));process.exit(1);}
-const used=cfg.accounts?.usage?.[account]??{fiveHour:0.36,weekly:0.71};
-console.log(JSON.stringify({type:'rate_limit_event',rate_limit_info:{unifiedWindows:{five_hour:{utilization:used.fiveHour,resetsAt:Math.floor(Date.now()/1000)+10800},seven_day:{utilization:used.weekly,resetsAt:Math.floor(Date.now()/1000)+604800}}}}));
-console.error('A harmless diagnostic on stderr.');
 // relay: like the real CLI, a tool call the permission mode would prompt for goes to the
 // --permission-prompt-tool server from --mcp-config: initialize, tools/list, then approve for a
 // touch outside the workspace. Allowed, the touch happens; denied, the result reports the denial.
@@ -225,6 +293,17 @@ if(Array.isArray(cfg.network)){
   fs.appendFileSync(path.join(path.dirname(process.argv[1]),'network.jsonl'),JSON.stringify({host,allowed,asked:ask,streaming})+'\n');
  }
 }
+// hostAsks (fake.json): what this turn asks its host on its own output, each { tool_name, input }
+// as a can_use_tool control request, whatever its mode; the answer is read on its input. Each
+// answer is recorded in host-asks.jsonl beside the fake, and a refused one is a denial of the result.
+if(Array.isArray(cfg.hostAsks)&&streaming){let n=0;for(const ask of cfg.hostAsks){
+ const id=`req_fake_host_${++n}`,use=`toolu_fake_host_${n}`;
+ say({type:'control_request',request_id:id,request:{subtype:'can_use_tool',tool_name:ask.tool_name,input:ask.input,permission_suggestions:[],tool_use_id:use,description:`Allow ${ask.tool_name}?`}});
+ let reply=null;for(;;){const line=await nextLine();if(line===null)break;let row;try{row=JSON.parse(line);}catch{continue;}if(row.type==='control_response'&&row.response?.request_id===id){reply=row.response;break;}}
+ const allowed=reply?.subtype==='success'&&reply.response?.behavior==='allow';
+ fs.appendFileSync(path.join(path.dirname(process.argv[1]),'host-asks.jsonl'),JSON.stringify({tool_name:ask.tool_name,allowed,reply})+'\n');
+ if(!allowed)denials.push({tool_name:ask.tool_name,tool_use_id:use,tool_input:ask.input});
+}}
 if(mode==='relay'&&promptTool&&permissionMode!=='bypassPermissions'){
  const {spawn}=await import('node:child_process');const readline=await import('node:readline');
  const server=servers[promptTool.split('__')[1]];if(!server)throw new Error('The approval relay is not in --mcp-config.');
@@ -250,8 +329,7 @@ if(mode==='relay'&&promptTool&&permissionMode!=='bypassPermissions'){
 // blocked (fake.json): the question this turn ends on, as a model does when something it needed was refused.
 if(cfg.blocked){result.outcome='needs_input';result.question=cfg.blocked;result.choices=[];}
 if(heard.length&&typeof result.summary==='string')result.summary=`${result.summary} Also took in what you sent while it worked: ${heard.join(' | ')}`;
+// A message the turn took in is completed before the turn's result line.
+for(const uuid of folded.splice(0))lifecycle(uuid,'completed');
 console.log(JSON.stringify({type:'result',is_error:false,session_id:session,total_cost_usd:0,...(denials.length?{permission_denials:denials}:{}),structured_output:mode==='invalid'||badReply?{outcome:'nope'}:result}));
-// A stream-json run ends when its input does; one the runner never closes fails the test. A
-// user message that comes after the result, before the input closes, runs as one more turn of
-// the same run, as the real CLI runs a queued prompt after EOF, with a result line of its own.
-if(streaming){const timer=setTimeout(()=>{console.error('The input was never closed after the result.');process.exit(3);},10000);for(;;){const line=await nextLine();if(line===null)break;let row;try{row=JSON.parse(line);}catch{continue;}if(row.type==='user'&&typeof row.message?.content==='string'){const words=ownerWords(row.message.content);fs.appendFileSync(absorbedFile,JSON.stringify({content:row.message.content,mid:false})+'\n');console.log(JSON.stringify({type:'result',is_error:false,session_id:session,total_cost_usd:0,structured_output:{...result,summary:`Answered what you sent after the turn: ${words}`}}));}}clearTimeout(timer);}
+await afterResult();
