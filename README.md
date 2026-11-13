@@ -124,7 +124,8 @@ A schedule also runs while ELU is closed, through a login item, once ELU is
 installed (not run through `npx`). On macOS, while an agent works or a schedule is on, ELU
 stops the Mac from going to sleep on its own (`caffeinate -i`); the display can still
 sleep. Schedules show in the Sessions tab under Scheduled: `p` pauses one and `x` deletes
-it, each followed by Enter. A time is `in 30m`, `every 2h` (15 minutes to 7 days), `daily 9:00`, `weekdays 9am`,
+it, each followed by Enter. A time is `in 30m`, `every 2h` (15 minutes to 7 days),
+`daily 9:00`, `weekdays 9am`,
 `mon,thu 14:30`, `tomorrow 15:00` or `2026-12-01 9:00`, in this computer's local time.
 The model cannot make a schedule itself: asked to repeat work, it gives you the
 `/schedule` line to type.
@@ -338,7 +339,8 @@ or something only you can do. Its approvals wait on its own row in Sessions, and
 session's pane says so. Both agents show in the same pane, the devbox's as "Opus 5.5 on
 @devbox" and yours as "Opus 5.5 here", and the helper is also a session of its own in
 Sessions. Start a message with `@devbox` to write to the devbox session itself, and answer its
-question there the same way: `@devbox 1`. `y`, `n` and `a`, each followed by Enter, still answer its approvals. A
+question there the same way: `@devbox 1`. `y`, `n` and `a`, each followed by Enter, still
+answer its approvals. A
 teammate's session on the devbox, such as a handoff you accepted there, has no agent here:
 what you type goes to it. A message to a devbox session that names files or folders on the laptop asks
 "Send 14 files (2.1 MB) from this computer with this message?": y sends them along, n sends

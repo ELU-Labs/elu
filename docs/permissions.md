@@ -199,8 +199,8 @@ says by default means the default, as 600 does. A vendor that prints its answer 
 the end (Antigravity and Grok Build without the live relay) has the cap alone.
 
 The keys are `y` allow and `n` deny, each followed by Enter. Where the session can
-be given Full access there is a third, `f`: it asks what `/permissions full` asks, then allows the
-action and switches the session to Full access, so that session stops asking.
+be given Full access there is a third, `f`: it asks what `/permissions full` asks,
+then allows the action and switches the session to Full access, so that session stops asking.
 It is not offered for a bot's scheduled turn or a turn that runs read only.
 
 ### Network
@@ -304,7 +304,8 @@ A message that asks for a change to code or files, or for work that needs planni
 back as a Task before anything is edited: a title, a description, the goal, the objectives
 that say when it is done, a priority, a severity, the success criteria and the model's
 estimate of the work in minutes. You approve it with `y` then Enter, reject it
-with `n` then Enter, or change it with a message. This holds in every mode, Full access included, for
+with `n` then Enter, or change it with a message. This holds in every mode, Full access
+included, for
 the session's model and for a bot that works, such as `@lead`.
 
 ELU enforces this much, on every vendor:
