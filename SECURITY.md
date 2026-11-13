@@ -503,7 +503,9 @@ no policy.
 ## Credentials
 
 Agents do not receive cloud or GitHub credentials from ELU's inherited environment.
-Vendor authentication remains the vendor CLI's responsibility. ELU never signs you in.
+Vendor authentication remains the vendor CLI's responsibility. ELU never signs you in by
+itself: an account you add in the Usage tab (`a`) is signed in by the vendor's own command
+(`claude auth login`, `codex login`), which ELU runs in your terminal. It never signs you out.
 It never reads Claude Code's sign-in, in the macOS Keychain or in its credentials file, and
 it sends no request of its own with any vendor sign-in.
 
@@ -526,6 +528,15 @@ your PATH, including when you have it only for the check sandbox:
 
 Apart from `r`, a check asked for less than a minute after the last one is skipped.
 
+Before Antigravity or Grok Build has passed its one-time check, the Usage tab reads its
+sign-in the way the check does before its first step, and nothing more. For Grok Build it
+looks for `~/.grok/auth.json`, never opens it, and runs nothing. For Antigravity it runs
+`agy --version`, `agy --help` and `agy -p /usage --output-format json` under ELU's private
+Antigravity home, reads only the exit code, and starts no model turn; it does this when the
+tab opens and has not read that `agy` yet, when the tab's check is due, and on `r`.
+`usage.json` keeps the program's path, whether it is signed in and when that was read.
+`c` on either vendor's line runs its one-time check, the same check a first message runs.
+
 What is saved, in `~/.config/elu-code`, is usage reduced to numbers and times
 (`usage.json`), and the email and plan name of each account seen, with its last usage
 (`accounts.json`). The Usage tab takes the Claude email, plan name and rate limit tier from
@@ -537,6 +548,30 @@ default effort from the model catalog bundled in the installed `claude` program.
 only reads that file, never runs it for this, and makes no request. What it found, model
 names and effort levels only, is kept in `~/.config/elu-code/claude-catalog.json` by the
 program's path, size and modification time.
+
+### Several accounts
+
+Each Claude Code or Codex account you add in the Usage tab gets a folder of its own,
+`~/.config/elu-code/logins/<vendor>/<id>/.claude` (or `.codex`), which ELU gives the vendor
+as its home (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`) for each run on that account. The vendor
+keeps that account's sign-in there: Claude Code in `.credentials.json` on Linux and, on
+macOS, in a Keychain item named after the folder ("Claude Code-credentials-" and eight hex
+digits); Codex in `auth.json`. ELU never reads, copies or moves a sign-in, and your own
+sign-in stays where the vendor keeps it, as the first account. The rest of an account's
+folder is links to your own Claude Code or Codex home: settings, `CLAUDE.md`, memory and
+the sessions a later turn resumes, skills, agents, commands, plugins and hooks (for Codex:
+`config.toml`, `AGENTS.md`, skills, prompts, rules and sessions). So every account runs with
+the same setup, and only the sign-in differs. The MCP servers and memory a run gets come from
+your own home on every account.
+
+`logins.json` records which accounts were added and which one new runs use; it holds no
+email, token or path. Switching (Enter on an account) changes the account of the next run
+only: a run keeps the account it started on. When a run stops at an account's limit, the
+chat names that account and says to switch in Usage; ELU never switches by itself.
+Forgetting an account (`x`) deletes its folder after you confirm. It is not signed out, so
+nothing is revoked; on macOS its Keychain item stays until you delete it in Keychain Access.
+Accounts belong to the machine they were added on and are never sent to a teammate or to
+another of your machines.
 
 ## Checks and evidence
 

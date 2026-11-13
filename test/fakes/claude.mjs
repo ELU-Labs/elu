@@ -39,12 +39,27 @@ if(args[0]==='mcp'){
  }
  console.error('The fake knows mcp add-json and mcp remove only.');process.exit(1);
 }
-if(cfg.calls)fs.appendFileSync(cfg.calls, JSON.stringify({vendor,args,...(cfg.note?{tmp:process.env.CLAUDE_CODE_TMPDIR??null}:{})})+'\n');
+// accounts (fake.json): the account a run is on is the one .claude.json names in its config
+// folder, CLAUDE_CONFIG_DIR, as the real CLI reads it (HOME without it); a call records it and
+// what it sees there of the owner's settings and memory. accounts.loginAs: the account
+// `auth login` signs in, into that folder; none ends it as cancelled. accounts.limited: accounts
+// whose runs end as the real CLI ends one at its session limit. accounts.usage: per account,
+// the fractions of the windows a run reports.
+const home=process.env.CLAUDE_CONFIG_DIR??process.env.HOME??'';const readIn=name=>{try{return fs.readFileSync(path.join(home,name),'utf8');}catch{return null;}};
+let account=null;try{account=JSON.parse(readIn('.claude.json')).oauthAccount?.emailAddress??null;}catch{}
+const seen=()=>{const list=dir=>{try{return fs.readdirSync(path.join(home,dir)).sort();}catch{return null;}};const mcpAt=args.indexOf('--mcp-config');let mcp=null;try{const value=mcpAt>=0?args[mcpAt+1]:null;mcp=Object.keys(JSON.parse(value.trim().startsWith('{')?value:fs.readFileSync(value,'utf8')).mcpServers??{}).sort();}catch{}const memory=args.flatMap((arg,at)=>arg==='--add-dir'&&/memory$/.test(args[at+1]??'')?[args[at+1]]:[]).flatMap(dir=>{try{return fs.readdirSync(dir).sort().map(name=>`${name}:${fs.readFileSync(path.join(dir,name),'utf8')}`);}catch{return [];}});return {settings:readIn('settings.json'),claudeMd:readIn('CLAUDE.md'),skills:list('skills'),projects:list('projects'),mcp,memory};};
+if(cfg.calls)fs.appendFileSync(cfg.calls, JSON.stringify({vendor,args,...(cfg.note?{tmp:process.env.CLAUDE_CODE_TMPDIR??null}:{}),...(cfg.accounts&&args[0]!=='auth'&&!args.includes('--version')&&!args.includes('--help')?{account,config:process.env.CLAUDE_CONFIG_DIR??null,...seen()}:{})})+'\n');
 if(args.includes('--version')){console.log('2.1.319');process.exit(0);}
 // The --model entry of the real --help, which is where the aliases a bot's Model step offers come from.
 const MODEL_HELP="  --model <model>                       Model for the current session. Provide\n                                        an alias for the latest model (e.g.\n                                        'fable', 'opus', or 'sonnet') or a\n                                        model's full name.\n  -n, --name <name>                     Set a display name for this session";
 if(args.includes('--help')){console.log('--print --add-dir --restricted --safe-mode --setting-sources --settings --strict-mcp-config --mcp-config --no-chrome --permission-mode --permission-prompts --tools --allowedTools --disallowedTools --output-format --verbose --json-schema --max-budget-usd --session-id --input-format --ignore-user-config --ignore-rules --json --sandbox --cd --output-schema --config');console.log(MODEL_HELP);process.exit(0);}
-if(args[0]==='auth'){console.log(JSON.stringify({loggedIn:mode!=='signed-out'}));process.exit(0);}
+if(args[0]==='auth'&&args[1]==='login'){
+ const as=cfg.accounts?.loginAs;if(!as){console.error('Login cancelled.');process.exit(1);}
+ fs.mkdirSync(home,{recursive:true});fs.writeFileSync(path.join(home,'.claude.json'),JSON.stringify({oauthAccount:{accountUuid:'uuid-never-shown',emailAddress:as,organizationName:'Example',planDisplayName:cfg.accounts.plan??'Pro'}}),{mode:0o600});
+ fs.writeFileSync(path.join(home,'.credentials.json'),JSON.stringify({claudeAiOauth:{accessToken:'access-never-shown',refreshToken:'refresh-never-shown'}}),{mode:0o600});
+ console.log('Login successful.');process.exit(0);
+}
+if(args[0]==='auth'){console.log(JSON.stringify({loggedIn:mode!=='signed-out'&&(!cfg.accounts||Boolean(account))}));process.exit(0);}
 // --input-format stream-json: the prompt is the first line, a user message, and the input stays
 // open for the answers to this run's control requests until the runner closes it.
 const streaming=args.includes('--input-format')&&args[args.indexOf('--input-format')+1]==='stream-json';
@@ -54,6 +69,8 @@ let input='';
 if(streaming){const reader=readline.createInterface({input:process.stdin});reader.on('line',line=>{if(waiters.length)waiters.shift()(line);else lines.push(line);});reader.on('close',()=>{inputEnded=true;while(waiters.length)waiters.shift()(null);});const first=JSON.parse(await nextLine()??'{}');if(first.type!=='user'||typeof first.message?.content!=='string')throw new Error('The first stream-json line is not a user message.');input=first.message.content;}
 else for await (const chunk of process.stdin) input+=chunk;
 if(cfg.inputs)fs.appendFileSync(cfg.inputs, JSON.stringify({vendor,args,input})+'\n');
+// accounts.hold (fake.json): while that file is there, a run waits before it answers.
+if(cfg.accounts?.hold)while(fs.existsSync(cfg.accounts.hold))await new Promise(resolve=>setTimeout(resolve,20));
 const result={outcome:'done',summary:'Updated coupon normalization.',question:null,choices:[],comments:[],responses:[]};
 const schemaArg=args.indexOf('--json-schema');
 const schema=schemaArg>=0?JSON.parse(args[schemaArg+1]):null;
@@ -125,7 +142,9 @@ if(cfg.calls&&servers['elu-code-approval'])fs.appendFileSync(path.join(path.dirn
 const permissionMode=args.includes('--permission-mode')?args[args.indexOf('--permission-mode')+1]:'default';
 // permissionMode (fake.json): the mode this run says it really got, when that is not the one it was started with.
 console.log(JSON.stringify({type:'system',subtype:'init',session_id:session,model:reported,permissionMode:cfg.permissionMode??permissionMode,mcp_servers:mcp}));
-console.log(JSON.stringify({type:'rate_limit_event',rate_limit_info:{unifiedWindows:{five_hour:{utilization:0.36,resetsAt:Math.floor(Date.now()/1000)+10800},seven_day:{utilization:0.71,resetsAt:Math.floor(Date.now()/1000)+604800}}}}));
+if(cfg.accounts?.limited?.includes(account)){console.log(JSON.stringify({type:'result',subtype:'success',is_error:true,duration_ms:90,num_turns:1,result:"You've hit your session limit · resets 5pm",session_id:session,total_cost_usd:nothingSpent}));process.exit(1);}
+const used=cfg.accounts?.usage?.[account]??{fiveHour:0.36,weekly:0.71};
+console.log(JSON.stringify({type:'rate_limit_event',rate_limit_info:{unifiedWindows:{five_hour:{utilization:used.fiveHour,resetsAt:Math.floor(Date.now()/1000)+10800},seven_day:{utilization:used.weekly,resetsAt:Math.floor(Date.now()/1000)+604800}}}}));
 console.error('A harmless diagnostic on stderr.');
 // relay: like the real CLI, a tool call the permission mode would prompt for goes to the
 // --permission-prompt-tool server from --mcp-config: initialize, tools/list, then approve for a
