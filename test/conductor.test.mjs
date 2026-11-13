@@ -9,9 +9,13 @@ import { projectSnapshot, registerProject } from '../lib/projects.mjs';
 import { saveTask } from '../lib/state.mjs';
 import { pendingRequests, removeRequest, updateRequest, takeRequest } from '../lib/workspace.mjs';
 import { Conductor, enqueue, sendCommand, saveConductorSettings, conductorStatus, conductorNote, conductorRunning, conductorAlive, olderConductor, retryRequest, VERSION } from '../lib/conductor.mjs';
-// The conductor of 0.1.16 as published, which has no handover, on today's modules.
+// The conductors of 0.1.16 and 0.1.17 as published, which have no handover, and of 0.1.19, which
+// has; each on today's modules.
 import * as earlier from './fixtures/conductor-0.1.16/conductor.mjs';
+import * as earlier17 from './fixtures/conductor-0.1.17/conductor.mjs';
+import * as published19 from './fixtures/conductor-0.1.19/conductor.mjs';
 import { pendingRequests as earlierRequests, saveRequest as earlierSave } from './fixtures/conductor-0.1.16/workspace.mjs';
+import * as conductorFiles from '../lib/conductor-files.mjs';
 import { boardRows, barCells, rowCard } from '../lib/board.mjs';
 import { saveSchedule, runScheduleNow, parseWhen } from '../lib/schedules.mjs';
 import { saveBot } from '../lib/bots.mjs';
@@ -348,6 +352,244 @@ test('work 0.1.16 queued before the update waits for the new version, which coun
   assert.equal(old.claims, 1, 'the old conductor never started it');
   assert.equal(fresh.beside, false);
   assert.deepEqual(texts(p.repo, request(p.root, backlog.id).taskId), ['Queued before the update']);
+});
+
+// What each conductor started: started lists the requests it began, in order, so a request
+// that runs twice, or on the wrong version, shows.
+function counting(conductor, started) {
+  const launch = conductor.launch.bind(conductor);
+  conductor.launch = (repo, row) => { const value = launch(repo, row); if ([...conductor.runs.values()].some(run => run.requestId === row.id)) started.push(row.id); return value; };
+  return conductor;
+}
+// A conductor of a published version (test/fixtures). updated(to) replaces the files under it
+// with another version, read at once instead of after 5 s.
+function published(t, { module = earlier, version = '0.1.16', tickMs = 20, next } = {}) {
+  const box = { started: [], exits: 0, disk: version };
+  const conductor = counting(new module.Conductor({ tickMs, version, onDisk: () => box.disk, onExit: () => { box.exits++; conductor.stop(); }, ...(next ? { next } : {}) }), box.started);
+  conductor.start(); LIVE.get(t).push(conductor);
+  return Object.assign(box, { conductor, updated(to = '0.1.99') { box.disk = to; conductor.versionAt = 0; } });
+}
+// This version's conductor, with what it started. disk is the version on disk it reads.
+function current(t, { disk = VERSION, ...options } = {}) {
+  const box = { started: [], disk };
+  const conductor = counting(new Conductor({ tickMs: 20, onDisk: () => box.disk, ...options }), box.started);
+  conductor.start(); LIVE.get(t).push(conductor);
+  return Object.assign(box, { conductor, updated(to) { box.disk = to; conductor.versionAt = 0; } });
+}
+// A downgrade: the copy on disk is an earlier version now, under every process still running.
+function downgrade(t, version) {
+  const installed = conductorFiles.installed; if (!installed) return;
+  const before = installed.version; installed.version = () => version; t.after(() => { installed.version = before; });
+}
+// A conductor that exits at once, between two of its ticks, as a process does that ends.
+function exitNow(conductor) { conductor.closed = true; clearInterval(conductor.timer); conductor.write(true); conductor.release(); conductor.release = null; }
+const sessions = (repo, goal) => projectSnapshot(repo).tasks.filter(row => row.goal === goal).length;
+const besideFiles = () => fs.readdirSync(path.join(personalDirectory(), 'requests')).filter(name => name.endsWith('.beside.json'));
+
+// The moment between the exit of a conductor without handover and promote(), when the lock is
+// free: an app of that version still open can start a conductor of its own then, whose
+// recover() takes every request starting or running in the main file for interrupted.
+for (const [name, module] of [['0.1.16', earlier], ['0.1.17', earlier17]]) {
+  test(`a ${name} conductor that starts before promote() takes nothing the conductor beside it starts or runs: nothing is marked interrupted, nothing runs twice`, async t => {
+    const p = setup(t, 'slow'), first = enqueue(p.root, 'The old turn'), old = published(t, { module, version: name });
+    await until(() => request(p.root, first.id)?.state === 'running', 'the old turn');
+    old.updated();
+    // The conductor beside it ticks only when the test says, so that moment lasts as long as needed.
+    const fresh = current(t, { tickMs: 3600000 });
+    assert.equal(fresh.conductor.beside, true);
+    const beside = enqueue(p.root, 'Runs beside'); fresh.conductor.tick();
+    assert.deepEqual(fresh.started, [beside.id]);
+    const id = request(p.root, beside.id).taskId;
+    await until(() => task(p.repo, id)?.activeRole === 'lead', 'the turn beside');
+    // The old turn ends, and its conductor exits.
+    sendCommand({ type: 'stop', root: p.root, taskId: request(p.root, first.id).taskId });
+    await until(() => old.exits > 0 && !fs.existsSync(conductorFiles.conductorLock()), 'the old conductor to exit');
+    const again = published(t, { module, version: name });
+    assert.deepEqual([request(p.root, beside.id).state, request(p.root, beside.id).taskId], ['running', id], 'its recover() left the turn beside alone');
+    assert.equal(task(p.repo, id).state, 'running');
+    // While that one holds the lock, the conductor beside starts one more. In the middle of
+    // starting it, that one exits and another of its version starts.
+    const next = enqueue(p.root, 'Starts beside');
+    const make = fresh.conductor.controller.bind(fresh.conductor); let third = null;
+    fresh.conductor.controller = repo => { if (!third) { exitNow(again.conductor); third = published(t, { module, version: name }); } return make(repo); };
+    fresh.conductor.tick();
+    assert.ok(third, 'the other conductor started while it was starting');
+    assert.deepEqual(third.started, [], 'it did not start it again');
+    assert.deepEqual(fresh.started, [beside.id, next.id]);
+    assert.deepEqual([again.started, old.started], [[], [first.id]]);
+    await until(() => task(p.repo, request(p.root, next.id).taskId)?.activeRole === 'lead', 'the second turn beside');
+    assert.equal(sessions(p.repo, 'Starts beside'), 1, 'it runs once');
+    assert.equal(request(p.root, beside.id).state, 'running');
+  });
+}
+
+test('a conductor of this version started in that moment leaves the lock to the one beside, and nothing of its runs is marked interrupted', async t => {
+  const p = setup(t, 'slow'), first = enqueue(p.root, 'The old turn'), old = published(t);
+  await until(() => request(p.root, first.id)?.state === 'running', 'the old turn');
+  old.updated();
+  const fresh = current(t, { tickMs: 3600000 });
+  const beside = enqueue(p.root, 'Runs beside'); fresh.conductor.tick();
+  const id = request(p.root, beside.id).taskId;
+  await until(() => task(p.repo, id)?.activeRole === 'lead', 'the turn beside');
+  sendCommand({ type: 'stop', root: p.root, taskId: request(p.root, first.id).taskId });
+  await until(() => old.exits > 0 && !fs.existsSync(conductorFiles.conductorLock()), 'the old conductor to exit');
+  // An app of 0.1.16 still open starts the conductor on disk, which is this version.
+  const other = counting(new Conductor({ tickMs: 20 }), []); let refused = null;
+  try { other.start(); LIVE.get(t).push(other); } catch (error) { refused = error; }
+  assert.deepEqual([request(p.root, beside.id).state, request(p.root, beside.id).taskId], ['running', id], 'nothing marked the turn beside interrupted');
+  assert.match(refused?.message ?? 'it started', /already runs/);
+  // Nor does this version's recover(), whatever runs it then.
+  new Conductor().recover();
+  assert.deepEqual([request(p.root, beside.id).state, task(p.repo, id).state], ['running', 'running']);
+  fresh.conductor.tick();
+  assert.equal(fresh.conductor.beside, false, 'the conductor beside took the lock');
+  assert.equal(conductorAlive(), true);
+  assert.deepEqual(fresh.started, [beside.id]);
+});
+
+// An app of 0.1.16 still open after the update writes what it sends into the main file, where
+// the 0.1.16 conductor finishing its turn would start it on its next tick.
+test('what an app of 0.1.16 still open sends is moved where that conductor never reads at once, and runs once on the new version', async t => {
+  const p = setup(t, 'slow'), first = enqueue(p.root, 'The old turn');
+  // Both conductors tick only when the test says, so only a change of the request file moves them.
+  const old = published(t, { tickMs: 3600000 });
+  await until(() => request(p.root, first.id)?.state === 'running', 'the old turn');
+  const oldTask = request(p.root, first.id).taskId;
+  old.updated();
+  const fresh = current(t, { tickMs: 3600000 });
+  const sent = earlier.enqueue(p.root, 'From the old app'), more = earlier.enqueue(p.root, 'And more from the old app', { continuationTaskId: oldTask });
+  await until(() => !earlierRequests(p.root).some(row => row.state === 'queued'), 'the new version to move them, before either conductor ticks', 3000);
+  old.conductor.tick();
+  assert.deepEqual(old.started, [first.id], 'the old conductor found nothing to start');
+  fresh.conductor.tick();
+  assert.deepEqual(fresh.started, [sent.id]);
+  await until(() => task(p.repo, request(p.root, sent.id).taskId)?.activeRole === 'lead', 'the new session');
+  // The old turn ends: the follow-up goes to the new version once that conductor has exited.
+  for (const value of [old, fresh]) { value.conductor.timer = setInterval(() => value.conductor.tick(), 20); }
+  sendCommand({ type: 'stop', root: p.root, taskId: oldTask });
+  await until(() => fresh.started.includes(more.id), 'the follow-up on the new version');
+  assert.deepEqual(old.started, [first.id]);
+  await until(() => texts(p.repo, oldTask).length === 2, 'the follow-up to be sent');
+  assert.deepEqual(texts(p.repo, oldTask), ['The old turn', 'And more from the old app']);
+  assert.deepEqual([sessions(p.repo, 'From the old app'), fresh.started.filter(id => id === sent.id).length], [1, 1], 'once');
+});
+
+// A downgrade: the copy on disk is a version without handover again, while processes of this
+// version still run. That version never reads the file beside the main one.
+for (const [name, module] of [['0.1.16', earlier], ['0.1.17', earlier17]]) {
+  test(`after a downgrade to ${name}, what an app of this version still open sends goes where ${name} reads it, and runs once there`, async t => {
+    const p = setup(t), old = published(t, { module, version: name });
+    await until(() => olderConductor() !== null, 'the conductor to write its status');
+    downgrade(t, name);
+    const sent = enqueue(p.root, 'Sent after the downgrade');
+    assert.ok(earlierRequests(p.root).some(row => row.id === sent.id), `${name} reads it`);
+    await until(() => request(p.root, sent.id)?.state === 'done', 'the request');
+    assert.deepEqual(old.started, [sent.id]);
+    assert.deepEqual(besideFiles(), []);
+  });
+
+  test(`a downgrade to ${name} while this version runs a turn: ${name} takes new work, never marks that turn interrupted, and runs its follow-up once after it`, async t => {
+    const p = setup(t, 'slow'), first = enqueue(p.root, 'Runs on this version'); let after = null;
+    const now = current(t, { next: () => { after ??= published(t, { module, version: name }); } });
+    await until(() => request(p.root, first.id)?.state === 'running', 'the turn');
+    const id = request(p.root, first.id).taskId;
+    await until(() => task(p.repo, id)?.activeRole === 'lead', 'the model working');
+    downgrade(t, name); now.updated(name);
+    const more = sayTo(p, id, 'And the follow-up'), other = enqueue(p.root, 'New work');
+    await until(() => after?.started.includes(other.id), `${name} to take the new work`);
+    assert.deepEqual([request(p.root, first.id).state, request(p.root, first.id).taskId, task(p.repo, id).state], ['running', id, 'running'], 'its recover() left the turn alone');
+    await pause(300);
+    assert.equal(request(p.root, more.id).state, 'queued', 'the follow-up waits for the turn');
+    assert.deepEqual(after.started, [other.id]);
+    sendCommand({ type: 'stop', root: p.root, taskId: id });
+    await until(() => after.started.includes(more.id), `the follow-up on ${name}`);
+    await until(() => texts(p.repo, id).length === 2, 'the follow-up to be sent');
+    assert.deepEqual(texts(p.repo, id), ['Runs on this version', 'And the follow-up']);
+    assert.deepEqual(now.started, [first.id]);
+    assert.equal(sessions(p.repo, 'New work'), 1);
+  });
+}
+
+test('a downgrade while the conductor beside 0.1.16 holds work: that work goes back where 0.1.16 reads it and runs once there, and the turn beside is never marked interrupted', async t => {
+  const p = setup(t, 'slow'); saveConductorSettings({ maxAgents: 2 });
+  const first = enqueue(p.root, 'The old turn'), old = published(t);
+  await until(() => request(p.root, first.id)?.state === 'running', 'the old turn');
+  old.updated();
+  const fresh = current(t, { next: () => {} });
+  const beside = enqueue(p.root, 'Runs beside'), held = enqueue(p.root, 'Waits beside');
+  await until(() => fresh.started.includes(beside.id), 'the turn beside');
+  const id = request(p.root, beside.id).taskId;
+  await pause(300);
+  assert.deepEqual([request(p.root, held.id).state, old.started], ['queued', [first.id]], 'two sessions at once, and 0.1.16 does not read it');
+  // Back to 0.1.16 under both: the 0.1.16 conductor is the version on disk again, so it stays.
+  downgrade(t, '0.1.16'); old.updated('0.1.16'); fresh.updated('0.1.16');
+  await until(() => old.started.includes(held.id), 'the held request on 0.1.16');
+  assert.deepEqual(fresh.started, [beside.id]);
+  // The 0.1.16 conductor stops and another starts, as one does on 0.1.16.
+  await old.conductor.stop();
+  const again = published(t);
+  assert.deepEqual([request(p.root, beside.id).state, request(p.root, beside.id).taskId, task(p.repo, id).state], ['running', id, 'running'], 'its recover() left the turn beside alone');
+  sendCommand({ type: 'stop', root: p.root, taskId: id });
+  await until(() => request(p.root, beside.id)?.state === 'done', 'the turn beside to finish');
+  assert.deepEqual([sessions(p.repo, 'Waits beside'), sessions(p.repo, 'Runs beside'), again.started.length], [1, 1, 0]);
+});
+
+// 0.1.18 and 0.1.19 hand over too, and read the file beside the main one.
+test('a downgrade to 0.1.19 while this version runs a turn: 0.1.19 takes new work and leaves that turn to finish here', async t => {
+  const p = setup(t, 'slow'), first = enqueue(p.root, 'Runs on this version'); let after = null;
+  const now = current(t, { next: () => { after ??= published(t, { module: published19, version: '0.1.19', next: () => {} }); } });
+  await until(() => request(p.root, first.id)?.state === 'running', 'the turn');
+  const id = request(p.root, first.id).taskId;
+  await until(() => task(p.repo, id)?.activeRole === 'lead', 'the model working');
+  downgrade(t, '0.1.19'); now.updated('0.1.19');
+  const more = sayTo(p, id, 'And the follow-up'), other = enqueue(p.root, 'New work');
+  await until(() => after?.started.includes(other.id), '0.1.19 to take the new work');
+  assert.deepEqual([request(p.root, first.id).state, task(p.repo, id).state], ['running', 'running']);
+  await pause(300);
+  assert.equal(request(p.root, more.id).state, 'queued');
+  sendCommand({ type: 'stop', root: p.root, taskId: id });
+  await until(() => after.started.includes(more.id), 'the follow-up on 0.1.19');
+  await until(() => texts(p.repo, id).length === 2, 'the follow-up to be sent');
+  assert.deepEqual([now.started, after.started], [[first.id], [other.id, more.id]]);
+});
+
+test('after the first update from 0.1.16, a 0.1.19 conductor started beside it later still takes nothing twice', async t => {
+  const p = setup(t, 'slow'), first = enqueue(p.root, 'The old turn'), old = published(t);
+  await until(() => request(p.root, first.id)?.state === 'running', 'the old turn');
+  old.updated();
+  const fresh = current(t, { next: () => {} });
+  const beside = enqueue(p.root, 'Runs beside');
+  await until(() => fresh.started.includes(beside.id), 'the turn beside');
+  const id = request(p.root, beside.id).taskId;
+  // A downgrade to 0.1.19: the conductor beside hands over, and 0.1.19's starts beside 0.1.16.
+  downgrade(t, '0.1.19'); fresh.updated('0.1.19');
+  await until(() => fresh.conductor.draining, 'the conductor beside to hand over');
+  const later = published(t, { module: published19, version: '0.1.19', next: () => {} });
+  assert.equal(later.conductor.beside, true);
+  const sent = enqueue(p.root, 'Sent after the downgrade');
+  await until(() => later.started.includes(sent.id), '0.1.19 to take it');
+  sendCommand({ type: 'stop', root: p.root, taskId: request(p.root, first.id).taskId });
+  await until(() => old.exits > 0 && !later.conductor.beside, '0.1.19 to take the lock');
+  assert.deepEqual([request(p.root, beside.id).state, task(p.repo, id).state], ['running', 'running'], 'nothing marked the turn beside interrupted');
+  assert.deepEqual([old.started, fresh.started, later.started], [[first.id], [beside.id], [sent.id]]);
+});
+
+test('elu conductor stop beside 0.1.16 leaves nothing queued where 0.1.16 never reads, so a downgrade after it starts that work once', async t => {
+  const p = setup(t, 'slow'), first = enqueue(p.root, 'The old turn'), old = published(t);
+  await until(() => request(p.root, first.id)?.state === 'running', 'the old turn');
+  old.updated();
+  const fresh = current(t, { next: () => {} });
+  const held = enqueue(p.root, 'Queued beside'); saveConductorSettings({ maxAgents: 1 });
+  await pause(300);
+  assert.equal(request(p.root, held.id).state, 'queued');
+  // Every conductor stops, and 0.1.16 is installed again before any other starts.
+  sendCommand({ type: 'shutdown' });
+  await until(() => old.conductor.closed && fresh.conductor.closed, 'both to stop');
+  downgrade(t, '0.1.16');
+  saveConductorSettings({ maxAgents: 4 });
+  const again = published(t);
+  await until(() => again.started.includes(held.id), '0.1.16 to start what waited');
+  assert.equal(sessions(p.repo, 'Queued beside'), 1);
 });
 
 test('the agent limit and priority decide what starts, and stop frees the slot', async t => {
