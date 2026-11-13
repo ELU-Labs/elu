@@ -1368,7 +1368,7 @@ test('a local /a2a task keeps the client context and answers GetTask after the c
     saveDefaultMode('full');
     const sent = daemon.localCall('SendMessage', { message: msg({ contextId: 'ctx-1' }), metadata: { project: 'app' } }, local);
     assert.equal(sent.contextId, 'ctx-1');
-    assert.equal(pendingRequests(root).find(row => row.id === sent.id).permissions, 'auto', 'an owner request from another machine runs the default, capped at Approve for me');
+    assert.equal(pendingRequests(root).find(row => row.id === sent.id).permissions, 'full', 'the owner\'s own request runs his default mode as it is, Full access included');
     assert.throws(() => daemon.localCall('SendMessage', { message: msg({ taskId: sent.id }), metadata: { project: 'app' } }, local), error => error.details.rpc.code === ErrorCode.UNSUPPORTED_OPERATION);
     assert.throws(() => daemon.localCall('SendMessage', { message: msg({ contextId: 'a b' }), metadata: { project: 'app' } }, local), error => error.details.rpc.code === ErrorCode.INVALID_PARAMS);
     const repo = repository(root);

@@ -70,9 +70,14 @@ test('argv per profile is a fixed snapshot; settings and the hook are written pe
     assert.ok(privateHome.startsWith(`${path.join(personal, 'agy-home')}${path.sep}`), privateHome);
     assert.equal(fs.statSync(privateHome).mode & 0o777, 0o700); assert.equal(fs.statSync(path.join(privateHome, '.gemini', 'antigravity-cli', 'settings.json')).mode & 0o777, 0o600);
     const settings = settingsOf(mode, cwd), hooks = hooksOf(mode, cwd).hooks.PreToolUse; written[mode] = settings;
-    assert.deepEqual(settings.trustedWorkspaces, [cwd]); assert.equal(settings.disableSlashCommands, true);
-    assert.equal(hooks.length, 1); assert.equal(hooks[0].matcher, MATCHERS[mode]);
-    assert.equal(hooks[0].hooks[0].type, 'command'); assert.ok(hooks[0].hooks[0].command.includes(HOOK) && hooks[0].hooks[0].command.endsWith(`--profile ${mode}`), hooks[0].hooks[0].command);
+    assert.deepEqual(settings.trustedWorkspaces, [cwd]);
+    // Full access is everything: slash commands stay on and no hook of ELU's is installed.
+    if (mode === 'full') { assert.equal('disableSlashCommands' in settings, false); assert.deepEqual(hooks, []); assert.equal(MATCHERS.full, undefined); }
+    else {
+      assert.equal(settings.disableSlashCommands, true);
+      assert.equal(hooks.length, 1); assert.equal(hooks[0].matcher, MATCHERS[mode]);
+      assert.equal(hooks[0].hooks[0].type, 'command'); assert.ok(hooks[0].hooks[0].command.includes(HOOK) && hooks[0].hooks[0].command.endsWith(`--profile ${mode}`), hooks[0].hooks[0].command);
+    }
     const env = agy.childEnv({ mode, cwd });
     assert.equal(env.HOME, privateHome); assert.equal(env.AGY_CLI_DISABLE_AUTO_UPDATE, 'true');
     assert.equal(agentEnv({ PATH: '/bin' }, agy.meta.envKeys, env).HOME, privateHome, 'the override passes the personal-directory rule');

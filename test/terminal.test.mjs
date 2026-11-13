@@ -2621,11 +2621,23 @@ test('the New session form picks Permissions, Where and Folders, and the session
   const confirm = dialogText(v, 'Full access');
   assert.match(confirm.replace(/\s+/g, ' '), /Full access: the model changes any file, runs any command and uses the internet without asking\./);
   // Full access runs them too, and the question says so plainly.
-  assert.match(confirm.replace(/\s+/g, ' '), /That includes push, tags, merges, publishing and deploys\./); assert.doesNotMatch(confirm, /stay blocked|refused by name/); assert.match(confirm, /Use it\? y\/N/);
+  assert.match(confirm.replace(/\s+/g, ' '), /That includes push, tags, merges, publishing and deploys\. It reads your secret files and sign-ins, and gets your whole environment\./); assert.doesNotMatch(confirm, /stay blocked|refused by name/); assert.match(confirm, /Use it\? y\/N/);
   await dialog(v, 'Full access', 'n'); await until(() => !modal(v, 'Full access'), 'declined');
   assert.match(text(), /Permissions {2}Ask for approval/);
   pickRow(list, /Permissions/); v.input.write('\r'); await until(() => modal(v, 'Permissions'), 'picker again'); v.input.write('3'); await dialog(v, 'Full access', 'y');
   await until(() => /Full access for this session\./.test(status()) && /Permissions {2}Full access/.test(text()), 'full');
+  // Full access takes a folder the other modes keep closed. It leaves the form with Full
+  // access, and Ask for approval refuses it.
+  fs.mkdirSync(path.join(home, '.ssh'), { recursive: true });
+  await send(v, '/permissions folders add ~/.ssh'); await until(() => /The model reads ~\/\.ssh this session\./.test(status()) && /Folders {6}~\/\.ssh/.test(text()), 'Full access takes ~/.ssh');
+  pickRow(list, /Folders/); v.input.write('\r'); await until(() => modal(v, 'Folders'), 'the folders dialog');
+  assert.match(dialogText(v, 'Folders'), /Any folder the model may read this session\./); v.input.write('\x1b'); await until(() => !modal(v, 'Folders'), 'closed');
+  await send(v, '/permissions ask'); await until(() => /Ask for approval for this session\./.test(status()) && /Folders {6}none/.test(text()), 'the folder went with Full access');
+  await send(v, '/permissions folders add ~/.ssh'); await until(() => /That folder holds secrets or ELU state\./.test(status()), 'Ask for approval refuses it');
+  assert.match(text(), /Folders {6}none/);
+  pickRow(list, /Folders/); v.input.write('\r'); await until(() => modal(v, 'Folders'), 'the folders dialog');
+  assert.match(dialogText(v, 'Folders'), /A folder in your home the model may read this session\./); v.input.write('\x1b'); await until(() => !modal(v, 'Folders'), 'closed');
+  await send(v, '/permissions full'); await dialog(v, 'Full access', 'y'); await until(() => /Full access for this session\./.test(status()) && /Permissions {2}Full access/.test(text()), 'full again');
   pickRow(list, /Runs in/); v.input.write('\r'); await until(() => modal(v, 'Runs in'), 'where');
   const where = dialogText(v, 'Runs in');
   assert.match(where, /1 {2}New worktree {7}A copy of this repo on a new branch, feat\/task-N\./);
@@ -3019,7 +3031,7 @@ test('a beside y and n keeps the rule for this project and allows what it covers
   assert.equal(listEntries().every(row => row.on), true);
 });
 
-test('what Full access itself asks stays with the owner: a turn that started in it, a removal, an MCP tool', { timeout: 40000 }, async t => {
+test('a turn that started in Full access shows what its vendor asks; one switched to it is allowed everything, a removal and an MCP tool included', { timeout: 40000 }, async t => {
   const p = setup(t), v = await view(t, { repo: p.repo }), panels = v.current.panels, status = () => panels.status.getText().replace(/\s+/g, ' '), chat = () => panels.chat.getText();
   const answer = id => { const file = path.join(approvalsDir(), `${id}.answer.json`); return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')).decision : null; };
   const wants = (id, taskId, command, tool = 'Bash') => requestApproval({ id, root: p.root, taskId, role: 'lead', vendor: 'claude', tool, input: tool === 'Bash' ? { command } : {} });
@@ -3037,19 +3049,20 @@ test('what Full access itself asks stays with the owner: a turn that started in 
   await pause(); assert.equal(answer('run-3-a'), null); assert.equal(answer('run-3-b'), null);
   v.input.write('\x1b'); await until(() => v.current.screen.focused === panels.board, 'the list');
   v.input.write('n'); await until(() => answer('run-3-a') === 'deny', 'denied by hand'); v.input.write('y'); await until(() => answer('run-3-b') === 'allow', 'allowed by hand');
-  // A turn switched to Full access while it runs: the app allows what waits, except a removal and an MCP tool.
+  // A turn switched to Full access while it runs: the app allows everything that waits, a
+  // removal and an MCP tool included, and everything the turn asks next. Full access is everything.
   running('4', 'Tidy the build', 'ask');
   await openTask(v, /Tidy the bu/); await until(() => v.current.session === '4', 'the other session is open');
   wants('run-4-a', '4', 'ls build'); wants('run-4-b', '4', 'cd build && rm -rf old'); wants('run-4-c', '4', '', 'mcp__files__delete');
   await until(() => /Run: ls build\n/.test(chat()), 'they wait');
   await send(v, '/permissions full'); await dialog(v, 'Full access', 'y');
-  await until(() => /Allowed\. Full access\. This turn still asks before rm, rmdir and MCP tools\./.test(status()), 'said as it is');
-  assert.equal(answer('run-4-a'), 'allow'); await pause(); assert.equal(answer('run-4-b'), null); assert.equal(answer('run-4-c'), null);
+  await until(() => /Allowed\. Full access: this session no longer asks you\./.test(status()), 'said as it is');
+  assert.doesNotMatch(status(), /still asks/);
+  for (const id of ['run-4-a', 'run-4-b', 'run-4-c']) assert.equal(answer(id), 'allow', `${id}: nothing that waited is kept back`);
   wants('run-4-d', '4', 'npm test'); await until(() => answer('run-4-d') === 'allow', 'what it asks next is allowed');
   wants('run-4-e', '4', 'sudo rmdir /data/old'); wants('run-4-f', '4', `echo ${'x'.repeat(260)}`);
-  await pause(); assert.equal(answer('run-4-e'), null, 'a removal is the owner’s'); assert.equal(answer('run-4-f'), null, 'a command too long to read whole is the owner’s');
-  assert.match(chat(), /Run: cd build && rm -rf old\nEsc, then y allow · n deny · esc later/);
-  for (const id of ['run-4-b', 'run-4-c', 'run-4-e', 'run-4-f']) answerApproval(id, 'deny');
+  await until(() => answer('run-4-e') === 'allow' && answer('run-4-f') === 'allow', 'a removal and a long command are allowed with the rest');
+  assert.doesNotMatch(chat(), /Run: cd build && rm -rf old\nEsc, then y allow/);
 });
 
 test('/publish in a session whose turn runs says to wait for the reply, never the lock line', { timeout: 20000 }, async t => {
@@ -3287,12 +3300,12 @@ test('a new approval rings the terminal bell once', { timeout: 20000 }, async t 
 });
 
 test('a teammate message is approved as your own session, worked on in a mode picked now, or declined; y is preselected', { timeout: 40000 }, async t => {
-  const p = setup(t), home = path.join(p.parent, 'home'), evals = path.join(home, 'evals'); fs.mkdirSync(evals, { recursive: true });
+  const p = setup(t), home = path.join(p.parent, 'home'), evals = path.join(home, 'evals'), keys = path.join(home, '.ssh'); fs.mkdirSync(evals, { recursive: true }); fs.mkdirSync(keys); fs.writeFileSync(path.join(keys, 'config'), '');
   environment(t, { HOME: fs.realpathSync(home) });
   const token = letter => `ghp_${letter.repeat(24)}`;
   const items = [
     { id: 'in-1', kind: 'incoming', peer: KEYS.sara, name: 'sara', project: 'app', text: `Where are the fixtures? ${token('a')} opens them, under ${evals}`, at: ago(1), state: 'submitted', threadId: 'th-1', request: 'ask' },
-    { id: 'in-2', kind: 'incoming', peer: KEYS.li, name: 'li', project: 'app', text: `Run evals with ${token('b')} in ${evals}`, at: ago(2), state: 'submitted', threadId: 'th-2', request: 'handoff' },
+    { id: 'in-2', kind: 'incoming', peer: KEYS.li, name: 'li', project: 'app', text: `Run evals with ${token('b')} in ${evals}, keys in ${keys}/config`, at: ago(2), state: 'submitted', threadId: 'th-2', request: 'handoff' },
   ];
   const peer = fakePeer({ items, trusted: [KEYS.li] }), v = await view(t, { repo: p.repo, peer }), panels = v.current.panels, status = () => panels.status.getText();
   await wide(v);
@@ -3330,8 +3343,13 @@ test('a teammate message is approved as your own session, worked on in a mode pi
   assert.match(work, /Permissions {2}Ask for approval {6}1 to change/); assert.match(work, /Runs in {6}New worktree {10}2 to change/);
   assert.match(work, /Edits the session's files; asks you for the rest and the internet\./); assert.match(work, /A copy of this repo on a new branch\./); assert.match(work, /Other folders it may read\./); assert.doesNotMatch(work, /read-only/);
   assert.match(work, /Folders {6}~\/evals {2}from their message · 3 to change/);
+  // The message also names a file in ~/.ssh. Full access offers that folder too; a lower mode offers only what it may read.
+  v.input.write('1'); await until(() => modal(v, 'Permissions'), 'mode picker'); v.input.write('3'); await dialog(v, 'Full access', 'y');
+  await until(() => modal(v, 'Accept') && /Permissions {2}Full access/.test(dialogText(v, 'Accept')), 'Full access picked');
+  assert.match(dialogText(v, 'Accept'), /Folders {6}~\/evals ~\/\.ssh {2}from their message · 3 to change/);
   v.input.write('1'); await until(() => modal(v, 'Permissions'), 'mode picker'); v.input.write('2');
   await until(() => modal(v, 'Accept') && /Permissions {2}Approve for me/.test(dialogText(v, 'Accept')), 'mode picked');
+  assert.match(dialogText(v, 'Accept'), /Folders {6}~\/evals {2}from their message · 3 to change/, 'the secret folder left with Full access');
   v.input.write('\r');
   await until(() => peer.sent.some(c => c.type === 'work' && c.id === 'in-2'), 'w accepts the task');
   assert.deepEqual(peer.sent.find(c => c.type === 'work' && c.id === 'in-2'), { type: 'work', id: 'in-2', permissions: 'auto', place: { kind: 'worktree' }, folders: [fs.realpathSync(evals)], root: p.repo.root });

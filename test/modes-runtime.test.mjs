@@ -301,7 +301,7 @@ test('place here runs in the checkout itself with a dirty tree; checks keep the 
   assert.equal(fs.existsSync(path.join(f.controller.repo.worktrees, task.id)), false, 'no worktree');
   assert.ok(task.runs.filter(run => run.role === 'lead').every(run => run.permissions === 'full' && run.effectivePermissions === 'full'));
   const names = task.evidence.results.map(row => row.name);
-  assert.ok(names.includes('secret-paths') && names.includes('no-deleted-tests'));
+  assert.ok(!names.includes('secret-paths') && names.includes('no-deleted-tests'));
   for (const name of ['changed-lines', 'protected-paths', 'unchanged-scripts', 'no-dependency-changes']) assert.equal(names.includes(name), false, `${name} is skipped in full`);
   const sandboxed = f.calls().filter(call => call.vendor === 'codex' && call.args[0] === 'sandbox' && call.args.includes('--'));
   assert.ok(sandboxed.length >= 1, 'the checks ran in the sandbox');
@@ -311,7 +311,7 @@ test('place here runs in the checkout itself with a dirty tree; checks keep the 
   assert.equal(git(f.root, ['rev-parse', 'HEAD']), head);
 });
 
-test('full skips the cap and the protected paths but a secret path still blocks; auto allows a lockfile change', t => {
+test('full skips the cap, the protected paths and the secret paths; auto allows a lockfile change', t => {
   const dir = temp(t), root = path.join(dir, 'repo'); fs.mkdirSync(root);
   git(root, ['init', '--initial-branch=main']); git(root, ['config', 'user.name', 'T']); git(root, ['config', 'user.email', 't@example.invalid']);
   fs.mkdirSync(path.join(root, 'src')); fs.writeFileSync(path.join(root, 'src/a.mjs'), 'export const a = 1;\n');
@@ -330,7 +330,7 @@ test('full skips the cap and the protected paths but a secret path still blocks;
   assert.equal(auto['changed-lines'], 'failed'); assert.equal(auto['protected-paths'], 'passed', 'dependency files are not protected in auto'); assert.equal(auto['no-dependency-changes'], undefined); assert.equal(auto['unchanged-scripts'], 'passed');
   const full = status('full');
   assert.equal(full['changed-lines'], undefined); assert.equal(full['protected-paths'], undefined); assert.equal(full['unchanged-scripts'], undefined); assert.equal(full['no-dependency-changes'], undefined);
-  assert.equal(full['secret-paths'], 'failed'); assert.equal(full['no-deleted-tests'], 'passed'); assert.equal(full['declared-paths'], 'passed');
+  assert.equal(full['secret-paths'], undefined, 'Full access changes secret files too'); assert.equal(auto['secret-paths'], 'failed'); assert.equal(full['no-deleted-tests'], 'passed'); assert.equal(full['declared-paths'], 'passed');
   for (const file of ['package.json', 'package-lock.json', 'yarn.lock', 'pnpm-lock.yaml', 'Cargo.lock']) { assert.equal(protectedPath(file), true, file); assert.equal(protectedPath(file, { mode: 'ask' }), true); assert.equal(protectedPath(file, { mode: 'auto' }), false); assert.equal(protectedPath(file, { mode: 'full' }), false); }
   for (const file of ['.github/workflows/ci.yml', '.git/config', 'Makefile', 'tsconfig.json']) for (const mode of ['locked', 'ask', 'auto', 'full']) assert.equal(protectedPath(file, { mode }), true, `${file} in ${mode}`);
   const args = sandboxArgs({ cwd: root, scratch: path.join(dir, 'scratch'), program: 'node', helper: process.execPath, network: 'on' });
@@ -413,6 +413,42 @@ test('the role time limit waits while an approval is pending', async t => {
   assert.ok(task.runs.filter(run => run.role === 'lead').every(run => run.code === 0), 'the run was not killed while it waited');
   assert.ok(['ready', 'unverified'].includes(task.state), task.error?.message);
   assert.equal(pendingApprovals().length, 0);
+});
+
+test('a Full access run has the owner\'s whole environment: his SSH agent and his GitHub sign-in reach its commands; Ask for approval keeps the allow-list', async t => {
+  const f = setup(t, 'answer'), fakeFile = path.join(f.fake.dir, 'fake.json'), fake = JSON.parse(fs.readFileSync(fakeFile, 'utf8')), seen = path.join(f.parent, 'seen.txt');
+  // The owner's shell: an SSH agent, a GitHub token, and a key that would move Claude Code to another account.
+  environment(t, { SSH_AUTH_SOCK: '/run/user/1/agent.sock', GH_TOKEN: 'gh-owner', ANTHROPIC_API_KEY: 'sk-another-account' });
+  fs.writeFileSync(fakeFile, JSON.stringify({ ...fake, commands: [`printf '%s|%s|%s' "$SSH_AUTH_SOCK" "$GH_TOKEN" "$ANTHROPIC_API_KEY" > "${seen}"`] }));
+  for (const [mode, expected] of [['full', '/run/user/1/agent.sock|gh-owner|'], ['ask', '||']]) {
+    fs.rmSync(seen, { force: true });
+    const task = await f.controller.ask('What is here?', null, { permissions: mode }).finished;
+    assert.ok(['answered', 'needs_input', 'ready'].includes(task.state), task.error?.message);
+    assert.equal(fs.readFileSync(seen, 'utf8'), expected, `${mode}: what a command of the run sees`);
+    // npm reads the owner's own settings in Full access, and none of them below it.
+    assert.equal(settingsOf(f.leads().at(-1).args).env.npm_config_userconfig, mode === 'full' ? undefined : '/dev/null', mode);
+  }
+});
+
+test('a folder only Full access takes leaves the session when it leaves Full access; the folders the other modes take stay', async t => {
+  const f = setup(t, 'answer'), ssh = path.join(f.parent, '.ssh'); fs.mkdirSync(ssh);
+  const task = await f.controller.ask('What is here?', null, { permissions: 'full' }).finished, id = task.id, folders = () => readTask(f.controller.repo, id).folders;
+  f.controller.addFolder(id, ssh); f.controller.addFolder(id, f.work);
+  assert.deepEqual(folders(), [fs.realpathSync(ssh), fs.realpathSync(f.work)], 'Full access takes both');
+  assert.equal(f.controller.setPermissions(id, 'ask').permissions, 'ask');
+  assert.deepEqual(folders(), [fs.realpathSync(f.work)], 'the secret folder went with Full access');
+  assert.throws(() => f.controller.addFolder(id, ssh), /That folder holds secrets or ELU state\./, 'Ask for approval refuses it');
+  // Back in Full access nothing comes back by itself, and the folder can be named again.
+  f.controller.setPermissions(id, 'full'); assert.deepEqual(folders(), [fs.realpathSync(f.work)]);
+  assert.deepEqual(f.controller.addFolder(id, ssh).folders, [fs.realpathSync(f.work), fs.realpathSync(ssh)]);
+  // The next turn names both to the model; one in Approve for me names only the folder that mode takes.
+  await f.controller.ask('And now?', id).finished;
+  assert.deepEqual(f.leads().at(-1).args.filter((arg, at, all) => all[at - 1] === '--add-dir').filter(dir => [fs.realpathSync(ssh), fs.realpathSync(f.work)].includes(dir)).sort(), [fs.realpathSync(ssh), fs.realpathSync(f.work)].sort());
+  f.controller.setPermissions(id, 'auto'); assert.deepEqual(folders(), [fs.realpathSync(f.work)]);
+  // A session whose only folder was a Full access one has none left.
+  const other = await f.controller.ask('Another one', null, { permissions: 'full', folders: [ssh] }).finished;
+  assert.deepEqual(readTask(f.controller.repo, other.id).folders, [fs.realpathSync(ssh)]);
+  f.controller.setPermissions(other.id, 'ask'); assert.equal(readTask(f.controller.repo, other.id).folders, undefined);
 });
 
 test('a session reads the .npmrc its repository tracks in Full and in Ask; an untracked .env stays closed in Ask, and Full access denies nothing', async t => {

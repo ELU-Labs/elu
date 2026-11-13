@@ -143,6 +143,8 @@ and `/permissions default auto` sets what new sessions start with.
   On Grok Build, what its reviewer refuses then asks you.
 - **Full access** (`full`): any file, any command, the internet, with no sandbox. That
   includes push, tags, merges, publishing and deploys: the never list below does not apply.
+  Nothing of ELU's limits it: every tool the vendor has, your secret files and sign-ins,
+  your whole environment. [What stays, and why](docs/permissions.md#full-access).
 
 When the model asks, `y` allows and `n` denies; `f` allows and gives that session Full access.
 `a` allows and keeps a narrow rule, such as `npm test` or `git diff`, for this project or all
@@ -157,7 +159,7 @@ A new approval rings the terminal bell once.
 
 Bots that review, and a teammate's question, always run read only.
 `/permissions folders add <path>` lets the model read one more folder of your home this
-session.
+session; in Full access, any folder there is.
 
 On Claude Code, your own MCP servers (`claude mcp list`) are on for the model and for bots
 that work, and their tools run without asking in every mode. Neither the sandbox nor the
