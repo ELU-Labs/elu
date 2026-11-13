@@ -16,7 +16,7 @@ import { CARDS_MAX, NAME_MAX, TITLE_MAX, cardsFor, cleanCard, cleanCards, cleanP
 import { peerFile } from '../lib/peer/paths.mjs';
 import { markMine, noteTheirs } from '../lib/peer/mine.mjs';
 import { createIdentity, identity as loadIdentity } from '../lib/peer/identity.mjs';
-import { appendOp, createTeam, head, makeOp } from '../lib/peer/roster.mjs';
+import { appendOp, createTeam, head, makeOp, merge, readLog } from '../lib/peer/roster.mjs';
 import { createInvite, redeemCode } from '../lib/peer/invite.mjs';
 import { repoId, setBoardOff, share, unshare } from '../lib/peer/shares.mjs';
 import { savePeerSettings } from '../lib/peer/settings.mjs';
@@ -513,6 +513,45 @@ test('who started a session goes with its card, and only the computer of mine th
     const toSara = cardsFor(sara.identity.key, ana.identity.key, rows, repos, proofs(sara.identity.key)), toBob = cardsFor('d'.repeat(64), ana.identity.key, rows, repos, proofs('d'.repeat(64)));
     assert.equal(toSara.find(card => card.title === 'From my laptop').remote, '0f0e0d0c-0b0a-4908-8706-050403020100');
     assert.equal(toBob.find(card => card.title === 'From my laptop').remote, undefined);
+  });
+});
+
+// Ana's two computers (ana and sara here) are paired as her own; kim is a real teammate whose
+// name is Sara. Whose a card is goes by the key that started its session, never by a name.
+test('a computer of mine tells mine which of its sessions are mine, by the key that started each; a teammate named like my computer keeps their card, and so does an older one\'s card by that name', t => {
+  const crew = makeTeam(t), ana = crew.founder, sara = crew.member, now = Date.now(), kim = withHome(newHome(t), () => createIdentity({ name: 'Sara' })), bob = 'd'.repeat(64);
+  const log = withHome(ana.home, () => { redeemCode(createInvite(ana.identity, crew.teamId, { hours: 1 }), kim.key, 'Sara'); return readLog(crew.teamId).ops; });
+  withHome(sara.home, () => { const { rejected } = merge(crew.teamId, log); assert.deepEqual(rejected, []); });
+  const atAna = withHome(ana.home, () => {
+    markMine(ana.identity.key, sara.identity.key); noteTheirs(sara.identity.key, true);
+    const repo = folderProject(t), shop = cloneIn(repo, 'shop');
+    session(repo, 1, shop, { goal: 'Typed there by hand' });
+    session(repo, 2, shop, { goal: 'A message from my other computer', origin: { kind: 'handoff', peer: sara.identity.key, name: 'sara', own: true } });
+    session(repo, 3, shop, { goal: 'A message from kim', origin: { kind: 'handoff', peer: kim.key, name: 'Sara', own: true } });
+    // Taken on there in a mode picked by hand (w): worked on as a teammate's, so not told as mine.
+    session(repo, 4, shop, { goal: 'Worked on from my other computer', origin: { kind: 'handoff', peer: sara.identity.key, name: 'sara' } });
+    const repos = localRepos(now), rows = sessionCards({ owner: 'ana', repos, now });
+    return { repo, shop, repos, rows };
+  });
+  assert.deepEqual(atAna.rows.map(row => [row.card.title, row.card.by, row.own]).sort(), [['A message from kim', 'Sara', false], ['A message from my other computer', 'sara', true], ['Typed there by hand', 'ana', true], ['Worked on from my other computer', 'sara', false]]);
+  const atSara = withHome(sara.home, () => { const repo = folderProject(t); cloneIn(repo, 'shop', { from: atAna.shop }); return { repo, repos: localRepos(now) }; });
+  // Told to my computer with own; to a teammate's, without.
+  const told = withHome(ana.home, () => cardsFor(sara.identity.key, ana.identity.key, atAna.rows, atAna.repos, proofsFor(sara.identity.key, ana.identity.key, atSara.repos)));
+  assert.deepEqual(told.map(card => [card.title, card.own]).sort(), [['A message from kim', false], ['A message from my other computer', true], ['Typed there by hand', true], ['Worked on from my other computer', false]]);
+  const toBob = withHome(ana.home, () => cardsFor(bob, ana.identity.key, atAna.rows, atAna.repos, atAna.rows.map(row => repoProof(bob, ana.identity.key, atAna.repos.get(row.repo).repoId, atAna.repos.get(row.repo).commit))));
+  assert.equal(toBob.length, 4); assert.ok(toBob.every(card => !('own' in card)), 'a teammate is not told');
+  withHome(sara.home, () => {
+    markMine(sara.identity.key, ana.identity.key); noteTheirs(ana.identity.key, true);
+    fs.mkdirSync(peerFile(), { recursive: true });
+    fs.writeFileSync(peerFile('state.json'), JSON.stringify({ key: sara.identity.key, running: true, at: new Date().toISOString(), teams: [{ id: crew.teamId, members: [{ key: ana.identity.key, name: 'ana', online: true, box: 'ana-box' }] }] }));
+    saveLocalRepos(atSara.repos); saveProofs(ana.identity.key, proofsFor(ana.identity.key, sara.identity.key, atAna.repos));
+    const shown = () => Object.fromEntries(teammateSessions(atSara.repo.root).people[0].sessions.map(card => [card.title, card.own === true]));
+    saveCards(ana.identity.key, sara.identity.key, told);
+    assert.deepEqual(shown(), { 'A message from kim': false, 'A message from my other computer': true, 'Typed there by hand': true, 'Worked on from my other computer': false }, "kim's card names Sara, and stays kim's");
+    // An older computer of mine says nothing of own: a name says whose it is, but not Sara,
+    // which kim also goes by here. Mine there by that name shows as a teammate's, never the other way.
+    saveCards(ana.identity.key, sara.identity.key, told.map(({ own: _own, ...card }) => card));
+    assert.deepEqual(shown(), { 'A message from kim': false, 'A message from my other computer': false, 'Typed there by hand': true, 'Worked on from my other computer': false });
   });
 });
 
