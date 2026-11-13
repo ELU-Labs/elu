@@ -807,7 +807,7 @@ test("in a session open on this computer, my other computer's @name reads as you
   const rows = () => palette.hidden ? [] : palette.items.map(item => item.getText().replace(/\s+/g, ' ').trim());
   await until(() => board.items.map(plainItem).some(row => /Tidy the notes/.test(row)), 'the session here');
   board.focus(); selectRow(board, /Tidy the notes/);
-  await until(() => v.current.view === 'chat', 'the session here is open');
+  await until(() => /^ Message /.test(label()), 'the session here is open');
   ask.focus(); ask.readInput(); await until(() => ask.__listener, 'message box');
   v.input.write('@sa');
   await until(() => rows().some(row => /^@sara your computer · online$/.test(row)), 'the @ list calls it your computer');
