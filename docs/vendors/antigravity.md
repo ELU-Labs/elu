@@ -35,8 +35,14 @@ signed it in.
 Sign it in from ELU: `s` on the Antigravity line in the Usage tab. ELU leaves its screen and
 runs `agy -p /usage` under its sign-in HOME, with your terminal as its input: the browser opens
 Google sign-in, you copy the code it shows, paste it there and press Enter. `agy` waits 60
-seconds for the code. On a computer with no browser, open the link it prints on any other. ELU comes back when it ends and reads the sign-in again. `c` on a
-signed-out line offers the same sign-in first.
+seconds for the code. On a computer with no browser, open the link it prints on any other.
+ELU comes back when it ends and reads the sign-in again. `c` on a signed-out line offers the
+same sign-in first.
+
+If the 60 seconds pass with no code, `agy` stops (`Error: authentication timed out.`), ELU
+comes back and says `Antigravity CLI got no code in 60 seconds. s starts again with a new
+link.` Press `s` again: it is a new sign-in with a new link and a new code, and 60 seconds
+more. The sign-in screen says so at its top, before `agy` prints its link.
 
 ELU reads the sign-in with `agy -p /usage --output-format json`: no model turn, no quota
 spent. Signed in, it exits 0. Signed out, `agy` 1.5.8 prints a sign-in link, opens the browser
