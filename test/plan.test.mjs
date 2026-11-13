@@ -27,6 +27,12 @@ function fixture(t, mode = 'normal', vendor = 'claude') {
 }
 const inputs = f => fs.readFileSync(path.join(f.parent, 'inputs.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
 const source = f => fs.readFileSync(path.join(f.root, 'src/coupon.mjs'), 'utf8');
+// The session's Task once its subtasks read as these states, while a turn runs.
+async function shows(f, id, states) {
+  let live = null;
+  for (const until = Date.now() + 20000; Date.now() < until; await new Promise(resolve => setTimeout(resolve, 50))) { live = currentTask(f.repo, id); if (live.subtasks.map(step => step.state).join() === states) break; }
+  return live;
+}
 // The model's own turns; a bot's review of the edit is a run too.
 const turns = task => task.runs.filter(run => run.role === 'lead').length;
 const TASK = { title: 'Uppercase coupons', description: 'Make normalize return the code in upper case.', goal: 'Codes compare equal whatever their case.', objectives: ['normalize returns upper case', 'The test passes'], priority: 'medium', severity: 'low' };
@@ -65,38 +71,97 @@ for (const vendor of ['claude', 'codex']) {
     assert.deepEqual(after.subtasks, [{ id: 's1', text: 'Change normalize', state: 'done' }, { id: 's2', text: 'Run the coupon test', state: 'done' }]);
   });
 
-  // Claude Code keeps its list with TodoWrite or with the Task tools; both tick.
-  for (const liveTool of vendor === 'claude' ? ['todos', 'tasks'] : ['todos']) test(`${vendor}: a working turn ticks the Task's subtasks from the model's own to-do list (${liveTool}) while it runs, not only when it ends`, async t => {
+  // Claude Code 2.1.322 keeps its list with the Task tools; an older one sends it whole with TodoWrite. Both tick.
+  for (const liveTool of vendor === 'claude' ? ['tasks', 'todowrite'] : ['plan']) test(`${vendor}: a working turn ticks the Task's subtasks from the model's own to-do list (${liveTool}) while it runs, not only when it ends`, async t => {
     const f = fixture(t, 'normal', vendor), gate = path.join(f.parent, 'go-on'), settings = path.join(f.fake.dir, 'fake.json');
     fs.writeFileSync(settings, JSON.stringify({ ...JSON.parse(fs.readFileSync(settings, 'utf8')), live: gate, liveTool }));
     const asked = await f.controller.ask('Uppercase coupon codes', null, { permissions: 'ask' }).finished;
     approveTask(f.repo, asked.id);
     const finished = f.controller.ask('Approved the Task: Uppercase coupons', asked.id, { approved: true }).finished;
     // The model wrote its to-do list and is still working: the Task shows that list now.
-    let live = null;
-    for (const until = Date.now() + 20000; Date.now() < until; await new Promise(resolve => setTimeout(resolve, 50))) { live = currentTask(f.repo, asked.id); if (live.subtasks.length === 2 && live.subtasks[0].state === 'done' && live.subtasks[1].state === 'doing') break; }
+    const live = await shows(f, asked.id, 'done,doing');
     assert.equal(readTask(f.repo, asked.id).state, 'running');
     assert.deepEqual(live.subtasks, [{ id: 's1', text: 'Change normalize', state: 'done' }, { id: 's2', text: 'Run the coupon test', state: 'doing' }]);
     assert.equal(taskState(live), 'approved · 1 of 2 subtasks done');
+    // The turn is told which tool the owner's list is read from.
     const work = inputs(f).find(row => row.input.includes('this turn does its work'));
-    assert.match(work.input, /Keep your to-do list with your own to-do tool/);
+    assert.match(work.input, vendor === 'claude' ? /Keep the Task's subtasks in your task list as you work: make each step with TaskCreate/ : /Keep the Task's subtasks in your plan as you work, with your update_plan tool/);
+    assert.match(work.input, /The owner sees that list as the Task's subtasks while this turn runs\./);
     // The first turn, which plans, is launched without it.
     const launches = inputs(f).map(row => row.args.join(' '));
     assert.doesNotMatch(launches[0], vendor === 'claude' ? /TodoWrite|TaskCreate/ : /tools\.update_plan\.enabled=true/);
-    if (vendor === 'claude') assert.match(launches.find(row => row.includes('TodoWrite')), /--tools \S*TodoWrite,TaskCreate,TaskUpdate,TaskList,TaskGet/);
+    // Claude Code has no to-do tool in a run unless --tools names one; it takes from the list the ones it has.
+    if (vendor === 'claude') { assert.match(work.args.join(' '), /--tools Read,Grep,Glob,Edit,Write,Bash,WebFetch,WebSearch,TaskCreate,TaskUpdate,TaskList,TaskGet,TodoWrite /); for (const name of ['TaskCreate', 'TaskUpdate', 'TaskList', 'TaskGet', 'TodoWrite']) assert.ok(work.args.includes(`--allowedTools=${name}`), name); }
+    else assert.ok(work.args.includes('tools.update_plan.enabled=true'));
     fs.writeFileSync(gate, '');
     const done = await finished;
     assert.notEqual(done.kind, 'conversation');
     // When the turn ends its reply's own list stands, every step done.
     const after = currentTask(f.repo, asked.id);
     assert.equal(after.state, 'done'); assert.deepEqual(after.subtasks.map(step => step.state), ['done', 'done']);
+    // What leaves this machine carries the subtasks, never the steps as the vendor numbers them.
+    assert.equal(Object.hasOwn(sharedTask(after), 'todo'), false);
   });
 }
 
+for (const [mode, label] of [['ask', 'Ask for approval'], ['auto', 'Approve for me'], ['full', 'Full access']]) test(`claude: a working turn in ${label} is launched with the to-do tools, and its list ticks`, async t => {
+  const f = fixture(t, 'normal', 'claude'), gate = path.join(f.parent, 'go-on'), settings = path.join(f.fake.dir, 'fake.json');
+  fs.writeFileSync(settings, JSON.stringify({ ...JSON.parse(fs.readFileSync(settings, 'utf8')), live: gate }));
+  const asked = await f.controller.ask('Uppercase coupon codes', null, { permissions: mode }).finished;
+  approveTask(f.repo, asked.id);
+  const finished = f.controller.ask('Approved the Task: Uppercase coupons', asked.id, { approved: true }).finished;
+  assert.deepEqual((await shows(f, asked.id, 'done,doing')).subtasks.map(step => step.text), ['Change normalize', 'Run the coupon test']);
+  const work = inputs(f).find(row => row.input.includes('this turn does its work'));
+  assert.equal(work.args[work.args.indexOf('--permission-mode') + 1], { ask: 'default', auto: 'auto', full: 'bypassPermissions' }[mode]);
+  assert.match(work.args[work.args.indexOf('--tools') + 1], /,TaskCreate,TaskUpdate,TaskList,TaskGet,TodoWrite$/);
+  fs.writeFileSync(gate, ''); await finished;
+});
+
+test('claude: a later turn of the same session ticks a step an earlier turn made, which Claude Code names by its number alone', async t => {
+  const f = fixture(t, 'normal', 'claude'), gate = path.join(f.parent, 'go-on'), settings = path.join(f.fake.dir, 'fake.json');
+  fs.writeFileSync(settings, JSON.stringify({ ...JSON.parse(fs.readFileSync(settings, 'utf8')), live: gate, liveAsks: true }));
+  const asked = await f.controller.ask('Uppercase coupon codes', null, { permissions: 'ask' }).finished;
+  approveTask(f.repo, asked.id);
+  const first = f.controller.ask('Approved the Task: Uppercase coupons', asked.id, { approved: true }).finished;
+  await shows(f, asked.id, 'done,doing');
+  // The turn stops on a question with its second step still in hand.
+  fs.writeFileSync(gate, '');
+  const waits = await first; fs.rmSync(gate);
+  assert.equal(waits.state, 'needs_input'); assert.deepEqual(currentTask(f.repo, asked.id).subtasks.map(step => step.state), ['done', 'doing']);
+  // The owner's answer goes on in the same Claude Code session, which still holds both steps:
+  // the model makes none again and only sets the second one completed, by its number.
+  const second = f.controller.ask('Yes', asked.id).finished;
+  const live = await shows(f, asked.id, 'done,done');
+  assert.equal(readTask(f.repo, asked.id).state, 'running');
+  assert.deepEqual(live.subtasks, [{ id: 's1', text: 'Change normalize', state: 'done' }, { id: 's2', text: 'Run the coupon test', state: 'done' }]);
+  const launch = inputs(f).at(-1), log = fs.readFileSync(readTask(f.repo, asked.id).activeLog, 'utf8');
+  assert.equal(launch.args[launch.args.indexOf('--resume') + 1], waits.runs.at(-1).session);
+  assert.match(log, /"name":"TaskUpdate","input":\{"taskId":"2","status":"completed"\}/); assert.doesNotMatch(log, /TaskCreate/);
+  fs.writeFileSync(gate, ''); await second;
+});
+
 // Lines in the shape each vendor prints them, with made-up content (test/fixtures/live-todos.json).
-for (const [name, lines] of Object.entries(JSON.parse(fs.readFileSync(new URL('./fixtures/live-todos.json', import.meta.url), 'utf8')))) test(`the model's own to-do list reads as the Task's subtasks, line by line: ${name}`, () => {
-  const read = liveTodos();
+// Claude Code's are the shapes of 2.1.322: a step shows once Claude Code says it made or changed it.
+// seed: the steps an earlier turn of the same vendor session left.
+for (const { name, seed, lines } of JSON.parse(fs.readFileSync(new URL('./fixtures/live-todos.json', import.meta.url), 'utf8'))) test(`the model's own to-do list reads as the Task's subtasks, line by line: ${name}`, () => {
+  const read = liveTodos(seed);
   lines.forEach(({ row, reads }, index) => assert.deepEqual(read(row), reads, `line ${index + 1}`));
+});
+
+test('the steps a reader keeps go to the next turn of the session, and a long list leaves out its oldest finished steps first', () => {
+  const read = liveTodos(), made = (id, subject) => { read({ type: 'assistant', message: { content: [{ type: 'tool_use', id: `call-${id}`, name: 'TaskCreate', input: { subject, description: 'x' } }] } }); return read({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: `call-${id}`, content: `Task #${id} created successfully: ${subject}` }] }, tool_use_result: { task: { id: String(id), subject } } }); };
+  const set = (id, status) => { read({ type: 'assistant', message: { content: [{ type: 'tool_use', id: `set-${id}`, name: 'TaskUpdate', input: { taskId: String(id), status } }] } }); return read({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: `set-${id}`, content: `Updated task #${id} status` }] }, tool_use_result: { success: true, taskId: String(id), updatedFields: ['status'] } }); };
+  made(1, 'First'); made(2, 'Second'); set(1, 'completed');
+  assert.deepEqual(read.kept(), [{ id: '1', text: 'First', state: 'done' }, { id: '2', text: 'Second', state: 'todo' }]);
+  // The next turn of that session starts from them: Claude Code keeps its list with the session.
+  const next = liveTodos(read.kept());
+  next({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'c', name: 'TaskUpdate', input: { taskId: '2', status: 'in_progress' } }] } });
+  assert.deepEqual(next({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'c', content: 'Updated task #2 status' }] }, tool_use_result: { success: true, taskId: '2', updatedFields: ['status'] } }), [{ id: 's1', text: 'First', state: 'done' }, { id: 's2', text: 'Second', state: 'doing' }]);
+  // More steps than a Task shows: the newest and the open ones stay.
+  set(2, 'completed');
+  let shown = null; for (let id = 3; id <= TASK_LIMITS.subtasks + 2; id++) shown = made(id, `Step ${id}`);
+  assert.equal(shown.length, TASK_LIMITS.subtasks); assert.equal(shown[0].text, 'Step 3'); assert.equal(shown.at(-1).text, `Step ${TASK_LIMITS.subtasks + 2}`);
+  assert.equal(read.kept().length, TASK_LIMITS.subtasks + 2);
 });
 
 test('n rejects the Task: the session stays idle, nothing is edited, and the next request is planned again', async t => {
