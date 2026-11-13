@@ -174,6 +174,10 @@ test("a Claude run refused with an API error keeps Claude's words and gets the a
   const signedOut = kept(t, [init('claude-opus-5-5'), SIGNED_OUT]);
   assert.equal(signedOut.cause, 'unknown');
   assert.equal(stopLine(session({ error: signedOut })).text, 'The model could not run: Claude Code is signed out. Sign in again with claude, then type continue.');
+  // A --model Claude has no model for, as test/fakes/claude.mjs ends that run: said with the name that was asked for, and the owner chooses another.
+  const none = kept(t, [init('claude-opus-9-9'), refused({ api_error_status: 404, api_error: 'not_found_error', result: "There's an issue with the selected model (claude-opus-9-9). It may not exist or you may not have access to it. Run --model to pick a different model." })]);
+  assert.equal(none.cause, 'model-unavailable');
+  assert.equal(stopLine(session({ error: none })).text, 'The model could not run: Claude says there is no model claude-opus-9-9 for this account. Choose another with /model, then type continue.');
   // Any other refusal keeps Claude's words, then to try again.
   const other = kept(t, [init('claude-opus-5-5'), refused({ api_error_status: 500, api_error: 'api_error', result: 'Internal server error' })]);
   assert.equal(stopLine(session({ error: other })).text, 'The model could not run: Claude says: Internal server error. Type continue to try again.');

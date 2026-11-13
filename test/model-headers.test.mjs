@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { project, fakeClis, autoApprove, temp } from './helpers.mjs';
 import { claudeId, entryTag, modelTag, shortEffort, shortModel } from '../lib/models.mjs';
 import { claudeOwnEffort, runEffort } from '../lib/bot-models.mjs';
@@ -12,6 +13,7 @@ import { ProjectController, conversationEntries } from '../lib/projects.mjs';
 import { projectFolder } from '../lib/workspace.mjs';
 import { readTask, saveTask } from '../lib/state.mjs';
 import { remoteSessions as remoteGlue } from '../lib/terminal-remote.mjs';
+import { vendorError } from '../lib/adapters/claude.mjs';
 
 // Each chat entry a model wrote names that model and its effort in parentheses after the
 // name in its header: "@lead (fable 5.2 med)". The model is the one that really ran.
@@ -204,6 +206,27 @@ test('the agent of a solo session, a bot, and a bot that fell back each name the
   const reply = task.messages.at(-1);
   assert.deepEqual([reply.bot, reply.model, reply.effort], ['lead', 'claude-opus-5-5', 'medium']);
   assert.equal(header(conversationEntries(f.repo, task).at(-1), 80, ' on @ali-devbox'), '@lead (opus 5.5 med) on @ali-devbox  4:37 PM');
+});
+
+// test/fakes/claude.mjs answers --model as Claude Code does, so no test or app run on it shows
+// one model under another's name: a full id of its catalog runs that model, an alias runs what
+// it stands for, and any other name is refused with the API's 404, never run as something else.
+test('the stand-in Claude Code runs a model of its catalog by its id and refuses a name it has no model for', t => {
+  const f = setup(t, { models: { opus: 'claude-opus-5-5' } }), bin = path.join(f.parent, 'bin', 'claude');
+  const run = model => {
+    const out = spawnSync(bin, ['-p', '--output-format', 'stream-json', '--verbose', ...(model ? ['--model', model] : [])], { input: 'Where is the cart total?', encoding: 'utf8' });
+    const rows = out.stdout.trim().split('\n').map(line => JSON.parse(line));
+    return { code: out.status, text: out.stdout, model: rows.find(row => row.subtype === 'init')?.model, result: rows.find(row => row.type === 'result') };
+  };
+  for (const [asked, ran] of [['claude-opus-5-5', 'claude-opus-5-5'], ['claude-fable-5-2', 'claude-fable-5-2'], ['claude-sonnet-5-5[1m]', 'claude-sonnet-5-5'], ['opus', 'claude-opus-5-5'], ['sonnet', 'claude-fable-5-1'], [null, 'claude-fable-5-1']]) {
+    const ok = run(asked); assert.deepEqual([ok.code, ok.model, ok.result.is_error], [0, ran, false], String(asked));
+  }
+  for (const asked of ['claude-opus-9-9', 'claude-sonnet-5', 'opus-5.5', 'nosuch']) {
+    const refused = run(asked);
+    assert.deepEqual([refused.code, refused.model, refused.result.is_error, refused.result.api_error_status], [1, asked, true, 404], asked);
+    assert.equal(refused.result.result, `There's an issue with the selected model (${asked}). It may not exist or you may not have access to it. Run --model to pick a different model.`);
+    assert.equal(vendorError(refused.text, { model: asked }).text, `Claude says there is no model ${asked} for this account.`);
+  }
 });
 
 test('a model whose effort is not known shows only the model; a Codex bot\'s effort comes from its model list', async t => {
