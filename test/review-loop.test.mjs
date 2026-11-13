@@ -301,21 +301,21 @@ test('the chat says when a review was given the large file as excerpts because t
   const f = bigChange(t, 'normal', { tooLong: 200000 });
   const task = await f.controller.ask('Normalize coupon codes').finished;
   assert.equal(task.state, 'ready', JSON.stringify(task.error));
-  assert.deepEqual(shownOf(f, task, 'reviewer'), ["Passed.\n@reviewer's model could not take this change whole, so it reviewed the whole diff, src/coupon.mjs whole and src/big.mjs as excerpts around each change."]);
+  assert.deepEqual(shownOf(f, task, 'reviewer'), ["Passed.\n@reviewer's model could not take the whole change, so it reviewed src/big.mjs as excerpts."]);
 });
 
 test('the chat says when a review was given the diff alone', async t => {
   const f = bigChange(t, 'normal', { tooLong: 'files' });
   const task = await f.controller.ask('Normalize coupon codes').finished;
   assert.equal(task.state, 'ready', JSON.stringify(task.error));
-  assert.deepEqual(shownOf(f, task, 'reviewer'), ["Passed.\n@reviewer's model could not take this change with its files, so it reviewed the diff alone."]);
+  assert.deepEqual(shownOf(f, task, 'reviewer'), ["Passed.\n@reviewer's model could not take the change with its files, so it reviewed the diff alone."]);
 });
 
 test('every round of a review given excerpts says so, the must-fix round and the one that passes', async t => {
   const f = bigChange(t, 'review-fix', { tooLong: 200000 });
   const task = await f.controller.ask('Normalize coupon codes', null, { bots: ['critic'] }).finished;
   assert.equal(task.state, 'ready', JSON.stringify(task.error));
-  const less = "@critic's model could not take this change whole, so it reviewed the whole diff, src/coupon.mjs whole and src/big.mjs as excerpts around each change.";
+  const less = "@critic's model could not take the whole change, so it reviewed src/big.mjs as excerpts.";
   assert.deepEqual(shownOf(f, task, 'critic'), [`1 must-fix:\n- Handle the edge case.\n${less}`, `Passed.\n${less}`]);
 });
 
@@ -327,7 +327,7 @@ test('the chat says when a bot answered the owner from excerpts of the edits bec
   const chats = f.inputs('codex').filter(row => row.input.includes('You are @critic, a bot in a chat')).map(row => row.input);
   assert.equal(chats.length, 2, 'the whole edits refused, then the excerpts'); assert.ok(chats[1].includes('"lines":"4851-5155 of 8005"'));
   const [less, reply] = answered.messages.slice(-2);
-  assert.deepEqual({ text: less.text, bot: less.bot, quiet: less.quiet }, { text: "@critic's model could not take this change whole, so it answered from the whole diff, src/coupon.mjs whole and src/big.mjs as excerpts around each change.", bot: 'critic', quiet: true });
+  assert.deepEqual({ text: less.text, bot: less.bot, quiet: less.quiet }, { text: "@critic's model could not take the whole change, so it answered from src/big.mjs as excerpts.", bot: 'critic', quiet: true });
   assert.equal(reply.bot, 'critic'); assert.notEqual(reply.quiet, true);
   // The line is for the owner: the agent reads the bot's answer, never ELU's line about it.
   assert.equal(shownOf(f, answered, 'critic').at(-2), less.text);
