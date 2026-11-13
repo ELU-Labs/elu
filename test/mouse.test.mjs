@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import { PassThrough } from 'node:stream';
-import { project } from './helpers.mjs';
+import { project, keyThenEnter } from './helpers.mjs';
 import { repository } from '../lib/git.mjs';
 import { launchTerminal } from '../lib/terminal.mjs';
 import { layout, position, indexAt, editKey } from '../lib/editor.mjs';
@@ -112,6 +112,8 @@ async function view(t, { protocol = 'sgr' } = {}) {
   const finished = launchTerminal({ repo: repository(p.root), input, output, refreshMs: 30, startConductor: () => false, clipboard: text => copied.push(text), onRender: value => { rendered = value; } });
   finished.catch(() => {});
   await until(() => rendered, 'first render');
+  // A row's key is its letter, then Enter (keyThenEnter).
+  keyThenEnter(input, () => rendered);
   // A failed test can leave a dialog open, and the app ignores q while one is: every pass
   // closes what is open (closing one can open the next) and presses q again. A view that
   // still will not close is interrupted the way a hangup would, and if even that fails the
