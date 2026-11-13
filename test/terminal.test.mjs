@@ -2937,6 +2937,14 @@ test('a schedule offers Full access, says what it means and asks once', { timeou
   assert.match(said(), /Each run has Full access with nobody watching: it reads anything, runs any command and uses the internet without asking\. The never list is refused by name only: a command that names it another way can get through\./);
   assert.match(said(), /Use it for this schedule\? y\/N/);
   await dialog(v, 'Full access', 'y'); await until(() => /Full access for this schedule\./.test(status()) && /Permissions {2}Full access/.test(text()), 'full');
+  // Full access or not, a schedule never runs in your checkout: Here is refused when it is picked, not when it is saved.
+  const noHere = () => /A schedule never runs in your checkout as it is\. Set Runs in to New worktree or a branch\./.test(status().replace(/\s+/g, ' '));
+  pickRow(panels.composeList, /Runs in/); v.input.write('\r'); await until(() => modal(v, 'Runs in'), 'where');
+  v.input.write('3'); await until(noHere, 'Here is refused in the picker');
+  assert.match(text(), /Runs in {6}New worktree/);
+  await send(v, '/place worktree'); await until(() => /New worktree for this schedule\./.test(status()), 'a worktree is said for the schedule');
+  await send(v, '/place here'); await until(noHere, 'and by /place');
+  assert.match(text(), /Runs in {6}New worktree/);
   // Asked once: saving it asks nothing more.
   await send(v, 'Triage the backlog'); await until(() => /Scheduled daily 9:00/.test(status()), 'scheduled with no second question');
   const first = listSchedules().find(row => row.goal === 'Triage the backlog');
