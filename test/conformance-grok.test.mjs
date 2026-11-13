@@ -71,9 +71,10 @@ test('compile refuses until this machine\'s check passed, then builds each profi
   assert.deepEqual(ask, [...common('120'), '--permission-mode', 'dontAsk', '--sandbox', 'workspace', ...allow(['Read', 'Grep', ...edits, `Read(${folder}/**)`]), ...deny([...guarded, ...never, ...secrets]), '-s', SESSION]);
   const auto = grok.compile({ ...base, role: lead(), mode: 'auto', folders: [folder], protectedPaths: ['package.json', '.git'] });
   assert.deepEqual(auto, ask.map(a => a === 'dontAsk' ? 'auto' : a));
-  // Full access is everything: no never list and no deny rule, home secrets included.
+  // Full access is everything: no never list and no deny rule, home secrets included, and
+  // nothing of Grok's own is switched off or capped: its memory, its subagents, its turns.
   const full = grok.compile({ ...base, role: lead(), mode: 'full', place: { kind: 'here' }, protectedPaths: ['package.json'] });
-  assert.deepEqual(full, [...common('120').filter(arg => arg !== '--no-subagents'), '--permission-mode', 'bypassPermissions', '--sandbox', 'off', '-s', SESSION]);
+  assert.deepEqual(full, ['--no-auto-update', '--no-alt-screen', '--cwd', w.repo, '--output-format', 'json', '--prompt-file', path.join(runDir, 'prompt.txt'), '--permission-mode', 'bypassPermissions', '--sandbox', 'off', '-s', SESSION]);
   assert.equal(full.some(arg => never.includes(arg)), false, 'no never-list rule in the Full access argv');
   assert.deepEqual(grok.compile({ ...base, role: lead(undefined, { model: 'grok-4.6' }), mode: 'ask', resume: SESSION }).filter((a, i, all) => ['--model', '-r'].includes(all[i - 1]) || ['--model', '-r', '-s'].includes(a)), ['--model', 'grok-4.6', '-r', SESSION]);
   for (const mode of ['ask', 'auto', 'full']) assert.ok(!grok.compile({ ...base, role: lead(), mode }).includes('read-only'), mode);
@@ -114,7 +115,7 @@ test('childEnv carries every switch and no key variable; the private home holds 
   const config = configOf('locked');
   assert.equal(config, grok.CONFIG_TOML); assert.equal(fs.statSync(path.join(dir, 'config.toml')).mode & 0o777, 0o600);
   for (const line of ['[compat.claude]\nskills = false\nrules = false\nagents = false\nmcps = false\nhooks = false', '[compat.cursor]\nskills = false', 'telemetry = false', 'feedback = false', 'managed_config = false', 'campaigns = false', 'remote_fetch = false', 'backend_tools = false', 'trace_upload = false', 'mixpanel_enabled = false', '[harness]\ndisable_workspace_teleport = true\ndisable_codebase_upload = true', 'auto_update = false', '[relay]\nenabled = false', 'load_envrc = false', '[subagents]\nenabled = false', 'deny = ["Bash(git push:*)", "Bash(git tag:*)"']) assert.ok(config.includes(line), line);
-  for (const mode of PROFILES) assert.equal(grok.childEnv({ mode, home: w.home }).GROK_BACKEND_SEARCH, '0', `server-side search is off in ${mode}`);
+  for (const mode of PROFILES) assert.equal(grok.childEnv({ mode, home: w.home }).GROK_BACKEND_SEARCH, mode === 'full' ? undefined : '0', `server-side search is off in ${mode}, and Full access switches nothing of the agent's off`);
   assert.ok(!/api_key|env_key|token/i.test(config), 'no key or token in the config');
   assert.ok(fs.existsSync(path.join(dir, 'trusted_folders.toml'))); assert.ok(fs.statSync(path.join(dir, 'sessions')).isDirectory());
   assert.equal(fs.statSync(path.join(personal, 'grok-home')).mode & 0o777, 0o700);
