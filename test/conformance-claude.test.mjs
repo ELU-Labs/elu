@@ -58,12 +58,12 @@ test('ask, auto and full launch through the approval relay, ask and auto deny th
   assert.deepEqual(claude({ mode: 'locked', role: f.role, cwd: f.cwd, protectedPaths: f.protectedPaths, commonDir: f.commonDir, session: SESSION }), lockedArgs, 'locked is the default and byte-identical');
   const expectedModes = { ask: 'default', auto: 'auto', full: 'bypassPermissions' };
   for (const mode of ['ask', 'auto', 'full']) {
-    const args = claude({ ...f.base, mode }), settings = settingsOf(args), tools = valueOf(args, '--tools').split(',');
+    const args = claude({ ...f.base, mode }), settings = settingsOf(args), tools = valueOf(args, '--tools').replace(/^default$/, 'Read,Grep,Glob,Edit,Write,Bash,WebFetch,WebSearch').split(',');
     assert.equal(args[0], '-p'); assert.equal(valueOf(args, '--permission-mode'), expectedModes[mode], mode);
     assert.equal(valueOf(args, '--permission-prompts'), 'host'); assert.equal(valueOf(args, '--permission-prompt-tool'), 'mcp__elu-code-approval__approve');
     assert.equal(args.includes('--restricted'), false); assert.equal(args.includes('--safe-mode'), false);
     assert.ok(args.includes('--strict-mcp-config')); assert.equal(valueOf(args, '--mcp-config'), f.mcp.file); assert.equal(valueOf(args, '--setting-sources'), '');
-    assert.ok(args.includes('--no-chrome')); assert.equal(valueOf(args, '--disallowedTools'), 'Agent,Task,NotebookEdit,PowerShell,Monitor');
+    assert.ok(args.includes('--no-chrome')); assert.equal(mode === 'full' ? args.includes('--disallowedTools') : valueOf(args, '--disallowedTools') === 'Agent,Task,NotebookEdit,PowerShell,Monitor', mode !== 'full');
     assert.equal(valueOf(args, '--session-id'), SESSION);
     // No spending limit unless the owner set one; a limit goes to the vendor as it is.
     assert.equal(f.role.maxCostUsd, null); assert.equal(args.includes('--max-budget-usd'), false, mode);

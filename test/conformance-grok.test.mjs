@@ -73,7 +73,7 @@ test('compile refuses until this machine\'s check passed, then builds each profi
   assert.deepEqual(auto, ask.map(a => a === 'dontAsk' ? 'auto' : a));
   // Full access is everything: no never list and no deny rule, home secrets included.
   const full = grok.compile({ ...base, role: lead(), mode: 'full', place: { kind: 'here' }, protectedPaths: ['package.json'] });
-  assert.deepEqual(full, [...common('120'), '--permission-mode', 'bypassPermissions', '--sandbox', 'off', '-s', SESSION]);
+  assert.deepEqual(full, [...common('120').filter(arg => arg !== '--no-subagents'), '--permission-mode', 'bypassPermissions', '--sandbox', 'off', '-s', SESSION]);
   assert.equal(full.some(arg => never.includes(arg)), false, 'no never-list rule in the Full access argv');
   assert.deepEqual(grok.compile({ ...base, role: lead(undefined, { model: 'grok-4.6' }), mode: 'ask', resume: SESSION }).filter((a, i, all) => ['--model', '-r'].includes(all[i - 1]) || ['--model', '-r', '-s'].includes(a)), ['--model', 'grok-4.6', '-r', SESSION]);
   for (const mode of ['ask', 'auto', 'full']) assert.ok(!grok.compile({ ...base, role: lead(), mode }).includes('read-only'), mode);
