@@ -81,9 +81,11 @@ for (const [name, module] of [['0.1.16', v16], ['0.1.17', v17]]) {
 
 // Run from its own folder (npx), the 0.1.16 conductor never sees an update and stays until it
 // has been idle for 10 minutes. The conductor beside it stays as long, so what the window
-// sends later never finds that one alone.
+// sends later never finds that one alone. The 0.1.16 conductor ticks only when the test says,
+// as above: in one process with this version's, its 20 ms tick can come before the change of
+// the request file is read, which no ELU window's send waits for.
 test('the conductor beside an idle 0.1.16 one never leaves first, so what an ELU window of 0.1.16 sends later still runs on the new version', async t => {
-  const p = setup(t), old = running(t, v16.Conductor, { version: '0.1.16' });
+  const p = setup(t), old = running(t, v16.Conductor, { version: '0.1.16', tickMs: HOUR });
   await until(() => olderConductor() !== null, 'the 0.1.16 conductor to write its status');
   let exits = 0;
   const fresh = running(t, Conductor, { version: VERSION, idleMs: 50, onExit: () => { exits++; } });
@@ -91,6 +93,9 @@ test('the conductor beside an idle 0.1.16 one never leaves first, so what an ELU
   await new Promise(resolve => setTimeout(resolve, 400));
   assert.equal(exits, 0, 'it stays while the 0.1.16 conductor holds the lock');
   const sent = v16.enqueue(p.root, 'Sent later from the old window');
+  await until(() => !mainFileRequests(p.root).some(row => row.state === 'queued'), 'the new version to move it, before the 0.1.16 conductor ticks', 3000);
+  old.conductor.tick();
+  assert.deepEqual(old.started, [], 'the 0.1.16 conductor found nothing to start');
   await until(() => fresh.started.includes(sent.id), 'the new version to start it');
   assert.deepEqual(old.started, []);
   // Once the 0.1.16 conductor has gone, it takes the lock, and leaves when idle as any does.
