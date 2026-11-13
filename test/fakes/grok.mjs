@@ -29,8 +29,9 @@ if (args.includes('--help')) { console.log('--output-format --permission-mode --
 if (args[0] === 'login') { console.error('fake grok: login is interactive'); process.exit(2); }
 
 // What the prompt asks for, done as far as the launch allows. ask() decides an action the
-// rules neither allow nor forbid: the relay over ACP, nothing in headless mode.
-async function act(prompt, record, { bypass, canWrite, canShell, canFetch, cwd, ask }) {
+// rules neither allow nor forbid: the relay over ACP, nothing in headless mode. progress
+// (ACP only) reports a command as a tool call: in progress before it runs, completed after.
+async function act(prompt, record, { bypass, canWrite, canShell, canFetch, cwd, ask, progress = null }) {
   const blocked = [], did = [];
   const allow = async (action, free) => bypass || free || (ask ? ask(action) : false);
   if (/create (a |another )?file|files? at/i.test(prompt)) {
@@ -44,7 +45,8 @@ async function act(prompt, record, { bypass, canWrite, canShell, canFetch, cwd, 
   // A full path, or a program on PATH named elu-something.
   const command = prompt.match(/run the (?:shell )?command (\/\S+|elu-[\w-]+)/i)?.[1];
   if (command) {
-    if ((canShell || bypass) && await allow({ kind: 'execute', title: `Run ${command}`, rawInput: { command } }, false)) { spawnSync(command, { stdio: 'ignore' }); did.push(`ran ${command}`); }
+    const action = { kind: 'execute', title: `Run ${command}`, rawInput: { command } };
+    if ((canShell || bypass) && await allow(action, false)) { await progress?.(action, 'in_progress'); spawnSync(command, { stdio: 'ignore' }); await progress?.(action, 'completed'); did.push(`ran ${command}`); }
     else blocked.push(`run ${command}`);
   }
   const url = prompt.match(/fetch (https?:\/\/\S+)/i)?.[1];
@@ -103,7 +105,9 @@ if (args.includes('agent') && args.includes('stdio')) {
           return answer?.outcome?.outcome === 'selected' && String(answer.outcome.optionId).startsWith('allow');
         };
         send({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: record.id, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Working. ' } } } });
-        const result = await act(text, record, { bypass: record.yolo || mode === 'leaky', canWrite, canShell: true, canFetch: true, cwd: record.cwd, ask });
+        // Written before the command runs, so the client has the line while the command is silent.
+        const progress = (action, status) => new Promise(resolve => process.stdout.write(`${JSON.stringify({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: record.id, update: { sessionUpdate: status === 'in_progress' ? 'tool_call' : 'tool_call_update', toolCallId: `call_run_${record.turns.length}`, title: action.title, kind: action.kind, status } } })}\n`, resolve));
+        const result = await act(text, record, { bypass: record.yolo || mode === 'leaky', canWrite, canShell: true, canFetch: true, cwd: record.cwd, ask, progress });
         record.turns.push(text); save(record);
         send({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: record.id, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: resultText(result) } } } });
         return reply({ stopReason: mode === 'max-turns' ? 'max_turn_requests' : 'end_turn' });

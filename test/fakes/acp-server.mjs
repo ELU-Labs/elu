@@ -1,7 +1,9 @@
 // A scripted ACP server for acp-client tests: newline JSON-RPC 2.0 on stdio. It answers
 // initialize and session/new, turns a session/prompt into two session/update notifications
 // plus a session/request_permission request it waits on, never answers `slow`, echoes
-// `echo` (with how many notifications it received), and exits 3 on `exit`.
+// `echo` (with how many notifications it received), and exits 3 on `exit`. `command` is a
+// tool call that runs for params.ms printing nothing: a tool_call update in progress, then,
+// unless params.ms is null, one that says it completed, and the reply.
 import readline from 'node:readline';
 const send = value => process.stdout.write(`${JSON.stringify(value)}\n`);
 const waiting = new Map(); let notifications = 0, nextId = 100;
@@ -27,6 +29,14 @@ async function handle(row) {
       break;
     }
     case 'echo': reply({ params: row.params ?? null, notifications }); break;
+    case 'command': {
+      const update = (sessionUpdate, status) => send({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: 'sess-1', update: { sessionUpdate, toolCallId: 'call_1', title: 'Run the tests', kind: 'execute', status } } });
+      update('tool_call', 'in_progress');
+      if (row.params?.ms === null) break;
+      await new Promise(resolve => setTimeout(resolve, row.params?.ms ?? 0));
+      update('tool_call_update', 'completed'); reply({ ran: true });
+      break;
+    }
     case 'slow': break;
     case 'exit': process.exit(3);
     default: send({ jsonrpc: '2.0', id: row.id, error: { code: -32601, message: 'Method not found' } });

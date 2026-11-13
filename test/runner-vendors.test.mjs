@@ -14,6 +14,7 @@ import * as agy from '../lib/adapters/agy.mjs';
 import * as claude from '../lib/adapters/claude.mjs';
 import { saveRule } from '../lib/permission-rules.mjs';
 import { shimsBase } from '../lib/never-shims.mjs';
+import { turnClock } from '../lib/turn-limits.mjs';
 
 // Every vendor through the runner, against the fakes: Codex leads with its
 // own launch and parse, Grok takes the prompt from a file under a private HOME, and an ACP
@@ -263,6 +264,30 @@ test('an Antigravity session refuses a push that a script makes over ACP in Ask 
   const full = await f.controller.ask(`Run this command: ${publish.script}. Reply with the summary "headless".`, null, { permissions: 'full' }).finished;
   assert.equal(full.state, 'answered', JSON.stringify(full.error)); assert.ok(f.calls().at(-1).args.includes('-p'));
   assert.equal(publish.code(), '0'); assert.deepEqual(publish.refs(), ['refs/heads/from-script', 'refs/tags/v2']);
+});
+
+// The turn limits, shrunk for a test.
+function quickClock(t, quietSeconds, capSeconds = 7200) {
+  const before = { ...turnClock }; Object.assign(turnClock, { quietSeconds, capSeconds }); t.after(() => Object.assign(turnClock, before));
+}
+// The owner's case: a long test run inside a turn prints nothing until it ends.
+test('a Codex turn whose command runs silently past the quiet limit is not stopped', async t => {
+  const f = setup(t, 'codex', { commands: ['sleep 3'] }); quickClock(t, 1);
+  const task = await f.controller.ask('Where is coupon normalization?', null, { permissions: 'auto' }).finished;
+  assert.equal(task.state, 'answered', JSON.stringify(task.error));
+  assert.match(fs.readFileSync(task.runs[0].logFile, 'utf8'), /"item\.completed","item":\{"id":"item_1","type":"command_execution"/, 'the command ran to its end');
+});
+
+test('a Grok Build turn over ACP whose command runs silently past the quiet limit is not stopped', async t => {
+  const f = setup(t, 'grok'), slow = path.join(f.parent, 'slow-tests.sh'); quickClock(t, 1);
+  fs.mkdirSync(path.join(f.parent, '.grok')); fs.writeFileSync(path.join(f.parent, '.grok', 'auth.json'), '{}\n', { mode: 0o600 });
+  proven('grok', f.bin, '1.0.77', { relay: true });
+  fs.writeFileSync(slow, `#!/bin/sh\nsleep 3\nprintf ran > ${JSON.stringify(f.ran)}\n`, { mode: 0o700 });
+  const pending = f.controller.ask(`Run the command ${slow} then reply done with the summary "ran it".`, null, { permissions: 'ask' }).finished;
+  await answer('allow', { vendor: 'grok' });
+  const task = await pending;
+  assert.equal(task.state, 'answered', JSON.stringify(task.error)); assert.equal(task.result.summary, 'ran it'); assert.equal(fs.readFileSync(f.ran, 'utf8'), 'ran');
+  assert.deepEqual(f.calls().at(-1).args.slice(-2), ['agent', 'stdio'], 'over ACP');
 });
 
 test('a Codex lead whose command was declined reports the denial and asks', async t => {
