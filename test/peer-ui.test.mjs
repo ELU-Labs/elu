@@ -663,9 +663,9 @@ test('/invite offers a code for someone new or which bots teammates may use, and
   assert.deepEqual(rowsOf(v, title), ['[ ] @reviewer', '[ ] @lead', '[ ] @qa', '[ ] @elu', 'Done']);
   await choose(v, title, /^Done$/); await until(() => /No bot is shared, so a teammate’s message comes to you\./.test(status()), 'none shared');
   assert.equal(modal(v, 'Team invite'), undefined, 'choosing bots makes no code');
-  // With no bots to share the menu offers only the codes, and the code says nothing about bots.
+  // With no bots to share the menu offers only the code, and the code says nothing about bots.
   for (const bot of listBots()) removeBot(bot.name);
-  await send(v, '/invite'); await until(() => rowsOf(v, 'Invite').length === 2, 'the two codes');
+  await send(v, '/invite'); await until(() => rowsOf(v, 'Invite').length === 1, 'the code');
   await choose(v, 'Invite', /^Someone new/); await until(() => modal(v, 'Team invite'), 'the invite');
   assert.ok(!/bot/i.test(invite()), 'the invite says nothing about bots'); await closeDialog(v, 'Team invite');
   saveBot({ name: 'notes', vendor: 'claude', instructions: 'Keep notes.' }); saveBot({ name: 'docs', vendor: 'claude', instructions: 'Write docs.', shared: true });
