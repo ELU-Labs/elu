@@ -39,6 +39,7 @@ import { peerDataBlock } from '../lib/peer/peerdata.mjs';
 import { peerCli } from '../lib/peer/cli.mjs';
 import { RULES_MAX, saveTeamAccess, teamAccess, teammateRules } from '../lib/peer/access.mjs';
 import { refuse } from '../lib/util.mjs';
+import { processIdentity } from '../lib/process.mjs';
 import { BOTS_TOLD, cleanBots, cleanBox, cleanRows, overlaps, statusRows, thisMachine } from '../lib/peer/status.mjs';
 import { createAsk, dismissAsk, reconnect, reviewText, teammate, tickAsks, teamAsk, dismissTeam, applyTask, getAsk, asks as allAsks } from '../lib/peer/asks.mjs';
 import { RETRY_MS, checkInviterProof, inviteKeys, joinerProof, openInvites, parseInvite, redeemCode } from '../lib/peer/invite.mjs';
@@ -1293,6 +1294,14 @@ test('a join that gives up says why and what to do; a cancelled one stops at onc
     assert.equal(cancelled.message, 'Join cancelled. You did not join.');
     assert.equal(looking.shortJoin, null);
     assert.deepEqual(await looking.command({ type: 'joinCancel' }), { cancelled: false }, 'nothing under way to cancel');
+    // A join sent right after a cancel, read by the daemon in the same pass, is taken: the cancelled one is not in its way.
+    const again = made(connected), one = timed(again.command({ type: 'join', code }));
+    await until(() => again.shortJoin?.keys, 'the search under way', 20000);
+    const stopped = again.command({ type: 'joinCancel' }), two = timed(again.join(code, { timeoutMs: 1200 }));
+    assert.deepEqual(await stopped, { cancelled: true });
+    assert.equal((await one).message, 'Join cancelled. You did not join.');
+    assert.match((await two).message, /^Nobody answered for this code\./, 'the second join ran, and gave up by itself');
+    assert.equal(again.shortJoin, null);
     // Cancelled in the moment before the search starts, while the code's keys are worked out.
     const early = made(connected), first = timed(early.command({ type: 'join', code }));
     assert.deepEqual(await early.command({ type: 'joinCancel' }), { cancelled: true });
@@ -1312,6 +1321,27 @@ test('a join that gives up says why and what to do; a cancelled one stops at onc
     assert.ok(starting.shortJoin?.keys, 'still looking while the network starts');
     net = { bootstrapped: true, online: true, answers: 0 };
     assert.equal((await slow).message, offline);
+  });
+});
+
+test('a join is cancelled before any daemon has read it, and a daemon that never starts is said as that, not as a timeout', async t => {
+  const home = newHome(t);
+  await withHome(home, async () => {
+    createIdentity({ name: 'sara' });
+    const code = 'k7qm-x2pd-9fhw', queued = () => fs.readdirSync(peerFile('commands')).filter(name => !name.endsWith('.result.json')).map(name => JSON.parse(fs.readFileSync(peerFile('commands', name), 'utf8')).type);
+    // Something else holds the daemon's lock and writes no state: no daemon is started here, and none answers.
+    fs.mkdirSync(path.dirname(peerFile('peer.lock')), { recursive: true }); fs.writeFileSync(peerFile('peer.lock'), JSON.stringify({ pid: process.pid, identity: processIdentity(process.pid) }));
+    const stopper = new AbortController(), joining = peer.joinTeam(code, { signal: stopper.signal }).then(() => null, error => error.message);
+    await new Promise(resolve => setTimeout(resolve, 300));
+    assert.deepEqual(queued(), ['join']);
+    const started = Date.now(); stopper.abort();
+    assert.equal(await joining, 'Join cancelled. You did not join.');
+    assert.ok(Date.now() - started < 1000, `no daemon had read it, so it is cancelled at once: ${Date.now() - started} ms`);
+    assert.deepEqual(queued(), ['joinCancel'], 'the join is taken back, and a daemon that had read it is told to stop');
+    for (const name of fs.readdirSync(peerFile('commands'))) fs.rmSync(peerFile('commands', name));
+    const dead = await peer.joinTeam(code, { startMs: 700 }).then(() => null, error => error.message);
+    assert.match(dead, /^ELU could not start its network helper on this computer, so nobody was looked for\. Try again\. See .*daemon\.log\.$/);
+    assert.deepEqual(queued(), ['joinCancel'], 'the join is not left for a daemon that starts later');
   });
 });
 
