@@ -7,6 +7,7 @@ import { stopLine, logCause, logLimit, limitOf } from '../lib/stop-line.mjs';
 import { boardRows, rowTitle } from '../lib/board.mjs';
 import { STUCK_LINE } from '../lib/runner.mjs';
 import * as claude from '../lib/adapters/claude.mjs';
+import { signInCommand } from '../lib/vendors.mjs';
 
 // A session as it is kept: an edit session (no kind) unless said otherwise, whose last turn ran on Claude.
 const at = '2026-11-12T10:00:00.000Z';
@@ -40,7 +41,7 @@ test('a turn that could not finish names the cause when it is known, then the on
   assert.equal(failed('model-unavailable'), 'The model could not finish: that model is not available. Choose another with /model, then type continue.');
   assert.equal(failed('unknown'), 'The model could not finish. Type continue to try again.');
   // Codex signs in with its own command.
-  assert.equal(said({ runs: [{ role: 'lead', vendor: 'codex', at }], error: { message: 'The model could not finish.', cause: 'unknown' } }, { logCause: () => 'auth' }).text, 'The model could not finish: Codex is signed out. Sign in again with codex login, then type continue.');
+  assert.equal(said({ runs: [{ role: 'lead', vendor: 'codex', at }], error: { message: 'The model could not finish.', cause: 'unknown' } }, { logCause: () => 'auth' }).text, 'The model could not finish: Codex is signed out. Sign in again with ' + signInCommand('codex') + ', then type continue.');
   // A bot's turn says who.
   assert.equal(said({ error: { message: '@scout could not finish.', cause: 'rate-limit' } }).text, '@scout could not finish: the account hit its rate limit. Switch account in Usage, or type continue to try again.');
   // What Claude printed on stderr stays, with the action after it.
@@ -184,9 +185,9 @@ test("a bot's or a reviewer's failed run names that run's vendor, not the lead's
   assert.equal(said({ runs, error: { message: 'Antigravity could not finish.', cause: 'auth', logFile: '/runs/checker.log' } }).text, 'Antigravity could not finish: Antigravity CLI is signed out. Sign in again with agy, then type continue.');
   // A Codex bot whose log reads as signed out.
   const codex = [...runs, { role: 'bot:critic', vendor: 'codex', at, logFile: '/runs/critic.log' }];
-  assert.equal(said({ runs: codex, error: { message: '@critic could not finish.', cause: 'unknown', logFile: '/runs/critic.log' } }, { logCause: () => 'auth' }).text, '@critic could not finish: Codex is signed out. Sign in again with codex login, then type continue.');
+  assert.equal(said({ runs: codex, error: { message: '@critic could not finish.', cause: 'unknown', logFile: '/runs/critic.log' } }, { logCause: () => 'auth' }).text, '@critic could not finish: Codex is signed out. Sign in again with ' + signInCommand('codex') + ', then type continue.');
   // An error that names no log is the last run's.
-  assert.equal(said({ runs: codex, error: { message: '@critic could not finish.', cause: 'auth' } }).text, '@critic could not finish: Codex is signed out. Sign in again with codex login, then type continue.');
+  assert.equal(said({ runs: codex, error: { message: '@critic could not finish.', cause: 'auth' } }).text, '@critic could not finish: Codex is signed out. Sign in again with ' + signInCommand('codex') + ', then type continue.');
 });
 
 test("a turn stopped by the session's own /budget says so, not that the account is out of credits", t => {
