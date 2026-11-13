@@ -624,6 +624,13 @@ test('e on a reply or a result that waits in Sessions opens its text to edit in 
   await until(() => v.current.view === 'chats' && v.current.screen.focused === ask && ask.getValue() === WHOLE, 'the result in the box of Chats');
   await until(() => ask._label.getText().trim() === 'Edit the result for @sara · Enter sends it · Esc leaves it held' && keys() === 'enter send the edited result  esc leave it held', 'the box says it is an edit');
   assert.match(status(), /It may hold a secret\. Take that out, then Enter sends it to @sara\. Esc leaves it held\./);
+  // Esc leaves it held, with the cursor on it in her threads: y, e and n act on it from there.
+  const [, threads] = v.panels.teamLists;
+  v.input.write('\x1b');
+  await until(() => /The result is still held\. y sends it as it is, e edits it, n drops it\./.test(status()) && ask.getValue() === '', 'Esc leaves it held');
+  await until(() => v.current.screen.focused === threads && /result ready/.test(plainItem(threads.items[threads.selected])) && /^y accept\/send {2}e edit {2}n decline/.test(keys()), 'the cursor is on the held result');
+  v.input.write('e');
+  await until(() => v.current.screen.focused === ask && ask.getValue() === WHOLE, 'e edits it again');
   await until(() => ask.__listener, 'the box reads'); ask.setValue('Lowercase input is covered by a test now.'); ask.submit();
   await until(() => /Sending the edited result to @sara\./.test(status()), 'the edited result went');
   assert.deepEqual(peer.sent().filter(row => row.type === 'approve').map(row => [row.id, row.text]), [['held:result-r1', 'Lowercase input is covered by a test now.']]);
