@@ -92,10 +92,10 @@ test('argv per profile is a fixed snapshot; settings and the hook are written pe
     assert.ok(rules.every(rule => /^write_file\(|^command\(sudo\)$/.test(rule)));
     assert.ok(rules.includes(`write_file(${folder}/)`), 'a named folder is read, never written');
   }
-  assert.equal(full.permissions.deny.includes(`write_file(${folder}/)`), false, 'Full access leaves a named folder as it is');
+  assert.equal(full.permissions.deny, undefined, 'Full access leaves a named folder as it is');
   assert.equal(auto.toolPermission, 'proceed-in-sandbox'); assert.ok(auto.permissions.deny.includes('command(sudo)')); assert.equal(auto.enableTerminalSandbox, true);
   assert.equal(full.allowNonWorkspaceAccess, true); assert.deepEqual(full.permissions.allow, ['read_url(*)', 'execute_url(*)', 'mcp(*)']);
-  assert.ok(full.permissions.deny.some(rule => rule.startsWith(`write_file(${path.join(owner, '.ssh')}`)) && !full.permissions.deny.some(rule => rule.includes('package.json')), 'full keeps only the secret tripwire');
+  assert.deepEqual(Object.keys(full.permissions), ['allow'], 'Full access is everything: no deny rule, home secrets included');
   // Opening a saved conversation runs agy under the workspace HOME, where the conversation lives.
   const saved = crypto.randomUUID(), open = agy.interactive({ session: saved, cwd });
   assert.deepEqual([open.bin, open.args], ['agy', ['--conversation', saved]]); assert.equal(open.env.HOME, agy.privateHome({ cwd })); assert.equal(open.env.AGY_CLI_DISABLE_AUTO_UPDATE, 'true');

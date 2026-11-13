@@ -320,7 +320,7 @@ test('a record that goes missing approves nothing: the one-time pass is not give
 // What the launch rules say about the folder that holds the record. They are not the whole
 // fence: Full access runs shell commands with no sandbox on every vendor, and there the owner
 // has given the session his own reach.
-test("a session's file tools cannot reach the record of approvals: with permissions its folder is denied by name, a shell command is fenced from it where the sandbox runs, and Read only writes in the session folder only", t => {
+test("a session's file tools cannot reach the record of approvals: in Ask and Approve for me its folder is denied by name, a shell command is fenced from it where the sandbox runs, and Read only writes in the session folder only", t => {
   // The record is kept outside ~/.config here, so no rule about that folder is what covers it.
   const p = project(t), personal = path.join(p.parent, 'state'), cwd = p.root, mcp = { file: path.join(p.parent, 'mcp.json'), names: ['elu-code-approval'] };
   fs.writeFileSync(mcp.file, '{"mcpServers":{}}'); environment(t, { XDG_CONFIG_HOME: personal });
@@ -330,7 +330,8 @@ test("a session's file tools cannot reach the record of approvals: with permissi
   const settingsOf = args => JSON.parse(args[args.indexOf('--settings') + 1]), under = `//${folder.slice(1)}`;
   for (const mode of ['ask', 'auto', 'full']) {
     const settings = settingsOf(claude.compile({ mode, role: lead, cwd, protectedPaths: ['.elu-code', '.git'], commonDir: path.join(cwd, '.git'), session, mcp, approval: { tool: APPROVAL_TOOL } }));
-    for (const tool of ['Read', 'Edit', 'Write']) for (const rule of [`${tool}(${under})`, `${tool}(${under}/**)`]) assert.ok(settings.permissions.deny.includes(rule), `${mode} denies ${rule}`);
+    // Full access is everything: the owner gave the session his own reach, this folder included.
+    for (const tool of ['Read', 'Edit', 'Write']) for (const rule of [`${tool}(${under})`, `${tool}(${under}/**)`]) assert.equal(settings.permissions.deny.includes(rule), mode !== 'full', `${mode} ${mode === 'full' ? 'leaves' : 'denies'} ${rule}`);
     if (mode !== 'full') { assert.ok(settings.sandbox.filesystem.denyWrite.includes(folder), `${mode}: a shell command cannot write it`); assert.ok(settings.sandbox.filesystem.denyRead.includes(folder), `${mode}: a shell command cannot read it`); }
   }
   // Codex: the profile of Ask for approval and Approve for me denies the folder.
