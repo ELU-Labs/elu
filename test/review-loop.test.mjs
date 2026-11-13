@@ -9,7 +9,7 @@ import { ProjectController, conversationEntries, reviewsEdits } from '../lib/pro
 import { projectFolder } from '../lib/workspace.mjs';
 import { readTask, saveTask } from '../lib/state.mjs';
 import { assertReady } from '../lib/publish.mjs';
-import { changed, outputFolders, publishable, taskChanges } from '../lib/git.mjs';
+import { changed, diff, outputFolders, publishable, taskChanges } from '../lib/git.mjs';
 import { structuralChecks } from '../lib/checks.mjs';
 import { defaultConfig } from '../lib/config.mjs';
 import { loopStopMessage, stopLine } from '../lib/stop-line.mjs';
@@ -340,4 +340,43 @@ test('the line names at most two cut files, and says nothing when the bot had th
   assert.equal(lessLine('critic', { shape: 'paths', context: { changedFiles: ['a.mjs'] } }, 'answered from'), "This change is too large for @critic's model, so it answered from the changed file paths only.");
   assert.equal(lessLine('critic', { shape: 'whole', context: {} }, 'reviewed'), null);
   assert.equal(lessLine('critic', {}, 'reviewed'), null);
+});
+
+// A changed file of any size is checked and reviewed: ELU sets no size limit of its own on a
+// file, a diff or the lines of a change. Only the model's own refusal gives a bot less.
+const MiB = 1024 * 1024;
+test('a five-line change to a file over 4 MiB is checked and reviewed with the whole file', async t => {
+  const f = setup(t, 'normal', { insert: { file: 'src/big.mjs', at: 5000, text: ADDED } }); largeFile(f.root, 'src/big.mjs', 80000);
+  assert.ok(fs.statSync(path.join(f.root, 'src/big.mjs')).size > 4 * MiB);
+  const task = await f.controller.ask('Normalize coupon codes').finished;
+  assert.equal(task.state, 'ready', JSON.stringify(task.error)); assert.equal(task.reviewStatus, 'passed');
+  assert.ok(task.evidence.results.every(row => row.status === 'passed'), JSON.stringify(task.evidence.results));
+  const [review] = reviewOf(f.inputs('claude'), 'reviewer'), { source } = contextOf(review), big = fs.readFileSync(path.join(task.worktree, 'src/big.mjs'), 'utf8');
+  assert.ok(big.length > 4 * MiB && big.includes(ADDED));
+  assert.deepEqual(source.files, [{ path: 'src/big.mjs', content: big }, COUPON]);
+  assert.equal(source.patch, patchOf(task));
+});
+
+test('a new file and an ignored file over 4 MiB are read whole, and a diff over 16 MiB is given whole', t => {
+  const { root } = project(t);
+  fs.writeFileSync(path.join(root, '.gitignore'), 'out.log\n'); git(root, ['add', '.gitignore']); git(root, ['commit', '-m', 'Ignore the log']);
+  const base = git(root, ['rev-parse', 'HEAD']), line = 'a line of a file that is larger than four mebibytes, written to test the size\n';
+  const count = Math.ceil(5 * MiB / line.length);
+  fs.writeFileSync(path.join(root, 'src/new.txt'), line.repeat(count)); fs.writeFileSync(path.join(root, 'out.log'), line.repeat(count));
+  const change = changed(root, base);
+  assert.deepEqual(change.paths, ['out.log', 'src/new.txt']); assert.deepEqual(change.ignored, ['out.log']);
+  assert.deepEqual(change.unfollowed, [], 'nothing is left unread for its size');
+  // The new file's lines count; the large ignored output is known to the digest by its size and time.
+  assert.equal(change.lines, count);
+  // A tracked file that grows by 17 MiB: the diff Git prints is read whole.
+  fs.writeFileSync(path.join(root, 'src/coupon.mjs'), `${fs.readFileSync(path.join(root, 'src/coupon.mjs'), 'utf8')}${'// '.concat(line).repeat(Math.ceil(17 * MiB / line.length))}`);
+  const patch = diff(root, base);
+  assert.ok(patch.length > 17 * MiB, `${patch.length}`); assert.ok(patch.endsWith(`+// ${line}`));
+});
+
+test('a model that refuses a change over 4 MiB whole reviews it as excerpts', async t => {
+  const f = setup(t, 'normal', { insert: { file: 'src/big.mjs', at: 5000, text: ADDED }, tooLong: 1000000 }); largeFile(f.root, 'src/big.mjs', 80000);
+  const task = await f.controller.ask('Normalize coupon codes').finished;
+  assert.equal(task.state, 'ready', JSON.stringify(task.error));
+  assert.ok(reviewOf(f.inputs('claude'), 'reviewer')[1].includes('"lines":"4851-5155 of 80005"'));
 });

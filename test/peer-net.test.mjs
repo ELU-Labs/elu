@@ -37,7 +37,7 @@ import { acceptIncoming, processOutbox, sendReply, syncRecords } from '../lib/pe
 import { task as a2aTask, TaskState } from '../lib/peer/a2a.mjs';
 import { peerDataBlock } from '../lib/peer/peerdata.mjs';
 import { peerCli } from '../lib/peer/cli.mjs';
-import { RULES_MAX, saveTeamAccess, teamAccess, teammateRules } from '../lib/peer/access.mjs';
+import { checkRules, saveTeamAccess, teamAccess, teammateRules } from '../lib/peer/access.mjs';
 import { refuse } from '../lib/util.mjs';
 import { BOTS_TOLD, cleanBots, cleanBox, cleanRows, overlaps, statusRows, thisMachine } from '../lib/peer/status.mjs';
 import { createAsk, dismissAsk, reconnect, reviewText, teammate, tickAsks, teamAsk, dismissTeam, applyTask, getAsk, asks as allAsks } from '../lib/peer/asks.mjs';
@@ -420,7 +420,7 @@ test('what teammates can do here is saved per team, checked, and its rules reach
   withHome(sara.home, () => {
     assert.equal(teamAccess(crew.teamId), null, 'never set');
     assert.throws(() => saveTeamAccess(crew.teamId, { handling: 'full' }), /Choose auto or manual\./);
-    assert.throws(() => saveTeamAccess(crew.teamId, { rules: 'x'.repeat(RULES_MAX + 1) }), /Keep the rules to 1000 characters\./);
+    assert.equal(checkRules('x'.repeat(5000)).length, 5000, 'rules of any length are taken whole');
     assert.throws(() => saveTeamAccess(crew.teamId, { folder: '/' }), /Unknown access setting: folder\./);
     assert.throws(() => saveTeamAccess(crew.teamId, { root: path.dirname(os.homedir()) }), /home folder cannot be/);
     assert.throws(() => saveTeamAccess('team', {}), /Choose a team\./);
@@ -2064,8 +2064,17 @@ test('review over the network, a handoff that waits for accept, and status rows 
   assert.equal(served.kind, 'review'); assert.match(served.text, /value\.trim\(\)/);
   await run(sara.home, { type: 'approve', id: held.id });
   await until(() => askRecord(ana.home, askId)?.state === 'answered', 'review answer');
-  liveTask(mine.root, { id: '2', files: { 'src/coupon.mjs': `// ${'a'.repeat(96)}\n`.repeat(1700) } });
-  assert.throws(() => withHome(ana.home, () => reviewText(mine.root, '2')), /over 160000 characters/);
+  // A diff of any size goes to Sara whole: this one is over 1 MiB, more than one line on the
+  // link carries, so it goes ahead of its message in pieces. ELU 0.1.19 refused it over 160000 characters.
+  liveTask(mine.root, { id: '2', files: { 'src/coupon.mjs': `// ${'a'.repeat(96)}\n`.repeat(12000) } });
+  const big = withHome(ana.home, () => reviewText(mine.root, '2'));
+  assert.ok(Buffer.byteLength(big) > 1024 * 1024, String(big.length));
+  const second = await run(ana.home, { type: 'review', to: 'sara', root: mine.root, taskId: '2' });
+  const bigServed = await until(() => records(sara.home).find(row => row.kind === 'review' && row.text.length > 160000), 'the long review served');
+  assert.equal(bigServed.text, big, 'every character of the diff reached the review');
+  const heldLong = await until(() => item(sara.home, 'held'), 'the long review run and its held reply');
+  await run(sara.home, { type: 'approve', id: heldLong.id });
+  await until(() => askRecord(ana.home, second.askId)?.state === 'answered', 'long review answer');
 
   // A handoff is never auto-accepted: it waits with nothing queued until Sara picks w and a mode.
   const handoff = await run(ana.home, { type: 'handoff', to: 'sara', project: 'app', text: 'Add a coupon expiry check.' });

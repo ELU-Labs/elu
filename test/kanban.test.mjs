@@ -13,7 +13,7 @@ const task = (id, goal, state, extra = {}) => ({ id, goal, state, createdAt: new
 test('cards wait in To do, follow their session once started, and go to Done by hand', t => {
   const p = project(t), repo = projectFolder(p.root);
   const first = addCard(repo, 'Add rate limiting to login'), second = addCard(repo, 'Write coupon docs');
-  assert.throws(() => addCard(repo, '   '), /1 to 16000/);
+  assert.throws(() => addCard(repo, '   '), /Write the task first/);
   editCard(repo, second.id, 'Write coupon API docs');
   let columns = boardColumns(readBoard(repo), { tasks: [], queue: [] });
   assert.deepEqual(names(columns), { todo: ['Add rate limiting to login', 'Write coupon API docs'], progress: [], needs: [], done: [] });
