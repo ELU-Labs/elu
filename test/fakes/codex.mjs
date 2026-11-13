@@ -5,13 +5,25 @@ import fs from 'node:fs'; import path from 'node:path'; import {spawnSync} from 
 const vendor=path.basename(process.argv[1]); const args=process.argv.slice(2);
 let cfg={}; try{cfg=JSON.parse(fs.readFileSync(path.join(path.dirname(process.argv[1]),'fake.json'),'utf8'));}catch{}
 const mode=cfg.mode??'normal';
-if(cfg.calls)fs.appendFileSync(cfg.calls, JSON.stringify({vendor,args})+'\n');
+// accounts (fake.json): the account a run is on is the one auth.json names in CODEX_HOME (or
+// ~/.codex), as the real CLI keeps it; a call records it. accounts.loginAs: the account `codex
+// login` signs in there. accounts.limited: accounts whose turns fail at their usage limit.
+// accounts.codexUsage: per account, the percent of the windows the app-server reports.
+const codexHome=process.env.CODEX_HOME??path.join(process.env.HOME??'','.codex');
+let account=null;try{account=JSON.parse(Buffer.from(JSON.parse(fs.readFileSync(path.join(codexHome,'auth.json'),'utf8')).tokens.id_token.split('.')[1],'base64url').toString('utf8')).email??null;}catch{}
+if(cfg.calls)fs.appendFileSync(cfg.calls, JSON.stringify({vendor,args,...(cfg.accounts&&args[0]==='exec'?{account,config:process.env.CODEX_HOME??null}:{})})+'\n');
 if(args.includes('--version')){console.log('codex-cli 0.166.0-alpha.5.1');process.exit(0);}
 if(args.includes('--help')){console.log('--print --add-dir --restricted --safe-mode --setting-sources --settings --strict-mcp-config --mcp-config --no-chrome --permission-mode --permission-prompts --tools --allowedTools --disallowedTools --output-format --verbose --json-schema --max-budget-usd --session-id --ignore-user-config --ignore-rules --json --sandbox --cd --output-schema --config --skip-git-repo-check');process.exit(0);}
 // `debug models --bundled` as the real CLI prints it: the catalog as JSON, one row hidden.
 // fake.json may carry its own rows as `models`.
 if(args[0]==='debug'&&args[1]==='models'){console.log(JSON.stringify({models:cfg.models??[{slug:'big-model',display_name:'Big Model',description:'Frontier model for the most demanding work.',visibility:'list',priority:2},{slug:'quick-model',display_name:'Quick Model',description:'Fast and affordable model for easier tasks.',visibility:'list',priority:1},{slug:'review-model',display_name:'Review Model',description:'Automatic approval review model.',visibility:'hide',priority:9}]}));process.exit(0);}
 // `login status` as the real CLI prints it: a ChatGPT sign-in, an API key (exit 0 too, with a masked key), or nothing.
+if(args[0]==='login'&&args[1]!=='status'){
+ const as=cfg.accounts?.loginAs;if(!as){console.error('Login cancelled.');process.exit(1);}
+ const payload=Buffer.from(JSON.stringify({email:as,'https://api.openai.com/auth':{chatgpt_plan_type:cfg.accounts.plan??'plus'}})).toString('base64url');
+ fs.mkdirSync(codexHome,{recursive:true});fs.writeFileSync(path.join(codexHome,'auth.json'),JSON.stringify({auth_mode:'chatgpt',tokens:{id_token:`h.${payload}.s`,access_token:'access-never-shown',refresh_token:'refresh-never-shown'}}),{mode:0o600});
+ console.log('Successfully logged in');process.exit(0);
+}
 if(args[0]==='login'){
  if(mode==='signed-out'){console.log('Not logged in');process.exit(1);}
  if(mode==='api-key'){console.log('API key configured - sk-fake***-0000\nAuthentication is checked when you send a request.');process.exit(0);}
@@ -22,7 +34,7 @@ if(args[0]==='app-server'){
  for await(const line of readline.createInterface({input:process.stdin})){
   const row=JSON.parse(line);if(cfg.calls)fs.appendFileSync(cfg.calls,JSON.stringify({vendor,args:[],rpc:row.method})+'\n');
   if(row.id===1)console.log(JSON.stringify({id:1,result:{}}));
-  if(row.id===2){const resetsAt=Math.floor(Date.now()/1000)+7200;console.log(JSON.stringify({id:2,result:{rateLimits:{primary:{usedPercent:18,windowDurationMins:300,resetsAt},secondary:{usedPercent:62,windowDurationMins:10080,resetsAt:resetsAt+604800}}}}));}
+  if(row.id===2){const resetsAt=Math.floor(Date.now()/1000)+7200,used=cfg.accounts?.codexUsage?.[account]??{fiveHour:18,weekly:62};console.log(JSON.stringify({id:2,result:{rateLimits:{primary:{usedPercent:used.fiveHour,windowDurationMins:300,resetsAt},secondary:{usedPercent:used.weekly,windowDurationMins:10080,resetsAt:resetsAt+604800}}}}));}
  }
  process.exit(0);
 }
@@ -53,6 +65,7 @@ const resumed=args[0]==='exec'&&args[1]==='resume'?args[2]:null;
 const session=resumed??'12345678-1234-4234-8234-123456789abc';
 if(mode==='review-block'||mode==='review-fix'&&!input.includes('Handled the edge case.'))result.comments=[{id:'R1',severity:'must_fix',body:'Handle the edge case.'}];
 console.log(JSON.stringify({type:'thread.started',thread_id:session}));
+if(cfg.accounts?.limited?.includes(account)){const message="You've hit your usage limit. Upgrade to Pro or try again later.";console.log(JSON.stringify({type:'turn.started'}));console.log(JSON.stringify({type:'error',message}));console.log(JSON.stringify({type:'turn.failed',error:{message:`${message} (usage_limit_reached)`}}));process.exit(1);}
 // tooLong (fake.json): a review this model will not take (as in the fake Claude Code), ended as
 // the real CLI ends a prompt longer than the model's context window.
 const tooLong=cfg.tooLong!==undefined&&input.includes('Review as @')&&(cfg.tooLong==='all'||cfg.tooLong==='files'&&/"content":"|"excerpts":\[/.test(input)||typeof cfg.tooLong==='number'&&input.length>cfg.tooLong);
