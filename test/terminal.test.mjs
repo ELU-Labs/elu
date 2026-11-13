@@ -962,7 +962,7 @@ test('a long list of models is clipped to the dialog with a count of the rest, a
   v.input.write('\x1b'); await until(() => !modal(v, 'Model') && v.current.screen.focused === panels.botsList, 'Esc makes nothing'); assert.deepEqual(listBots(), []);
   // agy is never run for its models: the dialog is the plain one, Tab does nothing, and any name goes on to the next step.
   await start('pages', 'agy');
-  assert.deepEqual(modelLines(v), ['A model agy knows by name. Empty uses Antigravity CLI\'s own.']); assert.match(plainFrame(v), /┌─ Enter submits \/ Esc cancels \/ PageUp reads ─/);
+  assert.deepEqual(modelLines(v), ['A model agy knows by name. Empty uses Antigravity CLI\'s own.']); assert.match(plainFrame(v), /┌─ Enter submits \/ Esc cancels \/ PgUp PgDn page ─/);
   v.input.write('\t'); v.input.write('some-model'); await modelHolds(v, 'some-model'); v.input.write('\r'); await plainBot(v);
   await until(() => editor(v, 'Instructions · @pages')?.__listener, 'on to the instructions, with no effort list'); v.input.write('Check the pages.');
   await until(() => editor(v, 'Instructions · @pages').getValue() === 'Check the pages.', 'typed'); v.input.write('\x13');

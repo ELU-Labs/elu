@@ -911,6 +911,149 @@ test('a session on my other computer keeps the lines the owner reads while its o
   assert.equal(chat.getScrollPerc(true), 100, 'it follows the newest line');
 });
 
+// PgUp and PgDn as a terminal sends them, and a click at a place in a widget.
+const PGUP = '\x1b[5~', PGDN = '\x1b[6~';
+const clickAt = (v, widget, dx = 4, dy = 2) => v.input.write(`\x1b[<0;${widget.aleft + dx + 1};${widget.atop + dy + 1}M\x1b[<0;${widget.aleft + dx + 1};${widget.atop + dy + 1}m`);
+const resizeTo = async (v, columns, rows) => { v.output.columns = columns; v.output.rows = rows; v.output.emit('resize'); await until(() => v.current.screen.width === columns && v.current.screen.height === rows, `${columns}x${rows}`); };
+
+test('PgUp and PgDn page a session on my other computer, from the message box and in its chat, at 80x24 and at 140x50, and the key bar names them there', { timeout: 60000 }, async t => {
+  const at = new Date().toISOString(), said = n => Array.from({ length: n }, (_, index) => ({ role: index % 2 ? 'Claude' : 'You', at, text: `Line ${index + 1} of the long chat`, ...(index % 2 ? { lead: true } : {}) }));
+  const remote = [{ id: '33333333-3333-4333-8333-333333333333', machine: SARA, createdAt: at, lastAt: at, title: 'Read the long chat', state: 'answered', steps: [], approvals: [], entries: said(120) },
+    { id: '44444444-4444-4444-8444-444444444444', machine: SARA, createdAt: at, lastAt: at, title: 'A short one', state: 'answered', steps: [], approvals: [], entries: said(1) }];
+  const p = project(later(t)); environment(t, p.parent);
+  const peer = fakePeer({ items: [], mine: [{ key: SARA, mine: true, theirs: true }], remote }), v = await view(t, { repo: repository(p.root), dashboard: true, peer });
+  const board = v.panels.board, chat = v.panels.chat, ask = v.panels.ask, keys = () => v.panels.keys.getText().trim(), page = () => chat.height - chat.iheight - 1;
+  const box = async () => { ask.focus(); ask.readInput(); await until(() => ask.__listener && /Message your agent here/.test(ask._label.getText()), 'the message box over the session there'); };
+  await until(() => board.items.some(item => /Read the long chat/.test(plainItem(item))), 'the remote rows');
+  // A chat that fits its pane: the bar is as it was.
+  board.focus(); selectRow(board, /A short one/); await until(() => /Line 1 of the long chat/.test(chat.getContent()) && !/Line 2 of/.test(chat.getContent()), 'the short chat');
+  await box(); await until(() => /^enter send to your agent here {2}@sara-box writes there {2}esc sessions$/.test(keys()), 'the keys over a short chat');
+  board.focus(); selectRow(board, /Read the long chat/); await until(() => /Line 120 of the long chat/.test(chat.getContent()), 'the long chat');
+  for (const [columns, rows] of [[80, 24], [140, 50]]) {
+    await resizeTo(v, columns, rows); await box();
+    // To the end first: a size change keeps the place the chat was at.
+    for (let presses = 0; chat.getScrollPerc(true) !== 100 && presses < 200; presses++) { v.input.write(PGDN); await pause(30); }
+    await until(() => chat.getScrollPerc(true) === 100, `the chat there at its end, ${columns}x${rows}`);
+    const end = chat.childBase; assert.ok(end > 2 * page(), 'more than two pages');
+    // More chat than the pane shows: the bar names the keys, before Esc.
+    await until(() => (columns < 100 ? /^enter send to your agent here {2}@sara-box writes there {2}pgup pgdn page$/ : /^enter send to your agent here {2}@sara-box writes there {2}pgup pgdn page {2}esc sessions$/).test(keys()), `the keys over a long chat, ${columns}x${rows}`);
+    // From the message box: the chat moves a page, the text and the focus stay.
+    ask.setValue('half a thought'); v.input.write(PGUP);
+    await until(() => chat.childBase === end - page(), `a page up from the box, ${columns}x${rows}`); await pause(200);
+    assert.equal(chat.childBase, end - page(), 'the draws keep the page'); assert.equal(ask.getValue(), 'half a thought'); assert.equal(v.current.screen.focused, ask);
+    v.input.write(PGUP); await until(() => chat.childBase === end - 2 * page(), `another page up, ${columns}x${rows}`);
+    v.input.write(PGDN); await until(() => chat.childBase === end - page(), `a page down from the box, ${columns}x${rows}`);
+    // Written to that computer by its @name, the bar still names them.
+    ask.setValue('@sara-box and then'); v.input.write(' ');
+    await until(() => /^enter send to @sara-box {2}pgup pgdn page {2}esc sessions$/.test(keys()), `the keys when it is sent there, ${columns}x${rows}`);
+    assert.equal(chat.childBase, end - page(), 'typing keeps the page');
+    ask.clearValue(); ask.cancel();
+    // A click on its chat gives it the keys: the same page each way.
+    clickAt(v, chat); await until(() => v.current.screen.focused === chat, `the chat there has the focus, ${columns}x${rows}`);
+    await until(() => /↑↓ scroll {2}esc sessions\b.* {2}pgup pgdn page$/.test(keys()), `the keys in the chat there, ${columns}x${rows}`);
+    assert.equal(chat.childBase, end - page(), 'the click keeps the page');
+    v.input.write(PGUP); await until(() => chat.childBase === end - 2 * page(), `a page up in the chat there, ${columns}x${rows}`);
+    v.input.write(PGDN); v.input.write(PGDN); await until(() => chat.childBase === end && chat.getScrollPerc(true) === 100, `two pages down reach the end, ${columns}x${rows}`);
+  }
+});
+
+test("PgUp and PgDn page a teammate's message beside the Sessions list, from the message box and in the card, where it is taller than its pane", { timeout: 60000 }, async t => {
+  // A row's card holds the first 400 characters of the message: taller than the pane at 80x24, and all of it shows at 140x50.
+  const words = Array.from({ length: 80 }, (_, index) => `word${index + 1}`).join(' ');
+  const peer = fakePeer({ items: [{ id: 'incoming-9', kind: 'incoming', peer: SARA, name: 'sara', project: 'web', text: words, at: ago(1), state: 'submitted', threadId: 'th-long' }] });
+  const p = project(later(t)); environment(t, p.parent);
+  const v = await view(t, { repo: repository(p.root), dashboard: true, peer, columns: 80, rows: 24 });
+  const board = v.panels.board, chat = v.panels.chat, ask = v.panels.ask, keys = () => v.panels.keys.getText().trim(), page = () => chat.height - chat.iheight - 1;
+  await until(() => board.items.some(item => /@sara question/.test(plainItem(item))), 'the row of the question');
+  board.focus(); selectRow(board, /@sara question/);
+  await until(() => /word1 /.test(chat.getText()) && /y accept · n decline/.test(chat.getText()) && chat.getScrollPerc(true) === 100, 'the card, at its end');
+  const end = chat.childBase; assert.ok(end > 0 && end < page(), 'taller than its pane, by less than a page');
+  // From the message box, which starts a new session here: the card moves, the text stays.
+  ask.focus(); ask.readInput(); await until(() => ask.__listener && /^enter new session {2}pgup pgdn page/.test(keys()), 'the keys from the box');
+  ask.setValue('half a thought'); v.input.write(PGUP);
+  await until(() => chat.childBase === 0, 'a page up from the box shows its top'); await pause(200);
+  assert.equal(chat.childBase, 0, 'the draws keep the place'); assert.equal(ask.getValue(), 'half a thought'); assert.equal(v.current.screen.focused, ask);
+  v.input.write(PGDN); await until(() => chat.childBase === end, 'a page down from the box shows its end');
+  ask.clearValue(); ask.cancel();
+  // A click on the card gives it the keys.
+  clickAt(v, chat); await until(() => v.current.screen.focused === chat, 'the card has the focus');
+  await until(() => /^y accept {2}n decline {2}c decline\b.*↑↓ scroll {2}esc sessions\b/.test(keys()), 'the keys in the card');
+  v.input.write(PGUP); await until(() => chat.childBase === 0, 'a page up in the card');
+  v.input.write(PGDN); await until(() => chat.childBase === end, 'a page down in the card');
+  // Where all of it shows, there is nothing to page and the bar does not offer it.
+  await resizeTo(v, 140, 50);
+  ask.focus(); ask.readInput(); await until(() => ask.__listener && /^enter new session/.test(keys()), 'the message box at 140x50');
+  await until(() => chat._clines.length <= chat.height - chat.iheight, 'all of the card shows');
+  assert.doesNotMatch(keys(), /pgup/);
+  v.input.write(PGUP); await pause(150); assert.equal(chat.childBase, 0);
+});
+
+test("PgUp and PgDn page a teammate's thread in its dialog a page at a time, as they page a chat, opened from Sessions and from Chats, at 80x24 and at 140x50", { timeout: 60000 }, async t => {
+  const talk = Array.from({ length: 70 }, (_, index) => ({ from: index % 2 ? 'me' : 'peer', peer: SARA, name: 'sara', kind: index % 2 ? 'answer' : 'ask', text: `Thread line ${index + 1}`, at: ago(100 - index) }));
+  const peer = fakePeer({ items: [{ id: 'incoming-9', kind: 'incoming', peer: SARA, name: 'sara', project: 'web', text: 'Thread line 1', at: ago(1), state: 'submitted', threadId: 'th-long' }] });
+  peer.threadMessages = id => id === 'th-long' ? talk : [];
+  const p = project(later(t)); environment(t, p.parent);
+  const v = await view(t, { repo: repository(p.root), dashboard: true, peer, columns: 80, rows: 24 });
+  const board = v.panels.board, [, threads] = v.panels.teamLists, title = 'Thread with @sara';
+  const body = () => modal(v, title).children.find(child => child.options?.scrollable), field = () => modal(v, title).children.find(child => child.type === 'textbox');
+  // In the open dialog: a page is its text's height less one line, so the last line of a page is the first of the next.
+  const pages = async where => {
+    await until(() => modal(v, title) && /Thread line 1\b/.test(body().getText()) && field().__listener, `the thread, ${where}`);
+    const text = body(), page = text.height - text.iheight - 1;
+    assert.equal(text.childBase, 0, 'it opens at its first message'); assert.ok(text.getScrollHeight() > 3 * text.height, 'more than three pages');
+    assert.match(field()._label.getText(), /Enter submits \/ Esc cancels \/ PgUp PgDn page/);
+    v.input.write(PGDN); await until(() => text.childBase === page, `a page down, ${where}`);
+    v.input.write(PGDN); await until(() => text.childBase === 2 * page, `another page down, ${where}`);
+    v.input.write(PGUP); await until(() => text.childBase === page, `a page up, ${where}`);
+    v.input.write(PGUP); await until(() => text.childBase === 0, `back at its first message, ${where}`);
+    // The letter Enter would send is still the field's text, and nothing was decided.
+    assert.equal(field().value, 'y'); assert.ok(modal(v, title), 'the dialog stays open');
+    await closeDialog(v, title);
+    assert.deepEqual(peer.sent(), [], 'nothing was sent');
+  };
+  for (const [columns, rows] of [[80, 24], [140, 50]]) {
+    await resizeTo(v, columns, rows);
+    // From Sessions: Enter on its row.
+    await send(v, '/sessions'); await until(() => v.current.view === 'tasks' && board.items.some(item => /@sara question/.test(plainItem(item))), 'Sessions');
+    board.focus(); selectRow(board, /@sara question/); await until(() => /enter read/.test(v.panels.keys.getText()), 'its row'); v.input.write('\r');
+    await pages(`from Sessions, ${columns}x${rows}`);
+    // From Chats: Enter on its thread.
+    await send(v, '/chats'); await until(() => v.current.view === 'chats' && threads.items.some(item => /asks you/.test(plainItem(item))), 'Chats');
+    threads.focus(); selectRow(threads, /asks you/); v.input.write('\r');
+    await pages(`from Chats, ${columns}x${rows}`);
+  }
+});
+
+test("in Chats PgUp and PgDn move a page in the open one's threads, in the threads and from the message box, at 80x24 and at 140x50", { timeout: 60000 }, async t => {
+  const items = Array.from({ length: 120 }, (_, index) => ({ id: `answer-${index + 1}`, kind: 'answer', peer: SARA, name: 'sara', project: 'web', text: `Answer number ${index + 1}`, at: ago(index + 1), state: 'completed', threadId: `th-${index + 1}` }));
+  const { v, peer } = await teamView(t, { peer: fakePeer({ items }), columns: 80, rows: 24 }), [, threads] = v.panels.teamLists, ask = v.panels.ask;
+  await openRow(v, /sara/, '@sara');
+  for (const [columns, rows] of [[80, 24], [140, 50]]) {
+    await resizeTo(v, columns, rows);
+    await until(() => threads.items.length > 3 * threads.height, `more than three pages of threads, ${columns}x${rows}`);
+    const page = () => threads.height - threads.iheight - 1, last = threads.items.length - 1;
+    threads.select(0);
+    // From the message box: the threads move a page, the text and the focus stay.
+    ask.focus(); ask.readInput(); await until(() => ask.__listener, 'the message box');
+    ask.setValue('half a thought'); v.input.write(PGDN);
+    await until(() => threads.selected === page(), `a page down from the box, ${columns}x${rows}`); await pause(200);
+    assert.equal(threads.selected, page(), 'the draws keep the place'); assert.equal(ask.getValue(), 'half a thought'); assert.equal(v.current.screen.focused, ask);
+    v.input.write(PGDN); await until(() => threads.selected === 2 * page(), `another page down, ${columns}x${rows}`);
+    assert.equal(threads.childBase, page(), 'the list moves with its cursor: the last row of one page is the first of the next');
+    v.input.write(PGUP); await until(() => threads.selected === page(), `a page up from the box, ${columns}x${rows}`);
+    ask.clearValue(); ask.cancel();
+    // In the threads themselves, to both ends.
+    threads.focus(); await until(() => v.current.screen.focused === threads, 'the threads');
+    await until(() => /^y accept\/send {2}n decline {2}c continue {2}enter read {2}pgup pgdn page$/.test(v.panels.keys.getText().trim()), `the keys in the threads, ${columns}x${rows}`);
+    v.input.write(PGUP); await until(() => threads.selected === 0, `a page up in the threads, ${columns}x${rows}`);
+    v.input.write(PGUP); await pause(100); assert.equal(threads.selected, 0, 'it stops at the first row');
+    v.input.write(PGDN); await until(() => threads.selected === page(), `a page down in the threads, ${columns}x${rows}`);
+    threads.select(last - 1); v.input.write(PGDN); await until(() => threads.selected === last, `it stops at the last row, ${columns}x${rows}`);
+    assert.equal(v.panels.teamBoxes[1]._label.getText().trim(), '@sara', 'the same chat is open');
+  }
+  assert.deepEqual(peer.sent(), [], 'nothing was sent');
+});
+
 test('a thread shows under its channel, #general or its teammate, and a row counts what waits for me', () => {
   const core = { id: 'team-1', name: 'Core', members: [{ key: ME, name: 'ana' }, { key: SARA, name: 'sara', online: true }, { key: LI, name: 'li' }], channels: [{ id: 'c1', name: 'design', members: [ME, SARA] }] };
   const status = { key: ME, teams: [core] }, general = roomTarget('team-1', null), design = roomTarget('team-1', 'c1');
