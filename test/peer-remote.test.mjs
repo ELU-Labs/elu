@@ -708,7 +708,7 @@ test("a teammate's session there is watched and answered from here by its place,
   await assert.rejects(withHome(laptop.home, () => remoteCommand(viewCtx, { type: 'remoteWatch', to: devbox.identity.key, ref: `${item.project}:99` })), /That session is not on this computer\./);
 });
 
-test('a watch its computer let go is made again: a reply still reaches the session, and a listing it never sent drops the old view', async t => {
+test('a watch its computer let go is made again: a reply still reaches the session, and a listing it never sent catches the view up', async t => {
   const { laptop, devbox, project, hostCtx, viewCtx } = pair(t);
   withHome(devbox.home, () => { chat(project.root, 1, { goal: 'Make coupons upper case', messages: [{ at: new Date().toISOString(), text: 'Make coupons upper case' }] }); relist(); });
   await withHome(laptop.home, () => listTick(viewCtx));
@@ -722,14 +722,100 @@ test('a watch its computer let go is made again: a reply still reaches the sessi
   // A reply from here watches it again and goes through.
   assert.deepEqual(await withHome(laptop.home, () => remoteCommand(viewCtx, { type: 'remoteSend', id: item.id, text: 'And the tests' })), { id: item.id });
   assert.equal(withHome(devbox.home, () => pendingRequests(project.root)).at(-1).goal, 'And the tests');
-  // A view whose listing shows a change it never sent is dropped: the row shows what was listed until it is opened again.
+  // A view whose listing shows a change it never sent is kept, and catches up.
   withHome(laptop.home, () => {
     const file = path.join(process.env.XDG_CONFIG_HOME, 'elu-code', 'peer', 'remote', 'view', `${item.id}.json`), hour = new Date(Date.now() - 3600000).toISOString();
     fs.writeFileSync(file, JSON.stringify({ ...JSON.parse(fs.readFileSync(file, 'utf8')), behind: false, lastAt: hour, watchedAt: hour }));
   });
   withHome(devbox.home, () => { chat(project.root, 1, { goal: 'Make coupons upper case', messages: [{ at: new Date(Date.now() + 1000).toISOString(), text: 'Typed there later' }] }); relist(); });
   await withHome(laptop.home, () => listTick(viewCtx, Date.now() + 3001));
-  assert.ok(!withHome(laptop.home, () => remoteSessions()).some(row => row.id === item.id));
+  const seen = () => withHome(laptop.home, () => remoteSessions().find(row => row.id === item.id));
+  assert.equal(seen()?.behind, true, 'kept, to catch up');
+  withHome(devbox.home, () => hostTick(hostCtx, Date.now() + 1));
+  await withHome(laptop.home, () => viewTick(viewCtx));
+  assert.ok(seen().entries.some(entry => entry.text === 'Typed there later')); assert.equal(seen().behind, false); assert.equal(seen().ref, item.ref);
+});
+
+test('a watched session whose events did not all arrive here keeps its view: the listing that shows more catches it up, a watch its computer let go is made again in place, and only a session gone there loses it', async t => {
+  const { laptop, devbox, project, toHost, hostCtx, viewCtx, viewer } = pair(t), start = Date.now(), minute = 60000, day = 86400000;
+  const said = (text, at) => ({ at: new Date(at).toISOString(), text });
+  const typed = [said('Roll the release', start)];
+  const there = (text, at) => { typed.push(said(text, at)); withHome(devbox.home, () => { chat(project.root, 1, { goal: 'Roll the release', state: 'needs_input', messages: typed }); relist(); }); };
+  withHome(devbox.home, () => { chat(project.root, 1, { goal: 'Roll the release', state: 'needs_input', messages: typed }); relist(); });
+  await withHome(laptop.home, () => listTick(viewCtx));
+  const item = withHome(laptop.home, () => remoteMachines()[0].sessions[0]);
+  await withHome(laptop.home, () => remoteCommand(viewCtx, { type: 'remoteWatch', to: devbox.identity.key, ref: item.ref }));
+  withHome(devbox.home, () => hostTick(hostCtx));
+  withHome(laptop.home, () => viewer['elu.remote.events'](toHost.sent.filter(([method]) => method === 'elu.remote.events').at(-1)[1], connection(devbox.identity.key)));
+  await withHome(laptop.home, () => viewTick(viewCtx));
+  const file = withHome(laptop.home, () => path.join(process.env.XDG_CONFIG_HOME, 'elu-code', 'peer', 'remote', 'view', `${item.id}.json`));
+  const seen = () => withHome(laptop.home, () => remoteSessions().find(row => row.id === item.id));
+  assert.deepEqual(seen().entries.map(entry => entry.text), ['Roll the release']);
+  // Five minutes on, something is typed there. The devbox sends its events, which never arrive here.
+  there('Typed there later', start + 5 * minute);
+  withHome(devbox.home, () => hostTick(hostCtx, start + 5 * minute));
+  // The next listing shows that change. The devbox still keeps the watch: the view here stays, and catches up.
+  await withHome(laptop.home, () => listTick(viewCtx, start + 5 * minute + 3001));
+  assert.ok(fs.existsSync(file), 'the view here is kept');
+  assert.equal(seen().behind, true);
+  await withHome(laptop.home, () => viewTick(viewCtx));
+  assert.deepEqual(seen().entries.map(entry => entry.text), ['Roll the release', 'Typed there later']);
+  assert.equal(seen().behind, false); assert.equal(seen().ref, item.ref);
+  // A listing that says the same again asks for nothing more.
+  await withHome(laptop.home, () => listTick(viewCtx, start + 5 * minute + 6002));
+  assert.equal(seen().behind, false);
+  // A week with nothing new: the devbox lets the watch go. Then something is typed there again.
+  withHome(devbox.home, () => hostTick(hostCtx, start + 8 * day));
+  assert.throws(() => withHome(devbox.home, () => hostMethods(hostCtx)['elu.remote.since']({ id: item.id, after: 0 }, connection(laptop.identity.key))), /That session is not on this computer\./);
+  there('Typed there a week later', start + 8 * day);
+  await withHome(laptop.home, () => listTick(viewCtx, start + 8 * day + 3001));
+  assert.ok(fs.existsSync(file)); assert.equal(seen().behind, true);
+  // Catching up finds the watch gone: it is made again under the same id, and the view starts over in place, never removed.
+  await withHome(laptop.home, () => viewTick(viewCtx));
+  assert.ok(fs.existsSync(file), 'the view here is kept');
+  assert.equal(seen().ref, item.ref); assert.equal(seen().title, 'Roll the release'); assert.equal(seen().behind, true);
+  withHome(devbox.home, () => hostTick(hostCtx));
+  await withHome(laptop.home, () => viewTick(viewCtx));
+  assert.deepEqual(seen().entries.map(entry => entry.text), ['Roll the release', 'Typed there later', 'Typed there a week later']);
+  assert.equal(seen().behind, false);
+  // A message from here still goes there, to the same session.
+  assert.deepEqual(await withHome(laptop.home, () => remoteCommand(viewCtx, { type: 'remoteSend', id: item.id, text: 'Ship it' })), { id: item.id });
+  assert.equal(withHome(devbox.home, () => pendingRequests(project.root)).at(-1).goal, 'Ship it');
+  // The session is gone there: its project there is gone, and the watch too. Only then does the view here go.
+  withHome(devbox.home, () => { hostTick(hostCtx, Date.now() + 8 * day); fs.rmSync(path.join(repository(project.root).state, 'tasks', '1'), { recursive: true, force: true }); relist(); });
+  await assert.rejects(withHome(laptop.home, () => remoteCommand(viewCtx, { type: 'remoteSend', id: item.id, text: 'Still there?' })), /not on this computer/);
+  assert.ok(!fs.existsSync(file), 'a session gone there loses its view here');
+});
+
+test('a watched session quiet for a while keeps its view here when something new happens there and the listing shows it before its events come', async t => {
+  const { laptop, devbox, project, toHost, hostCtx, viewCtx, viewer } = pair(t), start = Date.now(), minute = 60000;
+  const typed = [{ at: new Date(start).toISOString(), text: 'Roll the release' }];
+  const save = () => withHome(devbox.home, () => { chat(project.root, 1, { goal: 'Roll the release', state: 'needs_input', messages: typed }); relist(); });
+  const deliver = () => withHome(laptop.home, () => viewer['elu.remote.events'](toHost.sent.filter(([method]) => method === 'elu.remote.events').at(-1)[1], connection(devbox.identity.key)));
+  save();
+  await withHome(laptop.home, () => listTick(viewCtx, start));
+  const item = withHome(laptop.home, () => remoteMachines()[0].sessions[0]);
+  await withHome(laptop.home, () => remoteCommand(viewCtx, { type: 'remoteWatch', to: devbox.identity.key, ref: item.ref }));
+  withHome(devbox.home, () => hostTick(hostCtx, start)); deliver();
+  await withHome(laptop.home, () => viewTick(viewCtx));
+  const file = withHome(laptop.home, () => path.join(process.env.XDG_CONFIG_HOME, 'elu-code', 'peer', 'remote', 'view', `${item.id}.json`));
+  const seen = () => withHome(laptop.home, () => remoteSessions().find(row => row.id === item.id));
+  assert.deepEqual(seen().entries.map(entry => entry.text), ['Roll the release']);
+  // Quiet for 15 minutes: the devbox looks at it every 30 s. It looks now, and a few seconds later something is typed there.
+  const quiet = start + 15 * minute;
+  withHome(devbox.home, () => hostTick(hostCtx, quiet));
+  typed.push({ at: new Date(quiet + 5000).toISOString(), text: 'Typed there later' }); save();
+  // The listing shows that change before the devbox looks again and sends its events: the view here is kept.
+  await withHome(laptop.home, () => listTick(viewCtx, quiet + 6000));
+  assert.ok(fs.existsSync(file), 'the view here is kept while the devbox keeps the watch');
+  await withHome(laptop.home, () => viewTick(viewCtx));
+  assert.ok(fs.existsSync(file));
+  // The devbox looks again and sends the events: the same view shows them, with its place there.
+  withHome(devbox.home, () => hostTick(hostCtx, quiet + 31000)); deliver();
+  await withHome(laptop.home, () => viewTick(viewCtx));
+  assert.deepEqual(seen().entries.map(entry => entry.text), ['Roll the release', 'Typed there later']);
+  assert.equal(seen().ref, item.ref); assert.equal(seen().title, 'Roll the release'); assert.ok(!seen().handoff);
+  assert.equal(seen().createdAt, item.createdAt, 'the same view, not one made again');
 });
 
 test('a watch whose view here went while its computer still sends its events keeps its listed place, and a view saved without one takes it at the next list', async t => {
