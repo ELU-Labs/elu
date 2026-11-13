@@ -7,7 +7,7 @@ import { BOTS_MAX, BOT_COLORS, CHAT_BOTS_MAX, EFFORTS, botColor, botColorProblem
 import { ProjectController, conversationEntries, registerProject, activity } from '../lib/projects.mjs';
 import { projectFolder, pendingRequests } from '../lib/workspace.mjs';
 import { runConversation, botReplies, ownerMessages, BOT_REPLIES_MAX, BOT_REPLY_CHARS, BOT_REPLIES_CHARS } from '../lib/runner.mjs';
-import { readTask, saveTask, tasks } from '../lib/state.mjs';
+import { readTask, saveTask, taskDir, tasks } from '../lib/state.mjs';
 import { assertReady } from '../lib/publish.mjs';
 import { assertPolicy } from '../lib/policy.mjs';
 import { validateConversation } from '../lib/config.mjs';
@@ -606,6 +606,26 @@ test('a teammate\'s answer to the owner\'s ask, continued in his session, reads 
   assert.equal(messages.some(row => /another model|Could not answer/.test(row.text)), false, 'notes and failures are left out');
   assert.equal(messages.at(-1).text, 'Continue with the answer from @sara shown in the peer data block.');
   assert.ok(read.includes(BOT_FINDINGS));
+});
+
+test('a bot reads the lead\'s newest reply when that run\'s log is not one this reads, after a Claude run', async t => {
+  const f = setup(t);
+  const first = await f.controller.ask('Where is coupon normalization?').finished;
+  const claudeSaid = conversationEntries(f.repo, first).filter(entry => entry.lead);
+  assert.equal(claudeSaid.length, 1);
+  // The session's model switched to Grok: its headless log row is { text, stopReason }.
+  const task = readTask(f.repo, first.id), at = new Date(Date.now() + 5000).toISOString(), logFile = path.join(taskDir(f.repo, task.id), 'grok-run.log');
+  fs.writeFileSync(logFile, `${JSON.stringify({ text: JSON.stringify({ outcome: 'done', intent: 'answer', summary: 'Grok looked at the tests.' }), stopReason: 'end_turn', sessionId: 's-1' })}\n`);
+  task.runs.push({ role: 'lead', vendor: 'grok', logFile, code: 0, session: 's-1', at });
+  task.result = { ...task.result, summary: 'Grok looked at the tests.' };
+  const entries = conversationEntries(f.repo, task).filter(entry => entry.lead);
+  assert.deepEqual(entries.map(entry => [entry.text, entry.at]), [[claudeSaid[0].text, claudeSaid[0].at], ['Grok looked at the tests.', at]]);
+  // A newest run that said nothing, such as one that failed, repeats no reply already shown.
+  const failed = path.join(taskDir(f.repo, task.id), 'failed-run.log'); fs.writeFileSync(failed, '');
+  task.runs.push({ role: 'lead', vendor: 'grok', logFile: failed, code: 1, session: 's-1', at: new Date(Date.now() + 9000).toISOString() });
+  assert.equal(conversationEntries(f.repo, task).filter(entry => entry.lead && entry.text === 'Grok looked at the tests.').length, 1);
+  // A Claude conversation is as before: one entry for its one reply.
+  assert.deepEqual(conversationEntries(f.repo, first).filter(entry => entry.lead).map(entry => entry.text), [claudeSaid[0].text]);
 });
 
 test('the bots\' replies the lead reads are bounded: the newest first, each cut with a note, the total capped', () => {
