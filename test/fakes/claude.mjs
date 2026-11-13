@@ -56,6 +56,8 @@ const schemaArg=args.indexOf('--json-schema');
 const schema=schemaArg>=0?JSON.parse(args[schemaArg+1]):null;
 const conversation=Boolean(schema?.properties?.intent);if(conversation&&schema.properties.repository){const named=cfg.repository;result.repository=named&&fs.existsSync(named)?fs.readFileSync(named,'utf8'):'';}if(conversation){result.intent=mode==='answer'||mode==='slow-answer'||mode==='dialogue'&&input.includes('Just explain the implementation')?'answer':'edit';if(result.intent==='answer')result.summary='Yes. You can add multiple agents with /agents.\nNo project checks or setup are needed to ask a question.\nYour next message continues this conversation.';}
 if(cfg.name!==undefined&&schema?.properties?.name)result.name=cfg.name;
+// learned (fake.json): what the reply says the owner taught, given only when the schema offers it, as a model would.
+if(cfg.learned!==undefined&&schema?.properties?.learned)result.learned=cfg.learned;
 // intent (fake.json): answer makes every conversation turn an answer, so a relay test needs no Task.
 if(conversation&&cfg.intent==='answer'){result.intent='answer';result.summary='Looked.';}
 // A request for an edit plans first (lib/plan.mjs): it comes back with a Task unless the prompt
