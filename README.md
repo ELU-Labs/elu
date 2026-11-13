@@ -108,7 +108,7 @@ You can send a message at any time. One sent while the session is working waits 
 | `/changes` | Shows what this session changed; `/chat` goes back |
 | `/publish` | Shows the exact push and draft pull request, then asks you |
 | `/stop` | Stops the running response. A message you sent while it ran is sent next; `/stop` again cancels that message |
-| `/schedule in 1h check the build` | Starts a session later or on a schedule: `/schedule [when] [message]`. `/schedule ` lists times such as `in 5m`, `in 1h` and `daily 9:00`. Each run is a new session with the model, mode and bots of the form (a bot with its own schedule is left out); it does not see the chat it was made in |
+| `/schedule in 1h check the build` | Starts a session later or on a schedule: `/schedule [when] [message]`. `/schedule ` lists times such as `in 5m`, `in 1h` and `daily 9:00`. Each run is a new session with the model, mode and bots of the form (a bot with its own schedule is left out); it does not see the chat it was made in. A schedule gets Full access only when you pick it for that schedule, and the form asks you once before saving it |
 | `/budget 5` | Limits this session to 5 dollars; `/budget off` removes the limit |
 | `! git status` | Runs a shell command. In an open session the model gets the command and its output with your next message |
 | `/update` | Says how to update: `/quit`, then `elu update` |
@@ -120,6 +120,8 @@ Code stops the Mac from going to sleep on its own (`caffeinate -i`); the display
 sleep. Schedules show in the Sessions tab under Scheduled: `p` pauses one and `x` deletes
 it. A time is `in 30m`, `every 2h` (15 minutes to 7 days), `daily 9:00`, `weekdays 9am`,
 `mon,thu 14:30`, `tomorrow 15:00` or `2026-12-01 9:00`, in this computer's local time.
+The model cannot make a schedule itself: asked to repeat work, it gives you the
+`/schedule` line to type.
 
 ## Permissions
 

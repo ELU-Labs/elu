@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { parseWhen, splitWhen, nextRun, saveSchedule, listSchedules, runDue, runScheduleNow, pauseSchedule, removeSchedule, installScheduler, uninstallScheduler } from '../lib/schedules.mjs';
+import { atomic, personalDirectory } from '../lib/util.mjs';
 import { saveBot, removeBot } from '../lib/bots.mjs';
 import { enqueue } from '../lib/conductor.mjs';
 import { pendingRequests, updateRequest } from '../lib/workspace.mjs';
@@ -141,9 +142,11 @@ test('a one-time schedule turns off after it runs; pause, run now, and delete', 
   assert.throws(() => enqueue(p.root, 'x', { scheduleId: '../evil' }), /Invalid schedule ID/);
 });
 
-test('a schedule runs with Ask or Approve for me, never Full access', t => {
+test('a schedule runs with the mode picked for it; Full access only when the owner picked it', t => {
   home(t); const p = project(t), start = () => true, when = () => parseWhen('every 1h', at(9, 8));
-  assert.throws(() => saveSchedule({ root: p.root, goal: 'Lint', when: when(), permissions: 'full' }, at(9, 8)), /Approve for me at most/);
+  assert.throws(() => saveSchedule({ root: p.root, goal: 'Lint', when: when(), permissions: 'full' }, at(9, 8)), /Full access only when you pick it/);
+  assert.throws(() => saveSchedule({ root: p.root, goal: 'Lint', when: when(), permissions: 'full', picked: false }, at(9, 8)), /Full access only when you pick it/);
+  assert.throws(() => saveSchedule({ root: p.root, goal: 'Lint', when: when(), permissions: 'full', picked: true, place: { kind: 'here' } }, at(9, 8)), /never runs in your checkout/);
   assert.throws(() => saveSchedule({ root: p.root, goal: 'Lint', when: when(), permissions: 'locked' }, at(9, 8)), /Choose ask, auto, or full/);
   const row = saveSchedule({ root: p.root, goal: 'Lint', when: when(), permissions: 'auto', picked: true }, at(9, 8));
   assert.equal(row.permissions, 'auto'); assert.equal(listSchedules()[0].permissions, 'auto'); assert.equal(listSchedules()[0].picked, true);
@@ -155,6 +158,52 @@ test('a schedule runs with Ask or Approve for me, never Full access', t => {
   // A picked mode is kept on the run, above the default (Ask for approval here).
   assert.equal(run.permissions, 'auto'); assert.equal(run.picked, true);
   assert.equal('permissions' in requests.find(request => request.scheduleId === plain.id), false);
+});
+
+// The owner picked Full access for this schedule, so each run starts in it, whatever the
+// default says; the file keeps it for the next run and for a restart.
+test('a schedule the owner gave Full access keeps it, and each run starts in it', t => {
+  home(t); const p = project(t), start = () => true;
+  saveDefaultMode('ask');
+  const row = saveSchedule({ root: p.root, goal: 'Triage the backlog', when: parseWhen('every 3h', at(9, 8)), permissions: 'full', picked: true }, at(9, 8));
+  assert.equal(row.permissions, 'full'); assert.equal(row.picked, true);
+  assert.deepEqual([listSchedules()[0].permissions, listSchedules()[0].picked], ['full', true]);
+  assert.equal(runDue(at(9, 11, 1), { start }), 1);
+  const run = pendingRequests(p.root).find(request => request.scheduleId === row.id);
+  assert.equal(run.permissions, 'full'); assert.equal(run.picked, true);
+  updateRequest(p.root, run.id, { state: 'done' });
+  assert.equal(runScheduleNow(row.id, at(9, 12), { start }), true);
+  assert.equal(pendingRequests(p.root).find(request => request.scheduleId === row.id && request.state !== 'done').permissions, 'full', 'r runs it in Full access too');
+});
+
+// The previous version's scheduler and app run beside this one, and a schedule file may come
+// from either. One without a mode, or with ask or auto, runs as before; a mode this version
+// does not know is refused, never read as something wider; and Full access that was not
+// picked is held to Approve for me.
+test('schedule files from other versions: old rows run as before, an unknown mode is refused', t => {
+  home(t); const p = project(t), start = () => true, now = at(9, 8);
+  saveDefaultMode('full');
+  const base = { root: p.root, project: 'p', when: parseWhen('every 1h', now), enabled: true, createdAt: now.toISOString(), nextRunAt: at(9, 9).toISOString(), lastRunAt: null, lastRequestId: null, lastTaskId: null, runs: 0, note: null };
+  const rows = [
+    { ...base, id: 'schedule-0000000a', goal: 'No mode' },
+    { ...base, id: 'schedule-0000000b', goal: 'Auto, not picked', permissions: 'auto' },
+    { ...base, id: 'schedule-0000000c', goal: 'Unknown mode', permissions: 'yolo', picked: true },
+    { ...base, id: 'schedule-0000000d', goal: 'Full, not picked', permissions: 'full' },
+    { ...base, id: 'schedule-0000000e', goal: 'Locked', permissions: 'locked', picked: true },
+  ];
+  atomic(path.join(personalDirectory(), 'schedules.json'), { version: 1, schedules: rows });
+  assert.equal(listSchedules().length, 5, 'every row still reads');
+  assert.equal(runDue(at(9, 9), { start }), 3);
+  const of = id => pendingRequests(p.root).find(request => request.scheduleId === id);
+  assert.equal('permissions' in of('schedule-0000000a'), false, 'no mode: as before');
+  assert.equal(of('schedule-0000000b').permissions, 'auto'); assert.equal('picked' in of('schedule-0000000b'), false);
+  assert.equal(of('schedule-0000000d').permissions, 'auto', 'Full that nobody picked is held to Approve for me');
+  for (const id of ['schedule-0000000c', 'schedule-0000000e']) {
+    assert.equal(of(id), undefined, `${id} did not run`);
+    assert.match(listSchedules().find(row => row.id === id).note, /permissions cannot be read by this version/);
+    assert.ok(Date.parse(listSchedules().find(row => row.id === id).nextRunAt) > at(9, 9).getTime(), 'its next time still moves on');
+  }
+  assert.throws(() => runScheduleNow('schedule-0000000c', at(9, 10), { start }), /permissions cannot be read/);
 });
 
 // A mode the owner did not pick follows the default at each run, so a lower default reaches

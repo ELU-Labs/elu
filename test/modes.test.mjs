@@ -19,7 +19,8 @@ test('modes and places are checked by name, and here needs Full access', () => {
   for (const mode of PROFILES) assert.ok(LABELS[mode] && BADGES[mode], mode);
   for (const mode of MODES) assert.equal(checkMode(mode), mode);
   for (const value of ['locked', 'Full', '', null, 1, ['ask']]) assert.throws(() => checkMode(value), /Choose ask, auto, or full/, String(value));
-  assert.throws(() => checkMode('full', { allowFull: false }), /Approve for me at most/);
+  // A schedule takes Full access too (lib/schedules.mjs keeps it for a mode the owner picked).
+  assert.equal(checkMode('full', { allowFull: false }), 'full', 'the old option no longer narrows it');
   assert.deepEqual(checkPlace(null), { kind: 'worktree' }); assert.deepEqual(checkPlace('worktree'), { kind: 'worktree' }); assert.deepEqual(checkPlace({ kind: 'worktree' }), { kind: 'worktree' });
   assert.deepEqual(checkPlace('branch:feat/x-1.2', { mode: 'ask' }), { kind: 'branch', branch: 'feat/x-1.2' });
   assert.deepEqual(checkPlace({ kind: 'branch', branch: 'main' }), { kind: 'branch', branch: 'main' });

@@ -13,6 +13,7 @@ import { sandboxArgs } from '../lib/sandbox.mjs';
 import { capMode, checkMode, defaultMode, saveDefaultMode } from '../lib/modes.mjs';
 import { enqueue, retryRequest } from '../lib/conductor.mjs';
 import { saveSchedule, parseWhen } from '../lib/schedules.mjs';
+import { SCHEDULE_NOTE, saveBot } from '../lib/bots.mjs';
 import { answerApproval, approvalsDir, awaitDecision, pendingApprovals, requestApproval } from '../lib/approvals.mjs';
 import { defaultConfig } from '../lib/config.mjs';
 import { READ_ONLY_REPLY } from '../lib/runner.mjs';
@@ -192,10 +193,11 @@ test('a named folder that holds the repository a session edits is read only to t
   }
 });
 
-test('a schedule never runs with Full access; an automatic request is capped at Approve for me', async t => {
+test('a schedule gets Full access only when the owner picked it; an automatic request is capped at Approve for me', async t => {
   const p = project(t), fake = fakeClis(p.parent); environment(t, fake.env);
-  assert.throws(() => checkMode('full', { allowFull: false }), /Approve for me at most/);
-  assert.throws(() => saveSchedule({ root: p.root, goal: 'Nightly tidy', when: parseWhen('daily 9:00', new Date(2026, 10, 9, 8)), permissions: 'full' }, new Date(2026, 10, 9, 8)), /Approve for me at most/);
+  assert.equal(checkMode('full'), 'full');
+  assert.throws(() => saveSchedule({ root: p.root, goal: 'Nightly tidy', when: parseWhen('daily 9:00', new Date(2026, 10, 9, 8)), permissions: 'full' }, new Date(2026, 10, 9, 8)), /Full access only when you pick it/);
+  assert.equal(saveSchedule({ root: p.root, goal: 'Nightly check', when: parseWhen('daily 9:00', new Date(2026, 10, 9, 8)), permissions: 'full', picked: true }, new Date(2026, 10, 9, 8)).permissions, 'full');
   const row = saveSchedule({ root: p.root, goal: 'Nightly tidy', when: parseWhen('daily 9:00', new Date(2026, 10, 9, 8)), permissions: 'auto' }, new Date(2026, 10, 9, 8));
   assert.equal(row.permissions, 'auto');
   // An owner's request from another machine (A2A) is capped at auto whatever the default says.
@@ -204,6 +206,26 @@ test('a schedule never runs with Full access; an automatic request is capped at 
   const request = enqueue(p.root, 'Normalize coupons', { permissions: capMode(defaultMode(), 'auto') });
   assert.equal(request.permissions, 'auto');
   assert.throws(() => enqueue(p.root, 'q', { origin: origin('ask'), readOnly: true, context: 'ctx', permissions: 'auto' }), /Teammate questions stay read-only/);
+});
+
+// A bot's schedule has no mode of its own and the owner never picks Full access for it, so its
+// turn keeps Approve for me in a Full access session. The model and the bot are each told how
+// the owner repeats work: with /schedule, which they cannot run themselves.
+test("a bot's own scheduled turn keeps Approve for me in a Full access session; the model and the bot are told about /schedule", async t => {
+  const f = setup(t, 'answer');
+  saveBot({ name: 'nightly', vendor: 'claude', instructions: 'Tidy the notes.', schedule: 'every 1h' });
+  const chat = await f.controller.ask('Run the backlog check every 3 hours.', null, { bots: ['nightly'], permissions: 'full' }).finished;
+  assert.equal(chat.permissions, 'full');
+  assert.match(SCHEDULE_NOTE, /typing \/schedule, a time such as every 3h, and the message/); assert.match(SCHEDULE_NOTE, /you cannot create schedules or cron jobs yourself/);
+  assert.ok(f.inputs()[0].input.includes(SCHEDULE_NOTE), "the model's answer turn is told");
+  const before = f.leads().length, asked = f.inputs().length;
+  const run = await f.controller.ask('Do your scheduled work.', chat.id, { bot: 'nightly', scheduled: true }).finished;
+  const turns = run.runs.filter(value => value.role === 'bot:nightly');
+  assert.ok(turns.length > 0, 'the bot ran'); assert.ok(turns.every(value => value.permissions === 'auto'), JSON.stringify(turns.map(value => value.permissions)));
+  const modes = f.leads().slice(before).map(call => valueOf(call.args, '--permission-mode'));
+  assert.ok(modes.includes('auto') && !modes.includes('bypassPermissions'), modes.join());
+  assert.ok(f.inputs().slice(asked).some(row => row.input.includes(SCHEDULE_NOTE)), "the bot's work turn is told");
+  assert.equal(readTask(f.controller.repo, chat.id).permissions, 'full', 'the session keeps its own mode');
 });
 
 // A mode the owner picked for a new session is saved on its request, so every window and a
