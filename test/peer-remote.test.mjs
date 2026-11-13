@@ -10,7 +10,8 @@ import { bothMine, dropStrangers, markMine, markedMine, mineRows, noteTheirs, un
 import { NOT_MINE, UPDATE, UPDATE_LIST, hostMethods, hostTick, listTick, relist, remoteCommand, remoteConnected, remoteMachines, remoteSessions, viewMethods, viewTick, watchId } from '../lib/peer/remote.mjs';
 import { repository } from '../lib/git.mjs';
 import { saveTeamAccess } from '../lib/peer/access.mjs';
-import { leaveOp, merge } from '../lib/peer/roster.mjs';
+import { leaveOp, merge, readLog } from '../lib/peer/roster.mjs';
+import { otherSessions } from '../lib/peer/session-tools.mjs';
 import { createInvite, redeemCode, takeMineOffer } from '../lib/peer/invite.mjs';
 import { pendingRequests, updateRequest } from '../lib/workspace.mjs';
 import { requestApproval, pendingApprovals } from '../lib/approvals.mjs';
@@ -870,7 +871,8 @@ test("a session a message from my other computer started there is mine on its li
     withHome(laptop.home, () => fs.rmSync(path.join(process.env.XDG_CONFIG_HOME, 'elu-code', 'peer', 'remote', 'machines'), { recursive: true, force: true }));
     toViewer.request = async (method, params) => {
       const result = withHome(devbox.home, () => host[method](params, toHost));
-      return old && method === 'elu.remote.list' ? { ...result, sessions: result.sessions.map(({ remoteId, ...item }) => item.by === 'mine' ? { ...item, by: 'teammate', who: 'ana' } : item) } : result;
+      // A build from before also does not say it decided mine by key.
+      return old && method === 'elu.remote.list' ? { ...result, mineByPeer: undefined, sessions: result.sessions.map(({ remoteId, ...item }) => item.by === 'mine' ? { ...item, by: 'teammate', who: 'ana' } : item) } : result;
     };
     await withHome(laptop.home, () => listTick(context(laptop.identity, { [devbox.identity.key]: toViewer })));
     return withHome(laptop.home, () => Object.fromEntries(remoteMachines()[0].sessions.map(item => [item.title, [item.by, item.who]])));
@@ -885,4 +887,48 @@ test("a session a message from my other computer started there is mine on its li
   assert.deepEqual(routes(), { 'Run the evals': 'here', 'Fix the login redirect': 'there' });
   assert.deepEqual(await list(true), { 'Run the evals': ['mine', null], 'Fix the login redirect': ['teammate', 'kim'] }, "an older host names this computer: it is read as mine");
   assert.deepEqual(routes(), { 'Run the evals': 'here', 'Fix the login redirect': 'there' });
+});
+
+// A real teammate (kim, on another account) whose name is the laptop's, Ana, hands a session to
+// my devbox. It is kim's on every list, whatever the name, and nothing of mine goes to it.
+test("a teammate named like my computer keeps their session on my other computer's list, from a newer host and an older one, and only mine are offered to my sessions here", async t => {
+  const { team, laptop, devbox, project, toHost, toViewer, host } = pair(t), kim = withHome(newHome(t), () => createIdentity({ name: 'Ana' }));
+  const log = withHome(laptop.home, () => { redeemCode(createInvite(laptop.identity, team.teamId, { hours: 1 }), kim.key, 'Ana'); return readLog(team.teamId).ops; });
+  withHome(devbox.home, () => {
+    merge(team.teamId, log);
+    chat(project.root, 1, { goal: 'Run the evals', minutes: 3, origin: { kind: 'handoff', peer: laptop.identity.key, name: 'ana', threadId: null, own: true } });
+    chat(project.root, 2, { goal: 'Fix the login redirect', minutes: 2, origin: { kind: 'handoff', peer: kim.key, name: 'Ana', threadId: null, own: true } });
+    // Taken on here in a mode picked by hand (w): worked on as a teammate's (usesSavedRules), so listed as one.
+    chat(project.root, 3, { goal: 'Check the build', minutes: 1, origin: { kind: 'handoff', peer: laptop.identity.key, name: 'ana', threadId: null } });
+    relist();
+  });
+  const listed = withHome(devbox.home, () => host['elu.remote.list']({}, toHost)), row = title => listed.sessions.find(item => item.title === title);
+  assert.equal(listed.mineByPeer, true);
+  assert.deepEqual(['Run the evals', 'Fix the login redirect', 'Check the build'].map(title => [row(title).by, row(title).who]), [['mine', null], ['teammate', 'Ana'], ['teammate', 'ana']]);
+  // The laptop lists them: from this host, and from one of the build before, which lists mine as a teammate's by the laptop's name.
+  const list = async (old = false) => {
+    withHome(laptop.home, () => fs.rmSync(path.join(process.env.XDG_CONFIG_HOME, 'elu-code', 'peer', 'remote', 'machines'), { recursive: true, force: true }));
+    toViewer.request = async (method, params) => {
+      const result = withHome(devbox.home, () => host[method](params, toHost));
+      return old && method === 'elu.remote.list' ? { ...result, mineByPeer: undefined, sessions: result.sessions.map(({ remoteId, ...item }) => item.by === 'mine' ? { ...item, by: 'teammate', who: 'ana' } : item) } : result;
+    };
+    await withHome(laptop.home, () => listTick(context(laptop.identity, { [devbox.identity.key]: toViewer })));
+    return withHome(laptop.home, () => Object.fromEntries(remoteMachines()[0].sessions.map(item => [item.title, [item.by, item.who]])));
+  };
+  const status = { key: laptop.identity.key, name: 'ana', box: 'laptop', teams: [{ members: [{ key: laptop.identity.key, name: 'ana' }, { key: devbox.identity.key, name: 'box', box: 'devbox', online: true }, { key: kim.key, name: 'Ana', box: 'kims-mac', online: true }] }] };
+  const facade = { mineRows: peerFacade.mineRows, remoteSessions: peerFacade.remoteSessions, remoteMachines: peerFacade.remoteMachines, projectRepoId: () => row('Run the evals').repoId, projectRepoIds: () => [] };
+  const routes = () => withHome(laptop.home, () => {
+    const glue = remoteGlue({ facade, peerRead: () => status, peerCommand: async () => ({}), chatMessage: () => '', ink: text => text, colour: false, restMs: 1e9 });
+    return Object.fromEntries(glue.sections(Date.now(), '/work/shop').filter(line => line.row).map(line => [line.row.remote.title, glue.route(line.row, 'go on').to]));
+  });
+  // What the laptop's own sessions may send to: only mine (lib/peer/session-tools.mjs).
+  const offered = () => withHome(laptop.home, () => otherSessions().computers.flatMap(machine => machine.sessions.map(item => item.title)));
+  assert.deepEqual(await list(), { 'Run the evals': ['mine', null], 'Fix the login redirect': ['teammate', 'Ana'], 'Check the build': ['teammate', 'ana'] }, "kim's name is the laptop's, and kim's session stays kim's");
+  assert.deepEqual(routes(), { 'Run the evals': 'here', 'Fix the login redirect': 'there', 'Check the build': 'there' });
+  assert.deepEqual(offered(), ['Run the evals']);
+  // From the build before, a name is all there is, and kim goes by the laptop's: it says nothing,
+  // so mine there shows as a teammate's, as it did before, and kim's is never shown as mine.
+  assert.deepEqual(await list(true), { 'Run the evals': ['teammate', 'ana'], 'Fix the login redirect': ['teammate', 'Ana'], 'Check the build': ['teammate', 'ana'] });
+  assert.deepEqual(routes(), { 'Run the evals': 'there', 'Fix the login redirect': 'there', 'Check the build': 'there' });
+  assert.deepEqual(offered(), []);
 });
