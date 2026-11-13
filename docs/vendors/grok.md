@@ -14,7 +14,9 @@ grok login
 Install into a user-writable npm prefix; nothing here needs sudo. `grok login` opens the
 browser (`grok login --device-auth` on a remote machine) and keeps the token in
 `~/.grok/auth.json`. ELU never reads that file, never copies it, and reads no API key
-variable: if `grok` is signed out, the session says `Grok Build: not signed in. Run: grok login`.
+variable: if `grok` is signed out, the session says `Grok Build: not signed in. Run: grok login`,
+or `Run: grok login --device-auth` on a computer with no browser (an SSH session, or Linux with
+no display).
 
 ## The one-time check
 
