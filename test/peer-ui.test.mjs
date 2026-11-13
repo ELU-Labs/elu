@@ -822,6 +822,20 @@ test('Sessions lists every session of my other computer in this repository under
   assert.equal(peer.sent().find(row => row.type === 'remoteWatch').to, SARA);
 });
 
+test("Projects says how many sessions of my other computer's project are not in this one, in a row that fits its line at 80 columns as at 160", async t => {
+  const now = Date.now(), at = minutes => new Date(now - minutes * 60000).toISOString(), SHOP = 'e'.repeat(64), p2 = '2'.repeat(16);
+  const session = (n, title) => ({ id: `${n}1111111-1111-4111-8111-11111111111${n}`, ref: `${p2}:${n}`, project: p2, title, state: 'answered', at: at(n), createdAt: at(n + 1), approvals: [], by: 'you', who: null });
+  const machines = [{ key: SARA, listedAt: at(0), older: false, projects: [{ id: p2, name: 'ana', repoId: null, home: true }], sessions: [session(3, 'Tidy my notes'), session(4, 'Sort the photos')] }];
+  for (const columns of [160, 80]) {
+    const p = project(later(t)); environment(t, p.parent);
+    const peer = fakePeer({ items: [], mine: [{ key: SARA, mine: true, theirs: true }], machines, repoId: SHOP }), v = await view(t, { repo: repository(p.root), dashboard: true, peer, columns, rows: 24 });
+    const list = v.panels.projectsList, row = () => list.items.map(plainItem).find(item => /ana on sara-box/.test(item));
+    await send(v, '/projects'); await until(() => v.current.view === 'projects' && row(), 'the other project');
+    assert.ok(row().trimEnd().length <= list.width - 2, `it fits at ${columns}: ${row()}`);
+    assert.match(row(), columns === 160 ? /online\s+2 sessions not in this project {2}\d+m ago/ : /online\s+2 not in this project/);
+  }
+});
+
 // The wheel at a pane, as SGR reports in one read: up or down, a step each.
 const wheelAt = (v, widget, step, times = 1) => v.input.write(`\x1b[<${step < 0 ? 64 : 65};${widget.aleft + 3};${widget.atop + 3}M`.repeat(times));
 const pause = (ms = 150) => new Promise(resolve => setTimeout(resolve, ms));
