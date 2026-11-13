@@ -398,6 +398,8 @@ test('an older build is told to update, never asked a question instead', async t
     // Marked on one side only: waits for the other.
     noteTheirs(devbox.identity.key, false);
     await assert.rejects(remoteCommand(context(laptop.identity, { [devbox.identity.key]: connection(devbox.identity.key) }), { type: 'remoteStart', to: devbox.identity.key, text: 'hello', permissions: 'ask' }), /Waiting for @.{4} to mark this machine too\. On it, run \/mine @ana\./);
+    // What to type there is this machine's box name when it has one: the name that computer shows it under.
+    await assert.rejects(remoteCommand({ ...context(laptop.identity, { [devbox.identity.key]: connection(devbox.identity.key) }), boxName: () => 'laptop' }, { type: 'remoteStart', to: devbox.identity.key, text: 'hello', permissions: 'ask' }), /Waiting for @.{4} to mark this machine too\. On it, run \/mine @laptop\./);
   });
 });
 
@@ -441,6 +443,14 @@ test('the new session box starts a session on my computer by its @name, and a me
   assert.equal(glue.named('@DevBox').key, 'd'.repeat(64), 'any case');
   assert.equal(glue.named('@kim'), null, 'a teammate who is not mine is asked a question as before');
   assert.equal(glue.named('@kims-mac'), null);
+  // What the app calls it wherever a peer is named: one name, the one Sessions shows, and your computer. A teammate has no such words.
+  assert.deepEqual([...glue.yours().values()], [{ key: 'd'.repeat(64), name: 'devbox', waiting: false }]);
+  assert.deepEqual([glue.own('d'.repeat(64)), glue.own('e'.repeat(64))], [true, false]);
+  assert.deepEqual([glue.words('d'.repeat(64)), glue.words('e'.repeat(64))], ['your computer', '']);
+  // One that has not marked this machine back yet is not mine yet, and its words say so.
+  const waits = remoteGlue({ facade: { mineRows: () => [{ key: 'd'.repeat(64), mine: true, theirs: false }, { key: 'e'.repeat(64), mine: false, theirs: true }], remoteSessions: () => [] }, peerRead: () => status, peerCommand: async () => ({}), chatMessage: ({ text }) => text, ink: text => text, colour: false });
+  assert.deepEqual([...waits.yours().values()], [{ key: 'd'.repeat(64), name: 'devbox', waiting: true }], 'one that only marks this machine is no computer of mine');
+  assert.deepEqual([waits.words('d'.repeat(64)), waits.words('d'.repeat(64), ', '), waits.words('e'.repeat(64))], ['your computer · waiting for it to confirm', 'your computer, waiting for it to confirm', '']);
   const started = await glue.start(glue.named('@devbox'), 'Make coupons upper case', { permissions: 'auto', place: { kind: 'worktree' }, model: { vendor: 'claude', model: 'opus' }, bots: ['reviewer'] });
   assert.deepEqual(commands.at(-1), { type: 'remoteStart', to: 'd'.repeat(64), text: 'Make coupons upper case', permissions: 'auto', place: { kind: 'worktree' }, model: { vendor: 'claude', model: 'opus' }, bots: ['reviewer'] });
   assert.equal(started.line, 'Started on @devbox in shop. It shows here as it works.');
@@ -458,7 +468,7 @@ test('the new session box starts a session on my computer by its @name, and a me
   assert.deepEqual(commands.at(-1), { type: 'mine', key: 'd'.repeat(64) });
   // Machines already on the team that are not both mine yet: the ones /invite offers to mark without a code.
   assert.deepEqual(glue.unmarked().map(row => row.name), ['kims-mac']);
-  await assert.rejects(glue.mine(['@nobody']), { message: "No teammate's computer is called @nobody." });
+  await assert.rejects(glue.mine(['@nobody']), { message: 'No computer on your team is called @nobody.' });
 });
 
 // ---- Every session on a computer of mine ----
