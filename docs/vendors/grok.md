@@ -34,7 +34,8 @@ The Usage tab shows whether Grok is signed in before the check has run: it looks
 `c` on that line runs the same check there, with each step under the line as it ends, and the
 line then says `ready`, or that the check failed and which step was not proven. Signed out,
 `c` asks first whether to sign in. The check's folders are made in the system temp folder as
-it is on disk: on macOS `/var` is a link to `/private/var`, and ELU refuses to work through a link.
+it is on disk: on macOS `/var` is a link to `/private/var`, and ELU follows a link like that
+one, above what it writes, and refuses one inside it.
 
 The check runs eight steps against the installed binary in a throwaway repository, with a
 planted file outside it, a local web listener and a marker command:
