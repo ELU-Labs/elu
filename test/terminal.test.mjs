@@ -107,7 +107,7 @@ async function view(t, options = {}) {
         rendered.panels.ask.cancel();
         for (const child of [...rendered.screen.children]) { child.dismiss?.(); child.children?.find(item => item.type === 'textbox')?.emit('cancel'); }
         if (waited > 3000) process.emit('SIGHUP');
-        else { rendered.panels.chat.focus(); rendered.screen.emit('keypress', 'q', { name: 'q' }); }
+        else { rendered.panels.tabs[0].focus(); rendered.screen.emit('keypress', 'q', { name: 'q' }); }
       }
       await new Promise(resolve => setTimeout(resolve, stopped ? 20 : 2));
     }
@@ -136,7 +136,8 @@ async function dialog(v, title, value) {
   await until(() => field.__listener, `${title} input`);
   field.setValue(value); field.submit();
 }
-function key(v, name, ch = name) { if (v.current.screen.focused === v.current.panels.ask) v.current.panels.ask.cancel(); v.current.screen.emit('keypress', ch, { name }); }
+// q quits from a tab: on a Sessions row or in its chat it is the first letter of a message.
+function key(v, name, ch = name) { if (v.current.screen.focused === v.current.panels.ask) v.current.panels.ask.cancel(); if (name === 'q') v.current.panels.tabs[0].focus(); v.current.screen.emit('keypress', ch, { name }); }
 function captureFrames(name, frames) {
   if (!process.env.ELU_CODE_CAPTURE_DIRECTORY) return;
   assert.ok(frames.every(frame => !/\/Users\/|\/home\/|Bearer |sk-ant-|github_pat_/.test(frame.text)));
