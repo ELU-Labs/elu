@@ -3494,7 +3494,10 @@ test('Usage: Antigravity and Grok Build show their sign-in before their one-time
 test('Usage on a Mac: Antigravity says it is not signed in for ELU at once, c offers its sign-in on a clean screen, the code typed there signs it in, and the check runs to ready; Grok Build\'s check passes with the temp folder under a link', { timeout: 90000 }, async t => {
   const p = setup(t), fake = fakeUsage(t), fakeFile = path.join(p.dir, 'fake.json');
   fs.mkdirSync(path.join(p.parent, 'private', 'var', 'folders', 'xy', 'T'), { recursive: true }); fs.symlinkSync(path.join(p.parent, 'private', 'var'), path.join(p.parent, 'var'));
-  environment(t, { TMPDIR: path.join(p.parent, 'var', 'folders', 'xy', 'T'), SSH_CONNECTION: '', SSH_TTY: '', SSH_CLIENT: '' });
+  // As macOS has them: TMPDIR ends with a slash, /tmp is a link to /private/tmp, and the home folder is under no link.
+  fs.mkdirSync(path.join(p.parent, 'private', 'tmp')); fs.symlinkSync(path.join(p.parent, 'private', 'tmp'), path.join(p.parent, 'tmp'));
+  assert.equal(fs.realpathSync(fake.home), fake.home);
+  environment(t, { TMPDIR: `${path.join(p.parent, 'var', 'folders', 'xy', 'T')}${path.sep}`, SSH_CONNECTION: '', SSH_TTY: '', SSH_CLIENT: '' });
   fs.writeFileSync(fakeFile, JSON.stringify({ ...JSON.parse(fs.readFileSync(fakeFile, 'utf8')), agy: { signedIn: false, auth: 'prompt' } }));
   // A browser that opens records the link it was given.
   const openers = path.join(p.parent, 'openers'), opened = path.join(p.parent, 'opened.log'); fs.mkdirSync(openers);

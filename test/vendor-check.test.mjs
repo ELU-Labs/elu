@@ -19,11 +19,13 @@ function environment(t, values) {
   const previous = Object.fromEntries(Object.keys(values).map(key => [key, process.env[key]])); Object.assign(process.env, values);
   t.after(() => { for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } });
 }
-// The temp folder as macOS has it: TMPDIR is /var/folders/…/T, and /var is a link to /private/var.
+// The folders as macOS has them: TMPDIR is /var/folders/…/T/ and ends with a slash, /var is a
+// link to /private/var, /tmp is a link to /private/tmp, and the home folder is under no link.
 function linkedTemp(root) {
   fs.mkdirSync(path.join(root, 'private', 'var', 'folders', 'xy', 'T'), { recursive: true });
   fs.symlinkSync(path.join(root, 'private', 'var'), path.join(root, 'var'));
-  return path.join(root, 'var', 'folders', 'xy', 'T');
+  fs.mkdirSync(path.join(root, 'private', 'tmp')); fs.symlinkSync(path.join(root, 'private', 'tmp'), path.join(root, 'tmp'));
+  return `${path.join(root, 'var', 'folders', 'xy', 'T')}${path.sep}`;
 }
 // The fake CLIs on PATH, the owner's home with a Grok Build token, ELU's state, and openers
 // on PATH that record each link they are asked to open: a browser that opened.
@@ -51,12 +53,18 @@ async function held(fn) {
 test('the one-time check runs when the temp folder is under a link, as macOS\'s /var is: Grok Build and Antigravity CLI pass', { timeout: 120000 }, async t => {
   const m = machine(t), tmp = linkedTemp(m.root);
   environment(t, { TMPDIR: tmp });
-  assert.equal(os.tmpdir(), tmp); assert.equal(fs.lstatSync(path.join(m.root, 'var')).isSymbolicLink(), true);
+  assert.equal(tmp.endsWith(path.sep), true); assert.equal(`${os.tmpdir()}${path.sep}`, tmp); assert.equal(fs.lstatSync(path.join(m.root, 'var')).isSymbolicLink(), true);
   assert.equal(systemTemp(), path.join(m.root, 'private', 'var', 'folders', 'xy', 'T'));
+  assert.equal(fs.realpathSync(m.home), m.home, 'the home folder is under no link');
+  // The vendors are given TMPDIR as the owner's shell has it, slash and link and all.
+  m.env.TMPDIR = tmp;
   // Before: the check's folder was made under /var/folders/… as written, and its first step refused it.
-  for (const vendor of ['grok', 'agy']) {
+  // One check starts from the home folder, as c in the Usage tab does, the other from a project
+  // under /tmp named through the link, as a first message from there does.
+  const project = path.join(m.root, 'tmp', 'project'); fs.mkdirSync(project);
+  for (const [vendor, cwd] of [['grok', m.home], ['agy', project]]) {
     const said = [];
-    assert.equal(await checkOnFirstUse(await m.row(vendor), { cwd: m.home, environment: m.env, say: text => said.push(text) }), true, vendor);
+    assert.equal(await checkOnFirstUse(await m.row(vendor), { cwd, environment: m.env, say: text => said.push(text) }), true, vendor);
     assert.ok(!said.some(line => /symbolic link/.test(line)), said.join('\n'));
     assert.deepEqual(Object.entries(conformanceState(vendor).steps).filter(([, status]) => status !== 'pass').map(([id]) => id), [], vendor);
   }
