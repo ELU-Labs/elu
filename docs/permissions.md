@@ -350,10 +350,10 @@ Some turns wait for nobody:
 - `elu run "<goal>"` on the command line makes no Task.
 
 A teammate's message that starts a session by itself (Auto) or that you approve with y is
-not among them: that session runs in your default mode, and its Task waits for your
-approval as one you asked for would. One started by Auto has nobody watching it, so, like a
-schedule whose mode you did not pick, it never runs with Full access: from Full it runs with
-Approve for me.
+not among them: that session runs in your default mode, Full access included, as if you
+had typed the message yourself, and its Task waits for your approval as one you asked for
+would. A later message in its thread runs in the session's mode at the time, Full access
+included.
 
 ## Lifecycle
 
