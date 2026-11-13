@@ -61,7 +61,7 @@ test('compile refuses until this machine\'s check passed, then builds each profi
   ];
   assert.ok(secrets.some(rule => rule === `Read(${path.join(personal, 'conformance')}/**)`), 'ELU state is denied');
   const never = grok.NEVER_COMMANDS.map(command => `Bash(${command}:*)`);
-  const common = turns => ['--no-auto-update', '--no-alt-screen', '--no-memory', '--no-subagents', '--cwd', w.repo, '--output-format', 'json', '--max-turns', turns, '--prompt-file', path.join(runDir, 'prompt.txt')];
+  const common = turns => ['--no-auto-update', '--no-alt-screen', '--no-memory', '--no-subagents', '--cwd', w.repo, '--output-format', 'streaming-json', '--max-turns', turns, '--prompt-file', path.join(runDir, 'prompt.txt')];
   const deny = rules => rules.flatMap(rule => ['--deny', rule]), allow = rules => rules.flatMap(rule => ['--allow', rule]);
   assert.deepEqual(grok.compile({ ...base, mode: 'locked' }), [...common('40'), '--permission-mode', 'dontAsk', '--sandbox', 'read-only', '--tools', 'read_file,grep,list_dir', '--disallowed-tools', 'run_terminal_cmd,search_replace,web_search,web_fetch,spawn_subagent,Agent', '--disable-web-search', ...deny(['Bash', 'Edit', 'Write', 'WebFetch', 'WebSearch', 'MCPTool', ...secrets]), '-s', SESSION]);
   assert.deepEqual(grok.compile({ ...base, mode: 'locked' }), grok.compile({ ...base }), 'locked is the default profile');
@@ -194,6 +194,28 @@ test('parse reads the json object, pulls the result out of fences, and names aut
   assert.match(policyReport(lead('read'), { mode: 'locked' }).rules.find(rule => rule.rule === 'dollar limit').enforcement, /not requested/);
   assert.deepEqual(grok.foreignTraces({ sources: [{ path: path.join(w.personal, 'grok-home', '.grok', 'config.toml') }], externalCompat: { claude: { rules: { enabled: false } } } }), []);
   assert.deepEqual(grok.foreignTraces({ instructions: [{ path: '/Users/x/.claude/CLAUDE.md', vendor: 'claude' }], hooks: [{ origin: 'cursor' }], externalCompat: { claude: { rules: { enabled: true } } } }), ['/Users/x/.claude/CLAUDE.md', 'claude', 'cursor', 'externalCompat.claude.rules.enabled']);
+});
+
+// A headless run prints streaming-json, one event per line, so the chat can show what it does
+// while it works: the answer is in its text events, its spend on the end event, as the
+// vendor's docs (1.0.77) lay the format out.
+test('parse reads a streaming-json run: the answer from its text events, the rest from its end event', () => {
+  const answer = { outcome: 'done', summary: 'streamed', question: null, choices: [], comments: [], responses: [] };
+  const lines = rows => rows.map(row => JSON.stringify(row)).join('\n') + '\n';
+  const end = extra => ({ type: 'end', stopReason: 'end_turn', sessionId: SESSION, requestId: 'r', cwd: '/repo', num_turns: 2, usage: { input_tokens: 10, output_tokens: 5 }, modelUsage: { 'grok-4.6': { inputTokens: 10, outputTokens: 5 } }, ...extra });
+  const text = JSON.stringify(answer), chunks = [text.slice(0, 20), text.slice(20)];
+  const run = lines([{ type: 'thought', data: 'Looking at the {braces} in the tests.' }, { type: 'text', data: 'Let me read {it}. ' }, { type: 'tool_call', toolCallId: 'call_1', title: 'Read', kind: 'read', status: 'in_progress', toolName: 'read_file', rawInput: { path: 'src/main.rs' }, content: [], locations: [] },
+    { type: 'tool_call_update', toolCallId: 'call_1', status: 'completed', content: [], rawOutput: { lines: 4 }, locations: [] }, { type: 'text', data: 'Done. ' }, ...chunks.map(data => ({ type: 'text', data })),
+    { type: 'usage', messageId: 'resp_1', stopReason: 'end_turn', usage: { input_tokens: 10, output_tokens: 5 }, signature: 'x' }, end({ total_cost_usd: 0.5 })]);
+  const parsed = grok.parse(run);
+  assert.equal(parsed.result.summary, 'streamed'); assert.equal(parsed.session, SESSION); assert.equal(parsed.model, 'grok-4.6'); assert.equal(parsed.costUsd, 0.5);
+  assert.equal(grok.parse(lines([{ type: 'text', data: `Here:\n\`\`\`json\n${text}\n\`\`\`\n` }, end()])).result.summary, 'streamed', 'a fenced answer');
+  assert.throws(() => grok.parse(lines([{ type: 'text', data: 'Still going' }, end({ stopReason: 'max_turn_requests' })])), /stopped early \(max_turn_requests\)/);
+  const failed = (() => { try { grok.parse(lines([{ type: 'thought', data: 'x' }, { type: 'error', message: 'Not logged in. Run grok login.' }])); } catch (e) { return e; } })();
+  assert.match(failed.message, /could not finish/); assert.equal(failed.details.cause, 'auth');
+  assert.throws(() => grok.parse(lines([{ type: 'text', data: text }])), /could not finish/, 'a stream cut before its end event');
+  assert.deepEqual(grok.logRow({ type: 'tool_call', toolCallId: 'c', title: 'Read', status: 'in_progress' }), { speaker: 'lead', text: 'Read' });
+  assert.equal(grok.logRow({ type: 'text', data: 'chunk' }), null);
 });
 
 test('run() relays an ACP permission request through the approval files: allow writes, deny and timeout do not, and a pending approval holds the time limit', async t => {

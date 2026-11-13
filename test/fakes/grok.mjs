@@ -2,7 +2,8 @@
 // it follows the vendor's docs. fakeClis() in helpers.mjs copies it next to
 // fake.json, which holds the test's mode and the files it records to. It reads
 // --prompt-file and never stdin, prints the --output-format json object with the -s
-// session id, writes only where the flags allow (bypassPermissions anywhere; otherwise
+// session id (or, with --output-format streaming-json, one event per line: its thought, each
+// tool call and how it ended, the text in chunks, then end), writes only where the flags allow (bypassPermissions anywhere; otherwise
 // inside --cwd, never under a read-only sandbox or GROK_WRITE_FILE=0), runs a command or
 // fetches a URL only under bypassPermissions, keeps sessions under $GROK_HOME/sessions for
 // -r, serves `agent stdio` with a permission request for anything the rules do not allow,
@@ -27,13 +28,28 @@ const list = dir => { try { return fs.readdirSync(dir); } catch { return []; } }
 if (args.includes('--version')) { console.log('1.0.77'); process.exit(0); }
 if (args.includes('--help')) { console.log('--output-format --permission-mode --sandbox --max-turns --cwd --no-auto-update --tools --disallowed-tools --allow --deny --prompt-file --prompt-json --no-alt-screen --no-memory --no-subagents --disable-web-search --session-id --resume --model'); process.exit(0); }
 if (args[0] === 'login') { console.error('fake grok: login is interactive'); process.exit(2); }
+// refuses (fake.json): values of --output-format this release does not take. A run started with
+// one ends at once, as a command line that does not read ends: two lines on stderr, exit 2.
+if ((cfg.refuses ?? []).includes(value('--output-format'))) { console.error(`error: invalid value '${value('--output-format')}' for '--output-format <FORMAT>'\n  [possible values: text, json]`); process.exit(2); }
 
 // What the prompt asks for, done as far as the launch allows. ask() decides an action the
-// rules neither allow nor forbid: the relay over ACP, nothing in headless mode. progress
-// (ACP only) reports a command as a tool call: in progress before it runs, completed after.
-async function act(prompt, record, { bypass, canWrite, canShell, canFetch, cwd, ask, progress = null }) {
+// rules neither allow nor forbid: the relay over ACP, nothing in headless mode.
+// report(call, status): each action as a tool call, started (in_progress) and ended
+// (completed or failed), for the formats that show them. A command is started before it
+// runs and ended after it, and act waits for report, which over ACP resolves once the line
+// is written: the client has the call while the command is silent.
+async function act(prompt, record, { bypass, canWrite, canShell, canFetch, cwd, ask, report = () => {} }) {
   const blocked = [], did = [];
-  const allow = async (action, free) => bypass || free || (ask ? ask(action) : false);
+  let calls = 0;
+  // run: what an allowed action does while its call is open (a command).
+  const allow = async (action, free, run = null) => {
+    const call = { toolCallId: `call_${++calls}`, title: action.title, kind: action.kind, toolName: { edit: 'search_replace', execute: 'run_terminal_cmd', fetch: 'web_fetch' }[action.kind], rawInput: action.rawInput };
+    await report(call, 'in_progress');
+    const yes = bypass || free || (ask ? await ask(action, call) : false);
+    if (yes) run?.();
+    await report(call, yes ? 'completed' : 'failed');
+    return yes;
+  };
   if (/create (a |another )?file|files? at/i.test(prompt)) {
     for (const file of [...prompt.matchAll(/(\/\S+?\.txt)\b/g)].map(match => match[1])) {
       const inside = path.resolve(file).startsWith(cwd + path.sep);
@@ -45,8 +61,7 @@ async function act(prompt, record, { bypass, canWrite, canShell, canFetch, cwd, 
   // A full path, or a program on PATH named elu-something.
   const command = prompt.match(/run the (?:shell )?command (\/\S+|elu-[\w-]+)/i)?.[1];
   if (command) {
-    const action = { kind: 'execute', title: `Run ${command}`, rawInput: { command } };
-    if ((canShell || bypass) && await allow(action, false)) { await progress?.(action, 'in_progress'); spawnSync(command, { stdio: 'ignore' }); await progress?.(action, 'completed'); did.push(`ran ${command}`); }
+    if ((canShell || bypass) && await allow({ kind: 'execute', title: `Run ${command}`, rawInput: { command } }, false, () => spawnSync(command, { stdio: 'ignore' }))) did.push(`ran ${command}`);
     else blocked.push(`run ${command}`);
   }
   const url = prompt.match(/fetch (https?:\/\/\S+)/i)?.[1];
@@ -100,14 +115,16 @@ if (args.includes('agent') && args.includes('stdio')) {
         const record = live.get(row.params?.sessionId); if (!record) return error(-32000, 'Unknown session.');
         const text = (row.params?.prompt ?? []).filter(part => part?.type === 'text').map(part => part.text).join('\n');
         if (cfg.inputs) fs.appendFileSync(cfg.inputs, JSON.stringify({ vendor, args, input: text }) + '\n');
-        const ask = async action => {
-          const answer = await request('session/request_permission', { sessionId: record.id, toolCall: { toolCallId: `call_${nextId}`, title: action.title, kind: action.kind, status: 'pending', rawInput: action.rawInput }, options: [{ optionId: 'allow', name: 'Allow', kind: 'allow_once' }, { optionId: 'allow_always', name: 'Always allow', kind: 'allow_always' }, { optionId: 'reject', name: 'Reject', kind: 'reject_once' }] });
+        const ask = async (action, call) => {
+          const answer = await request('session/request_permission', { sessionId: record.id, toolCall: { toolCallId: call?.toolCallId ?? `call_${nextId}`, title: action.title, kind: action.kind, status: 'pending', rawInput: action.rawInput }, options: [{ optionId: 'allow', name: 'Allow', kind: 'allow_once' }, { optionId: 'allow_always', name: 'Always allow', kind: 'allow_always' }, { optionId: 'reject', name: 'Reject', kind: 'reject_once' }] });
           return answer?.outcome?.outcome === 'selected' && String(answer.outcome.optionId).startsWith('allow');
         };
-        send({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: record.id, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Working. ' } } } });
+        const update = change => send({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: record.id, update: change } });
+        update({ sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: 'Reading the request.' } });
+        update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Working. ' } });
         // Written before the command runs, so the client has the line while the command is silent.
-        const progress = (action, status) => new Promise(resolve => process.stdout.write(`${JSON.stringify({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: record.id, update: { sessionUpdate: status === 'in_progress' ? 'tool_call' : 'tool_call_update', toolCallId: `call_run_${record.turns.length}`, title: action.title, kind: action.kind, status } } })}\n`, resolve));
-        const result = await act(text, record, { bypass: record.yolo || mode === 'leaky', canWrite, canShell: true, canFetch: true, cwd: record.cwd, ask, progress });
+        const report = (call, status) => new Promise(resolve => process.stdout.write(`${JSON.stringify({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: record.id, update: status === 'in_progress' ? { sessionUpdate: 'tool_call', ...call, status, content: [], locations: [] } : { sessionUpdate: 'tool_call_update', toolCallId: call.toolCallId, status } } })}\n`, resolve));
+        const result = await act(text, record, { bypass: record.yolo || mode === 'leaky', canWrite, canShell: true, canFetch: true, cwd: record.cwd, ask, report });
         record.turns.push(text); save(record);
         send({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: record.id, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: resultText(result) } } } });
         return reply({ stopReason: mode === 'max-turns' ? 'max_turn_requests' : 'end_turn' });
@@ -148,7 +165,19 @@ else {
   if (load(session)) fail('That session id is already in use.');
   record = { id: session, cwd, sandbox, turns: [] };
 }
-const result = await act(prompt, record, { bypass, canWrite, canShell, canFetch, cwd, ask: null });
+const streaming = value('--output-format') === 'streaming-json', line = row => console.log(JSON.stringify(row));
+if (streaming) line({ type: 'thought', data: 'Reading the request.' });
+const report = streaming ? (call, status) => line(status === 'in_progress' ? { type: 'tool_call', ...call, status, content: [], locations: [] } : { type: 'tool_call_update', toolCallId: call.toolCallId, status, content: [], rawOutput: {}, locations: [] }) : undefined;
+const result = await act(prompt, record, { bypass, canWrite, canShell, canFetch, cwd, ask: null, report });
 record.turns.push(prompt); save(record);
+const usage = { input_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 5, reasoning_tokens: 0, total_tokens: 15 }, modelUsage = { 'grok-4.6': { inputTokens: 10, outputTokens: 5, cacheReadInputTokens: 0, modelCalls: 1 } };
+// The answer as text chunks, a response boundary, then end with what the json object carries but the text.
+if (streaming) {
+  const text = mode === 'max-turns' ? 'Still working on it.' : `Done reading. ${resultText(result)}`;
+  for (let at = 0; at < text.length; at += 40) line({ type: 'text', data: text.slice(at, at + 40) });
+  line({ type: 'usage', messageId: 'resp_1', stopReason: 'end_turn', usage, signature: 'sig' });
+  line({ type: 'end', stopReason: mode === 'max-turns' ? 'max_turn_requests' : 'end_turn', sessionId: session, requestId: 'req-1', cwd, num_turns: mode === 'max-turns' ? 3 : 1, ...(mode === 'max-turns' ? {} : { usage, modelUsage }) });
+  process.exit(0);
+}
 if (mode === 'max-turns') { console.log(JSON.stringify({ text: 'Still working on it.', stopReason: 'max_turn_requests', sessionId: session, requestId: 'req-1', num_turns: 3 })); process.exit(0); }
-console.log(JSON.stringify({ text: resultText(result), stopReason: 'end_turn', sessionId: session, requestId: 'req-1', num_turns: 1, usage: { input_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 5, reasoning_tokens: 0, total_tokens: 15 }, modelUsage: { 'grok-4.6': { inputTokens: 10, outputTokens: 5, cacheReadInputTokens: 0, modelCalls: 1 } } }));
+console.log(JSON.stringify({ text: resultText(result), stopReason: 'end_turn', sessionId: session, requestId: 'req-1', num_turns: 1, usage, modelUsage }));

@@ -79,8 +79,13 @@ no shell and no web tools, not because the sandbox blocks the network.
 Headless runs have no schema flag, so ELU puts the output schema in the prompt and
 validates the answer. Sessions resume with `-r`; a mode switch that changes the sandbox
 profile cannot resume (Grok keeps a session's sandbox), so that turn's retry starts a fresh
-session without the earlier context. A headless run prints its answer only at the end, so
-it has the two-hour cap of a turn and no quiet limit (see How long a turn runs in
+session without the earlier context. A headless run uses `--output-format streaming-json`:
+each thought, tool call and piece of text comes as it happens and shows in the chat, the
+answer is read from the text, and `end` closes the run with its usage. A program whose file
+does not hold `streaming-json` is started with `--output-format json`, which prints only at
+the end, and a launch that ends at once with nothing printed runs again that way (see
+[Claude Code](claude.md)). It keeps the two-hour
+cap of a turn and no quiet limit (see How long a turn runs in
 [permissions](../permissions.md)); `--max-turns` (40 for
 read-only turns, 120 for edit turns) bounds the model rounds. Cost is not reported under a
 subscription; the role's `maxCostUsd` must be `null`.

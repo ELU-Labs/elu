@@ -109,6 +109,10 @@ notice on stderr naming the tool. ELU records each notice as a denial on the run
 the model is told to return `needs_input` naming what it needs. Over ACP, a permission
 request reaches you under Needs you; no answer within 20 minutes counts as a denial.
 
+Over ACP the chat shows each thought and each tool call as it happens. A headless run prints
+only its result, so until it ends the chat shows the working line and the newest line of the
+session's activity.
+
 ## What is not enforced, or not verified
 
 Everything above comes from Google's documentation and the Antigravity changelog; the
