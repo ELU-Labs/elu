@@ -3546,7 +3546,7 @@ test('Usage on a Mac: Antigravity says it is not signed in for ELU at once, c of
   assert.deepEqual([first.args, first.stdio, first.home], [['-p', '/usage'], 'inherit', path.join(personalDirectory(), 'agy-home', 'signin')]);
   assert.ok(!first.path.includes('no-browser'));
   assert.ok(before.lastIndexOf('\x1b[?1049l') > before.lastIndexOf('\x1b[?1049h'), 'left the alternate screen');
-  assert.ok(before.endsWith('\x1b[H\x1b[2JSigning in to Antigravity CLI for ELU. ELU comes back when it ends.\r\nYour browser opens Google sign-in. Sign in there and copy the code it shows,\r\nthen paste it here and press Enter. It waits 60 seconds for the code.\r\n\r\n'), JSON.stringify(before.slice(-300)));
+  assert.ok(before.endsWith('\x1b[H\x1b[2JSigning in to Antigravity CLI for ELU. ELU comes back when it ends.\r\nYour browser opens Google sign-in. Sign in there and copy the code it shows,\r\nthen paste it here and press Enter. It waits 60 seconds for the code.\r\nIf the 60 seconds pass, it stops. Press s again for a new link and a new code.\r\n\r\n'), JSON.stringify(before.slice(-400)));
   assert.equal(first.during, first.before, 'nothing of ELU\'s drew over the sign-in');
   // Ctrl-C on that screen ends the sign-in, not ELU: while it runs ELU listens for the signals
   // the terminal sends both, and stops listening after.
@@ -3578,6 +3578,56 @@ test('Usage on a Mac: Antigravity says it is not signed in for ELU at once, c of
   assert.doesNotMatch(text(), /symbolic link/);
   // Signed in now, s still runs the sign-in again (a lapsed one): the key bar keeps it, without c.
   await until(() => /^s sign in {2}d details {2}r refresh/.test(panels.keys.getText().trim()), 'key bar once ready');
+});
+
+// Antigravity CLI waits 60 seconds for the code and then ends by itself. An owner who took
+// longer at Google's page came back to "sign-in did not finish": nothing had said the time
+// was up, nor that s gives a new link and a new code. Here its minute is four seconds long.
+test('Usage: Antigravity\'s sign-in screen says what happens when its 60 seconds pass, a sign-in that ran out of them says so, and s starts one with a new link', { timeout: 90000 }, async t => {
+  const p = setup(t), fake = fakeUsage(t), fakeFile = path.join(p.dir, 'fake.json');
+  environment(t, { SSH_CONNECTION: '', SSH_TTY: '', SSH_CLIENT: '' });
+  fs.writeFileSync(fakeFile, JSON.stringify({ ...JSON.parse(fs.readFileSync(fakeFile, 'utf8')), agy: { signedIn: false, auth: 'prompt', authSeconds: 4 } }));
+  const openers = path.join(p.parent, 'openers'); fs.mkdirSync(openers);
+  for (const name of ['open', 'xdg-open']) fs.writeFileSync(path.join(openers, name), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  environment(t, { PATH: `${process.env.PATH}${path.delimiter}${openers}` });
+  fake.vendors = () => detect(p.root, { ...process.env, HOME: fake.home });
+  fake.platform = 'darwin'; fake.signInWait = 4;
+  // What the owner does on the sign-in screen: ends it with Ctrl-C, lets the time pass, or pastes the code.
+  const started = []; let v = null, owner = 'quits';
+  fake.spawn = (bin, args, options) => {
+    const row = { before: v.raw.length, printed: '', acted: false }; started.push(row);
+    const child = spawn(bin, args, { env: options.env, stdio: ['pipe', 'pipe', 'pipe'] });
+    const read = chunk => {
+      row.printed += chunk; if (row.acted || !/paste the authorization code here and press Enter:/.test(row.printed)) return;
+      row.acted = true; if (owner === 'quits') child.kill('SIGINT'); else if (owner === 'pastes') child.stdin.write('4/0AeanS0b-fake-code\n');
+    };
+    child.stdout.on('data', read); child.stderr.on('data', read);
+    return child;
+  };
+  v = await view(t, { repo: p.repo, usage: fake });
+  const panels = v.current.panels, text = () => panels.usageList.items.map(item => item.getText()).join('\n'), status = () => panels.status.getText();
+  await send(v, '/usage'); await until(() => v.current.view === 'usage' && !panels.usageBox.hidden, 'Usage tab');
+  await until(() => /^Antigravity not signed in for ELU · s signs in$/m.test(text()), 'Antigravity not signed in for ELU', 15000);
+  panels.usageList.focus(); await until(() => v.current.screen.focused === panels.usageList, 'list focused');
+  panels.usageList.select(panels.usageList.items.findIndex(item => /^Antigravity/.test(item.getText()))); await until(() => /s sign in/.test(panels.keys.getText()), 's in the key bar');
+  // Ended by the owner before the time was up: the sign-in did not finish, and nothing says the time ran out.
+  v.input.write('s');
+  await until(() => /Antigravity CLI's sign-in did not finish\. s tries again\./.test(status()), 'the sign-in the owner ended', 20000);
+  const screen = v.raw.slice(0, started[0].before);
+  assert.ok(screen.endsWith('\x1b[H\x1b[2JSigning in to Antigravity CLI for ELU. ELU comes back when it ends.\r\nYour browser opens Google sign-in. Sign in there and copy the code it shows,\r\nthen paste it here and press Enter. It waits 60 seconds for the code.\r\nIf the 60 seconds pass, it stops. Press s again for a new link and a new code.\r\n\r\n'), JSON.stringify(screen.slice(-400)));
+  for (const line of screen.slice(screen.lastIndexOf('\x1b[2J') + 4).split('\r\n')) assert.ok(line.length <= 80, `fits 80 columns: ${line}`);
+  // The time passes with no code: agy says so and ends, and ELU says what s does now.
+  owner = 'waits'; v.input.write('s');
+  await until(() => /Antigravity CLI got no code in 60 seconds\. s starts again with a new link\./.test(status()), 'the time ran out', 30000);
+  assert.match(started[1].printed, /Waiting for authentication \(timeout 4s\)\.\.\.\nOr, paste the authorization code here and press Enter:\nError: authentication timed out\./);
+  assert.ok(status().trim().length <= 78, 'the status fits 80 columns');
+  assert.match(text(), /^Antigravity not signed in for ELU · s signs in$/m);
+  // s again: a sign-in of its own with another link, and the code pasted in time signs it in.
+  owner = 'pastes'; v.input.write('s');
+  await until(() => /Antigravity CLI is signed in for ELU\./.test(status()), 'signed in', 30000);
+  const link = row => row.printed.match(/https:\/\/accounts\.google\.com\/\S+/)[0];
+  assert.equal(started.length, 3); assert.notEqual(link(started[2]), link(started[1]));
+  assert.match(text(), /^Antigravity signed in · needs a one-time check \(c runs it now\)$/m);
 });
 
 // Antigravity CLI passed its check on this machine, so reading the vendors asks it for its
