@@ -777,8 +777,11 @@ test('over a session on my other computer the box writes to my agent here, start
   // @ that computer, by its row's name or its owner's there, writes to the session there without it.
   board.focus(); selectRow(board, /on sara-box/);
   ask.focus(); ask.readInput(); await until(() => ask.__listener, 'message box');
+  // The key bar says the same: Enter writes to my agent here, @sara-box writes there.
+  await until(() => /enter send to your agent here {2}@sara-box writes there/.test(v.panels.keys.getText()), 'the keys say where Enter sends');
   v.input.write('@sara-box 1');
   await until(() => /Message the session on @sara-box/.test(ask._label.getText()), 'the box says it goes there');
+  await until(() => /enter send to @sara-box/.test(v.panels.keys.getText()), 'and the keys');
   ask.submit();
   await until(() => sentThere().length === 1, 'sent there');
   assert.deepEqual(sentThere()[0], { type: 'remoteSend', id, text: '1' });
