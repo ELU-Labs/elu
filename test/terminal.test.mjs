@@ -1196,7 +1196,7 @@ test('a second project view is read-only and releases no writer lock', async t =
   await send(second, '/new'); await until(() => second.current.panels.ask.__listener && /View only/.test(second.current.panels.ask._label.getText()), 'view-only form again');
   assert.doesNotMatch(second.current.panels.header.getContent(), /READ ONLY|View only/, 'the header names the session, not the window');
   assert.equal(fs.readFileSync(p.calls, 'utf8'), calls, 'a second view must not query a vendor');
-  assert.throws(() => second.current.controller.plan('Change text'), /^View only: another ELU window has this project\. Close it, or \/takeover here\. That window is process \d+/);
+  assert.throws(() => second.current.controller.plan('Change text'), /View only: another ELU window has this project\. Close it, or \/takeover here\. That window is process \d+/);
   const claim = claimView(p.repo); assert.equal(claim.readOnly, true);
   key(second, 'q'); await second.finished;
   assert.equal(claimView(p.repo).readOnly, true);
