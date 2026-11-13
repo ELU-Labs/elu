@@ -131,6 +131,22 @@ test('Claude: a run that hits the account limit names that account, the limit it
   assert.equal(again.state, 'answered', JSON.stringify(again.error)); assert.equal(f.runs().at(-1).account, 'first@example.com');
 });
 
+// The owner's devbox over SSH: Codex was signed in, and its sign-in lapsed while a session ran.
+// The line under the session names the sign-in that works with no browser.
+test('Codex: a turn that fails because the sign-in lapsed says Codex is signed out and names the sign-in for this computer; signed in again, continue carries on', { timeout: 60000 }, async t => {
+  const f = setup(t, 'codex', { lapsed: ['codex-first@example.com'] });
+  environment(t, { SSH_CONNECTION: '10.0.0.2 52000 10.0.0.3 22', SSH_TTY: '', SSH_CLIENT: '' });
+  const { id, finished } = f.controller.ask('Where is coupon normalization?');
+  await assert.rejects(finished, /The model could not finish/);
+  const task = readTask(f.controller.repo, id), stop = stopLine(task);
+  assert.equal(stop.text, 'The model could not finish: Codex is signed out. Sign in again with codex login --device-auth, then type continue.');
+  assert.equal(stop.short, 'sign in again with codex login --device-auth, then type continue');
+  // He signs in again in his terminal; the same session carries on.
+  f.setFake(value => { value.accounts.lapsed = []; });
+  const again = await f.controller.ask('continue', id).finished;
+  assert.equal(again.state, 'answered', JSON.stringify(again.error)); assert.equal(f.runs().at(-1).account, 'codex-first@example.com');
+});
+
 test('forget removes only ELU\'s copy of an added account, after which new turns use the owner\'s own; nothing is signed out', { timeout: 60000 }, async t => {
   const f = setup(t, 'claude', { loginAs: 'second@example.com' });
   const slot = addAccount(f, 'claude'); f.setFake(value => { value.accounts.loginAs = 'third@example.com'; });

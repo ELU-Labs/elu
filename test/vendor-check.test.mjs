@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { temp, fakeClis } from './helpers.mjs';
 import * as agy from '../lib/adapters/agy.mjs';
 import * as grok from '../lib/adapters/grok.mjs';
@@ -138,9 +138,17 @@ test('Grok Build: s runs grok login under the HOME and GROK_HOME ELU runs it wit
   const command = grok.signInTerminal({ env: m.env }), row = m.row('grok');
   assert.equal(fs.statSync(path.join(m.home, '.grok')).mode & 0o777, 0o700, 'his ~/.grok, made as grok makes it');
   assert.deepEqual(command.args, ['login']);
+  // On a computer with no browser it is the sign-in grok names for one.
+  assert.deepEqual(grok.signInTerminal({ env: m.env, browser: false }).args, ['login', '--device-auth']);
   assert.equal(command.env.HOME, grok.privateHome()); assert.equal(command.env.GROK_HOME, grok.grokHome());
-  const signIn = spawnSync(row.bin, command.args, { env: command.env, input: '\n', encoding: 'utf8' });
-  assert.equal(signIn.status, 0, signIn.stderr);
+  // grok prints a link and a code, and waits until the owner confirms the code on that page; it reads no input.
+  const signIn = await new Promise(resolve => {
+    const child = spawn(row.bin, command.args, { env: command.env, stdio: ['ignore', 'pipe', 'pipe'] }); let printed = '', approved = false;
+    const read = chunk => { printed += chunk; if (!approved && /Waiting for authorization\.\.\./.test(printed)) { approved = true; fs.writeFileSync(path.join(m.fake.dir, 'grok-approved'), ''); } };
+    child.stdout.on('data', read); child.stderr.on('data', read); child.on('close', status => resolve({ status, printed }));
+  });
+  assert.equal(signIn.status, 0, signIn.printed);
+  assert.match(signIn.printed, /Confirm this code in your browser:\n\n {2}FAKE-CODE\n/);
   // Through ELU's link: the owner's own token file, which his own grok reads too.
   assert.equal(fs.existsSync(path.join(m.home, '.grok', 'auth.json')), true);
   assert.deepEqual(await grok.readSignIn({ env: m.env }), { signedIn: true, reason: null });

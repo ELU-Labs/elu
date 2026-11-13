@@ -8,6 +8,8 @@ const mode=cfg.mode??'normal';
 // accounts (fake.json): the account a run is on is the one auth.json names in CODEX_HOME (or
 // ~/.codex), as the real CLI keeps it; a call records it. accounts.loginAs: the account `codex
 // login` signs in there. accounts.limited: accounts whose turns fail at their usage limit.
+// accounts.lapsed: accounts whose sign-in lapsed (true: every account). `login status` still
+// says signed in, and a turn fails in the words codex-cli 0.167.0 keeps for it.
 // accounts.codexUsage: per account, the percent of the windows the app-server reports.
 const codexHome=process.env.CODEX_HOME??path.join(process.env.HOME??'','.codex');
 let account=null;try{account=JSON.parse(Buffer.from(JSON.parse(fs.readFileSync(path.join(codexHome,'auth.json'),'utf8')).tokens.id_token.split('.')[1],'base64url').toString('utf8')).email??null;}catch{}
@@ -70,6 +72,7 @@ const resumed=args[0]==='exec'&&args[1]==='resume'?args[2]:null;
 const session=resumed??'12345678-1234-4234-8234-123456789abc';
 if(mode==='review-block'||mode==='review-fix'&&!input.includes('Handled the edge case.'))result.comments=[{id:'R1',severity:'must_fix',body:'Handle the edge case.'}];
 console.log(JSON.stringify({type:'thread.started',thread_id:session}));
+if(cfg.accounts?.lapsed===true||cfg.accounts?.lapsed?.includes?.(account)){const message='Your access token could not be refreshed because your refresh token has expired. Please log out and sign in again.';console.log(JSON.stringify({type:'turn.started'}));console.log(JSON.stringify({type:'error',message}));console.log(JSON.stringify({type:'turn.failed',error:{message}}));process.exit(1);}
 if(cfg.accounts?.limited?.includes(account)){const message="You've hit your usage limit. Upgrade to Pro or try again later.";console.log(JSON.stringify({type:'turn.started'}));console.log(JSON.stringify({type:'error',message}));console.log(JSON.stringify({type:'turn.failed',error:{message:`${message} (usage_limit_reached)`}}));process.exit(1);}
 // tooLong (fake.json): a review this model will not take (as in the fake Claude Code), ended as
 // the real CLI ends a prompt longer than the model's context window.

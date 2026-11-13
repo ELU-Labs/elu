@@ -67,6 +67,31 @@ test("an unknown cause is read from the run log's last result line: credits, rat
   }
 });
 
+// A Codex session whose sign-in lapsed while it ran. The words are the ones codex-cli 0.167.0
+// keeps for it (read in its program file; none was watched, which takes a real account), in the
+// rows codex exec --json ends a failed turn with.
+test('a Codex turn that failed because its sign-in lapsed reads as signed out, and the line names the sign-in for this computer', t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'stop-line-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const lapsed = ['Your access token could not be refreshed because you have since logged out or signed in to another account. Please sign in again.',
+    'Your access token could not be refreshed because your refresh token has expired. Please log out and sign in again.',
+    'Your access token could not be refreshed because your refresh token was revoked. Please log out and sign in again.',
+    'Your access token could not be refreshed. Please log out and sign in again.',
+    'Your authentication session could not be refreshed automatically. Please log out and sign in again.'];
+  const kept = Object.fromEntries(['SSH_CONNECTION', 'SSH_TTY', 'SSH_CLIENT'].map(name => [name, process.env[name]]));
+  t.after(() => { for (const [name, value] of Object.entries(kept)) { if (value === undefined) delete process.env[name]; else process.env[name] = value; } });
+  for (const [at, message] of lapsed.entries()) {
+    const file = path.join(dir, `lapsed-${at}.log`);
+    fs.writeFileSync(file, [{ type: 'thread.started', thread_id: 'thread-1' }, { type: 'turn.started' }, { type: 'error', message }, { type: 'turn.failed', error: { message } }].map(row => JSON.stringify(row)).join('\n') + '\n');
+    assert.equal(logCause(file), 'auth', message);
+    const stop = () => stopLine(session({ runs: [{ role: 'lead', vendor: 'codex', at: '2026-11-12T10:00:00.000Z', logFile: file }], error: { message: 'The model could not finish.', cause: 'unknown', logFile: file } }), { account: none }).text;
+    // Over SSH no browser opens here: the device code sign-in.
+    process.env.SSH_CONNECTION = '10.0.0.2 52000 10.0.0.3 22';
+    assert.equal(stop(), 'The model could not finish: Codex is signed out. Sign in again with codex login --device-auth, then type continue.');
+    for (const name of Object.keys(kept)) delete process.env[name];
+    assert.equal(stop(), `The model could not finish: Codex is signed out. Sign in again with ${signInCommand('codex')}, then type continue.`);
+  }
+});
+
 test('a limit on Claude Code or Codex names the account the run was on and says to switch in Usage; other vendors keep their line', () => {
   const asked = [], account = run => { asked.push([run.vendor, run.login ?? 'default']); return run.vendor === 'codex' ? 'work@example.com' : 'home@example.com'; };
   const limited = (runs, cause) => stopLine(session({ runs, error: { message: 'The model could not finish.', cause, logFile: null } }), { logCause: none, account });
