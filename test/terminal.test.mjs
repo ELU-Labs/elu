@@ -91,7 +91,16 @@ async function view(t, options = {}) {
   const finished = launchTerminal({ usage: fakeUsage(t), ...options, input, output, refreshMs: 30, startConductor: () => false, onRender: value => { rendered = value; options.onRender?.(value); } });
   finished.catch(() => {});
   await until(() => rendered, 'first render');
-  const state = { input, output, finished, get current() { return rendered; }, get raw() { return raw; }, get events() { return events; }, frame() { return rendered.screen.screenshot(0, output.columns, 0, output.rows); } };
+  // A row's key is its letter, then Enter: one such character written while the list, or the
+  // pane beside it, has the focus is followed by Enter, as a person presses it. type() writes text as it is.
+  const write = input.write.bind(input);
+  input.write = (data, ...rest) => {
+    const rowKey = typeof data === 'string' && /^[a-z+]$/.test(data) && rendered.view === 'tasks' && [rendered.panels.board, rendered.panels.chat].includes(rendered.screen.focused);
+    const result = write(data, ...rest);
+    if (rowKey) setTimeout(() => write('\r'), 5);
+    return result;
+  };
+  const state = { type(text) { for (const ch of text) write(ch); }, input, output, finished, get current() { return rendered; }, get raw() { return raw; }, get events() { return events; }, frame() { return rendered.screen.screenshot(0, output.columns, 0, output.rows); } };
   // A failed test can leave a dialog open, and the app ignores q while one is: every pass
   // closes what is open (closing one can open the next) and presses q again. A view that
   // still will not close is interrupted the way a hangup would, and if even that fails the
@@ -1362,7 +1371,7 @@ test('a new session opens beside the list; mouse and keys move between Sessions,
   assert.match(cursor(v), row, 'the cursor is on the clicked row');
   // A click in the chat focuses the chat.
   click(v, panels.chat, 4, 1); await until(() => focused() === panels.chat, 'a click in the right pane focuses it');
-  assert.equal(v.current.session, id); assert.match(panels.keys.getText(), /↑↓ scroll {2}esc sessions {2}i type/);
+  assert.equal(v.current.session, id); assert.match(panels.keys.getText(), /↑↓ scroll {2}esc sessions/);
   click(v, panels.tabs[3]); await until(() => v.current.view === 'chats', 'mouse opens Chats');
   // On no team there is nothing in Chats to focus, so its tab keeps the focus.
   assert.equal(v.current.screen.focused, panels.tabs[3]); assert.equal(panels.tabs[3].style.bold, true);
@@ -1679,14 +1688,14 @@ test('keyboard input reaches the view and quit restores terminal mode', async t 
 test('typing on a Sessions row goes into the message box with no Tab first; the keys the key bar names still act', async t => {
   const p = setup(t);
   liveTask(p.root, { id: '4', goal: 'Trim coupon codes', state: 'answered' });
-  const v = await view(t, { repo: p.repo }), panels = v.current.panels, ask = panels.ask, type = text => { for (const ch of text) v.input.write(ch); };
+  const v = await view(t, { repo: p.repo }), panels = v.current.panels, ask = panels.ask, type = text => v.type(text);
   const typed = async (text, where) => { await until(() => ask.getValue() === text && v.current.screen.focused === ask, where); ask.setValue(''); };
   await selectRow(v, /Trim coupon codes/);
   // Nothing acted: the session is still the one shown, no dialog opened, and it is not archived.
   const widgets = v.current.screen.children.filter(child => !child.destroyed).length;
   const untouched = () => { assert.equal(v.current.session, '4'); assert.equal(v.current.screen.children.filter(child => !child.destroyed).length, widgets, 'no dialog'); assert.equal(readTask(p.repo, '4').state, 'answered'); assert.ok(rows(v).some(row => /Trim coupon codes/.test(row)), 'still listed, not archived'); assert.doesNotMatch(panels.status.getText(), /not running/); };
-  await until(() => /a follow up {2}e rename {2}c archive {2}n new session/.test(panels.keys.getText()), 'the row’s keys');
-  // The cursor on the row, one key at a time as a person types: h is no key there, so it and all after it, n and s too, go into the box.
+  await until(() => /a follow up {2}e rename {2}c archive {2}n new session {2}letter then enter/.test(panels.keys.getText()), 'the row’s keys, and how a letter acts');
+  // The cursor on the row, one key at a time as a person types: all of it goes into the box.
   type('how is it going? next steps'); await typed('how is it going? next steps', 'the message in the box');
   untouched();
   // q and ? write too: a message that starts with them neither quits nor opens the help.
@@ -1698,9 +1707,17 @@ test('typing on a Sessions row goes into the message box with no Tab first; the 
   // In its chat beside the list, the same.
   await selectRow(v, /Trim coupon codes/); panels.chat.focus(); await until(() => v.current.screen.focused === panels.chat, 'the chat beside the list');
   type('thanks'); await typed('thanks', 'from the chat'); untouched();
-  // A key the bar names acts as before: n starts a new session.
-  await selectRow(v, /Trim coupon codes/); type('n'); await until(() => v.current.session === 'new', 'n starts a new session');
+  // What the owner typed, in small letters, each starting with a key of the row: nothing acts, the text is in the box.
+  for (const text of ['can you create PR now?', 'now what', 'status', 'continue', 'e', 'x marks it', '+1']) { await selectRow(v, /Trim coupon codes/); type(text); await typed(text, text); untouched(); }
+  // A row's key alone in the box: the line under the box says what Enter does, and Enter does it.
+  await selectRow(v, /Trim coupon codes/); type('n');
+  await until(() => ask.getValue() === 'n' && /enter starts a new session · keep typing to write a message/.test(panels.keys.getText()), 'the line under the box names n');
+  untouched(); type('\r'); await until(() => v.current.session === 'new', 'n then Enter starts a new session');
   assert.equal(ask.getValue(), '');
+  await selectRow(v, /Trim coupon codes/); type('c');
+  await until(() => ask.getValue() === 'c' && /enter archives this session · keep typing to write a message/.test(panels.keys.getText()), 'the line under the box names c');
+  untouched(); type('\r'); await until(() => !rows(v).some(row => /Trim coupon codes/.test(row)), 'c then Enter archives it');
+  assert.equal(ask.getValue(), ''); assert.equal(v.current.screen.focused, panels.board, 'back on the list');
 });
 
 // A first request as long as a pasted brief: about 500 characters, with two file paths.
@@ -3542,7 +3559,7 @@ test('Sessions shows the list on the left and the open session on the right, at 
     assert.equal(panels.chat._clines.length, panels.chat.getContent().split('\n').length, 'the chat fits its pane without a second wrap');
     assert.equal(panels.status.getText(), 'ready'); assert.equal(panels.ask._label.getText(), ' Message Opus · with @reviewer ');
     // The key bar is the focused pane's: here the list's, with the keys of the row under the cursor.
-    assert.equal(v.current.screen.focused, panels.board); assert.equal(panels.keys.getText().trim(), 'enter open  p publish  d changes  e rename  c archive  n new session  tab next');
+    assert.equal(v.current.screen.focused, panels.board); assert.equal(panels.keys.getText().trim(), 'enter open  p publish  d changes  e rename  c archive  n new session');
     // On screen each row holds the list first and the session after it, and nothing runs past the edge.
     const drawn = v.frame().replace(/\x1b\[[\d;]*m/g, '').replace(/\\#/g, '#').split('\n');
     assert.ok(drawn.every(line => line.length <= width), 'nothing is wider than the screen');
@@ -3610,7 +3627,7 @@ test('Enter, Right, Tab, Esc, Left and a click move the focus between the list a
   assert.equal(panels.ask.getValue(), 'ab', 'the text stays in the box');
   await moves('\t', panels.ask, 'Tab moves in again'); panels.ask.clearValue();
   await moves('\t', panels.chat, 'Tab from the box reaches the chat');
-  await until(() => /↑↓ scroll {2}esc sessions {2}i type/.test(panels.keys.getText()), 'the chat’s keys');
+  await until(() => /↑↓ scroll {2}esc sessions/.test(panels.keys.getText()), 'the chat’s keys');
   await moves('\x1b', panels.board, 'Esc on the chat goes back to the list');
   await moves('\t', panels.ask, 'Tab'); await moves('\t', panels.chat, 'Tab');
   await moves('\x1b[D', panels.board, 'Left on the chat goes back to the list');
@@ -4289,7 +4306,7 @@ test("the owner's list: his one running session is one row, its spent messages l
   await selectRow(v, /@ali question/);
   await until(() => /y accept · n decline · enter read/.test(panels.chat.getText()), 'its keys beside the list');
   panels.chat.focus();
-  await until(() => /y accept {2}n decline {2}c decline {2}↑↓ scroll {2}esc sessions {2}i type/.test(panels.keys.getText()), 'the same keys while the pane has the focus');
+  await until(() => /y accept {2}n decline {2}c decline {2}letter then enter {2}↑↓ scroll {2}esc sessions/.test(panels.keys.getText()), 'the same keys while the pane has the focus');
   // Ctrl-Y and Ctrl-N there answer nothing.
   v.input.write('\x19'); v.input.write('\x0e'); await pause(300);
   assert.deepEqual(peer.sent.filter(c => ['approve', 'discard', 'work'].includes(c.type)), [], 'Ctrl-Y and Ctrl-N answer nothing');
