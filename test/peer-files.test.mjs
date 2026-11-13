@@ -419,6 +419,9 @@ test("only the owner's own sessions take files: a teammate's handoff accepted th
   // The owner's own handoff from this computer of his is his session: it takes them.
   const own = watched('3', { kind: 'handoff', peer: p.laptop.identity.key, name: 'ana', threadId: 'thread-2', own: true });
   withHome(p.devbox.home, () => assert.equal(p.host['elu.remote.files'](piece(own, parts()[0]), p.toHost).files, 1));
+  // So is one he took on there in a mode he picked by hand (w): it came from his laptop.
+  const picked = watched('4', { kind: 'handoff', peer: p.laptop.identity.key, name: 'ana', threadId: 'thread-3' });
+  withHome(p.devbox.home, () => assert.equal(p.host['elu.remote.files'](piece(picked, parts()[0]), p.toHost).files, 1));
 });
 
 test("a turn reads across the home only when it adds it: Approve for me refuses a file there outside the turn's folders", t => {
