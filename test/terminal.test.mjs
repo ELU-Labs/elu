@@ -107,7 +107,7 @@ async function view(t, options = {}) {
         rendered.panels.ask.cancel();
         for (const child of [...rendered.screen.children]) { child.dismiss?.(); child.children?.find(item => item.type === 'textbox')?.emit('cancel'); }
         if (waited > 3000) process.emit('SIGHUP');
-        else { rendered.panels.chat.focus(); rendered.screen.emit('keypress', 'q', { name: 'q' }); }
+        else { rendered.panels.tabs[0].focus(); rendered.screen.emit('keypress', 'q', { name: 'q' }); }
       }
       await new Promise(resolve => setTimeout(resolve, stopped ? 20 : 2));
     }
@@ -136,7 +136,8 @@ async function dialog(v, title, value) {
   await until(() => field.__listener, `${title} input`);
   field.setValue(value); field.submit();
 }
-function key(v, name, ch = name) { if (v.current.screen.focused === v.current.panels.ask) v.current.panels.ask.cancel(); v.current.screen.emit('keypress', ch, { name }); }
+// q quits from a tab: on a Sessions row or in its chat it is the first letter of a message.
+function key(v, name, ch = name) { if (v.current.screen.focused === v.current.panels.ask) v.current.panels.ask.cancel(); if (name === 'q') v.current.panels.tabs[0].focus(); v.current.screen.emit('keypress', ch, { name }); }
 function captureFrames(name, frames) {
   if (!process.env.ELU_CODE_CAPTURE_DIRECTORY) return;
   assert.ok(frames.every(frame => !/\/Users\/|\/home\/|Bearer |sk-ant-|github_pat_/.test(frame.text)));
@@ -1697,6 +1698,33 @@ test('keyboard input reaches the view and quit restores terminal mode', async t 
   v.input.write('\t'); await until(() => v.current.screen.focused !== v.current.panels.ask, 'Tab leaves the message box');
   v.input.write('q'); await until(() => v.current.screen.destroyed, 'keyboard quit'); await v.finished;
   assert.match(v.raw, /\x1b\[\?1049l|\x1b\[\?47l/);
+});
+
+test('typing on a Sessions row goes into the message box with no Tab first; the keys the key bar names still act', async t => {
+  const p = setup(t);
+  liveTask(p.root, { id: '4', goal: 'Trim coupon codes', state: 'answered' });
+  const v = await view(t, { repo: p.repo }), panels = v.current.panels, ask = panels.ask, type = text => { for (const ch of text) v.input.write(ch); };
+  const typed = async (text, where) => { await until(() => ask.getValue() === text && v.current.screen.focused === ask, where); ask.setValue(''); };
+  await selectRow(v, /Trim coupon codes/);
+  // Nothing acted: the session is still the one shown, no dialog opened, and it is not archived.
+  const widgets = v.current.screen.children.filter(child => !child.destroyed).length;
+  const untouched = () => { assert.equal(v.current.session, '4'); assert.equal(v.current.screen.children.filter(child => !child.destroyed).length, widgets, 'no dialog'); assert.equal(readTask(p.repo, '4').state, 'answered'); assert.ok(rows(v).some(row => /Trim coupon codes/.test(row)), 'still listed, not archived'); assert.doesNotMatch(panels.status.getText(), /not running/); };
+  await until(() => /a follow up {2}e rename {2}c archive {2}n new session/.test(panels.keys.getText()), 'the row’s keys');
+  // The cursor on the row, one key at a time as a person types: h is no key there, so it and all after it, n and s too, go into the box.
+  type('how is it going? next steps'); await typed('how is it going? next steps', 'the message in the box');
+  untouched();
+  // q and ? write too: a message that starts with them neither quits nor opens the help.
+  await selectRow(v, /Trim coupon codes/); type('quick one'); await typed('quick one', 'q starts a message');
+  await selectRow(v, /Trim coupon codes/); type('?'); await typed('?', '? starts a message');
+  // A capital letter writes, even one whose small letter is a key: a message that starts Can does not archive the session.
+  await selectRow(v, /Trim coupon codes/); type('Can you check it'); await typed('Can you check it', 'a capital starts a message');
+  assert.ok(!v.current.screen.destroyed, 'q did not quit'); untouched();
+  // In its chat beside the list, the same.
+  await selectRow(v, /Trim coupon codes/); panels.chat.focus(); await until(() => v.current.screen.focused === panels.chat, 'the chat beside the list');
+  type('thanks'); await typed('thanks', 'from the chat'); untouched();
+  // A key the bar names acts as before: n starts a new session.
+  await selectRow(v, /Trim coupon codes/); type('n'); await until(() => v.current.session === 'new', 'n starts a new session');
+  assert.equal(ask.getValue(), '');
 });
 
 // A first request as long as a pasted brief: about 500 characters, with two file paths.

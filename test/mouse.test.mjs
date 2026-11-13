@@ -126,7 +126,7 @@ async function view(t, { protocol = 'sgr' } = {}) {
         rendered.panels.ask.cancel();
         for (const child of [...rendered.screen.children]) { child.dismiss?.(); child.children?.find(item => item.type === 'textbox')?.emit('cancel'); }
         if (waited > 3000) process.emit('SIGHUP');
-        else { rendered.panels.chat.focus(); rendered.screen.emit('keypress', 'q', { name: 'q' }); }
+        else { rendered.panels.tabs[0].focus(); rendered.screen.emit('keypress', 'q', { name: 'q' }); }
         await new Promise(resolve => setTimeout(resolve, 20));
       }
     } finally {
