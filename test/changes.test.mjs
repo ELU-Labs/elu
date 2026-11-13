@@ -415,7 +415,7 @@ test('changeRows takes line notes: the summary says how, each note shows under i
   assert.equal(rows[at + 1].line.now, 9);
   for (const row of rows) assert.ok(widthOf(row) <= 80, shown(row));
   // Without the option the view is as it was.
-  assert.equal(changeRows(changes, 80, false).some(row => row.kind === 'mark' || /notes/.test(shown(row))), false);
+  assert.equal(changeRows(changes, 80, false).some(row => row.kind === 'mark' || /to the model/.test(shown(row))), false);
   // An empty project offers no notes.
   assert.deepEqual(changeRows({ files: [] }, 80, false, { notes }).map(shown), ['No changes yet.']);
   assert.equal(notesMessage(notes), [
