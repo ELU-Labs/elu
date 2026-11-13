@@ -6,6 +6,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { temp, fakeClis, keyLike } from './helpers.mjs';
 import { claudeUsage, codexUsage, usageSnapshot, observeClaudeLog, readCodexUsage, refreshCodexUsage, personalDirectory, claudeAccount, codexAccount, readAccounts, recordAccount, refreshUsage, usageStale, usageTab } from '../lib/usage.mjs';
 import { usageBlocks, usageDetailLines } from '../lib/terminal.mjs';
+import { readSignInsBeforeCheck, signInsUnread, withCheck } from '../lib/vendor-check.mjs';
+import { atomic } from '../lib/util.mjs';
 
 function environment(t, values) {
   const previous = Object.fromEntries(Object.keys(values).map(key => [key, process.env[key]])); Object.assign(process.env, values);
@@ -103,7 +105,7 @@ const SECRETS = new RegExp([TOKEN, ...OTHERS].join('|'));
 function home(t, { claude = true, codex = true } = {}) {
   const dir = temp(t); fs.mkdirSync(path.join(dir, 'claude')); fs.mkdirSync(path.join(dir, 'codex'));
   if (claude) {
-    fs.writeFileSync(path.join(dir, '.claude.json'), JSON.stringify({ numStartups: 3, oauthAccount: { accountUuid: OTHERS[3], emailAddress: 'owner@example.invalid', organizationName: 'Example Org', planDisplayName: 'Max 20x', userRateLimitTier: 'default_claude_max_20x', hasExtraUsageEnabled: false } }));
+    fs.writeFileSync(path.join(dir, 'claude', '.claude.json'), JSON.stringify({ numStartups: 3, oauthAccount: { accountUuid: OTHERS[3], emailAddress: 'owner@example.invalid', organizationName: 'Example Org', planDisplayName: 'Max 20x', userRateLimitTier: 'default_claude_max_20x', hasExtraUsageEnabled: false } }));
     fs.writeFileSync(path.join(dir, 'claude', '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: TOKEN, refreshToken: OTHERS[0], expiresAt: Date.now() + 3600000, scopes: ['user:inference'], subscriptionType: 'max', rateLimitTier: 'default_claude_max_20x' } }));
   }
   if (codex) {
@@ -184,7 +186,8 @@ test('the Usage tab names the active account per vendor, lists the others, and h
   assert.deepEqual(claude.active, { account: 'owner@example.invalid', plan: 'Max 20x', tier: 'default_claude_max_20x' });
   assert.deepEqual(claude.usage, { observedAt, fiveHour: null, weekly: { usedPercent: 12, resetsAt } });
   assert.deepEqual(claude.others.map(row => [row.account, row.usage.weekly.usedPercent]), [['old@example.invalid', 100]]);
-  assert.equal(claude.switchHint, 'Switch: claude, then /login');
+  assert.equal(claude.keysHint, 'enter use · a add account · x forget');
+  assert.deepEqual(claude.accounts.map(row => [row.login, row.account, row.active]), [['default', 'owner@example.invalid', true]]);
   assert.deepEqual(codex.active, { account: 'owner@example.invalid', plan: 'Team', tier: null }); assert.equal(codex.usage.fiveHour.usedPercent, 34);
   assert.deepEqual([agy.installed, agy.signedIn, agy.usage, agy.signInHint], [true, false, null, 'Run: agy']);
   assert.deepEqual([grok.installed, grok.signedIn, grok.active], [false, false, null]);
@@ -196,7 +199,7 @@ test('the Usage tab names the active account per vendor, lists the others, and h
   assert.match(text, /^Claude {6}owner@example.invalid · Max 20x · active$/m);
   assert.match(text, /^ {12}5h  \[------\]    —   not reported$/m); assert.match(text, /^ {12}wk  \[#-----\]   12%  resets /m);
   assert.match(text, /^ {12}old@example.invalid · last seen \w{3} \d+ · wk 100% then$/m);
-  assert.match(text, /^ {12}Switch: claude, then \/login$/m); assert.match(text, /^Codex {7}owner@example.invalid · Team · active$/m); assert.match(text, /^ {12}5h  \[##----\]   34%  resets /m);
+  assert.match(text, /^ {12}old@example.invalid · last seen \w{3} \d+ · wk 100% then\n {12}enter use · a add account · x forget$/m); assert.match(text, /^Codex {7}owner@example.invalid · Team · active$/m); assert.match(text, /^ {12}5h  \[##----\]   34%  resets /m);
   assert.match(text, /^Antigravity not signed in. Run: agy$/m); assert.match(text, /^Grok Build {2}not installed$/m);
   const details = usageDetailLines(claude, new Date(now)).join('\n');
   assert.match(details, /owner@example.invalid · Max 20x · default_claude_max_20x\nReported \d\d:\d\d\n\n5h  \[------\]    —   not reported\nwk  \[#-----\]   12%  resets /); assert.match(details, /Other accounts\nold@example.invalid · Pro · first seen/);
@@ -212,19 +215,59 @@ test('the Usage tab names the active account per vendor, lists the others, and h
   }
 });
 
-test('the Usage tab says a vendor that was never checked is checked on the next message to it, not that it is signed out', t => {
-  const folder = temp(t); environment(t, { XDG_CONFIG_HOME: folder });
-  const { env } = home(t), now = Date.now();
-  // detect() never runs such a vendor, not even to read its sign-in: null, and no release.
-  const waiting = vendor => ({ vendor, available: true, supported: false, signedIn: null, version: null, conformant: false });
-  const [, , agy, grok] = usageTab({ vendors: [waiting('agy'), waiting('grok')], env, now });
-  assert.deepEqual([agy.installed, agy.signedIn, agy.unchecked, grok.unchecked], [true, false, true, true]);
-  assert.deepEqual(usageBlocks([agy, grok], { now: new Date(now) }).map(row => row.text), ['Antigravity checked on your next message to it', 'Grok Build  checked on your next message to it']);
-  assert.deepEqual(usageDetailLines(grok), ['Grok Build has not been checked on this machine yet. Your first message to it runs the check.']);
-  // Once it was run for its check its sign-in is read like any other vendor's, whether the check passed or not.
-  const ran = (signedIn, conformant) => usageTab({ vendors: [{ vendor: 'grok', available: true, supported: true, signedIn, version: '1.0.77', release: '1.0.77', conformant }], env, now })[3];
-  const out = ran(false, true), into = ran(true, true), failed = ran(true, false);
-  assert.deepEqual([out.unchecked, into.unchecked, failed.unchecked], [false, false, false]);
-  assert.deepEqual(usageBlocks([out]).map(row => row.text), ['Grok Build  not signed in. Run: grok login']);
-  assert.equal(usageBlocks([into])[0].text, 'Grok Build  signed in · active'); assert.equal(usageBlocks([failed])[0].text, 'Grok Build  signed in · active');
+test('the Usage tab reads Antigravity and Grok Build sign-in before their one-time check, starting no turn, and says c runs it', async t => {
+  const folder = temp(t); environment(t, { XDG_CONFIG_HOME: path.join(folder, 'personal') });
+  const { env } = home(t), now = Date.now(), fake = fakeClis(folder), config = path.join(fake.dir, 'fake.json');
+  const calls = () => fs.existsSync(fake.calls) ? fs.readFileSync(fake.calls, 'utf8').trim().split('\n').map(line => JSON.parse(line)) : [];
+  // detect() never runs such a vendor: null sign-in, and no release.
+  const waiting = vendor => ({ vendor, available: true, bin: path.join(fake.dir, vendor), supported: false, signedIn: null, version: null, conformant: false });
+  const rows = [waiting('agy'), waiting('grok')], tab = () => { const [, , agy, grok] = usageTab({ vendors: withCheck(rows, { env }), env, now }); return { agy, grok }; };
+  const text = row => usageBlocks([row], { now: new Date(now) }).map(line => line.text);
+  // Before any read: Grok's token file is looked for at once, Antigravity is not read yet.
+  let { agy, grok } = tab();
+  assert.deepEqual([agy.unchecked, agy.check, agy.signInRead, grok.check, grok.signInRead], [true, 'needed', null, 'needed', false]);
+  assert.deepEqual(text(agy), ['Antigravity sign-in not read yet · needs a one-time check (c runs it now)']);
+  assert.deepEqual(text(grok), ['Grok Build  not signed in. Run: grok login']);
+  assert.equal(signInsUnread(rows), true);
+  fs.mkdirSync(path.join(env.HOME, '.grok')); fs.writeFileSync(path.join(env.HOME, '.grok', 'auth.json'), '{"token":"never-read"}\n', { mode: 0o600 });
+  assert.deepEqual(text(tab().grok), ['Grok Build  signed in · needs a one-time check (c runs it now)']);
+  // Antigravity: its release and help, as the check asks first, then agy -p /usage under the
+  // private sign-in HOME. Only the exit code is read; nothing reaches a model turn.
+  await readSignInsBeforeCheck(rows, { env: { ...process.env, ...env } });
+  assert.deepEqual(calls().map(call => [call.vendor, call.args]), [['agy', ['--version']], ['agy', ['--help']], ['agy', ['-p', '/usage', '--output-format', 'json']]]);
+  assert.equal(calls().at(-1).home, path.join(personalDirectory(), 'agy-home', 'signin')); assert.equal(calls().at(-1).autoUpdate, 'true');
+  assert.equal(fs.existsSync(path.join(folder, 'inputs.jsonl')), false, 'no prompt was sent');
+  ({ agy, grok } = tab());
+  assert.deepEqual(text(agy), ['Antigravity signed in · needs a one-time check (c runs it now)']);
+  assert.equal(signInsUnread(rows), false);
+  assert.deepEqual(usageDetailLines(agy), ['Signed in.', '', 'Antigravity CLI has not been checked on this machine yet. Your first message to it runs the check.', 'c runs it now.']);
+  // A read is kept for its program: the tab does not ask again until r (all), or for another program.
+  await readSignInsBeforeCheck(rows, { env: { ...process.env, ...env } }); assert.equal(calls().length, 3);
+  assert.equal(signInsUnread([{ ...rows[0], bin: path.join(folder, 'elsewhere', 'agy') }]), true);
+  fs.writeFileSync(config, JSON.stringify({ ...JSON.parse(fs.readFileSync(config, 'utf8')), agy: { signedIn: false } }));
+  await readSignInsBeforeCheck(rows, { env: { ...process.env, ...env }, all: true }); assert.equal(calls().length, 6);
+  ({ agy } = tab());
+  assert.deepEqual(text(agy), ['Antigravity not signed in. Run: agy']);
+  assert.deepEqual(usageDetailLines(agy), ['Not signed in. Run: agy', '', 'Antigravity CLI has not been checked on this machine yet. Your first message to it runs the check.', 'c runs it now.']);
+  // A release that cannot run here is not asked for its sign-in.
+  fs.writeFileSync(path.join(fake.dir, 'agy'), `#!${process.execPath}\nif (process.argv.includes('--version')) console.log('agy version 1.5.4'); else if (process.argv.includes('--help')) console.log('--output-format'); else { require('node:fs').writeFileSync(${JSON.stringify(path.join(folder, 'asked'))}, 'x'); process.exit(0); }\n`, { mode: 0o755 });
+  await readSignInsBeforeCheck(rows, { env: { ...process.env, ...env }, all: true });
+  assert.equal(fs.existsSync(path.join(folder, 'asked')), false);
+  ({ agy } = tab());
+  assert.deepEqual(text(agy), ['Antigravity this release cannot run here', '            Antigravity CLI 1.5.4: This untested version is missing required', '            flags: --json-schema, --conversation, --mode, --sandbox,', '            --add-dir, --print-timeout, --dangerously-skip-permissions.']);
+  assert.ok(text(agy).every(line => line.length <= 76));
+  // Saved: the program, the answer and when; never more.
+  const saved = JSON.parse(fs.readFileSync(path.join(personalDirectory(), 'usage.json'), 'utf8')).signIns;
+  assert.deepEqual(Object.keys(saved), ['agy']); assert.deepEqual(Object.keys(saved.agy).sort(), ['at', 'bin', 'reason', 'signedIn', 'supported']);
+  // Once the check ran, it says where the vendor stands: ready, or which step failed.
+  const ran = conformant => withCheck([{ vendor: 'grok', available: true, bin: rows[1].bin, supported: true, signedIn: true, version: '1.0.77', release: '1.0.77', conformant }], { env });
+  assert.deepEqual(text(usageTab({ vendors: ran(true), env, now })[3]), ['Grok Build  signed in · ready']);
+  atomic(path.join(personalDirectory(), 'conformance', 'grok.json'), { v: 1, bin: rows[1].bin, version: '1.0.77', steps: { signin: 'pass', 'locked-no-write': 'pass', 'locked-no-shell': 'fail', 'locked-no-network': 'pass', json: 'pass', resume: 'pass', relay: 'fail', isolation: 'fail' }, relay: false, at: new Date().toISOString() });
+  const failed = usageTab({ vendors: ran(false), env, now })[3];
+  assert.deepEqual(text(failed), ['Grok Build  signed in · check failed (c runs it again)', '            Not proven: a read-only turn runs no command, and 1 more.']);
+  assert.equal(usageDetailLines(failed).at(-1), 'c runs it again.');
+  // A check c started shows its lines under the vendor as it goes, then why it stopped.
+  const checks = new Map([['grok', { running: true, lines: ['One-time check of Grok Build on this machine first: about seven short turns on it, a few minutes.'], current: 'Checking Grok Build, 2 of 8 done: a read-only turn writes no file.', error: null }]]);
+  assert.deepEqual(usageBlocks([usageTab({ vendors: withCheck([waiting('grok')], { env }), env, now })[3]], { checks }).map(line => line.text), ['Grok Build  signed in · checking…', '            One-time check of Grok Build on this machine first: about seven', '            short turns on it, a few minutes.', '            Checking Grok Build, 2 of 8 done: a read-only turn writes no', '            file.']);
+  assert.ok(!calls().some(call => call.vendor === 'grok'), 'grok was never run');
 });

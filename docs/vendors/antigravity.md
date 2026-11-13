@@ -34,8 +34,8 @@ enforcement designed from Google's documentation holds. ELU starts it by itself
 before your first message to Antigravity goes out, whether you wrote to a session on it or
 to a bot on it. The session says so first, then shows each step as it ends, and then your
 message goes on. The check takes about seven short turns on Antigravity and a few minutes.
-Only a message you just sent starts it: a scheduled turn, a shadow turn or a review never
-does. It runs in a throwaway repository with a planted file outside it, a local web
+Only a message you just sent, or `c` in the Usage tab, starts it: a scheduled turn, a shadow
+turn or a review never does. It runs in a throwaway repository with a planted file outside it, a local web
 listener and a marker command:
 
 | Step | Proves |
@@ -56,6 +56,15 @@ If a required step fails, Antigravity stays off here, the session says which ste
 proven, and your next message to it runs the check again. When `relay` fails,
 Ask and Auto still run: blocked actions are denied and reported instead of asked live, and
 the permissions picker says so.
+
+The Usage tab shows whether Antigravity is signed in before the check has run. It asks
+`agy` what the check asks first, its release (`agy --version`) and its flags (`agy --help`),
+then runs the sign-in probe above, `agy -p /usage --output-format json` under ELU's private
+HOME: exit code only, no model turn, no quota spent. It does this when the tab opens and it
+has not read this `agy` yet, when the tab's usage check is due, and on `r`. The line then
+says `signed in · needs a one-time check (c runs it now)`, or `not signed in. Run: agy`. `c` on
+that line runs the same check there, with each step under the line as it ends, and the line
+then says `ready`, or that the check failed and which step was not proven.
 
 ## The private HOME
 
