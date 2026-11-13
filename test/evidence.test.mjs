@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { project, git } from './helpers.mjs';
 import { structuralChecks } from '../lib/checks.mjs';
-import { defaultConfig } from '../lib/config.mjs';
+import { defaultConfig, validateConfig } from '../lib/config.mjs';
 import { atomic } from '../lib/util.mjs';
 import { assertGitSafe, repository } from '../lib/git.mjs';
 
@@ -13,10 +13,29 @@ test('evidence counts new lines, refuses binary files, and enforces declared pat
   config.paths = ['src']; config.limits.changedLines = 2;
   fs.writeFileSync(path.join(root, 'new.txt'), 'one\ntwo\nthree\n');
   let r = structuralChecks(task, config);
-  assert.equal(r.change.lines, 3); assert.equal(r.results.find((row) => row.name === 'changed-lines').status, 'failed');
+  assert.equal(r.change.lines, 3); assert.equal(r.results.find((row) => row.name === 'no-binary-changes').status, 'passed');
   assert.equal(r.results.find((row) => row.name === 'declared-paths').status, 'failed');
   fs.writeFileSync(path.join(root, 'new.txt'), Buffer.from([0, 1, 2]));
   r = structuralChecks(task, config); assert.equal(r.change.binary, true);
+  assert.deepEqual(r.results.find((row) => row.name === 'no-binary-changes'), { name: 'no-binary-changes', status: 'failed', details: ['Binary changes require manual review.'] });
+});
+
+// ELU sets no limit of its own on the size of a change: no changed-lines check, whatever the
+// config's old changedLines says, in every mode.
+test('a change of any number of lines passes the checks in every mode, and a config may leave changedLines out', (t) => {
+  const { root } = project(t); const task = { worktree: root, base: git(root, ['rev-parse', 'HEAD']) }; const config = defaultConfig();
+  config.limits.changedLines = 2;
+  fs.writeFileSync(path.join(root, 'src/many.mjs'), Array.from({ length: 20000 }, (_, i) => `export const v${i} = ${i};`).join('\n') + '\n');
+  for (const mode of ['locked', 'ask', 'auto', 'full']) {
+    const r = structuralChecks(task, config, { mode });
+    assert.equal(r.change.lines, 20000);
+    assert.equal(r.results.some((row) => row.name === 'changed-lines'), false, mode);
+    assert.ok(r.results.every((row) => row.status === 'passed'), `${mode}: ${JSON.stringify(r.results.filter((row) => row.status !== 'passed'))}`);
+  }
+  const { changedLines, ...limits } = defaultConfig().limits;
+  assert.equal(changedLines, 400, 'still written, for older ELU that requires it');
+  assert.deepEqual(validateConfig({ ...defaultConfig(), limits }).limits, { reviewRounds: 2 });
+  assert.throws(() => validateConfig({ ...defaultConfig(), limits: { ...limits, changedLines: 0 } }), /changedLines must be an integer/);
 });
 test('deleted tests, new dependencies, scripts, and lockfiles fail independent checks', (t) => {
   const { root } = project(t); const task = { worktree: root, base: git(root, ['rev-parse', 'HEAD']) };
