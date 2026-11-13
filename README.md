@@ -277,6 +277,13 @@ no rules when there are none.
 type `@kim where are the tax rates?` in any session. A message always reaches them, and
 they can reply in the same thread.
 
+Two more choices are yours for each teammate, in Chats with their row selected or their
+messages open. `h` holds your replies and results to them: each one waits in their thread
+until you press `y` to send it, `e` to edit its text first, or `n` to drop it. One that may
+hold a secret always waits, and is sent only after you take the secret out. `o` turns on
+auto-continue: their answer, or the result of work they approved, continues the session you
+asked from. The line over their thread says which of the two are on.
+
 What a teammate's message does on your machine is yours to choose, once per team: `/join`
 asks, and so does your first `/invite` for a team. **Auto** (the default for a new team)
 starts a session in your project as if you had typed the message yourself: it runs in the
