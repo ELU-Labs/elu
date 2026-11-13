@@ -136,8 +136,10 @@ Task state mapping:
 | reply held for the owner's approval | WORKING, with ext metadata `{substate: "awaiting-owner"}` |
 | reply sent | COMPLETED, with the reply as one Artifact (text part) |
 | owner declined, or blocked by policy or caps | REJECTED, with a reason message |
-| run failed | FAILED |
+| run failed or was stopped | FAILED, with a reason message |
 | asker cancelled | CANCELED |
+
+A FAILED task says why, and the one thing to do (`lib/peer/failure.mjs`): the stop line the answering machine shows its own user, put for a reader who is not at it. It names that machine (`@name` as the team calls its owner; its machine name for the owner's other computers), as in "Grok Build is signed out. Sign Grok Build in on @kai, then send it again." A teammate gets it with paths cut and no account named, a trusted teammate and the owner's other computers with paths kept, and a reason that may hold a secret stays on the answering machine. It is at most 300 characters. A SUBMITTED task may carry a message too: a machine with no project for teammates' messages says so, and what to do there, while the message waits for its owner. The sender shows both under its message in Chats and in the opened thread. A machine on 0.1.19 or earlier sends only "The run failed.", which the sender shows as "The run failed on @name. Update ELU there to see why."
 
 ## Your other computers
 
