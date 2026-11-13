@@ -341,8 +341,9 @@ code for someone new; the first time, it also makes your team, named after the o
 
 `/standup` starts a Standup session in the open project, named "Standup" and the date and
 time, and asks each open session for an update: what it is working on, what is done, what is
-next, and what blocks it. Open means not archived and not in Done, and working, waiting for
-you, or active in the last 7 days. That is every such session of yours in every project on
+next, and what blocks it. Open means not archived and not moved to Done (a chat that has
+answered is asked), and working, waiting for you, or active in the last 7 days. The same rule
+holds for your teammates' sessions, as their computers apply it. That is every such session of yours in every project on
 this computer, those on your other computers that are online (`/mine`), and your teammates'
 sessions on the shared Kanban whose computers are online. A project kept off the Kanban
 (`/share off`) is never asked. At most 20 of yours and 20 of your teammates' are asked,
@@ -351,7 +352,9 @@ newest first; the rest are listed.
 Before asking, the chat says how many sessions it asks and on which computers. Each session
 answers in one turn of its own agent (its model, or the worker bot that works in it), on its
 own model and limits, in at most 8 lines, and that turn changes nothing: no edit, no Task,
-and the session stays where it was. Its chat shows "@sam asks: standup", the update, and
+and the session stays where it was. A Claude Code session answers in a copy of its own
+history, so its next turn goes on from its work; another vendor keeps the standup in that
+history. Its chat shows "@sam asks: standup", the update, and
 "Sent to @sam". A session that is working answers when its turn ends, or is listed as still
 working after 10 minutes. Answers show in the Standup as they come, each titled with its
 session, agent and computer: "ELU Issues · Opus 5.5 on @devbox", "Self Healing · Opus 5.5
@@ -365,10 +368,16 @@ once a round, to approve or decline, and a decline is listed in your Standup. Ea
 sessions answers at most once a round, is told their rules for teammates, and what comes back
 is checked as any answer to a teammate is: paths are cut, and an update that may hold a
 secret is not sent. You get the update text, the card's title, the agent's name and the
-computer, nothing else.
+computer, nothing else. Each answer turn counts as one of your requests there and spends from
+your daily allowance there, as any message of yours that runs on their computer, so a full
+round can use up the day's requests. A computer that still runs an older build of ELU Code
+for its sessions is listed, not asked.
 
 When the round ends, the Standup's own model reads every update and sums it up: what is
-done, what is in progress, what is blocked or waits for someone, and who. Then you talk to
+done, what is in progress, what is blocked or waits for someone, and who. That turn starts
+with nobody watching, so it only answers and keeps the Kanban: no edits, no Task, none of
+your MCP servers, and Full access runs as Approve for me. It runs once a round and is never
+retried on its own. Then you talk to
 it: each message goes to that model with the updates and this computer's Kanban boards for
 the projects involved, teammates' cards on them read-only. It can keep the Kanban right: in
 a Claude Code session with permissions it lists the boards, adds a To do card that says where
