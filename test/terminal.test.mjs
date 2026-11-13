@@ -2934,7 +2934,7 @@ test('a schedule offers Full access, says what it means and asks once', { timeou
   const picker = dialogText(v, 'Permissions');
   assert.match(picker, /Full access/); assert.match(picker, /Each run of a schedule has nobody watching\./);
   v.input.write('3'); await until(() => modal(v, 'Full access'), 'the schedule line');
-  assert.match(said(), /Each run has Full access with nobody watching: it reads anything, runs any command and uses the internet without asking\. The never list still holds\./);
+  assert.match(said(), /Each run has Full access with nobody watching: it reads anything, runs any command and uses the internet without asking\. The never list is refused by name only: a command that names it another way can get through\./);
   assert.match(said(), /Use it for this schedule\? y\/N/);
   await dialog(v, 'Full access', 'y'); await until(() => /Full access for this schedule\./.test(status()) && /Permissions {2}Full access/.test(text()), 'full');
   // Asked once: saving it asks nothing more.

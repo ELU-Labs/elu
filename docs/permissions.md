@@ -365,10 +365,11 @@ Approve for me.
   not pick yourself runs with your default at each run, and never above `auto`.
   One you pick Full access for keeps `full`, and each of its runs starts in Full
   access, with nobody watching: it reads anything, runs any command and uses the
-  internet without asking, and the never list still holds. Before it saves such
-  a schedule, the form says so in one line and asks you once. A schedule from an
-  earlier version runs as it did; a mode a schedule file names that this version
-  does not know is refused, and that run does not start. It also
+  internet without asking, and the never list is refused by name only, as in any
+  Full access session. Before it saves such a schedule, the form says so in one
+  line and asks you once. A schedule from an earlier version runs as it did; a
+  mode a schedule file names that this version does not know is refused, and that
+  run does not start. It also
   keeps the bots of the form it was made in, and, for a one-time schedule, a
   branch if one was set. A repeating schedule runs in a new worktree each time,
   since a branch is checked out in one place at a time, and a schedule never
