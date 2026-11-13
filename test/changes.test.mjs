@@ -8,7 +8,7 @@ import { repository } from '../lib/git.mjs';
 import { saveTask } from '../lib/state.mjs';
 import { taskPatch } from '../lib/projects.mjs';
 import { buildChanges } from '../lib/diff.mjs';
-import { changeRows, changeSummary } from '../lib/changes.mjs';
+import { changeRows, changeSummary, noteKey, notesMessage } from '../lib/changes.mjs';
 import { parseDiff, LIMITS } from '../lib/diff.mjs';
 import { visible } from '../lib/terminal-visuals.mjs';
 
@@ -392,4 +392,36 @@ test('changeRows masks secrets, hides Windows line ends and says what a limit le
   const big = changeRows({ base: 'origin/main', branch: 'feat/task-2', files: [{ ...file('a{bold}\x1b[2J.txt', ['x']), added: 2468, removed: 177 }], added: 2468, removed: 177, cut: false }, 80, false, { open: new Set() });
   assert.deepEqual(big.map(shown), ['origin/main...feat/task-2 · 1 file changed · +2,468 −177', '', edge('▸ a{bold}␛[2J.txt', 'new  +2,468 −177')]);
   assert.equal(changeSummary({ files: new Array(24).fill(null) }), 'Changes 24'); assert.equal(changeSummary({ files: [], hiddenFiles: 1200 }), 'Changes 1,200'); assert.equal(changeSummary(null), 'Changes');
+});
+
+test('changeRows takes line notes: the summary says how, each note shows under its line, and they go to the model as one message', () => {
+  const changes = sample(), notes = new Map();
+  let rows = changeRows(changes, 80, false, { open: new Set([0]), notes });
+  assert.deepEqual(rows.slice(0, 2).map(shown), ['a1b2c3d4...feat/task-3 · 4 files changed · +6 −2', '+ beside a line notes what should change. Notes go to the model together.']);
+  // Every row of a line carries it, so a note can be put on any of them.
+  const added = rows.find(row => shown(row).includes('return text.trim()')), removed = rows.find(row => row.kind === 'del');
+  assert.deepEqual({ ...added.line, text: undefined }, { path: 'src/coupon.mjs', kind: 'add', old: null, now: 9, text: undefined });
+  assert.equal(added.line.text, '    return text.trim() // {bold}not a tag{/bold} {red-fg}');
+  assert.equal(rows.find(row => row.kind === 'hunk').line, undefined);
+  notes.set(noteKey(added.line), { ...added.line, note: 'keep the {bold} comment out' });
+  notes.set(noteKey(removed.line), { ...removed.line, note: 'why was this removed?' });
+  rows = changeRows(changes, 80, false, { open: new Set([0]), notes });
+  assert.equal(shown(rows[1]), '2 notes. s sends them to the model together.');
+  const at = rows.findIndex(row => row === rows.find(row => shown(row).includes('return text.trim()')));
+  assert.deepEqual(rows.slice(at - 1, at + 2).map(row => [row.kind, shown(row)]), [
+    ['del', ' 9    -     return text;'], ['mark', '        ✎ why was this removed?'], ['add', '    9 +     return text.trim() // {bold}not a tag{/bold} {red-fg}'],
+  ]);
+  assert.deepEqual([rows[at + 1].kind, shown(rows[at + 1])], ['mark', '        ✎ keep the {bold} comment out']);
+  assert.equal(rows[at + 1].line.now, 9);
+  for (const row of rows) assert.ok(widthOf(row) <= 80, shown(row));
+  // Without the option the view is as it was.
+  assert.equal(changeRows(changes, 80, false).some(row => row.kind === 'mark' || /notes/.test(shown(row))), false);
+  // An empty project offers no notes.
+  assert.deepEqual(changeRows({ files: [] }, 80, false, { notes }).map(shown), ['No changes yet.']);
+  assert.equal(notesMessage(notes), [
+    'Notes on your changes. Change what each one asks:',
+    '', 'src/coupon.mjs, removed line 9: return text;', 'why was this removed?',
+    '', 'src/coupon.mjs, line 9: return text.trim() // {bold}not a tag{/bold} {red-fg}', 'keep the {bold} comment out',
+  ].join('\n'));
+  assert.equal(notesMessage(new Map()), '');
 });
