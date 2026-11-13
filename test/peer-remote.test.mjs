@@ -705,6 +705,49 @@ test('a session followed here by the id both machines give it shows once in Sess
   assert.equal(later.length, 5);
 });
 
+// A real handoff has an id of its own (adoptHandoffs), not the one a watch of its place gets.
+// The computer it runs on lists it with that id, which its handoff record keeps, so the
+// computer it came from shows it once, in its listed place, whether its events came first or after.
+test('a handoff the other computer lists shows once here, by the id its handoff record keeps', async t => {
+  const { laptop, devbox, project, toHost, viewCtx, host, viewer } = pair(t), kim = 'e'.repeat(64);
+  const own = crypto.randomUUID(), picked = crypto.randomUUID(), theirs = crypto.randomUUID(), at = new Date().toISOString();
+  const handoff = (id, peer, name, remoteId) => ({ task: a2aTask({ id, contextId: `th-${id}`, state: TaskState.WORKING }), peer, name, kind: 'handoff', threadId: `th-${id}`, root: project.root, requestId: `request-${id}`, localTaskId: null, text: 'Handed off', createdAt: at, remoteId });
+  const origin = (id, peer, name, extra = {}) => ({ kind: 'handoff', peer, name, a2aTaskId: id, threadId: `th-${id}`, hop: 1, ...extra });
+  withHome(devbox.home, () => {
+    // No hosted row says which session each became (it was let go, or never learned it): only the handoff record keeps its id.
+    chat(project.root, 1, { goal: 'Run the evals', state: 'running', origin: origin('h-1', laptop.identity.key, 'ana', { own: true }) });
+    chat(project.root, 2, { goal: 'Tidy the docs', state: 'running', origin: origin('h-2', laptop.identity.key, 'ana') });
+    chat(project.root, 3, { goal: 'Fix the login redirect', state: 'running', origin: origin('h-3', kim, 'kim', { own: true }) });
+    saveRecord(handoff('h-1', laptop.identity.key, 'ana', own)); saveRecord(handoff('h-2', laptop.identity.key, 'ana', picked)); saveRecord(handoff('h-3', kim, 'kim', theirs));
+    relist();
+  });
+  const listed = withHome(devbox.home, () => host['elu.remote.list']({}, toHost)).sessions, row = title => listed.find(item => item.title === title);
+  assert.equal(row('Run the evals').remoteId, own, 'by the id the laptop follows it by');
+  assert.equal(row('Tidy the docs').remoteId, picked, 'one worked there in a mode picked there too');
+  assert.equal(row('Fix the login redirect').remoteId, undefined, "a teammate's handoff is not followed from here");
+  // The laptop follows two of them, by their events, before the devbox lists them.
+  const send = ids => withHome(laptop.home, () => viewer['elu.remote.events']({ items: ids.map(id => ({ id, events: [] })) }, connection(devbox.identity.key)));
+  const viewOf = id => withHome(laptop.home, () => remoteSessions().find(item => item.id === id));
+  send([own, picked]);
+  assert.equal(viewOf(own).handoff, true); assert.equal(viewOf(own).ref, undefined);
+  await withHome(laptop.home, () => listTick(viewCtx));
+  for (const [id, title] of [[own, 'Run the evals'], [picked, 'Tidy the docs']]) { assert.equal(viewOf(id).ref, row(title).ref, 'it takes its listed place'); assert.equal(viewOf(id).handoff, undefined); }
+  const status = { key: laptop.identity.key, name: 'ana', box: 'laptop', teams: [{ members: [{ key: laptop.identity.key, name: 'ana' }, { key: devbox.identity.key, name: 'box', box: 'devbox', online: true }] }] };
+  const facade = { mineRows: peerFacade.mineRows, remoteSessions: peerFacade.remoteSessions, remoteMachines: peerFacade.remoteMachines, projectRepoId: () => row('Run the evals').repoId, projectRepoIds: () => [] };
+  const rows = () => withHome(laptop.home, () => remoteGlue({ facade, peerRead: () => status, peerCommand: async () => ({}), chatMessage: () => '', ink: text => text, colour: false, restMs: 1e9 }).sections(Date.now(), '/work/shop').filter(line => line.row).map(line => line.row));
+  const once = () => {
+    const shown = rows();
+    assert.equal(shown.length, 3, 'each session once');
+    for (const [id, title] of [[own, 'Run the evals'], [picked, 'Tidy the docs']]) { const found = shown.filter(item => item.ref === row(title).ref); assert.equal(found.length, 1, title); assert.equal(found[0].id, id, 'by the id it is followed by'); assert.equal(found[0].listed, true); }
+  };
+  once();
+  // Its view here went, and its events come again: it is made in its listed place, with its listed title.
+  withHome(laptop.home, () => fs.rmSync(path.join(process.env.XDG_CONFIG_HOME, 'elu-code', 'peer', 'remote', 'view', `${own}.json`)));
+  send([own]);
+  assert.equal(viewOf(own).ref, row('Run the evals').ref); assert.equal(viewOf(own).title, 'Run the evals'); assert.equal(viewOf(own).handoff, undefined);
+  once();
+});
+
 test('a computer with many sessions is listed a page a tick, everything only on connect, and lists, catch-ups and watches share one budget', async t => {
   const { laptop, devbox } = machines(t), key = devbox.identity.key, P = '1'.repeat(16);
   await withHome(laptop.home, async () => {
