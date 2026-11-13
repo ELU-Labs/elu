@@ -4,7 +4,7 @@ import { project, fakeClis } from './helpers.mjs';
 import { repository } from '../lib/git.mjs';
 import { projectSnapshot, registerProject } from '../lib/projects.mjs';
 import { pendingRequests } from '../lib/workspace.mjs';
-import { Conductor, enqueue, sendCommand, VERSION } from '../lib/conductor.mjs';
+import { Conductor, enqueue, sendCommand, olderConductor, VERSION } from '../lib/conductor.mjs';
 // The conductors and request functions of published versions, on today's other modules:
 // 0.1.16 and 0.1.17 have no handover, 0.1.19 (and 0.1.18) has.
 import * as v16 from './fixtures/conductor-0.1.16/conductor.mjs';
@@ -78,6 +78,26 @@ for (const [name, module] of [['0.1.16', v16], ['0.1.17', v17]]) {
     assert.equal(sessions(p.repo, 'From the old window'), 1, 'once');
   });
 }
+
+// Run from its own folder (npx), the 0.1.16 conductor never sees an update and stays until it
+// has been idle for 10 minutes. The conductor beside it stays as long, so what the window
+// sends later never finds that one alone.
+test('the conductor beside an idle 0.1.16 one never leaves first, so what an ELU window of 0.1.16 sends later still runs on the new version', async t => {
+  const p = setup(t), old = running(t, v16.Conductor, { version: '0.1.16' });
+  await until(() => olderConductor() !== null, 'the 0.1.16 conductor to write its status');
+  let exits = 0;
+  const fresh = running(t, Conductor, { version: VERSION, idleMs: 50, onExit: () => { exits++; } });
+  assert.equal(fresh.conductor.beside, true);
+  await new Promise(resolve => setTimeout(resolve, 400));
+  assert.equal(exits, 0, 'it stays while the 0.1.16 conductor holds the lock');
+  const sent = v16.enqueue(p.root, 'Sent later from the old window');
+  await until(() => fresh.started.includes(sent.id), 'the new version to start it');
+  assert.deepEqual(old.started, []);
+  // Once the 0.1.16 conductor has gone, it takes the lock, and leaves when idle as any does.
+  sendCommand({ type: 'stop', root: p.root, taskId: request(p.root, sent.id).taskId });
+  await old.conductor.stop();
+  await until(() => !fresh.conductor.beside && exits > 0, 'it to take the lock and then leave when idle');
+});
 
 // 0.1.18 and 0.1.19 hand over: the replaced conductor gives up the lock, so what a window of
 // that version writes into the main file is read by the new version's conductor, which holds it.
