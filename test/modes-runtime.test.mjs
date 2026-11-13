@@ -19,6 +19,7 @@ import { defaultConfig } from '../lib/config.mjs';
 import { READ_ONLY_REPLY } from '../lib/runner.mjs';
 import { ruleFor, saveRule } from '../lib/permission-rules.mjs';
 import { turnClock } from '../lib/turn-limits.mjs';
+import { runSteps } from '../lib/run-activity.mjs';
 
 // Sessions with permissions, end to end against the fake CLIs.
 // The personal directory (XDG_CONFIG_HOME) and HOME both point into the test folder, so a
@@ -28,8 +29,9 @@ function environment(t, values) {
   t.after(() => { for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } });
 }
 // commands: what the fake Claude Code runs in each turn that has the approval relay.
-function setup(t, mode = 'normal', { commands = undefined } = {}) {
-  const p = project(t), fake = fakeClis(p.parent, { mode, commands });
+// more: anything else fake.json holds for the mode (test/helpers.mjs fakeClis).
+function setup(t, mode = 'normal', { commands = undefined, ...more } = {}) {
+  const p = project(t), fake = fakeClis(p.parent, { mode, commands, ...more });
   environment(t, { ...fake.env, HOME: p.parent, GIT_AUTHOR_NAME: 'Test Owner', GIT_AUTHOR_EMAIL: 'owner@example.invalid', GIT_COMMITTER_NAME: 'Test Owner', GIT_COMMITTER_EMAIL: 'owner@example.invalid' });
   const work = path.join(p.parent, 'notes'); fs.mkdirSync(work);
   const controller = autoApprove(new ProjectController(projectFolder(p.root)));
@@ -487,6 +489,22 @@ test('a command that runs silently inside a turn, longer than the quiet limit, d
   const leads = task.runs.filter(run => run.role === 'lead'); assert.ok(leads.length >= 2 && leads.every(run => run.code === 0));
   assert.match(fs.readFileSync(leads.at(-1).logFile, 'utf8'), /"tool_result"/, 'the command reported its end');
   assert.equal(fs.readFileSync(path.join(task.worktree, 'src/coupon.mjs'), 'utf8'), 'export const normalize = (value) => value.toUpperCase();\n');
+});
+
+// Claude Code itself prints through a silent command: a heartbeat every half minute
+// (tool_progress), and rows about the commands it has going. None of them ends the call, so
+// the quiet limit keeps waiting between two heartbeats, and the chat's step for the command
+// is timed from them (lib/run-activity.mjs). The stand-in's command goes 15 times faster than
+// the clock: three heartbeats, two seconds apart.
+test('a silent command whose heartbeats come further apart than the quiet limit is not stopped, and its step is timed from them', async t => {
+  const f = setup(t, 'live', { intent: 'answer', live: { speed: 15, seconds: 90, think: 100 } }); quickClock(t, 1);
+  const started = Date.now(), task = await f.controller.ask('Run the coupon tests', null, { permissions: 'full' }).finished;
+  assert.equal(task.state, 'answered', task.error?.message);
+  assert.ok(Date.now() - started > 6000, 'the command ran for six times the quiet limit');
+  const lead = task.runs.findLast(run => run.role === 'lead'); assert.equal(lead.code, 0);
+  assert.equal(fs.readFileSync(lead.logFile, 'utf8').match(/"type":"tool_progress"/g)?.length, 3, 'its heartbeats');
+  const call = runSteps(lead.logFile, { cwd: task.worktree }).find(step => step.kind === 'tool' && step.text === 'Run: npm test');
+  assert.deepEqual([call?.status, call?.seconds >= 90], ['ok', true], `the step counts what the heartbeats said: ${JSON.stringify(call)}`);
 });
 
 test('a command that never ends still stops the turn at the cap, in one line', async t => {
