@@ -688,6 +688,48 @@ test('r on an approved message that is blocked starts its Task\'s work again, an
   assert.deepEqual([request(s.p.root, again.id).state, request(s.p.root, again.id).reason], ['blocked', 'That Task is no longer waiting to start.']);
 });
 
+test('a Task approved by typing yes tells the teammate when its work fails, as one approved with the key does, and once', async t => {
+  const s = await plannedBySara(t);
+  createAsk(s.saraCtx, { to: s.sara.me.key, kind: 'ask', text: HANDOFF, threadId: 'thread-1' });
+  const told = () => s.results('in').filter(line => line.text === STOPPED).length;
+  s.p.extra({ workFail: true });
+  // The owner types yes in the session: no key, so the message carries no approved mark.
+  const typed = await s.turn('yes');
+  assert.equal(request(s.p.root, typed.id).approved, undefined);
+  assert.equal(sessionTasks(s.p.repo, s.id).at(-1).state, 'approved'); assert.equal(sessionTasks(s.p.repo, s.id).at(-1).edit.started, true);
+  processOutbox(s.ctx);
+  await until(() => told() === 1, 'the stop at sara after a typed yes');
+  // His next message carries the work on and fails too: she was told already.
+  await s.turn('Go on.');
+  processOutbox(s.ctx); await new Promise(resolve => setTimeout(resolve, 200));
+  assert.equal(told(), 1); assert.deepEqual(s.sent, ['SendMessage']);
+  // Done at last: the result follows.
+  s.p.extra({ summary: 'Coupon codes are uppercase now.' });
+  await s.turn('Go on.');
+  assert.equal(sessionTasks(s.p.repo, s.id).at(-1).state, 'done');
+  processOutbox(s.ctx);
+  await until(() => s.results('in').some(line => line.text === 'Coupon codes are uppercase now.'), 'the result at sara');
+  assert.equal(told(), 1); assert.deepEqual(s.sent, ['SendMessage', 'SendMessage']);
+});
+
+test('approved work that stopped on a question and then fails in the turn that carries it on tells the teammate once', async t => {
+  const s = await plannedBySara(t);
+  createAsk(s.saraCtx, { to: s.sara.me.key, kind: 'ask', text: HANDOFF, threadId: 'thread-1' });
+  const told = () => s.results('in').filter(line => line.text === STOPPED).length;
+  // The approved run stops on a question for the owner: nothing is sent, as before.
+  s.p.extra({ workQuestion: true });
+  await s.approve();
+  processOutbox(s.ctx); assert.equal(s.results().length, 0);
+  // He answers, and the turn that carries the work on fails: she is told the work stopped.
+  s.p.extra({ workFail: true });
+  await s.turn('Yes, go on.');
+  processOutbox(s.ctx);
+  await until(() => told() === 1, 'the stop at sara after a continuing turn');
+  await s.turn('Try again.');
+  processOutbox(s.ctx); await new Promise(resolve => setTimeout(resolve, 200));
+  assert.equal(told(), 1); assert.deepEqual(s.sent, ['SendMessage']);
+});
+
 test('a result continues the chat the message came from when answers from that teammate continue it', t => {
   const p = setup(t, 'normal'), sara = teammate(p);
   const events = [], saraCtx = { me: { key: SARA, name: 'sara' }, kick: () => {}, event: text => events.push(text), push: () => {}, session: () => null, dial: () => {} };
