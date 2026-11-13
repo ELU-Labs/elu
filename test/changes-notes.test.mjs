@@ -107,7 +107,7 @@ test('Changes: a click on the + or the + key notes a line, the note stays with t
   assert.match(shown, /✎ Round it to cents/); assert.match(shown, /✎ Say why the old one went/);
   again.input.write('s'); await until(() => /Sent 2 notes to the model together\./.test(again.status()), 'the notes are sent');
   assert.equal(fs.existsSync(s.notes), false, 'sent notes are not kept');
-  assert.doesNotMatch(again.flat(), /✎/);
+  await until(() => !/✎/.test(again.flat()), 'sent notes leave the view');
   const kept = everything(s.repo.state);
   assert.match(kept, /Notes on your changes\. Change what each one asks:/);
   assert.match(kept, /lib\/price\.mjs, removed line 2: export const price = \(value\) => value;\\nSay why the old one went/);
