@@ -273,6 +273,40 @@ test('Chats stacks the bar over threads at 80x24 without breaking borders', asyn
   list.select(0); v.input.write('\x1b[A'); await until(() => v.current.screen.focused === roster, 'Up from the first thread returns');
 });
 
+// The arrows stopped at the Direct messages heading and the cursor went back to #general, so a direct chat opened with a click only.
+for (const [columns, rows] of [[160, 40], [140, 50], [80, 24]]) test(`Up and Down in the Team bar reach every channel and every direct chat and skip the headings at ${columns}x${rows}`, { timeout: 30000 }, async t => {
+  const { v } = await teamView(t, { columns, rows, peer: fakePeer({ items: [] }) });
+  const [bar, threads] = v.panels.teamLists, at = () => plainItem(bar.items[bar.selected]).trim(), open = () => v.panels.teamBoxes[1]._label.getText().trim();
+  await until(() => bar.items.length > 5 && open() === '#general', 'the bar opens on #general');
+  const all = bar.items.map(item => plainItem(item).trim()), stops = all.filter(line => !['Channels', '', 'Direct messages'].includes(line));
+  assert.deepEqual(all.slice(0, 5), ['Channels', '# general  3', '+ Add channel', '', 'Direct messages']); assert.match(stops[2], /^● @sara/);
+  // One key, one row: the next row that can be chosen, or the bar is left.
+  const press = async key => { const from = at(); v.input.write(key); await until(() => v.current.screen.focused !== bar || at() !== from && stops.includes(at()), `a move from ${from}`); return at(); };
+  bar.focus(); assert.equal(at(), '# general  3');
+  const down = [at()]; for (let step = 1; step < stops.length; step++) down.push(await press('\x1b[B'));
+  assert.deepEqual(down, stops, 'Down stops on every channel, person, bot and add row, and on no heading');
+  // The threads beside the bar follow the cursor to a direct chat, and Enter there writes to that person.
+  bar.select(all.findIndex(line => /^\+ Add channel/.test(line)));
+  assert.match(await press('\x1b[B'), /^● @sara/); await until(() => open() === '@sara', '@sara opens from the keyboard');
+  v.input.write('\r'); await until(() => v.current.screen.focused === v.panels.ask && /Message @sara/.test(v.panels.ask._label.getText()), 'Enter on @sara writes to them');
+  bar.focus(); bar.select(all.findIndex(line => /^○ @li/.test(line))); await until(() => open() === '@li', '@li opens');
+  // Up goes back the same way, over the headings, to the first channel; one more Up leaves the bar for the tabs.
+  bar.select(bar.items.length - 1);
+  const up = [at()]; for (let step = 1; step < stops.length; step++) up.push(await press('\x1b[A'));
+  assert.deepEqual(up, [...stops].reverse(), 'Up stops on the same rows');
+  await until(() => open() === '#general', '#general is open again');
+  v.input.write('\x1b[A'); await until(() => v.current.screen.focused === v.panels.tabs.find(tab => tab.viewName === 'chats'), 'Up from the first channel reaches the Chats tab');
+  assert.equal(at(), '# general  3', 'the cursor stays on the first channel');
+  // Down from the last row leaves for the threads under the bar, or the message box beside it.
+  bar.focus(); bar.select(bar.items.length - 1); v.input.write('\x1b[B');
+  await until(() => v.current.screen.focused === (columns < 100 ? threads : v.panels.ask), 'Down from the last row leaves the bar');
+  // The wheel passes the headings too, both ways.
+  bar.focus(); bar.select(all.findIndex(line => /^\+ Add channel/.test(line))); wheelAt(v, bar, 1);
+  await until(() => /^● @sara/.test(at()), 'a wheel step down from + Add channel lands on @sara');
+  wheelAt(v, bar, -1); await until(() => at() === '+ Add channel', 'a wheel step up from @sara lands on + Add channel');
+  assert.ok(stops.includes(at()) && v.current.screen.focused === bar);
+});
+
 test('a message that starts with ! in Chats runs in a shell and is never asked to the team', async t => {
   const { v, peer } = await teamView(t);
   await send(v, '!echo not-for-the-team');
