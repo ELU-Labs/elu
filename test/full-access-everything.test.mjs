@@ -190,10 +190,10 @@ test('one Claude run that ends several turns is read by its last answer; what fo
 test('a Full access run fails none of the three structural checks: what they find is kept as a note', t => {
   const dir = temp(t), root = path.join(dir, 'repo'); fs.mkdirSync(path.join(root, 'test'), { recursive: true });
   git(root, ['init', '--initial-branch=main']); git(root, ['config', 'user.name', 'T']); git(root, ['config', 'user.email', 't@example.invalid']);
-  fs.writeFileSync(path.join(root, '.gitignore'), 'dist/\n'); fs.writeFileSync(path.join(root, 'test/a.test.mjs'), 'export {};\n'); fs.mkdirSync(path.join(root, 'src')); fs.writeFileSync(path.join(root, 'src/a.mjs'), 'export const a = 1;\n');
+  fs.writeFileSync(path.join(root, '.gitignore'), '*.local\n'); fs.writeFileSync(path.join(root, 'test/a.test.mjs'), 'export {};\n'); fs.mkdirSync(path.join(root, 'src')); fs.writeFileSync(path.join(root, 'src/a.mjs'), 'export const a = 1;\n');
   git(root, ['add', '.']); git(root, ['commit', '-qm', 'init']);
   const base = git(root, ['rev-parse', 'HEAD']), config = { ...defaultConfig(), paths: ['src/**'] }, task = { worktree: root, base, place: { kind: 'worktree' } };
-  fs.rmSync(path.join(root, 'test/a.test.mjs')); fs.mkdirSync(path.join(root, 'dist')); fs.writeFileSync(path.join(root, 'dist/out.js'), 'x\n'); fs.writeFileSync(path.join(root, 'notes.md'), 'outside the declared paths\n');
+  fs.rmSync(path.join(root, 'test/a.test.mjs')); fs.writeFileSync(path.join(root, 'src/keys.local'), 'x\n'); fs.writeFileSync(path.join(root, 'notes.md'), 'outside the declared paths\n');
   const rows = mode => Object.fromEntries(checks.structuralChecks(task, config, { mode }).results.map(row => [row.name, row]));
   const full = rows('full');
   for (const name of ['no-ignored-output', 'declared-paths', 'no-deleted-tests']) { assert.equal(full[name].status, 'noted', name); assert.ok(full[name].details.length, `${name} says what it found`); assert.equal(checks.checkPassed(full[name]), true); }
@@ -201,7 +201,7 @@ test('a Full access run fails none of the three structural checks: what they fin
   assert.equal(Object.values(full).every(checks.checkPassed), true, 'nothing of ELU\'s stops a Full access run');
   for (const mode of ['ask', 'auto']) { const lower = rows(mode); for (const name of ['no-ignored-output', 'declared-paths', 'no-deleted-tests']) { assert.equal(lower[name].status, 'failed', `${mode} ${name}`); assert.equal(checks.checkPassed(lower[name]), false); } }
   // With nothing to find they pass, as in every mode.
-  git(root, ['checkout', '-q', '--', '.']); fs.rmSync(path.join(root, 'dist'), { recursive: true }); fs.rmSync(path.join(root, 'notes.md'));
+  git(root, ['checkout', '-q', '--', '.']); fs.rmSync(path.join(root, 'src/keys.local')); fs.rmSync(path.join(root, 'notes.md'));
   for (const name of ['no-ignored-output', 'declared-paths', 'no-deleted-tests']) assert.equal(rows('full')[name].status, 'passed', name);
 });
 
