@@ -168,7 +168,8 @@ test('with no team setting, a session from my other computer runs in the only pr
   const parent = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'elu-code-remote-home-')));
   t.after(() => fs.rmSync(parent, { recursive: true, force: true }));
   const home = path.join(parent, 'home'); fs.mkdirSync(home);
-  const fake = fakeClis(parent, { mode: 'answer' }), names = ['PATH', 'HOME', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'CLAUDE_CONFIG_DIR'];
+  // Its Opus reports itself as Opus 5.5, so that is the name this computer shows the model by.
+  const fake = fakeClis(parent, { mode: 'answer', models: { opus: 'claude-opus-5-5' } }), names = ['PATH', 'HOME', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'CLAUDE_CONFIG_DIR'];
   const previous = Object.fromEntries(names.map(name => [name, process.env[name]]));
   Object.assign(process.env, fake.env, { HOME: home, XDG_CONFIG_HOME: devbox.home });
   let conductor = null;
@@ -190,15 +191,24 @@ test('with no team setting, a session from my other computer runs in the only pr
     }
     const task = readTask(repo, pendingRequests(home).find(row => row.id === request.id).taskId);
     assert.equal(task.state, 'answered'); assert.equal(task.worktree, home); assert.equal(task.origin.mine, true); assert.equal(task.origin.peer, undefined);
-    // /model NAME message from the laptop: the session runs on that model from this message on.
-    methods['elu.remote.send']({ id: started.id, text: 'And the docs?', model: { vendor: 'claude', model: 'sonnet' } }, from);
+    // /model NAME message from the laptop arrives as typed. The name is read here, among this
+    // computer's models: the session runs on it from this message on, and the answer names it.
+    assert.deepEqual(methods['elu.remote.send']({ id: started.id, text: 'sonnet  And the docs?', model: true }, from), { id: started.id, model: 'Sonnet', sent: true });
     assert.deepEqual(sessionModel(repo, readTask(repo, task.id)), { vendor: 'claude', model: 'sonnet' });
     assert.equal(pendingRequests(home).at(-1).goal, 'And the docs?'); assert.equal(pendingRequests(home).at(-1).continuationTaskId, task.id);
-    // The model alone changes it and sends nothing; nothing at all is refused.
+    // "opus 5.5" is the name this computer shows its Opus by, since a run here reported it: the
+    // laptop need not have run Opus, and no id is made up. The name alone sends nothing.
     const queued = pendingRequests(home).length;
-    methods['elu.remote.send']({ id: started.id, text: '', model: { vendor: 'claude', model: 'opus' } }, from);
+    assert.deepEqual(methods['elu.remote.send']({ id: started.id, text: 'opus 5.5', model: true }, from), { id: started.id, model: 'Opus 5.5', sent: false });
     assert.deepEqual(sessionModel(repo, readTask(repo, task.id)), { vendor: 'claude', model: 'opus' }); assert.equal(pendingRequests(home).length, queued);
-    assert.throws(() => methods['elu.remote.send']({ id: started.id, text: ' ' }, from), /Write the message in 1 to/);
+    // Two words of the shown name, then the message as typed.
+    assert.deepEqual(methods['elu.remote.send']({ id: started.id, text: "Opus 5.5 can't it wait?", model: true }, from), { id: started.id, model: 'Opus 5.5', sent: true });
+    assert.equal(pendingRequests(home).at(-1).goal, "can't it wait?"); assert.deepEqual(sessionModel(repo, readTask(repo, task.id)), { vendor: 'claude', model: 'opus' });
+    // A name that is no model here is refused in the words /model says it, and nothing changes or goes.
+    const before = pendingRequests(home).length;
+    assert.throws(() => methods['elu.remote.send']({ id: started.id, text: 'nosuch and the tests', model: true }, from), { message: 'No model named nosuch. /model lists them; /model add adds one by name.' });
+    assert.deepEqual(sessionModel(repo, readTask(repo, task.id)), { vendor: 'claude', model: 'opus' }); assert.equal(pendingRequests(home).length, before);
+    for (const model of [true, undefined]) assert.throws(() => methods['elu.remote.send']({ id: started.id, text: ' ', model }, from), /Write the message in 1 to/);
   } finally {
     await conductor?.stop();
     for (const [name, value] of Object.entries(previous)) { if (value === undefined) delete process.env[name]; else process.env[name] = value; }
@@ -618,6 +628,29 @@ test("a teammate's session there is watched and answered from here by its place,
   assert.ok(withHome(laptop.home, () => remoteSessions().some(row => row.id === item.id && row.ref === item.ref)), 'it is followed here now');
   // A place that is not a session there is refused plainly.
   await assert.rejects(withHome(laptop.home, () => remoteCommand(viewCtx, { type: 'remoteWatch', to: devbox.identity.key, ref: `${item.project}:99` })), /That session is not on this computer\./);
+});
+
+test('a model with a message goes only to a computer whose ELU takes one: an older one is named in one line and is sent nothing', async t => {
+  const { laptop, devbox, project, toViewer, viewCtx } = pair(t), model = true;
+  withHome(devbox.home, () => { chat(project.root, 1, { goal: 'Make coupons upper case', messages: [{ at: new Date().toISOString(), text: 'Make coupons upper case' }] }); relist(); });
+  await withHome(laptop.home, () => listTick(viewCtx));
+  const item = withHome(laptop.home, () => remoteMachines()[0].sessions[0]);
+  await withHome(laptop.home, () => remoteCommand(viewCtx, { type: 'remoteWatch', to: devbox.identity.key, ref: item.ref }));
+  // What reaches the devbox: a send with a model is only recorded here (the host test covers what it does there).
+  const sends = [], host = toViewer.request;
+  toViewer.request = async (method, params) => { if (method === 'elu.remote.send') sends.push(params); return method === 'elu.remote.send' && params.model ? { id: params.id, model: 'Sonnet 5.5', sent: /\s/.test(params.text) } : host(method, params); };
+  // Its hello does not say model: 1 (ELU 0.1.19): the message would arrive and the model stay, so nothing goes.
+  for (const text of ['sonnet And the tests', 'sonnet']) await assert.rejects(withHome(laptop.home, () => remoteCommand(viewCtx, { type: 'remoteSend', id: item.id, text, model })), /Update ELU on @\S+ to change its model from here\.$/);
+  assert.deepEqual(sends, []);
+  // A message with no model still goes to it.
+  assert.deepEqual(await withHome(laptop.home, () => remoteCommand(viewCtx, { type: 'remoteSend', id: item.id, text: 'No model' })), { id: item.id });
+  assert.deepEqual(sends, [{ id: item.id, text: 'No model' }]); assert.equal(withHome(devbox.home, () => pendingRequests(project.root)).at(-1).goal, 'No model');
+  // Updated, its hello says model: 1: the name goes as typed with the message, for that computer
+  // to read, and what it took the name for comes back for the status line.
+  toViewer.remoteHello = { remote: 1, model: 1 };
+  assert.deepEqual(await withHome(laptop.home, () => remoteCommand(viewCtx, { type: 'remoteSend', id: item.id, text: 'sonnet And the tests', model })), { id: item.id, model: 'Sonnet 5.5', sent: true });
+  assert.deepEqual(sends.at(-1), { id: item.id, text: 'sonnet And the tests', model: true });
+  assert.deepEqual(await withHome(laptop.home, () => remoteCommand(viewCtx, { type: 'remoteSend', id: item.id, text: 'sonnet', model })), { id: item.id, model: 'Sonnet 5.5', sent: false });
 });
 
 test('a watch its computer let go is made again: a reply still reaches the session, and a listing it never sent drops the old view', async t => {

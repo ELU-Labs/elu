@@ -95,7 +95,14 @@ const badReply=cfg.badReply==='once'&&!resumed||cfg.badReply==='lost'&&!input.in
 // models (fake.json): the full id a run reports in system/init for the --model it was started
 // with. noCredits: a --model this account has no usage credits for; that run ends as the real
 // CLI's does then, with the API error on its result line.
-const nothingSpent=0;const modelArg=args.includes('--model')?args[args.indexOf('--model')+1]:null;const reported=cfg.models?.[modelArg]??'claude-fable-5-1';
+// A --model that is a full id of the catalog reports that id. An alias (opus) reports what
+// models gives it, else claude-fable-5-1, as a run with no --model does. Any other name is no
+// model: the real CLI starts, reports the name it was given, and ends with the API's 404 on
+// its result line; it never runs another model in its place.
+const nothingSpent=0;const modelArg=args.includes('--model')?args[args.indexOf('--model')+1]:null;
+const ALIASES=['fable','opus','sonnet','haiku','default','best','opusplan'];const plainModel=String(modelArg??'').replace(/\[[^\]]*\]$/,'');const listed=(CATALOG?.models??[]).find(row=>row.id===plainModel.replace(/-\d{8}$/,''))?.id??null;
+const reported=cfg.models?.[modelArg]??listed??'claude-fable-5-1';
+if(modelArg!==null&&cfg.models?.[modelArg]===undefined&&!listed&&!ALIASES.includes(plainModel)){console.log(JSON.stringify({type:'system',subtype:'init',session_id:session,model:modelArg,permissionMode:'default',mcp_servers:[]}));console.log(JSON.stringify({type:'result',subtype:'success',is_error:true,api_error_status:404,api_error:'not_found_error',duration_ms:150,num_turns:1,result:`There's an issue with the selected model (${modelArg}). It may not exist or you may not have access to it. Run --model to pick a different model.`,session_id:session,total_cost_usd:nothingSpent}));process.exit(1);}
 if(cfg.noCredits&&modelArg===cfg.noCredits){console.log(JSON.stringify({type:'system',subtype:'init',session_id:session,model:reported,permissionMode:'default',mcp_servers:[]}));console.log(JSON.stringify({type:'result',subtype:'success',is_error:true,api_error_status:429,api_error:'model_requires_usage_credits',duration_ms:180,num_turns:1,result:"You're out of usage credits. Switch to another model, or manage usage credits at https://claude.ai/settings/usage?from=cc_cli_limit_message, to continue.",session_id:session,total_cost_usd:nothingSpent}));process.exit(1);}
 // tooLong (fake.json): a review this model will not take, ended as the real CLI ends a prompt
 // longer than its model takes: a number, one over that many characters; 'files', one that
