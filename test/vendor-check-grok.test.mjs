@@ -19,7 +19,8 @@ function environment(t, values) {
 }
 function onlyGrok(t, { grok = undefined } = {}) {
   const p = project(t), fake = fakeClis(p.parent, { mode: 'answer' }), config = path.join(fake.dir, 'fake.json');
-  for (const other of ['claude', 'codex', 'agy']) fs.rmSync(path.join(fake.dir, other));
+  // No other vendor is installed: a wrapper that exits 127 stands wherever one would be found on PATH.
+  for (const other of ['claude', 'codex', 'agy']) fs.writeFileSync(path.join(fake.dir, other), '#!/bin/sh\nexit 127\n', { mode: 0o755 });
   const set = value => fs.writeFileSync(config, JSON.stringify({ ...JSON.parse(fs.readFileSync(config, 'utf8')), grok: value }));
   set(grok);
   environment(t, { ...fake.env, HOME: p.parent, GIT_AUTHOR_NAME: 'Test Owner', GIT_AUTHOR_EMAIL: 'owner@example.invalid', GIT_COMMITTER_NAME: 'Test Owner', GIT_COMMITTER_EMAIL: 'owner@example.invalid' });
