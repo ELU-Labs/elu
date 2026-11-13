@@ -72,7 +72,8 @@ export async function main(argv = process.argv.slice(2)) {
     const schedules = await import('../lib/schedules.mjs');
     // The login item runs this every minute. It prints only when something happens.
     // Bots that have a schedule are counted with the schedules made with /schedule.
-    if (words[1] === 'tick') { const bots = (await import('../lib/bot-schedules.mjs')).runBotSchedules(), fired = bots + schedules.runDue(); (await import('../lib/awake.mjs')).refreshAwake(); return fired ? { message: `Queued ${fired} scheduled task${fired === 1 ? '' : 's'}.` } : { quiet: true }; }
+    // last: with no schedule left on, the login item removes itself, after the output.
+    if (words[1] === 'tick') { const { fired, last } = (await import('../lib/bot-schedules.mjs')).scheduleTick(); return { ...(fired ? { message: `Queued ${fired} scheduled task${fired === 1 ? '' : 's'}.` } : { quiet: true }), ...(last ? { last } : {}) }; }
     if (words[1] === 'list' || !words[1]) return { schedules: schedules.listSchedules(), message: schedules.listSchedules().map(row => `${row.enabled ? row.when.label : 'paused'}  ${row.project}  ${row.goal.split('\n')[0]}${row.nextRunAt ? `  next ${schedules.dateText(new Date(row.nextRunAt))}` : ''}`).join('\n') || 'No schedules. In ELU, set When in + New task.' };
     refuse(`Unknown command: schedule ${words[1]}. Use elu schedule [list|tick].`);
   }
@@ -243,6 +244,8 @@ if (process.argv[1] && fs.realpathSync(process.argv[1]) === fileURLToPath(import
     else if (result.quiet) { /* Nothing to report. */ }
     else process.stdout.write(formatResult(result,process.argv[2]));
     if (result.results?.some((row) => row.status !== 'passed') || result.state === 'blocked'||result.sandboxHelper?.working===false||result.success===false) process.exitCode = 1;
+    // What a command leaves for the very end. Nothing may follow it: it can end this process.
+    if (typeof result.last === 'function') { try { result.last(); } catch { /* The login item's next run tries again. */ } }
   } catch (error) {
     const output = { success: false, message: error.message, ...error.details };
     if (ownArgs(process.argv.slice(2)).includes('--json')) process.stdout.write(`${JSON.stringify(output)}\n`);

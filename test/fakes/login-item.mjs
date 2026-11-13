@@ -4,34 +4,55 @@
 // It answers only the calls lib/schedules.mjs makes, as the real programs do:
 //   launchctl bootstrap gui/UID FILE   loads it; exit 5 when FILE is missing or already loaded
 //   launchctl bootout gui/UID FILE     unloads it; exit 5 when it is not loaded
+//   launchctl bootout gui/UID/LABEL    unloads what was loaded with that Label; exit 3 when nothing is
 //   systemctl --user daemon-reload
 //   systemctl --user enable --now UNIT    exit 1 when the unit file does not exist
 //   systemctl --user disable --now UNIT   exit 1 when the unit file does not exist
-// What is loaded is kept in $FAKE_LOGIN_ITEM_STORE/loaded.json, and every call is appended
-// to $FAKE_LOGIN_ITEM_STORE/calls.jsonl.
+// A bootout also ends the login item's job when one runs, as launchd does: SIGTERM to its
+// whole process group, so a job that asks for its own bootout ends there, and the launchctl
+// it waits for with it. Disabling a unit ends a job of that unit the same way; a timer has
+// none, so its service runs on.
+// What is loaded is kept in $FAKE_LOGIN_ITEM_STORE/loaded.json, the Label of each loaded
+// file in labels.json, and every call is appended to calls.jsonl. jobs.json names the job
+// that runs now, { LABEL or UNIT: its process group }; job in the helpers writes it. A call
+// made from inside that process group is marked fromJob: the real program would be ended
+// with the job, which is why the login item's own bootout is started in a group of its own.
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 
 const name = path.basename(process.argv[1]), args = process.argv.slice(2), store = process.env.FAKE_LOGIN_ITEM_STORE;
 const fail = (code, text) => { process.stderr.write(`${text}\n`); process.exit(code); };
 if (!store) fail(64, 'FAKE_LOGIN_ITEM_STORE is not set.');
-const file = path.join(store, 'loaded.json');
-const loaded = () => { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return []; } };
-const save = rows => fs.writeFileSync(file, JSON.stringify(rows));
-fs.appendFileSync(path.join(store, 'calls.jsonl'), `${JSON.stringify({ name, args })}\n`);
+const read = (file, empty) => { try { return JSON.parse(fs.readFileSync(path.join(store, file), 'utf8')); } catch { return empty; } };
+const write = (file, value) => fs.writeFileSync(path.join(store, file), JSON.stringify(value));
+const loaded = () => read('loaded.json', []);
+const save = rows => write('loaded.json', rows);
+const endJob = key => { const group = read('jobs.json', {})[key]; if (Number.isInteger(group)) { try { process.kill(-group, 'SIGTERM'); } catch { /* It has ended. */ } } };
+const jobs = Object.values(read('jobs.json', {})), fromJob = jobs.length > 0 && jobs.includes(Number(spawnSync('ps', ['-o', 'pgid=', '-p', String(process.pid)], { encoding: 'utf8' }).stdout));
+fs.appendFileSync(path.join(store, 'calls.jsonl'), `${JSON.stringify({ name, args, ...(fromJob ? { fromJob } : {}) })}\n`);
 
 if (name === 'launchctl') {
-  const [verb, domain, target] = args;
+  const [verb, domain, target] = args, labels = read('labels.json', {});
+  // The job is ended last: it may be the one that asked, and this process with it.
+  const unload = file => { const label = labels[file]; delete labels[file]; write('labels.json', labels); save(loaded().filter(row => row !== file)); endJob(label); process.exit(0); };
+  const label = verb === 'bootout' && !target ? /^gui\/\d+\/([^/]+)$/.exec(domain ?? '')?.[1] : null;
+  if (label) {
+    const file = loaded().find(row => labels[row] === label);
+    if (!file) fail(3, 'Boot-out failed: 3: No such process');
+    unload(file);
+  }
   if (!/^gui\/\d+$/.test(domain ?? '') || !target) fail(64, 'Usage: launchctl bootstrap | bootout <domain-target> <service-path>');
   if (verb === 'bootstrap') {
     if (!fs.existsSync(target)) fail(5, `${target}: No such file or directory\nBootstrap failed: 5: Input/output error`);
     if (loaded().includes(target)) fail(5, 'Bootstrap failed: 5: Input/output error');
+    write('labels.json', { ...labels, [target]: /<key>Label<\/key>\s*<string>([^<]+)<\/string>/.exec(fs.readFileSync(target, 'utf8'))?.[1] ?? null });
     save([...loaded(), target]); process.exit(0);
   }
   if (verb === 'bootout') {
     if (!loaded().includes(target)) fail(5, 'Boot-out failed: 5: Input/output error');
-    save(loaded().filter(row => row !== target)); process.exit(0);
+    unload(target);
   }
   fail(64, `Unrecognized subcommand: ${verb}`);
 }
@@ -41,6 +62,8 @@ if (name === 'systemctl') {
   const [, verb, now, unit] = args, units = path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config'), 'systemd', 'user');
   if (!['enable', 'disable'].includes(verb) || now !== '--now' || !unit) fail(1, `Unknown command verb ${verb}.`);
   if (!fs.existsSync(path.join(units, unit))) fail(1, `Failed to ${verb} unit: Unit file ${unit} does not exist.`);
-  save(verb === 'enable' ? [...new Set([...loaded(), unit])] : loaded().filter(row => row !== unit)); process.exit(0);
+  save(verb === 'enable' ? [...new Set([...loaded(), unit])] : loaded().filter(row => row !== unit));
+  if (verb === 'disable') endJob(unit);
+  process.exit(0);
 }
 fail(64, `The stand-in is not ${name}.`);
