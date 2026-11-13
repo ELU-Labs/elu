@@ -49,6 +49,26 @@ export function git(root, args) {
   const r = command('git', ['-C', root, ...args], root);
   if (r.status !== 0) throw new Error(r.stderr); return r.stdout.trim();
 }
+// A PATH on which only the stand-in vendors named in keep are installed (fakeDir: fakeClis().dir).
+// A system folder that holds a real vendor command line (a developer's own computer has them)
+// is stood in for by a folder of links to everything else in it.
+export function vendorPath(parent, fakeDir, keep) {
+  const vendors = ['claude', 'codex', 'agy', 'grok'], tag = keep.join('-') || 'none', dir = path.join(parent, `only-${tag}`);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir); fs.copyFileSync(path.join(fakeDir, 'fake.json'), path.join(dir, 'fake.json'));
+    for (const vendor of keep) fs.copyFileSync(path.join(fakeDir, vendor), path.join(dir, vendor));
+  }
+  const rest = [...new Set(process.env.PATH.split(path.delimiter).filter(Boolean))].filter(folder => folder !== fakeDir && !path.basename(folder).startsWith('only-') && !path.basename(folder).startsWith('system-')).map((folder, index) => {
+    if (!vendors.some(name => fs.existsSync(path.join(folder, name)))) return folder;
+    const links = path.join(parent, `system-${index}`);
+    if (!fs.existsSync(links)) {
+      fs.mkdirSync(links);
+      for (const name of fs.readdirSync(folder)) if (!vendors.includes(name)) { try { fs.symlinkSync(path.join(folder, name), path.join(links, name)); } catch { /* Left out. */ } }
+    }
+    return links;
+  });
+  return { dir, PATH: [dir, ...rest].join(path.delimiter) };
+}
 export function project(t) {
   const parent = temp(t); const root = path.join(parent, 'sample app'); fs.mkdirSync(root);
   git(root, ['init', '--initial-branch=main']); git(root, ['config', 'user.name', 'Test Owner']); git(root, ['config', 'user.email', 'owner@example.invalid']);

@@ -450,6 +450,17 @@ You need macOS or Linux, Node 22 or newer, Git, and Claude Code (`claude`) insta
 signed in: new projects and the built-in bots run on it. To run sessions on Codex
 (`codex`), sign in to it and choose it with `/model`.
 
+New sessions start on the default model. A project's default is set with `/model default
+<name>`, or in its settings: Projects, Enter, Default model. This computer's default, which
+every project that has not chosen uses, is set with `/model computer <name>` or the This
+computer row there. `none` in place of the name clears either. With nothing chosen, the
+default is the first vendor installed on this computer, in this order: Claude Code, Codex,
+Antigravity CLI, Grok Build. So a computer that has only Grok Build runs every new session on
+it, also one that a teammate's message, your other computer or a schedule starts. A default
+whose vendor is not installed here is not used, and ELU says so wherever it shows the
+default. A bot that names no model, and whose vendor is not installed here, runs on this
+computer's default; a bot that names its model keeps it.
+
 Codex must be installed even if your sessions run on Claude Code, but it does not need to
 be signed in. ELU runs your project's checks and its pre-push hooks inside Codex's
 sandbox (`codex sandbox`); without it the checks fail and `/publish` refuses. Install it

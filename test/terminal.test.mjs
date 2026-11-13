@@ -34,6 +34,8 @@ import { shellSandboxLine } from '../lib/sandbox.mjs';
 import { listSchedules, saveSchedule, parseWhen } from '../lib/schedules.mjs';
 import { listBots, getBot, saveBot, removeBot, botVendors, botEfforts } from '../lib/bots.mjs';
 import { botModels } from '../lib/bot-models.mjs';
+import { computerDefault, saveComputerDefault } from '../lib/models.mjs';
+import { vendorPath } from './helpers.mjs';
 import { HOME_QUESTION } from '../lib/util.mjs';
 import { PeerDaemon } from '../lib/peer/daemon.mjs';
 import { createIdentity } from '../lib/peer/identity.mjs';
@@ -153,6 +155,8 @@ async function approveTask(v) {
   v.input.write('\x1b'); await until(() => v.current.screen.focused !== v.current.panels.ask, 'out of the message box');
   v.input.write('y'); await until(() => !/Task · waits for your approval/.test(v.current.panels.chat.getText()), 'the Task is approved');
 }
+// The two rows of a project's settings about its default model, where every stand-in vendor is installed and nothing is chosen.
+const DEFAULT_ROWS = ['Default model Opus · not chosen, so the first installed here', 'This computer not chosen · Opus, the first installed here'];
 async function send(v, text) {
   v.current.panels.ask.focus(); v.current.panels.ask.readInput();
   await until(() => v.current.panels.ask.__listener, 'message box');
@@ -331,7 +335,7 @@ test('Projects lists each project with its folder, sessions and last activity; E
   assert.ok(first.length <= 78 && second.length <= 78, 'rows fit the list');
   panels.projectsList.focus(); await until(() => /enter settings {2}o make active {2}n new project {2}x archive {2}tab next/.test(panels.keys.getText()), 'project keys');
   v.input.write('\r'); await until(() => modal(v, 'Project sample app'), 'settings dialog');
-  assert.deepEqual(dialogRows(v, 'Project sample app').slice(1), ['Instructions  none', 'Context       none', 'Archive']);
+  assert.deepEqual(dialogRows(v, 'Project sample app').slice(1), ['Instructions  none', 'Context       none', ...DEFAULT_ROWS, 'Archive']);
   assert.match(v.frame(), /enter choose · esc close/);
   v.input.write('\x1b'); await until(() => !modal(v, 'Project sample app') && v.current.screen.focused === panels.projectsList, 'Esc closes it and the list keeps focus');
   // Make active is the first row of the settings: Enter on it switches, as o does on the list.
@@ -635,12 +639,66 @@ test('a click outside a dialog with typed text keeps the dialog, its text and th
   assert.equal(registeredProjects().length, 1, 'no project was made');
 });
 
+test("a computer with only Grok Build: the project's settings show its default model and this computer's, Enter picks one, /model computer sets it, and a saved default that is not installed is said", { timeout: 60000 }, async t => {
+  const p = setup(t, 'answer'); registerProject(p.repo);
+  environment(t, { PATH: vendorPath(p.parent, p.dir, ['grok']).PATH });
+  const v = await view(t, { repo: p.repo }), panels = v.current.panels, PAGE = 'Project sample app', status = () => panels.status.getText().replace(/\s+/g, ' ');
+  const page = async () => { await send(v, '/projects'); await until(() => v.current.view === 'projects' && panels.projectsList.items.length === 1, 'the project row'); panels.projectsList.focus(); v.input.write('\r'); await until(() => modal(v, PAGE), 'the settings'); };
+  await page();
+  // Nothing is chosen: Grok Build is the first vendor installed, so new sessions start on it.
+  assert.deepEqual(dialogRows(v, PAGE).slice(3, 5), ['Default model Grok · not chosen, so the first installed here', 'This computer not chosen · Grok, the first installed here']);
+  // Enter on This computer opens the picker; none is offered beside the models.
+  for (let at = 0; at < 3; at += 1) v.input.write('\x1b[B');
+  await until(() => dialogList(v, PAGE).selected === 4, 'on This computer'); v.input.write('\r'); await until(() => modal(v, 'Model'), 'the picker');
+  assert.match(dialogText(v, 'Model').replace(/\s+/g, ' '), /No default for this computer: Grok \(grok\) is the first installed here\./);
+  assert.match(dialogText(v, 'Model'), /none +no choice: the first one installed here/);
+  await dialog(v, 'Model', 'grok');
+  await until(() => modal(v, PAGE) && dialogRows(v, PAGE)[4] === 'This computer Grok · used by every project that has not chosen', 'saved, and back in the settings');
+  assert.equal(dialogRows(v, PAGE)[3], "Default model Grok · this computer's default");
+  assert.match(status(), /This computer's default is Grok \(grok\)\./);
+  assert.deepEqual(computerDefault(), { vendor: 'grok', model: null });
+  // Enter on Default model is the picker of /model default: the project's own choice wins.
+  v.input.write('\x1b[A'); await until(() => dialogList(v, PAGE).selected === 3, 'on Default model'); v.input.write('\r'); await until(() => modal(v, 'Model'), 'the picker');
+  assert.match(dialogText(v, 'Model').replace(/\s+/g, ' '), /sample app uses this computer's default, Grok \(grok\)\./);
+  assert.match(dialogText(v, 'Model'), /none +no choice: this computer's default/);
+  await dialog(v, 'Model', 'grok');
+  await until(() => modal(v, PAGE) && dialogRows(v, PAGE)[3] === 'Default model Grok', 'the project has its own');
+  assert.equal(v.current.controller.startModel().from, 'project');
+  v.input.write('\x1b'); await until(() => !modal(v, PAGE), 'closed');
+  // none goes back to no choice, by command too.
+  await send(v, '/model default none'); await until(() => /sample app uses this computer's default, Grok \(grok\)\./.test(status()), "back on this computer's");
+  await send(v, '/model computer none'); await until(() => /No default for this computer: Grok \(grok\) is the first installed here\./.test(status()), 'no choice on this computer');
+  assert.equal(computerDefault(), null);
+  await send(v, '/model computer grok'); await until(() => /This computer's default is Grok \(grok\)\.$/.test(status().trim()), 'set by command');
+  // A saved default whose vendor is not installed here is said wherever the default is shown.
+  saveComputerDefault({ vendor: 'claude', model: 'opus' });
+  await send(v, '/model'); await until(() => /Opus is this computer's default, but Claude Code is not installed here\./.test(status()), 'said by /model');
+  await page();
+  assert.deepEqual(dialogRows(v, PAGE).slice(3, 5), ['Default model Grok · not chosen, so the first installed here', 'This computer Grok · Opus is chosen, but Claude Code is not installed']);
+  v.input.write('\x1b'); await until(() => !modal(v, PAGE), 'closed');
+  await send(v, '/new'); await until(() => /Your message goes to Grok\. Opus is this computer's default, but Claude Code is not installed here\. Bots review/.test(panels.composeHint.getText().replace(/\s+/g, ' ')), 'said on the new session form');
+});
+
+test('the default model of a project that is not the active one is set from its settings too', { timeout: 60000 }, async t => {
+  const p = setup(t, 'answer'); registerProject(p.repo);
+  const v = await view(t, { dashboard: true }), panels = v.current.panels, PAGE = 'Project sample app';
+  await send(v, '/projects'); await until(() => v.current.view === 'projects' && panels.projectsList.items.length === 1, 'the project row');
+  panels.projectsList.focus(); v.input.write('\r'); await until(() => modal(v, PAGE) && dialogList(v, PAGE).selected === 0, 'its settings, on Make active');
+  assert.deepEqual(dialogRows(v, PAGE).slice(3, 5), DEFAULT_ROWS);
+  for (let at = 0; at < 3; at += 1) v.input.write('\x1b[B');
+  await until(() => dialogList(v, PAGE).selected === 3, 'on Default model'); v.input.write('\r'); await until(() => modal(v, 'Model'), 'the picker');
+  await dialog(v, 'Model', 'sonnet');
+  await until(() => modal(v, PAGE) && dialogRows(v, PAGE)[3] === 'Default model Sonnet', 'saved for that project');
+  assert.match(fs.readFileSync(path.join(p.root, '.elu-code/config.yaml'), 'utf8'), /model: sonnet/);
+  assert.match(panels.status.getText().replace(/\s+/g, ' '), /New sessions in sample app start with Sonnet \(claude · sonnet\)\./);
+});
+
 test('clicks inside a list dialog mark and pick its rows; one on its border or hint goes nowhere', async t => {
   const p = setup(t), v = await view(t, { repo: p.repo }), panels = v.current.panels, list = panels.projectsList, title = 'Project sample app';
   await send(v, '/projects'); await until(() => v.current.view === 'projects' && list.items.length === 1, 'Projects');
   list.focus(); v.input.write('\r'); await until(() => dialogList(v, title)?.lpos, 'settings');
   const rows = dialogList(v, title);
-  assert.deepEqual(dialogRows(v, title).slice(1), ['Instructions  none', 'Context       none', 'Archive']); assert.equal(rows.selected, 1);
+  assert.deepEqual(dialogRows(v, title).slice(1), ['Instructions  none', 'Context       none', ...DEFAULT_ROWS, 'Archive']); assert.equal(rows.selected, 1);
   // The border and the hint are the dialog's: a click there does not fall through to the list behind.
   click(v, modal(v, title), 0, 0); click(v, modal(v, title).children.find(child => child.type === 'text')); await pause();
   assert.ok(modal(v, title), 'the dialog stays open'); assert.equal(v.current.screen.focused, rows); assert.equal(rows.selected, 1);
@@ -4294,12 +4352,12 @@ test('a file that changed, grew too large or went missing after he approved it k
   for (const row of pendingTrust(p.root)) answerTrust(p.root, row, false);
   const v = await view(t, { dashboard: true }), panels = v.current.panels, PAGE = 'Project sample app', status = () => panels.status.getText();
   const KEPT = /Keeping the approved \.elu-code\/context\.md\. To change that, open Projects/;
-  const again = async title => { await until(() => modal(v, PAGE) && dialogList(v, PAGE).selected === 4, 'the page, on Shared files'); v.input.write('\r'); await until(() => modal(v, title), title); };
+  const again = async title => { await until(() => modal(v, PAGE) && dialogList(v, PAGE).selected === 6, 'the page, on Shared files'); v.input.write('\r'); await until(() => modal(v, title), title); };
   await send(v, '/projects'); await until(() => v.current.view === 'projects' && panels.projectsList.items.length === 1, 'the project row');
   panels.projectsList.focus(); v.input.write('\r'); await until(() => modal(v, PAGE), 'the project page');
   assert.equal(dialogRows(v, PAGE)[2], 'Context       The API lives in src/.', 'the text in force is the one he approved');
-  assert.equal(dialogRows(v, PAGE).at(-1), 'Shared files  1 changed · Enter to review'); assert.equal(dialogRows(v, PAGE).length, 5);
-  for (let at = 0; at < 4; at += 1) v.input.write('\x1b[B');
+  assert.equal(dialogRows(v, PAGE).at(-1), 'Shared files  1 changed · Enter to review'); assert.equal(dialogRows(v, PAGE).length, 7);
+  for (let at = 0; at < 6; at += 1) v.input.write('\x1b[B');
   // A second look at the changed file: what changed, and Keep the approved one where the cursor is.
   await again('Not in use · .elu-code/context.md');
   assert.deepEqual(dialogRows(v, 'Not in use · .elu-code/context.md'), ['Use it', 'Keep the approved one']); assert.equal(dialogList(v, 'Not in use · .elu-code/context.md').selected, 1);
@@ -4319,7 +4377,7 @@ test('a file that changed, grew too large or went missing after he approved it k
   assert.deepEqual(dialogRows(v, 'Gone · .elu-code/context.md'), ['Go without it', 'Keep the approved one']); assert.equal(dialogList(v, 'Gone · .elu-code/context.md').selected, 1);
   assert.match(v.frame(), /notes file is gone\. The version you approved on [A-Z][a-z]{2} \d{1,2},/); assert.match(v.frame(), /stays in use until you choose otherwise\. It reads:/); assert.match(v.frame(), /The API lives in src\/\./);
   v.input.write('\x1b[A'); await until(() => dialogList(v, 'Gone · .elu-code/context.md').selected === 0, 'on Go without it'); v.input.write('\r');
-  await until(() => modal(v, PAGE) && dialogRows(v, PAGE).length === 4, 'the page again, with nothing left to review');
+  await until(() => modal(v, PAGE) && dialogRows(v, PAGE).length === 6, 'the page again, with nothing left to review');
   assert.match(status(), /Going without \.elu-code\/context\.md\./); assert.equal(trustedText(p.root, 'context.md'), null); assert.equal(dialogRows(v, PAGE)[2], 'Context       none');
 });
 
@@ -4331,14 +4389,14 @@ test('the project page offers a second look at files that are not in use: Shared
   const v = await view(t, { dashboard: true }), panels = v.current.panels, PAGE = 'Project sample app', LOOK = 'Not in use · .elu-code/context.md';
   await send(v, '/projects'); await until(() => v.current.view === 'projects' && panels.projectsList.items.length === 1, 'the project row');
   panels.projectsList.focus(); v.input.write('\r'); await until(() => modal(v, PAGE), 'the project page');
-  assert.equal(dialogRows(v, PAGE).at(-1), 'Shared files  1 not in use · Enter to review'); assert.equal(dialogRows(v, PAGE).length, 5);
+  assert.equal(dialogRows(v, PAGE).at(-1), 'Shared files  1 not in use · Enter to review'); assert.equal(dialogRows(v, PAGE).length, 7);
   assert.equal(dialogRows(v, PAGE)[2], 'Context       not in use', 'its text is not shown as the project\'s context');
-  for (let at = 0; at < 4; at += 1) v.input.write('\x1b[B');
-  await until(() => dialogList(v, PAGE)?.selected === 4, 'on Shared files'); v.input.write('\r'); await until(() => modal(v, LOOK), 'the file, shown again');
+  for (let at = 0; at < 6; at += 1) v.input.write('\x1b[B');
+  await until(() => dialogList(v, PAGE)?.selected === 6, 'on Shared files'); v.input.write('\r'); await until(() => modal(v, LOOK), 'the file, shown again');
   assert.deepEqual(dialogRows(v, LOOK), ['Use it', 'Do not use it']); assert.equal(dialogList(v, LOOK).selected, 1);
   assert.match(v.frame(), /You chose not to use this project's notes\. The model reads them\./); assert.match(v.frame(), /The API lives in src\/\./);
   v.input.write('\x1b[A'); await until(() => dialogList(v, LOOK).selected === 0, 'on Use it'); v.input.write('\r');
-  await until(() => modal(v, PAGE) && dialogRows(v, PAGE).length === 4, 'the page again, with nothing left to review');
+  await until(() => modal(v, PAGE) && dialogRows(v, PAGE).length === 6, 'the page again, with nothing left to review');
   assert.equal(trustedText(p.root, 'context.md'), 'The API lives in src/.\n'); assert.equal(dialogList(v, PAGE).selected, 0, 'the cursor is back at the top, not on Archive');
   assert.equal(dialogRows(v, PAGE)[2], 'Context       The API lives in src/.');
 });
