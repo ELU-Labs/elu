@@ -66,7 +66,7 @@ function setup(t, mode = 'normal') {
   const read = 'else for await (const chunk of process.stdin) input+=chunk;', mark = "const session='12345678";
   assert.ok(script.includes(read) && script.includes(mark), 'helpers.mjs fake CLI changed shape');
   script = script.replace(read, `${read}\nconst extra=fs.existsSync(${JSON.stringify(extra)})?JSON.parse(fs.readFileSync(${JSON.stringify(extra)},'utf8')):{};`)
-    .replace('total_cost_usd:0', 'total_cost_usd:extra.cost??0').replace(mark, `if(extra.slow)await new Promise(resolve=>setTimeout(resolve,extra.slow));if(extra.intent&&schema?.properties?.intent)result.intent=extra.intent;if(schema?.properties?.asks)result.asks=extra.asks??[];if(extra.summary)result.summary=extra.summary;if(extra.workQuestion&&!conversation){result.outcome='needs_input';result.question='Shall I go on?';result.choices=[];}if(extra.workFail&&!conversation){console.error('The model stopped.');process.exit(1);}\n${mark}`);
+    .replace('total_cost_usd:0', 'total_cost_usd:extra.cost??0').replace(mark, `if(extra.slow)await new Promise(resolve=>setTimeout(resolve,extra.slow));if(extra.intent&&schema?.properties?.intent)result.intent=extra.intent;if(schema?.properties?.asks)result.asks=extra.asks??[];if(extra.summary)result.summary=extra.summary;if(extra.workQuestion&&!conversation){result.outcome='needs_input';result.question='Shall I go on?';result.choices=[];}if(extra.workFail&&!conversation){console.error('The model stopped.');process.exit(1);}if(extra.workRate&&!conversation){const id='12345678-1234-4234-8234-123456789abc';console.log(JSON.stringify({type:'system',subtype:'init',session_id:id,model:'claude-fable-5-1',permissionMode:'default',mcp_servers:[]}));console.log(JSON.stringify({type:'result',subtype:'success',is_error:true,api_error_status:429,api_error:'rate_limit_error',duration_ms:180,num_turns:1,result:'API Error: 429 This request would exceed your rate limit. Please try again later.',session_id:id,total_cost_usd:0}));process.exit(1);}\n${mark}`);
   fs.writeFileSync(file, script, { mode: 0o755 });
   const previous = { PATH: process.env.PATH, XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME };
   Object.assign(process.env, fake.env);
@@ -610,6 +610,82 @@ test('c on a thread that shows a result continues the chat with that result, onc
   assert.match(next.goal, /^Continue with the result from @ana shown in the peer data block\.$/); assert.equal(next.context, 'Coupon codes are uppercase now.');
   assert.equal(continued().length, 2); assert.equal(row(), undefined);
   assert.throws(() => continueAnswer(saraCtx, asked.id), /already continued/);
+});
+
+// The approval of the Task Sara's message led to, queued as the terminal queues it, without
+// waiting for its run to end.
+function approveNow(s) {
+  const [proposed] = sessionTasks(s.p.repo, s.id); approveTask(s.p.repo, s.id);
+  return enqueue(s.p.root, `Approved the Task: ${proposed.title}`, { continuationTaskId: s.id, priority: 0, approved: true });
+}
+const approvals = s => readTask(s.p.repo, s.id).messages.filter(row => /^Approved the Task: /.test(row.text));
+const STOPPED = 'The approved work stopped before it was done.';
+
+test('an approved run that is queued again after a rate limit starts again and finishes: approved once, one result, no stop notice', async t => {
+  const s = await plannedBySara(t);
+  createAsk(s.saraCtx, { to: s.sara.me.key, kind: 'ask', text: HANDOFF, threadId: 'thread-1' });
+  // The work of the approved Task is rate limited, as Claude Code ends such a run.
+  s.p.extra({ workRate: true });
+  const row = approveNow(s), approvedAt = sessionTasks(s.p.repo, s.id).at(-1).approvedAt;
+  await until(() => request(s.p.root, row.id)?.state === 'queued' && request(s.p.root, row.id).attempts === 1, 'the retry queued', 60000);
+  assert.equal(request(s.p.root, row.id).reason, 'Rate limited. Retrying shortly.'); assert.equal(request(s.p.root, row.id).approved, true);
+  assert.equal(sessionTasks(s.p.repo, s.id).at(-1).edit.started, true);
+  // Nothing is said to Sara while the run waits to go again.
+  processOutbox(s.ctx); assert.equal(s.results().length, 0);
+  // The limit has passed: the same request starts again without waiting out the minute.
+  s.p.extra({ summary: 'Coupon codes are uppercase now.' });
+  updateRequest(s.p.root, row.id, { notBefore: null });
+  await until(() => ['done', 'blocked'].includes(request(s.p.root, row.id)?.state), 'the retried run', 60000);
+  assert.deepEqual([request(s.p.root, row.id).state, request(s.p.root, row.id).reason], ['done', 'Finished.']);
+  // Approved once: the Task is the one he approved, done, and the chat says so one time.
+  const task = sessionTasks(s.p.repo, s.id).at(-1);
+  assert.deepEqual([task.state, task.approvedAt], ['done', approvedAt]); assert.equal(sessionTasks(s.p.repo, s.id).length, 1);
+  assert.equal(approvals(s).length, 1, JSON.stringify(readTask(s.p.repo, s.id).messages.map(m => m.text)));
+  assert.match(fs.readFileSync(path.join(readTask(s.p.repo, s.id).worktree, 'src/coupon.mjs'), 'utf8'), /toUpperCase/);
+  // Sara gets the result, once, and was never told the work stopped.
+  processOutbox(s.ctx);
+  await until(() => s.results('in').length === 1, 'the result at sara');
+  assert.equal(s.results('in')[0].text, 'Coupon codes are uppercase now.'); assert.deepEqual(s.sent, ['SendMessage']);
+  assert.equal(thread('thread-1').filter(line => line.text === STOPPED).length, 0);
+});
+
+test('an approved run that stops making progress is queued again, starts again and finishes, approved once', async t => {
+  const s = await plannedBySara(t), [conductor] = LIVE.get(t);
+  createAsk(s.saraCtx, { to: s.sara.me.key, kind: 'ask', text: HANDOFF, threadId: 'thread-1' });
+  // The work hangs. The conductor ends such a run as stalled (watch): it marks it and stops it.
+  s.p.extra({ slow: 30000 });
+  const row = approveNow(s);
+  await until(() => { const now = readTask(s.p.repo, s.id); return now.state === 'running' && Boolean(now.activeLog) && fs.existsSync(now.activeLog); }, 'the work turn running', 60000);
+  const run = [...conductor.runs.values()].find(value => value.requestId === row.id);
+  s.p.extra({ summary: 'Coupon codes are uppercase now.' });
+  run.stalled = true; await run.controller.stop(run.taskId, 'No progress for 8 minutes. Retrying.');
+  await until(() => request(s.p.root, row.id)?.attempts === 1, 'the retry queued', 20000);
+  assert.equal(request(s.p.root, row.id).approved, true);
+  await until(() => ['done', 'blocked'].includes(request(s.p.root, row.id)?.state), 'the retried run', 60000);
+  assert.deepEqual([request(s.p.root, row.id).state, request(s.p.root, row.id).reason], ['done', 'Finished.']);
+  assert.equal(sessionTasks(s.p.repo, s.id).at(-1).state, 'done'); assert.equal(approvals(s).length, 1);
+  processOutbox(s.ctx);
+  await until(() => s.results('in').length === 1, 'the result at sara');
+  assert.equal(s.results('in')[0].text, 'Coupon codes are uppercase now.');
+  assert.equal(thread('thread-1').filter(line => line.text === STOPPED).length, 0);
+});
+
+test('r on an approved message that is blocked starts its Task\'s work again, and an approval that comes again for a finished Task starts nothing', async t => {
+  const s = await plannedBySara(t);
+  s.p.extra({ workRate: true });
+  const row = approveNow(s);
+  await until(() => request(s.p.root, row.id)?.state === 'queued' && request(s.p.root, row.id).attempts === 1, 'the retry queued', 60000);
+  // The owner does not wait: he removes the wait and, were it blocked, retries it by hand.
+  updateRequest(s.p.root, row.id, { state: 'blocked', blockedAt: new Date().toISOString(), notBefore: null, reason: 'Rate limited.' });
+  s.p.extra({ summary: 'Coupon codes are uppercase now.' });
+  assert.equal(retryRequest(s.p.root, row.id).state, 'queued');
+  await until(() => ['done', 'blocked'].includes(request(s.p.root, row.id)?.state), 'the retried run', 60000);
+  assert.equal(request(s.p.root, row.id).state, 'done', request(s.p.root, row.id).reason);
+  assert.equal(sessionTasks(s.p.repo, s.id).at(-1).state, 'done'); assert.equal(approvals(s).length, 1);
+  // A Task that is done starts no work for an approval that comes again.
+  const again = enqueue(s.p.root, 'Approved the Task: Uppercase coupons', { continuationTaskId: s.id, priority: 0, approved: true });
+  await until(() => ['done', 'blocked'].includes(request(s.p.root, again.id)?.state), 'the late approval', 30000);
+  assert.deepEqual([request(s.p.root, again.id).state, request(s.p.root, again.id).reason], ['blocked', 'That Task is no longer waiting to start.']);
 });
 
 test('a result continues the chat the message came from when answers from that teammate continue it', t => {
