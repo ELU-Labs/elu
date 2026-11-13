@@ -772,6 +772,52 @@ test('Sessions lists every session of my other computer in this repository under
   assert.equal(peer.sent().find(row => row.type === 'remoteWatch').to, SARA);
 });
 
+// The wheel at a pane, as SGR reports in one read: up or down, a step each.
+const wheelAt = (v, widget, step, times = 1) => v.input.write(`\x1b[<${step < 0 ? 64 : 65};${widget.aleft + 3};${widget.atop + 3}M`.repeat(times));
+const pause = (ms = 150) => new Promise(resolve => setTimeout(resolve, ms));
+
+test('a session on my other computer stays where the owner scrolled it through every draw and every update, stays at the top, and follows its end again once he is back there', { timeout: 30000 }, async t => {
+  const at = new Date().toISOString(), said = n => Array.from({ length: n }, (_, index) => ({ role: index % 2 ? 'Claude' : 'You', at, text: `Line ${index + 1} of the long chat`, ...(index % 2 ? { lead: true } : {}) }));
+  const remote = [{ id: '33333333-3333-4333-8333-333333333333', machine: SARA, createdAt: at, lastAt: at, title: 'Read the long chat', state: 'answered', steps: [], approvals: [], entries: said(60) },
+    { id: '44444444-4444-4444-8444-444444444444', machine: SARA, createdAt: at, lastAt: at, title: 'A short one', state: 'answered', steps: [], approvals: [], entries: said(2) }];
+  const p = project(later(t)); environment(t, p.parent);
+  const peer = fakePeer({ items: [], mine: [{ key: SARA, mine: true, theirs: true }], remote }), v = await view(t, { repo: repository(p.root), dashboard: true, peer });
+  const board = v.panels.board, chat = v.panels.chat, ask = v.panels.ask;
+  await until(() => board.items.some(item => /Read the long chat/.test(plainItem(item))), 'the remote row');
+  board.focus(); selectRow(board, /Read the long chat/);
+  await until(() => /Runs on @sara-box/.test(chat.getContent()) && chat.getScrollPerc(true) === 100, 'its chat, at the end');
+  // The owner's cursor stays in the message box while he scrolls the chat with the trackpad.
+  ask.focus(); await until(() => /Message this session on @sara-box/.test(ask._label.getText()), 'the message box names it');
+  const end = chat.childBase;
+  wheelAt(v, chat, -1, 10); await until(() => chat.childBase === end - 10, 'ten lines up');
+  // The app draws every 30 ms here: none of those draws takes the chat back to its end.
+  await pause(300);
+  assert.equal(chat.childBase, end - 10, 'it stays on the lines he chose');
+  // More arrives below: the place is kept.
+  remote[0].entries = [...remote[0].entries, { role: 'Claude', at, text: 'Arrived while he read', lead: true }, ...said(6)];
+  await until(() => /Arrived while he read/.test(chat.getContent()), 'the new lines'); await pause(150);
+  assert.equal(chat.childBase, end - 10, 'what arrives below does not move it');
+  // Up past the top it stays at the top, through every draw and update.
+  wheelAt(v, chat, -1, 400); await until(() => chat.childBase === 0, 'the top');
+  await pause(300);
+  assert.equal(chat.childBase, 0, 'at the top it stays at the top');
+  remote[0].entries = [...remote[0].entries, { role: 'Claude', at, text: 'Arrived at the top', lead: true }];
+  await until(() => /Arrived at the top/.test(chat.getContent()), 'more new lines'); await pause(150);
+  assert.equal(chat.childBase, 0, 'and never starts again from the bottom');
+  assert.match(v.text(), /Line 1 of the long chat/);
+  // Back at the end, it follows the newest line again.
+  wheelAt(v, chat, 1, 600); await until(() => chat.getScrollPerc(true) === 100, 'the end');
+  remote[0].entries = [...remote[0].entries, { role: 'Claude', at, text: 'The newest line', lead: true }];
+  await until(() => /The newest line/.test(v.text()), 'the newest line in view');
+  assert.equal(chat.getScrollPerc(true), 100);
+  // Scrolled up, then another row and back: it opens at its end again.
+  const before = chat.childBase;
+  wheelAt(v, chat, -1, 20); await until(() => chat.childBase === before - 20, 'up again');
+  board.focus(); selectRow(board, /A short one/); await until(() => !/Line 60 of the long chat/.test(chat.getContent()), 'the other row');
+  selectRow(board, /Read the long chat/); await until(() => /Line 60 of the long chat/.test(chat.getContent()), 'the long chat again');
+  await until(() => chat.getScrollPerc(true) === 100, 'opened at its end');
+});
+
 test('a thread shows under its channel, #general or its teammate, and a row counts what waits for me', () => {
   const core = { id: 'team-1', name: 'Core', members: [{ key: ME, name: 'ana' }, { key: SARA, name: 'sara', online: true }, { key: LI, name: 'li' }], channels: [{ id: 'c1', name: 'design', members: [ME, SARA] }] };
   const status = { key: ME, teams: [core] }, general = roomTarget('team-1', null), design = roomTarget('team-1', 'c1');
