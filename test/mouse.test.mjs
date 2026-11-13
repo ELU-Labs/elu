@@ -360,7 +360,7 @@ test('a key that arrives in one read with a mouse report is still typed', async 
   await until(() => v.ask.getValue() === 'abcd', 'both keys typed');
 });
 
-test('Ctrl-C copies a highlight and stays; with nothing highlighted it quits', async t => {
+test('Ctrl-C copies a highlight and stays, and the highlight stays; with nothing highlighted it quits', async t => {
   const v = await view(t);
   await until(() => v.current.screen.lines[0]?.length, 'drawn');
   v.press(2, 0); v.drag(9, 0); v.release(9, 0);
@@ -369,10 +369,13 @@ test('Ctrl-C copies a highlight and stays; with nothing highlighted it quits', a
   await until(() => v.copied.length === 2, 'copied on Ctrl-C');
   assert.equal(v.copied[1], v.copied[0]);
   assert.ok(!v.current.screen.destroyed, 'the app is still open');
+  assert.equal(v.current.selection.text(), v.copied[0], 'the highlight stays');
   // Read a drawn frame: between frames an idle refresh leaves the status line's cells blank.
   await until(() => { const screen = v.current.screen; screen.render(); return /Copied \d+ characters?\./.test(screen.lines.map(line => line.map(cell => cell[1]).join('')).join('\n')); }, 'the status line says so');
+  // The next key ends the highlight, as it does when nothing was copied; Ctrl-C then quits.
+  v.input.write('\x1b[C'); await until(() => !v.current.selection.active, 'a key ends it');
   v.input.write('\x03');
-  await until(() => v.current.screen.destroyed, 'the second Ctrl-C quits');
+  await until(() => v.current.screen.destroyed, 'Ctrl-C with nothing highlighted quits');
   assert.equal(v.copied.length, 2);
 });
 
@@ -401,6 +404,37 @@ test('a highlight in a session copies after the app has redrawn while idle: on r
   v.click(at.x + 1, at.y); await idle(); v.click(at.x + 1, at.y);
   await until(() => v.copied.length === 3, 'a double click copies the word');
   assert.equal(v.copied[2], 'grok');
+});
+
+test('Ctrl-C in a session copies the highlight and keeps it drawn; the next click ends it', async t => {
+  const v = await view(t);
+  await typing(v, 'grok login'); v.ask.submit();
+  const screen = () => v.current.screen;
+  const drawn = () => { screen().render(); return screen().lines.map(line => line.map(cell => cell[1]).join('')); };
+  // The text a frame draws highlighted: the cells inverted while it is drawn and put back after.
+  const highlighted = () => {
+    const s = screen(), draw = s.draw, flags = () => s.lines.map(line => line.map(cell => (cell[0] >> 18) & 8));
+    let during = [];
+    s.draw = function(...args) { const result = draw.apply(this, args); during = flags(); return result; };
+    try { s.render(); } finally { s.draw = draw; }
+    const after = flags();
+    return s.lines.map((line, y) => line.filter((cell, x) => during[y]?.[x] !== after[y][x]).map(cell => cell[1]).join('')).filter(Boolean).join('\n');
+  };
+  let at = null;
+  await until(() => { const rows = drawn(), y = rows.findIndex(row => row.includes('┃ grok login')); at = y < 0 ? null : { x: rows[y].indexOf('grok login'), y }; return at; }, 'the message is in the chat');
+  v.press(at.x, at.y); v.drag(at.x + 5, at.y); v.drag(at.x + 9, at.y); v.release(at.x + 9, at.y);
+  await until(() => v.copied.length === 1, 'copied on release');
+  assert.equal(highlighted(), 'grok login', 'the highlight is drawn');
+  v.input.write('\x03');
+  await until(() => v.copied.length === 2, 'copied on Ctrl-C');
+  assert.equal(v.copied[1], 'grok login');
+  await until(() => v.current.panels.status.getText().includes('Copied 10 characters.'), 'the status line says so');
+  assert.equal(v.current.selection.text(), 'grok login', 'the highlight stays');
+  assert.equal(highlighted(), 'grok login', 'and is drawn');
+  v.click(at.x + 1, at.y);
+  await until(() => !v.current.selection.active, 'a click ends it');
+  assert.equal(highlighted(), '', 'and it is drawn no more');
+  assert.equal(v.copied.length, 2, 'the click copies nothing');
 });
 
 test('copies go to pbcopy on macOS and to OSC 52 elsewhere', async t => {
@@ -540,4 +574,40 @@ test('with a highlight made by the keys, typing or a paste replaces it, Backspac
   assert.equal(v.copied[0], 'ell');
   v.input.write('\x7f'); await until(() => v.ask.getValue() === 'hAB', 'the drag highlight removed');
   assert.equal(v.copied.length, 1, 'the keys copy nothing by themselves');
+});
+
+test('Ctrl-C copies a highlight in the message box and keeps it: typing then replaces it, Backspace removes it, a plain arrow ends it', async t => {
+  const v = await view(t);
+  await typing(v, 'line 19\nline 20');
+  const text = () => v.current.selection.text();
+  v.input.write(SHIFT.left.repeat(2)); await until(() => text() === '20', 'two characters');
+  v.input.write('\x03'); await until(() => v.copied.length === 1, 'copied on Ctrl-C');
+  assert.equal(v.copied[0], '20');
+  await until(() => v.current.panels.status.getText().includes('Copied 2 characters.'), 'the status line says so');
+  assert.equal(text(), '20', 'the highlight stays'); assert.equal(v.ask.cursor, 13);
+  v.input.write('X'); await until(() => v.ask.getValue() === 'line 19\nline X', 'typing replaces it');
+  assert.equal(v.ask.cursor, 14); assert.equal(v.current.selection.active, false);
+  // After a copy Shift and an arrow go on from the same end, and Backspace removes the highlight.
+  v.input.write(SHIFT.left.repeat(2)); await until(() => text() === ' X', 'two');
+  v.input.write('\x03'); await until(() => v.copied.length === 2, 'copied again');
+  assert.equal(v.copied[1], ' X'); assert.equal(text(), ' X', 'it stays');
+  v.input.write(SHIFT.left.repeat(4)); await until(() => text() === 'line X', 'four more');
+  v.input.write('\x03'); await until(() => v.copied.length === 3, 'copied the longer one');
+  assert.equal(v.copied[2], 'line X');
+  v.input.write('\x7f'); await until(() => v.ask.getValue() === 'line 19\n', 'Backspace removes it');
+  assert.equal(v.ask.cursor, 8); assert.equal(v.current.selection.active, false);
+  // A highlight made by a drag stays after Ctrl-C too, and typing replaces it.
+  const a = v.cell(0, 0), b = v.cell(0, 3);
+  v.press(a.x, a.y); v.drag(b.x, b.y); v.release(b.x, b.y);
+  await until(() => v.copied.length === 4, 'copied on release');
+  v.input.write('\x03'); await until(() => v.copied.length === 5, 'copied on Ctrl-C');
+  assert.deepEqual(v.copied.slice(3), ['line', 'line']); assert.equal(text(), 'line', 'it stays');
+  v.input.write('Z'); await until(() => v.ask.getValue() === 'Z 19\n', 'typing replaces the drag highlight');
+  assert.equal(v.ask.cursor, 1); assert.equal(v.current.selection.active, false);
+  // A plain arrow after a copy ends the highlight at its end, and the text stays.
+  v.input.write(SHIFT.right.repeat(3)); await until(() => text() === ' 19', 'three');
+  v.input.write('\x03'); await until(() => v.copied.length === 6, 'copied');
+  v.input.write('\x1b[C'); await until(() => !v.current.selection.active, 'Right ends it');
+  assert.equal(v.ask.cursor, 4); assert.equal(v.ask.getValue(), 'Z 19\n');
+  assert.ok(!v.current.screen.destroyed, 'Ctrl-C with a highlight never quits');
 });
