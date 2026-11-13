@@ -129,6 +129,18 @@ it. A time is `in 30m`, `every 2h` (15 minutes to 7 days), `daily 9:00`, `weekda
 The model cannot make a schedule itself: asked to repeat work, it gives you the
 `/schedule` line to type.
 
+## Keys
+
+The last row of the screen names the keys for whatever has the focus.
+
+| Key | What it does |
+| --- | --- |
+| Tab | Moves between the tabs, the list, the message box and the chat |
+| Enter | Sends the message, or opens the selected row |
+| Esc | Leaves the message box for the list, and the list for the message box; closes a dialog |
+| ↑ ↓ | Move in a list; scroll the chat when it has the focus |
+| PgUp PgDn | Move a page: in a session's chat or its changes and in the threads of a chat in Chats, from the message box too; in the Sessions list; in the text of a dialog, such as a teammate's thread or `/help` |
+
 ## Permissions
 
 Each session runs in one of three modes. `/permissions ask`, `auto` or `full` changes it,

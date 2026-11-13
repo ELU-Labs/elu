@@ -987,7 +987,7 @@ test('a long list of models is clipped to the dialog with a count of the rest, a
   v.input.write('\x1b'); await until(() => !modal(v, 'Model') && v.current.screen.focused === panels.botsList, 'Esc makes nothing'); assert.deepEqual(listBots(), []);
   // agy is never run for its models: the dialog is the plain one, Tab does nothing, and any name goes on to the next step.
   await start('pages', 'agy');
-  assert.deepEqual(modelLines(v), ['A model agy knows by name. Empty uses Antigravity CLI\'s own.']); assert.match(plainFrame(v), /┌─ Enter submits \/ Esc cancels \/ PageUp reads ─/);
+  assert.deepEqual(modelLines(v), ['A model agy knows by name. Empty uses Antigravity CLI\'s own.']); assert.match(plainFrame(v), /┌─ Enter submits \/ Esc cancels \/ PgUp PgDn page ─/);
   v.input.write('\t'); v.input.write('some-model'); await modelHolds(v, 'some-model'); v.input.write('\r'); await plainBot(v);
   await until(() => editor(v, 'Instructions · @pages')?.__listener, 'on to the instructions, with no effort list'); v.input.write('Check the pages.');
   await until(() => editor(v, 'Instructions · @pages').getValue() === 'Check the pages.', 'typed'); v.input.write('\x13');
@@ -4640,6 +4640,63 @@ test('PgUp and PgDn move a chat a page, in the chat and from the message box und
   // In the chat itself.
   v.input.write('\x1b'); await until(() => v.current.screen.focused !== ask, 'out of the box');
   chat.focus(); await until(() => v.current.screen.focused === chat, 'the chat');
+  await until(() => /↑↓ scroll {2}esc sessions {2}i type {2}pgup pgdn page/.test(v.current.panels.keys.getText()), 'the keys in the bar, in the chat');
   v.input.write('\x1b[6~'); await until(() => chat.getScrollPerc(true) === 100, 'a page down reaches the end');
   v.input.write('\x1b[5~'); await until(() => chat.childBase === end - page(), 'a page up in the chat');
+});
+
+test('PgUp and PgDn from the message box page what a session changed while Changes shows; the key bar and /help name them', { timeout: 60000 }, async t => {
+  const p = setup(t), at = new Date(Date.now() - 60000).toISOString(), base = git(p.root, ['rev-parse', 'HEAD']), worktree = path.join(p.repo.worktrees, '1');
+  fs.mkdirSync(p.repo.worktrees, { recursive: true }); git(p.root, ['worktree', 'add', '-b', 'feat/task-1', worktree, base]);
+  for (let index = 1; index <= 60; index++) fs.writeFileSync(path.join(worktree, `note-${String(index).padStart(2, '0')}.txt`), `Cart file ${index}\n`);
+  saveTask(p.repo, { id: '1', goal: 'Cart note 1', state: 'ready', worktree, branch: 'feat/task-1', base, createdAt: at, runs: [], reviews: [], responses: [], sessions: {}, messages: Array.from({ length: 40 }, (_, index) => ({ at, text: `Cart note ${index + 1}` })) });
+  liveTask(p.root, { id: '2', goal: 'Short talk', state: 'answered' });
+  const v = await view(t, { repo: p.repo }), panels = v.current.panels, chat = panels.chat, ask = panels.ask, changes = panels.changes, keys = () => panels.keys.getText().trim();
+  // A chat that fits its pane: the bar is as it was.
+  await openTask(v, /Short talk/); await pause(200);
+  assert.doesNotMatch(keys(), /pgup/);
+  v.input.write('\x1b'); await until(() => v.current.screen.focused !== ask, 'out of the short chat');
+  // More chat than the pane shows: the bar names the keys, from the box and in the chat.
+  await openTask(v, /Cart note/);
+  await until(() => /Cart note 40/.test(chat.getContent()) && /^enter send {2}pgup pgdn page/.test(keys()), 'the keys in the bar, from the box');
+  // /help says it.
+  await send(v, '/help'); await until(() => modal(v, 'Commands'), 'help');
+  assert.match(dialogText(v, 'Commands').replace(/\s+/g, ' '), /Enter moves into it and Esc moves back\. PgUp and PgDn page its chat, from the message box too\./); await dialog(v, 'Commands', '');
+  await until(() => v.current.screen.focused === ask, 'back in the box');
+  // Changes, with the keys still in the message box.
+  await send(v, '/changes');
+  await until(() => v.current.sessionView === 'changes' && /note-01\.txt/.test(changes.getText()), 'what it changed');
+  assert.equal(v.current.screen.focused, ask); assert.match(keys(), /^enter send {2}pgup pgdn page/);
+  const first = changes.getText();
+  ask.setValue('half a thought'); v.input.write('\x1b[6~');
+  await until(() => changes.getText() !== first && !/note-01\.txt/.test(changes.getText()), 'a page down from the box'); await pause(200);
+  assert.equal(ask.getValue(), 'half a thought'); assert.equal(v.current.screen.focused, ask); assert.equal(v.current.sessionView, 'changes');
+  const second = changes.getText();
+  v.input.write('\x1b[6~'); await until(() => changes.getText() !== second, 'another page down');
+  v.input.write('\x1b[5~'); await until(() => changes.getText() === second, 'a page up from the box');
+  v.input.write('\x1b[5~'); await until(() => /note-01\.txt/.test(changes.getText()), 'back at the top');
+  assert.equal(ask.getValue(), 'half a thought');
+});
+
+test('PgUp and PgDn from the message box page a Standup chat, at 80x24 and at 140x50', { timeout: 60000 }, async t => {
+  const p = setup(t), at = new Date(Date.now() - 60000).toISOString(), round = 'standup-0123456789abcdef', result = { outcome: 'done', intent: 'answer', summary: 'Everyone answered.', question: null, choices: [], comments: [], responses: [] };
+  const said = [{ at, text: 'You ask: standup', from: 'Standup', standup: round, line: true }, ...Array.from({ length: 60 }, (_, index) => ({ at, text: `Cart update ${index + 1}: still on the coupon codes.`, from: 'Opus 5.5', who: 'Opus 5.5', standup: round, answer: true })), { at, text: 'Sent to your Standup', from: 'Standup', standup: round, line: true }];
+  saveTask(p.repo, { id: '1', kind: 'conversation', standup: true, goal: 'Standup', state: 'answered', worktree: p.root, branch: null, base: null, createdAt: at, runs: [], reviews: [], responses: [], sessions: {}, result, messages: said });
+  const v = await view(t, { repo: p.repo }), chat = v.current.panels.chat, ask = v.current.panels.ask, page = () => chat.height - chat.iheight - 1;
+  await openTask(v, /Standup/);
+  for (const [columns, rows] of [[80, 24], [140, 50]]) {
+    v.output.columns = columns; v.output.rows = rows; v.output.emit('resize');
+    await until(() => v.current.screen.width === columns && v.current.screen.height === rows && v.current.screen.focused === ask, `${columns}x${rows}`);
+    // To the end first: a size change keeps the place the chat was at.
+    for (let presses = 0; chat.getScrollPerc(true) !== 100 && presses < 80; presses++) { v.input.write('\x1b[6~'); await pause(30); }
+    await until(() => /Cart update 60/.test(chat.getContent()) && chat.getScrollPerc(true) === 100, `the Standup chat at its end, ${columns}x${rows}`);
+    const end = chat.childBase; assert.ok(end > 2 * page(), 'more than two pages');
+    ask.setValue('half a thought'); v.input.write('\x1b[5~');
+    await until(() => chat.childBase === end - page(), `a page up, ${columns}x${rows}`); await pause(200);
+    assert.equal(chat.childBase, end - page(), 'the draws keep the page'); assert.equal(ask.getValue(), 'half a thought'); assert.equal(v.current.screen.focused, ask);
+    assert.match(v.current.panels.keys.getText(), /pgup pgdn page/);
+    v.input.write('\x1b[5~'); await until(() => chat.childBase === end - 2 * page(), `another page up, ${columns}x${rows}`);
+    v.input.write('\x1b[6~'); await until(() => chat.childBase === end - page(), `a page down, ${columns}x${rows}`);
+    v.input.write('\x1b[6~'); await until(() => chat.getScrollPerc(true) === 100, `back at the end, ${columns}x${rows}`);
+  }
 });
