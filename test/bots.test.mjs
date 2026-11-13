@@ -559,12 +559,15 @@ test('the lead reads a bot\'s reply to the owner, under its name and time, in it
   const fix = turns.find(row => row.input.includes('Address the review'));
   assert.ok(fix, 'the review sent the lead back'); assert.ok(contextOf(fix.input).messages.some(row => row.bot === 'critic' && row.text === FINDING));
   assert.ok(contextOf(fix.input).review.comments.length > 0, 'with the review findings it fixes');
-  // The bot, written to again, reads the lead's latest reply in its chat.
+  // The bot, written to again, reads the lead's latest reply in its chat: the fix turn's
+  // summary, at the time of the fix turn, the last lead run.
   f.mode('answer');
-  const leadSaid = conversationEntries(f.repo, readTask(f.repo, done.id)).filter(entry => entry.lead).at(-1);
+  const fixed = readTask(f.repo, done.id), fixRun = fixed.runs.findLast(run => run.role === 'lead');
+  assert.equal(fixed.result.summary, 'Updated coupon normalization.');
+  assert.ok(turns.at(-1).input.includes('Address the review'), 'the last lead run was a fix turn');
   await f.controller.ask('Is it fixed now?', blocked.id, { bot: 'critic' }).finished;
   const chat = contextOf(f.inputs('codex').at(-1).input).chat;
-  assert.deepEqual(chat.filter(row => row.from === 'agent').at(-1), { at: leadSaid.at, from: 'agent', text: leadSaid.text });
+  assert.deepEqual(chat.filter(row => row.from === 'agent').at(-1), { at: fixRun.at, from: 'agent', text: 'Updated coupon normalization.' });
   assert.deepEqual(chat.at(-1).from, 'owner → @critic');
 });
 
