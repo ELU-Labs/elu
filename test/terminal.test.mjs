@@ -2309,6 +2309,30 @@ test('the 30-second check takes the login item away when the last schedule ended
   check(); assert.deepEqual(calls, ['uninstall'], 'its session was the last place a schedule was on');
 });
 
+test("a schedule taken off a bot on its page takes the login item with it at once, and one given back there brings it back", { timeout: 30000 }, async t => {
+  const p = setup(t), calls = [];
+  const loginItem = { install: () => { calls.push('install'); return { installed: true }; }, uninstall: () => { calls.push('uninstall'); return { removed: true }; } };
+  saveBot({ name: 'nightly', instructions: 'Check the nightly build.', schedule: 'every 1h' });
+  // One session with the bot, already counted with its next run an hour away, so nothing runs during the test.
+  const { repo } = liveTask(p.root, { id: '4', goal: 'Trim coupon codes', state: 'answered' });
+  saveTask(repo, { ...readTask(repo, '4'), bots: ['nightly'] });
+  fs.writeFileSync(path.join(taskDir(repo, '4'), 'bot-schedules.json'), JSON.stringify({ version: 1, bots: { nightly: { on: true, schedule: 'every 1h', nextRunAt: new Date(Date.now() + 3600000).toISOString(), lastRunAt: null, lastRequestId: null, runs: 0, note: null } } }));
+  const v = await view(t, { repo: p.repo, loginItem }), panels = v.current.panels, status = () => panels.status.getText().replace(/\s+/g, ' ');
+  await until(() => calls.includes('install'), 'the bot schedule is on at the start, so the login item is asked for'); calls.length = 0;
+  click(v, panels.tabs[4]); await until(() => v.current.view === 'bots' && panels.botsList.items.some(row => /^@nightly/.test(row.getText())), 'Bots');
+  panels.botsList.focus(); panels.botsList.select(panels.botsList.items.findIndex(row => /^@nightly/.test(row.getText())));
+  v.input.write('\r'); await until(() => modal(v, 'Bot @nightly'), 'the bot opens');
+  const pick = index => { dialogList(v, 'Bot @nightly').select(index); v.input.write('\r'); };
+  // Schedule, emptied: no bot runs by itself any more. Its page stays open and the login item is gone already.
+  pick(4); await dialog(v, 'Schedule', ''); await until(() => /@nightly does not run by itself\./.test(status()), 'the schedule is taken off');
+  assert.deepEqual(calls, ['uninstall']); assert.ok(modal(v, 'Bot @nightly'), 'the page is still open'); assert.equal(getBot('nightly').schedule, null);
+  // A schedule typed there again is on in the session the bot is in, so the login item is asked for again.
+  pick(4); await dialog(v, 'Schedule', 'every 2h'); await until(() => /@nightly runs by itself every 2h\./.test(status()), 'a schedule again');
+  assert.deepEqual(calls, ['uninstall', 'install']);
+  // Closing the page settles it once more and changes nothing.
+  v.input.write('\x1b'); await until(() => !modal(v, 'Bot @nightly') && calls.length === 3, 'closed'); assert.deepEqual(calls, ['uninstall', 'install', 'install']);
+});
+
 test('/schedule offers times in the command list, saves a time and message typed together, and lists the times when Enter is pressed on it alone', { timeout: 30000 }, async t => {
   const p = setup(t), loginItem = { install: () => ({ installed: true }), uninstall: () => ({ removed: true }) };
   const v = await view(t, { repo: p.repo, loginItem }), panels = v.current.panels, ask = panels.ask;
