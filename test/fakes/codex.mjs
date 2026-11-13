@@ -19,8 +19,9 @@ if(args.includes('--help')){console.log('--print --add-dir --restricted --safe-m
 if(args[0]==='debug'&&args[1]==='models'){console.log(JSON.stringify({models:cfg.models??[{slug:'big-model',display_name:'Big Model',description:'Frontier model for the most demanding work.',visibility:'list',priority:2},{slug:'quick-model',display_name:'Quick Model',description:'Fast and affordable model for easier tasks.',visibility:'list',priority:1},{slug:'review-model',display_name:'Review Model',description:'Automatic approval review model.',visibility:'hide',priority:9}]}));process.exit(0);}
 // `login status` as the real CLI prints it: a ChatGPT sign-in, an API key (exit 0 too, with a masked key), or nothing.
 if(args[0]==='login'&&args[1]!=='status'){
- // --device-auth prints the link and a one-time code first, as the real CLI does, then waits for the sign-in.
- if(args.includes('--device-auth'))console.log('Follow these steps to sign in with ChatGPT using device code authorization:\n\n1. Open this link in your browser and sign in to your account\n   https://auth.openai.com/codex/device\n\n2. Enter this one-time code (expires in 15 minutes)\n   FAKE-CODE\n');
+ // --device-auth prints the link and a one-time code first, as codex-cli 0.167.0 prints them (watched in a
+ // scratch home), then waits for the sign-in on that page; it reads nothing from its input.
+ if(args.includes('--device-auth'))console.log("\nWelcome to Codex [v\x1b[90m0.166.0-alpha.5.1\x1b[0m]\n\x1b[90mOpenAI's command-line coding agent\x1b[0m\n\nFollow these steps to sign in with ChatGPT using device code authorization:\n\n1. Open this link in your browser and sign in to your account\n   \x1b[94mhttps://auth.openai.com/codex/device\x1b[0m\n\n2. Enter this one-time code \x1b[90m(expires in 15 minutes)\x1b[0m\n   \x1b[94mFAKE-CODE\x1b[0m\n\n\x1b[90mContinue only if you started this login in Codex. If a website or another person gave you this code, cancel.\x1b[0m\n");
  // accounts.loginSeconds: how long the sign-in waits for the owner, as the real one does.
  if(cfg.accounts?.loginSeconds)Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,cfg.accounts.loginSeconds*1000);
  const as=cfg.accounts?.loginAs;if(!as){console.error('Login cancelled.');process.exit(1);}

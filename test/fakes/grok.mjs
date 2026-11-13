@@ -26,16 +26,23 @@ const list = dir => { try { return fs.readdirSync(dir); } catch { return []; } }
 
 if (args.includes('--version')) { console.log('1.0.77'); process.exit(0); }
 if (args.includes('--help')) { console.log('--output-format --permission-mode --sandbox --max-turns --cwd --no-auto-update --tools --disallowed-tools --allow --deny --prompt-file --prompt-json --no-alt-screen --no-memory --no-subagents --disable-web-search --session-id --resume --model'); process.exit(0); }
-// login: grok.login on, it prints a sign-in link and waits for Enter on its input (where the
-// owner finishes in the browser), then writes auth.json in GROK_HOME, through ELU's link to the
-// owner's ~/.grok/auth.json when there is one. Off, login is refused, as before.
+// login: grok.login on, the device code sign-in as grok 1.0.77 runs it (watched in a scratch
+// home, with --device-auth and without): a link with the code in it, the code to confirm on
+// that page, and a wait for the owner to approve there. It reads nothing from its input, and
+// Ctrl-C ends it. grok.browser on, the link opened by itself. The approval is the file
+// grok-approved beside fake.json (grok.approved names another), which a test writes as the
+// owner's click; grok then writes auth.json in GROK_HOME, through ELU's link to the owner's
+// ~/.grok/auth.json when there is one. What it prints after the approval was not watched.
+// Off, login is refused, as before.
 if (args[0] === 'login') {
   if (!cfg.grok?.login) { console.error('fake grok: login is interactive'); process.exit(2); }
-  process.stderr.write('Sign in to Grok: open https://accounts.x.ai/device and confirm the code FAKE-CODE.\nWaiting for the sign-in to finish in the browser. Press Enter here when it has.\n');
-  const done = await new Promise(resolve => { const timer = setTimeout(() => resolve(false), (cfg.grok.seconds ?? 60) * 1000); process.stdin.once('data', () => { clearTimeout(timer); resolve(true); }); });
-  if (!done) { process.stderr.write('Sign-in timed out.\n'); process.exit(1); }
+  const approved = cfg.grok.approved ?? path.join(path.dirname(process.argv[1]), 'grok-approved');
+  process.stderr.write(`\nTo sign in, open this URL in your browser:\n\n  https://accounts.x.ai/oauth2/device?user_code=FAKE-CODE\n\n${cfg.grok.browser ? '' : '  (Could not open browser automatically \u2014 open the URL above manually.)\n\n'}Confirm this code in your browser:\n\n  FAKE-CODE\n\n\x1b[90mOnly continue with a code you requested. Don't share it with anyone.\x1b[0m\n\nWaiting for authorization...\n`);
+  const until = Date.now() + (cfg.grok.seconds ?? 60) * 1000;
+  while (!fs.existsSync(approved)) { if (Date.now() > until) { process.stderr.write('Error: the sign-in was not approved in time.\n'); process.exit(1); } await new Promise(resolve => setTimeout(resolve, 50)); }
+  fs.rmSync(approved, { force: true });
   fs.mkdirSync(home, { recursive: true }); fs.writeFileSync(path.join(home, 'auth.json'), '{"token":"never-read"}\n', { mode: 0o600 });
-  process.stderr.write('Signed in to Grok.\n'); process.exit(0);
+  process.stderr.write('Signed in.\n'); process.exit(0);
 }
 
 // What the prompt asks for, done as far as the launch allows. ask() decides an action the
