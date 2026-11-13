@@ -776,30 +776,46 @@ test('over a session on my other computer the box writes to my agent here, start
   assert.equal(pendingRequests(p.root).filter(row => row.continuationTaskId === '1').length, 1, 'neither went to my agent here');
 });
 
-test('/model NAME and a message over a session on my other computer: that session takes the model and the message goes there', async t => {
+test('/model NAME and a message over a session on my other computer go there as typed: that computer reads the name, and the status names the model it took', async t => {
   const at = new Date().toISOString(), id = '55555555-5555-4555-8555-555555555555';
   const remote = [{ id, machine: SARA, createdAt: at, lastAt: at, title: 'Native replay e2e handoff', state: 'running', steps: [], entries: [{ role: 'You', at, text: 'Start the handoff' }], approvals: [] }];
   const p = project(later(t)); environment(t, p.parent);
   const before = process.env.PATH; process.env.PATH = fakeClis(p.parent).env.PATH; owned(t).files.push(() => { process.env.PATH = before; });
+  // What the other computer answers: the model it read at the start of the text, by the name it shows it by, and whether words came after it.
+  const THERE = [[/^opus 5\.5\b/i, 'Opus 5.5'], [/^opus\b/, 'Opus 5.5'], [/^sonnet 5\b/, 'Sonnet 5'], [/^devbox-model\b/, 'devbox-model']];
+  const took = text => THERE.find(([name]) => name.test(text));
   let older = false;
-  const peer = fakePeer({ items: [], mine: [{ key: SARA, mine: true, theirs: true }], remote, refuse: command => older && command.type === 'remoteSend' && command.model ? 'Update ELU on @sara-box to change its model from here.' : null }), v = await view(t, { repo: repository(p.root), dashboard: true, peer });
-  const board = v.panels.board, sentThere = () => peer.sent().filter(row => row.type === 'remoteSend');
+  const peer = fakePeer({ items: [], mine: [{ key: SARA, mine: true, theirs: true }], remote, refuse: command => command.type !== 'remoteSend' || !command.model ? null
+    : older ? 'Update ELU on @sara-box to change its model from here.' : took(command.text) ? null : `@sara-box: No model named ${command.text.split(' ')[0]}. /model lists them; /model add adds one by name.` });
+  const answer = peer.awaitCommand; peer.awaitCommand = async (...args) => { const out = await answer(...args), command = peer.last; return command.type === 'remoteSend' && command.model ? { id, model: took(command.text)[1], sent: command.text.replace(took(command.text)[0], '').trim() !== '' } : out; };
+  const v = await view(t, { repo: repository(p.root), dashboard: true, peer });
+  const board = v.panels.board, sentThere = () => peer.sent().filter(row => row.type === 'remoteSend'), status = () => v.panels.status.getText().replace(/\s+/g, ' ');
+  const over = async () => { board.focus(); selectRow(board, /Native replay e2e handoff/); await until(() => /@sara-box/.test(v.panels.ask._label.getText()), 'the box writes about the session there'); };
   await until(() => board.items.map(plainItem).some(row => /Native replay e2e handoff/.test(row)), 'the row of the session there');
-  board.focus(); selectRow(board, /Native replay e2e handoff/); await until(() => /@sara-box/.test(v.panels.ask._label.getText()), 'the box writes about the session there');
-  await send(v, '/model opus can you help this remote agent with the files it needs and instruction to start the handoff');
+  await over(); await send(v, '/model opus can you help this remote agent with the files it needs and instruction to start the handoff');
   await until(() => sentThere().length === 1, 'sent there');
-  assert.deepEqual(sentThere()[0], { type: 'remoteSend', id, text: 'can you help this remote agent with the files it needs and instruction to start the handoff', model: { vendor: 'claude', model: 'opus' } });
-  await until(() => /Sent to the session on @sara-box, now on Opus\./.test(v.panels.status.getText()), 'the status says where it went and names the model');
-  board.focus(); selectRow(board, /Native replay e2e handoff/); await until(() => /@sara-box/.test(v.panels.ask._label.getText()), 'the box writes about the session there');
-  await send(v, '/model sonnet 5');
+  assert.deepEqual(sentThere()[0], { type: 'remoteSend', id, text: 'opus can you help this remote agent with the files it needs and instruction to start the handoff', model: true });
+  await until(() => /Sent to the session on @sara-box, now on Opus 5\.5\./.test(status()), 'the status says where it went and names the model as that computer does');
+  // The name alone. No Opus ever ran on this computer, so it has no model it shows as Opus 5.5: the two words still go as typed, and no id is made up here.
+  await over(); await send(v, '/model opus 5.5');
   await until(() => sentThere().length === 2, 'the model alone');
-  assert.deepEqual(sentThere()[1], { type: 'remoteSend', id, text: '', model: { vendor: 'claude', model: 'claude-sonnet-5' } });
-  await until(() => /The session on @sara-box uses Sonnet 5 from your next message\./.test(v.panels.status.getText()), 'the status names the model');
-  // That computer runs an older ELU, which would send the message and keep the old model: one plain line, nothing sent, and the text stays.
+  assert.deepEqual(sentThere()[1], { type: 'remoteSend', id, text: 'opus 5.5', model: true });
+  await until(() => /The session on @sara-box uses Opus 5\.5 from your next message\./.test(status()), 'the status names the model');
+  await over(); await send(v, '/model sonnet 5');
+  await until(() => sentThere().length === 3 && /The session on @sara-box uses Sonnet 5 from your next message\./.test(status()), 'a name and version');
+  assert.deepEqual(sentThere()[2], { type: 'remoteSend', id, text: 'sonnet 5', model: true });
+  // A model only that computer has: this one's /model would say there is none, and it is not asked.
+  await over(); await send(v, '/model devbox-model  and the tests');
+  await until(() => sentThere().length === 4 && /Sent to the session on @sara-box, now on devbox-model\./.test(status()), 'a model of that computer alone');
+  assert.deepEqual(sentThere()[3], { type: 'remoteSend', id, text: 'devbox-model  and the tests', model: true });
+  // A name that computer does not know: its own line, and the text stays to be corrected.
+  await over(); await send(v, '/model nosuch and the tests');
+  await until(() => /@sara-box: No model named nosuch\. \/model lists them; \/model add adds one by name\./.test(status()), 'that computer says it has no such model');
+  assert.equal(v.panels.ask.getValue(), '/model nosuch and the tests'); v.panels.ask.setValue('');
+  // That computer runs an older ELU, which would send the whole text as a message and keep the old model: one plain line, nothing sent, and the text stays.
   older = true;
-  board.focus(); selectRow(board, /Native replay e2e handoff/); await until(() => /@sara-box/.test(v.panels.ask._label.getText()), 'the box writes about the session there');
-  await send(v, '/model opus 5.5 and the tests');
-  await until(() => /Update ELU on @sara-box to change its model from here\./.test(v.panels.status.getText()), 'the status says to update it');
+  await over(); await send(v, '/model opus 5.5 and the tests');
+  await until(() => /Update ELU on @sara-box to change its model from here\./.test(status()), 'the status says to update it');
   assert.equal(v.panels.ask.getValue(), '/model opus 5.5 and the tests');
 });
 
