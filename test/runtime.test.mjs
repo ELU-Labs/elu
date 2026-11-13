@@ -12,11 +12,11 @@ test('a missing configured sandbox helper refuses before an agent starts',(t)=>{
  const result=cli(p.root,['run','Normalize coupons','--yes'],env);assert.equal(result.status,1);assert.match(result.json.message,/sandbox helper/i);
  const calls=fs.readFileSync(f.calls,'utf8').trim().split('\n').map(JSON.parse);assert.equal(calls.some(x=>x.args.includes('-p')||x.args[0]==='exec'),false);
 });
-test('newer CLI releases with required flags are marked untested and older releases refuse',(t)=>{
+test('newer CLI releases with required flags are marked untested and older releases refuse',async (t) => {
  const p=project(t);const f=fakeClis(p.parent);const file=path.join(f.dir,'claude');const original=fs.readFileSync(file,'utf8');
  assert.deepEqual(meta.supportedVersions,['2.1.319','2.1.322']);
- fs.writeFileSync(file,original.replaceAll('2.1.319','2.1.322'));let row=detect(p.root,{...process.env,...f.env}).find(x=>x.vendor==='claude');assert.equal(row.supported,true);assert.equal(row.versionStatus,'tested version');
- fs.writeFileSync(file,original.replaceAll('2.1.319','2.1.320'));row=detect(p.root,{...process.env,...f.env}).find(x=>x.vendor==='claude');assert.equal(row.supported,true);assert.equal(row.versionStatus,'untested version');
- fs.writeFileSync(file,original.replaceAll('2.1.319','2.1.318'));row=detect(p.root,{...process.env,...f.env}).find(x=>x.vendor==='claude');assert.equal(row.supported,false);
- fs.writeFileSync(file,original.replaceAll('2.1.319','2.1.320').replaceAll('--restricted','--missing'));row=detect(p.root,{...process.env,...f.env}).find(x=>x.vendor==='claude');assert.equal(row.supported,false);
+ fs.writeFileSync(file,original.replaceAll('2.1.319','2.1.322'));let row=(await detect(p.root,{...process.env,...f.env})).find(x=>x.vendor==='claude');assert.equal(row.supported,true);assert.equal(row.versionStatus,'tested version');
+ fs.writeFileSync(file,original.replaceAll('2.1.319','2.1.320'));row=(await detect(p.root,{...process.env,...f.env})).find(x=>x.vendor==='claude');assert.equal(row.supported,true);assert.equal(row.versionStatus,'untested version');
+ fs.writeFileSync(file,original.replaceAll('2.1.319','2.1.318'));row=(await detect(p.root,{...process.env,...f.env})).find(x=>x.vendor==='claude');assert.equal(row.supported,false);
+ fs.writeFileSync(file,original.replaceAll('2.1.319','2.1.320').replaceAll('--restricted','--missing'));row=(await detect(p.root,{...process.env,...f.env})).find(x=>x.vendor==='claude');assert.equal(row.supported,false);
 });

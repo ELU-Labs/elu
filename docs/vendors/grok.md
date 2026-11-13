@@ -122,7 +122,11 @@ directory) and a `GROK_HOME` inside it holding only what ELU wrote:
 - `sessions/`: Grok's session store, so `-r` works.
 - `auth.json`: a symbolic link to your real `~/.grok/auth.json`. `grok login`, `grok logout`
   and token refreshes write through it; ELU holds no copy. If Grok ever replaces the
-  link with a file, the newer token wins at the next run.
+  link with a file, the newer token wins at the next run. Which of the two `grok login`
+  does has not been watched: ELU's tests sign it in both ways. Written through the link,
+  the token is in your own `~/.grok/auth.json`; written over it, the token stays in ELU's
+  Grok home, ELU's runs are signed in, and your own `grok` is signed in only by its own
+  `grok login`.
 
 There is no `~/.claude` under that home, so the `isolation` step shows what actually
 reaches a run on your machine. If it fails, Grok stays off here and the session says why.

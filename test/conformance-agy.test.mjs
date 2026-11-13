@@ -133,13 +133,13 @@ test('a named folder that holds the workspace or lies inside it is not denied to
   }
 });
 
-test('until its one-time check passed here compile refuses and says what starts the check, parse needs no pin, and detect never runs the binary', t => {
+test('until its one-time check passed here compile refuses and says what starts the check, parse needs no pin, and detect never runs the binary', async t => {
   const dir = home(t), marker = path.join(dir, 'ran'), bins = path.join(dir, 'bin'), bin = path.join(bins, 'agy'); fs.mkdirSync(bins);
   fs.writeFileSync(bin, `#!${process.execPath}\nimport fs from 'node:fs';fs.writeFileSync(${JSON.stringify(marker)},'ran');process.exit(0);\n`, { mode: 0o755 });
   assert.deepEqual(agy.meta.supportedVersions, [], 'no release is pinned in the adapter');
   assert.throws(() => agy.compile({ role: reader, cwd: dir, schemaFile: schemaAt(dir) }), /^EluCodeError: Antigravity CLI has not been checked on this machine yet\. Your first message to it runs the check\.$/);
   assert.deepEqual(agy.parse(JSON.stringify({ structured_output: result })).result, result);
-  const row = detect(dir, { PATH: bins }).find(value => value.vendor === 'agy');
+  const row = (await detect(dir, { PATH: bins })).find(value => value.vendor === 'agy');
   assert.equal(row.available, true); assert.equal(row.supported, false); assert.equal(row.signedIn, null); assert.equal(row.conformant, false);
   // The row says what Antigravity does here and what will start its check, not that it is unsupported.
   assert.equal(row.support, 'sessions and reviews'); assert.equal(row.reason, 'Antigravity CLI has not been checked on this machine yet. Your first message to it runs the check.');
@@ -229,12 +229,12 @@ test('headless runs against the fake: locked soft-denies with exit 0, ask denies
   assert.equal(gone.result.summary, 'No nonce in this conversation.'); assert.match(gone.session, UUID); assert.notEqual(gone.session, first.session);
   assert.ok(!fake.last().args.includes('--conversation')); assert.match(gone.log, /run-\d+-fresh\.log$/); assert.ok(fs.existsSync(gone.log));
   fake.set({ signedIn: false });
-  assert.equal(agy.probeSignIn({ bin: fake.bin, cwd: ws }), false);
+  assert.equal(await agy.signedIn({ bin: fake.bin, cwd: ws }), false);
   const launches = calls();
   await assert.rejects(go({ mode: 'locked', role: reader, prompt: 'Reply with the summary "x".', resume: first.session }), error => error.details.cause === 'auth' && /authentication required/.test(error.message));
   assert.equal(calls(), launches + 1);
   fake.set({});
-  assert.equal(agy.probeSignIn({ bin: fake.bin, cwd: ws }), true);
+  assert.equal(await agy.signedIn({ bin: fake.bin, cwd: ws }), true);
   const probe = fake.last();
   assert.deepEqual(probe.args, ['-p', '/usage', '--output-format', 'json']); assert.equal(probe.home, path.join(path.resolve(personalDirectory()), 'agy-home', 'signin')); assert.equal(probe.autoUpdate, 'true');
 });
