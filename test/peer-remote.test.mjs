@@ -534,6 +534,28 @@ test('a computer of mine lists every session here, whoever started it, a page at
   assert.equal(withHome(devbox.home, () => host['elu.remote.list']({ since: 1 }, toHost)).full, true);
 });
 
+test('the model and effort of each entry travel with it to my other computer, checked there; an entry without them reads as before', async t => {
+  const { laptop, devbox, project, toHost, hostCtx, viewCtx, viewer } = pair(t), at = () => new Date().toISOString();
+  withHome(devbox.home, () => { chat(project.root, 1, { goal: 'Plan the coupons', state: 'answered', messages: [{ at: at(), text: 'Plan the coupons', to: '@lead' }, { at: at(), from: '@lead', bot: 'lead', text: 'Planned.', model: 'claude-fable-5-2', effort: 'medium' }, { at: at(), from: '@reviewer', bot: 'reviewer', text: 'Looks right.' }] }); relist(); });
+  await withHome(laptop.home, () => listTick(viewCtx));
+  const item = withHome(laptop.home, () => remoteMachines())[0].sessions[0];
+  await withHome(laptop.home, () => remoteCommand(viewCtx, { type: 'remoteWatch', to: devbox.identity.key, ref: item.ref }));
+  withHome(devbox.home, () => hostTick(hostCtx));
+  const pushed = toHost.sent.filter(([method]) => method === 'elu.remote.events').at(-1)[1];
+  const sent = pushed.items.flatMap(row => row.events).filter(event => event.type === 'entry');
+  assert.deepEqual(sent.filter(event => event.bot).map(event => [event.bot, event.model ?? null, event.effort ?? null]), [['lead', 'claude-fable-5-2', 'medium'], ['reviewer', null, null]]);
+  // What arrives is checked: a model or an effort that does not read as one is left out.
+  const forged = structuredClone(pushed); forged.items[0].events.find(event => event.bot === 'reviewer').model = 'opus 5.5\u001b[2J'; forged.items[0].events.find(event => event.bot === 'reviewer').effort = 'MAX!';
+  withHome(laptop.home, () => viewer['elu.remote.events'](forged, connection(devbox.identity.key)));
+  await withHome(laptop.home, () => viewTick(viewCtx));
+  const seen = withHome(laptop.home, () => remoteSessions().find(row => row.id === item.id));
+  assert.deepEqual(seen.entries.filter(entry => entry.bot).map(entry => [entry.role, entry.model ?? null, entry.effort ?? null]), [['@lead', 'claude-fable-5-2', 'medium'], ['@reviewer', null, null]]);
+  // Watched again, the host sends nothing new for entries it already sent: the model is not part of an entry's key.
+  withHome(devbox.home, () => { const repo = repository(project.root), task = readTask(repo, '1'); delete task.messages[1].model; saveTask(repo, task); hostTick(hostCtx, Date.now() + 1); });
+  const again = toHost.sent.filter(([method]) => method === 'elu.remote.events').slice(1).flatMap(([, params]) => params.items.flatMap(row => row.events)).filter(event => event.type === 'entry');
+  assert.deepEqual(again, []);
+});
+
 test('a session started there by hand is watched from here: live, continued, stopped and answered as one started from here', async t => {
   const { laptop, devbox, project, toHost, hostCtx, viewCtx, viewer } = pair(t);
   withHome(devbox.home, () => { chat(project.root, 1, { goal: 'Make coupons upper case', state: 'answered', messages: [{ at: new Date().toISOString(), text: 'Make coupons upper case' }, { at: new Date().toISOString(), from: 'Lead', text: 'Done: codes are upper case now.' }] }); relist(); });

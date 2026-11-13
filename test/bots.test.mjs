@@ -265,7 +265,8 @@ test('a message written to a bot runs the bot and not the lead, saves the reply 
   // The owner's message says who it was written to; the reply is the bot's.
   const [asked, reply] = task.messages.slice(-2);
   assert.deepEqual({ ...asked, at: null }, { at: null, text: 'Is that the whole story?', to: '@critic' });
-  assert.deepEqual({ ...reply, at: null }, { at: null, text: first.result.summary, from: '@critic', bot: 'critic' });
+  // It keeps the model and effort it ran with: Codex reports no model, so the one it was started with.
+  assert.deepEqual({ ...reply, at: null }, { at: null, text: first.result.summary, from: '@critic', bot: 'critic', model: 'big-model', effort: 'xhigh' });
   assert.equal(task.result.summary, first.result.summary, 'the lead\'s last answer stays the session\'s result'); assert.equal(task.activeRole, null);
   // The bot read its instructions, a frame saying who it is, and the chat so far.
   const prompt = f.inputs('codex')[0].input;
@@ -360,7 +361,7 @@ test('the chat shows a message to a bot and its reply as their own entries, in t
   assert.equal(entries[1].lead, true); assert.equal(entries[1].role, 'Fable 5.1', 'the session\'s model speaks under the name its run reported');
   const [asked, reply] = task.messages.slice(-2);
   assert.deepEqual(entries[2], { role: 'You → @critic', to: 'critic', at: asked.at, text: 'Is that right?' });
-  assert.deepEqual(entries[3], { role: '@critic', bot: 'critic', at: reply.at, text: reply.text });
+  assert.deepEqual(entries[3], { role: '@critic', bot: 'critic', at: reply.at, text: reply.text, model: 'big-model', effort: 'xhigh' });
   assert.equal(entries.filter(entry => entry.lead).length, 1, 'a bot\'s reply is never shown as the lead\'s');
 });
 
