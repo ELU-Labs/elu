@@ -11,13 +11,13 @@ import { hash } from '../lib/util.mjs';
 import { saveTask, taskPlace } from '../lib/state.mjs';
 import { projectFolder } from '../lib/workspace.mjs';
 import { registerProject } from '../lib/projects.mjs';
-import { closeSession, setDone } from '../lib/kanban.mjs';
+import { boardColumns, closeSession, readBoard, setDone } from '../lib/kanban.mjs';
 import { BYTES_MAX as CARD_BYTES, CARDS_MAX, NAME_MAX, TITLE_MAX, cardsFor, cleanCard, fitCards, cleanCards, cleanProofs, localRepos, proofsFor, repoProof, saveCards, saveLocalRepos, saveProofs, sessionCards, teammateSessions } from '../lib/peer/cards.mjs';
 import { peerFile } from '../lib/peer/paths.mjs';
 import { createIdentity, identity as loadIdentity } from '../lib/peer/identity.mjs';
 import { appendOp, createTeam, head, makeOp, merge, readLog } from '../lib/peer/roster.mjs';
 import { createInvite, redeemCode } from '../lib/peer/invite.mjs';
-import { repoId, setBoardOff, share, unshare } from '../lib/peer/shares.mjs';
+import { repoId, setBoardOff, share, shares, unshare } from '../lib/peer/shares.mjs';
 import { savePeerSettings } from '../lib/peer/settings.mjs';
 import { saveBot } from '../lib/bots.mjs';
 import { approveTask, planFile, proposeTask, sessionTasks } from '../lib/plan.mjs';
@@ -704,4 +704,61 @@ test('my other computer is told each session\'s Task with its card, or its first
   const fitted = fitCards(big);
   assert.equal(fitted.length, 60, 'every card still goes'); assert.ok(Buffer.byteLength(JSON.stringify(fitted)) <= CARD_BYTES);
   assert.ok(fitted[0].task); assert.equal(fitted.at(-1).task, undefined);
+});
+
+test('every session\'s Task goes with its card, without /share, to a teammate who proves they have the repository, and shows on their board and to their models', async t => {
+  const crew = makeTeam(t), ana = crew.founder, sara = crew.member, bob = withHome(newHome(t), () => createIdentity({ name: 'bob' })), now = Date.now();
+  withHome(ana.home, () => redeemCode(createInvite(loadIdentity(), crew.teamId, { hours: 1 }), bob.key, 'bob'));
+  // Ana works in her clone of the shop repository and shares nothing: one session's Task is approved, another's waits for her.
+  const atAna = withHome(ana.home, () => {
+    const repo = folderProject(t), shop = cloneIn(repo, 'shop');
+    session(repo, 1, shop, { goal: 'Speed up the search page' });
+    fs.writeFileSync(planFile(repo, '1'), JSON.stringify({ version: 1, tasks: [plan({ session: '1', title: 'Make search answer in a second' })] }));
+    session(repo, 2, shop, { goal: 'Look into the flaky checkout' });
+    fs.writeFileSync(planFile(repo, '2'), JSON.stringify({ version: 1, tasks: [plan({ id: 't-00000002', session: '2', state: 'proposed', title: 'Waiting for Ana' })] }));
+    return { repo, shop, repos: localRepos(now) };
+  });
+  // Sara has her own clone of it; Bob, on the same team, has none.
+  const atSara = withHome(sara.home, () => { const repo = folderProject(t); cloneIn(repo, 'shop', { from: atAna.shop }); return { repo, repos: localRepos(now) }; });
+  const cards = await withHome(ana.home, async () => {
+    assert.deepEqual(shares(), []); assert.deepEqual(planRows(now), [], 'no project of hers is on a team board');
+    const me = loadIdentity(), daemon = Object.assign(new PeerDaemon({ conductor: () => {} }), { me, node: { dial() {}, leave() {} } }); daemon.methods = daemon.extensions();
+    saveProofs(sara.identity.key, proofsFor(sara.identity.key, me.key, atSara.repos));
+    const connect = who => {
+      const wire = { out: '' }, socket = Object.assign(new EventEmitter(), { destroyed: false, write: chunk => { wire.out += chunk; return true; }, destroy() { this.destroyed = true; this.emit('close'); } });
+      daemon.attach(socket, who.key);
+      socket.emit('data', Buffer.from(`${JSON.stringify({ jsonrpc: '2.0', method: 'elu.hello', params: { binding: BINDING, a2aVersion: '1.0', name: who.name, teams: [{ id: crew.teamId, ...head(crew.teamId), ops: [] }], handles: [], plans: true, cards: 1 } })}\n`));
+      return { wire, last: () => wire.out.split('\n').flatMap(line => { try { const frame = JSON.parse(line); return frame.method === 'elu.plans' ? [frame.params] : []; } catch { return []; } }).at(-1) };
+    };
+    const toSara = connect(sara.identity), toBob = connect(bob);
+    assert.equal(daemon.sessions.get(sara.identity.key)?.admitted, true); assert.equal(daemon.sessions.get(bob.key)?.admitted, true);
+    daemon.tellPlans();
+    // Sara, who proved she has the repository, is told the approved Task; never the one that waits, what approval starts, or a path.
+    assert.deepEqual(toSara.last().tasks.map(task => [task.title, task.state, task.repoId]), [['Make search answer in a second', 'approved', repoId(atAna.shop)]]);
+    for (const word of ['Waiting for Ana', 'fix the login redirect please', '/Users/someone', atAna.repo.root]) assert.equal(toSara.wire.out.includes(word), false, word);
+    // Bob, on the team without the repository, is told nothing of it.
+    assert.deepEqual(toBob.last()?.tasks ?? [], []); assert.equal(toBob.wire.out.includes('Make search answer'), false);
+    // /share off in her project keeps its Tasks to herself.
+    setBoardOff(atAna.repo.root, true); daemon.tellPlans(); assert.deepEqual(toSara.last().tasks, []);
+    setBoardOff(atAna.repo.root, false); daemon.tellPlans(); assert.equal(toSara.last().tasks.length, 1);
+    return { told: toSara.last().tasks, cards: cardsFor(sara.identity.key, me.key, sessionCards({ owner: 'ana', repos: atAna.repos, now }), atAna.repos, proofsFor(sara.identity.key, me.key, atSara.repos)) };
+  });
+  // At Sara's: the Task is on her Kanban with its session's card, and her models are told it.
+  withHome(sara.home, () => {
+    fs.mkdirSync(peerFile(), { recursive: true });
+    fs.writeFileSync(peerFile('state.json'), JSON.stringify({ key: sara.identity.key, running: true, at: new Date().toISOString(), teams: [{ id: crew.teamId, members: [{ key: ana.identity.key, name: 'ana', online: true, box: 'laptop' }] }] }));
+    saveLocalRepos(atSara.repos); saveRemotePlans(ana.identity.key, cards.told);
+    assert.deepEqual(teammatePlans(atSara.repo.root), [], 'not before Ana proved she has the repository');
+    saveProofs(ana.identity.key, proofsFor(ana.identity.key, sara.identity.key, atAna.repos)); saveCards(ana.identity.key, sara.identity.key, cards.cards);
+    const people = teammatePlans(atSara.repo.root);
+    assert.deepEqual(people.map(person => [person.name, person.tasks.map(task => task.title)]), [['ana', ['Make search answer in a second']]]);
+    const items = boardColumns(readBoard(atSara.repo), { tasks: [], queue: [] }, Date.now(), people, teammateSessions(atSara.repo.root).people).flatMap(column => column.items);
+    const card = items.find(item => item.session?.title === 'Speed up the search page');
+    assert.equal(card?.shared?.title, 'Make search answer in a second', 'the session card opens with its Task');
+    assert.equal(items.filter(item => item.shared?.title === 'Make search answer in a second').length, 1, 'one card for the session and its Task');
+    assert.match(teammatePlanParts(atSara.repo.root).join('\n'), /Make search answer in a second/);
+    // Kept off at Sara's: not shown and not given to her models.
+    setBoardOff(atSara.repo.root, true);
+    assert.deepEqual(teammatePlans(atSara.repo.root), []); assert.deepEqual(teammatePlanParts(atSara.repo.root), []);
+  });
 });
