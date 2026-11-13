@@ -24,6 +24,8 @@ import { clockTime } from '../lib/terminal-plan.mjs';
 import { saveTask, readTask, taskDir, taskTitle, setTitle, lock } from '../lib/state.mjs';
 import { processIdentity } from '../lib/process.mjs';
 import { activeLogin, listLogins } from '../lib/logins.mjs';
+import { detect } from '../lib/detect.mjs';
+import { conformanceState } from '../lib/conformance.mjs';
 import { spawnSync } from 'node:child_process';
 import { approvalsDir, requestApproval, answerApproval } from '../lib/approvals.mjs';
 import { defaultMode } from '../lib/modes.mjs';
@@ -3439,6 +3441,42 @@ function twoSessions(t, mode = 'answer') {
   liveTask(p.root, { id: '5', goal: 'Which format should the export use', state: 'needs_input' });
   return p;
 }
+
+test('Usage: Antigravity and Grok Build show their sign-in before their one-time check, c runs the check there step by step, and the line then says ready', { timeout: 60000 }, async t => {
+  const p = setup(t), fake = fakeUsage(t);
+  // The real reading of the vendors, with the fake CLIs on PATH and the test's home for the owner's.
+  fake.vendors = () => detect(p.root, { ...process.env, HOME: fake.home });
+  fs.mkdirSync(path.join(fake.home, '.grok')); fs.writeFileSync(path.join(fake.home, '.grok', 'auth.json'), '{"token":"never-read"}\n', { mode: 0o600 });
+  const v = await view(t, { repo: p.repo, usage: fake }), panels = v.current.panels, text = () => panels.usageList.items.map(item => item.getText()).join('\n'), status = () => panels.status.getText();
+  const rowOf = pattern => panels.usageList.items.findIndex(item => pattern.test(item.getText()));
+  const calls = () => fs.readFileSync(p.calls, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+  await send(v, '/usage'); await until(() => v.current.view === 'usage' && !panels.usageBox.hidden, 'Usage tab');
+  // Opening the tab reads both at once: no message to either, and no check yet.
+  await until(() => /^Antigravity signed in · needs a one-time check \(c runs it now\)$/m.test(text()), 'Antigravity signed in', 20000);
+  assert.match(text(), /^Grok Build {2}signed in · needs a one-time check \(c runs it now\)$/m);
+  assert.doesNotMatch(text(), /checked on your next message/);
+  assert.deepEqual(calls().filter(call => ['agy', 'grok'].includes(call.vendor)).map(call => [call.vendor, call.args]), [['agy', ['--version']], ['agy', ['--help']], ['agy', ['-p', '/usage', '--output-format', 'json']]], 'Grok was not run; Antigravity was asked only for its release, help and sign-in');
+  assert.equal(conformanceState('grok'), null);
+  // c on the Grok line: the same check a first message runs, its steps under the vendor as it goes.
+  panels.usageList.focus(); await until(() => v.current.screen.focused === panels.usageList, 'list focused');
+  panels.usageList.select(rowOf(/^Grok Build/)); await until(() => /c run check {2}d details {2}r refresh/.test(panels.keys.getText()), 'c in the key bar');
+  const seen = new Set(), watch = setInterval(() => { for (const line of text().split('\n')) seen.add(line.trim()); }, 5); t.after(() => clearInterval(watch));
+  v.input.write('c');
+  await until(() => /^Grok Build {2}signed in · ready$/m.test(text()), 'Grok ready', 45000);
+  clearInterval(watch);
+  assert.ok(seen.has('Grok Build  signed in · checking…'), [...seen].join('\n'));
+  assert.ok([...seen].some(line => /^Checking Grok Build, \d of 8 done/.test(line)), 'a step line showed while it ran');
+  assert.match(text(), /^Grok Build {2}signed in · ready\n {12}One-time check of Grok Build on this machine first: about seven\n {12}short turns on it, a few minutes\.\n {12}Grok Build 1\.0\.77 passed its check on this machine\.$/m);
+  await until(() => /Grok Build is ready\./.test(status()), 'status');
+  assert.deepEqual(Object.values(conformanceState('grok').steps).filter(step => step !== 'pass'), [], 'the check record is the session\'s');
+  assert.match(text(), /^Antigravity signed in · needs a one-time check \(c runs it now\)$/m, 'Antigravity is untouched');
+  // r reads every vendor again; the finished check's lines go.
+  v.input.write('r'); await until(() => !/One-time check of Grok Build/.test(text()) && /Usage updated/.test(status()), 'r');
+  assert.match(text(), /^Grok Build {2}signed in · ready$/m);
+  // Signed out, Antigravity says how to sign in, after r.
+  fs.writeFileSync(path.join(p.dir, 'fake.json'), JSON.stringify({ ...JSON.parse(fs.readFileSync(path.join(p.dir, 'fake.json'), 'utf8')), agy: { signedIn: false } }));
+  v.input.write('r'); await until(() => /^Antigravity not signed in\. Run: agy$/m.test(text()), 'Antigravity signed out', 20000);
+});
 
 test('Sessions shows the list on the left and the open session on the right, at 100 columns and at 80', { timeout: 30000 }, async t => {
   // In colour, as the app runs. The drawn rows are checked too, and colour is what once cost a row its age.

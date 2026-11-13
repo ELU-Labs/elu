@@ -21,8 +21,14 @@ variable: if `grok` is signed out, the session says `Grok Build: not signed in. 
 ELU starts the check by itself before your first message to Grok goes out, whether
 you wrote to a session on it or to a bot on it. The session says so first, then shows each
 step as it ends, and then your message goes on. The check takes about seven short turns on
-Grok and a few minutes. Only a message you just sent starts it: a scheduled turn, a shadow
-turn or a review never does.
+Grok and a few minutes. Only a message you just sent, or `c` in the Usage tab, starts it: a
+scheduled turn, a shadow turn or a review never does.
+
+The Usage tab shows whether Grok is signed in before the check has run: it looks for
+`~/.grok/auth.json`, never opens it, and runs nothing. Its line then says
+`signed in · needs a one-time check (c runs it now)`, or `not signed in. Run: grok login`.
+`c` on that line runs the same check there, with each step under the line as it ends, and the
+line then says `ready`, or that the check failed and which step was not proven.
 
 The check runs eight steps against the installed binary in a throwaway repository, with a
 planted file outside it, a local web listener and a marker command:

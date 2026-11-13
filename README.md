@@ -453,7 +453,8 @@ sign-in, Enter on an account makes new turns use it, and `x` forgets one. Each a
 its own five-hour and weekly usage ([how accounts are kept](SECURITY.md#several-accounts)).
 Antigravity (`agy`) and Grok Build (`grok`) are checked once on each machine: your first
 message to one starts the check by itself. It takes about seven short turns on that vendor
-and a few minutes. Vendor notes: [docs/vendors](docs/vendors).
+and a few minutes. The Usage tab shows whether each is signed in before that, and `c` on its
+line runs the check there and then. Vendor notes: [docs/vendors](docs/vendors).
 
 Google's FAQ says that using another app to reach Antigravity breaks its terms and can get
 your account suspended or terminated. ELU wraps `agy`, so read

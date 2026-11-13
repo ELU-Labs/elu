@@ -524,6 +524,15 @@ your PATH, including when you have it only for the check sandbox:
 
 Apart from `r`, a check asked for less than a minute after the last one is skipped.
 
+Before Antigravity or Grok Build has passed its one-time check, the Usage tab reads its
+sign-in the way the check does before its first step, and nothing more. For Grok Build it
+looks for `~/.grok/auth.json`, never opens it, and runs nothing. For Antigravity it runs
+`agy --version`, `agy --help` and `agy -p /usage --output-format json` under ELU's private
+Antigravity home, reads only the exit code, and starts no model turn; it does this when the
+tab opens and has not read that `agy` yet, when the tab's check is due, and on `r`.
+`usage.json` keeps the program's path, whether it is signed in and when that was read.
+`c` on either vendor's line runs its one-time check, the same check a first message runs.
+
 What is saved, in `~/.config/elu-code`, is usage reduced to numbers and times
 (`usage.json`), and the email and plan name of each account seen, with its last usage
 (`accounts.json`). The Usage tab takes the Claude email, plan name and rate limit tier from
