@@ -1706,17 +1706,23 @@ test('a card of my other computer opens as mine: its whole Task, you and that co
   const task = { id: 't-5e1f0a2b', revision: 1, title: 'Make the search page fast', description: 'Measure first, then cache the slow query.', goal: 'The search page answers in under a second.', objectives: ['A timing test for the search page', 'The slow query is cached'],
     priority: 'high', severity: 'high', state: 'approved', startedBy: 'owner', subtasks: [{ text: 'Time the page', state: 'done' }, { text: 'Cache the query', state: 'doing' }, { text: 'Tests', state: 'todo' }], met: [1],
     proposedAt: ago(120), approvedAt: ago(100), doneAt: null, criteria: ['Three runs in a row answer in under a second'], estimateMinutes: 180, etaMinutes: 25, etaAt: ago(0) };
+  // own: that computer says each was started by me (lib/peer/cards.mjs teammateSessions).
   const people = [{ peer: SARA, name: 'sara', box: 'sara-box', online: true, heardAt: ago(0), mine: true, sessions: [
-    teamSession({ id: '0123456789abcdee', title: 'Nightly checks', by: 'ana', plan: task.id, task, ref: `${HOME}:6` }),
-    teamSession({ id: '0123456789abcdef', title: 'Flaky upload', column: 'needs', by: 'ana', at: ago(2), first: 'Find why uploads fail on slow networks', ref: `${HOME}:7` }),
-    teamSession({ id: '0123456789abcded', title: 'Release notes', column: 'done', by: 'ana', at: ago(4), plan: 't-77aa0c31', ref: `${HOME}:8` }) ] }];
+    teamSession({ id: '0123456789abcdee', title: 'Nightly checks', by: 'ana', own: true, plan: task.id, task, ref: `${HOME}:6` }),
+    teamSession({ id: '0123456789abcdef', title: 'Flaky upload', column: 'needs', by: 'ana', own: true, at: ago(2), first: 'Find why uploads fail on slow networks', ref: `${HOME}:7` }),
+    teamSession({ id: '0123456789abcded', title: 'Release notes', column: 'done', by: 'ana', own: true, at: ago(4), plan: 't-77aa0c31', ref: `${HOME}:8` }) ] }];
   peer.teammateTasks = () => []; peer.boardKeptOff = () => false;
   peer.teammateSessions = () => ({ repos: [{ repoId: WEB, name: 'acme/web', at: ago(0) }], people });
   const v = await view(t, { repo: repository(p.root), peer }), panels = v.panels, title = 'Your session on sara-box';
   const column = index => panels.kanbanLists[index].items.map(item => plainItem(item).trimEnd());
   const hint = () => modal(v, title)?.children.filter(child => child.type === 'text').map(child => child.getText()).join('\n') ?? '';
   await send(v, '/kanban'); await until(() => v.current.view === 'kanban' && column(1).length === 1 && column(2).length === 1 && column(3).length === 1, 'the cards');
-  panels.kanbanLists[1].focus(); panels.kanbanLists[1].select(0); v.input.write('\r');
+  panels.kanbanLists[1].focus(); panels.kanbanLists[1].select(0);
+  // Its line under the board says it is mine, and a key that would move it says so too.
+  await until(() => /Your session on sara-box · In progress · Task: Make the search page fast/.test(panels.status.getText()), 'its line says mine');
+  assert.doesNotMatch(panels.status.getText(), /@ana|read-only/);
+  v.input.write('x'); await until(() => /That is your session on sara-box\. Enter opens it; it changes only on that computer\./.test(panels.status.getText()), 'x refused as mine');
+  v.input.write('\r');
   await until(() => rowsOf(v, title).length, 'the card opens');
   const rows = rowsOf(v, title).map(line => line.trimEnd());
   assert.deepEqual(rows.slice(0, 3), ['Make the search page fast', 'in progress · priority high · severity high', 'you · sara-box']);
@@ -1740,6 +1746,31 @@ test('a card of my other computer opens as mine: its whole Task, you and that co
   await until(() => rowsOf(v, title).includes('No Task yet'), 'an older build');
   assert.ok(rowsOf(v, title).some(line => /It has a Task\. Update ELU Code on sara-box to see it here\./.test(line)));
   v.input.write('\x1b'); await until(() => !modal(v, title), 'Esc closes it');
+});
+
+test('a teammate\'s session on my other computer opens with their name, not as mine: its first message, and Enter opens it in Sessions', async t => {
+  const p = project(later(t)); environment(t, p.parent);
+  const HOME = '0123456789abcdef', listed = { id: '11111111-2222-4333-8444-555555555556', ref: `${HOME}:9`, project: HOME, title: 'Kim asks for a fix', state: 'running', at: ago(0), createdAt: ago(60), approvals: [], by: 'teammate', who: 'kim', repoId: WEB, question: null, error: null, plan: null };
+  const peer = fakePeer({ mine: [{ key: SARA, mine: true, theirs: true }], machines: [{ key: SARA, listedAt: ago(0), older: false, projects: [{ id: HOME, name: 'home', repoId: null, home: true }], sessions: [listed] }], repoId: WEB });
+  // own: false, as that computer tells it for a session a teammate's message started there.
+  const people = [{ peer: SARA, name: 'sara', box: 'sara-box', online: true, heardAt: ago(0), mine: true, sessions: [teamSession({ id: '0123456789abcdee', title: 'Kim asks for a fix', by: 'kim', first: 'Fix the cart total for coupons', ref: `${HOME}:9` })] }];
+  peer.teammateTasks = () => []; peer.boardKeptOff = () => false;
+  peer.teammateSessions = () => ({ repos: [{ repoId: WEB, name: 'acme/web', at: ago(0) }], people });
+  const v = await view(t, { repo: repository(p.root), peer }), panels = v.panels, title = "kim's session on sara-box";
+  const column = index => panels.kanbanLists[index].items.map(item => plainItem(item).trimEnd());
+  await send(v, '/kanban'); await until(() => v.current.view === 'kanban' && column(1).length === 1, 'the card');
+  assert.match(column(1)[0], /@kim · sara-box/);
+  panels.kanbanLists[1].focus(); panels.kanbanLists[1].select(0);
+  await until(() => /@kim's session on sara-box · In progress · read-only/.test(panels.status.getText()), 'its note names kim');
+  v.input.write('\r');
+  await until(() => rowsOf(v, title).length, 'the card opens');
+  const rows = rowsOf(v, title).map(line => line.trimEnd());
+  assert.deepEqual(rows.slice(0, 3), ['Kim asks for a fix', 'In progress', 'Started by @kim · on sara-box']);
+  assert.ok(rows.includes('Fix the cart total for coupons'));
+  assert.doesNotMatch(rows.join('\n'), /you · |their machine/);
+  v.input.write('\r');
+  await until(() => v.current.view === 'tasks' && !modal(v, title) && /Kim asks for a fix/.test(plainItem(panels.board.items[panels.board.selected] ?? { getText: () => '' })), 'Sessions, on that session');
+  assert.deepEqual(peer.sent(), []);
 });
 
 test('/share off keeps the open project\'s Tasks off the team board and /share on puts them back', async t => {

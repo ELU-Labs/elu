@@ -14,7 +14,6 @@ import { registerProject } from '../lib/projects.mjs';
 import { closeSession, setDone } from '../lib/kanban.mjs';
 import { BYTES_MAX as CARD_BYTES, CARDS_MAX, NAME_MAX, TITLE_MAX, cardsFor, cleanCard, fitCards, cleanCards, cleanProofs, localRepos, proofsFor, repoProof, saveCards, saveLocalRepos, saveProofs, sessionCards, teammateSessions } from '../lib/peer/cards.mjs';
 import { peerFile } from '../lib/peer/paths.mjs';
-import { markMine, noteTheirs } from '../lib/peer/mine.mjs';
 import { createIdentity, identity as loadIdentity } from '../lib/peer/identity.mjs';
 import { appendOp, createTeam, head, makeOp, merge, readLog } from '../lib/peer/roster.mjs';
 import { createInvite, redeemCode } from '../lib/peer/invite.mjs';
