@@ -4,7 +4,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { PassThrough } from 'node:stream';
 import { project, fakeClis, keyLike, git } from './helpers.mjs';
-import { makeTeam, answeringClis } from './peer-helpers.mjs';
+import { makeTeam, answeringClis, withHome } from './peer-helpers.mjs';
+import { markMine, noteTheirs } from '../lib/peer/mine.mjs';
 import { ProjectController, registerProject } from '../lib/projects.mjs';
 import { projectFolder, pendingRequests, updateRequest } from '../lib/workspace.mjs';
 import { readTask, saveTask, taskTitle } from '../lib/state.mjs';
@@ -352,4 +353,12 @@ test('another computer of mine whose hello lacks standup: 1 is never sent the qu
   assert.deepEqual(await remoteCommand(ctx, { type: 'remoteStandup', to: key, round: newRound(), refs: [] }), { older: true });
   assert.deepEqual(await remoteCommand({ session: () => null }, { type: 'remoteStandupRead', to: key, round: newRound() }), { offline: true });
   assert.deepEqual(requests, []);
+});
+
+test('another computer of mine is sent every session of the round to ask', async t => {
+  const { founder, member } = makeTeam(t), key = member.identity.key, sent = [];
+  const ctx = { me: founder.identity, session: () => ({ remoteHello: { remote: 1, standup: 1 }, request: async (method, params) => { sent.push([method, params]); return { asked: [], skipped: [] }; } }) };
+  const refs = Array.from({ length: 25 }, (_, n) => `0123456789abcdef:${n + 1}`);
+  await withHome(founder.home, async () => { markMine(founder.identity.key, key); noteTheirs(key, true); await remoteCommand(ctx, { type: 'remoteStandup', to: key, round: newRound(), refs }); });
+  assert.deepEqual(sent.map(([method, params]) => [method, params.refs.length]), [['elu.remote.standup', 25]]);
 });
