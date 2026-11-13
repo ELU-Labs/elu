@@ -73,7 +73,9 @@ and has no flag to turn that off. So ELU runs it with `HOME` set to a folder und
 own state (`agy-home/`, mode 0700), one per workspace, holding only:
 
 - `.gemini/antigravity-cli/settings.json`: the mode's permission rules, written before each run;
-- `.gemini/config/hooks.json`: one PreToolUse hook, `lib/agy-hook.mjs`, run with the mode's name;
+- `.gemini/config/hooks.json`: one PreToolUse hook, `lib/agy-hook.mjs`, run with the mode's name.
+  Full access has none: the file is written empty, and slash commands, off in the other
+  modes (`disableSlashCommands`), stay on;
 - the conversations `agy` keeps there, so a session resumes with `--conversation`, also
   after `/permissions` changed its mode: the rules are rewritten for every run.
 
@@ -95,7 +97,7 @@ machine cannot read it with `ps`.
 | --- | --- | --- | --- | --- |
 | How it runs | `agy -p --sandbox` | `agy acp` after `relay` passed, else `-p` | `agy acp` after `relay` passed, else `-p --mode=accept-edits --sandbox` | `-p --dangerously-skip-permissions` |
 | Settings | `request-review`; `command`, `write_file`, `read_url`, `execute_url`, `mcp` denied; workspace only | `request-review`; `command`, `read_url`, `execute_url`, `mcp` ask; workspace only; protected files and secret folders denied to the file tool | `proceed-in-sandbox`; `sudo` and `.git` denied; workspace only; protected files and secret folders denied | outside access allowed; `read_url`, `execute_url`, `mcp` allowed; secret folders denied to the file tool |
-| Hook | denies web search, commands, edits, image generation, scheduling and subagents | asks for web search; denies push, tag, merge, deploy and publish by command text | denies web search and the never list; sends the rest to the reviewer | no opinion: Full access runs the never list |
+| Hook | denies web search, commands, edits, image generation, scheduling and subagents | asks for web search; denies push, tag, merge, deploy and publish by command text | denies web search and the never list; sends the rest to the reviewer | none installed |
 | Named folders | none | `--add-dir` each; `write_file` denied in each | same | `--add-dir` each |
 | Web | denied | asks, or reported | reviewed, or reported | allowed |
 

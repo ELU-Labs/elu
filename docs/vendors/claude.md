@@ -33,13 +33,15 @@ Code memory, when there is one.
 | `--permission-prompts` / `--permission-prompt-tool` | `host` / `mcp__elu-code-approval__approve` | same | same |
 | `--restricted` / `--safe-mode` | no | no | no |
 | `--input-format` | `stream-json`: the prompt is one user message and the input stays open for the network questions | text | text |
-| `--tools` | `Read,Grep,Glob,Edit,Write,Bash,WebFetch,WebSearch` | same | same |
+| `--tools` | `Read,Grep,Glob,Edit,Write,Bash,WebFetch,WebSearch` | same | `default`: every tool Claude Code has |
 | `--allowedTools` | your MCP servers, `Read`, `Grep`, `Glob`, `Edit` and `Write` on the workspace | same | none |
-| `--disallowedTools` | `Agent,Task,NotebookEdit,PowerShell,Monitor`; a turn with helpers, below | same | same |
+| `--disallowedTools` | `Agent,Task,NotebookEdit,PowerShell,Monitor`; a turn with helpers, below | same | not passed: no tool is refused |
 | `--add-dir` | each folder of the session; an answer turn (yours, or a working bot's) also gets your home folder and a private copy of your Claude Code memory when there is one | same | same |
 | Sandbox | on where it starts, never required; a host a command connects to asks you, and one you allowed stays allowed in the session; unsandboxed commands ask you | on where it starts, never required, no network; unsandboxed commands go to the reviewer | off |
 | Asks | web tools; answer turns also edits in the project folder | answer-turn edits only | none |
-| Denies | protected paths, writes in the folders of the session, secret reads, ELU state, the never list | same, without dependency files | secret reads, ELU state |
+| Denies | protected paths, writes in the folders of the session, secret reads, ELU state, the never list | same, without dependency files | nothing |
+| Settings `env` | npm reads no settings of yours (`npm_config_userconfig=/dev/null`), OpenSSL no config | same | empty: npm and OpenSSL read what they read in your shell |
+| Environment of the run | a short allow-list | same | your whole environment, less the names that choose Claude Code's account and endpoint (`ANTHROPIC_*`, `CLAUDE_*`) and the other vendors' |
 
 Every profile keeps `--setting-sources ''`, `--strict-mcp-config` with a private
 config file and disabled hooks. `--max-budget-usd` is passed only when the session
@@ -75,7 +77,16 @@ is launched with these changes: `--tools` adds `Agent`; `--allowedTools` adds
 the turn's own tools and the helpers' model; the deny rules add each built-in agent type
 and an `Agent` call that names a model or an isolation; and the settings and the
 environment turn off built-in agents, forked agents, helpers of helpers and background
-tasks, and force the helpers' model when the bot names one.
+tasks, and force the helpers' model when the bot names one. In Full access none of that
+is set but the helpers' model: the helper has every tool, any agent type can be started,
+and its instructions name nothing it may not do.
+
+With every tool, one run can end more than one turn: Claude Code answers, waits for a
+helper or a command it left in the background, and answers again when that finishes. ELU
+reads the rows these write (`task_started`, `task_notification`, `task_updated`,
+`background_tasks_changed`, `tool_progress`) and takes the last result that carries an
+answer as the reply; a later result that failed or carries none does not undo it. Read
+from the strings of Claude Code 2.1.322; not seen with the real service.
 
 In Ask and Auto, stand-in commands (`lib/never-shims.mjs`) cover what those rules cannot read: a
 script, `sh -c`, `npm test`. Claude Code starts each command from a snapshot of

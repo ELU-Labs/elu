@@ -14,9 +14,11 @@ session; a turn that is not your own session's runs read only.
 | Shell inside the vendor sandbox | no | yes; Antigravity runs no sandbox, so every command asks | yes | yes, no sandbox |
 | Shell outside it, network, web tools | no | asks | a reviewer model decides | yes |
 | Secrets and ELU state | no | no | no | yes: Full access denies nothing |
+| Tools | read and search | the vendor's file, shell and web tools | same | every tool the vendor has |
+| Your environment | a short list (`PATH`, `HOME`, language, temp folder) | same | same | all of it: your SSH agent, your GitHub and cloud sign-ins, your proxy |
 | Never list (push, tag, merge, deploy, publish) | blocked | blocked; every escape asks | stand-in commands and, except on Codex, deny rules; a command that gets past them gets through if the reviewer allows it | none: the model runs them without asking |
 | Runs in | worktree | worktree or a named branch | same | also here |
-| Checks | sandboxed, no network, structural limits | same | no network; dependency files may change | network on; only secret paths and deleted tests block |
+| Checks | sandboxed, no network, structural limits | same | no network; dependency files may change | network on; no structural limit blocks, what one finds is shown as a note |
 
 Secrets here are files Git does not track whose names look like secrets: `.env*`, `.npmrc`,
 `.netrc`, `.pypirc`, `auth.json`, `credentials`, `credentials.json`, `id_rsa`, `id_ed25519`,
@@ -24,6 +26,58 @@ Secrets here are files Git does not track whose names look like secrets: `.env*`
 repository tracks is read in every mode, as any other tracked file: it is in the repository
 already. A teammate's question is denied the names whatever Git says. Outside a Git work
 tree every file of those names is denied.
+
+## Full access
+
+Full access is everything. A turn that runs with it has no limit of ELU's:
+
+- **Files.** It reads and changes any file: secret files (`.env`, `.npmrc`, keys), the
+  secret folders in your home (`~/.ssh`, `~/.aws`, `~/.config`), ELU's own folder, and
+  your vendor sign-ins (`~/.claude`, `~/.codex`, `~/.grok`).
+- **Folders.** `/permissions folders add <path>` takes any folder there is: a secret
+  folder, ELU's folder, one outside your home, your home itself, and as many as you name.
+  A path with `*`, `?`, brackets or braces in it starts too.
+- **Commands.** Any command runs without asking and outside any sandbox, with push, tag,
+  merge, publish and deploy among them. There is no never list.
+- **Your environment.** Commands get the environment a command you type gets: your SSH
+  agent, your GitHub and cloud sign-ins, your proxy, your npm settings.
+- **Tools.** Every tool the vendor has. Claude Code: helpers, background commands,
+  notebooks and the rest of its default set. Codex: every feature its release ships
+  (helpers, the plan, images, skills, plugins). Grok Build: its memory, its subagents, its
+  server-side search, and as many turns as the work takes. Antigravity: its slash
+  commands, and no hook of ELU's between it and a tool call.
+- **Network.** The internet and anything on this computer, the local A2A endpoint
+  included when you have turned it on.
+- **Checks.** Your project's own tests and build still run after an edit. ELU's structural
+  checks (ignored output, files outside the declared paths, deleted tests) fail nothing:
+  what one finds is shown as a note.
+- **Approvals.** Once a session has Full access, ELU allows everything its running turn
+  asks, a removal and an MCP tool included.
+
+What stays, and why:
+
+- The names that choose a vendor's own account and endpoint (`ANTHROPIC_*`, `CLAUDE_*`,
+  `OPENAI_*`, `CODEX_*`, `XAI_*`, `GROK_*`, `GEMINI_*`, `GOOGLE_API_KEY`) do not come from
+  your shell: a key among them would move the turn to another account than the one you
+  signed in with.
+- The vendor starts with the settings ELU gives it, not with your vendor settings file or
+  your hooks: ELU reads the run's output, and a setting it did not make can change that
+  output. On Claude Code your own MCP servers are on, as in every mode (`/mcp`). Codex,
+  Grok Build and Antigravity get no MCP servers from ELU in any mode.
+- A turn has to answer in the form ELU reads, and a turn that prints nothing for 10
+  minutes, or runs 2 hours, is stopped ([How long a turn runs](#how-long-a-turn-runs)).
+  That is how a vendor that hangs is told from one that works.
+- Codex cannot ask you a question in the middle of a turn: nobody could answer it there.
+- Grok Build and Antigravity run with a home folder of their own, as in every mode, so
+  `~` in their commands is not your home. Name your real folders by their full path.
+- What a vendor asks in every mode is still shown to you. Claude Code asks before `rm` or
+  `rmdir` on your home, the working folder or a top-level folder.
+- Who gets Full access is unchanged: your own sessions and the schedules you pick it for.
+  A bot's scheduled turn, a teammate's message that starts by itself, and a request to the
+  local A2A endpoint run with Approve for me at most; a teammate's question runs read only.
+
+Everything in the sections below about deny rules, the never list, the sandbox and
+approvals holds in the other modes.
 
 "Asks" is a live approval in your terminal where the vendor has a relay: Claude
 Code, and Antigravity and Grok Build once the `relay` step of their one-time check
@@ -51,10 +105,12 @@ The workspace is the place you picked: a worktree on a new task branch, a
 worktree with a named branch checked out, or, in Full access, the checkout
 itself with its current branch and a dirty tree allowed. Folders are extra
 directories in your home that the model may read this session, added with
-`/permissions folders add <path>`; they are never a secret folder or ELU's
-state. A folder that holds one of those is refused too, and a link counts as
+`/permissions folders add <path>`; below Full access they are never a secret
+folder or ELU's state. A folder that holds one of those is refused too, and a link counts as
 where it leads: with `~/.config` linked to `~/dotfiles/config`, `~/dotfiles` is
-refused. In Ask for approval and Approve for me a folder is read and never written:
+refused. Full access takes any folder ([Full access](#full-access)); a session that leaves
+Full access keeps only the folders the other modes take. A folder a trusted teammate's
+message names is offered the same way when you work on it with `w`. In Ask for approval and Approve for me a folder is read and never written:
 Claude Code denies writes there to its file tools and to sandboxed commands, Codex gives
 the folder read access only, and Antigravity denies writes there to its file tool. On
 Claude Code and Antigravity a folder that holds the workspace or lies inside it, such as
@@ -90,6 +146,7 @@ the session's mode when you write to it, and so do the helpers it hands work to.
 Code a working bot can start helpers when its instructions ask for them. They run on the
 bot's own model unless the bot was saved with another for them, as `@lead` was, with the
 tools and the denied commands of the bot's turn, and they start no helpers of their own.
+In Full access a helper has every tool and is told nothing it may not do.
 A bot that is allowed to merge pull requests starts helpers only when it was saved with a
 model for them. A turn its schedule started runs with Approve for me at most, because
 nobody may be watching: a bot's schedule has no mode of its own, so you never pick Full
@@ -366,8 +423,8 @@ Approve for me.
   limit, the folders and the bots. The turn in progress keeps the mode it
   started with, with one exception: after a switch to Full access, ELU
   allows that turn's approvals for you, the one that waits and the ones it asks
-  next. Three kinds stay yours to answer: a removal with `rm` or `rmdir`, an
-  MCP tool, and a command too long to show whole. The never list is not asked,
+  next, all of them: a removal with `rm` or `rmdir`, an MCP tool and a command too
+  long to show whole included. The never list is not asked,
   so it stays refused in that turn, which started without Full access; the next
   turn runs it. A bot's scheduled turn is not answered this way: it runs
   with Approve for me at most.
@@ -394,7 +451,8 @@ Approve for me.
   never starts that bot's schedule. An unanswered approval times out and the
   task asks you.
 - A request sent to the local A2A endpoint, which is off by default, runs your
-  personal default, capped at `auto`.
+  personal default, capped at `auto`: it never runs with Full access. A session that
+  has Full access can itself reach the endpoint, as it can anything on this computer.
 - A teammate's message you answer runs read only and never gets a mode. One you
   choose to work on runs with the mode you pick then.
 - `elu run` runs read only unless you pass `--permissions auto|full`,

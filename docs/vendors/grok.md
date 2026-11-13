@@ -82,7 +82,8 @@ profile cannot resume (Grok keeps a session's sandbox), so that turn's retry sta
 session without the earlier context. A headless run prints its answer only at the end, so
 it has the two-hour cap of a turn and no quiet limit (see How long a turn runs in
 [permissions](../permissions.md)); `--max-turns` (40 for
-read-only turns, 120 for edit turns) bounds the model rounds. Cost is not reported under a
+read-only turns, 120 for edit turns) bounds the model rounds, except in Full access, which
+has no turn cap of ELU's. Cost is not reported under a
 subscription; the role's `maxCostUsd` must be `null`.
 
 ## The private home
@@ -106,7 +107,10 @@ directory) and a `GROK_HOME` inside it holding only what ELU wrote:
 - `config.toml`: Claude and Cursor compatibility off, telemetry, trace upload, Mixpanel,
   feedback, managed config, campaigns, remote fetch and server-side search off, workspace
   snapshots and codebase uploads off, auto-update off, session relay off, `.envrc` off,
-  subagents off, and, in every profile but Full, the never list as deny rules. It is
+  and, in every profile but Full, server-side search off, subagents off and the never list
+  as deny rules. Full access is everything: its run also drops `--no-memory`,
+  `--no-subagents`, `--max-turns`, `GROK_MEMORY=0`, `GROK_SUBAGENTS=0` and
+  `GROK_BACKEND_SEARCH=0`. It is
   rewritten before every run, for that run's profile. Runs share it: a run that reads one
   written for another profile still has the never list in its flags wherever it holds.
 - `trusted_folders.toml`: empty. A workspace is never trusted, so its `.grok/config.toml`,
@@ -126,15 +130,16 @@ On consumer plans Grok's product analytics, session trace upload (which includes
 contents) and per-turn workspace snapshots are on by default. ELU turns off every
 documented switch, in the environment and in `config.toml`: `GROK_TELEMETRY_ENABLED=0`,
 `GROK_TELEMETRY_TRACE_UPLOAD=0`, `GROK_TELEMETRY_MIXPANEL_ENABLED=0`,
-`GROK_FEEDBACK_ENABLED=0`, `GROK_MEMORY=0`, `GROK_SUBAGENTS=0`, `GROK_CAMPAIGNS=0`,
+`GROK_FEEDBACK_ENABLED=0`, `GROK_MEMORY=0` and `GROK_SUBAGENTS=0` (both below Full access
+only), `GROK_CAMPAIGNS=0`,
 `GROK_DISABLE_AUTOUPDATER=1`, `[telemetry] trace_upload=false`,
 `[harness] disable_workspace_teleport=true` and the older `disable_codebase_upload=true`
 (the key that stopped per-turn repository uploads on earlier releases), `[relay]
 enabled=false`. With trace upload on, a headless run can spend up to 150 seconds draining
 uploads at exit; off, it ends when the turn ends. Grok's server-side web search
 (`[features] backend_tools`, `GROK_BACKEND_SEARCH`) runs inside the model call, where no
-permission rule applies, so it is off in every mode; the model's own web tools follow the
-mode. Account-level settings for coding data, retention and training live in Grok's own
+permission rule applies, so it is off in every mode but Full access, where no rule applies
+at all; the model's own web tools follow the mode. Account-level settings for coding data, retention and training live in Grok's own
 `/privacy` screen; ELU cannot change them.
 
 ## What is enforced and what is not

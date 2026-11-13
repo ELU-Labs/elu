@@ -13,7 +13,7 @@ Labels: **[run]** checked by running the tested release of `codex` against a loc
 
 ## What each mode launches
 
-Every mode keeps the same isolation: `--ignore-user-config --ignore-rules --json`, `-c mcp_servers={}`, hooks, apps, plugins, browser, multi-agent, image and skill features off, user input and plan tools off, and a refusal to launch when a project or managed `config.toml` could add MCP servers. The output schema goes through `--output-schema`; the prompt arrives on stdin. A session's model also gets `--skip-git-repo-check`: a project folder need not be a Git repository, and without the flag Codex refuses to start there [run].
+Every mode but Full access keeps the same isolation: `--ignore-user-config --ignore-rules --json`, `-c mcp_servers={}`, hooks, apps, plugins, browser, multi-agent, image and skill features off, user input and plan tools off, and a refusal to launch when a project or managed `config.toml` could add MCP servers. Full access keeps `--ignore-user-config --ignore-rules --json`, `-c mcp_servers={}`, the user input tool off (nobody could answer it in a run without a terminal) and that refusal, and switches nothing else off: every feature stays as the release ships it, a login shell is allowed, and commands get the whole environment of the run. Its stream may then carry any kind of item (`collab_tool_call`, `mcp_tool_call`, `web_search`, ones a later release adds), and ELU reads them all; below Full access a kind the session was not given refuses the run. Not seen with the real service: these are the release's own defaults. The output schema goes through `--output-schema`; the prompt arrives on stdin. A session's model also gets `--skip-git-repo-check`: a project folder need not be a Git repository, and without the flag Codex refuses to start there [run].
 
 | | Read only (reviewer) | Ask for approval | Approve for me | Full access |
 |---|---|---|---|---|
@@ -23,6 +23,7 @@ Every mode keeps the same isolation: `--ignore-user-config --ignore-rules --json
 | Network | blocked | blocked, loopback included [run] | blocked unless the reviewer allows an escalation | open [run] |
 | Web search | off | off | off | `web_search="live"` [run: the tool is offered; a real search is unverified] |
 | Named folders | n/a | read-only | read-only | n/a |
+| Features and tools | all off | shell on, the rest off | same | the release's defaults |
 | Where | task worktree | worktree or branch | worktree or branch | also your checkout |
 
 The `elu_ask` profile is one `-c permissions.elu_ask=…` value with `default_permissions="elu_ask"` [run]:
