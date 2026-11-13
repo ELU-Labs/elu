@@ -1867,4 +1867,14 @@ test('Usage lists the top ten agents by cost with their tokens, t shows the last
   machines[0] = { ...machines[0], topAgents: null };
   await until(() => rows().includes('sara-box: update ELU to include it') && !rows().some(row => /Remote job/.test(row)), 'the update line');
   assert.ok(rows().includes('ELU spend today at least $13.03'), 'only what this computer reported');
+  // A computer of mine on a build before 0.1.20, which counts a session's total again for each
+  // of its turns: its rows stay, a line says its costs may be too high, and so does its part of the spend line.
+  const sent = { today: { costUsd: 20, partial: false, rows: [remoteRow] }, week: { costUsd: 25, partial: false, rows: [remoteRow] } };
+  machines[0] = { ...machines[0], topAgents: { own: false, ...sent } };
+  await until(() => rows().includes('sara-box: older ELU, its costs may be too high. Update ELU there.') && rows().some(row => /Remote job/.test(row)), 'the older build line');
+  assert.ok(rows().includes('  this computer at least $13.03, sara-box $20.00 (older ELU)'));
+  assert.ok(rows().every(row => row.length <= list.width - 2), 'every line fits');
+  // Once it is updated it says each cost is a run's own, and neither is said.
+  machines[0] = { ...machines[0], topAgents: { own: true, ...sent } };
+  await until(() => !rows().some(row => /older ELU/.test(row)) && rows().includes('  this computer at least $13.03, sara-box $20.00'), 'the line gone');
 });

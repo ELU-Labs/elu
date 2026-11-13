@@ -106,6 +106,25 @@ if(cfg.noCredits&&modelArg===cfg.noCredits){console.log(JSON.stringify({type:'sy
 const tooLong=cfg.tooLong!==undefined&&input.includes('Review as @')&&(cfg.tooLong==='all'||cfg.tooLong==='files'&&/"content":"|"excerpts":\[/.test(input)||typeof cfg.tooLong==='number'&&input.length>cfg.tooLong);
 if(tooLong){console.log(JSON.stringify({type:'system',subtype:'init',session_id:session,model:reported,permissionMode:'default',mcp_servers:[]}));console.log(JSON.stringify({type:'result',subtype:'success',is_error:true,duration_ms:120,num_turns:1,result:'Prompt is too long',session_id:session,total_cost_usd:nothingSpent}));process.exit(1);}
 if(mode==='no-sandbox'){console.error('Error: sandbox required but unavailable: bubblewrap (bwrap) not installed, socat not installed');console.error('  sandbox.failIfUnavailable is set.');console.log(JSON.stringify({type:'result',subtype:'error_during_execution',is_error:true,session_id:session}));process.exit(1);}
+// spend (fake.json): what a turn uses itself, { model, tokens: [in, out, cacheRead, cacheWrite], usd }.
+// As the real CLI, the session then has its own id (the one --session-id names, or the one
+// --resume goes on with), and its result carries usage (the turn's own tokens) and, in
+// modelUsage and total_cost_usd, what the whole session has used so far: a resumed turn goes on
+// from its session's totals (kept beside fake.json for each session, a turn that is stopped
+// included), a new session starts from nothing. An assistant row with the turn's tokens comes
+// before any answer.
+if(cfg.spend){
+ const kept=path.join(path.dirname(process.argv[1]),'spent.json'),own=cfg.spend,[input,output,read,write]=own.tokens;
+ const id=flag=>args.includes(flag)?args[args.indexOf(flag)+1]:null,mine=id('--resume')??id('--session-id')??session;
+ let all={};try{all=JSON.parse(fs.readFileSync(kept,'utf8'));}catch{}
+ const before=id('--resume')&&all[mine]?all[mine]:{tokens:[0,0,0,0],usd:0};
+ const total={tokens:before.tokens.map((value,at)=>value+own.tokens[at]),usd:before.usd+own.usd};fs.writeFileSync(kept,JSON.stringify({...all,[mine]:total}));
+ const usage={input_tokens:input,output_tokens:output,cache_read_input_tokens:read,cache_creation_input_tokens:write},print=console.log;
+ console.log=text=>{let row=null;try{row=JSON.parse(text);}catch{}
+  if(row?.session_id===session)row.session_id=mine;
+  print(row?.type==='result'&&!row.is_error?JSON.stringify({...row,total_cost_usd:total.usd,usage,modelUsage:{[own.model]:{inputTokens:total.tokens[0],outputTokens:total.tokens[1],cacheReadInputTokens:total.tokens[2],cacheCreationInputTokens:total.tokens[3],costUSD:total.usd}}}):row?JSON.stringify(row):text);};
+ print(JSON.stringify({type:'assistant',session_id:mine,message:{id:'msg_spend',model:own.model,usage}}));
+}
 // An answer turn with permissions has Write in its tools, but a lead that is told ELU prepares the workspace does not edit there.
 const edit=(args[args.indexOf('--tools')+1]??'').split(',').includes('Write')&&!conversation;
 if(edit&&mode==='scaffold'){

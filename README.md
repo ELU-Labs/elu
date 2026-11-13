@@ -422,7 +422,8 @@ open a project that is set up or send a message, at most once a minute while a s
 on screen, and from the Usage tab ([what is read and when](SECURITY.md#credentials)).
 Its top agents add up what each vendor reported for each run: the cost and tokens Claude Code
 reports (its cost is the API price, also on a subscription), and Codex's tokens. Codex
-reports no cost, so its cost shows as —.
+reports no cost, so its cost reads not reported. A turn you stop counts with the tokens it
+had used; Claude Code says a cost only when a turn ends.
 
 You need macOS or Linux, Node 22 or newer, Git, and Claude Code (`claude`) installed and
 signed in: new projects and the built-in bots run on it. To run sessions on Codex
