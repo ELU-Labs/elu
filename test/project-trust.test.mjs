@@ -14,7 +14,7 @@ import { saveBot } from '../lib/bots.mjs';
 import { APPROVAL_TOOL } from '../lib/mcp.mjs';
 import * as claude from '../lib/adapters/claude.mjs';
 import * as codex from '../lib/adapters/codex.mjs';
-import { NOT_APPROVED, answerTrust, approvedOn, ensureTrustStore, pendingTrust, reviewLines, trustRows, trustedText, unapprovedNote, unusedTrust } from '../lib/project-trust.mjs';
+import { NOT_APPROVED, answerTrust, approvedOn, ensureTrustStore, longNote, pendingTrust, reviewLines, trustRows, trustedText, unapprovedNote, unusedTrust } from '../lib/project-trust.mjs';
 
 function environment(t, values) {
   const previous = Object.fromEntries(Object.keys(values).map(key => [key, process.env[key]])); Object.assign(process.env, values);
@@ -217,6 +217,14 @@ test('a file over 100 KB is asked about and used like any other: the session get
   answerTrust(p.root, context, true);
   assert.equal(trustedText(p.root, 'context.md'), big); assert.equal(readProjectSettings(p.root).context, big);
   assert.doesNotThrow(() => saveContext(p.root, `${big}more`)); assert.equal(trustedText(p.root, 'context.md'), `${big}more\n`);
+  // It is shown whole, never as "too large", and a session that runs without it says only that it is not approved.
+  fs.writeFileSync(p.file('instructions.md'), `${'Rule.\n'.repeat(200000)}`);
+  const row = pendingTrust(p.root).find(item => item.name === 'instructions.md'), lines = reviewLines(row);
+  assert.equal(lines.length, 200002); assert.match(lines[0], /^This project came with instructions\./); assert.equal(lines.at(-1), 'Rule.');
+  assert.equal(unapprovedNote(p.root).text, "Running without this project's .elu-code/config.yaml and .elu-code/instructions.md: you have not approved them on this machine. To review them, open Projects and choose this project.");
+  // The one line the dialog puts above a file that long.
+  assert.equal(longNote(row), 'This file is long: 200,000 lines (1.1 MB). Open .elu-code/instructions.md to read all of it.');
+  assert.equal(longNote({ name: 'context.md', gone: true, text: null, before: 'a\nb\n' }), 'The text you approved is long: 2 lines (1 KB).');
 });
 
 test('he goes without a file only by his own word: clearing its text in ELU ends it, and a file that goes missing or is replaced without him keeps his text', t => {

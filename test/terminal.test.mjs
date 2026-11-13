@@ -3837,6 +3837,43 @@ test("a project's own instructions are asked about on screen before they are use
   assert.equal(trustedText(p.root, 'instructions.md'), 'Answer in French.\n'); assert.deepEqual(unusedTrust(p.root).map(row => row.state), ['declined']);
 });
 
+// A file of a few pages is shown page by page, and Use it comes once the last was shown. A very
+// long file would take hundreds of pages: it says how long it is and where to read it, and
+// offers the choice at once, with the pages still there to step through.
+test('a very long project file is asked about with one clear choice at once, and a file of a few pages still shows every page first', { timeout: 60000 }, async t => {
+  const p = setup(t, 'answer'), file = path.join(p.root, '.elu-code/context.md'), facts = count => `${Array.from({ length: count }, (_, n) => `Fact ${n + 1} about the API.`).join('\n')}\n`;
+  fs.writeFileSync(file, facts(30));
+  const v = await view(t, { repo: p.repo }), NEW = 'New · .elu-code/context.md';
+  // The words on screen, without the frame of the dialog and the breaks between its lines.
+  const words = () => v.frame().replace(/\x1b\[[0-9;]*m/g, '').replace(/[^\x20-\x7e]/g, ' ').replace(/\s+/g, ' ');
+  await until(() => modal(v, NEW), 'the question on opening the project');
+  assert.deepEqual(dialogRows(v, NEW), ['Next page (1 of 3)', 'Do not use it']); assert.equal(dialogList(v, NEW).selected, 0);
+  v.input.write('\r'); await until(() => dialogRows(v, NEW)[0] === 'Next page (2 of 3)', 'the second page');
+  v.input.write('\r'); await until(() => dialogRows(v, NEW)[0] === 'Use it', 'the last page');
+  assert.deepEqual(dialogRows(v, NEW), ['Use it', 'Do not use it', 'Read it again']); assert.equal(dialogList(v, NEW).selected, 1);
+  assert.match(v.frame(), /Fact 30 about the API\./);
+  v.input.write('\x1b'); await until(() => !modal(v, NEW), 'decide later');
+  // The same file with 20,000 lines.
+  const long = facts(20000); fs.writeFileSync(file, long);
+  await send(v, 'Where is coupon normalization?'); await until(() => modal(v, NEW), 'asked again');
+  const rows = dialogRows(v, NEW);
+  assert.deepEqual(rows.slice(0, 2), ['Use it', 'Do not use it']); assert.match(rows[2], /^Next page \(1 of \d{4}\)$/); assert.equal(rows.length, 3);
+  assert.equal(dialogList(v, NEW).selected, 1, 'the cursor is on not using it');
+  assert.match(words(), /This file is long: 20,000 lines \(\d+ KB\)\. Open \.elu-code\/context\.md to read all of it\./);
+  assert.match(words(), /This project came with notes\. The model reads them\./); assert.match(words(), /Fact 1 about the API\./);
+  assert.doesNotMatch(words(), /too large/i);
+  // The pages are still there, and every one offers the same choice.
+  v.input.write('\x1b[B'); await until(() => dialogList(v, NEW).selected === 2, 'on Next page'); v.input.write('\r');
+  await until(() => /^Next page \(2 of \d{4}\)$/.test(dialogRows(v, NEW)[2] ?? ''), 'the second page');
+  assert.deepEqual(dialogRows(v, NEW).slice(0, 2), ['Use it', 'Do not use it']); assert.match(words(), /This file is long: 20,000 lines/); assert.doesNotMatch(words(), /Fact 1 about the API\./);
+  assert.equal(dialogList(v, NEW).selected, 2, 'the cursor stays on the next page');
+  // Use it, without stepping through the rest: every character of it is in force.
+  for (let n = 0; n < 2; n += 1) v.input.write('\x1b[A');
+  await until(() => dialogList(v, NEW).selected === 0, 'on Use it'); v.input.write('\r');
+  await until(() => !modal(v, NEW) && trustedText(p.root, 'context.md') === long, 'in force, every character of it');
+  assert.deepEqual(pendingTrust(p.root), []);
+});
+
 test('a file that changed or went missing after he approved it keeps his text in force: the project page shows that text, and the choices are to keep it or to take the change', { timeout: 60000 }, async t => {
   const p = setup(t, 'answer'), file = path.join(p.root, '.elu-code/context.md'); registerProject(p.repo);
   fs.writeFileSync(file, 'The API lives in src/.\n'); approveProjectFiles(p.root);
