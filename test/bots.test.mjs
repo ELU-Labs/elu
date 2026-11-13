@@ -585,6 +585,26 @@ test('a bot sees the lead\'s last reply, and the lead the bot\'s, in a conversat
   assert.ok(read.includes(BOT_FINDINGS));
 });
 
+test('a teammate\'s answer to the owner\'s ask, continued in his session, reads the bots\' replies bounded and no notes', async t => {
+  const f = setup(t);
+  const task = await f.controller.ask('Where is coupon normalization?', null, { bots: ['critic'] }).finished;
+  const saved = readTask(f.repo, task.id), start = Date.now() - 30000;
+  const at = index => new Date(start + index * 1000).toISOString();
+  saved.messages.push(...Array.from({ length: BOT_REPLIES_MAX + 3 }, (_, index) => ({ at: at(index), text: `finding ${index}`, from: '@critic', bot: 'critic' })), { at: at(20), text: '@critic ran on another model instead', from: '@critic', bot: 'critic', quiet: true }, { at: at(21), text: 'Could not answer. The model stopped.', from: '@critic', bot: 'critic', failed: true });
+  saveTask(f.repo, saved);
+  // lib/peer/asks.mjs continueAnswer queues this turn: read-only, origin kind answer, in the owner's chat.
+  const origin = { kind: 'answer', peer: 'b'.repeat(64), name: 'sara', a2aTaskId: 'task-9', threadId: 'thread-9', hop: 0 };
+  const before = f.inputs('claude').length;
+  await runConversation(f.repo, readTask(f.repo, task.id), 'Continue with the answer from @sara shown in the peer data block.', { origin, readOnly: true, context: 'Use the v2 endpoint.' });
+  const read = f.inputs('claude').slice(before).at(-1).input, messages = contextOf(read).messages;
+  const bots = messages.filter(row => row.bot);
+  assert.deepEqual(bots.map(row => row.text), Array.from({ length: BOT_REPLIES_MAX }, (_, index) => `finding ${index + 3}`), 'the newest replies, at most BOT_REPLIES_MAX');
+  assert.ok(messages.some(row => row.from === 'ELU Code' && row.text === '3 earlier replies of the session\'s bots are left out here for length.'));
+  assert.equal(messages.some(row => /another model|Could not answer/.test(row.text)), false, 'notes and failures are left out');
+  assert.equal(messages.at(-1).text, 'Continue with the answer from @sara shown in the peer data block.');
+  assert.ok(read.includes(BOT_FINDINGS));
+});
+
 test('the bots\' replies the lead reads are bounded: the newest first, each cut with a note, the total capped', () => {
   const at = index => new Date(Date.UTC(2026, 0, 1, 0, index)).toISOString();
   assert.equal(BOT_REPLIES_MAX, 8); assert.equal(BOT_REPLY_CHARS, 6000); assert.equal(BOT_REPLIES_CHARS, 24000);
