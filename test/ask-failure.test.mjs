@@ -27,6 +27,7 @@ import { hostMethods } from '../lib/peer/remote.mjs';
 import { peerItems } from '../lib/peer/index.mjs';
 import { remoteRow, rowTitle } from '../lib/board.mjs';
 import { teamPanes, visible } from '../lib/terminal-visuals.mjs';
+import { remoteSessions as remoteGlue } from '../lib/terminal-remote.mjs';
 
 // A message from another computer started a session here, and the session failed. The
 // one who sent it is told why, and the one thing to do, in words that name this computer.
@@ -229,4 +230,15 @@ test('a session on my other computer that failed lists and shows there with the 
   assert.equal(rowTitle({ ...shown, grouped: true }), 'add a note to the readme · sign Grok Build in');
   // One that works, or ended well, says nothing more.
   assert.equal(rowTitle(remoteRow({ id: 'r2', machine: devbox.identity.key, state: 'answered', title: 'an older one', createdAt: new Date().toISOString() }, 'devbox')), 'on devbox · an older one');
+});
+
+// Seen in the real app at 80x24: the reason filled a row of the pane, the pane wrapped that
+// row a second time, and "Code" of "Sign Claude Code in" stood on a row of its own.
+test('the reason of a session on my other computer is wrapped one column short of its pane, so the pane never wraps a row of it again', () => {
+  const glue = remoteGlue({ facade: { mineRows: () => [], remoteSessions: () => [] }, peerRead: () => null, peerCommand: async () => ({}), chatMessage: ({ title, text }) => `${title}\n${text}`, ink: text => text, colour: false });
+  const row = remoteRow({ id: 'r1', machine: 'd'.repeat(64), state: 'blocked', title: 'fix typo', error: 'Claude Code is signed out. Sign Claude Code in on @devbox, then send it again.', entries: [], steps: [], approvals: [], createdAt: new Date().toISOString() }, 'devbox');
+  const reason = width => glue.parts(row, width).find(part => part.key.startsWith('error')).text.split('\n');
+  // The pane beside the list at 80 columns holds 43: its first row would be exactly as wide.
+  assert.deepEqual(reason(43), ['Claude Code is signed out. Sign Claude', 'Code in on @devbox, then send it again.']);
+  assert.deepEqual(reason(103), ['Claude Code is signed out. Sign Claude Code in on @devbox, then send it again.']);
 });
