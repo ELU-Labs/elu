@@ -307,6 +307,43 @@ for (const [columns, rows] of [[160, 40], [140, 50], [80, 24]]) test(`Up and Dow
   assert.ok(stops.includes(at()) && v.current.screen.focused === bar);
 });
 
+// Chats was opened by typing /chats. The first Up from the message box brought /chats back into it and the first Down
+// emptied it again: the cursor never left the box, and the key bar said nothing about either key.
+for (const [columns, rows] of [[140, 50], [80, 24]]) test(`the key bar says where the cursor is after every Up and Down from the message box in Chats at ${columns}x${rows}`, { timeout: 30000 }, async t => {
+  const peer = fakePeer({ items: [] }); peer.channels = [{ id: 'd'.repeat(16), name: 'design', members: [ME, SARA] }];
+  const { v } = await teamView(t, { columns, rows, peer });
+  const [bar] = v.panels.teamLists, ask = v.panels.ask, keys = () => v.panels.keys.getText().trim(), at = () => plainItem(bar.items[bar.selected]).trim(), focused = () => v.current.screen.focused;
+  const box = 'enter send  @name one teammate  / commands  ! run a shell command';
+  await until(() => bar.items.length > 5 && focused() === ask && ask.getValue() === '' && keys() === box, 'the cursor is in the empty message box');
+  // Up: /chats is in the box again and the cursor is still there. The bar names the key that takes it out.
+  v.input.write('\x1b[A'); await until(() => ask.getValue() === '/chats' && focused() === ask, 'Up brings /chats back');
+  await until(() => keys() === 'enter send  ↓ clear  @name one teammate  / commands  ! run a shell command', 'the bar says what Down does with it');
+  // Down: the box is empty again, and the bar is the empty box's.
+  v.input.write('\x1b[B'); await until(() => ask.getValue() === '' && focused() === ask && keys() === box, 'Down clears the box');
+  // Down again leaves the box for the Team bar, and the bar is that row's.
+  v.input.write('\x1b[B'); await until(() => focused() === bar && keys() === 'enter write  n new channel  tab threads', 'Down from the empty box reaches the Team bar');
+  assert.equal(at(), '# general  3');
+  // Every row of the bar, down and back up: the bar names that row's keys after each key. A teammate's live session has its teammate's keys.
+  const hints = line => /^\+ Add channel/.test(line) ? 'enter new channel  ↑↓ choose' : /^\+ Add teammate/.test(line) ? 'enter invite a teammate  ↑↓ choose' : /^# design/.test(line) ? 'enter write  n new channel  m members  x leave  tab threads'
+    : /^[●○⚠·] @/.test(line) ? 'enter write  t trust  n new channel  tab threads' : 'enter write  n new channel  tab threads';
+  const stops = bar.items.map(item => plainItem(item).trim()).filter(line => !['Channels', '', 'Direct messages'].includes(line));
+  assert.ok(stops.some(line => /^# design/.test(line)) && stops.some(line => /^● @sara/.test(line)) && /^\+ Add teammate/.test(stops.at(-1)));
+  for (const [key, order] of [['\x1b[B', stops.slice(1)], ['\x1b[A', stops.slice(0, -1).reverse()]]) for (const line of order) { v.input.write(key); await until(() => focused() === bar && at() === line && keys() === hints(line), `the keys of ${line}, now ${keys()}`); }
+  // Up from the first channel is the Chats tab; Down comes back to the bar, and Esc goes to the message box.
+  v.input.write('\x1b[A'); await until(() => focused() === v.panels.tabs.find(tab => tab.viewName === 'chats') && keys() === '←→ switch  enter open  ↓ chats', 'the tab and its keys');
+  v.input.write('\x1b[B'); await until(() => focused() === bar && keys() === hints(stops[0]), 'back on the bar');
+  v.input.write('\x1b'); await until(() => focused() === ask && keys() === box, 'Esc returns to the message box and its keys');
+  // With more sent, the bar says which way is older and which is newer, and stops saying so once the text is changed.
+  await send(v, 'one'); await send(v, 'two');
+  await until(() => focused() === ask && ask.getValue() === '' && keys() === box, 'both are sent and the box is empty');
+  v.input.write('\x1b[A'); await until(() => ask.getValue() === 'two' && keys().startsWith('enter send  ↑ older  ↓ clear  @name one teammate'), 'the newest: older is up, clear is down');
+  v.input.write('\x1b[A'); await until(() => ask.getValue() === 'one' && keys().startsWith('enter send  ↑ older  ↓ newer  @name one teammate'), 'between two');
+  v.input.write('\x1b[A'); await until(() => ask.getValue() === '/chats' && keys().startsWith('enter send  ↓ newer  @name one teammate'), 'the oldest has none over it');
+  v.input.write('\x1b[B'); await until(() => ask.getValue() === 'one' && keys().startsWith('enter send  ↑ older  ↓ newer'), 'and down is newer');
+  v.input.write('x'); await until(() => ask.getValue() === 'onex' && keys() === box, 'changed text is the owner\'s own: the arrows no longer walk');
+  assert.equal(focused(), ask);
+});
+
 test('a message that starts with ! in Chats runs in a shell and is never asked to the team', async t => {
   const { v, peer } = await teamView(t);
   await send(v, '!echo not-for-the-team');
