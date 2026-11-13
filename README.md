@@ -375,8 +375,7 @@ holds for your teammates' sessions, as their computers apply it; a teammate's co
 older build does not say which of its sessions in Done answered, so those are listed, not asked. That is every such session of yours in every project on
 this computer, those on your other computers that are online (`/mine`), and your teammates'
 sessions on the shared Kanban whose computers are online. A project kept off the Kanban
-(`/share off`) is never asked. At most 20 of yours and 20 of your teammates' are asked,
-newest first; the rest are listed.
+(`/share off`) is never asked. Every one of them is asked, newest first.
 
 Before asking, the chat says how many sessions it asks and on which computers. Each session
 answers in one turn of its own agent (its model, or the worker bot that works in it), on its
@@ -402,7 +401,7 @@ your daily allowance there, as any message of yours that runs on their computer,
 round can use up the day's requests. A computer that still runs an older build of ELU
 for its sessions is listed, not asked.
 
-When the round ends, the Standup's own model reads every update and sums it up: what is
+When the round ends, the Standup's own model reads every update, whole, and sums it up: what is
 done, what is in progress, what is blocked or waits for someone, and who. That turn starts
 with nobody watching, so it only answers and keeps the Kanban: it reads, with no edits, no
 shell, no web, no Task and none of your MCP servers; Full access runs as Approve for me, and

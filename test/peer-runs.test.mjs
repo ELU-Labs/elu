@@ -129,12 +129,12 @@ test('enqueue checks what another machine sent', t => {
     assert.throws(() => ask(p.root, { origin: origin('ask', bad) }), undefined, JSON.stringify(bad));
   assert.throws(() => ask(p.root, { readOnly: false }), /read-only/);
   assert.throws(() => enqueue(p.root, 'Review', { origin: origin('review'), context: 'diff' }), /read-only/);
-  assert.throws(() => ask(p.root, { context: 'x'.repeat(16001) }), /16000/);
+  assert.equal(ask(p.root, { context: 'x'.repeat(16001) }).context.length, 16001, 'a teammate\'s question of any length');
   assert.throws(() => ask(p.root, { context: '' }), /Peer data/);
   assert.throws(() => enqueue(p.root, 'Own goal', { context: 'stray' }), /origin/);
   assert.throws(() => ask(p.root, { state: 'running' }), /queued or waiting/);
   assert.equal(enqueue(p.root, 'Review the diff from @sara in the peer data block.', { origin: origin('review'), readOnly: true, context: 'd'.repeat(160000) }).context.length, 160000);
-  assert.throws(() => enqueue(p.root, 'Review', { origin: origin('review'), readOnly: true, context: 'd'.repeat(160001) }), /160000/);
+  assert.equal(enqueue(p.root, 'Review', { origin: origin('review'), readOnly: true, context: 'd'.repeat(3 * 1024 * 1024) }).context.length, 3 * 1024 * 1024, 'a review of any length');
 });
 
 test('an accepted ask runs read-only with peer instructions and never escalates, even when the lead asks to edit', async t => {

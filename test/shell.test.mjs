@@ -29,6 +29,21 @@ test('a long output keeps its start and its end', () => {
   assert.equal(fitOutput('short'), 'short');
 });
 
+test('a long output is kept whole for the lead, the chat shows its start and end, and every command reaches the lead', async t => {
+  const dir = temp(t), node = JSON.stringify(process.execPath);
+  const result = await runShell(`${node} -e "process.stdout.write('START' + 'x'.repeat(50000) + 'END')"`, { cwd: dir }).done;
+  assert.equal(result.code, 0); assert.ok(result.output.length < OUTPUT_MAX + 200, 'the chat keeps OUTPUT_MAX');
+  assert.equal(result.whole, `START${'x'.repeat(50000)}END`, 'all of it, for a model');
+  const state = temp(t), repo = { state, root: dir }; fs.mkdirSync(path.join(state, 'tasks', '8'), { recursive: true });
+  recordShell(repo, '8', { at: '2026-01-01T10:00:00.000Z', command: 'make', cwd: dir, ...result });
+  assert.ok(shellText(shellRows(repo, '8')[0]).includes('characters cut'), 'the chat row is the fitted one');
+  assert.ok(shellMessages(repo, '8')[0].output.includes(`START${'x'.repeat(50000)}END`), 'the lead reads it whole');
+  assert.ok(shellMessages(repo, '8', { short: true })[0].output.includes('characters cut'), 'its short form is the chat row');
+  for (let n = 0; n < 30; n++) recordShell(repo, '8', { at: new Date(Date.UTC(2026, 0, 1, 11, n)).toISOString(), command: `echo ${n}`, cwd: dir, output: `${n}`, code: 0 });
+  assert.equal(shellMessages(repo, '8').length, 31, 'every command'); assert.equal(shellMessages(repo, '8', { short: true }).length, 20, 'the newest 20 in the short form');
+  assert.equal(shellRows(repo, '8').length, 20, 'the chat shows the newest 20');
+});
+
 test('a command runs in its folder and returns both streams and its exit code', async t => {
   const dir = temp(t), seen = [];
   const run = runShell('pwd; echo problem >&2; exit 3', { cwd: dir, onOutput: () => seen.push(run.tail()) });
@@ -116,4 +131,13 @@ test('the lead gets the owner\'s commands with the next message; a session that 
   recordShell(repo, asked.id, row({ command: 'cat private-notes.txt', output: 'private' }));
   await controller.ask('Answer the question from @sara.', asked.id, { origin, readOnly: true, context: 'And the tests?' }).finished;
   assert.doesNotMatch(inputs().at(-1).input, /private-notes|The owner ran this/);
+});
+
+test('the chat a bot reads holds every ! command of the session, not the newest 20', async t => {
+  const p = project(t), fake = fakeClis(p.parent, { mode: 'answer' });
+  environment(t, { ...fake.env, HOME: p.parent, GIT_AUTHOR_NAME: 'Test Owner', GIT_AUTHOR_EMAIL: 'owner@example.invalid', GIT_COMMITTER_NAME: 'Test Owner', GIT_COMMITTER_EMAIL: 'owner@example.invalid' });
+  const controller = new ProjectController(projectFolder(p.root)), repo = controller.repo;
+  const first = await controller.ask('Where is coupon normalization?', null, { permissions: 'ask' }).finished;
+  for (let n = 0; n < 30; n++) recordShell(repo, first.id, row({ command: `echo ${n}`, cwd: repo.root }));
+  assert.deepEqual(conversationEntries(repo, first).filter(entry => entry.shell).map(entry => entry.text.split('\n')[0]), Array.from({ length: 30 }, (_, n) => `$ echo ${n}`));
 });
