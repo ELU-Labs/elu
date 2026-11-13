@@ -673,6 +673,37 @@ test('a computer of mine on an older build is listed as one to update, and nothi
   });
 });
 
+test('a computer of mine sends its top agents with its sessions list, and one on a build before them sends none', async t => {
+  const { laptop, devbox, project, toViewer } = pair(t), now = new Date().toISOString(), twoDays = new Date(Date.now() - 2 * 86400000).toISOString();
+  withHome(devbox.home, () => {
+    chat(project.root, 1, { goal: 'Fix the cart total', runs: [
+      { role: 'lead', vendor: 'claude', at: now, costUsd: 4.5, model: 'claude-opus-5-5', tokens: { input: 100, output: 20, cacheRead: 3000, cacheWrite: 0 } },
+      { role: 'bot:pair', vendor: 'codex', at: now, costUsd: null, tokens: { input: 50, output: 5, cacheRead: 0, cacheWrite: 0 } }] });
+    chat(project.root, 2, { goal: 'Speed up the build', minutes: 60 * 24 * 3, runs: [{ role: 'lead', vendor: 'claude', at: twoDays, costUsd: 7 }] });
+    relist();
+  });
+  const status = { key: laptop.identity.key, name: 'ana', box: 'laptop', teams: [{ members: [{ key: laptop.identity.key, name: 'ana' }, { key: devbox.identity.key, name: 'ana', box: 'devbox', online: true }] }] };
+  const agents = () => withHome(laptop.home, () => remoteGlue({ facade: peerFacade, peerRead: () => status, peerCommand: async () => ({}), chatMessage: () => '', ink: text => text, colour: false }).agents());
+  const list = () => withHome(laptop.home, () => listTick(context(laptop.identity, { [devbox.identity.key]: toViewer })));
+  await list();
+  const top = withHome(laptop.home, () => remoteMachines()[0].topAgents), ref = withHome(laptop.home, () => remoteMachines()[0].sessions.find(row => row.title === 'Fix the cart total').ref);
+  assert.deepEqual(top.today.rows.map(row => [row.agent, row.title, row.model, row.costUsd, row.tokens?.cacheRead ?? null]), [['@lead', 'Fix the cart total', 'opus 5.5', 4.5, 3000], ['@pair', 'Fix the cart total', 'codex', null, 0]]);
+  assert.equal(top.today.costUsd, 4.5); assert.equal(top.today.partial, true);
+  assert.deepEqual(top.week.rows.map(row => [row.title, row.costUsd]), [['Speed up the build', 7], ['Fix the cart total', 4.5], ['Fix the cart total', null]]);
+  // Each row opens the session it names: the id this computer knows it by.
+  assert.equal(top.today.rows[0].ref, ref); assert.equal(top.today.rows[0].id, watchId(laptop.identity.key, devbox.identity.key, ref));
+  assert.deepEqual(agents().map(row => [row.machine.name, Boolean(row.top), row.listed]), [['devbox', true, true]]);
+  // A build from before them: its list carries no topAgents, so nothing of it is counted and the Usage tab says to update it.
+  const answer = toViewer.request;
+  toViewer.request = async (method, params) => { const { topAgents, ...rest } = await answer(method, params); void topAgents; return rest; };
+  await list();
+  assert.equal(withHome(laptop.home, () => remoteMachines()[0].topAgents), null);
+  assert.deepEqual(agents().map(row => [row.machine.name, row.top, row.listed]), [['devbox', null, true]]);
+  // Offline, it is left out.
+  status.teams[0].members[1].online = false;
+  assert.deepEqual(agents(), []);
+});
+
 // The app's side: what Sessions and Projects show of each computer of mine.
 test("Sessions groups my computer's sessions of this repository under its name, newest first, and Projects lists its other projects", async () => {
   const SHOP = 'a'.repeat(64), DOCS = 'f'.repeat(64), D = 'd'.repeat(64), K = 'e'.repeat(64), now = Date.now(), ago = minutes => new Date(now - minutes * 60000).toISOString();

@@ -55,7 +55,7 @@ as `.env`, stops it until `.gitignore` keeps that file out.
 | Kanban | The open project's tasks and sessions: To do, In progress, Needs you, Done. On a team, everyone with a clone of the same repository shares one board: every session a teammate, or another computer of yours, runs in it shows in the same columns with who started it and on which machine, to read only. A project whose folder holds several repositories has a board for each. `/share off` keeps a project off it both ways. |
 | Chats | Your team's channels, your teammates and your bots. |
 | Bots | Your bots. `n` makes one, Enter opens one. |
-| Usage | Your vendor accounts and their plan usage. |
+| Usage | Your vendor accounts and their plan usage, then your top 10 agents by cost with their tokens. `t` switches between today and the last 7 days. |
 
 Click a tab's name. Or press Tab until the tab row is selected, choose with ← and →, and
 press Enter.
@@ -359,6 +359,9 @@ Claude Code reports during your sessions. For Codex plan usage, ELU Code starts 
 `app-server`, which asks with your Codex sign-in, whenever `codex` is installed: when you
 open a project that is set up or send a message, at most once a minute while a session is
 on screen, and from the Usage tab ([what is read and when](SECURITY.md#credentials)).
+Its top agents add up what each vendor reported for each run: the cost and tokens Claude Code
+reports (its cost is the API price, also on a subscription), and Codex's tokens. Codex
+reports no cost, so its cost shows as —.
 
 You need macOS or Linux, Node 22 or newer, Git, and Claude Code (`claude`) installed and
 signed in: new projects and the built-in bots run on it. To run sessions on Codex

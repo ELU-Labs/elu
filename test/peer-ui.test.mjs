@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import { PassThrough } from 'node:stream';
-import { project, temp } from './helpers.mjs';
+import { project, temp, fakeClis } from './helpers.mjs';
+import { liveTask } from './peer-helpers.mjs';
 import { repository } from '../lib/git.mjs';
 import { registerProject } from '../lib/projects.mjs';
 import { saveRequest, pendingRequests, updateRequest } from '../lib/workspace.mjs';
@@ -10,7 +11,7 @@ import { launchTerminal } from '../lib/terminal.mjs';
 import { listBots, removeBot, saveBot } from '../lib/bots.mjs';
 import { boardRows, barCells, barColumns } from '../lib/board.mjs';
 import { readBoard } from '../lib/kanban.mjs';
-import { saveTask } from '../lib/state.mjs';
+import { readTask, saveTask } from '../lib/state.mjs';
 import { helperLink } from '../lib/remote-helper.mjs';
 import { botTarget, chatBar, dmTarget, fitWords, ink, membersLine, peerName, roomTarget, teamPanes, threadTarget, visible } from '../lib/terminal-visuals.mjs';
 
@@ -1691,4 +1692,68 @@ test('on no team, Kanban has no teammates\' cards and asks for nothing', async t
   await send(v, '/kanban'); await until(() => v.current.view === 'kanban' && !v.panels.kanbanBoxes[0].hidden, 'Kanban');
   await new Promise(resolve => setTimeout(resolve, 200));
   assert.equal(v.panels.kanbanTeam.hidden, true); assert.equal(asked, 0); assert.equal(v.panels.kanbanBoxes[1]._label.getText().trim(), 'In progress 0');
+});
+
+// Usage: the top agents by cost, from this computer and my computers that are online.
+test('Usage lists the top ten agents by cost with their tokens, t shows the last 7 days, Enter opens a session here or there, and an older computer of mine is told to update', { timeout: 60000 }, async t => {
+  const p = project(later(t)); environment(t, p.parent); registerProject(repository(p.root));
+  // Stand-in vendor CLIs first on PATH: the tab's own check never reaches a real one.
+  const before = process.env.PATH; process.env.PATH = fakeClis(p.parent).env.PATH; owned(t).files.push(() => { process.env.PATH = before; });
+  // Each run names its log, as every run does; these logs lie outside the sessions, so no chat is read from them.
+  const now = new Date().toISOString(), threeDays = new Date(Date.now() - 3 * 86400000).toISOString(), logFile = path.join(p.parent, 'run.log');
+  const { repo } = liveTask(p.root, { id: '1', goal: 'Fix the coupons' });
+  saveTask(repo, { ...readTask(repo, '1'), runs: [
+    { role: 'lead', vendor: 'claude', logFile, at: now, costUsd: 12.4, model: 'claude-opus-5-5', tokens: { input: 1200000, output: 34000, cacheRead: 8100000, cacheWrite: 0 } },
+    { role: 'bot:pair', vendor: 'codex', logFile, at: now, costUsd: null, model: 'gpt-6.1-sol', tokens: { input: 5000, output: 900, cacheRead: 1000, cacheWrite: 0 } }] });
+  const conversation = (id, goal, runs) => saveTask(repo, { id: String(id), kind: 'conversation', goal, state: 'answered', worktree: p.root, base: null, branch: null, createdAt: now, runs: runs.map(run => ({ logFile, ...run })), reviews: [], responses: [], messages: [], sessions: {}, result: null });
+  conversation(2, 'Speed up the build', [{ role: 'lead', vendor: 'claude', at: threeDays, costUsd: 50 }]);
+  // My other computer: one session there, and what its agents spent.
+  const P = '5'.repeat(16), RID = '55555555-5555-4555-8555-555555555555';
+  const remoteRow = { ref: `${P}:5`, id: RID, agent: '@lead', title: 'Remote job', model: 'opus 5.5', tokens: { input: 900, output: 80, cacheRead: 40000, cacheWrite: 0 }, costUsd: 20, partial: false, at: now };
+  const machines = [{ key: SARA, listedAt: now, older: false, projects: [{ id: P, name: 'shop', repoId: null, home: false }],
+    sessions: [{ id: RID, ref: `${P}:5`, project: P, title: 'Remote job', state: 'answered', at: now, createdAt: now, approvals: [], by: 'you', who: null, repoId: null }],
+    topAgents: { today: { costUsd: 20, partial: false, rows: [remoteRow] }, week: { costUsd: 25, partial: false, rows: [{ ...remoteRow, costUsd: 25 }] } } }];
+  const peer = fakePeer({ items: [], mine: [{ key: SARA, mine: true, theirs: true }], machines });
+  const v = await view(t, { repo: repository(p.root), dashboard: true, peer, usage: { env: { HOME: temp(t) }, vendors: () => [] } });
+  const list = v.panels.usageList, rows = () => list.items.map(plainItem);
+  const agentRows = () => rows().slice(rows().findIndex(row => /^Agent /.test(row)) + 1).filter(row => /^@/.test(row));
+  await send(v, '/usage'); await until(() => v.current.view === 'usage' && rows().includes('Top agents today'), 'the section');
+  await until(() => agentRows().length === 3, 'three agents today');
+  // Most cost first, with where it ran, the model, tokens, the cost at API price and its share of today's total ($32.40).
+  assert.match(rows().find(row => /^Agent /.test(row)), /^Agent +Session +Model +in · out · cache +Cost \(API price\) +Share$/);
+  assert.equal(rows().join('\n').match(/Cost \(API price\)/g).length, 1);
+  const [first, second, third] = agentRows();
+  assert.match(first, /^@lead +Remote job +on sara-box +opus 5\.5 +900 · 80 · 40k +\$20\.00 +62%$/);
+  assert.match(second, /^@lead +Fix the coupons +opus 5\.5 +1\.2M · 34k · 8\.1M +\$12\.40 +38%$/);
+  assert.match(third, /^@pair +Fix the coupons +gpt-6\.1-sol +5k · 900 · 1k +— +—$/);
+  // The spend line is this computer's: what the section counts here, at least that, as Codex reported no cost.
+  assert.ok(rows().includes('ELU spend today at least $12.40'));
+  assert.ok(rows().every(row => row.length <= list.width - 2), 'every line fits');
+  // t: the last seven days. The keys say so.
+  list.focus(); await until(() => v.current.screen.focused === list, 'list focused');
+  assert.match(v.panels.keys.getText(), /enter details {2}r refresh {2}t 7 days/);
+  v.input.write('t'); await until(() => rows().includes('Top agents, last 7 days'), 'the week');
+  assert.match(agentRows()[0], /^@lead +Speed up the build +claude +— +\$50\.00 +57%$/);
+  assert.match(agentRows()[1], /^@lead +Remote job +on sara-box .* \$25\.00 +29%$/);
+  assert.ok(rows().includes('ELU spend today at least $12.40'), 'the spend line stays today');
+  v.input.write('t'); await until(() => rows().includes('Top agents today'), 'today again');
+  // Enter on a row here opens its session, in Sessions beside the list.
+  selectRow(list, /^@lead +Fix the coupons/); await until(() => /enter open/.test(v.panels.keys.getText()), 'enter opens');
+  v.input.write('\r'); await until(() => v.current.view === 'tasks' && v.current.session === '1', 'the session here');
+  // Enter on a row of my other computer opens it in Sessions, under that computer.
+  await send(v, '/usage'); await until(() => v.current.view === 'usage' && agentRows().length === 3, 'back in Usage');
+  list.focus(); selectRow(list, /^@lead +Remote job/); v.input.write('\r');
+  await until(() => v.current.view === 'tasks' && /Remote job/.test(plainItem(v.panels.board.items[v.panels.board.selected] ?? { getText: () => '' })), 'the session there, under the cursor');
+  // At most ten rows: nine more sessions here.
+  for (let id = 3; id <= 11; id++) conversation(id, `Small job ${id}`, [{ role: 'lead', vendor: 'claude', at: now, costUsd: id / 100 }]);
+  await send(v, '/usage'); await until(() => v.current.view === 'usage' && agentRows().length === 10 && rows().some(row => /Small job 11/.test(row)), 'ten rows');
+  assert.ok(!rows().some(row => /Small job 3 /.test(row) || /^@pair/.test(row)), 'the cheapest and the one with no cost are left out');
+  assert.ok(rows().includes('ELU spend today at least $13.03'), 'the spend line still counts every run here');
+  // At 80 columns each agent is still one line that fits the pane.
+  v.output.columns = 80; v.output.rows = 24; v.output.emit('resize');
+  await until(() => v.current.screen.width === 80 && list.width < 80, '80 columns');
+  await until(() => agentRows().length === 10 && rows().every(row => row.length <= list.width - 2), 'every row fits');
+  // A computer of mine on a build that sends none: one line, and none of its rows.
+  machines[0] = { ...machines[0], topAgents: null };
+  await until(() => rows().includes('sara-box: update ELU to include it') && !rows().some(row => /Remote job/.test(row)), 'the update line');
 });
