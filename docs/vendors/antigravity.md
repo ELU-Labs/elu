@@ -1,22 +1,22 @@
 # Antigravity CLI
 
 `agy` is Google's terminal coding agent for Google One AI Pro and Ultra subscribers (Plus
-and Free with a quota). In ELU Code it can run sessions and reviews, in every permission mode. `agy`
+and Free with a quota). In ELU it can run sessions and reviews, in every permission mode. `agy`
 runs only after it passes the one-time check below on this machine.
 
 ## Install
 
 Use the vendor's installer from [antigravity.google/docs](https://antigravity.google/docs).
-It puts `agy` in your user bin folder (`~/.local/bin`); nothing needs sudo. ELU Code never
+It puts `agy` in your user bin folder (`~/.local/bin`); nothing needs sudo. ELU never
 installs it and never updates it: its own runs set `AGY_CLI_DISABLE_AUTO_UPDATE=true`, your
 own runs keep the vendor's default.
 
 ## Sign in
 
 Run `agy` once and sign in with your Google account. The token lives in the OS keychain
-(on Linux, the keyring reached over `DBUS_SESSION_BUS_ADDRESS`, which ELU Code passes
-through). ELU Code checks sign-in with `agy -p /usage --output-format json`: exit code only,
-no model turn, no quota spent. Signed out, ELU Code says: `Antigravity: not signed in. Run: agy`.
+(on Linux, the keyring reached over `DBUS_SESSION_BUS_ADDRESS`, which ELU passes
+through). ELU checks sign-in with `agy -p /usage --output-format json`: exit code only,
+no model turn, no quota spent. Signed out, ELU says: `Antigravity: not signed in. Run: agy`.
 
 Google's FAQ at [antigravity.google/docs/faq](https://antigravity.google/docs/faq) says,
 verbatim: "Using third-party software, tools, or services to access Antigravity is a
@@ -24,13 +24,13 @@ violation of our Terms of Service and severely degrades the experience for legit
 product users. Such actions can result in suspension or termination of your account…" and,
 on headless use: "Antigravity CLI headless mode (`agy -p`) is intended for direct scripting
 and CI workflows. Wrapping `agy` inside third-party coding agents or applications, or
-automating account rotation, is not supported under consumer plans." ELU Code wraps `agy`.
-Enabling it is your decision; the risk is your account, and ELU Code cannot reduce it.
+automating account rotation, is not supported under consumer plans." ELU wraps `agy`.
+Enabling it is your decision; the risk is your account, and ELU cannot reduce it.
 
 ## The one-time check
 
 The check proves, on this machine and for the exact binary and release found, that the
-enforcement designed from Google's documentation holds. ELU Code starts it by itself
+enforcement designed from Google's documentation holds. ELU starts it by itself
 before your first message to Antigravity goes out, whether you wrote to a session on it or
 to a bot on it. The session says so first, then shows each step as it ends, and then your
 message goes on. The check takes about seven short turns on Antigravity and a few minutes.
@@ -40,7 +40,7 @@ listener and a marker command:
 
 | Step | Proves |
 | --- | --- |
-| `signin` | the sign-in probe passes under ELU Code's private HOME |
+| `signin` | the sign-in probe passes under ELU's private HOME |
 | `locked-no-write` | a read-only run told to create files creates nothing, inside or outside |
 | `locked-no-shell` | told to run the marker command, the marker never runs |
 | `locked-no-network` | told to fetch the local URL, the listener sees nothing |
@@ -48,7 +48,7 @@ listener and a marker command:
 | `resume` | a second run with the conversation id continues the first |
 | `relay` (optional) | over `agy acp`, a write outside the workspace arrives as a permission request, and a denial writes nothing |
 
-The result is saved under your ELU Code state. A different binary path or release has to
+The result is saved under your ELU state. A different binary path or release has to
 pass again, on your next message to it; until it does, no run starts, and a turn you did
 not send yourself says
 `Antigravity CLI has not been checked on this machine yet. Your first message to it runs the check.`
@@ -60,7 +60,7 @@ the permissions picker says so.
 ## The private HOME
 
 `agy` reads `~/.gemini` for settings, hooks, MCP servers, plugins, skills and context files,
-and has no flag to turn that off. So ELU Code runs it with `HOME` set to a folder under its
+and has no flag to turn that off. So ELU runs it with `HOME` set to a folder under its
 own state (`agy-home/`, mode 0700), one per workspace, holding only:
 
 - `.gemini/antigravity-cli/settings.json`: the mode's permission rules, written before each run;
@@ -96,7 +96,7 @@ lies inside it gets no deny, because a deny wins over the workspace's edits: for
 the folder of all your projects, where a worktree sits beside its repository.
 
 In headless mode a blocked action is a soft deny: the run goes on, exits 0, and prints a
-notice on stderr naming the tool. ELU Code records each notice as a denial on the run and
+notice on stderr naming the tool. ELU records each notice as a denial on the run and
 the model is told to return `needs_input` naming what it needs. Over ACP, a permission
 request reaches you under Needs you; no answer within 20 minutes counts as a denial.
 
@@ -127,5 +127,5 @@ one-time check is the proof, per machine. In particular, until a check says othe
 ## Telemetry
 
 Antigravity's "Interactions data" (prompts and responses used to improve the product) is an
-account setting, not a file or an environment variable. ELU Code cannot turn it off; opt out
+account setting, not a file or an environment variable. ELU cannot turn it off; opt out
 in your Antigravity account settings.

@@ -16,7 +16,7 @@ import { loopStopMessage, stopLine } from '../lib/stop-line.mjs';
 import { currentTask, planFile } from '../lib/plan.mjs';
 import { reviewRequest } from '../lib/runner.mjs';
 
-// After the agent's edit ELU Code runs the checks and the session's reviewing bots review the
+// After the agent's edit ELU runs the checks and the session's reviewing bots review the
 // change; their must-fix findings go back to the agent. What the agent leaves in its worktree
 // by installing or building never stops that loop, the agent is told who reviews it, and the
 // owner's own message to a reviewing bot about the edits runs the same loop.
@@ -58,7 +58,7 @@ test('npm install, pip install -e and a coverage run in the worktree are not a c
   assert.equal(taskChanges(task).digest, task.evidence.digest);
   // The agent was told who reviews its change, and that it never hands that to the owner.
   const implement = f.inputs('claude').find(row => row.input.includes('Implement the task.'));
-  assert.ok(implement.input.includes("After your turn ELU Code runs the project's checks, then @reviewer reviews your change. Must-fix findings come back to you, to fix or to dispute with a reason."));
+  assert.ok(implement.input.includes("After your turn ELU runs the project's checks, then @reviewer reviews your change. Must-fix findings come back to you, to fix or to dispute with a reason."));
   assert.ok(implement.input.includes('Never ask the owner to wait for a bot, to review, or to commit, push or merge.'));
   assert.equal(conversationEntries(f.repo, task).filter(row => row.bot === 'reviewer').at(-1).text, 'Passed.', 'the chat shows the review');
 });
@@ -140,9 +140,9 @@ test('the owner\'s message to a reviewing bot reviews only edits the session mad
 });
 
 test('the agent is told who reviews its change; with none, that no bot does', () => {
-  assert.equal(reviewLoopNote(['reviewer', 'pair']), "After your turn ELU Code runs the project's checks, then @reviewer and @pair review your change. Must-fix findings come back to you, to fix or to dispute with a reason. ELU Code publishes the change when the owner approves it. Never ask the owner to wait for a bot, to review, or to commit, push or merge.");
-  assert.match(reviewLoopNote(['critic'], { again: true }), /^After this turn ELU Code runs the checks again and @critic reviews your change again\./);
-  assert.match(reviewLoopNote([]), /^After your turn ELU Code runs the project's checks\. No bot reviews this session\. ELU Code publishes/);
+  assert.equal(reviewLoopNote(['reviewer', 'pair']), "After your turn ELU runs the project's checks, then @reviewer and @pair review your change. Must-fix findings come back to you, to fix or to dispute with a reason. ELU publishes the change when the owner approves it. Never ask the owner to wait for a bot, to review, or to commit, push or merge.");
+  assert.match(reviewLoopNote(['critic'], { again: true }), /^After this turn ELU runs the checks again and @critic reviews your change again\./);
+  assert.match(reviewLoopNote([]), /^After your turn ELU runs the project's checks\. No bot reviews this session\. ELU publishes/);
 });
 
 test('a plain question to a bot is told apart from a message about the work', () => {
@@ -173,7 +173,7 @@ test('the owner\'s message to a reviewing bot about the edits runs a review: its
   // The fix turn worked under the session's Task, opened again for it, and done again when the review passed.
   assert.ok(fix.includes('The owner approved the Task below, and this turn does its work.') && fix.includes('Uppercase coupons'), 'the fix turn carries the approved Task');
   assert.equal(currentTask(f.repo, done.id).state, 'done');
-  assert.ok(fix.includes('After this turn ELU Code runs the checks again and @critic reviews your change again.'));
+  assert.ok(fix.includes('After this turn ELU runs the checks again and @critic reviews your change again.'));
   // The chat shows each step.
   assert.deepEqual({ ...done.messages.at(-1), at: null }, { at: null, text: owner, to: '@critic', review: true });
   const steps = done.loop.slice(-3).map(({ text, bot, loop }) => ({ text, ...(bot ? { bot } : {}), ...(loop ? { loop } : {}) }));
@@ -205,7 +205,7 @@ test('an error after the edit shows a plain stop line with what to do, never the
   assert.equal(loopStopMessage(Object.assign(new Error('EACCES: permission denied, open'), { code: 'EACCES' })), said);
 });
 
-// A review is given the change whole, whatever its size: ELU Code sets no limit of its own.
+// A review is given the change whole, whatever its size: ELU sets no limit of its own.
 // Only when the bot's model says the prompt is too long for it is the same review asked again
 // with the large files as excerpts around each change, then with the diff alone; when even the
 // diff alone is too long, the session stops and says what to do.

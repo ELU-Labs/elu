@@ -11,7 +11,8 @@ import { bothMine, dropStrangers, markMine, markedMine, mineRows, noteTheirs, un
 import { NOT_MINE, UPDATE, UPDATE_LIST, hostMethods, hostTick, listTick, relist, remoteCommand, remoteConnected, remoteMachines, remoteSessions, viewMethods, viewTick, watchId } from '../lib/peer/remote.mjs';
 import { repository } from '../lib/git.mjs';
 import { saveTeamAccess } from '../lib/peer/access.mjs';
-import { leaveOp, merge } from '../lib/peer/roster.mjs';
+import { leaveOp, merge, readLog } from '../lib/peer/roster.mjs';
+import { otherSessions } from '../lib/peer/session-tools.mjs';
 import { createInvite, redeemCode, takeMineOffer } from '../lib/peer/invite.mjs';
 import { pendingRequests, updateRequest } from '../lib/workspace.mjs';
 import { requestApproval, pendingApprovals } from '../lib/approvals.mjs';
@@ -141,7 +142,7 @@ test('a session from my other computer starts as my own, with its bots, in the p
     markMine(devbox.identity.key, laptop.identity.key); noteTheirs(laptop.identity.key, true);
     const from = connection(laptop.identity.key), ctx = context(devbox.identity, { [laptop.identity.key]: from }), methods = hostMethods(ctx);
     // No project on this computer at all: said plainly.
-    assert.throws(() => methods['elu.remote.start'](START, from), { message: 'Open ELU Code once on this computer so it has a project.' });
+    assert.throws(() => methods['elu.remote.start'](START, from), { message: 'Open ELU once on this computer so it has a project.' });
     const project = registeredProject(t); saveTeamAccess(team.teamId, { root: project.root });
     assert.throws(() => methods['elu.remote.start']({ ...START, bots: ['nobody'] }, from), { message: '@nobody is not a bot on this computer. Make it there, or start without it.' });
     const started = methods['elu.remote.start'](START, from);
@@ -516,7 +517,9 @@ test('a computer of mine lists every session here, whoever started it, a page at
   assert.match(shop.repoId, /^[0-9a-f]{64}$/); assert.equal(notes.repoId, null);
   // Each session names the repository it works in: here the project's own, or none.
   assert.equal(row('Run the tests').repoId, shop.repoId); assert.equal(row('Tidy my notes').repoId, null);
-  assert.deepEqual(Object.keys(listed.sessions[0]).sort(), ['approvals', 'at', 'by', 'createdAt', 'error', 'plan', 'project', 'question', 'ref', 'repoId', 'state', 'title', 'who'].sort());
+  // standup: false only on a session a standup here would not ask (lib/standup.mjs).
+  assert.deepEqual(Object.keys(listed.sessions[0]).filter(name => name !== 'standup').sort(), ['approvals', 'at', 'by', 'createdAt', 'error', 'plan', 'project', 'question', 'ref', 'repoId', 'state', 'title', 'who'].sort());
+  assert.ok(listed.sessions.every(item => item.standup === undefined || item.standup === false));
   void other;
   // A page at a time.
   const first = withHome(devbox.home, () => host['elu.remote.list']({ limit: 3 }, toHost));
@@ -656,7 +659,7 @@ test('a computer of mine on an older build is listed as one to update, and nothi
     const missing = connection(devbox.identity.key); missing.request = async method => { missing.sent.push([method]); const error = new Error('Method not found'); error.details = { rpc: { code: -32601 } }; throw error; };
     await listTick(context(laptop.identity, { [devbox.identity.key]: missing }));
     assert.equal(remoteMachines()[0].older, true);
-    assert.equal(UPDATE_LIST('devbox'), 'Update ELU Code on devbox to see its sessions here.');
+    assert.equal(UPDATE_LIST('devbox'), 'Update ELU on devbox to see its sessions here.');
     // Not asked again for ten minutes.
     await listTick(context(laptop.identity, { [devbox.identity.key]: missing })); assert.equal(missing.sent.length, 1);
     // A build from before sessions on other computers is asked nothing at all.
@@ -742,7 +745,7 @@ test("Sessions groups my computer's sessions of this repository under its name, 
   // An offline computer keeps its last list, and says so; an older one says to update it.
   machinesFile[0].older = true;
   const older = remoteGlue({ facade, peerRead: () => status, peerCommand: async () => ({}), chatMessage: () => '', ink: text => text, colour: false }).sections(now, '/work/shop').filter(line => !line.spacer).map(text);
-  assert.deepEqual(older.slice(0, 2), ['On devbox · offline', 'Update ELU Code on devbox to see its sessions here.']);
+  assert.deepEqual(older.slice(0, 2), ['On devbox · offline', 'Update ELU on devbox to see its sessions here.']);
 });
 
 // The owner's two computers as they are: projects that are folders holding clones, with no
@@ -853,8 +856,8 @@ test("Projects lists my computer's project of this repository while Sessions lea
   const shown = view => view.sections(now, '/work/shop').filter(line => !line.spacer).map(line => line.header ?? line.note ?? line.row.remote.title);
   let view = glue();
   assert.deepEqual(shown(view), ['On devbox · online', 'Fix the cart', 'Fix the total']);
-  // The shop there shows whole; its other clone does not, so Projects lists it.
-  assert.deepEqual(view.projects(now, '/work/shop').map(row => [row.name, row.sessions]), [['shop-2 on devbox', 2]]);
+  // The shop there shows whole; its other clone does not, so Projects lists it, for the one session not shown here.
+  assert.deepEqual(view.projects(now, '/work/shop').map(row => [row.name, row.sessions]), [['shop-2 on devbox', 1]]);
   view.openProject(D, p.clone);
   assert.deepEqual(shown(view).slice(-2), ['shop-2 on devbox', 'Edit the docs']);
   // This project's Kanban has a board for the docs too: the session shows, and Projects leaves the clone out.
@@ -864,4 +867,128 @@ test("Projects lists my computer's project of this repository while Sessions lea
   // With no computer of mine, what this project holds is not read.
   mine = []; asked = 0; view = glue();
   assert.deepEqual(shown(view), []); assert.deepEqual(view.projects(now, '/work/shop'), []); assert.equal(asked, 0);
+});
+
+// The owner's two computers as he has them: here a folder holding clones, there the home
+// folder, neither with a repository of its own. Every session there that works in a repository
+// this project holds is part of this project: in Sessions under the computer's heading, and not
+// a second time in Projects.
+test("my computer's project is one with this one: Projects leaves it out while each of its sessions shows here, and lists it, with how many, for those that cannot", () => {
+  const SHOP = 'a'.repeat(64), DOCS = 'f'.repeat(64), D = 'd'.repeat(64), now = Date.now(), ago = minutes => new Date(now - minutes * 60000).toISOString(), home = '5'.repeat(16);
+  const status = { key: 'k'.repeat(64), name: 'ana', box: 'laptop', teams: [{ members: [{ key: 'k'.repeat(64), name: 'ana' }, { key: D, name: 'box', box: 'devbox', online: true }] }] };
+  const session = (ref, title, minutes, extra = {}) => ({ id: crypto.randomUUID(), ref, project: home, title, state: 'answered', at: ago(minutes), createdAt: ago(minutes + 1), approvals: [], by: 'you', who: null, repoId: SHOP, ...extra });
+  const machinesFile = [{ key: D, listedAt: ago(0), older: false, projects: [{ id: home, name: 'work', repoId: null, home: true }],
+    sessions: [session(`${home}:1`, 'By hand there', 2), session(`${home}:2`, 'From the laptop', 3, { by: 'mine' }), session(`${home}:3`, 'A message from kim', 4, { by: 'teammate', who: 'kim' })] }];
+  // Two of them are followed here, so their pane says who started them and where a message goes.
+  const views = [2, 3].map(n => ({ id: crypto.randomUUID(), machine: D, ref: `${home}:${n}`, createdAt: ago(n + 1), lastAt: ago(n), state: 'answered', title: machinesFile[0].sessions[n - 1].title, entries: [], steps: [], approvals: [] }));
+  const facade = { mineRows: () => [{ key: D, mine: true, theirs: true }], remoteSessions: () => views, remoteMachines: () => machinesFile, projectRepoId: () => null, projectRepoIds: () => [SHOP] };
+  const glue = () => remoteGlue({ facade, peerRead: () => status, peerCommand: async () => ({}), chatMessage: ({ title, text }) => `${title}: ${text}`, ink: text => text, colour: false, restMs: 1e9 });
+  const shown = view => view.sections(now, '/work/projects').filter(line => !line.spacer).map(line => line.header ?? line.note ?? line.row.remote.title);
+  let view = glue();
+  assert.deepEqual(shown(view), ['On devbox · online', 'By hand there', 'From the laptop', 'A message from kim']);
+  assert.deepEqual(view.projects(now, '/work/projects'), [], 'every session there is part of this project');
+  // Mine, from the laptop: a plain message goes to the agent here, and no one is named as who started it.
+  const rowOf = title => view.sections(now, '/work/projects').find(line => line.row?.remote.title === title).row;
+  const laptops = rowOf('From the laptop'), kims = rowOf('A message from kim');
+  assert.deepEqual(view.route(laptops, 'check the numbers'), { to: 'here', text: 'check the numbers' });
+  assert.match(view.label(laptops), /Message your agent here/);
+  assert.doesNotMatch(view.view(laptops, 200), /Started by/); assert.match(view.view(laptops, 200), /Type below to write to your agent here/);
+  // A teammate's: named, and every message goes to it, as before.
+  assert.deepEqual(view.route(kims, 'check the numbers'), { to: 'there', text: 'check the numbers' });
+  assert.match(view.view(kims, 200), /Started by @kim\. Type below to continue it there\./);
+  // Two that this project cannot show: one in no repository, one in a repository it does not
+  // hold. Projects lists the project for those two only, and opening it shows them.
+  machinesFile[0].sessions.push(session(`${home}:4`, 'Tidy my notes', 1, { repoId: null }), session(`${home}:5`, 'Edit the docs', 5, { repoId: DOCS }));
+  view = glue();
+  assert.deepEqual(view.projects(now, '/work/projects').map(row => [row.name, row.sessions]), [['work on devbox', 2]]);
+  view.openProject(D, home);
+  assert.deepEqual(shown(view).slice(-3), ['work on devbox', 'Tidy my notes', 'Edit the docs']);
+  // No sessions there yet: nothing to open, so nothing in Projects, and the heading says so.
+  machinesFile[0].sessions = []; views.length = 0; view = glue();
+  assert.deepEqual(view.projects(now, '/work/projects'), []);
+  assert.deepEqual(shown(view), ['On devbox · online', 'No sessions yet.']);
+});
+
+test("a session a message from my other computer started there is mine on its list, from before too, and goes to my agent here; a teammate's stays theirs, and an older host's row from my computer is read as mine", async t => {
+  const { laptop, devbox, project, toHost, toViewer, host } = pair(t), kim = 'e'.repeat(64), followed = crypto.randomUUID();
+  const repo = withHome(devbox.home, () => {
+    // Started by messages through the teammate path, as a build from before keeps them: no mine on the origin.
+    chat(project.root, 1, { goal: 'Run the evals', minutes: 3, origin: { kind: 'handoff', peer: laptop.identity.key, name: 'ana', threadId: null, own: true } });
+    const repo = chat(project.root, 2, { goal: 'Fix the login redirect', minutes: 2, origin: { kind: 'handoff', peer: kim, name: 'kim', threadId: null, own: true } });
+    // The laptop already follows the first, as a handoff of its own (adoptHandoffs).
+    const folder = path.join(process.env.XDG_CONFIG_HOME, 'elu-code', 'peer', 'remote', 'host'), now = new Date().toISOString();
+    fs.mkdirSync(folder, { recursive: true });
+    fs.writeFileSync(path.join(folder, `${followed}.json`), JSON.stringify({ id: followed, machine: laptop.identity.key, root: project.root, requestId: null, taskId: '1', text: 'Run the evals', createdAt: now, updatedAt: now, seq: 0, first: 1, seen: {}, handoff: true }));
+    relist(); return repo;
+  });
+  const listed = withHome(devbox.home, () => host['elu.remote.list']({}, toHost)), row = title => listed.sessions.find(item => item.title === title);
+  assert.deepEqual([row('Run the evals').by, row('Run the evals').who, row('Run the evals').remoteId], ['mine', null, followed], 'by the id the laptop follows it by, so it is one session there');
+  assert.deepEqual([row('Fix the login redirect').by, row('Fix the login redirect').who, row('Fix the login redirect').remoteId], ['teammate', 'kim', undefined]);
+  // Nothing on the session itself changed: its mode and rules are what they were.
+  assert.deepEqual(withHome(devbox.home, () => readTask(repo, '1').origin), { kind: 'handoff', peer: laptop.identity.key, name: 'ana', threadId: null, own: true });
+  // The laptop lists them; old: the devbox on the build before, which lists that one as kim's is listed.
+  const list = async (old = false) => {
+    withHome(laptop.home, () => fs.rmSync(path.join(process.env.XDG_CONFIG_HOME, 'elu-code', 'peer', 'remote', 'machines'), { recursive: true, force: true }));
+    toViewer.request = async (method, params) => {
+      const result = withHome(devbox.home, () => host[method](params, toHost));
+      // A build from before also does not say it decided mine by key.
+      return old && method === 'elu.remote.list' ? { ...result, mineByPeer: undefined, sessions: result.sessions.map(({ remoteId, ...item }) => item.by === 'mine' ? { ...item, by: 'teammate', who: 'ana' } : item) } : result;
+    };
+    await withHome(laptop.home, () => listTick(context(laptop.identity, { [devbox.identity.key]: toViewer })));
+    return withHome(laptop.home, () => Object.fromEntries(remoteMachines()[0].sessions.map(item => [item.title, [item.by, item.who]])));
+  };
+  const status = { key: laptop.identity.key, name: 'ana', box: 'laptop', teams: [{ members: [{ key: laptop.identity.key, name: 'ana' }, { key: devbox.identity.key, name: 'box', box: 'devbox', online: true }] }] };
+  const facade = { mineRows: peerFacade.mineRows, remoteSessions: peerFacade.remoteSessions, remoteMachines: peerFacade.remoteMachines, projectRepoId: () => row('Run the evals').repoId, projectRepoIds: () => [] };
+  const routes = () => withHome(laptop.home, () => {
+    const glue = remoteGlue({ facade, peerRead: () => status, peerCommand: async () => ({}), chatMessage: () => '', ink: text => text, colour: false, restMs: 1e9 });
+    return Object.fromEntries(glue.sections(Date.now(), '/work/shop').filter(line => line.row).map(line => [line.row.remote.title, glue.route(line.row, 'go on').to]));
+  });
+  assert.deepEqual(await list(), { 'Run the evals': ['mine', null], 'Fix the login redirect': ['teammate', 'kim'] });
+  assert.deepEqual(routes(), { 'Run the evals': 'here', 'Fix the login redirect': 'there' });
+  assert.deepEqual(await list(true), { 'Run the evals': ['mine', null], 'Fix the login redirect': ['teammate', 'kim'] }, "an older host names this computer: it is read as mine");
+  assert.deepEqual(routes(), { 'Run the evals': 'here', 'Fix the login redirect': 'there' });
+});
+
+// A real teammate (kim, on another account) whose name is the laptop's, Ana, hands a session to
+// my devbox. It is kim's on every list, whatever the name, and nothing of mine goes to it.
+test("a teammate named like my computer keeps their session on my other computer's list, from a newer host and an older one, and only mine are offered to my sessions here", async t => {
+  const { team, laptop, devbox, project, toHost, toViewer, host } = pair(t), kim = withHome(newHome(t), () => createIdentity({ name: 'Ana' }));
+  const log = withHome(laptop.home, () => { redeemCode(createInvite(laptop.identity, team.teamId, { hours: 1 }), kim.key, 'Ana'); return readLog(team.teamId).ops; });
+  withHome(devbox.home, () => {
+    merge(team.teamId, log);
+    chat(project.root, 1, { goal: 'Run the evals', minutes: 3, origin: { kind: 'handoff', peer: laptop.identity.key, name: 'ana', threadId: null, own: true } });
+    chat(project.root, 2, { goal: 'Fix the login redirect', minutes: 2, origin: { kind: 'handoff', peer: kim.key, name: 'Ana', threadId: null, own: true } });
+    // Taken on here in a mode picked by hand (w): worked on as a teammate's (usesSavedRules), so listed as one.
+    chat(project.root, 3, { goal: 'Check the build', minutes: 1, origin: { kind: 'handoff', peer: laptop.identity.key, name: 'ana', threadId: null } });
+    relist();
+  });
+  const listed = withHome(devbox.home, () => host['elu.remote.list']({}, toHost)), row = title => listed.sessions.find(item => item.title === title);
+  assert.equal(listed.mineByPeer, true);
+  assert.deepEqual(['Run the evals', 'Fix the login redirect', 'Check the build'].map(title => [row(title).by, row(title).who]), [['mine', null], ['teammate', 'Ana'], ['teammate', 'ana']]);
+  // The laptop lists them: from this host, and from one of the build before, which lists mine as a teammate's by the laptop's name.
+  const list = async (old = false) => {
+    withHome(laptop.home, () => fs.rmSync(path.join(process.env.XDG_CONFIG_HOME, 'elu-code', 'peer', 'remote', 'machines'), { recursive: true, force: true }));
+    toViewer.request = async (method, params) => {
+      const result = withHome(devbox.home, () => host[method](params, toHost));
+      return old && method === 'elu.remote.list' ? { ...result, mineByPeer: undefined, sessions: result.sessions.map(({ remoteId, ...item }) => item.by === 'mine' ? { ...item, by: 'teammate', who: 'ana' } : item) } : result;
+    };
+    await withHome(laptop.home, () => listTick(context(laptop.identity, { [devbox.identity.key]: toViewer })));
+    return withHome(laptop.home, () => Object.fromEntries(remoteMachines()[0].sessions.map(item => [item.title, [item.by, item.who]])));
+  };
+  const status = { key: laptop.identity.key, name: 'ana', box: 'laptop', teams: [{ members: [{ key: laptop.identity.key, name: 'ana' }, { key: devbox.identity.key, name: 'box', box: 'devbox', online: true }, { key: kim.key, name: 'Ana', box: 'kims-mac', online: true }] }] };
+  const facade = { mineRows: peerFacade.mineRows, remoteSessions: peerFacade.remoteSessions, remoteMachines: peerFacade.remoteMachines, projectRepoId: () => row('Run the evals').repoId, projectRepoIds: () => [] };
+  const routes = () => withHome(laptop.home, () => {
+    const glue = remoteGlue({ facade, peerRead: () => status, peerCommand: async () => ({}), chatMessage: () => '', ink: text => text, colour: false, restMs: 1e9 });
+    return Object.fromEntries(glue.sections(Date.now(), '/work/shop').filter(line => line.row).map(line => [line.row.remote.title, glue.route(line.row, 'go on').to]));
+  });
+  // What the laptop's own sessions may send to: only mine (lib/peer/session-tools.mjs).
+  const offered = () => withHome(laptop.home, () => otherSessions().computers.flatMap(machine => machine.sessions.map(item => item.title)));
+  assert.deepEqual(await list(), { 'Run the evals': ['mine', null], 'Fix the login redirect': ['teammate', 'Ana'], 'Check the build': ['teammate', 'ana'] }, "kim's name is the laptop's, and kim's session stays kim's");
+  assert.deepEqual(routes(), { 'Run the evals': 'here', 'Fix the login redirect': 'there', 'Check the build': 'there' });
+  assert.deepEqual(offered(), ['Run the evals']);
+  // From the build before, a name is all there is, and kim goes by the laptop's: it says nothing,
+  // so mine there shows as a teammate's, as it did before, and kim's is never shown as mine.
+  assert.deepEqual(await list(true), { 'Run the evals': ['teammate', 'ana'], 'Fix the login redirect': ['teammate', 'Ana'], 'Check the build': ['teammate', 'ana'] });
+  assert.deepEqual(routes(), { 'Run the evals': 'there', 'Fix the login redirect': 'there', 'Check the build': 'there' });
+  assert.deepEqual(offered(), []);
 });

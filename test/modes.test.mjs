@@ -6,7 +6,7 @@ import path from 'node:path';
 import { MODES, PROFILES, LABELS, BADGES, DEFAULT_MODE, checkMode, checkPlace, checkFolders, capMode, defaultMode, saveDefaultMode, runProfile, isPeerRun } from '../lib/modes.mjs';
 import { onDisk, onDiskUp, personalDirectory } from '../lib/util.mjs';
 
-// A temp folder with its own ELU Code personal directory (XDG_CONFIG_HOME) for the test.
+// A temp folder with its own ELU personal directory (XDG_CONFIG_HOME) for the test.
 function home(t) {
   const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'elu-code-modes-'))), previous = process.env.XDG_CONFIG_HOME;
   process.env.XDG_CONFIG_HOME = path.join(dir, 'personal');
@@ -44,7 +44,7 @@ test('a path is known by what it is on disk: a link is what it leads to, a missi
   assert.deepEqual(onDiskUp(path.join(real, 'missing')).slice(0, 2), [null, onDisk(real)]);
 });
 
-test('folders are existing directories inside the home, never secrets or ELU Code state, at most eight', t => {
+test('folders are existing directories inside the home, never secrets or ELU state, at most eight', t => {
   const dir = home(t), h = path.join(dir, 'home'), work = path.join(h, 'work'), state = path.join(h, 'state');
   process.env.XDG_CONFIG_HOME = state;
   fs.mkdirSync(path.join(work, 'a'), { recursive: true }); fs.mkdirSync(path.join(h, '.ssh')); fs.mkdirSync(personalDirectory(), { recursive: true });
@@ -58,17 +58,17 @@ test('folders are existing directories inside the home, never secrets or ELU Cod
   assert.throws(() => checkFolders([path.join(h, 'file.txt')], { home: h }), /Folder not found/);
   assert.throws(() => checkFolders([h], { home: h }), /not your home itself/);
   assert.throws(() => checkFolders([dir], { home: h }), /inside your home/);
-  assert.throws(() => checkFolders([path.join(h, '.ssh')], { home: h }), /secrets or ELU Code state/);
-  assert.throws(() => checkFolders([path.join(work, 'keys')], { home: h }), /secrets or ELU Code state/, 'a symlink to a secret folder');
-  assert.throws(() => checkFolders([personalDirectory()], { home: h }), /secrets or ELU Code state/);
-  assert.throws(() => checkFolders([state], { home: h }), /secrets or ELU Code state/, 'a parent of the state folder');
+  assert.throws(() => checkFolders([path.join(h, '.ssh')], { home: h }), /secrets or ELU state/);
+  assert.throws(() => checkFolders([path.join(work, 'keys')], { home: h }), /secrets or ELU state/, 'a symlink to a secret folder');
+  assert.throws(() => checkFolders([personalDirectory()], { home: h }), /secrets or ELU state/);
+  assert.throws(() => checkFolders([state], { home: h }), /secrets or ELU state/, 'a parent of the state folder');
   // A closed folder is closed by what it is on disk, however its path is written. One whose own name is a link is closed
   // where it leads, by either path, with what is in it and the folder above it; a folder beside it stays open. The same
   // folder in other letter case is closed too, on a disk that does not tell case apart.
   fs.mkdirSync(path.join(h, 'vault', 'aws', 'deep'), { recursive: true }); fs.mkdirSync(path.join(h, 'vault', 'notes')); fs.symlinkSync(path.join(h, 'vault', 'aws'), path.join(h, '.aws'));
-  for (const folder of [path.join(h, '.aws'), path.join(h, 'vault', 'aws'), path.join(h, 'vault', 'aws', 'deep'), path.join(h, 'vault')]) assert.throws(() => checkFolders([folder], { home: h }), /secrets or ELU Code state/, folder);
+  for (const folder of [path.join(h, '.aws'), path.join(h, 'vault', 'aws'), path.join(h, 'vault', 'aws', 'deep'), path.join(h, 'vault')]) assert.throws(() => checkFolders([folder], { home: h }), /secrets or ELU state/, folder);
   assert.deepEqual(checkFolders([path.join(h, 'vault', 'notes')], { home: h }), [path.join(h, 'vault', 'notes')]);
-  if (fs.existsSync(path.join(h, '.SSH'))) assert.throws(() => checkFolders([path.join(h, '.SSH')], { home: h }), /secrets or ELU Code state/, 'other letter case');
+  if (fs.existsSync(path.join(h, '.SSH'))) assert.throws(() => checkFolders([path.join(h, '.SSH')], { home: h }), /secrets or ELU state/, 'other letter case');
   const many = Array.from({ length: 9 }, (_, i) => { const folder = path.join(work, `f${i}`); fs.mkdirSync(folder); return folder; });
   assert.throws(() => checkFolders(many, { home: h }), /at most 8/);
   assert.equal(checkFolders(many.slice(0, 8), { home: h }).length, 8);

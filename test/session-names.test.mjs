@@ -8,7 +8,7 @@ import { repository } from '../lib/git.mjs';
 import { projectSnapshot } from '../lib/projects.mjs';
 import { readTask, saveTask, taskTitle, setTitle, suggestTitle, titleFromTask, modelTitle, hasTitle, nameFile, lock, TITLE_MAX, MODEL_TITLE_MAX } from '../lib/state.mjs';
 
-// A project whose list is read: ELU Code's own folder is in a temporary place for the test,
+// A project whose list is read: ELU's own folder is in a temporary place for the test,
 // so the record of approved project files is never written to the real one.
 function listedProject(t) {
   const p = project(t), previous = process.env.XDG_CONFIG_HOME; process.env.XDG_CONFIG_HOME = path.join(p.parent, 'personal');

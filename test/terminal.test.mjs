@@ -19,6 +19,7 @@ import { Conductor, enqueue } from '../lib/conductor.mjs';
 import { liveTask } from './peer-helpers.mjs';
 import { readBoard, sessionClosed, closeSession } from '../lib/kanban.mjs';
 import { proposeTask, approveTask as approvePlan, reportProgress, finishTask, reopenTask } from '../lib/plan.mjs';
+import { clockTime } from '../lib/terminal-plan.mjs';
 import { saveTask, readTask, taskDir, taskTitle, setTitle, lock } from '../lib/state.mjs';
 import { processIdentity } from '../lib/process.mjs';
 import { approvalsDir, requestApproval, answerApproval } from '../lib/approvals.mjs';
@@ -111,6 +112,10 @@ async function view(t, options = {}) {
   return state;
 }
 
+// The card a Kanban card opens: its rows, and the keys under them.
+const cardDialog = v => v.current.screen.children.find(child => !child.destroyed && child.options?.label?.trim() === 'Your session');
+const cardRows = v => cardDialog(v)?.children.find(child => child.type === 'list')?.items.map(item => item.getText().trimEnd()) ?? [];
+const cardHint = v => cardDialog(v)?.children.filter(child => child.type === 'text').map(child => child.getText()).join('\n') ?? '';
 function modal(v, title) {
   return v.current.screen.children.find(child => !child.destroyed && child.options?.label?.trim() === title);
 }
@@ -253,7 +258,7 @@ test('six tabs: arrows cycle them, /bots, /projects and /usage open their views,
   const v = await view(t, { dashboard: true }), panels = v.current.panels, focused = () => v.current.screen.focused;
   const press = (sequence, check, label) => { v.input.write(sequence); return until(check, label); };
   const items = list => list.items.map(item => item.getText());
-  assert.equal(v.current.controller, undefined); assert.equal(panels.brand.getText().trim(), '◆ ELU Code'); assert.equal(v.current.screen.title, 'ELU Code');
+  assert.equal(v.current.controller, undefined); assert.equal(panels.brand.getText().trim(), '◆ ELU'); assert.equal(v.current.screen.title, 'ELU');
   await send(v, '/projects'); await until(() => v.current.view === 'projects' && !panels.projectsBox.hidden, 'Projects tab');
   assert.match(v.frame(), /\+ New project/); assert.match(items(panels.projectsList).join('\n'), /sample app/);
   assert.equal(panels.tabs[1].style.underline, true, 'Projects is the current tab');
@@ -640,9 +645,9 @@ test('x archives a project after a confirm: it leaves the list, the open one clo
   assert.equal(registeredProjects().length, 1); assert.equal(panels.brand.getText().trim(), '◆ sample app');
   await until(() => v.current.screen.focused === panels.projectsList, `focus back on the list, not ${v.current.screen.focused?.type}`);
   v.input.write('x'); await dialog(v, 'Archive sample app', 'y');
-  await until(() => registeredProjects().length === 0 && !v.current.controller && panels.brand.getText().trim() === '◆ ELU Code', 'archived and closed');
+  await until(() => registeredProjects().length === 0 && !v.current.controller && panels.brand.getText().trim() === '◆ ELU', 'archived and closed');
   await until(() => /No projects yet\. n creates one\./.test(items().join('\n')), 'empty list');
-  assert.match(panels.status.getText(), /Archived sample app\. n in Projects brings it back\./); assert.equal(v.current.screen.title, 'ELU Code');
+  assert.match(panels.status.getText(), /Archived sample app\. n in Projects brings it back\./); assert.equal(v.current.screen.title, 'ELU');
   assert.ok(fs.existsSync(path.join(p.root, '.elu-code', 'config.yaml')) && fs.existsSync(path.join(p.root, 'src', 'coupon.mjs')), 'files stay');
   assert.match(panels.ask._label.getText(), /Enter creates a project first/);
   // n in Projects brings it back, registered again. The folder has no name saved in it, so n asks for one.
@@ -1264,6 +1269,9 @@ test('with no project, Enter or + New session names this folder as a project fir
   // Up in the emptied box brings back what was sent, and Down past it empties the box again. From the start of an empty box, Left goes to the list.
   await new Promise(resolve => setImmediate(resolve)); panels.ask.clearValue(); v.input.write('\x1b[A');
   await until(() => panels.ask.getValue() === 'Fix the login bug' && v.current.screen.focused === panels.ask, 'Up brings back the message that was sent');
+  // Shift+Up in the box highlights its text; it does not walk what was sent.
+  v.input.write('\x1b[1;2A'); await until(() => v.current.selection.text() === 'Fix the login bug', 'Shift+Up highlights to the start');
+  assert.equal(panels.ask.getValue(), 'Fix the login bug'); assert.equal(v.current.screen.focused, panels.ask);
   v.input.write('\x1b[B'); await until(() => panels.ask.getValue() === '' && v.current.screen.focused === panels.ask, 'Down past the newest empties the box');
   v.input.write('\x1b[D');
   await until(() => v.current.screen.focused === panels.board && /\+ New session/.test(cursor(v)), 'with no sessions, Left reaches + New session');
@@ -1552,6 +1560,21 @@ test('setup commits require an unchanged preview and never include another stage
   assert.equal(git(p.root, ['status', '--porcelain']), '');
 });
 
+test("a standup answered while the model waits leaves its question where it was, in one block", async t => {
+  const p = setup(t, 'question'), v = await view(t, { repo: p.repo });
+  await send(v, 'Normalize coupon codes');
+  await until(() => projectSnapshot(p.repo).tasks[0]?.state === 'needs_input', 'lead question');
+  await until(() => v.current.panels.chat.getContent().includes('Which format?'), 'visible question');
+  // The rows a standup's answer turn adds (lib/runner.mjs runStandup), after the question.
+  const task = projectSnapshot(p.repo).tasks[0], round = 'standup-0123456789abcdef', at = new Date(Date.now() + 1000).toISOString();
+  saveTask(p.repo, { ...readTask(p.repo, task.id), messages: [...readTask(p.repo, task.id).messages, { at, text: 'You ask: standup', from: 'Standup', standup: round, line: true }, { at, text: 'Waiting on the format.', from: 'Opus 5.5', who: 'Opus 5.5', standup: round, answer: true }, { at, text: 'Sent to your Standup', from: 'Standup', standup: round, line: true }] });
+  await until(() => v.current.panels.chat.getContent().includes('Sent to your Standup'), 'the standup rows');
+  const chat = v.current.panels.chat.getContent();
+  assert.equal(chat.split('is waiting for you').length, 2, 'one block holds the reply and its question');
+  assert.equal(chat.split('Which format?').length, 2, 'the question shows once');
+  assert.ok(chat.indexOf('is waiting for you') < chat.indexOf('Which format?') && chat.indexOf('Which format?') < chat.indexOf('You ask: standup'), 'the question stays above the standup');
+});
+
 test('stopping an owned task records stopped state and closes its process group', async t => {
   const p = setup(t, 'slow'), controller = new ProjectController(p.repo);
   const plan = await controller.plan('Wait for my next instruction');
@@ -1564,7 +1587,7 @@ test('stopping an owned task records stopped state and closes its process group'
 test('a task is reviewed by its bot, answers the lead, inspects evidence, and asks before any push', async t => {
   const p = setup(t, 'question');
   const root = path.join(p.parent, 'shop'); fs.renameSync(p.root, root); p.root = root; p.repo = repository(root);
-  // A moved folder is a new project to ELU Code: the owner approves its settings again.
+  // A moved folder is a new project to ELU: the owner approves its settings again.
   approveProjectFiles(p.root);
   git(p.root, ['remote', 'add', 'origin', 'https://github.com/example/shop.git']);
   const ghCalls = path.join(p.parent, 'github-calls.jsonl');
@@ -1624,7 +1647,7 @@ test('a task is reviewed by its bot, answers the lead, inspects evidence, and as
     assert.ok(frames.every(frame => !/\/Users\/|\/home\/|Bearer |sk-ant-|github_pat_/.test(frame.text)));
     fs.writeFileSync(path.join(folder, 'frames.json'), JSON.stringify(frames, null, 2));
     const offset = (v.events.at(-1)?.[0] ?? 0) + 1;
-    fs.writeFileSync(path.join(folder, 'terminal.cast'), [JSON.stringify({ version: 2, width: 80, height: 24, title: 'ELU Code with fake vendors', env: { TERM: 'xterm-256color' } }), ...v.events.map(JSON.stringify), ...dash.events.map(([at, type, text]) => JSON.stringify([offset + at, type, text]))].join('\n') + '\n');
+    fs.writeFileSync(path.join(folder, 'terminal.cast'), [JSON.stringify({ version: 2, width: 80, height: 24, title: 'ELU with fake vendors', env: { TERM: 'xterm-256color' } }), ...v.events.map(JSON.stringify), ...dash.events.map(([at, type, text]) => JSON.stringify([offset + at, type, text]))].join('\n') + '\n');
   }
 });
 
@@ -1722,7 +1745,7 @@ test('a session shows the first words of its request in one row, then the short 
   await until(() => /· {2}Work on our receipt email, we have two cases for it that… {2}· {2}ready/.test(panels.header.getText()), 'the title is the first words');
   assert.ok(rows(v).some(row => /^.✓ Work on our receipt email, we… +now$/.test(row)), rows(v).join('|'));
   await send(v, '/rename'); await until(() => modal(v, 'Rename session') && box().__listener, 'the dialog');
-  assert.equal(box().getValue(), '', 'a request is never put in the box'); assert.match(dialogText(v, 'Rename session').replace(/\s+/g, ' '), /Leave it empty to go back to the name ELU Code gave it\./);
+  assert.equal(box().getValue(), '', 'a request is never put in the box'); assert.match(dialogText(v, 'Rename session').replace(/\s+/g, ' '), /Leave it empty to go back to the name ELU gave it\./);
   box().emit('cancel'); await until(() => !modal(v, 'Rename session'), 'closed');
   // A new session: its first reply names it, in the list and in the title.
   await send(v, '/new'); await until(() => !panels.compose.hidden, 'the form');
@@ -1780,7 +1803,7 @@ test('the first screen creates a project in its folder, and the form picks one b
   const folder = temp({ after: close => resources(t).files.push(close) }), fake = fakeClis(folder), root = path.join(folder, 'new project');
   environment(t, { ...fake.env, NO_COLOR: '1' }); fs.mkdirSync(root);
   const v = await view(t, { startDirectory: root }), panels = v.current.panels;
-  const frames = [{ title: 'Open ELU Code outside Git', text: v.frame() }];
+  const frames = [{ title: 'Open ELU outside Git', text: v.frame() }];
   assert.equal(v.current.view, 'tasks'); assert.match(v.frame(), /New session/); assert.equal(fs.existsSync(fake.calls), false);
   // + New session is the list's first row and already selected, so a click on it is Enter.
   assert.match(rows(v).join('\n'), /^▌\+ New session\n\n No project yet\./);
@@ -1846,7 +1869,7 @@ test('a request for an edit shows its Task: n rejects it, a message revises it, 
   await wide(v);
   await send(v, 'Uppercase coupon codes');
   await until(() => session()?.plan?.state === 'proposed' && /Task · waits for your approval\nUppercase coupons\nmedium priority · low severity\n/.test(chat()), 'the Task in the chat');
-  assert.match(chat(), /Goal: Coupon codes compare equal whatever their case\.\nObjectives\n {2}1\. normalize returns the code in upper case\n {2}2\. The coupon test passes\nEsc, then y approve · n reject · or type what to change/);
+  assert.match(chat(), /medium priority · low severity\nETA not set\n[\s\S]*Goal: Coupon codes compare equal whatever their case\.\nObjectives\n {2}1\. normalize returns the code in upper case\n {2}2\. The coupon test passes\nSuccess criteria · not set\nEsc, then y approve · n reject · or type what to change/);
   await until(() => /\? Needs you · Esc, then y approve · n reject · Task: Uppercase coupons/.test(status()), 'the status line');
   // Nothing was edited and no workspace was made: the session rests as an answer leaves it.
   assert.equal(session().state, 'answered'); assert.equal(session().kind, 'conversation'); assert.match(source(), /=> value;/);
@@ -1866,7 +1889,7 @@ test('a request for an edit shows its Task: n rejects it, a message revises it, 
   assert.equal(session().plan.state, 'done'); assert.ok(session().messages.some(row => row.text === 'Approved the Task: Uppercase coupons'));
   assert.match(fs.readFileSync(path.join(session().worktree, 'src/coupon.mjs'), 'utf8'), /toUpperCase/); assert.match(source(), /=> value;/);
   await until(() => /Task · done · 2 of 2 objectives reported met\nUppercase coupons\n/.test(chat()), 'done on the card');
-  assert.match(chat(), / {2}✓ 1\. normalize returns the code in upper case\n {2}✓ 2\. The coupon test passes\nSubtasks\n {2}\[x\] Change normalize\n {2}\[x\] Run the coupon test/);
+  assert.match(chat(), /urgent priority · low severity\nETA done \d{1,2}:\d\d [AP]M\n[\s\S]* {2}✓ 1\. normalize returns the code in upper case\n {2}✓ 2\. The coupon test passes\nSuccess criteria · not set\nSubtasks\n {2}\[x\] Change normalize\n {2}\[x\] Run the coupon test/);
   // On the Kanban the session is its Task: the title, then where it stands.
   await send(v, '/kanban'); await until(() => v.current.view === 'kanban' && panels.kanbanLists[2].items.some(item => /^Uppercase coupons {2}ready to publish( · |$)/.test(item.getText())), 'the Task on the board, under Needs you, its detail cut between parts');
 });
@@ -2206,7 +2229,7 @@ test('/schedule offers times in the command list, saves a time and message typed
   await send(v, '/bots add qa'); await until(() => /Bots\s+@reviewer @qa/.test(composeText(v)), 'qa in the form');
   await send(v, '/schedule every 2h'); await until(() => /Runs every 2h, next .+\. Write the message below\./.test(status()), 'the time is set and the message is next');
   assert.match(composeText(v), /When\s+every 2h/); assert.match(panels.ask._label.getText(), /Schedule → Opus · every 2h · sample app · with @reviewer @qa/);
-  assert.equal(panels.composeHint.getContent().replace(/\s+/g, ' ').trim(), `${RUNS.replace('@reviewer', '@reviewer @qa')} Runs while this computer is awake, even with ELU Code closed.`);
+  assert.equal(panels.composeHint.getContent().replace(/\s+/g, ' ').trim(), `${RUNS.replace('@reviewer', '@reviewer @qa')} Runs while this computer is awake, even with ELU closed.`);
   await send(v, 'Run the linters'); await until(() => saved('Run the linters'), 'saved from the form');
   assert.deepEqual([saved('Run the linters').when.label, saved('Run the linters').bots], ['every 2h', ['reviewer', 'qa']]);
   // A start that is no time says which forms work, and the text stays in the box.
@@ -2320,7 +2343,8 @@ test('Kanban adds tasks, starts one with the lead, opens its session, and moves 
   const done = panels.kanbanLists[3]; done.focus(); done.select(0);
   v.input.write('<'); await until(() => items(2).some(text => /Uppercase coupon codes/.test(text)), 'reopened');
   needs.focus(); needs.select(0); v.input.write('\r');
-  await until(() => v.current.view === 'chat' && v.current.session === '3' && /Uppercase coupon codes/.test(panels.header.getText()), 'Enter opens its session');
+  await until(() => cardRows(v).length, 'Enter shows the card'); v.input.write('\r');
+  await until(() => v.current.view === 'chat' && v.current.session === '3' && /Uppercase coupon codes/.test(panels.header.getText()), 'Enter there opens its session');
   assert.equal(panels.back.getText().trim(), '‹ Kanban'); assert.equal(panels.tabs[2].style.underline, true, 'Kanban stays the current tab');
   // From Kanban a session takes the whole width: no list beside it, and ‹ Kanban leads back.
   assert.equal(panels.back.hidden, false); assert.equal(panels.boardBox.hidden, true); assert.deepEqual([panels.chat.aleft, panels.chat.width, panels.ask.aleft, panels.ask.width], [0, v.current.screen.width, 0, v.current.screen.width]);
@@ -2679,7 +2703,7 @@ test('a saved request goes again with no more access than the default now', { ti
   assert.equal(pendingRequests(p.root).find(row => row.goal === 'Tidy the changelog').permissions, 'ask');
 });
 
-// The pick is saved on the request, so a window that did not send it, or ELU Code opened again,
+// The pick is saved on the request, so a window that did not send it, or ELU opened again,
 // keeps it too.
 test('a saved request whose mode was picked keeps it in any window, sent again or retried', { timeout: 40000 }, async t => {
   const p = setup(t);
@@ -3026,7 +3050,7 @@ test('a command refused for a never-list part names that part and never points a
   await openTask(v, /Ship it/); await until(() => v.current.session === '8', 'the third session is open');
   await until(() => /Blocked: git push is never allowed, in any mode \(git push origin main\)\. Run it yourself\./.test(chat()), 'the never list by name');
   // What a wider mode lifts names the command that gives it.
-  assert.match(chat(), /Blocked: Run npm install\. Needs Full access: \/permissions full continues it\./); assert.match(chat(), /Blocked: Edit .+?config\.json\. ELU Code's own files stay closed in every mode\./);
+  assert.match(chat(), /Blocked: Run npm install\. Needs Full access: \/permissions full continues it\./); assert.match(chat(), /Blocked: Edit .+?config\.json\. ELU's own files stay closed in every mode\./);
   assert.doesNotMatch(chat(), /\/permissions to allow more/);
   // A stand-in command refused a push, once inside a script, and the turn went on to answer: the chat still says so, each refusal once.
   const step = (command, never) => ({ tool: 'command_execution', summary: `Run: /bin/zsh -c '${command}'`, never });
@@ -3101,7 +3125,7 @@ test('each Blocked line says why and the one thing to do, and raising the mode t
   await until(() => /Stopped: Edit \/srv\/shared\/app\.ts\. No answer in 20 minutes; reply to try again\./.test(chat()), 'an unanswered approval says so, matched across the resume');
   assert.match(chat(), /Blocked: Connect to elu\.dev\. The internet is off for commands in Ask for approval: \/permissions full continues it\./);
   // Publishing waits for checks, so the line asks for a reply, not for /publish.
-  assert.match(chat(), /Blocked: Run git commit -am fix\. No commit is needed: ELU Code commits when you publish\. Reply to go on\./);
+  assert.match(chat(), /Blocked: Run git commit -am fix\. No commit is needed: ELU commits when you publish\. Reply to go on\./);
   assert.doesNotMatch(chat(), /\/publish/);
   // Raising the mode to one that lifts what stopped it continues the turn at once.
   await send(v, '/permissions full'); await dialog(v, 'Full access', 'y');
@@ -3289,7 +3313,7 @@ test('Usage shows each account with the usage its sessions reported, r checks ag
   await until(() => /Usage updated \d\d:\d\d/.test(status()), 'first check');
   assert.match(text(), /^Claude {6}owner@example.invalid · Max 20x · active\n {12}Usage shows after your next session on Claude Code\.\n {12}old@example.invalid · last seen Nov 9 · wk 100% then\n {12}Switch: claude, then \/login$/m);
   await until(() => /^Codex {7}owner@example.invalid · Team · active\n {12}5h  \[#-----\]   18%/m.test(text()), 'the Codex block');
-  assert.match(text(), /^Antigravity not signed in. Run: agy\nGrok Build {2}not installed\nELU Code spend today not reported$/m);
+  assert.match(text(), /^Antigravity not signed in. Run: agy\nGrok Build {2}not installed\nELU spend today not reported$/m);
   assert.ok(panels.usageList.items.every(item => item.getText().length <= 76), 'every line fits the pane');
   // A session on Claude Code reports its windows. r checks again now and records them with the account.
   const saved = JSON.parse(fs.readFileSync(usageFile, 'utf8'));
@@ -3517,7 +3541,13 @@ test('a session opened from Kanban takes the whole width, and ‹ Kanban or Esc 
   const p = twoSessions(t), v = await view(t, { repo: p.repo }), panels = v.current.panels, focused = () => v.current.screen.focused;
   await sized(v, 100, 30);
   await send(v, '/kanban'); await until(() => v.current.view === 'kanban' && panels.kanbanLists[2].items.some(item => /Trim coupon codes/.test(item.getText())), 'Kanban, with the ready session under Needs you');
+  // Enter shows the card: no Task yet, so its first message; Enter there opens its session.
   const needs = panels.kanbanLists[2]; pickRow(needs, /Trim coupon codes/); v.input.write('\r');
+  await until(() => cardRows(v).includes('No Task yet'), 'Enter shows the card');
+  assert.deepEqual(cardRows(v).slice(0, 3), ['Trim coupon codes before they are compared at checkout', 'Needs you', 'you · this computer']);
+  assert.ok(cardRows(v).includes('Trim coupon codes before they are compared at checkout'));
+  assert.match(cardHint(v), /enter open the session · ↑↓ scroll · esc close/);
+  v.input.write('\r');
   await until(() => v.current.view === 'chat' && v.current.session === '4' && /^sample app {2}· {2}Trim coupon codes before they are compared at checkout {2}· {2}ready$/.test(panels.header.getText()), 'Enter opens its session');
   // No list is behind this session. Its title line reads the session at every redraw: what it shows about schedules comes from this project.
   const titles = new Set(); for (const end = Date.now() + 2600; Date.now() < end;) { titles.add(panels.header.getText()); await new Promise(resolve => setTimeout(resolve, 10)); }
@@ -3530,7 +3560,7 @@ test('a session opened from Kanban takes the whole width, and ‹ Kanban or Esc 
   // A click on ‹ Kanban goes back to the board.
   click(v, panels.back); await until(() => v.current.view === 'kanban' && panels.back.hidden, 'the button goes back to Kanban');
   // Esc goes back too: from the message box to the chat, then to the board.
-  pickRow(needs, /Trim coupon codes/); v.input.write('\r'); await until(() => v.current.view === 'chat' && focused() === panels.ask, 'opened again');
+  pickRow(needs, /Trim coupon codes/); v.input.write('\r'); await until(() => cardRows(v).length, 'the card again'); v.input.write('\r'); await until(() => v.current.view === 'chat' && focused() === panels.ask, 'opened again');
   v.input.write('\x1b'); await until(() => focused() === panels.chat, 'Esc leaves the message box for the chat'); assert.equal(v.current.view, 'chat');
   v.input.write('\x1b'); await until(() => v.current.view === 'kanban', 'Esc on the chat goes back to Kanban');
   // In Sessions the same session shows beside the list, with no button.
@@ -3553,6 +3583,34 @@ test('Task cards in narrow Kanban columns read their whole titles', { timeout: 3
   await sized(v, 160, 30); await until(() => cards().join('|') === 'Round refunds to cents|Uppercase coupons  to approve · high', 'the detail beside the title where it fits');
 });
 
+test('Enter on my own Kanban card shows its whole Task with its success criteria, subtasks and ETA; Enter there opens the session', { timeout: 30000 }, async t => {
+  const p = setup(t, 'answer'); registerProject(p.repo);
+  liveTask(p.root, { id: '4', goal: 'Round refund amounts', state: 'ready' });
+  proposeTask(p.repo, '4', { title: 'Round refunds to cents', description: 'One file changes.', goal: 'The amounts are right.', objectives: ['It works', 'Its test passes'], priority: 'high', severity: 'low', criteria: ['A refund of 10.005 reads 10.01', 'No other file changes'], estimateMinutes: 45 });
+  const approved = approvePlan(p.repo, '4');
+  reportProgress(p.repo, '4', { subtasks: [{ id: 's1', text: 'Change it', state: 'done' }, { id: 's2', text: 'Run the test', state: 'doing' }, { id: 's3', text: 'Tidy', state: 'todo' }], met: [1] });
+  const v = await view(t, { repo: p.repo }), panels = v.current.panels;
+  await send(v, '/kanban'); await until(() => v.current.view === 'kanban' && panels.kanbanLists[2].items.some(item => /Round refunds/.test(item.getText())), 'the Task under Needs you');
+  pickRow(panels.kanbanLists[2], /Round refunds/); v.input.write('\r');
+  await until(() => cardRows(v).length, 'Enter shows the card');
+  const eta = Date.parse(approved.approvedAt) + 45 * 60000, rows = cardRows(v);
+  assert.deepEqual(rows.slice(0, rows.indexOf('') + 1), ['Round refunds to cents', 'in progress · priority high · severity low', 'you · this computer', '']);
+  assert.deepEqual(rows.slice(rows.indexOf('Goal')), [
+    'Goal', 'The amounts are right.', '', 'Description', 'One file changes.',
+    '', 'Objectives · 1 of 2 met', '  ✓ It works', '  · Its test passes',
+    '', 'Success criteria', '  · A refund of 10.005 reads 10.01', '  · No other file changes',
+    '', 'Subtasks · 1 of 3 done', '  ✓ Change it', '  ▸ Run the test', '  · Tidy',
+    '', rows.find(line => line.startsWith('ETA ')), '', rows.at(-1)]);
+  assert.match(rows.find(line => line.startsWith('ETA ')), new RegExp(`^ETA ${clockTime(eta).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} · in (44|45) min$`));
+  assert.match(rows.at(-1), /^last activity /);
+  assert.doesNotMatch(rows.join('\n'), /their machine|only they can change it/);
+  assert.match(cardHint(v), /enter open the session/);
+  v.input.write('\r');
+  await until(() => v.current.view === 'chat' && v.current.session === '4', 'Enter opens its session');
+  // The session's own Task block has the ETA and the success criteria too.
+  await until(() => /ETA .* · in (44|45) min/.test(panels.chat.getText()) && /Success criteria/.test(panels.chat.getText()) && /A refund of 10\.005 reads 10\.01/.test(panels.chat.getText()), 'the Task block in the chat');
+});
+
 test("a project's own instructions are asked about on screen before they are used: the text is shown, each answer is remembered for that text, and a change shows what changed", { timeout: 60000 }, async t => {
   const p = setup(t, 'answer'), file = path.join(p.root, '.elu-code/instructions.md');
   // The file came with the folder: the owner never saved it on this machine.
@@ -3560,7 +3618,7 @@ test("a project's own instructions are asked about on screen before they are use
   const v = await view(t, { repo: p.repo }), NEW = 'New · .elu-code/instructions.md', CHANGED = 'Changed · .elu-code/instructions.md';
   const tasks = () => v.current.controller.snapshot().tasks, status = () => v.current.panels.status.getText();
   const sent = () => fs.readFileSync(path.join(p.parent, 'inputs.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line)).filter(row => row.vendor === 'claude').map(row => row.input);
-  const notes = () => tasks()[0].messages.filter(row => row.from === 'ELU Code').map(row => row.text);
+  const notes = () => tasks()[0].messages.filter(row => row.from === 'ELU').map(row => row.text);
   const answered = runs => until(() => tasks()[0]?.state === 'answered' && tasks()[0].runs.length === runs, `turn ${runs} answered`, 20000);
   // Opening the project asks, with the text and the cursor on not using it.
   await until(() => modal(v, NEW), 'the question on opening the project');
@@ -3576,7 +3634,7 @@ test("a project's own instructions are asked about on screen before they are use
   assert.deepEqual(unusedTrust(p.root).map(row => row.state), ['declined']);
   assert.equal(sent().length, 1); assert.doesNotMatch(sent()[0], /Always push|Project instructions \(owner\)|Running without/);
   assert.deepEqual(notes(), ["Running without this project's .elu-code/instructions.md: you have not approved it on this machine. To review it, open Projects and choose this project."]);
-  await until(() => /ELU Code {2}\d{1,2}:\d\d [AP]M\n┃ Running without this project's/.test(v.current.panels.chat.getText()), 'the line in the chat');
+  await until(() => /ELU {2}\d{1,2}:\d\d [AP]M\n┃ Running without this project's/.test(v.current.panels.chat.getText()), 'the line in the chat');
   // That answer holds for this text: the next message asks nothing.
   await send(v, 'And the tests?'); await answered(2);
   assert.equal(modal(v, NEW), undefined); assert.equal(notes().length, 1); assert.doesNotMatch(sent().at(-1), /Always push|Running without/);
@@ -3889,7 +3947,7 @@ test('/mcp add asks for a name, the URL, the header and the key in a hidden fiel
   assert.ok(!v.raw.includes(key), 'and never on screen');
 });
 
-test('a pasted MCP config is never sent: ELU Code offers to add it, n leaves it in the box unsent, y adds it and the box keeps only the other words', { timeout: 60000 }, async t => {
+test('a pasted MCP config is never sent: ELU offers to add it, n leaves it in the box unsent, y adds it and the box keeps only the other words', { timeout: 60000 }, async t => {
   const p = setup(t, 'answer'), key = keyLike('elu_live_', 'Pasted7Key', 'Never0Sent2'), file = path.join(p.parent, 'claude', '.claude.json');
   // The shape ELU's setup page gives for any MCP client.
   const config = `{\n  "mcpServers": {\n    "elu": {\n      "url": "https://app.example.invalid/api/mcp",\n      "headers": { "Authorization": "Bearer ${key}" },\n      "timeout": 120\n    }\n  }\n}`;
@@ -3996,7 +4054,7 @@ test('a pasted server config whose key does not read, or whose URL holds the key
 
 // The owner's list on 2026-11-12, as his files had it: session 3 runs his newest message, two
 // older "I approve" were refused before he updated, and a teammate's question waits for him.
-const REFUSED = "A teammate's message never runs in your home folder. Open ELU Code in the project folder, then approve again.";
+const REFUSED = "A teammate's message never runs in your home folder. Open ELU in the project folder, then approve again.";
 function ownerState(p) {
   const began = ago(11 * 3600), latest = ago(60);
   liveTask(p.root, { id: '3', goal: 'ELU Issues', state: 'ready' });
@@ -4242,8 +4300,8 @@ test('in the list a lone y or n answers what the selected session waits on and i
 test('a newer version is named in the status line as the app opens, and /update says how to update', async t => {
   const p = setup(t); registerProject(p.repo);
   let asked = 0;
-  const v = await view(t, { repo: p.repo, updateCheck: async () => { asked++; return 'ELU Code 9.9.9 is out. /quit, then elu update.'; } }), status = () => v.current.panels.status.getText();
-  await until(() => /ELU Code 9\.9\.9 is out\. \/quit, then elu update\./.test(status()), 'the new-version line');
+  const v = await view(t, { repo: p.repo, updateCheck: async () => { asked++; return 'ELU 9.9.9 is out. /quit, then elu update.'; } }), status = () => v.current.panels.status.getText();
+  await until(() => /ELU 9\.9\.9 is out\. \/quit, then elu update\./.test(status()), 'the new-version line');
   assert.equal(asked, 1);
   await send(v, '/update'); await until(() => /To update, \/quit, then run elu update\./.test(status()), 'how to update');
 });

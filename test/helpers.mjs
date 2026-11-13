@@ -66,7 +66,7 @@ export function cli(root, args, env = {}) {
   try { json = JSON.parse(r.stdout); } catch { throw new Error(`Invalid output: ${r.stdout}\n${r.stderr}`); }
   return { ...r, json };
 }
-// What the owner does when ELU Code asks about a project's own settings and instructions:
+// What the owner does when ELU asks about a project's own settings and instructions:
 // he says use them. A test that writes such a file by hand, or moves the folder, says so
 // before it expects the file in force. env: where that owner's record is kept, when it is
 // not this process's own (a test that runs the command line in its own environment).

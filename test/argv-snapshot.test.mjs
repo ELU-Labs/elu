@@ -15,8 +15,8 @@ import { picturesRoot } from '../lib/pictures.mjs';
 // The locked profile is the Read only launch. fixtures/argv-locked.json was computed from the
 // adapters before permission modes existed, with every machine path replaced by a token;
 // compile({ mode: 'locked' }) must still produce it, argument for argument, with four changes
-// since: every run, the owner's too, is denied ELU Code's own state folder; the file tools of
-// every run are denied ELU Code's records in the repository's Git folder; a sandboxed
+// since: every run, the owner's too, is denied ELU's own state folder; the file tools of
+// every run are denied ELU's records in the repository's Git folder; a sandboxed
 // command reads the rest of that folder, so git works there (a teammate's question reads none
 // of the folder, with the file tools or from a command); and in a Git work tree the owner's
 // runs are kept from the secret-looking files Git does not track, by path, not from every
@@ -63,7 +63,7 @@ test('compile in the locked profile is byte-identical to the launch before modes
   assert.equal(withPictures[at + 1], shown); assert.equal(withPictures.filter(arg => arg === '--add-dir').length, 1);
   assert.deepEqual([...withPictures.slice(0, at), ...withPictures.slice(at + 2)].map(tokenise), expected['claude peer']);
   assert.throws(() => claude.compile({ ...locked, role: reviewer, cwd, protectedPaths: ['.git'], commonDir: common, session, pictures: shown }), /Only a teammate's question run is given a pictures folder/);
-  assert.throws(() => claude.compile({ ...locked, role: reviewer, cwd, protectedPaths: ['.git'], commonDir: common, session, peer: true, pictures: home }), /must be in ELU Code's own pictures folder/);
+  assert.throws(() => claude.compile({ ...locked, role: reviewer, cwd, protectedPaths: ['.git'], commonDir: common, session, peer: true, pictures: home }), /must be in ELU's own pictures folder/);
   // The state folder (identity, approvals, other projects' records) is denied to the file tools and
   // to the shell in every Claude launch, wherever XDG_CONFIG_HOME points.
   for (const name of Object.keys(cases).filter(name => name.startsWith('claude'))) {

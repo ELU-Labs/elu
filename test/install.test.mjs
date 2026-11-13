@@ -56,7 +56,7 @@ test('a Node that is too old gets one sentence and exit code 1', (t) => {
   for (const version of ['18.19.1', '20.11.0', '9.11.2', '21.7.3']) {
     const result = command(process.execPath, ['--require', preload, LAUNCHER, '--help'], REPO, { SHOWN_NODE: version });
     assert.equal(result.status, 1);
-    assert.equal(result.stderr, `ELU Code needs Node 22 or newer; this is Node ${version}.\n`);
+    assert.equal(result.stderr, `ELU needs Node 22 or newer; this is Node ${version}.\n`);
     assert.equal(result.stdout, '');
   }
   const current = command(process.execPath, ['--require', preload, LAUNCHER, '--help'], REPO, { SHOWN_NODE: '22.0.0' });
@@ -112,7 +112,7 @@ test('a start through npx runs the installed copy of the same version, and its o
   const env = { HOME: home, XDG_CONFIG_HOME: path.join(home, '.config'), PATH: `${path.join(prefix, 'bin')}:${process.env.PATH}` };
   const own = command(process.execPath, [path.join(copy, 'bin', 'elu.cjs'), '--help'], dir, env);
   assert.equal(own.status, 0, own.stderr);
-  assert.match(own.stdout, /ELU Code/);
+  assert.match(own.stdout, /ELU/);
   const entry = "import { fileURLToPath } from 'node:url';\nconsole.log('installed copy', JSON.stringify(process.argv.slice(2)), process.argv[1] === fileURLToPath(import.meta.url));\n";
   place(prefix, { entry });
   const handed = command(process.execPath, [path.join(copy, 'bin', 'elu.cjs'), 'peers', '--json'], dir, env);
@@ -130,7 +130,7 @@ test('a start through npx runs the installed copy of the same version, and its o
   // With no terminal there is nothing to install either: the copy npx fetched answers.
   fs.rmSync(prefix, { recursive: true });
   const piped = command(process.execPath, [path.join(copy, 'bin', 'elu.cjs')], dir, env);
-  assert.match(piped.stdout, /^ELU Code/);
+  assert.match(piped.stdout, /^ELU/);
   assert.equal(piped.stderr, '');
   assert.equal(fs.existsSync(path.join(home, '.local')), false);
 });
@@ -195,7 +195,7 @@ test('a newer elu is never replaced by an older copy: the installed one opens in
   for (const version of ['3.2.2', '3.10.0', '4.0.0']) {
     const installed = place(s.prefix, { version });
     assert.equal(s.go(), installed);
-    assert.equal(s.said.pop(), `Opening ELU Code ${version}, the version installed here. npx gave an older copy (3.2.1).\n`);
+    assert.equal(s.said.pop(), `Opening ELU ${version}, the version installed here. npx gave an older copy (3.2.1).\n`);
     // With arguments or no terminal it runs too, and says nothing.
     assert.equal(s.go({ argv: ['--version'] }), installed);
     assert.equal(s.go({ interactive: false }), installed);
@@ -204,7 +204,7 @@ test('a newer elu is never replaced by an older copy: the installed one opens in
   fs.rmSync(s.prefix, { recursive: true }); const local = place(path.join(s.home, '.local'), { version: '3.3.0' });
   assert.equal(s.go(), local);
   assert.deepEqual(s.calls, []);
-  assert.deepEqual(s.said, ['Opening ELU Code 3.3.0, the version installed here. npx gave an older copy (3.2.1).\n']);
+  assert.deepEqual(s.said, ['Opening ELU 3.3.0, the version installed here. npx gave an older copy (3.2.1).\n']);
 });
 
 test('an older elu is updated where it is', (t) => {
@@ -220,7 +220,7 @@ test('a failed install says how to install by hand and the app still opens from 
   const s = scene(t, { fail: true });
   assert.equal(s.go(), null);
   assert.deepEqual(s.said, ['Installing the elu command: npm install --global --ignore-scripts @elu-labs/elu@3.2.1\n',
-    `That did not work (code EACCES). ELU Code opens anyway. To install the command yourself: ${BY_HAND}\n`]);
+    `That did not work (code EACCES). ELU opens anyway. To install the command yourself: ${BY_HAND}\n`]);
   assert.equal(BY_HAND, 'npm install --global @elu-labs/elu');
   // No npm at all is said the same way.
   const none = scene(t);
@@ -329,8 +329,8 @@ test('a login item and a login service are written only by the installed command
     // This copy is not what elu runs here: nothing is written and nothing is loaded.
     const home = path.join(dir, platform), options = { platform, home, env: { HOME: home, XDG_CONFIG_HOME: path.join(home, '.config'), PATH: `${path.join(prefix, 'bin')}:/usr/bin` }, run };
     fs.mkdirSync(home);
-    assert.deepEqual(installScheduler(options), { installed: false, reason: `Schedules run only while ELU Code is open until it is installed: ${BY_HAND}` });
-    assert.throws(() => installService(options), /Install ELU Code first, then start it at login: npm install --global @elu-labs\/elu/);
+    assert.deepEqual(installScheduler(options), { installed: false, reason: `Schedules run only while ELU is open until it is installed: ${BY_HAND}` });
+    assert.throws(() => installService(options), /Install ELU first, then start it at login: npm install --global @elu-labs\/elu/);
     for (const file of [...schedulerFiles(options), servicePath(options)]) assert.equal(fs.existsSync(file), false);
     assert.deepEqual(ran, []);
   }

@@ -1,9 +1,9 @@
-# ELU Code
+# ELU
 
 A full-screen terminal app that runs coding sessions on the AI command lines you already
 use, with bots that review and do work, and teammates you can ask.
 
-![ELU Code on a made-up project, with stand-in vendors](docs/demo.gif)
+![ELU on a made-up project, with stand-in vendors](docs/demo.gif)
 
 ## Install
 
@@ -13,7 +13,7 @@ From your home folder, not inside a project you do not trust:
 npx -y @elu-labs/elu
 ```
 
-This opens ELU Code and installs the `elu` command; next time you type `elu`. To install
+This opens ELU and installs the `elu` command; next time you type `elu`. To install
 a given version, name it: `npx -y @elu-labs/elu@0.1.12`.
 
 You need macOS or Linux, Node 22 or newer, Git, Claude Code signed in, and Codex installed
@@ -44,7 +44,7 @@ published. A folder of one of those names that Git does not ignore, such as a tr
 
 A worktree sits beside its repository, in a folder named after it with `.elu-code` added
 (`shop.elu-code` beside `shop`). When a Task edits the project folder itself and the folder
-has no commits yet, ELU Code first commits its files there as `Start project history`,
+has no commits yet, ELU first commits its files there as `Start project history`,
 running `git init` if it needs to, and pushes nothing. A file that looks like a secret, such
 as `.env`, stops it until `.gitignore` keeps that file out.
 
@@ -64,7 +64,8 @@ press Enter.
 
 Ask for a change to code or files, or for work that needs planning, and the first reply is
 a Task: a title, a description, the goal, the objectives that say when it is done, a
-priority and a severity. Nothing is edited yet.
+priority, a severity, the success criteria that show it is done, and the model's estimate
+of the work. Nothing is edited yet.
 
 | Do | What happens |
 | --- | --- |
@@ -78,14 +79,17 @@ An approved Task gives its session its name, unless you named the session yourse
 
 On the Kanban tab a session with a Task shows as that Task: its title, how far it is, its
 priority and its severity. One that waits for your approval is under Needs you. Enter opens
-its session.
+the whole Task: the goal, the objectives, the success criteria, the subtasks and the ETA;
+Enter again opens its session. A teammate's card, and one of your other computer's, open the
+same way.
 
 After you approve, the model splits the work into subtasks and changes them as it likes.
-The card lists them as a checklist and marks the objectives the model reports met. The
+The card lists them as a checklist and marks the objectives the model reports met. Its ETA
+is approval plus the estimate, and follows the minutes left the model reports as it works. The
 Task is done when every objective is reported met and the turn, with its checks and
 review, has ended. A new message opens it again.
 
-ELU Code starts the edit only for a Task you approved. What the model can still do in its
+ELU starts the edit only for a Task you approved. What the model can still do in its
 first turn depends on the vendor and the mode:
 [docs/permissions.md](docs/permissions.md#plan-first).
 
@@ -110,13 +114,15 @@ You can send a message at any time. One sent while the session is working waits 
 | `/stop` | Stops the running response. A message you sent while it ran is sent next; `/stop` again cancels that message |
 | `/schedule in 1h check the build` | Starts a session later or on a schedule: `/schedule [when] [message]`. `/schedule ` lists times such as `in 5m`, `in 1h` and `daily 9:00`. Each run is a new session with the model, mode and bots of the form (a bot with its own schedule is left out); it does not see the chat it was made in. A schedule gets Full access only when you pick it for that schedule, and the form asks you once before saving it |
 | `/budget 5` | Limits this session to 5 dollars; `/budget off` removes the limit |
+| `/standup` | Asks every open session of yours, here and on your other computers, and your teammates' shared ones, for an update, in a new Standup session. See [Standup](#standup) |
+| `@everyone did anyone touch auth?` | In a Standup session, asks the sessions of its last round again, with your question; `@everyone standup` asks for an update. Elsewhere it starts a Standup with the question |
 | `! git status` | Runs a shell command. In an open session the model gets the command and its output with your next message |
 | `/update` | Says how to update: `/quit`, then `elu update` |
-| `/quit` | Closes ELU Code. Sessions that are running or queued go on in the background; `elu conductor stop` stops them |
+| `/quit` | Closes ELU. Sessions that are running or queued go on in the background; `elu conductor stop` stops them |
 
-A schedule also runs while ELU Code is closed, through a login item, once ELU Code is
+A schedule also runs while ELU is closed, through a login item, once ELU is
 installed (not run through `npx`). On macOS, while an agent works or a schedule is on, ELU
-Code stops the Mac from going to sleep on its own (`caffeinate -i`); the display can still
+stops the Mac from going to sleep on its own (`caffeinate -i`); the display can still
 sleep. Schedules show in the Sessions tab under Scheduled: `p` pauses one and `x` deletes
 it. A time is `in 30m`, `every 2h` (15 minutes to 7 days), `daily 9:00`, `weekdays 9am`,
 `mon,thu 14:30`, `tomorrow 15:00` or `2026-12-01 9:00`, in this computer's local time.
@@ -165,13 +171,13 @@ a shell, `elu mcp add NAME URL --header Authorization` asks for the key with ech
 reads it from standard input; a command goes after `--`, as in
 `elu mcp add github --env GITHUB_TOKEN -- docker run -i --rm ghcr.io/github/github-mcp-server`.
 `elu mcp remove NAME` removes one. If you paste a server config, such as an `mcpServers`
-block, or a `claude mcp add` line (with `!` or without) into the message box, ELU Code does
+block, or a `claude mcp add` line (with `!` or without) into the message box, ELU does
 not send or run it: it offers to add the server, so the key stays out of the chat. The model
 is told to ask you to type `/mcp add` when it needs a server you do not have, and adding or
 removing one is on the never list; in Full access that is a rule on command text, not a
 boundary.
 
-ELU Code does not push, merge, tag, deploy or publish by itself. `/publish` shows the exact
+ELU does not push, merge, tag, deploy or publish by itself. `/publish` shows the exact
 push and the draft pull request, waits for you, and refuses a default branch. The model is
 told never to run those commands, and on Claude Code they are denied by rule; in Full access
 that is a rule on the command's text, not a sandbox. Stand-in commands, first on every
@@ -203,11 +209,11 @@ Five come with the app. You can edit or remove any of them in the Bots tab.
 - `@lead plan the refund change` gives a bot work. `@lead`, `@qa`, `@elu` and each bot you
   make do the work you write to them, within the session's permissions; `@reviewer` and
   `@pair` read and answer.
-- After each edit, ELU Code runs the checks and every reviewing bot of the session reviews
+- After each edit, ELU runs the checks and every reviewing bot of the session reviews
   the change. Its must-fix findings go to the model, which fixes each one or disputes it with
   a reason; then the checks and the review run again, up to the policy's review rounds. The
   chat shows each step, such as `@reviewer: 2 must-fix`, `Fixed 2` and `@reviewer: Passed.`
-  The model is told which bots review its change and that ELU Code runs the checks and
+  The model is told which bots review its change and that ELU runs the checks and
   publishing, so it never asks you to wait for a bot, review, commit, push or merge.
 - Write to a reviewing bot about edits the session has not published, such as `@reviewer make
   sure the fixes are real, not nitpicks`, and it reviews them with your words, in that same
@@ -233,8 +239,8 @@ Five come with the app. You can edit or remove any of them in the Bots tab.
   there.
 - Each bot has a color: its name and its replies show in it. **Color** on its page changes
   it, and so does `/bots color qa gold`. `/bots color qa random` picks another.
-- `@elu` starts when it joins a session and then runs there every hour. Once ELU Code is
-  installed, it runs while ELU Code is closed too, through the login item that runs
+- `@elu` starts when it joins a session and then runs there every hour. Once ELU is
+  installed, it runs while ELU is closed too, through the login item that runs
   schedules. `/bots schedule off elu` stops that in one session. It needs ELU connected:
   `npx -y @elu-labs/cli --offer=promo` signs you up, or in, adds ELU to your web app and
   connects your AI tools.
@@ -256,7 +262,7 @@ elu join CODE            # joins their team; your messages start sessions here
 ```
 
 There is nothing to turn on. Once your computer is on a team, a background process (the
-peer daemon) keeps it reachable by your teammates, also while ELU Code is closed. Until you
+peer daemon) keeps it reachable by your teammates, also while ELU is closed. Until you
 invite someone or join a team, nothing starts and nothing connects. There is no off switch
 while you stay on a team: `/leave` (or `elu team leave`) takes you off one, and once you are
 on no team the daemon stops. If no teammate was online to hear that you left, it keeps
@@ -279,14 +285,14 @@ reading it unless it looks like a secret. Any Task it proposes waits for your ap
 only an approved Task's edit runs in a new worktree. **Manual** keeps each message waiting
 until you press y. You can also write rules in plain English, such as "Only work on the elu
 repo. Don't write anything until I accept it.", and every session a teammate starts is told
-them. A teammate's message never runs in your home folder on its own: ELU Code asks you
+them. A teammate's message never runs in your home folder on its own: ELU asks you
 first, and runs it there only when you press y. Their session shows their own words under their name. Push, merge, tag, deploy and publish stay blocked as they are for your own sessions in
 that mode. [SECURITY.md](SECURITY.md#what-teammates-can-do-here) has the details. `/access`,
 or `elu access`, shows and changes all of it.
 
 `elu share`, or `/share` in the app, shares the project you are in, so teammates can name it
 and see its live work. Inviting a teammate shares one too: `elu invite` shares the folder you
-run it in when it is an ELU Code project (`--project PATH` names another), and `/invite`
+run it in when it is an ELU project (`--project PATH` names another), and `/invite`
 the open project. Joining shares no project of yours, but the Kanban board needs no share:
 every session you run in a repository a teammate also has is on their Kanban, with its title,
 its column, who started it and which machine, and theirs are on yours. Nothing else about it
@@ -307,16 +313,17 @@ sees them when it answers.
 team. Either way, a new invite brings them back, also when nobody heard the leave yet: the
 leave goes along with the invite.
 
-Your own computers work together the same way. On your laptop, `/invite` and choose
-"Another computer of mine" (or `elu invite --mine`), then `/join` that code on your devbox
-and answer Yes when it asks if the laptop is yours too (or `elu join CODE --mine`). A devbox
-already on your team needs no code: pick it in that same list, or run `/mine @devbox` on the
-laptop and `/mine @laptop` on the devbox. From then on, `@devbox fix the flaky test` in the
+Your own computers work together the same way. Two computers on one team that are signed
+in to GitHub with `gh` as the same account pair by themselves. Otherwise run
+`elu invite --mine` on your laptop, then `/join` that code on your devbox and answer Yes when
+it asks if the laptop is yours too (or `elu join CODE --mine`). A devbox already on your team
+needs no code: run `/mine @devbox` on the laptop and `/mine @laptop` on the devbox. From then on, `@devbox fix the flaky test` in the
 new session box starts the session on the devbox, with the mode, model and bots you picked.
 It shows in Sessions marked "on devbox", live, and its approvals wait on both machines. It is
 your own session there, so your rules apply, and `a` on its approval, from either machine,
 keeps the rule on the devbox, where it runs.
-Sessions also lists every other session on the devbox in the same repository under "On devbox", and Projects lists its other projects as "<project> on devbox".
+Sessions also lists every other session on the devbox in the same repository under "On devbox": they are part of your project, in Sessions and on its Kanban ("you · devbox"), whichever of your computers started them.
+Projects lists a devbox project as "<project> on devbox" only for its sessions this project cannot show, and says how many.
 With a devbox session under the cursor, what you type goes to your agent here, on the laptop:
 the first message starts a session in the project open on the laptop, named "Help: " and the
 devbox session's title, and the next ones continue it. It is told which session it helps, what
@@ -350,12 +357,65 @@ again. `/mine auto off` (or `ELU_NO_GITHUB_PAIRING=1`) turns this off.
 In a channel, `/invite @kim` adds a teammate you already have. `/invite` alone makes a
 code for someone new; the first time, it also makes your team, named after the open project.
 
+## Standup
+
+`/standup` starts a Standup session in the open project, named "Standup" and the date and
+time, and asks each open session for an update: what it is working on, what is done, what is
+next, and what blocks it. Open means not archived and not moved to Done (a chat that has
+answered is asked), and working, waiting for you, or active in the last 7 days. The same rule
+holds for your teammates' sessions, as their computers apply it; a teammate's computer on an
+older build does not say which of its sessions in Done answered, so those are listed, not asked. That is every such session of yours in every project on
+this computer, those on your other computers that are online (`/mine`), and your teammates'
+sessions on the shared Kanban whose computers are online. A project kept off the Kanban
+(`/share off`) is never asked. At most 20 of yours and 20 of your teammates' are asked,
+newest first; the rest are listed.
+
+Before asking, the chat says how many sessions it asks and on which computers. Each session
+answers in one turn of its own agent (its model, or the worker bot that works in it), on its
+own model and limits, in at most 8 lines, and that turn changes nothing: no edit, no Task,
+and the session stays where it was, in Sessions and on the Kanban: answering is not activity. A Claude Code session answers in a copy of its own
+history, so its next turn goes on from its work; another vendor keeps the standup in that
+history. Its chat shows "@sam asks: standup", the update, and
+"Sent to @sam". A session that is working answers when its turn ends, or is listed as still
+working after 10 minutes. Answers show in the Standup as they come, each titled with its
+session, agent and computer: "ELU Issues · Opus 5.5 on @devbox", "Self Healing · Opus 5.5
+here", "Billing · @billing on @kim". Then come the sessions not asked, those that declined,
+and those still working, then one line: "Standup done · 9 sessions on 4 computers · 2 not
+asked". `/stop` stops waiting. Nothing runs on a timer: only `/standup` and `@everyone` ask.
+
+On a teammate's computer their own setting decides, as for any message from you: Auto asks
+their sessions at once; Manual shows them "@sam asks every session for a standup update"
+once a round, to approve or decline, and a decline is listed in your Standup. Each of their
+sessions answers at most once a round, is told their rules for teammates, and what comes back
+is checked as any answer to a teammate is: paths are cut, and an update that may hold a
+secret is not sent. You get the update text, the card's title, the agent's name and the
+computer, nothing else. Each answer turn counts as one of your requests there and spends from
+your daily allowance there, as any message of yours that runs on their computer, so a full
+round can use up the day's requests. A computer that still runs an older build of ELU
+for its sessions is listed, not asked.
+
+When the round ends, the Standup's own model reads every update and sums it up: what is
+done, what is in progress, what is blocked or waits for someone, and who. That turn starts
+with nobody watching, so it only answers and keeps the Kanban: it reads, with no edits, no
+shell, no web, no Task and none of your MCP servers; Full access runs as Approve for me, and
+another vendor runs it Read only. It runs once a round and is never
+retried on its own. Then you talk to
+it: each message goes to that model with the updates and this computer's Kanban boards for
+the projects involved, your other computers' sessions and teammates' cards on them read-only. It can keep the Kanban right: in
+a Claude Code session with permissions it lists the boards, adds a To do card that says where
+it came from ("from @billing on @kim"), changes a To do card's text, moves a card or session
+to Done or back, and removes a card it added. It never changes another computer's board or a
+teammate's card. In Ask for approval you allow each change; in Approve for me and Full access
+it makes them, and the chat says each one: "Added 'Check JWT aud claim' to To do, from
+@billing on @kim", "Moved 'Main green' to Done". Another vendor, or Read only, lists the
+changes for you to make. It messages another session only when you ask it to.
+
 ## Install details
 
 Sessions run in the vendors' own unmodified command lines (Claude Code, Codex, Antigravity
-and Grok Build), with your existing sign-in. ELU Code has no account and no telemetry, and
+and Grok Build), with your existing sign-in. ELU has no account and no telemetry, and
 it never reads your Claude Code sign-in. The Usage tab shows Claude plan usage from what
-Claude Code reports during your sessions. For Codex plan usage, ELU Code starts Codex's own
+Claude Code reports during your sessions. For Codex plan usage, ELU starts Codex's own
 `app-server`, which asks with your Codex sign-in, whenever `codex` is installed: when you
 open a project that is set up or send a message, at most once a minute while a session is
 on screen, and from the Usage tab ([what is read and when](SECURITY.md#credentials)).
@@ -365,7 +425,7 @@ signed in: new projects and the built-in bots run on it. To run sessions on Code
 (`codex`), sign in to it and choose it with `/model`.
 
 Codex must be installed even if your sessions run on Claude Code, but it does not need to
-be signed in. ELU Code runs your project's checks and its pre-push hooks inside Codex's
+be signed in. ELU runs your project's checks and its pre-push hooks inside Codex's
 sandbox (`codex sandbox`); without it the checks fail and `/publish` refuses. Install it
 with `npm install --global @openai/codex`. To use a copy that is not on your PATH, set
 `ELU_CODE_SANDBOX_HELPER` to its absolute path. On Linux that sandbox is bubblewrap:
@@ -375,26 +435,26 @@ install `bubblewrap` and, on Ubuntu 24.04, load the AppArmor profile in
 GitHub CLI (`gh`) is needed for draft pull requests, and for `@elu` to review and merge a
 fix pull request.
 
-The first run of `npx -y @elu-labs/elu` opens ELU Code and installs `elu` as a global
+The first run of `npx -y @elu-labs/elu` opens ELU and installs `elu` as a global
 command: it prints the `npm install --global` line it runs, and uses `~/.local` when npm's
-global folder cannot be written. To open ELU Code without installing anything, run
+global folder cannot be written. To open ELU without installing anything, run
 `ELU_NO_INSTALL=1 npx -y @elu-labs/elu`.
 
 Run `npx -y @elu-labs/elu` from your home folder, not from inside a project you do not
 trust: `npx` lets the folder it starts in decide what runs.
 
-The Usage tab lists the vendor command lines ELU Code found and whether each is signed in.
+The Usage tab lists the vendor command lines ELU found and whether each is signed in.
 Antigravity (`agy`) and Grok Build (`grok`) are checked once on each machine: your first
 message to one starts the check by itself. It takes about seven short turns on that vendor
 and a few minutes. Vendor notes: [docs/vendors](docs/vendors).
 
 Google's FAQ says that using another app to reach Antigravity breaks its terms and can get
-your account suspended or terminated. ELU Code wraps `agy`, so read
+your account suspended or terminated. ELU wraps `agy`, so read
 [docs/vendors/antigravity.md](docs/vendors/antigravity.md) before you send it a message.
 
 ## Update and remove
 
-Quit ELU Code with `/quit` in every terminal it is open in, then:
+Quit ELU with `/quit` in every terminal it is open in, then:
 
 ```sh
 elu update
@@ -405,16 +465,16 @@ On 0.1.11 or older, which have no `elu update`, update once with
 npx kept.
 
 `elu update` installs the newest version where `elu` already is and restarts the peer
-daemon on it; sessions still running finish on the old version first. Once a day ELU Code
+daemon on it; sessions still running finish on the old version first. Once a day ELU
 checks for a newer version and says so in its status line; `ELU_NO_UPDATE_CHECK=1` turns
 that check off. Both ask the npm registry for the latest version number and send nothing
 else.
 
-To remove ELU Code, first delete your schedules in the app (Sessions tab, under Scheduled:
+To remove ELU, first delete your schedules in the app (Sessions tab, under Scheduled:
 `x` on each one), so they no longer keep the Mac awake, and quit it with `/quit`.
 
 Then remove the login item that runs schedules, and bots with a schedule such as `@elu`,
-while ELU Code is closed, if there is one. On macOS, run
+while ELU is closed, if there is one. On macOS, run
 `launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/dev.elu-code.scheduler.plist`
 and delete that file. On Linux, run `systemctl --user disable --now elu-code-scheduler.timer`
 and delete `elu-code-scheduler.service` and `elu-code-scheduler.timer` in
@@ -427,7 +487,7 @@ elu peer uninstall          # stops the peer daemon and removes its login item
 elu conductor stop          # stops sessions that are still running
 ```
 
-In each project folder that is a Git repository, see what ELU Code would remove there,
+In each project folder that is a Git repository, see what ELU would remove there,
 then remove it:
 
 ```sh

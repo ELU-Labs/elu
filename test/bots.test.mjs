@@ -605,7 +605,7 @@ test('a teammate\'s answer to the owner\'s ask, continued in his session, reads 
   const read = f.inputs('claude').slice(before).at(-1).input, messages = contextOf(read).messages;
   const bots = messages.filter(row => row.bot);
   assert.deepEqual(bots.map(row => row.text), Array.from({ length: BOT_REPLIES_MAX }, (_, index) => `finding ${index + 3}`), 'the newest replies, at most BOT_REPLIES_MAX');
-  assert.ok(messages.some(row => row.from === 'ELU Code' && row.text === '3 earlier replies of the session\'s bots are left out here for length.'));
+  assert.ok(messages.some(row => row.from === 'ELU' && row.text === '3 earlier replies of the session\'s bots are left out here for length.'));
   assert.equal(messages.some(row => /another model|Could not answer/.test(row.text)), false, 'notes and failures are left out');
   assert.equal(messages.at(-1).text, 'Continue with the answer from @sara shown in the peer data block.');
   assert.ok(read.includes(BOT_FINDINGS));
@@ -646,12 +646,12 @@ test('the bots\' replies the lead reads are bounded: the newest first, each cut 
   // A long reply is cut, and says so.
   const [long] = botReplies([{ at: at(0), text: 'x'.repeat(10000), from: '@critic', bot: 'critic' }]);
   assert.equal(long.text.startsWith('x'.repeat(BOT_REPLY_CHARS) + '\n'), true); assert.equal(long.text.includes('x'.repeat(BOT_REPLY_CHARS + 1)), false);
-  assert.match(long.text, /\[ELU Code cut this reply here: it is 10000 characters long, and this is its start\.\]$/);
+  assert.match(long.text, /\[ELU cut this reply here: it is 10000 characters long, and this is its start\.\]$/);
   // Twelve replies of 5,000 characters: the newest four fit the total; the rest are counted.
   const many = Array.from({ length: 12 }, (_, index) => ({ at: at(index), text: `${index}`.padEnd(5000, '.'), from: '@critic', bot: 'critic' }));
   const kept = botReplies(many);
   assert.deepEqual(kept.slice(1).map(row => row.text[0] === '1' ? row.text.slice(0, 2) : row.text[0]), ['8', '9', '10', '11']);
-  assert.deepEqual(kept[0], { at: at(7), from: 'ELU Code', text: '8 earlier replies of the session\'s bots are left out here for length.' });
+  assert.deepEqual(kept[0], { at: at(7), from: 'ELU', text: '8 earlier replies of the session\'s bots are left out here for length.' });
   assert.ok(kept.slice(1).reduce((total, row) => total + row.text.length, 0) <= BOT_REPLIES_CHARS);
   // Twenty short replies: the newest eight.
   const short = botReplies(Array.from({ length: 20 }, (_, index) => ({ at: at(index), text: `r${index}`, from: '@critic', bot: 'critic' })));

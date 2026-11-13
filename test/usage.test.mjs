@@ -76,7 +76,7 @@ test('failed and stalled metadata servers are closed without producing a zero re
   assert.equal(await readCodexUsage({ bin: script, cwd: folder }), null);
 });
 
-test('the Codex app-server is told the ELU Code version from package.json', async t => {
+test('the Codex app-server is told the ELU version from package.json', async t => {
   // A copy of lib/ beside a package.json with another version: a version written into the code would not follow it.
   const folder = fs.realpathSync(temp(t)), script = path.join(folder, 'server.cjs'), seen = path.join(folder, 'initialize.json');
   fs.cpSync(fileURLToPath(new URL('../lib', import.meta.url)), path.join(folder, 'lib'), { recursive: true });
@@ -84,7 +84,7 @@ test('the Codex app-server is told the ELU Code version from package.json', asyn
   const copy = await import(pathToFileURL(path.join(folder, 'lib', 'usage.mjs')).href);
   fs.writeFileSync(script, `#!${process.execPath}\nlet text='';process.stdin.on('data',chunk=>{text+=chunk;if(text.includes('\\n')){require('fs').writeFileSync(${JSON.stringify(seen)},text.split('\\n')[0]);process.exit(0);}});\n`, { mode: 0o755 });
   assert.equal(await copy.readCodexUsage({ bin: script, cwd: folder }), null);
-  assert.deepEqual(JSON.parse(fs.readFileSync(seen, 'utf8')).params.clientInfo, { name: 'elu_code', title: 'ELU Code', version: '9.8.7' });
+  assert.deepEqual(JSON.parse(fs.readFileSync(seen, 'utf8')).params.clientInfo, { name: 'elu_code', title: 'ELU', version: '9.8.7' });
 });
 
 test('unsafe personal cache paths are never followed', async t => {
@@ -97,7 +97,7 @@ test('unsafe personal cache paths are never followed', async t => {
 
 // A temp home with the sign-in files a test plants. Every secret below is a marker that
 // must never show up anywhere. Claude Code's own sign-in file is planted only to show that
-// ELU Code never reads it or sends its token.
+// ELU never reads it or sends its token.
 const TOKEN = keyLike('sk-ant-', 'oat01-fake-access-token-never-stored'), OTHERS = ['refresh-token-never-stored', 'codex-access-never-stored', 'account-id-never-stored', 'uuid-never-stored'];
 const SECRETS = new RegExp([TOKEN, ...OTHERS].join('|'));
 function home(t, { claude = true, codex = true } = {}) {
@@ -144,7 +144,7 @@ test('a check asks Codex, records both accounts with the usage last seen, never 
   cache = JSON.parse(fs.readFileSync(path.join(personalDirectory(), 'usage.json'), 'utf8'));
   assert.equal(cache.claude.weekly.usedPercent, 12); assert.equal(cache.claude.fiveHour, null);
   assert.equal(readAccounts().find(row => row.vendor === 'claude').usage.weekly.usedPercent, 12);
-  // ELU Code made no request of its own, and no sign-in reached personal state.
+  // ELU made no request of its own, and no sign-in reached personal state.
   assert.deepEqual(requests, []);
   for (const name of ['usage.json', 'accounts.json']) assert.doesNotMatch(fs.readFileSync(path.join(personalDirectory(), name), 'utf8'), SECRETS, name);
   assert.deepEqual(fs.readdirSync(personalDirectory()).sort(), ['accounts.json', 'usage.json']);

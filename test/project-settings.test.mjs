@@ -14,7 +14,7 @@ function environment(t, values) {
   t.after(() => { for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } });
 }
 const read = file => fs.readFileSync(file, 'utf8');
-// A project folder, with ELU Code's own folder in a temporary place: a save records there
+// A project folder, with ELU's own folder in a temporary place: a save records there
 // that the owner approved the text.
 function folder(t) { environment(t, { XDG_CONFIG_HOME: temp(t) }); return temp(t); }
 
@@ -38,7 +38,7 @@ test('a save over 100 KB is refused with one line, and the file keeps its old te
   assert.throws(() => saveInstructions(root, 'x'.repeat(LIMIT + 1)), { message: 'Keep the instructions under 100 KB.' });
   assert.throws(() => saveContext(root, 'y'.repeat(LIMIT + 1)), { message: 'Keep the context under 100 KB.' });
   assert.equal(readProjectSettings(root).instructions, 'short\n');
-  // The limit is on the file as saved, with its last newline: a file ELU Code writes is never one it would not use.
+  // The limit is on the file as saved, with its last newline: a file ELU writes is never one it would not use.
   assert.throws(() => saveInstructions(root, 'x'.repeat(LIMIT)), { message: 'Keep the instructions under 100 KB.' });
   assert.doesNotThrow(() => saveInstructions(root, 'x'.repeat(LIMIT - 1)));
   assert.equal(fs.statSync(path.join(root, '.elu-code/instructions.md')).size, LIMIT);

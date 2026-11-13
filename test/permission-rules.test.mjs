@@ -203,7 +203,7 @@ test('where the turn has no working sandbox, every command counts as outside it'
 });
 
 // What a rule allows is checked each time it answers, not only when it was kept.
-test('a kept rule never reaches a secret, ELU Code\'s state or a git option that runs a program; read programs keep the exact command', t => {
+test('a kept rule never reaches a secret, ELU\'s state or a git option that runs a program; read programs keep the exact command', t => {
   const { project } = home(t);
   const ctx = { project, cwd: project, saved: true, sandboxed: true }, outside = command => bash(command, { dangerouslyDisableSandbox: true });
   saveRule({ kind: 'command', words: ['npm', 'test'], exact: false, outside: true }, { scope: 'all' });

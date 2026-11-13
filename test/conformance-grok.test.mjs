@@ -17,7 +17,7 @@ import { fakeClis, temp } from './helpers.mjs';
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const SESSION = '12345678-1234-4234-8234-123456789abc';
-// A test world: ELU Code's personal directory under a scratch folder, a stand-in for the
+// A test world: ELU's personal directory under a scratch folder, a stand-in for the
 // owner's home with a signed-in ~/.grok/auth.json (contents never read), the fake CLIs on
 // PATH, and a small Git repository as the workspace.
 function world(t, { mode = 'normal', signedIn = true } = {}) {
@@ -59,7 +59,7 @@ test('compile refuses until this machine\'s check passed, then builds each profi
     ...['.env*', '.npmrc', '.netrc', '.pypirc', 'auth.json', 'credentials', 'credentials.json', 'id_rsa', 'id_ed25519', '*.pem'].map(name => `Read(**/${name})`),
     ...fs.readdirSync(personal).filter(name => name !== 'grok-home').flatMap(name => { const p = path.join(personal, name); return [`Read(${p})`, `Read(${p}/**)`, `Grep(${p}/**)`]; }),
   ];
-  assert.ok(secrets.some(rule => rule === `Read(${path.join(personal, 'conformance')}/**)`), 'ELU Code state is denied');
+  assert.ok(secrets.some(rule => rule === `Read(${path.join(personal, 'conformance')}/**)`), 'ELU state is denied');
   const never = grok.NEVER_COMMANDS.map(command => `Bash(${command}:*)`);
   const common = turns => ['--no-auto-update', '--no-alt-screen', '--no-memory', '--no-subagents', '--cwd', w.repo, '--output-format', 'json', '--max-turns', turns, '--prompt-file', path.join(runDir, 'prompt.txt')];
   const deny = rules => rules.flatMap(rule => ['--deny', rule]), allow = rules => rules.flatMap(rule => ['--allow', rule]);
@@ -87,7 +87,7 @@ test('compile refuses until this machine\'s check passed, then builds each profi
   assert.ok(grok.meta.flags.includes('--prompt-file'));
 });
 
-test('childEnv carries every switch and no key variable; the private home holds ELU Code\'s config and a link to the real token', t => {
+test('childEnv carries every switch and no key variable; the private home holds ELU\'s config and a link to the real token', t => {
   const w = world(t);
   const env = grok.childEnv({ mode: 'locked', home: w.home }), personal = w.personal;
   assert.deepEqual(env, {
@@ -102,7 +102,7 @@ test('childEnv carries every switch and no key variable; the private home holds 
   assert.deepEqual(grok.meta.envKeys, []);
   const merged = agentEnv({ ...w.env, XAI_API_KEY: 'sk-nope', GROK_API_KEY: 'nope', GROK_TELEMETRY_ENABLED: '1' }, grok.meta.envKeys, env);
   assert.equal(merged.XAI_API_KEY, undefined); assert.equal(merged.GROK_API_KEY, undefined); assert.equal(merged.GROK_TELEMETRY_ENABLED, '0'); assert.equal(merged.HOME, env.HOME); assert.equal(merged.PATH, w.env.PATH);
-  // The private GROK_HOME: config and no-trust files written by ELU Code, a session store, and the token link.
+  // The private GROK_HOME: config and no-trust files written by ELU, a session store, and the token link.
   const dir = env.GROK_HOME, config = fs.readFileSync(path.join(dir, 'config.toml'), 'utf8');
   assert.equal(config, grok.CONFIG_TOML); assert.equal(fs.statSync(path.join(dir, 'config.toml')).mode & 0o777, 0o600);
   for (const line of ['[compat.claude]\nskills = false\nrules = false\nagents = false\nmcps = false\nhooks = false', '[compat.cursor]\nskills = false', 'telemetry = false', 'feedback = false', 'managed_config = false', 'campaigns = false', 'remote_fetch = false', 'backend_tools = false', 'trace_upload = false', 'mixpanel_enabled = false', '[harness]\ndisable_workspace_teleport = true\ndisable_codebase_upload = true', 'auto_update = false', '[relay]\nenabled = false', 'load_envrc = false', '[subagents]\nenabled = false', 'deny = ["Bash(git push:*)", "Bash(git tag:*)"']) assert.ok(config.includes(line), line);

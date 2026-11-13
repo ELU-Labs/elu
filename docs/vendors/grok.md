@@ -1,6 +1,6 @@
 # Grok Build
 
-Grok Build (`grok`) is xAI's coding CLI for SuperGrok and X Premium+ subscribers. ELU Code
+Grok Build (`grok`) is xAI's coding CLI for SuperGrok and X Premium+ subscribers. ELU
 runs sessions on it. Its enforcement follows the vendor's documentation; a one-time check on
 your machine proves it before the first run.
 
@@ -13,12 +13,12 @@ grok login
 
 Install into a user-writable npm prefix; nothing here needs sudo. `grok login` opens the
 browser (`grok login --device-auth` on a remote machine) and keeps the token in
-`~/.grok/auth.json`. ELU Code never reads that file, never copies it, and reads no API key
+`~/.grok/auth.json`. ELU never reads that file, never copies it, and reads no API key
 variable: if `grok` is signed out, the session says `Grok Build: not signed in. Run: grok login`.
 
 ## The one-time check
 
-ELU Code starts the check by itself before your first message to Grok goes out, whether
+ELU starts the check by itself before your first message to Grok goes out, whether
 you wrote to a session on it or to a bot on it. The session says so first, then shows each
 step as it ends, and then your message goes on. The check takes about seven short turns on
 Grok and a few minutes. Only a message you just sent starts it: a scheduled turn, a shadow
@@ -29,11 +29,11 @@ planted file outside it, a local web listener and a marker command:
 
 | Step | What it proves |
 |---|---|
-| `signin` | the token works from ELU Code's private Grok home |
+| `signin` | the token works from ELU's private Grok home |
 | `locked-no-write` | a read-only run told to create files creates none, inside or outside |
 | `locked-no-shell` | told to run the marker command, it never runs |
 | `locked-no-network` | told to fetch the local URL, the listener sees nothing |
-| `json` | the headless result parses and follows ELU Code's schema |
+| `json` | the headless result parses and follows ELU's schema |
 | `resume` | a second run with the session id continues the first |
 | `relay` | over ACP, a write outside the workspace asks first; denied, nothing is written |
 | `isolation` | `grok inspect --json` shows no Claude or Cursor instructions, hooks or servers |
@@ -57,7 +57,7 @@ Auto still work, but a blocked action is reported instead of asked:
 | Full | headless `--permission-mode bypassPermissions`, `--sandbox off` | anything; the never list stays as deny rules |
 
 Every profile denies reads of secret folders (`~/.ssh`, `~/.aws`, `~/.claude`, `~/.codex`,
-`.env*`, `auth.json`, key files, ELU Code's own state) by rule, and denies the never list on
+`.env*`, `auth.json`, key files, ELU's own state) by rule, and denies the never list on
 command text (`git push`, `git tag`, `git merge`, `gh pr merge`, `gh release`, package
 publishes, deploys, `kubectl apply`, `terraform apply`). Those rules match text: `sh -c`
 and aliases get past them, so in Auto and Full they are a tripwire, not a boundary.
@@ -68,7 +68,7 @@ Read only profile has no shell, so there the never list holds. Grok's sandbox bl
 child process's network on Linux only; on macOS the read-only profile holds because it has
 no shell and no web tools, not because the sandbox blocks the network.
 
-Headless runs have no schema flag, so ELU Code puts the output schema in the prompt and
+Headless runs have no schema flag, so ELU puts the output schema in the prompt and
 validates the answer. Sessions resume with `-r`; a mode switch that changes the sandbox
 profile cannot resume (Grok keeps a session's sandbox), so that turn's retry starts a fresh
 session without the earlier context. A headless run prints its answer only at the end, so
@@ -86,14 +86,14 @@ the tree, `.envrc`, and your Claude Code configuration: `~/.claude/settings.json
 `~/.claude/rules/*.md`, `~/.claude/agents/*.md`, `~/.claude/skills/`, `~/.claude.json`
 (MCP servers), plus the same Cursor files. The switches
 `GROK_CLAUDE_{SKILLS,RULES,AGENTS,MCPS,HOOKS}_ENABLED=0` and `GROK_CURSOR_*_ENABLED=0`
-exist, and ELU Code sets all ten, but
+exist, and ELU sets all ten, but
 [xai-org/grok-build-plugin-cc#34](https://github.com/xai-org/grok-build-plugin-cc/issues/34)
 (open, filed against CLI 1.0.5) reports `~/.claude/CLAUDE.md`, `rules` and `agents` still
 loading with every switch off, and the `~/.claude` scan is anchored on `HOME`, which
 `GROK_HOME` does not move.
 
-So every run gets a private `HOME` under ELU Code's state (`grok-home` in your personal
-directory) and a `GROK_HOME` inside it holding only what ELU Code wrote:
+So every run gets a private `HOME` under ELU's state (`grok-home` in your personal
+directory) and a `GROK_HOME` inside it holding only what ELU wrote:
 
 - `config.toml`: Claude and Cursor compatibility off, telemetry, trace upload, Mixpanel,
   feedback, managed config, campaigns, remote fetch and server-side search off, workspace
@@ -104,7 +104,7 @@ directory) and a `GROK_HOME` inside it holding only what ELU Code wrote:
   prompt; they are repository content, treated as untrusted.
 - `sessions/`: Grok's session store, so `-r` works.
 - `auth.json`: a symbolic link to your real `~/.grok/auth.json`. `grok login`, `grok logout`
-  and token refreshes write through it; ELU Code holds no copy. If Grok ever replaces the
+  and token refreshes write through it; ELU holds no copy. If Grok ever replaces the
   link with a file, the newer token wins at the next run.
 
 There is no `~/.claude` under that home, so the `isolation` step shows what actually
@@ -113,7 +113,7 @@ reaches a run on your machine. If it fails, Grok stays off here and the session 
 ## Telemetry and uploads
 
 On consumer plans Grok's product analytics, session trace upload (which includes file
-contents) and per-turn workspace snapshots are on by default. ELU Code turns off every
+contents) and per-turn workspace snapshots are on by default. ELU turns off every
 documented switch, in the environment and in `config.toml`: `GROK_TELEMETRY_ENABLED=0`,
 `GROK_TELEMETRY_TRACE_UPLOAD=0`, `GROK_TELEMETRY_MIXPANEL_ENABLED=0`,
 `GROK_FEEDBACK_ENABLED=0`, `GROK_MEMORY=0`, `GROK_SUBAGENTS=0`, `GROK_CAMPAIGNS=0`,
@@ -125,7 +125,7 @@ uploads at exit; off, it ends when the turn ends. Grok's server-side web search
 (`[features] backend_tools`, `GROK_BACKEND_SEARCH`) runs inside the model call, where no
 permission rule applies, so it is off in every mode; the model's own web tools follow the
 mode. Account-level settings for coding data, retention and training live in Grok's own
-`/privacy` screen; ELU Code cannot change them.
+`/privacy` screen; ELU cannot change them.
 
 ## What is enforced and what is not
 
@@ -149,5 +149,5 @@ Not enforced, or not proven:
   the rule above keeps the newer token either way.
 - Workspace `AGENTS.md` and `CLAUDE.md` reach the prompt in every mode. A repository can
   steer the model's instructions, not its permissions.
-- A full shell in Full access can push, tag, merge, deploy and publish. ELU Code keeps the
+- A full shell in Full access can push, tag, merge, deploy and publish. ELU keeps the
   prompt line, the deny rules and its own publish gate, and claims no more.

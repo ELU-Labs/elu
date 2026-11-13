@@ -1,6 +1,6 @@
 # Third-party notices
 
-Two of the bots ELU Code comes with are adapted from skills published by others. Their
+Two of the bots ELU comes with are adapted from skills published by others. Their
 instructions are in `lib/default-bots.mjs`. Some test files are examples copied from a
 published specification; they are in the repository only, not in the npm package.
 

@@ -1,6 +1,6 @@
 ---
 name: Bug report
-about: Something ELU Code did wrong
+about: Something ELU did wrong
 labels: bug
 ---
 
@@ -17,7 +17,7 @@ labels: bug
 
 **Your setup**
 
-- ELU Code: <!-- `elu --version` -->
+- ELU: <!-- `elu --version` -->
 - Operating system:
 - Node: <!-- `node --version` -->
 - Vendor command line and release: <!-- for example `claude --version` -->
