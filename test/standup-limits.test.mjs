@@ -183,7 +183,7 @@ test("a teammate's round spends from their allowance, is checked again when appr
   const shared = share(p.root, { handle: 'shop', teams: [teamId] });
   fs.mkdirSync(peerFile(), { recursive: true });
   fs.writeFileSync(peerFile('state.json'), JSON.stringify({ key: founder.identity.key, running: true, at: new Date().toISOString(), teams: [{ id: teamId, members: [{ key: founder.identity.key, online: true }, { key: sara, online: true }] }] }));
-  saveRemotePlans(sara, [{ repoId: shared.repoId, handle: 'shop', id: 't-0a1b2c3d', revision: 1, title: 'Private plan of sara', description: '', goal: 'x', objectives: [], priority: 'high', severity: 'minor', state: 'approved', startedBy: 'owner', who: 'Opus 5.5', subtasks: [], met: [], approvedAt: new Date().toISOString(), doneAt: null, updatedAt: new Date().toISOString() }]);
+  saveRemotePlans(sara, [{ repoId: shared.repoId, handle: 'shop', id: 't-0a1b2c3d', revision: 1, title: 'Private plan of sara', description: 'Text', goal: 'Ship it.', objectives: ['One'], priority: 'high', severity: 'critical', state: 'approved', startedBy: 'owner', who: 'Opus 5.5', subtasks: [], met: [], approvedAt: new Date().toISOString(), doneAt: null, updatedAt: new Date().toISOString() }]);
   await controller.ask(STANDUP_QUESTION, task.id, { standupFor: { round: newRound(), by: 'You' } }).finished;
   assert.match(inputs(fake).at(-1).input, /Private plan of sara/, "the owner's own round is told teammates' Tasks");
   // Auto: each session asked is one of sara's runs here and reserves what one run may spend.
