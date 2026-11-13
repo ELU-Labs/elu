@@ -31,13 +31,13 @@ test('every vendor has a name, caps, an enforcement table and an adapter with th
 // An unpinned vendor (no tested release in its meta) is pinned per machine by its one-time
 // check: until then it is listed from PATH, never executed, not even for --version,
 // and its compile says what starts the check. Its fake answers --version only once installed as a test CLI.
-test('unpinned vendors are listed from PATH but never executed, and refuse to launch until their one-time check passed here', t => {
+test('unpinned vendors are listed from PATH but never executed, and refuse to launch until their one-time check passed here', async t => {
   const p = project(t), f = fakeClis(p.parent), marker = path.join(p.parent, 'unexpected-execution');
   const previous = process.env.XDG_CONFIG_HOME; process.env.XDG_CONFIG_HOME = f.env.XDG_CONFIG_HOME;
   t.after(() => { if (previous === undefined) delete process.env.XDG_CONFIG_HOME; else process.env.XDG_CONFIG_HOME = previous; });
   // Recorders in place of the fakes: any execution leaves the marker.
   for (const name of ['agy', 'grok']) fs.writeFileSync(path.join(f.dir, name), `#!${process.execPath}\nimport fs from 'node:fs';fs.appendFileSync(${JSON.stringify(marker)},'executed\\n');process.exit(91);\n`, { mode: 0o755 });
-  const rows = detect(p.root, { PATH: f.dir });
+  const rows = await detect(p.root, { PATH: f.dir });
   for (const vendor of ['agy', 'grok']) {
     const row = rows.find(value => value.vendor === vendor), adapter = ADAPTERS[vendor];
     assert.deepEqual(adapter.meta.supportedVersions, [], vendor);

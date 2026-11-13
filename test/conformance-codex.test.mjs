@@ -153,11 +153,11 @@ test('lead parse: declined items become denials, mcp_tool_call is refused, web s
   assert.equal(parseCodex(long + base, { mode: 'ask' }).denials[0].summary.length, 200);
 });
 
-test('only a ChatGPT sign-in counts: an API key or no sign-in is reported as signed out', (t) => {
+test('only a ChatGPT sign-in counts: an API key or no sign-in is reported as signed out', async (t) => {
   const parent = temp(t);
   for (const [mode, expected] of [['normal', true], ['api-key', false], ['signed-out', false]]) {
     const f = fakeClis(parent, { mode });
-    assert.equal(signedIn({ bin: path.join(f.dir, 'codex'), cwd: parent, env: { ...process.env, PATH: f.env.PATH } }), expected, mode);
+    assert.equal(await signedIn({ bin: path.join(f.dir, 'codex'), cwd: parent, env: { ...process.env, PATH: f.env.PATH } }), expected, mode);
   }
   assert.equal(meta.signInHint, 'Codex: sign in with ChatGPT. Run: codex login');
 });

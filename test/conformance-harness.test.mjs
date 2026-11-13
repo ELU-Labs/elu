@@ -64,7 +64,7 @@ test('a gated vendor refuses to run until its one-time check passed here, for th
   assert.throws(() => requireConformance('grok', { bin: '/x/grok', version: '1.0.0' }), /Grok Build has not been checked on this machine yet/);
 });
 
-test('a kept reading of the vendors is read again once a check wrote its record', t => {
+test('a kept reading of the vendors is read again once a check wrote its record', async t => {
   home(t);
   let reads = 0;
   const list = vendorReading(), source = () => [{ reading: ++reads }], file = path.join(personalDirectory(), 'conformance', 'grok.json');
@@ -83,4 +83,23 @@ test('a kept reading of the vendors is read again once a check wrote its record'
   // A source that fails leaves nothing kept, and forget drops a good reading.
   assert.throws(() => list.read(() => { throw new Error('no vendors'); }), /no vendors/); assert.equal(list.kept(), null);
   list.read(source); assert.equal(list.kept().length, 1); list.forget(); assert.equal(list.kept(), null);
+});
+
+test('a reading of the vendors that takes time is one reading for everyone who asks meanwhile, and one forgotten while it ran is never kept', async t => {
+  home(t);
+  const list = vendorReading(); let reads = 0, release = null;
+  const slow = () => { const mine = ++reads; return new Promise(resolve => { release = () => resolve([{ reading: mine }]); }); };
+  // Two ask while it runs: the programs are started once, and nothing is kept until it ends.
+  const first = list.read(slow), second = list.read(slow);
+  assert.equal(first, second); assert.equal(reads, 1); assert.equal(list.kept(), null);
+  release(); assert.deepEqual(await first, [{ reading: 1 }]); assert.deepEqual(list.kept(), [{ reading: 1 }]);
+  // Kept: the next reading is a new one.
+  list.forget(); const third = list.read(slow), letThird = release; assert.equal(reads, 2);
+  // Forgotten while it runs (a sign-in, r): whoever asks next starts another, and the one from before is not kept when it ends.
+  list.forget(); const fourth = list.read(slow); assert.notEqual(third, fourth); assert.equal(reads, 3);
+  letThird(); assert.deepEqual(await third, [{ reading: 2 }]); assert.equal(list.kept(), null);
+  release(); assert.deepEqual(await fourth, [{ reading: 3 }]); assert.deepEqual(list.kept(), [{ reading: 3 }]);
+  // One that fails keeps nothing and is not handed to the next who asks.
+  list.forget(); await assert.rejects(list.read(() => Promise.reject(new Error('no vendors'))), /no vendors/); assert.equal(list.kept(), null);
+  assert.deepEqual(await list.read(async () => [{ reading: 'after' }]), [{ reading: 'after' }]); assert.deepEqual(list.kept(), [{ reading: 'after' }]);
 });

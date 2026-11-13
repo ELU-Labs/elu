@@ -95,13 +95,13 @@ test('the dashboard can read a new project before history or settings exist', t 
   assert.equal(fs.existsSync(f.fake.calls), false);
 });
 
-test('missing settings can be restored without losing task history or instruction ownership', t => {
+test('missing settings can be restored without losing task history or instruction ownership', async t => {
   const f = fixture(t), repo = createHistory(historyPlan(projectFolder(f.root)));
-  applyInit(repo, initPlan(repo));
+  applyInit(repo, await initPlan(repo));
   const instructions = fs.readFileSync(path.join(f.root, 'AGENTS.md'), 'utf8');
   fs.unlinkSync(path.join(f.root, '.elu-code/config.yaml'));
   fs.writeFileSync(path.join(repo.state, 'owner-note.txt'), 'keep history');
-  const plan = initPlan(repo); assert.equal(plan.initialized, false); assert.equal(plan.config.checks.length, 0); applyInit(repo, plan);
+  const plan = await initPlan(repo); assert.equal(plan.initialized, false); assert.equal(plan.config.checks.length, 0); applyInit(repo, plan);
   assert.equal(fs.readFileSync(path.join(f.root, 'AGENTS.md'), 'utf8'), instructions);
   assert.equal(fs.readFileSync(path.join(repo.state, 'owner-note.txt'), 'utf8'), 'keep history');
   assert.ok(fs.existsSync(path.join(f.root, '.elu-code/config.yaml')));

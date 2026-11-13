@@ -20,11 +20,29 @@ macOS each of those HOMEs holds one link, `Library/Keychains`, to your own
 `~/Library/Keychains`: `agy` in ELU then uses the sign-in `agy` has in your terminal. Nothing
 else of your home is linked, and no turn may write ELU's state.
 
+On Linux with no keyring (a server over SSH, a container), `agy` keeps a token file under its
+HOME. Each of ELU's HOMEs then holds a link to that file in your own home, at both places it
+has been reported at, `~/.gemini/antigravity-cli/antigravity-oauth-token` and
+`~/.gemini/antigravity-oauth-token`. So `agy` in ELU uses the sign-in `agy` has in your
+terminal, and a sign-in made from ELU lands in your own file, for every workspace. ELU never
+opens that file and keeps no copy. If `agy` writes a new file over ELU's link instead of
+writing through it, ELU moves the newer of the two to your own place the next time it runs
+`agy`. Google's documentation does not name the file: the name is from `agy` 1.5.8 itself, the
+folder from people who looked at a Linux install, and ELU has not seen it on one. If your
+`agy` keeps it somewhere else, the check will say Antigravity is not signed in after `s`
+signed it in.
+
 Sign it in from ELU: `s` on the Antigravity line in the Usage tab. ELU leaves its screen and
 runs `agy -p /usage` under its sign-in HOME, with your terminal as its input: the browser opens
 Google sign-in, you copy the code it shows, paste it there and press Enter. `agy` waits 60
-seconds for the code. On a computer with no browser, open the link it prints on any other. ELU comes back when it ends and reads the sign-in again. `c` on a
-signed-out line offers the same sign-in first.
+seconds for the code. On a computer with no browser, open the link it prints on any other.
+ELU comes back when it ends and reads the sign-in again. `c` on a signed-out line offers the
+same sign-in first.
+
+If the 60 seconds pass with no code, `agy` stops (`Error: authentication timed out.`), ELU
+comes back and says `Antigravity CLI got no code in 60 seconds. s starts again with a new
+link.` Press `s` again: it is a new sign-in with a new link and a new code, and 60 seconds
+more. The sign-in screen says so at its top, before `agy` prints its link.
 
 ELU reads the sign-in with `agy -p /usage --output-format json`: no model turn, no quota
 spent. Signed in, it exits 0. Signed out, `agy` 1.5.8 prints a sign-in link, opens the browser
@@ -140,6 +158,8 @@ one-time check is the proof, per machine. In particular, until a check says othe
   request;
 - whether `-p` in a folder it does not trust refuses instead of denying softly, and whether
   the keychain sign-in is visible under the private HOME;
+- on Linux with no keyring, where `agy` keeps its token file and whether it writes it in
+  place (ELU handles both ways of writing it, and links both places it is reported at);
 - that `-p` reads the task from standard input, that `--print-timeout` takes seconds
   (`900s`), and that the output names the conversation id (the `json` and `resume` steps);
 - secret reads: `agy` has no read deny, so a read of a secret folder is stopped only by
