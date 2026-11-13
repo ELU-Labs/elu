@@ -776,6 +776,27 @@ test('over a session on my other computer the box writes to my agent here, start
   assert.equal(pendingRequests(p.root).filter(row => row.continuationTaskId === '1').length, 1, 'neither went to my agent here');
 });
 
+test("over a session on my other computer, its @name that is also a name on my team keeps the box on that computer, never a teammate ask", async t => {
+  const at = new Date().toISOString(), id = '55555555-5555-4555-8555-555555555555';
+  const remote = [{ id, machine: SARA, createdAt: at, lastAt: at, title: 'Roll the release', state: 'needs_input', question: 'Ship it?', choices: [], steps: [], entries: [{ role: 'You', at, text: 'Roll the release' }], approvals: [] }];
+  const p = project(later(t)); environment(t, p.parent);
+  // sara-box is mine; on the team it goes by sara, so @sara names it there and is a team name too.
+  const peer = fakePeer({ items: [], mine: [{ key: SARA, mine: true, theirs: true }], remote }), v = await view(t, { repo: repository(p.root), dashboard: true, peer });
+  const board = v.panels.board, ask = v.panels.ask, label = () => ask._label.getText();
+  await until(() => board.items.map(plainItem).some(row => /Roll the release/.test(row)), 'the row of the session there');
+  board.focus(); selectRow(board, /on sara-box/);
+  await until(() => /Message your agent here/.test(label()), 'the session there under the cursor');
+  ask.focus(); ask.readInput(); await until(() => ask.__listener, 'message box');
+  v.input.write('@sara second message');
+  await until(() => /Message the session on @sara-box/.test(label()), 'the box says it goes there');
+  assert.doesNotMatch(label(), /teammate|Ask @/);
+  await until(() => /enter send to @sara-box/.test(v.panels.keys.getText()), 'and the keys');
+  ask.submit();
+  await until(() => peer.sent().some(row => row.type === 'remoteSend'), 'sent there');
+  assert.deepEqual(peer.sent().filter(row => row.type === 'remoteSend'), [{ type: 'remoteSend', id, text: 'second message' }]);
+  assert.deepEqual(peer.sent().filter(row => row.type === 'ask'), [], 'no teammate was asked anything');
+});
+
 test('Sessions lists every session of my other computer in this repository under its name, and Projects opens its other projects', async t => {
   const now = Date.now(), at = minutes => new Date(now - minutes * 60000).toISOString(), SHOP = 'e'.repeat(64);
   const p1 = '1'.repeat(16), p2 = '2'.repeat(16);
