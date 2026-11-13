@@ -69,7 +69,11 @@ What stays, and why:
   That is how a vendor that hangs is told from one that works.
 - Codex cannot ask you a question in the middle of a turn: nobody could answer it there.
 - Grok Build and Antigravity run with a home folder of their own, as in every mode, so
-  `~` in their commands is not your home. Name your real folders by their full path.
+  `~` in their commands is not your home: each reads its own settings from `~`, and ELU
+  has no other way to give it the settings the run needs. Git and `gh` are pointed at your
+  own settings and sign-in (`GIT_CONFIG_GLOBAL`, `GH_CONFIG_DIR`), and SSH finds your keys.
+  Another tool that keeps its sign-in under `~` (npm, a cloud CLI) needs its full path or
+  its own variable there. Claude Code and Codex run in your home.
 - What a vendor asks in every mode is still shown to you. Claude Code asks before `rm` or
   `rmdir` on your home, the working folder or a top-level folder.
 - Who gets Full access is unchanged: your own sessions and the schedules you pick it for.

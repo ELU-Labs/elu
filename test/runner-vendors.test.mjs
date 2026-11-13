@@ -267,8 +267,8 @@ test('an Antigravity session refuses a push that a script makes over ACP in Ask 
 
 // Grok Build and Antigravity CLI run under a home of their own, so ~ in a command of theirs is
 // not the owner's. In Full access Git and gh still read his settings and his sign-in.
-for (const [vendor, version, say] of [['grok', '1.0.77', script => `Run the command ${script} then reply done with the summary "ran it".`], ['agy', '1.5.4', script => `Run this command: ${script}. Reply with the summary "headless".`]]) {
-  test(`a ${vendor} command in Full access reads the owner's Git settings and gh sign-in from under its own home`, async t => {
+for (const [vendor, name, version, say] of [['grok', 'a Grok Build', '1.0.77', script => `Run the command ${script} then reply done with the summary "ran it".`], ['agy', 'an Antigravity', '1.5.4', script => `Run this command: ${script}. Reply with the summary "headless".`]]) {
+  test(`${name} command in Full access reads the owner's Git settings and gh sign-in from under its own home`, async t => {
     const f = setup(t, vendor), script = path.join(f.parent, 'who.sh'), out = path.join(f.parent, 'who.out'), gh = path.join(process.env.XDG_CONFIG_HOME, 'gh');
     if (vendor === 'grok') { fs.mkdirSync(path.join(f.parent, '.grok')); fs.writeFileSync(path.join(f.parent, '.grok', 'auth.json'), '{}\n', { mode: 0o600 }); }
     proven(vendor, f.bin, version, { relay: true });
