@@ -105,8 +105,9 @@ test('the lead error names what is wrong', () => {
   const signedOut = vendor => vendorProblem(vendor, [{ vendor, available: true, supported: true, signedIn: false }]);
   // Where no browser can open (an SSH session, Linux with no display), the device code sign-in.
   assert.equal(signedOut('codex'), `Codex is signed out. Run ${hasBrowser() ? 'codex login' : 'codex login --device-auth'} to sign in, then send again.`);
-  assert.equal(signedOut('grok'), `Grok Build is signed out. Run ${hasBrowser() ? 'grok login' : 'grok login --device-auth'} to sign in, then send again.`);
-  assert.equal(signedOut('agy'), 'Antigravity CLI is signed out. Run agy to sign in, then send again.');
+  // Antigravity and Grok Build sign in from ELU itself: agy's sign-in for ELU is not the one in the owner's terminal.
+  assert.equal(signedOut('grok'), 'Grok Build is signed out. Sign it in with s on its line in the Usage tab, then send again.');
+  assert.equal(signedOut('agy'), 'Antigravity CLI is signed out. Sign it in with s on its line in the Usage tab, then send again.');
   assert.equal(vendorProblem('claude', [{ vendor: 'claude', available: true, supported: false, signedIn: true, release: '2.1.321', reason: 'This untested version is missing required flags: --verbose.' }]), 'Claude Code 2.1.321: This untested version is missing required flags: --verbose.');
 });
 

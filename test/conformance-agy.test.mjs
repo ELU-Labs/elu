@@ -145,7 +145,7 @@ test('until its one-time check passed here compile refuses and says what starts 
   assert.equal(row.support, 'sessions and reviews'); assert.equal(row.reason, 'Antigravity CLI has not been checked on this machine yet. Your first message to it runs the check.');
   assert.equal(fs.existsSync(marker), false, 'never run, not even for --version');
   assert.throws(() => requireConformance('agy', { bin, version: '1.5.4' }), /Antigravity CLI has not been checked on this machine yet/);
-  assert.deepEqual(agy.meta.signInHint.split('\n'), ['Antigravity: not signed in. Run: agy', "Google's FAQ: wrapping agy in third-party agents is not supported on consumer plans. antigravity.google/docs/faq"]);
+  assert.deepEqual(agy.meta.signInHint.split('\n'), ['Antigravity: not signed in for ELU. Sign it in with s on its line in the Usage tab.', "Google's FAQ: wrapping agy in third-party agents is not supported on consumer plans. antigravity.google/docs/faq"]);
   assert.equal(agy.meta.installHint, 'Install agy from antigravity.google/docs');
 });
 
@@ -292,6 +292,6 @@ test('the conformance steps pass against the fake and record relay; a vendor tha
   assert.equal(requireConformance('agy', { bin: fake.bin, version: '1.5.4' }), true, 'the relay step is optional: ask and auto fall back to deny and report');
   fake.set({ signedIn: false });
   const out = await runConformance('agy', { bin: fake.bin, version: '1.5.4', scratch: scratch('s4'), env: process.env, log: line => log.push(line) });
-  assert.equal(out.steps.signin, 'fail'); assert.ok(log.some(line => line === 'signin: fail: not signed in under the private HOME (run: agy)'));
+  assert.equal(out.steps.signin, 'fail'); assert.ok(log.some(line => line === 'signin: fail: not signed in for ELU; sign it in with s on its line in the Usage tab'));
   assert.throws(() => requireConformance('agy', { bin: fake.bin, version: '1.5.4' }), /Antigravity CLI did not pass its check on this machine \(not proven: it is signed in/);
 });

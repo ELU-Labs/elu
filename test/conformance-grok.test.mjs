@@ -233,7 +233,7 @@ test('run() relays an ACP permission request through the approval files: allow w
   await assert.rejects(grok.run(start('empty', { prompt: ' ' })), /needs a prompt/);
   const out = world(t, { signedIn: false }); passed(out.bin);
   const failure = await grok.run({ ...start('out', { prompt: 'x' }), bin: out.bin, env: out.env, cwd: out.repo, logFile: path.join(out.dir, 'out.log') }).then(() => null, error => error);
-  assert.match(failure.message, /could not finish/); assert.equal(failure.details.cause, 'auth'); assert.match(failure.details.reason, /Run: grok login/);
+  assert.match(failure.message, /could not finish/); assert.equal(failure.details.cause, 'auth'); assert.equal(failure.details.reason, 'Grok Build: not signed in. Sign it in with s on its line in the Usage tab.');
   // A machine whose relay step failed keeps the headless fallback: ACP would skip the question.
   passed(out.bin, { relay: false });
   await assert.rejects(grok.run({ ...start('norelay', { prompt: 'x' }), bin: out.bin, env: out.env, cwd: out.repo }), /^EluCodeError: Grok Build can't ask live here\. Blocked actions are reported\.$/);

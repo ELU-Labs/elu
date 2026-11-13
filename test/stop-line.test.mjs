@@ -182,7 +182,7 @@ test("a Claude run refused with an API error keeps Claude's words and gets the a
 
 test("a bot's or a reviewer's failed run names that run's vendor, not the lead's", () => {
   const runs = [{ role: 'lead', vendor: 'claude', at, logFile: '/runs/lead.log' }, { role: 'bot:checker', vendor: 'agy', at, logFile: '/runs/checker.log' }, { role: 'lead', vendor: 'claude', at, logFile: '/runs/lead-2.log' }];
-  assert.equal(said({ runs, error: { message: 'Antigravity could not finish.', cause: 'auth', logFile: '/runs/checker.log' } }).text, 'Antigravity could not finish: Antigravity CLI is signed out. Sign in again with agy, then type continue.');
+  assert.equal(said({ runs, error: { message: 'Antigravity could not finish.', cause: 'auth', logFile: '/runs/checker.log' } }).text, 'Antigravity could not finish: Antigravity CLI is signed out. Sign it in with s on its line in the Usage tab, then type continue.');
   // A Codex bot whose log reads as signed out.
   const codex = [...runs, { role: 'bot:critic', vendor: 'codex', at, logFile: '/runs/critic.log' }];
   assert.equal(said({ runs: codex, error: { message: '@critic could not finish.', cause: 'unknown', logFile: '/runs/critic.log' } }, { logCause: () => 'auth' }).text, '@critic could not finish: Codex is signed out. Sign in again with ' + signInCommand('codex') + ', then type continue.');

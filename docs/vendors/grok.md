@@ -14,9 +14,12 @@ grok login
 Install into a user-writable npm prefix; nothing here needs sudo. `grok login` opens the
 browser (`grok login --device-auth` on a remote machine) and keeps the token in
 `~/.grok/auth.json`. ELU never reads that file, never copies it, and reads no API key
-variable: if `grok` is signed out, the session says `Grok Build: not signed in. Run: grok login`,
-or `Run: grok login --device-auth` on a computer with no browser (an SSH session, or Linux with
-no display).
+variable. You can also sign in from ELU: `s` on the Grok Build line in the Usage tab leaves
+ELU's screen and runs `grok login` there (`grok login --device-auth` on a computer with no
+browser: an SSH session, or Linux with no display), under the HOME and Grok home ELU runs
+`grok` with, so the token lands in your own `~/.grok/auth.json` through the link below; ELU
+comes back when it ends. If `grok` is signed out, the session says
+`Grok Build: not signed in. Sign it in with s on its line in the Usage tab.`
 
 ## The one-time check
 
@@ -28,9 +31,11 @@ scheduled turn, a shadow turn or a review never does.
 
 The Usage tab shows whether Grok is signed in before the check has run: it looks for
 `~/.grok/auth.json`, never opens it, and runs nothing. Its line then says
-`signed in · needs a one-time check (c runs it now)`, or `not signed in. Run: grok login`.
+`signed in · needs a one-time check (c runs it now)`, or `not signed in for ELU · s signs in`.
 `c` on that line runs the same check there, with each step under the line as it ends, and the
-line then says `ready`, or that the check failed and which step was not proven.
+line then says `ready`, or that the check failed and which step was not proven. Signed out,
+`c` asks first whether to sign in. The check's folders are made in the system temp folder as
+it is on disk: on macOS `/var` is a link to `/private/var`, and ELU refuses to work through a link.
 
 The check runs eight steps against the installed binary in a throwaway repository, with a
 planted file outside it, a local web listener and a marker command:
