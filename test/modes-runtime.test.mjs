@@ -690,18 +690,22 @@ test('in Ask for approval a host a sandboxed command connects to is asked once, 
   const pushAgain = await settle(f.controller.ask('Push it again', push.task.id), () => 'deny');
   assert.deepEqual([push.asked.length, pushAgain.asked.length], [1, 1]); assert.deepEqual(settingsOf(f.leads().at(-1).args).sandbox.network.allowedDomains, []);
   assert.deepEqual(connections(), [{ host: 'github.com', allowed: true, asked: true, streaming: true }, { host: 'github.com', allowed: false, asked: true, streaming: true }]);
-  // Approve for me decides without the owner, and Full access has no sandbox: neither streams its input.
+  // Every turn of the owner's streams its input, so what he sends while it works reaches it
+  // (lib/runner.mjs listen). Approve for me and Full access still ask him nothing.
   connecting([]);
   await f.controller.ask('Look', null, { permissions: 'auto' }).finished;
-  assert.equal(valueOf(f.leads().at(-1).args, '--input-format'), undefined);
+  assert.equal(valueOf(f.leads().at(-1).args, '--input-format'), 'stream-json');
   await f.controller.ask('Look', null, { permissions: 'full' }).finished;
-  assert.equal(valueOf(f.leads().at(-1).args, '--input-format'), undefined);
+  assert.equal(valueOf(f.leads().at(-1).args, '--input-format'), 'stream-json');
+  assert.deepEqual(pendingApprovals({ root }), []);
 });
 
-// Before: the prompt went in as text, so the input was closed and the host was denied unasked.
-test('a run whose prompt goes in as text gets every host it asks about denied without anyone being asked', async t => {
-  const f = setup(t, 'answer'); fakeClis(f.parent, { mode: 'answer', network: ['elu.dev'] });
-  await f.controller.ask('Look', null, { permissions: 'auto' }).finished;
+// Outside Ask for approval nobody is asked about a host: the input stays open for the owner's
+// messages, and a host the sandbox does not list is denied, as it was with the input closed.
+test('outside Ask for approval every host a turn connects to is denied without anyone being asked', async t => {
+  const f = setup(t, 'answer'), root = f.controller.repo.project ?? f.controller.repo.root; fakeClis(f.parent, { mode: 'answer', network: ['elu.dev'] });
+  const task = await f.controller.ask('Look', null, { permissions: 'auto' }).finished;
   const rows = fs.readFileSync(path.join(f.fake.dir, 'network.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
-  assert.deepEqual(rows, [{ host: 'elu.dev', allowed: false, asked: false, streaming: false }]);
+  assert.deepEqual(rows, [{ host: 'elu.dev', allowed: false, asked: false, streaming: true }]);
+  assert.deepEqual(pendingApprovals({ root }), []); assert.deepEqual(task.approvals ?? [], []);
 });

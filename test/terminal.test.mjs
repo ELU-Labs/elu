@@ -1109,14 +1109,14 @@ test('a message with no @name goes to whoever the owner last wrote to in the ses
   // @model alone sends nothing and waits for the message.
   await send(v, '@model'); await until(() => /Write your message after @model\./.test(panels.status.getText()) && panels.ask.getValue() === '@model ', 'the box keeps @model');
   panels.ask.setValue(''); assert.equal(roles().length, 5);
-  // A message that waits behind a working bot is named for the bot it will go to.
+  // A message sent while a bot works goes to its turn at once, named for that bot.
   answers('slow');
   await send(v, '@sec Still there?'); await until(() => /@sec is working/.test(chat()), 'the bot at work');
   await send(v, 'and the deploy key?');
-  await until(() => /You → @sec \(waiting\) {2}\d{1,2}:\d\d [AP]M\n┃ and the deploy key\? *\nSent when this turn ends\./.test(chat()), 'the waiting message names the bot');
-  assert.equal(pendingRequests(p.root).find(row => row.state === 'queued').bot, 'sec');
+  await until(() => /You → @sec {2}\d{1,2}:\d\d [AP]M\n┃ and the deploy key\? *\nSent to the running turn\./.test(chat()), 'the message went to the bot\'s turn');
+  assert.deepEqual(pendingRequests(p.root).filter(row => row.state === 'queued'), []);
+  assert.deepEqual(tasks()[0].messages.filter(row => row.during).map(row => [row.to, row.text]), [['@sec', 'and the deploy key?']]);
   // A bot taken out of the session is no longer who a plain message goes to.
-  await box(); v.input.write('\x1b[A'); await until(() => panels.ask.getValue() === '@sec and the deploy key?', 'taken back, as it was addressed'); panels.ask.setValue('');
   await send(v, '/stop'); await until(() => tasks()[0].state !== 'running', 'stopped');
   await until(() => /Stopped before answering\. Write to @sec again and it picks up where it stopped\./.test(chat().replace(/\s*\n┃ /g, ' ')), 'the stop says what the next message does');
   await send(v, '/bots remove sec'); await until(() => !tasks()[0].bots.includes('sec'), 'removed');
@@ -1162,11 +1162,13 @@ test('a bot at work is named in the chat; one that is stopped or cannot answer s
   await send(v, '@sec Still there?'); await until(() => /@sec is working/.test(chat()) && /@sec working/.test(panels.header.getText()), 'the bot is shown at work');
   // The session reads as working before the vendor starts. The run has read its mode once its call is recorded; only then may the mode change.
   await until(() => started() > before, 'the slow run has started');
-  await send(v, '@sec And the deploy key?'); await until(() => /You → @sec \(waiting\) {2}\d{1,2}:\d\d [AP]M\n┃ And the deploy key\? *\nSent when this turn ends\.\n↑ in the message box takes it back/.test(chat()), 'waiting for the bot');
-  // /stop ends the bot's turn without touching the lead's answer; the waiting message is answered next.
+  // Written to the bot while it works, a message goes to its turn at once.
+  await send(v, '@sec And the deploy key?'); await until(() => /You → @sec {2}\d{1,2}:\d\d [AP]M\n┃ And the deploy key\? *\nSent to the running turn\./.test(chat()), 'sent to the bot\'s turn');
+  // /stop ends the bot's turn without touching the lead's answer; the next message to it is answered.
   answers('answer');
   await send(v, '/stop'); await until(() => /@sec {2}\d{1,2}:\d\d [AP]M\n┃ Stopped before answering\./.test(chat()), 'stopped');
-  await until(() => /@sec answered/.test(status()) && tasks()[0].messages.at(-1).bot === 'sec' && !tasks()[0].messages.at(-1).failed, 'the waiting message was answered');
+  await send(v, '@sec And the deploy key?');
+  await until(() => /@sec answered/.test(status()) && tasks()[0].messages.at(-1).bot === 'sec' && !tasks()[0].messages.at(-1).failed, 'the next message was answered');
   assert.equal(tasks()[0].state, 'answered'); assert.doesNotMatch(chat(), /\(waiting\)/);
   // A new session whose first message goes to that bot has nowhere to stand: it is blocked.
   answers('invalid');
@@ -1939,20 +1941,22 @@ test('moving to the list, and on to another row, keeps the lead working and keep
 });
 
 // The owner's case: the session is working and he sends another message. Nothing is refused
-// and nothing needs /stop: it waits in the chat and is the next turn by itself.
+// and nothing needs /stop. On a vendor that cannot take it during the turn (Codex here) it
+// waits in the chat and is the next turn by itself, and Enter sends it now.
 test('a message sent while the session works waits in its chat; Up takes it back and /stop sends it next', { timeout: 40000 }, async t => {
   const p = setup(t, 'slow'), v = await view(t, { repo: p.repo }), panels = v.current.panels, chat = () => panels.chat.getText();
   const waiting = () => pendingRequests(p.root).filter(row => row.state === 'queued').map(row => row.goal), sent = () => projectSnapshot(p.repo).tasks[0]?.messages.map(row => row.text) ?? [];
+  await send(v, '/model default codex'); await until(() => /New sessions in .+ start with Codex/.test(panels.status.getText()), 'Codex for new sessions');
   await send(v, 'Keep working on the board');
-  await until(() => projectSnapshot(p.repo).tasks[0]?.activeRole === 'lead' && /Opus is working\n\n.+\n\ntype a message any time · \/stop to stop/.test(chat()), 'the hint under the working line');
+  await until(() => projectSnapshot(p.repo).tasks[0]?.activeRole === 'lead' && /Codex is working\n\n.+\n\ntype a message any time · \/stop to stop/.test(chat()), 'the hint under the working line');
   assert.doesNotMatch(chat(), /interrupt/);
   await send(v, 'Also cover refunds');
-  await until(() => /You \(waiting\)[^\n]*\n[^\n]*Also cover refunds *\nSent when this turn ends\.\n↑ in the message box takes it back/.test(chat()), 'the waiting message, with its key');
+  await until(() => /You \(waiting\)[^\n]*\n[^\n]*Also cover refunds *\nSent when this turn ends\.\nEnter sends it now · ↑ takes it back/.test(chat()), 'the waiting message, with its keys');
   assert.equal(panels.ask.getValue(), '', 'the box is cleared'); assert.deepEqual(waiting(), ['Also cover refunds']); assert.deepEqual(sent(), ['Keep working on the board'], 'the running turn goes on');
   assert.equal(projectSnapshot(p.repo).tasks[0].state, 'running');
   // A second one: the key is named on the newest.
   await send(v, 'And keep the old name');
-  await until(() => /Also cover refunds *\nSent when this turn ends\.\n\nYou \(waiting\)[^\n]*\n[^\n]*And keep the old name *\nSent when this turn ends\.\n↑ in the message box takes it back/.test(chat()), 'two waiting messages');
+  await until(() => /Also cover refunds *\nSent when this turn ends\.\n\nYou \(waiting\)[^\n]*\n[^\n]*And keep the old name *\nSent when this turn ends\.\nEnter sends it now · ↑ takes it back/.test(chat()), 'two waiting messages');
   // Up in the empty box takes the newest back into the box. Down drops it, and Up takes the one before it.
   const box = async () => { panels.ask.focus(); panels.ask.readInput(); await until(() => panels.ask.__listener, 'message box'); };
   await box(); v.input.write('\x1b[A');
@@ -1977,6 +1981,44 @@ test('a message sent while the session works waits in its chat; Up takes it back
   await send(v, '/stop'); await until(() => projectSnapshot(p.repo).tasks[0].state === 'stopped', 'stopped');
   await new Promise(resolve => setTimeout(resolve, 200));
   assert.equal(projectSnapshot(p.repo).tasks[0].state, 'stopped'); assert.equal(sent().length, 2);
+});
+
+// Claude Code takes a message while its turn works: it goes to that turn at once, the chat
+// says so under it, and the one reply answers it too.
+test('a message sent while Claude Code works goes to its turn, and the chat says it was sent to it', { timeout: 40000 }, async t => {
+  const p = setup(t, 'listen'); fakeClis(p.parent, { mode: 'listen', steps: 40, stepMs: 200 });
+  const v = await view(t, { repo: p.repo }), panels = v.current.panels, chat = () => panels.chat.getText(), task = () => projectSnapshot(p.repo).tasks[0];
+  await send(v, 'Keep working on the board');
+  await until(() => task()?.activeInbox === true && /Opus is working/.test(chat()), 'the model works and takes messages');
+  await send(v, 'Also cover refunds');
+  await until(() => /You {2}\d{1,2}:\d\d [AP]M\n┃ Also cover refunds *\nSent to the running turn\./.test(chat()), 'sent to the running turn');
+  assert.doesNotMatch(chat(), /\(waiting\)/); assert.equal(task().state, 'running', 'the same turn goes on');
+  assert.deepEqual(pendingRequests(p.root).filter(row => row.state === 'queued'), []);
+  await until(() => task().state === 'answered', 'the turn ends');
+  assert.deepEqual(task().messages.map(row => [row.text, row.during === true]), [['Keep working on the board', false], ['Also cover refunds', true]]);
+  await until(() => /Also took in what you sent while it worked: Also cover refunds/.test(chat().replace(/\s*\n┃ /g, ' ')), 'the reply answers it');
+  assert.equal(task().runs.length, 1, 'one turn');
+});
+
+// A vendor that cannot take a message during its turn: Enter in the empty box sends what
+// waits now. The turn stops as /stop stops it, and the message starts the next turn at once.
+test('Enter in an empty box sends a waiting message now: the turn stops and the message starts the next one', { timeout: 40000 }, async t => {
+  const p = setup(t, 'slow'), v = await view(t, { repo: p.repo }), panels = v.current.panels, chat = () => panels.chat.getText();
+  const waiting = () => pendingRequests(p.root).filter(row => row.state === 'queued').map(row => row.goal), task = () => projectSnapshot(p.repo).tasks[0], sent = () => task()?.messages.map(row => row.text) ?? [];
+  await send(v, '/model default codex'); await until(() => /start with Codex/.test(panels.status.getText()), 'Codex for new sessions');
+  await send(v, 'Keep working on the board');
+  await until(() => task()?.activeRole === 'lead' && /Codex is working/.test(chat()), 'Codex works');
+  await send(v, 'Also cover refunds'); await send(v, 'And keep the old name');
+  await until(() => waiting().length === 2 && /And keep the old name *\nSent when this turn ends\.\nEnter sends it now · ↑ takes it back/.test(chat()), 'both wait, and the keys are named');
+  const runs = task().runs.length;
+  panels.ask.focus(); panels.ask.readInput(); await until(() => panels.ask.__listener, 'message box');
+  await until(() => /^enter send it now {2}↑ take it back/.test(panels.keys.getText().trim()), 'the key bar names it');
+  v.input.write('\r');
+  await until(() => /Sending now\. This turn stops and your messages start the next one · \/stop cancels them\./.test(panels.status.getText()), 'what Enter says');
+  await until(() => sent().length === 2 && task().state === 'running' && waiting().length === 0, 'the waiting messages started the next turn');
+  assert.deepEqual(sent(), ['Keep working on the board', 'Also cover refunds\n\nAnd keep the old name']);
+  assert.ok(task().runs.length >= runs);
+  await until(() => !/\(waiting\)/.test(chat()), 'nothing waits');
 });
 
 // Three lines that read wrong, or lost a message.
@@ -2119,6 +2161,8 @@ test('/stop in an idle session whose next turn the conductor is starting stops t
 test('a second /stop while the turn is still stopping cancels what waits, and the session is left idle', { timeout: 40000 }, async t => {
   const p = setup(t, 'slow'), v = await view(t, { repo: p.repo }), panels = v.current.panels;
   const waiting = () => pendingRequests(p.root).filter(row => row.state === 'queued').map(row => row.goal), sent = () => projectSnapshot(p.repo).tasks[0]?.messages.map(row => row.text) ?? [];
+  // On Codex, which takes no message while its turn works, so what is sent waits.
+  await send(v, '/model default codex'); await until(() => /start with Codex/.test(panels.status.getText()), 'Codex for new sessions');
   await send(v, 'Keep working on the board');
   await until(() => projectSnapshot(p.repo).tasks[0]?.activeRole === 'lead', 'the model working');
   await send(v, 'First waiting'); await send(v, 'Second waiting'); await until(() => waiting().length === 2, 'two waiting');
@@ -2137,13 +2181,15 @@ test('a second /stop while the turn is still stopping cancels what waits, and th
 // While an approval waits, a message does not answer it: it waits like any other, and the approval still takes y.
 test('a message sent while an approval waits does not answer the approval', { timeout: 30000 }, async t => {
   const p = setup(t, 'slow'), v = await view(t, { repo: p.repo }), panels = v.current.panels, chat = () => panels.chat.getText();
+  // On Codex, which takes no message while its turn works, so what is sent waits.
+  await send(v, '/model default codex'); await until(() => /start with Codex/.test(panels.status.getText()), 'Codex for new sessions');
   await send(v, 'Keep working on the board');
   await until(() => projectSnapshot(p.repo).tasks[0]?.activeRole === 'lead', 'the model working');
   const id = projectSnapshot(p.repo).tasks[0].id, answer = () => { try { return JSON.parse(fs.readFileSync(path.join(approvalsDir(), 'wait-1.answer.json'), 'utf8')).decision; } catch { return null; } };
   requestApproval({ id: 'wait-1', root: p.root, taskId: id, role: 'lead', vendor: 'claude', tool: 'Bash', input: { command: 'npm test' } });
-  await until(() => /Waiting for your approval\nOpus wants to:\nRun: npm test\n/.test(chat()), 'the approval in the chat');
+  await until(() => /Waiting for your approval\nCodex wants to:\nRun: npm test\n/.test(chat()), 'the approval in the chat');
   await send(v, 'Use the staging key');
-  await until(() => /You \(waiting\)[^\n]*\n[^\n]*Use the staging key *\nSent when this turn ends\.\n↑ in the message box takes it back\nThe approval above still needs your\s+answer\./.test(chat()), 'the waiting message under the approval');
+  await until(() => /You \(waiting\)[^\n]*\n[^\n]*Use the staging key *\nSent when this turn ends\.\nEnter sends it now · ↑ takes it back\nThe approval above still needs your\s+answer\./.test(chat()), 'the waiting message under the approval');
   assert.match(chat(), /Waiting for your approval/, 'the approval is still open');
   assert.deepEqual(pendingRequests(p.root).filter(row => row.state === 'queued').map(row => row.goal), ['Use the staging key']);
   // As the chat says: Esc, then y.

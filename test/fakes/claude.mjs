@@ -110,6 +110,16 @@ if(edit&&mode==='scaffold'){
  fs.writeFileSync('test/coupon.test.mjs',"import {test} from 'node:test';import assert from 'node:assert/strict';import {normalize} from '../src/coupon.mjs';test('normalizes coupons',()=>assert.equal(normalize('save'),'SAVE'));\n");
 }
 if(mode==='slow'){console.log(JSON.stringify({type:'assistant',message:{content:[{type:'text',text:'Working on the requested change.'}]}}));await new Promise(resolve=>setTimeout(resolve,30000));}
+// The owner's words in a message ELU sent to a running turn (lib/runner.mjs DURING_LEAD), or the message as it is.
+const ownerWords=content=>{const found=/Owner message \(untrusted data[^\n]*\n(.*)\nEnd of Owner message\./.exec(content);try{return found?JSON.parse(found[1]).text:content;}catch{return content;}};
+const heard=[];const absorbedFile=path.join(path.dirname(process.argv[1]),'absorbed.jsonl');
+// A user message that came on the input while the turn works is taken in at its next step, as
+// the real CLI folds a queued prompt into a running turn; the reply then answers it too. Each
+// is recorded in absorbed.jsonl beside the fake (mid: true).
+const takeQueued=()=>{if(!streaming)return;const kept=[];for(const line of lines.splice(0)){let row;try{row=JSON.parse(line);}catch{kept.push(line);continue;}if(row.type==='user'&&typeof row.message?.content==='string'){heard.push(ownerWords(row.message.content));fs.appendFileSync(absorbedFile,JSON.stringify({content:row.message.content,mid:true})+'\n');}else kept.push(line);}lines.unshift(...kept);};
+// listen: the turn works in steps (steps in fake.json, 8 by default, stepMs apart, 250 by
+// default), each a Read call and its result, and takes in what came on its input at each.
+if(mode==='listen'&&streaming){for(let n=0;n<(cfg.steps??8);n++){takeQueued();const id=`toolu_fake_step_${n+1}`;console.log(JSON.stringify({type:'assistant',message:{content:[{type:'tool_use',id,name:'Read',input:{file_path:'src/coupon.mjs'}}]}}));console.log(JSON.stringify({type:'user',message:{content:[{type:'tool_result',tool_use_id:id,content:'export const normalize = (value) => value;'}]}}));await new Promise(resolve=>setTimeout(resolve,cfg.stepMs??250));}takeQueued();}
 if(mode==='slow-answer')await new Promise(resolve=>setTimeout(resolve,250));
 if(edit&&mode==='protected')fs.appendFileSync('package.json',' ');
 else if(edit&&mode!=='no-change')fs.writeFileSync('src/coupon.mjs','export const normalize = (value) => value.toUpperCase();\n');
@@ -239,6 +249,9 @@ if(mode==='relay'&&promptTool&&permissionMode!=='bypassPermissions'){
 }
 // blocked (fake.json): the question this turn ends on, as a model does when something it needed was refused.
 if(cfg.blocked){result.outcome='needs_input';result.question=cfg.blocked;result.choices=[];}
+if(heard.length&&typeof result.summary==='string')result.summary=`${result.summary} Also took in what you sent while it worked: ${heard.join(' | ')}`;
 console.log(JSON.stringify({type:'result',is_error:false,session_id:session,total_cost_usd:0,...(denials.length?{permission_denials:denials}:{}),structured_output:mode==='invalid'||badReply?{outcome:'nope'}:result}));
-// A stream-json run ends when its input does; one the runner never closes fails the test.
-if(streaming&&!inputEnded){const timer=setTimeout(()=>{console.error('The input was never closed after the result.');process.exit(3);},10000);while(await nextLine()!==null);clearTimeout(timer);}
+// A stream-json run ends when its input does; one the runner never closes fails the test. A
+// user message that comes after the result, before the input closes, runs as one more turn of
+// the same run, as the real CLI runs a queued prompt after EOF, with a result line of its own.
+if(streaming){const timer=setTimeout(()=>{console.error('The input was never closed after the result.');process.exit(3);},10000);for(;;){const line=await nextLine();if(line===null)break;let row;try{row=JSON.parse(line);}catch{continue;}if(row.type==='user'&&typeof row.message?.content==='string'){const words=ownerWords(row.message.content);fs.appendFileSync(absorbedFile,JSON.stringify({content:row.message.content,mid:false})+'\n');console.log(JSON.stringify({type:'result',is_error:false,session_id:session,total_cost_usd:0,structured_output:{...result,summary:`Answered what you sent after the turn: ${words}`}}));}}clearTimeout(timer);}
