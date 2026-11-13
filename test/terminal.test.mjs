@@ -2208,6 +2208,30 @@ test('a task scheduled from + New task lists under Scheduled and pauses, runs no
   assert.deepEqual(calls, ['install', 'uninstall'], 'the last schedule removes the login item');
 });
 
+test('/bots schedule off removes the login item when it turns off the last schedule, and /bots schedule on brings it back', { timeout: 30000 }, async t => {
+  const p = setup(t), calls = [];
+  const loginItem = { install: () => { calls.push('install'); return { installed: true }; }, uninstall: () => { calls.push('uninstall'); return { removed: true }; } };
+  saveBot({ name: 'nightly', instructions: 'Check the nightly build.', schedule: 'every 1h' });
+  // Two sessions with the bot, each already counted with its next run an hour away, so nothing runs during the test.
+  for (const [id, goal] of [['4', 'Trim coupon codes'], ['5', 'Uppercase names']]) {
+    const { repo } = liveTask(p.root, { id, goal, state: 'answered' });
+    saveTask(repo, { ...readTask(repo, id), bots: ['nightly'] });
+    fs.writeFileSync(path.join(taskDir(repo, id), 'bot-schedules.json'), JSON.stringify({ version: 1, bots: { nightly: { on: true, schedule: 'every 1h', nextRunAt: new Date(Date.now() + 3600000).toISOString(), lastRunAt: null, lastRequestId: null, runs: 0, note: null } } }));
+  }
+  const v = await view(t, { repo: p.repo, loginItem }), status = () => v.current.panels.status.getText().replace(/\s+/g, ' ');
+  await openTask(v, /Trim coupon codes/);
+  await send(v, '/bots schedule off nightly'); await until(() => /@nightly no longer runs by itself in this session\./.test(status()), 'off in the first session');
+  assert.ok(!calls.includes('uninstall'), 'the other session still runs it, so the login item stays');
+  await send(v, '/bots schedule on nightly'); await until(() => /@nightly runs here every 1h/.test(status()), 'on again');
+  await send(v, '/bots schedule off nightly'); await until(() => /@nightly no longer runs by itself in this session\./.test(status()), 'off again');
+  await openTask(v, /Uppercase names/);
+  calls.length = 0;
+  await send(v, '/bots schedule off nightly'); await until(() => calls.includes('uninstall'), 'the last schedule off removes the login item');
+  assert.deepEqual(calls, ['uninstall']);
+  await send(v, '/bots schedule on nightly'); await until(() => /@nightly runs here every 1h/.test(status()), 'on in the second session');
+  assert.equal(calls.at(-1), 'install', 'a schedule on again asks for the login item');
+});
+
 test('/schedule offers times in the command list, saves a time and message typed together, and lists the times when Enter is pressed on it alone', { timeout: 30000 }, async t => {
   const p = setup(t), loginItem = { install: () => ({ installed: true }), uninstall: () => ({ removed: true }) };
   const v = await view(t, { repo: p.repo, loginItem }), panels = v.current.panels, ask = panels.ask;
