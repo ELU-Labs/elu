@@ -661,6 +661,26 @@ test('@name in an open session asks that teammate from the session, and /ask say
   assert.equal(ask.getValue(), '/ask @nobody hello'); assert.equal(pendingRequests(p.root).length, 0); assert.equal(peer.sent().length, 2);
 });
 
+test('at 80 columns the key bar of an open session on a team shows whole hints, none cut in the middle', { timeout: 20000 }, async t => {
+  const p = project(later(t)); environment(t, p.parent);
+  // In colour, as a terminal shows it: a coloured line as wide as its box loses its last word there.
+  delete process.env.NO_COLOR;
+  const repo = repository(p.root), at = new Date().toISOString();
+  saveTask(repo, { id: '1', kind: 'conversation', goal: 'Find the tax rates', state: 'answered', worktree: repo.root, base: null, branch: null, createdAt: at, runs: [], reviews: [], responses: [], messages: [{ at, text: 'Find the tax rates' }], sessions: {}, result: null });
+  const peer = fakePeer({ items: [] }), v = await view(t, { repo, dashboard: true, peer, columns: 80, rows: 24 });
+  const board = v.panels.board, ask = v.panels.ask, keys = () => v.panels.keys.getText().trim();
+  // The last line as a render leaves it.
+  const shown = () => { v.current.screen.render(); return v.lines().at(-1).trim(); };
+  await until(() => board.items.map(plainItem).some(row => /Find the tax/.test(row)), 'the session row');
+  board.focus(); selectRow(board, /Find the tax/); v.input.write('\r');
+  await until(() => v.current.session === '1', 'the session is open');
+  ask.focus(); await until(() => /@name ask a bot or a teammate/.test(keys()), 'the key bar names teammates');
+  // The hints may take 78 columns here, and enter, @name, / and /model together are 78:
+  // the screen shows all of what the bar holds.
+  await until(() => shown() === keys(), 'the screen shows the whole bar');
+  assert.equal(shown(), 'enter send  @name ask a bot or a teammate  / commands  /model choose the model');
+});
+
 test('m and x on a created channel also work from its threads, and nothing is cut at 80 columns', { timeout: 20000 }, async t => {
   const peer = fakePeer({ items: [] }), id = 'd'.repeat(16); peer.channels = [{ id, name: 'design', members: [ME, SARA] }];
   const { v } = await teamView(t, { peer, columns: 80, rows: 24 });
