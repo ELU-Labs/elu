@@ -1269,6 +1269,9 @@ test('with no project, Enter or + New session names this folder as a project fir
   // Up in the emptied box brings back what was sent, and Down past it empties the box again. From the start of an empty box, Left goes to the list.
   await new Promise(resolve => setImmediate(resolve)); panels.ask.clearValue(); v.input.write('\x1b[A');
   await until(() => panels.ask.getValue() === 'Fix the login bug' && v.current.screen.focused === panels.ask, 'Up brings back the message that was sent');
+  // Shift+Up in the box highlights its text; it does not walk what was sent.
+  v.input.write('\x1b[1;2A'); await until(() => v.current.selection.text() === 'Fix the login bug', 'Shift+Up highlights to the start');
+  assert.equal(panels.ask.getValue(), 'Fix the login bug'); assert.equal(v.current.screen.focused, panels.ask);
   v.input.write('\x1b[B'); await until(() => panels.ask.getValue() === '' && v.current.screen.focused === panels.ask, 'Down past the newest empties the box');
   v.input.write('\x1b[D');
   await until(() => v.current.screen.focused === panels.board && /\+ New session/.test(cursor(v)), 'with no sessions, Left reaches + New session');
