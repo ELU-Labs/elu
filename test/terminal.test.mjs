@@ -2059,7 +2059,11 @@ test('a message sent while Claude Code works goes to its turn, and the chat says
   await until(() => /You {2}\d{1,2}:\d\d [AP]M\n┃ Also cover refunds *\nSent to the running turn\./.test(chat()), 'sent to the running turn');
   assert.doesNotMatch(chat(), /\(waiting\)/); assert.equal(task().state, 'running', 'the same turn goes on');
   assert.deepEqual(pendingRequests(p.root).filter(row => row.state === 'queued'), []);
+  // The status line follows that turn to its end: it never stops at the bare word "running".
+  await new Promise(resolve => setTimeout(resolve, 300));
+  assert.equal(task().state, 'running'); assert.doesNotMatch(panels.status.getText(), /› running/);
   await until(() => task().state === 'answered', 'the turn ends');
+  await until(() => /› Opus answered/.test(panels.status.getText()), 'the status line says it answered');
   assert.deepEqual(task().messages.map(row => [row.text, row.during === true]), [['Keep working on the board', false], ['Also cover refunds', true]]);
   await until(() => /Also took in what you sent while it worked: Also cover refunds/.test(chat().replace(/\s*\n┃ /g, ' ')), 'the reply answers it');
   assert.equal(task().runs.length, 1, 'one turn');
