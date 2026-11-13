@@ -53,6 +53,16 @@ and your next message to it runs the check again. If `relay` fails, Ask and
 Auto still work, but a blocked action is reported instead of asked:
 `Grok can't ask live here. Blocked actions are reported.`
 
+## Messages you send while a turn works
+
+A headless turn (`--prompt-file`) reads one prompt and an ACP turn answers one
+`session/prompt`; the program queues prompts sent during a turn of its own, but a client has
+no documented way to add to the one that runs. So a message you send while Grok Build works
+waits in the chat, "Sent when this turn ends.", and Enter in the empty message box sends it
+now: the turn stops as `/stop` stops it and what waits starts the next turn at once. The next
+turn goes on in the session that was stopped: the one the launch named with `-s`, or the
+ACP session from `session/new`, loaded with `session/load`.
+
 ## How each mode runs
 
 | Mode | Transport | Permissions |

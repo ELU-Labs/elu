@@ -95,10 +95,12 @@ export const FAKES = fileURLToPath(new URL('./fakes/', import.meta.url));
 // tooLong: the reviews the fake Claude Code and Codex refuse as too long for the model (see the fakes).
 // live: how the fake Claude Code's long turn (mode live) goes. refuses: what a fake vendor's
 // release does not take, and ends a run over at once (see the fakes).
-export function fakeClis(parent, { mode = 'normal', sandboxBin = null, name = undefined, commands = undefined, replay = undefined, note = undefined, permissionMode = undefined, badReply = undefined, asks = undefined, intent = undefined, network = undefined, models = undefined, noCredits = undefined, fence = undefined, byMode = undefined, wait = undefined, blocked = undefined, install = undefined, insert = undefined, tooLong = undefined, learned = undefined, accounts = undefined, gate = undefined, live = undefined, refuses = undefined } = {}) {
+// steps, stepMs, commandMs, afterMs, capabilities, hostAsks: how the fake Claude Code's turn that
+// takes messages while it works goes, and what it asks on its own output (see the fake).
+export function fakeClis(parent, { mode = 'normal', sandboxBin = null, name = undefined, commands = undefined, replay = undefined, note = undefined, permissionMode = undefined, badReply = undefined, asks = undefined, intent = undefined, network = undefined, models = undefined, noCredits = undefined, fence = undefined, byMode = undefined, wait = undefined, blocked = undefined, install = undefined, insert = undefined, tooLong = undefined, learned = undefined, accounts = undefined, gate = undefined, live = undefined, refuses = undefined, steps = undefined, stepMs = undefined, capabilities = undefined, commandMs = undefined, afterMs = undefined, hostAsks = undefined } = {}) {
   const dir = path.join(parent, 'bin'); fs.mkdirSync(dir, { recursive: true });
   const calls = path.join(parent, 'calls.jsonl');
-  fs.writeFileSync(path.join(dir, 'fake.json'), JSON.stringify({ mode, calls, inputs: path.join(parent, 'inputs.jsonl'), repository: path.join(parent, 'repository.txt'), sandboxBin, name, commands, replay, note, permissionMode, badReply, asks, intent, network, models, noCredits, fence, byMode, wait, blocked, install, insert, tooLong, learned, accounts, gate, live, refuses }));
+  fs.writeFileSync(path.join(dir, 'fake.json'), JSON.stringify({ mode, calls, inputs: path.join(parent, 'inputs.jsonl'), repository: path.join(parent, 'repository.txt'), sandboxBin, name, commands, replay, note, permissionMode, badReply, asks, intent, network, models, noCredits, fence, byMode, wait, blocked, install, insert, tooLong, learned, accounts, gate, live, refuses, steps, stepMs, capabilities, commandMs, afterMs, hostAsks }));
   for (const vendor of ['claude', 'codex', 'agy', 'grok']) {
     fs.writeFileSync(path.join(dir, vendor), `#!${process.execPath}\n${fs.readFileSync(path.join(FAKES, `${vendor}.mjs`), 'utf8')}`, { mode: 0o755 });
   }

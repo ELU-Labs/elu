@@ -762,18 +762,65 @@ test('in Ask for approval a host a sandboxed command connects to is asked once, 
   const pushAgain = await settle(f.controller.ask('Push it again', push.task.id), () => 'deny');
   assert.deepEqual([push.asked.length, pushAgain.asked.length], [1, 1]); assert.deepEqual(settingsOf(f.leads().at(-1).args).sandbox.network.allowedDomains, []);
   assert.deepEqual(connections(), [{ host: 'github.com', allowed: true, asked: true, streaming: true }, { host: 'github.com', allowed: false, asked: true, streaming: true }]);
-  // Approve for me decides without the owner, and Full access has no sandbox: neither streams its input.
+  // Every turn of the owner's streams its input, so what he sends while it works reaches it
+  // (lib/runner.mjs listen). Approve for me and Full access still ask him nothing.
   connecting([]);
   await f.controller.ask('Look', null, { permissions: 'auto' }).finished;
-  assert.equal(valueOf(f.leads().at(-1).args, '--input-format'), undefined);
+  assert.equal(valueOf(f.leads().at(-1).args, '--input-format'), 'stream-json');
   await f.controller.ask('Look', null, { permissions: 'full' }).finished;
-  assert.equal(valueOf(f.leads().at(-1).args, '--input-format'), undefined);
+  assert.equal(valueOf(f.leads().at(-1).args, '--input-format'), 'stream-json');
+  assert.deepEqual(pendingApprovals({ root }), []);
 });
 
-// Before: the prompt went in as text, so the input was closed and the host was denied unasked.
-test('a run whose prompt goes in as text gets every host it asks about denied without anyone being asked', async t => {
-  const f = setup(t, 'answer'); fakeClis(f.parent, { mode: 'answer', network: ['elu.dev'] });
-  await f.controller.ask('Look', null, { permissions: 'auto' }).finished;
+// The owner's rule for Full access: nothing is refused there. Claude Code asks its host on its
+// own output for what its own rules would prompt for: a tool call, a host, a form from an MCP
+// server. ELU had refused each of them at once outside Ask for approval.
+test('what Claude Code asks on its own output is allowed at once in Full access, goes to the rules and the owner in Approve for me, and is refused in Read only', { timeout: 60000 }, async t => {
+  const f = setup(t, 'answer'), root = f.controller.repo.project ?? f.controller.repo.root;
+  const asks = [{ tool_name: 'Bash', input: { command: 'git push origin main' } }, { tool_name: 'SandboxNetworkAccess', input: { host: 'elu.dev' } }, { tool_name: 'mcp__deploy__ship', input: { target: 'production', force: true } }, { tool_name: 'Bash', input: { command: 'git status' } }];
+  fakeClis(f.parent, { mode: 'answer', hostAsks: asks });
+  const answers = () => { const file = path.join(f.fake.dir, 'host-asks.jsonl'); const rows = fs.existsSync(file) ? fs.readFileSync(file, 'utf8').trim().split('\n').map(JSON.parse) : []; fs.rmSync(file, { force: true }); return rows; };
+  const settle = async (run, answer) => {
+    const asked = []; let done = false; const finished = run.finished.finally(() => { done = true; });
+    while (!done) { for (const row of pendingApprovals({ root })) { asked.push(row); answerApproval(row.id, answer(row)); } await sleep(25); }
+    return { task: await finished, asked };
+  };
+  // Full access: every one is allowed as it was asked, the push and the host too, and nobody is asked.
+  const full = await settle(f.controller.ask('Ship it', null, { permissions: 'full' }), () => 'deny');
+  assert.equal(full.task.state, 'answered', JSON.stringify(full.task.error));
+  assert.deepEqual(full.asked, [], 'the owner is asked nothing');
+  const allowed = answers();
+  assert.deepEqual(allowed.map(row => [row.tool_name, row.allowed]), asks.map(ask => [ask.tool_name, true]));
+  assert.deepEqual(allowed.map(row => row.reply.response), asks.map(ask => ({ behavior: 'allow', updatedInput: ask.input })));
+  assert.deepEqual(full.task.approvals.map(row => [row.tool, row.decision, row.by]), asks.map(ask => [ask.tool_name, 'allow', 'full']));
+  assert.deepEqual(full.task.runs.at(-1).denials ?? [], []);
+  // A host Full access let through is not one the owner allowed: the session does not keep it for a stricter mode.
+  fakeClis(f.parent, { mode: 'answer' });
+  await settle(f.controller.ask('And now ask me', full.task.id, { permissions: 'ask' }), () => 'deny');
+  assert.deepEqual(settingsOf(f.leads().at(-1).args).sandbox.network.allowedDomains, []);
+  // Approve for me: a default answers what it covers, and the owner is asked the rest, as the approval relay asks him.
+  fakeClis(f.parent, { mode: 'answer', hostAsks: asks });
+  const auto = await settle(f.controller.ask('Ship it', null, { permissions: 'auto' }), row => row.tool === 'SandboxNetworkAccess' ? 'allow' : 'deny');
+  assert.equal(auto.task.state, 'answered', JSON.stringify(auto.task.error));
+  assert.deepEqual(auto.asked.map(row => [row.tool, row.summary]), [['Bash', 'Run: git push origin main'], ['SandboxNetworkAccess', 'Network access to elu.dev'], ['mcp__deploy__ship', 'Use mcp__deploy__ship']]);
+  assert.deepEqual(answers().map(row => [row.tool_name, row.allowed]), [['Bash', false], ['SandboxNetworkAccess', true], ['mcp__deploy__ship', false], ['Bash', true]]);
+  assert.deepEqual(auto.task.approvals.map(row => [row.tool, row.decision, row.by ?? null]), [['Bash', 'deny', null], ['SandboxNetworkAccess', 'allow', null], ['mcp__deploy__ship', 'deny', null], ['Bash', 'allow', 'default']]);
+  // Read only asks the owner nothing, so there each is refused, with the reason.
+  const locked = await settle(f.controller.ask('Ship it'), () => 'allow');
+  assert.equal(locked.task.permissions ?? 'locked', 'locked'); assert.deepEqual(locked.asked, []);
+  const refused = answers();
+  assert.deepEqual(refused.map(row => row.allowed), [false, false, false, false]);
+  assert.deepEqual(refused[0].reply.response, { behavior: 'deny', message: 'ELU asks nothing of the owner in Read only.' });
+  assert.deepEqual(pendingApprovals({ root }), []);
+});
+
+// A host Claude Code does not ask about is its own to refuse: the stand-in asks only in its
+// default permission mode, as the first builder read the real program. What it does ask is
+// answered by the session's mode (the test above).
+test('outside Ask for approval every host a turn connects to is denied without anyone being asked', async t => {
+  const f = setup(t, 'answer'), root = f.controller.repo.project ?? f.controller.repo.root; fakeClis(f.parent, { mode: 'answer', network: ['elu.dev'] });
+  const task = await f.controller.ask('Look', null, { permissions: 'auto' }).finished;
   const rows = fs.readFileSync(path.join(f.fake.dir, 'network.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
-  assert.deepEqual(rows, [{ host: 'elu.dev', allowed: false, asked: false, streaming: false }]);
+  assert.deepEqual(rows, [{ host: 'elu.dev', allowed: false, asked: false, streaming: true }]);
+  assert.deepEqual(pendingApprovals({ root }), []); assert.deepEqual(task.approvals ?? [], []);
 });

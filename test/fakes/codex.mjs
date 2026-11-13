@@ -68,6 +68,8 @@ const resumed=args[0]==='exec'&&args[1]==='resume'?args[2]:null;
 const session=resumed??'12345678-1234-4234-8234-123456789abc';
 if(mode==='review-block'||mode==='review-fix'&&!input.includes('Handled the edge case.'))result.comments=[{id:'R1',severity:'must_fix',body:'Handle the edge case.'}];
 console.log(JSON.stringify({type:'thread.started',thread_id:session}));
+// slow: a new thread works for half a minute before it answers, as a long turn does; a resumed one answers at once.
+if(mode==='slow'&&!resumed){console.log(JSON.stringify({type:'turn.started'}));console.log(JSON.stringify({type:'item.completed',item:{id:'item_0',type:'reasoning',text:'Working on the requested change.'}}));await new Promise(resolve=>setTimeout(resolve,30000));}
 if(cfg.accounts?.limited?.includes(account)){const message="You've hit your usage limit. Upgrade to Pro or try again later.";console.log(JSON.stringify({type:'turn.started'}));console.log(JSON.stringify({type:'error',message}));console.log(JSON.stringify({type:'turn.failed',error:{message:`${message} (usage_limit_reached)`}}));process.exit(1);}
 // tooLong (fake.json): a review this model will not take (as in the fake Claude Code), ended as
 // the real CLI ends a prompt longer than the model's context window.

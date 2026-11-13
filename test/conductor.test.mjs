@@ -5,7 +5,7 @@ import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { project, fakeClis, config, approveProjectFiles, approvingConductor } from './helpers.mjs';
 import { repository } from '../lib/git.mjs';
-import { projectSnapshot, registerProject } from '../lib/projects.mjs';
+import { ProjectController, projectSnapshot, registerProject } from '../lib/projects.mjs';
 import { saveTask } from '../lib/state.mjs';
 import { pendingRequests, removeRequest, updateRequest, takeRequest } from '../lib/workspace.mjs';
 import { Conductor, enqueue, sendCommand, saveConductorSettings, conductorStatus, conductorNote, conductorRunning, conductorAlive, olderConductor, retryRequest, VERSION } from '../lib/conductor.mjs';
@@ -35,13 +35,15 @@ async function stopAll(t) {
 }
 // Nothing may keep this file running once its tests are done.
 after(() => { setTimeout(() => giveUp('Something is still running 10 s after the last test.'), 10000).unref(); });
-function setup(t, mode = 'answer', { name = undefined } = {}) {
+// lead: the vendor new sessions start on (Claude Code when not given).
+function setup(t, mode = 'answer', { name = undefined, lead = null } = {}) {
   LIVE.set(t, []); t.after(() => stopAll(t));
   const p = project(t), fake = fakeClis(p.parent, { mode, name });
   const previous = { PATH: process.env.PATH, XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME };
   Object.assign(process.env, fake.env);
   t.after(() => { for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } });
   const repo = repository(p.root); registerProject(repo);
+  if (lead) new ProjectController(repo).setDefaultModel({ vendor: lead });
   return { ...p, ...fake, repo };
 }
 function conduct(t, options = {}) {
@@ -195,7 +197,8 @@ function oldConductor(t, { disk = '0.0.1', ...options } = {}) {
 const requestsOf = conductor => [...conductor.runs.values()].map(run => run.requestId);
 
 test('after an update the old conductor takes no new work: the new version runs it at once, the old run finishes, and the old conductor exits', async t => {
-  const p = setup(t, 'slow'), first = enqueue(p.root, 'Start the work');
+  // On Codex, whose turn takes no message while it works, so the follow-up waits for it.
+  const p = setup(t, 'slow', { lead: 'codex' }), first = enqueue(p.root, 'Start the work');
   let exits = 0; const old = oldConductor(t, { onExit: () => { exits++; } });
   await until(() => request(p.root, first.id)?.state === 'running', 'the first turn');
   const id = request(p.root, first.id).taskId;

@@ -211,9 +211,14 @@ It is not offered for a bot's scheduled turn or a turn that runs read only.
 
 In Ask for approval, a sandboxed command that connects to a host (`curl https://elu.dev`,
 `npm view`) asks you under Needs you as "Network access to elu.dev". Claude Code asks this
-on its own output, not through the relay, so ELU starts it with the prompt as a
-stream-json message (`--input-format stream-json`), keeps its input open and writes your
-answer back. Allow lets that host through for the rest of the session: Claude Code keeps it
+on its own output, not through the relay. ELU starts every turn of yours with the prompt as
+a stream-json message (`--input-format stream-json`) and keeps its input open, so a message
+you send while it works reaches it ([vendors/claude.md](vendors/claude.md)), and in Ask for
+approval it writes your answer back there. Whatever else Claude Code asks on its own output
+(a tool call, a form from an MCP server) is answered the same way, by the session's mode.
+In Full access it is allowed at once: nobody is asked and nothing is refused. In Approve
+for me and Ask for approval one of your rules or a default answers it, and otherwise you
+are asked under Needs you. In Read only it is refused. Allow lets that host through for the rest of the session: Claude Code keeps it
 for the run, and later turns of the session start with it in the sandbox's allowed hosts.
 Deny, or no answer, fails the connection. Before, the input was closed once the prompt was
 read, and Claude Code denied every host without asking and reported it as "user denied".

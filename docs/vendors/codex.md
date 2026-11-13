@@ -37,6 +37,19 @@ A profile value containing `*`, `?`, `[`, `]`, `{` or `}` is refused before laun
 
 Resume: `codex exec resume <thread_id> -` with the same `-c` set. `exec resume` has no `--sandbox` or `--cd`, so the sandbox and profile come from `-c` keys and the process runs in the workspace [run: the profile, Approve for me and Full access all applied on a resumed thread].
 
+## Messages you send while a turn works
+
+`codex exec` reads its prompt to the end of its input before it starts, and has no way to
+take more while it works. So a message you send to a Codex turn waits in the chat, "Sent
+when this turn ends.", and Enter in the empty message box sends it now: the turn stops as
+`/stop` stops it, its edits and the chat kept, and what waits starts the next turn at once,
+in the order sent, as one message. Outside Read only the next turn goes on in the thread
+that was stopped (`codex exec resume <thread id>`, the id read from the stopped run's
+`thread.started` line), so Codex keeps what it was doing. A Read only turn starts a new
+thread each time, as before, so there the next turn is given what the stopped one wrote and
+did, read from its log: each message, each command with its exit code and what it printed
+(one still running is marked as stopped), and the files it changed.
+
 ## What the owner sees
 
 - Approve for me: an action the reviewer declines comes back as `status: "declined"` and is listed on the run as a denial (`Run: <command>` or `Edit: <paths>`) [run]. The model is told not to retry it and to return `needs_input`.
