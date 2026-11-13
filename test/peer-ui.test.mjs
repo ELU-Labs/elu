@@ -1035,6 +1035,8 @@ test("in Chats PgUp and PgDn move a page in the open one's threads, in the threa
     threads.select(0);
     // From the message box: the threads move a page, the text and the focus stay.
     ask.focus(); ask.readInput(); await until(() => ask.__listener, 'the message box');
+    // More threads than their pane shows: the bar names the keys after Enter, as over a session's chat.
+    await until(() => /^enter send {2}pgup pgdn page {2}@name one \w+ {2}\/ commands/.test(v.panels.keys.getText().trim()), `the keys over the message box, ${columns}x${rows}`);
     ask.setValue('half a thought'); v.input.write(PGDN);
     await until(() => threads.selected === page(), `a page down from the box, ${columns}x${rows}`); await pause(200);
     assert.equal(threads.selected, page(), 'the draws keep the place'); assert.equal(ask.getValue(), 'half a thought'); assert.equal(v.current.screen.focused, ask);
@@ -1051,6 +1053,11 @@ test("in Chats PgUp and PgDn move a page in the open one's threads, in the threa
     threads.select(last - 1); v.input.write(PGDN); await until(() => threads.selected === last, `it stops at the last row, ${columns}x${rows}`);
     assert.equal(v.panels.teamBoxes[1]._label.getText().trim(), '@sara', 'the same chat is open');
   }
+  // A chat whose threads all show has nothing to page: both bars are as they were.
+  await openRow(v, /# general/, '#general');
+  await until(() => threads.items.length <= threads.height - threads.iheight, 'all the threads of #general show');
+  ask.focus(); ask.readInput(); await until(() => ask.__listener && /^enter send {2}@name one \w+ {2}\/ commands/.test(v.panels.keys.getText().trim()), 'the keys over the message box of a short chat');
+  ask.cancel(); threads.focus(); await until(() => /enter read$/.test(v.panels.keys.getText().trim()), 'the keys in the threads of a short chat');
   assert.deepEqual(peer.sent(), [], 'nothing was sent');
 });
 
