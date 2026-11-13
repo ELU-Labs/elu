@@ -57,7 +57,8 @@ test('compile refuses until this machine\'s check passed, then builds each profi
   const secrets = [
     ...HOME_SECRETS.flatMap(name => { const p = path.join(home, name); return [`Read(${p})`, `Read(${p}/**)`, `Grep(${p}/**)`]; }),
     ...['.env*', '.npmrc', '.netrc', '.pypirc', 'auth.json', 'credentials', 'credentials.json', 'id_rsa', 'id_ed25519', '*.pem'].map(name => `Read(**/${name})`),
-    ...fs.readdirSync(personal).filter(name => name !== 'grok-home').flatMap(name => { const p = path.join(personal, name); return [`Read(${p})`, `Read(${p}/**)`, `Grep(${p}/**)`]; }),
+    // The Full access mirror is closed whether or not a run has made it yet.
+    ...[...fs.readdirSync(personal).filter(name => name !== 'grok-home'), 'grok-home-full'].flatMap(name => { const p = path.join(personal, name); return [`Read(${p})`, `Read(${p}/**)`, `Grep(${p}/**)`]; }),
   ];
   assert.ok(secrets.some(rule => rule === `Read(${path.join(personal, 'conformance')}/**)`), 'ELU state is denied');
   const never = grok.NEVER_COMMANDS.map(command => `Bash(${command}:*)`);
@@ -130,6 +131,42 @@ test('childEnv carries every switch and no key variable; the private home holds 
   fs.unlinkSync(link); fs.writeFileSync(link, '{"token":"refreshed"}\n', { mode: 0o600 }); grok.childEnv({ mode: 'ask', home: w.home }); assert.ok(fs.lstatSync(link).isFile(), 'the newer private token stays');
   const old = new Date(Date.now() - 60000); fs.utimesSync(link, old, old); grok.childEnv({ mode: 'ask', home: w.home }); assert.ok(fs.lstatSync(link).isSymbolicLink(), 'an older private token gives way to the real one');
   assert.throws(() => grok.childEnv({ mode: 'plan', home: w.home }), /Choose ask, auto, or full/);
+});
+
+// The real Grok Build 1.0.77, given a home that holds Claude, Cursor and .agents folders as
+// HOME, lists their hooks, rules, skills, agents, plugins and MCP servers as loaded with
+// GROK_HOME elsewhere and every switch off. So Full access cannot run in the owner's home:
+// its ~ is a mirror of it without those folders (lib/home-mirror.mjs).
+test('in Full access ~ is a mirror of the owner\'s home and GROK_HOME stays ELU\'s; the other modes keep the private home with nothing of his in it', t => {
+  const w = world(t), personal = w.personal, put = (file, text) => { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, text, { mode: 0o600 }); };
+  put(path.join(w.home, '.npmrc'), 'owner-npm-token\n'); put(path.join(w.home, '.config', 'gcloud', 'token'), 'owner-cloud-token\n');
+  put(path.join(w.home, '.claude', 'CLAUDE.md'), 'his instructions\n'); put(path.join(w.home, '.claude', 'rules', 'r.md'), 'his rule\n'); put(path.join(w.home, '.grok', 'config.toml'), '# his own\n');
+  const his = () => ['.claude/CLAUDE.md', '.claude/rules/r.md', '.grok/config.toml', '.grok/auth.json'].map(name => `${name} ${fs.readFileSync(path.join(w.home, name), 'utf8')} ${fs.statSync(path.join(w.home, name)).mtimeMs}`).concat(fs.readdirSync(path.join(w.home, '.grok')).sort()), before = his();
+  const full = grok.childEnv({ mode: 'full', home: w.home });
+  assert.equal(full.HOME, path.join(personal, 'grok-home-full')); assert.equal(grok.fullHome(), full.HOME); assert.equal(full.GROK_HOME, path.join(personal, 'grok-home', '.grok'));
+  assert.equal(fs.statSync(full.HOME).mode & 0o777, 0o700);
+  assert.equal(fs.readFileSync(path.join(full.HOME, '.npmrc'), 'utf8'), 'owner-npm-token\n'); assert.equal(fs.readFileSync(path.join(full.HOME, '.config', 'gcloud', 'token'), 'utf8'), 'owner-cloud-token\n');
+  assert.equal(fs.existsSync(path.join(full.HOME, '.claude')), false, 'his Claude Code folder is not under the run\'s home');
+  // ~/.grok there is ELU's own, with the config written for this run and the link to his token.
+  assert.equal(fs.realpathSync(path.join(full.HOME, '.grok')), fs.realpathSync(full.GROK_HOME)); assert.equal(fs.readFileSync(path.join(full.HOME, '.grok', 'config.toml'), 'utf8'), grok.configToml('full'));
+  assert.equal(grok.signedIn({ env: full }), true); assert.deepEqual(agentEnv(w.env, [], full, { full: true }).HOME, full.HOME);
+  // What grok inspect lists: nothing of his under the mirror, his Claude files were his home the run's (the fake follows issue #34).
+  const inspect = env => JSON.parse(spawnSync(w.bin, ['inspect', '--json'], { cwd: w.repo, env, encoding: 'utf8' }).stdout);
+  assert.deepEqual(grok.foreignTraces(inspect(agentEnv(w.env, [], full, { full: true }))), []);
+  assert.deepEqual(grok.foreignTraces(inspect({ ...agentEnv(w.env, [], full, { full: true }), HOME: w.home })).filter(trace => trace.includes(path.sep)), [path.join(w.home, '.claude', 'CLAUDE.md'), path.join(w.home, '.claude', 'rules', 'r.md')]);
+  // Read only, Ask for approval and Approve for me: the private home, holding ELU's .grok and nothing else.
+  for (const mode of ['locked', 'ask', 'auto']) { const env = grok.childEnv({ mode, home: w.home }); assert.equal(env.HOME, path.join(personal, 'grok-home'), mode); assert.deepEqual(fs.readdirSync(env.HOME), ['.grok'], mode); }
+  // Their rules close the mirror, as the rest of ELU's folder, also before a Full access run has made it.
+  passed(w.bin);
+  for (const mode of ['locked', 'ask', 'auto']) { const args = grok.compile({ role: lead(mode === 'locked' ? 'read' : 'edit'), mode, cwd: w.repo, session: SESSION, runDir: runDirIn(w) }); for (const rule of [`Read(${full.HOME})`, `Read(${full.HOME}/**)`, `Grep(${full.HOME}/**)`]) assert.equal(args[args.indexOf(rule) - 1], '--deny', `${mode} ${rule}`); }
+  fs.rmSync(full.HOME, { recursive: true }); assert.ok(grok.compile({ role: lead(), mode: 'ask', cwd: w.repo, session: SESSION, runDir: runDirIn(w) }).includes(`Read(${full.HOME}/**)`));
+  // Opening the session in Grok's own terminal keeps the private home.
+  assert.equal(grok.interactive({ session: SESSION, cwd: w.repo }).env.HOME, path.join(personal, 'grok-home')); assert.equal(fs.existsSync(full.HOME), false, 'and makes no mirror');
+  // When a Full access run ends, what a command made at the top of ~ goes to his home; another mode's run settles nothing.
+  grok.childEnv({ mode: 'full', home: w.home }); fs.writeFileSync(path.join(full.HOME, '.yarnrc'), 'made in the run\n');
+  grok.settleHome({ mode: 'ask', home: w.home }); assert.equal(fs.existsSync(path.join(w.home, '.yarnrc')), false);
+  grok.settleHome({ mode: 'full', home: w.home }); assert.equal(fs.readFileSync(path.join(w.home, '.yarnrc'), 'utf8'), 'made in the run\n'); assert.ok(fs.lstatSync(path.join(full.HOME, '.yarnrc')).isSymbolicLink());
+  assert.deepEqual(his(), before, 'his own ~/.grok and ~/.claude were never written');
 });
 
 test('prepareInput writes the prompt file with the schema; the fake reads it, ignores stdin and reports a session the runner can resume', async t => {

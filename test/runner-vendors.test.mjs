@@ -265,19 +265,60 @@ test('an Antigravity session refuses a push that a script makes over ACP in Ask 
   assert.equal(publish.code(), '0'); assert.deepEqual(publish.refs(), ['refs/heads/from-script', 'refs/tags/v2']);
 });
 
-// Grok Build and Antigravity CLI run under a home of their own, so ~ in a command of theirs is
-// not the owner's. In Full access Git and gh still read his settings and his sign-in.
-for (const [vendor, name, version, say] of [['grok', 'a Grok Build', '1.0.77', script => `Run the command ${script} then reply done with the summary "ran it".`], ['agy', 'an Antigravity', '1.5.4', script => `Run this command: ${script}. Reply with the summary "headless".`]]) {
-  test(`${name} command in Full access reads the owner's Git settings and gh sign-in from under its own home`, async t => {
-    const f = setup(t, vendor), script = path.join(f.parent, 'who.sh'), out = path.join(f.parent, 'who.out'), gh = path.join(process.env.XDG_CONFIG_HOME, 'gh');
-    if (vendor === 'grok') { fs.mkdirSync(path.join(f.parent, '.grok')); fs.writeFileSync(path.join(f.parent, '.grok', 'auth.json'), '{}\n', { mode: 0o600 }); }
+// Grok Build and Antigravity CLI read their own settings from ~, so each runs under a home of
+// ELU's. In Full access that home is a mirror of the owner's (lib/home-mirror.mjs): a command
+// finds his sign-ins under ~ as one he types does. The other modes keep the bare private home.
+const HOMED = [['grok', 'a Grok Build', '1.0.77', '.grok', script => `Run the command ${script} then reply done with the summary "ran it".`], ['agy', 'an Antigravity', '1.5.4', '.gemini', script => `Run this command: ${script}. Reply with the summary "headless".`]];
+// The owner's home for these: his npm and cloud sign-ins, his Git settings, and a folder of
+// his own for every coding tool, which no run may load or write.
+function ownerHome(f, vendor) {
+  if (vendor === 'grok') { fs.mkdirSync(path.join(f.parent, '.grok')); fs.writeFileSync(path.join(f.parent, '.grok', 'auth.json'), '{}\n', { mode: 0o600 }); }
+  fs.writeFileSync(path.join(f.parent, '.npmrc'), '//registry.npmjs.org/:_authToken=owner-npm-token\n', { mode: 0o600 });
+  fs.mkdirSync(path.join(f.parent, '.config', 'cloudtool'), { recursive: true }); fs.writeFileSync(path.join(f.parent, '.config', 'cloudtool', 'credentials'), 'owner-cloud-token\n', { mode: 0o600 });
+  fs.writeFileSync(path.join(f.parent, '.gitconfig'), '[user]\n\tname = Owner Settings\n');
+  const tools = ['.claude', '.codex', '.cursor', '.gemini', '.grok'];
+  for (const tool of tools) { fs.mkdirSync(path.join(f.parent, tool, 'rules'), { recursive: true }); fs.writeFileSync(path.join(f.parent, tool, 'owner-settings'), `the owner's own ${tool}\n`); fs.writeFileSync(path.join(f.parent, tool, 'rules', 'r.md'), 'his rule\n'); }
+  fs.writeFileSync(path.join(f.parent, '.claude', 'CLAUDE.md'), 'his instructions\n');
+  // Every file of his under those folders, with what it holds and when it was last written.
+  return () => tools.flatMap(tool => fs.readdirSync(path.join(f.parent, tool), { recursive: true }).sort().map(name => { const file = path.join(f.parent, tool, name), stat = fs.lstatSync(file); return `${tool}/${name} ${stat.isFile() ? `${fs.readFileSync(file, 'utf8')} ${stat.mtimeMs}` : 'folder'}`; }));
+}
+for (const [vendor, name, version, folder, say] of HOMED) {
+  test(`${name} command in Full access reads the owner's sign-ins under ~ and writes into his home; the vendor's settings stay ELU's and his own vendor folders are not touched`, async t => {
+    const f = setup(t, vendor), script = path.join(f.parent, 'who.sh'), out = path.join(f.parent, 'who.out'), tools = ownerHome(f, vendor), before = tools();
     proven(vendor, f.bin, version, { relay: true });
-    fs.writeFileSync(path.join(f.parent, '.gitconfig'), '[user]\n\tname = Owner Settings\n'); fs.mkdirSync(gh, { recursive: true });
-    fs.writeFileSync(script, `#!/bin/sh\n{ git config --global user.name; printf '%s\\n' "$GH_CONFIG_DIR"; [ "$HOME" = ${JSON.stringify(f.parent)} ] && echo owner-home || echo own-home; } > ${JSON.stringify(out)} 2>&1\n`, { mode: 0o700 });
+    // What the command sees of the vendor's own folder: the settings ELU wrote for this run.
+    const own = vendor === 'grok' ? 'head -1 "$GROK_HOME/config.toml"; [ "$(cd .grok && pwd -P)" = "$(cd "$GROK_HOME" && pwd -P)" ] && echo "~/.grok is GROK_HOME"' : 'grep -c trustedWorkspaces .gemini/antigravity-cli/settings.json; grep -c PreToolUse .gemini/config/hooks.json';
+    fs.writeFileSync(script, `#!/bin/sh\ncd ~ || exit 1\n{ cat .npmrc; cat .config/cloudtool/credentials; git config --global user.name\n[ "$HOME" = ${JSON.stringify(f.parent)} ] && echo his-home || echo a-home-of-ELU\necho from-run > .config/cloudtool/from-run; echo made-in-run > .made-in-run; mkdir .newtool && echo token > .newtool/token\nfor tool in .claude .codex .cursor; do [ -e $tool ] && echo "sees $tool"; done\n[ -e ${folder}/owner-settings ] && echo "his ${folder}" || echo "not his ${folder}"\n${own}\n} > ${JSON.stringify(out)} 2>&1\n`, { mode: 0o700 });
     const full = await f.controller.ask(say(script), null, { permissions: 'full' }).finished;
     assert.equal(full.state, 'answered', JSON.stringify(full.error));
-    assert.equal(fs.readFileSync(out, 'utf8'), `Owner Settings\n${gh}\nown-home\n`);
+    assert.equal(fs.readFileSync(out, 'utf8'), `//registry.npmjs.org/:_authToken=owner-npm-token\nowner-cloud-token\nOwner Settings\na-home-of-ELU\nnot his ${folder}\n${vendor === 'grok' ? '# Written by ELU before every run. Edits here are overwritten.\n~/.grok is GROK_HOME\n' : '1\n1\n'}`);
+    // What it wrote under ~/.config is in his home, and what it made at the top of ~ is there once the run has ended.
+    assert.equal(fs.readFileSync(path.join(f.parent, '.config', 'cloudtool', 'from-run'), 'utf8'), 'from-run\n');
+    assert.equal(fs.lstatSync(path.join(f.parent, '.made-in-run')).isFile(), true); assert.equal(fs.readFileSync(path.join(f.parent, '.made-in-run'), 'utf8'), 'made-in-run\n');
+    assert.equal(fs.lstatSync(path.join(f.parent, '.newtool')).isDirectory(), true); assert.equal(fs.readFileSync(path.join(f.parent, '.newtool', 'token'), 'utf8'), 'token\n');
+    assert.deepEqual(tools(), before, 'nothing under his own vendor folders was written');
+    // The next run in Full access has what he added since, and what the first run made.
+    fs.writeFileSync(path.join(f.parent, '.terraformrc'), 'owner-terraform-token\n');
+    fs.writeFileSync(script, `#!/bin/sh\n{ cat ~/.terraformrc ~/.made-in-run ~/.newtool/token; } > ${JSON.stringify(out)} 2>&1\n`, { mode: 0o700 });
+    const next = await f.controller.ask(say(script), full.id).finished;
+    assert.equal(next.state, 'answered', JSON.stringify(next.error)); assert.equal(fs.readFileSync(out, 'utf8'), 'owner-terraform-token\nmade-in-run\ntoken\n');
+    assert.deepEqual(tools(), before);
   });
+  for (const [mode, label] of [['ask', 'Ask for approval'], ['auto', 'Approve for me']]) {
+    test(`${name} command in ${label} still has a home with nothing of the owner's in it`, async t => {
+      const f = setup(t, vendor), script = path.join(f.parent, 'who.sh'), out = path.join(f.parent, 'who.out'), tools = ownerHome(f, vendor), before = tools();
+      proven(vendor, f.bin, version, { relay: true });
+      fs.writeFileSync(script, `#!/bin/sh\n{ [ -e ~/.npmrc ] && echo "sees ~/.npmrc"; [ -e ~/.config ] && echo "sees ~/.config"; ls -A ~; echo made > ~/.made-in-run; } > ${JSON.stringify(out)} 2>&1\n`, { mode: 0o700 });
+      // The owner allows the command when it asks.
+      let done = false; const pending = f.controller.ask(say(script), null, { permissions: mode }).finished.finally(() => { done = true; });
+      while (!done) { const row = pendingApprovals().find(row => row.vendor === vendor); if (row) answerApproval(row.id, 'allow'); await sleep(50); }
+      const task = await pending;
+      assert.equal(task.state, 'answered', JSON.stringify(task.error));
+      assert.equal(fs.readFileSync(out, 'utf8'), `${folder}\n`, 'the home holds the vendor\'s own folder and nothing else');
+      assert.equal(fs.existsSync(path.join(f.parent, '.made-in-run')), false, 'what it made at the top of ~ stays in the private home');
+      assert.deepEqual(tools(), before);
+    });
+  }
 }
 
 test('a Codex lead whose command was declined reports the denial and asks', async t => {

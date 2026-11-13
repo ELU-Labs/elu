@@ -78,14 +78,16 @@ test('argv per profile is a fixed snapshot; settings and the hook are written pe
       assert.equal(hooks.length, 1); assert.equal(hooks[0].matcher, MATCHERS[mode]);
       assert.equal(hooks[0].hooks[0].type, 'command'); assert.ok(hooks[0].hooks[0].command.includes(HOOK) && hooks[0].hooks[0].command.endsWith(`--profile ${mode}`), hooks[0].hooks[0].command);
     }
-    const env = agy.childEnv({ mode, cwd });
-    assert.equal(env.HOME, privateHome); assert.equal(env.AGY_CLI_DISABLE_AUTO_UPDATE, 'true');
-    assert.equal(agentEnv({ PATH: '/bin' }, agy.meta.envKeys, env).HOME, privateHome, 'the override passes the personal-directory rule');
+    // Full access runs in the mirror of the owner's home beside the workspace's HOME; its .gemini is this one's.
+    const env = agy.childEnv({ mode, cwd, home: dir }), runHome = mode === 'full' ? `${privateHome}-full` : privateHome;
+    assert.equal(env.HOME, runHome); assert.equal(env.AGY_CLI_DISABLE_AUTO_UPDATE, 'true');
+    assert.equal(agentEnv({ PATH: '/bin' }, agy.meta.envKeys, env).HOME, runHome, 'the override passes the personal-directory rule');
     assert.equal(policyReport({ ...lead, vendor: 'agy' }, { mode }).rules.length, 7);
   }
   // One HOME per workspace, whatever the mode, so a conversation survives a mode switch; another workspace has its own.
+  // Full access reads the same .gemini through its mirror.
   assert.notEqual(agy.privateHome({ mode: 'ask', cwd }), agy.privateHome({ mode: 'ask', cwd: folder })); assert.equal(agy.privateHome({ mode: 'ask', cwd }), agy.privateHome({ mode: 'auto', cwd }));
-  assert.equal(agy.privateHome({ cwd }), agy.privateHome({ mode: 'full', cwd }));
+  assert.equal(agy.privateHome({ cwd }), agy.privateHome({ mode: 'full', cwd })); assert.equal(fs.readlinkSync(path.join(`${agy.privateHome({ cwd })}-full`, '.gemini')), path.join(agy.privateHome({ cwd }), '.gemini'));
   const { locked, ask, auto, full } = written;
   assert.deepEqual(locked.permissions.deny, ['command(*)', 'write_file(*)', 'read_url(*)', 'execute_url(*)', 'mcp(*)']);
   assert.equal(locked.toolPermission, 'request-review'); assert.equal(locked.allowNonWorkspaceAccess, false); assert.equal(locked.enableTerminalSandbox, true);
@@ -226,7 +228,8 @@ test('headless runs against the fake: locked soft-denies with exit 0, ask denies
   // The HOME is the workspace's, so the conversation survives a mode switch (a switch applies from the next turn).
   const switched = await go({ mode: 'full', role: lead, prompt: 'Reply with the nonce from earlier in this conversation.', resume: first.session });
   assert.equal(switched.result.summary, nonce); assert.equal(switched.session, first.session); assert.ok(fake.last().args.includes('--conversation'));
-  assert.equal(fake.last().home, agy.privateHome({ cwd: ws }));
+  // In Full access the HOME is the mirror beside the workspace's, whose .gemini is the workspace's own.
+  assert.equal(fake.last().home, `${agy.privateHome({ cwd: ws })}-full`); assert.equal(fs.realpathSync(path.join(fake.last().home, '.gemini')), path.join(agy.privateHome({ cwd: ws }), '.gemini'));
   // A conversation agy no longer has starts fresh in one turn, with its own log; a sign-in failure is not launched twice.
   const calls = () => fs.readFileSync(path.join(dir, 'calls.jsonl'), 'utf8').trim().split('\n').length;
   fs.rmSync(path.join(agy.privateHome({ cwd: ws }), '.gemini', 'antigravity-cli', 'brain', first.session), { recursive: true, force: true });
@@ -242,6 +245,35 @@ test('headless runs against the fake: locked soft-denies with exit 0, ask denies
   assert.equal(agy.probeSignIn({ bin: fake.bin, cwd: ws }), true);
   const probe = fake.last();
   assert.deepEqual(probe.args, ['-p', '/usage', '--output-format', 'json']); assert.equal(probe.home, path.join(path.resolve(personalDirectory()), 'agy-home', 'signin')); assert.equal(probe.autoUpdate, 'true');
+});
+
+// agy reads ~/.gemini from HOME and has no flag for another place, so Full access cannot run in
+// the owner's home: its ~ is a mirror of it (lib/home-mirror.mjs) whose .gemini is ELU's.
+test('in Full access ~ is a mirror of the owner\'s home with the workspace\'s own .gemini in it; the other modes keep the private HOME with nothing of his in it', async t => {
+  const dir = home(t), ws = repo(dir), fake = install(dir), schemaFile = schemaAt(dir), owner = path.join(dir, 'owner'), script = path.join(dir, 'who.sh'), out = path.join(dir, 'who.out');
+  const put = (file, text) => { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, text, { mode: 0o600 }); };
+  put(path.join(owner, '.npmrc'), 'owner-npm-token\n'); put(path.join(owner, '.config', 'gcloud', 'token'), 'owner-cloud-token\n');
+  put(path.join(owner, '.gemini', 'antigravity-cli', 'settings.json'), '{"his":"settings"}\n'); put(path.join(owner, '.gemini', 'GEMINI.md'), 'his instructions\n'); put(path.join(owner, '.claude', 'CLAUDE.md'), 'his instructions\n');
+  const his = () => ['.gemini/antigravity-cli/settings.json', '.gemini/GEMINI.md', '.claude/CLAUDE.md'].map(name => `${name} ${fs.readFileSync(path.join(owner, name), 'utf8')} ${fs.statSync(path.join(owner, name)).mtimeMs}`).concat(fs.readdirSync(path.join(owner, '.gemini'), { recursive: true }).sort()), before = his();
+  fs.writeFileSync(script, `#!/bin/sh\ncd ~ || exit 1\n{ cat .npmrc .config/gcloud/token; echo from-run > .config/gcloud/from-run; echo made > .made-in-run; grep -c trustedWorkspaces .gemini/antigravity-cli/settings.json; [ -e .gemini/GEMINI.md ] && echo "his .gemini"; [ -e .claude ] && echo "sees .claude"; ls -A | grep -c .; } > ${JSON.stringify(out)} 2>&1\n`, { mode: 0o700 });
+  let n = 0;
+  const go = mode => agy.run({ bin: fake.bin, env: { ...process.env, HOME: owner }, logFile: path.join(dir, `run-${n++}.log`), timeoutSeconds: 60, relay: false, cwd: ws, protectedPaths: ['.git'], commonDir: path.join(ws, '.git'), schemaFile, session: crypto.randomUUID(), mode, role: mode === 'locked' ? reader : lead, prompt: `Run this command: ${script}. Reply with the summary "ran".` });
+  const base = agy.privateHome({ cwd: ws }), mirror = `${base}-full`;
+  await go('full');
+  assert.equal(fake.last().home, mirror); assert.equal(fs.statSync(mirror).mode & 0o777, 0o700);
+  // .npmrc, .config, .gemini (ELU's) and .made-in-run: four entries, and none of them his .gemini or .claude.
+  assert.equal(fs.readFileSync(out, 'utf8'), 'owner-npm-token\nowner-cloud-token\n1\n4\n');
+  assert.equal(fs.readFileSync(path.join(owner, '.config', 'gcloud', 'from-run'), 'utf8'), 'from-run\n');
+  assert.equal(fs.readlinkSync(path.join(mirror, '.gemini')), path.join(base, '.gemini')); assert.equal(settingsOf('full', ws).allowNonWorkspaceAccess, true);
+  // The runner settles the home when the run ends: what the command made at the top of ~ is his.
+  assert.equal(fs.existsSync(path.join(owner, '.made-in-run')), false);
+  agy.settleHome({ mode: 'ask', cwd: ws, home: owner }); assert.equal(fs.existsSync(path.join(owner, '.made-in-run')), false, 'only a Full access run has a mirror to settle');
+  agy.settleHome({ mode: 'full', cwd: ws, home: owner }); assert.equal(fs.readFileSync(path.join(owner, '.made-in-run'), 'utf8'), 'made\n'); assert.ok(fs.lstatSync(path.join(mirror, '.made-in-run')).isSymbolicLink());
+  assert.equal(agy.fullHome({ cwd: ws, home: owner }), mirror);
+  // Read only and Ask for approval: the private HOME, holding ELU's .gemini and nothing else.
+  for (const mode of ['locked', 'ask']) { await go(mode); assert.equal(fake.last().home, base, mode); assert.deepEqual(fs.readdirSync(base), ['.gemini'], mode); assert.equal(agy.childEnv({ mode, cwd: ws, home: owner }).HOME, base, mode); }
+  assert.equal(agy.childEnv({ mode: 'auto', cwd: ws, home: owner }).HOME, base); assert.equal(agy.interactive({ session: crypto.randomUUID(), cwd: ws }).env.HOME, base);
+  assert.deepEqual(his(), before, 'his own ~/.gemini and ~/.claude were never written');
 });
 
 test('over ACP a permission request reaches the approvals and the answer decides: allow writes, deny and timeout do not and are recorded', async t => {
