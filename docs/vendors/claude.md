@@ -46,11 +46,21 @@ config file and disabled hooks. `--max-budget-usd` is passed only when the sessi
 has a spending limit (`/budget`) or the run is a teammate's question. The approval relay is the
 one server ELU adds to that file; it is never in the allow list.
 
-Every launch, Read only too, passes `--thinking-display summarized`, so the chat can show what
-the model thinks while it works. Without it a print run sends each thinking block of the newer
-models with its text empty. Claude Code 2.1.318 to 2.1.323 accept the flag but leave it out of
-`--help`, as they do `--permission-prompt-tool`. Read from the 2.1.323 binary; not seen with
-the real service yet.
+A launch, Read only too, passes `--thinking-display summarized`, so the chat can show what
+the model thinks while it works. Claude Code 2.1.318 to 2.1.323 accept the flag but leave it out of
+`--help`, as they do `--permission-prompt-tool`, and `claude <any flag> --version` exits 0 for
+a made-up flag too (seen on 2.1.322). So the program cannot be asked whether it takes the flag:
+ELU reads the program's own file for the flag's text, once for each program, and starts a
+program that does not hold it without the flag. A launch that still ends at once with nothing
+printed runs again without the flag, and that program is not given it again; a later release
+is read anew. What was found is kept in `~/.config/elu-code/vendor-extras.json`.
+
+With the flag or without, the 2.1.322 runs read so far sent every thinking block with its text
+empty. The chat then shows the thought's token count, live, from the `system/thinking_tokens`
+rows. A `tool_progress` row comes every 30 seconds while a command prints nothing and says how
+long the call has run; the chat counts the seconds between two of them. `task_started`,
+`task_notification`, `task_updated` and `background_tasks_changed` rows name the commands a
+turn has running in the background, which the chat shows as one line.
 
 A folder you name with `/permissions folders add` is read and never written in Ask and
 Auto: `Edit` and `Write` deny rules cover it and the sandbox's `denyWrite` lists it, the

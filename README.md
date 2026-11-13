@@ -99,7 +99,7 @@ Type these in the message box. `/` alone lists every command, and `/help` explai
 
 You can send a message at any time. One sent while the session is working waits in the chat and is sent by itself when that turn ends; several go together, in order. `↑` in the empty message box takes the newest one back so you can change it.
 
-While the model or a bot works, the chat shows what it does as it happens: each thought, each tool call (● running, ✓ done, ✗ failed), its plan, and what it writes on the way. When the turn ends they fold into one line above its reply, such as `▸ 12 steps in 1m 12s`. `ctrl+o` opens or folds the steps of every turn, in the message box too; a click on that line opens or folds that turn's. A session on your other computer shows the same.
+While the model or a bot works, the chat shows what it does as it happens: each thought, each tool call (● running, ✓ done, ✗ failed), its plan, and what it writes on the way. A thought that comes without its text shows how many tokens it has taken so far, such as `✻ thinking · 1.2k tokens`. A call says how long it has run, second by second, such as `● Run: npm test · 2m 10s`, and keeps its total when it ends. Commands the turn left running in the background are one line, such as `● 1 background command: npm run watch · 4m 0s`. When the turn ends they fold into one line above its reply, such as `▸ 12 steps in 1m 12s`. A turn you stop with `/stop` keeps its steps, and its line says `stopped`. `ctrl+o` opens or folds the steps of every turn, in the message box too; a click on that line opens or folds that turn's. A session on your other computer shows the same.
 
 | Type | What it does |
 | --- | --- |

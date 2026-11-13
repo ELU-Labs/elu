@@ -42,7 +42,7 @@ Resume: `codex exec resume <thread_id> -` with the same `-c` set. `exec resume` 
 - Approve for me: an action the reviewer declines comes back as `status: "declined"` and is listed on the run as a denial (`Run: <command>` or `Edit: <paths>`) [run]. The model is told not to retry it and to return `needs_input`.
 - Ask for approval: Codex has no live approval relay. A sandbox block produces no stream item and no denial record [run]; the model reports what it could not do.
 - No dollar figure: Codex reports no cost in its stream. `maxCostUsd` must be `null`; the time limit bounds the run.
-- What the model thinks: every launch passes `-c model_reasoning_summary="auto"`. Every model in the bundled catalog of 0.167.0-alpha.4.1 defaults to `none`, and then the stream has no reasoning item. The chat shows each reasoning summary as it arrives, with each command, edit and message. Not seen with the real service yet.
+- What the model thinks: every launch passes `-c model_reasoning_summary="auto"`. Every model in the bundled catalog of 0.167.0-alpha.4.1 defaults to `none`, and then the stream has no reasoning item. The chat shows each reasoning summary as it arrives, with each command, edit and message, and how long a command has run. A program whose file does not hold the key is started without it, and a launch that ends at once with nothing printed runs again without it (see [Claude Code](claude.md)). Not seen with the real service yet.
 
 ## Code mode, seen with the real service
 
