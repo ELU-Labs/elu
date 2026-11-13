@@ -641,6 +641,26 @@ test('a rule kept once answers the next session; defaults never ask; the never l
   assert.deepEqual(mine.task.approvals.map(row => [row.decision, row.by, row.rule]), [['allow', 'default', 'git status'], ['allow', 'rule', 'npm test']]);
 });
 
+// Where user namespaces are turned off, bwrap can still make a network namespace when it runs as
+// root or is installed setuid, but Claude Code's sandbox always makes a user namespace, so it does
+// not start and Claude Code runs every command outside it. A default that holds only inside the
+// sandbox (git reads, the project's checks) must then wait for the owner, as with no sandbox at all.
+test('where bwrap cannot make a user namespace, a command counts as outside the sandbox: a default that needs the sandbox waits for the owner', { skip: process.platform !== 'linux', timeout: 60000 }, async t => {
+  const f = setup(t, 'relay'), root = f.controller.repo.project ?? f.controller.repo.root;
+  const tools = path.join(f.parent, 'no-user-namespaces'); fs.mkdirSync(tools);
+  fs.writeFileSync(path.join(tools, 'bwrap'), '#!/bin/sh\nfor arg in "$@"; do [ "$arg" = --unshare-user ] && { echo "bwrap: No permission to create new namespace" >&2; exit 1; }; done\nexit 0\n', { mode: 0o755 });
+  fs.writeFileSync(path.join(tools, 'socat'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  environment(t, { PATH: `${tools}${path.delimiter}${process.env.PATH}` });
+  fakeClis(f.parent, { mode: 'relay', intent: 'answer', asks: [{ tool_name: 'Bash', input: { command: 'git status' } }] });
+  const asked = [], run = f.controller.ask('Check the tree', null, { permissions: 'ask' }); let done = false; const finished = run.finished.finally(() => { done = true; });
+  while (!done) { for (const row of pendingApprovals({ root })) { asked.push(row); answerApproval(row.id, 'deny'); } await sleep(25); }
+  const task = await finished;
+  assert.equal(task.state, 'answered', JSON.stringify(task.error));
+  assert.deepEqual(asked.map(row => [row.summary, row.sandboxed === true]), [['Run: git status', false]], 'the owner was asked, and the turn was not taken as sandboxed');
+  assert.deepEqual(task.approvals.map(row => [row.summary, row.decision, row.by ?? null]), [['Run: git status', 'deny', null]]);
+  assert.equal(fs.existsSync(path.join(f.fake.dir, 'ran.jsonl')), false, 'nothing ran outside the sandbox without the owner');
+});
+
 // The owner's bug: a sandboxed command in Ask for approval connected to a host, Claude Code
 // asked on its own output, its input was already closed, and the host was denied as "user
 // denied" though nobody was asked. Now the question reaches the owner and his answer reaches Claude.

@@ -127,7 +127,11 @@ runs commands without one: Ask for approval asks you for each, and Approve for m
 sends each to the reviewer. The Permissions picker says "No OS sandbox here" when a
 tool is missing. Where both are installed and `bwrap` cannot start, Claude Code says
 its sandbox is disabled; seen on 2.1.322, `npm test` then came to the owner as an
-approval. Nothing is installed for you.
+approval. The picker and `elu policy show` then say "The OS sandbox cannot start
+here". Claude Code's sandbox always makes a user namespace, so ELU's start check
+makes one too: where user namespaces are turned off, a `bwrap` run as root or
+installed setuid still starts without one, and the sandbox does not. Nothing is
+installed for you.
 
 Not enforced or not verified on these releases: Bash rules match text only;
 WebFetch runs outside the sandbox; a `bypassPermissions` run does not check

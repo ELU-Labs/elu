@@ -410,11 +410,16 @@ on PATH, and `bwrap` must be allowed to make user namespaces. Where the sandbox
 does not start, the system fences nothing, so Ask for approval asks you for every
 command and Approve for me sends every command to the reviewer.
 
-The Permissions picker says which case this machine is: "No OS sandbox here" when
-a tool is not installed, "The OS sandbox cannot start here" when both are installed
-and `bwrap` cannot start. ELU finds out by starting `bwrap` once, around a
-command that does nothing, when the picker first opens; start ELU again after
-a fix.
+The Permissions picker and `elu policy show` say which case this machine is: "No
+OS sandbox here" when a tool is not installed, "The OS sandbox cannot start here"
+when both are installed and `bwrap` cannot start. ELU finds out by starting `bwrap`
+around a command that does nothing, with the namespaces Claude Code's sandbox
+makes: its own user, network and process namespaces. A `bwrap` run as root, or
+installed setuid, can make the others where user namespaces are turned off; the
+sandbox still cannot start there, and ELU says so. Where it cannot start, ELU
+counts every command as outside the sandbox, so a default that holds only inside
+it (Git reads, the project's checks) asks you. The answer is kept for each `bwrap`
+program, so it is started once; start ELU again after a fix.
 
 Ubuntu 24.04 stops a program from making user namespaces unless an AppArmor
 profile lets it, and has no profile for `bwrap`. This one does, saved as
