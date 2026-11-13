@@ -237,8 +237,14 @@ if(mode==='relay'&&promptTool&&permissionMode!=='bypassPermissions'){
  }
  child.stdin.end();
 }
+// background (fake.json): the turn starts a command in the background and ends asking a
+// question; as the real CLI does, it then stays open while that command runs (background.pid
+// beside the fake names it).
+const BACKGROUND='for i in $(seq 1 110); do sleep 60; done';
+if(cfg.background){console.log(JSON.stringify({type:'assistant',message:{content:[{type:'tool_use',id:'toolu_fake_bg',name:'Bash',input:{command:BACKGROUND,description:'Watch the deploy',run_in_background:true}}]}}));console.log(JSON.stringify({type:'user',message:{content:[{type:'tool_result',tool_use_id:'toolu_fake_bg',content:'Command running in background with ID: bfake1. Output is being written to: /tmp/bfake1.output'}]}}));result.outcome='needs_input';result.question='Is the deploy still running?';result.choices=[];}
 // blocked (fake.json): the question this turn ends on, as a model does when something it needed was refused.
 if(cfg.blocked){result.outcome='needs_input';result.question=cfg.blocked;result.choices=[];}
 console.log(JSON.stringify({type:'result',is_error:false,session_id:session,total_cost_usd:0,...(denials.length?{permission_denials:denials}:{}),structured_output:mode==='invalid'||badReply?{outcome:'nope'}:result}));
 // A stream-json run ends when its input does; one the runner never closes fails the test.
 if(streaming&&!inputEnded){const timer=setTimeout(()=>{console.error('The input was never closed after the result.');process.exit(3);},10000);while(await nextLine()!==null);clearTimeout(timer);}
+if(cfg.background){const {spawn}=await import('node:child_process');const child=spawn('/bin/sh',['-c',BACKGROUND],{stdio:'ignore'});fs.writeFileSync(path.join(path.dirname(process.argv[1]),'background.pid'),String(child.pid));await new Promise(resolve=>child.once('exit',resolve));}

@@ -455,6 +455,19 @@ test('a turn that prints nothing for the quiet limit stops with one line, keeps 
   assert.equal(fs.readFileSync(path.join(task.worktree, 'src/coupon.mjs'), 'utf8'), 'export const normalize = (value) => value.toUpperCase();\n', 'the edit stays on disk');
 });
 
+test('a turn that answered ends at its result: the command it left running in the background is stopped and named', async t => {
+  const f = setup(t, 'answer'), file = path.join(f.fake.dir, 'fake.json');
+  fs.writeFileSync(file, JSON.stringify({ ...JSON.parse(fs.readFileSync(file, 'utf8')), background: true }));
+  const started = Date.now(), task = await f.controller.ask('Is ship still running?', null, { permissions: 'full' }).finished;
+  assert.ok(Date.now() - started < 30000, 'the turn ended at its result, not when the command it left would');
+  assert.ok(['answered', 'needs_input'].includes(task.state), task.error?.message);
+  const lead = task.runs.findLast(run => run.role === 'lead');
+  assert.deepEqual([lead.code, lead.endedAfterResult, lead.leftRunning], [0, true, 'for i in $(seq 1 110); do sleep 60; done']);
+  const pid = Number(fs.readFileSync(path.join(f.fake.dir, 'background.pid'), 'utf8')), alive = () => { try { process.kill(pid, 0); return true; } catch { return false; } };
+  for (const until = Date.now() + 5000; alive() && Date.now() < until;) await new Promise(resolve => setTimeout(resolve, 100));
+  assert.equal(alive(), false, 'the command it left ended with the turn');
+});
+
 test('an approval waiting for the owner is not quiet: the turn waits past the quiet limit', async t => {
   const f = setup(t, 'relay'); quickClock(t); f.controller.draftConfig.checks = [];
   const { task, answered } = await relay(f, 'allow', { delay: 4000 });
