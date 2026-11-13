@@ -3209,12 +3209,12 @@ test('a new approval rings the terminal bell once', { timeout: 20000 }, async t 
 });
 
 test('a teammate message is approved as your own session, worked on in a mode picked now, or declined; y is preselected', { timeout: 40000 }, async t => {
-  const p = setup(t), home = path.join(p.parent, 'home'), evals = path.join(home, 'evals'); fs.mkdirSync(evals, { recursive: true });
+  const p = setup(t), home = path.join(p.parent, 'home'), evals = path.join(home, 'evals'), keys = path.join(home, '.ssh'); fs.mkdirSync(evals, { recursive: true }); fs.mkdirSync(keys); fs.writeFileSync(path.join(keys, 'config'), '');
   environment(t, { HOME: fs.realpathSync(home) });
   const token = letter => `ghp_${letter.repeat(24)}`;
   const items = [
     { id: 'in-1', kind: 'incoming', peer: KEYS.sara, name: 'sara', project: 'app', text: `Where are the fixtures? ${token('a')} opens them, under ${evals}`, at: ago(1), state: 'submitted', threadId: 'th-1', request: 'ask' },
-    { id: 'in-2', kind: 'incoming', peer: KEYS.li, name: 'li', project: 'app', text: `Run evals with ${token('b')} in ${evals}`, at: ago(2), state: 'submitted', threadId: 'th-2', request: 'handoff' },
+    { id: 'in-2', kind: 'incoming', peer: KEYS.li, name: 'li', project: 'app', text: `Run evals with ${token('b')} in ${evals}, keys in ${keys}/config`, at: ago(2), state: 'submitted', threadId: 'th-2', request: 'handoff' },
   ];
   const peer = fakePeer({ items, trusted: [KEYS.li] }), v = await view(t, { repo: p.repo, peer }), panels = v.current.panels, status = () => panels.status.getText();
   await wide(v);
@@ -3252,8 +3252,13 @@ test('a teammate message is approved as your own session, worked on in a mode pi
   assert.match(work, /Permissions {2}Ask for approval {6}1 to change/); assert.match(work, /Runs in {6}New worktree {10}2 to change/);
   assert.match(work, /Edits the session's files; asks you for the rest and the internet\./); assert.match(work, /A copy of this repo on a new branch\./); assert.match(work, /Other folders it may read\./); assert.doesNotMatch(work, /read-only/);
   assert.match(work, /Folders {6}~\/evals {2}from their message · 3 to change/);
+  // The message also names a file in ~/.ssh. Full access offers that folder too; a lower mode offers only what it may read.
+  v.input.write('1'); await until(() => modal(v, 'Permissions'), 'mode picker'); v.input.write('3'); await dialog(v, 'Full access', 'y');
+  await until(() => modal(v, 'Accept') && /Permissions {2}Full access/.test(dialogText(v, 'Accept')), 'Full access picked');
+  assert.match(dialogText(v, 'Accept'), /Folders {6}~\/evals ~\/\.ssh {2}from their message · 3 to change/);
   v.input.write('1'); await until(() => modal(v, 'Permissions'), 'mode picker'); v.input.write('2');
   await until(() => modal(v, 'Accept') && /Permissions {2}Approve for me/.test(dialogText(v, 'Accept')), 'mode picked');
+  assert.match(dialogText(v, 'Accept'), /Folders {6}~\/evals {2}from their message · 3 to change/, 'the secret folder left with Full access');
   v.input.write('\r');
   await until(() => peer.sent.some(c => c.type === 'work' && c.id === 'in-2'), 'w accepts the task');
   assert.deepEqual(peer.sent.find(c => c.type === 'work' && c.id === 'in-2'), { type: 'work', id: 'in-2', permissions: 'auto', place: { kind: 'worktree' }, folders: [fs.realpathSync(evals)], root: p.repo.root });
