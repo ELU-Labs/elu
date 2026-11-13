@@ -1689,6 +1689,7 @@ test('typing on a Sessions row goes into the message box with no Tab first; the 
   const p = setup(t);
   liveTask(p.root, { id: '4', goal: 'Trim coupon codes', state: 'answered' });
   const v = await view(t, { repo: p.repo }), panels = v.current.panels, ask = panels.ask, type = text => v.type(text);
+  const onRow = async () => { await selectRow(v, /Trim coupon codes/); if (v.current.screen.focused === ask) ask.cancel(); ask.setValue(''); panels.board.focus(); await until(() => v.current.screen.focused === panels.board && v.current.session === '4', 'the cursor on the row'); };
   const typed = async (text, where) => { await until(() => ask.getValue() === text && v.current.screen.focused === ask, where); ask.setValue(''); };
   await selectRow(v, /Trim coupon codes/);
   // Nothing acted: the session is still the one shown, no dialog opened, and it is not archived.
@@ -1708,13 +1709,13 @@ test('typing on a Sessions row goes into the message box with no Tab first; the 
   await selectRow(v, /Trim coupon codes/); panels.chat.focus(); await until(() => v.current.screen.focused === panels.chat, 'the chat beside the list');
   type('thanks'); await typed('thanks', 'from the chat'); untouched();
   // What the owner typed, in small letters, each starting with a key of the row: nothing acts, the text is in the box.
-  for (const text of ['can you create PR now?', 'now what', 'status', 'continue', 'e', 'x marks it', '+1']) { await selectRow(v, /Trim coupon codes/); type(text); await typed(text, text); untouched(); }
+  for (const text of ['can you create PR now?', 'now what', 'status', 'continue', 'e', 'x marks it', '+1']) { await onRow(); type(text); await typed(text, text); untouched(); }
   // A row's key alone in the box: the line under the box says what Enter does, and Enter does it.
-  await selectRow(v, /Trim coupon codes/); type('n');
+  await onRow(); type('n');
   await until(() => ask.getValue() === 'n' && /enter starts a new session · keep typing to write a message/.test(panels.keys.getText()), 'the line under the box names n');
   untouched(); type('\r'); await until(() => v.current.session === 'new', 'n then Enter starts a new session');
   assert.equal(ask.getValue(), '');
-  await selectRow(v, /Trim coupon codes/); type('c');
+  await onRow(); type('c');
   await until(() => ask.getValue() === 'c' && /enter archives this session · keep typing to write a message/.test(panels.keys.getText()), 'the line under the box names c');
   untouched(); type('\r'); await until(() => !rows(v).some(row => /Trim coupon codes/.test(row)), 'c then Enter archives it');
   assert.equal(ask.getValue(), ''); assert.equal(v.current.screen.focused, panels.board, 'back on the list');
