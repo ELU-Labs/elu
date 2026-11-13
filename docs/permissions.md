@@ -76,9 +76,11 @@ What stays, and why:
   its own variable there. Claude Code and Codex run in your home.
 - What a vendor asks in every mode is still shown to you. Claude Code asks before `rm` or
   `rmdir` on your home, the working folder or a top-level folder.
-- Who gets Full access is unchanged: your own sessions and the schedules you pick it for.
-  A bot's scheduled turn, a teammate's message that starts by itself, and a request to the
-  local A2A endpoint run with Approve for me at most; a teammate's question runs read only.
+- Who gets Full access: your own sessions, the schedules of their bots, and the schedules
+  you pick it for. A bot's scheduled turn runs in its session's mode, Full access included.
+  A request to the local A2A endpoint is your own and runs your default mode as it is. A
+  teammate's message that starts by itself runs with Approve for me at most, and a
+  teammate's question runs read only.
 
 Everything in the sections below about deny rules, the never list, the sandbox and
 approvals holds in the other modes.
@@ -455,7 +457,8 @@ Approve for me.
   never starts that bot's schedule. An unanswered approval times out and the
   task asks you.
 - A request sent to the local A2A endpoint, which is off by default, runs your
-  personal default, capped at `auto`: it never runs with Full access. A session that
+  personal default as it is, Full access included: only a program on this computer
+  that holds your own token reaches the endpoint. A session that
   has Full access can itself reach the endpoint, as it can anything on this computer.
 - A teammate's message you answer runs read only and never gets a mode. One you
   choose to work on runs with the mode you pick then.
