@@ -1341,6 +1341,34 @@ test('a claim that takes the project over knows whether the window that had it l
   next.release();
 });
 
+// Two windows on one computer need not run in one time zone: one in a terminal, one over a
+// connection or started by a program that sets its own. ps prints a process's start in the time
+// zone of whoever asks, so each window reads another line for the other than that one wrote.
+// They still know each other: what /takeover asks reaches the window that has the project, the
+// window that takes it knows the other let go and is still open, and the start it names for
+// that window is the one read here.
+test('windows in different time zones ask each other for the project, and each knows the other is open and when it started', { timeout: 30000 }, async t => {
+  const p = setup(t), zone = Intl.DateTimeFormat().resolvedOptions().timeZone === 'Asia/Kolkata' ? 'America/Los_Angeles' : 'Asia/Kolkata';
+  const projects = new URL('../lib/projects.mjs', import.meta.url).href, gitLib = new URL('../lib/git.mjs', import.meta.url).href;
+  // The other window: it has the project, lets go when asked, and says so.
+  const code = `import { claimView } from ${JSON.stringify(projects)}; import { repository } from ${JSON.stringify(gitLib)};
+    const claim = claimView(repository(${JSON.stringify(p.root)}), { window: {} }); console.log(claim.readOnly ? 'view-only' : 'has it');
+    setInterval(() => { if (claim.wanted()) { claim.giveUp(); console.log('let go'); } }, 50);`;
+  const other = spawn(process.execPath, ['--input-type=module', '-e', code], { env: { ...process.env, TZ: zone }, stdio: ['ignore', 'pipe', 'inherit'] });
+  t.after(() => other.kill('SIGKILL'));
+  let said = ''; other.stdout.on('data', chunk => { said += chunk; });
+  await until(() => /has it|view-only/.test(said), 'the other window'); assert.match(said, /has it/);
+  const mine = claimView(p.repo, { window: {} });
+  assert.equal(mine.readOnly, true, 'the window in another time zone has the project'); assert.equal(mine.holder.pid, other.pid); assert.equal(mine.retry(), false);
+  // Its lock holds its start as its own time zone prints it; the start named is the one this window reads.
+  const real = Date.parse(processIdentity(other.pid).slice(0, 24));
+  assert.ok(Math.abs(Date.parse(mine.holder.startedAt) - real) <= 2000, `${mine.holder.startedAt} is not ${new Date(real).toISOString()}`);
+  takeOver(p.repo);
+  await until(() => /let go/.test(said), 'what was asked reaches the window that has the project');
+  assert.equal(mine.retry(), true); assert.equal(mine.holderOpen, true, 'that window let go, and is still open');
+  mine.release();
+});
+
 test('Tasks reads every project without writing or starting a vendor', async t => {
   const one = setup(t), two = project(t); assert.equal(cli(two.root, ['init', '--yes'], one.env).status, 0);
   registerProject(one.repo); registerProject(repository(two.root));
