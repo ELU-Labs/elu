@@ -1196,7 +1196,7 @@ test('a second project view is read-only and releases no writer lock', async t =
   await send(second, '/new'); await until(() => second.current.panels.ask.__listener && /View only/.test(second.current.panels.ask._label.getText()), 'view-only form again');
   assert.doesNotMatch(second.current.panels.header.getContent(), /READ ONLY|View only/, 'the header names the session, not the window');
   assert.equal(fs.readFileSync(p.calls, 'utf8'), calls, 'a second view must not query a vendor');
-  assert.throws(() => second.current.controller.plan('Change text'), { message: 'View only: another ELU window has this project. Close it, or /takeover here.' });
+  assert.throws(() => second.current.controller.plan('Change text'), /^View only: another ELU window has this project\. Close it, or \/takeover here\. That window is process \d+/);
   const claim = claimView(p.repo); assert.equal(claim.readOnly, true);
   key(second, 'q'); await second.finished;
   assert.equal(claimView(p.repo).readOnly, true);
@@ -1240,6 +1240,75 @@ test('/takeover says so when the other window does not let go', async t => {
   assert.equal(v.current.controller.readOnly, true);
   older.release(); await until(() => v.current.controller.readOnly === false, 'taken once the older window closed');
   key(v, 'q'); await v.finished;
+});
+
+// The owner's devbox, over SSH: the connection froze, he opened ELU again in a new one, and
+// the window on the frozen connection still had the project, so the new window opened read
+// only. The old one quit a few seconds later, but the new window stayed read only for good,
+// and /stop on its running session said "This view is read-only. Use the first view to make
+// changes." when there was no first view any more.
+test('a window that opened read only beside another takes the project over once that one quits, and /stop stops its running session', { timeout: 40000 }, async t => {
+  const p = setup(t, 'slow'), tasks = () => projectSnapshot(p.repo).tasks;
+  const first = await view(t, { repo: p.repo });
+  await send(first, 'Keep working on the board'); await until(() => tasks()[0]?.activeRole === 'lead', 'the model working');
+  // Every line the status shows: the window may take the project over, and say so, at any moment after /stop.
+  const said = [], second = await view(t, { repo: p.repo, onRender: value => said.push(value.panels.status.getText()) }), panels = second.current.panels;
+  await until(() => /View only/.test(panels.ask._label.getText()), 'the second window opens view-only');
+  await openTask(second, /Keep working/);
+  // The first window quits, as the one on the frozen connection did.
+  key(first, 'q'); await first.finished;
+  const from = said.length, after = () => said.slice(from); await send(second, '/stop');
+  await until(() => after().some(text => /Stopping|That window is/.test(text)), 'what /stop says');
+  assert.ok(!after().some(text => /That window is/.test(text)), '/stop is not refused'); assert.ok(after().some(text => /Stopping\. Changes and chat history are kept\./.test(text)));
+  await until(() => tasks()[0].state === 'stopped', 'the session stopped');
+  // The window has the project now: it says so once, and nothing reads view-only.
+  await until(() => !/View only/.test(panels.ask._label.getText()), 'the window took the project over');
+  assert.ok(after().some(text => /This window can make changes now\./.test(text)), 'it says so'); assert.doesNotMatch(panels.header.getContent(), /READ ONLY|View only/);
+  assert.equal(claimView(p.repo).readOnly, true, 'this window holds the project');
+  await send(second, 'Now tidy the coupon module'); await until(() => tasks()[0].messages.some(row => row.text === 'Now tidy the coupon module'), 'a message from it is sent');
+});
+
+// While the other window is still open, it is the one that makes changes, and every line
+// that says so names it and what to do. Stopping changes nothing in the project, so /stop works here.
+test('beside a window that has the project, /stop still stops a session here, and the read-only line names that window and what to do', { timeout: 40000 }, async t => {
+  const p = setup(t, 'slow'), tasks = () => projectSnapshot(p.repo).tasks;
+  const first = await view(t, { repo: p.repo });
+  await send(first, 'Keep working on the board'); await until(() => tasks()[0]?.activeRole === 'lead', 'the model working');
+  const second = await view(t, { repo: p.repo }), panels = second.current.panels, status = () => panels.status.getText();
+  await openTask(second, /Keep working/);
+  await until(() => /^ View only: another ELU window has it/.test(panels.ask._label.getText()), 'the box says another window has it');
+  await wide(second);
+  // With room, the box names that window's terminal when it has one, and what to do.
+  await until(() => /^ View only: another ELU window has it(, in terminal \S+)? · close it, or \/takeover $/.test(panels.ask._label.getText()), 'the box names the window and what to do');
+  await send(second, 'Also cover refunds');
+  // The window that has it: its process, when it started, and its terminal when it has one.
+  const started = clockTime(new Date(processIdentity(process.pid).slice(0, 24)));
+  await until(() => /That window is/.test(status()), 'why it was not sent');
+  assert.match(status().replace(/\s+/g, ' '), new RegExp(`^› View only: another ELU window has this project\\. Close it, or /takeover here\\. That window is process ${process.pid}, started ${started}(, in terminal \\S+)?\\.$`));
+  assert.equal(panels.ask.getValue(), 'Also cover refunds', 'the message stays in the box');
+  assert.deepEqual(tasks()[0].messages.map(row => row.text), ['Keep working on the board'], 'nothing was sent');
+  await send(second, '/stop'); await until(() => /Stopping\. Changes and chat history are kept\./.test(status()), 'the stop is taken');
+  await until(() => tasks()[0].state === 'stopped', 'the session stopped');
+  assert.match(panels.ask._label.getText(), /View only/, 'the other window still has the project');
+});
+
+// A window that asks again for the project it has, as switching back to it does, is never
+// locked out by itself: what it holds is its own, and goes only with its last claim.
+test('a window that claims a project it already holds keeps it, and lets it go only with its last claim', t => {
+  const p = setup(t), mine = {};
+  const one = claimView(p.repo, { window: mine }), two = claimView(p.repo, { window: mine });
+  assert.equal(one.readOnly, false); assert.equal(two.readOnly, false, 'its own lock is not another window\'s');
+  assert.equal(claimView(p.repo).readOnly, true, 'another window is still view-only');
+  one.release(); one.release();
+  assert.equal(claimView(p.repo).readOnly, true, 'the window still holds it');
+  two.release();
+  const next = claimView(p.repo); assert.equal(next.readOnly, false); next.release();
+  // A view-only claim takes the project over once its holder lets it go.
+  const holder = claimView(p.repo), late = claimView(p.repo, { window: {} });
+  assert.equal(late.readOnly, true); assert.equal(late.retry(), false); assert.equal(late.holder.pid, process.pid);
+  holder.release(); assert.equal(late.retry(), true); assert.equal(late.readOnly, false);
+  assert.equal(claimView(p.repo).readOnly, true); late.release();
+  const last = claimView(p.repo); assert.equal(last.readOnly, false); last.release();
 });
 
 test('Tasks reads every project without writing or starting a vendor', async t => {
@@ -2008,7 +2077,7 @@ test('a message sent while the session works waits in its chat; Up takes it back
   // Sent again. /stop stops the turn, and the waiting message is the next turn with no key pressed.
   await send(v, 'Also cover refunds and rounding'); await until(() => waiting().length === 1, 'waiting again');
   await send(v, '/stop');
-  await until(() => /Stopping\. Your waiting message is sent next · \/stop again cancels it\./.test(panels.status.getText()), 'what /stop says');
+  await until(() => /Stopping\. Your waiting message goes as soon as it stops · ↑ takes it back\./.test(panels.status.getText()), 'what /stop says');
   await until(() => sent().length === 2 && projectSnapshot(p.repo).tasks[0].activeRole === 'lead', 'the waiting message started the next turn');
   assert.deepEqual(sent(), ['Keep working on the board', 'Also cover refunds and rounding']); assert.deepEqual(waiting(), []);
   // With nothing waiting, /stop leaves the session idle.
@@ -2154,7 +2223,8 @@ test('/stop in an idle session whose next turn the conductor is starting stops t
   assert.equal(tasks().length, 1); assert.ok(tasks()[0].messages.some(message => message.text === 'Now tidy the coupon module'), 'the message was sent');
 });
 
-test('a second /stop while the turn is still stopping cancels what waits, and the session is left idle', { timeout: 40000 }, async t => {
+// The owner's waiting messages are his words: /stop stops the turn so they go, and never drops them.
+test('a second /stop while the turn is still stopping keeps what waits, and it goes, in order, as soon as the turn stops', { timeout: 40000 }, async t => {
   const p = setup(t, 'slow'), v = await view(t, { repo: p.repo }), panels = v.current.panels;
   const waiting = () => pendingRequests(p.root).filter(row => row.state === 'queued').map(row => row.goal), sent = () => projectSnapshot(p.repo).tasks[0]?.messages.map(row => row.text) ?? [];
   await send(v, 'Keep working on the board');
@@ -2162,14 +2232,27 @@ test('a second /stop while the turn is still stopping cancels what waits, and th
   await send(v, 'First waiting'); await send(v, 'Second waiting'); await until(() => waiting().length === 2, 'two waiting');
   // The conductor is held still, so the first stop is certainly not done when the second is typed.
   const conductor = resources(t).conductor; conductor.busy = true;
-  await send(v, '/stop'); await until(() => /Your waiting messages are sent next · \/stop again cancels them\./.test(panels.status.getText()), 'the first /stop');
-  assert.equal(waiting().length, 2);
-  await send(v, '/stop'); await until(() => /Waiting messages cancelled\./.test(panels.status.getText()), 'the second /stop');
-  assert.deepEqual(waiting(), []);
+  await send(v, '/stop'); await until(() => /Stopping\. Your 2 waiting messages go as soon as it stops, in order · ↑ takes one back\./.test(panels.status.getText().replace(/\s+/g, ' ')), 'the first /stop');
+  assert.deepEqual(waiting(), ['First waiting', 'Second waiting']);
+  await send(v, '/stop'); await until(() => /Still stopping\. Your 2 waiting messages go as soon as it stops, in order\./.test(panels.status.getText().replace(/\s+/g, ' ')), 'the second /stop');
+  assert.deepEqual(waiting(), ['First waiting', 'Second waiting'], 'nothing was cancelled');
   conductor.busy = false;
-  await until(() => projectSnapshot(p.repo).tasks[0].state === 'stopped', 'stopped');
-  await new Promise(resolve => setTimeout(resolve, 200));
-  assert.equal(projectSnapshot(p.repo).tasks[0].state, 'stopped'); assert.deepEqual(sent(), ['Keep working on the board'], 'nothing more was sent');
+  await until(() => sent().length === 2, 'the waiting messages started the next turn');
+  assert.match(sent()[1], /^First waiting\s+Second waiting$/, 'both, in the order sent'); assert.deepEqual(waiting(), []);
+});
+
+test('/stop with nothing running keeps a waiting message, and it is sent', { timeout: 40000 }, async t => {
+  const p = setup(t, 'slow'), v = await view(t, { repo: p.repo }), panels = v.current.panels, status = () => panels.status.getText().replace(/\s+/g, ' ');
+  const waiting = () => pendingRequests(p.root).filter(row => row.state === 'queued').map(row => row.goal), tasks = () => projectSnapshot(p.repo).tasks, sent = () => tasks()[0]?.messages.map(row => row.text) ?? [];
+  await send(v, 'Keep working on the board'); await until(() => tasks()[0]?.activeRole === 'lead', 'the model working');
+  await send(v, '/stop'); await until(() => tasks()[0].state === 'stopped', 'stopped');
+  // The conductor is held, so the next message waits with nothing running.
+  const conductor = resources(t).conductor; conductor.busy = true;
+  await send(v, 'Now tidy the coupon module'); await until(() => waiting().length === 1, 'it waits');
+  await send(v, '/stop'); await until(() => /Nothing is running in this chat\. Your waiting message goes next · ↑ takes it back\./.test(status()), 'what /stop says');
+  assert.deepEqual(waiting(), ['Now tidy the coupon module'], 'it was not cancelled');
+  conductor.busy = false;
+  await until(() => sent().includes('Now tidy the coupon module'), 'and it was sent');
 });
 
 // While an approval waits, a message does not answer it: it waits like any other, and the approval still takes y.

@@ -5,7 +5,7 @@ import { PassThrough } from 'node:stream';
 import { project, temp, fakeClis } from './helpers.mjs';
 import { liveTask } from './peer-helpers.mjs';
 import { repository } from '../lib/git.mjs';
-import { registerProject } from '../lib/projects.mjs';
+import { claimView, registerProject } from '../lib/projects.mjs';
 import { saveRequest, pendingRequests, updateRequest } from '../lib/workspace.mjs';
 import { launchTerminal } from '../lib/terminal.mjs';
 import { listBots, removeBot, saveBot } from '../lib/bots.mjs';
@@ -774,6 +774,27 @@ test('over a session on my other computer the box writes to my agent here, start
   await until(() => sentThere().length === 2, 'sent there again');
   assert.deepEqual(sentThere()[1], { type: 'remoteSend', id, text: 'Mine' });
   assert.equal(pendingRequests(p.root).filter(row => row.continuationTaskId === '1').length, 1, 'neither went to my agent here');
+});
+
+// The owner opened a session of his devbox and typed /stop. It went to this computer's
+// project, which another window had, and he was told the view was read only. A session on
+// another computer stops there, whatever this window may change here.
+test('/stop over a session on my other computer stops it there, in a window that is read only here', async t => {
+  const at = new Date().toISOString(), id = '55555555-5555-4555-8555-555555555555';
+  const remote = [{ id, machine: SARA, createdAt: at, lastAt: at, title: 'Prepare the release notes', state: 'running', steps: [{ at, text: 'model: started' }], entries: [{ role: 'You', at, text: 'Prepare the release notes' }], approvals: [] }];
+  const p = project(later(t)); environment(t, p.parent);
+  // Another window has this project here.
+  const other = claimView(repository(p.root)); owned(t).files.push(() => other.release());
+  const peer = fakePeer({ items: [], mine: [{ key: SARA, mine: true, theirs: true }], remote }), v = await view(t, { repo: repository(p.root), dashboard: true, peer });
+  const board = v.panels.board, ask = v.panels.ask, status = () => v.panels.status.getText().replace(/\s+/g, ' ');
+  await until(() => board.items.map(plainItem).some(row => /Prepare the release notes/.test(row)), 'the row of the session there');
+  board.focus(); selectRow(board, /Prepare the release notes/);
+  await until(() => /Working on @sara-box/.test(v.panels.chat.getText()) && /Message your agent here/.test(ask._label.getText()), 'the session there beside the list');
+  await send(v, '/stop');
+  await until(() => /Stopping it on @sara-box|That window is/.test(status()), 'what /stop says');
+  assert.doesNotMatch(status(), /view.only|read.only/i);
+  assert.match(status(), /Stopping it on @sara-box\. Changes and chat history are kept there\./);
+  assert.deepEqual(peer.sent().filter(row => row.type === 'remoteStop'), [{ type: 'remoteStop', id }], 'the stop went there, once');
 });
 
 test('Sessions lists every session of my other computer in this repository under its name, and Projects opens its other projects', async t => {
