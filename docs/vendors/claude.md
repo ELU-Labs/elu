@@ -5,7 +5,9 @@ token. The Usage tab names the account from `~/.claude.json` (email, organizatio
 plan and rate limit tier) and shows only the five-hour and weekly usage windows that
 Claude Code prints during sessions. An account you add there runs with `CLAUDE_CONFIG_DIR`
 set to a folder of its own that links to your `~/.claude` for everything but the sign-in
-([../../SECURITY.md](../../SECURITY.md#several-accounts)). Tested releases:
+([../../SECURITY.md](../../SECURITY.md#several-accounts)); `claude auth login` signs it in on a
+cleared screen under one line of ELU's, which on a computer with no browser (an SSH session,
+or Linux with no display) says to open the link Claude Code prints. Tested releases:
 2.1.319 and 2.1.322. The modes are described in
 [../permissions.md](../permissions.md); this page is how `claude` is launched
 for each.

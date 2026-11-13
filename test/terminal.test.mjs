@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { PassThrough } from 'node:stream';
+import { EventEmitter } from 'node:events';
 import { project, fakeClis, cli, git, temp, approveProjectFiles, autoApprove, keyLike } from './helpers.mjs';
 import { repository } from '../lib/git.mjs';
 import { ProjectController, projectSnapshot, dashboardSnapshot, claimView, registerProject, registeredProjects, nameProject, savedProjectName, personalDirectory, setupCommitPlan, commitSetup, taskDetails } from '../lib/projects.mjs';
@@ -3386,6 +3387,47 @@ test('Usage: a signs another account in with the vendor\'s own sign-in, Enter ma
   assert.equal(fs.existsSync(path.join(personalDirectory(), 'logins', 'claude', id)), false); assert.equal(fs.readFileSync(own, 'utf8'), signedIn);
   await until(() => /^Claude {6}owner@example.invalid · Max 20x · active$/m.test(text()) && !/second@example/.test(text()), 'one account again');
   assert.doesNotMatch(v.raw, /never-shown/); assert.doesNotMatch(v.frame(), /never-shown/);
+});
+
+test('Usage: a leaves ELU\'s screen for a cleared one with one line of ELU\'s, draws nothing over the sign-in, and draws ELU again in full after it', { timeout: 30000 }, async t => {
+  const p = setup(t), fakeFile = path.join(p.dir, 'fake.json');
+  const signInAs = loginAs => fs.writeFileSync(fakeFile, JSON.stringify({ ...JSON.parse(fs.readFileSync(fakeFile, 'utf8')), accounts: { loginAs, plan: 'Pro' } }));
+  environment(t, { SSH_CONNECTION: '', SSH_TTY: '', SSH_CLIENT: '' });
+  // The vendor's sign-in, as the terminal starts it: ELU's output so far, and while it runs.
+  const started = [];
+  let v = null;
+  const fake = fakeUsage(t, { platform: 'darwin', spawn: (bin, args, options) => {
+    const row = { args, stdio: options.stdio, before: v.raw.length, during: null }; started.push(row);
+    const child = new EventEmitter();
+    setTimeout(() => { row.during = v.raw.length; child.emit('exit', spawnSync(bin, args, { env: options.env, encoding: 'utf8' }).status); }, 300);
+    return child;
+  } });
+  v = await view(t, { repo: p.repo, usage: fake });
+  const panels = v.current.panels, status = () => panels.status.getText(), text = () => panels.usageList.items.map(item => item.getText()).join('\n');
+  await send(v, '/usage'); await until(() => v.current.view === 'usage' && !panels.usageBox.hidden, 'Usage tab');
+  await until(() => /Usage updated \d\d:\d\d/.test(status()), 'first check');
+  panels.usageList.focus(); await until(() => v.current.screen.focused === panels.usageList, 'list focused');
+  signInAs('second@example.com'); panels.usageList.select(0); v.input.write('a');
+  await until(() => /Added second@example\.com\./.test(status()), 'added');
+  const [first] = started, before = v.raw.slice(0, first.before), after = v.raw.slice(first.before);
+  assert.deepEqual([first.args, first.stdio], [['auth', 'login'], 'inherit']);
+  // Out of ELU's screen with the cursor shown, then a cleared screen with ELU's one line.
+  assert.ok(before.lastIndexOf('\x1b[?1049l') > before.lastIndexOf('\x1b[?1049h'), 'left the alternate screen');
+  assert.ok(before.lastIndexOf('\x1b[?25h') > before.lastIndexOf('\x1b[?1049h'), 'the cursor is shown');
+  assert.ok(before.endsWith('\x1b[H\x1b[2JSigning in a new Claude Code account. ELU comes back when it ends.\r\n\r\n'), JSON.stringify(before.slice(-200)));
+  // Nothing of ELU's is written while the sign-in runs, though ELU draws on.
+  assert.equal(first.during, first.before);
+  // Back on ELU's screen, cleared and drawn whole.
+  assert.ok(after.startsWith('\x1b[?1049h'), JSON.stringify(after.slice(0, 40)));
+  assert.ok(after.indexOf('\x1b[H\x1b[2J') > 0 && after.indexOf('\x1b[H\x1b[2J') < after.indexOf('Usage'), 'cleared, then drawn');
+  await until(() => /second@example\.com · Pro/.test(text()), 'the account listed');
+  // On a computer reached over SSH, the same sign-in, with where its link goes.
+  process.env.SSH_CONNECTION = '10.0.0.2 52000 10.0.0.3 22'; fake.platform = 'linux';
+  signInAs('third@example.com'); panels.usageList.select(0); v.input.write('a');
+  await until(() => /Added third@example\.com\./.test(status()), 'added over SSH');
+  assert.deepEqual(started[1].args, ['auth', 'login']);
+  assert.ok(v.raw.slice(0, started[1].before).endsWith('\x1b[H\x1b[2JSigning in a new Claude Code account. ELU comes back when it ends.\r\nThis computer has no browser: open the link Claude Code prints in a browser, then follow its steps.\r\n\r\n'));
+  assert.equal(started[1].during, started[1].before);
 });
 
 // Sessions in two panes: the list on the left, and what its cursor is on, on the right.

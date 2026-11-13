@@ -10,7 +10,7 @@ import { readTask } from '../lib/state.mjs';
 import { memoryFolder } from '../lib/memory.mjs';
 import { personalDirectory } from '../lib/util.mjs';
 import { agentEnv } from '../lib/process.mjs';
-import { SIGN_IN, SHARED, activeLogin, finishLogin, linkShared, listLogins, loginEnv, loginFolder, newLogin, useLogin } from '../lib/logins.mjs';
+import { SIGN_IN, SHARED, activeLogin, finishLogin, hasBrowser, linkShared, listLogins, loginEnv, loginFolder, newLogin, useLogin } from '../lib/logins.mjs';
 import { accountOf, forgetAccount, readAccounts, refreshUsage, usageTab } from '../lib/usage.mjs';
 import { stopLine } from '../lib/stop-line.mjs';
 import { usageBlocks } from '../lib/terminal.mjs';
@@ -110,7 +110,7 @@ test('Claude: a second account signs in beside the first; a switch moves new tur
   assert.doesNotMatch(read(path.join(personalDirectory(), 'logins.json')), /@/);
 });
 
-test('Claude: a run that hits the account limit names that account and says to switch in Usage; nothing switches by itself', { timeout: 60000 }, async t => {
+test('Claude: a run that hits the account limit names that account, the limit it hit and when it resets, and says to switch in Usage; nothing switches by itself', { timeout: 60000 }, async t => {
   const f = setup(t, 'claude', { loginAs: 'second@example.com', limited: ['second@example.com'] });
   const slot = addAccount(f, 'claude'); useLogin('claude', slot.id);
   const { id, finished } = f.controller.ask('Where is coupon normalization?');
@@ -118,7 +118,8 @@ test('Claude: a run that hits the account limit names that account and says to s
   const task = readTask(f.controller.repo, id);
   assert.equal(task.error.cause, 'quota'); assert.equal(task.runs.at(-1).login, slot.id);
   const stop = stopLine(task);
-  assert.equal(stop.text, 'The model could not finish: second@example.com is out of usage credits. Switch account in Usage, then type continue.');
+  // What Claude said: "You've hit your session limit · resets 5pm" (test/fakes/claude.mjs).
+  assert.equal(stop.text, 'The model could not finish: second@example.com hit its session limit (resets 5pm). Switch account in Usage, then type continue.');
   assert.equal(stop.short, 'switch account in Usage, then type continue');
   assert.equal(activeLogin('claude'), slot.id, 'no automatic switch');
   // The email is this machine's: the task keeps the account's id, never its email.
@@ -169,7 +170,8 @@ test('Codex: each account has its own CODEX_HOME with the owner\'s config and se
   f.setFake(value => { value.accounts.limited = ['codex-second@example.com']; });
   const { id, finished } = f.controller.ask('And the tests?', task.id);
   await assert.rejects(finished, /could not finish/);
-  assert.equal(stopLine(readTask(f.controller.repo, id)).text, 'The model could not finish: codex-second@example.com is out of usage credits. Switch account in Usage, then type continue.');
+  // Codex said its usage limit, and to try again later: no time to show (test/fakes/codex.mjs).
+  assert.equal(stopLine(readTask(f.controller.repo, id)).text, 'The model could not finish: codex-second@example.com hit its usage limit. Switch account in Usage, then type continue.');
 });
 
 test('an account folder is ELU\'s own: links are laid again, a run environment can name only such a folder, and the folders never reach a peer', t => {
@@ -190,4 +192,14 @@ test('an account folder is ELU\'s own: links are laid again, a run environment c
   // Nothing about accounts is in the files a teammate's machine is sent from.
   const peer = path.join(personalDirectory(), 'peer');
   if (fs.existsSync(peer)) for (const name of fs.readdirSync(peer, { recursive: true })) { const file = path.join(peer, name); if (fs.statSync(file).isFile()) assert.doesNotMatch(read(file), /second@example\.com|logins/, name); }
+});
+
+test('a computer has a browser for a sign-in unless it is reached over SSH, or is Linux with no display', () => {
+  assert.equal(hasBrowser({}, 'darwin'), true); assert.equal(hasBrowser({}, 'win32'), true);
+  assert.equal(hasBrowser({ SSH_CONNECTION: '10.0.0.2 52000 10.0.0.3 22' }, 'darwin'), false);
+  assert.equal(hasBrowser({ SSH_TTY: '/dev/pts/1', DISPLAY: ':0' }, 'linux'), false);
+  assert.equal(hasBrowser({}, 'linux'), false); assert.equal(hasBrowser({ DISPLAY: '' }, 'linux'), false);
+  assert.equal(hasBrowser({ DISPLAY: ':0' }, 'linux'), true); assert.equal(hasBrowser({ WAYLAND_DISPLAY: 'wayland-0' }, 'linux'), true);
+  // The sign-in is the vendor's same command either way: it prints the link the owner opens.
+  assert.deepEqual(SIGN_IN, { claude: ['auth', 'login'], codex: ['login'] });
 });
