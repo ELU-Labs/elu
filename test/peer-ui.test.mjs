@@ -817,6 +817,51 @@ test('a session on my other computer stays where the owner scrolled it through e
   await until(() => chat.getScrollPerc(true) === 100, 'opened at its end');
 });
 
+test('a session on my other computer keeps the lines the owner reads while its oldest entries leave the top and new ones land above its changes and its Task', { timeout: 30000 }, async t => {
+  // The viewer keeps the last 200 entries of a session; this one has said more than that.
+  const KEPT = 200, at = new Date().toISOString(), entry = n => ({ role: n % 2 ? 'Claude' : 'You', at, text: `Line ${n} of the long chat`, ...(n % 2 ? { lead: true } : {}) });
+  const upTo = n => Array.from({ length: n }, (_, index) => entry(index + 1)).slice(-KEPT);
+  const patch = Array.from({ length: 40 }, (_, index) => `+ changed line ${index + 1}`).join('\n'), subtasks = Array.from({ length: 30 }, (_, index) => ({ text: `Step ${index + 1} of the plan`, state: index ? 'todo' : 'doing' }));
+  const session = { id: '55555555-5555-4555-8555-555555555555', machine: SARA, createdAt: at, lastAt: at, title: 'Read the long chat', state: 'running', approvals: [], entries: upTo(230),
+    steps: [{ at, text: 'Reading the cart' }], diff: { summary: '1 file changed', patch }, plan: { title: 'Fix the totals', goal: 'Totals add up', priority: 'P2', severity: 'S3', state: 'approved', objectives: ['Totals add up'], subtasks, met: [] } };
+  const p = project(later(t)); environment(t, p.parent);
+  const peer = fakePeer({ items: [], mine: [{ key: SARA, mine: true, theirs: true }], remote: [session] }), v = await view(t, { repo: repository(p.root), dashboard: true, peer });
+  const board = v.panels.board, chat = v.panels.chat, ask = v.panels.ask;
+  // A line as it reads: no colour, and no bar before a message's text.
+  const bare = line => (line ?? '').replace(/\x1b\[[\d;]*m/g, '').replace(/^\s*┃/, '').trim();
+  const top = () => bare(chat._clines?.[chat.childBase]), lineOf = text => (chat._clines ?? []).findIndex(line => bare(line) === text);
+  // To a line, a wheel step a line, the owner's cursor in the message box.
+  const scrollTo = async text => { const to = lineOf(text); assert.ok(to >= 0, text); wheelAt(v, chat, Math.sign(to - chat.childBase), Math.abs(to - chat.childBase)); await until(() => top() === text, text); };
+  const more = async (entries, also = {}) => { const last = entries.at(-1).text; Object.assign(session, { entries, ...also }); await until(() => chat.getContent().includes(last), last); await pause(150); };
+  await until(() => board.items.some(item => /Read the long chat/.test(plainItem(item))), 'the remote row');
+  board.focus(); selectRow(board, /Read the long chat/);
+  await until(() => /Runs on @sara-box/.test(chat.getContent()) && chat.getScrollPerc(true) === 100, 'its chat, at the end');
+  ask.focus();
+  // Reading the changes: an entry lands above them, two leave the top, a step and a subtask move on.
+  await scrollTo('+ changed line 20');
+  await more([...upTo(230), { role: 'Claude', at, text: 'A longer answer\nthat takes\nfour lines\nof the pane', lead: true }, entry(231)].slice(-KEPT),
+    { steps: [...session.steps, { at, text: 'Running the tests' }], plan: { ...session.plan, subtasks: subtasks.map((step, index) => ({ ...step, state: index ? index === 1 ? 'doing' : 'todo' : 'done' })) } });
+  assert.equal(top(), '+ changed line 20', 'the changes stay where he reads them');
+  // Reading the chat: the oldest entries leave the top as new ones arrive.
+  await scrollTo('Line 150 of the long chat');
+  await more([...session.entries, ...Array.from({ length: 12 }, (_, index) => entry(232 + index))].slice(-KEPT));
+  assert.equal(top(), 'Line 150 of the long chat', 'the entry he reads stays at the top of the pane');
+  await pause(300);
+  assert.equal(top(), 'Line 150 of the long chat', 'and through every draw after');
+  // Reading a step when the work ends and the steps go: the place is the part after them, the Task.
+  await scrollTo('Reading the cart');
+  await more([...session.entries, entry(244)].slice(-KEPT), { state: 'answered' });
+  assert.match(top(), /^Task · /, 'the part after the steps, from its first line');
+  // At the top it stays at the top while the first entry there leaves.
+  wheelAt(v, chat, -1, 2000); await until(() => chat.childBase === 0, 'the top');
+  await more([...session.entries, entry(245), entry(246)].slice(-KEPT));
+  assert.equal(chat.childBase, 0, 'at the top it stays at the top');
+  // Back at the end, it follows the newest line again.
+  wheelAt(v, chat, 1, 2000); await until(() => chat.getScrollPerc(true) === 100, 'the end');
+  await more([...session.entries, entry(247)].slice(-KEPT));
+  assert.equal(chat.getScrollPerc(true), 100, 'it follows the newest line');
+});
+
 test('a thread shows under its channel, #general or its teammate, and a row counts what waits for me', () => {
   const core = { id: 'team-1', name: 'Core', members: [{ key: ME, name: 'ana' }, { key: SARA, name: 'sara', online: true }, { key: LI, name: 'li' }], channels: [{ id: 'c1', name: 'design', members: [ME, SARA] }] };
   const status = { key: ME, teams: [core] }, general = roomTarget('team-1', null), design = roomTarget('team-1', 'c1');
