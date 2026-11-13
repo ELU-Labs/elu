@@ -170,6 +170,41 @@ test('a teammate on 0.1.19 still gives a row for each project it shares, from it
   });
 });
 
+test('the connection this machine joined an older teammate through is closed once, so the one after it names what that teammate shares', async t => {
+  const crew = makeTeam(t), ana = crew.founder, sara = crew.member.identity.key;
+  await withHome(ana.home, async () => {
+    const start = () => { const daemon = Object.assign(new PeerDaemon({ conductor: () => {}, testing: { againMs: 20 } }), { me: loadIdentity(), node: { dial() {}, leave() {} } }); daemon.methods = daemon.extensions(); return daemon; };
+    const sockets = [];
+    const connect = (daemon, teams, handles) => {
+      const socket = Object.assign(new EventEmitter(), { destroyed: false, write: () => true, destroy() { this.destroyed = true; this.emit('close'); } });
+      sockets.push(socket); daemon.attach(socket, sara);
+      socket.emit('data', Buffer.from(`${JSON.stringify({ jsonrpc: '2.0', method: 'elu.hello', params: { binding: BINDING, a2aVersion: '1.0', name: 'sara', teams, handles } })}\n`));
+      return socket;
+    };
+    const status = (socket, extra = {}) => socket.emit('data', Buffer.from(`${JSON.stringify({ jsonrpc: '2.0', method: 'elu.status', params: { rows: [], ...extra } })}\n`));
+    const settle = () => new Promise(resolve => setTimeout(resolve, 100));
+    const known = [{ id: crew.teamId, ...head(crew.teamId), ops: [] }];
+    // Her hello came before this machine was on her team: it names no team and no project,
+    // and her build (0.1.19) says its projects nowhere else.
+    const daemon = start(), first = connect(daemon, [], []); status(first); status(first); await settle();
+    assert.equal(first.destroyed, true, 'closed, so the two connect again');
+    // The connection after it names what she shares, and stays.
+    const second = connect(daemon, known, ['notes']); status(second); await settle();
+    assert.equal(second.destroyed, false); assert.deepEqual(daemon.handles.get(sara), ['notes']);
+    // Once is enough: a later hello that names no team again is left alone.
+    const third = connect(daemon, [], []); status(third); await settle();
+    assert.equal(third.destroyed, false);
+    // A teammate on this build says its projects in elu.status, so its connection is never closed for them.
+    const other = start(), fresh = connect(other, [], []); status(fresh, { projects: [] }); await settle();
+    assert.equal(fresh.destroyed, false);
+    // And one whose hello already named the team has said what it shares.
+    const last = start(), usual = connect(last, known, []); status(usual); await settle();
+    assert.equal(usual.destroyed, false);
+    // Nothing of these connections outlives the test.
+    for (const socket of sockets) if (!socket.destroyed) socket.destroy();
+  });
+});
+
 test('the sessions of a project shared with a team are told to its members who have no clone, and to nobody once it is kept off', t => {
   const crew = makeTeam(t), ana = crew.founder, sara = crew.member, now = Date.now();
   const { shop, notes } = inviter(t, crew, { origin: ORIGIN });
