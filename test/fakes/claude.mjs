@@ -75,6 +75,11 @@ const badReply=cfg.badReply==='once'&&!resumed||cfg.badReply==='lost'&&!input.in
 // CLI's does then, with the API error on its result line.
 const nothingSpent=0;const modelArg=args.includes('--model')?args[args.indexOf('--model')+1]:null;const reported=cfg.models?.[modelArg]??'claude-fable-5-1';
 if(cfg.noCredits&&modelArg===cfg.noCredits){console.log(JSON.stringify({type:'system',subtype:'init',session_id:session,model:reported,permissionMode:'default',mcp_servers:[]}));console.log(JSON.stringify({type:'result',subtype:'success',is_error:true,api_error_status:429,api_error:'model_requires_usage_credits',duration_ms:180,num_turns:1,result:"You're out of usage credits. Switch to another model, or manage usage credits at https://claude.ai/settings/usage?from=cc_cli_limit_message, to continue.",session_id:session,total_cost_usd:nothingSpent}));process.exit(1);}
+// tooLong (fake.json): a review this model will not take, ended as the real CLI ends a prompt
+// longer than its model takes: a number, one over that many characters; 'files', one that
+// carries any file's content or excerpts; 'all', every one.
+const tooLong=cfg.tooLong!==undefined&&input.includes('Review as @')&&(cfg.tooLong==='all'||cfg.tooLong==='files'&&/"content":"|"excerpts":\[/.test(input)||typeof cfg.tooLong==='number'&&input.length>cfg.tooLong);
+if(tooLong){console.log(JSON.stringify({type:'system',subtype:'init',session_id:session,model:reported,permissionMode:'default',mcp_servers:[]}));console.log(JSON.stringify({type:'result',subtype:'success',is_error:true,duration_ms:120,num_turns:1,result:'Prompt is too long',session_id:session,total_cost_usd:nothingSpent}));process.exit(1);}
 if(mode==='no-sandbox'){console.error('Error: sandbox required but unavailable: bubblewrap (bwrap) not installed, socat not installed');console.error('  sandbox.failIfUnavailable is set.');console.log(JSON.stringify({type:'result',subtype:'error_during_execution',is_error:true,session_id:session}));process.exit(1);}
 // An answer turn with permissions has Write in its tools, but a lead that is told ELU Code prepares the workspace does not edit there.
 const edit=(args[args.indexOf('--tools')+1]??'').split(',').includes('Write')&&!conversation;
@@ -99,6 +104,8 @@ if(edit&&cfg.install===true&&!fs.existsSync('node_modules/pkg')){
  fs.writeFileSync('.coverage',Buffer.from([0,1,2]));fs.mkdirSync('htmlcov',{recursive:true});fs.writeFileSync('htmlcov/index.html','<p>100%</p>\n');
 }
 if(edit&&cfg.install==='link'){try{fs.lstatSync('tool-link');}catch{fs.symlinkSync('src/coupon.mjs','tool-link');}}
+// insert (fake.json): { file, at, text }, lines an editing turn also puts in that file after line at, once.
+if(edit&&cfg.insert){const {file,at,text}=cfg.insert;const lines=fs.readFileSync(file,'utf8').split('\n');if(!lines.includes(text.split('\n')[0]))fs.writeFileSync(file,[...lines.slice(0,at),text,...lines.slice(at)].join('\n'));}
 if(edit&&input.includes('Trim spaces'))fs.writeFileSync('src/coupon.mjs','export const normalize = (value) => value.trim().toUpperCase();\n');
 // chatty: keeps printing, a line every 200 ms for ticks (fake.json, 15 by default), longer than
 // a test's quiet limit, then finishes. stall: an edit turn makes its edit, prints one line and

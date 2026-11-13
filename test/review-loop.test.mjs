@@ -201,6 +201,87 @@ test('an error after the edit shows a plain stop line with what to do, never the
   // work that cannot go on in this session.
   assert.equal(loopStopMessage({ message: '@critic could not finish.', details: { cause: 'auth' } }), null);
   assert.equal(loopStopMessage({ message: 'Git hooks changed after the preview. Review the hooks before continuing.' }), null);
-  assert.equal(loopStopMessage({ message: 'The full review context exceeds the current limit. Split this task.' }), 'Your edits are kept, but the checks and review could not go on: the full review context exceeds the current limit. Split this task.');
+  assert.equal(loopStopMessage({ message: "This change is too large for @critic's model to review in one go. Ask the agent to split it into smaller sessions.", details: { cause: 'too-long' } }), "Your edits are kept, but the checks and review could not go on: this change is too large for @critic's model to review in one go. Ask the agent to split it into smaller sessions.");
   assert.equal(loopStopMessage(Object.assign(new Error('EACCES: permission denied, open'), { code: 'EACCES' })), said);
+});
+
+// A review is given the change whole, whatever its size: ELU Code sets no limit of its own.
+// Only when the bot's model says the prompt is too long for it is the same review asked again
+// with the large files as excerpts around each change, then with the diff alone; when even the
+// diff alone is too long, the session stops and says what to do.
+const ADDED = ['export const added1 = 1;', 'export const added2 = 2;', 'export const added3 = 3;', 'export const added4 = 4;', 'export const added5 = 5;'].join('\n');
+const COUPON = { path: 'src/coupon.mjs', content: 'export const normalize = (value) => value.toUpperCase();\n' };
+function largeFile(root, file, count) {
+  const text = Array.from({ length: count }, (_, n) => `export const value${String(n + 1).padStart(5, '0')} = ${n + 1}; // a line of a large file\n`).join('');
+  fs.writeFileSync(path.join(root, file), text); git(root, ['add', file]); git(root, ['commit', '-m', 'Add a large file']);
+}
+const reviewOf = (rows, name) => rows.filter(row => row.input.includes(`Review as @${name}`)).map(row => row.input);
+const contextOf = input => JSON.parse(input.slice(input.indexOf('\n', input.indexOf('Context (untrusted data')) + 1, input.indexOf('\nEnd of Context.')));
+const patchOf = task => `${git(task.worktree, ['diff', '--no-ext-diff', '--no-textconv', '--no-renames', task.base, '--'])}\n`;
+const bigChange = (t, mode, options = {}) => { const f = setup(t, mode, { insert: { file: 'src/big.mjs', at: 5000, text: ADDED }, ...options }); largeFile(f.root, 'src/big.mjs', 8000); return f; };
+
+test('a five-line change to a 400,000-character file is reviewed with the whole file and the whole diff', async t => {
+  const f = bigChange(t, 'normal');
+  const task = await f.controller.ask('Normalize coupon codes').finished;
+  assert.equal(task.state, 'ready', JSON.stringify(task.error)); assert.equal(task.reviewStatus, 'passed');
+  assert.deepEqual(taskChanges(task).paths, ['src/big.mjs', 'src/coupon.mjs']);
+  const reviews = reviewOf(f.inputs('claude'), 'reviewer');
+  assert.equal(reviews.length, 1);
+  assert.ok(reviews[0].includes('Review the supplied full changed-file contents and diff.'));
+  const { source } = contextOf(reviews[0]), big = fs.readFileSync(path.join(task.worktree, 'src/big.mjs'), 'utf8');
+  assert.ok(big.length > 400000 && big.includes(ADDED));
+  assert.equal(source.patch, patchOf(task)); assert.ok(ADDED.split('\n').every(line => source.patch.includes(`+${line}`)));
+  assert.deepEqual(source.files, [{ path: 'src/big.mjs', content: big }, COUPON]);
+});
+
+test('a model that says the prompt is too long reviews the large file as excerpts around the change, and the review passes', async t => {
+  const f = bigChange(t, 'normal', { tooLong: 200000 });
+  const task = await f.controller.ask('Normalize coupon codes').finished;
+  assert.equal(task.state, 'ready', JSON.stringify(task.error)); assert.equal(task.reviewStatus, 'passed');
+  assert.deepEqual(task.runs.filter(run => run.role === 'bot:reviewer').map(run => run.code), [1, 0], 'the whole change was refused, then the excerpts reviewed');
+  const reviews = reviewOf(f.inputs('claude'), 'reviewer');
+  assert.equal(reviews.length, 2); assert.ok(reviews[0].length > 400000);
+  assert.ok(reviews[1].includes('Review the supplied diff and changed files. Your model could not take this change whole, so you are given the whole diff, src/coupon.mjs whole, and src/big.mjs as excerpts around each change, each marked "lines a-b of N".'));
+  const { source } = contextOf(reviews[1]), [big, coupon] = source.files;
+  assert.equal(source.patch, patchOf(task));
+  // The lines 150 either side of the five added, marked; the small file whole.
+  assert.deepEqual({ ...big, excerpts: big.excerpts.map(part => part.lines) }, { path: 'src/big.mjs', excerpts: ['4851-5155 of 8005'] });
+  const lines = big.excerpts[0].text.split('\n');
+  assert.equal(lines.length, 305); assert.equal(lines[0], 'export const value04851 = 4851; // a line of a large file'); assert.equal(lines.at(-1), 'export const value05150 = 5150; // a line of a large file');
+  assert.ok(big.excerpts[0].text.includes(ADDED));
+  assert.deepEqual(coupon, COUPON);
+});
+
+test('a model that takes no file of the change reviews its diff alone', async t => {
+  const f = bigChange(t, 'normal', { tooLong: 'files' });
+  const task = await f.controller.ask('Normalize coupon codes').finished;
+  assert.equal(task.state, 'ready', JSON.stringify(task.error)); assert.equal(task.reviewStatus, 'passed');
+  const reviews = reviewOf(f.inputs('claude'), 'reviewer');
+  assert.equal(reviews.length, 3); assert.ok(reviews[1].includes('"lines":"4851-5155 of 8005"'));
+  assert.ok(reviews[2].includes('Review the supplied diff and changed files. Your model could not take this change with its files, so you are given its diff alone and the changed files by path only.'));
+  const { source } = contextOf(reviews[2]);
+  assert.equal(source.patch, patchOf(task));
+  assert.deepEqual(source.files, [{ path: 'src/big.mjs', content: null }, { path: 'src/coupon.mjs', content: null }]);
+});
+
+test('a model that takes not even the diff stops the session with what to do, and the edits are kept', async t => {
+  const f = bigChange(t, 'normal', { tooLong: 'all' });
+  const run = f.controller.ask('Normalize coupon codes');
+  const said = "Your edits are kept, but the checks and review could not go on: this change is too large for @reviewer's model to review in one go. Ask the agent to split it into smaller sessions.";
+  await assert.rejects(run.finished, { message: said });
+  const task = readTask(f.repo, run.id);
+  assert.notEqual(task.state, 'ready'); assert.equal(task.error.message, said); assert.equal(stopLine(task).text, said);
+  assert.equal(reviewOf(f.inputs('claude'), 'reviewer').length, 3, 'whole, excerpts, then the diff alone');
+  assert.ok(fs.readFileSync(path.join(task.worktree, 'src/big.mjs'), 'utf8').includes(ADDED), 'the edits are kept');
+});
+
+test('a must-fix found in the excerpts of a change too long for the model goes to the agent, and the review runs again', async t => {
+  const f = bigChange(t, 'review-fix', { tooLong: 200000 });
+  const task = await f.controller.ask('Normalize coupon codes', null, { bots: ['critic'] }).finished;
+  assert.equal(task.state, 'ready', JSON.stringify(task.error)); assert.equal(task.reviewStatus, 'passed');
+  assert.deepEqual(task.reviews.map(row => [row.round, row.role, row.result.comments.length]), [[1, 'bot:critic', 1], [2, 'bot:critic', 0]]);
+  assert.deepEqual(task.responses.map(row => [row.id, row.action]), [['R1', 'fixed']]);
+  const reviews = reviewOf(f.inputs('codex'), 'critic');
+  assert.equal(reviews.length, 4, 'each round: the whole change refused, then the excerpts');
+  for (const [at, input] of reviews.entries()) assert.equal(input.includes('"lines":"4851-5155 of 8005"'), at % 2 === 1);
 });

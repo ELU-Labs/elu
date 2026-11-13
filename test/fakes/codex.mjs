@@ -53,6 +53,10 @@ const resumed=args[0]==='exec'&&args[1]==='resume'?args[2]:null;
 const session=resumed??'12345678-1234-4234-8234-123456789abc';
 if(mode==='review-block'||mode==='review-fix'&&!input.includes('Handled the edge case.'))result.comments=[{id:'R1',severity:'must_fix',body:'Handle the edge case.'}];
 console.log(JSON.stringify({type:'thread.started',thread_id:session}));
+// tooLong (fake.json): a review this model will not take (as in the fake Claude Code), ended as
+// the real CLI ends a prompt longer than the model's context window.
+const tooLong=cfg.tooLong!==undefined&&input.includes('Review as @')&&(cfg.tooLong==='all'||cfg.tooLong==='files'&&/"content":"|"excerpts":\[/.test(input)||typeof cfg.tooLong==='number'&&input.length>cfg.tooLong);
+if(tooLong){const message="Codex ran out of room in the model's context window. Start a new conversation or clear earlier history before retrying.";console.log(JSON.stringify({type:'turn.started'}));console.log(JSON.stringify({type:'error',message}));console.log(JSON.stringify({type:'turn.failed',error:{message}}));process.exit(1);}
 // commands (fake.json): what the model runs this turn. Each runs in a plain shell with the
 // environment this process was started with, as a session's command does, and is shown as it ran.
 if(Array.isArray(cfg.commands)&&args.some(a=>/^default_permissions=|^sandbox_mode=/.test(a))){cfg.commands.forEach((command,i)=>{const r=spawnSync('/bin/sh',['-c',command],{env:process.env,encoding:'utf8'});const item={id:`item_${i+1}`,type:'command_execution',command:`/bin/zsh -c '${command}'`};console.log(JSON.stringify({type:'item.started',item:{...item,aggregated_output:'',exit_code:null,status:'in_progress'}}));console.log(JSON.stringify({type:'item.completed',item:{...item,aggregated_output:`${r.stdout??''}${r.stderr??''}`,exit_code:r.status,status:r.status===0?'completed':'failed'}}));});}
