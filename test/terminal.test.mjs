@@ -550,6 +550,30 @@ test('a session’s chat stays where the owner scrolled it through every draw an
   assert.equal(chat.getScrollPerc(true), 100, 'it follows the end again');
 });
 
+test('a session’s chat keeps the lines the owner reads by what they are, while its oldest entries leave the top and one lands above them', { timeout: 30000 }, async t => {
+  const p = setup(t), start = Date.now() - 3600000, at = n => new Date(start + n * 1000).toISOString(), result = { outcome: 'done', intent: 'answer', summary: 'Answered.', question: null, choices: [], comments: [], responses: [] };
+  const said = (from, to) => Array.from({ length: to - from + 1 }, (_, index) => ({ at: at(from + index), text: `Cart note ${from + index}` }));
+  saveTask(p.repo, { id: '1', kind: 'conversation', goal: 'Cart note 1', state: 'answered', worktree: p.root, branch: null, base: null, createdAt: at(0), runs: [], reviews: [], responses: [], sessions: {}, result, messages: said(1, 90) });
+  const v = await view(t, { repo: p.repo }), chat = v.current.panels.chat;
+  // A line as it reads: no colour, and no bar before a message's text.
+  const bare = line => (line ?? '').replace(/\x1b\[[\d;]*m/g, '').replace(/^\s*[┃▌│]/, '').trim();
+  const top = () => bare(chat._clines?.[chat.childBase]), lineOf = text => (chat._clines ?? []).findIndex(line => bare(line) === text);
+  await selectRow(v, /Cart note/);
+  await until(() => /Cart note 90/.test(chat.getContent()) && chat.getScrollPerc(true) === 100, 'the chat at its end');
+  const to = lineOf('Cart note 40'); assert.ok(to > 0, 'Cart note 40 is in the chat');
+  v.input.write(`\x1b[<64;${chat.aleft + 3};${chat.atop + 3}M`.repeat(chat.childBase - to)); await until(() => top() === 'Cart note 40', 'Cart note 40 at the top');
+  // The chat shows its last 80 entries: six more, and the six oldest leave the top.
+  saveTask(p.repo, { ...readTask(p.repo, '1'), messages: said(1, 96) });
+  await until(() => /Cart note 96/.test(chat.getContent()) && !/Cart note 16\b/.test(chat.getContent()), 'six new, six gone'); await pause(150);
+  assert.equal(top(), 'Cart note 40', 'the entry he reads stays at the top of the pane');
+  // One lands above it, three lines long, by its time.
+  saveTask(p.repo, { ...readTask(p.repo, '1'), messages: [...said(1, 96), { at: at(30.5), text: 'Landed above\nin three\nlines' }] });
+  await until(() => /Landed above/.test(chat.getContent()), 'the entry above'); await pause(150);
+  assert.equal(top(), 'Cart note 40', 'what lands above does not move it');
+  await pause(300);
+  assert.equal(top(), 'Cart note 40', 'and through every draw after');
+});
+
 test('the wheel on a dialog\'s list moves a row a step and draws once a frame, not once a step', { timeout: 30000 }, async t => {
   const p = setup(t), v = await view(t, { repo: p.repo, loginItem: { install: () => ({ installed: true }), uninstall: () => ({ removed: true }) } });
   await send(v, '/schedule'); await until(() => modal(v, 'When') && dialogRows(v, 'When').length === 8, 'the list of times');
