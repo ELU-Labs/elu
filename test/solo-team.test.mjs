@@ -274,7 +274,7 @@ test('ELU opens on a computer an earlier version left on its own empty team and 
   const first = await view(t, { repo: repository(p.root), peer: calm() });
   let said = ''; try { await until(() => /closed/.test(first.status()), 'the line at the start', 3000); said = first.status(); } catch { said = first.status(); }
   assert.deepEqual(await shownGenerals(first), ['# general  3']);
-  assert.match(said, /Your own team workspace had only you in it, so it was closed\./);
+  assert.match(said, /Your team workspace had only you, so it was closed\./);
   assert.ok(fs.existsSync(path.join(closedFolder(c, own.id), 'log.jsonl')), 'kept, out of the teams folder');
   // Once: the next start says nothing, and a team made on purpose after it stays.
   await first.close();
@@ -294,20 +294,22 @@ test('/join says in one sentence that my own empty team was closed, and that the
   const v = await view(t, { repo: repository(p.root), peer: calm({ joinTeam: async () => answer }) });
   const join = async () => { await send(v, `/join ${CODE}`); await choose(v, 'Join a team', /^Join$/); await choose(v, 'What teammates can do here', /^Auto/); await closeDialog(v, 'Rules for teammates', ''); };
   // The status row, without the mark it starts with.
-  const line = () => v.status().replace(/\s+/g, ' ').replace(/^› /, '').trim(), joinedLine = 'Joined ELU with ali. Their messages start sessions here, as if you typed them.';
+  // What is new comes first: the row is one row, cut at its width, and what teammates can do here was just answered.
+  const line = () => v.status().replace(/\s+/g, ' ').replace(/^› /, '').trim(), does = 'Their messages start sessions here, as if you typed them.';
   await join();
   await until(() => line().startsWith('Joined ELU with ali.'), () => `joined: ${JSON.stringify(line())}`);
-  assert.equal(line(), `${joinedLine} Your own team workspace had only you in it, so it was closed.`);
+  assert.equal(line(), `Joined ELU with ali. Your team workspace had only you, so it was closed. ${does}`);
+  assert.ok('› Joined ELU with ali. Your team workspace had only you, so it was closed.'.length <= 78, 'the sentence is whole on a row of 80 columns');
   // Two teams that both have other people: nothing was closed, and the line says there are two.
   answer = { id: elu, name: 'ELU', inviter: { name: 'ali', fingerprint: 'aaaaaaaa' }, teams: 2 };
   await join();
   await until(() => line().startsWith('Joined ELU with ali.') && !/closed/.test(line()), 'joined again');
-  assert.equal(line(), `${joinedLine} You are on 2 teams now, each with its own #general.`);
+  assert.equal(line(), `Joined ELU with ali. You are on 2 teams now, each with its own #general. ${does}`);
   // An ordinary join says neither.
   answer = { id: elu, name: 'ELU', inviter: { name: 'ali', fingerprint: 'aaaaaaaa' } };
   await join();
   await until(() => line().startsWith('Joined ELU with ali.') && !/2 teams/.test(line()), 'joined a third time');
-  assert.equal(line(), joinedLine);
+  assert.equal(line(), `Joined ELU with ali. ${does}`);
 });
 
 test('/invite on a team makes its code for that team and never another team: with several it asks which, and a member is told who can', { timeout: 60000 }, async t => {
