@@ -38,7 +38,10 @@ export const CLI = fileURLToPath(new URL('../bin/elu-code.mjs', import.meta.url)
 export const keyLike = (...parts) => parts.join('');
 export function temp(t) {
   const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'elu-code-test-')));
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true })); return dir;
+  // A turn that is stopped while its vendor is still being read ends at once, and the reading
+  // goes on to its end: a stand-in it starts can write its record of the call while this folder
+  // is being removed. The folder is then removed again.
+  t.after(() => { for (let again = 5; ; again--) { try { return fs.rmSync(dir, { recursive: true, force: true }); } catch (error) { if (error.code !== 'ENOTEMPTY' || !again) throw error; } } }); return dir;
 }
 // The read-only role a review runs with: what a config's reviewer entry held before bots
 // did the reviews, and what a bot's turn is given now (botRole in lib/bots.mjs).
