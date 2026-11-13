@@ -1146,7 +1146,10 @@ test('/model takes the name it shows (/model opus 5.5), and a message after the 
   await until(() => tasks()[0].runs.filter(run => run.role === 'lead').length === 3 && tasks()[0].state === 'answered', 'the second message went');
   assert.equal(models().at(-1), 'opus'); assert.equal(tasks()[0].messages.filter(row => !row.lead && !row.bot).at(-1)?.text, 'and the tax line?');
   await until(() => /Opus 5\.5 answered/.test(status()), 'the status line says it answered');
-  assert.ok(said.some(text => /Opus 5\.5 from this message\./.test(text)), 'the status line named the model the message went to'); panels.status.setContent = setContent;
+  // The line names the model the message went to from the send until the answer: nothing clears it in between.
+  const from = said.findIndex(text => /Opus 5\.5 from this message\./.test(text)), to = said.findIndex((text, at) => at > from && /Opus 5\.5 answered/.test(text));
+  assert.ok(from >= 0 && to > from, 'the status line named the model the message went to, then said it answered');
+  assert.deepEqual(said.slice(from, to).filter(text => !/Opus 5\.5 from this message\./.test(text)), [], 'and it stayed while the session worked'); panels.status.setContent = setContent;
   // A Claude name and version that is not a short name is the model of that version.
   await send(v, '/model sonnet 5'); await until(() => /Sonnet 5 from your next message\./.test(status()), 'a family and version');
   // No model at the start: refused, and the text stays in the box.
