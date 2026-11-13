@@ -795,8 +795,8 @@ test("Projects lists my computer's project of this repository while Sessions lea
   const shown = view => view.sections(now, '/work/shop').filter(line => !line.spacer).map(line => line.header ?? line.note ?? line.row.remote.title);
   let view = glue();
   assert.deepEqual(shown(view), ['On devbox · online', 'Fix the cart', 'Fix the total']);
-  // The shop there shows whole; its other clone does not, so Projects lists it.
-  assert.deepEqual(view.projects(now, '/work/shop').map(row => [row.name, row.sessions]), [['shop-2 on devbox', 2]]);
+  // The shop there shows whole; its other clone does not, so Projects lists it, for the one session not shown here.
+  assert.deepEqual(view.projects(now, '/work/shop').map(row => [row.name, row.sessions]), [['shop-2 on devbox', 1]]);
   view.openProject(D, p.clone);
   assert.deepEqual(shown(view).slice(-2), ['shop-2 on devbox', 'Edit the docs']);
   // This project's Kanban has a board for the docs too: the session shows, and Projects leaves the clone out.
@@ -807,3 +807,44 @@ test("Projects lists my computer's project of this repository while Sessions lea
   mine = []; asked = 0; view = glue();
   assert.deepEqual(shown(view), []); assert.deepEqual(view.projects(now, '/work/shop'), []); assert.equal(asked, 0);
 });
+
+// The owner's two computers as he has them: here a folder holding clones, there the home
+// folder, neither with a repository of its own. Every session there that works in a repository
+// this project holds is part of this project: in Sessions under the computer's heading, and not
+// a second time in Projects.
+test("my computer's project is one with this one: Projects leaves it out while each of its sessions shows here, and lists it, with how many, for those that cannot", () => {
+  const SHOP = 'a'.repeat(64), DOCS = 'f'.repeat(64), D = 'd'.repeat(64), now = Date.now(), ago = minutes => new Date(now - minutes * 60000).toISOString(), home = '5'.repeat(16);
+  const status = { key: 'k'.repeat(64), name: 'ana', box: 'laptop', teams: [{ members: [{ key: 'k'.repeat(64), name: 'ana' }, { key: D, name: 'box', box: 'devbox', online: true }] }] };
+  const session = (ref, title, minutes, extra = {}) => ({ id: crypto.randomUUID(), ref, project: home, title, state: 'answered', at: ago(minutes), createdAt: ago(minutes + 1), approvals: [], by: 'you', who: null, repoId: SHOP, ...extra });
+  const machinesFile = [{ key: D, listedAt: ago(0), older: false, projects: [{ id: home, name: 'work', repoId: null, home: true }],
+    sessions: [session(`${home}:1`, 'By hand there', 2), session(`${home}:2`, 'From the laptop', 3, { by: 'mine' }), session(`${home}:3`, 'A message from kim', 4, { by: 'teammate', who: 'kim' })] }];
+  // Two of them are followed here, so their pane says who started them and where a message goes.
+  const views = [2, 3].map(n => ({ id: crypto.randomUUID(), machine: D, ref: `${home}:${n}`, createdAt: ago(n + 1), lastAt: ago(n), state: 'answered', title: machinesFile[0].sessions[n - 1].title, entries: [], steps: [], approvals: [] }));
+  const facade = { mineRows: () => [{ key: D, mine: true, theirs: true }], remoteSessions: () => views, remoteMachines: () => machinesFile, projectRepoId: () => null, projectRepoIds: () => [SHOP] };
+  const glue = () => remoteGlue({ facade, peerRead: () => status, peerCommand: async () => ({}), chatMessage: ({ title, text }) => `${title}: ${text}`, ink: text => text, colour: false, restMs: 1e9 });
+  const shown = view => view.sections(now, '/work/projects').filter(line => !line.spacer).map(line => line.header ?? line.note ?? line.row.remote.title);
+  let view = glue();
+  assert.deepEqual(shown(view), ['On devbox · online', 'By hand there', 'From the laptop', 'A message from kim']);
+  assert.deepEqual(view.projects(now, '/work/projects'), [], 'every session there is part of this project');
+  // Mine, from the laptop: a plain message goes to the agent here, and no one is named as who started it.
+  const rowOf = title => view.sections(now, '/work/projects').find(line => line.row?.remote.title === title).row;
+  const laptops = rowOf('From the laptop'), kims = rowOf('A message from kim');
+  assert.deepEqual(view.route(laptops, 'check the numbers'), { to: 'here', text: 'check the numbers' });
+  assert.match(view.label(laptops), /Message your agent here/);
+  assert.doesNotMatch(view.view(laptops, 200), /Started by/); assert.match(view.view(laptops, 200), /Type below to write to your agent here/);
+  // A teammate's: named, and every message goes to it, as before.
+  assert.deepEqual(view.route(kims, 'check the numbers'), { to: 'there', text: 'check the numbers' });
+  assert.match(view.view(kims, 200), /Started by @kim\. Type below to continue it there\./);
+  // Two that this project cannot show: one in no repository, one in a repository it does not
+  // hold. Projects lists the project for those two only, and opening it shows them.
+  machinesFile[0].sessions.push(session(`${home}:4`, 'Tidy my notes', 1, { repoId: null }), session(`${home}:5`, 'Edit the docs', 5, { repoId: DOCS }));
+  view = glue();
+  assert.deepEqual(view.projects(now, '/work/projects').map(row => [row.name, row.sessions]), [['work on devbox', 2]]);
+  view.openProject(D, home);
+  assert.deepEqual(shown(view).slice(-3), ['work on devbox', 'Tidy my notes', 'Edit the docs']);
+  // No sessions there yet: nothing to open, so nothing in Projects, and the heading says so.
+  machinesFile[0].sessions = []; views.length = 0; view = glue();
+  assert.deepEqual(view.projects(now, '/work/projects'), []);
+  assert.deepEqual(shown(view), ['On devbox · online', 'No sessions yet.']);
+});
+
