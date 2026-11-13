@@ -515,6 +515,30 @@ test('a trackpad stroke on the Sessions list moves a row a step and draws the ap
   assert.match(row, /^▌/); assert.ok(id); assert.equal(v.current.session, id);
 });
 
+test('a session’s chat stays where the owner scrolled it through every draw and what arrives below, stays at the top, and follows its end once he is back there', { timeout: 30000 }, async t => {
+  const p = setup(t), at = new Date(Date.now() - 60000).toISOString(), result = { outcome: 'done', intent: 'answer', summary: 'Answered.', question: null, choices: [], comments: [], responses: [] };
+  const said = (from, to) => Array.from({ length: to - from + 1 }, (_, index) => ({ at, text: `Cart note ${from + index}` }));
+  saveTask(p.repo, { id: '1', kind: 'conversation', goal: 'Cart note 1', state: 'answered', worktree: p.root, branch: null, base: null, createdAt: at, runs: [], reviews: [], responses: [], sessions: {}, result, messages: said(1, 40) });
+  const v = await view(t, { repo: p.repo }), chat = v.current.panels.chat, wheelAt = (code, steps) => v.input.write(`\x1b[<${code};${chat.aleft + 3};${chat.atop + 3}M`.repeat(steps)), up = steps => wheelAt(64, steps);
+  await selectRow(v, /Cart note/);
+  await until(() => /Cart note 40/.test(chat.getContent()) && chat.getScrollPerc(true) === 100, 'the chat at its end');
+  const end = chat.childBase;
+  up(8); await until(() => chat.childBase === end - 8, 'eight lines up'); await pause(200);
+  assert.equal(chat.childBase, end - 8, 'the draws keep his place');
+  saveTask(p.repo, { ...readTask(p.repo, '1'), messages: said(1, 46) });
+  await until(() => /Cart note 46/.test(chat.getContent()), 'the new messages'); await pause(150);
+  assert.equal(chat.childBase, end - 8, 'what arrives below does not move it');
+  up(400); await until(() => chat.childBase === 0, 'the top'); await pause(200);
+  assert.equal(chat.childBase, 0, 'at the top it stays at the top');
+  saveTask(p.repo, { ...readTask(p.repo, '1'), messages: said(1, 48) });
+  await until(() => /Cart note 48/.test(chat.getContent()), 'more messages'); await pause(150);
+  assert.equal(chat.childBase, 0, 'and never starts again from the bottom');
+  wheelAt(65, 600); await until(() => chat.getScrollPerc(true) === 100, 'back at the end');
+  saveTask(p.repo, { ...readTask(p.repo, '1'), messages: said(1, 50) });
+  await until(() => /Cart note 50/.test(chat.getContent()), 'the newest message'); await pause(150);
+  assert.equal(chat.getScrollPerc(true), 100, 'it follows the end again');
+});
+
 test('the wheel on a dialog\'s list moves a row a step and draws once a frame, not once a step', { timeout: 30000 }, async t => {
   const p = setup(t), v = await view(t, { repo: p.repo, loginItem: { install: () => ({ installed: true }), uninstall: () => ({ removed: true }) } });
   await send(v, '/schedule'); await until(() => modal(v, 'When') && dialogRows(v, 'When').length === 8, 'the list of times');

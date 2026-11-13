@@ -265,6 +265,19 @@ test('a handoff I work on as my own on my other computer shows there with its ap
 
 // a on an approval answered from the other computer keeps the rule where the session runs:
 // its relay reads the rules there. The rule is made there from the request, never sent.
+test('a session on another computer is drawn in parts, each keyed by what it shows, that keep their keys as entries come and go', () => {
+  const glue = remoteGlue({ facade: { mineRows: () => [], remoteSessions: () => [] }, peerRead: () => null, peerCommand: async () => ({}), chatMessage: ({ title, text }) => `${title}\n${text}`, ink: text => text, colour: false });
+  const at = new Date().toISOString(), said = (from, to) => Array.from({ length: to - from + 1 }, (_, index) => ({ role: 'You', at, text: `Entry ${from + index}` }));
+  const session = entries => remoteRow({ id: START.id, machine: 'd'.repeat(64), createdAt: at, state: 'running', title: 'Long', entries, steps: [{ at, text: 'Reading the cart' }], approvals: [], diff: { summary: '1 file', patch: '+ one' }, plan: { title: 'Fix it', goal: 'Totals add up', priority: 'P2', severity: 'S3', state: 'approved', objectives: [], subtasks: [], met: [] } }, 'devbox');
+  const before = glue.parts(session(said(1, 5)), 80), after = glue.parts(session([...said(3, 5), { role: 'You', at, text: 'Entry 5' }, ...said(6, 7)]), 80);
+  assert.equal(glue.view(session(said(1, 5)), 80), before.map(part => part.text).join('\n\n'));
+  assert.equal(new Set(before.map(part => part.key)).size, before.length, 'no two parts share a key');
+  // The entries that stay keep their keys; so do the parts below them.
+  for (const part of before.filter(part => !/Entry [12]$/.test(part.text))) assert.ok(after.some(other => other.key === part.key && other.text === part.text), part.text);
+  assert.ok(!after.some(part => before.slice(0, 2).some(gone => gone.key === part.key)), 'the entries that left the top are gone');
+  assert.equal(after.filter(part => /Entry 5$/.test(part.text)).length, 2, 'the same entry twice is drawn twice');
+});
+
 test('a from my other computer keeps the rule on the computer the session runs on', async t => {
   const { team, laptop, devbox } = machines(t);
   const project = withHome(devbox.home, () => { const project = registeredProject(t); saveTeamAccess(team.teamId, { root: project.root }); markMine(devbox.identity.key, laptop.identity.key); noteTheirs(laptop.identity.key, true); return project; });
