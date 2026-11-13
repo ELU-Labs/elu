@@ -14,7 +14,7 @@ session; a turn that is not your own session's runs read only.
 | Shell inside the vendor sandbox | no | yes; Antigravity runs no sandbox, so every command asks | yes | yes, no sandbox |
 | Shell outside it, network, web tools | no | asks | a reviewer model decides | yes |
 | Secrets and ELU Code state | no | no | no | file tools denied; a shell can read |
-| Never list (push, tag, merge, deploy, publish) | blocked | blocked; every escape asks | stand-in commands and, except on Codex, deny rules; a command that gets past them gets through if the reviewer allows it | stand-in commands, prompt text and, except on Codex, deny rules; no sandbox behind them |
+| Never list (push, tag, merge, deploy, publish) | blocked | blocked; every escape asks | stand-in commands and, except on Codex, deny rules; a command that gets past them gets through if the reviewer allows it | none: the model runs them without asking |
 | Runs in | worktree | worktree or a named branch | same | also here |
 | Checks | sandboxed, no network, structural limits | same | no network; dependency files may change | network on; only secret paths and deleted tests block |
 
@@ -95,20 +95,29 @@ model for them. A turn its schedule started runs with Approve for me at most, be
 nobody may be watching: a bot's schedule has no mode of its own, so you never pick Full
 access for it.
 
-One entry of the never list can open: a bot that is allowed to merge pull requests
-(`@elu` comes allowed; a bot you make is not) may run `gh pr merge` in its own working
-turn on `claude`. Ask for approval still asks you before each merge. Push, tag,
-`git merge`, deploy and publish stay blocked for that bot and for everyone else.
+Full access has no never list. A turn that runs with it, your session's or a working
+bot's, runs what your own shell could: `git push` (tags too), `git tag`, `git merge`,
+`gh pr merge`, `gh release`, `npm publish`, deploys, and adding or removing an MCP
+server. It gets no deny rules for them, no stand-in commands and no line in its
+instructions that forbids them; its instructions say it may push, open and merge pull
+requests, tag, publish and deploy when the task calls for it. The switch that lets a bot
+merge pull requests changes nothing there. Everything below holds in Ask for approval and
+Approve for me, and a read-only turn has no shell to run them with.
+
+One entry of the never list can open outside Full access: a bot that is allowed to merge
+pull requests (`@elu` comes allowed; a bot you make is not) may run `gh pr merge` in its
+own working turn on `claude`. Ask for approval still asks you before each merge. Push,
+tag, `git merge`, deploy and publish stay blocked for that bot and for everyone else.
 
 A longer command line that holds a never-list command is refused whole. The chat
-then names the part, as in `Blocked: git tag is never allowed, in any mode`, and
+then names the part, as in `Blocked: git tag is not allowed outside Full access`, and
 does not point at `/permissions`. Each turn's instructions name the commands once
 and say how to list tags without `git tag`: `git for-each-ref
 --sort=-creatordate refs/tags` or `git describe --tags`.
 
 A rule on the command's text does not see what a script runs, and Codex has no
-deny rules. So every session with permissions also gets stand-in commands, on
-every vendor; on Codex they alone hold the never list. A
+deny rules. So every session in Ask for approval or Approve for me also gets stand-in
+commands, on every vendor; on Codex they alone hold the never list. A
 private folder goes first on the session's PATH with one small script per command
 word (`git`, `gh`, `npm` and the rest). Each refuses the never-list call by name,
 in the same words, whatever runs it: the model, a script, `sh -c`, `npm test`.
@@ -139,11 +148,10 @@ a session cannot name another by changing `TMPDIR`.
 
 Stand-in commands are not a sandbox. A full path to the real command
 (`/usr/bin/git push`), a changed PATH, a Git alias or another program that does the
-same work gets past them, and a session in Full access can rewrite the folder; it
-is written again when the next session starts. In Ask for approval and Approve for
-me the vendor's sandbox, where it runs one, still stands behind them; Antigravity in
+same work gets past them; the folder is written again when the next session starts.
+The vendor's sandbox, where it runs one, still stands behind them; Antigravity in
 Ask for approval runs none, so every command asks and one you approve runs outside
-any sandbox. In Full access nothing does.
+any sandbox. A session in Full access gets no stand-in folder on its PATH.
 
 ## Git in the sandbox
 
@@ -285,7 +293,8 @@ copy of the request.
 
 Every vendor that asks goes through the relay: Claude Code through its permission prompt
 tool, Antigravity and Grok Build over ACP. The relay checks the never list, then your
-rules, then the defaults, before it writes a request. Claude Code's own allow rules are not
+rules, then the defaults, before it writes a request: no rule or default answers a
+never-list command, so outside Full access it is never allowed without you. Claude Code's own allow rules are not
 used, so a rule never lets a command leave the sandbox without the relay seeing it. Codex
 does not ask during a turn, so rules change nothing there.
 
@@ -355,7 +364,8 @@ Approve for me.
   allows that turn's approvals for you, the one that waits and the ones it asks
   next. Three kinds stay yours to answer: a removal with `rm` or `rmdir`, an
   MCP tool, and a command too long to show whole. The never list is not asked,
-  so it stays refused. A bot's scheduled turn is not answered this way: it runs
+  so it stays refused in that turn, which started without Full access; the next
+  turn runs it. A bot's scheduled turn is not answered this way: it runs
   with Approve for me at most.
 - A turn that starts in Full access is never answered for you. What it still
   asks, its vendor asks in every mode (Claude Code asks before `rm` or `rmdir`
@@ -365,8 +375,8 @@ Approve for me.
   not pick yourself runs with your default at each run, and never above `auto`.
   One you pick Full access for keeps `full`, and each of its runs starts in Full
   access, with nobody watching: it reads anything, runs any command and uses the
-  internet without asking, and the never list is refused by name only, as in any
-  Full access session. Before it saves such a schedule, the form says so in one
+  internet without asking, push, tags, merges, publishing and deploys included, as
+  in any Full access session. Before it saves such a schedule, the form says so in one
   line and asks you once. A schedule from an earlier version runs as it did; a
   mode a schedule file names that this version does not know is refused, and that
   run does not start. The other way round, an earlier version runs a Full access

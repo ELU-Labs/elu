@@ -54,14 +54,16 @@ Auto still work, but a blocked action is reported instead of asked:
 | Read only | headless (`--prompt-file`) | `--permission-mode dontAsk`, `--sandbox read-only`, tools `read_file,grep,list_dir`, every write, shell, web and MCP tool denied |
 | Ask | ACP (`grok agent stdio`) when `relay` passed, else headless `dontAsk` | `Read` and `Grep` with no path, workspace edits and reads of each named folder allowed by rule; outside edits, named folders included, shell and web ask you (ACP) or are denied and reported (headless); `--sandbox workspace` in headless mode |
 | Auto | ACP with `autoMode`, else headless `--permission-mode auto` | Grok's own reviewer model decides routine actions; what it refuses asks you over ACP |
-| Full | headless `--permission-mode bypassPermissions`, `--sandbox off` | anything; the never list stays as deny rules |
+| Full | headless `--permission-mode bypassPermissions`, `--sandbox off` | anything, the never list included |
 
 Every profile denies reads of secret folders (`~/.ssh`, `~/.aws`, `~/.claude`, `~/.codex`,
-`.env*`, `auth.json`, key files, ELU Code's own state) by rule, and denies the never list on
-command text (`git push`, `git tag`, `git merge`, `gh pr merge`, `gh release`, package
-publishes, deploys, `kubectl apply`, `terraform apply`). Those rules match text: `sh -c`
-and aliases get past them, so in Auto and Full they are a tripwire, not a boundary.
-Stand-in commands first on the session's PATH also refuse the list by name for what a
+`.env*`, `auth.json`, key files, ELU Code's own state) by rule. Every profile but Full
+denies the never list on command text (`git push`, `git tag`, `git merge`, `gh pr merge`,
+`gh release`, package publishes, deploys, `kubectl apply`, `terraform apply`). Those rules
+match text: `sh -c` and aliases get past them, so in Auto they are a tripwire, not a
+boundary. Full has no never list: no deny rules for it, in the flags or in `config.toml`,
+and no stand-in commands. In Ask and Auto, stand-in commands first on the session's PATH
+also refuse the list by name for what a
 script or `sh -c` runs; that was seen only in tests against a stand-in `grok`, not with the
 real one, and whether Grok's sandbox lets a command read that folder is not proven. The
 Read only profile has no shell, so there the never list holds. Grok's sandbox blocks a
@@ -98,7 +100,9 @@ directory) and a `GROK_HOME` inside it holding only what ELU Code wrote:
 - `config.toml`: Claude and Cursor compatibility off, telemetry, trace upload, Mixpanel,
   feedback, managed config, campaigns, remote fetch and server-side search off, workspace
   snapshots and codebase uploads off, auto-update off, session relay off, `.envrc` off,
-  subagents off, and the never list as deny rules. It is rewritten before every run.
+  subagents off, and, in every profile but Full, the never list as deny rules. It is
+  rewritten before every run, for that run's profile. Runs share it: a run that reads one
+  written for another profile still has the never list in its flags wherever it holds.
 - `trusted_folders.toml`: empty. A workspace is never trusted, so its `.grok/config.toml`,
   hooks, MCP servers and skills never load. Its `AGENTS.md` and `CLAUDE.md` still reach the
   prompt; they are repository content, treated as untrusted.
@@ -149,5 +153,5 @@ Not enforced, or not proven:
   the rule above keeps the newer token either way.
 - Workspace `AGENTS.md` and `CLAUDE.md` reach the prompt in every mode. A repository can
   steer the model's instructions, not its permissions.
-- A full shell in Full access can push, tag, merge, deploy and publish. ELU Code keeps the
-  prompt line, the deny rules and its own publish gate, and claims no more.
+- A full shell in Full access pushes, tags, merges, deploys and publishes, as you chose.
+  ELU keeps its own publish gate for `/publish`, and claims no more.

@@ -70,7 +70,9 @@ test('ask, auto and full launch through the approval relay, deny the never list 
     const capped = claude({ ...f.base, mode, role: { ...f.role, maxCostUsd: 3 } }); assert.equal(valueOf(capped, '--max-budget-usd'), '3', mode);
     for (const tool of ['Read', 'Grep', 'Glob', 'Edit', 'Write', 'WebFetch', 'WebSearch']) assert.ok(tools.includes(tool), `${mode} has ${tool}`);
     assert.ok(tools.includes('Bash'), `${mode} has a shell; without the OS sandbox its commands follow the mode`);
-    for (const rule of NEVER_RULES) assert.ok(settings.permissions.deny.includes(rule), `${mode} denies ${rule}`);
+    // Full access has no never list: no deny rule of it on the command line.
+    for (const rule of NEVER_RULES) assert.equal(settings.permissions.deny.includes(rule), mode !== 'full', `${mode} ${mode === 'full' ? 'runs' : 'denies'} ${rule}`);
+    if (mode === 'full') assert.equal(args.some(arg => NEVER_RULES.some(rule => arg.includes(rule))), false, 'no never-list rule anywhere in the Full access argv');
     assert.ok(NEVER_RULES.includes('Bash(git push:*)') && NEVER_RULES.includes('Bash(terraform apply:*)') && NEVER_RULES.includes('Bash(claude mcp add:*)') && NEVER_RULES.includes('Bash(elu mcp add:*)') && NEVER_RULES.length === 22);
     for (const name of ['.env*', '.npmrc', '.netrc', 'auth.json', 'credentials.json', 'id_rsa', '*.pem']) assert.ok(settings.permissions.deny.includes(`Read(**/${name})`), `${mode} denies ${name}`);
     const home = fs.realpathSync(os.homedir());
@@ -100,7 +102,7 @@ test('ask and auto keep the sandbox and the protected paths; full drops the sand
   assert.deepEqual(settings.sandbox, { enabled: false }); assert.equal(settings.permissions.ask, undefined);
   assert.equal(full.some(a => a.startsWith('--allowedTools=')), false, 'full has no allow list');
   assert.equal(settings.permissions.deny.some(rule => rule.includes('package.json')), false, 'full lifts the protected paths');
-  assert.ok(settings.permissions.deny.includes('Bash(git push:*)') && settings.permissions.deny.includes('Read(**/.env*)'), 'the never list and secrets stay denied');
+  assert.ok(!settings.permissions.deny.includes('Bash(git push:*)') && settings.permissions.deny.includes('Read(**/.env*)'), 'secrets stay denied; the never list does not');
   assert.ok(full.includes('--permission-mode') && valueOf(full, '--permission-mode') === 'bypassPermissions');
   // An answer turn (a read role) keeps its folder write-denied in ask and auto, so an edit there asks like any outside edit.
   const answer = { ...f.role, access: 'read', commands: [], writablePaths: [] };
