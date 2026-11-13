@@ -18,7 +18,7 @@ import { localRepos, repoProof, saveProofs, sessionCards } from '../lib/peer/car
 import { savePeerPolicy } from '../lib/peer/settings.mjs';
 import { declineStandup, teamStandupAsk, teamStandupCommand, teamStandupRead, waitingStandups } from '../lib/peer/standup.mjs';
 import { remoteCommand } from '../lib/peer/remote.mjs';
-import { STANDUP_QUESTION, UPDATES_MAX, boundedUpdates, checkStandupFor, everyoneMessage, newRound, standupAgent, standupLeftOut, standupReply, teammateAnswer } from '../lib/standup.mjs';
+import { STANDUP_QUESTION, UPDATES_MAX, boundedUpdates, checkStandupFor, cutAnswer, everyoneMessage, newRound, standupAgent, standupLeftOut, standupReply, teammateAnswer } from '../lib/standup.mjs';
 import { endLine, runStandupRound, standupPlan } from '../lib/standup-round.mjs';
 import { kanbanTool, standupSession } from '../lib/standup-kanban.mjs';
 import { serve, TOOL_NAME } from '../lib/approval-server.mjs';
@@ -361,4 +361,9 @@ test('another computer of mine is sent every session of the round to ask', async
   const refs = Array.from({ length: 25 }, (_, n) => `0123456789abcdef:${n + 1}`);
   await withHome(founder.home, async () => { markMine(founder.identity.key, key); noteTheirs(key, true); await remoteCommand(ctx, { type: 'remoteStandup', to: key, round: newRound(), refs }); });
   assert.deepEqual(sent.map(([method, params]) => [method, params.refs.length]), [['elu.remote.standup', 25]]);
+});
+
+test('a standup update is kept whole, however long: no 12 lines, no 2400 characters', () => {
+  const long = Array.from({ length: 40 }, (_, n) => `Line ${n + 1}: ${'x'.repeat(200)}`).join('\n');
+  assert.equal(cutAnswer(`  ${long}\n`), long); assert.doesNotMatch(cutAnswer(long), /Cut here/);
 });
