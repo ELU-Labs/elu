@@ -185,7 +185,8 @@ test('teammates\' sessions are cards in the column their board has them, with wh
   const mine = [{ peer: 'd'.repeat(64), name: 'devbox', box: 'my-devbox', online: true, heardAt: ago(0), mine: true, sessions: [card({ id: '4123456789abcdef', title: 'By hand there', by: 'devbox', own: true }), card({ id: '5123456789abcdef', title: 'From my laptop', by: 'ana', own: true }), card({ id: '6123456789abcdef', title: 'From kim', by: 'kim' })] }];
   const own = boardColumns(readBoard(repo), { tasks: [], queue: [] }, now, [], mine).flatMap(column => column.items);
   assert.deepEqual(own.map(item => [item.title, item.detail]).sort(), [['By hand there', 'you · my-devbox'], ['From kim', '@kim · my-devbox'], ['From my laptop', 'you · my-devbox']]);
-  assert.equal(own.find(item => item.title === 'From my laptop').note, 'Your session on my-devbox · In progress · read-only');
+  assert.equal(own.find(item => item.title === 'From my laptop').note, 'Your session on my-devbox · In progress');
+  assert.equal(own.find(item => item.title === 'From kim').note, "@kim's session on my-devbox · In progress · read-only");
 });
 
 test('a project above several repositories has a board for each, led by the open session\'s; a session in no repository is on each', t => {

@@ -63,7 +63,7 @@ if(conversation&&cfg.intent==='answer'){result.intent='answer';result.summary='L
 // mode bad-task returns one that does not read. A turn that reports progress ticks every subtask.
 const TASK={title:'Uppercase coupons',description:'Make normalize return the coupon code in upper case.\nOnly src/coupon.mjs changes.',goal:'Coupon codes compare equal whatever their case.',objectives:['normalize returns the code in upper case','The coupon test passes'],priority:'medium',severity:'low'};
 if(schema?.properties?.task)result.task=result.intent!=='edit'||input.includes('Approved Task (untrusted data')||mode==='no-task'?[]:[mode==='bad-task'?{...TASK,priority:'soon'}:input.includes('Make it urgent')?{...TASK,priority:'urgent'}:cfg.task??TASK];
-if(schema?.properties?.subtasks){result.subtasks=cfg.subtasks??[{text:'Change normalize',state:'done'},{text:'Run the coupon test',state:'done'}];result.objectivesMet=cfg.objectivesMet??[1,2];}
+if(schema?.properties?.subtasks){result.subtasks=cfg.subtasks??[{text:'Change normalize',state:'done'},{text:'Run the coupon test',state:'done'}];result.objectivesMet=cfg.objectivesMet??[1,2];if(cfg.etaMinutes!==undefined)result.etaMinutes=cfg.etaMinutes;}
 const session='12345678-1234-4234-8234-123456789abc';
 // badReply (fake.json): 'once' gives a reply that cannot be read until the session is asked again; 'lost' also
 // refuses that session, as the real one does a session it cannot find, and reads well once the message starts over.

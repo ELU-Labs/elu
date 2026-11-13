@@ -293,7 +293,8 @@ does not ask during a turn, so rules change nothing there.
 
 A message that asks for a change to code or files, or for work that needs planning, comes
 back as a Task before anything is edited: a title, a description, the goal, the objectives
-that say when it is done, a priority and a severity. You approve it with `y`, reject it
+that say when it is done, a priority, a severity, the success criteria and the model's
+estimate of the work in minutes. You approve it with `y`, reject it
 with `n`, or change it with a message. This holds in every mode, Full access included, for
 the session's model and for a bot that works, such as `@lead`.
 
@@ -308,8 +309,11 @@ ELU Code enforces this much, on every vendor:
 - A Task is read as untrusted text. The title is one line of up to 80 characters; the
   description up to 2000; the goal up to 500; one to eight objectives of up to 300 each;
   the priority is urgent, high, medium or low; the severity is critical, high, medium or
-  low. Control characters are refused, and markup is shown as typed.
-- After approval the model reports its subtasks and the objectives it says are met. A
+  low; at most eight success criteria of up to 200 each. The estimate is a whole number of
+  minutes up to a week, else it is not set. Control characters are refused, and markup is
+  shown as typed.
+- After approval the model reports its subtasks, the objectives it says are met, and the
+  minutes it thinks are left, which move the ETA. A
   report cannot change the goal or an objective: those change only through a revised Task
   that you approve again. Done on the card is the model's report. The checks and the
   review are what verify the edit.

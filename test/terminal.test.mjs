@@ -19,6 +19,7 @@ import { Conductor, enqueue } from '../lib/conductor.mjs';
 import { liveTask } from './peer-helpers.mjs';
 import { readBoard, sessionClosed, closeSession } from '../lib/kanban.mjs';
 import { proposeTask, approveTask as approvePlan, reportProgress, finishTask, reopenTask } from '../lib/plan.mjs';
+import { clockTime } from '../lib/terminal-plan.mjs';
 import { saveTask, readTask, taskDir, taskTitle, setTitle, lock } from '../lib/state.mjs';
 import { processIdentity } from '../lib/process.mjs';
 import { approvalsDir, requestApproval, answerApproval } from '../lib/approvals.mjs';
@@ -111,6 +112,10 @@ async function view(t, options = {}) {
   return state;
 }
 
+// The card a Kanban card opens: its rows, and the keys under them.
+const cardDialog = v => v.current.screen.children.find(child => !child.destroyed && child.options?.label?.trim() === 'Your session');
+const cardRows = v => cardDialog(v)?.children.find(child => child.type === 'list')?.items.map(item => item.getText().trimEnd()) ?? [];
+const cardHint = v => cardDialog(v)?.children.filter(child => child.type === 'text').map(child => child.getText()).join('\n') ?? '';
 function modal(v, title) {
   return v.current.screen.children.find(child => !child.destroyed && child.options?.label?.trim() === title);
 }
@@ -1861,7 +1866,7 @@ test('a request for an edit shows its Task: n rejects it, a message revises it, 
   await wide(v);
   await send(v, 'Uppercase coupon codes');
   await until(() => session()?.plan?.state === 'proposed' && /Task · waits for your approval\nUppercase coupons\nmedium priority · low severity\n/.test(chat()), 'the Task in the chat');
-  assert.match(chat(), /Goal: Coupon codes compare equal whatever their case\.\nObjectives\n {2}1\. normalize returns the code in upper case\n {2}2\. The coupon test passes\nEsc, then y approve · n reject · or type what to change/);
+  assert.match(chat(), /medium priority · low severity\nETA not set\n[\s\S]*Goal: Coupon codes compare equal whatever their case\.\nObjectives\n {2}1\. normalize returns the code in upper case\n {2}2\. The coupon test passes\nSuccess criteria · not set\nEsc, then y approve · n reject · or type what to change/);
   await until(() => /\? Needs you · Esc, then y approve · n reject · Task: Uppercase coupons/.test(status()), 'the status line');
   // Nothing was edited and no workspace was made: the session rests as an answer leaves it.
   assert.equal(session().state, 'answered'); assert.equal(session().kind, 'conversation'); assert.match(source(), /=> value;/);
@@ -1881,7 +1886,7 @@ test('a request for an edit shows its Task: n rejects it, a message revises it, 
   assert.equal(session().plan.state, 'done'); assert.ok(session().messages.some(row => row.text === 'Approved the Task: Uppercase coupons'));
   assert.match(fs.readFileSync(path.join(session().worktree, 'src/coupon.mjs'), 'utf8'), /toUpperCase/); assert.match(source(), /=> value;/);
   await until(() => /Task · done · 2 of 2 objectives reported met\nUppercase coupons\n/.test(chat()), 'done on the card');
-  assert.match(chat(), / {2}✓ 1\. normalize returns the code in upper case\n {2}✓ 2\. The coupon test passes\nSubtasks\n {2}\[x\] Change normalize\n {2}\[x\] Run the coupon test/);
+  assert.match(chat(), /urgent priority · low severity\nETA done \d{1,2}:\d\d [AP]M\n[\s\S]* {2}✓ 1\. normalize returns the code in upper case\n {2}✓ 2\. The coupon test passes\nSuccess criteria · not set\nSubtasks\n {2}\[x\] Change normalize\n {2}\[x\] Run the coupon test/);
   // On the Kanban the session is its Task: the title, then where it stands.
   await send(v, '/kanban'); await until(() => v.current.view === 'kanban' && panels.kanbanLists[2].items.some(item => /^Uppercase coupons {2}ready to publish( · |$)/.test(item.getText())), 'the Task on the board, under Needs you, its detail cut between parts');
 });
@@ -2335,7 +2340,8 @@ test('Kanban adds tasks, starts one with the lead, opens its session, and moves 
   const done = panels.kanbanLists[3]; done.focus(); done.select(0);
   v.input.write('<'); await until(() => items(2).some(text => /Uppercase coupon codes/.test(text)), 'reopened');
   needs.focus(); needs.select(0); v.input.write('\r');
-  await until(() => v.current.view === 'chat' && v.current.session === '3' && /Uppercase coupon codes/.test(panels.header.getText()), 'Enter opens its session');
+  await until(() => cardRows(v).length, 'Enter shows the card'); v.input.write('\r');
+  await until(() => v.current.view === 'chat' && v.current.session === '3' && /Uppercase coupon codes/.test(panels.header.getText()), 'Enter there opens its session');
   assert.equal(panels.back.getText().trim(), '‹ Kanban'); assert.equal(panels.tabs[2].style.underline, true, 'Kanban stays the current tab');
   // From Kanban a session takes the whole width: no list beside it, and ‹ Kanban leads back.
   assert.equal(panels.back.hidden, false); assert.equal(panels.boardBox.hidden, true); assert.deepEqual([panels.chat.aleft, panels.chat.width, panels.ask.aleft, panels.ask.width], [0, v.current.screen.width, 0, v.current.screen.width]);
@@ -3532,7 +3538,13 @@ test('a session opened from Kanban takes the whole width, and ‹ Kanban or Esc 
   const p = twoSessions(t), v = await view(t, { repo: p.repo }), panels = v.current.panels, focused = () => v.current.screen.focused;
   await sized(v, 100, 30);
   await send(v, '/kanban'); await until(() => v.current.view === 'kanban' && panels.kanbanLists[2].items.some(item => /Trim coupon codes/.test(item.getText())), 'Kanban, with the ready session under Needs you');
+  // Enter shows the card: no Task yet, so its first message; Enter there opens its session.
   const needs = panels.kanbanLists[2]; pickRow(needs, /Trim coupon codes/); v.input.write('\r');
+  await until(() => cardRows(v).includes('No Task yet'), 'Enter shows the card');
+  assert.deepEqual(cardRows(v).slice(0, 3), ['Trim coupon codes before they are compared at checkout', 'Needs you', 'you · this computer']);
+  assert.ok(cardRows(v).includes('Trim coupon codes before they are compared at checkout'));
+  assert.match(cardHint(v), /enter open the session · ↑↓ scroll · esc close/);
+  v.input.write('\r');
   await until(() => v.current.view === 'chat' && v.current.session === '4' && /^sample app {2}· {2}Trim coupon codes before they are compared at checkout {2}· {2}ready$/.test(panels.header.getText()), 'Enter opens its session');
   // No list is behind this session. Its title line reads the session at every redraw: what it shows about schedules comes from this project.
   const titles = new Set(); for (const end = Date.now() + 2600; Date.now() < end;) { titles.add(panels.header.getText()); await new Promise(resolve => setTimeout(resolve, 10)); }
@@ -3545,7 +3557,7 @@ test('a session opened from Kanban takes the whole width, and ‹ Kanban or Esc 
   // A click on ‹ Kanban goes back to the board.
   click(v, panels.back); await until(() => v.current.view === 'kanban' && panels.back.hidden, 'the button goes back to Kanban');
   // Esc goes back too: from the message box to the chat, then to the board.
-  pickRow(needs, /Trim coupon codes/); v.input.write('\r'); await until(() => v.current.view === 'chat' && focused() === panels.ask, 'opened again');
+  pickRow(needs, /Trim coupon codes/); v.input.write('\r'); await until(() => cardRows(v).length, 'the card again'); v.input.write('\r'); await until(() => v.current.view === 'chat' && focused() === panels.ask, 'opened again');
   v.input.write('\x1b'); await until(() => focused() === panels.chat, 'Esc leaves the message box for the chat'); assert.equal(v.current.view, 'chat');
   v.input.write('\x1b'); await until(() => v.current.view === 'kanban', 'Esc on the chat goes back to Kanban');
   // In Sessions the same session shows beside the list, with no button.
@@ -3566,6 +3578,34 @@ test('Task cards in narrow Kanban columns read their whole titles', { timeout: 3
   assert.deepEqual(cards(), ['Round refunds to cents', 'Uppercase coupons']);
   // In a wide terminal the same cards have the parts that fit beside them.
   await sized(v, 160, 30); await until(() => cards().join('|') === 'Round refunds to cents|Uppercase coupons  to approve · high', 'the detail beside the title where it fits');
+});
+
+test('Enter on my own Kanban card shows its whole Task with its success criteria, subtasks and ETA; Enter there opens the session', { timeout: 30000 }, async t => {
+  const p = setup(t, 'answer'); registerProject(p.repo);
+  liveTask(p.root, { id: '4', goal: 'Round refund amounts', state: 'ready' });
+  proposeTask(p.repo, '4', { title: 'Round refunds to cents', description: 'One file changes.', goal: 'The amounts are right.', objectives: ['It works', 'Its test passes'], priority: 'high', severity: 'low', criteria: ['A refund of 10.005 reads 10.01', 'No other file changes'], estimateMinutes: 45 });
+  const approved = approvePlan(p.repo, '4');
+  reportProgress(p.repo, '4', { subtasks: [{ id: 's1', text: 'Change it', state: 'done' }, { id: 's2', text: 'Run the test', state: 'doing' }, { id: 's3', text: 'Tidy', state: 'todo' }], met: [1] });
+  const v = await view(t, { repo: p.repo }), panels = v.current.panels;
+  await send(v, '/kanban'); await until(() => v.current.view === 'kanban' && panels.kanbanLists[2].items.some(item => /Round refunds/.test(item.getText())), 'the Task under Needs you');
+  pickRow(panels.kanbanLists[2], /Round refunds/); v.input.write('\r');
+  await until(() => cardRows(v).length, 'Enter shows the card');
+  const eta = Date.parse(approved.approvedAt) + 45 * 60000, rows = cardRows(v);
+  assert.deepEqual(rows.slice(0, rows.indexOf('') + 1), ['Round refunds to cents', 'in progress · priority high · severity low', 'you · this computer', '']);
+  assert.deepEqual(rows.slice(rows.indexOf('Goal')), [
+    'Goal', 'The amounts are right.', '', 'Description', 'One file changes.',
+    '', 'Objectives · 1 of 2 met', '  ✓ It works', '  · Its test passes',
+    '', 'Success criteria', '  · A refund of 10.005 reads 10.01', '  · No other file changes',
+    '', 'Subtasks · 1 of 3 done', '  ✓ Change it', '  ▸ Run the test', '  · Tidy',
+    '', rows.find(line => line.startsWith('ETA ')), '', rows.at(-1)]);
+  assert.match(rows.find(line => line.startsWith('ETA ')), new RegExp(`^ETA ${clockTime(eta).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} · in (44|45) min$`));
+  assert.match(rows.at(-1), /^last activity /);
+  assert.doesNotMatch(rows.join('\n'), /their machine|only they can change it/);
+  assert.match(cardHint(v), /enter open the session/);
+  v.input.write('\r');
+  await until(() => v.current.view === 'chat' && v.current.session === '4', 'Enter opens its session');
+  // The session's own Task block has the ETA and the success criteria too.
+  await until(() => /ETA .* · in (44|45) min/.test(panels.chat.getText()) && /Success criteria/.test(panels.chat.getText()) && /A refund of 10\.005 reads 10\.01/.test(panels.chat.getText()), 'the Task block in the chat');
 });
 
 test("a project's own instructions are asked about on screen before they are used: the text is shown, each answer is remembered for that text, and a change shows what changed", { timeout: 60000 }, async t => {

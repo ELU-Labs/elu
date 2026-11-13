@@ -64,7 +64,8 @@ press Enter.
 
 Ask for a change to code or files, or for work that needs planning, and the first reply is
 a Task: a title, a description, the goal, the objectives that say when it is done, a
-priority and a severity. Nothing is edited yet.
+priority, a severity, the success criteria that show it is done, and the model's estimate
+of the work. Nothing is edited yet.
 
 | Do | What happens |
 | --- | --- |
@@ -78,10 +79,13 @@ An approved Task gives its session its name, unless you named the session yourse
 
 On the Kanban tab a session with a Task shows as that Task: its title, how far it is, its
 priority and its severity. One that waits for your approval is under Needs you. Enter opens
-its session.
+the whole Task: the goal, the objectives, the success criteria, the subtasks and the ETA;
+Enter again opens its session. A teammate's card, and one of your other computer's, open the
+same way.
 
 After you approve, the model splits the work into subtasks and changes them as it likes.
-The card lists them as a checklist and marks the objectives the model reports met. The
+The card lists them as a checklist and marks the objectives the model reports met. Its ETA
+is approval plus the estimate, and follows the minutes left the model reports as it works. The
 Task is done when every objective is reported met and the turn, with its checks and
 review, has ended. A new message opens it again.
 

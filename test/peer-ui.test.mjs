@@ -12,6 +12,7 @@ import { boardRows, barCells, barColumns } from '../lib/board.mjs';
 import { readBoard } from '../lib/kanban.mjs';
 import { saveTask } from '../lib/state.mjs';
 import { helperLink } from '../lib/remote-helper.mjs';
+import { clockTime } from '../lib/terminal-plan.mjs';
 import { botTarget, chatBar, dmTarget, fitWords, ink, membersLine, peerName, roomTarget, teamPanes, threadTarget, visible } from '../lib/terminal-visuals.mjs';
 
 const ME = 'a'.repeat(64), SARA = 'b'.repeat(64), LI = 'c'.repeat(64);
@@ -1586,17 +1587,38 @@ test('Kanban shows teammates\' Tasks as cards in the same columns with their nam
   // Enter shows the whole Task to read.
   panels.kanbanLists[1].focus(); panels.kanbanLists[1].select(0); v.input.write('\r');
   await until(() => modal(v, "sara's Task"), 'the Task opens');
+  // A Task from a build before success criteria and estimates: both read as not set.
   assert.deepEqual(rowsOf(v, "sara's Task").map(line => line.trimEnd()), [
     'Fix the login redirect',
     'in progress · priority high · severity critical · revision 2',
     "Worked on by Opus 5.5 on sara's machine sara-box · started by its owner",
-    'approved 30m ago · updated 2m ago',
     '', 'Goal', 'Sign-in returns to the page that asked for it.',
     '', 'Description', 'After sign-in the app returns to the home page.',
     '', 'Objectives · 1 of 2 met', '  ✓ The return address survives sign-in', '  · A bad return address falls back to home',
+    '', 'Success criteria · not set',
     '', 'Subtasks · 1 of 3 done', '  ✓ Carry the return address through the form', '  ▸ Check the address is on this site', '  · Tests',
+    '', 'ETA not set',
+    '', 'last activity 2m ago',
+    '', 'It runs on their machine: only they can change it.',
   ]);
   v.input.write('\x1b'); await until(() => !modal(v, "sara's Task"), 'Esc closes it');
+  // One with success criteria and an estimate: the ETA is its approval plus the estimate, or the minutes left it last reported.
+  const estimated = teamTask({ criteria: ['A deep link survives sign-in'], estimateMinutes: 60 });
+  people = [{ ...people[0], tasks: [estimated, people[0].tasks[1]] }, people[1]];
+  await until(() => column(1).length === 2, 'the same cards'); await new Promise(resolve => setTimeout(resolve, 3200));
+  panels.kanbanLists[1].focus(); panels.kanbanLists[1].select(0); v.input.write('\r');
+  await until(() => rowsOf(v, "sara's Task").some(line => /^ETA /.test(line)), 'the Task with an estimate');
+  const timed = rowsOf(v, "sara's Task").map(line => line.trimEnd()), eta = Date.parse(estimated.approvedAt) + 60 * 60000;
+  assert.deepEqual(timed.slice(timed.indexOf('Success criteria'), timed.indexOf('Success criteria') + 2), ['Success criteria', '  · A deep link survives sign-in']);
+  assert.match(timed.find(line => /^ETA /.test(line)), new RegExp(`^ETA ${clockTime(eta).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} · in (29|30) min$`));
+  v.input.write('\x1b'); await until(() => !modal(v, "sara's Task"), 'Esc closes it');
+  people = [{ ...people[0], tasks: [teamTask({ estimateMinutes: 20, approvedAt: ago(30) }), people[0].tasks[1]] }, people[1]];
+  await new Promise(resolve => setTimeout(resolve, 3200));
+  panels.kanbanLists[1].focus(); panels.kanbanLists[1].select(0); v.input.write('\r');
+  await until(() => rowsOf(v, "sara's Task").some(line => /^ETA .* · overdue by (9|10|11) min$/.test(line.trimEnd())), 'overdue');
+  v.input.write('\x1b'); await until(() => !modal(v, "sara's Task"), 'Esc closes it');
+  people = [{ ...people[0], tasks: [teamTask(), people[0].tasks[1]] }, people[1]];
+  await new Promise(resolve => setTimeout(resolve, 3200));
   // A Task a teammate took over from a handoff says so; an offline teammate's says when they were last heard.
   panels.kanbanLists[3].focus(); panels.kanbanLists[3].select(0); v.input.write('\r');
   await until(() => rowsOf(v, "li's Task").some(line => /last heard 3h ago/.test(line)), 'last heard');
@@ -1650,9 +1672,15 @@ test('Kanban shows every session teammates run in the same repository, with who 
   v.input.write('x'); await until(() => /That is sara's session\. Enter opens it to read; it changes only on their machine\./.test(panels.status.getText()), 'x refused');
   v.input.write('\r');
   await until(() => modal(v, "sara's session"), 'the session opens');
+  // The whole Task it works on, as a Task card shows it.
   const rows = rowsOf(v, "sara's session").map(line => line.trimEnd());
-  assert.deepEqual(rows.slice(0, 4), ['Fix the cart total', 'In progress', "Started by @sara · on sara's machine sara-box", 'last activity 1m ago']);
-  assert.ok(rows.includes('Task · Fix the login redirect')); assert.ok(rows.includes('It runs on their machine: only they can change it.'));
+  assert.deepEqual(rows.slice(0, 3), ['Fix the login redirect', 'in progress · priority high · severity critical · revision 2', "Started by @sara · on sara's machine sara-box"]);
+  for (const line of ['Goal', 'Objectives · 1 of 2 met', 'Success criteria · not set', 'Subtasks · 1 of 3 done', 'ETA not set', 'last activity 1m ago', 'It runs on their machine: only they can change it.']) assert.ok(rows.includes(line), line);
+  v.input.write('\x1b'); await until(() => !modal(v, "sara's session"), 'Esc closes it');
+  // One with no Task: it says so. Their first message is never sent, so nothing else shows.
+  panels.kanbanLists[2].focus(); panels.kanbanLists[2].select(0); v.input.write('\r');
+  await until(() => rowsOf(v, "sara's session").includes('No Task yet'), 'no Task yet');
+  assert.deepEqual(rowsOf(v, "sara's session").map(line => line.trimEnd()), ['Which tax rate?', 'Needs you', "Started by @li · on sara's machine sara-box", '', 'No Task yet', '', 'last activity 3m ago', '', 'It runs on their machine: only they can change it.']);
   v.input.write('\x1b'); await until(() => !modal(v, "sara's session"), 'Esc closes it');
   // The other repository's board: its own cards only.
   panels.kanbanPick.focus(); panels.kanbanPick.emit('press');
@@ -1668,6 +1696,50 @@ test('Kanban shows every session teammates run in the same repository, with who 
   people = [];
   await until(() => column(2).length === 0, 'gone', 8000);
   assert.deepEqual(readBoard(repository(p.root)).cards, []); assert.deepEqual(peer.sent(), []);
+});
+
+test('a card of my other computer opens as mine: its whole Task, you and that computer, and Enter opens it in Sessions; one with no Task yet shows its first message', async t => {
+  const p = project(later(t)); environment(t, p.parent);
+  const HOME = '0123456789abcdef', listed = { id: '11111111-2222-4333-8444-555555555555', ref: `${HOME}:6`, project: HOME, title: 'Nightly checks', state: 'running', at: ago(0), createdAt: ago(60), approvals: [], by: 'you', who: null, repoId: WEB, question: null, error: null, plan: null };
+  const peer = fakePeer({ mine: [{ key: SARA, mine: true, theirs: true }], machines: [{ key: SARA, listedAt: ago(0), older: false, projects: [{ id: HOME, name: 'home', repoId: null, home: true }], sessions: [listed] }], repoId: WEB });
+  // As the card brings it: the Task with its success criteria, its estimate and the minutes left it last reported.
+  const task = { id: 't-5e1f0a2b', revision: 1, title: 'Make the search page fast', description: 'Measure first, then cache the slow query.', goal: 'The search page answers in under a second.', objectives: ['A timing test for the search page', 'The slow query is cached'],
+    priority: 'high', severity: 'high', state: 'approved', startedBy: 'owner', subtasks: [{ text: 'Time the page', state: 'done' }, { text: 'Cache the query', state: 'doing' }, { text: 'Tests', state: 'todo' }], met: [1],
+    proposedAt: ago(120), approvedAt: ago(100), doneAt: null, criteria: ['Three runs in a row answer in under a second'], estimateMinutes: 180, etaMinutes: 25, etaAt: ago(0) };
+  const people = [{ peer: SARA, name: 'sara', box: 'sara-box', online: true, heardAt: ago(0), mine: true, sessions: [
+    teamSession({ id: '0123456789abcdee', title: 'Nightly checks', by: 'ana', plan: task.id, task, ref: `${HOME}:6` }),
+    teamSession({ id: '0123456789abcdef', title: 'Flaky upload', column: 'needs', by: 'ana', at: ago(2), first: 'Find why uploads fail on slow networks', ref: `${HOME}:7` }),
+    teamSession({ id: '0123456789abcded', title: 'Release notes', column: 'done', by: 'ana', at: ago(4), plan: 't-77aa0c31', ref: `${HOME}:8` }) ] }];
+  peer.teammateTasks = () => []; peer.boardKeptOff = () => false;
+  peer.teammateSessions = () => ({ repos: [{ repoId: WEB, name: 'acme/web', at: ago(0) }], people });
+  const v = await view(t, { repo: repository(p.root), peer }), panels = v.panels, title = 'Your session on sara-box';
+  const column = index => panels.kanbanLists[index].items.map(item => plainItem(item).trimEnd());
+  const hint = () => modal(v, title)?.children.filter(child => child.type === 'text').map(child => child.getText()).join('\n') ?? '';
+  await send(v, '/kanban'); await until(() => v.current.view === 'kanban' && column(1).length === 1 && column(2).length === 1 && column(3).length === 1, 'the cards');
+  panels.kanbanLists[1].focus(); panels.kanbanLists[1].select(0); v.input.write('\r');
+  await until(() => rowsOf(v, title).length, 'the card opens');
+  const rows = rowsOf(v, title).map(line => line.trimEnd());
+  assert.deepEqual(rows.slice(0, 3), ['Make the search page fast', 'in progress · priority high · severity high', 'you · sara-box']);
+  for (const line of ['Goal', 'The search page answers in under a second.', 'Description', 'Objectives · 1 of 2 met', '  ✓ A timing test for the search page', 'Success criteria', '  · Three runs in a row answer in under a second', 'Subtasks · 1 of 3 done', '  ▸ Cache the query', 'last activity 1m ago']) assert.ok(rows.includes(line), line);
+  assert.match(rows.find(line => /^ETA /.test(line)), / · in (24|25) min$/, 'the minutes left it last reported');
+  assert.doesNotMatch(rows.join('\n'), /their machine|only they can change it|read-only/);
+  assert.match(hint(), /enter open the session/);
+  // Enter opens it in Sessions, with the cursor on it under its computer.
+  v.input.write('\r');
+  await until(() => v.current.view === 'tasks' && !modal(v, title) && /Nightly checks/.test(plainItem(panels.board.items[panels.board.selected] ?? { getText: () => '' })), 'Sessions, on that session');
+  assert.deepEqual(peer.sent(), []);
+  await send(v, '/kanban'); await until(() => v.current.view === 'kanban' && column(2).length === 1, 'back on the board');
+  // No Task yet: its first message. Sessions does not list it here, so Enter only closes.
+  panels.kanbanLists[2].focus(); panels.kanbanLists[2].select(0); v.input.write('\r');
+  await until(() => rowsOf(v, title).includes('No Task yet'), 'no Task yet');
+  assert.deepEqual(rowsOf(v, title).map(line => line.trimEnd()), ['Flaky upload', 'Needs you', 'you · sara-box', '', 'No Task yet', 'Find why uploads fail on slow networks', '', 'last activity 2m ago']);
+  assert.doesNotMatch(hint(), /enter open/);
+  v.input.write('\x1b'); await until(() => !modal(v, title), 'Esc closes it');
+  // From an older build there: it has a Task that did not come with the card.
+  panels.kanbanLists[3].focus(); panels.kanbanLists[3].select(0); v.input.write('\r');
+  await until(() => rowsOf(v, title).includes('No Task yet'), 'an older build');
+  assert.ok(rowsOf(v, title).some(line => /It has a Task\. Update ELU Code on sara-box to see it here\./.test(line)));
+  v.input.write('\x1b'); await until(() => !modal(v, title), 'Esc closes it');
 });
 
 test('/share off keeps the open project\'s Tasks off the team board and /share on puts them back', async t => {
