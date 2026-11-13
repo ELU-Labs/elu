@@ -114,6 +114,24 @@ for (const [name, module] of PUBLISHED.slice(0, 2)) {
   });
 }
 
+test('a replaced conductor starts the next version\'s at once while an ELU window of an earlier version is open, so that window never finds the lock free', async t => {
+  const p = setup(t); let starts = 0;
+  // With no such window and nothing queued, the next one starts only with the next thing sent.
+  const alone = running(t, Conductor, { version: NOW, next: () => { starts++; } });
+  alone.updated('0.1.21');
+  await until(() => alone.conductor.draining, 'the conductor to hand over');
+  await pause(100);
+  assert.equal(starts, 0);
+  await alone.conductor.stop();
+  // With a window of an earlier version open, it starts at the handover, with nothing queued.
+  await openWindow(t);
+  const mine = running(t, Conductor, { version: NOW, next: () => { starts++; } });
+  const first = enqueue(p.root, 'The turn before the update'); await turn(p, first);
+  mine.updated('0.1.21');
+  await until(() => mine.conductor.draining, 'the conductor to hand over');
+  assert.equal(starts, 1, 'the next conductor is started as the lock is given up');
+});
+
 for (const [name, module] of PUBLISHED) {
   test(`a ${name} conductor run from its own folder, idle, is told to leave: this version takes the lock, and what an ELU window of ${name} sends then runs here`, async t => {
     const p = setup(t), old = running(t, module.Conductor, { version: name });
