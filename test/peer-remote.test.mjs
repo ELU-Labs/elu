@@ -366,7 +366,7 @@ test('a from my other computer keeps the rule on the computer the session runs o
   const row = remoteRow(seen, 'devbox');
   assert.deepEqual(rowActions(row).map(([key]) => key), ['y', 'n', 'a', 'enter']);
   const glue = remoteGlue({ facade: { mineRows: () => [], remoteSessions: () => [] }, peerRead: () => null, peerCommand: command => withHome(laptop.home, () => remoteCommand(viewCtx, command)), chatMessage: ({ text }) => text, ink: text => text, colour: false });
-  assert.match(glue.view(row, 80), /Esc, then y allow · n deny · a always/);
+  assert.match(glue.view(row, 80), /Esc, then y allow · n deny · a always, then Enter/);
   assert.equal(await glue.action(row, 'always', 'project'), 'Allowed. From now on, without asking on @devbox: Run npm test, with any arguments (this project).');
   // Kept on the devbox, for its project; the laptop keeps nothing.
   withHome(devbox.home, () => {

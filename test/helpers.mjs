@@ -103,3 +103,18 @@ export function fakeClis(parent, { mode = 'normal', sandboxBin = null, name = un
   // CLAUDE_CONFIG_DIR keeps the lead from picking up the real MCP servers of whoever runs the tests.
   return { env: { PATH: `${dir}${path.delimiter}${process.env.PATH}`, XDG_CONFIG_HOME: path.join(parent, 'personal'), XDG_DATA_HOME: path.join(parent, 'data'), CLAUDE_CONFIG_DIR: path.join(parent, 'claude'), ...(sandboxBin ? { ELU_CODE_SANDBOX_HELPER: sandboxBin } : {}) }, calls, dir };
 }
+
+// In Sessions, and in a session's chat, a letter types and a key is its letter, then Enter.
+// A test presses such a key with input.write('c'): one a-z or + written while the list or
+// the chat has the focus is followed by Enter, as a person presses it. current() is the last
+// render. Returns the plain write, which sends text as it is.
+export function keyThenEnter(input, current) {
+  const write = input.write.bind(input);
+  input.write = (data, ...rest) => {
+    const shown = current(), key = typeof data === 'string' && /^[a-z+]$/.test(data) && Boolean(shown) && [shown.panels.board, shown.panels.chat].includes(shown.screen.focused);
+    const result = write(data, ...rest);
+    if (key) setTimeout(() => write('\r'), 5);
+    return result;
+  };
+  return write;
+}

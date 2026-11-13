@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import { PassThrough } from 'node:stream';
-import { project, temp, fakeClis } from './helpers.mjs';
+import { project, temp, fakeClis, keyThenEnter } from './helpers.mjs';
 import { liveTask } from './peer-helpers.mjs';
 import { repository } from '../lib/git.mjs';
 import { registerProject } from '../lib/projects.mjs';
@@ -117,6 +117,8 @@ async function view(t, { columns = 160, rows = 40, ...options } = {}) {
   const finished = launchTerminal({ ...options, input, output, refreshMs: 30, startConductor: () => false, onRender: value => { rendered = value; renders++; } });
   finished.catch(() => {});
   await until(() => rendered, 'first render');
+  // A row's key is its letter, then Enter (keyThenEnter). type() writes text as it is.
+  const write = keyThenEnter(input, () => rendered);
   // A failed test can leave a dialog open, and the app ignores q while one is: every pass
   // closes what is open (closing one can open the next) and presses q again. A view that
   // still will not close is interrupted the way a hangup would, and if even that fails the
@@ -134,7 +136,7 @@ async function view(t, { columns = 160, rows = 40, ...options } = {}) {
     }
     input.destroy(); output.destroy();
   });
-  return { input, output, finished, get current() { return rendered; }, get panels() { return rendered.panels; }, get renders() { return renders; }, get writes() { return writes; },
+  return { type(text) { for (const ch of text) write(ch); }, input, output, finished, get current() { return rendered; }, get panels() { return rendered.panels; }, get renders() { return renders; }, get writes() { return writes; },
     lines() { return rendered.screen.lines.map(row => row.map(cell => cell[1]).join('')); }, text() { return this.lines().join('\n'); } };
 }
 async function send(v, text) {
@@ -720,11 +722,11 @@ test('a session on my other computer that waits for y or n shows n once in the k
   await until(() => /New session on @sara-box/.test(ask._label.getText()), 'the label names the computer');
   ask.clearValue(); ask.cancel();
   board.focus(); selectRow(board, /wants to run ls/);
-  await until(() => /y allow {2}n deny {2}enter open {2}tab next/.test(keys()), 'approval keys');
+  await until(() => /y allow {2}n deny {2}enter open {2}letter then enter {2}tab next/.test(keys()), 'approval keys');
   assert.doesNotMatch(keys(), /new session/);
   // A Task waiting in a session started from here waits under Needs you, marked with the computer.
   selectRow(board, /on sara-box · Uppercase plan/);
-  await until(() => /y approve {2}n reject {2}enter open {2}tab next/.test(keys()), 'Task keys');
+  await until(() => /y approve {2}n reject {2}enter open {2}letter then enter {2}tab next/.test(keys()), 'Task keys');
   assert.doesNotMatch(keys(), /new session/);
 });
 
@@ -774,6 +776,30 @@ test('over a session on my other computer the box writes to my agent here, start
   await until(() => sentThere().length === 2, 'sent there again');
   assert.deepEqual(sentThere()[1], { type: 'remoteSend', id, text: 'Mine' });
   assert.equal(pendingRequests(p.root).filter(row => row.continuationTaskId === '1').length, 1, 'neither went to my agent here');
+});
+
+test('status typed on the row of a running session on my other computer is a message and stops nothing there; s then Enter stops it', async t => {
+  const at = new Date().toISOString(), id = '66666666-6666-4666-8666-666666666666';
+  const remote = [{ id, machine: SARA, createdAt: at, lastAt: at, title: 'Run the nightly checks', state: 'running', steps: [], entries: [{ role: 'You', at, text: 'Run the nightly checks' }], approvals: [] }];
+  const p = project(later(t)); environment(t, p.parent);
+  const peer = fakePeer({ items: [], mine: [{ key: SARA, mine: true, theirs: true }], remote }), v = await view(t, { repo: repository(p.root), dashboard: true, peer });
+  const board = v.panels.board, ask = v.panels.ask, keys = () => v.panels.keys.getText(), stops = () => peer.sent().filter(row => row.type === 'remoteStop');
+  const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
+  const onRow = async () => { board.focus(); selectRow(board, /Run the nightly/); await until(() => v.current.screen.focused === board && /enter open {2}s stop {2}n new session {2}letter then enter/.test(keys()) && /Message your agent here/.test(ask._label.getText()), 'its row, with s stop'); };
+  await until(() => board.items.map(plainItem).some(row => /ON SARA-BOX/.test(row)) && board.items.map(plainItem).some(row => /Run the nightly checks/.test(row)), 'the row of the session there, under its computer');
+  // The owner's word, a key at a time. s is this row's key for stop, and it stops nothing there.
+  await onRow(); v.type('status');
+  await until(() => ask.getValue() === 'status' && v.current.screen.focused === ask, 'status is in the box');
+  await wait(300); assert.deepEqual(stops(), [], 'nothing was stopped there');
+  // Enter sends it as a message, to my agent here. The session there still runs.
+  v.type('\r'); await until(() => pendingRequests(p.root).some(row => row.helps && row.goal === 'status'), 'sent as a message');
+  await wait(200); assert.deepEqual(stops(), [], 'still running there'); assert.equal(ask.getValue(), '');
+  // s alone: the line under the box says what Enter does. Enter stops it there.
+  await onRow(); v.type('s');
+  await until(() => ask.getValue() === 's' && /enter stops this session · keep typing to write a message/.test(keys()), 'the line under the box names s');
+  await wait(200); assert.deepEqual(stops(), []);
+  v.type('\r'); await until(() => stops().length === 1, 's then Enter stops it there');
+  assert.equal(stops()[0].id, id); assert.equal(ask.getValue(), '');
 });
 
 test('Sessions lists every session of my other computer in this repository under its name, and Projects opens its other projects', async t => {
