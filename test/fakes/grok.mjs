@@ -26,7 +26,17 @@ const list = dir => { try { return fs.readdirSync(dir); } catch { return []; } }
 
 if (args.includes('--version')) { console.log('1.0.77'); process.exit(0); }
 if (args.includes('--help')) { console.log('--output-format --permission-mode --sandbox --max-turns --cwd --no-auto-update --tools --disallowed-tools --allow --deny --prompt-file --prompt-json --no-alt-screen --no-memory --no-subagents --disable-web-search --session-id --resume --model'); process.exit(0); }
-if (args[0] === 'login') { console.error('fake grok: login is interactive'); process.exit(2); }
+// login: grok.login on, it prints a sign-in link and waits for Enter on its input (where the
+// owner finishes in the browser), then writes auth.json in GROK_HOME, through ELU's link to the
+// owner's ~/.grok/auth.json when there is one. Off, login is refused, as before.
+if (args[0] === 'login') {
+  if (!cfg.grok?.login) { console.error('fake grok: login is interactive'); process.exit(2); }
+  process.stderr.write('Sign in to Grok: open https://accounts.x.ai/device and confirm the code FAKE-CODE.\nWaiting for the sign-in to finish in the browser. Press Enter here when it has.\n');
+  const done = await new Promise(resolve => { const timer = setTimeout(() => resolve(false), (cfg.grok.seconds ?? 60) * 1000); process.stdin.once('data', () => { clearTimeout(timer); resolve(true); }); });
+  if (!done) { process.stderr.write('Sign-in timed out.\n'); process.exit(1); }
+  fs.mkdirSync(home, { recursive: true }); fs.writeFileSync(path.join(home, 'auth.json'), '{"token":"never-read"}\n', { mode: 0o600 });
+  process.stderr.write('Signed in to Grok.\n'); process.exit(0);
+}
 
 // What the prompt asks for, done as far as the launch allows. ask() decides an action the
 // rules neither allow nor forbid: the relay over ACP, nothing in headless mode.
