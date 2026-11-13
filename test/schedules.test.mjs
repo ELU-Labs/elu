@@ -6,11 +6,17 @@ import path from 'node:path';
 import { parseWhen, splitWhen, nextRun, saveSchedule, listSchedules, runDue, runScheduleNow, pauseSchedule, removeSchedule, installScheduler, uninstallScheduler } from '../lib/schedules.mjs';
 import { atomic, personalDirectory } from '../lib/util.mjs';
 import { saveBot, removeBot } from '../lib/bots.mjs';
+import { scheduleTick, setBotSchedule } from '../lib/bot-schedules.mjs';
+import { repository } from '../lib/git.mjs';
+import { registerProject } from '../lib/projects.mjs';
+import { readTask, saveTask, taskDir } from '../lib/state.mjs';
 import { enqueue } from '../lib/conductor.mjs';
 import { pendingRequests, updateRequest } from '../lib/workspace.mjs';
-import { project } from './helpers.mjs';
+import { project, CLI } from './helpers.mjs';
 import { standIn } from './login-item-helpers.mjs';
+import { liveTask } from './peer-helpers.mjs';
 import { saveDefaultMode } from '../lib/modes.mjs';
+import { processIdentity } from '../lib/process.mjs';
 
 // Local times, so the tests hold in any time zone. 2026-11-09 is a Monday.
 const at = (day, hour, minute = 0) => new Date(2026, 10, day, hour, minute);
@@ -287,4 +293,93 @@ test('on Linux the login item is enabled and disabled through systemctl --user, 
   assert.deepEqual(item.loaded(), []); assert.deepEqual(item.files(), []);
   assert.deepEqual(item.calls().at(-1).args, ['--user', 'disable', '--now', 'elu-code-scheduler.timer']);
   assert.equal(item.install().changed, true); assert.deepEqual(item.loaded(), ['elu-code-scheduler.timer']);
+});
+
+const until = async (check, what) => { for (const started = Date.now(); !check();) { if (Date.now() - started > 10000) throw new Error(`Timed out waiting for ${what}`); await new Promise(resolve => setTimeout(resolve, 10)); } };
+// A one-time schedule that is due now: saved ten minutes ago for five minutes later.
+const dueOnce = (root, goal = 'Check the build') => { const then = new Date(Date.now() - 10 * 60000); return saveSchedule({ root, goal, when: parseWhen('in 5m', then) }, then); };
+
+test('elu schedule tick, run as the login item runs it while ELU is closed, queues the last one-time run and then removes the login item', { skip: !['darwin', 'linux'].includes(process.platform) && 'This system has no login item.' }, async t => {
+  home(t); const p = project(t), item = standIn(t, process.platform, { config: process.env.XDG_CONFIG_HOME });
+  // A conductor counts as running, since this process holds its lock: the tick starts none for the run it queues.
+  fs.mkdirSync(personalDirectory(), { recursive: true }); fs.writeFileSync(path.join(personalDirectory(), 'conductor.lock'), JSON.stringify({ pid: process.pid, identity: processIdentity(process.pid) }));
+  const row = dueOnce(p.root);
+  item.install(); assert.ok(item.files().length); assert.equal(item.loaded().length, 1);
+  const ran = await item.job([process.execPath, CLI, 'schedule', 'tick']);
+  // What it has to say is out before the removal, which ends the run on macOS. On Linux the service runs to its end.
+  assert.deepEqual([ran.stdout, ran.stderr], ['Queued 1 scheduled task.\n', '']);
+  assert.ok(ran.status === 0 || process.platform === 'darwin' && ran.signal === 'SIGTERM', `it ended with ${ran.status ?? ran.signal}`);
+  assert.equal(pendingRequests(p.root).filter(request => request.scheduleId === row.id).length, 1, 'the run was queued first');
+  assert.equal(listSchedules()[0].enabled, false, 'a one-time schedule is off once it ran');
+  await until(() => !item.loaded().length, 'the login item to be unloaded');
+  assert.deepEqual(item.files(), [], 'no schedule is on, so its files are gone');
+  // On macOS the bootout comes from outside the job, which it ends. On Linux the service itself disables its timer.
+  assert.deepEqual(item.calls().at(-1), process.platform === 'darwin' ? { name: 'launchctl', args: ['bootout', `gui/${process.getuid()}/dev.elu-code.scheduler`] } : { name: 'systemctl', args: ['--user', 'disable', '--now', 'elu-code-scheduler.timer'], fromJob: true });
+  // Run by hand with no login item left, it queues nothing, says nothing and ends well.
+  assert.deepEqual(await item.job([process.execPath, CLI, 'schedule', 'tick']), { status: 0, signal: null, stdout: '', stderr: '' });
+});
+
+// A script in place of the login item's command, so its run is on the system the test names
+// whatever system the test itself is on. tick: what elu schedule tick does, then what comes after.
+const lib = name => JSON.stringify(new URL(`../lib/${name}`, import.meta.url).href);
+const script = (item, name, lines) => { const file = path.join(item.home, name); fs.writeFileSync(file, `${lines.join('\n')}\n`); return [process.execPath, file]; };
+const tickScript = (item, platform, after) => script(item, 'tick.mjs', [
+  `import { scheduleTick } from ${lib('bot-schedules.mjs')};`,
+  `const { fired, last } = scheduleTick(new Date(), { start: () => false, item: { platform: '${platform}' } });`,
+  'process.stdout.write(`fired ${fired}\\n`);',
+  'last?.();',
+  after,
+]);
+
+test('on macOS the login item removes itself in the one order launchd lets it finish: its file first, then its bootout by label, started last and not waited for', async t => {
+  home(t); const p = project(t), item = standIn(t, 'darwin', { config: process.env.XDG_CONFIG_HOME }), plist = path.join(item.home, 'Library', 'LaunchAgents', 'dev.elu-code.scheduler.plist');
+  const byLabel = { name: 'launchctl', args: ['bootout', `gui/${process.getuid()}/dev.elu-code.scheduler`] };
+  // The stand-in ends a job that boots itself out, as launchd does. So the order the app uses,
+  // bootout and then the file, never reaches the file from inside the job: it would load again at the next login.
+  item.install();
+  let ran = await item.job(script(item, 'app-order.mjs', [`import { uninstallScheduler } from ${lib('schedules.mjs')};`, "uninstallScheduler({ platform: 'darwin' });", "process.stdout.write('after its bootout\\n');"]));
+  assert.deepEqual(ran, { status: null, signal: 'SIGTERM', stdout: '', stderr: '' }); assert.deepEqual(item.loaded(), []); assert.deepEqual(item.files(), [plist]);
+  assert.deepEqual(item.calls().at(-1), { name: 'launchctl', args: ['bootout', `gui/${process.getuid()}`, plist], fromJob: true }, 'a launchctl the job waits for is in its process group, and ends with it');
+  // The tick's own order. Its script has more to do after the removal, and is ended before it gets there.
+  item.uninstall(); dueOnce(p.root); item.install(); assert.deepEqual(item.loaded(), [plist]);
+  const tick = tickScript(item, 'darwin', "setTimeout(() => process.stdout.write('after its bootout\\n'), 20000);");
+  ran = await item.job(tick);
+  assert.deepEqual(ran, { status: null, signal: 'SIGTERM', stdout: 'fired 1\n', stderr: '' });
+  assert.deepEqual(item.files(), [], 'the file went before the bootout ended the job'); assert.deepEqual(item.loaded(), []);
+  assert.deepEqual(item.calls().at(-1), byLabel, 'by label, and from outside the job: its launchctl outlives it');
+  // A login item whose file went without it is still loaded. Its next run with nothing on ends it too.
+  item.install(); fs.rmSync(plist); assert.deepEqual(item.loaded(), [plist]);
+  ran = await item.job(tick);
+  assert.deepEqual(ran, { status: null, signal: 'SIGTERM', stdout: 'fired 0\n', stderr: '' }); assert.deepEqual(item.loaded(), []); assert.deepEqual(item.calls().at(-1), byLabel);
+});
+
+test('on Linux the login item disables its own timer from within its service, which runs on to its end', async t => {
+  home(t); const p = project(t), item = standIn(t, 'linux', { config: process.env.XDG_CONFIG_HOME });
+  dueOnce(p.root); item.install(); assert.equal(item.files().length, 2); assert.deepEqual(item.loaded(), ['elu-code-scheduler.timer']);
+  const before = item.calls().length, ran = await item.job(tickScript(item, 'linux', "process.stdout.write('ran to its end\\n');"));
+  assert.deepEqual(ran, { status: 0, signal: null, stdout: 'fired 1\nran to its end\n', stderr: '' });
+  assert.deepEqual(item.files(), []); assert.deepEqual(item.loaded(), []);
+  assert.deepEqual(item.calls().slice(before).map(call => call.args), [['--user', 'disable', '--now', 'elu-code-scheduler.timer']], 'the timer only: the service that runs is never stopped');
+});
+
+test("the tick leaves the login item while a schedule is on, a task's or a bot's, and has it removed once none is", async t => {
+  home(t); const p = project(t), repo = repository(p.root), item = standIn(t, 'darwin'), plist = path.join(item.home, 'Library', 'LaunchAgents', 'dev.elu-code.scheduler.plist');
+  registerProject(repo);
+  const tick = () => scheduleTick(new Date(), { start: () => true, item: item.options }), there = () => item.files().length === 1 && item.loaded().length === 1;
+  const gone = async () => { await until(() => !item.loaded().length, 'the bootout'); return !item.files().length; };
+  dueOnce(p.root); const hourly = saveSchedule({ root: p.root, goal: 'Lint', when: parseWhen('every 1h') });
+  item.install();
+  // The one-time run fires and is off; the hourly one is still on.
+  let ran = tick(); assert.equal(ran.fired, 1); assert.equal(ran.last, null); assert.ok(there());
+  // A paused schedule is not on. The removal is handed to the caller, to run after everything else.
+  pauseSchedule(hourly.id, true); ran = tick(); assert.equal(ran.fired, 0); assert.ok(there(), 'nothing is removed before the caller is done');
+  assert.deepEqual(ran.last(), { removed: true, files: [plist] }); assert.ok(await gone());
+  // A bot's schedule that is on in a session keeps the login item; turned off there, it goes.
+  saveBot({ name: 'nightly', instructions: 'Check the nightly build.', schedule: 'every 1h' });
+  liveTask(p.root, { id: '4', goal: 'Trim coupon codes', state: 'answered' }); saveTask(repo, { ...readTask(repo, '4'), bots: ['nightly'] });
+  fs.writeFileSync(path.join(taskDir(repo, '4'), 'bot-schedules.json'), JSON.stringify({ version: 1, bots: { nightly: { on: true, schedule: 'every 1h', nextRunAt: new Date(Date.now() + 3600000).toISOString(), lastRunAt: null, lastRequestId: null, runs: 0, note: null } } }));
+  item.install(); ran = tick(); assert.equal(ran.fired, 0); assert.equal(ran.last, null); assert.ok(there());
+  setBotSchedule(repo, '4', 'nightly', false); ran = tick(); assert.equal(typeof ran.last, 'function'); ran.last(); assert.ok(await gone());
+  // The real unloaders are refused inside the test runner, for the tick's own removal too.
+  assert.throws(() => scheduleTick(new Date(), { start: () => true, item: { platform: 'darwin', home: item.home } }).last(), /Tests must not install login items/);
 });
