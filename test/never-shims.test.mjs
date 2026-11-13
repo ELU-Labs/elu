@@ -6,7 +6,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { temp } from './helpers.mjs';
 import { NEVER_COMMANDS, neverSentence, refusedIn } from '../lib/never-list.mjs';
-import { REFUSED, SHIM_VENDORS, scratchRoots, shimEnvFile, shimPath, shimScripts, shimsBase, writeShims } from '../lib/never-shims.mjs';
+import { REFUSED, SHIM_VENDORS, scratchRoots, shimEnvFile, shimPath, shimScripts, shimsBase, withoutShims, writeShims } from '../lib/never-shims.mjs';
 
 // The stand-ins in a throwaway folder, beside stub "real" commands that print what they got.
 // The stub git cannot say where a push would go or which repository a call acts on, so
@@ -35,8 +35,8 @@ test('every never-list command is refused by its stand-in, in the words of the B
       assert.equal(refusedIn(`before\n${got.out}\nafter`), command, line);
     }
   }
-  assert.equal(refusedIn('git push is never allowed, in any mode'), null, 'the sentence without its full stop is someone quoting it');
-  assert.equal(refusedIn('docs say: git push is never allowed, in any mode.'), null, 'only a line of its own counts');
+  assert.equal(refusedIn('git push is not allowed outside Full access'), null, 'the sentence without its full stop is someone quoting it');
+  assert.equal(refusedIn('docs say: git push is not allowed outside Full access.'), null, 'only a line of its own counts');
 });
 
 test('a stand-in reads the command the way the tool does, not as text', t => {
@@ -89,6 +89,8 @@ test('the folder is private, first on PATH once, and written again when anything
   for (const name of fs.readdirSync(f.all)) assert.equal(mode(path.join(f.all, name)), '755', name);
   assert.equal(shimPath(['/usr/bin', f.merge, f.all, '/bin'].join(path.delimiter)), [f.all, '/usr/bin', '/bin'].join(path.delimiter));
   assert.equal(shimPath(['/usr/bin', f.all].join(path.delimiter), { merge: true }), [f.merge, '/usr/bin'].join(path.delimiter));
+  // Full access: no stand-in folder at all, not even one an outer session left on PATH.
+  assert.equal(withoutShims(['/usr/bin', f.merge, f.all, shimsBase(), '/bin'].join(path.delimiter)), ['/usr/bin', '/bin'].join(path.delimiter));
   // The folder goes on the PATH a session is given and nowhere else: ELU's own checks run the real commands.
   const mine = process.env.PATH; shimPath(mine); assert.equal(process.env.PATH, mine); assert.equal(mine.split(path.delimiter).some(entry => entry.startsWith(shimsBase())), false);
   // What a session left behind: a changed stand-in, a link in its place, a program of its own.

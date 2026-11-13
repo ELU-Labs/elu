@@ -79,9 +79,9 @@ An approved Task gives its session its name, unless you named the session yourse
 
 On the Kanban tab a session with a Task shows as that Task: its title, how far it is, its
 priority and its severity. One that waits for your approval is under Needs you. Enter opens
-the whole Task: the goal, the objectives, the success criteria, the subtasks and the ETA;
-Enter again opens its session. A teammate's card, and one of your other computer's, open the
-same way.
+the whole Task, as does a click: the goal, the objectives, the success criteria, the subtasks
+and the ETA. Its Go to session button opens its session; Enter presses it. A teammate's card,
+and one of your other computer's, open the same way.
 
 After you approve, the model splits the work into subtasks and changes them as it likes.
 The card lists them as a checklist and marks the objectives the model reports met. Its ETA
@@ -140,14 +140,14 @@ and `/permissions default auto` sets what new sessions start with.
 - **Approve for me** (`auto`): edits the session's files; a reviewer model, not you, decides
   the rest. Commands get no internet unless the reviewer lets one leave the sandbox.
   On Grok Build, what its reviewer refuses then asks you.
-- **Full access** (`full`): any file, any command, the internet, with no sandbox. The never
-  list below is refused by name only: a command that names it another way can get through.
+- **Full access** (`full`): any file, any command, the internet, with no sandbox. That
+  includes push, tags, merges, publishing and deploys: the never list below does not apply.
 
 When the model asks, `y` allows and `n` denies; `f` allows and gives that session Full access.
 `a` allows and keeps a narrow rule, such as `npm test` or `git diff`, for this project or all
 of them, so it is not asked again. Reads in the project, git reads and the project's own test,
 lint and build scripts run without asking from the start. `/permissions rules` or
-`elu permissions` lists them all and removes any. The never list always wins.
+`elu permissions` lists them all and removes any. No rule covers the never list.
 You can change the mode while a turn runs. When a turn stopped on something a wider mode
 allows, its Blocked line says which, and raising the mode continues the turn at once, with
 only what that mode allows. A turn that also stopped on your no, or on the never list, waits
@@ -174,17 +174,18 @@ reads it from standard input; a command goes after `--`, as in
 block, or a `claude mcp add` line (with `!` or without) into the message box, ELU does
 not send or run it: it offers to add the server, so the key stays out of the chat. The model
 is told to ask you to type `/mcp add` when it needs a server you do not have, and adding or
-removing one is on the never list; in Full access that is a rule on command text, not a
-boundary.
+removing one is on the never list, outside Full access.
 
 ELU does not push, merge, tag, deploy or publish by itself. `/publish` shows the exact
-push and the draft pull request, waits for you, and refuses a default branch. The model is
-told never to run those commands, and on Claude Code they are denied by rule; in Full access
-that is a rule on the command's text, not a sandbox. Stand-in commands, first on every
-session's PATH, also refuse them by name, inside a script too; a full path to the real
-command gets past those. One exception: a bot that is allowed
-to merge pull requests may run `gh pr merge`. Ask for approval still asks you first; in
-Approve for me the reviewer model decides. `@elu` comes allowed; a bot you make is not.
+push and the draft pull request, waits for you, and refuses a default branch. Outside Full
+access the model is told never to run those commands, and on Claude Code they are denied by
+rule. Stand-in commands, first on the PATH of every session in Ask for approval or Approve
+for me, also refuse them by name, inside a script too; a full path to the real command gets
+past those. One exception: a bot that is allowed to merge pull requests may run
+`gh pr merge`. Ask for approval still asks you first; in Approve for me the reviewer model
+decides. `@elu` comes allowed; a bot you make is not. In Full access none of this applies:
+the model, and a bot working in that session, may push, open and merge pull requests, tag,
+publish and deploy when the task calls for it.
 Details:
 [docs/permissions.md](docs/permissions.md), [SECURITY.md](SECURITY.md).
 

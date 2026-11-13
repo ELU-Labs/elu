@@ -86,7 +86,7 @@ machine cannot read it with `ps`.
 | --- | --- | --- | --- | --- |
 | How it runs | `agy -p --sandbox` | `agy acp` after `relay` passed, else `-p` | `agy acp` after `relay` passed, else `-p --mode=accept-edits --sandbox` | `-p --dangerously-skip-permissions` |
 | Settings | `request-review`; `command`, `write_file`, `read_url`, `execute_url`, `mcp` denied; workspace only | `request-review`; `command`, `read_url`, `execute_url`, `mcp` ask; workspace only; protected files and secret folders denied to the file tool | `proceed-in-sandbox`; `sudo` and `.git` denied; workspace only; protected files and secret folders denied | outside access allowed; `read_url`, `execute_url`, `mcp` allowed; secret folders denied to the file tool |
-| Hook | denies web search, commands, edits, image generation, scheduling and subagents | asks for web search; denies push, tag, merge, deploy and publish by command text | denies web search and the never list; sends the rest to the reviewer | denies the never list by command text |
+| Hook | denies web search, commands, edits, image generation, scheduling and subagents | asks for web search; denies push, tag, merge, deploy and publish by command text | denies web search and the never list; sends the rest to the reviewer | no opinion: Full access runs the never list |
 | Named folders | none | `--add-dir` each; `write_file` denied in each | same | `--add-dir` each |
 | Web | denied | asks, or reported | reviewed, or reported | allowed |
 
@@ -105,10 +105,10 @@ request reaches you under Needs you; no answer within 20 minutes counts as a den
 Everything above comes from Google's documentation and the Antigravity changelog; the
 one-time check is the proof, per machine. In particular, until a check says otherwise:
 
-- the never list is matched on command text by the hook, a tripwire that an obfuscated
-  command gets past; in Full access it is prompt text and that hook only;
-- stand-in commands first on the session's PATH also refuse the never list by name for
-  what a script runs. That was seen only in tests against a stand-in `agy`, not with the
+- outside Full access the never list is matched on command text by the hook, a tripwire
+  that an obfuscated command gets past; Full access has no never list;
+- in Ask for approval and Approve for me, stand-in commands first on the session's PATH
+  also refuse the never list by name for what a script runs. That was seen only in tests against a stand-in `agy`, not with the
   real one;
 - whether `read_url` denies cover web search (hence the hook), whether the hook loads from
   the private HOME, and the exact shape of the headless notice and of the ACP permission

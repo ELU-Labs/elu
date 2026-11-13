@@ -13,6 +13,7 @@ import { ADAPTERS } from '../lib/adapters/index.mjs';
 import * as agy from '../lib/adapters/agy.mjs';
 import * as claude from '../lib/adapters/claude.mjs';
 import { saveRule } from '../lib/permission-rules.mjs';
+import { shimsBase } from '../lib/never-shims.mjs';
 
 // Every vendor through the runner, against the fakes: Codex leads with its
 // own launch and parse, Grok takes the prompt from a file under a private HOME, and an ACP
@@ -59,7 +60,7 @@ test('a Codex lead answers in Approve for me with its sandboxed command; the sam
   assert.equal(second.state, 'answered', JSON.stringify(second.error)); assert.deepEqual(f.calls().filter(call => call.args[0] === 'exec').at(-1).args.slice(0, 3), ['exec', 'resume', run.session]);
 });
 
-for (const [mode, label] of [['ask', 'Ask for approval'], ['auto', 'Approve for me'], ['full', 'Full access']]) {
+for (const [mode, label] of [['ask', 'Ask for approval'], ['auto', 'Approve for me']]) {
   test(`a Codex session in ${label} refuses push, publish and merge by name, inside a script too, and still runs git status and a push to a folder here`, async t => {
     const f = setup(t, 'codex', { commands: ['git push origin HEAD', 'npm publish', 'gh pr merge 5', 'sh -c "git -C . push"', 'git status --short --branch', 'git push --quiet ../local.git HEAD:refs/heads/from-session'] });
     // The project's origin is on another machine; a bare repository beside the project is not.
@@ -70,7 +71,7 @@ for (const [mode, label] of [['ask', 'Ask for approval'], ['auto', 'Approve for 
     assert.ok(call.args.includes('allow_login_shell=false'), 'a login shell would put the system folders ahead of the stand-ins');
     const steps = fs.readFileSync(run.logFile, 'utf8').trim().split('\n').map(line => JSON.parse(line)).filter(row => row.type === 'item.completed' && row.item.type === 'command_execution').map(row => row.item);
     assert.deepEqual(steps.map(step => step.exit_code), [126, 126, 126, 126, 0, 0]);
-    assert.deepEqual(steps.slice(0, 4).map(step => step.aggregated_output.trim()), ['git push', 'npm publish', 'gh pr merge', 'git push'].map(command => `${command} is never allowed, in any mode.`));
+    assert.deepEqual(steps.slice(0, 4).map(step => step.aggregated_output.trim()), ['git push', 'npm publish', 'gh pr merge', 'git push'].map(command => `${command} is not allowed outside Full access.`));
     assert.match(steps[4].aggregated_output, /^## /, 'git status reached the real git');
     assert.equal(git(local, ['for-each-ref', '--format=%(refname)']).trim(), 'refs/heads/from-session', 'pushing to a folder on this machine is not publishing');
     assert.deepEqual(run.denials.map(denial => denial.never), ['git push', 'npm publish', 'gh pr merge', 'git push'], 'each refused step is kept for the chat');
@@ -78,22 +79,72 @@ for (const [mode, label] of [['ask', 'Ask for approval'], ['auto', 'Approve for 
   });
 }
 
+// Full access has no never list. A bare repository beside the project stands for the remote,
+// under a name of its own, and a stand-in gh first on PATH for GitHub's: nothing leaves this
+// machine. --receive-pack is an option the git stand-in cannot read, so outside Full access it
+// refuses even a push to a folder here.
+function fullWorld(f) {
+  const local = path.join(f.parent, 'local.git'), merged = path.join(f.parent, 'gh.calls');
+  git(f.parent, ['init', '--quiet', '--bare', local]); git(f.root, ['remote', 'add', 'backup', local]);
+  fs.writeFileSync(path.join(f.fake.dir, 'gh'), `#!/bin/sh\nprintf '%s\\n' "$*" >> ${JSON.stringify(merged)}\necho "merged by the stand-in gh"\n`, { mode: 0o755 });
+  const refs = () => git(local, ['for-each-ref', '--format=%(refname)']).trim().split('\n').filter(Boolean).sort();
+  return { local, refs, merged: () => fs.existsSync(merged) ? fs.readFileSync(merged, 'utf8') : '' };
+}
+const FULL_COMMANDS = ['git push -u backup HEAD:refs/heads/from-session', 'git rev-parse --abbrev-ref --symbolic-full-name @{u}', 'git push --receive-pack=git-receive-pack backup HEAD:refs/heads/any-option', 'git tag v1',
+  'git push --tags backup', 'sh -c "git -C . push backup HEAD:refs/heads/from-script"', 'printf "%s\\n" "$PATH"'];
+
+test('a Codex session in Full access runs push, tags and a pull request merge: no stand-in refuses, no line of its instructions forbids them', async t => {
+  const f = setup(t, 'codex', { commands: [...FULL_COMMANDS, 'gh pr merge 5 --squash'] }), w = fullWorld(f);
+  const task = await f.controller.ask('Publish it.', null, { permissions: 'full' }).finished;
+  assert.equal(task.state, 'answered', JSON.stringify(task.error));
+  const [run] = task.runs, steps = fs.readFileSync(run.logFile, 'utf8').trim().split('\n').map(line => JSON.parse(line)).filter(row => row.type === 'item.completed' && row.item.type === 'command_execution').map(row => row.item);
+  assert.deepEqual(steps.map(step => step.exit_code), FULL_COMMANDS.map(() => 0).concat(0), steps.map(step => step.aggregated_output).join('\n'));
+  assert.equal(steps[1].aggregated_output.trim(), 'backup/from-session', 'git push -u set the upstream');
+  assert.deepEqual(w.refs(), ['refs/heads/any-option', 'refs/heads/from-script', 'refs/heads/from-session', 'refs/tags/v1']);
+  assert.equal(git(f.root, ['tag', '--list']).trim(), 'v1');
+  assert.equal(w.merged(), 'pr merge 5 --squash\n', 'gh pr merge reached the gh on PATH'); assert.match(steps.at(-1).aggregated_output, /merged by the stand-in gh/);
+  assert.ok(steps[6].aggregated_output.trim().split(path.delimiter).every(dir => dir !== shimsBase() && !dir.startsWith(`${shimsBase()}${path.sep}`)), 'no stand-in folder on the PATH');
+  assert.equal(run.denials, undefined, 'nothing was refused');
+  const input = f.inputs().at(-1).input;
+  assert.doesNotMatch(input, /Never run these|Do not push|not allowed outside Full access/);
+  assert.match(input, /You may push, open and merge pull requests, tag, publish and deploy when the task calls for it\./);
+});
+
 // Claude Code refuses a never-list command the model types by a rule on its text. A script the
 // session runs is not that text: there the stand-in refuses, once the file named in
 // CLAUDE_ENV_FILE has put its folder back in front of the system's.
-for (const [mode, label] of [['ask', 'Ask for approval'], ['auto', 'Approve for me'], ['full', 'Full access']]) {
+for (const [mode, label] of [['ask', 'Ask for approval'], ['auto', 'Approve for me']]) {
   test(`a Claude Code session in ${label} refuses a push and a publish that a script makes, and still runs git status and a push to a folder here`, async t => {
     const f = setup(t, 'claude', { commands: ['sh -c "git -C . push"', 'sh -c "npm publish"', 'git status --short --branch', 'git push --quiet ../local.git HEAD:refs/heads/from-session'] });
     const local = path.join(f.parent, 'local.git'); git(f.root, ['remote', 'add', 'origin', 'ssh://git.invalid/sample.git']); git(f.parent, ['init', '--quiet', '--bare', local]);
     const task = await f.controller.ask('Publish it.', null, { permissions: mode }).finished;
     assert.equal(task.state, 'answered', JSON.stringify(task.error));
     const [run] = task.runs, printed = fs.readFileSync(run.logFile, 'utf8').trim().split('\n').map(line => JSON.parse(line)).filter(row => row.type === 'user').map(row => row.message.content[0].content);
-    assert.deepEqual(printed.slice(0, 2), ['git push', 'npm publish'].map(command => `Exit code 126\n${command} is never allowed, in any mode.\n`));
+    assert.deepEqual(printed.slice(0, 2), ['git push', 'npm publish'].map(command => `Exit code 126\n${command} is not allowed outside Full access.\n`));
     assert.match(printed[2], /^## /, 'git status reached the real git'); assert.equal(printed[3], '');
     assert.equal(git(local, ['for-each-ref', '--format=%(refname)']).trim(), 'refs/heads/from-session', 'pushing to a folder on this machine is not publishing');
     assert.deepEqual(run.denials.map(denial => [denial.tool, denial.input.command, denial.never]), [['Bash', 'sh -c "git -C . push"', 'git push'], ['Bash', 'sh -c "npm publish"', 'npm publish']], 'each refused step is kept for the chat');
   });
 }
+
+// The commands run as Claude Code runs them: from a shell whose PATH starts with the system
+// folders again, so gh is not run here (the one found first may be a real one).
+test('a Claude Code session in Full access runs push and tags, in a script too: no deny rule, no stand-in, no CLAUDE_ENV_FILE', async t => {
+  const f = setup(t, 'claude', { commands: [...FULL_COMMANDS, 'printf "%s" "${CLAUDE_ENV_FILE:-none}"', 'command -v git'] }), w = fullWorld(f);
+  const task = await f.controller.ask('Publish it.', null, { permissions: 'full' }).finished;
+  assert.equal(task.state, 'answered', JSON.stringify(task.error));
+  const [run] = task.runs, printed = fs.readFileSync(run.logFile, 'utf8').trim().split('\n').map(line => JSON.parse(line)).filter(row => row.type === 'user').map(row => row.message.content[0].content);
+  assert.ok(printed.every(out => !out.startsWith('Exit code')), printed.join('\n'));
+  assert.equal(printed[1].trim(), 'backup/from-session', 'git push -u set the upstream');
+  assert.deepEqual(w.refs(), ['refs/heads/any-option', 'refs/heads/from-script', 'refs/heads/from-session', 'refs/tags/v1']);
+  assert.equal(printed[FULL_COMMANDS.length], 'none', 'no file puts a stand-in folder back on PATH');
+  assert.ok(!printed[FULL_COMMANDS.length + 1].startsWith(shimsBase()), 'git is the real one');
+  assert.ok(printed[6].trim().split(path.delimiter).every(dir => dir !== shimsBase() && !dir.startsWith(`${shimsBase()}${path.sep}`)), 'no stand-in folder on the PATH');
+  assert.equal(run.denials, undefined, 'nothing was refused');
+  const call = f.calls().findLast(row => row.args.includes('--permission-prompt-tool')), deny = JSON.parse(call.args[call.args.indexOf('--settings') + 1]).permissions.deny;
+  assert.equal(deny.some(rule => rule.startsWith('Bash(')), false, 'no never-list deny rule');
+  assert.doesNotMatch(f.inputs().at(-1).input, /Never run these|Do not push|not allowed outside Full access/);
+});
 
 // Claude Code writes a note of its working folder after every command. Its own place for that
 // is under /tmp, where its sandbox as ELU sets it denies writes, so every command ended
@@ -172,9 +223,16 @@ function pushScript(f) {
   fs.writeFileSync(script, `#!/bin/sh\ncd ${JSON.stringify(f.root)} && git push origin HEAD > ${JSON.stringify(out)} 2>&1\nprintf %s $? >> ${JSON.stringify(out)}\n`, { mode: 0o700 });
   return { script, said: () => { const text = fs.readFileSync(out, 'utf8'); fs.rmSync(out); return text; } };
 }
-const REFUSED_PUSH = 'git push is never allowed, in any mode.\n126';
+const REFUSED_PUSH = 'git push is not allowed outside Full access.\n126';
+// A script that pushes to a bare repository beside the project, with an option the git
+// stand-in cannot read, then makes a tag and pushes it: Full access runs all of it.
+function fullScript(f) {
+  const w = fullWorld(f), script = path.join(f.parent, 'publish.sh'), out = path.join(f.parent, 'publish.out');
+  fs.writeFileSync(script, `#!/bin/sh\ncd ${JSON.stringify(f.root)} && git push --receive-pack=git-receive-pack backup HEAD:refs/heads/from-script > ${JSON.stringify(out)} 2>&1 && git tag v2 && git push --tags backup >> ${JSON.stringify(out)} 2>&1\nprintf %s $? >> ${JSON.stringify(out)}\n`, { mode: 0o700 });
+  return { ...w, script, code: () => fs.readFileSync(out, 'utf8').slice(-1) };
+}
 
-test('a Grok Build session refuses a push that a script makes: over ACP in Ask for approval, and headless in Full access', async t => {
+test('a Grok Build session refuses a push that a script makes over ACP in Ask for approval, and runs one headless in Full access', async t => {
   const f = setup(t, 'grok'), push = pushScript(f);
   fs.mkdirSync(path.join(f.parent, '.grok')); fs.writeFileSync(path.join(f.parent, '.grok', 'auth.json'), '{}\n', { mode: 0o600 });
   proven('grok', f.bin, '1.0.77', { relay: true });
@@ -183,12 +241,16 @@ test('a Grok Build session refuses a push that a script makes: over ACP in Ask f
   const task = await pending;
   assert.equal(task.state, 'answered', JSON.stringify(task.error)); assert.deepEqual(f.calls().at(-1).args.slice(-2), ['agent', 'stdio']);
   assert.equal(push.said(), REFUSED_PUSH, 'the owner allowed the script; the push inside it was still refused');
-  const full = await f.controller.ask(`Run the command ${push.script} then reply done with the summary "ran it".`, null, { permissions: 'full' }).finished;
-  assert.equal(full.state, 'answered', JSON.stringify(full.error)); assert.ok(f.calls().at(-1).args.includes('--prompt-file'));
-  assert.equal(push.said(), REFUSED_PUSH);
+  // Full access has no never list: the same kind of script pushes and tags.
+  const publish = fullScript(f);
+  const full = await f.controller.ask(`Run the command ${publish.script} then reply done with the summary "ran it".`, null, { permissions: 'full' }).finished;
+  assert.equal(full.state, 'answered', JSON.stringify(full.error)); const args = f.calls().at(-1).args; assert.ok(args.includes('--prompt-file'));
+  assert.equal(publish.code(), '0'); assert.deepEqual(publish.refs(), ['refs/heads/from-script', 'refs/tags/v2']);
+  assert.equal(args.some(arg => /^Bash\(/.test(arg)), false, 'no never-list rule on the command line');
+  assert.doesNotMatch(fs.readFileSync(path.join(personalDirectory(), 'grok-home', '.grok', 'config.toml'), 'utf8'), /Bash\(/, 'nor in the config');
 });
 
-test('an Antigravity session refuses a push that a script makes: over ACP in Ask for approval, and headless in Full access', async t => {
+test('an Antigravity session refuses a push that a script makes over ACP in Ask for approval, and runs one headless in Full access', async t => {
   const f = setup(t, 'agy'), push = pushScript(f);
   proven('agy', f.bin, '1.5.4', { relay: true });
   const pending = f.controller.ask(`Run this command: ${push.script}. Reply with the summary "live".`, null, { permissions: 'ask' }).finished;
@@ -196,9 +258,11 @@ test('an Antigravity session refuses a push that a script makes: over ACP in Ask
   const task = await pending;
   assert.equal(task.state, 'answered', JSON.stringify(task.error)); assert.deepEqual(f.calls().at(-1).args, ['acp']);
   assert.equal(push.said(), REFUSED_PUSH, 'the owner allowed the script; the push inside it was still refused');
-  const full = await f.controller.ask(`Run this command: ${push.script}. Reply with the summary "headless".`, null, { permissions: 'full' }).finished;
+  // Full access has no never list: the same kind of script pushes and tags.
+  const publish = fullScript(f);
+  const full = await f.controller.ask(`Run this command: ${publish.script}. Reply with the summary "headless".`, null, { permissions: 'full' }).finished;
   assert.equal(full.state, 'answered', JSON.stringify(full.error)); assert.ok(f.calls().at(-1).args.includes('-p'));
-  assert.equal(push.said(), REFUSED_PUSH);
+  assert.equal(publish.code(), '0'); assert.deepEqual(publish.refs(), ['refs/heads/from-script', 'refs/tags/v2']);
 });
 
 test('a Codex lead whose command was declined reports the denial and asks', async t => {

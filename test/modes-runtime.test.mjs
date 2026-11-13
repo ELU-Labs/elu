@@ -72,7 +72,7 @@ test('a new session gets the personal default; a follow-up inherits mode, place 
   assert.match(prompt, /When an action is declined or blocked, do not retry it another way\. Return outcome needs_input and name the action you need\./);
   assert.match(prompt, /You may also read these folders: /); assert.doesNotMatch(prompt, /install packages/);
   // The never list by name, once, with the read-only way to list tags.
-  assert.equal(prompt.split('Never run these, alone or inside a longer command line, in any mode: git push, git tag, git merge, gh pr merge, gh release, npm publish, pnpm publish, yarn publish, cargo publish, firebase deploy, vercel deploy, gcloud run deploy, gcloud app deploy, fly deploy, kubectl apply, terraform apply, claude mcp add, claude mcp add-json, claude mcp add-from-claude-desktop, claude mcp remove, elu mcp add, elu mcp remove. To list tags use git for-each-ref --sort=-creatordate refs/tags or git describe --tags, never git tag.').length, 2);
+  assert.equal(prompt.split('Never run these in this mode, alone or inside a longer command line: git push, git tag, git merge, gh pr merge, gh release, npm publish, pnpm publish, yarn publish, cargo publish, firebase deploy, vercel deploy, gcloud run deploy, gcloud app deploy, fly deploy, kubectl apply, terraform apply, claude mcp add, claude mcp add-json, claude mcp add-from-claude-desktop, claude mcp remove, elu mcp add, elu mcp remove. To list tags use git for-each-ref --sort=-creatordate refs/tags or git describe --tags, never git tag.').length, 2);
   assert.match(prompt, /This session runs with Approve for me: you have a shell, the internet, and the MCP tools you were given; an action outside the project or the sandbox is reviewed before it runs\./);
   assert.match(prompt, /The repository's own ELU config \(roles, network, commands\) does not limit this session\./);
   const policy = fs.readFileSync(path.join(taskDir(f.controller.repo, first.id), 'policy.yaml'), 'utf8');
@@ -86,8 +86,11 @@ test('a new session gets the personal default; a follow-up inherits mode, place 
   assert.equal(third.runs[2].permissions, 'full'); assert.equal(third.runs[2].effectivePermissions, 'full');
   run = f.leads()[2]; assert.equal(valueOf(run.args, '--permission-mode'), 'bypassPermissions'); assert.deepEqual(settingsOf(run.args).sandbox, { enabled: false });
   assert.equal(settingsOf(run.args).permissions.deny.some(rule => rule.includes(fs.realpathSync(f.work).slice(1))), false, 'Full access leaves the folder as it is');
-  assert.match(f.inputs()[2].input, /^Work only on the given task\. Do not push, merge, tag, publish, or deploy\./);
-  assert.match(f.inputs()[2].input, /This session runs with Full access: any file, any command, the internet, and the MCP tools you were given\./);
+  // Full access has no never list: no deny rule, no stand-in folder, no line that forbids it, and it is told what it may do.
+  assert.match(f.inputs()[2].input, /^Work only on the given task\.\n/);
+  assert.match(f.inputs()[2].input, /This session runs with Full access: any file, any command, the internet, and the MCP tools you were given\. You may push, open and merge pull requests, tag, publish and deploy when the task calls for it\./);
+  assert.doesNotMatch(f.inputs()[2].input, /Never run these|Do not push|never list|Never add or remove a server yourself/);
+  assert.equal(settingsOf(run.args).permissions.deny.some(rule => rule.startsWith('Bash(')), false, 'no never-list deny rule in Full access');
   assert.equal(fs.readFileSync(path.join(taskDir(f.controller.repo, first.id), 'policy.yaml'), 'utf8'), policy);
   assert.equal(pinnedConfig(f.controller.repo, null, { task: third }).configHash, first.configHash);
   // Nothing in the repository or its configuration records the mode.
@@ -625,7 +628,7 @@ test('a rule kept once answers the next session; defaults never ask; the never l
   asking([['git status', false], ['git push origin main']]);
   const third = await settle(f.controller.ask('Check and push', null, { permissions: 'ask' }));
   assert.deepEqual(third.asked.map(row => row.summary), ['Run: git push origin main outside the sandbox']);
-  assert.equal(ruleFor(third.asked[0].tool, third.asked[0].input).refused, 'That is on the never list, so it is never allowed.');
+  assert.equal(ruleFor(third.asked[0].tool, third.asked[0].input).refused, 'That is on the never list, so it runs only in Full access.');
   assert.deepEqual(third.task.approvals.map(row => [row.summary, row.decision, row.by ?? null]), [['Run: git status', 'allow', 'default'], ['Run: git push origin main outside the sandbox', 'deny', null]]);
   // A session a teammate started: the defaults answer, the owner's rule does not.
   asking([['git status', false], ['npm test']]);

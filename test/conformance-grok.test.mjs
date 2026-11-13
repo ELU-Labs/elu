@@ -71,7 +71,10 @@ test('compile refuses until this machine\'s check passed, then builds each profi
   assert.deepEqual(ask, [...common('120'), '--permission-mode', 'dontAsk', '--sandbox', 'workspace', ...allow(['Read', 'Grep', ...edits, `Read(${folder}/**)`]), ...deny([...guarded, ...never, ...secrets]), '-s', SESSION]);
   const auto = grok.compile({ ...base, role: lead(), mode: 'auto', folders: [folder], protectedPaths: ['package.json', '.git'] });
   assert.deepEqual(auto, ask.map(a => a === 'dontAsk' ? 'auto' : a));
-  assert.deepEqual(grok.compile({ ...base, role: lead(), mode: 'full', place: { kind: 'here' }, protectedPaths: ['package.json'] }), [...common('120'), '--permission-mode', 'bypassPermissions', '--sandbox', 'off', ...deny([...never, ...secrets]), '-s', SESSION]);
+  // Full access has no never list: only the secrets are denied.
+  const full = grok.compile({ ...base, role: lead(), mode: 'full', place: { kind: 'here' }, protectedPaths: ['package.json'] });
+  assert.deepEqual(full, [...common('120'), '--permission-mode', 'bypassPermissions', '--sandbox', 'off', ...deny(secrets), '-s', SESSION]);
+  assert.equal(full.some(arg => never.includes(arg)), false, 'no never-list rule in the Full access argv');
   assert.deepEqual(grok.compile({ ...base, role: lead(undefined, { model: 'grok-4.6' }), mode: 'ask', resume: SESSION }).filter((a, i, all) => ['--model', '-r'].includes(all[i - 1]) || ['--model', '-r', '-s'].includes(a)), ['--model', 'grok-4.6', '-r', SESSION]);
   for (const mode of ['ask', 'auto', 'full']) assert.ok(!grok.compile({ ...base, role: lead(), mode }).includes('read-only'), mode);
   for (const mode of ['locked', 'ask', 'auto']) assert.ok(!grok.compile({ ...base, role: lead(mode === 'locked' ? 'read' : 'edit'), mode }).some(a => /bypass|yolo|always-approve/.test(a)), mode);
@@ -103,7 +106,12 @@ test('childEnv carries every switch and no key variable; the private home holds 
   const merged = agentEnv({ ...w.env, XAI_API_KEY: 'sk-nope', GROK_API_KEY: 'nope', GROK_TELEMETRY_ENABLED: '1' }, grok.meta.envKeys, env);
   assert.equal(merged.XAI_API_KEY, undefined); assert.equal(merged.GROK_API_KEY, undefined); assert.equal(merged.GROK_TELEMETRY_ENABLED, '0'); assert.equal(merged.HOME, env.HOME); assert.equal(merged.PATH, w.env.PATH);
   // The private GROK_HOME: config and no-trust files written by ELU, a session store, and the token link.
-  const dir = env.GROK_HOME, config = fs.readFileSync(path.join(dir, 'config.toml'), 'utf8');
+  // The config is written for each run's profile: Full access has no never list there either.
+  const dir = env.GROK_HOME, configOf = mode => { grok.childEnv({ mode, home: w.home }); return fs.readFileSync(path.join(dir, 'config.toml'), 'utf8'); };
+  const fullConfig = configOf('full');
+  assert.equal(fullConfig, grok.configToml('full')); assert.doesNotMatch(fullConfig, /\[permission\]|deny|Bash\(/);
+  for (const mode of ['locked', 'ask', 'auto']) assert.equal(configOf(mode), grok.CONFIG_TOML, mode);
+  const config = configOf('locked');
   assert.equal(config, grok.CONFIG_TOML); assert.equal(fs.statSync(path.join(dir, 'config.toml')).mode & 0o777, 0o600);
   for (const line of ['[compat.claude]\nskills = false\nrules = false\nagents = false\nmcps = false\nhooks = false', '[compat.cursor]\nskills = false', 'telemetry = false', 'feedback = false', 'managed_config = false', 'campaigns = false', 'remote_fetch = false', 'backend_tools = false', 'trace_upload = false', 'mixpanel_enabled = false', '[harness]\ndisable_workspace_teleport = true\ndisable_codebase_upload = true', 'auto_update = false', '[relay]\nenabled = false', 'load_envrc = false', '[subagents]\nenabled = false', 'deny = ["Bash(git push:*)", "Bash(git tag:*)"']) assert.ok(config.includes(line), line);
   for (const mode of PROFILES) assert.equal(grok.childEnv({ mode, home: w.home }).GROK_BACKEND_SEARCH, '0', `server-side search is off in ${mode}`);
@@ -182,7 +190,7 @@ test('parse reads the json object, pulls the result out of fences, and names aut
   const open = grok.interactive({ session: SESSION, cwd: w.repo });
   assert.deepEqual([open.bin, open.args], ['grok', ['--no-auto-update', '--cwd', w.repo, '-r', SESSION]]); assert.equal(open.env.GROK_HOME, path.join(w.personal, 'grok-home', '.grok'));
   for (const mode of PROFILES) { const report = policyReport(lead(mode === 'locked' ? 'read' : 'edit'), { mode }); assert.equal(report.rules.length, 7, mode); assert.ok(report.rules.every(rule => typeof rule.enforcement === 'string' && rule.enforcement), mode); }
-  assert.match(policyReport(lead(), { mode: 'full' }).rules.find(rule => rule.rule.startsWith('never')).enforcement, /prompt text/);
+  assert.match(policyReport(lead(), { mode: 'full' }).rules.find(rule => rule.rule.startsWith('never')).enforcement, /^none: Full access runs/);
   assert.match(policyReport(lead('read'), { mode: 'locked' }).rules.find(rule => rule.rule === 'dollar limit').enforcement, /not requested/);
   assert.deepEqual(grok.foreignTraces({ sources: [{ path: path.join(w.personal, 'grok-home', '.grok', 'config.toml') }], externalCompat: { claude: { rules: { enabled: false } } } }), []);
   assert.deepEqual(grok.foreignTraces({ instructions: [{ path: '/Users/x/.claude/CLAUDE.md', vendor: 'claude' }], hooks: [{ origin: 'cursor' }], externalCompat: { claude: { rules: { enabled: true } } } }), ['/Users/x/.claude/CLAUDE.md', 'claude', 'cursor', 'externalCompat.claude.rules.enabled']);

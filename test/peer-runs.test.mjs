@@ -359,7 +359,7 @@ test('Auto starts a teammate\'s message at once as the owner\'s own session: nev
   assert.ok(first.input.includes(`\n\n${WAIT_RULE}`), 'the rules as the owner wrote them');
   assert.ok(first.input.indexOf(WAIT_RULE) < first.input.indexOf('<<peer-data-'), 'the rules come before the teammate\'s message');
   assert.match(first.input, /This session runs with Approve for me/); assert.doesNotMatch(first.input, /This session runs with Full access/);
-  assert.match(first.input, /Never run these, alone or inside a longer command line, in any mode: git push, git tag, git merge, gh pr merge/);
+  assert.match(first.input, /Never run these in this mode, alone or inside a longer command line: git push, git tag, git merge, gh pr merge/);
   const deny = JSON.parse(first.args[first.args.indexOf('--settings') + 1]).permissions.deny;
   for (const rule of ['Bash(git push:*)', 'Bash(git merge:*)', 'Bash(gh pr merge:*)', 'Bash(git tag:*)', 'Bash(npm publish:*)']) assert.ok(deny.includes(rule), rule);
   // The turn spends at most what intake reserved for the message.

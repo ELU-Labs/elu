@@ -149,12 +149,14 @@ test('until its one-time check passed here compile refuses and says what starts 
   assert.equal(agy.meta.installHint, 'Install agy from antigravity.google/docs');
 });
 
-test('the hook denies every matched tool in locked, the never list in every profile, asks or denies web search, and fails closed', () => {
+test('the hook denies every matched tool in locked, the never list in every profile but Full access, asks or denies web search, and fails closed', () => {
   for (const tool of TOOLS) assert.equal(decide('locked', { tool_name: tool, tool_input: {} }).decision, 'deny', tool);
   assert.equal(decide('locked', { tool_name: 'view_file', tool_input: {} }), null);
   const never = ['git push origin main', 'git -C . push', 'git -c a=b tag v1', 'git merge feature', 'gh pr merge 5', 'gh release create v1', 'npm publish', 'cargo publish', 'echo ok && git push', 'sudo terraform apply', 'kubectl apply -f x', 'gcloud run deploy api', 'fly deploy',
     'claude mcp add elu https://x', 'claude mcp add-json elu {}', 'claude --debug mcp remove elu', 'echo ok && elu mcp add x https://x'];
-  for (const profile of ['ask', 'auto', 'full']) for (const command of never) assert.equal(decide(profile, { tool_name: 'run_command', tool_input: { CommandLine: command } })?.decision, 'deny', `${profile}: ${command}`);
+  for (const profile of ['ask', 'auto']) for (const command of never) assert.equal(decide(profile, { tool_name: 'run_command', tool_input: { CommandLine: command } })?.decision, 'deny', `${profile}: ${command}`);
+  // Full access runs the never list: the hook has no opinion on it.
+  for (const command of never) assert.equal(decide('full', { tool_name: 'run_command', tool_input: { CommandLine: command } }), null, `full: ${command}`);
   for (const command of ['npm test', 'git status', 'git log --oneline', 'echo git push', 'terraform plan', 'claude mcp list', 'elu mcp']) { assert.equal(neverListed(command), false, command); assert.equal(decide('ask', { tool_name: 'run_command', tool_input: { CommandLine: command } }), null, command); }
   assert.equal(decide('full', { tool_name: 'run_command', tool_input: { command: 'ls' } }), null);
   // A command word ends where the word does: a longer word is another command.

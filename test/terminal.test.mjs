@@ -116,6 +116,7 @@ async function view(t, options = {}) {
 const cardDialog = v => v.current.screen.children.find(child => !child.destroyed && child.options?.label?.trim() === 'Your session');
 const cardRows = v => cardDialog(v)?.children.find(child => child.type === 'list')?.items.map(item => item.getText().trimEnd()) ?? [];
 const cardHint = v => cardDialog(v)?.children.filter(child => child.type === 'text').map(child => child.getText()).join('\n') ?? '';
+const cardButton = v => cardDialog(v)?.children.find(child => child.type === 'button');
 function modal(v, title) {
   return v.current.screen.children.find(child => !child.destroyed && child.options?.label?.trim() === title);
 }
@@ -1022,10 +1023,10 @@ test('@name in a session asks that bot, not the lead: @ offers the saved bots, t
   assert.equal(v.current.view, 'tasks'); await until(() => /^.✓ Is the token in… +now$/.test(cursor(v)), 'its row is selected'); assert.doesNotMatch(rows(v).join('\n'), /#\d/, 'no row shows a number');
   assert.deepEqual(roles(id), ['bot:sec'], 'the bot ran and the lead did not'); assert.equal(runs().length, 1);
   assert.ok(JSON.stringify(sent().at(-1)).includes('Review the change for leaked secrets.'), 'the bot ran with its instructions');
-  await until(() => /You → @sec {2}\d{1,2}:\d\d [AP]M\n┃ Is the token in config\.js a secret\?/.test(chat()) && /@sec {2}\d{1,2}:\d\d [AP]M\n┃ Yes\. You can add multiple agents/.test(chat()), 'both sides in the chat');
-  assert.doesNotMatch(chat(), /^Fable 5\.1 {2}\d/m, 'no reply from the session’s model'); assert.match(status(), /@sec answered/);
+  await until(() => /You → @sec {2}\d{1,2}:\d\d [AP]M\n┃ Is the token in config\.js a secret\?/.test(chat()) && /@sec \(fable 5\.1 high\) {2}\d{1,2}:\d\d [AP]M\n┃ Yes\. You can add multiple agents/.test(chat()), 'both sides in the chat, the bot with the model and effort that answered');
+  assert.doesNotMatch(chat(), /^Fable 5\.1(?: \(high\))? {2}\d/m, 'no reply from the session’s model'); assert.match(status(), /@sec answered/);
   // The bot's reply sits behind a bar of the bot's own color, violet here; your message keeps its blue one.
-  assert.match(panels.chat.content, /\{141-fg\}\{bold\}@sec\{\/bold\}/); assert.match(panels.chat.content, /\{75-fg\}\{bold\}You → @sec\{\/bold\}/);
+  assert.match(panels.chat.content, /\{141-fg\}\{bold\}@sec \(fable 5\.1 high\)\{\/bold\}/); assert.match(panels.chat.content, /\{75-fg\}\{bold\}You → @sec\{\/bold\}/);
   // The session keeps the bots its form had. The owner wrote to @sec, so the message box names @sec as who gets the next message.
   assert.deepEqual(task(id).bots, ['reviewer', 'sec']); await until(() => /^ Message @sec · @model writes to Opus $/.test(label()), 'the label names who gets the next message');
   // @model writes to the session's model, and the message box names it and the bots again. A message that starts with a word that is no bot goes there too.
@@ -1033,16 +1034,16 @@ test('@name in a session asks that bot, not the lead: @ offers the saved bots, t
   await until(() => /^ Message Opus · Ask for approval · with @reviewer @sec $/.test(label()), 'the label names the bots');
   await send(v, '@nobody what does this function do?'); await until(() => roles(id).length === 3 && task(id).state === 'answered', 'the lead answered again');
   assert.deepEqual(roles(id), ['bot:sec', 'lead', 'lead']); assert.equal(task(id).messages.at(-1).text, '@nobody what does this function do?', 'sent as typed');
-  await until(() => /^Fable 5\.1 {2}\d{1,2}:\d\d [AP]M\n┃ Yes/m.test(chat()) && /You {2}\d{1,2}:\d\d [AP]M\n┃ @nobody what does this function do\?/.test(chat()), 'the model’s side of the chat, under its name'); assert.doesNotMatch(chat(), /\(lead\)/);
+  await until(() => /^Fable 5\.1 \(high\) {2}\d{1,2}:\d\d [AP]M\n┃ Yes/m.test(chat()) && /You {2}\d{1,2}:\d\d [AP]M\n┃ @nobody what does this function do\?/.test(chat()), 'the model’s side of the chat, under its name'); assert.doesNotMatch(chat(), /\(lead\)/);
   // In the open session, @ offers the bots again; Enter fills one in, and it answers on its own model.
   await typing(); v.input.write('@d'); await until(() => !panels.palette.hidden && panels.palette.items.length === 1, '@ in an open session');
   v.input.write('\r'); await until(() => panels.ask.getValue() === '@docs ', 'Enter fills it in');
   v.input.write('Is the README still right?'); await until(() => panels.ask.getValue() === '@docs Is the README still right?', 'typed to @docs');
   v.input.write('\r'); await until(() => roles(id).length === 4 && task(id).state === 'answered', '@docs answered');
   assert.equal(roles(id).at(-1), 'bot:docs'); assert.equal(runs().at(-1).args[runs().at(-1).args.indexOf('--model') + 1], 'opus');
-  await until(() => /You → @docs {2}\d{1,2}:\d\d [AP]M\n┃ Is the README still right\?/.test(chat()) && /@docs {2}\d{1,2}:\d\d [AP]M\n┃ Yes/.test(chat()) && /^ Message @docs · @model writes to Opus $/.test(label()), 'its reply, and the label names who gets the next message now');
+  await until(() => /You → @docs {2}\d{1,2}:\d\d [AP]M\n┃ Is the README still right\?/.test(chat()) && /@docs \(fable 5\.1 high\) {2}\d{1,2}:\d\d [AP]M\n┃ Yes/.test(chat()) && /^ Message @docs · @model writes to Opus $/.test(label()), 'its reply, and the label names who gets the next message now');
   assert.deepEqual(task(id).bots, ['reviewer', 'sec', 'docs'], 'the bot that was written to joined the session');
-  assert.match(panels.chat.content, /\{221-fg\}\{bold\}@docs\{\/bold\}/, '@docs answers in its own color, gold');
+  assert.match(panels.chat.content, /\{221-fg\}\{bold\}@docs \(fable 5\.1 high\)\{\/bold\}/, '@docs answers in its own color, gold');
   // /bots remove and /bots add change who is in the chat. The command list offers the bots each can take.
   await send(v, '/bots remove docs'); await until(() => /@docs left this session\./.test(status()) && /with @reviewer @sec $/.test(label()), 'removed'); assert.deepEqual(task(id).bots, ['reviewer', 'sec']);
   await send(v, '/bots remove docs'); await until(() => /@docs is not in this session\./.test(status()), 'not in it');
@@ -1477,7 +1478,7 @@ test('a chat shows both sides, and a saved request comes back from Tasks', { tim
   await until(() => v.current.snapshot.tasks?.[0]?.state === 'answered', 'first response');
   await send(v, 'Can one review security?');
   await until(() => v.current.snapshot.tasks[0]?.runs.length === 2 && v.current.snapshot.tasks[0]?.state === 'answered', 'follow-up response');
-  const chat = v.current.panels.chat.getText(); assert.match(chat, /You {2}\d{1,2}:\d\d [AP]M\n┃ Can I add multiple agents/); assert.match(chat, /Fable 5\.1 {2}\d{1,2}:\d\d [AP]M\n┃ Yes/); assert.doesNotMatch(chat, /\(lead\)/); assert.match(chat, /Can one review security/);
+  const chat = v.current.panels.chat.getText(); assert.match(chat, /You {2}\d{1,2}:\d\d [AP]M\n┃ Can I add multiple agents/); assert.match(chat, /Fable 5\.1 \(high\) {2}\d{1,2}:\d\d [AP]M\n┃ Yes/); assert.doesNotMatch(chat, /\(lead\)/); assert.match(chat, /Can one review security/);
   v.current.controller.queue('testing if this works and if I can add multi agent', undefined, { state: 'blocked', reason: 'Project checks are still needed.' });
   await openTask(v, /✗ testing if this/);
   await until(() => v.current.panels.ask.getValue().includes('testing if this works'), 'request restored');
@@ -2343,8 +2344,8 @@ test('Kanban adds tasks, starts one with the lead, opens its session, and moves 
   const done = panels.kanbanLists[3]; done.focus(); done.select(0);
   v.input.write('<'); await until(() => items(2).some(text => /Uppercase coupon codes/.test(text)), 'reopened');
   needs.focus(); needs.select(0); v.input.write('\r');
-  await until(() => cardRows(v).length, 'Enter shows the card'); v.input.write('\r');
-  await until(() => v.current.view === 'chat' && v.current.session === '3' && /Uppercase coupon codes/.test(panels.header.getText()), 'Enter there opens its session');
+  await until(() => cardButton(v), 'Enter shows the card, with Go to session'); v.input.write('\r');
+  await until(() => v.current.view === 'chat' && v.current.session === '3' && /Uppercase coupon codes/.test(panels.header.getText()), 'Enter there presses Go to session: its session');
   assert.equal(panels.back.getText().trim(), '‹ Kanban'); assert.equal(panels.tabs[2].style.underline, true, 'Kanban stays the current tab');
   // From Kanban a session takes the whole width: no list beside it, and ‹ Kanban leads back.
   assert.equal(panels.back.hidden, false); assert.equal(panels.boardBox.hidden, true); assert.deepEqual([panels.chat.aleft, panels.chat.width, panels.ask.aleft, panels.ask.width], [0, v.current.screen.width, 0, v.current.screen.width]);
@@ -2532,8 +2533,8 @@ test('the New session form picks Permissions, Where and Folders, and the session
   v.input.write('3'); await until(() => modal(v, 'Full access'), 'confirm');
   const confirm = dialogText(v, 'Full access');
   assert.match(confirm.replace(/\s+/g, ' '), /Full access: the model changes any file, runs any command and uses the internet without asking\./);
-  // Nothing but their names stops them in Full access, and the question says so.
-  assert.match(confirm.replace(/\s+/g, ' '), /Push, tag, merge, deploy and publish are refused by name only: a command that names them another way can get through\./); assert.doesNotMatch(confirm, /stay blocked/); assert.match(confirm, /Use it\? y\/N/);
+  // Full access runs them too, and the question says so plainly.
+  assert.match(confirm.replace(/\s+/g, ' '), /That includes push, tags, merges, publishing and deploys\./); assert.doesNotMatch(confirm, /stay blocked|refused by name/); assert.match(confirm, /Use it\? y\/N/);
   await dialog(v, 'Full access', 'n'); await until(() => !modal(v, 'Full access'), 'declined');
   assert.match(text(), /Permissions {2}Ask for approval/);
   pickRow(list, /Permissions/); v.input.write('\r'); await until(() => modal(v, 'Permissions'), 'picker again'); v.input.write('3'); await dialog(v, 'Full access', 'y');
@@ -2874,7 +2875,7 @@ test('a beside y and n keeps the rule for this project and allows what it covers
   click(v, panels.chat, 4, 1); await until(() => v.current.screen.focused === panels.chat, 'the chat is focused');
   v.input.write('a'); await until(() => modal(v, 'Always allow'), 'where');
   assert.deepEqual(dialogRows(v, 'Always allow').map(row => row.trim().replace(/\s+/g, ' ')), [`This project ${p.root.replace(os.homedir(), '~')}`, 'All my projects']);
-  assert.match(modal(v, 'Always allow').children.map(child => child.getText?.() ?? '').join('\n').replace(/\s+/g, ' '), /Run npm test, with any arguments, also outside the sandbox, without asking\. Push, tag, merge, deploy and publish stay blocked\./);
+  assert.match(modal(v, 'Always allow').children.map(child => child.getText?.() ?? '').join('\n').replace(/\s+/g, ' '), /Run npm test, with any arguments, also outside the sandbox, without asking\. Push, tag, merge, deploy and publish stay blocked outside Full access\./);
   v.input.write('\x1b'); await until(() => !modal(v, 'Always allow'), 'cancelled');
   assert.equal(answer('run-3-a'), null); assert.deepEqual(readStore().rules, []);
   // Enter on This project: kept, allowed now, and what else waits that it covers is allowed too.
@@ -2888,7 +2889,7 @@ test('a beside y and n keeps the rule for this project and allows what it covers
   wants('run-3-d', '3', 'git push origin main');
   await until(() => /Run: git push origin main outside the sandbox\nEsc, then y allow · n deny · f full access(?! · a)/.test(chat()) && !/a always/.test(chat()), 'no a for the never list');
   click(v, panels.chat, 4, 1); await until(() => v.current.screen.focused === panels.chat, 'the chat is focused again');
-  v.input.write('a'); await until(() => /That is on the never list, so it is never allowed\. y allows it once, n denies it\./.test(status()), 'why');
+  v.input.write('a'); await until(() => /That is on the never list, so it runs only in Full access\. y allows it once, n denies it\./.test(status()), 'why');
   assert.equal(modal(v, 'Always allow'), undefined); assert.equal(answer('run-3-d'), null);
   // On the session's row in the list a says the same, and opens no answer box.
   await send(v, '/permissions rules remove 99'); await until(() => /No rule has that number/.test(status()), 'another message first');
@@ -2982,7 +2983,7 @@ test('a schedule offers Full access, says what it means and asks once', { timeou
   const picker = dialogText(v, 'Permissions');
   assert.match(picker, /Full access/); assert.match(picker, /Each run of a schedule has nobody watching\./);
   v.input.write('3'); await until(() => modal(v, 'Full access'), 'the schedule line');
-  assert.match(said(), /Each run has Full access with nobody watching: it reads anything, runs any command and uses the internet without asking\. The never list is refused by name only: a command that names it another way can get through\./);
+  assert.match(said(), /Each run has Full access with nobody watching: it reads anything, runs any command and uses the internet without asking, push, tags, merges, publishing and deploys included\./);
   assert.match(said(), /Use it for this schedule\? y\/N/);
   await dialog(v, 'Full access', 'y'); await until(() => /Full access for this schedule\./.test(status()) && /Permissions {2}Full access/.test(text()), 'full');
   // Full access or not, a schedule never runs in your checkout: Here is refused when it is picked, not when it is saved.
@@ -3028,36 +3029,39 @@ test('a command refused for a never-list part names that part and never points a
     saveTask(p.repo, { ...readTask(p.repo, id), permissions, approvals, runs: [{ role: 'lead', vendor, session: 'session-1', at: new Date().toISOString(), logFile: log, permissions, denials }] });
   };
   const run = command => ({ tool: 'Bash', input: { command } });
-  // The owner's session: Full access, and two lines that each end with git tag.
-  blocked('6', 'Summarise the week', 'full', [
+  // The owner's session: Approve for me, and two lines that each end with git tag.
+  blocked('6', 'Summarise the week', 'auto', [
     run('cd /srv/app && git log --since="1 week ago" --oneline | wc -l; git merge-base HEAD origin/main; git tag --sort=-creatordate | head -3'),
     run('cd /srv/app; git log --since="1 week ago" --format=%an | sort | uniq -c; git tag --sort=-creatordate | head -3'),
   ]);
   await openTask(v, /Summarise the week/); await until(() => v.current.session === '6', 'his session is open');
-  await until(() => /Blocked: git tag is never allowed, in any mode \(part of: cd \/srv\/app && git log --since="1 week ago" --oneline \| wc -l; git merge-base HEAD/.test(chat()), 'the line names git tag');
-  assert.match(chat(), /Blocked: git tag is never allowed, in any mode \(part of: cd \/srv\/app; git log --since="1 week ago" --format=%an/);
+  await until(() => /Blocked: git tag is not allowed outside Full access \(part of: cd \/srv\/app && git log --since="1 week ago" --oneline \| wc -l; git merge-base HEAD/.test(chat()), 'the line names git tag');
+  assert.match(chat(), /Blocked: git tag is not allowed outside Full access \(part of: cd \/srv\/app; git log --since="1 week ago" --format=%an/);
   assert.doesNotMatch(chat(), /Blocked: Run cd/); assert.doesNotMatch(chat(), /\/permissions to allow more/);
   assert.equal(panels.chat._clines.length, panels.chat.getContent().split('\n').length, 'each line fits the pane beside the list');
-  // Full access and not the never list: a secret, the app's own file, the owner's own answer, and a rule it cannot name.
-  blocked('7', 'Read the keys', 'full', [{ tool: 'Read', input: { file_path: path.join(os.homedir(), '.ssh', 'id_ed25519') } }, run('rm -rf /srv/app/old'), run('cat notes.txt')],
+  // Full access, which has no never list: a secret, the app's own file, the owner's own answer, and a rule it cannot name,
+  // even on a line that holds git push.
+  blocked('7', 'Read the keys', 'full', [{ tool: 'Read', input: { file_path: path.join(os.homedir(), '.ssh', 'id_ed25519') } }, run('rm -rf /srv/app/old'), run('cat notes.txt && git push origin main')],
     [{ id: 'run-7-a', tool: 'Bash', summary: 'Run: rm -rf /srv/app/old', decision: 'deny', at: new Date().toISOString(), role: 'lead', session: 'session-1' }]);
   await openTask(v, /Read the keys/); await until(() => v.current.session === '7', 'the second session is open');
   await until(() => /Blocked: Read ~\/\.ssh\/id_ed25519\. Files that may hold secrets stay closed: open it yourself\./.test(chat()), 'a secret says so');
-  assert.match(chat(), /Stopped: Run rm -rf \/srv\/app\/old\. You said no; reply with what to do instead\./); assert.match(chat(), /Blocked: Run cat notes\.txt\. A rule no mode lifts refused it\./);
+  assert.match(chat(), /Stopped: Run rm -rf \/srv\/app\/old\. You said no; reply with what to do instead\./); assert.match(chat(), /Blocked: Run cat notes\.txt && git push origin main\. A rule no mode lifts refused it\./);
+  assert.doesNotMatch(chat(), /not allowed outside Full access/);
   assert.doesNotMatch(chat(), /\/permissions to allow more/);
   // Ask for approval: the never list is named, and the hint stays for what a wider mode would allow.
   blocked('8', 'Ship it', 'ask', [run('git push origin main'), run('npm install'), { tool: 'Edit', input: { file_path: path.join(personalDirectory(), 'config.json') } }]);
   await openTask(v, /Ship it/); await until(() => v.current.session === '8', 'the third session is open');
-  await until(() => /Blocked: git push is never allowed, in any mode \(git push origin main\)\. Run it yourself\./.test(chat()), 'the never list by name');
+  await until(() => /Blocked: git push is not allowed outside Full access \(git push origin main\)\. Run it yourself\./.test(chat()), 'the never list by name');
   // What a wider mode lifts names the command that gives it.
   assert.match(chat(), /Blocked: Run npm install\. Needs Full access: \/permissions full continues it\./); assert.match(chat(), /Blocked: Edit .+?config\.json\. ELU's own files stay closed in every mode\./);
   assert.doesNotMatch(chat(), /\/permissions to allow more/);
   // A stand-in command refused a push, once inside a script, and the turn went on to answer: the chat still says so, each refusal once.
+  // (A turn of an earlier version, which had stand-ins in Full access too.)
   const step = (command, never) => ({ tool: 'command_execution', summary: `Run: /bin/zsh -c '${command}'`, never });
   blocked('9', 'Sync the branch', 'full', [step('sh ./sync.sh', 'git push'), step('sh ./sync.sh', 'git push'), step('git push origin HEAD', 'git push')], [], { vendor: 'codex', state: 'answered' });
   await openTask(v, /Sync the branch/); await until(() => v.current.session === '9', 'the fourth session is open');
-  await until(() => /Blocked: git push is never allowed, in any mode \(part of: sh \.\/sync\.sh\)\./.test(chat()), 'a push refused inside a script is named');
-  assert.match(chat(), /Blocked: git push is never allowed, in any mode \(git push origin HEAD\)\./);
+  await until(() => /Blocked: git push is not allowed outside Full access \(part of: sh \.\/sync\.sh\)\./.test(chat()), 'a push refused inside a script is named');
+  assert.match(chat(), /Blocked: git push is not allowed outside Full access \(git push origin HEAD\)\./);
   assert.equal(chat().match(/part of: sh \.\/sync\.sh/g).length, 1); assert.doesNotMatch(chat(), /\/permissions to allow more/);
 });
 
@@ -3151,7 +3155,7 @@ test('each Blocked line says why and the one thing to do, and raising the mode t
   // A never-list command in the turn waits for him too.
   blocked('14', 'Ship the fix', 'ask', [{ tool: 'Bash', input: { command: 'git push origin main' } }, { tool: 'Bash', input: { command: 'npm install' } }]);
   await openTask(v, /Ship the fix/); await until(() => v.current.session === '14', 'the push session is open');
-  await until(() => /git push is never allowed/.test(chat()), 'the never list');
+  await until(() => /git push is not allowed outside Full access/.test(chat()), 'the never list');
   await send(v, '/permissions full'); await dialog(v, 'Full access', 'y');
   await until(() => /Full access from your next message\./.test(status()), 'no retry of the push');
   assert.deepEqual(continued('14'), []);
@@ -3524,7 +3528,7 @@ test('+ New session shows the new session form, and a message sent from it opens
   // It is open on the right, its row is the selected one, and the focus is in its message box.
   await until(() => v.current.session === id && /✓ Can I add/.test(cursor(v)), 'the new session is open, with its row selected');
   assert.equal(focused(), panels.ask); assert.equal(panels.compose.hidden, true); assert.equal(panels.chat.hidden, false); assert.equal(panels.ask.getValue(), '');
-  assert.match(panels.header.getText(), /^sample app {2}· {2}Can I add multiple agents\? {2}· {2}answered/); assert.match(panels.chat.getText(), /You {2}\d{1,2}:\d\d [AP]M\n┃ Can I add multiple agents\?[^]*\nFable 5\.1 {2}\d{1,2}:\d\d [AP]M\n┃ Yes/);
+  assert.match(panels.header.getText(), /^sample app {2}· {2}Can I add multiple agents\? {2}· {2}answered/); assert.match(panels.chat.getText(), /You {2}\d{1,2}:\d\d [AP]M\n┃ Can I add multiple agents\?[^]*\nFable 5\.1 \(high\) {2}\d{1,2}:\d\d [AP]M\n┃ Yes/);
   assert.deepEqual(rows(v).filter(row => /^.[?✓] /.test(row)).map(row => /^.[?✓] (\w+ \w+)/.exec(row)[1]).sort(), ['Can I', 'Trim coupon', 'Which format'], 'the list has all three sessions'); assert.match(rows(v)[0], /^ \+ New session$/);
   // A follow-up from the same box stays in that session.
   await send(v, 'Can one review security?');
@@ -3541,14 +3545,21 @@ test('a session opened from Kanban takes the whole width, and ‹ Kanban or Esc 
   const p = twoSessions(t), v = await view(t, { repo: p.repo }), panels = v.current.panels, focused = () => v.current.screen.focused;
   await sized(v, 100, 30);
   await send(v, '/kanban'); await until(() => v.current.view === 'kanban' && panels.kanbanLists[2].items.some(item => /Trim coupon codes/.test(item.getText())), 'Kanban, with the ready session under Needs you');
-  // Enter shows the card: no Task yet, so its first message; Enter there opens its session.
-  const needs = panels.kanbanLists[2]; pickRow(needs, /Trim coupon codes/); v.input.write('\r');
-  await until(() => cardRows(v).includes('No Task yet'), 'Enter shows the card');
+  // A click on the card shows it, not its session: no Task yet, so its first message, and the Go to session button.
+  const needs = panels.kanbanLists[2]; pickRow(needs, /Trim coupon codes/);
+  click(v, needs.items[needs.selected]);
+  await until(() => cardRows(v).includes('No Task yet'), 'a click shows the card');
+  assert.equal(v.current.view, 'kanban'); assert.equal(v.current.session, null);
   assert.deepEqual(cardRows(v).slice(0, 3), ['Trim coupon codes before they are compared at checkout', 'Needs you', 'you · this computer']);
   assert.ok(cardRows(v).includes('Trim coupon codes before they are compared at checkout'));
-  assert.match(cardHint(v), /enter open the session · ↑↓ scroll · esc close/);
-  v.input.write('\r');
-  await until(() => v.current.view === 'chat' && v.current.session === '4' && /^sample app {2}· {2}Trim coupon codes before they are compared at checkout {2}· {2}ready$/.test(panels.header.getText()), 'Enter opens its session');
+  assert.equal(cardButton(v)?.getText().trim(), 'Go to session'); assert.equal(focused(), cardButton(v), 'the button has the focus');
+  assert.match(cardHint(v), /enter go to session · ↑↓ scroll · esc close/); assert.doesNotMatch(cardHint(v), /open the session/);
+  // Esc closes it; Enter on the card shows it again, and a click on the button opens its session.
+  v.input.write('\x1b'); await until(() => !cardDialog(v), 'Esc closes it'); assert.equal(v.current.view, 'kanban');
+  pickRow(needs, /Trim coupon codes/); v.input.write('\r'); await until(() => cardButton(v), 'Enter shows the card');
+  click(v, cardButton(v));
+  await until(() => v.current.view === 'chat' && v.current.session === '4' && /^sample app {2}· {2}Trim coupon codes before they are compared at checkout {2}· {2}ready$/.test(panels.header.getText()), 'the button opens its session');
+  assert.equal(cardDialog(v), undefined);
   // No list is behind this session. Its title line reads the session at every redraw: what it shows about schedules comes from this project.
   const titles = new Set(); for (const end = Date.now() + 2600; Date.now() < end;) { titles.add(panels.header.getText()); await new Promise(resolve => setTimeout(resolve, 10)); }
   assert.deepEqual([...titles].filter(text => !/Trim coupon codes before they are compared at checkout/.test(text)), [], 'the title line never shows anything else');
@@ -3567,6 +3578,35 @@ test('a session opened from Kanban takes the whole width, and ‹ Kanban or Esc 
   await openTask(v, /Trim coupon/); await until(() => v.current.session === '4', 'that session is open'); assert.equal(v.current.view, 'tasks'); assert.equal(panels.back.hidden, true); assert.equal(panels.boardBox.hidden, false); assert.deepEqual([panels.chat.aleft, panels.chat.width], [30, 70]);
 });
 
+test('one click on any Kanban card opens it, also in a column without the focus; the wheel and the keys only move the cursor', { timeout: 30000 }, async t => {
+  const p = twoSessions(t), v = await view(t, { repo: p.repo }), panels = v.current.panels, focused = () => v.current.screen.focused;
+  const cards = () => v.current.screen.children.filter(child => !child.destroyed && child.options?.label?.trim() === 'Your session').length;
+  await sized(v, 100, 30);
+  const needs = panels.kanbanLists[2], at = pattern => needs.items.findIndex(item => pattern.test(item.getText()));
+  await send(v, '/kanban'); await until(() => v.current.view === 'kanban' && at(/Trim coupon codes/) >= 0 && at(/Which format/) >= 0, 'both sessions under Needs you');
+  // The cursor of Needs you is on the other card, and the focus is in To do.
+  needs.select(at(/Trim coupon codes/)); panels.kanbanLists[0].focus(); await until(() => focused() === panels.kanbanLists[0], 'To do has the focus');
+  const which = at(/Which format/); assert.notEqual(needs.selected, which);
+  click(v, needs.items[which]);
+  await until(() => cardRows(v)[0] === 'Which format should the export use', 'one click opens the card it lands on');
+  await pause(); assert.equal(cards(), 1, 'one card'); assert.equal(v.current.view, 'kanban'); assert.equal(v.current.session, null); assert.equal(needs.selected, which);
+  v.input.write('\x1b'); await until(() => !cardDialog(v), 'Esc closes it');
+  // A click on the card the cursor is already on opens it once, and never its session.
+  assert.equal(needs.selected, at(/Which format/)); click(v, needs.items[needs.selected]); await until(() => cardRows(v)[0] === 'Which format should the export use', 'a click on the selected card opens it');
+  await pause(); assert.equal(cards(), 1, 'one card'); assert.equal(v.current.view, 'kanban'); assert.equal(v.current.session, null);
+  v.input.write('\x1b'); await until(() => !cardDialog(v), 'Esc closes it again');
+  // A click on a column's title or on the empty rows under the cards opens nothing.
+  click(v, panels.kanbanBoxes[2], 2, 0); click(v, needs, 1, needs.height - 1); await pause();
+  assert.equal(cards(), 0); assert.equal(v.current.view, 'kanban');
+  // The wheel and the arrows move the cursor and open nothing.
+  needs.focus(); needs.select(0);
+  wheel(v, needs, 1, 0); await until(() => needs.selected === 1, 'the wheel moves the cursor down a card');
+  v.input.write('\x1b[A'); await until(() => needs.selected === 0, 'Up moves it back'); v.input.write('\x1b[B'); await until(() => needs.selected === 1, 'Down moves it again');
+  await pause(); assert.equal(cards(), 0, 'the wheel and the keys open nothing'); assert.equal(focused(), needs);
+  // Enter still opens the card under the cursor.
+  v.input.write('\r'); await until(() => cardDialog(v), 'Enter opens it'); await pause(); assert.equal(cards(), 1);
+});
+
 test('Task cards in narrow Kanban columns read their whole titles', { timeout: 30000 }, async t => {
   const p = setup(t, 'answer'); registerProject(p.repo);
   liveTask(p.root, { id: '4', goal: 'Round refund amounts', state: 'ready' }); liveTask(p.root, { id: '5', goal: 'Uppercase coupon codes', state: 'answered' });
@@ -3583,7 +3623,7 @@ test('Task cards in narrow Kanban columns read their whole titles', { timeout: 3
   await sized(v, 160, 30); await until(() => cards().join('|') === 'Round refunds to cents|Uppercase coupons  to approve · high', 'the detail beside the title where it fits');
 });
 
-test('Enter on my own Kanban card shows its whole Task with its success criteria, subtasks and ETA; Enter there opens the session', { timeout: 30000 }, async t => {
+test('Enter on my own Kanban card shows its whole Task with its success criteria, subtasks and ETA; its Go to session button opens the session', { timeout: 30000 }, async t => {
   const p = setup(t, 'answer'); registerProject(p.repo);
   liveTask(p.root, { id: '4', goal: 'Round refund amounts', state: 'ready' });
   proposeTask(p.repo, '4', { title: 'Round refunds to cents', description: 'One file changes.', goal: 'The amounts are right.', objectives: ['It works', 'Its test passes'], priority: 'high', severity: 'low', criteria: ['A refund of 10.005 reads 10.01', 'No other file changes'], estimateMinutes: 45 });
@@ -3594,7 +3634,8 @@ test('Enter on my own Kanban card shows its whole Task with its success criteria
   pickRow(panels.kanbanLists[2], /Round refunds/); v.input.write('\r');
   await until(() => cardRows(v).length, 'Enter shows the card');
   const eta = Date.parse(approved.approvedAt) + 45 * 60000, rows = cardRows(v);
-  assert.deepEqual(rows.slice(0, rows.indexOf('') + 1), ['Round refunds to cents', 'in progress · priority high · severity low', 'you · this computer', '']);
+  // Its checks are done and it waits for /publish under Needs you: the column leads the Task's state.
+  assert.deepEqual(rows.slice(0, rows.indexOf('') + 1), ['Round refunds to cents', 'Needs you · in progress · priority high · severity low', 'you · this computer', '']);
   assert.deepEqual(rows.slice(rows.indexOf('Goal')), [
     'Goal', 'The amounts are right.', '', 'Description', 'One file changes.',
     '', 'Objectives · 1 of 2 met', '  ✓ It works', '  · Its test passes',
@@ -3604,9 +3645,18 @@ test('Enter on my own Kanban card shows its whole Task with its success criteria
   assert.match(rows.find(line => line.startsWith('ETA ')), new RegExp(`^ETA ${clockTime(eta).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} · in (44|45) min$`));
   assert.match(rows.at(-1), /^last activity /);
   assert.doesNotMatch(rows.join('\n'), /their machine|only they can change it/);
-  assert.match(cardHint(v), /enter open the session/);
+  // Under the text, the Go to session button, with the focus.
+  assert.equal(cardButton(v)?.getText().trim(), 'Go to session'); assert.equal(v.current.screen.focused, cardButton(v));
+  assert.ok(cardButton(v).atop > cardDialog(v).children.find(child => child.type === 'list').atop, 'under the text');
+  assert.match(cardHint(v), /^enter go to session · ↑↓ scroll · esc close$/m);
+  // The text only reads: clicks on its lines and ↓ leave the card open and the focus on the button.
+  const list = cardDialog(v).children.find(child => child.type === 'list'), goal = list.items[rows.indexOf('Goal')];
+  click(v, goal); click(v, goal); click(v, list.items[0]); click(v, list.items[0]); v.input.write('\x1b[B');
+  await new Promise(resolve => setTimeout(resolve, 300));
+  assert.equal(v.current.view, 'kanban'); assert.ok(cardDialog(v), 'still open'); assert.equal(v.current.screen.focused, cardButton(v));
+  // Enter presses the button.
   v.input.write('\r');
-  await until(() => v.current.view === 'chat' && v.current.session === '4', 'Enter opens its session');
+  await until(() => v.current.view === 'chat' && v.current.session === '4', 'Enter on the button opens its session');
   // The session's own Task block has the ETA and the success criteria too.
   await until(() => /ETA .* · in (44|45) min/.test(panels.chat.getText()) && /Success criteria/.test(panels.chat.getText()) && /A refund of 10\.005 reads 10\.01/.test(panels.chat.getText()), 'the Task block in the chat');
 });

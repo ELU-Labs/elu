@@ -2,14 +2,16 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
-import { NEVER_COMMANDS, liftedBy, neverCommands, neverLine, neverPart, shellParts, whyBlocked } from '../lib/never-list.mjs';
+import { NEVER_COMMANDS, liftedBy, neverCommands, neverLine, neverPart, neverSentence, shellParts, whyBlocked } from '../lib/never-list.mjs';
 import { NEVER_RULES } from '../lib/adapters/claude.mjs';
 import { personalDirectory } from '../lib/util.mjs';
 
 test('the never list in words is the list the rules refuse, and the line for the model names each command once', () => {
   assert.deepEqual(NEVER_COMMANDS.map(command => `Bash(${command}:*)`), [...NEVER_RULES]);
   const line = neverLine();
-  assert.ok(line.startsWith(`Never run these, alone or inside a longer command line, in any mode: ${NEVER_COMMANDS.join(', ')}. To list tags`));
+  assert.ok(line.startsWith(`Never run these in this mode, alone or inside a longer command line: ${NEVER_COMMANDS.join(', ')}. To list tags`));
+  // Full access runs the list, so neither the line nor a refusal says no mode does.
+  assert.doesNotMatch(line, /in any mode/); assert.equal(neverSentence('git push'), 'git push is not allowed outside Full access');
   assert.match(line, /To list tags use git for-each-ref --sort=-creatordate refs\/tags or git describe --tags, never git tag\.$/);
   assert.ok(line.length <= 520, `${line.length} characters`);
   // A bot the owner lets merge pull requests is not told gh pr merge is off its list.
@@ -44,12 +46,15 @@ test('why an action was refused, in every mode: the never list, a closed file, t
   t.after(() => { process.env.HOME = home; if (config === undefined) delete process.env.XDG_CONFIG_HOME; else process.env.XDG_CONFIG_HOME = config; });
   assert.equal(os.homedir(), '/home/owner');
   const run = command => ({ tool: 'Bash', input: { command } }), claude = mode => ({ mode, vendor: 'claude' });
-  assert.deepEqual(whyBlocked(run('cd x; git tag | head -3'), claude('full')), { kind: 'never', command: 'git tag', line: 'cd x; git tag | head -3', alone: false });
+  assert.deepEqual(whyBlocked(run('cd x; git tag | head -3'), claude('auto')), { kind: 'never', command: 'git tag', line: 'cd x; git tag | head -3', alone: false });
+  // Full access refuses none of the list by its text: a line refused there was refused for another reason.
+  assert.deepEqual(whyBlocked(run('cd x; git tag | head -3'), claude('full')), { kind: 'rule' });
   assert.deepEqual(whyBlocked(run('git push origin main'), claude('ask')), { kind: 'never', command: 'git push', line: 'git push origin main', alone: true });
   // Where the vendor has no rule for the list, a stand-in command refuses it in every mode: no mode lets it through.
   assert.deepEqual(whyBlocked({ tool: 'command_execution', summary: 'Run: git push origin main' }, { mode: 'ask', vendor: 'codex' }), { kind: 'never', command: 'git push', line: 'git push origin main', alone: true });
   assert.deepEqual(whyBlocked({ tool: 'run_command', summary: 'Run: cd x && git push' }, { mode: 'auto', vendor: 'grok' }), { kind: 'never', command: 'git push', line: 'cd x && git push', alone: false });
   // A step a stand-in command refused: the adapter names the command, and the line is shown without the vendor's shell around it.
+  // A turn of an earlier version had stand-ins in Full access too, and its record still reads so.
   assert.deepEqual(whyBlocked({ tool: 'command_execution', summary: "Run: /bin/zsh -c 'git push origin HEAD'", never: 'git push' }, { mode: 'full', vendor: 'codex' }), { kind: 'never', command: 'git push', line: 'git push origin HEAD', alone: true });
   assert.deepEqual(whyBlocked({ tool: 'command_execution', summary: "Run: /bin/zsh -lc 'sh ./sync.sh'", never: 'npm publish' }, { mode: 'ask', vendor: 'codex' }), { kind: 'never', command: 'npm publish', line: 'sh ./sync.sh', alone: false });
   assert.notEqual(whyBlocked({ tool: 'command_execution', summary: 'Run: ls', never: 'ls' }, { mode: 'ask', vendor: 'codex' }).kind, 'never', 'only a command of the list is taken at its word');

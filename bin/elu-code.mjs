@@ -85,7 +85,7 @@ export async function main(argv = process.argv.slice(2)) {
       owner.start(); return new Promise(() => {});
     }
     if (words[1] === 'stop') {
-      if (!conductor.conductorAlive()) return { message: 'The conductor is not running.' };
+      if (!conductor.conductorRunning()) return { message: 'The conductor is not running.' };
       conductor.sendCommand({ type: 'shutdown' }); return { message: 'The conductor stops its runs, keeps their history, and exits. It starts again when work is queued.' };
     }
     if (words[1]) refuse(`Unknown command: conductor ${words[1]}. Use elu conductor [stop].`);

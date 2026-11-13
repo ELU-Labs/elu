@@ -9,6 +9,9 @@ let cfg={}; try{cfg=JSON.parse(fs.readFileSync(path.join(path.dirname(process.ar
 // bypassPermissions), over the rest of fake.json, so one session's turns can differ by mode.
 {const at=args.indexOf('--permission-mode');const started=at>=0?args[at+1]:'default';if(cfg.byMode?.[started])cfg={...cfg,...cfg.byMode[started]};}
 const mode=cfg.mode??'normal';
+// The model catalog as Claude Code bundles it (the 2.1.323 shape, trimmed). ELU reads each
+// row's default_effort from this file to name the effort a run went with; it never runs it for that.
+const CATALOG={version:1,models:[{id:"claude-fable-5-1",family:"fable",context:{window:1e6,native_1m:!0},max_output_tokens:{default:64000,upper:128000},capabilities:["effort","max_effort"],default_effort:"high",effort_cost_index:{low:0.75,medium:0.86,high:1}},{id:"claude-fable-5-2",family:"fable",display_name:"Fable 5.2",capabilities:["effort","per_turn_effort"],default_effort:"medium",image_limits:{maxWidth:2576}},{id:"claude-opus-5-5",family:"opus",display_name:"Opus 5.5",capabilities:["effort"],default_effort:"medium"},{id:"claude-sonnet-5-5",family:"sonnet",default_effort:"medium"},{id:"claude-haiku-5-5",family:"haiku",default_effort:"medium"},{id:"claude-3-5-sonnet",family:"sonnet",capabilities:[]}],aliases:{opus:{default:"claude-opus-5-5"}}};
 // claude mcp add-json --scope user -- NAME JSON and claude mcp remove --scope SCOPE -- NAME, as the real 2.1.322 does them, on the
 // .claude.json in CLAUDE_CONFIG_DIR. The settings are recorded as <json>, so a test can look for a key everywhere else.
 // mode mcp-echo: add-json fails and prints the settings it was given, as an error may.
@@ -56,6 +59,8 @@ const schemaArg=args.indexOf('--json-schema');
 const schema=schemaArg>=0?JSON.parse(args[schemaArg+1]):null;
 const conversation=Boolean(schema?.properties?.intent);if(conversation&&schema.properties.repository){const named=cfg.repository;result.repository=named&&fs.existsSync(named)?fs.readFileSync(named,'utf8'):'';}if(conversation){result.intent=mode==='answer'||mode==='slow-answer'||mode==='dialogue'&&input.includes('Just explain the implementation')?'answer':'edit';if(result.intent==='answer')result.summary='Yes. You can add multiple agents with /agents.\nNo project checks or setup are needed to ask a question.\nYour next message continues this conversation.';}
 if(cfg.name!==undefined&&schema?.properties?.name)result.name=cfg.name;
+// learned (fake.json): what the reply says the owner taught, given only when the schema offers it, as a model would.
+if(cfg.learned!==undefined&&schema?.properties?.learned)result.learned=cfg.learned;
 // intent (fake.json): answer makes every conversation turn an answer, so a relay test needs no Task.
 if(conversation&&cfg.intent==='answer'){result.intent='answer';result.summary='Looked.';}
 // A request for an edit plans first (lib/plan.mjs): it comes back with a Task unless the prompt

@@ -1211,7 +1211,7 @@ test('/join asks to join first, then what teammates can do here: Cancel or Esc j
   await send(v, '/join k7qm-x2pd-9fhw'); await choose(v, 'Join a team', /^Join$/);
   await until(() => rowsOf(v, 'What teammates can do here').length === 2, 'what teammates can do');
   assert.deepEqual(rowsOf(v, 'What teammates can do here'), ['Auto: their message starts a session here, as if you typed it', 'Manual: each message waits for you to approve it']);
-  assert.match(v.text(), /Push, merge, deploy and publish stay blocked either way\./);
+  assert.match(v.text(), /Push, merge, deploy and publish need Full access either way\./);
   await choose(v, 'What teammates can do here', /^Auto/); await until(() => modal(v, 'Rules for teammates'), 'the rules');
   assert.match(v.text().replace(/[│\s]+/g, ' '), /Optional, in plain English\. For example: Only work on the elu repo\. Don't write anything until I accept it\./, 'the hint, read across its wrap');
   modal(v, 'Rules for teammates').children.find(child => child.type === 'textbox').emit('cancel');
@@ -1681,6 +1681,7 @@ test('Kanban shows every session teammates run in the same repository, with who 
   panels.kanbanLists[2].focus(); panels.kanbanLists[2].select(0); v.input.write('\r');
   await until(() => rowsOf(v, "sara's session").includes('No Task yet'), 'no Task yet');
   assert.deepEqual(rowsOf(v, "sara's session").map(line => line.trimEnd()), ['Which tax rate?', 'Needs you', "Started by @li · on sara's machine sara-box", '', 'No Task yet', '', 'last activity 3m ago', '', 'It runs on their machine: only they can change it.']);
+  assert.equal(modal(v, "sara's session").children.some(child => child.type === 'button'), false, 'a teammate\'s card has no Go to session');
   v.input.write('\x1b'); await until(() => !modal(v, "sara's session"), 'Esc closes it');
   // The other repository's board: its own cards only.
   panels.kanbanPick.focus(); panels.kanbanPick.emit('press');
@@ -1698,7 +1699,7 @@ test('Kanban shows every session teammates run in the same repository, with who 
   assert.deepEqual(readBoard(repository(p.root)).cards, []); assert.deepEqual(peer.sent(), []);
 });
 
-test('a card of my other computer opens as mine: its whole Task, you and that computer, and Enter opens it in Sessions; one with no Task yet shows its first message', async t => {
+test('a card of my other computer opens as mine: its whole Task, you and that computer, and its Go to session button opens it in Sessions; one with no Task yet shows its first message', async t => {
   const p = project(later(t)); environment(t, p.parent);
   const HOME = '0123456789abcdef', listed = { id: '11111111-2222-4333-8444-555555555555', ref: `${HOME}:6`, project: HOME, title: 'Nightly checks', state: 'running', at: ago(0), createdAt: ago(60), approvals: [], by: 'you', who: null, repoId: WEB, question: null, error: null, plan: null };
   const peer = fakePeer({ mine: [{ key: SARA, mine: true, theirs: true }], machines: [{ key: SARA, listedAt: ago(0), older: false, projects: [{ id: HOME, name: 'home', repoId: null, home: true }], sessions: [listed] }], repoId: WEB });
@@ -1729,8 +1730,9 @@ test('a card of my other computer opens as mine: its whole Task, you and that co
   for (const line of ['Goal', 'The search page answers in under a second.', 'Description', 'Objectives · 1 of 2 met', '  ✓ A timing test for the search page', 'Success criteria', '  · Three runs in a row answer in under a second', 'Subtasks · 1 of 3 done', '  ▸ Cache the query', 'last activity 1m ago']) assert.ok(rows.includes(line), line);
   assert.match(rows.find(line => /^ETA /.test(line)), / · in (24|25) min$/, 'the minutes left it last reported');
   assert.doesNotMatch(rows.join('\n'), /their machine|only they can change it|read-only/);
-  assert.match(hint(), /enter open the session/);
-  // Enter opens it in Sessions, with the cursor on it under its computer.
+  assert.match(hint(), /enter go to session/);
+  assert.equal(modal(v, title).children.find(child => child.type === 'button')?.getText().trim(), 'Go to session');
+  // Enter presses Go to session: it opens in Sessions, with the cursor on it under its computer.
   v.input.write('\r');
   await until(() => v.current.view === 'tasks' && !modal(v, title) && /Nightly checks/.test(plainItem(panels.board.items[panels.board.selected] ?? { getText: () => '' })), 'Sessions, on that session');
   assert.deepEqual(peer.sent(), []);
@@ -1739,7 +1741,7 @@ test('a card of my other computer opens as mine: its whole Task, you and that co
   panels.kanbanLists[2].focus(); panels.kanbanLists[2].select(0); v.input.write('\r');
   await until(() => rowsOf(v, title).includes('No Task yet'), 'no Task yet');
   assert.deepEqual(rowsOf(v, title).map(line => line.trimEnd()), ['Flaky upload', 'Needs you', 'you · sara-box', '', 'No Task yet', 'Find why uploads fail on slow networks', '', 'last activity 2m ago']);
-  assert.doesNotMatch(hint(), /enter open/);
+  assert.doesNotMatch(hint(), /enter (open|go to session)/); assert.equal(modal(v, title).children.some(child => child.type === 'button'), false, 'no Go to session');
   v.input.write('\x1b'); await until(() => !modal(v, title), 'Esc closes it');
   // From an older build there: it has a Task that did not come with the card.
   panels.kanbanLists[3].focus(); panels.kanbanLists[3].select(0); v.input.write('\r');
@@ -1748,7 +1750,7 @@ test('a card of my other computer opens as mine: its whole Task, you and that co
   v.input.write('\x1b'); await until(() => !modal(v, title), 'Esc closes it');
 });
 
-test('a teammate\'s session on my other computer opens with their name, not as mine: its first message, and Enter opens it in Sessions', async t => {
+test('a teammate\'s session on my other computer opens with their name, not as mine: its first message, and its Go to session button opens it in Sessions', async t => {
   const p = project(later(t)); environment(t, p.parent);
   const HOME = '0123456789abcdef', listed = { id: '11111111-2222-4333-8444-555555555556', ref: `${HOME}:9`, project: HOME, title: 'Kim asks for a fix', state: 'running', at: ago(0), createdAt: ago(60), approvals: [], by: 'teammate', who: 'kim', repoId: WEB, question: null, error: null, plan: null };
   const peer = fakePeer({ mine: [{ key: SARA, mine: true, theirs: true }], machines: [{ key: SARA, listedAt: ago(0), older: false, projects: [{ id: HOME, name: 'home', repoId: null, home: true }], sessions: [listed] }], repoId: WEB });
@@ -1768,6 +1770,9 @@ test('a teammate\'s session on my other computer opens with their name, not as m
   assert.deepEqual(rows.slice(0, 3), ['Kim asks for a fix', 'In progress', 'Started by @kim · on sara-box']);
   assert.ok(rows.includes('Fix the cart total for coupons'));
   assert.doesNotMatch(rows.join('\n'), /you · |their machine/);
+  // It is in Sessions, so the card has Go to session, with the focus: Enter presses it.
+  const press = modal(v, title).children.find(child => child.type === 'button');
+  assert.equal(press?.getText().trim(), 'Go to session'); assert.equal(v.current.screen.focused, press);
   v.input.write('\r');
   await until(() => v.current.view === 'tasks' && !modal(v, title) && /Kim asks for a fix/.test(plainItem(panels.board.items[panels.board.selected] ?? { getText: () => '' })), 'Sessions, on that session');
   assert.deepEqual(peer.sent(), []);
