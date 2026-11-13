@@ -6,7 +6,7 @@ import { PassThrough } from 'node:stream';
 import { project, fakeClis, keyLike, git } from './helpers.mjs';
 import { makeTeam, answeringClis } from './peer-helpers.mjs';
 import { ProjectController, registerProject } from '../lib/projects.mjs';
-import { projectFolder, pendingRequests } from '../lib/workspace.mjs';
+import { projectFolder, pendingRequests, updateRequest } from '../lib/workspace.mjs';
 import { readTask, saveTask, taskTitle } from '../lib/state.mjs';
 import { enqueue } from '../lib/conductor.mjs';
 import { addCard, closeSession, readBoard, setDone } from '../lib/kanban.mjs';
@@ -38,15 +38,17 @@ function setup(t, options = { mode: 'answer' }) {
 }
 const inputs = fake => fs.existsSync(path.join(path.dirname(fake.calls), 'inputs.jsonl')) ? fs.readFileSync(path.join(path.dirname(fake.calls), 'inputs.jsonl'), 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse) : [];
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
-// What the conductor does with a standup's question: the session answers it once its turn is
-// over. A session that works is left for the round to list.
+// What the conductor does with a standup's question: the request runs, the session answers it
+// once its turn is over, and the request is done. A session that works is left for the round to list.
 function answering(controller, done) {
   const handled = new Set();
   const loop = (async () => {
     while (!done()) {
       for (const row of pendingRequests(controller.repo.root).filter(value => value.standupFor && value.state === 'queued' && !handled.has(value.id))) {
         if (['running', 'preparing'].includes(readTask(controller.repo, row.continuationTaskId).state)) continue;
-        handled.add(row.id); await controller.ask(row.goal, row.continuationTaskId, { standupFor: row.standupFor }).finished;
+        handled.add(row.id); updateRequest(controller.repo.root, row.id, { state: 'running' });
+        await controller.ask(row.goal, row.continuationTaskId, { standupFor: row.standupFor }).finished;
+        updateRequest(controller.repo.root, row.id, { state: 'done', reason: 'Finished.' });
       }
       await sleep(20);
     }
@@ -70,7 +72,7 @@ test('@everyone and a standup question are read as the round asks them', () => {
 
 test('who is asked: open sessions with an agent; archived, Done, quiet, a Standup and a teammate session are not', () => {
   const now = Date.parse('2026-11-12T12:00:00Z'), day = 86400000, at = ms => new Date(ms).toISOString();
-  const board = { cards: [], done: ['3'], archived: ['2'], closed: { 2: at(now - 2 * day), 3: at(now - 2 * day) } };
+  const board = { cards: [], done: ['2', '3'], archived: ['2'], closed: { 2: at(now - 2 * day), 3: at(now - 2 * day) } };
   const task = (id, fields = {}) => ({ id, createdAt: at(now - 30 * day), state: 'answered', runs: [{ role: 'lead', at: at(now - day) }], messages: [], ...fields });
   assert.equal(standupLeftOut(board, task('1'), { now }), null, 'active this week');
   assert.equal(standupLeftOut(board, task('2', { runs: [{ role: 'lead', at: at(now - 3 * day) }] }), { now }), 'archived');
@@ -93,8 +95,8 @@ test('a session with a worker bot is answered by that bot; otherwise by its lead
 });
 
 test('what leaves for a teammate: paths cut, and an update that may hold a secret is held', () => {
-  const cut = teammateAnswer('Working on /Users/sam/shop/src/billing.mjs, tests next.', { root: '/Users/sam/shop' });
-  assert.equal(cut.held, false); assert.doesNotMatch(cut.text, /\/Users\/sam/);
+  const cut = teammateAnswer('Working on /srv/notes/billing.txt and src/billing.mjs, tests next.', { root: '/srv/shop' });
+  assert.equal(cut.held, false); assert.equal(cut.text, 'Working on [path] and src/billing.mjs, tests next.');
   const held = teammateAnswer(`Set the token to ${keyLike('ghp_', 'A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8')}`, { root: '/tmp' });
   assert.deepEqual(held, { text: null, held: true });
 });
@@ -150,7 +152,7 @@ test("a teammate's standup is told the owner's rules, gets the question as a tea
   const controller = new ProjectController(projectFolder(p.root)); controller.draftConfig.checks = []; registerProject(controller.repo);
   const task = await controller.ask('Where is billing?').finished;
   const team = 'b'.repeat(64), peer = 'c'.repeat(64); saveTeamAccess(team, { handling: 'manual', rules: 'Never share invoice totals.' });
-  fake.summary(`Fixing ${path.join(p.root, 'src/billing.mjs')} next.`);
+  fake.summary(`Fixing billing from ${path.join(p.parent, 'notes', 'billing.txt')} next.`);
   const round = newRound();
   await controller.ask(STANDUP_QUESTION, task.id, { standupFor: { round, by: '@kim', question: 'Is billing done?', peer, teams: [team] } }).finished;
   const turn = inputs(fake).at(-1).input;
@@ -158,7 +160,7 @@ test("a teammate's standup is told the owner's rules, gets the question as a tea
   assert.match(turn, /Is billing done\?/);
   const rows = readTask(controller.repo, task.id).messages.filter(row => row.standup === round);
   assert.equal(rows[0].text, '@kim asks: Is billing done?'); assert.equal(rows.at(-1).text, 'Sent to @kim');
-  assert.doesNotMatch(rows[1].sent, new RegExp(p.root.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  assert.equal(rows[1].sent, 'Fixing billing from [path] next.');
   fake.summary(`Token is ${keyLike('ghp_', 'A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8')}`);
   const second = newRound();
   await controller.ask(STANDUP_QUESTION, task.id, { standupFor: { round: second, by: '@kim', peer, teams: [team] } }).finished;
@@ -178,12 +180,12 @@ test('a round asks open sessions, lists a working one after the wait, leaves arc
   let over = false; const loop = answering(f.controller, () => over);
   const { task, answered, listed } = await runStandupRound(f.repo, standup.id, { sources: none, times: TIMES });
   over = true; await loop;
-  assert.equal(answered, 1); assert.equal(listed, 1);
+  assert.equal(answered, 1, JSON.stringify(task.messages.slice(-4))); assert.equal(listed, 1);
   const lines = task.messages.filter(row => row.standupChat).map(row => row.text);
   assert.match(lines[0], /^Asking 2 sessions on 1 computer \(2 here\) for a standup update\./);
   const update = task.messages.find(row => row.update);
   assert.match(update.from, /^Explain coupons · .+ here$/); assert.match(update.text, /multiple agents/);
-  assert.match(lines.at(-2), /Explain carts · here · working · still working after 0 minutes/);
+  assert.match(lines.at(-2), /Explain carts · here · working · last reply: Yes\. .+ · still working after 0 minutes$/);
   assert.equal(lines.at(-1), 'Standup done · 1 session on 1 computer · 1 not asked');
   assert.doesNotMatch(lines.join('\n'), /Explain taxes|Explain refunds|Explain fees/);
   assert.equal(task.standup.updates[0].id, 'u1'); assert.equal(task.standup.updates[0].agent, update.from.split(' · ')[1].replace(/ here$/, ''));
