@@ -3,14 +3,16 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { project, fakeClis, temp } from './helpers.mjs';
+import { project, fakeClis, fakeKeychain, claudeKeychainNames, temp } from './helpers.mjs';
 import { ProjectController } from '../lib/projects.mjs';
 import { projectFolder } from '../lib/workspace.mjs';
 import { readTask } from '../lib/state.mjs';
 import { memoryFolder } from '../lib/memory.mjs';
 import { personalDirectory } from '../lib/util.mjs';
 import { agentEnv } from '../lib/process.mjs';
-import { SIGN_IN, SHARED, activeLogin, finishLogin, hasBrowser, linkShared, listLogins, loginEnv, loginFolder, newLogin, useLogin } from '../lib/logins.mjs';
+import * as logins from '../lib/logins.mjs';
+import { SIGN_IN, SHARED, activeLogin, finishLogin, hasBrowser, linkShared, listLogins, loginEnv, loginFolder, newLogin, removeLogin, useLogin } from '../lib/logins.mjs';
+import { addServer, removeServer } from '../lib/mcp.mjs';
 import { accountOf, forgetAccount, readAccounts, refreshUsage, usageTab } from '../lib/usage.mjs';
 import { stopLine } from '../lib/stop-line.mjs';
 import { usageBlocks } from '../lib/terminal.mjs';
@@ -53,7 +55,9 @@ function addAccount(f, vendor) {
   return slot;
 }
 const read = file => fs.readFileSync(file, 'utf8');
-const SEEN = ['settings', 'claudeMd', 'skills', 'projects', 'mcp', 'memory'];
+// What a run sees of the owner's: userMcp is what Claude Code itself reads as his MCP servers
+// (user scope, in the .claude.json of the folder it runs with), beside the servers ELU hands it.
+const SEEN = ['settings', 'claudeMd', 'skills', 'projects', 'mcp', 'userMcp', 'memory'];
 
 test('Claude: a second account signs in beside the first; a switch moves new turns to it, a running turn keeps its own, and every account sees the same settings, MCP servers and memory', { timeout: 60000 }, async t => {
   const hold = path.join(temp(t), 'hold');
@@ -84,7 +88,7 @@ test('Claude: a second account signs in beside the first; a switch moves new tur
   assert.equal(other.account, 'second@example.com'); assert.equal(other.config, slot.dir); assert.ok(other.args.includes('--resume'), 'the session goes on');
   assert.equal(second.runs.at(-1).login, slot.id);
   for (const key of SEEN) assert.deepEqual(other[key], own[key], key);
-  assert.deepEqual(own.mcp, ['notes']); assert.equal(own.settings, '{"theme":"dark"}'); assert.equal(own.claudeMd, 'Keep diffs small.'); assert.deepEqual(own.skills, ['review']);
+  assert.deepEqual(own.mcp, ['notes']); assert.deepEqual(own.userMcp, ['notes']); assert.equal(own.settings, '{"theme":"dark"}'); assert.equal(own.claudeMd, 'Keep diffs small.'); assert.deepEqual(own.skills, ['review']);
   assert.ok(own.memory.some(row => row === 'MEMORY.md:The owner prefers small diffs.'), JSON.stringify(own.memory));
   // A turn that is running keeps the account it started on, whatever the switch says meanwhile.
   fs.writeFileSync(hold, '');
@@ -202,4 +206,150 @@ test('a computer has a browser for a sign-in unless it is reached over SSH, or i
   assert.equal(hasBrowser({ DISPLAY: ':0' }, 'linux'), true); assert.equal(hasBrowser({ WAYLAND_DISPLAY: 'wayland-0' }, 'linux'), true);
   // The sign-in is the vendor's same command either way: it prints the link the owner opens.
   assert.deepEqual(SIGN_IN, { claude: ['auth', 'login'], codex: ['login'] });
+});
+
+// On macOS Claude Code keeps an account's sign-in in the Keychain, named after the folder it
+// runs with (claudeKeychainNames), not in the folder. The stand-in security (test/fakes) holds
+// the items here; the real Keychain is never reached.
+function keychainSetup(t) {
+  const f = setup(t, 'claude', { loginAs: 'second@example.com', keychain: true });
+  environment(t, { USER: 'owner' });
+  const others = [
+    { account: 'owner', service: 'Claude Code-credentials' },
+    { account: 'owner', service: claudeKeychainNames(f.normal).credentials },
+    { account: 'owner', service: 'Claude Code-device-keys' },
+    { account: 'owner', service: 'Another App' },
+  ];
+  return { f, others, keychain: fakeKeychain(f.fake.dir, others) };
+}
+const services = keychain => keychain.items().map(item => item.service).sort();
+
+test('macOS: forgetting an added Claude Code account deletes the Keychain items named after its folder, and no other: the owner\'s own sign-in, the other accounts\' and every other app\'s stay', { timeout: 60000 }, async t => {
+  const { f, others, keychain } = keychainSetup(t);
+  const slot = addAccount(f, 'claude'); f.setFake(value => { value.accounts.loginAs = 'third@example.com'; });
+  const third = addAccount(f, 'claude');
+  const second = claudeKeychainNames(slot.dir), thirdNames = claudeKeychainNames(third.dir);
+  // Each sign-in went where Claude Code puts it on macOS: an item named after its own folder, for $USER.
+  assert.deepEqual(services(keychain), [...others.map(item => item.service), second.credentials, thirdNames.credentials].sort());
+  assert.ok(keychain.items().every(item => item.account === 'owner'));
+  assert.equal(fs.existsSync(path.join(slot.dir, '.credentials.json')), false, 'no copy of the sign-in in the folder on macOS');
+  // An API key Claude Code saved for that folder is named after it too.
+  keychain.add({ account: 'owner', service: second.apiKey });
+  const before = keychain.calls().length;
+  assert.equal(forgetAccount('claude', slot.id, { platform: 'darwin' }).email, 'second@example.com');
+  assert.deepEqual(services(keychain), [...others.map(item => item.service), thirdNames.credentials].sort(), 'only that folder\'s items went');
+  const ran = keychain.calls().slice(before);
+  assert.ok(ran.length > 0, 'security was run');
+  for (const args of ran) {
+    assert.equal(args[0], 'delete-generic-password', JSON.stringify(args));
+    assert.deepEqual([args[1], args[2], args[3]], ['-a', 'owner', '-s'], JSON.stringify(args));
+    assert.ok(args[4].endsWith(`-${second.hash}`) && args[4].startsWith('Claude Code'), args[4]);
+  }
+  assert.equal(fs.existsSync(path.dirname(slot.dir)), false);
+  // The other account is still signed in, and so is the owner.
+  assert.equal(accountOf('claude', third.id).email, 'third@example.com'); assert.equal(accountOf('claude').email, 'first@example.com');
+  // On Linux Claude Code keeps the sign-in in the folder, which goes with it: security is never run.
+  const linux = keychain.calls().length;
+  forgetAccount('claude', third.id, { platform: 'linux' });
+  assert.equal(keychain.calls().length, linux);
+});
+
+test('macOS: a sign-in that is not kept (an account already here, or one ELU was closed during) leaves no Keychain item; a locked Keychain is named so the owner can delete the item', { timeout: 60000 }, async t => {
+  const { f, others, keychain } = keychainSetup(t);
+  // The same account signed in again is not kept: its folder and its item both go.
+  const again = addAccount(f, 'claude'), names = claudeKeychainNames(again.dir);
+  assert.ok(services(keychain).includes(names.credentials));
+  removeLogin('claude', again.id, { platform: 'darwin' });
+  assert.deepEqual(services(keychain), others.map(item => item.service).sort());
+  // A folder an earlier sign-in left behind (ELU closed during it) is cleared with its item when the next account is added.
+  const left = newLogin('claude', process.env, { platform: 'darwin' });
+  spawnSync(f.bin, [...SIGN_IN.claude], { env: { ...process.env, CLAUDE_CONFIG_DIR: left.dir }, encoding: 'utf8' });
+  const old = claudeKeychainNames(left.dir); assert.ok(services(keychain).includes(old.credentials));
+  const hourAgo = (Date.now() - 2 * 3600000) / 1000; fs.utimesSync(path.dirname(left.dir), hourAgo, hourAgo);
+  const next = newLogin('claude', process.env, { platform: 'darwin' });
+  assert.equal(fs.existsSync(path.dirname(left.dir)), false); assert.ok(!services(keychain).includes(old.credentials));
+  removeLogin('claude', next.id, { platform: 'darwin' });
+  // A locked Keychain: the account is still forgotten, and the item that could not be deleted is named.
+  const kept = addAccount(f, 'claude'), keptNames = claudeKeychainNames(kept.dir);
+  keychain.lock(true);
+  const forgot = forgetAccount('claude', kept.id, { platform: 'darwin' });
+  assert.equal(forgot.email, 'second@example.com'); assert.deepEqual(listLogins('claude'), ['default']);
+  assert.equal(forgot.keychainLeft, keptNames.credentials);
+  assert.ok(services(keychain).includes(keptNames.credentials));
+});
+
+// The owner's own MCP servers (user scope) in an account's own view: what Claude Code lists
+// when it runs with the account's folder, as a command started by hand there does.
+const mcpList = (bin, env) => spawnSync(bin, ['mcp', 'list'], { env: { ...process.env, ...env }, encoding: 'utf8' }).stdout;
+
+test('Claude: every added account sees the owner\'s own MCP servers, kept in sync when he adds or removes one in ELU or in Claude Code, and none of his sign-in is copied', { timeout: 60000 }, async t => {
+  const f = setup(t, 'claude', { loginAs: 'second@example.com' });
+  fs.writeFileSync(path.join(f.normal, '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: 'own-access-never-shown' }, mcpOAuth: { 'notes|1': { accessToken: 'notes-token-never-shown' } } }));
+  const slot = addAccount(f, 'claude');
+  const file = path.join(slot.dir, '.claude.json'), mine = () => JSON.parse(read(file)), own = () => JSON.parse(read(path.join(f.normal, '.claude.json')));
+  const list = dir => mcpList(f.bin, { CLAUDE_CONFIG_DIR: dir });
+  // Signed in: the account's own .claude.json has his servers, and is still the account's own sign-in.
+  assert.deepEqual(mine().mcpServers, own().mcpServers);
+  assert.equal(list(slot.dir), list(f.normal)); assert.match(list(slot.dir), /^notes: true$/m);
+  assert.equal(mine().oauthAccount.emailAddress, 'second@example.com');
+  assert.doesNotMatch(read(file), /first@example\.com/);
+  for (const name of fs.readdirSync(slot.dir)) if (fs.lstatSync(path.join(slot.dir, name)).isFile()) assert.doesNotMatch(read(path.join(slot.dir, name)), /own-access-never-shown|notes-token-never-shown|first@example/, name);
+  assert.equal(fs.lstatSync(file).isSymbolicLink(), false);
+  // Added and removed in ELU (/mcp add, /mcp remove, elu mcp): every account at once.
+  await addServer('docs', { type: 'http', url: 'https://docs.example.com/mcp', headers: { Authorization: 'Bearer docs-0123456789abcdef' } });
+  assert.deepEqual(Object.keys(mine().mcpServers).sort(), ['docs', 'notes']); assert.deepEqual(mine().mcpServers, own().mcpServers);
+  assert.equal(list(slot.dir), list(f.normal));
+  await removeServer('docs');
+  assert.deepEqual(Object.keys(mine().mcpServers), ['notes']);
+  // Added in Claude Code itself (claude mcp add, in his own folder): a run on the account sees it.
+  assert.equal(spawnSync(f.bin, ['mcp', 'add-json', '--scope', 'user', '--', 'search', JSON.stringify({ type: 'stdio', command: 'true', args: [] })], { env: process.env, encoding: 'utf8' }).status, 0);
+  useLogin('claude', slot.id);
+  const task = await f.controller.ask('Where is coupon normalization?').finished;
+  assert.equal(task.state, 'answered', JSON.stringify(task.error));
+  assert.equal(f.runs().at(-1).account, 'second@example.com'); assert.deepEqual(f.runs().at(-1).userMcp, ['notes', 'search']);
+  // Removed in Claude Code itself: the open app's look (every few seconds) takes it away.
+  assert.equal(spawnSync(f.bin, ['mcp', 'remove', '--scope', 'user', '--', 'search'], { env: process.env, encoding: 'utf8' }).status, 0);
+  logins.shareServersAll();
+  assert.deepEqual(Object.keys(mine().mcpServers), ['notes']); assert.equal(list(slot.dir), list(f.normal));
+  // A server the account was given in its own folder stays; one of his by the same name is his.
+  const account = mine(); account.mcpServers = { ...account.mcpServers, 'only-here': { type: 'stdio', command: 'true', args: [] }, notes: { type: 'stdio', command: 'false', args: [] } };
+  fs.writeFileSync(file, JSON.stringify(account));
+  logins.shareServersAll();
+  assert.deepEqual(mine().mcpServers, { ...own().mcpServers, 'only-here': { type: 'stdio', command: 'true', args: [] } });
+  // Claude Code's own lock on the file: nothing is written while a Claude Code holds it; one a process left behind (older than 10 s) is taken over.
+  assert.equal(spawnSync(f.bin, ['mcp', 'add-json', '--scope', 'user', '--', 'later', JSON.stringify({ type: 'stdio', command: 'true', args: [] })], { env: process.env, encoding: 'utf8' }).status, 0);
+  const held = `${file}.lock`; fs.mkdirSync(held);
+  logins.shareServersAll();
+  assert.ok(!mine().mcpServers.later, 'not written under a lock Claude Code holds');
+  const old = (Date.now() - 30000) / 1000; fs.utimesSync(held, old, old);
+  logins.shareServersAll();
+  assert.ok(mine().mcpServers.later, 'a lock left behind is taken over'); assert.equal(fs.existsSync(held), false);
+  // Everything else in the account's file is as Claude Code wrote it.
+  assert.equal(mine().oauthAccount.emailAddress, 'second@example.com');
+  // An account added later gets them too, and forgetting one leaves his file as it was.
+  f.setFake(value => { value.accounts.loginAs = 'third@example.com'; });
+  const third = addAccount(f, 'claude');
+  assert.deepEqual(JSON.parse(read(path.join(third.dir, '.claude.json'))).mcpServers, own().mcpServers);
+  const his = read(path.join(f.normal, '.claude.json'));
+  forgetAccount('claude', third.id, { platform: 'linux' });
+  assert.equal(read(path.join(f.normal, '.claude.json')), his);
+});
+
+test('Codex: every added account sees the owner\'s MCP servers in his config.toml, even when he has none yet when the account is added', { timeout: 60000 }, async t => {
+  const f = setup(t, 'codex', { loginAs: 'codex-second@example.com' });
+  const config = path.join(f.codexHome, 'config.toml'); fs.rmSync(config);
+  const slot = addAccount(f, 'codex');
+  const list = home => mcpList(f.bin, { CODEX_HOME: home });
+  // Codex saves config.toml whole, a new file renamed over the old one, as codex mcp add does.
+  const save = text => { const temporary = `${config}.tmp`; fs.writeFileSync(temporary, text); fs.renameSync(temporary, config); };
+  save('model = "big-model"\n\n[mcp_servers.notes]\ncommand = "true"\n');
+  assert.match(list(slot.dir), /^notes$/m); assert.equal(list(slot.dir), list(f.codexHome));
+  save('model = "big-model"\n\n[mcp_servers.notes]\ncommand = "true"\n\n[mcp_servers.docs]\nurl = "https://docs.example.com/mcp"\n');
+  assert.equal(list(slot.dir), 'notes\ndocs\n'); assert.equal(list(slot.dir), list(f.codexHome));
+  save('model = "big-model"\n\n[mcp_servers.docs]\nurl = "https://docs.example.com/mcp"\n');
+  assert.equal(list(slot.dir), 'docs\n');
+  // One file: the account's config.toml is his, and its sign-in stays its own.
+  assert.equal(fs.readlinkSync(path.join(slot.dir, 'config.toml')), config);
+  assert.equal(fs.lstatSync(path.join(slot.dir, 'auth.json')).isSymbolicLink(), false);
+  assert.equal(accountOf('codex', slot.id).email, 'codex-second@example.com');
 });

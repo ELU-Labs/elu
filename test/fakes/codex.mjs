@@ -29,6 +29,8 @@ if(args[0]==='login'){
  if(mode==='api-key'){console.log('API key configured - sk-fake***-0000\nAuthentication is checked when you send a request.');process.exit(0);}
  console.log('Logged in using ChatGPT');process.exit(0);
 }
+// `mcp list`: the [mcp_servers.NAME] tables of config.toml in CODEX_HOME (or ~/.codex), as the real CLI reads it.
+if(args[0]==='mcp'&&args[1]==='list'){let text='';try{text=fs.readFileSync(path.join(codexHome,'config.toml'),'utf8');}catch{}const names=[...text.matchAll(/^\[mcp_servers\.([A-Za-z0-9_-]+)\]\s*$/gm)].map(match=>match[1]);console.log(names.length?names.join('\n'):'No MCP servers configured yet. Try `codex mcp add my-tool -- my-command`.');process.exit(0);}
 if(args[0]==='app-server'){
  const readline=await import('node:readline');
  for await(const line of readline.createInterface({input:process.stdin})){
