@@ -493,10 +493,62 @@ test('the open channel names who is in it over its threads, and an empty one say
   await until(() => inside(v) === 'In #design · you, @sara · m changes who is in it', 'who is in #design');
   assert.deepEqual(threadLines(v), ['Nothing in #design yet. Type below to write to it. m changes who is in it.']);
   await until(() => /enter read {2}m members {2}x leave$/.test(keys()), 'm and x for a created channel');
-  // A person has no such line, and their threads start at the top again.
+  // A person's line says what is on for them, and their threads start under it too.
   await openRow(v, /@sara\s+direct/, '@sara');
-  await until(() => inside(v) === null && threads.atop === box.atop + 1, 'no line for a person');
-  assert.deepEqual(threadLines(v), ['Nothing in @sara yet. Type below to write to it.']);
+  await until(() => inside(v) === 'Hold replies: off · Auto-continue: off · h and o change them' && threads.atop === box.atop + 2, 'the line for a person');
+  assert.deepEqual(threadLines(v), ['Nothing in @sara yet. Type below to write to it.']); assertPanes(v, 160);
+  // A bot of mine has no line, and its threads start at the top again.
+  await openRow(v, /◆ @reviewer\s*$/, '@reviewer');
+  await until(() => inside(v) === null && threads.atop === box.atop + 1, 'no line for a bot');
+});
+
+// The daemon keeps what h and o set for a teammate (peerSetting, lib/peer/daemon.mjs); this
+// stand-in keeps it the same way, and answers peerPolicy from it as lib/peer/settings.mjs does.
+function withPolicy(peer, policy = {}) {
+  const sendCommand = peer.sendPeerCommand;
+  peer.peerPolicy = key => ({ autoAccept: false, holdReplies: false, autoAsk: false, autoContinue: false, muted: false, trusted: false, ...policy[key] });
+  peer.sendPeerCommand = command => { if (command.type === 'peerSetting') policy[command.key] = { ...policy[command.key], [command.name]: command.on }; return sendCommand(command); };
+  return peer;
+}
+const dialogBody = (v, title) => modal(v, title).children.find(child => child.options?.scrollable).getText();
+
+test('h and o on a teammate turn hold replies and auto-continue on and off: the line over their threads says what is on, and their screen and the help name the keys', { timeout: 30000 }, async t => {
+  const peer = withPolicy(fakePeer()), { v } = await teamView(t, { peer });
+  const [bar, threads] = v.panels.teamLists, keys = () => v.panels.keys.getText().trim(), status = () => v.panels.status.getText();
+  const settings = () => peer.sent().filter(row => row.type === 'peerSetting').map(row => [row.key === SARA ? 'sara' : row.key, row.name, row.on]);
+  await openRow(v, /@sara\s+direct/, '@sara');
+  await until(() => inside(v) === 'Hold replies: off · Auto-continue: off · h and o change them', 'the line over her threads');
+  bar.focus(); await until(() => /^enter write {2}t trust {2}h hold replies {2}o auto-continue {2}tab threads/.test(keys()), 'the keys on her row');
+  // h holds my replies and results to her; the line and the status say so.
+  v.input.write('h');
+  await until(() => inside(v) === 'Hold replies: on · Auto-continue: off · h and o change them', 'hold replies on');
+  await until(() => /Holding replies to @sara\. Each reply and result waits for you: y sends it, e edits it first, n drops it\./.test(status()), 'what h did');
+  assert.deepEqual(settings(), [['sara', 'holdReplies', true]]);
+  // From her threads the same keys act on her.
+  threads.focus(); v.input.write('o');
+  await until(() => inside(v) === 'Hold replies: on · Auto-continue: on · h and o change them' && /Auto-continue is on for @sara\. Their answer or result continues the chat you asked from\./.test(status()), 'auto-continue on');
+  v.input.write('h');
+  await until(() => inside(v) === 'Hold replies: off · Auto-continue: on · h and o change them' && /Replies to @sara go when they are ready\. One with a possible secret still waits for you\./.test(status()), 'hold replies off');
+  // Her screen says both, and h and o there change them.
+  bar.focus(); selectRow(bar, /@sara\s+direct/); v.input.write('t'); await until(() => modal(v, 'Teammate @sara'), 'her screen');
+  assert.match(dialogBody(v, 'Teammate @sara'), /Hold replies: off · your replies and results go to them when ready\.\nAuto-continue: on · their answer or result continues the chat you asked from\.\n\nt trusts them · h holds replies · o turns auto-continue off/);
+  v.input.write('o');
+  await until(() => !modal(v, 'Teammate @sara') && /Auto-continue is off for @sara\. Their answers wait in their thread; c continues with one\./.test(status()), 'o on her screen');
+  await until(() => inside(v) === 'Hold replies: off · Auto-continue: off · h and o change them', 'both off again');
+  assert.deepEqual(settings(), [['sara', 'holdReplies', true], ['sara', 'autoContinue', true], ['sara', 'holdReplies', false], ['sara', 'autoContinue', false]]);
+  // On a channel there is no teammate to set it for.
+  await openRow(v, /# general/, '#general'); bar.focus(); v.input.write('h');
+  await until(() => /Choose a teammate first\./.test(status()), 'h on a channel');
+  assert.equal(settings().length, 4);
+  // The help says where the two are.
+  await send(v, '/help'); await until(() => modal(v, 'Commands'), 'help');
+  assert.match(dialogBody(v, 'Commands').replace(/\s+/g, ' '), /On a teammate, h holds your replies and results to them until you send each one: y sends it, e edits it first, n drops it\. o lets their answer or result continue the chat you asked from\./);
+  await closeDialog(v, 'Commands');
+  // At 80 columns the line still says what is on.
+  v.output.columns = 80; v.output.rows = 24; v.output.emit('resize');
+  await openRow(v, /@sara/, '@sara');
+  await until(() => v.current.screen.width === 80 && /^Hold replies: off · Auto-continue: off/.test(inside(v) ?? ''), 'the line at 80 columns');
+  assertPanes(v, 80);
 });
 
 test('e on a held reply or a held result opens its whole text in the message box: Enter sends the edited text, a refused edit stays in the box, Esc leaves it held, and n drops a result as a result', { timeout: 30000 }, async t => {
