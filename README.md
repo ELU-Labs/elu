@@ -84,7 +84,8 @@ and the ETA. Its Go to session button opens its session; Enter presses it. A tea
 and one of your other computer's, open the same way.
 
 After you approve, the model splits the work into subtasks and changes them as it likes.
-The card lists them as a checklist and marks the objectives the model reports met. Its ETA
+The card lists them as a checklist that follows the model's own to-do list while the turn
+runs, and marks the objectives the model reports met. Its ETA
 is approval plus the estimate, and follows the minutes left the model reports as it works. The
 Task is done when every objective is reported met and the turn, with its checks and
 review, has ended. A new message opens it again.

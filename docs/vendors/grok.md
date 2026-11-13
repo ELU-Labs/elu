@@ -85,6 +85,12 @@ it has the two-hour cap of a turn and no quiet limit (see How long a turn runs i
 read-only turns, 120 for edit turns) bounds the model rounds. Cost is not reported under a
 subscription; the role's `maxCostUsd` must be `null`.
 
+A turn that works on an approved Task shows its subtasks as it goes. Over ACP, ELU reads
+the `plan` updates Grok sends for its own to-do list. Headless in Full access, the turn is
+told to keep the list in a JSON file in a private temporary folder of that run; ELU reads
+it twice a second and removes it with the run. Headless in Ask or Auto, the subtasks show
+when the turn ends.
+
 ## The private home
 
 By default Grok reads your `~/.grok` tree (config, rules, hooks, skills, agents,
@@ -160,4 +166,7 @@ Not enforced, or not proven:
 - Workspace `AGENTS.md` and `CLAUDE.md` reach the prompt in every mode. A repository can
   steer the model's instructions, not its permissions.
 - A full shell in Full access pushes, tags, merges, deploys and publishes, as you chose.
+- Subtasks while a turn runs were seen only in tests against a stand-in `grok`: that the
+  real one sends `plan` updates over ACP, and that its model keeps the list file, is not
+  verified.
   ELU keeps its own publish gate for `/publish`, and claims no more.

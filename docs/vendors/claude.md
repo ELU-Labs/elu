@@ -33,7 +33,7 @@ Code memory, when there is one.
 | `--permission-prompts` / `--permission-prompt-tool` | `host` / `mcp__elu-code-approval__approve` | same | same |
 | `--restricted` / `--safe-mode` | no | no | no |
 | `--input-format` | `stream-json`: the prompt is one user message and the input stays open for the network questions | text | text |
-| `--tools` | `Read,Grep,Glob,Edit,Write,Bash,WebFetch,WebSearch` | same | same |
+| `--tools` | `Read,Grep,Glob,Edit,Write,Bash,WebFetch,WebSearch`; a turn that works on an approved Task adds the to-do tools, below | same | same |
 | `--allowedTools` | your MCP servers, `Read`, `Grep`, `Glob`, `Edit` and `Write` on the workspace | same | none |
 | `--disallowedTools` | `Agent,Task,NotebookEdit,PowerShell,Monitor`; a turn with helpers, below | same | same |
 | `--add-dir` | each folder of the session; an answer turn (yours, or a working bot's) also gets your home folder and a private copy of your Claude Code memory when there is one | same | same |
@@ -67,6 +67,16 @@ allowed to merge pull requests (`@elu` comes allowed; a bot you make is not) run
 own working turn without the `gh pr merge` rule; in Ask that command asks you instead.
 Full access has none of these rules, no stand-in commands and no `CLAUDE_ENV_FILE`: a turn
 there runs push, tags, merges, publishing and deploys as your own shell would.
+
+A turn that works on an approved Task is launched with Claude Code's to-do tools, in every
+mode: `--tools` adds `TaskCreate,TaskUpdate,TaskList,TaskGet,TodoWrite`, and Ask and Auto
+allow them without asking. On 2.1.321 and 2.1.322 a run has no to-do tool unless `--tools`
+names one; named, it has the four Task tools, and a name that release does not have is left
+out. The turn is told to keep the Task's subtasks there. Each step shows on the card when
+Claude Code answers the call, so the subtasks tick while the turn runs. Claude Code keeps
+that list with its session and names a step by its number, so ELU keeps the steps with the
+Task for the session's next turn. This was read in Claude Code's own code; a turn of the
+real one making these calls was not seen yet.
 
 A working bot's turn that may start helpers (see [../permissions.md](../permissions.md))
 is launched with these changes: `--tools` adds `Agent`; `--allowedTools` adds

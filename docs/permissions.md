@@ -322,7 +322,8 @@ ELU enforces this much, on every vendor:
   minutes up to a week, else it is not set. Control characters are refused, and markup is
   shown as typed.
 - After approval the model reports its subtasks, the objectives it says are met, and the
-  minutes it thinks are left, which move the ETA. A
+  minutes it thinks are left, which move the ETA. While the turn runs, the subtasks follow
+  the model's own to-do list; each vendor's page says how it is read. A
   report cannot change the goal or an objective: those change only through a revised Task
   that you approve again. Done on the card is the model's report. The checks and the
   review are what verify the edit.
