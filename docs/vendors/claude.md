@@ -7,7 +7,8 @@ Claude Code prints during sessions. An account you add there runs with `CLAUDE_C
 set to a folder of its own that links to your `~/.claude` for everything but the sign-in
 ([../../SECURITY.md](../../SECURITY.md#several-accounts)); `claude auth login` signs it in on a
 cleared screen under one line of ELU's, which on a computer with no browser (an SSH session,
-or Linux with no display) says to open the link Claude Code prints. Tested releases:
+or Linux with no display) says to open the link Claude Code prints, since `claude auth login`
+has no device code sign-in (`--help`, 2.1.322). Tested releases:
 2.1.319 and 2.1.322. The modes are described in
 [../permissions.md](../permissions.md); this page is how `claude` is launched
 for each.
