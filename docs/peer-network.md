@@ -162,8 +162,8 @@ Wire, on the existing connection:
 | Method | Direction | Params | Result |
 |---|---|---|---|
 | `elu.mine` (notification) | both | `{mine: boolean}`: whether the sender marks the receiver as its own. Sent on every admitted connection with `remote: 1`, and on each change. The receiver says a line only when the answer changed. | none |
-| `elu.remote.start` | viewer to host | `{id, text, permissions, place, model, bots}` | `{id, project}` |
-| `elu.remote.send` | viewer to host | `{id, text}` (a leading `@bot` writes to that bot of the host's) | `{id}` |
+| `elu.remote.start` | viewer to host | `{id, text, permissions, place, model, bots}`, or `longText` in place of `text` (see [Long messages](#long-messages)) | `{id, project}` |
+| `elu.remote.send` | viewer to host | `{id, text}` or `{id, longText}` (a leading `@bot` writes to that bot of the host's) | `{id}` |
 | `elu.remote.stop` | viewer to host | `{id}` | `{stopping}` |
 | `elu.remote.answer` | viewer to host | `{id, approval, decision: "allow"\|"deny", always?: "project"\|"all"}` | `{answered, kept?}`: false when it was already answered |
 | `elu.remote.task` | viewer to host | `{id, decision: "approve"\|"reject"}` | `{answered}` |
@@ -171,7 +171,7 @@ Wire, on the existing connection:
 | `elu.remote.events` (notification) | host to viewer | `{items: [{id, events}]}` | none |
 | `elu.remote.list` | viewer to host | `{since, after, limit}` | `{full, cursor, projects, sessions, gone, next}` |
 | `elu.remote.watch` | viewer to host | `{ref}` | `{id, project, title}` |
-| `elu.remote.files` | viewer to host | `{id, send, seq, last, size, data, text}` (`text` on the last piece only; see [Files](#files)) | `{ok}` per piece, then `{id, files, bytes, dir}` |
+| `elu.remote.files` | viewer to host | `{id, send, seq, last, size, data, text}` (`text`, or `longText` in its place, on the last piece only; see [Files](#files)) | `{ok}` per piece, then `{id, files, bytes, dir}` |
 
 - Every request and notification above except `elu.mine` is refused with "Only your own computers can do this." unless the sender's key is mine on the receiver, and the host sends events only to such a key. An `id` (a UUID the viewer chose) belongs to the key that started it; to any other key it is "That session is not on this computer."
 - `start` runs the message as the host owner's own new session: `permissions` is `ask`, `auto` or `full`, `place` is as for a local session, `model` is `{vendor, model}` or null, and `bots` are names of the host's own bots (one it lacks is refused). Teammate rules, Auto/Manual and teammate caps do not apply; the never list, the sandbox and the host's limits do. It runs in the registered `root` of the first team the two share that has one (`/access`). With none, it runs where the owner's own sessions there run: the host's only registered project, or of several the one whose newest session (`createdAt` or `activeSince`) is newest, the home folder included, since the home-folder rule is for teammates' sessions. A host with no registered project refuses it with what to do there. The task's `origin` is `{kind: "mine", mine: true, machine, name, remoteId}`.
@@ -276,6 +276,7 @@ A question, a review or a handoff of any length goes to a teammate whole. ELU se
 - A longer one goes first, in pieces of 700 KiB, with `elu.text.put` `{id, seq, last, size, sha256, data}`, as pictures do. The message then names it with a part `{url: "urn:elu-code:text:<id>", mediaType: "text/plain", metadata: {<peer extension>: {size, sha256}}}`. The receiving side checks the size and hash, puts the whole text back in place of that part, and then reads the message as usual.
 - What the receiving side holds for its disk, not for the model: a text is at most 64 MB, a teammate has at most 8 texts and 128 MB on their way at once (more is answered as a rate limit, which the sender retries), and pieces not used within 10 minutes are dropped.
 - A teammate on ELU 0.1.19 or earlier refuses a question over 16000 characters, or a review over 160000, and does not know `elu.text.put`. The row then says `@kim needs to update ELU to get a message this long.`
+- A message to a session on another computer of yours goes the same way: a new session, a message to one, and a message sent with files. The pieces go first with `elu.text.put`, which takes them from a computer that is yours on both sides whatever its teammate setting, and the request (`elu.remote.start`, `elu.remote.send`, or the last piece of `elu.remote.files`) carries `longText: {id, size, sha256}` in place of `text`. The host puts the whole text in its place before it reads the request. A piece or a request whose answer was lost is sent again and taken once. A computer of yours on a build that does not know `elu.text.put` gets nothing, and the line says `@devbox needs to update ELU to get a message this long.`
 
 ## Roster
 

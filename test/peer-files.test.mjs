@@ -27,6 +27,8 @@ import { parseCommand } from '../lib/terminal-commands.mjs';
 import { peerFile } from '../lib/peer/paths.mjs';
 import { sendToSession } from '../lib/peer/session-tools.mjs';
 import { sendsTo } from '../lib/remote-helper.mjs';
+import { textMethods } from '../lib/peer/texts.mjs';
+import { FRAME_MAX } from '../lib/peer/transport.mjs';
 
 // Files from one computer of mine to a session on another (lib/peer/files.mjs, remote.mjs).
 // The two daemons are joined by calls, each side's methods running in its own home, as in
@@ -127,6 +129,29 @@ test('a typed message offers the files it names, and they land whole in the sess
     assert.notEqual(landedDir(requests.at(-1).goal), landedDir(requests[0].goal));
     assert.equal(path.dirname(landedDir(requests.at(-1).goal)), inbox);
     assert.deepEqual(readTask(repository(p.project.root), '1').folders, [inbox]);
+  });
+});
+
+// A message longer than one line on the link goes ahead of the last piece in elu.text.put
+// pieces (lib/peer/texts.mjs), and that piece names it: the session gets every character.
+test('a message too long for one line on the link goes with its files whole, named on the last piece of the send', async t => {
+  const p = pair(t), b = batch(t), put = textMethods(p.hostCtx, {})['elu.text.put'];
+  p.toViewer.request = (method, params) => { p.calls.push([method, params]); return withHome(p.devbox.home, () => (method === 'elu.text.put' ? put : p.host[method])(params, p.toHost)); };
+  const body = `${'Then read every line of this. '.repeat(45000)}END`, text = `Use the key ${b.key} first.\n${body}`;
+  assert.ok(Buffer.byteLength(JSON.stringify(text)) > FRAME_MAX, 'longer than one line on the link');
+  const files = withHome(p.laptop.home, () => stageFiles(offerPaths([b.key])));
+  const result = await withHome(p.laptop.home, () => remoteCommand(p.viewCtx, { type: 'remoteFiles', id: p.id, to: p.devbox.identity.key, ref: p.ref, text, files }));
+  assert.deepEqual(result, { id: p.id, files: 1, bytes: 'PRIVATE KEY'.length });
+  const sent = p.calls.filter(([method]) => method !== 'elu.remote.watch');
+  assert.deepEqual(sent.map(([method]) => method), ['elu.text.put', 'elu.text.put', 'elu.remote.files']);
+  assert.ok(sent.every(([method, params]) => Buffer.byteLength(JSON.stringify({ jsonrpc: '2.0', id: 1, method, params })) < FRAME_MAX), 'each request fits one line on the link');
+  assert.equal('text' in sent.at(-1)[1], false); assert.equal(sent.at(-1)[1].longText.size, Buffer.byteLength(text));
+  withHome(p.devbox.home, () => {
+    const [request] = requestsFor(p.project.root), dir = landedDir(request.goal);
+    assert.ok(request.goal.startsWith(`Use the key ${path.join(dir, 'id_ed25519')} first.\n${body}\n\nFiles from @mac: 1 file (1 KB) in `), 'every character of it, its path pointing where the file landed');
+    assert.equal(fs.readFileSync(path.join(dir, 'id_ed25519'), 'utf8'), 'PRIVATE KEY');
+    const staged = path.join(process.env.XDG_CONFIG_HOME, 'elu-code', 'peer', 'texts', 'in', p.laptop.identity.key);
+    assert.deepEqual(fs.existsSync(staged) ? fs.readdirSync(staged) : [], [], 'nothing stays staged');
   });
 });
 

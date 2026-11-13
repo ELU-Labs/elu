@@ -31,6 +31,10 @@ import * as peerFacade from '../lib/peer/index.mjs';
 import { listEntries, usesSavedRules } from '../lib/permission-rules.mjs';
 import { getRecord, records, saveRecord } from '../lib/peer/taskstore.mjs';
 import { task as a2aTask, TaskState } from '../lib/peer/a2a.mjs';
+import { textMethods } from '../lib/peer/texts.mjs';
+import { FRAME_MAX } from '../lib/peer/transport.mjs';
+import { PIECE } from '../lib/peer/pictures.mjs';
+import { savePeerPolicy } from '../lib/peer/settings.mjs';
 
 // A connection as the daemon hands it to a method: admitted, on a build that has remote
 // sessions unless said otherwise, recording what is sent to it.
@@ -535,6 +539,71 @@ test('a computer of mine lists every session here, whoever started it, a page at
   assert.deepEqual(since.gone, [row('Notes for the week').ref]);
   // A cursor from before this daemon started lists everything again.
   assert.equal(withHome(devbox.home, () => host['elu.remote.list']({ since: 1 }, toHost)).full, true);
+});
+
+// A message longer than one line on the link (1 MiB) goes ahead of its request in elu.text.put
+// pieces, as a long message to a teammate does, and the request names it. Nothing is cut.
+test('a message too long for one line on the link reaches a session on my other computer whole, in pieces: a new session and a message to it', async t => {
+  const { laptop, devbox, project, toHost, toViewer, hostCtx, viewCtx, host } = pair(t);
+  const put = textMethods(hostCtx, {})['elu.text.put'];
+  toViewer.request = async (method, params) => { toViewer.sent.push([method, params]); return withHome(devbox.home, () => (method === 'elu.text.put' ? put : host[method])(params, toHost)); };
+  const long = `Plan the coupons.\n${'Every line of this message matters. '.repeat(40000)}THE END`;
+  assert.ok(Buffer.byteLength(JSON.stringify(long)) > FRAME_MAX, 'longer than one line on the link');
+  const started = await withHome(laptop.home, () => remoteCommand(viewCtx, { type: 'remoteStart', to: devbox.identity.key, text: long, permissions: 'ask', bots: [] }));
+  const requests = () => withHome(devbox.home, () => pendingRequests(project.root));
+  assert.equal(requests().length, 1);
+  assert.ok(requests()[0].goal === long, 'every character of it starts the session');
+  const lines = toViewer.sent.map(([method, params]) => [method, Buffer.byteLength(JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }))]);
+  assert.deepEqual(lines.map(([method]) => method), ['elu.text.put', 'elu.text.put', 'elu.text.put', 'elu.remote.start']);
+  assert.ok(lines.every(([, size]) => size < FRAME_MAX), 'each request fits one line on the link');
+  assert.equal('text' in toViewer.sent.at(-1)[1], false, 'the request names the text');
+  // What was sent shows here whole until the session's own chat arrives, and nothing stays staged there.
+  assert.ok(withHome(laptop.home, () => remoteSessions().find(row => row.id === started.id)).text === long);
+  const staged = () => withHome(devbox.home, () => { const dir = path.join(process.env.XDG_CONFIG_HOME, 'elu-code', 'peer', 'texts', 'in', laptop.identity.key); return fs.existsSync(dir) ? fs.readdirSync(dir) : []; });
+  assert.deepEqual(staged(), []);
+  // A message to it, once the conductor started it.
+  const first = requests()[0].id;
+  withHome(devbox.home, () => { liveTask(project.root, { id: '1', goal: 'Plan the coupons.' }); updateRequest(project.root, first, { state: 'running', taskId: '1' }); });
+  const more = `And this too.\n${'Line. '.repeat(200000)}DONE`;
+  assert.ok(Buffer.byteLength(JSON.stringify(more)) > FRAME_MAX);
+  await withHome(laptop.home, () => remoteCommand(viewCtx, { type: 'remoteSend', id: started.id, text: more }));
+  assert.ok(requests().find(row => row.continuationTaskId === '1').goal === more, 'every character of it continues the session');
+  assert.deepEqual(staged(), []);
+  // A short message still travels in its request.
+  toViewer.sent.length = 0;
+  await withHome(laptop.home, () => remoteCommand(viewCtx, { type: 'remoteSend', id: started.id, text: 'And the tests' }));
+  assert.deepEqual(toViewer.sent.map(([method, params]) => [method, params.text]), [['elu.remote.send', 'And the tests']]);
+  // A computer on a build before long messages is said to need an update: nothing is cut to fit, and no session starts.
+  const before = requests().length;
+  toViewer.request = async method => { if (method === 'elu.text.put') throw Object.assign(new Error('Method not found'), { details: { rpc: { code: -32601 } } }); throw new Error('Nothing else is asked.'); };
+  const update = { message: `@${devbox.identity.key.slice(0, 4)} needs to update ELU to get a message this long.` };
+  await assert.rejects(withHome(laptop.home, () => remoteCommand(viewCtx, { type: 'remoteStart', to: devbox.identity.key, text: long, permissions: 'ask', bots: [] })), update);
+  await assert.rejects(withHome(laptop.home, () => remoteCommand(viewCtx, { type: 'remoteSend', id: started.id, text: more })), update);
+  assert.equal(requests().length, before);
+  assert.equal(withHome(laptop.home, () => remoteSessions().length), 1, 'a refused start leaves no row here');
+});
+
+test('the pieces of a long message are taken from a computer of mine whatever its teammate setting, one sent again is taken once, and a message whose text is not there is asked for again', async t => {
+  const { laptop, devbox, project, toHost, hostCtx, host } = pair(t), put = textMethods(hostCtx, {})['elu.text.put'];
+  const bytes = Buffer.from(`Start here.\n${'x'.repeat(PIECE * 2)}`), id = crypto.randomUUID(), sha256 = crypto.createHash('sha256').update(bytes).digest('hex');
+  const piece = seq => ({ id, seq, last: seq === 2, size: bytes.length, sha256, data: bytes.subarray(seq * PIECE, (seq + 1) * PIECE).toString('base64') });
+  const longText = { id, size: bytes.length, sha256 }, start = { ...START, id: crypto.randomUUID(), text: undefined, longText };
+  await withHome(devbox.home, async () => {
+    // Named before its pieces are here: said as a rate limit, which the sender takes as "send it again".
+    await assert.rejects(async () => host['elu.remote.start'](start, toHost), error => error.details?.rpc?.code === -32000 && /has not arrived/.test(error.message));
+    assert.equal(pendingRequests(project.root).length, 0);
+    // Muted as a teammate, it is still my own computer.
+    savePeerPolicy(laptop.identity.key, { muted: true });
+    for (const seq of [0, 1, 1, 2, 2]) assert.deepEqual(put(piece(seq), toHost), { ok: true });
+    const result = await host['elu.remote.start'](start, toHost);
+    assert.ok(pendingRequests(project.root)[0].goal === bytes.toString('utf8'));
+    // Asked again after its answer was lost: the same session, though the text is gone from the staging folder.
+    assert.deepEqual(await host['elu.remote.start'](start, toHost), result);
+    assert.equal(pendingRequests(project.root).length, 1);
+    // A computer that is not mine on both sides and is muted gets the refusal a muted teammate gets.
+    noteTheirs(laptop.identity.key, false);
+    assert.throws(() => put({ ...piece(0), id: crypto.randomUUID() }, toHost), { message: 'This teammate is not taking requests from you.' });
+  });
 });
 
 test('the model and effort of each entry travel with it to my other computer, checked there; an entry without them reads as before', async t => {
