@@ -6,10 +6,10 @@ import { project, fakeClis, git } from './helpers.mjs';
 import { makeTeam } from './peer-helpers.mjs';
 import { ProjectController, registerProject } from '../lib/projects.mjs';
 import { projectFolder, pendingRequests, updateRequest } from '../lib/workspace.mjs';
-import { readTask } from '../lib/state.mjs';
+import { readTask, saveTask } from '../lib/state.mjs';
 import { Conductor, OLDER_CONDUCTOR, conductorTakesStandup, enqueue, saveConductorSettings } from '../lib/conductor.mjs';
 import { personalDirectory } from '../lib/usage.mjs';
-import { lastActivity, readBoard, setDone } from '../lib/kanban.mjs';
+import { addCard, lastActivity, readBoard, setDone } from '../lib/kanban.mjs';
 import { boardRows } from '../lib/board.mjs';
 import { createConversation } from '../lib/runner.mjs';
 import { saveTeamAccess } from '../lib/peer/access.mjs';
@@ -281,4 +281,25 @@ test("the Standup's model reads the owner's other computers apart from his teamm
   assert.deepEqual(board().otherComputers, [{ computer: '@devbox', title: 'Flaky test', column: 'Done' }]);
   assert.equal(board().otherComputersReadOnly, true);
   assert.equal(board().teammates, undefined);
+  // It reads every card: of a column, and of the owner's other computers.
+  saveCards(other, me, Array.from({ length: 60 }, (_, n) => ({ repoId: repo.repoId, id: n.toString(16).padStart(16, '0'), title: `Card ${n}`, column: 'progress', by: 'ana', at: new Date().toISOString() })), { repos });
+  for (let n = 0; n < 45; n++) addCard(controller.repo, `To do ${n}`);
+  assert.equal(board().otherComputers.length, 60);
+  const todo = board().columns.find(column => column.column === 'To do');
+  assert.equal(todo.cards.length, 45); assert.equal(todo.more, undefined);
+});
+
+test("a Standup's model reads every update whole; only when it says that is too long for it does the same turn read them bounded", async t => {
+  const f = setup(t), config = path.join(f.parent, 'bin', 'fake.json');
+  fs.writeFileSync(config, JSON.stringify({ ...JSON.parse(fs.readFileSync(config, 'utf8')), standupTooLong: 60000 }));
+  const standup = createConversation(f.repo, f.controller.draftConfig, '/standup'), kept = readTask(f.repo, standup.id);
+  const updates = Array.from({ length: 45 }, (_, n) => ({ id: `u${n + 1}`, session: `Session ${n + 1}`, agent: 'Claude', computer: 'here', at: new Date(Date.now() - (60 - n) * 60000).toISOString(), text: `Update ${n + 1}: ${'x'.repeat(1500)}` }));
+  saveTask(f.repo, { ...kept, standup: { ...kept.standup, updates } });
+  const task = await f.controller.ask('What is done?', standup.id).finished;
+  assert.equal(task.state, 'answered');
+  const asked = inputs(f.fake).filter(row => row.vendor === 'claude' && row.input.includes("owner's Standup"));
+  assert.equal(asked.length, 2);
+  for (const n of [1, 45]) assert.ok(asked[0].input.includes(`Update ${n}:`), `the whole has update ${n}`);
+  assert.ok(asked[1].input.includes('Update 45:')); assert.ok(!asked[1].input.includes('Update 1:'));
+  assert.match(asked[1].input, /older updates are left out here for length/);
 });

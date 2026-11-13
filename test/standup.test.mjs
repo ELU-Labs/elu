@@ -4,7 +4,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { PassThrough } from 'node:stream';
 import { project, fakeClis, keyLike, git } from './helpers.mjs';
-import { makeTeam, answeringClis } from './peer-helpers.mjs';
+import { makeTeam, answeringClis, withHome } from './peer-helpers.mjs';
+import { markMine, noteTheirs } from '../lib/peer/mine.mjs';
 import { ProjectController, registerProject } from '../lib/projects.mjs';
 import { projectFolder, pendingRequests, updateRequest } from '../lib/workspace.mjs';
 import { readTask, saveTask, taskTitle } from '../lib/state.mjs';
@@ -101,9 +102,11 @@ test('what leaves for a teammate: paths cut, and an update that may hold a secre
   assert.deepEqual(held, { text: null, held: true });
 });
 
-test("the Standup's model reads a bounded set of updates, newest first", () => {
+test("the Standup's model reads every update whole, newest first; only a model that says they are too long for it is given fewer", () => {
   const updates = Array.from({ length: 45 }, (_, n) => ({ id: `u${n + 1}`, at: new Date(Date.UTC(2026, 10, 1, 0, n)).toISOString(), text: 'x'.repeat(n === 44 ? 5000 : 100) }));
-  const kept = boundedUpdates(updates);
+  const whole = boundedUpdates(updates);
+  assert.equal(whole.length, 45); assert.equal(whole[0].id, 'u45'); assert.equal(whole[0].text.length, 5000);
+  const kept = boundedUpdates(updates, { fitted: true });
   assert.equal(kept.length, UPDATES_MAX + 1); assert.equal(kept[0].id, 'u45');
   assert.match(kept[0].text, /cut this update here/); assert.ok(kept[0].text.length < 3200);
   assert.match(kept.at(-1).note, /15 older updates are left out/);
@@ -194,7 +197,7 @@ test('a round asks open sessions, lists a working one after the wait, leaves arc
   assert.equal(readTask(f.repo, a.id).state, 'answered');
 });
 
-test('at most 20 of your sessions are asked, newest first; the rest, offline and older computers are listed, and an older one is never sent the question', async t => {
+test("every one of your sessions and your teammates' is asked, newest first; offline and older computers are listed, and an older one is never sent the question", async t => {
   const f = setup(t);
   const first = await f.controller.ask('Explain coupons').finished, model = readTask(f.repo, first.id);
   for (let n = 2; n <= 22; n++) saveTask(f.repo, { ...model, id: String(n), goal: `Session ${n}`, title: `Session ${n}`, createdAt: new Date(Date.now() - n * 60000).toISOString(), runs: model.runs.map(run => ({ ...run, at: new Date(Date.now() - n * 60000).toISOString() })), messages: [] });
@@ -202,9 +205,12 @@ test('at most 20 of your sessions are asked, newest first; the rest, offline and
     { key: 'd'.repeat(64), name: '@devbox', online: true, standup: false, sessions: [{ here: false, where: '@devbox', key: 'd'.repeat(64), ref: '0123456789abcdef:1', title: 'Flaky test', at: Date.now(), state: 'answered', waits: null, last: '' }] },
     { key: 'e'.repeat(64), name: '@mini', online: false, standup: true, sessions: [{ here: false, where: '@mini', key: 'e'.repeat(64), ref: '0123456789abcdef:2', title: 'Docs', at: Date.now(), state: 'answered', waits: null, last: '' }] },
   ];
-  const plan = await standupPlan({ root: f.root, id: '999' }, { sources: { computers, teammates: () => [] } });
-  assert.equal(plan.asked.length, 20); assert.equal(plan.asked[0].title, 'Explain coupons');
-  assert.deepEqual(plan.notAsked.map(row => row.why).sort(), ['@devbox runs an older ELU', '@mini is offline', 'more than 20 of your sessions', 'more than 20 of your sessions'].sort());
+  const kim = 'f'.repeat(64), now = new Date().toISOString();
+  const people = () => [{ peer: kim, name: 'kim', online: true, sessions: Array.from({ length: 25 }, (_, n) => ({ id: n.toString(16).padStart(16, '0'), title: `Kim ${n}`, column: 'progress', by: 'kim', at: now, standup: true })) }];
+  const plan = await standupPlan({ root: f.root, id: '999' }, { sources: { computers, teammates: people } });
+  assert.equal(plan.asked.filter(row => !row.team).length, 22); assert.equal(plan.asked[0].title, 'Explain coupons');
+  assert.equal(plan.asked.filter(row => row.team).length, 25);
+  assert.deepEqual(plan.notAsked.map(row => row.why).sort(), ['@devbox runs an older ELU', '@mini is offline'].sort());
   // A round never sends a computer whose hello lacks standup: 1 the question.
   const sent = [];
   const peer = { peerStatus: () => ({ running: true }), sendPeerCommand: body => { sent.push(body); return { id: 'x' }; }, awaitCommand: async () => ({}) };
@@ -347,4 +353,12 @@ test('another computer of mine whose hello lacks standup: 1 is never sent the qu
   assert.deepEqual(await remoteCommand(ctx, { type: 'remoteStandup', to: key, round: newRound(), refs: [] }), { older: true });
   assert.deepEqual(await remoteCommand({ session: () => null }, { type: 'remoteStandupRead', to: key, round: newRound() }), { offline: true });
   assert.deepEqual(requests, []);
+});
+
+test('another computer of mine is sent every session of the round to ask', async t => {
+  const { founder, member } = makeTeam(t), key = member.identity.key, sent = [];
+  const ctx = { me: founder.identity, session: () => ({ remoteHello: { remote: 1, standup: 1 }, request: async (method, params) => { sent.push([method, params]); return { asked: [], skipped: [] }; } }) };
+  const refs = Array.from({ length: 25 }, (_, n) => `0123456789abcdef:${n + 1}`);
+  await withHome(founder.home, async () => { markMine(founder.identity.key, key); noteTheirs(key, true); await remoteCommand(ctx, { type: 'remoteStandup', to: key, round: newRound(), refs }); });
+  assert.deepEqual(sent.map(([method, params]) => [method, params.refs.length]), [['elu.remote.standup', 25]]);
 });

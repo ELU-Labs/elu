@@ -12,7 +12,7 @@ import { saveTask, taskPlace } from '../lib/state.mjs';
 import { projectFolder } from '../lib/workspace.mjs';
 import { registerProject } from '../lib/projects.mjs';
 import { boardColumns, closeSession, readBoard, setDone } from '../lib/kanban.mjs';
-import { BYTES_MAX as CARD_BYTES, CARDS_MAX, NAME_MAX, TITLE_MAX, cardsFor, cleanCard, fitCards, cleanCards, cleanProofs, localRepos, proofsFor, repoProof, saveCards, saveLocalRepos, saveProofs, sessionCards, teammateSessions } from '../lib/peer/cards.mjs';
+import { BYTES_MAX as CARD_BYTES, NAME_MAX, TITLE_MAX, cardsFor, cleanCard, fitCards, cleanCards, cleanProofs, localRepos, proofsFor, repoProof, saveCards, saveLocalRepos, saveProofs, sessionCards, teammateSessions } from '../lib/peer/cards.mjs';
 import { peerFile } from '../lib/peer/paths.mjs';
 import { createIdentity, identity as loadIdentity } from '../lib/peer/identity.mjs';
 import { appendOp, createTeam, head, makeOp, merge, readLog } from '../lib/peer/roster.mjs';
@@ -433,7 +433,7 @@ test('a told session card keeps only its own fields, each cleaned and within its
   assert.equal(cleanCard(cardOf({ by: 7 })).by, null);
   for (const bad of [{ column: 'todo' }, { column: 'archived' }, { title: '\x1b[2J\x07' }, { repoId: 'abc' }, { id: '../x' }, { id: 5 }, { at: 'yesterday' }]) assert.equal(cleanCard(cardOf(bad)), null, JSON.stringify(bad));
   assert.deepEqual([cleanCard(cardOf({ plan: '../x' })).plan, cleanCard(cardOf({ remote: 'a b' })).remote], [undefined, undefined]);
-  assert.equal(cleanCards(Array.from({ length: 300 }, (_, n) => cardOf({ id: n.toString(16).padStart(16, '0') }))).length, CARDS_MAX);
+  assert.equal(cleanCards(Array.from({ length: 300 }, (_, n) => cardOf({ id: n.toString(16).padStart(16, '0') }))).length, 300, 'every card is kept');
   assert.equal(cleanCards([cardOf(), cardOf({ title: 'Again' })]).length, 1);
   assert.deepEqual([cleanCards(null), cleanCards({ 0: cardOf() })], [[], []]);
   // Proofs are for one pair of machines and one first commit.
@@ -503,6 +503,31 @@ test('every session in a repository a teammate proves they have is told them, fr
     assert.deepEqual(columns.find(row => row[0] === 'Which tax rate?'), ['Which tax rate?', 'done']);
     closeSession(atAna.repo, '2');
     assert.equal(sessionCards({ me: ana.identity.key, owner: 'ana', repos: anaRepos, now: Date.now() + 1000 }).some(row => row.card.title === 'Which tax rate?'), false);
+  });
+});
+
+test('every session is told and shown: every finished one of a repository, and every card of one teammate on a board', t => {
+  const crew = makeTeam(t), ana = crew.founder, sara = crew.member, now = Date.now();
+  const atAna = withHome(ana.home, () => {
+    const repo = folderProject(t), shop = cloneIn(repo, 'shop');
+    for (let id = 1; id <= 25; id++) { session(repo, id, shop, { goal: `Finished ${id}`, state: 'answered', createdAt: new Date(now - 3600000).toISOString() }); setDone(repo, { task: { id: String(id) } }, true); }
+    session(repo, 26, shop, { goal: 'Still open' });
+    return { repo, shop };
+  });
+  const anaRepos = withHome(ana.home, () => localRepos(now));
+  const rows = withHome(ana.home, () => sessionCards({ me: ana.identity.key, owner: 'ana', repos: anaRepos, now: now + 1000 }));
+  assert.equal(rows.filter(row => row.card.column === 'done').length, 25, 'every finished session is told');
+  assert.equal(rows.length, 26);
+  withHome(sara.home, () => {
+    const repo = folderProject(t); cloneIn(repo, 'shop', { from: atAna.shop });
+    const saraRepos = localRepos(now);
+    fs.mkdirSync(peerFile(), { recursive: true });
+    fs.writeFileSync(peerFile('state.json'), JSON.stringify({ key: sara.identity.key, running: true, at: new Date().toISOString(), teams: [{ id: crew.teamId, members: [{ key: ana.identity.key, name: 'ana', online: true }] }] }));
+    saveLocalRepos(saraRepos);
+    saveProofs(ana.identity.key, proofsFor(ana.identity.key, sara.identity.key, anaRepos));
+    const repoIdOf = rows[0].card.repoId;
+    saveCards(ana.identity.key, sara.identity.key, Array.from({ length: 150 }, (_, n) => cardOf({ repoId: repoIdOf, id: n.toString(16).padStart(16, '0'), title: `Card ${n}` })));
+    assert.equal(teammateSessions(repo.root).people[0].sessions.length, 150, 'every card of one teammate is shown');
   });
 });
 
@@ -700,9 +725,9 @@ test('my other computer is told each session\'s Task with its card, or its first
   assert.equal(cleanCard(cardOf({ task: { ...plan(), state: 'rejected' } }), { mine: true }).task, undefined);
   assert.equal(cleanCard(cardOf({ task: plan() })).task, undefined, 'not from a teammate');
   assert.deepEqual(cleanTold({ ...plan(), state: 'proposed' }), null, 'a teammate\'s told Task is never one that waits');
-  const big = Array.from({ length: 60 }, (_, n) => cardOf({ id: n.toString(16).padStart(16, '0'), task: { ...plan(), description: '\u{1F600}'.repeat(2000) } }));
+  const big = Array.from({ length: 160 }, (_, n) => cardOf({ id: n.toString(16).padStart(16, '0'), task: { ...plan(), description: '\u{1F600}'.repeat(2000) } }));
   const fitted = fitCards(big);
-  assert.equal(fitted.length, 60, 'every card still goes'); assert.ok(Buffer.byteLength(JSON.stringify(fitted)) <= CARD_BYTES);
+  assert.equal(fitted.length, 160, 'every card still goes'); assert.ok(Buffer.byteLength(JSON.stringify(fitted)) <= CARD_BYTES);
   assert.ok(fitted[0].task); assert.equal(fitted.at(-1).task, undefined);
 });
 
