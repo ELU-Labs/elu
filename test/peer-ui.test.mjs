@@ -379,6 +379,41 @@ test('a thread dialog acts on the letter it names, only while its field is empty
   await until(() => peer.sent().some(row => row.type === 'continue' && row.id === 'answer-1'), 'continued from the dialog');
 });
 
+test('a thread names its project: the one a teammate\'s message runs in here, the one I asked from, or the share I named; one with no project has no such line', { timeout: 30000 }, async t => {
+  const p = project(later(t)); environment(t, p.parent); registerProject(repository(p.root));
+  const name = path.basename(p.root);
+  const peer = fakePeer({ items: [
+    // Sara's message names no project; its session runs in this one.
+    { id: 'incoming:task-in', kind: 'incoming', peer: SARA, name: 'sara', project: null, root: p.root, text: 'How do we rotate keys?', at: ago(1), state: 'submitted', threadId: 'th-in' },
+    // A result of mine that waits to go, from the work in this project.
+    { id: 'held:result-1', kind: 'held', result: true, peer: SARA, name: 'sara', project: null, root: p.root, text: 'Keys rotate nightly now.', question: 'Rotate the keys nightly.', at: ago(2), state: 'held', threadId: 'th-held' },
+    // A question I asked from this project, naming none of hers, and her answer.
+    { id: 'answer:1', kind: 'answer', peer: SARA, name: 'sara', project: null, root: p.root, text: 'Use v2.', question: 'Which endpoint?', at: ago(4), state: 'answered', threadId: 'th-out' },
+    // One I sent to a share of Li's by its name.
+    { id: 'asked:2', kind: 'asked', peer: LI, name: 'li', project: 'api', root: p.root, text: 'Where are the fixtures?', at: ago(5), state: 'submitted', threadId: 'th-api' },
+    // One that came with no project and waits for one.
+    { id: 'incoming:task-none', kind: 'incoming', peer: LI, name: 'li', project: null, root: null, text: 'Anyone there?', at: ago(6), state: 'submitted', threadId: 'th-none' },
+  ] });
+  const v = await view(t, { peer });
+  await send(v, '/chats'); await until(() => v.current.view === 'chats', 'Chats');
+  const [, threads] = v.panels.teamLists;
+  const shown = async (who, pattern) => {
+    await openRow(v, who === 'sara' ? /@sara\s+direct/ : /@li\s+offline/, `@${who}`);
+    await until(() => threads.items.some(item => pattern.test(plainItem(item))), `row ${pattern}`);
+    threads.focus(); selectRow(threads, pattern); v.input.write('\r');
+    await until(() => modal(v, `Thread with @${who}`), `the thread with @${who}`);
+    const said = modal(v, `Thread with @${who}`).children.find(child => child.options?.scrollable).getContent(); await closeDialog(v, `Thread with @${who}`);
+    return said;
+  };
+  for (const [who, pattern] of [['sara', /asks you/], ['sara', /result ready/], ['sara', /answered/]]) {
+    const said = await shown(who, pattern);
+    assert.ok(said.startsWith(`Project: ${name}\n`), `${pattern}: ${said.slice(0, 80)}`); assert.doesNotMatch(said, /not named/);
+  }
+  assert.ok((await shown('li', /you asked/)).startsWith('Project: api\n'));
+  const none = await shown('li', /asks you/);
+  assert.doesNotMatch(none, /Project:|not named/); assert.match(none, /^Anyone there\?/);
+});
+
 test('Shift letters and typed text never fail silently, and nothing opens an external editor', async t => {
   const { v, peer } = await teamView(t);
   const [, threads] = v.panels.teamLists, status = () => v.panels.status.getText(), screen = v.current.screen;
