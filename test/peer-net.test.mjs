@@ -2064,8 +2064,17 @@ test('review over the network, a handoff that waits for accept, and status rows 
   assert.equal(served.kind, 'review'); assert.match(served.text, /value\.trim\(\)/);
   await run(sara.home, { type: 'approve', id: held.id });
   await until(() => askRecord(ana.home, askId)?.state === 'answered', 'review answer');
-  liveTask(mine.root, { id: '2', files: { 'src/coupon.mjs': `// ${'a'.repeat(96)}\n`.repeat(1700) } });
-  assert.throws(() => withHome(ana.home, () => reviewText(mine.root, '2')), /over 160000 characters/);
+  // A diff of any size goes to Sara whole: this one is over 1 MiB, more than one line on the
+  // link carries, so it goes ahead of its message in pieces. ELU 0.1.19 refused it over 160000 characters.
+  liveTask(mine.root, { id: '2', files: { 'src/coupon.mjs': `// ${'a'.repeat(96)}\n`.repeat(12000) } });
+  const big = withHome(ana.home, () => reviewText(mine.root, '2'));
+  assert.ok(Buffer.byteLength(big) > 1024 * 1024, String(big.length));
+  const second = await run(ana.home, { type: 'review', to: 'sara', root: mine.root, taskId: '2' });
+  const bigServed = await until(() => records(sara.home).find(row => row.kind === 'review' && row.text.length > 160000), 'the long review served');
+  assert.equal(bigServed.text, big, 'every character of the diff reached the review');
+  const heldLong = await until(() => item(sara.home, 'held'), 'the long review run and its held reply');
+  await run(sara.home, { type: 'approve', id: heldLong.id });
+  await until(() => askRecord(ana.home, second.askId)?.state === 'answered', 'long review answer');
 
   // A handoff is never auto-accepted: it waits with nothing queued until Sara picks w and a mode.
   const handoff = await run(ana.home, { type: 'handoff', to: 'sara', project: 'app', text: 'Add a coupon expiry check.' });
