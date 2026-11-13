@@ -4494,3 +4494,20 @@ test('an update check that fails says nothing and the app opens all the same', a
   await until(() => asked === 1, 'the check'); await new Promise(resolve => setTimeout(resolve, 200));
   assert.doesNotMatch(v.current.panels.status.getText(), /is out|offline/);
 });
+
+test('kill -TERM puts the terminal back at once, before the sessions have stopped, so a kill while they stop leaves no mouse tracking on', { timeout: 15000 }, async t => {
+  const p = setup(t), v = await view(t, { repo: p.repo }), controller = v.current.controller, close = controller.close.bind(controller);
+  // Stopping what this window runs takes a while, as a session that is slow to stop does.
+  let release; const stopping = new Promise(resolve => { release = resolve; });
+  controller.close = async () => { await stopping; return close(); };
+  await until(() => /\x1b\[\?1000h/.test(v.raw) && /\x1b\[\?1049h/.test(v.raw), 'mouse tracking on and the alternate screen');
+  const before = v.raw.length, after = () => v.raw.slice(before);
+  process.emit('SIGTERM');
+  try {
+    await until(() => /\x1b\[\?1000l/.test(after()) && /\x1b\[\?1006l/.test(after()) && /\x1b\[\?1049l/.test(after()) && /\x1b\[\?25h/.test(after()), 'mouse tracking off, the cursor shown and the normal screen, while it still stops', 3000);
+    assert.ok(!v.current.screen.destroyed, 'the window has not finished closing');
+    // Nothing is drawn over the terminal after that.
+    const quiet = v.raw.length; await pause(200); assert.equal(v.raw.length, quiet);
+  } finally { release(); }
+  await v.finished;
+});
