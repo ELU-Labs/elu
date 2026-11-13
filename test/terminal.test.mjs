@@ -116,6 +116,7 @@ async function view(t, options = {}) {
 const cardDialog = v => v.current.screen.children.find(child => !child.destroyed && child.options?.label?.trim() === 'Your session');
 const cardRows = v => cardDialog(v)?.children.find(child => child.type === 'list')?.items.map(item => item.getText().trimEnd()) ?? [];
 const cardHint = v => cardDialog(v)?.children.filter(child => child.type === 'text').map(child => child.getText()).join('\n') ?? '';
+const cardButton = v => cardDialog(v)?.children.find(child => child.type === 'button');
 function modal(v, title) {
   return v.current.screen.children.find(child => !child.destroyed && child.options?.label?.trim() === title);
 }
@@ -2343,8 +2344,8 @@ test('Kanban adds tasks, starts one with the lead, opens its session, and moves 
   const done = panels.kanbanLists[3]; done.focus(); done.select(0);
   v.input.write('<'); await until(() => items(2).some(text => /Uppercase coupon codes/.test(text)), 'reopened');
   needs.focus(); needs.select(0); v.input.write('\r');
-  await until(() => cardRows(v).length, 'Enter shows the card'); v.input.write('\r');
-  await until(() => v.current.view === 'chat' && v.current.session === '3' && /Uppercase coupon codes/.test(panels.header.getText()), 'Enter there opens its session');
+  await until(() => cardButton(v), 'Enter shows the card, with Go to session'); v.input.write('\r');
+  await until(() => v.current.view === 'chat' && v.current.session === '3' && /Uppercase coupon codes/.test(panels.header.getText()), 'Enter there presses Go to session: its session');
   assert.equal(panels.back.getText().trim(), '‹ Kanban'); assert.equal(panels.tabs[2].style.underline, true, 'Kanban stays the current tab');
   // From Kanban a session takes the whole width: no list beside it, and ‹ Kanban leads back.
   assert.equal(panels.back.hidden, false); assert.equal(panels.boardBox.hidden, true); assert.deepEqual([panels.chat.aleft, panels.chat.width, panels.ask.aleft, panels.ask.width], [0, v.current.screen.width, 0, v.current.screen.width]);
@@ -3541,14 +3542,21 @@ test('a session opened from Kanban takes the whole width, and ‹ Kanban or Esc 
   const p = twoSessions(t), v = await view(t, { repo: p.repo }), panels = v.current.panels, focused = () => v.current.screen.focused;
   await sized(v, 100, 30);
   await send(v, '/kanban'); await until(() => v.current.view === 'kanban' && panels.kanbanLists[2].items.some(item => /Trim coupon codes/.test(item.getText())), 'Kanban, with the ready session under Needs you');
-  // Enter shows the card: no Task yet, so its first message; Enter there opens its session.
-  const needs = panels.kanbanLists[2]; pickRow(needs, /Trim coupon codes/); v.input.write('\r');
-  await until(() => cardRows(v).includes('No Task yet'), 'Enter shows the card');
+  // A click on the card shows it, not its session: no Task yet, so its first message, and the Go to session button.
+  const needs = panels.kanbanLists[2]; pickRow(needs, /Trim coupon codes/);
+  click(v, needs.items[needs.selected]);
+  await until(() => cardRows(v).includes('No Task yet'), 'a click shows the card');
+  assert.equal(v.current.view, 'kanban'); assert.equal(v.current.session, null);
   assert.deepEqual(cardRows(v).slice(0, 3), ['Trim coupon codes before they are compared at checkout', 'Needs you', 'you · this computer']);
   assert.ok(cardRows(v).includes('Trim coupon codes before they are compared at checkout'));
-  assert.match(cardHint(v), /enter open the session · ↑↓ scroll · esc close/);
-  v.input.write('\r');
-  await until(() => v.current.view === 'chat' && v.current.session === '4' && /^sample app {2}· {2}Trim coupon codes before they are compared at checkout {2}· {2}ready$/.test(panels.header.getText()), 'Enter opens its session');
+  assert.equal(cardButton(v)?.getText().trim(), 'Go to session'); assert.equal(focused(), cardButton(v), 'the button has the focus');
+  assert.match(cardHint(v), /enter go to session · ↑↓ scroll · esc close/); assert.doesNotMatch(cardHint(v), /open the session/);
+  // Esc closes it; Enter on the card shows it again, and a click on the button opens its session.
+  v.input.write('\x1b'); await until(() => !cardDialog(v), 'Esc closes it'); assert.equal(v.current.view, 'kanban');
+  pickRow(needs, /Trim coupon codes/); v.input.write('\r'); await until(() => cardButton(v), 'Enter shows the card');
+  click(v, cardButton(v));
+  await until(() => v.current.view === 'chat' && v.current.session === '4' && /^sample app {2}· {2}Trim coupon codes before they are compared at checkout {2}· {2}ready$/.test(panels.header.getText()), 'the button opens its session');
+  assert.equal(cardDialog(v), undefined);
   // No list is behind this session. Its title line reads the session at every redraw: what it shows about schedules comes from this project.
   const titles = new Set(); for (const end = Date.now() + 2600; Date.now() < end;) { titles.add(panels.header.getText()); await new Promise(resolve => setTimeout(resolve, 10)); }
   assert.deepEqual([...titles].filter(text => !/Trim coupon codes before they are compared at checkout/.test(text)), [], 'the title line never shows anything else');
@@ -3583,7 +3591,7 @@ test('Task cards in narrow Kanban columns read their whole titles', { timeout: 3
   await sized(v, 160, 30); await until(() => cards().join('|') === 'Round refunds to cents|Uppercase coupons  to approve · high', 'the detail beside the title where it fits');
 });
 
-test('Enter on my own Kanban card shows its whole Task with its success criteria, subtasks and ETA; Enter there opens the session', { timeout: 30000 }, async t => {
+test('Enter on my own Kanban card shows its whole Task with its success criteria, subtasks and ETA; its Go to session button opens the session', { timeout: 30000 }, async t => {
   const p = setup(t, 'answer'); registerProject(p.repo);
   liveTask(p.root, { id: '4', goal: 'Round refund amounts', state: 'ready' });
   proposeTask(p.repo, '4', { title: 'Round refunds to cents', description: 'One file changes.', goal: 'The amounts are right.', objectives: ['It works', 'Its test passes'], priority: 'high', severity: 'low', criteria: ['A refund of 10.005 reads 10.01', 'No other file changes'], estimateMinutes: 45 });
@@ -3604,9 +3612,18 @@ test('Enter on my own Kanban card shows its whole Task with its success criteria
   assert.match(rows.find(line => line.startsWith('ETA ')), new RegExp(`^ETA ${clockTime(eta).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} · in (44|45) min$`));
   assert.match(rows.at(-1), /^last activity /);
   assert.doesNotMatch(rows.join('\n'), /their machine|only they can change it/);
-  assert.match(cardHint(v), /enter open the session/);
+  // Under the text, the Go to session button, with the focus.
+  assert.equal(cardButton(v)?.getText().trim(), 'Go to session'); assert.equal(v.current.screen.focused, cardButton(v));
+  assert.ok(cardButton(v).atop > cardDialog(v).children.find(child => child.type === 'list').atop, 'under the text');
+  assert.match(cardHint(v), /^enter go to session · ↑↓ scroll · esc close$/m);
+  // The text only reads: clicks on its lines and ↓ leave the card open and the focus on the button.
+  const list = cardDialog(v).children.find(child => child.type === 'list'), goal = list.items[rows.indexOf('Goal')];
+  click(v, goal); click(v, goal); click(v, list.items[0]); click(v, list.items[0]); v.input.write('\x1b[B');
+  await new Promise(resolve => setTimeout(resolve, 300));
+  assert.equal(v.current.view, 'kanban'); assert.ok(cardDialog(v), 'still open'); assert.equal(v.current.screen.focused, cardButton(v));
+  // Enter presses the button.
   v.input.write('\r');
-  await until(() => v.current.view === 'chat' && v.current.session === '4', 'Enter opens its session');
+  await until(() => v.current.view === 'chat' && v.current.session === '4', 'Enter on the button opens its session');
   // The session's own Task block has the ETA and the success criteria too.
   await until(() => /ETA .* · in (44|45) min/.test(panels.chat.getText()) && /Success criteria/.test(panels.chat.getText()) && /A refund of 10\.005 reads 10\.01/.test(panels.chat.getText()), 'the Task block in the chat');
 });
