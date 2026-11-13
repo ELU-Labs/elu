@@ -9,6 +9,7 @@ import { saveBot, removeBot } from '../lib/bots.mjs';
 import { enqueue } from '../lib/conductor.mjs';
 import { pendingRequests, updateRequest } from '../lib/workspace.mjs';
 import { project } from './helpers.mjs';
+import { standIn } from './login-item-helpers.mjs';
 import { saveDefaultMode } from '../lib/modes.mjs';
 
 // Local times, so the tests hold in any time zone. 2026-11-09 is a Monday.
@@ -252,4 +253,38 @@ test('the login item checks every minute and keeps only lasting PATH entries', t
   // The real loader refuses inside the test runner, so no test can load a login item.
   assert.throws(() => installScheduler({ platform: 'darwin', home: path.join(dir, 'other'), env }), /Tests must not install login items/);
   assert.equal(fs.existsSync(path.join(dir, 'other')), false, 'refused before writing anything');
+});
+
+test('on macOS the login item is loaded and unloaded through launchctl, which a stand-in first on PATH answers', t => {
+  home(t); const item = standIn(t, 'darwin'), plist = path.join(item.home, 'Library', 'LaunchAgents', 'dev.elu-code.scheduler.plist');
+  const verbs = () => item.calls().map(call => `${call.name} ${call.args[0]}`);
+  // Nothing is loaded yet, so the real bootout fails here too; the install goes on to load it.
+  assert.deepEqual(item.install(), { installed: true, changed: true, files: [plist] });
+  assert.deepEqual(item.loaded(), [plist]); assert.deepEqual(verbs(), ['launchctl bootout', 'launchctl bootstrap']);
+  assert.deepEqual(item.calls()[1].args, ['bootstrap', `gui/${process.getuid()}`, plist]);
+  assert.equal(item.install().changed, false); assert.equal(item.calls().length, 2, 'the same files are not loaded again');
+  // Removed: unloaded first, then the file goes. A second removal finds nothing and calls nothing.
+  assert.deepEqual(item.uninstall(), { removed: true, files: [plist] });
+  assert.deepEqual(item.loaded(), []); assert.deepEqual(item.files(), []); assert.equal(verbs().at(-1), 'launchctl bootout');
+  assert.deepEqual(item.uninstall(), { removed: false }); assert.equal(item.calls().length, 3);
+  // Asked for again, it is loaded again. One whose text changed is unloaded and loaded once.
+  assert.equal(item.install().changed, true); assert.deepEqual(item.loaded(), [plist]);
+  assert.equal(item.install({ env: { ...item.env, LANG: 'en_US.UTF-8' } }).changed, true);
+  assert.deepEqual(item.loaded(), [plist]); assert.deepEqual(verbs().slice(-2), ['launchctl bootout', 'launchctl bootstrap']);
+  // A file that vanished while it was loaded: bootout is still asked for by install, so it loads.
+  fs.rmSync(plist); assert.deepEqual(item.uninstall(), { removed: false });
+  assert.equal(item.install().changed, true); assert.deepEqual(item.loaded(), [plist]);
+  assert.ok(item.calls().every(call => call.name === 'launchctl'), 'every call went to the stand-in');
+});
+
+test('on Linux the login item is enabled and disabled through systemctl --user, which a stand-in first on PATH answers', t => {
+  home(t); const item = standIn(t, 'linux'), units = path.join(item.home, '.config', 'systemd', 'user');
+  const files = [path.join(units, 'elu-code-scheduler.service'), path.join(units, 'elu-code-scheduler.timer')];
+  assert.deepEqual(item.install(), { installed: true, changed: true, files });
+  assert.deepEqual(item.loaded(), ['elu-code-scheduler.timer']);
+  assert.deepEqual(item.calls().map(call => call.args), [['--user', 'daemon-reload'], ['--user', 'enable', '--now', 'elu-code-scheduler.timer']]);
+  assert.deepEqual(item.uninstall(), { removed: true, files });
+  assert.deepEqual(item.loaded(), []); assert.deepEqual(item.files(), []);
+  assert.deepEqual(item.calls().at(-1).args, ['--user', 'disable', '--now', 'elu-code-scheduler.timer']);
+  assert.equal(item.install().changed, true); assert.deepEqual(item.loaded(), ['elu-code-scheduler.timer']);
 });
