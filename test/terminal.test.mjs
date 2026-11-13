@@ -2309,6 +2309,22 @@ test('the 30-second check takes the login item away when the last schedule ended
   check(); assert.deepEqual(calls, ['uninstall'], 'its session was the last place a schedule was on');
 });
 
+test('ELU started over a service file from 0.1.19 writes it again with KillMode=process and has systemd read it again', { timeout: 30000 }, async t => {
+  const p = setup(t), item = standIn(t, 'linux');
+  saveSchedule({ root: p.root, goal: 'Check dependencies for updates', when: parseWhen('every 1h') });
+  item.install();
+  const [service] = item.files(), text = fs.readFileSync(service, 'utf8'); assert.match(text, /^Type=oneshot\nKillMode=process$/m);
+  // What 0.1.19 left: the same file without the line, loaded.
+  fs.writeFileSync(service, text.replace('KillMode=process\n', '')); item.run('systemctl', ['--user', 'daemon-reload']);
+  assert.doesNotMatch(item.units()['elu-code-scheduler.service'], /KillMode/);
+  const before = item.calls().length;
+  await view(t, { repo: p.repo, loginItem: { install: item.install, uninstall: item.uninstall } });
+  await until(() => item.calls().length >= before + 2, 'the start settles the login item');
+  assert.equal(fs.readFileSync(service, 'utf8'), text); assert.equal(item.units()['elu-code-scheduler.service'], text, 'systemd holds the new text');
+  assert.deepEqual(item.calls().slice(before).map(call => call.args), [['--user', 'daemon-reload'], ['--user', 'enable', '--now', 'elu-code-scheduler.timer']]);
+  assert.deepEqual(item.loaded(), ['elu-code-scheduler.timer']);
+});
+
 test('a login item that could not be loaded is asked for again by the 30-second check until it is', { timeout: 30000 }, async t => {
   const p = setup(t), calls = []; let failures = 2;
   const loginItem = { install: () => { calls.push('install'); if (failures-- > 0) throw new Error('Another ELU command holds this lock.'); return { installed: true }; }, uninstall: () => { calls.push('uninstall'); return { removed: true }; } };
