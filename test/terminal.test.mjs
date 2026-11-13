@@ -2843,21 +2843,15 @@ test('f beside y and n allows what waits and gives the session Full access; wher
   await until(() => /Allowed\. Full access: this session no longer asks you\./.test(status()), 'said as it is');
   assert.equal(answer('run-3-a'), 'allow'); assert.equal(answer('run-3-b'), 'allow'); assert.equal(readTask(p.repo, '3').permissions, 'full');
   wants('run-3-c', '3', 'npm test'); await until(() => answer('run-3-c') === 'allow', 'what it asks next is allowed without a key');
-  // A bot's scheduled turn runs with Approve for me at most: its approvals keep y and n, and f does nothing.
+  // A bot's scheduled turn runs in its session's mode, so f gives it Full access as it does the model's turn.
   running('4', 'Sweep the logs', { activeRole: 'bot:scout', messages: [{ at: began, text: 'Sweep the logs', to: '@scout', scheduled: true }] });
   await openTask(v, /Sweep the l/); await until(() => v.current.session === '4', 'the other session is open');
   wants('run-4-a', '4', 'ls logs', 'bot:scout');
-  await until(() => /@scout wants to:\nRun: ls logs\nEsc, then y allow · n deny · esc later/.test(chat()), 'the chat keeps its line');
-  await until(() => /^\? Needs you · Esc, then y allow · n deny/.test(status()) && !/full access/.test(status().split('\n')[0]), 'the status row keeps its line');
-  v.input.write('\x1b'); await until(() => v.current.screen.focused === panels.board && /y allow {2}n deny {2}enter open/.test(keys()), 'the list keeps its keys');
-  v.input.write('f'); await new Promise(resolve => setTimeout(resolve, 300));
-  assert.equal(modal(v, 'Full access'), undefined); assert.equal(answer('run-4-a'), null); assert.equal(readTask(p.repo, '4').permissions, 'ask');
-  // Set to Full access by hand, the session's mode is saved, and the scheduled turn still asks.
-  v.input.write('\r'); await until(() => v.current.screen.focused === panels.ask && v.current.session === '4', 'back in its message box');
-  await send(v, '/permissions full'); await dialog(v, 'Full access', 'y');
-  await until(() => /Full access from the next message; this turn still asks\./.test(status().replace(/\n/g, ' ')), 'said as it is for a scheduled turn');
-  await new Promise(resolve => setTimeout(resolve, 300)); assert.equal(answer('run-4-a'), null); assert.equal(readTask(p.repo, '4').permissions, 'full');
-  v.input.write('\x1b'); await until(() => v.current.screen.focused === panels.board, 'the list'); v.input.write('n'); await until(() => answer('run-4-a') === 'deny', 'denied by hand');
+  await until(() => /@scout wants to:\nRun: ls logs\nEsc, then y allow · n deny · f full access/.test(chat()), 'the chat names f');
+  v.input.write('\x1b'); await until(() => v.current.screen.focused === panels.board && /y allow {2}n deny {2}f full access {2}enter open/.test(keys()), 'the list names f');
+  v.input.write('f'); await dialog(v, 'Full access', 'y');
+  await until(() => answer('run-4-a') === 'allow', 'allowed'); assert.equal(readTask(p.repo, '4').permissions, 'full');
+  wants('run-4-b', '4', 'npm test', 'bot:scout'); await until(() => answer('run-4-b') === 'allow', 'what it asks next is allowed without a key');
 });
 
 // Approvals you give once: a beside y and n shows the rule, asks where, keeps it and allows.

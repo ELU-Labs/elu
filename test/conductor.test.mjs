@@ -108,6 +108,21 @@ test('a bot with its own schedule is left out of the sessions a schedule starts,
   assert.equal(pendingRequests(p.root).filter(value => value.bot === 'nightly').length, 0, 'nothing queued for the bot in those sessions');
 });
 
+test("a bot's schedule runs in a session that edits the checkout in place while it has Full access", async t => {
+  const p = setup(t);
+  saveBot({ name: 'nightly', instructions: 'Check the nightly build.', schedule: 'every 1h' });
+  enqueue(p.root, 'Tidy the notes here', { permissions: 'full', place: 'here', bots: ['nightly'] });
+  conduct(t);
+  await until(() => projectSnapshot(p.repo).tasks.length === 1 && pendingRequests(p.root).every(value => value.state === 'done'), 'the session ran');
+  assert.equal(projectSnapshot(p.repo).tasks[0].place.kind, 'here');
+  assert.equal(runBotSchedules(new Date(), { start: () => true }), 1, 'its first run is queued');
+  const runs = () => pendingRequests(p.root).filter(value => value.bot === 'nightly' && value.scheduled);
+  await until(() => runs().length === 1 && runs()[0].state === 'done', 'the run ended');
+  const task = projectSnapshot(p.repo).tasks[0];
+  assert.doesNotMatch(runs()[0].reason ?? '', /in place/); assert.ok(task.messages.some(row => row.to === '@nightly' && row.scheduled), 'the schedule wrote to it');
+  assert.ok(task.runs.filter(row => row.role === 'bot:nightly').every(row => row.permissions === 'full') && task.runs.some(row => row.role === 'bot:nightly'), 'with Full access');
+});
+
 test('a queued message runs in the background and its request records the chat', async t => {
   const p = setup(t), conductor = conduct(t);
   const sent = enqueue(p.root, 'Can I add multiple agents?');
