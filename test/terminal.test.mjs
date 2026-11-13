@@ -1844,6 +1844,30 @@ test('on a row that waits on an approval y, n, f and a act with Enter, and a mes
   answerApproval('run-3-c', 'deny');
 });
 
+test('in colour, the line of a session that waits on an approval keeps to one row and ends at Enter, with the last message under it', { timeout: 30000 }, async t => {
+  // In colour, as the app runs: a coloured line as wide as its row loses its last word to the next row.
+  const p = setup(t); delete process.env.NO_COLOR;
+  const began = new Date().toISOString();
+  liveTask(p.root, { id: '3', goal: 'Check the build', state: 'ready' });
+  saveTask(p.repo, { ...readTask(p.repo, '3'), permissions: 'ask', state: 'running', activeRole: 'lead', activeSince: began, owner: { pid: process.pid, identity: processIdentity(process.pid) }, messages: [{ at: began, text: 'Check the build' }] });
+  resources(t).files.push(lock(p.repo, 'task-3'));
+  const v = await view(t, { repo: p.repo }), panels = v.current.panels, drawn = () => panels.status.getScreenLines().map(line => line.replace(/\x1b\[[^m]*m/g, ''));
+  await sized(v, 140, 50); await openTask(v, /Check the build/); await until(() => v.current.session === '3', 'its session is open');
+  requestApproval({ id: 'run-3-a', root: p.root, taskId: '3', role: 'lead', vendor: 'claude', tool: 'Bash', input: { command: 'npm install --save-dev prettier eslint typescript' } });
+  await until(() => /^\? Needs you · Esc, then y allow · n deny · f full access, then Enter · Run: npm install/.test(drawn()[0] ?? ''), 'the line that waits');
+  // What is asked is cut to the row. Its end is not pushed onto a second row.
+  assert.deepEqual([drawn().length, panels.status.height], [1, 1]); assert.match(drawn()[0], /\.\.\.$/); assert.ok(drawn()[0].length < panels.status.width);
+  // The last message shows under it, on the second row.
+  await send(v, '/permissions rules remove 99'); await until(() => /No rule has that number/.test(panels.status.getText()), 'a message');
+  assert.deepEqual([drawn().length, panels.status.height], [2, 2]); assert.match(drawn()[1], /^› No rule has that number/);
+  // At 80 columns, with f and a offered, the words do not fit: the row names the letters, and still ends at Enter.
+  answerApproval('run-3-a', 'deny');
+  requestApproval({ id: 'run-3-b', root: p.root, taskId: '3', role: 'lead', vendor: 'claude', tool: 'Bash', input: { command: 'npm test', dangerouslyDisableSandbox: true }, cwd: p.root, access: 'read', rules: 'saved' });
+  await sized(v, 80, 24);
+  await until(() => /^\? Esc, y · n · f · a, Enter · Run: npm test/.test(drawn()[0] ?? '') && drawn()[0].length < panels.status.width, 'the letters at 80 columns');
+  assert.match(panels.chat.getText().replace(/\s+/g, ' '), /Esc, then y allow · n deny · f full access · a always, then Enter/, 'the chat above says the words');
+});
+
 test('in the chat of a session opened from Kanban typing writes a message, and y then Enter answers what it waits on', { timeout: 40000 }, async t => {
   const p = setup(t); registerProject(p.repo);
   const began = new Date().toISOString();
