@@ -8,7 +8,10 @@ import { repository } from '../lib/git.mjs';
 import { projectSnapshot, registerProject } from '../lib/projects.mjs';
 import { saveTask } from '../lib/state.mjs';
 import { pendingRequests, removeRequest, updateRequest, takeRequest } from '../lib/workspace.mjs';
-import { Conductor, enqueue, sendCommand, saveConductorSettings, conductorStatus, conductorNote, conductorRunning, retryRequest, VERSION } from '../lib/conductor.mjs';
+import { Conductor, enqueue, sendCommand, saveConductorSettings, conductorStatus, conductorNote, conductorRunning, conductorAlive, olderConductor, retryRequest, VERSION } from '../lib/conductor.mjs';
+// The conductor of 0.1.16 as published, which has no handover, on today's modules.
+import * as earlier from './fixtures/conductor-0.1.16/conductor.mjs';
+import { pendingRequests as earlierRequests, saveRequest as earlierSave } from './fixtures/conductor-0.1.16/workspace.mjs';
 import { boardRows, barCells, rowCard } from '../lib/board.mjs';
 import { saveSchedule, runScheduleNow, parseWhen } from '../lib/schedules.mjs';
 import { saveBot } from '../lib/bots.mjs';
@@ -254,6 +257,97 @@ test('elu conductor stop ends the new version and the old one still finishing it
   await until(() => old.conductor.runs.size === 0 && old.fresh.runs.size === 0, 'their runs to end');
   assert.equal(task(p.repo, id).state, 'stopped');
   assert.equal(conductorRunning(), false);
+});
+
+// The first update from a version without handover: the conductor of 0.1.16 keeps the lock and
+// starts every queued request it can read until it is idle. claims counts what it started.
+// updated() is the update: the version on disk changes, read at once instead of after 5 s.
+function conductor016(t) {
+  const box = { claims: 0, exits: 0, disk: '0.1.16' };
+  const conductor = new earlier.Conductor({ tickMs: 20, version: '0.1.16', onDisk: () => box.disk, onExit: () => { box.exits++; conductor.stop(); } });
+  const launch = conductor.launch.bind(conductor);
+  conductor.launch = (...args) => { box.claims++; return launch(...args); };
+  conductor.start(); LIVE.get(t).push(conductor);
+  return Object.assign(box, { conductor, updated() { box.disk = '0.1.17'; conductor.versionAt = 0; } });
+}
+const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+test('beside a 0.1.16 conductor, queued requests wait where it never reads, and go back once it has exited', async t => {
+  const p = setup(t), old = conductor016(t);
+  await until(() => olderConductor()?.version === null, 'the 0.1.16 conductor to write its status');
+  assert.equal(conductorAlive(), false, 'it takes no work from this version, so one starts beside it');
+  assert.equal(conductorRunning(), true);
+  const sent = enqueue(p.root, 'New work');
+  assert.equal(request(p.root, sent.id).state, 'queued');
+  assert.equal(earlierRequests(p.root).length, 0, 'the 0.1.16 conductor cannot read it');
+  await pause(200);
+  assert.equal(old.claims, 0);
+  // A request 0.1.16 queued itself, such as its own retry after a rate limit, is moved there by the next write.
+  const own = earlierSave(p.root, 'Queued by 0.1.16', undefined, { state: 'queued', priority: 0, continuationTaskId: null, taskId: null, attempts: 1, notBefore: new Date(Date.now() + 60000).toISOString(), queuedAt: new Date().toISOString(), reason: 'Rate limited. Retrying shortly.' });
+  assert.deepEqual(earlierRequests(p.root).map(row => row.id), [own.id]);
+  updateRequest(p.root, sent.id, { reason: 'Still waiting.' });
+  assert.deepEqual(earlierRequests(p.root).map(row => row.id), [], 'held from it too');
+  // elu conductor stop reaches it. Once it has exited, every request is where any version reads.
+  sendCommand({ type: 'shutdown' });
+  await until(() => old.exits > 0 && olderConductor() === null, 'the 0.1.16 conductor to stop');
+  assert.equal(old.claims, 0);
+  updateRequest(p.root, sent.id, { reason: 'Waiting to start.' });
+  assert.deepEqual(earlierRequests(p.root).map(row => row.id).sort(), [sent.id, own.id].sort());
+  assert.equal(fs.readdirSync(path.join(personalDirectory(), 'requests')).filter(name => name.endsWith('.beside.json')).length, 0);
+});
+
+test('after the first update from 0.1.16, new work and a schedule run on the new version at once, the old turn finishes, and its follow-up then runs once', async t => {
+  const p = setup(t, 'chatty'), first = enqueue(p.root, 'Start the work'), old = conductor016(t);
+  await until(() => request(p.root, first.id)?.state === 'running', 'the first turn');
+  const id = request(p.root, first.id).taskId;
+  await until(() => task(p.repo, id)?.activeRole === 'lead', 'the model working');
+  old.updated();
+  const fresh = conduct(t);
+  assert.equal(fresh.beside, true, 'the new version starts beside the old one, which keeps the lock');
+  const second = enqueue(p.root, 'New work'), more = sayTo(p, id, 'And the follow-up');
+  const schedule = saveSchedule({ root: p.root, goal: 'Check the build', when: parseWhen('daily 9:00') });
+  runScheduleNow(schedule.id, new Date(), { start: () => true });
+  await until(() => requestsOf(fresh).includes(second.id), 'the new version to start the new session');
+  await until(() => pendingRequests(p.root).some(row => row.scheduleId === schedule.id && row.state === 'running'), 'the schedule on the new version');
+  assert.equal(old.claims, 1, 'the old conductor claimed nothing new');
+  assert.deepEqual(requestsOf(old.conductor), [first.id], 'its own turn goes on');
+  assert.equal(request(p.root, first.id).state, 'running', 'the new conductor left that turn alone');
+  assert.equal(conductorStatus().runs.length, 3);
+  assert.equal(conductorNote(), `1 session started before the update finishes. New ones start on ${VERSION}.`);
+  assert.equal(request(p.root, more.id).state, 'queued', 'the follow-up waits for the turn the old version runs');
+  await until(() => old.exits > 0, 'the old conductor to finish its turn and exit', 60000);
+  assert.notEqual(task(p.repo, id).state, 'stopped', 'its turn was never stopped');
+  assert.equal(old.claims, 1);
+  await until(() => !fresh.beside, 'the new version to take the lock');
+  assert.equal(conductorAlive(), true);
+  await until(() => request(p.root, more.id)?.state === 'done', 'the follow-up', 60000);
+  assert.deepEqual(texts(p.repo, id), ['Start the work', 'And the follow-up'], 'each message sent once');
+  assert.deepEqual(texts(p.repo, request(p.root, second.id).taskId), ['New work']);
+  const scheduled = pendingRequests(p.root).filter(row => row.scheduleId === schedule.id);
+  assert.equal(scheduled.length, 1, 'the schedule fired once');
+  await until(() => request(p.root, scheduled[0].id)?.state === 'done', 'the scheduled run', 60000);
+  assert.equal(projectSnapshot(p.repo).tasks.length, 3, 'no request started a session twice');
+  assert.equal(old.claims, 1);
+});
+
+test('work 0.1.16 queued before the update waits for the new version, which counts the old turn against the limit', async t => {
+  const p = setup(t, 'chatty'); saveConductorSettings({ maxAgents: 1 });
+  const first = enqueue(p.root, 'Start the work'), old = conductor016(t);
+  await until(() => request(p.root, first.id)?.state === 'running', 'the first turn');
+  // An app of 0.1.16 queued it while the turn ran; the limit kept it waiting.
+  const backlog = earlier.enqueue(p.root, 'Queued before the update');
+  await pause(200);
+  assert.equal(request(p.root, backlog.id).state, 'queued');
+  old.updated();
+  const fresh = conduct(t);
+  await until(() => !earlierRequests(p.root).some(row => row.id === backlog.id), 'the new version to hold it');
+  await pause(200);
+  assert.equal(request(p.root, backlog.id).state, 'queued', 'one session at a time: the old turn still runs');
+  await until(() => old.exits > 0, 'the old conductor to finish its turn and exit', 60000);
+  await until(() => request(p.root, backlog.id)?.state === 'done', 'the held request', 60000);
+  assert.equal(old.claims, 1, 'the old conductor never started it');
+  assert.equal(fresh.beside, false);
+  assert.deepEqual(texts(p.repo, request(p.root, backlog.id).taskId), ['Queued before the update']);
 });
 
 test('the agent limit and priority decide what starts, and stop frees the slot', async t => {

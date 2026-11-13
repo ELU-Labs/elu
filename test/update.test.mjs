@@ -250,14 +250,14 @@ test('elu update stops an idle conductor and leaves one with sessions running to
   t.after(() => { busy.kill('SIGKILL'); return gone; });
   fs.mkdirSync(path.join(dir, 'conductor'), { recursive: true });
   fs.writeFileSync(path.join(dir, 'conductor.lock'), JSON.stringify({ pid: busy.pid, identity: processIdentity(busy.pid) }));
-  fs.writeFileSync(path.join(dir, 'conductor', 'state.json'), JSON.stringify({ pid: busy.pid, stopped: false, heartbeatAt: new Date().toISOString(), runs: [{ root: '/x', taskId: '1' }] }));
+  fs.writeFileSync(path.join(dir, 'conductor', 'state.json'), JSON.stringify({ pid: busy.pid, version: '3.2.1', stopped: false, heartbeatAt: new Date().toISOString(), runs: [{ root: '/x', taskId: '1' }] }));
   assert.equal(conductorAlive(), true);
   const kept = await s.update({ env });
   assert.equal(kept.message, 'Updated ELU Code 3.2.1 → 3.3.0. Open it again with elu.\n1 running session finishes on 3.2.1. New sessions start on the new version.');
   assert.equal(busy.exitCode, null);
   assert.equal(fs.existsSync(path.join(dir, 'conductor', 'commands')) ? fs.readdirSync(path.join(dir, 'conductor', 'commands')).length : 0, 0);
   // Sessions only queued keep it too: it hands them to the new version's conductor by itself.
-  fs.writeFileSync(path.join(dir, 'conductor', 'state.json'), JSON.stringify({ pid: busy.pid, stopped: false, heartbeatAt: new Date().toISOString(), runs: [], queued: 2 }));
+  fs.writeFileSync(path.join(dir, 'conductor', 'state.json'), JSON.stringify({ pid: busy.pid, version: '3.3.0', stopped: false, heartbeatAt: new Date().toISOString(), runs: [], queued: 2 }));
   r.state.body = { version: '3.3.1' };
   assert.equal((await s.update({ env })).message, 'Updated ELU Code 3.3.0 → 3.3.1. Open it again with elu.');
   assert.equal(busy.exitCode, null);
