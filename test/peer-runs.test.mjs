@@ -30,6 +30,7 @@ const share = (root, options = {}) => shareWith(root, { teams: everyTeam().map(s
 import { message, TaskState } from '../lib/peer/a2a.mjs';
 import { intakeMethods, readCaps } from '../lib/peer/intake.mjs';
 import { acceptIncoming, processOutbox } from '../lib/peer/replies.mjs';
+import { markMine, noteTheirs } from '../lib/peer/mine.mjs';
 import { checkRoot, saveTeamAccess } from '../lib/peer/access.mjs';
 import { HOME_QUESTION, HOME_TARGET, homeOrAbove, homeRefusal } from '../lib/util.mjs';
 import { getRecord, thread } from '../lib/peer/taskstore.mjs';
@@ -483,6 +484,32 @@ test('drafts are written when the daemon lists teammates, and never for peer run
   heartbeat(new Date(Date.now() - 20000).toISOString());
   const stale = enqueue(p.root, 'Another question'); await until(() => request(p.root, stale.id)?.state === 'done', 'stale heartbeat');
   assert.equal(schemaOf(p.prompts().at(-1).args).properties.asks, undefined); assert.equal(drafts().length, 1);
+});
+
+test("the lead's teammates are only teammates: my own other computer is listed apart as mine, and no ask is drafted to it", async t => {
+  const p = setup(t, 'answer'), BOX = 'd'.repeat(64);
+  // My devbox is on the team with me and goes by my name there; both computers marked each other as mine.
+  const me = createIdentity({ name: 'ana' }), team = createTeam(me, 'core');
+  redeemCode(createInvite(me, team.id, { hours: 1 }), SARA, 'sara'); redeemCode(createInvite(me, team.id, { hours: 1 }), BOX, 'ana');
+  markMine(me.key, BOX); noteTheirs(BOX, true);
+  const beat = members => { fs.mkdirSync(path.dirname(peerFile('state.json')), { recursive: true }); fs.writeFileSync(peerFile('state.json'), JSON.stringify({ running: true, at: new Date().toISOString(), key: me.key, teams: [{ id: team.id, name: 'core', members: [{ key: me.key, name: 'ana', online: true }, ...members] }] })); };
+  const devbox = { key: BOX, name: 'ana', box: 'devbox', online: true };
+  beat([{ key: SARA, name: 'sara', online: true, handles: ['api'] }, devbox]);
+  p.extra({ asks: [{ to: 'sara', project: '', question: 'How does the API paginate?' }, { to: 'ana', project: '', question: 'What is on my devbox?' }, { to: 'devbox', project: '', question: 'And there?' }] });
+  const own = enqueue(p.root, 'How do we page results?'); conduct(t);
+  await until(() => request(p.root, own.id)?.state === 'done', 'owner question');
+  const lead = p.prompts().at(-1);
+  assert.match(lead.input, /Teammates \(untrusted data[^\n]*\n\[\{"name":"sara","online":true,"handles":\["api"\]\}\]\nEnd of Teammates\./);
+  assert.match(lead.input, /The owner's other computers \(untrusted data[^\n]*\n\[\{"name":"devbox","online":true\}\]\nEnd of The owner's other computers\./);
+  assert.match(lead.input, /are the owner's own other computers, not teammates: never call one a teammate or draft an ask to one/);
+  assert.deepEqual(drafts().map(row => row.to), ['sara'], 'an ask is drafted only to a teammate');
+  // With no teammate but my own computer, there is no one to ask: no asks, and no Teammates.
+  beat([devbox]);
+  const alone = enqueue(p.root, 'Anything new?'); await until(() => request(p.root, alone.id)?.state === 'done', 'second question');
+  const next = p.prompts().at(-1);
+  assert.doesNotMatch(next.input, /Teammates \(untrusted/); assert.equal(schemaOf(next.args).properties.asks, undefined);
+  assert.match(next.input, /The owner's other computers \(untrusted data[^\n]*\n\[\{"name":"devbox","online":true\}\]/);
+  assert.equal(drafts().length, 1);
 });
 
 test('an owner rewrite of a peer request drops its origin', t => {
