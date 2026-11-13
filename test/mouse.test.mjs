@@ -420,3 +420,65 @@ test('the app asks the terminal for SGR reports, which have no column limit', as
   await until(() => v.sent.includes('\x1b[?1006h'), 'SGR mode on');
   assert.ok(v.sent.indexOf('\x1b[?1006h') > v.sent.indexOf('\x1b[?1005h'), 'after the UTF-8 mode blessed picks');
 });
+
+// Lines of the same length, so a row of the message box starts every eight characters.
+const numbered = count => Array.from({ length: count }, (_, index) => `line ${String(index + 1).padStart(2, '0')}`).join('\n');
+const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+test('a drag held above the message box scrolls it up, the anchor stays on its text, and the copy holds the hidden first lines', async t => {
+  const v = await view(t), value = numbered(12);
+  await typing(v, value);
+  assert.equal(v.ask.childBase, 8, 'the box shows its last four lines');
+  const cursor = v.ask.cursor, at = v.cell(10, 2), top = v.ask.lpos.yi;
+  v.press(at.x, at.y); v.drag(at.x, at.y - 1); v.drag(at.x, top - 2);
+  await until(() => v.ask.childBase === 0, 'scrolled to the top');
+  const range = v.current.selection.range();
+  assert.deepEqual(range.to, { x: at.x, y: at.y + 8 }, 'the anchor moved down with its text, out of view');
+  assert.deepEqual(range.from, { x: v.cell(0, 0).x, y: v.cell(0, 0).y }, 'the highlight takes the lines that came into view');
+  v.release(at.x, top - 2);
+  await until(() => v.copied.length === 1, 'copied');
+  assert.equal(v.copied[0], value.slice(0, 10 * 8 + 3));
+  assert.equal(v.ask.cursor, cursor, 'the cursor stays'); assert.equal(v.ask.getValue(), value, 'the text stays');
+  await pause(150); assert.equal(v.ask.childBase, 0, 'the box stays where the drag took it');
+  // The wheel still ends the highlight.
+  v.input.write(v.report(64, at.x, v.cell(0, 0).y));
+  await until(() => !v.current.selection.active, 'the wheel ends it');
+});
+
+test('a drag held below the message box scrolls it down, and letting go stops it', async t => {
+  const v = await view(t), value = numbered(40);
+  await typing(v, value);
+  v.ask.cursor = 0; v.ask.setValue(); v.current.screen.render();
+  assert.equal(v.ask.childBase, 0);
+  const at = v.cell(1, 3), below = v.ask.lpos.yl;
+  v.press(at.x, at.y); v.drag(at.x + 1, at.y); v.drag(at.x, below);
+  await until(() => v.ask.childBase >= 5, 'scrolling down');
+  v.release(at.x, below);
+  await until(() => v.copied.length === 1, 'copied');
+  const stopped = v.ask.childBase;
+  await pause(300);
+  assert.equal(v.ask.childBase, stopped, 'letting go stops the scrolling');
+  assert.ok(stopped < 36, 'it stopped before the end');
+  // From the press to the end of the last row in view.
+  assert.equal(v.copied[0], value.slice(8 + 3, (stopped + 3) * 8 + 7));
+  assert.equal(v.ask.cursor, 0); assert.equal(v.ask.getValue(), value);
+});
+
+test('a drag held above a session chat scrolls it up, copies the lines scrolled out of view, and the chat stays there', async t => {
+  const v = await view(t), value = numbered(40);
+  await typing(v, value); v.ask.submit();
+  const chat = () => v.current.panels.chat;
+  const drawn = () => { v.current.screen.render(); return v.current.screen.lines.map(line => line.map(cell => cell[1]).join('')); };
+  let at = null;
+  await until(() => { const rows = drawn(), y = rows.findIndex(row => row.includes('┃ line 38')); at = y < 0 ? null : { x: rows[y].indexOf('line 38'), y }; return at; }, 'the end of the message in the chat');
+  assert.ok(chat().childBase > 0, 'the start of the message is out of view');
+  const top = chat().lpos.yi, base = chat().childBase;
+  v.press(at.x + 1, at.y); v.drag(at.x + 1, at.y - 1); v.drag(at.x + 1, top - 1);
+  await until(() => chat().childBase < base, 'scrolling up');
+  assert.equal(v.current.selection.range().to.y, at.y + base - chat().childBase, 'the anchor moves with its text');
+  await until(() => chat().childBase === 0, 'scrolled to the top');
+  v.release(at.x + 1, top - 1);
+  await until(() => v.copied.length === 1, 'copied');
+  assert.ok(v.copied[0].endsWith(`${numbered(37)}\nli`), v.copied[0]);
+  await pause(300); assert.equal(chat().childBase, 0, 'the chat stays where the drag took it');
+});
