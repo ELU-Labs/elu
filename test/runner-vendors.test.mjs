@@ -15,6 +15,8 @@ import * as claude from '../lib/adapters/claude.mjs';
 import { saveRule } from '../lib/permission-rules.mjs';
 import { shimsBase } from '../lib/never-shims.mjs';
 import { turnClock } from '../lib/turn-limits.mjs';
+import { runSteps } from '../lib/run-activity.mjs';
+import { takesExtra } from '../lib/vendor-extras.mjs';
 
 // Every vendor through the runner, against the fakes: Codex leads with its
 // own launch and parse, Grok takes the prompt from a file under a private HOME, and an ACP
@@ -23,8 +25,8 @@ function environment(t, values) {
   const previous = Object.fromEntries(Object.keys(values).map(key => [key, process.env[key]])); Object.assign(process.env, values);
   t.after(() => { for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } });
 }
-function setup(t, vendor, { mode = 'answer', name = undefined, commands = undefined, replay = undefined, note = undefined, badReply = undefined } = {}) {
-  const p = project(t), fake = fakeClis(p.parent, { mode, name, commands, replay, note, badReply });
+function setup(t, vendor, { mode = 'answer', name = undefined, commands = undefined, replay = undefined, note = undefined, badReply = undefined, refuses = undefined } = {}) {
+  const p = project(t), fake = fakeClis(p.parent, { mode, name, commands, replay, note, badReply, refuses });
   environment(t, { ...fake.env, HOME: p.parent, GIT_AUTHOR_NAME: 'Test Owner', GIT_AUTHOR_EMAIL: 'owner@example.invalid', GIT_COMMITTER_NAME: 'Test Owner', GIT_COMMITTER_EMAIL: 'owner@example.invalid' });
   // The lead role as /agents would save it for this vendor: a time limit, no dollar budget.
   const controller = new ProjectController(projectFolder(p.root)); Object.assign(controller.draftConfig.roles.lead, { vendor, maxCostUsd: null });
@@ -288,6 +290,97 @@ test('a Grok Build turn over ACP whose command runs silently past the quiet limi
   const task = await pending;
   assert.equal(task.state, 'answered', JSON.stringify(task.error)); assert.equal(task.result.summary, 'ran it'); assert.equal(fs.readFileSync(f.ran, 'utf8'), 'ran');
   assert.deepEqual(f.calls().at(-1).args.slice(-2), ['agent', 'stdio'], 'over ACP');
+});
+
+// What each vendor did reaches the chat from its run's log (lib/run-activity.mjs). Codex sends
+// its reasoning only because the launch asks for a summary of it; Grok Build headless streams
+// its thought, each tool call and its text; over ACP Grok Build and Antigravity send their
+// thought and each tool call they asked about. The reply itself is never a step.
+const shown = steps => steps.map(step => [step.kind, step.text, ...(step.status ? [step.status] : []), ...(step.note ? [step.note] : [])]);
+test('a Codex run asks for its reasoning summary; its log shows the reasoning, the command that failed, its prose and its edit', async t => {
+  const f = setup(t, 'codex', { mode: 'steps' });
+  const task = await f.controller.ask('Why do lower case coupons fail?', null, { permissions: 'auto' }).finished;
+  const call = f.calls().find(call => call.args[0] === 'exec'), at = call.args.indexOf('model_reasoning_summary="auto"');
+  assert.ok(at > 0 && call.args[at - 1] === '-c', 'the launch asks for the reasoning summary');
+  assert.deepEqual(shown(runSteps(task.runs[0].logFile, { cwd: task.worktree })).slice(-4), [['thinking', '**Reading the coupon module**\n\nThe codes should compare in upper case.'], ['tool', 'Run: npm test', 'failed', 'exit 1'], ['text', 'The test fails on lower case codes. Fixing normalize.'], ['tool', 'Edit: src/coupon.mjs', 'ok']]);
+});
+
+test('a Grok Build headless run streams its thought, tool calls and text; the reply is read from the stream and is not a step', async t => {
+  const f = setup(t, 'grok');
+  fs.mkdirSync(path.join(f.parent, '.grok')); fs.writeFileSync(path.join(f.parent, '.grok', 'auth.json'), '{}\n', { mode: 0o600 });
+  proven('grok', f.bin, '1.0.77', { relay: false });
+  const task = await f.controller.ask(`Run the command ${f.marker} then reply done with the summary "ran it".`, null, { permissions: 'full' }).finished;
+  assert.equal(task.state, 'answered', JSON.stringify(task.error)); assert.equal(task.result.summary, 'ran it'); assert.equal(fs.readFileSync(f.ran, 'utf8'), 'ran');
+  const call = f.calls().at(-1); assert.equal(call.args[call.args.indexOf('--output-format') + 1], 'streaming-json');
+  assert.deepEqual(shown(runSteps(task.runs[0].logFile)), [['thinking', 'Reading the request.'], ['tool', `Run ${f.marker}`, 'ok'], ['text', 'Done reading.']]);
+  assert.equal(task.runs[0].model, 'grok-4.6', 'the end event names the model');
+});
+
+test('over ACP, Grok Build and Antigravity runs show their thought and each tool call the owner was asked about', async t => {
+  for (const vendor of ['grok', 'agy']) {
+    const f = setup(t, vendor);
+    if (vendor === 'grok') { fs.mkdirSync(path.join(f.parent, '.grok')); fs.writeFileSync(path.join(f.parent, '.grok', 'auth.json'), '{}\n', { mode: 0o600 }); }
+    proven(vendor, f.bin, vendor === 'grok' ? '1.0.77' : '1.5.4', { relay: true });
+    const prompt = vendor === 'grok' ? `Run the command ${f.marker} then reply done with the summary "ran it".` : `Run this command: ${f.marker}. Reply with the summary "ran it".`;
+    const pending = f.controller.ask(prompt, null, { permissions: 'ask' }).finished;
+    await answer('deny', { vendor });
+    const task = await pending, steps = shown(runSteps(task.runs[0].logFile));
+    assert.deepEqual(steps.slice(0, 1), [['thinking', 'Reading the request.']], vendor);
+    assert.ok(steps.some(step => step[0] === 'tool' && step[1] === `Run ${f.marker}` && step[2] === 'failed'), `${vendor}: the call the owner denied, failed: ${JSON.stringify(steps)}`);
+    assert.ok(!steps.some(step => /"outcome"/.test(step[1] ?? '')), `${vendor}: never the reply`);
+  }
+});
+
+// The option each launch above carries is one a release may not take. `claude <any flag>
+// --version` exits 0 for a made-up flag, so nothing can be asked first: the program's own file
+// is read for the text (lib/vendor-extras.mjs), and a launch that ends at once over it runs
+// again without. The owner's turn is answered either way, and the refused launch is no run.
+const extras = {
+  claude: { refuses: ['--thinking-display'], given: call => call.args.includes('--thinking-display'), launch: call => call.args.includes('-p'), ask: 'Where is coupon normalization?' },
+  codex: { refuses: ['model_reasoning_summary'], given: call => call.args.some(arg => arg.startsWith('model_reasoning_summary=')), launch: call => call.args[0] === 'exec', ask: 'Where is coupon normalization?' },
+  grok: { refuses: ['streaming-json'], given: call => call.args[call.args.indexOf('--output-format') + 1] === 'streaming-json', launch: call => call.args.includes('--output-format'), ask: 'Reply done with the summary "ran it".' },
+};
+for (const [vendor, extra] of Object.entries(extras)) {
+  test(`a ${vendor} release that ends a launch over ELU's option still answers: the turn runs again without it, and later turns start without it`, async t => {
+    const f = setup(t, vendor, { refuses: extra.refuses });
+    if (vendor === 'grok') { fs.mkdirSync(path.join(f.parent, '.grok')); fs.writeFileSync(path.join(f.parent, '.grok', 'auth.json'), '{}\n', { mode: 0o600 }); proven('grok', f.bin, '1.0.77', { relay: false }); }
+    const launches = () => f.calls().filter(extra.launch).map(extra.given);
+    const task = await f.controller.ask(extra.ask, null, { permissions: vendor === 'grok' ? 'full' : 'auto' }).finished;
+    assert.equal(task.state, 'answered', JSON.stringify(task.error));
+    assert.deepEqual(launches(), [true, false], 'given once, refused, then run without');
+    assert.equal(task.runs.length, 1, 'the refused launch is no run'); assert.equal(task.runs[0].code, 0);
+    assert.doesNotMatch(fs.readFileSync(`${task.runs[0].logFile}.stderr`, 'utf8'), /unknown|invalid value/, 'and leaves nothing of its error on the run');
+    assert.equal(takesExtra(vendor, f.bin), false, 'remembered for this program');
+    const second = await f.controller.ask(extra.ask, task.id).finished;
+    assert.equal(second.state, 'answered', JSON.stringify(second.error));
+    assert.deepEqual(launches(), [true, false, false], 'the next turn starts once, without it');
+    // An update is another program: it is given the option again.
+    const stat = fs.statSync(f.bin); fs.utimesSync(f.bin, stat.atime, new Date(stat.mtimeMs + 5000));
+    assert.equal(takesExtra(vendor, f.bin), true);
+  });
+}
+
+test('a Claude Code program whose file does not hold the option is never started with it; one that fails for another reason fails as before', async t => {
+  const f = setup(t, 'claude');
+  // The stand-in as a release without the option: a program, not a launcher, that does not hold the text.
+  const source = fs.readFileSync(f.bin, 'utf8').replaceAll('--thinking-display', '--thinking\\x2ddisplay');
+  fs.writeFileSync(f.bin, `${source}\n// ${'x'.repeat(300000)}\n`, { mode: 0o755 });
+  assert.equal(takesExtra('claude', f.bin), false);
+  const task = await f.controller.ask('Where is coupon normalization?', null, { permissions: 'auto' }).finished;
+  assert.equal(task.state, 'answered', JSON.stringify(task.error));
+  const launches = f.calls().filter(call => call.args.includes('-p'));
+  assert.equal(launches.length, 1); assert.ok(!launches[0].args.includes('--thinking-display')); assert.ok(launches[0].args.includes('stream-json'), 'the rest of the launch is the same');
+});
+
+test('a launch that ends at once for another reason is tried once more without the option, then reports what the program said; the program keeps its option', async t => {
+  // A release that takes neither this flag nor the launch at all: both starts end the same way.
+  const f = setup(t, 'claude', { refuses: ['--thinking-display', '--json-schema'] });
+  const task = await f.controller.ask('Where is coupon normalization?', null, { permissions: 'auto' }).finished.catch(error => error);
+  const launches = f.calls().filter(call => call.args.includes('-p')).map(call => call.args.includes('--thinking-display'));
+  assert.deepEqual(launches, [true, false]);
+  assert.equal(takesExtra('claude', f.bin), true, 'the option did not cause it, so it is not held against the program');
+  const kept = readTask(f.controller.repo, '1');
+  assert.notEqual(kept.state, 'answered'); assert.match(JSON.stringify(kept.error ?? kept.messages ?? ''), /unknown option '--json-schema'|did not|failed|error/i);
 });
 
 test('a Codex lead whose command was declined reports the denial and asks', async t => {

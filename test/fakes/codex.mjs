@@ -14,6 +14,9 @@ let account=null;try{account=JSON.parse(Buffer.from(JSON.parse(fs.readFileSync(p
 if(cfg.calls)fs.appendFileSync(cfg.calls, JSON.stringify({vendor,args,...(cfg.accounts&&args[0]==='exec'?{account,config:process.env.CODEX_HOME??null}:{})})+'\n');
 if(args.includes('--version')){console.log('codex-cli 0.166.0-alpha.5.1');process.exit(0);}
 if(args.includes('--help')){console.log('--print --add-dir --restricted --safe-mode --setting-sources --settings --strict-mcp-config --mcp-config --no-chrome --permission-mode --permission-prompts --tools --allowedTools --disallowedTools --output-format --verbose --json-schema --max-budget-usd --session-id --ignore-user-config --ignore-rules --json --sandbox --cd --output-schema --config --skip-git-repo-check');process.exit(0);}
+// refuses (fake.json): config keys this release does not take. An exec started with one ends at
+// once with one line on stderr and nothing printed.
+{const unknown=args[0]==='exec'?(cfg.refuses??[]).find(key=>args.some(arg=>arg.startsWith(`${key}=`))):null;if(unknown){console.error(`error: unknown configuration key: ${unknown}`);process.exit(1);}}
 // `debug models --bundled` as the real CLI prints it: the catalog as JSON, one row hidden.
 // fake.json may carry its own rows as `models`.
 if(args[0]==='debug'&&args[1]==='models'){console.log(JSON.stringify({models:cfg.models??[{slug:'big-model',display_name:'Big Model',description:'Frontier model for the most demanding work.',visibility:'list',priority:2},{slug:'quick-model',display_name:'Quick Model',description:'Fast and affordable model for easier tasks.',visibility:'list',priority:1},{slug:'review-model',display_name:'Review Model',description:'Automatic approval review model.',visibility:'hide',priority:9}]}));process.exit(0);}
@@ -76,5 +79,19 @@ if(tooLong){const message="Codex ran out of room in the model's context window. 
 if(Array.isArray(cfg.commands)&&args.some(a=>/^default_permissions=|^sandbox_mode=/.test(a))){cfg.commands.forEach((command,i)=>{const item={id:`item_${i+1}`,type:'command_execution',command:`/bin/zsh -c '${command}'`};console.log(JSON.stringify({type:'item.started',item:{...item,aggregated_output:'',exit_code:null,status:'in_progress'}}));const r=spawnSync('/bin/sh',['-c',command],{env:process.env,encoding:'utf8'});console.log(JSON.stringify({type:'item.completed',item:{...item,aggregated_output:`${r.stdout??''}${r.stderr??''}`,exit_code:r.status,status:r.status===0?'completed':'failed'}}));});}
 // A lead run shows one sandboxed command; in declined mode the auto reviewer refused it.
 else if(args.some(a=>/^default_permissions=|^sandbox_mode=/.test(a))){const status=mode==='declined'?'declined':'completed';console.log(JSON.stringify({type:'item.started',item:{id:'item_1',type:'command_execution',command:'/bin/zsh -lc \'npm test\'',aggregated_output:'',exit_code:null,status:'in_progress'}}));console.log(JSON.stringify({type:'item.completed',item:{id:'item_1',type:'command_execution',command:'/bin/zsh -lc \'npm test\'',aggregated_output:status==='completed'?'ok\n':'',exit_code:status==='completed'?0:null,status}}));if(status==='declined'){result.outcome='needs_input';result.question='The test run was declined. Allow npm test?';}}
+// steps (mode): a turn that shows its work as exec --json writes it. A reasoning item comes only
+// with -c model_reasoning_summary set to something other than none: every model in the release's
+// catalog defaults to none, and then the stream has no reasoning item. gate (fake.json): a file
+// the turn waits for while its command runs.
+if(mode==='steps'){
+ const summary=args.flatMap((a,i)=>args[i-1]==='-c'&&/^model_reasoning_summary=/.test(a)?[a.split('=')[1].replace(/"/g,'')]:[]).at(-1)??'none';
+ const item=(type,value)=>console.log(JSON.stringify({type,item:value}));
+ if(summary!=='none')item('item.completed',{id:'item_10',type:'reasoning',text:'**Reading the coupon module**\n\nThe codes should compare in upper case.'});
+ item('item.started',{id:'item_11',type:'command_execution',command:"/bin/zsh -c 'npm test'",aggregated_output:'',exit_code:null,status:'in_progress'});
+ if(cfg.gate){while(!fs.existsSync(cfg.gate))await new Promise(resolve=>setTimeout(resolve,20));}
+ item('item.completed',{id:'item_11',type:'command_execution',command:"/bin/zsh -c 'npm test'",aggregated_output:'not ok 1\n',exit_code:1,status:'failed'});
+ item('item.completed',{id:'item_12',type:'agent_message',text:'The test fails on lower case codes. Fixing normalize.'});
+ item('item.completed',{id:'item_13',type:'file_change',changes:[{path:path.join(process.cwd(),'src','coupon.mjs'),kind:'update'}],status:'completed'});
+}
 console.log(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:JSON.stringify(result)}}));
 console.log(JSON.stringify({type:'turn.completed',usage:{input_tokens:0,output_tokens:0}}));

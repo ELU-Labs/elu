@@ -32,6 +32,9 @@ test('a run records the tokens and model its vendor reported, and none where it 
   // Grok Build: its one JSON result.
   const grok = JSON.stringify({ text: '{}', stopReason: 'end_turn', usage: { input_tokens: 10, cache_read_input_tokens: 2, cache_creation_input_tokens: 0, output_tokens: 5 } });
   assert.deepEqual(runUsage('grok', grok), { tokens: { input: 10, output: 5, cacheRead: 2, cacheWrite: 0 }, model: null });
+  // A streaming-json run: its end event, not the per-response usage lines before it.
+  const streamed = [{ type: 'text', data: '{}' }, { type: 'usage', usage: { input_tokens: 99, output_tokens: 99 } }, { type: 'end', stopReason: 'end_turn', usage: { input_tokens: 10, cache_read_input_tokens: 2, cache_creation_input_tokens: 0, output_tokens: 5 }, modelUsage: { 'grok-4.6': { inputTokens: 10, outputTokens: 5, cacheReadInputTokens: 2 } } }].map(row => JSON.stringify(row)).join('\n');
+  assert.deepEqual(runUsage('grok', streamed), { tokens: { input: 10, output: 5, cacheRead: 2, cacheWrite: 0 }, model: 'grok-4.6' });
   // Antigravity reports none; nor does a log of noise, a negative count, or a result without usage.
   assert.deepEqual(runUsage('agy', claude), { tokens: null, model: null });
   assert.deepEqual(runUsage('claude', 'not json\n{"type":"result"}'), { tokens: null, model: null });

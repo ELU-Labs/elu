@@ -20,7 +20,7 @@ import { Conductor, enqueue } from '../lib/conductor.mjs';
 import { boardRows, remoteRow, rowActions, rowTitle } from '../lib/board.mjs';
 import { remoteSessions as remoteGlue } from '../lib/terminal-remote.mjs';
 import { teamPath } from '../lib/peer/roster.mjs';
-import { readTask, saveTask, taskPlace } from '../lib/state.mjs';
+import { readTask, saveTask, taskDir, taskPlace } from '../lib/state.mjs';
 import { spawnSync } from 'node:child_process';
 import { projectFolder } from '../lib/workspace.mjs';
 import { registerProject } from '../lib/projects.mjs';
@@ -320,6 +320,126 @@ test('a handoff I work on as my own on my other computer shows there with its ap
   assert.ok(seen, 'the laptop shows it'); assert.equal(seen.title, 'Run evals');
   assert.deepEqual(seen.approvals.map(item => item.id), ['approval-h1']);
   assert.deepEqual(await withHome(devbox.home, () => host['elu.remote.answer']({ id: remoteId, approval: 'approval-h1', decision: 'allow' }, toHost)), { answered: true });
+});
+
+// The owner's case, on a session that runs on his other computer: what its model thinks and
+// does shows here as it happens, and folds into one line above its reply once the turn ends,
+// as in a session here. Each step goes once, and again when it changes.
+test('what a turn does on my other computer shows here step by step, then folds above its reply', async t => {
+  const { team, laptop, devbox } = machines(t);
+  const project = withHome(devbox.home, () => { const project = registeredProject(t); saveTeamAccess(team.teamId, { root: project.root }); markMine(devbox.identity.key, laptop.identity.key); noteTheirs(laptop.identity.key, true); return project; });
+  withHome(laptop.home, () => { markMine(laptop.identity.key, devbox.identity.key); noteTheirs(devbox.identity.key, true); });
+  const toHost = connection(laptop.identity.key), toViewer = connection(devbox.identity.key);
+  const hostCtx = context(devbox.identity, { [laptop.identity.key]: toHost }), viewCtx = context(laptop.identity, { [devbox.identity.key]: toViewer });
+  const host = hostMethods(hostCtx), viewer = viewMethods(viewCtx);
+  toViewer.request = (method, params) => withHome(devbox.home, () => host[method](params, toHost));
+  const started = await withHome(laptop.home, () => remoteCommand(viewCtx, { type: 'remoteStart', to: devbox.identity.key, text: 'Why do coupons fail?', permissions: 'ask' }));
+  const viewed = () => withHome(laptop.home, () => remoteSessions().find(row => row.id === started.id));
+  // Each tick there, its events reach here in order; a gap is caught up.
+  let given = 0;
+  const tick = async () => {
+    withHome(devbox.home, () => hostTick(hostCtx));
+    const pushes = toHost.sent.filter(([method]) => method === 'elu.remote.events');
+    for (const [, params] of pushes.slice(given)) withHome(laptop.home, () => viewer['elu.remote.events'](params, toViewer));
+    given = pushes.length;
+    if (viewed().behind) await withHome(laptop.home, () => viewTick(viewCtx));
+  };
+  await tick();
+  // The session there is a step into its turn: a thought, a file read, a command running.
+  const say = content => JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [content] }, parent_tool_use_id: null });
+  const { repo, worktree } = withHome(devbox.home, () => liveTask(project.root, { id: '1', goal: 'Why do coupons fail?', state: 'running' }));
+  const log = path.join(taskDir(repo, '1'), 'lead-1.log'), startedAt = new Date(Date.now() - 65000).toISOString();
+  fs.writeFileSync(log, [say({ type: 'thinking', thinking: 'The codes should compare in upper case.' }), say({ type: 'tool_use', id: 't1', name: 'Read', input: { file_path: path.join(worktree, 'src', 'coupon.mjs') } }),
+    JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 't1', content: 'x' }] } }), say({ type: 'tool_use', id: 't2', name: 'Bash', input: { command: 'npm test' } })].join('\n') + '\n');
+  withHome(devbox.home, () => { saveTask(repo, { ...readTask(repo, '1'), activeLog: log, activeSince: startedAt }); const [request] = pendingRequests(project.root); updateRequest(project.root, request.id, { state: 'running', taskId: '1' }); });
+  await tick();
+  let open = false;
+  const glue = remoteGlue({ facade: { mineRows: () => [], remoteSessions: () => [] }, peerRead: () => null, peerCommand: async () => ({}), chatMessage: ({ title, text }) => `${title}\n${text}`, ink: text => text, colour: false, stepsShown: () => open });
+  const drawn = () => glue.view(remoteRow(viewed(), 'devbox'), 80);
+  assert.match(drawn(), /Working on @devbox\n\n✻ The codes should compare in upper case\.\n✓ Read: src\/coupon\.mjs\n● Run: npm test/, 'every step so far, the command still running');
+  const acts = () => toHost.sent.filter(([method]) => method === 'elu.remote.events').flatMap(([, params]) => params.items.flatMap(item => item.events)).filter(event => event.type === 'act');
+  assert.equal(acts().length, 3); assert.ok(!JSON.stringify(acts()).includes(worktree), 'no path of that computer goes');
+  // The command ends and the turn with it: the reply, with the steps folded above it.
+  fs.appendFileSync(log, [JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 't2', content: 'not ok', is_error: true }] } }), say({ type: 'text', text: 'Fixing normalize.' }),
+    JSON.stringify({ type: 'result', subtype: 'success', structured_output: { outcome: 'done', summary: 'Codes compare in upper case now.' } })].join('\n') + '\n');
+  withHome(devbox.home, () => { const task = readTask(repo, '1'); saveTask(repo, { ...task, state: 'answered', activeRole: null, activeLog: null, runs: [{ role: 'lead', vendor: 'claude', logFile: log, code: 0, startedAt, at: new Date().toISOString() }] }); });
+  await tick();
+  assert.equal(acts().length, 5, 'the command again, now failed, and the text: nothing sent twice');
+  assert.match(drawn(), /▸ 4 steps in 1m \d+s · ctrl\+o shows them\n\n[^\n]*on @devbox[^\n]*\nCodes compare in upper case now\./, 'folded above the reply');
+  assert.doesNotMatch(drawn(), /Working on @devbox|✗ Run: npm test/);
+  open = true;
+  assert.match(drawn(), /▾ 4 steps in 1m \d+s · ctrl\+o hides them\n✻ The codes should compare in upper case\.\n✓ Read: src\/coupon\.mjs\n✗ Run: npm test\n• Fixing normalize\.\n\n[^\n]*on @devbox/);
+  // A computer whose ELU sends no runs still shows the newest lines of its activity.
+  const old = { ...viewed(), runs: undefined, state: 'running', steps: [{ at: startedAt, text: 'model: Read src/coupon.mjs' }] };
+  assert.match(glue.view(remoteRow(old, 'devbox'), 80), /Working on @devbox\n\nmodel: Read src\/coupon\.mjs/);
+});
+
+// The owner watches his devbox sessions from his Mac, and saw "is working" for ten minutes with
+// nothing else. What real Claude Code 2.1.322 sends in a long turn (rows in their real
+// shapes, made-up content) shows here as it does there: a thought counted in tokens, how long
+// a silent command has run, the command in the background; and a turn stopped there keeps its steps.
+test('a long turn on my other computer shows here its thought in tokens, how long its command has run and its background command; stopped, its steps stay', async t => {
+  const { team, laptop, devbox } = machines(t);
+  const project = withHome(devbox.home, () => { const project = registeredProject(t); saveTeamAccess(team.teamId, { root: project.root }); markMine(devbox.identity.key, laptop.identity.key); noteTheirs(laptop.identity.key, true); return project; });
+  withHome(laptop.home, () => { markMine(laptop.identity.key, devbox.identity.key); noteTheirs(devbox.identity.key, true); });
+  const toHost = connection(laptop.identity.key), toViewer = connection(devbox.identity.key);
+  const hostCtx = context(devbox.identity, { [laptop.identity.key]: toHost }), viewCtx = context(laptop.identity, { [devbox.identity.key]: toViewer });
+  const host = hostMethods(hostCtx), viewer = viewMethods(viewCtx);
+  toViewer.request = (method, params) => withHome(devbox.home, () => host[method](params, toHost));
+  const started = await withHome(laptop.home, () => remoteCommand(viewCtx, { type: 'remoteStart', to: devbox.identity.key, text: 'Run the coupon tests', permissions: 'ask' }));
+  const viewed = () => withHome(laptop.home, () => remoteSessions().find(row => row.id === started.id));
+  let given = 0;
+  const tick = async () => {
+    withHome(devbox.home, () => hostTick(hostCtx));
+    const pushes = toHost.sent.filter(([method]) => method === 'elu.remote.events');
+    for (const [, params] of pushes.slice(given)) withHome(laptop.home, () => viewer['elu.remote.events'](params, toViewer));
+    given = pushes.length;
+    if (viewed().behind) await withHome(laptop.home, () => viewTick(viewCtx));
+  };
+  await tick();
+  const SESSION = '0e2f1a54-7c3b-4d19-9a6e-5b8c2d7f4a10', ID = '4f1c2b7e-9d3a-4e58-8b61-0a7c5d2e9f34', TEST = 'toolu_01Qm7RtYpL2nXv8KcWd4HsZb', WATCH = 'toolu_01Bn5VgTjM9rPx3LqWz6KdYc';
+  const row = value => JSON.stringify({ ...value, session_id: SESSION, uuid: ID });
+  const say = content => row({ type: 'assistant', message: { id: 'msg_01', role: 'assistant', content: [content] }, parent_tool_use_id: null });
+  const tokens = (total, delta) => row({ type: 'system', subtype: 'thinking_tokens', estimated_tokens: total, estimated_tokens_delta: delta });
+  const task = (subtype, id, fields) => row({ type: 'system', subtype, task_id: id, run_id: `0${id}-85fcba98`, ...fields });
+  const { repo } = withHome(devbox.home, () => liveTask(project.root, { id: '1', goal: 'Run the coupon tests', state: 'running' }));
+  const log = path.join(taskDir(repo, '1'), 'lead-1.log'), now = Date.now(), startedAt = new Date(now - 140000).toISOString();
+  // Written as it was at each time: a log carries no times, and a row's time is its log's last write when read.
+  const write = (at, rows) => { fs.appendFileSync(log, rows.join('\n') + '\n'); fs.utimesSync(log, at / 1000, at / 1000); };
+  write(now - 135000, [tokens(50, 50), tokens(209, 159)]);
+  withHome(devbox.home, () => { saveTask(repo, { ...readTask(repo, '1'), activeLog: log, activeSince: startedAt }); const [request] = pendingRequests(project.root); updateRequest(project.root, request.id, { state: 'running', taskId: '1' }); });
+  await tick();
+  let open = false;
+  const glue = remoteGlue({ facade: { mineRows: () => [], remoteSessions: () => [] }, peerRead: () => null, peerCommand: async () => ({}), chatMessage: ({ title, text }) => `${title}\n${text}`, ink: text => text, colour: false, stepsShown: () => open });
+  const drawn = () => glue.view(remoteRow(viewed(), 'devbox'), 80);
+  assert.match(drawn(), /Working on @devbox\n\n✻ thinking · 209 tokens(\n\n|$)/, 'the thought, counted while it goes');
+  // The thought ends with no text; a watcher goes to the background; the tests print nothing for two minutes.
+  write(now - 130000, [tokens(1240, 1031), say({ type: 'thinking', thinking: '', signature: 'EuYBCkYIBxgCKkD' }),
+    say({ type: 'tool_use', id: WATCH, name: 'Bash', input: { command: 'npm run watch', run_in_background: true } }), task('task_started', 'bd27w0ond', { tool_use_id: WATCH, description: 'npm run watch', is_backgrounded: true, task_type: 'local_bash' }),
+    row({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: WATCH, content: 'Command running in background with ID: bd27w0ond' }] }, parent_tool_use_id: null }),
+    row({ type: 'system', subtype: 'background_tasks_changed', tasks: [{ task_id: 'bd27w0ond', run_id: '0bd27w0ond-85fcba98', task_type: 'local_bash', description: 'npm run watch' }] }),
+    say({ type: 'tool_use', id: TEST, name: 'Bash', input: { command: 'npm test' } }), task('task_started', 'bumf0lxl0', { tool_use_id: TEST, description: 'npm test', is_backgrounded: false, task_type: 'local_bash' })]);
+  await tick();
+  assert.match(drawn(), /Working on @devbox\n\n✻ thought · 1\.2k tokens\n✓ Run: npm run watch\n● Run: npm test · 2m 1\ds\n● 1 background command: npm run watch · 2m 1\ds(\n\n|$)/, 'each line with its time, counted on this computer from when it started there');
+  for (let n = 0; n < 4; n++) write(now - 130000 + (n + 1) * 30000, [row({ type: 'tool_progress', tool_use_id: `${TEST}-heartbeat-${n}`, tool_name: 'Bash', parent_tool_use_id: TEST, elapsed_time_seconds: (n + 1) * 30, heartbeat: true })]);
+  const acts = () => toHost.sent.filter(([method]) => method === 'elu.remote.events').flatMap(([, params]) => params.items.flatMap(item => item.events)).filter(event => event.type === 'act');
+  const sent = acts().length;
+  await tick();
+  assert.equal(acts().length, sent, 'heartbeats that agree with the start change no step: nothing is sent again');
+  assert.deepEqual(acts().slice(-2).map(({ kind, text, status, since, count }) => ({ kind, text, status, since, count })), [{ kind: 'tool', text: 'Run: npm test', status: 'running', since: now - 130000, count: undefined }, { kind: 'background', text: 'npm run watch', status: undefined, since: now - 130000, count: 1 }]);
+  assert.deepEqual(acts().filter(event => event.kind === 'thinking').map(({ text, tokens, live }) => ({ text, tokens, live })), [{ text: '', tokens: 209, live: true }, { text: '', tokens: 1240, live: undefined }], 'the count again when it changed');
+  // Stopped there (/stop): the turn is no run of the session, and what it did stays in its chat here.
+  const at = new Date(now).toISOString();
+  withHome(devbox.home, () => { const kept = readTask(repo, '1'); saveTask(repo, { ...kept, state: 'stopped', activeRole: null, activeLog: null, stops: [{ role: 'lead', logFile: log, startedAt, at }] }); });
+  await tick();
+  assert.match(drawn(), /▸ 3 steps in 2m 20s · stopped · ctrl\+o shows them/);
+  assert.doesNotMatch(drawn(), /Working on @devbox|● Run|background command/);
+  open = true;
+  assert.match(drawn(), /▾ 3 steps in 2m 20s · stopped · ctrl\+o hides them\n✻ thought · 1\.2k tokens\n✓ Run: npm run watch\n■ Run: npm test · stopped after 2m 10s(\n\n|$)/, 'the command it was cut in, and for how long it had run');
+  // A step with a count or a time that is no number is taken without it.
+  const before = viewed().runs.at(-1).steps.length;
+  withHome(laptop.home, () => viewer['elu.remote.events']({ items: [{ id: started.id, events: [{ seq: viewed().seq + 1, type: 'act', run: viewed().runs.at(-1).run, n: before, kind: 'background', text: 'x', since: 'soon', count: -4, tokens: 1.5, seconds: '9' }] }] }, toViewer));
+  assert.deepEqual(viewed().runs.at(-1).steps.at(-1), { kind: 'background', text: 'x', count: 1 });
 });
 
 // a on an approval answered from the other computer keeps the rule where the session runs:
