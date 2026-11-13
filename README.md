@@ -384,6 +384,10 @@ Run `npx -y @elu-labs/elu` from your home folder, not from inside a project you 
 trust: `npx` lets the folder it starts in decide what runs.
 
 The Usage tab lists the vendor command lines ELU Code found and whether each is signed in.
+It keeps several Claude Code or Codex accounts signed in at once, so when one runs out of its
+limit you switch instead of signing in again: `a` adds an account with the vendor's own
+sign-in, Enter on an account makes new turns use it, and `x` forgets one. Each account shows
+its own five-hour and weekly usage ([how accounts are kept](SECURITY.md#several-accounts)).
 Antigravity (`agy`) and Grok Build (`grok`) are checked once on each machine: your first
 message to one starts the check by itself. It takes about seven short turns on that vendor
 and a few minutes. Vendor notes: [docs/vendors](docs/vendors).

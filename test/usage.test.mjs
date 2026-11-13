@@ -103,7 +103,7 @@ const SECRETS = new RegExp([TOKEN, ...OTHERS].join('|'));
 function home(t, { claude = true, codex = true } = {}) {
   const dir = temp(t); fs.mkdirSync(path.join(dir, 'claude')); fs.mkdirSync(path.join(dir, 'codex'));
   if (claude) {
-    fs.writeFileSync(path.join(dir, '.claude.json'), JSON.stringify({ numStartups: 3, oauthAccount: { accountUuid: OTHERS[3], emailAddress: 'owner@example.invalid', organizationName: 'Example Org', planDisplayName: 'Max 20x', userRateLimitTier: 'default_claude_max_20x', hasExtraUsageEnabled: false } }));
+    fs.writeFileSync(path.join(dir, 'claude', '.claude.json'), JSON.stringify({ numStartups: 3, oauthAccount: { accountUuid: OTHERS[3], emailAddress: 'owner@example.invalid', organizationName: 'Example Org', planDisplayName: 'Max 20x', userRateLimitTier: 'default_claude_max_20x', hasExtraUsageEnabled: false } }));
     fs.writeFileSync(path.join(dir, 'claude', '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: TOKEN, refreshToken: OTHERS[0], expiresAt: Date.now() + 3600000, scopes: ['user:inference'], subscriptionType: 'max', rateLimitTier: 'default_claude_max_20x' } }));
   }
   if (codex) {
@@ -184,7 +184,8 @@ test('the Usage tab names the active account per vendor, lists the others, and h
   assert.deepEqual(claude.active, { account: 'owner@example.invalid', plan: 'Max 20x', tier: 'default_claude_max_20x' });
   assert.deepEqual(claude.usage, { observedAt, fiveHour: null, weekly: { usedPercent: 12, resetsAt } });
   assert.deepEqual(claude.others.map(row => [row.account, row.usage.weekly.usedPercent]), [['old@example.invalid', 100]]);
-  assert.equal(claude.switchHint, 'Switch: claude, then /login');
+  assert.equal(claude.keysHint, 'enter use · a add account · x forget');
+  assert.deepEqual(claude.accounts.map(row => [row.login, row.account, row.active]), [['default', 'owner@example.invalid', true]]);
   assert.deepEqual(codex.active, { account: 'owner@example.invalid', plan: 'Team', tier: null }); assert.equal(codex.usage.fiveHour.usedPercent, 34);
   assert.deepEqual([agy.installed, agy.signedIn, agy.usage, agy.signInHint], [true, false, null, 'Run: agy']);
   assert.deepEqual([grok.installed, grok.signedIn, grok.active], [false, false, null]);
@@ -196,7 +197,7 @@ test('the Usage tab names the active account per vendor, lists the others, and h
   assert.match(text, /^Claude {6}owner@example.invalid · Max 20x · active$/m);
   assert.match(text, /^ {12}5h  \[------\]    —   not reported$/m); assert.match(text, /^ {12}wk  \[#-----\]   12%  resets /m);
   assert.match(text, /^ {12}old@example.invalid · last seen \w{3} \d+ · wk 100% then$/m);
-  assert.match(text, /^ {12}Switch: claude, then \/login$/m); assert.match(text, /^Codex {7}owner@example.invalid · Team · active$/m); assert.match(text, /^ {12}5h  \[##----\]   34%  resets /m);
+  assert.match(text, /^ {12}old@example.invalid · last seen \w{3} \d+ · wk 100% then\n {12}enter use · a add account · x forget$/m); assert.match(text, /^Codex {7}owner@example.invalid · Team · active$/m); assert.match(text, /^ {12}5h  \[##----\]   34%  resets /m);
   assert.match(text, /^Antigravity not signed in. Run: agy$/m); assert.match(text, /^Grok Build {2}not installed$/m);
   const details = usageDetailLines(claude, new Date(now)).join('\n');
   assert.match(details, /owner@example.invalid · Max 20x · default_claude_max_20x\nReported \d\d:\d\d\n\n5h  \[------\]    —   not reported\nwk  \[#-----\]   12%  resets /); assert.match(details, /Other accounts\nold@example.invalid · Pro · first seen/);

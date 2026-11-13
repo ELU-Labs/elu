@@ -8,6 +8,7 @@ Labels: **[run]** checked by running the tested release of `codex` against a loc
 
 - `npm i -g @openai/codex` (a user prefix, no sudo).
 - `codex login` and choose ChatGPT. ELU Code reads `codex login status` and accepts only `Logged in using ChatGPT` [run]. An API key sign-in exits 0 too, so it is reported as signed out and the status line says `Codex: sign in with ChatGPT. Run: codex login`. No key variable is read or passed.
+- More ChatGPT accounts: `a` in the Usage tab runs `codex login` with `CODEX_HOME` set to a folder of the account's own, which links to your `~/.codex` for everything but `auth.json` ([../../SECURITY.md](../../SECURITY.md#several-accounts)). Each account's usage is read with its own `app-server`. A sign-in kept in the OS keyring instead of `auth.json` names no account ELU can read, so it is not added [unverified].
 - If another `codex` shim comes first on your PATH (the cmux shim does on some machines), put the real binary first. ELU Code launches with `features.hooks=false`; whether that neutralizes a shim's hooks is [unverified].
 
 ## What each mode launches

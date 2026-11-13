@@ -21,6 +21,8 @@ import { readBoard, sessionClosed, closeSession } from '../lib/kanban.mjs';
 import { proposeTask, approveTask as approvePlan, reportProgress, finishTask, reopenTask } from '../lib/plan.mjs';
 import { saveTask, readTask, taskDir, taskTitle, setTitle, lock } from '../lib/state.mjs';
 import { processIdentity } from '../lib/process.mjs';
+import { activeLogin, listLogins } from '../lib/logins.mjs';
+import { spawnSync } from 'node:child_process';
 import { approvalsDir, requestApproval, answerApproval } from '../lib/approvals.mjs';
 import { defaultMode } from '../lib/modes.mjs';
 import { listEntries, readStore } from '../lib/permission-rules.mjs';
@@ -3274,9 +3276,9 @@ test('vendor rows say how to sign in, Google’s FAQ under agy, and that a vendo
   assert.equal(vendorText({ vendor: 'agy', support: 'lead', available: true, supported: true, signedIn: false }), 'lead · not signed in');
 });
 
-test('Usage shows each account with the usage its sessions reported, r checks again, Enter opens details, and no sign-in reaches disk or the screen', { timeout: 30000 }, async t => {
+test('Usage shows each account with the usage its sessions reported, r checks again, d opens details, and no sign-in reaches disk or the screen', { timeout: 30000 }, async t => {
   const p = setup(t), fake = fakeUsage(t);
-  fs.writeFileSync(path.join(fake.home, '.claude.json'), JSON.stringify({ oauthAccount: { accountUuid: 'uuid-never-shown', emailAddress: 'owner@example.invalid', organizationName: 'Example', planDisplayName: 'Max 20x', userRateLimitTier: 'default_claude_max_20x', hasExtraUsageEnabled: false } }));
+  fs.writeFileSync(path.join(fake.home, 'claude', '.claude.json'), JSON.stringify({ oauthAccount: { accountUuid: 'uuid-never-shown', emailAddress: 'owner@example.invalid', organizationName: 'Example', planDisplayName: 'Max 20x', userRateLimitTier: 'default_claude_max_20x', hasExtraUsageEnabled: false } }));
   const payload = Buffer.from(JSON.stringify({ email: 'owner@example.invalid', 'https://api.openai.com/auth': { chatgpt_plan_type: 'team' } })).toString('base64url');
   fs.writeFileSync(path.join(fake.home, 'codex', 'auth.json'), JSON.stringify({ tokens: { id_token: `h.${payload}.s`, access_token: 'codex-token-never-shown', account_id: 'account-never-shown' } }));
   fs.mkdirSync(personalDirectory(), { recursive: true });
@@ -3287,7 +3289,7 @@ test('Usage shows each account with the usage its sessions reported, r checks ag
   // Opening the tab checks once. The blocks: the active account, its usage, the older account, how to switch.
   // No session on Claude Code has run yet, so its block says when usage shows.
   await until(() => /Usage updated \d\d:\d\d/.test(status()), 'first check');
-  assert.match(text(), /^Claude {6}owner@example.invalid · Max 20x · active\n {12}Usage shows after your next session on Claude Code\.\n {12}old@example.invalid · last seen Nov 9 · wk 100% then\n {12}Switch: claude, then \/login$/m);
+  assert.match(text(), /^Claude {6}owner@example.invalid · Max 20x · active\n {12}Usage shows after your next session on Claude Code\.\n {12}old@example.invalid · last seen Nov 9 · wk 100% then\n {12}enter use · a add account · x forget$/m);
   await until(() => /^Codex {7}owner@example.invalid · Team · active\n {12}5h  \[#-----\]   18%/m.test(text()), 'the Codex block');
   assert.match(text(), /^Antigravity not signed in. Run: agy\nGrok Build {2}not installed\nELU Code spend today not reported$/m);
   assert.ok(panels.usageList.items.every(item => item.getText().length <= 76), 'every line fits the pane');
@@ -3295,13 +3297,14 @@ test('Usage shows each account with the usage its sessions reported, r checks ag
   const saved = JSON.parse(fs.readFileSync(usageFile, 'utf8'));
   fs.writeFileSync(usageFile, JSON.stringify({ ...saved, claude: { observedAt: new Date().toISOString(), fiveHour: null, weekly: { usedPercent: 12, resetsAt: Math.floor(Date.now() / 1000) + 3600 } } }));
   panels.usageList.focus(); await until(() => v.current.screen.focused === panels.usageList, 'list focused');
-  assert.match(panels.keys.getText(), /enter details {2}r refresh/);
+  assert.match(panels.keys.getText(), /enter use {2}a add account {2}x forget {2}d details {2}r refresh/);
   const recorded = () => JSON.parse(fs.readFileSync(accountsFile, 'utf8')).rows.find(row => row.vendor === 'claude' && row.account === 'owner@example.invalid')?.usage?.weekly?.usedPercent;
   assert.equal(recorded(), undefined);
   v.input.write('r'); await until(() => recorded() === 12, 'second check');
-  await until(() => /^Claude {6}owner@example.invalid · Max 20x · active\n {12}5h  \[------\]    —   not reported\n {12}wk  \[#-----\]   12%  resets [^\n]+\n {12}old@example.invalid · last seen Nov 9 · wk 100% then\n {12}Switch: claude, then \/login$/m.test(text()), 'the Claude windows');
-  // Enter opens the vendor's details.
-  panels.usageList.select(0); v.input.write('\r'); await until(() => modal(v, 'Claude usage'), 'details');
+  await until(() => /^Claude {6}owner@example.invalid · Max 20x · active\n {12}5h  \[------\]    —   not reported\n {12}wk  \[#-----\]   12%  resets [^\n]+\n {12}old@example.invalid · last seen Nov 9 · wk 100% then\n {12}enter use · a add account · x forget$/m.test(text()), 'the Claude windows');
+  // Enter on the account in use says so; d opens the vendor's details.
+  panels.usageList.select(0); v.input.write('\r'); await until(() => /New Claude Code turns already use owner@example.invalid\./.test(status()), 'already in use');
+  v.input.write('d'); await until(() => modal(v, 'Claude usage'), 'details');
   const details = dialogText(v, 'Claude usage');
   assert.match(details, /owner@example.invalid · Max 20x · default_claude_max_20x\nReported \d\d:\d\d/); assert.match(details, /wk  \[#-----\]   12%  resets/); assert.match(details, /Other accounts\nold@example.invalid · Pro · first seen Oct 1 · last seen Nov 9 · wk 100% then/);
   await dialog(v, 'Claude usage', '');
@@ -3311,6 +3314,54 @@ test('Usage shows each account with the usage its sessions reported, r checks ag
   assert.doesNotMatch(v.raw, secrets); assert.doesNotMatch(v.frame(), secrets);
   const accounts = JSON.parse(fs.readFileSync(path.join(personalDirectory(), 'accounts.json'), 'utf8')).rows;
   assert.deepEqual(accounts.map(row => [row.vendor, row.account]).sort(), [['claude', 'old@example.invalid'], ['claude', 'owner@example.invalid'], ['codex', 'owner@example.invalid']]);
+});
+
+test('Usage: a signs another account in with the vendor\'s own sign-in, Enter makes new turns use it, and x forgets only ELU\'s copy after y/N', { timeout: 30000 }, async t => {
+  const p = setup(t), asked = [], fakeFile = path.join(p.dir, 'fake.json');
+  const signInAs = loginAs => fs.writeFileSync(fakeFile, JSON.stringify({ ...JSON.parse(fs.readFileSync(fakeFile, 'utf8')), accounts: { loginAs, plan: 'Pro' } }));
+  const fake = fakeUsage(t, { signIn: async ({ vendor, bin, args, env }) => { asked.push({ vendor, args, config: env.CLAUDE_CONFIG_DIR }); return spawnSync(bin, args, { env, encoding: 'utf8' }).status; } });
+  const own = path.join(fake.home, 'claude', '.claude.json'), signedIn = JSON.stringify({ oauthAccount: { emailAddress: 'owner@example.invalid', planDisplayName: 'Max 20x' } });
+  fs.writeFileSync(own, signedIn);
+  const v = await view(t, { repo: p.repo, usage: fake }), panels = v.current.panels, text = () => panels.usageList.items.map(item => item.getText()).join('\n'), status = () => panels.status.getText();
+  const rowOf = pattern => panels.usageList.items.findIndex(item => pattern.test(item.getText()));
+  await send(v, '/usage'); await until(() => v.current.view === 'usage' && !panels.usageBox.hidden, 'Usage tab');
+  await until(() => /Usage updated \d\d:\d\d/.test(status()), 'first check');
+  panels.usageList.focus(); await until(() => v.current.screen.focused === panels.usageList, 'list focused');
+  // A sign-in that does not finish adds nothing and leaves no folder.
+  panels.usageList.select(0); v.input.write('a');
+  await until(() => /No account was added: the Claude Code sign-in did not finish\./.test(status()), 'cancelled');
+  assert.deepEqual(listLogins('claude'), ['default']); assert.deepEqual(fs.readdirSync(path.join(personalDirectory(), 'logins', 'claude')), []);
+  // a: the vendor's own sign-in, in a folder of its own. The owner's own sign-in is untouched and stays in use.
+  signInAs('second@example.com'); v.input.write('a');
+  await until(() => /Added second@example\.com\. Enter on it uses it\./.test(status()), 'added');
+  const [, id] = listLogins('claude');
+  assert.deepEqual(asked.map(row => [row.vendor, row.args]), [['claude', ['auth', 'login']], ['claude', ['auth', 'login']]]);
+  assert.equal(asked[1].config, path.join(personalDirectory(), 'logins', 'claude', id, '.claude'));
+  assert.equal(fs.readFileSync(own, 'utf8'), signedIn); assert.equal(activeLogin('claude'), 'default');
+  await until(() => /^Claude {6}owner@example.invalid · Max 20x · active\n {12}Usage shows after your next session on Claude Code\.\n {12}second@example\.com · Pro\n {12}Usage shows after a session on this account\.\n {12}enter use · a add account · x forget$/m.test(text()), 'both accounts');
+  // The same account again is not added twice.
+  v.input.write('a'); await until(() => /second@example\.com is already signed in here\./.test(status()), 'already here');
+  assert.equal(listLogins('claude').length, 2);
+  // Enter on any line of an account: new turns use it.
+  panels.usageList.select(rowOf(/Usage shows after a session on this account/)); v.input.write('\r');
+  await until(() => /New Claude Code turns use second@example\.com\./.test(status()), 'switched');
+  assert.equal(activeLogin('claude'), id);
+  await until(() => /^Claude {6}owner@example.invalid · Max 20x\n {12}Usage shows after a session on this account\.\n {12}second@example\.com · Pro · active$/m.test(text()), 'the second account in use');
+  // x on the owner's own account: the vendor's sign-in, nothing of ELU's to forget.
+  panels.usageList.select(0); v.input.write('x');
+  await until(() => /owner@example\.invalid is your own sign-in: ELU keeps no copy to forget\./.test(status()), 'own sign-in');
+  // x on the added one asks first; no keeps it, yes forgets it.
+  panels.usageList.select(rowOf(/second@example\.com · Pro · active/)); v.input.write('x');
+  await until(() => modal(v, 'Forget second@example.com'), 'asked');
+  assert.match(dialogText(v, 'Forget second@example.com'), /ELU forgets its copy of the Claude Code sign-in for second@example\.com\. It is not signed out\.\nNew Claude Code turns go back to your own sign-in\./);
+  await dialog(v, 'Forget second@example.com', ''); assert.equal(listLogins('claude').length, 2);
+  panels.usageList.focus(); panels.usageList.select(rowOf(/second@example\.com · Pro · active/)); v.input.write('x');
+  await dialog(v, 'Forget second@example.com', 'y');
+  await until(() => /Forgot second@example\.com\./.test(status()), 'forgotten');
+  assert.deepEqual(listLogins('claude'), ['default']); assert.equal(activeLogin('claude'), 'default');
+  assert.equal(fs.existsSync(path.join(personalDirectory(), 'logins', 'claude', id)), false); assert.equal(fs.readFileSync(own, 'utf8'), signedIn);
+  await until(() => /^Claude {6}owner@example.invalid · Max 20x · active$/m.test(text()) && !/second@example/.test(text()), 'one account again');
+  assert.doesNotMatch(v.raw, /never-shown/); assert.doesNotMatch(v.frame(), /never-shown/);
 });
 
 // Sessions in two panes: the list on the left, and what its cursor is on, on the right.
