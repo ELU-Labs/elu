@@ -3439,6 +3439,45 @@ test('Usage: a leaves ELU\'s screen for a cleared one with one line of ELU\'s, d
   assert.equal(started[1].during, started[1].before);
 });
 
+// The owner's computer with no browser: a on Claude Code, the link opened on another computer,
+// the code that page shows pasted at "Paste code here if prompted >". A terminal wraps a paste in
+// ESC[200~ … ESC[201~ while the app that has it asked for paste marks, and Claude Code 2.1.322
+// sends the line as it came: with ELU's marks left on, the code was refused and no account added.
+test('Usage: a code pasted on the sign-in screen reaches Claude Code as it was copied, and the account is added', { timeout: 30000 }, async t => {
+  const p = setup(t), fakeFile = path.join(p.dir, 'fake.json'), pasted = path.join(p.parent, 'pasted.json'), code = 'FAKEcode-abc123#FAKEstate-xyz789';
+  fs.writeFileSync(fakeFile, JSON.stringify({ ...JSON.parse(fs.readFileSync(fakeFile, 'utf8')), accounts: { loginAs: 'second@example.com', plan: 'Pro', pasted, terminal: true } }));
+  environment(t, { SSH_CONNECTION: '10.0.0.2 52000 10.0.0.3 22', SSH_TTY: '', SSH_CLIENT: '' });
+  const started = []; let v = null;
+  // The terminal: whether the app that has it asked for paste marks, by the last word ELU wrote about them.
+  const marks = () => v.raw.lastIndexOf('\x1b[?2004h') > v.raw.lastIndexOf('\x1b[?2004l');
+  const fake = fakeUsage(t, { platform: 'linux', spawn: (bin, args, options) => {
+    const row = { args, printed: '', marks: null }; started.push(row);
+    const child = spawn(bin, args, { env: options.env, stdio: ['pipe', 'pipe', 'pipe'] });
+    // The owner pastes the code once the sign-in asks for it, then presses Enter.
+    const read = chunk => {
+      row.printed += chunk; if (row.marks !== null || !/Paste code here if prompted > $/.test(row.printed)) return;
+      row.marks = marks(); child.stdin.write(`${row.marks ? `\x1b[200~${code}\x1b[201~` : code}\r`);
+    };
+    child.stdout.on('data', read); child.stderr.on('data', read);
+    return child;
+  } });
+  v = await view(t, { repo: p.repo, usage: fake });
+  const panels = v.current.panels, status = () => panels.status.getText(), text = () => panels.usageList.items.map(item => item.getText()).join('\n');
+  await send(v, '/usage'); await until(() => v.current.view === 'usage' && !panels.usageBox.hidden, 'Usage tab');
+  await until(() => /Usage updated \d\d:\d\d/.test(status()), 'first check');
+  assert.equal(marks(), true, 'ELU takes pastes in marks');
+  panels.usageList.focus(); await until(() => v.current.screen.focused === panels.usageList, 'list focused');
+  panels.usageList.select(0); v.input.write('a');
+  await until(() => /Added second@example\.com\.|No account was added/.test(status()), 'the sign-in ended');
+  assert.deepEqual([started[0].args, started[0].marks], [['auth', 'login'], false], 'no paste marks while the sign-in has the terminal');
+  assert.equal(JSON.parse(fs.readFileSync(pasted, 'utf8')), code);
+  assert.match(started[0].printed, /Paste code here if prompted > Login successful\.\n$/);
+  assert.match(status(), /Added second@example\.com\. Enter on it uses it\./);
+  await until(() => /second@example\.com · Pro/.test(text()), 'the account listed');
+  // Back in ELU, a paste into the message box comes in marks again.
+  assert.equal(marks(), true);
+});
+
 test('Usage: a on a computer with no browser signs a new Codex account in with its device code', { timeout: 30000 }, async t => {
   const p = setup(t), fakeFile = path.join(p.dir, 'fake.json'), started = [];
   const signInAs = loginAs => fs.writeFileSync(fakeFile, JSON.stringify({ ...JSON.parse(fs.readFileSync(fakeFile, 'utf8')), accounts: { loginAs, plan: 'plus' } }));
