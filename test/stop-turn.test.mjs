@@ -53,4 +53,5 @@ test('a stop after the agent answered ends the command it left running in the ba
   assert.equal(said.length, 1); assert.match(said[0].text, /^Stopping also ended a command the agent started: for i in \$\(seq 1 110\); do sleep 1; done\.$/);
   const entries = conversationEntries(controller.repo, task).map(row => row.text);
   assert.equal(entries.includes(ANSWER), true, 'the chat shows the answer');
+  assert.equal(entries.indexOf(said[0].text), entries.indexOf(ANSWER) + 1, 'and the line on what the stop ended right below it');
 });
