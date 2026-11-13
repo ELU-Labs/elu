@@ -156,6 +156,7 @@ Two machines of the same owner (a laptop and a devbox, say) can each start and w
 - A machine already on the team that uses a mine code is refused, and the code stays unused: both sides are told to run `/mine` on each machine instead.
 - `hello` carries `remote: 1`. A build without it is older: it is never sent the methods below, and every action toward it says "@name needs to update ELU to run sessions from here." Nothing falls back to an ask.
 - `hello` carries `files: 1` on a build that takes files (`elu.remote.files`). Files are never sent to a computer whose hello says `remote: 1` without it, nor to one that answers Method not found: the owner is told "@name needs to update ELU to receive files."
+- **What the app calls one.** A computer this machine marked goes by one name wherever the app names it: its box name, else its name on the team, the name Sessions and `/mine` use. That holds in the @ lists, the message boxes, Chats, `/invite`, `/peers` and `/access`; its name on the team still reaches it when typed. It reads "your computer", never teammate. One that has not marked this machine back reads "your computer · waiting for it to confirm" ("waiting to confirm" in the Chats bar), and its screen in Chats says what ends the wait. A message written to it as `@name text` is an ask like any member's: the team's Auto or Manual setting, its rules and the daily limits apply, and a refusal it sends back names "this computer".
 
 Wire, on the existing connection:
 
