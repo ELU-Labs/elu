@@ -14,6 +14,7 @@ import { registerProject } from '../lib/projects.mjs';
 import { closeSession, setDone } from '../lib/kanban.mjs';
 import { CARDS_MAX, NAME_MAX, TITLE_MAX, cardsFor, cleanCard, cleanCards, cleanProofs, localRepos, proofsFor, repoProof, saveCards, saveLocalRepos, saveProofs, sessionCards, teammateSessions } from '../lib/peer/cards.mjs';
 import { peerFile } from '../lib/peer/paths.mjs';
+import { markMine, noteTheirs } from '../lib/peer/mine.mjs';
 import { createIdentity, identity as loadIdentity } from '../lib/peer/identity.mjs';
 import { appendOp, createTeam, head, makeOp } from '../lib/peer/roster.mjs';
 import { createInvite, redeemCode } from '../lib/peer/invite.mjs';
@@ -475,6 +476,14 @@ test('every session in a repository a teammate proves they have is told them, fr
     saveCards(ana.identity.key, sara.identity.key, [{ ...told[0], title: `Loud\x1b[2J\x07 ${'x'.repeat(400)}`, by: 'a\x00na' }]);
     const [loud] = teammateSessions(atSara.repo.root).people[0].sessions;
     assert.deepEqual([loud.title.length, /[\x00-\x1f]/.test(loud.title), loud.by], [TITLE_MAX, false, 'ana']);
+    // Ana's computer is Sara's own (both marked it): a card started by either of their names is
+    // hers, whichever computer it came from; one a real teammate started stays theirs. On a
+    // computer that is not hers, no card is.
+    const by = () => teammateSessions(atSara.repo.root).people.map(person => [person.mine === true, person.sessions.map(card => [card.by, card.own === true]).sort()]);
+    saveCards(ana.identity.key, sara.identity.key, [{ ...told[0], by: 'ana' }, { ...told[1], by: 'sara' }, { ...told[0], id: '9123456789abcdef', by: 'kim' }]);
+    assert.deepEqual(by(), [[false, [['ana', false], ['kim', false], ['sara', false]]]]);
+    markMine(sara.identity.key, ana.identity.key); noteTheirs(ana.identity.key, true);
+    assert.deepEqual(by(), [[true, [['ana', true], ['kim', false], ['sara', true]]]]);
     // Kept off here: none shown.
     setBoardOff(atSara.repo.root, true); assert.deepEqual(teammateSessions(atSara.repo.root), { repos: [], people: [] });
     assert.equal([...localRepos(now).values()].some(row => row.roots.includes(atSara.repo.root)), false, 'and its repositories are proven to nobody');
