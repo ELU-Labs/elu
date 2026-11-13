@@ -33,7 +33,7 @@ import { acceptIncoming, processOutbox } from '../lib/peer/replies.mjs';
 import { checkRoot, saveTeamAccess } from '../lib/peer/access.mjs';
 import { HOME_QUESTION, HOME_TARGET, homeOrAbove, homeRefusal } from '../lib/util.mjs';
 import { getRecord, thread } from '../lib/peer/taskstore.mjs';
-import { applyTask, asks as sentAsks, createAsk, dropHeldResult, getAsk, sendHeldResult } from '../lib/peer/asks.mjs';
+import { applyTask, asks as sentAsks, continueAnswer, createAsk, dropHeldResult, getAsk, sendHeldResult } from '../lib/peer/asks.mjs';
 import { peerItems } from '../lib/peer/index.mjs';
 
 const SARA = 'b'.repeat(64), ME = 'a'.repeat(64);
@@ -546,6 +546,28 @@ test('approved work that fails again and again tells the teammate once for its T
   processOutbox(s.ctx);
   await until(() => s.results('in').some(line => line.text === 'Coupon codes are uppercase now.'), 'the result at sara');
   assert.equal(told(), 1); assert.deepEqual(s.sent, ['SendMessage', 'SendMessage']);
+});
+
+test('c on a thread that shows a result continues the chat with that result, once', t => {
+  const p = setup(t, 'normal'), sara = teammate(p);
+  const saraCtx = { me: { key: SARA, name: 'sara' }, kick: () => {}, event: () => {}, push: () => {}, session: () => null, dial: () => {} };
+  const saraSide = intakeMethods(saraCtx);
+  const asked = createAsk(saraCtx, { to: sara.me.key, kind: 'ask', text: HANDOFF, threadId: 'thread-9', root: p.root, chatTaskId: '7' });
+  const row = () => peerItems().find(item => item.id === `answer:${asked.id}`);
+  const continued = () => pendingRequests(p.root).filter(item => item.continuationTaskId === '7' && item.origin?.threadId === 'thread-9');
+  // The plan is answered and the chat goes on with it: the row leaves the list.
+  applyTask(saraCtx, sara.me.key, a2aTask({ contextId: 'thread-9', state: TaskState.COMPLETED, artifacts: [artifact({ name: 'Answer', text: 'The plan waits for my approval.' })] }), asked.id);
+  assert.equal(row().result, undefined);
+  continueAnswer(saraCtx, asked.id);
+  assert.equal(row(), undefined); assert.equal(continued().at(-1).context, 'The plan waits for my approval.');
+  // The result comes later, with auto-continue off: the row is back and shows it, as a result.
+  saraSide.SendMessage({ message: message({ text: 'Coupon codes are uppercase now.', contextId: 'thread-9', messageId: crypto.randomUUID(), ext: { kind: 'result', project: null, hop: 1, from: { key: sara.me.key, name: 'ana' } } }) }, { key: sara.me.key });
+  assert.equal(row().text, 'Coupon codes are uppercase now.'); assert.equal(row().result, true); assert.equal(continued().length, 1);
+  // c continues the chat with the result, not with the plan again.
+  const next = continueAnswer(saraCtx, asked.id);
+  assert.match(next.goal, /^Continue with the result from @ana shown in the peer data block\.$/); assert.equal(next.context, 'Coupon codes are uppercase now.');
+  assert.equal(continued().length, 2); assert.equal(row(), undefined);
+  assert.throws(() => continueAnswer(saraCtx, asked.id), /already continued/);
 });
 
 test('a result continues the chat the message came from when answers from that teammate continue it', t => {
