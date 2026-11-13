@@ -646,6 +646,49 @@ test('e on a held reply or a held result opens its whole text in the message box
   await until(() => /Dropped the result\. Nothing was sent to @sara\./.test(status()), 'what n did');
 });
 
+test('the status of a held edit tells to take the possible secret out only while the box holds one: it clears as the key is deleted, before Enter', { timeout: 30000 }, async t => {
+  const SECRET = `AKIA${'A1B2'.repeat(4)}`, WHOLE = `Coupon codes are uppercase now. The key is ${SECRET}`;
+  const refusal = 'This result contains a possible secret. Remove it before sending.';
+  const peer = fakePeer({ items: [
+    { id: 'held:result-r1', kind: 'held', result: true, blocked: true, problems: ['aws-access-key'], peer: SARA, name: 'sara', project: null, text: WHOLE, question: 'Make coupon codes uppercase.', at: ago(2), state: 'held', threadId: 'th-2' },
+    { id: 'held:task-1', kind: 'held', peer: SARA, name: 'sara', project: 'web', text: 'The deploy script lives in bin/deploy.', question: 'Where is the deploy script?', at: ago(3), state: 'awaiting-owner', threadId: 'th-1', blocked: false },
+  ], refuse: command => command.type === 'approve' && String(command.text ?? '').includes(SECRET) ? refusal : null });
+  peer.heldText = id => ({ 'held:result-r1': WHOLE, 'held:task-1': 'The deploy script lives in bin/deploy.' })[id] ?? null;
+  const { v } = await teamView(t, { peer });
+  const [, threads] = v.panels.teamLists, ask = v.panels.ask, status = () => v.panels.status.getText().trim();
+  const TAKE = '› Take out the possible secret. Enter sends it to @sara, Esc leaves it held.', READY = '› Enter sends it to @sara. Esc leaves it held.';
+  await openRow(v, /@sara\s+direct/, '@sara');
+  await until(() => threads.items.some(item => /result ready/.test(plainItem(item))), 'the held result');
+  threads.focus(); selectRow(threads, /result ready/); v.input.write('e');
+  await until(() => v.current.screen.focused === ask && ask.getValue() === WHOLE && status() === TAKE, 'the edit, with the key still in it');
+  // Enter with the key still in it: the daemon refuses, and the status says why.
+  await until(() => ask.__listener, 'the box reads'); v.input.write('\r');
+  await until(() => status() === `› ${refusal}`, 'the refusal');
+  assert.equal(ask.getValue(), WHOLE);
+  // He deletes the key, a character at a time. The line stays while the text still holds
+  // it, and is gone with the keystroke after which it no longer does, before any Enter.
+  await until(() => ask.__listener && v.current.screen.focused === ask, 'the box reads again');
+  v.input.write('\x7f');
+  await until(() => ask.getValue() === WHOLE.slice(0, -1), 'one character deleted');
+  await until(() => status() === READY, 'the status once the key is gone');
+  assert.equal(peer.sent().filter(row => row.type === 'approve').length, 1, 'nothing was sent again');
+  // Typed back, the box holds it again and the status says so again.
+  v.input.write(SECRET.at(-1));
+  await until(() => ask.getValue() === WHOLE && status() === TAKE, 'the key typed back');
+  for (let left = SECRET.length; left > 0; left--) v.input.write('\x7f');
+  await until(() => ask.getValue() === WHOLE.slice(0, -SECRET.length) && status() === READY, 'the whole key deleted');
+  v.input.write('in your vault.'); await until(() => ask.getValue().endsWith('in your vault.'), 'typed');
+  assert.equal(status(), READY);
+  v.input.write('\r');
+  await until(() => /Sending the edited result to @sara\./.test(status()) && ask.getValue() === '', 'the edited result went');
+  assert.equal(peer.sent().filter(row => row.type === 'approve').at(-1).text, 'Coupon codes are uppercase now. The key is in your vault.');
+  // An edit that never held one keeps its own line, and says so once a key is typed into it.
+  threads.focus(); selectRow(threads, /reply ready/); v.input.write('e');
+  await until(() => ask.getValue() === 'The deploy script lives in bin/deploy.' && status() === '› Change the text below, then Enter sends it to @sara. Esc leaves it held.', 'the reply in the box');
+  v.input.write(' x'); await until(() => ask.getValue().endsWith(' x'), 'typed into the reply');
+  assert.equal(status(), '› Change the text below, then Enter sends it to @sara. Esc leaves it held.');
+});
+
 test('e on a reply or a result that waits in Sessions opens its text to edit in Chats, and a draft of yours has no e', { timeout: 20000 }, async t => {
   const p = project(later(t)); environment(t, p.parent); registerProject(repository(p.root));
   const SECRET = `AKIA${'A1B2'.repeat(4)}`, WHOLE = `Lowercase input is covered by a test now. The key is ${SECRET}`;
