@@ -825,7 +825,7 @@ test('a computer of mine sends its top agents with its sessions list, and one on
   const list = () => withHome(laptop.home, () => listTick(context(laptop.identity, { [devbox.identity.key]: toViewer })));
   await list();
   const top = withHome(laptop.home, () => remoteMachines()[0].topAgents), ref = withHome(laptop.home, () => remoteMachines()[0].sessions.find(row => row.title === 'Fix the cart total').ref);
-  assert.deepEqual(top.today.rows.map(row => [row.agent, row.title, row.model, row.costUsd, row.tokens?.cacheRead ?? null]), [['@lead', 'Fix the cart total', 'opus 5.5', 4.5, 3000], ['@pair', 'Fix the cart total', 'codex', null, 0]]);
+  assert.deepEqual(top.today.rows.map(row => [row.agent, row.title, row.model, row.costUsd, row.tokens?.cacheRead ?? null]), [['Opus 5.5', 'Fix the cart total', 'opus 5.5', 4.5, 3000], ['@pair', 'Fix the cart total', 'codex', null, 0]]);
   assert.equal(top.today.costUsd, 4.5); assert.equal(top.today.partial, true);
   assert.deepEqual(top.week.rows.map(row => [row.title, row.costUsd]), [['Speed up the build', 7], ['Fix the cart total', 4.5], ['Fix the cart total', null]]);
   // Each row opens the session it names: the id this computer knows it by.
@@ -837,9 +837,9 @@ test('a computer of mine sends its top agents with its sessions list, and one on
   await list();
   assert.equal(withHome(laptop.home, () => remoteMachines()[0].topAgents), null);
   assert.deepEqual(agents().map(row => [row.machine.name, row.top, row.listed]), [['devbox', null, true]]);
-  // Offline, it is left out.
+  // Offline, it sends nothing and is named as offline, so the spend line says it is not counted.
   status.teams[0].members[1].online = false;
-  assert.deepEqual(agents(), []);
+  assert.deepEqual(agents().map(row => [row.machine.name, row.offline, row.top ?? null]), [['devbox', true, null]]);
 });
 
 // The app's side: what Sessions and Projects show of each computer of mine.

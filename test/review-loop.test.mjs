@@ -252,6 +252,21 @@ test('a model that says the prompt is too long reviews the large file as excerpt
   assert.deepEqual(coupon, COUPON);
 });
 
+// Claude Code refuses input over 10MB before it starts. That is a review too long for it, as a
+// model's refusal is: the same review is given the change in a smaller shape. The refused run
+// started nothing and spent nothing, and names the model it was asked for.
+test('a review Claude Code refuses for its input size is reviewed as excerpts, and the refused run spent nothing', async t => {
+  const f = bigChange(t, 'normal', { stdinLimit: 200000 });
+  const task = await f.controller.ask('Normalize coupon codes').finished;
+  assert.equal(task.state, 'ready', JSON.stringify(task.error)); assert.equal(task.reviewStatus, 'passed');
+  const runs = task.runs.filter(run => run.role === 'bot:reviewer');
+  assert.deepEqual(runs.map(run => [run.code, run.started ?? true, run.costUsd, run.ownCost]), [[1, false, 0, true], [0, true, 0, true]], 'the whole change was refused before it started, then the excerpts reviewed');
+  assert.ok(runs.every(run => run.asked === runs[0].asked && runs[0].asked), 'each names the model it was asked for');
+  const reviews = reviewOf(f.inputs('claude'), 'reviewer');
+  assert.equal(reviews.length, 1, 'the refused input never reached the model');
+  assert.ok(reviews[0].includes('as excerpts around each change'));
+});
+
 test('a model that takes no file of the change reviews its diff alone', async t => {
   const f = bigChange(t, 'normal', { tooLong: 'files' });
   const task = await f.controller.ask('Normalize coupon codes').finished;

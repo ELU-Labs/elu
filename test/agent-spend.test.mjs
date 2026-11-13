@@ -39,7 +39,7 @@ test('a run records the tokens and model its vendor reported, and none where it 
   assert.deepEqual(runUsage('claude', ''), { tokens: null, model: null });
 });
 
-test('top agents are one row per agent in a session, most cost first, today or the last seven days, and old runs count without tokens', () => {
+test('top agents are one row per agent in a session, named as the chat names them, most cost first, today or the last seven days, and old runs count without tokens', () => {
   const projects = [{ root: '/work/shop', tasks: [
     task(1, 'Fix the coupons', [
       run('lead', { costUsd: 2, model: 'claude-opus-5-5', tokens: { input: 1200, output: 340, cacheRead: 8100000, cacheWrite: 0 } }),
@@ -58,8 +58,9 @@ test('top agents are one row per agent in a session, most cost first, today or t
   ] }];
   const today = agentSpend(projects, { now: NOW });
   assert.deepEqual(today.rows.map(row => [row.agent, row.title, row.model, row.costUsd === null ? null : Number(row.costUsd.toFixed(2)), row.partial]), [
-    ['@lead', 'Fix the coupons', 'opus 5.5', 12.4, false],
-    ['@lead', 'Old shape', 'claude', 1.1, false],
+    // A session's own agent reads as its model, a vendor's default as the vendor; a bot as @name.
+    ['Opus 5.5', 'Fix the coupons', 'opus 5.5', 12.4, false],
+    ['Claude', 'Old shape', 'claude', 1.1, false],
     ['@reviewer', 'Fix the coupons', 'sonnet 5', 0.3, false],
     ['@writer', 'Notes', 'claude', 0.2, false],
     ['@pair', 'Fix the coupons', 'gpt-6.1-sol', null, false],
@@ -73,12 +74,13 @@ test('top agents are one row per agent in a session, most cost first, today or t
   const week = agentSpend(projects, { now: NOW, days: 7 });
   assert.deepEqual(week.rows.slice(0, 2).map(row => [row.title, row.costUsd]), [['Last week', 50], ['Fix the coupons', 12.4]]);
   assert.ok(!week.rows.some(row => row.title === 'Too old'));
-  // A row with some runs of unknown cost is at least its known cost.
+  // A row with some runs of unknown cost is at least its known cost, and names what reported none.
   const mixed = agentSpend([{ root: '/r', tasks: [task(1, 'Mixed', [run('lead', { costUsd: 3 }), run('lead', { costUsd: null })])] }], { now: NOW });
-  assert.equal(costText(mixed.rows[0]), '≥$3.00'); assert.equal(spendText(mixed), 'at least $3.00');
-  // Nothing reported a cost: no number.
+  assert.equal(costText(mixed.rows[0]), '$3.00 + claude'); assert.equal(spendText(mixed), 'at least $3.00');
+  assert.equal(costText({ costUsd: 3, partial: true }), '≥$3.00', 'a lower bound with no reason known');
+  // Nothing reported a cost: it says so; no run at all spent nothing.
   const none = agentSpend([{ root: '/r', tasks: [task(1, 'Codex only', [run('lead', { vendor: 'codex', costUsd: null })])] }], { now: NOW });
-  assert.equal(costText(none.rows[0]), '—'); assert.equal(spendText(none), 'not reported'); assert.equal(todayCost([], new Date(NOW)), 'not reported');
+  assert.equal(costText(none.rows[0]), 'not reported'); assert.equal(spendText(none), 'not reported'); assert.equal(todayCost([], new Date(NOW)), '$0.00');
   // Tasks of any shape a state file may hold do not break it.
   assert.deepEqual(agentSpend([{ root: '/r', tasks: [{ id: '1' }, { id: '2', runs: null }, null] }], { now: NOW }).rows, []);
 });
@@ -103,9 +105,11 @@ test('what a computer of mine sends is checked, and a build that sends nothing i
   const clean = cleanTopAgents(sent, ref => `id-${ref.split(':')[1]}`);
   assert.deepEqual(clean.today.rows.map(row => [row.id, row.agent, row.title, row.model, row.tokens, row.costUsd, row.partial]), [
     ['id-3', '@lead', 'Fix the build', 'opus 5.5', { input: 10, output: 2, cacheRead: 0, cacheWrite: 0 }, 4, false],
-    ['id-4', '@lead', 'odd agent', '', null, null, false],
+    ['id-4', 'rm -rf', 'odd agent', '', null, null, false],
   ]);
-  assert.deepEqual(clean.week, { costUsd: null, partial: false, rows: [] });
+  // A name that is neither @name nor a model's reads as Model.
+  assert.equal(cleanTopAgents({ today: { rows: [{ ref: `${'b'.repeat(16)}:5`, agent: '$(x)' }] } }).today.rows[0].agent, 'Model');
+  assert.deepEqual(clean.week, { costUsd: null, partial: false, runs: null, unpriced: [], rows: [] });
   assert.equal(cleanTopAgents(undefined), null); assert.equal(cleanTopAgents('x'), null);
   assert.ok(cleanTopAgents({ today: { rows: Array.from({ length: 30 }, (_, at) => ({ ref: `${'c'.repeat(16)}:${at + 1}` })) } }).today.rows.length <= TOP_AGENTS);
 });
@@ -114,12 +118,13 @@ test('tokens read compact, costs and shares say only what was reported', () => {
   assert.deepEqual([0, 950, 1000, 1234, 9949, 9950, 34000, 999499, 999500, 1200000, 12345678, 1100000000, 25e9].map(compact), ['0', '950', '1k', '1.2k', '9.9k', '10k', '34k', '999k', '1M', '1.2M', '12M', '1.1B', '25B']);
   assert.equal(compact(-1), '—'); assert.equal(compact(NaN), '—');
   assert.equal(tokensText({ input: 1200000, output: 340000, cacheRead: 8100000, cacheWrite: 5 }), '1.2M · 340k · 8.1M');
-  assert.equal(tokensText(null), '—');
-  assert.equal(costText({ costUsd: 12.4 }), '$12.40'); assert.equal(costText({ costUsd: null }), '—');
+  assert.equal(tokensText(null), 'not reported'); assert.equal(tokensText(null, { started: false }), 'did not start');
+  assert.equal(costText({ costUsd: 12.4 }), '$12.40'); assert.equal(costText({ costUsd: null }), 'not reported');
+  assert.equal(costText({ costUsd: 1.09, partial: true, unpriced: ['codex'] }), '$1.09 + codex');
   assert.equal(shareText({ costUsd: 12.4 }, 97.51), '13%'); assert.equal(shareText({ costUsd: 0.1 }, 97.51), '<1%'); assert.equal(shareText({ costUsd: null }, 97.51), '—'); assert.equal(shareText({ costUsd: 1 }, 0), '—');
 });
 
-test('the table labels the cost once, and a narrow pane drops whole columns right to left without wrapping', () => {
+test('the table labels the cost once, and a narrow pane drops the share, then the model, the tokens and where, keeping the cost, without wrapping', () => {
   const rows = [
     { agent: '@lead', title: 'Make the coupon codes upper case everywhere', where: '', model: 'opus 5.5', tokens: { input: 1200000, output: 34000, cacheRead: 8100000, cacheWrite: 0 }, costUsd: 12.4, partial: false },
     { agent: '@pair', title: 'Make the coupon codes upper case everywhere', where: 'on devbox', model: 'gpt-6.1-sol', tokens: null, costUsd: null, partial: false },
@@ -128,21 +133,23 @@ test('the table labels the cost once, and a narrow pane drops whole columns righ
   assert.equal(wide.length, 3);
   assert.match(wide[0], /^Agent +Session +Model +in · out · cache +Cost \(API price\) +Share$/);
   assert.match(wide[1], /^@lead +Make the coupon codes upper case everywhere +opus 5\.5 +1\.2M · 34k · 8\.1M +\$12\.40 +62%$/);
-  assert.match(wide[2], /^@pair +Make the coupon .* +on devbox +gpt-6\.1-sol +— +— +—$/);
+  assert.match(wide[2], /^@pair +Make the coupon .* +on devbox +gpt-6\.1-sol +not reported +not reported +—$/);
   assert.equal(wide.join('\n').match(/Cost \(API price\)/g).length, 1, 'the cost column is labelled once');
-  const headers = width => agentTable(rows, { width, total: 20 })[0].split(/ {2,}/);
+  const headers = width => agentTable(rows, { width, total: 20 })[0].split(/ {2,}/).filter(Boolean);
   let last = null;
   for (let width = 120; width >= 12; width--) {
     const lines = agentTable(rows, { width, total: 20 });
     assert.equal(lines.length, 3, `${width}: one line per row`);
     for (const line of lines) { assert.ok(line.length <= width, `${width}: ${JSON.stringify(line)}`); assert.ok(!line.includes('\n')); }
-    // Columns only ever go from the right: what is left is always a prefix of the full set.
-    // (Below 15 columns only Agent and the start of Session are left, cut at the edge.)
-    const now = headers(width), full = ['Agent', 'Session', 'Model', 'in · out · cache', 'Cost (API price)', 'Share'];
-    const fixed = names => names.filter(name => !name.startsWith('Sess'));
-    assert.deepEqual(fixed(now), fixed(full).slice(0, fixed(now).length), `${width}: ${now}`);
-    if (last) assert.ok(now.length <= last.length);
+    const now = headers(width);
+    // What is gone went in this order: the share, the model, the tokens (then where it ran, and the cost last).
+    const gone = ['Share', 'Model', 'in · out · cache'].filter(name => !now.includes(name));
+    assert.deepEqual(gone, ['Share', 'Model', 'in · out · cache'].slice(0, gone.length), `${width}: ${now}`);
+    if (last) assert.ok(now.length <= last.length, `${width}: ${now}`);
     last = now;
   }
-  assert.deepEqual(headers(60), ['Agent', 'Session', 'Model', 'in · out · cache'], 'at 60 the share and the cost have gone');  assert.ok(!agentTable(rows, { width: 60, total: 20 })[1].includes('$'));
+  assert.deepEqual(headers(64), ['Agent', 'Session', 'in · out · cache', 'Cost'], 'at 64 the share and the model have gone; the cost stays');
+  // Narrower, the tokens go before the session's title is cut below 12 columns.
+  assert.deepEqual(headers(62), ['Agent', 'Session', 'Cost']);
+  assert.match(agentTable(rows, { width: 62, total: 20 })[1], /^@lead +Make the coupon codes upper.* +\$12\.40$/);
 });

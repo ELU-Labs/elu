@@ -68,6 +68,9 @@ const nextLine=()=>lines.length?Promise.resolve(lines.shift()):inputEnded?Promis
 let input='';
 if(streaming){const reader=readline.createInterface({input:process.stdin});reader.on('line',line=>{if(waiters.length)waiters.shift()(line);else lines.push(line);});reader.on('close',()=>{inputEnded=true;while(waiters.length)waiters.shift()(null);});const first=JSON.parse(await nextLine()??'{}');if(first.type!=='user'||typeof first.message?.content!=='string')throw new Error('The first stream-json line is not a user message.');input=first.message.content;}
 else for await (const chunk of process.stdin) input+=chunk;
+// stdinLimit (fake.json): input over that many characters is refused before anything starts,
+// as the real CLI refuses piped input over 10MB: one line on stderr, nothing on stdout, exit 1.
+if(typeof cfg.stdinLimit==='number'&&input.length>cfg.stdinLimit){console.error('Error: piped stdin input exceeds 10MB. Pass large content as a file path in your prompt instead.');process.exit(1);}
 if(cfg.inputs)fs.appendFileSync(cfg.inputs, JSON.stringify({vendor,args,input})+'\n');
 // accounts.hold (fake.json): while that file is there, a run waits before it answers.
 if(cfg.accounts?.hold)while(fs.existsSync(cfg.accounts.hold))await new Promise(resolve=>setTimeout(resolve,20));
