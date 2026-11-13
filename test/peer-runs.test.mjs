@@ -29,12 +29,12 @@ import { saveBot } from '../lib/bots.mjs';
 const share = (root, options = {}) => shareWith(root, { teams: everyTeam().map(state => state.id), ...options });
 import { artifact, message, task as a2aTask, TaskState } from '../lib/peer/a2a.mjs';
 import { intakeMethods, readCaps } from '../lib/peer/intake.mjs';
-import { acceptIncoming, processOutbox } from '../lib/peer/replies.mjs';
+import { acceptIncoming, discardReply, processOutbox } from '../lib/peer/replies.mjs';
 import { checkRoot, saveTeamAccess } from '../lib/peer/access.mjs';
 import { HOME_QUESTION, HOME_TARGET, homeOrAbove, homeRefusal } from '../lib/util.mjs';
 import { getRecord, thread } from '../lib/peer/taskstore.mjs';
 import { applyTask, asks as sentAsks, continueAnswer, createAsk, dropHeldResult, getAsk, sendHeldResult } from '../lib/peer/asks.mjs';
-import { peerItems } from '../lib/peer/index.mjs';
+import { peerItems, threadMessages } from '../lib/peer/index.mjs';
 
 const SARA = 'b'.repeat(64), ME = 'a'.repeat(64);
 const origin = (kind = 'ask', extra = {}) => ({ kind, peer: SARA, name: 'sara', a2aTaskId: 'task-1', threadId: 'thread-1', hop: 1, ...extra });
@@ -546,6 +546,30 @@ test('approved work that fails again and again tells the teammate once for its T
   processOutbox(s.ctx);
   await until(() => s.results('in').some(line => line.text === 'Coupon codes are uppercase now.'), 'the result at sara');
   assert.equal(told(), 1); assert.deepEqual(s.sent, ['SendMessage', 'SendMessage']);
+});
+
+// A result that waits for the owner, as the daemon holds one for a teammate whose replies he checks first.
+function heldFor(p, sara, n, text) {
+  savePeerPolicy(SARA, { holdReplies: true });
+  fs.mkdirSync(peerFile('outbox'), { recursive: true });
+  fs.writeFileSync(peerFile('outbox', `result-request-00000000-0000-4000-8000-00000000000${n}.json`), JSON.stringify({ requestId: `request-00000000-0000-4000-8000-00000000000${n}`, root: p.root, peer: SARA, name: 'sara', threadId: `thread-${n}`, taskId: '1', outcome: 'completed', text, finishedAt: new Date().toISOString() }));
+  processOutbox(sara.ctx);
+  return heldResults().find(row => row.threadId === `thread-${n}`);
+}
+
+test('a dropped result is noted as a result in its thread, and a dropped reply as a reply', t => {
+  const p = setup(t, 'normal'), sara = teammate(p);
+  const notes = id => threadMessages(id).filter(row => row.from === 'note').map(row => row.text);
+  const held = heldFor(p, sara, 1, 'Coupon codes are uppercase now.');
+  dropHeldResult(sara.ctx, held.id.slice('held:result-'.length));
+  assert.deepEqual(notes('thread-1'), ['You did not send the result.']);
+  assert.equal(heldResults().length, 0);
+  // A held reply that is dropped still reads as a reply.
+  const reply = sara.send(HANDOFF, { threadId: 'thread-2' }); acceptIncoming(sara.ctx, reply.task.id, { how: 'work', permissions: 'ask' });
+  fs.writeFileSync(peerFile('outbox', `${getRecord(reply.task.id).requestId}.json`), JSON.stringify({ requestId: getRecord(reply.task.id).requestId, root: p.root, origin: origin('handoff'), taskId: '1', outcome: 'done', text: 'Done.', costUsd: 0, finishedAt: new Date().toISOString(), error: null }));
+  processOutbox(sara.ctx);
+  discardReply(sara.ctx, reply.task.id);
+  assert.deepEqual(notes('thread-2'), ['You did not send a reply.']);
 });
 
 test('c on a thread that shows a result continues the chat with that result, once', t => {
