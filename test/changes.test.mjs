@@ -417,9 +417,11 @@ test('changeRows takes line notes: the summary says how, each note shows under i
   // Without the option the view is as it was.
   assert.equal(changeRows(changes, 80, false).some(row => row.kind === 'mark' || /to the model/.test(shown(row))), false);
   // An empty project offers no notes.
-  // With every change gone the notes still show, each with its line as it was.
+  assert.deepEqual(changeRows({ files: [] }, 80, false, { notes: new Map() }).map(shown), ['No changes yet.']);
+  // With every change gone the notes still show, each with its line as it was, under how to send them.
   const gone = changeRows({ files: [] }, 80, false, { notes }).map(shown);
-  assert.equal(gone[0], 'No changes yet.'); assert.equal(gone.filter(text => text.startsWith('✎')).length, 2); assert.equal(gone.filter(text => /has changed since this note\. It was:/.test(text)).length, 2);
+  assert.deepEqual(gone.slice(0, 2), ['No changes yet.', '2 notes. s sends them to the model together.']); assert.equal(gone.filter(text => text.startsWith('✎')).length, 2); assert.equal(gone.filter(text => /has changed since this note\. It was:/.test(text)).length, 2);
+  assert.equal(changeRows({ files: [] }, 80, false, { notes: new Map([...notes].slice(0, 1)) }).map(shown)[1], '1 note. s sends it to the model.');
   assert.equal(notesMessage(notes), [
     'Notes on your changes. Change what each one asks:',
     '', 'src/coupon.mjs, removed line 9: return text;', 'why was this removed?',
