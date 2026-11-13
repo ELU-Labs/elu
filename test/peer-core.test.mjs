@@ -1048,6 +1048,7 @@ test('a path with spaces in a folder or file name is cut whole, and a sentence a
     ['See ~/Desktop/Screenshot 2026-11-12 at 10.14.07 AM.png next.', 'See [path] next.'], ['See ~/Desktop/Screen Recording 2026-11-12 at 10.14.07 AM.MOV next.', 'See [path] next.'],
     ['Open /Applications/Visual Studio Code.app first.', 'Open [path] first.'], ['Kept in ~/Google Drive/My Drive/Q3 Plan/Budget 2026.xlsx.', 'Kept in [path].'],
     ['In /Users/sam/Library/Mobile Documents/com~apple~CloudDocs/Notes/Plan.md now.', 'In [path] now.'], ['Got ~/Downloads/report (1).pdf and ~/Downloads/Shot 2 (12).PNG.', 'Got [path] and [path].'],
+    ['The shots (in ~/Library/Application Support/CleanShot/media) are new.', 'The shots (in [path]) are new.'],
   ];
   for (const [text, cut] of whole) {
     assert.equal(redactPaths(text, { root }), cut, text);
