@@ -1124,13 +1124,13 @@ test("a teammate named like my computer keeps their session on my other computer
     merge(team.teamId, log);
     chat(project.root, 1, { goal: 'Run the evals', minutes: 3, origin: { kind: 'handoff', peer: laptop.identity.key, name: 'ana', threadId: null, own: true } });
     chat(project.root, 2, { goal: 'Fix the login redirect', minutes: 2, origin: { kind: 'handoff', peer: kim.key, name: 'Ana', threadId: null, own: true } });
-    // Taken on here in a mode picked by hand (w): worked on as a teammate's (usesSavedRules), so listed as one.
+    // Taken on here in a mode picked by hand (w): still mine, as it came from my laptop.
     chat(project.root, 3, { goal: 'Check the build', minutes: 1, origin: { kind: 'handoff', peer: laptop.identity.key, name: 'ana', threadId: null } });
     relist();
   });
   const listed = withHome(devbox.home, () => host['elu.remote.list']({}, toHost)), row = title => listed.sessions.find(item => item.title === title);
   assert.equal(listed.mineByPeer, true);
-  assert.deepEqual(['Run the evals', 'Fix the login redirect', 'Check the build'].map(title => [row(title).by, row(title).who]), [['mine', null], ['teammate', 'Ana'], ['teammate', 'ana']]);
+  assert.deepEqual(['Run the evals', 'Fix the login redirect', 'Check the build'].map(title => [row(title).by, row(title).who]), [['mine', null], ['teammate', 'Ana'], ['mine', null]]);
   // The laptop lists them: from this host, and from one of the build before, which lists mine as a teammate's by the laptop's name.
   const list = async (old = false) => {
     withHome(laptop.home, () => fs.rmSync(path.join(process.env.XDG_CONFIG_HOME, 'elu-code', 'peer', 'remote', 'machines'), { recursive: true, force: true }));
@@ -1149,9 +1149,9 @@ test("a teammate named like my computer keeps their session on my other computer
   });
   // What the laptop's own sessions may send to: only mine (lib/peer/session-tools.mjs).
   const offered = () => withHome(laptop.home, () => otherSessions().computers.flatMap(machine => machine.sessions.map(item => item.title)));
-  assert.deepEqual(await list(), { 'Run the evals': ['mine', null], 'Fix the login redirect': ['teammate', 'Ana'], 'Check the build': ['teammate', 'ana'] }, "kim's name is the laptop's, and kim's session stays kim's");
-  assert.deepEqual(routes(), { 'Run the evals': 'here', 'Fix the login redirect': 'there', 'Check the build': 'there' });
-  assert.deepEqual(offered(), ['Run the evals']);
+  assert.deepEqual(await list(), { 'Run the evals': ['mine', null], 'Fix the login redirect': ['teammate', 'Ana'], 'Check the build': ['mine', null] }, "kim's name is the laptop's, and kim's session stays kim's");
+  assert.deepEqual(routes(), { 'Run the evals': 'here', 'Fix the login redirect': 'there', 'Check the build': 'here' });
+  assert.deepEqual(offered().sort(), ['Check the build', 'Run the evals']);
   // From the build before, a name is all there is, and kim goes by the laptop's: it says nothing,
   // so mine there shows as a teammate's, as it did before, and kim's is never shown as mine.
   assert.deepEqual(await list(true), { 'Run the evals': ['teammate', 'ana'], 'Fix the login redirect': ['teammate', 'Ana'], 'Check the build': ['teammate', 'ana'] });

@@ -533,16 +533,16 @@ test('a computer of mine tells mine which of its sessions are mine, by the key t
     session(repo, 1, shop, { goal: 'Typed there by hand' });
     session(repo, 2, shop, { goal: 'A message from my other computer', origin: { kind: 'handoff', peer: sara.identity.key, name: 'sara', own: true } });
     session(repo, 3, shop, { goal: 'A message from kim', origin: { kind: 'handoff', peer: kim.key, name: 'Sara', own: true } });
-    // Taken on there in a mode picked by hand (w): worked on as a teammate's, so not told as mine.
+    // Taken on there in a mode picked by hand (w): still mine, as it came from my other computer.
     session(repo, 4, shop, { goal: 'Worked on from my other computer', origin: { kind: 'handoff', peer: sara.identity.key, name: 'sara' } });
     const repos = localRepos(now), rows = sessionCards({ owner: 'ana', repos, now });
     return { repo, shop, repos, rows };
   });
-  assert.deepEqual(atAna.rows.map(row => [row.card.title, row.card.by, row.own]).sort(), [['A message from kim', 'Sara', false], ['A message from my other computer', 'sara', true], ['Typed there by hand', 'ana', true], ['Worked on from my other computer', 'sara', false]]);
+  assert.deepEqual(atAna.rows.map(row => [row.card.title, row.card.by, row.own]).sort(), [['A message from kim', 'Sara', false], ['A message from my other computer', 'sara', true], ['Typed there by hand', 'ana', true], ['Worked on from my other computer', 'sara', true]]);
   const atSara = withHome(sara.home, () => { const repo = folderProject(t); cloneIn(repo, 'shop', { from: atAna.shop }); return { repo, repos: localRepos(now) }; });
   // Told to my computer with own; to a teammate's, without.
   const told = withHome(ana.home, () => cardsFor(sara.identity.key, ana.identity.key, atAna.rows, atAna.repos, proofsFor(sara.identity.key, ana.identity.key, atSara.repos)));
-  assert.deepEqual(told.map(card => [card.title, card.own]).sort(), [['A message from kim', false], ['A message from my other computer', true], ['Typed there by hand', true], ['Worked on from my other computer', false]]);
+  assert.deepEqual(told.map(card => [card.title, card.own]).sort(), [['A message from kim', false], ['A message from my other computer', true], ['Typed there by hand', true], ['Worked on from my other computer', true]]);
   const toBob = withHome(ana.home, () => cardsFor(bob, ana.identity.key, atAna.rows, atAna.repos, atAna.rows.map(row => repoProof(bob, ana.identity.key, atAna.repos.get(row.repo).repoId, atAna.repos.get(row.repo).commit))));
   assert.equal(toBob.length, 4); assert.ok(toBob.every(card => !('own' in card)), 'a teammate is not told');
   withHome(sara.home, () => {
@@ -552,7 +552,7 @@ test('a computer of mine tells mine which of its sessions are mine, by the key t
     saveLocalRepos(atSara.repos); saveProofs(ana.identity.key, proofsFor(ana.identity.key, sara.identity.key, atAna.repos));
     const shown = () => Object.fromEntries(teammateSessions(atSara.repo.root).people[0].sessions.map(card => [card.title, card.own === true]));
     saveCards(ana.identity.key, sara.identity.key, told);
-    assert.deepEqual(shown(), { 'A message from kim': false, 'A message from my other computer': true, 'Typed there by hand': true, 'Worked on from my other computer': false }, "kim's card names Sara, and stays kim's");
+    assert.deepEqual(shown(), { 'A message from kim': false, 'A message from my other computer': true, 'Typed there by hand': true, 'Worked on from my other computer': true }, "kim's card names Sara, and stays kim's");
     // An older computer of mine says nothing of own: a name says whose it is, but not Sara,
     // which kim also goes by here. Mine there by that name shows as a teammate's, never the other way.
     saveCards(ana.identity.key, sara.identity.key, told.map(({ own: _own, ...card }) => card));
