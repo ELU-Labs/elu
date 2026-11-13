@@ -8,7 +8,7 @@ import { repository } from '../lib/git.mjs';
 import { projectSnapshot, registerProject } from '../lib/projects.mjs';
 import { saveTask } from '../lib/state.mjs';
 import { pendingRequests, removeRequest, updateRequest, takeRequest } from '../lib/workspace.mjs';
-import { Conductor, enqueue, sendCommand, saveConductorSettings, conductorStatus, retryRequest } from '../lib/conductor.mjs';
+import { Conductor, enqueue, sendCommand, saveConductorSettings, conductorStatus, conductorNote, conductorRunning, retryRequest, VERSION } from '../lib/conductor.mjs';
 import { boardRows, barCells, rowCard } from '../lib/board.mjs';
 import { saveSchedule, runScheduleNow, parseWhen } from '../lib/schedules.mjs';
 import { saveBot } from '../lib/bots.mjs';
@@ -175,6 +175,85 @@ test('a waiting message survives a conductor that stops, and the next conductor 
   conduct(t);
   await until(() => texts(p.repo, id).length === 2, 'the message to be sent after the restart');
   assert.deepEqual(texts(p.repo, id), ['Start the work', 'Sent before the restart']);
+});
+
+// An update replaces the files under a conductor. The stand-in reads the version on disk at once
+// instead of after 5 s, and next starts the new version's conductor in this process.
+function updated(conductor, disk) { conductor.disk = disk; conductor.versionAt = 0; }
+function oldConductor(t, { disk = '0.0.1', ...options } = {}) {
+  const box = { fresh: null, claims: 0 };
+  const conductor = new Conductor({ tickMs: 20, version: '0.0.1', onDisk: () => conductor.disk, next: () => { box.fresh ??= conduct(t); }, ...options });
+  conductor.disk = disk;
+  const launch = conductor.launch.bind(conductor);
+  conductor.launch = (...args) => { box.claims++; return launch(...args); };
+  conductor.start(); LIVE.get(t).push(conductor);
+  return Object.assign(box, { conductor });
+}
+const requestsOf = conductor => [...conductor.runs.values()].map(run => run.requestId);
+
+test('after an update the old conductor takes no new work: the new version runs it at once, the old run finishes, and the old conductor exits', async t => {
+  const p = setup(t, 'slow'), first = enqueue(p.root, 'Start the work');
+  let exits = 0; const old = oldConductor(t, { onExit: () => { exits++; } });
+  await until(() => request(p.root, first.id)?.state === 'running', 'the first turn');
+  const id = request(p.root, first.id).taskId;
+  await until(() => task(p.repo, id)?.activeRole === 'lead', 'the model working');
+  assert.equal(old.claims, 1);
+  // The update lands while the turn runs, and a new session and a follow-up are sent.
+  updated(old.conductor, '0.0.2');
+  const second = enqueue(p.root, 'New work'), more = sayTo(p, id, 'And the follow-up');
+  await until(() => old.fresh && requestsOf(old.fresh).includes(second.id), 'the new version to start the new session');
+  assert.equal(old.claims, 1, 'the replaced conductor claimed nothing more');
+  assert.deepEqual(requestsOf(old.conductor), [first.id], 'its own run goes on');
+  assert.equal(request(p.root, first.id).state, 'running', 'the new conductor left that run alone');
+  assert.equal(task(p.repo, id).state, 'running');
+  assert.equal(conductorStatus().running, true); assert.equal(conductorStatus().runs.length, 2);
+  assert.equal(conductorNote(), `1 session started before the update finishes on 0.0.1. New ones start on ${VERSION}.`);
+  await new Promise(resolve => setTimeout(resolve, 300));
+  assert.equal(request(p.root, more.id).state, 'queued', 'the follow-up waits for the turn the old version runs');
+  assert.equal(exits, 0);
+  // The stop reaches the conductor that runs the turn. Then the old one exits and the follow-up runs on the new one.
+  sendCommand({ type: 'stop', root: p.root, taskId: id });
+  await until(() => exits > 0, 'the old conductor to exit');
+  assert.equal(old.conductor.runs.size, 0);
+  await until(() => requestsOf(old.fresh).includes(more.id), 'the follow-up on the new version');
+  await until(() => texts(p.repo, id).length === 2, 'the follow-up to be sent');
+  assert.equal(old.claims, 1);
+  assert.deepEqual(texts(p.repo, id), ['Start the work', 'And the follow-up'], 'each message sent once');
+  const secondId = request(p.root, second.id).taskId;
+  assert.deepEqual(texts(p.repo, secondId), ['New work']);
+  assert.equal(projectSnapshot(p.repo).tasks.length, 2, 'no request started a session twice');
+  assert.equal(conductorNote(), null);
+});
+
+test('a replaced conductor with nothing running exits; work already queued goes straight to the new version', async t => {
+  const p = setup(t);
+  let exits = 0; const idle = oldConductor(t, { onExit: () => { exits++; } });
+  updated(idle.conductor, '0.0.2');
+  await until(() => exits > 0, 'the idle conductor to exit');
+  assert.equal(idle.fresh, null, 'nothing waits, so no conductor is started for it');
+  await idle.conductor.stop();
+  const sent = enqueue(p.root, 'Can I add multiple agents?');
+  const busy = oldConductor(t, { disk: '0.0.2', onExit: () => { exits++; } });
+  await until(() => request(p.root, sent.id)?.state === 'done', 'the queued request');
+  assert.equal(busy.claims, 0, 'the replaced conductor never claimed it');
+  assert.ok(busy.fresh, 'the new version took it');
+  assert.equal(task(p.repo, request(p.root, sent.id).taskId).messages.length, 1);
+});
+
+test('elu conductor stop ends the new version and the old one still finishing its run', async t => {
+  const p = setup(t, 'slow'), first = enqueue(p.root, 'Start the work');
+  const old = oldConductor(t);
+  await until(() => request(p.root, first.id)?.state === 'running', 'the first turn');
+  const id = request(p.root, first.id).taskId;
+  await until(() => task(p.repo, id)?.activeRole === 'lead', 'the model working');
+  updated(old.conductor, '0.0.2'); enqueue(p.root, 'New work');
+  await until(() => old.fresh?.runs.size === 1, 'the new version working');
+  assert.equal(conductorRunning(), true);
+  sendCommand({ type: 'shutdown' });
+  await until(() => old.conductor.closed && old.fresh.closed, 'both conductors to stop');
+  await until(() => old.conductor.runs.size === 0 && old.fresh.runs.size === 0, 'their runs to end');
+  assert.equal(task(p.repo, id).state, 'stopped');
+  assert.equal(conductorRunning(), false);
 });
 
 test('the agent limit and priority decide what starts, and stop frees the slot', async t => {
