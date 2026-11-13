@@ -110,6 +110,8 @@ You can send a message at any time. One sent while the session is working waits 
 | `/stop` | Stops the running response. A message you sent while it ran is sent next; `/stop` again cancels that message |
 | `/schedule in 1h check the build` | Starts a session later or on a schedule: `/schedule [when] [message]`. `/schedule ` lists times such as `in 5m`, `in 1h` and `daily 9:00`. Each run is a new session with the model, mode and bots of the form (a bot with its own schedule is left out); it does not see the chat it was made in. A schedule gets Full access only when you pick it for that schedule, and the form asks you once before saving it |
 | `/budget 5` | Limits this session to 5 dollars; `/budget off` removes the limit |
+| `/standup` | Asks every open session of yours, here and on your other computers, and your teammates' shared ones, for an update, in a new Standup session. See [Standup](#standup) |
+| `@everyone did anyone touch auth?` | In a Standup session, asks the sessions of its last round again, with your question; `@everyone standup` asks for an update. Elsewhere it starts a Standup with the question |
 | `! git status` | Runs a shell command. In an open session the model gets the command and its output with your next message |
 | `/update` | Says how to update: `/quit`, then `elu update` |
 | `/quit` | Closes ELU Code. Sessions that are running or queued go on in the background; `elu conductor stop` stops them |
@@ -350,6 +352,59 @@ again. `/mine auto off` (or `ELU_NO_GITHUB_PAIRING=1`) turns this off.
 
 In a channel, `/invite @kim` adds a teammate you already have. `/invite` alone makes a
 code for someone new; the first time, it also makes your team, named after the open project.
+
+## Standup
+
+`/standup` starts a Standup session in the open project, named "Standup" and the date and
+time, and asks each open session for an update: what it is working on, what is done, what is
+next, and what blocks it. Open means not archived and not moved to Done (a chat that has
+answered is asked), and working, waiting for you, or active in the last 7 days. The same rule
+holds for your teammates' sessions, as their computers apply it; a teammate's computer on an
+older build does not say which of its sessions in Done answered, so those are listed, not asked. That is every such session of yours in every project on
+this computer, those on your other computers that are online (`/mine`), and your teammates'
+sessions on the shared Kanban whose computers are online. A project kept off the Kanban
+(`/share off`) is never asked. At most 20 of yours and 20 of your teammates' are asked,
+newest first; the rest are listed.
+
+Before asking, the chat says how many sessions it asks and on which computers. Each session
+answers in one turn of its own agent (its model, or the worker bot that works in it), on its
+own model and limits, in at most 8 lines, and that turn changes nothing: no edit, no Task,
+and the session stays where it was, in Sessions and on the Kanban: answering is not activity. A Claude Code session answers in a copy of its own
+history, so its next turn goes on from its work; another vendor keeps the standup in that
+history. Its chat shows "@sam asks: standup", the update, and
+"Sent to @sam". A session that is working answers when its turn ends, or is listed as still
+working after 10 minutes. Answers show in the Standup as they come, each titled with its
+session, agent and computer: "ELU Issues · Opus 5.5 on @devbox", "Self Healing · Opus 5.5
+here", "Billing · @billing on @kim". Then come the sessions not asked, those that declined,
+and those still working, then one line: "Standup done · 9 sessions on 4 computers · 2 not
+asked". `/stop` stops waiting. Nothing runs on a timer: only `/standup` and `@everyone` ask.
+
+On a teammate's computer their own setting decides, as for any message from you: Auto asks
+their sessions at once; Manual shows them "@sam asks every session for a standup update"
+once a round, to approve or decline, and a decline is listed in your Standup. Each of their
+sessions answers at most once a round, is told their rules for teammates, and what comes back
+is checked as any answer to a teammate is: paths are cut, and an update that may hold a
+secret is not sent. You get the update text, the card's title, the agent's name and the
+computer, nothing else. Each answer turn counts as one of your requests there and spends from
+your daily allowance there, as any message of yours that runs on their computer, so a full
+round can use up the day's requests. A computer that still runs an older build of ELU Code
+for its sessions is listed, not asked.
+
+When the round ends, the Standup's own model reads every update and sums it up: what is
+done, what is in progress, what is blocked or waits for someone, and who. That turn starts
+with nobody watching, so it only answers and keeps the Kanban: it reads, with no edits, no
+shell, no web, no Task and none of your MCP servers; Full access runs as Approve for me, and
+another vendor runs it Read only. It runs once a round and is never
+retried on its own. Then you talk to
+it: each message goes to that model with the updates and this computer's Kanban boards for
+the projects involved, your other computers' sessions and teammates' cards on them read-only. It can keep the Kanban right: in
+a Claude Code session with permissions it lists the boards, adds a To do card that says where
+it came from ("from @billing on @kim"), changes a To do card's text, moves a card or session
+to Done or back, and removes a card it added. It never changes another computer's board or a
+teammate's card. In Ask for approval you allow each change; in Approve for me and Full access
+it makes them, and the chat says each one: "Added 'Check JWT aud claim' to To do, from
+@billing on @kim", "Moved 'Main green' to Done". Another vendor, or Read only, lists the
+changes for you to make. It messages another session only when you ask it to.
 
 ## Install details
 
