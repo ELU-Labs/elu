@@ -7,7 +7,7 @@ import { PassThrough } from 'node:stream';
 import { EventEmitter } from 'node:events';
 import { project, fakeClis, cli, git, temp, approveProjectFiles, autoApprove, keyLike } from './helpers.mjs';
 import { repository } from '../lib/git.mjs';
-import { ProjectController, projectSnapshot, dashboardSnapshot, claimView, registerProject, registeredProjects, nameProject, savedProjectName, personalDirectory, setupCommitPlan, commitSetup, taskDetails } from '../lib/projects.mjs';
+import { ProjectController, projectSnapshot, dashboardSnapshot, claimView, takeOver, registerProject, registeredProjects, nameProject, savedProjectName, personalDirectory, setupCommitPlan, commitSetup, taskDetails } from '../lib/projects.mjs';
 import { LIMIT } from '../lib/project-settings.mjs';
 import { answerTrust, pendingTrust, trustedText, unusedTrust } from '../lib/project-trust.mjs';
 import { launchTerminal, geometry, plain, foldersNamed } from '../lib/terminal.mjs';
@@ -26,7 +26,7 @@ import { processIdentity } from '../lib/process.mjs';
 import { activeLogin, listLogins } from '../lib/logins.mjs';
 import { detect } from '../lib/detect.mjs';
 import { conformanceState } from '../lib/conformance.mjs';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { approvalsDir, requestApproval, answerApproval } from '../lib/approvals.mjs';
 import { defaultMode } from '../lib/modes.mjs';
 import { listEntries, readStore } from '../lib/permission-rules.mjs';
@@ -1309,6 +1309,36 @@ test('a window that claims a project it already holds keeps it, and lets it go o
   holder.release(); assert.equal(late.retry(), true); assert.equal(late.readOnly, false);
   assert.equal(claimView(p.repo).readOnly, true); late.release();
   const last = claimView(p.repo); assert.equal(last.readOnly, false); last.release();
+});
+
+// What a window says when it gets the project tells which happened: the window that had it
+// let go when /takeover asked, and is still open, or it has closed.
+test('a claim that takes the project over knows whether the window that had it let go or closed', async t => {
+  const p = setup(t), mine = {}, holder = claimView(p.repo, { window: mine }), late = claimView(p.repo, { window: {} });
+  const file = path.join(personalDirectory(), fs.readdirSync(personalDirectory()).find(name => /^view-[0-9a-f]{64}\.lock$/.test(name)));
+  assert.equal(late.readOnly, true); assert.equal(holder.wanted(), false, 'nothing was asked yet');
+  takeOver(p.repo);
+  // The window that has it claims it again, as switching back to it does: what was asked still reaches it.
+  claimView(p.repo, { window: mine }).release();
+  assert.equal(late.wanted(), false, 'a view-only window is not the one asked');
+  assert.equal(holder.wanted(), true); assert.equal(holder.wanted(), false, 'it is told once');
+  holder.giveUp(); assert.equal(holder.readOnly, true);
+  assert.equal(late.retry(), true); assert.equal(late.holderOpen, true, 'that window let go, and is still open');
+  assert.equal(holder.retry(), false); assert.equal(holder.holder.pid, process.pid);
+  // A window that takes the project clears what was asked of the one before it.
+  takeOver(p.repo); late.release();
+  assert.equal(holder.retry(), true); assert.equal(holder.wanted(), false, 'nothing is asked of the window that just took it');
+  holder.release();
+  // Another process has the project, and ends: the window that takes it over knows it closed.
+  const other = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' }), ended = new Promise(resolve => other.once('exit', resolve));
+  t.after(() => other.kill('SIGKILL'));
+  await until(() => processIdentity(other.pid), 'the other process');
+  fs.writeFileSync(file, JSON.stringify({ pid: other.pid, identity: processIdentity(other.pid) }));
+  const next = claimView(p.repo, { window: {} });
+  assert.equal(next.readOnly, true); assert.equal(next.holder.pid, other.pid); assert.equal(next.retry(), false);
+  other.kill('SIGKILL'); await ended;
+  assert.equal(next.retry(), true); assert.equal(next.holderOpen, false, 'that window closed');
+  next.release();
 });
 
 test('Tasks reads every project without writing or starting a vendor', async t => {
