@@ -18,6 +18,7 @@ import { vendorText } from '../lib/terminal-commands.mjs';
 import { formatResult } from '../lib/format.mjs';
 import { Conductor, enqueue } from '../lib/conductor.mjs';
 import { liveTask } from './peer-helpers.mjs';
+import { standIn } from './login-item-helpers.mjs';
 import { readBoard, sessionClosed, closeSession } from '../lib/kanban.mjs';
 import { proposeTask, approveTask as approvePlan, reportProgress, finishTask, reopenTask } from '../lib/plan.mjs';
 import { clockTime } from '../lib/terminal-plan.mjs';
@@ -2181,6 +2182,8 @@ test('a task scheduled from + New task lists under Scheduled and pauses, runs no
   const p = setup(t), calls = [];
   const loginItem = { install: () => { calls.push('install'); return { installed: true }; }, uninstall: () => { calls.push('uninstall'); return { removed: true }; } };
   const v = await view(t, { repo: p.repo, loginItem }), panels = v.current.panels;
+  // Nothing is scheduled at the start, so a login item left from before is removed.
+  await until(() => calls.length === 1, 'the start settles the login item'); assert.deepEqual(calls.splice(0), ['uninstall']);
   await wide(v);
   await send(v, '/schedule'); await until(() => modal(v, 'When') && dialogRows(v, 'When').length === 8, 'the list of times');
   dialogList(v, 'When').select(6); v.input.write('\r');
@@ -2199,13 +2202,62 @@ test('a task scheduled from + New task lists under Scheduled and pauses, runs no
   await until(() => /r run now {2}p pause {2}x delete/.test(panels.keys.getText()) && v.current.session === null, 'schedule keys');
   await until(() => /◷ weekdays 9:00 · sample app\n┃ Check dependencies for updates\n┃ Next run in \d+[mhd]\.\n\nr run now · p pause · x delete · enter last run/.test(panels.chat.getText()), 'the schedule beside the list');
   v.input.write('p'); await until(() => rows(v).some(row => /◷ weekdays 9:00/.test(row) && /paused$/.test(row)) && /┃ Paused\./.test(panels.chat.getText()), 'paused');
+  assert.deepEqual(calls, ['install', 'uninstall'], 'pausing the last schedule removes the login item');
   v.input.write('p'); await until(() => /Resumed\. Next run/.test(panels.status.getText()), 'resumed');
+  assert.deepEqual(calls, ['install', 'uninstall', 'install'], 'resuming it asks for the login item again');
   v.input.write('r'); await until(() => pendingRequests(p.root).some(row => row.goal === 'Check dependencies for updates' && /^schedule-/.test(row.scheduleId)), 'run now queues it');
   v.input.write('x'); await dialog(v, 'Delete schedule', 'y');
   await until(() => !rows(v).some(row => /◷/.test(row)), 'deleted');
   // Its row is gone, so the cursor takes the nearest row: here the request that run now queued.
   await until(() => rows(v).indexOf(cursor(v)) > 1 && v.current.screen.focused === board, 'the cursor is on a row that is left');
-  assert.deepEqual(calls, ['install', 'uninstall'], 'the last schedule removes the login item');
+  assert.deepEqual(calls, ['install', 'uninstall', 'install', 'uninstall'], 'the last schedule removes the login item');
+});
+
+test('the login item is there exactly while a task schedule is on: pausing the last one unloads it on macOS, resuming loads it again', { timeout: 30000 }, async t => {
+  const p = setup(t), item = standIn(t, 'darwin'), plist = path.join(item.home, 'Library', 'LaunchAgents', 'dev.elu-code.scheduler.plist');
+  for (const when of ['every 1h', 'every 2h']) saveSchedule({ root: p.root, goal: 'Check dependencies for updates', when: parseWhen(when) });
+  const v = await view(t, { repo: p.repo, loginItem: { install: item.install, uninstall: item.uninstall } }), panels = v.current.panels;
+  const there = () => item.files().length === 1 && item.loaded().length === 1, gone = () => !item.files().length && !item.loaded().length;
+  const press = async (pattern, done, what) => { await selectRow(v, pattern); v.input.write('p'); await until(done, what); };
+  await until(there, 'two schedules are on at the start, so the login item is loaded'); assert.deepEqual(item.loaded(), [plist]);
+  await press(/◷ every 1h/, () => rows(v).some(row => /◷ every 1h/.test(row) && /paused$/.test(row)), 'one paused');
+  assert.ok(there(), 'the other schedule is still on, so the login item stays');
+  await press(/◷ every 2h/, () => rows(v).some(row => /◷ every 2h/.test(row) && /paused$/.test(row)), 'both paused');
+  assert.ok(gone(), 'no schedule is on: the file is deleted and launchctl has booted it out');
+  await press(/◷ every 2h/, () => /Resumed\. Next run/.test(panels.status.getText()), 'one resumed');
+  assert.ok(there(), 'a schedule is on again: the file is back and loaded');
+  // Deleting the one that is on leaves a paused one only, so the login item goes again.
+  await selectRow(v, /◷ every 2h/); v.input.write('x'); await dialog(v, 'Delete schedule', 'y');
+  await until(() => !rows(v).some(row => /◷ every 2h/.test(row)), 'deleted'); assert.ok(gone(), 'a paused schedule alone keeps no login item');
+  await press(/◷ every 1h/, () => /Resumed\. Next run/.test(panels.status.getText()), 'the last one resumed'); assert.ok(there());
+  assert.ok(item.calls().length && item.calls().every(call => call.name === 'launchctl'), 'only the stand-in launchctl was called');
+});
+
+test('/bots remove NAME and removing a bot take the login item with the last schedule, and /bots add NAME brings it back', { timeout: 30000 }, async t => {
+  const p = setup(t), calls = [];
+  const loginItem = { install: () => { calls.push('install'); return { installed: true }; }, uninstall: () => { calls.push('uninstall'); return { removed: true }; } };
+  saveBot({ name: 'nightly', instructions: 'Check the nightly build.', schedule: 'every 1h' });
+  // Two sessions with the bot, each already counted with its next run an hour away, so nothing runs during the test.
+  for (const [id, goal] of [['4', 'Trim coupon codes'], ['5', 'Uppercase names']]) {
+    const { repo } = liveTask(p.root, { id, goal, state: 'answered' });
+    saveTask(repo, { ...readTask(repo, id), bots: ['nightly'] });
+    fs.writeFileSync(path.join(taskDir(repo, id), 'bot-schedules.json'), JSON.stringify({ version: 1, bots: { nightly: { on: true, schedule: 'every 1h', nextRunAt: new Date(Date.now() + 3600000).toISOString(), lastRunAt: null, lastRequestId: null, runs: 0, note: null } } }));
+  }
+  const v = await view(t, { repo: p.repo, loginItem }), panels = v.current.panels, status = () => panels.status.getText().replace(/\s+/g, ' ');
+  await until(() => calls.includes('install'), 'a bot schedule is on at the start, so the login item is asked for'); assert.ok(!calls.includes('uninstall'));
+  await openTask(v, /Trim coupon codes/);
+  await send(v, '/bots remove nightly'); await until(() => /@nightly left this session\./.test(status()), 'left the first session');
+  assert.ok(!calls.includes('uninstall'), 'the other session still runs it, so the login item stays');
+  await openTask(v, /Uppercase names/); calls.length = 0;
+  await send(v, '/bots remove nightly'); await until(() => /@nightly left this session\./.test(status()), 'left the second session');
+  assert.deepEqual(calls, ['uninstall'], 'its last session removes the login item');
+  await send(v, '/bots add nightly'); await until(() => /@nightly is in this session\./.test(status()), 'back in the second session');
+  assert.equal(calls.at(-1), 'install', 'a bot that comes back with its schedule asks for the login item'); assert.ok(!calls.slice(1).includes('uninstall'));
+  // Removing the bot itself, in Bots, ends its schedule everywhere.
+  calls.length = 0; click(v, panels.tabs[4]); await until(() => v.current.view === 'bots' && panels.botsList.items.some(row => /^@nightly/.test(row.getText())), 'Bots');
+  panels.botsList.focus(); panels.botsList.select(panels.botsList.items.findIndex(row => /^@nightly/.test(row.getText())));
+  v.input.write('x'); await dialog(v, 'Remove @nightly', 'y'); await until(() => /Removed @nightly\./.test(status()), 'removed');
+  await until(() => calls.at(-1) === 'uninstall', 'the removed bot was the last schedule'); assert.ok(!calls.includes('install'));
 });
 
 test('/bots schedule off removes the login item when it turns off the last schedule, and /bots schedule on brings it back', { timeout: 30000 }, async t => {
