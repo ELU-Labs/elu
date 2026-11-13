@@ -27,13 +27,13 @@ import { saveRemotePlans } from '../lib/peer/plans.mjs';
 import { saveBot } from '../lib/bots.mjs';
 // Shared with every team on the machine, as /share does.
 const share = (root, options = {}) => shareWith(root, { teams: everyTeam().map(state => state.id), ...options });
-import { message, TaskState } from '../lib/peer/a2a.mjs';
+import { artifact, message, task as a2aTask, TaskState } from '../lib/peer/a2a.mjs';
 import { intakeMethods, readCaps } from '../lib/peer/intake.mjs';
 import { acceptIncoming, processOutbox } from '../lib/peer/replies.mjs';
 import { checkRoot, saveTeamAccess } from '../lib/peer/access.mjs';
 import { HOME_QUESTION, HOME_TARGET, homeOrAbove, homeRefusal } from '../lib/util.mjs';
 import { getRecord, thread } from '../lib/peer/taskstore.mjs';
-import { createAsk, getAsk } from '../lib/peer/asks.mjs';
+import { applyTask, createAsk, getAsk } from '../lib/peer/asks.mjs';
 import { peerItems } from '../lib/peer/index.mjs';
 
 const SARA = 'b'.repeat(64), ME = 'a'.repeat(64);
@@ -420,6 +420,9 @@ test('once the owner approves the Task a teammate\'s message led to and its work
   processOutbox(ctx);
   assert.equal(thread('thread-1').filter(line => line.kind === 'result').length, 2);
   assert.equal(peerItems().filter(row => row.threadId === 'thread-1' && ['asked', 'answer'].includes(row.kind) && row.peer === SARA).length, 0);
+  // Sara's row for the thread shows the newest word in it: the result, not the plan.
+  applyTask(saraCtx, sara.me.key, a2aTask({ contextId: 'thread-1', state: TaskState.COMPLETED, artifacts: [artifact({ name: 'Answer', text: 'The plan.' })] }), asked.id);
+  assert.equal(peerItems().find(row => row.id === `answer:${asked.id}`)?.text, summary);
 });
 
 test('a teammate\'s later message keeps the mode the owner gave its session, and waits when that is Full access', async t => {
