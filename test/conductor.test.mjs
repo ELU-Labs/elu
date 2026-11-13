@@ -2,7 +2,7 @@ import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { project, fakeClis, config, approveProjectFiles, approvingConductor } from './helpers.mjs';
 import { repository } from '../lib/git.mjs';
 import { projectSnapshot, registerProject } from '../lib/projects.mjs';
@@ -486,6 +486,30 @@ test('runs left by a conductor that died are marked stopped and their process is
   new Conductor().recover();
   assert.equal(task(p.repo, '1').state, 'stopped'); assert.match(task(p.repo, '1').error.message, /Retry to continue/);
   assert.equal(request(p.root, live.id).state, 'queued');
+});
+// The app in a terminal starts the conductor in its time zone. The peer daemon, a schedule or a
+// login item looks at it from another: each look here is a process of its own in that zone.
+const conductorLib = new URL('../lib/conductor.mjs', import.meta.url).href;
+const elsewhere = (TZ, code) => JSON.parse(spawnSync(process.execPath, ['--input-type=module', '-e', `import { Conductor, conductorAlive } from ${JSON.stringify(conductorLib)}; ${code}`], { encoding: 'utf8', env: { ...process.env, TZ } }).stdout);
+test('a conductor started in another time zone is the conductor: none starts beside it, its turn goes on, and what it leaves when it dies is recovered', async t => {
+  const p = setup(t, 'slow'), first = enqueue(p.root, 'Start the work');
+  const holder = spawn(process.execPath, ['--input-type=module', '-e', `import { Conductor } from ${JSON.stringify(conductorLib)}; new Conductor({ tickMs: 20 }).start();`], { env: { ...process.env, TZ: 'America/Los_Angeles' }, stdio: 'ignore' });
+  t.after(() => holder.kill('SIGKILL'));
+  await until(() => request(p.root, first.id)?.state === 'running', 'the first turn');
+  const id = request(p.root, first.id).taskId, file = path.join(p.repo.state, 'tasks', id, 'process.json'), model = () => { try { return JSON.parse(fs.readFileSync(file, 'utf8')).pid; } catch { return null; } };
+  await until(() => task(p.repo, id)?.activeRole === 'lead' && model(), 'the model working');
+  const agent = model(), runs = pid => { try { process.kill(pid, 0); return true; } catch { return false; } };
+  const look = `const alive = conductorAlive(); let second = 'started'; try { await new Conductor({ tickMs: 20 }).start().stop(); } catch (error) { second = error.message; } console.log(JSON.stringify({ alive, second }));`;
+  for (const TZ of ['UTC', 'Asia/Kolkata']) {
+    const seen = elsewhere(TZ, look);
+    assert.equal(seen.alive, true, `it runs, seen from ${TZ}`); assert.match(seen.second, /holds this lock/, `no second conductor from ${TZ}`);
+    assert.equal(task(p.repo, id).state, 'running', `the turn goes on, seen from ${TZ}`); assert.equal(request(p.root, first.id).state, 'running'); assert.equal(runs(agent), true, 'the model still works');
+  }
+  // It dies with its turn running. A conductor in another time zone marks the turn stopped and stops the model it left.
+  holder.kill('SIGKILL'); await new Promise(resolve => holder.once('exit', resolve));
+  assert.equal(elsewhere('UTC', `new Conductor().recover(); console.log(JSON.stringify({ alive: conductorAlive() }));`).alive, false);
+  assert.equal(task(p.repo, id).state, 'stopped'); assert.match(task(p.repo, id).error.message, /Retry to continue/);
+  await until(() => !runs(agent), 'the model it left to be stopped');
 });
 
 test("a request carries the owner's session choices; a teammate's question never does", t => {

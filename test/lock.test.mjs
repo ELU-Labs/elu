@@ -50,3 +50,65 @@ test('a lock left by a process that is gone is taken over, one held by a live pr
   lock({ state }, 'x')(); assert.equal(fs.existsSync(file), false);
   assert.deepEqual(fs.readdirSync(state), []);
 });
+
+// Two ELU processes whose time zones differ: the app in a terminal, and a daemon that a login
+// item or another daemon started. Each look at the lock is a process of its own in that zone.
+const zone = (TZ, more = {}) => ({ ...process.env, TZ, ...more });
+const look = (state, name, env) => spawnSync(process.execPath, ['--input-type=module', '-e', `import { lock } from ${JSON.stringify(lib)};
+  try { lock({ state: ${JSON.stringify(state)} }, ${JSON.stringify(name)}); console.log('taken'); } catch (error) { console.log(error.message); }`], { encoding: 'utf8', env }).stdout.trim();
+// What 0.1.19 and earlier wrote as a holder's identity: the line ps printed for the writer.
+const written = (pid, env) => spawnSync('ps', ['-p', String(pid), '-o', 'lstart=', '-o', 'command='], { encoding: 'utf8', env }).stdout.trim();
+const ctime = date => { const [day, dd, month, year, time] = date.toUTCString().replace(',', '').split(' '); return `${day} ${month} ${String(Number(dd)).padStart(2)} ${time} ${year}`; };
+
+test('a lock held by a process in another time zone is held, and is taken over once that process is gone', async t => {
+  const state = temp(t), file = path.join(state, 'view.lock');
+  const script = `import { lock } from ${JSON.stringify(lib)}; lock({ state: ${JSON.stringify(state)} }, 'view'); console.log('held'); setInterval(() => {}, 1000);`;
+  const holder = spawn(process.execPath, ['--input-type=module', '-e', script], { env: zone('America/Los_Angeles'), stdio: ['ignore', 'pipe', 'inherit'] });
+  t.after(() => holder.kill('SIGKILL'));
+  let said = ''; holder.stdout.on('data', chunk => { said += chunk; });
+  for (const until = Date.now() + 10000; !said.includes('held');) { assert.ok(Date.now() < until && holder.exitCode === null, 'the holder takes the lock'); await new Promise(resolve => setTimeout(resolve, 20)); }
+  for (const env of [zone('UTC'), zone('Asia/Kolkata'), zone('America/Los_Angeles'), zone('Europe/Berlin', { LC_ALL: 'de_DE.UTF-8', COLUMNS: '40' })]) {
+    assert.match(look(state, 'view', env), /holds this lock/, `seen from ${env.TZ}`);
+    assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).pid, holder.pid, `still the holder's, seen from ${env.TZ}`);
+  }
+  holder.kill('SIGKILL'); await new Promise(resolve => holder.once('exit', resolve));
+  assert.equal(look(state, 'view', zone('UTC')), 'taken');
+});
+
+test('a lock written by 0.1.19 is held while its process runs, whatever time zone wrote it, and taken over when another process has its number', async t => {
+  const state = temp(t), file = path.join(state, 'x.lock');
+  const child = spawn(process.execPath, ['-e', 'setInterval(()=>{},1000)'], { stdio: 'ignore' });
+  t.after(() => child.kill('SIGKILL'));
+  for (const wrote of ['America/Los_Angeles', 'Asia/Kathmandu', 'UTC']) {
+    const identity = written(child.pid, zone(wrote)); assert.match(identity, /^\w{3} \w{3} [ \d]\d \d\d:\d\d:\d\d \d{4} .*setInterval/);
+    for (const reads of ['UTC', 'Europe/Berlin', 'America/Los_Angeles']) {
+      fs.writeFileSync(file, JSON.stringify({ pid: child.pid, identity }));
+      assert.match(look(state, 'x', zone(reads)), /holds this lock/, `written in ${wrote}, read in ${reads}`);
+    }
+  }
+  // The line as ps cut it for a writer whose COLUMNS was set: the same process still.
+  fs.writeFileSync(file, JSON.stringify({ pid: child.pid, identity: written(child.pid, zone('America/Los_Angeles', { COLUMNS: '40' })) }));
+  assert.match(look(state, 'x', zone('UTC')), /holds this lock/);
+  // The same number, another process: one that started seven minutes later, and one that runs another command.
+  const now = written(child.pid, zone('UTC')), stamp = now.slice(0, 24), command = now.slice(25);
+  fs.writeFileSync(file, JSON.stringify({ pid: child.pid, identity: `${ctime(new Date(Date.parse(`${stamp} UTC`) + 7 * 60000))} ${command}` }));
+  assert.equal(look(state, 'x', zone('UTC')), 'taken', 'another start');
+  fs.writeFileSync(file, JSON.stringify({ pid: child.pid, identity: `${stamp} /usr/bin/another --command` }));
+  assert.equal(look(state, 'x', zone('UTC')), 'taken', 'another command');
+});
+
+test('on Linux a holder is told from /proc when there is no ps to ask: held while it runs, taken over once it is gone', { skip: process.platform !== 'linux' && 'there is a /proc on Linux only' }, async t => {
+  const state = temp(t), bin = temp(t), file = path.join(state, 'view.lock');
+  fs.symlinkSync(process.execPath, path.join(bin, 'node'));
+  const bare = { ...process.env, PATH: bin };
+  assert.notEqual(spawnSync('ps', [], { env: bare }).error?.code ?? null, null, 'no ps on this PATH');
+  const script = `import { lock } from ${JSON.stringify(lib)}; lock({ state: ${JSON.stringify(state)} }, 'view'); console.log('held'); setInterval(() => {}, 1000);`;
+  const holder = spawn(process.execPath, ['--input-type=module', '-e', script], { env: bare, stdio: ['ignore', 'pipe', 'inherit'] });
+  t.after(() => holder.kill('SIGKILL'));
+  let said = ''; holder.stdout.on('data', chunk => { said += chunk; });
+  for (const until = Date.now() + 10000; !said.includes('held');) { assert.ok(Date.now() < until && holder.exitCode === null, 'the holder takes the lock'); await new Promise(resolve => setTimeout(resolve, 20)); }
+  assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).identity, null, 'nothing for 0.1.19 to compare');
+  for (const env of [bare, process.env]) assert.match(look(state, 'view', env), /holds this lock/);
+  holder.kill('SIGKILL'); await new Promise(resolve => holder.once('exit', resolve));
+  assert.equal(look(state, 'view', bare), 'taken');
+});
