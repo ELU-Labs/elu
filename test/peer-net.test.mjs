@@ -44,7 +44,8 @@ import { createAsk, dismissAsk, reconnect, reviewText, teammate, tickAsks, teamA
 import { RETRY_MS, checkInviterProof, inviteKeys, joinerProof, openInvites, parseInvite, redeemCode } from '../lib/peer/invite.mjs';
 import { base32, canonical } from '../lib/peer/canonical.mjs';
 import * as peer from '../lib/peer/index.mjs';
-import { bothMine, mineRows as readMine, noteTheirs } from '../lib/peer/mine.mjs';
+import { bothMine, markMine, mineRows as readMine, noteTheirs, unmarkMine } from '../lib/peer/mine.mjs';
+import { LONG_MAX, textMethods } from '../lib/peer/texts.mjs';
 import { boardRows } from '../lib/board.mjs';
 import { botKey, botVendors, botsFile, canShare, removeBot, saveBot } from '../lib/bots.mjs';
 import { dashboardSnapshot } from '../lib/projects.mjs';
@@ -416,6 +417,47 @@ test('a message reaches a teammate who shares no project and waits; y with the o
     saveTeamAccess(crew.teamId, { root: null });
     const forBot = methods.SendMessage({ message: message({ text: 'Where are the docs?', contextId: 'thread-b', messageId: 'm-8', ext: { kind: 'ask', bot: 'docs', project: null, hop: 1, from: { key: ana.key, name: 'ana' } } }) }, session);
     assert.equal(reason(forBot), 'There is no project here for that bot to read yet.');
+  });
+});
+
+// A short message travels in its request (SendMessage); a long one goes ahead of it in pieces
+// (elu.text.put). A refusal on either way calls this machine a computer to another computer
+// of its owner's, by either side's mark.
+test("one of the owner's own computers is never worded as a teammate in a refusal, for a short message and for a long one", t => {
+  const crew = makeTeam(t), ana = crew.founder.identity, sara = crew.member;
+  withHome(sara.home, () => {
+    const ctx = { me: loadIdentity(), kick() {}, event() {}, push() {} };
+    const methods = textMethods(ctx, intakeMethods(ctx)), session = { key: ana.key, admitted: true };
+    let sent = 0;
+    const short = () => { const id = `own-${++sent}`; return methods.SendMessage({ message: message({ text: 'x', contextId: `thread-${id}`, messageId: id, ext: { kind: 'ask', project: null, hop: 1, from: { key: ana.key, name: 'ana' } } }) }, session).status.message.parts[0].text; };
+    const bytes = Buffer.from('A long message, here in one piece.'), sha256 = crypto.createHash('sha256').update(bytes).digest('hex');
+    const long = (extra = {}) => { try { return methods['elu.text.put']({ id: crypto.randomUUID(), seq: 0, last: true, size: bytes.length, sha256, data: bytes.toString('base64'), ...extra }, session); } catch (error) { return error.message; } };
+    const tooBig = () => long({ size: LONG_MAX + 1 });
+    // A teammate reads teammate, on both ways.
+    savePeerPolicy(ana.key, { muted: true });
+    assert.equal(short(), 'This teammate is not taking requests from you.');
+    assert.equal(long(), 'This teammate is not taking requests from you.');
+    savePeerPolicy(ana.key, { muted: false });
+    assert.equal(tooBig(), 'A message to this teammate can be up to 64 MB.');
+    // That computer marks this one as its own, or this one marks it, or both: a computer on both ways.
+    const marks = { 'that computer marks this one': () => noteTheirs(ana.key, true), 'this computer marks that one': () => { noteTheirs(ana.key, false); markMine(ctx.me.key, ana.key); }, 'both mark each other': () => noteTheirs(ana.key, true) };
+    for (const [which, mark] of Object.entries(marks)) {
+      mark();
+      const both = bothMine(ctx.me.key, ana.key);
+      assert.equal(both, which === 'both mark each other', which);
+      savePeerPolicy(ana.key, { muted: true });
+      assert.equal(short(), 'This computer is not taking requests from you.', which);
+      // Mine on both sides, its pieces are taken whatever its teammate setting says.
+      if (both) assert.deepEqual(long(), { ok: true }, which);
+      else assert.equal(long(), 'This computer is not taking requests from you.', which);
+      savePeerPolicy(ana.key, { muted: false });
+      assert.equal(tooBig(), 'A message to this computer can be up to 64 MB.', which);
+    }
+    // No mark on either side any more: a teammate again.
+    unmarkMine(ana.key); noteTheirs(ana.key, false);
+    savePeerPolicy(ana.key, { muted: true });
+    assert.equal(short(), 'This teammate is not taking requests from you.');
+    assert.equal(long(), 'This teammate is not taking requests from you.');
   });
 });
 

@@ -707,9 +707,10 @@ test('the pieces of a long message are taken from a computer of mine whatever it
     // Asked again after its answer was lost: the same session, though the text is gone from the staging folder.
     assert.deepEqual(await host['elu.remote.start'](start, toHost), result);
     assert.equal(pendingRequests(project.root).length, 1);
-    // A computer that is not mine on both sides and is muted gets the refusal a muted teammate gets.
+    // A computer that is not mine on both sides and is muted is refused as a muted teammate is,
+    // and since this computer still marks it as mine the refusal says computer, never teammate.
     noteTheirs(laptop.identity.key, false);
-    assert.throws(() => put({ ...piece(0), id: crypto.randomUUID() }, toHost), { message: 'This teammate is not taking requests from you.' });
+    assert.throws(() => put({ ...piece(0), id: crypto.randomUUID() }, toHost), { message: 'This computer is not taking requests from you.' });
   });
 });
 
