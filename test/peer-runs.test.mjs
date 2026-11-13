@@ -34,7 +34,7 @@ import { checkRoot, saveTeamAccess } from '../lib/peer/access.mjs';
 import { HOME_QUESTION, HOME_TARGET, homeOrAbove, homeRefusal } from '../lib/util.mjs';
 import { getRecord, thread } from '../lib/peer/taskstore.mjs';
 import { applyTask, asks as sentAsks, continueAnswer, createAsk, dropHeldResult, getAsk, sendHeldResult } from '../lib/peer/asks.mjs';
-import { peerItems, threadMessages } from '../lib/peer/index.mjs';
+import { heldText, peerItems, threadMessages } from '../lib/peer/index.mjs';
 
 const SARA = 'b'.repeat(64), ME = 'a'.repeat(64);
 const origin = (kind = 'ask', extra = {}) => ({ kind, peer: SARA, name: 'sara', a2aTaskId: 'task-1', threadId: 'thread-1', hop: 1, ...extra });
@@ -570,6 +570,24 @@ test('a dropped result is noted as a result in its thread, and a dropped reply a
   processOutbox(sara.ctx);
   discardReply(sara.ctx, reply.task.id);
   assert.deepEqual(notes('thread-2'), ['You did not send a reply.']);
+});
+
+test('a held reply or result gives its whole text to edit, until it is sent or dropped', t => {
+  const p = setup(t, 'normal'), sara = teammate(p);
+  const whole = `Coupon codes are uppercase now. ${'The next part of what was done. '.repeat(40)}The end.`;
+  // The row carries the start of the text; the edit gets all of it.
+  const held = heldFor(p, sara, 1, whole);
+  assert.ok(held.text.length < whole.length); assert.equal(heldText(held.id), whole);
+  dropHeldResult(sara.ctx, held.id.slice('held:result-'.length));
+  assert.equal(heldText(held.id), null);
+  const reply = sara.send(HANDOFF, { threadId: 'thread-2' }); acceptIncoming(sara.ctx, reply.task.id, { how: 'work', permissions: 'ask' });
+  fs.writeFileSync(peerFile('outbox', `${getRecord(reply.task.id).requestId}.json`), JSON.stringify({ requestId: getRecord(reply.task.id).requestId, root: p.root, origin: origin('handoff'), taskId: '1', outcome: 'done', text: whole, costUsd: 0, finishedAt: new Date().toISOString(), error: null }));
+  processOutbox(sara.ctx);
+  const waiting = peerItems().find(row => row.kind === 'held' && !row.result);
+  assert.ok(waiting.text.length < whole.length); assert.equal(heldText(waiting.id), whole);
+  discardReply(sara.ctx, reply.task.id);
+  assert.equal(heldText(waiting.id), null);
+  assert.equal(heldText('held:nothing'), null); assert.equal(heldText('held:result-nothing'), null);
 });
 
 test('c on a thread that shows a result continues the chat with that result, once', t => {

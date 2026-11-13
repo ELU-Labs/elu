@@ -366,14 +366,14 @@ test('a thread dialog acts on the letter it names, only while its field is empty
   await until(() => peer.sent().some(row => row.type === 'work' && row.id === 'incoming:task-ask' && row.permissions === 'ask'), 'ask accepted from the dialog');
   await until(() => !modal(v, 'Thread with @sara') && /Accepted @sara/.test(v.panels.status.getText()), 'dialog closed');
   // Once something is typed, letters are text.
-  await open(threads, /reply ready/, 'Thread with @sara', 'y sends. n discards.');
+  await open(threads, /reply ready/, 'Thread with @sara', 'y sends. e edits it first. n discards.');
   // The thread reads like a chat: Sara's question, then my model's reply waiting to go.
   assert.match(v.text(), /@sara · question · \d\d:\d\d[^]*How do we rotate keys\?[^]*↳ your model · answer · not sent yet · \d\d:\d\d[^]*Rotate with bin\/rotate\./);
   v.input.write('x'); v.input.write('y'); await new Promise(resolve => setTimeout(resolve, 100));
   assert.ok(modal(v, 'Thread with @sara'), 'typed letters keep the dialog open');
   await closeDialog(v, 'Thread with @sara');
   assert.ok(!peer.sent().some(row => row.type === 'approve'), 'nothing approved');
-  await open(threads, /reply ready/, 'Thread with @sara', 'y sends. n discards.'); v.input.write('n');
+  await open(threads, /reply ready/, 'Thread with @sara', 'y sends. e edits it first. n discards.'); v.input.write('n');
   await until(() => peer.sent().some(row => row.type === 'discard' && row.id === 'held-1'), 'reply discarded from the dialog');
   await open(threads, /answered/, 'Thread with @sara', 'c continues'); v.input.write('c');
   await until(() => peer.sent().some(row => row.type === 'continue' && row.id === 'answer-1'), 'continued from the dialog');
@@ -497,6 +497,59 @@ test('the open channel names who is in it over its threads, and an empty one say
   await openRow(v, /@sara\s+direct/, '@sara');
   await until(() => inside(v) === null && threads.atop === box.atop + 1, 'no line for a person');
   assert.deepEqual(threadLines(v), ['Nothing in @sara yet. Type below to write to it.']);
+});
+
+test('e on a held reply or a held result opens its whole text in the message box: Enter sends the edited text, a refused edit stays in the box, Esc leaves it held, and n drops a result as a result', { timeout: 30000 }, async t => {
+  const SECRET = `AKIA${'A1B2'.repeat(4)}`, WHOLE = `Done. Call it with ${SECRET} as the key. ${'The next part of what was done. '.repeat(20)}The end.`;
+  const peer = fakePeer({ items: [
+    { id: 'held:task-1', kind: 'held', peer: SARA, name: 'sara', project: 'web', text: 'The deploy script lives in bin/deploy.', question: 'Where is the deploy script?', at: ago(3), state: 'awaiting-owner', threadId: 'th-1', blocked: false },
+    { id: 'held:result-r1', kind: 'held', result: true, blocked: true, problems: ['aws-access-key'], peer: SARA, name: 'sara', project: null, text: WHOLE.slice(0, 400), question: 'Make coupon codes uppercase.', at: ago(2), state: 'held', threadId: 'th-2' },
+    { id: 'answer-1', kind: 'answer', peer: SARA, name: 'sara', project: 'web', text: 'Use the v2 endpoint.', at: ago(10), state: 'completed', threadId: 'th-5' },
+  ], refuse: command => command.type === 'approve' && String(command.text ?? '').includes(SECRET) ? 'This result contains a possible secret. Remove it before sending.' : null });
+  peer.heldText = id => ({ 'held:result-r1': WHOLE, 'held:task-1': 'The deploy script lives in bin/deploy.' })[id] ?? null;
+  const { v } = await teamView(t, { peer });
+  const [, threads] = v.panels.teamLists, ask = v.panels.ask, keys = () => v.panels.keys.getText().trim(), status = () => v.panels.status.getText(), label = () => ask._label.getText().trim();
+  const approved = () => peer.sent().filter(row => row.type === 'approve').map(row => [row.id, row.text]);
+  await openRow(v, /@sara\s+direct/, '@sara');
+  await until(() => threads.items.some(item => /result ready/.test(plainItem(item))) && threads.items.some(item => /reply ready/.test(plainItem(item))), 'the held rows');
+  // e is offered on a row that waits to be sent, and nowhere else.
+  threads.focus(); selectRow(threads, /answered/); await until(() => /^y accept\/send {2}n decline/.test(keys()), 'no e on an answer');
+  v.input.write('e'); await until(() => /e edits a reply or a result that waits for you\. Choose one in Threads\./.test(status()), 'e on an answer');
+  selectRow(threads, /result ready/); await until(() => /^y accept\/send {2}e edit {2}n decline/.test(keys()), 'e on a held result');
+  // e: the whole text is in the message box, which says what Enter and Esc do.
+  v.input.write('e');
+  await until(() => v.current.screen.focused === ask && ask.getValue() === WHOLE, 'the whole result in the box');
+  await until(() => label() === 'Edit the result for @sara · Enter sends it · Esc leaves it held' && keys() === 'enter send the edited result  esc leave it held', 'the box says it is an edit');
+  assert.match(status(), /It may hold a secret\. Take that out, then Enter sends it to @sara\. Esc leaves it held\./);
+  assert.ok(v.panels.palette.hidden, 'no command list over an edit');
+  // Enter with the secret still in it: refused, and the text stays in the box as an edit.
+  await until(() => ask.__listener, 'the box reads'); ask.submit();
+  await until(() => /This result contains a possible secret\. Remove it before sending\./.test(status()), 'the refusal');
+  assert.equal(ask.getValue(), WHOLE); assert.equal(label(), 'Edit the result for @sara · Enter sends it · Esc leaves it held');
+  assert.deepEqual(approved(), [['held:result-r1', WHOLE]]);
+  // The secret taken out: Enter sends the edited text, and the box writes to her again.
+  await until(() => ask.__listener, 'the box reads again'); ask.setValue('Done. Use the key from your own vault.'); ask.submit();
+  await until(() => /Sending the edited result to @sara\./.test(status()) && ask.getValue() === '' && label() === 'Message @sara', 'the edited result went');
+  assert.deepEqual(approved().at(-1), ['held:result-r1', 'Done. Use the key from your own vault.']);
+  // A held reply the same way; Esc leaves it held and sends nothing.
+  threads.focus(); selectRow(threads, /reply ready/); v.input.write('e');
+  await until(() => ask.getValue() === 'The deploy script lives in bin/deploy.' && label() === 'Edit the reply to @sara · Enter sends it · Esc leaves it held', 'the reply in the box');
+  assert.match(status(), /Change the text below, then Enter sends it to @sara\. Esc leaves it held\./);
+  v.input.write('\x1b');
+  await until(() => ask.getValue() === '' && label() === 'Message @sara' && /The reply is still held\. y sends it as it is, e edits it, n drops it\./.test(status()), 'Esc leaves it held');
+  assert.equal(approved().length, 2); assert.ok(!peer.sent().some(row => row.type === 'discard'), 'nothing was dropped');
+  // Its thread names e too, and e there opens the same edit. Text that starts like a command is still the reply.
+  threads.focus(); selectRow(threads, /reply ready/); v.input.write('\r');
+  await until(() => modal(v, 'Thread with @sara') && v.text().includes('y sends. e edits it first. n discards.'), 'the thread');
+  v.input.write('e');
+  await until(() => !modal(v, 'Thread with @sara') && ask.getValue() === 'The deploy script lives in bin/deploy.' && /^Edit the reply to @sara/.test(label()), 'e in the thread');
+  await until(() => ask.__listener, 'the box reads'); ask.setValue('/usr/local/bin/deploy is the script.'); ask.submit();
+  await until(() => /Sending the edited reply to @sara\./.test(status()), 'the edited reply went');
+  assert.deepEqual(approved().at(-1), ['held:task-1', '/usr/local/bin/deploy is the script.']);
+  // n on a held result says result, not reply.
+  threads.focus(); selectRow(threads, /result ready/); v.input.write('n');
+  await until(() => peer.sent().some(row => row.type === 'discard' && row.id === 'held:result-r1'), 'the result dropped');
+  await until(() => /Dropped the result\. Nothing was sent to @sara\./.test(status()), 'what n did');
 });
 
 test('m and x on a created channel also work from its threads, and nothing is cut at 80 columns', { timeout: 20000 }, async t => {
