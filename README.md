@@ -322,7 +322,10 @@ needs no code: run `/mine @devbox` on the laptop and `/mine @laptop` on the devb
 new session box starts the session on the devbox, with the mode, model and bots you picked.
 It shows in Sessions marked "on devbox", live, and its approvals wait on both machines. It is
 your own session there, so your rules apply, and `a` on its approval, from either machine,
-keeps the rule on the devbox, where it runs.
+keeps the rule on the devbox, where it runs. When the devbox's home folder is one of its projects,
+the box first asks which folder the session works in there: its projects, the home folder, and
+each Git repository in the home folder, the cursor on where it would run. Enter starts it there;
+Esc sends nothing and keeps your message.
 Sessions also lists every other session on the devbox in the same repository under "On devbox": they are part of your project, in Sessions and on its Kanban ("you · devbox"), whichever of your computers started them.
 Projects lists a devbox project as "<project> on devbox" only for its sessions this project cannot show, and says how many.
 With a devbox session under the cursor, what you type goes to your agent here, on the laptop:

@@ -23,7 +23,7 @@ import { teamPath } from '../lib/peer/roster.mjs';
 import { readTask, saveTask, taskPlace } from '../lib/state.mjs';
 import { spawnSync } from 'node:child_process';
 import { projectFolder } from '../lib/workspace.mjs';
-import { registerProject } from '../lib/projects.mjs';
+import { registerProject, registeredProjects } from '../lib/projects.mjs';
 import { localRepos, saveLocalRepos } from '../lib/peer/cards.mjs';
 import { folderRemote } from '../lib/kanban-repos.mjs';
 import { closeSession } from '../lib/kanban.mjs';
@@ -194,6 +194,103 @@ test('with no team setting, a session from my other computer runs in the only pr
     await conductor?.stop();
     for (const [name, value] of Object.entries(previous)) { if (value === undefined) delete process.env[name]; else process.env[name] = value; }
   }
+});
+
+// The devbox with no team setting, where the owner runs the app from his home folder: a session
+// from his laptop would run in the home folder. The laptop asks that computer first, and he picks
+// the folder the session works in: a project there, or a Git repository in its home folder, which
+// becomes a project there as opening it there would. It is asked each time, while the home folder
+// is a project there: the folder where it would run is the one picked unless he moves.
+test('a session from my other computer that would run where the home folder is a project works in the folder I pick there, to the end', async t => {
+  const { team, laptop, devbox } = machines(t);
+  const parent = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'elu-code-remote-pick-')));
+  t.after(() => fs.rmSync(parent, { recursive: true, force: true }));
+  const home = path.join(parent, 'home'); fs.mkdirSync(home);
+  const fake = fakeClis(parent, { mode: 'answer' }), names = ['PATH', 'HOME', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'CLAUDE_CONFIG_DIR'];
+  const previous = Object.fromEntries(names.map(name => [name, process.env[name]]));
+  Object.assign(process.env, fake.env, { HOME: home, XDG_CONFIG_HOME: devbox.home });
+  const clone = dir => {
+    fs.mkdirSync(dir, { recursive: true });
+    for (const args of [['init', '-q', '--initial-branch=main'], ['config', 'user.name', 'Test Owner'], ['config', 'user.email', 'owner@example.invalid'], ['commit', '-q', '--allow-empty', '-m', 'First']]) assert.equal(spawnSync('git', args, { cwd: dir }).status, 0, args.join(' '));
+    return fs.realpathSync(dir);
+  };
+  let conductor = null;
+  try {
+    const repo = projectFolder(home); registerProject(repo);
+    // Two clones in the home folder, one inside a folder of its own; a folder that is no
+    // repository; a linked worktree of the first; and a folder outside the home folder.
+    const shop = clone(path.join(home, 'shop')), infra = clone(path.join(home, 'work', 'infra'));
+    fs.mkdirSync(path.join(home, 'notes')); fs.mkdirSync(path.join(shop, 'sub')); const outside = clone(path.join(parent, 'outside'));
+    assert.equal(spawnSync('git', ['worktree', 'add', '-q', '-b', 'two', path.join(home, 'shop-two')], { cwd: shop }).status, 0);
+    markMine(devbox.identity.key, laptop.identity.key); noteTheirs(laptop.identity.key, true);
+    const from = connection(laptop.identity.key), methods = hostMethods(context(devbox.identity, { [laptop.identity.key]: from }));
+    // It would run in the home folder: the home folder first, then each repository in it.
+    const where = methods['elu.remote.folders']({}, from);
+    assert.deepEqual({ ...where, folders: null }, { pick: true, root: home, project: 'home', folders: null });
+    assert.deepEqual(where.folders[0], { path: home, label: '~', name: 'home', project: true });
+    assert.deepEqual(where.folders.slice(1).map(row => row.label).sort(), ['~/shop', '~/work/infra']);
+    assert.deepEqual(where.folders.find(row => row.label === '~/shop'), { path: shop, label: '~/shop', name: 'shop', project: false });
+    assert.equal(where.folders.find(row => row.label === '~/work/infra').path, infra);
+    // A folder it did not list is refused, and nothing is queued anywhere.
+    const start = (folder, text = 'Where are the tests?') => methods['elu.remote.start']({ ...START, id: crypto.randomUUID(), text, bots: [], folder }, from);
+    const NOT_HERE = /is not a project or a Git repository in the home folder here\. Pick one of the folders listed\./;
+    for (const folder of [path.join(home, 'notes'), path.join(home, 'shop-two'), parent, outside, path.join(shop, 'sub')]) assert.throws(() => start(folder), NOT_HERE, folder);
+    assert.throws(() => start('shop'), { message: 'Pick one of the folders listed.' });
+    assert.throws(() => start(path.join(home, 'gone')), /is not on this computer any more\. Pick one of the folders listed\./);
+    assert.deepEqual(pendingRequests(home), []);
+    // The one he picks: a session of his there, in that repository, made a project there.
+    const started = start(shop);
+    assert.equal(started.project, 'shop');
+    assert.ok(registeredProjects().some(row => row.root === shop), 'a project there now');
+    assert.deepEqual(pendingRequests(home), []);
+    const [request] = pendingRequests(shop);
+    assert.equal(request.mine.machine, laptop.identity.key); assert.equal(request.origin, undefined);
+    conductor = new Conductor({ tickMs: 20 }).start();
+    for (const at = Date.now(); pendingRequests(shop).find(row => row.id === request.id)?.state !== 'done';) {
+      if (Date.now() - at > 30000) throw new Error(`Timed out: ${JSON.stringify(pendingRequests(shop))}`);
+      await new Promise(done => setTimeout(done, 20));
+    }
+    const task = readTask(registeredProjects().find(row => row.root === shop), pendingRequests(shop).find(row => row.id === request.id).taskId);
+    assert.equal(task.state, 'answered'); assert.equal(task.worktree, shop); assert.equal(task.origin.mine, true);
+    // Next time it is asked again, now with that project where it would run.
+    const again = methods['elu.remote.folders']({}, from);
+    assert.equal(again.pick, true); assert.equal(again.root, shop); assert.equal(again.project, 'shop');
+    assert.deepEqual(again.folders.filter(row => row.project).map(row => row.label).sort(), ['~', '~/shop']);
+    assert.equal(again.folders.filter(row => row.path === shop).length, 1, 'listed once');
+    // The home folder, picked: it runs there, as before.
+    start(home, 'Tidy my notes'); assert.equal(pendingRequests(home).length, 1);
+    // A team setting decides where they run: not asked. A folder picked anyway still goes where he picked.
+    saveTeamAccess(team.teamId, { root: shop });
+    assert.deepEqual(methods['elu.remote.folders']({}, from), { pick: false, root: shop, project: 'shop', folders: [] });
+    start(infra, 'Look at the infra'); assert.equal(pendingRequests(infra).length, 1);
+    // A teammate's computer is refused, as for every remote method.
+    assert.throws(() => methods['elu.remote.folders']({}, connection('e'.repeat(64))), { message: NOT_MINE });
+  } finally {
+    await conductor?.stop();
+    for (const [name, value] of Object.entries(previous)) { if (value === undefined) delete process.env[name]; else process.env[name] = value; }
+  }
+});
+
+// The laptop's daemon asks before it starts: an older build there is not asked, and starts as before.
+test('my computer asks where a session would run there, and an older build there is not asked', async t => {
+  const { laptop, devbox } = machines(t);
+  await withHome(laptop.home, async () => {
+    markMine(laptop.identity.key, devbox.identity.key); noteTheirs(devbox.identity.key, true);
+    const answers = { 'elu.remote.folders': { pick: true, root: '/home/ana', project: 'home', folders: [{ path: '/home/ana', label: '~', name: 'home', project: true }, { path: '/home/ana/shop', label: '~/shop', name: 'shop', project: false }, { path: 'not/absolute', label: 'x', name: 'x', project: false }, { path: '/home/ana/\u0007bell', label: 'bell', name: 'bell', project: false }] }, 'elu.remote.start': { id: START.id, project: 'shop' } };
+    const other = connection(devbox.identity.key, { answer: method => answers[method] }); other.remoteHello = { remote: 1, folders: 1 };
+    const ctx = context(laptop.identity, { [devbox.identity.key]: other });
+    assert.deepEqual(await remoteCommand(ctx, { type: 'remoteFolders', to: devbox.identity.key }), { pick: true, root: '/home/ana', project: 'home', folders: [{ path: '/home/ana', label: '~', name: 'home', project: true }, { path: '/home/ana/shop', label: '~/shop', name: 'shop', project: false }] }, 'a folder that is not a whole path is left out');
+    const started = await remoteCommand(ctx, { type: 'remoteStart', to: devbox.identity.key, text: 'Where are the tests?', permissions: 'ask', folder: '/home/ana/shop' });
+    assert.equal(started.project, 'shop');
+    assert.deepEqual(other.sent.find(([method]) => method === 'elu.remote.start')[1].folder, '/home/ana/shop');
+    // No folder picked: the start says nothing of one, as an older build expects.
+    await remoteCommand(ctx, { type: 'remoteStart', to: devbox.identity.key, text: 'Again', permissions: 'ask' });
+    assert.equal('folder' in other.sent.filter(([method]) => method === 'elu.remote.start')[1][1], false);
+    // An older build: not asked, and the app starts where it would before.
+    const old = connection(devbox.identity.key, { answer: () => ({}) });
+    assert.deepEqual(await remoteCommand(context(laptop.identity, { [devbox.identity.key]: old }), { type: 'remoteFolders', to: devbox.identity.key }), { pick: false, root: null, project: null, folders: [], older: true });
+    assert.deepEqual(old.sent, [], 'nothing was asked of it');
+  });
 });
 
 test('a team setting still decides where a session from my other computer runs; without one, of several projects the one with the newest session does', t => {

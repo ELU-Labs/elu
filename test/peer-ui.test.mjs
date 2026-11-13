@@ -22,7 +22,8 @@ const ago = minutes => new Date(Date.now() - minutes * 60000).toISOString();
 
 // teamless: this machine is on no team until /invite makes one (createTeam).
 // mine: mineRows(); remote: remoteSessions(); machines: remoteMachines(); repoId: projectRepoId(); joined: what joinTeam answers.
-function fakePeer({ items, running = true, refuse = () => null, remoteBots = [], teamless = false, access = { 'team-1': { handling: 'auto', rules: '', root: null, at: null } }, mine = [], remote = [], machines = [], repoId = null, joined = null } = {}) {
+// answer(command): what the daemon answers a command, when it is not the usual {}.
+function fakePeer({ items, running = true, refuse = () => null, remoteBots = [], teamless = false, access = { 'team-1': { handling: 'auto', rules: '', root: null, at: null } }, mine = [], remote = [], machines = [], repoId = null, joined = null, answer = null } = {}) {
   const calls = [];
   const record = (name, value) => (...args) => { calls.push([name, ...args]); return typeof value === 'function' ? value(...args) : value; };
   const facade = {
@@ -54,6 +55,7 @@ function fakePeer({ items, running = true, refuse = () => null, remoteBots = [],
       // lastTeam: a leave takes this machine off its only team, and a teammate took it, so the daemon stops.
       if (type === 'teamLeave' && facade.lastTeam) facade.left = true;
       if (type === 'teamLeave') return { team: 'team-1', name: 'Core', told: true, stopping: facade.lastTeam === true };
+      const answered = answer?.(facade.last); if (answered !== undefined && answered !== null) return answered;
       if (type !== 'channelSet') return {};
       facade.channels = [...facade.channels.filter(row => row.id !== id), ...(members.length ? [{ id, name, members }] : [])]; return { id };
     }),
@@ -1861,4 +1863,47 @@ test('Usage lists the top ten agents by cost with their tokens, t shows the last
   // A computer of mine on a build that sends none: one line, and none of its rows.
   machines[0] = { ...machines[0], topAgents: null };
   await until(() => rows().includes('sara-box: update ELU to include it') && !rows().some(row => /Remote job/.test(row)), 'the update line');
+});
+
+// The new session box, @ a computer of mine where the home folder is a project and no team
+// setting decides where its sessions run: before the session starts, the owner picks the folder
+// it works in there. The cursor starts on where it would run.
+test('@ my other computer asks which folder the session works in there, when its home folder is a project; Esc sends nothing, and an older build is not asked', async t => {
+  const p = project(later(t)); environment(t, p.parent);
+  const asked = { pick: true, root: '/home/sara', project: 'sara', folders: [{ path: '/home/sara', label: '~', name: 'sara', project: true }, { path: '/home/sara/shop', label: '~/shop', name: 'shop', project: false }, { path: '/home/sara/work/infra', label: '~/work/infra', name: 'infra', project: false }] };
+  let where = asked;
+  const answer = command => command.type === 'remoteFolders' ? (() => { if (where instanceof Error) throw where; return where; })() : command.type === 'remoteStart' ? { id: '77777777-7777-4777-8777-777777777777', project: command.folder ? path.basename(command.folder) : 'sara' } : null;
+  const peer = fakePeer({ items: [], mine: [{ key: SARA, mine: true, theirs: true }], answer }), v = await view(t, { repo: repository(p.root), dashboard: true, peer });
+  const starts = () => peer.sent().filter(row => row.type === 'remoteStart'), status = () => v.panels.status.getText(), title = 'Folder on @sara-box';
+  await send(v, '@sara-box fix the flaky test');
+  await until(() => rowsOf(v, title).length === 3, 'the folders there');
+  assert.deepEqual(rowsOf(v, title).map(row => row.trimEnd()), ['~  the home folder', '~/shop', '~/work/infra']);
+  assert.match(v.text(), /Pick the folder this session works in on @sara-box\./);
+  assert.equal(modal(v, title).children.find(child => child.type === 'list').selected, 0, 'on where it would run');
+  assert.deepEqual(starts(), [], 'nothing starts before he picks');
+  await choose(v, title, /shop/);
+  await until(() => starts().length === 1, 'started');
+  assert.equal(starts()[0].folder, '/home/sara/shop'); assert.equal(starts()[0].text, 'fix the flaky test'); assert.equal(starts()[0].to, SARA);
+  await until(() => /Started on @sara-box in shop\./.test(status()), 'where it started');
+  // Esc: nothing is sent, and the message is still in the box.
+  await send(v, '@sara-box tidy the notes');
+  await until(() => modal(v, title), 'asked again'); v.input.write('\x1b');
+  await until(() => !modal(v, title) && /Nothing was sent\. The message is still here\./.test(status()), 'Esc');
+  assert.equal(starts().length, 1); assert.equal(v.panels.ask.getValue(), '@sara-box tidy the notes');
+  // Where it would run now is shop: the cursor starts there, and Enter picks it.
+  where = { ...asked, root: '/home/sara/shop', project: 'shop', folders: [asked.folders[0], { ...asked.folders[1], project: true }, asked.folders[2]] };
+  await send(v, '@sara-box run the tests');
+  await until(() => modal(v, title), 'asked'); assert.equal(modal(v, title).children.find(child => child.type === 'list').selected, 1);
+  v.input.write('\r'); await until(() => starts().length === 2, 'started there');
+  assert.equal(starts()[1].folder, '/home/sara/shop');
+  // The home folder, picked: it runs there.
+  await send(v, '@sara-box read my notes'); await choose(v, title, /the home folder/);
+  await until(() => starts().length === 3, 'started in the home folder'); assert.equal(starts()[2].folder, '/home/sara');
+  // A team setting decides, an older build there, or a daemon that cannot ask: not asked, and it starts as before.
+  for (const [said, made] of [['no choice', { pick: false, root: '/home/sara/shop', project: 'shop', folders: [] }], ['older', { pick: false, root: null, project: null, folders: [], older: true }], ['refused', new Error('Unknown peer command.')]]) {
+    where = made; const before = starts().length;
+    await send(v, `@sara-box ${said}`);
+    await until(() => starts().length === before + 1, said);
+    assert.equal(modal(v, title), undefined, `${said}: not asked`); assert.equal('folder' in starts().at(-1), false, said);
+  }
 });
