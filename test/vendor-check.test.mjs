@@ -256,6 +256,12 @@ test('Grok Build: a token written over ELU\'s link instead of through it signs e
   assert.equal(await checkOnFirstUse(row, { cwd: m.home, environment: m.env }), true);
   assert.deepEqual(Object.entries(conformanceState('grok').steps).filter(([, status]) => status !== 'pass').map(([id]) => id), []);
   assert.equal(fs.lstatSync(link).isFile(), true);
+  // After its check the vendors are read as before every turn: signed in, and the Usage line says ready.
+  // (It said "not signed in for ELU" there: that reading looked at the owner's own file alone.)
+  const checked = await m.row('grok');
+  assert.deepEqual([checked.signedIn, checked.conformant], [true, true]);
+  const blank = { available: false }, tab = usageTab({ vendors: withCheck([{ vendor: 'claude', ...blank }, { vendor: 'codex', ...blank }, { vendor: 'agy', ...blank }, checked], { env: m.env }), env: m.env });
+  assert.deepEqual(usageBlocks([tab[3]]).map(line => line.text), ['Grok Build  signed in · ready']);
   // The owner signs in in his terminal later: his file is the newer one, and ELU's runs use it through the link again.
   const now = Math.floor(Date.now() / 1000); fs.utimesSync(link, now - 100, now - 100);
   fs.writeFileSync(real, '{"token":"never-read"}\n', { mode: 0o600 });
