@@ -100,6 +100,9 @@ test('what leaves for a teammate: paths cut, and an update that may hold a secre
   assert.equal(cut.held, false); assert.equal(cut.text, 'Working on [path] and src/billing.mjs, tests next.');
   const held = teammateAnswer(`Set the token to ${keyLike('ghp_', 'A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8')}`, { root: '/tmp' });
   assert.deepEqual(held, { text: null, held: true });
+  // A random temporary folder in a path is not a secret: the update goes, with the path cut.
+  const temp = teammateAnswer('Fixed the round in /tmp/su2-9SAVeT/x-link/tmp/elu-Qw8RtZ/project/notes/round.mjs, tests next.', { root: '/srv/shop' });
+  assert.deepEqual(temp, { text: 'Fixed the round in [path], tests next.', held: false });
 });
 
 test("the Standup's model reads every update whole, newest first; only a model that says they are too long for it is given fewer", () => {
@@ -155,8 +158,8 @@ test("a teammate's standup is told the owner's rules, gets the question as a tea
   const controller = new ProjectController(projectFolder(p.root)); controller.draftConfig.checks = []; registerProject(controller.repo);
   const task = await controller.ask('Where is billing?').finished;
   const team = 'b'.repeat(64), peer = 'c'.repeat(64); saveTeamAccess(team, { handling: 'manual', rules: 'Never share invoice totals.' });
-  // A fixed path: a random temporary folder name can read as a secret to the check and be held.
-  fake.summary('Fixing billing from /srv/notes/billing.txt next.');
+  // The project's own random temporary folder: a path like it is cut, not held as a secret.
+  fake.summary(`Fixing billing from ${path.join(p.parent, 'notes', 'billing.txt')} next.`);
   const round = newRound();
   await controller.ask(STANDUP_QUESTION, task.id, { standupFor: { round, by: '@kim', question: 'Is billing done?', peer, teams: [team] } }).finished;
   const turn = inputs(fake).at(-1).input;
