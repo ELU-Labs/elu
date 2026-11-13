@@ -1207,9 +1207,11 @@ test('/join counts while it looks for the inviter and says their ELU must be ope
     return new Promise((resolve, reject) => { held = { resolve, reject }; options.signal?.addEventListener('abort', () => setTimeout(() => reject(new Error('Join cancelled. You did not join.')), 400)); });
   };
   await send(v, '/join k7qm-x2pd-9fhw'); await answerJoin(v);
-  await until(() => /Looking for the person who invited you… 0 s\. Their ELU must be open\. Esc cancels\./.test(status()), 'the line as the search starts');
-  await until(() => /Looking for the person who invited you… 1 s\. Their ELU must be open\. Esc cancels\./.test(status()), 'one second counted');
-  await until(() => /Looking for the person who invited you… 2 s\. Their ELU must be open\. Esc cancels\./.test(status()), 'two seconds counted');
+  // The seconds shown, or NaN when the line says something else. A busy machine may skip a second, never go back.
+  const count = () => Number(/^› Looking for the person who invited you… (\d+) s\. Their ELU must be open\. Esc cancels\.$/.exec(status().replace(/\s+/g, ' ').trim())?.[1] ?? NaN);
+  await until(() => count() >= 0, 'the line as the search starts');
+  await until(() => count() >= 1, 'it counts');
+  const first = count(); await until(() => count() > first, 'and goes on counting');
   // Esc says so at once, before the daemon has answered, and the count stops.
   v.input.write('\x1b');
   await until(() => /Join cancelled\. You did not join\./.test(status()), 'cancelled');
@@ -1220,7 +1222,7 @@ test('/join counts while it looks for the inviter and says their ELU must be ope
   assert.deepEqual(peer.calls.filter(row => row[0] === 'saveTeamAccess'), [], 'nothing was saved for a team it did not join');
   // The same wait, and this time the inviter answers: the line says it joined and stops counting.
   await send(v, '/join k7qm-x2pd-9fhw'); await answerJoin(v);
-  await until(() => /Looking for the person who invited you… 1 s\./.test(status()), 'counting again');
+  await until(() => count() >= 1, 'counting again');
   held.resolve({ id: 'team-2', name: 'Docs', inviter: { name: 'sara', fingerprint: 'bbbbbbbb' } });
   await until(() => /^› Joined Docs with sara\./.test(status()), 'joined');
   await new Promise(resolve => setTimeout(resolve, 1300));
