@@ -458,7 +458,7 @@ test('a result for a teammate whose replies the owner checks first waits with hi
   const [held] = heldResults();
   assert.ok(held, JSON.stringify(peerItems().map(row => [row.id, row.kind])));
   assert.match(held.id, /^held:result-/); assert.equal(held.peer, SARA); assert.equal(held.threadId, 'thread-1'); assert.equal(held.blocked, false);
-  assert.equal(held.text, s.summary());
+  assert.equal(held.text, s.summary()); assert.equal(held.question, HANDOFF);
   assert.ok(s.sara.events.includes('result for @sara ready'), s.sara.events.join('\n'));
   assert.equal(thread('thread-1').at(-1).dir, 'local');
   // y: it goes into the thread once, and no longer waits.
