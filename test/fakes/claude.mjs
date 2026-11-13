@@ -133,6 +133,9 @@ if(edit&&input.includes('Trim spaces'))fs.writeFileSync('src/coupon.mjs','export
 // a test's quiet limit, then finishes. stall: an edit turn makes its edit, prints one line and
 // then prints nothing for a minute, as a turn that stopped working does.
 if(mode==='chatty')for(let n=0;n<(cfg.ticks??15);n++){console.log(JSON.stringify({type:'assistant',message:{content:[{type:'text',text:`Still working (${n}).`}]}}));await new Promise(resolve=>setTimeout(resolve,200));}
+// live (fake.json): a file; a turn launched with the to-do tool prints its to-do list, first step
+// done and the next in progress, as the real one calls TodoWrite, and goes on once that file exists.
+if(cfg.live&&(args[args.indexOf('--tools')+1]??'').split(',').includes('TodoWrite')){console.log(JSON.stringify({type:'assistant',parent_tool_use_id:null,message:{content:[{type:'tool_use',id:'toolu_fake_todo',name:'TodoWrite',input:{todos:[{content:'Change normalize',status:'completed',activeForm:'Changing normalize'},{content:'Run the coupon test',status:'in_progress',activeForm:'Running the coupon test'}]}}]}}));const until=Date.now()+30000;while(!fs.existsSync(cfg.live)&&Date.now()<until)await new Promise(resolve=>setTimeout(resolve,50));}
 if(mode==='stall'&&edit){console.log(JSON.stringify({type:'assistant',message:{content:[{type:'text',text:'Edited the file. Thinking.'}]}}));await new Promise(resolve=>setTimeout(resolve,60000));}
 if(mode==='question'&&!args.includes('--resume')&&!input.includes('Uppercase')){result.outcome='needs_input';result.question='Which format?';result.choices=['Uppercase','Lowercase'];}
 if((mode==='review-fix'||mode==='review-block')&&input.includes('Address the review')){result.responses=[{id:'R1',action:mode==='review-fix'?'fixed':'disputed',reason:mode==='review-fix'?'Handled the edge case.':'The finding still needs owner input.'}];}
