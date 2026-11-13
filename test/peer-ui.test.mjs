@@ -938,6 +938,19 @@ test('in Chats my other computer is yours in the bar, the box, its screen, the t
   await until(() => label() === ' Message #ops · the first of your computers to take it answers ', 'the channel box');
   await send(v, 'who is free?');
   await until(() => /Sent to #ops\. The first of your computers to take it answers\./.test(status()), 'and its line');
+  // Who is in a channel counts a computer of mine apart, never as a teammate.
+  const who = 'Who is in #ops', ticked = pattern => until(() => rowsOf(v, who).some(line => pattern.test(line)), `${pattern}`);
+  selectRow(bar, /# ops/); bar.focus(); v.input.write('m'); await ticked(/\[x\] @sara-box/);
+  assert.deepEqual(rowsOf(v, who), ['[x] @sara-box', '[ ] @li', 'Save'], 'the list names it as everywhere');
+  await choose(v, who, /\[ \] @li/); await ticked(/\[x\] @li/); await choose(v, who, /^Save$/);
+  await until(() => /#ops now has 1 teammate, your computer and you\./.test(status()), 'the saved line');
+  peer.channels = [{ id, name: 'ops', members: [ME, SARA] }];
+  await until(() => label() === ' Message #ops · the first of your computers to take it answers ', 'the channel as it was');
+  bar.focus(); v.input.write('m'); await ticked(/\[x\] @sara-box/); await choose(v, who, /\[x\] @sara-box/); await ticked(/\[ \] @sara-box/); await choose(v, who, /^Save$/);
+  await until(() => /Tick at least one teammate or one of your computers\. To leave the channel, press x on it\./.test(status()), 'what a channel needs');
+  bar.focus(); v.input.write('n'); await closeDialog(v, 'New channel', 'lab');
+  await choose(v, 'Who is in #lab', /\[ \] @sara-box/); await until(() => rowsOf(v, 'Who is in #lab').some(line => /\[x\] @sara-box/.test(line)), 'ticked'); await choose(v, 'Who is in #lab', /Create channel/);
+  await until(() => /Created #lab with your computer\. It sees it when it is online\./.test(status()), 'a channel with only my computer in it');
   // t with nobody chosen says a computer of mine can be chosen too.
   selectRow(bar, /\+ Add channel/); bar.focus(); v.input.write('t');
   await until(() => /Choose a teammate or one of your computers first\./.test(status()), 'what t says with nobody chosen');
@@ -950,6 +963,13 @@ test('in Chats a computer of mine that has not marked this one back says it wait
   const rows = () => palette.hidden ? [] : palette.items.map(item => item.getText().replace(/\s+/g, ' ').trim());
   // Not mine yet, so the row says that it waits in place of yours, in the few words the bar has room for.
   await until(() => bar.items.some(item => /^● @sara-box\s+waiting to confirm$/.test(plainItem(item).trimEnd())), 'its row in the bar');
+  // A bar with the room for it, as under 100 columns, says it whole.
+  const member = (waiting, online = true) => ({ status: { key: ME, teams: [{ id: 'team-1', name: 'Core', members: [{ key: ME, name: 'ana' }, { key: SARA, name: 'sara-box', online, path: 'direct', mine: true, waiting }] }] }, items: [] });
+  const drawn = (frame, width) => visible(chatBar(frame, width, false).find(row => row.value?.type === 'member').line).replace(/\s+/g, ' ').trim();
+  assert.equal(drawn(member(true), 78), '● @sara-box waiting for it to confirm');
+  assert.equal(drawn(member(true), 40), '● @sara-box waiting to confirm');
+  assert.equal(drawn(member(false), 40), '● @sara-box yours · direct');
+  assert.equal(drawn(member(false, false), 40), '○ @sara-box yours · offline');
   await openRow(v, /@sara-box/, '@sara-box');
   await until(() => label() === ' Message @sara-box · your computer · waiting for it to confirm ', 'the box of its direct chat');
   const title = 'Your computer @sara-box · waiting for it to confirm';
