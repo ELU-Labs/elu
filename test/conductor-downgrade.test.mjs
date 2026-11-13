@@ -164,3 +164,23 @@ test('a downgrade to 0.1.19 while this version runs a turn: 0.1.19 takes new wor
   assert.deepEqual([now.started, after.started], [[first.id], [other.id, more.id]]);
   assert.deepEqual(besideFiles(), []);
 });
+
+test('elu conductor stop beside 0.1.16 leaves nothing queued where 0.1.16 never reads, so a downgrade after it starts that work once', async t => {
+  const p = setup(t, 'slow'); saveConductorSettings({ maxAgents: 1 });
+  const first = enqueue(p.root, 'The old turn'), old = published(t, { module: earlier16, version: '0.1.16' });
+  await until(() => request(p.root, first.id)?.state === 'running', 'the old turn');
+  old.updated('0.1.99');
+  const fresh = current(t);
+  await until(() => fresh.conductor.beside === true, 'the conductor beside');
+  const held = enqueue(p.root, 'Queued beside');
+  await pause(300);
+  assert.deepEqual([request(p.root, held.id).state, besideFiles().length], ['queued', 1]);
+  // Every conductor stops, and 0.1.16 is installed again before any other starts.
+  sendCommand({ type: 'shutdown' });
+  await until(() => old.conductor.closed && fresh.conductor.closed, 'both to stop');
+  downgrade(t, '0.1.16'); saveConductorSettings({ maxAgents: 4 });
+  assert.deepEqual(besideFiles(), []);
+  const again = published(t, { module: earlier16, version: '0.1.16' });
+  await until(() => again.started.includes(held.id), '0.1.16 to start what waited');
+  assert.deepEqual([fresh.started, sessions(p.repo, 'Queued beside')], [[], 1]);
+});
