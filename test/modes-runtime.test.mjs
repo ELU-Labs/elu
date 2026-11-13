@@ -211,10 +211,10 @@ test('a schedule gets Full access only when the owner picked it; an automatic re
   assert.throws(() => enqueue(p.root, 'q', { origin: origin('ask'), readOnly: true, context: 'ctx', permissions: 'auto' }), /Teammate questions stay read-only/);
 });
 
-// A bot's schedule has no mode of its own and the owner never picks Full access for it, so its
-// turn keeps Approve for me in a Full access session. The model and the bot are each told how
+// A bot's scheduled turn runs in its session's mode: the owner who picks Full access for the
+// session picks it for the schedules of its bots. The model and the bot are each told how
 // the owner repeats work: with /schedule, which they cannot run themselves.
-test("a bot's own scheduled turn keeps Approve for me in a Full access session; the model and the bot are told about /schedule", async t => {
+test("a bot's own scheduled turn runs with Full access in a Full access session; the model and the bot are told about /schedule", async t => {
   const f = setup(t, 'answer');
   saveBot({ name: 'nightly', vendor: 'claude', instructions: 'Tidy the notes.', schedule: 'every 1h' });
   const chat = await f.controller.ask('Run the backlog check every 3 hours.', null, { bots: ['nightly'], permissions: 'full' }).finished;
@@ -224,11 +224,16 @@ test("a bot's own scheduled turn keeps Approve for me in a Full access session; 
   const before = f.leads().length, asked = f.inputs().length;
   const run = await f.controller.ask('Do your scheduled work.', chat.id, { bot: 'nightly', scheduled: true }).finished;
   const turns = run.runs.filter(value => value.role === 'bot:nightly');
-  assert.ok(turns.length > 0, 'the bot ran'); assert.ok(turns.every(value => value.permissions === 'auto'), JSON.stringify(turns.map(value => value.permissions)));
+  assert.ok(turns.length > 0, 'the bot ran'); assert.ok(turns.every(value => value.permissions === 'full'), JSON.stringify(turns.map(value => value.permissions)));
   const modes = f.leads().slice(before).map(call => valueOf(call.args, '--permission-mode'));
-  assert.ok(modes.includes('auto') && !modes.includes('bypassPermissions'), modes.join());
+  assert.ok(modes.includes('bypassPermissions') && !modes.includes('auto'), modes.join());
   assert.ok(f.inputs().slice(asked).some(row => row.input.includes(SCHEDULE_NOTE)), "the bot's work turn is told");
   assert.equal(readTask(f.controller.repo, chat.id).permissions, 'full', 'the session keeps its own mode');
+  // In a session with Approve for me, its scheduled turn has Approve for me.
+  const other = await f.controller.ask('Keep the notes tidy.', null, { bots: ['nightly'], permissions: 'auto' }).finished;
+  const ran = await f.controller.ask('Do your scheduled work.', other.id, { bot: 'nightly', scheduled: true }).finished;
+  const own = ran.runs.filter(value => value.role === 'bot:nightly');
+  assert.ok(own.length > 0 && own.every(value => value.permissions === 'auto'), JSON.stringify(own.map(value => value.permissions)));
 });
 
 // A mode the owner picked for a new session is saved on its request, so every window and a
