@@ -1023,10 +1023,10 @@ test('@name in a session asks that bot, not the lead: @ offers the saved bots, t
   assert.equal(v.current.view, 'tasks'); await until(() => /^.✓ Is the token in… +now$/.test(cursor(v)), 'its row is selected'); assert.doesNotMatch(rows(v).join('\n'), /#\d/, 'no row shows a number');
   assert.deepEqual(roles(id), ['bot:sec'], 'the bot ran and the lead did not'); assert.equal(runs().length, 1);
   assert.ok(JSON.stringify(sent().at(-1)).includes('Review the change for leaked secrets.'), 'the bot ran with its instructions');
-  await until(() => /You → @sec {2}\d{1,2}:\d\d [AP]M\n┃ Is the token in config\.js a secret\?/.test(chat()) && /@sec {2}\d{1,2}:\d\d [AP]M\n┃ Yes\. You can add multiple agents/.test(chat()), 'both sides in the chat');
-  assert.doesNotMatch(chat(), /^Fable 5\.1 {2}\d/m, 'no reply from the session’s model'); assert.match(status(), /@sec answered/);
+  await until(() => /You → @sec {2}\d{1,2}:\d\d [AP]M\n┃ Is the token in config\.js a secret\?/.test(chat()) && /@sec \(fable 5\.1 high\) {2}\d{1,2}:\d\d [AP]M\n┃ Yes\. You can add multiple agents/.test(chat()), 'both sides in the chat, the bot with the model and effort that answered');
+  assert.doesNotMatch(chat(), /^Fable 5\.1(?: \(high\))? {2}\d/m, 'no reply from the session’s model'); assert.match(status(), /@sec answered/);
   // The bot's reply sits behind a bar of the bot's own color, violet here; your message keeps its blue one.
-  assert.match(panels.chat.content, /\{141-fg\}\{bold\}@sec\{\/bold\}/); assert.match(panels.chat.content, /\{75-fg\}\{bold\}You → @sec\{\/bold\}/);
+  assert.match(panels.chat.content, /\{141-fg\}\{bold\}@sec \(fable 5\.1 high\)\{\/bold\}/); assert.match(panels.chat.content, /\{75-fg\}\{bold\}You → @sec\{\/bold\}/);
   // The session keeps the bots its form had. The owner wrote to @sec, so the message box names @sec as who gets the next message.
   assert.deepEqual(task(id).bots, ['reviewer', 'sec']); await until(() => /^ Message @sec · @model writes to Opus $/.test(label()), 'the label names who gets the next message');
   // @model writes to the session's model, and the message box names it and the bots again. A message that starts with a word that is no bot goes there too.
@@ -1034,16 +1034,16 @@ test('@name in a session asks that bot, not the lead: @ offers the saved bots, t
   await until(() => /^ Message Opus · Ask for approval · with @reviewer @sec $/.test(label()), 'the label names the bots');
   await send(v, '@nobody what does this function do?'); await until(() => roles(id).length === 3 && task(id).state === 'answered', 'the lead answered again');
   assert.deepEqual(roles(id), ['bot:sec', 'lead', 'lead']); assert.equal(task(id).messages.at(-1).text, '@nobody what does this function do?', 'sent as typed');
-  await until(() => /^Fable 5\.1 {2}\d{1,2}:\d\d [AP]M\n┃ Yes/m.test(chat()) && /You {2}\d{1,2}:\d\d [AP]M\n┃ @nobody what does this function do\?/.test(chat()), 'the model’s side of the chat, under its name'); assert.doesNotMatch(chat(), /\(lead\)/);
+  await until(() => /^Fable 5\.1 \(high\) {2}\d{1,2}:\d\d [AP]M\n┃ Yes/m.test(chat()) && /You {2}\d{1,2}:\d\d [AP]M\n┃ @nobody what does this function do\?/.test(chat()), 'the model’s side of the chat, under its name'); assert.doesNotMatch(chat(), /\(lead\)/);
   // In the open session, @ offers the bots again; Enter fills one in, and it answers on its own model.
   await typing(); v.input.write('@d'); await until(() => !panels.palette.hidden && panels.palette.items.length === 1, '@ in an open session');
   v.input.write('\r'); await until(() => panels.ask.getValue() === '@docs ', 'Enter fills it in');
   v.input.write('Is the README still right?'); await until(() => panels.ask.getValue() === '@docs Is the README still right?', 'typed to @docs');
   v.input.write('\r'); await until(() => roles(id).length === 4 && task(id).state === 'answered', '@docs answered');
   assert.equal(roles(id).at(-1), 'bot:docs'); assert.equal(runs().at(-1).args[runs().at(-1).args.indexOf('--model') + 1], 'opus');
-  await until(() => /You → @docs {2}\d{1,2}:\d\d [AP]M\n┃ Is the README still right\?/.test(chat()) && /@docs {2}\d{1,2}:\d\d [AP]M\n┃ Yes/.test(chat()) && /^ Message @docs · @model writes to Opus $/.test(label()), 'its reply, and the label names who gets the next message now');
+  await until(() => /You → @docs {2}\d{1,2}:\d\d [AP]M\n┃ Is the README still right\?/.test(chat()) && /@docs \(fable 5\.1 high\) {2}\d{1,2}:\d\d [AP]M\n┃ Yes/.test(chat()) && /^ Message @docs · @model writes to Opus $/.test(label()), 'its reply, and the label names who gets the next message now');
   assert.deepEqual(task(id).bots, ['reviewer', 'sec', 'docs'], 'the bot that was written to joined the session');
-  assert.match(panels.chat.content, /\{221-fg\}\{bold\}@docs\{\/bold\}/, '@docs answers in its own color, gold');
+  assert.match(panels.chat.content, /\{221-fg\}\{bold\}@docs \(fable 5\.1 high\)\{\/bold\}/, '@docs answers in its own color, gold');
   // /bots remove and /bots add change who is in the chat. The command list offers the bots each can take.
   await send(v, '/bots remove docs'); await until(() => /@docs left this session\./.test(status()) && /with @reviewer @sec $/.test(label()), 'removed'); assert.deepEqual(task(id).bots, ['reviewer', 'sec']);
   await send(v, '/bots remove docs'); await until(() => /@docs is not in this session\./.test(status()), 'not in it');
@@ -1478,7 +1478,7 @@ test('a chat shows both sides, and a saved request comes back from Tasks', { tim
   await until(() => v.current.snapshot.tasks?.[0]?.state === 'answered', 'first response');
   await send(v, 'Can one review security?');
   await until(() => v.current.snapshot.tasks[0]?.runs.length === 2 && v.current.snapshot.tasks[0]?.state === 'answered', 'follow-up response');
-  const chat = v.current.panels.chat.getText(); assert.match(chat, /You {2}\d{1,2}:\d\d [AP]M\n┃ Can I add multiple agents/); assert.match(chat, /Fable 5\.1 {2}\d{1,2}:\d\d [AP]M\n┃ Yes/); assert.doesNotMatch(chat, /\(lead\)/); assert.match(chat, /Can one review security/);
+  const chat = v.current.panels.chat.getText(); assert.match(chat, /You {2}\d{1,2}:\d\d [AP]M\n┃ Can I add multiple agents/); assert.match(chat, /Fable 5\.1 \(high\) {2}\d{1,2}:\d\d [AP]M\n┃ Yes/); assert.doesNotMatch(chat, /\(lead\)/); assert.match(chat, /Can one review security/);
   v.current.controller.queue('testing if this works and if I can add multi agent', undefined, { state: 'blocked', reason: 'Project checks are still needed.' });
   await openTask(v, /✗ testing if this/);
   await until(() => v.current.panels.ask.getValue().includes('testing if this works'), 'request restored');
@@ -3528,7 +3528,7 @@ test('+ New session shows the new session form, and a message sent from it opens
   // It is open on the right, its row is the selected one, and the focus is in its message box.
   await until(() => v.current.session === id && /✓ Can I add/.test(cursor(v)), 'the new session is open, with its row selected');
   assert.equal(focused(), panels.ask); assert.equal(panels.compose.hidden, true); assert.equal(panels.chat.hidden, false); assert.equal(panels.ask.getValue(), '');
-  assert.match(panels.header.getText(), /^sample app {2}· {2}Can I add multiple agents\? {2}· {2}answered/); assert.match(panels.chat.getText(), /You {2}\d{1,2}:\d\d [AP]M\n┃ Can I add multiple agents\?[^]*\nFable 5\.1 {2}\d{1,2}:\d\d [AP]M\n┃ Yes/);
+  assert.match(panels.header.getText(), /^sample app {2}· {2}Can I add multiple agents\? {2}· {2}answered/); assert.match(panels.chat.getText(), /You {2}\d{1,2}:\d\d [AP]M\n┃ Can I add multiple agents\?[^]*\nFable 5\.1 \(high\) {2}\d{1,2}:\d\d [AP]M\n┃ Yes/);
   assert.deepEqual(rows(v).filter(row => /^.[?✓] /.test(row)).map(row => /^.[?✓] (\w+ \w+)/.exec(row)[1]).sort(), ['Can I', 'Trim coupon', 'Which format'], 'the list has all three sessions'); assert.match(rows(v)[0], /^ \+ New session$/);
   // A follow-up from the same box stays in that session.
   await send(v, 'Can one review security?');
