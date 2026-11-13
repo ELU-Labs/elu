@@ -621,29 +621,29 @@ test("a computer with only Grok Build: the project's settings show its default m
   // Enter on This computer opens the picker; none is offered beside the models.
   for (let at = 0; at < 3; at += 1) v.input.write('\x1b[B');
   await until(() => dialogList(v, PAGE).selected === 4, 'on This computer'); v.input.write('\r'); await until(() => modal(v, 'Model'), 'the picker');
-  assert.match(dialogText(v, 'Model').replace(/\s+/g, ' '), /Every project that has not chosen starts new sessions with Grok \(grok\): the first installed here, since no default is chosen\./);
+  assert.match(dialogText(v, 'Model').replace(/\s+/g, ' '), /No default for this computer: Grok \(grok\) is the first installed here\./);
   assert.match(dialogText(v, 'Model'), /none +no choice: the first one installed here/);
   await dialog(v, 'Model', 'grok');
   await until(() => modal(v, PAGE) && dialogRows(v, PAGE)[4] === 'This computer Grok · used by every project that has not chosen', 'saved, and back in the settings');
   assert.equal(dialogRows(v, PAGE)[3], "Default model Grok · this computer's default");
-  assert.match(status(), /Every project that has not chosen starts new sessions with Grok \(grok\)\./);
+  assert.match(status(), /This computer's default is Grok \(grok\)\./);
   assert.deepEqual(computerDefault(), { vendor: 'grok', model: null });
   // Enter on Default model is the picker of /model default: the project's own choice wins.
   v.input.write('\x1b[A'); await until(() => dialogList(v, PAGE).selected === 3, 'on Default model'); v.input.write('\r'); await until(() => modal(v, 'Model'), 'the picker');
-  assert.match(dialogText(v, 'Model').replace(/\s+/g, ' '), /New sessions in sample app start with Grok \(grok\): this computer's default\./);
+  assert.match(dialogText(v, 'Model').replace(/\s+/g, ' '), /sample app uses this computer's default, Grok \(grok\)\./);
   assert.match(dialogText(v, 'Model'), /none +no choice: this computer's default/);
   await dialog(v, 'Model', 'grok');
   await until(() => modal(v, PAGE) && dialogRows(v, PAGE)[3] === 'Default model Grok', 'the project has its own');
   assert.equal(v.current.controller.startModel().from, 'project');
   v.input.write('\x1b'); await until(() => !modal(v, PAGE), 'closed');
   // none goes back to no choice, by command too.
-  await send(v, '/model default none'); await until(() => /New sessions in sample app start with Grok \(grok\): this computer's default\./.test(status()), "back on this computer's");
-  await send(v, '/model computer none'); await until(() => /Every project that has not chosen starts new sessions with Grok \(grok\): the first installed here, since no default is chosen\./.test(status()), 'no choice on this computer');
+  await send(v, '/model default none'); await until(() => /sample app uses this computer's default, Grok \(grok\)\./.test(status()), "back on this computer's");
+  await send(v, '/model computer none'); await until(() => /No default for this computer: Grok \(grok\) is the first installed here\./.test(status()), 'no choice on this computer');
   assert.equal(computerDefault(), null);
-  await send(v, '/model computer grok'); await until(() => /Every project that has not chosen starts new sessions with Grok \(grok\)\.$/.test(status().trim()), 'set by command');
+  await send(v, '/model computer grok'); await until(() => /This computer's default is Grok \(grok\)\.$/.test(status().trim()), 'set by command');
   // A saved default whose vendor is not installed here is said wherever the default is shown.
   saveComputerDefault({ vendor: 'claude', model: 'opus' });
-  await send(v, '/model'); await until(() => /New sessions in sample app start with Grok \(grok\): the first installed here, since no default is chosen\. Opus is this computer's default, but Claude Code is not installed here\. \/model default <name> changes it; \/model computer <name> sets this computer's\./.test(status()), 'said by /model');
+  await send(v, '/model'); await until(() => /Opus is this computer's default, but Claude Code is not installed here\./.test(status()), 'said by /model');
   await page();
   assert.deepEqual(dialogRows(v, PAGE).slice(3, 5), ['Default model Grok · not chosen, so the first installed here', 'This computer Grok · Opus is chosen, but Claude Code is not installed']);
   v.input.write('\x1b'); await until(() => !modal(v, PAGE), 'closed');
