@@ -316,7 +316,8 @@ new session box starts the session on the devbox, with the mode, model and bots 
 It shows in Sessions marked "on devbox", live, and its approvals wait on both machines. It is
 your own session there, so your rules apply, and `a` on its approval, from either machine,
 keeps the rule on the devbox, where it runs.
-Sessions also lists every other session on the devbox in the same repository under "On devbox", and Projects lists its other projects as "<project> on devbox".
+Sessions also lists every other session on the devbox in the same repository under "On devbox": they are part of your project, in Sessions and on its Kanban ("you · devbox"), whichever of your computers started them.
+Projects lists a devbox project as "<project> on devbox" only for its sessions this project cannot show, and says how many.
 With a devbox session under the cursor, what you type goes to your agent here, on the laptop:
 the first message starts a session in the project open on the laptop, named "Help: " and the
 devbox session's title, and the next ones continue it. It is told which session it helps, what
