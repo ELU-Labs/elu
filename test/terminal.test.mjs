@@ -4545,3 +4545,24 @@ test('/help says c archives a session and names /archive, as the key bar does', 
   assert.match(help, /Examples: \/model sonnet .*\/permissions folders add ~\/evals \/archive\b/);
   await dialog(v, 'Commands', '');
 });
+
+test('PgUp and PgDn move a chat a page, in the chat and from the message box under it', { timeout: 30000 }, async t => {
+  const p = setup(t), at = new Date(Date.now() - 60000).toISOString(), result = { outcome: 'done', intent: 'answer', summary: 'Answered.', question: null, choices: [], comments: [], responses: [] };
+  const said = Array.from({ length: 40 }, (_, index) => ({ at, text: `Cart note ${index + 1}` }));
+  saveTask(p.repo, { id: '1', kind: 'conversation', goal: 'Cart note 1', state: 'answered', worktree: p.root, branch: null, base: null, createdAt: at, runs: [], reviews: [], responses: [], sessions: {}, result, messages: said });
+  const v = await view(t, { repo: p.repo }), chat = v.current.panels.chat, ask = v.current.panels.ask, page = () => chat.height - chat.iheight - 1;
+  await openTask(v, /Cart note/);
+  await until(() => /Cart note 40/.test(chat.getContent()) && chat.getScrollPerc(true) === 100, 'the chat at its end');
+  const end = chat.childBase;
+  // From the message box: the chat moves, the text stays.
+  ask.setValue('half a thought'); v.input.write('\x1b[5~');
+  await until(() => chat.childBase === end - page(), 'a page up from the box'); await pause(200);
+  assert.equal(chat.childBase, end - page(), 'the draws keep the page'); assert.equal(ask.getValue(), 'half a thought'); assert.equal(v.current.screen.focused, ask);
+  v.input.write('\x1b[5~'); await until(() => chat.childBase === end - 2 * page(), 'another page up');
+  v.input.write('\x1b[6~'); await until(() => chat.childBase === end - page(), 'a page down from the box');
+  // In the chat itself.
+  v.input.write('\x1b'); await until(() => v.current.screen.focused !== ask, 'out of the box');
+  chat.focus(); await until(() => v.current.screen.focused === chat, 'the chat');
+  v.input.write('\x1b[6~'); await until(() => chat.getScrollPerc(true) === 100, 'a page down reaches the end');
+  v.input.write('\x1b[5~'); await until(() => chat.childBase === end - page(), 'a page up in the chat');
+});
