@@ -122,7 +122,7 @@ You can send a message at any time. One sent while the session is working waits 
 
 A schedule also runs while ELU is closed, through a login item, once ELU is
 installed (not run through `npx`). The login item is there only while a schedule is on, a
-task's or a bot's: ELU removes it with the last one and puts it back with the next. On macOS, while an agent works or a schedule is on, ELU
+task's or a bot's: ELU removes it with the last one, also while ELU is closed, and puts it back with the next. On macOS, while an agent works or a schedule is on, ELU
 stops the Mac from going to sleep on its own (`caffeinate -i`); the display can still
 sleep. Schedules show in the Sessions tab under Scheduled: `p` pauses one and `x` deletes
 it. A time is `in 30m`, `every 2h` (15 minutes to 7 days), `daily 9:00`, `weekdays 9am`,
