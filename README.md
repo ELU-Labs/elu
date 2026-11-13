@@ -102,7 +102,7 @@ You can send a message at any time. One sent while the session is working waits 
 | Type | What it does |
 | --- | --- |
 | `/new` | Starts a new session |
-| `/model sonnet` | Chooses the model of this session; `/model` alone lists them |
+| `/model sonnet` | Chooses the model of this session; `/model` alone lists them. The name can be the one the app shows, and a message after it is sent on that model: `/model opus 5.5 fix the build`. Over a session on your other computer it changes that session's model there |
 | `/permissions auto` | Sets what the model may do: `ask`, `auto` or `full` |
 | `/place branch try-coupons` | Sets where a new session runs: `worktree`, `branch NAME` or `here` |
 | `/bots add qa` | Keeps a bot in this session; `/bots remove qa` takes it out |
