@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -42,6 +43,16 @@ test('initial history respects ignores, requires an unchanged preview, and commi
   assert.deepEqual(git(f.root, ['ls-tree', '-r', '--name-only', 'HEAD']).split('\n'), ['.gitignore', 'source.mjs']);
   assert.equal(git(f.root, ['remote']), ''); assert.equal(historyPlan(repo), null);
   assert.equal(fs.readFileSync(path.join(f.root, '.env'), 'utf8'), 'SYNTHETIC_PRIVATE_VALUE');
+});
+
+test('initial history takes a file over 4 MiB like any other', t => {
+  const f = fixture(t), big = Buffer.alloc(5 * 1024 * 1024, 'a');
+  fs.writeFileSync(path.join(f.root, 'data.bin'), big); fs.writeFileSync(path.join(f.root, 'source.mjs'), 'export const count = 1;\n');
+  const plan = historyPlan(projectFolder(f.root));
+  assert.deepEqual(plan.files.map(file => file.path), ['data.bin', 'source.mjs']);
+  assert.equal(plan.files[0].hash, crypto.createHash('sha256').update(big).digest('hex'));
+  createHistory(plan);
+  assert.deepEqual(git(f.root, ['ls-tree', '-r', '--name-only', 'HEAD']).split('\n'), ['data.bin', 'source.mjs']);
 });
 
 test('initial history refuses an unignored credential-shaped file or an outside symlink', t => {

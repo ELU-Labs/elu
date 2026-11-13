@@ -70,6 +70,21 @@ test('automatic editing copies local source edits while keeping the owner checko
   await assert.rejects(controller.pushPlan(task.id), /pre-existing local edits/);
 });
 
+// Every local edit is copied, however large and however many: ELU sets no limit of its own.
+test('automatic editing copies a local file over 4 MiB and more than 5000 local files', async t => {
+  const p = project(t), fake = fakeClis(p.parent); environment(t, fake.env);
+  const big = 'a line of a local file larger than four mebibytes\n'.repeat(100000);
+  fs.writeFileSync(path.join(p.root, 'big.txt'), big); assert.ok(big.length > 4 * 1024 * 1024);
+  fs.mkdirSync(path.join(p.root, 'many'));
+  for (let n = 0; n < 5001; n++) fs.writeFileSync(path.join(p.root, 'many', `${n}.txt`), `${n}\n`);
+  const controller = autoApprove(new ProjectController(projectFolder(p.root)));
+  const task = await controller.ask('Normalize coupon codes').finished;
+  assert.equal(task.state, 'ready', JSON.stringify(task.error));
+  assert.equal(fs.readFileSync(path.join(task.worktree, 'big.txt'), 'utf8'), big);
+  assert.equal(fs.readdirSync(path.join(task.worktree, 'many')).length, 5001);
+  assert.equal(task.localChanges.length, 5002);
+});
+
 test('a question after an edit preserves the implementation and its verification', async t => {
   const p = project(t), fake = fakeClis(p.parent, { mode: 'dialogue' }); environment(t, fake.env);
   const controller = autoApprove(new ProjectController(projectFolder(p.root)));
