@@ -797,6 +797,30 @@ test("over a session on my other computer, its @name that is also a name on my t
   assert.deepEqual(peer.sent().filter(row => row.type === 'ask'), [], 'no teammate was asked anything');
 });
 
+test("in a session open on this computer, my other computer's @name reads as your computer in the @ list, the box and the sent line, never as a teammate", async t => {
+  const at = new Date().toISOString(), p = project(later(t)); environment(t, p.parent);
+  const repo = repository(p.root);
+  saveTask(repo, { id: '1', kind: 'conversation', goal: 'Tidy the notes', state: 'answered', worktree: repo.root, base: null, branch: null, createdAt: at, runs: [], reviews: [], responses: [], messages: [{ at, text: 'Tidy the notes' }], sessions: {}, result: null });
+  // sara's computer is mine; li is a teammate.
+  const peer = fakePeer({ items: [], mine: [{ key: SARA, mine: true, theirs: true }] }), v = await view(t, { repo, dashboard: true, peer });
+  const board = v.panels.board, ask = v.panels.ask, palette = v.panels.palette, label = () => ask._label.getText(), status = () => v.panels.status.getText();
+  const rows = () => palette.hidden ? [] : palette.items.map(item => item.getText().replace(/\s+/g, ' ').trim());
+  await until(() => board.items.map(plainItem).some(row => /Tidy the notes/.test(row)), 'the session here');
+  board.focus(); selectRow(board, /Tidy the notes/);
+  await until(() => v.current.view === 'chat', 'the session here is open');
+  ask.focus(); ask.readInput(); await until(() => ask.__listener, 'message box');
+  v.input.write('@sa');
+  await until(() => rows().some(row => /^@sara your computer · online$/.test(row)), 'the @ list calls it your computer');
+  assert.ok(!rows().some(row => /teammate/.test(row)), 'and never a teammate');
+  ask.clearValue(); v.input.write('@l'); await until(() => rows().some(row => /^@li teammate · offline$/.test(row)), 'a teammate keeps the word');
+  ask.clearValue(); v.input.write('@sara what runs there?');
+  await until(() => /^ Ask @sara · your computer · Enter sends it there, the reply shows here $/.test(label()), 'the box says whose it is and what Enter does');
+  ask.submit();
+  await until(() => peer.sent().some(row => row.type === 'ask'), 'asked');
+  assert.equal(peer.sent().find(row => row.type === 'ask').text, 'what runs there?');
+  await until(() => /Sent to @sara, your computer\. Its reply shows in this thread\./.test(status()), 'and the line after sending');
+});
+
 test('Sessions lists every session of my other computer in this repository under its name, and Projects opens its other projects', async t => {
   const now = Date.now(), at = minutes => new Date(now - minutes * 60000).toISOString(), SHOP = 'e'.repeat(64);
   const p1 = '1'.repeat(16), p2 = '2'.repeat(16);

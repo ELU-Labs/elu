@@ -81,6 +81,13 @@ test('@ in a session offers bots, then teammates; a teammate named like a bot is
   assert.deepEqual(sessionMentions('@mo', { ...open, teammates: () => [{ name: 'model', online: true }] }).map(row => row.description), ['Opus 5 · the model of this session']);
 });
 
+test('another computer of mine is offered as your computer, never as a teammate', () => {
+  const mine = { ...ctx, bots: () => [], teammates: () => [{ name: 'devbox', online: true, path: 'direct', mine: true }, { name: 'sara', online: false }], invitees: () => ({ channel: 'ops', people: [{ name: 'devbox', online: true, mine: true }, { name: 'sara', online: false }] }) };
+  assert.deepEqual(sessionMentions('@', mine).map(row => `${row.value} ${row.description}`), ['@devbox your computer · online', '@sara teammate · offline']);
+  assert.deepEqual(mentionMatches('@', mine).map(row => `${row.value} ${row.description}`), ['@devbox your computer · online · direct', '@sara offline']);
+  assert.deepEqual(argumentMatches('/invite ', mine).map(row => `${row.word} ${row.description}`), ['@devbox add to #ops · your computer · online', '@sara add to #ops · offline']);
+});
+
 test('@ offers teammates by name, and stops after a space', () => {
   assert.deepEqual(mentionMatches('@', ctx).map(row => row.value), ['@devbox', '@sara']);
   assert.deepEqual(mentionMatches('@dev', ctx).map(row => `${row.value} ${row.description}`), ['@devbox online · direct']);
