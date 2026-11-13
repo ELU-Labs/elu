@@ -837,7 +837,7 @@ test('a session on my other computer stays where the owner scrolled it through e
   board.focus(); selectRow(board, /Read the long chat/);
   await until(() => /Runs on @sara-box/.test(chat.getContent()) && chat.getScrollPerc(true) === 100, 'its chat, at the end');
   // The owner's cursor stays in the message box while he scrolls the chat with the trackpad.
-  ask.focus(); await until(() => /Message this session on @sara-box/.test(ask._label.getText()), 'the message box names it');
+  ask.focus(); await until(() => /Message your agent here · @sara-box/.test(ask._label.getText()), 'the message box names it');
   const end = chat.childBase;
   wheelAt(v, chat, -1, 10); await until(() => chat.childBase === end - 10, 'ten lines up');
   // The app draws every 30 ms here: none of those draws takes the chat back to its end.
