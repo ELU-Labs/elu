@@ -17,6 +17,13 @@ ELU launches installed vendor CLIs. The executables and your local installation 
 trusted. Repository content, check scripts, prompts, and model responses are untrusted.
 Only the owner can approve a push, or give a session Full access, which pushes without asking.
 
+ELU refuses a symbolic link inside what it or a session writes: its state folder, a
+project's record, a task's workspace. A link above those is yours or the system's and is
+followed: the temp folder, the folder its state is kept in (`$XDG_CONFIG_HOME`, else
+`~/.config`), a project folder you type, a Git hooks folder outside the project and a
+vendor's home are each read as they are on disk first. On macOS `/var` and `/tmp` are such
+links. A session is closed out of ELU's state under both names of that folder.
+
 Prompts explain the task but are not security controls. This tool cannot prove a change is
 correct, and model review is not a substitute for a person reviewing a pull request.
 
