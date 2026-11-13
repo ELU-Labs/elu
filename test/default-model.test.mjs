@@ -64,24 +64,24 @@ test("on a computer with only Grok Build, a teammate's message starts a session 
   assert.equal(ended.state, 'done', `it ran: ${ended.reason ?? ended.error ?? ''}`);
   const task = readTask(p.repo, ended.taskId), run = task.runs.at(-1);
   assert.ok(run, `a model answered: ${JSON.stringify(task.messages.at(-1))}`);
-  assert.equal(run.vendor, 'grok'); assert.equal(run.exitCode, 0);
-  assert.equal(task.messages.at(-1).role, 'lead', 'Grok Build answered the teammate');
+  assert.equal(run.vendor, 'grok'); assert.equal(task.state, 'answered', JSON.stringify(task.error));
 });
 
 test('a new session, Standup and a bot that names no model run on Grok Build there; a bot that names its model keeps it', async t => {
   const p = setup(t), controller = new ProjectController(projectFolder(p.root));
   assert.deepEqual(controller.defaultModel(), { vendor: 'grok', model: null });
-  const task = await controller.ask('Where is coupon normalization?');
-  assert.equal(lastRun(p.repo, task.id).vendor, 'grok');
+  const task = await controller.ask('Where is coupon normalization?').finished;
+  assert.equal(task.state, 'answered', JSON.stringify(task.error)); assert.equal(lastRun(p.repo, task.id).vendor, 'grok');
   // A bot saved for Claude Code with no model runs on this computer's default here.
   saveBot({ name: 'scout', vendor: 'claude', model: null, instructions: 'Look for risks.' });
-  const asked = await controller.ask('Thoughts?', task.id, { bot: 'scout' });
+  const asked = await controller.ask('Thoughts?', task.id, { bot: 'scout' }).finished;
   const run = readTask(p.repo, asked.id).runs.at(-1);
   assert.equal(run.role, 'bot:scout'); assert.equal(run.vendor, 'grok');
   assert.deepEqual(models.botHere({ name: 'scout', vendor: 'claude', model: null, effort: 'max', subagents: 'sonnet' }), { name: 'scout', vendor: 'grok', model: null, effort: null, subagents: null });
   // One that names its model is not moved: it says why it cannot start.
   saveBot({ name: 'judge', vendor: 'claude', model: 'opus', instructions: 'Judge it.' });
-  await assert.rejects(controller.ask('And you?', task.id, { bot: 'judge' }), /@judge can't start\. Claude Code is not installed or not on your PATH\./);
+  const judged = await controller.ask('And you?', task.id, { bot: 'judge' }).finished.then(value => JSON.stringify([value.error, value.messages.at(-1)]), error => error.message);
+  assert.match(judged, /@judge can't start\. Claude Code is not installed or not on your PATH\./);
   // A review is only moved to a vendor that can review, which Grok Build cannot.
   assert.equal(models.botHere({ name: 'scout', vendor: 'claude', model: null }, { review: true }).vendor, 'claude');
 });

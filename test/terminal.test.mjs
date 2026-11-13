@@ -613,7 +613,7 @@ test('a click outside a dialog with typed text keeps the dialog, its text and th
 test("a computer with only Grok Build: the project's settings show its default model and this computer's, Enter picks one, /model computer sets it, and a saved default that is not installed is said", { timeout: 60000 }, async t => {
   const p = setup(t, 'answer'); registerProject(p.repo);
   environment(t, { PATH: vendorPath(p.parent, p.dir, ['grok']).PATH });
-  const v = await view(t, { dashboard: true }), panels = v.current.panels, PAGE = 'Project sample app', status = () => panels.status.getText().replace(/\s+/g, ' ');
+  const v = await view(t, { repo: p.repo }), panels = v.current.panels, PAGE = 'Project sample app', status = () => panels.status.getText().replace(/\s+/g, ' ');
   const page = async () => { await send(v, '/projects'); await until(() => v.current.view === 'projects' && panels.projectsList.items.length === 1, 'the project row'); panels.projectsList.focus(); v.input.write('\r'); await until(() => modal(v, PAGE), 'the settings'); };
   await page();
   // Nothing is chosen: Grok Build is the first vendor installed, so new sessions start on it.
@@ -648,6 +648,20 @@ test("a computer with only Grok Build: the project's settings show its default m
   assert.deepEqual(dialogRows(v, PAGE).slice(3, 5), ['Default model Grok · not chosen, so the first installed here', 'This computer Grok · Opus is chosen, but Claude Code is not installed']);
   v.input.write('\x1b'); await until(() => !modal(v, PAGE), 'closed');
   await send(v, '/new'); await until(() => /Your message goes to Grok\. Opus is this computer's default, but Claude Code is not installed here\./.test(v.frame().replace(/\s+/g, ' ')), 'said on the new session form');
+});
+
+test('the default model of a project that is not the active one is set from its settings too', { timeout: 60000 }, async t => {
+  const p = setup(t, 'answer'); registerProject(p.repo);
+  const v = await view(t, { dashboard: true }), panels = v.current.panels, PAGE = 'Project sample app';
+  await send(v, '/projects'); await until(() => v.current.view === 'projects' && panels.projectsList.items.length === 1, 'the project row');
+  panels.projectsList.focus(); v.input.write('\r'); await until(() => modal(v, PAGE) && dialogList(v, PAGE).selected === 0, 'its settings, on Make active');
+  assert.deepEqual(dialogRows(v, PAGE).slice(3, 5), DEFAULT_ROWS);
+  for (let at = 0; at < 3; at += 1) v.input.write('\x1b[B');
+  await until(() => dialogList(v, PAGE).selected === 3, 'on Default model'); v.input.write('\r'); await until(() => modal(v, 'Model'), 'the picker');
+  await dialog(v, 'Model', 'sonnet');
+  await until(() => modal(v, PAGE) && dialogRows(v, PAGE)[3] === 'Default model Sonnet', 'saved for that project');
+  assert.match(fs.readFileSync(path.join(p.root, '.elu-code/config.yaml'), 'utf8'), /model: sonnet/);
+  assert.match(panels.status.getText().replace(/\s+/g, ' '), /New sessions in sample app start with Sonnet \(claude · sonnet\)\./);
 });
 
 test('clicks inside a list dialog mark and pick its rows; one on its border or hint goes nowhere', async t => {
