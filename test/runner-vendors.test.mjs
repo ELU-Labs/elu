@@ -280,6 +280,31 @@ for (const [vendor, name, version, say] of [['grok', 'a Grok Build', '1.0.77', s
   });
 }
 
+// Full access gets the owner's whole environment except the names that choose a vendor's
+// account, endpoint and settings, GROK_* among them. The switches for loading another tool's
+// files are ELU's own on every run, Full access included: all eighteen are off in the
+// environment the run's command prints and in the config ELU wrote for that run, whatever the
+// owner's shell set. The switches that take something from the agent itself are not set there.
+test('a Grok Build run in Full access prints its environment with all eighteen switches for another tool\'s files off, whatever the owner\'s shell set', async t => {
+  const f = setup(t, 'grok'), script = path.join(f.parent, 'env.sh'), out = path.join(f.parent, 'env.out');
+  fs.mkdirSync(path.join(f.parent, '.grok')); fs.writeFileSync(path.join(f.parent, '.grok', 'auth.json'), '{}\n', { mode: 0o600 });
+  proven('grok', f.bin, '1.0.77', { relay: true });
+  environment(t, { GROK_CURSOR_HOOKS_ENABLED: '1', GROK_CLAUDE_MCPS_ENABLED: 'true', GROK_CODEX_SESSIONS_ENABLED: '1', GROK_MEMORY: '0', OWNER_SETTING: 'kept' });
+  fs.writeFileSync(script, `#!/bin/sh\n{ env; printf '\\nCONFIG\\n'; cat "$GROK_HOME/config.toml"; } > ${JSON.stringify(out)} 2>&1\n`, { mode: 0o700 });
+  const full = await f.controller.ask(`Run the command ${script} then reply done with the summary "ran it".`, null, { permissions: 'full' }).finished;
+  assert.equal(full.state, 'answered', JSON.stringify(full.error));
+  const [printed, config] = fs.readFileSync(out, 'utf8').split('\nCONFIG\n'), value = name => printed.match(new RegExp(`^${name}=(.*)$`, 'm'))?.[1];
+  const tools = ['claude', 'cursor', 'codex'], surfaces = ['skills', 'rules', 'agents', 'mcps', 'hooks', 'sessions'];
+  const switches = tools.flatMap(tool => surfaces.map(surface => `GROK_${tool}_${surface}_ENABLED`.toUpperCase()));
+  assert.equal(switches.length, 18);
+  t.diagnostic(switches.map(name => `${name}=${value(name)}`).join(' '));
+  assert.deepEqual(Object.fromEntries(switches.map(name => [name, value(name)])), Object.fromEntries(switches.map(name => [name, '0'])));
+  for (const tool of tools) assert.ok(config.includes(`[compat.${tool}]\n${surfaces.map(surface => `${surface} = false\n`).join('')}`), `the run's config has every ${tool} switch off`);
+  // The rest of Full access holds: his own setting reached the command, his GROK_ name did not, and ELU set no limit of its own.
+  assert.equal(value('OWNER_SETTING'), 'kept');
+  for (const name of ['GROK_MEMORY', 'GROK_SUBAGENTS', 'GROK_BACKEND_SEARCH']) assert.equal(value(name), undefined, name);
+});
+
 test('a Codex lead whose command was declined reports the denial and asks', async t => {
   const f = setup(t, 'codex', { mode: 'declined' });
   const task = await f.controller.ask('Trim spaces in coupon codes.', null, { permissions: 'ask' }).finished;
