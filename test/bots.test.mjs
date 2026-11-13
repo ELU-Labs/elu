@@ -6,7 +6,7 @@ import { temp, project, fakeClis, autoApprove } from './helpers.mjs';
 import { BOTS_MAX, BOT_COLORS, CHAT_BOTS_MAX, EFFORTS, botColor, botColorProblem, pickBotColor, botReviews, botWorks, botShadows, botsFile, botVendors, botEfforts, listBots, getBot, needBot, saveBot, removeBot, botRuns, sharedBots, chatBots, botRole, botKey, botOfKey, chatBotsNote, botNameProblem, BOT_FINDINGS } from '../lib/bots.mjs';
 import { ProjectController, conversationEntries, registerProject, activity } from '../lib/projects.mjs';
 import { projectFolder, pendingRequests } from '../lib/workspace.mjs';
-import { runConversation, botReplies, ownerMessages, BOT_REPLIES_MAX, BOT_REPLY_CHARS, BOT_REPLIES_CHARS } from '../lib/runner.mjs';
+import { runConversation, botReplies, ownerMessages } from '../lib/runner.mjs';
 import { readTask, saveTask, taskDir, tasks } from '../lib/state.mjs';
 import { assertReady } from '../lib/publish.mjs';
 import { assertPolicy } from '../lib/policy.mjs';
@@ -575,6 +575,20 @@ test('the lead reads a bot\'s reply to the owner, under its name and time, in it
   assert.deepEqual(chat.at(-1).from, 'owner → @critic');
 });
 
+// ELU sets no limit of its own on what a bot reads of the chat: every entry, each whole.
+test('a bot reads the whole chat: a long message whole and more than 80 entries', async t => {
+  const f = setup(t);
+  const long = `Where is coupon normalization? ${'Read every word of this. '.repeat(3000)}`.trim();
+  const first = await f.controller.ask(long).finished;
+  const saved = readTask(f.repo, first.id), start = Date.parse(saved.createdAt) + 1000;
+  saved.messages.push(...Array.from({ length: 100 }, (_, index) => ({ at: new Date(start + index * 1000).toISOString(), text: `note ${index}` })));
+  saveTask(f.repo, saved);
+  await f.controller.ask('Is that right?', first.id, { bot: 'critic' }).finished;
+  const chat = contextOf(f.inputs('codex').at(-1).input).chat;
+  assert.equal(chat[0].text, long, 'the first message, whole');
+  assert.deepEqual(chat.filter(row => /^note \d+$/.test(row.text)).map(row => row.text), Array.from({ length: 100 }, (_, index) => `note ${index}`));
+});
+
 test('a bot sees the lead\'s last reply, and the lead the bot\'s, in a conversation', async t => {
   const f = setup(t);
   const first = await f.controller.ask('Where is coupon normalization?').finished;
@@ -597,7 +611,7 @@ test('a teammate\'s answer to the owner\'s ask, continued in his session, reads 
   const task = await f.controller.ask('Where is coupon normalization?', null, { bots: ['critic'] }).finished;
   const saved = readTask(f.repo, task.id), start = Date.now() - 30000;
   const at = index => new Date(start + index * 1000).toISOString();
-  saved.messages.push(...Array.from({ length: BOT_REPLIES_MAX + 3 }, (_, index) => ({ at: at(index), text: `finding ${index}`, from: '@critic', bot: 'critic' })), { at: at(20), text: '@critic ran on another model instead', from: '@critic', bot: 'critic', quiet: true }, { at: at(21), text: 'Could not answer. The model stopped.', from: '@critic', bot: 'critic', failed: true });
+  saved.messages.push(...Array.from({ length: 11 }, (_, index) => ({ at: at(index), text: `finding ${index}`, from: '@critic', bot: 'critic' })), { at: at(20), text: '@critic ran on another model instead', from: '@critic', bot: 'critic', quiet: true }, { at: at(21), text: 'Could not answer. The model stopped.', from: '@critic', bot: 'critic', failed: true });
   saveTask(f.repo, saved);
   // lib/peer/asks.mjs continueAnswer queues this turn: read-only, origin kind answer, in the owner's chat.
   const origin = { kind: 'answer', peer: 'b'.repeat(64), name: 'sara', a2aTaskId: 'task-9', threadId: 'thread-9', hop: 0 };
@@ -605,8 +619,8 @@ test('a teammate\'s answer to the owner\'s ask, continued in his session, reads 
   await runConversation(f.repo, readTask(f.repo, task.id), 'Continue with the answer from @sara shown in the peer data block.', { origin, readOnly: true, context: 'Use the v2 endpoint.' });
   const read = f.inputs('claude').slice(before).at(-1).input, messages = contextOf(read).messages;
   const bots = messages.filter(row => row.bot);
-  assert.deepEqual(bots.map(row => row.text), Array.from({ length: BOT_REPLIES_MAX }, (_, index) => `finding ${index + 3}`), 'the newest replies, at most BOT_REPLIES_MAX');
-  assert.ok(messages.some(row => row.from === 'ELU' && row.text === '3 earlier replies of the session\'s bots are left out here for length.'));
+  assert.deepEqual(bots.map(row => row.text), Array.from({ length: 11 }, (_, index) => `finding ${index}`), 'every reply, none left out');
+  assert.equal(messages.some(row => row.from === 'ELU'), false);
   assert.equal(messages.some(row => /another model|Could not answer/.test(row.text)), false, 'notes and failures are left out');
   assert.equal(messages.at(-1).text, 'Continue with the answer from @sara shown in the peer data block.');
   assert.ok(read.includes(BOT_FINDINGS));
@@ -632,9 +646,8 @@ test('a bot reads the lead\'s newest reply when that run\'s log is not one this 
   assert.deepEqual(conversationEntries(f.repo, first).filter(entry => entry.lead).map(entry => entry.text), [claudeSaid[0].text]);
 });
 
-test('the bots\' replies the lead reads are bounded: the newest first, each cut with a note, the total capped', () => {
+test('the bots\' replies the lead reads are every reply, each whole', () => {
   const at = index => new Date(Date.UTC(2026, 0, 1, 0, index)).toISOString();
-  assert.equal(BOT_REPLIES_MAX, 8); assert.equal(BOT_REPLY_CHARS, 6000); assert.equal(BOT_REPLIES_CHARS, 24000);
   // Notes about a bot's turn and its failures are not what it said; the owner's rows are not the bots'.
   const rows = [
     { at: at(0), text: 'Hello', to: '@critic' },
@@ -644,29 +657,21 @@ test('the bots\' replies the lead reads are bounded: the newest first, each cut 
     { at: at(4), text: 'Short.', from: '@critic', bot: 'critic' },
   ];
   assert.deepEqual(botReplies(rows), [{ at: at(3), from: '@scout', bot: 'scout', text: 'Shadow point.', shadow: true }, { at: at(4), from: '@critic', bot: 'critic', text: 'Short.' }]);
-  // A long reply is cut, and says so.
-  const [long] = botReplies([{ at: at(0), text: 'x'.repeat(10000), from: '@critic', bot: 'critic' }]);
-  assert.equal(long.text.startsWith('x'.repeat(BOT_REPLY_CHARS) + '\n'), true); assert.equal(long.text.includes('x'.repeat(BOT_REPLY_CHARS + 1)), false);
-  assert.match(long.text, /\[ELU cut this reply here: it is 10000 characters long, and this is its start\.\]$/);
-  // Twelve replies of 5,000 characters: the newest four fit the total; the rest are counted.
-  const many = Array.from({ length: 12 }, (_, index) => ({ at: at(index), text: `${index}`.padEnd(5000, '.'), from: '@critic', bot: 'critic' }));
-  const kept = botReplies(many);
-  assert.deepEqual(kept.slice(1).map(row => row.text[0] === '1' ? row.text.slice(0, 2) : row.text[0]), ['8', '9', '10', '11']);
-  assert.deepEqual(kept[0], { at: at(7), from: 'ELU', text: '8 earlier replies of the session\'s bots are left out here for length.' });
-  assert.ok(kept.slice(1).reduce((total, row) => total + row.text.length, 0) <= BOT_REPLIES_CHARS);
-  // Twenty short replies: the newest eight.
-  const short = botReplies(Array.from({ length: 20 }, (_, index) => ({ at: at(index), text: `r${index}`, from: '@critic', bot: 'critic' })));
-  assert.deepEqual(short.map(row => row.text), ['12 earlier replies of the session\'s bots are left out here for length.', ...Array.from({ length: 8 }, (_, index) => `r${index + 12}`)]);
+  // ELU sets no limit of its own: a long reply is whole, and twenty replies of 50,000 characters are all there.
+  const [long] = botReplies([{ at: at(0), text: 'x'.repeat(100000), from: '@critic', bot: 'critic' }]);
+  assert.equal(long.text, 'x'.repeat(100000));
+  const many = Array.from({ length: 20 }, (_, index) => ({ at: at(index), text: `${index}`.padEnd(50000, '.'), from: '@critic', bot: 'critic' }));
+  assert.deepEqual(botReplies(many).map(row => row.text), many.map(row => row.text));
 });
 
-test('a teammate\'s session reads its messages as before; the owner\'s reads the bots\' replies bounded', async t => {
+test('a teammate\'s session reads its messages as before; the owner\'s reads the bots\' replies whole', async t => {
   const f = setup(t);
   const task = await f.controller.ask('Where is coupon normalization?').finished;
-  const long = 'y'.repeat(BOT_REPLY_CHARS + 500), messages = [{ at: new Date(Date.now() + 1000).toISOString(), text: long, from: '@critic', bot: 'critic' }, { at: new Date(Date.now() + 2000).toISOString(), text: 'note', from: '@critic', bot: 'critic', quiet: true }];
+  const long = 'y'.repeat(60000), messages = [{ at: new Date(Date.now() + 1000).toISOString(), text: long, from: '@critic', bot: 'critic' }, { at: new Date(Date.now() + 2000).toISOString(), text: 'note', from: '@critic', bot: 'critic', quiet: true }];
   const theirs = { ...task, origin: { kind: 'handoff', peer: 'b'.repeat(64), name: 'sara' }, messages: [...task.messages, ...messages] };
   assert.deepEqual(ownerMessages(f.repo, theirs), theirs.messages, 'a teammate\'s session is unchanged');
   const mine = ownerMessages(f.repo, { ...task, messages: [...task.messages, ...messages] });
-  assert.equal(mine.some(row => row.quiet), false); assert.equal(mine.at(-1).text.length < long.length + 200 && mine.at(-1).text.startsWith('y'.repeat(BOT_REPLY_CHARS)) && mine.at(-1).text.length > BOT_REPLY_CHARS, true);
+  assert.equal(mine.some(row => row.quiet), false); assert.equal(mine.at(-1).text, long);
 });
 
 test('a bot asked about an editing session reads its edits, and reviews them before they are published', async t => {
