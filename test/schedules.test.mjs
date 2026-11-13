@@ -179,7 +179,7 @@ test('a schedule the owner gave Full access keeps it, and each run starts in it'
 // The previous version's scheduler and app run beside this one, and a schedule file may come
 // from either. One without a mode, or with ask or auto, runs as before; a mode this version
 // does not know is refused, never read as something wider; and Full access that was not
-// picked is held to Approve for me.
+// picked, which no version saves, runs with no mode, read only, as it did before.
 test('schedule files from other versions: old rows run as before, an unknown mode is refused', t => {
   home(t); const p = project(t), start = () => true, now = at(9, 8);
   saveDefaultMode('full');
@@ -197,7 +197,7 @@ test('schedule files from other versions: old rows run as before, an unknown mod
   const of = id => pendingRequests(p.root).find(request => request.scheduleId === id);
   assert.equal('permissions' in of('schedule-0000000a'), false, 'no mode: as before');
   assert.equal(of('schedule-0000000b').permissions, 'auto'); assert.equal('picked' in of('schedule-0000000b'), false);
-  assert.equal(of('schedule-0000000d').permissions, 'auto', 'Full that nobody picked is held to Approve for me');
+  assert.equal('permissions' in of('schedule-0000000d'), false, 'Full that nobody picked runs read only, as before');
   for (const id of ['schedule-0000000c', 'schedule-0000000e']) {
     assert.equal(of(id), undefined, `${id} did not run`);
     assert.match(listSchedules().find(row => row.id === id).note, /permissions cannot be read by this version/);
