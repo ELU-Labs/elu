@@ -637,9 +637,9 @@ test("Sessions groups my computer's sessions of this repository under its name, 
   // A listed session is opened by watching it; until then what its computer listed shows.
   const listedRow = lines.find(line => line.row?.ref === `${p.shop}:1`).row;
   assert.match(glue.view(listedRow, 80), /Opening it on @devbox…/);
-  // The model, a bot and the shell of a session there are named with that computer; the owner is not.
+  // The model, a bot and the shell of a session there are named with that computer; the owner's message says it went there.
   const said = glue.view({ ...old, remote: { ...old.remote, entries: [{ role: 'You', at: ago(3), text: 'Check the build' }, { role: 'Opus 5.5', lead: true, at: ago(2), text: 'It builds.' }, { role: '@reviewer', bot: 'reviewer', at: ago(1), text: 'Looks right.' }, { role: 'Shell', shell: true, at: ago(0), text: '$ ls' }] } }, 80);
-  assert.match(said, /You: Check the build[\s\S]*Opus 5\.5 on @devbox: It builds\.[\s\S]*@reviewer on @devbox: Looks right\.[\s\S]*Shell on @devbox: \$ ls/);
+  assert.match(said, /You → @devbox: Check the build[\s\S]*Opus 5\.5 on @devbox: It builds\.[\s\S]*@reviewer on @devbox: Looks right\.[\s\S]*Shell on @devbox: \$ ls/);
   await pause(0); assert.deepEqual(commands.at(-1), { type: 'remoteWatch', to: D, ref: `${p.shop}:1`, cursor: true });
   assert.deepEqual(rowActions(listedRow), [['enter', 'open']], 'it stays as long as it is there: nothing to remove');
   // Another project open here, of no repository: only what was started from here.
