@@ -68,3 +68,14 @@ test('a stop ends everything the run started: its background commands in a sessi
   assert.deepEqual(ended?.map(row => row.pid).sort(), [loop, orphan].sort(), 'it names what it ended outside the vendor itself');
   assert.match(fs.readFileSync(logFile, 'utf8'), /Which deploy\?/);
 });
+test('a limit that stops a run ends its background commands too', async (t) => {
+  const cwd = temp(t), pid = path.join(cwd, 'loop.pid');
+  const alive = id => { const r = spawnSync('ps', ['-o', 'stat=', '-p', String(id)], { encoding: 'utf8' }); return r.status === 0 && Boolean(r.stdout.trim()) && !r.stdout.trim().startsWith('Z'); };
+  const vendor = `const loop = require('node:child_process').spawn('sh', ['-c', 'while :; do sleep 1; done'], { detached: true, stdio: 'ignore' }); require('node:fs').writeFileSync(${JSON.stringify(pid)}, String(loop.pid)); setInterval(() => {}, 1000);`;
+  let ended = null;
+  const r = await runProcess({ bin: process.execPath, args: ['-e', vendor], cwd, env: agentEnv(), logFile: path.join(cwd, 'quiet.log'), timeoutSeconds: 60, quietSeconds: 1, onEnded: rows => { ended = rows; } });
+  const loop = Number(fs.readFileSync(pid, 'utf8')); t.after(() => { try { process.kill(loop, 'SIGKILL'); } catch {} });
+  assert.equal(r.stoppedBy, 'quiet');
+  const gone = Date.now() + 3000; while (alive(loop) && Date.now() < gone) await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(alive(loop), false); assert.deepEqual(ended?.map(row => row.pid), [loop]);
+});
