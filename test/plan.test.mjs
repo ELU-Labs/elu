@@ -6,10 +6,10 @@ import { temp, project, fakeClis, git } from './helpers.mjs';
 import { ProjectController } from '../lib/projects.mjs';
 import { projectFolder } from '../lib/workspace.mjs';
 import { readTask, setTitle, taskDir } from '../lib/state.mjs';
-import { TASK_LIMITS, approveTask, checkProposal, currentTask, planSchema, readPlanReply, rejectTask, reportProgress, sessionTasks, sharedTask } from '../lib/plan.mjs';
+import { TASK_LIMITS, approveTask, checkProposal, currentTask, planFile, planSchema, readPlanReply, rejectTask, reportProgress, sessionTasks, sharedTask, taskEta } from '../lib/plan.mjs';
 import { conversationSchema } from '../lib/config.mjs';
 import { boardRows, rowBadge } from '../lib/board.mjs';
-import { taskCard as drawCard, taskState } from '../lib/terminal-plan.mjs';
+import { clockTime, etaText, taskCard as drawCard, taskState } from '../lib/terminal-plan.mjs';
 import { visible } from '../lib/terminal-visuals.mjs';
 // The card as its text reads on screen, without the style marks.
 const taskCard = (plan, options) => visible(drawCard(plan, options));
@@ -157,12 +157,24 @@ test('a Task is checked as untrusted text', () => {
   assert.throws(() => checkProposal({ ...TASK, description: '   ' }), /needs a description/);
   assert.equal(checkProposal({ ...TASK, description: 'One\r\n\r\n\r\n\r\nTwo\tend  ' }).description, 'One\n\nTwo end');
   // Extra fields of a reply never reach the record.
-  assert.deepEqual(Object.keys(checkProposal({ ...TASK, state: 'approved', edit: { repository: '/' } })), ['title', 'description', 'goal', 'objectives', 'priority', 'severity']);
+  assert.deepEqual(Object.keys(checkProposal({ ...TASK, state: 'approved', edit: { repository: '/' } })), ['title', 'description', 'goal', 'objectives', 'priority', 'severity', 'criteria', 'estimateMinutes']);
+  // Success criteria are checked as the objectives are; with none, or no estimate, the Task still reads.
+  assert.deepEqual(checkProposal({ ...TASK, criteria: [' The coupon  test passes ', '', 'No other file changes'], estimateMinutes: 45 }), { ...checkProposal(TASK), criteria: ['The coupon test passes', 'No other file changes'], estimateMinutes: 45 });
+  assert.deepEqual([checkProposal(TASK).criteria, checkProposal(TASK).estimateMinutes], [[], null]);
+  assert.throws(() => checkProposal({ ...TASK, criteria: Array(9).fill('x') }), /at most 8 success criteria/);
+  assert.throws(() => checkProposal({ ...TASK, criteria: ['x'.repeat(TASK_LIMITS.criterion + 1)] }), /at most 200 characters/);
+  assert.throws(() => checkProposal({ ...TASK, criteria: [`Fix ${String.fromCharCode(27)}[31m it`] }), /control characters/);
+  for (const estimate of [0, -5, 1.5, '30', TASK_LIMITS.minutes + 1]) assert.equal(checkProposal({ ...TASK, estimateMinutes: estimate }).estimateMinutes, null, `estimate ${estimate}`);
 });
 
 test('the reply fields: one Task at most, subtasks read leniently, and the result keeps its own keys', () => {
   const schema = planSchema(conversationSchema({}), { propose: true, progress: true });
-  assert.deepEqual(schema.required.slice(-3), ['task', 'subtasks', 'objectivesMet']); assert.equal(schema.properties.task.maxItems, 1);
+  assert.deepEqual(schema.required.slice(-4), ['task', 'subtasks', 'objectivesMet', 'etaMinutes']); assert.equal(schema.properties.task.maxItems, 1);
+  assert.deepEqual(schema.properties.task.items.required.slice(-2), ['criteria', 'estimateMinutes']); assert.deepEqual(schema.properties.etaMinutes, { type: ['integer', 'null'] });
+  // The minutes left: a whole number up to a week, 0 too; null or anything else keeps the last estimate.
+  assert.equal(readPlanReply({ etaMinutes: 25 }, { progress: true }).reply.eta, 25); assert.equal(readPlanReply({ etaMinutes: 0 }, { progress: true }).reply.eta, 0);
+  for (const eta of [null, -1, 2.5, '9', TASK_LIMITS.minutes + 1]) assert.equal(readPlanReply({ etaMinutes: eta }, { progress: true }).reply, null, `eta ${eta}`);
+  assert.equal(readPlanReply({ outcome: 'done', etaMinutes: 25 }, { progress: false }).rest.etaMinutes, undefined);
   assert.equal(conversationSchema({}).properties.task, undefined);
   const read = readPlanReply({ outcome: 'done', task: [TASK], subtasks: [{ text: ' a  b ', state: 'doing' }, { text: '', state: 'done' }, { text: 'c', state: 'odd' }, 'no'], objectivesMet: [2, 2, 0, 9, 'x', 1] }, { propose: true, progress: true });
   assert.deepEqual(read.rest, { outcome: 'done' }); assert.equal(read.reply.proposal.title, 'Uppercase coupons');
@@ -193,16 +205,64 @@ test('the card and the list row say what waits, and markup in a Task shows as ty
   const f = fixture(t);
   const asked = await f.controller.ask('Uppercase coupon codes').finished, plan = currentTask(f.repo, asked.id);
   const card = taskCard(plan, { width: 60, colour: false });
-  assert.match(card, /^Task · waits for your approval\nUppercase coupons\nmedium priority · low severity\n/);
-  assert.match(card, /Goal: Coupon codes compare equal whatever their case\.\nObjectives\n  1\. normalize returns the code in upper case\n  2\. The coupon test passes\nEsc, then y approve · n reject · or type what to change$/);
+  assert.match(card, /^Task · waits for your approval\nUppercase coupons\nmedium priority · low severity\nETA not set\n/);
+  assert.match(card, /Goal: Coupon codes compare equal whatever their case\.\nObjectives\n  1\. normalize returns the code in upper case\n  2\. The coupon test passes\nSuccess criteria · not set\nEsc, then y approve · n reject · or type what to change$/);
   assert.match(taskCard(plan, { width: 60, colour: false, approval: true }), /y and n answer the approval below first/);
   assert.match(taskCard({ ...plan, revision: 3 }, { width: 60, colour: false }), /^Task · waits for your approval · revision 3\n/);
   const working = { ...plan, state: 'approved', subtasks: [{ id: 's1', text: 'Change normalize', state: 'done' }, { id: 's2', text: 'Run the test', state: 'doing' }, { id: 's3', text: 'Tidy', state: 'todo' }], met: [1] };
   assert.equal(taskState(working), 'approved · 1 of 3 subtasks done');
-  assert.match(taskCard(working, { width: 60, colour: false }), /  ✓ 1\. normalize returns the code in upper case\n  · 2\. The coupon test passes\nSubtasks\n  \[x\] Change normalize\n  \[~\] Run the test\n  \[ \] Tidy$/);
+  assert.match(taskCard(working, { width: 60, colour: false }), /  ✓ 1\. normalize returns the code in upper case\n  · 2\. The coupon test passes\nSuccess criteria · not set\nSubtasks\n  \[x\] Change normalize\n  \[~\] Run the test\n  \[ \] Tidy$/);
   assert.equal(taskState({ ...working, state: 'done', met: [1, 2] }), 'done · 2 of 2 objectives reported met');
   assert.doesNotMatch(drawCard({ ...plan, title: '{red-fg}Loud{/red-fg}' }, { width: 60, colour: true }), /\{red-fg\}Loud/);
   const project = { ...f.controller.snapshot(), root: f.root, name: 'sample app' };
   const row = boardRows([project], Date.now(), { approvals: [] }).find(value => value.kind === 'task');
   assert.equal(row.group, 0); assert.equal(row.now, 'Task to approve: Uppercase coupons'); assert.equal(rowBadge(row).title, 'Task to approve');
+});
+
+test('a Task comes with its success criteria and an estimate; the ETA counts from approval and follows the minutes left the work reports', async t => {
+  const f = fixture(t), fake = path.join(f.parent, 'bin', 'fake.json'), set = values => fs.writeFileSync(fake, JSON.stringify({ ...JSON.parse(fs.readFileSync(fake, 'utf8')), ...values }));
+  set({ task: { ...TASK, criteria: ['The coupon test passes', 'Only src/coupon.mjs changes'], estimateMinutes: 40 }, etaMinutes: 12 });
+  const asked = await f.controller.ask('Uppercase coupon codes').finished, waiting = currentTask(f.repo, asked.id);
+  // Stored with the Task, and told to the turns that work on it.
+  assert.deepEqual([waiting.criteria, waiting.estimateMinutes], [['The coupon test passes', 'Only src/coupon.mjs changes'], 40]);
+  assert.equal(taskEta(waiting), Date.parse(waiting.proposedAt) + 40 * 60000, 'before approval it counts from the proposal');
+  assert.match(taskCard(waiting, { width: 80, colour: false }), /ETA .* · in 40 min\n/);
+  assert.match(taskCard(waiting, { width: 80, colour: false }), /Objectives\n.*\n.*\nSuccess criteria\n  · The coupon test passes\n  · Only src\/coupon\.mjs changes\n/);
+  const approved = approveTask(f.repo, asked.id);
+  assert.equal(taskEta(approved), Date.parse(approved.approvedAt) + 40 * 60000, 'from approval on');
+  const done = await f.controller.ask('Approved the Task: Uppercase coupons', asked.id, { approved: true }).finished;
+  const work = inputs(f).find(row => row.input.includes('this turn does its work')).input;
+  assert.match(work, /"criteria":\["The coupon test passes","Only src\/coupon\.mjs changes"\]/); assert.match(work, /"estimateMinutes":40/); assert.match(work, /In etaMinutes give the minutes of work you think are left/);
+  // The working turn said 12 minutes are left: the ETA is 12 minutes from when it said so.
+  const after = currentTask(f.repo, done.id ?? asked.id);
+  assert.equal(after.etaMinutes, 12); assert.ok(Number.isFinite(Date.parse(after.etaAt)));
+  assert.equal(taskEta(after), Date.parse(after.etaAt) + 12 * 60000);
+  // Done reads as when it was done; the shared Task carries all of it.
+  assert.equal(after.state, 'done'); assert.equal(etaText(after), `done ${clockTime(Date.parse(after.doneAt))}`);
+  assert.deepEqual((({ criteria, estimateMinutes, etaMinutes, etaAt }) => ({ criteria, estimateMinutes, etaMinutes, etaAt }))(sharedTask(after)), { criteria: after.criteria, estimateMinutes: 40, etaMinutes: 12, etaAt: after.etaAt });
+  // A report while the Task is open moves it again.
+  const open = { ...after, state: 'approved' }, now = Date.parse(after.etaAt);
+  assert.equal(etaText({ ...open, etaAt: new Date(now).toISOString(), etaMinutes: 25 }, now), `${clockTime(now + 25 * 60000, now)} · in 25 min`);
+  assert.equal(etaText({ ...open, etaAt: new Date(now - 40 * 60000).toISOString(), etaMinutes: 30 }, now), `${clockTime(now - 10 * 60000, now)} · overdue by 10 min`);
+  assert.equal(etaText({ ...open, etaAt: new Date(now).toISOString(), etaMinutes: 150 }, now), `${clockTime(now + 150 * 60000, now)} · in 2 h 30 min`);
+});
+
+test('a Task saved before success criteria and estimates loads unchanged and reads as not set', async t => {
+  const f = fixture(t);
+  const asked = await f.controller.ask('Uppercase coupon codes').finished, file = planFile(f.repo, asked.id);
+  // The file as an older build wrote it: no criteria, no estimate, no revision of the minutes left.
+  const saved = JSON.parse(fs.readFileSync(file, 'utf8')), old = saved.tasks[0];
+  for (const key of ['criteria', 'estimateMinutes', 'etaMinutes', 'etaAt']) delete old[key];
+  fs.writeFileSync(file, JSON.stringify(saved), { mode: 0o600 });
+  const read = currentTask(f.repo, asked.id);
+  assert.deepEqual(read, old, 'loaded as it was written');
+  assert.equal(taskEta(read), null); assert.equal(etaText(read), 'not set');
+  const card = taskCard(read, { width: 80, colour: false });
+  assert.match(card, /\nETA not set\n/); assert.match(card, /\nSuccess criteria · not set\n/);
+  assert.deepEqual((({ criteria, estimateMinutes, etaMinutes, etaAt }) => ({ criteria, estimateMinutes, etaMinutes, etaAt }))(sharedTask(read)), { criteria: [], estimateMinutes: null, etaMinutes: null, etaAt: null });
+  // Approved, it still has no estimate; a report of the minutes left gives it an ETA.
+  approveTask(f.repo, asked.id);
+  const moved = reportProgress(f.repo, asked.id, { eta: 20 });
+  assert.equal(moved.etaMinutes, 20); assert.equal(taskEta(moved), Date.parse(moved.etaAt) + 20 * 60000);
+  assert.equal(reportProgress(f.repo, asked.id, {}), null, 'nothing to report changes nothing');
 });
