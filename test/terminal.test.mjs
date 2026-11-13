@@ -2539,7 +2539,7 @@ test('the New session form picks Permissions, Where and Folders, and the session
   const confirm = dialogText(v, 'Full access');
   assert.match(confirm.replace(/\s+/g, ' '), /Full access: the model changes any file, runs any command and uses the internet without asking\./);
   // Full access runs them too, and the question says so plainly.
-  assert.match(confirm.replace(/\s+/g, ' '), /That includes push, tags, merges, publishing and deploys\./); assert.doesNotMatch(confirm, /stay blocked|refused by name/); assert.match(confirm, /Use it\? y\/N/);
+  assert.match(confirm.replace(/\s+/g, ' '), /That includes push, tags, merges, publishing and deploys\. It reads your secret files and sign-ins, and gets your whole environment\./); assert.doesNotMatch(confirm, /stay blocked|refused by name/); assert.match(confirm, /Use it\? y\/N/);
   await dialog(v, 'Full access', 'n'); await until(() => !modal(v, 'Full access'), 'declined');
   assert.match(text(), /Permissions {2}Ask for approval/);
   pickRow(list, /Permissions/); v.input.write('\r'); await until(() => modal(v, 'Permissions'), 'picker again'); v.input.write('3'); await dialog(v, 'Full access', 'y');
