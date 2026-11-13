@@ -848,3 +848,41 @@ test("my computer's project is one with this one: Projects leaves it out while e
   assert.deepEqual(shown(view), ['On devbox · online', 'No sessions yet.']);
 });
 
+test("a session a message from my other computer started there is mine on its list, from before too, and goes to my agent here; a teammate's stays theirs, and an older host's row from my computer is read as mine", async t => {
+  const { laptop, devbox, project, toHost, toViewer, host } = pair(t), kim = 'e'.repeat(64), followed = crypto.randomUUID();
+  const repo = withHome(devbox.home, () => {
+    // Started by messages through the teammate path, as a build from before keeps them: no mine on the origin.
+    chat(project.root, 1, { goal: 'Run the evals', minutes: 3, origin: { kind: 'handoff', peer: laptop.identity.key, name: 'ana', threadId: null, own: true } });
+    const repo = chat(project.root, 2, { goal: 'Fix the login redirect', minutes: 2, origin: { kind: 'handoff', peer: kim, name: 'kim', threadId: null, own: true } });
+    // The laptop already follows the first, as a handoff of its own (adoptHandoffs).
+    const folder = path.join(process.env.XDG_CONFIG_HOME, 'elu-code', 'peer', 'remote', 'host'), now = new Date().toISOString();
+    fs.mkdirSync(folder, { recursive: true });
+    fs.writeFileSync(path.join(folder, `${followed}.json`), JSON.stringify({ id: followed, machine: laptop.identity.key, root: project.root, requestId: null, taskId: '1', text: 'Run the evals', createdAt: now, updatedAt: now, seq: 0, first: 1, seen: {}, handoff: true }));
+    relist(); return repo;
+  });
+  const listed = withHome(devbox.home, () => host['elu.remote.list']({}, toHost)), row = title => listed.sessions.find(item => item.title === title);
+  assert.deepEqual([row('Run the evals').by, row('Run the evals').who, row('Run the evals').remoteId], ['mine', null, followed], 'by the id the laptop follows it by, so it is one session there');
+  assert.deepEqual([row('Fix the login redirect').by, row('Fix the login redirect').who, row('Fix the login redirect').remoteId], ['teammate', 'kim', undefined]);
+  // Nothing on the session itself changed: its mode and rules are what they were.
+  assert.deepEqual(withHome(devbox.home, () => readTask(repo, '1').origin), { kind: 'handoff', peer: laptop.identity.key, name: 'ana', threadId: null, own: true });
+  // The laptop lists them; old: the devbox on the build before, which lists that one as kim's is listed.
+  const list = async (old = false) => {
+    withHome(laptop.home, () => fs.rmSync(path.join(process.env.XDG_CONFIG_HOME, 'elu-code', 'peer', 'remote', 'machines'), { recursive: true, force: true }));
+    toViewer.request = async (method, params) => {
+      const result = withHome(devbox.home, () => host[method](params, toHost));
+      return old && method === 'elu.remote.list' ? { ...result, sessions: result.sessions.map(({ remoteId, ...item }) => item.by === 'mine' ? { ...item, by: 'teammate', who: 'ana' } : item) } : result;
+    };
+    await withHome(laptop.home, () => listTick(context(laptop.identity, { [devbox.identity.key]: toViewer })));
+    return withHome(laptop.home, () => Object.fromEntries(remoteMachines()[0].sessions.map(item => [item.title, [item.by, item.who]])));
+  };
+  const status = { key: laptop.identity.key, name: 'ana', box: 'laptop', teams: [{ members: [{ key: laptop.identity.key, name: 'ana' }, { key: devbox.identity.key, name: 'box', box: 'devbox', online: true }] }] };
+  const facade = { mineRows: peerFacade.mineRows, remoteSessions: peerFacade.remoteSessions, remoteMachines: peerFacade.remoteMachines, projectRepoId: () => row('Run the evals').repoId, projectRepoIds: () => [] };
+  const routes = () => withHome(laptop.home, () => {
+    const glue = remoteGlue({ facade, peerRead: () => status, peerCommand: async () => ({}), chatMessage: () => '', ink: text => text, colour: false, restMs: 1e9 });
+    return Object.fromEntries(glue.sections(Date.now(), '/work/shop').filter(line => line.row).map(line => [line.row.remote.title, glue.route(line.row, 'go on').to]));
+  });
+  assert.deepEqual(await list(), { 'Run the evals': ['mine', null], 'Fix the login redirect': ['teammate', 'kim'] });
+  assert.deepEqual(routes(), { 'Run the evals': 'here', 'Fix the login redirect': 'there' });
+  assert.deepEqual(await list(true), { 'Run the evals': ['mine', null], 'Fix the login redirect': ['teammate', 'kim'] }, "an older host names this computer: it is read as mine");
+  assert.deepEqual(routes(), { 'Run the evals': 'here', 'Fix the login redirect': 'there' });
+});
