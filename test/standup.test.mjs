@@ -106,6 +106,8 @@ test('what leaves for a teammate: paths cut, and an update that may hold a secre
   const spaced = '/Library/Application Support/CleanShot/media/media_8Qw4Rt2LmZ/CleanShot 2026-11-12 at 10.14.07@2x.png';
   assert.deepEqual(teammateAnswer(`Screenshot saved in ~${spaced}, tests next.`, { root: '/srv/shop' }), { text: 'Screenshot saved in [path], tests next.', held: false });
   assert.deepEqual(teammateAnswer(`Screenshot saved in '/Users/sam${spaced}', tests next.`, { root: '/srv/shop' }), { text: "Screenshot saved in '[path]', tests next.", held: false });
+  // A base64 key split by its own "/" under a folder named like secrets is held.
+  assert.deepEqual(teammateAnswer(`The deploy key is config/secrets/${keyLike('wJalrXUtnFEMI/K7MDENG/', 'bPxRfiCYEXAMPLEKEY')}.`, { root: '/srv/shop' }), { text: null, held: true });
 });
 
 test("the Standup's model reads a bounded set of updates, newest first", () => {

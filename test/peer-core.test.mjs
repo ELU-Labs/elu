@@ -1002,6 +1002,30 @@ test('a relative path with a random-looking name is not read as a secret, but a 
   const hook = `https://hooks.example.com/services/T0A1B2C3D/B4E5F6G7H/${key.slice(0, 24)}`;
   assert.deepEqual(scanSecrets(`Post to ${hook} now.`).map(x => x.kind), ['high-entropy']);
 });
+test('a base64 key split by its own "/" under a folder named like secrets is caught, and names made of words are not', () => {
+  const key = keyLike('wJalrXUtnFEMI/K7MDENG/', 'bPxRfiCYEXAMPLEKEY');
+  for (const folder of ['config/secrets/', '/run/secrets/', '~/.config/app/secrets/', 'secrets/', '.keys/', 'deploy/api-keys/', '/etc/app/tokens/', 'ops/credentials/', '~/vault/'])
+    assert.deepEqual(scanSecrets(`Read ${folder}${key} now.`), [{ kind: 'high-entropy', index: `Read ${folder}`.length }], folder);
+  // A plain folder between the two does not hide it, and the update is held.
+  assert.deepEqual(scanSecrets(`Read config/secrets/prod/${key} now.`), [{ kind: 'high-entropy', index: 'Read config/secrets/prod/'.length }]);
+  assert.equal(prepareOutgoing(`The key is in config/secrets/${key}.`).ok, false);
+  const named = [
+    'config/secrets/us-east-1/db-main-01/README-prod', 'infra/keys/eu-west-1/app-7f3a9c/id_ed25519-2024', 'lib/tokens/parser/lexer/index-v2/readme',
+    '/etc/app/secrets/prod/us-east-1/db-main-01/password.txt', '~/.config/app/credentials/google-oauth2-client/web-2024-11/x86_64',
+  ];
+  for (const file of named) assert.deepEqual(scanSecrets(`See ${file} now.`), [], file);
+  // No folder named like secrets: a macOS temporary folder is still a path, not a key.
+  assert.deepEqual(scanSecrets('See /var/folders/7k/xq2m3h1d5gs0qfz8r9t2wvbr0000gn/T/elu-Ab3xYz/r/x now.'), []);
+  assert.deepEqual(scanSecrets('See private/var/folders/7k/xq2m3h1d5gs0qfz8r9t2wvbr0000gn/T/elu-Ab3xYz/r/x now.'), []);
+});
+test('a base64 key that holds a "/" is caught even when a piece of it reads as a plain word or as the start of a path', () => {
+  // One plain word among the pieces can be chance; a relative path has two or more.
+  const keys = [keyLike('wJalrXUtnFEMI/', 'Kabc/bPxRfiCYEXAMPLEKEYzz9'), keyLike('Zx8Qp3Lm9kRt2wVb7Nc4/', 'Hsd/Jd1Fg5YwJalrXUtn'), keyLike('tmp/', 'Zx8Qp3Lm9kRt2wVb7Nc4Hs6Jd1Fg5Y+wJalr')];
+  for (const key of keys) assert.deepEqual(scanSecrets(`Key ${key} now.`), [{ kind: 'high-entropy', index: 4 }], key);
+  // A key that starts with "/" or holds "+/" is not a path: its first name is no folder such as /tmp or /Users.
+  const slashed = [keyLike('/LdprlBuXLwOK/', 'fYFEKPjdGxsDFCLtSqn4mzSMNc'), keyLike('YhT8N9OMmxppoZWMocf2+/', 'dCy/7ZsIzReudniwD0'), keyLike('qKVd9oqm3iKT/5Cymr+/', 'BhIA/hc+BYzCGU7qjhkV')];
+  for (const key of slashed) assert.deepEqual(scanSecrets(`Key ${key} now.`), [{ kind: 'high-entropy', index: 4 }], key);
+});
 test('paths are redacted outside the project and the home folder becomes ~', () => {
   const home = os.homedir(), root = path.join(home, 'work', 'sample app');
   const text = `Edit ${root}/src/coupon.mjs, not ${home}/.ssh/id_ed25519 or /etc/passwd or ${root}-old/x.js. See https://github.com/elu/app/blob/main/a.js, src/a/b.js, ~/notes/x and /ask @sara.`;
