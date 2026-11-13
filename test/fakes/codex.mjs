@@ -14,6 +14,9 @@ let account=null;try{account=JSON.parse(Buffer.from(JSON.parse(fs.readFileSync(p
 if(cfg.calls)fs.appendFileSync(cfg.calls, JSON.stringify({vendor,args,...(cfg.accounts&&args[0]==='exec'?{account,config:process.env.CODEX_HOME??null}:{})})+'\n');
 if(args.includes('--version')){console.log('codex-cli 0.166.0-alpha.5.1');process.exit(0);}
 if(args.includes('--help')){console.log('--print --add-dir --restricted --safe-mode --setting-sources --settings --strict-mcp-config --mcp-config --no-chrome --permission-mode --permission-prompts --tools --allowedTools --disallowedTools --output-format --verbose --json-schema --max-budget-usd --session-id --ignore-user-config --ignore-rules --json --sandbox --cd --output-schema --config --skip-git-repo-check');process.exit(0);}
+// refuses (fake.json): config keys this release does not take. An exec started with one ends at
+// once with one line on stderr and nothing printed.
+{const unknown=args[0]==='exec'?(cfg.refuses??[]).find(key=>args.some(arg=>arg.startsWith(`${key}=`))):null;if(unknown){console.error(`error: unknown configuration key: ${unknown}`);process.exit(1);}}
 // `debug models --bundled` as the real CLI prints it: the catalog as JSON, one row hidden.
 // fake.json may carry its own rows as `models`.
 if(args[0]==='debug'&&args[1]==='models'){console.log(JSON.stringify({models:cfg.models??[{slug:'big-model',display_name:'Big Model',description:'Frontier model for the most demanding work.',visibility:'list',priority:2},{slug:'quick-model',display_name:'Quick Model',description:'Fast and affordable model for easier tasks.',visibility:'list',priority:1},{slug:'review-model',display_name:'Review Model',description:'Automatic approval review model.',visibility:'hide',priority:9}]}));process.exit(0);}

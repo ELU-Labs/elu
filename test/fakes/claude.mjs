@@ -60,6 +60,10 @@ if(args[0]==='auth'&&args[1]==='login'){
  console.log('Login successful.');process.exit(0);
 }
 if(args[0]==='auth'){console.log(JSON.stringify({loggedIn:mode!=='signed-out'&&(!cfg.accounts||Boolean(account))}));process.exit(0);}
+// refuses (fake.json): options this release does not take. A run started with one ends at once
+// as the real CLI ends it, with one line on stderr and nothing printed; --version above still
+// answers, as the real 2.1.322 does for any flag.
+{const unknown=(cfg.refuses??[]).find(flag=>args.includes(flag));if(unknown){console.error(`error: unknown option '${unknown}'`);process.exit(1);}}
 // --input-format stream-json: the prompt is the first line, a user message, and the input stays
 // open for the answers to this run's control requests until the runner closes it.
 const streaming=args.includes('--input-format')&&args[args.indexOf('--input-format')+1]==='stream-json';

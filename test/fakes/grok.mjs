@@ -28,6 +28,9 @@ const list = dir => { try { return fs.readdirSync(dir); } catch { return []; } }
 if (args.includes('--version')) { console.log('1.0.77'); process.exit(0); }
 if (args.includes('--help')) { console.log('--output-format --permission-mode --sandbox --max-turns --cwd --no-auto-update --tools --disallowed-tools --allow --deny --prompt-file --prompt-json --no-alt-screen --no-memory --no-subagents --disable-web-search --session-id --resume --model'); process.exit(0); }
 if (args[0] === 'login') { console.error('fake grok: login is interactive'); process.exit(2); }
+// refuses (fake.json): values of --output-format this release does not take. A run started with
+// one ends at once, as a command line that does not read ends: two lines on stderr, exit 2.
+if ((cfg.refuses ?? []).includes(value('--output-format'))) { console.error(`error: invalid value '${value('--output-format')}' for '--output-format <FORMAT>'\n  [possible values: text, json]`); process.exit(2); }
 
 // What the prompt asks for, done as far as the launch allows. ask() decides an action the
 // rules neither allow nor forbid: the relay over ACP, nothing in headless mode.
