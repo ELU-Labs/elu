@@ -23,7 +23,7 @@ import { teamPath } from '../lib/peer/roster.mjs';
 import { readTask, saveTask, taskPlace } from '../lib/state.mjs';
 import { spawnSync } from 'node:child_process';
 import { projectFolder } from '../lib/workspace.mjs';
-import { registerProject } from '../lib/projects.mjs';
+import { registerProject, sessionModel } from '../lib/projects.mjs';
 import { localRepos, saveLocalRepos } from '../lib/peer/cards.mjs';
 import { folderRemote } from '../lib/kanban-repos.mjs';
 import { closeSession } from '../lib/kanban.mjs';
@@ -190,6 +190,15 @@ test('with no team setting, a session from my other computer runs in the only pr
     }
     const task = readTask(repo, pendingRequests(home).find(row => row.id === request.id).taskId);
     assert.equal(task.state, 'answered'); assert.equal(task.worktree, home); assert.equal(task.origin.mine, true); assert.equal(task.origin.peer, undefined);
+    // /model NAME message from the laptop: the session runs on that model from this message on.
+    methods['elu.remote.send']({ id: started.id, text: 'And the docs?', model: { vendor: 'claude', model: 'sonnet' } }, from);
+    assert.deepEqual(sessionModel(repo, readTask(repo, task.id)), { vendor: 'claude', model: 'sonnet' });
+    assert.equal(pendingRequests(home).at(-1).goal, 'And the docs?'); assert.equal(pendingRequests(home).at(-1).continuationTaskId, task.id);
+    // The model alone changes it and sends nothing; nothing at all is refused.
+    const queued = pendingRequests(home).length;
+    methods['elu.remote.send']({ id: started.id, text: '', model: { vendor: 'claude', model: 'opus' } }, from);
+    assert.deepEqual(sessionModel(repo, readTask(repo, task.id)), { vendor: 'claude', model: 'opus' }); assert.equal(pendingRequests(home).length, queued);
+    assert.throws(() => methods['elu.remote.send']({ id: started.id, text: ' ' }, from), /Write the message in 1 to/);
   } finally {
     await conductor?.stop();
     for (const [name, value] of Object.entries(previous)) { if (value === undefined) delete process.env[name]; else process.env[name] = value; }
