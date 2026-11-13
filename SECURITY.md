@@ -528,6 +528,12 @@ What is saved, in `~/.config/elu-code`, is usage reduced to numbers and times
 `~/.claude.json`. It decodes the Codex email and plan on your machine from the id token in
 `auth.json` in the Codex home. No token from that file is sent, saved or shown.
 
+To name the effort a Claude Code reply ran with when none was set, ELU Code reads each
+model's default effort from the model catalog bundled in the installed `claude` program. It
+only reads that file, never runs it for this, and makes no request. What it found, model
+names and effort levels only, is kept in `~/.config/elu-code/claude-catalog.json` by the
+program's path, size and modification time.
+
 ## Checks and evidence
 
 Check scripts and pre-push guards run inside Codex's OS sandbox (`codex sandbox`, or the
