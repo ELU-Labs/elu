@@ -650,18 +650,13 @@ test('/invite offers a code for someone new or which bots teammates may use, and
   const invite = () => modal(v, 'Team invite').children.find(child => child.options?.scrollable).getText();
   // Plain /invite says what it can do first.
   await send(v, '/invite');
-  await until(() => rowsOf(v, 'Invite').length === 3, 'the invite menu');
-  assert.deepEqual(rowsOf(v, 'Invite'), ['Someone new: get an invite code to send them', 'Another computer of mine: start sessions on it from here', 'Choose which of your bots teammates can use']);
+  await until(() => rowsOf(v, 'Invite').length === 2, 'the invite menu');
+  assert.deepEqual(rowsOf(v, 'Invite'), ['Someone new: get an invite code to send them', 'Choose which of your bots teammates can use']);
   // Someone new goes straight to the code. A new home has the bots the app comes with, none shared.
   await choose(v, 'Invite', /^Someone new/); await until(() => modal(v, 'Team invite'), 'the invite');
   assert.equal(modal(v, title), undefined, 'no bots question on the way to the code');
   assert.match(invite(), /No bot is shared, so a teammate’s message comes to you\./); assert.ok(shared().every(([, on]) => !on), 'none shared');
   await closeDialog(v, 'Team invite');
-  // Another computer of mine: a code for one hour, which says what it allows.
-  await send(v, '/invite'); await choose(v, 'Invite', /^Another computer of mine/);
-  await choose(v, 'Which computer', /^A computer not on your team yet/); await until(() => modal(v, 'Another computer of mine'), 'the code for my computer');
-  assert.match(modal(v, 'Another computer of mine').children.find(child => child.options?.scrollable).getText(), /One use, expires in 1 h\. Anyone with this code can start sessions on this computer, so keep it to yourself\./);
-  await closeDialog(v, 'Another computer of mine');
   // The bots choice lists the bots a teammate can use. @pair is not offered: it runs on Codex, and a teammate's question cannot run there.
   await send(v, '/invite'); await choose(v, 'Invite', /^Choose which of your bots/);
   await until(() => rowsOf(v, title).includes('Done'), 'the bots the app comes with');
@@ -707,18 +702,6 @@ test('joining with a code made for another computer asks whether it is yours: No
   await choose(v, title, /^Yes/);
   await until(() => /Joined Core with sara\. Marked as yours\. Type @sara-box first in the new session box to start a session there\./.test(status()), 'yes');
   assert.deepEqual(marked(), [{ type: 'mine', key: SARA }]);
-});
-
-test('/invite, Another computer of mine, offers a computer already on the team, and /mine says what to type on it', async t => {
-  const { v, peer } = await teamView(t, { peer: fakePeer({ mine: [{ key: LI, mine: true, theirs: true }] }) }), status = () => v.panels.status.getText();
-  await send(v, '/invite'); await choose(v, 'Invite', /^Another computer of mine/);
-  // li is mine already, so only sara-box is offered, then a code for a new one.
-  await until(() => rowsOf(v, 'Which computer').length === 2, 'the computers');
-  assert.deepEqual(rowsOf(v, 'Which computer'), ['@sara-box (sara): already on your team, mark it as yours', 'A computer not on your team yet: get a code']);
-  await choose(v, 'Which computer', /^@sara-box/);
-  await until(() => /Waiting for @sara-box to mark this machine too\. On @sara-box, type \/mine @ana\./.test(status()), 'what to type there');
-  assert.deepEqual(peer.sent().at(-1), { type: 'mine', key: SARA });
-  assert.equal(peer.calls.some(row => row[0] === 'createInvite'), false, 'no code was made');
 });
 
 test('a session on my other computer that waits for y or n shows n once in the key bar, and @name of that computer names it in the new session box', async t => {
