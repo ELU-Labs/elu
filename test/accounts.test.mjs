@@ -12,6 +12,7 @@ import { personalDirectory } from '../lib/util.mjs';
 import { agentEnv } from '../lib/process.mjs';
 import { SIGN_IN, SHARED, activeLogin, finishLogin, hasBrowser, linkShared, listLogins, loginEnv, loginFolder, newLogin, useLogin } from '../lib/logins.mjs';
 import { accountOf, forgetAccount, readAccounts, refreshUsage, usageTab } from '../lib/usage.mjs';
+import { signInCommand, signInHintHere } from '../lib/vendors.mjs';
 import { stopLine } from '../lib/stop-line.mjs';
 import { usageBlocks } from '../lib/terminal.mjs';
 
@@ -200,6 +201,11 @@ test('a computer has a browser for a sign-in unless it is reached over SSH, or i
   assert.equal(hasBrowser({ SSH_TTY: '/dev/pts/1', DISPLAY: ':0' }, 'linux'), false);
   assert.equal(hasBrowser({}, 'linux'), false); assert.equal(hasBrowser({ DISPLAY: '' }, 'linux'), false);
   assert.equal(hasBrowser({ DISPLAY: ':0' }, 'linux'), true); assert.equal(hasBrowser({ WAYLAND_DISPLAY: 'wayland-0' }, 'linux'), true);
+  // What the owner is told to type follows it: the device code sign-in where the command has one.
+  assert.deepEqual(['claude', 'codex', 'agy', 'grok'].map(vendor => signInCommand(vendor, true)), ['claude', 'codex login', 'agy', 'grok login']);
+  assert.deepEqual(['claude', 'codex', 'agy', 'grok'].map(vendor => signInCommand(vendor, false)), ['claude', 'codex login --device-auth', 'agy', 'grok login --device-auth']);
+  assert.equal(signInHintHere('codex', 'Codex: sign in with ChatGPT. Run: codex login', false), 'Codex: sign in with ChatGPT. Run: codex login --device-auth');
+  assert.equal(signInHintHere('grok', 'Grok Build: not signed in. Run: grok login', true), 'Grok Build: not signed in. Run: grok login');
   // The sign-in is the vendor's same command either way: it prints the link the owner opens.
   assert.deepEqual(SIGN_IN, { claude: ['auth', 'login'], codex: ['login'] });
 });

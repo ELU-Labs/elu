@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { detect, unsupportedVendors, vendorProblem } from '../lib/detect.mjs';
+import { hasBrowser } from '../lib/vendors.mjs';
 import { defaultConfig, validateConfig } from '../lib/config.mjs';
 import { assertPolicy } from '../lib/policy.mjs';
 import { project, fakeClis, cli, git, readRole } from './helpers.mjs';
@@ -102,8 +103,9 @@ test('the lead error names what is wrong', () => {
   assert.equal(vendorProblem('claude', [{ vendor: 'claude', available: true, supported: true, signedIn: false }]), 'Claude Code is signed out. Run claude to sign in, then send again.');
   // The command is the one that signs in, which is not always the vendor's name.
   const signedOut = vendor => vendorProblem(vendor, [{ vendor, available: true, supported: true, signedIn: false }]);
-  assert.equal(signedOut('codex'), 'Codex is signed out. Run codex login to sign in, then send again.');
-  assert.equal(signedOut('grok'), 'Grok Build is signed out. Run grok login to sign in, then send again.');
+  // Where no browser can open (an SSH session, Linux with no display), the device code sign-in.
+  assert.equal(signedOut('codex'), `Codex is signed out. Run ${hasBrowser() ? 'codex login' : 'codex login --device-auth'} to sign in, then send again.`);
+  assert.equal(signedOut('grok'), `Grok Build is signed out. Run ${hasBrowser() ? 'grok login' : 'grok login --device-auth'} to sign in, then send again.`);
   assert.equal(signedOut('agy'), 'Antigravity CLI is signed out. Run agy to sign in, then send again.');
   assert.equal(vendorProblem('claude', [{ vendor: 'claude', available: true, supported: false, signedIn: true, release: '2.1.321', reason: 'This untested version is missing required flags: --verbose.' }]), 'Claude Code 2.1.321: This untested version is missing required flags: --verbose.');
 });

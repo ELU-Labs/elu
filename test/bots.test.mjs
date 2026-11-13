@@ -19,6 +19,7 @@ import { botModels, codexModels, claudeModels, matchModels } from '../lib/bot-mo
 import { botModelProblem, botRoomProblem } from '../lib/bots.mjs';
 import { stopLine } from '../lib/stop-line.mjs';
 import { openTask, sessionTasks } from '../lib/plan.mjs';
+import { signInCommand } from '../lib/vendors.mjs';
 
 // Bots: named agents the owner defines once (lib/bots.mjs) and uses in any chat. In a chat a
 // bot answers a message written to it, reviews the lead's edits, and, when shared, answers
@@ -940,7 +941,7 @@ test('a reviewing bot whose run fails after the edit keeps the edits, names its 
   const task = readTask(f.repo, run.id);
   assert.equal(task.state, 'unverified'); assert.match(task.error.message, /^@critic could not finish\./);
   assert.ok(openTask(sessionTasks(f.repo, task.id)), 'a turn that failed leaves its Task open');
-  assert.equal(stopLine(task).text, '@critic could not finish: Codex is signed out. Sign in again with codex login, then type continue.');
+  assert.equal(stopLine(task).text, '@critic could not finish: Codex is signed out. Sign in again with ' + signInCommand('codex') + ', then type continue.');
   // Signed in again, the owner's continue works on the Task: the lead works and @critic reviews.
   fs.rmSync(codexBin); fs.renameSync(kept, codexBin);
   const before = f.inputs('claude').length;

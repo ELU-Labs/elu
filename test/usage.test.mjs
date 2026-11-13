@@ -221,13 +221,16 @@ test('the Usage tab reads Antigravity and Grok Build sign-in before their one-ti
   const calls = () => fs.existsSync(fake.calls) ? fs.readFileSync(fake.calls, 'utf8').trim().split('\n').map(line => JSON.parse(line)) : [];
   // detect() never runs such a vendor: null sign-in, and no release.
   const waiting = vendor => ({ vendor, available: true, bin: path.join(fake.dir, vendor), supported: false, signedIn: null, version: null, conformant: false });
-  const rows = [waiting('agy'), waiting('grok')], tab = () => { const [, , agy, grok] = usageTab({ vendors: withCheck(rows, { env }), env, now }); return { agy, grok }; };
+  const rows = [waiting('agy'), waiting('grok')], tab = () => { const [, , agy, grok] = usageTab({ vendors: withCheck(rows, { env }), env, now, browser: true }); return { agy, grok }; };
   const text = row => usageBlocks([row], { now: new Date(now) }).map(line => line.text);
   // Before any read: Grok's token file is looked for at once, Antigravity is not read yet.
   let { agy, grok } = tab();
   assert.deepEqual([agy.unchecked, agy.check, agy.signInRead, grok.check, grok.signInRead], [true, 'needed', null, 'needed', false]);
   assert.deepEqual(text(agy), ['Antigravity sign-in not read yet · needs a one-time check (c runs it now)']);
   assert.deepEqual(text(grok), ['Grok Build  not signed in. Run: grok login']);
+  // On a computer with no browser, the sign-in that needs none: Codex and Grok Build have a device code one.
+  assert.deepEqual(usageTab({ vendors: [{ vendor: 'codex', available: true, signedIn: false }, ...withCheck(rows, { env })], env, now, browser: false }).map(row => row.signInHint), ['Run: claude', 'Run: codex login --device-auth', 'Run: agy', 'Run: grok login --device-auth']);
+  assert.deepEqual(usageTab({ vendors: [{ vendor: 'codex', available: true, signedIn: false }], env, now, browser: true })[1].signInHint, 'Run: codex login');
   assert.equal(signInsUnread(rows), true);
   fs.mkdirSync(path.join(env.HOME, '.grok')); fs.writeFileSync(path.join(env.HOME, '.grok', 'auth.json'), '{"token":"never-read"}\n', { mode: 0o600 });
   assert.deepEqual(text(tab().grok), ['Grok Build  signed in · needs a one-time check (c runs it now)']);

@@ -54,6 +54,15 @@ if(args.includes('--version')){console.log('2.1.319');process.exit(0);}
 const MODEL_HELP="  --model <model>                       Model for the current session. Provide\n                                        an alias for the latest model (e.g.\n                                        'fable', 'opus', or 'sonnet') or a\n                                        model's full name.\n  -n, --name <name>                     Set a display name for this session";
 if(args.includes('--help')){console.log('--print --add-dir --restricted --safe-mode --setting-sources --settings --strict-mcp-config --mcp-config --no-chrome --permission-mode --permission-prompts --tools --allowedTools --disallowedTools --output-format --verbose --json-schema --max-budget-usd --session-id --input-format --ignore-user-config --ignore-rules --json --sandbox --cd --output-schema --config');console.log(MODEL_HELP);process.exit(0);}
 if(args[0]==='auth'&&args[1]==='login'){
+ // What the real sign-in prints: it tries the browser, prints the link for when none opened,
+ // and on a terminal waits for the code that page shows. accounts.pasted: a file that gets the code as it arrived.
+ process.stdout.write(`Opening browser to sign in\u2026\nIf the browser didn't open, visit: https://claude.example/oauth/authorize?code=true&client_id=00000000-0000-4000-8000-000000000000&response_type=code&redirect_uri=https%3A%2F%2Fclaude.example%2Foauth%2Fcode%2Fcallback&scope=user%3Aprofile+user%3Ainference+user%3Asessions%3Aclaude_code+user%3Amcp_servers&code_challenge=FAKEfakeFAKEfakeFAKEfakeFAKEfakeFAKEfake123&code_challenge_method=S256&state=FAKEstateFAKEstateFAKEstateFAKEstate12345\n`);
+ if(process.stdin.isTTY&&process.stdout.isTTY){
+  const rl=(await import('node:readline')).createInterface({input:process.stdin,output:process.stdout});
+  const code=await new Promise(resolve=>{rl.once('SIGINT',()=>resolve(null));rl.once('close',()=>resolve(null));rl.question('Paste code here if prompted > ',resolve);});rl.close();
+  if(cfg.accounts?.pasted)fs.writeFileSync(cfg.accounts.pasted,JSON.stringify(code));
+  if(!code?.trim()){console.error('Login cancelled.');process.exit(1);}
+ }
  const as=cfg.accounts?.loginAs;if(!as){console.error('Login cancelled.');process.exit(1);}
  fs.mkdirSync(home,{recursive:true});fs.writeFileSync(path.join(home,'.claude.json'),JSON.stringify({oauthAccount:{accountUuid:'uuid-never-shown',emailAddress:as,organizationName:'Example',planDisplayName:cfg.accounts.plan??'Pro'}}),{mode:0o600});
  fs.writeFileSync(path.join(home,'.credentials.json'),JSON.stringify({claudeAiOauth:{accessToken:'access-never-shown',refreshToken:'refresh-never-shown'}}),{mode:0o600});

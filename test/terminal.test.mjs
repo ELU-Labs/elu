@@ -25,6 +25,7 @@ import { saveTask, readTask, taskDir, taskTitle, setTitle, lock } from '../lib/s
 import { processIdentity } from '../lib/process.mjs';
 import { activeLogin, listLogins } from '../lib/logins.mjs';
 import { detect } from '../lib/detect.mjs';
+import { signInCommand } from '../lib/vendors.mjs';
 import { conformanceState } from '../lib/conformance.mjs';
 import { spawnSync } from 'node:child_process';
 import { approvalsDir, requestApproval, answerApproval } from '../lib/approvals.mjs';
@@ -3298,7 +3299,7 @@ test('vendor rows say how to sign in, Google’s FAQ under agy, and that a vendo
   assert.ok(agy > 0, 'the agy sign-in line');
   assert.equal(lines[agy + 1], "  Google's FAQ: wrapping agy in third-party agents is not supported on consumer plans. antigravity.google/docs/faq");
   assert.ok(lines.includes('  Grok Build has not been checked on this machine yet. Your first message to it runs the check.'));
-  assert.ok(lines.includes('  Codex: sign in with ChatGPT. Run: codex login'));
+  assert.ok(lines.includes(`  Codex: sign in with ChatGPT. Run: ${signInCommand('codex')}`));
   assert.equal(lines.filter(line => /Google's FAQ/.test(line)).length, 1);
   assert.ok(!lines.some(line => /Claude Code: not signed in|Claude Code has not been checked/.test(line)));
   assert.equal(vendorText({ vendor: 'grok', support: 'lead', available: true, supported: true, signedIn: true, conformant: false }), 'lead · checked on your next message to it');
@@ -3432,7 +3433,9 @@ test('Usage: a leaves ELU\'s screen for a cleared one with one line of ELU\'s, d
   signInAs('third@example.com'); panels.usageList.select(0); v.input.write('a');
   await until(() => /Added third@example\.com\./.test(status()), 'added over SSH');
   assert.deepEqual(started[1].args, ['auth', 'login']);
-  assert.ok(v.raw.slice(0, started[1].before).endsWith('\x1b[H\x1b[2JSigning in a new Claude Code account. ELU comes back when it ends.\r\nThis computer has no browser: open the link Claude Code prints in a browser, then follow its steps.\r\n\r\n'));
+  assert.ok(v.raw.slice(0, started[1].before).endsWith('\x1b[H\x1b[2JSigning in a new Claude Code account. ELU comes back when it ends.\r\nOpen the link below on a computer with a browser, then paste the code here.\r\n\r\n'));
+  // Paste marks are off while the sign-in has the terminal, so a pasted code arrives as typed, and on again after.
+  assert.ok(v.raw.slice(0, started[1].before).endsWith('\x1b[?2004l\x1b[H\x1b[2JSigning in a new Claude Code account. ELU comes back when it ends.\r\nOpen the link below on a computer with a browser, then paste the code here.\r\n\r\n')); assert.ok(v.raw.slice(started[1].before).includes('\x1b[?1049h\x1b[?2004h'));
   assert.equal(started[1].during, started[1].before);
 });
 
@@ -3456,7 +3459,7 @@ test('Usage: a on a computer with no browser signs a new Codex account in with i
   signInAs('third@example.com'); panels.usageList.select(0); v.input.write('a');
   await until(() => /Added third@example\.com\./.test(status()), 'Claude Code added');
   assert.deepEqual(started[1].args, ['auth', 'login']);
-  assert.equal(started[1].lines[1], 'This computer has no browser: open the link Claude Code prints in a browser, then follow its steps.');
+  assert.equal(started[1].lines[1], 'Open the link below on a computer with a browser, then paste the code here.');
   // With a browser here, Codex signs in through it.
   process.env.SSH_CONNECTION = ''; fake.platform = 'darwin';
   signInAs('fourth@example.com'); panels.usageList.select(rowOf(/^Codex/)); v.input.write('a');
