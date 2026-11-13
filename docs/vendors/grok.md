@@ -62,7 +62,7 @@ Auto still work, but a blocked action is reported instead of asked:
 | Auto | ACP with `autoMode`, else headless `--permission-mode auto` | Grok's own reviewer model decides routine actions; what it refuses asks you over ACP |
 | Full | headless `--permission-mode bypassPermissions`, `--sandbox off` | anything, the never list included |
 
-Every profile denies reads of secret folders (`~/.ssh`, `~/.aws`, `~/.claude`, `~/.codex`,
+Every profile but Full denies reads of secret folders (`~/.ssh`, `~/.aws`, `~/.claude`, `~/.codex`,
 `.env*`, `auth.json`, key files, ELU's own state) by rule. Every profile but Full
 denies the never list on command text (`git push`, `git tag`, `git merge`, `gh pr merge`,
 `gh release`, package publishes, deploys, `kubectl apply`, `terraform apply`). Those rules

@@ -13,7 +13,7 @@ session; a turn that is not your own session's runs read only.
 | Edits outside it | no | asks | a reviewer model decides; on Antigravity refused, and on Claude Code an answer turn's edit asks | yes |
 | Shell inside the vendor sandbox | no | yes; Antigravity runs no sandbox, so every command asks | yes | yes, no sandbox |
 | Shell outside it, network, web tools | no | asks | a reviewer model decides | yes |
-| Secrets and ELU state | no | no | no | file tools denied; a shell can read |
+| Secrets and ELU state | no | no | no | yes: Full access denies nothing |
 | Never list (push, tag, merge, deploy, publish) | blocked | blocked; every escape asks | stand-in commands and, except on Codex, deny rules; a command that gets past them gets through if the reviewer allows it | none: the model runs them without asking |
 | Runs in | worktree | worktree or a named branch | same | also here |
 | Checks | sandboxed, no network, structural limits | same | no network; dependency files may change | network on; only secret paths and deleted tests block |
@@ -70,7 +70,7 @@ those turns; Codex reads anywhere in every turn; Grok Build allows `Read` and `G
 with no path. On Claude Code a command that stays in the sandbox also reads outside the
 workspace without asking. Antigravity keeps its file tool to the workspace and folders.
 The secret folders (`~/.ssh`, `~/.aws`, `~/.config`, `~/Library` and the rest) and ELU's
-state stay closed, as the table says. Your session's answer turns, and a working
+state stay closed below Full access, as the table says. Your session's answer turns, and a working
 bot's until the session's work is published, also get a list of up to 60 Git
 repositories found in your home, so the model can find the code you mean.
 
