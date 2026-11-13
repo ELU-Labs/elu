@@ -88,6 +88,10 @@ subscription; the role's `maxCostUsd` must be `null`.
 
 ## The private home
 
+In Full access a command the model runs still has this folder as `~`. ELU points Git and
+`gh` at your own settings and sign-in there (`GIT_CONFIG_GLOBAL`, `GH_CONFIG_DIR`, unless
+your shell sets them), and SSH finds your keys by itself. Seen with the stand-in only.
+
 By default Grok reads your `~/.grok` tree (config, rules, hooks, skills, agents,
 `AGENTS.md`), `/etc/grok`, the workspace's `.grok`, every `AGENTS.md` and `CLAUDE.md` up
 the tree, `.envrc`, and your Claude Code configuration: `~/.claude/settings.json` and

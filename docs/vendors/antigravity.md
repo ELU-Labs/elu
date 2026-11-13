@@ -68,6 +68,10 @@ then says `ready`, or that the check failed and which step was not proven.
 
 ## The private HOME
 
+In Full access a command the model runs still has this folder as `~`. ELU points Git and
+`gh` at your own settings and sign-in there (`GIT_CONFIG_GLOBAL`, `GH_CONFIG_DIR`, unless
+your shell sets them), and SSH finds your keys by itself. Seen with the stand-in only.
+
 `agy` reads `~/.gemini` for settings, hooks, MCP servers, plugins, skills and context files,
 and has no flag to turn that off. So ELU runs it with `HOME` set to a folder under its
 own state (`agy-home/`, mode 0700), one per workspace, holding only:
