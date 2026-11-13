@@ -626,19 +626,19 @@ test('a model with a message goes only to a computer whose ELU takes one: an old
   await withHome(laptop.home, () => listTick(viewCtx));
   const item = withHome(laptop.home, () => remoteMachines()[0].sessions[0]);
   await withHome(laptop.home, () => remoteCommand(viewCtx, { type: 'remoteWatch', to: devbox.identity.key, ref: item.ref }));
-  const queued = () => withHome(devbox.home, () => pendingRequests(project.root));
-  const modelThere = () => withHome(devbox.home, () => { const repo = repository(project.root); return sessionModel(repo, readTask(repo, '1')); });
-  const before = queued().length, was = modelThere();
+  // What reaches the devbox: a send with a model is only recorded here (the host test covers what it does there).
+  const sends = [], host = toViewer.request;
+  toViewer.request = async (method, params) => { if (method === 'elu.remote.send') sends.push(params); return method === 'elu.remote.send' && params.model ? { id: params.id } : host(method, params); };
   // Its hello does not say model: 1 (ELU 0.1.19): the message would arrive and the model stay, so nothing goes.
   for (const text of ['And the tests', '']) await assert.rejects(withHome(laptop.home, () => remoteCommand(viewCtx, { type: 'remoteSend', id: item.id, text, model })), /Update ELU on @\S+ to change its model from here\.$/);
-  assert.equal(queued().length, before); assert.deepEqual(modelThere(), was);
+  assert.deepEqual(sends, []);
   // A message with no model still goes to it.
   assert.deepEqual(await withHome(laptop.home, () => remoteCommand(viewCtx, { type: 'remoteSend', id: item.id, text: 'No model' })), { id: item.id });
-  assert.equal(queued().at(-1).goal, 'No model'); assert.deepEqual(modelThere(), was);
-  // Updated, its hello says model: 1: the session takes the model and the message.
+  assert.deepEqual(sends, [{ id: item.id, text: 'No model' }]); assert.equal(withHome(devbox.home, () => pendingRequests(project.root)).at(-1).goal, 'No model');
+  // Updated, its hello says model: 1: the model goes with the message.
   toViewer.remoteHello = { remote: 1, model: 1 };
   assert.deepEqual(await withHome(laptop.home, () => remoteCommand(viewCtx, { type: 'remoteSend', id: item.id, text: 'And the tests', model })), { id: item.id });
-  assert.equal(queued().at(-1).goal, 'And the tests'); assert.deepEqual(modelThere(), model);
+  assert.deepEqual(sends.at(-1), { id: item.id, text: 'And the tests', model });
 });
 
 test('a watch its computer let go is made again: a reply still reaches the session, and a listing it never sent drops the old view', async t => {
