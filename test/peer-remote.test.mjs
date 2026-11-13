@@ -20,7 +20,7 @@ import { Conductor, enqueue } from '../lib/conductor.mjs';
 import { boardRows, remoteRow, rowActions, rowTitle } from '../lib/board.mjs';
 import { remoteSessions as remoteGlue } from '../lib/terminal-remote.mjs';
 import { teamPath } from '../lib/peer/roster.mjs';
-import { readTask, saveTask, taskPlace } from '../lib/state.mjs';
+import { readTask, saveTask, taskDir, taskPlace } from '../lib/state.mjs';
 import { spawnSync } from 'node:child_process';
 import { projectFolder } from '../lib/workspace.mjs';
 import { registerProject } from '../lib/projects.mjs';
@@ -320,6 +320,58 @@ test('a handoff I work on as my own on my other computer shows there with its ap
   assert.ok(seen, 'the laptop shows it'); assert.equal(seen.title, 'Run evals');
   assert.deepEqual(seen.approvals.map(item => item.id), ['approval-h1']);
   assert.deepEqual(await withHome(devbox.home, () => host['elu.remote.answer']({ id: remoteId, approval: 'approval-h1', decision: 'allow' }, toHost)), { answered: true });
+});
+
+// The owner's case, on a session that runs on his other computer: what its model thinks and
+// does shows here as it happens, and folds into one line above its reply once the turn ends,
+// as in a session here. Each step goes once, and again when it changes.
+test('what a turn does on my other computer shows here step by step, then folds above its reply', async t => {
+  const { team, laptop, devbox } = machines(t);
+  const project = withHome(devbox.home, () => { const project = registeredProject(t); saveTeamAccess(team.teamId, { root: project.root }); markMine(devbox.identity.key, laptop.identity.key); noteTheirs(laptop.identity.key, true); return project; });
+  withHome(laptop.home, () => { markMine(laptop.identity.key, devbox.identity.key); noteTheirs(devbox.identity.key, true); });
+  const toHost = connection(laptop.identity.key), toViewer = connection(devbox.identity.key);
+  const hostCtx = context(devbox.identity, { [laptop.identity.key]: toHost }), viewCtx = context(laptop.identity, { [devbox.identity.key]: toViewer });
+  const host = hostMethods(hostCtx), viewer = viewMethods(viewCtx);
+  toViewer.request = (method, params) => withHome(devbox.home, () => host[method](params, toHost));
+  const started = await withHome(laptop.home, () => remoteCommand(viewCtx, { type: 'remoteStart', to: devbox.identity.key, text: 'Why do coupons fail?', permissions: 'ask' }));
+  const viewed = () => withHome(laptop.home, () => remoteSessions().find(row => row.id === started.id));
+  // Each tick there, its events reach here in order; a gap is caught up.
+  let given = 0;
+  const tick = async () => {
+    withHome(devbox.home, () => hostTick(hostCtx));
+    const pushes = toHost.sent.filter(([method]) => method === 'elu.remote.events');
+    for (const [, params] of pushes.slice(given)) withHome(laptop.home, () => viewer['elu.remote.events'](params, toViewer));
+    given = pushes.length;
+    if (viewed().behind) await withHome(laptop.home, () => viewTick(viewCtx));
+  };
+  await tick();
+  // The session there is a step into its turn: a thought, a file read, a command running.
+  const say = content => JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [content] }, parent_tool_use_id: null });
+  const { repo, worktree } = withHome(devbox.home, () => liveTask(project.root, { id: '1', goal: 'Why do coupons fail?', state: 'running' }));
+  const log = path.join(taskDir(repo, '1'), 'lead-1.log'), startedAt = new Date(Date.now() - 65000).toISOString();
+  fs.writeFileSync(log, [say({ type: 'thinking', thinking: 'The codes should compare in upper case.' }), say({ type: 'tool_use', id: 't1', name: 'Read', input: { file_path: path.join(worktree, 'src', 'coupon.mjs') } }),
+    JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 't1', content: 'x' }] } }), say({ type: 'tool_use', id: 't2', name: 'Bash', input: { command: 'npm test' } })].join('\n') + '\n');
+  withHome(devbox.home, () => { saveTask(repo, { ...readTask(repo, '1'), activeLog: log, activeSince: startedAt }); const [request] = pendingRequests(project.root); updateRequest(project.root, request.id, { state: 'running', taskId: '1' }); });
+  await tick();
+  let open = false;
+  const glue = remoteGlue({ facade: { mineRows: () => [], remoteSessions: () => [] }, peerRead: () => null, peerCommand: async () => ({}), chatMessage: ({ title, text }) => `${title}\n${text}`, ink: text => text, colour: false, stepsShown: () => open });
+  const drawn = () => glue.view(remoteRow(viewed(), 'devbox'), 80);
+  assert.match(drawn(), /Working on @devbox\n\n✻ The codes should compare in upper case\.\n✓ Read: src\/coupon\.mjs\n● Run: npm test/, 'every step so far, the command still running');
+  const acts = () => toHost.sent.filter(([method]) => method === 'elu.remote.events').flatMap(([, params]) => params.items.flatMap(item => item.events)).filter(event => event.type === 'act');
+  assert.equal(acts().length, 3); assert.ok(!JSON.stringify(acts()).includes(worktree), 'no path of that computer goes');
+  // The command ends and the turn with it: the reply, with the steps folded above it.
+  fs.appendFileSync(log, [JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 't2', content: 'not ok', is_error: true }] } }), say({ type: 'text', text: 'Fixing normalize.' }),
+    JSON.stringify({ type: 'result', subtype: 'success', structured_output: { outcome: 'done', summary: 'Codes compare in upper case now.' } })].join('\n') + '\n');
+  withHome(devbox.home, () => { const task = readTask(repo, '1'); saveTask(repo, { ...task, state: 'answered', activeRole: null, activeLog: null, runs: [{ role: 'lead', vendor: 'claude', logFile: log, code: 0, startedAt, at: new Date().toISOString() }] }); });
+  await tick();
+  assert.equal(acts().length, 5, 'the command again, now failed, and the text: nothing sent twice');
+  assert.match(drawn(), /▸ 4 steps in 1m \d+s · ctrl\+o shows them\n\n[^\n]*on @devbox[^\n]*\nCodes compare in upper case now\./, 'folded above the reply');
+  assert.doesNotMatch(drawn(), /Working on @devbox|✗ Run: npm test/);
+  open = true;
+  assert.match(drawn(), /▾ 4 steps in 1m \d+s · ctrl\+o hides them\n✻ The codes should compare in upper case\.\n✓ Read: src\/coupon\.mjs\n✗ Run: npm test\n• Fixing normalize\.\n\n[^\n]*on @devbox/);
+  // A computer whose ELU sends no runs still shows the newest lines of its activity.
+  const old = { ...viewed(), runs: undefined, state: 'running', steps: [{ at: startedAt, text: 'model: Read src/coupon.mjs' }] };
+  assert.match(glue.view(remoteRow(old, 'devbox'), 80), /Working on @devbox\n\nmodel: Read src\/coupon\.mjs/);
 });
 
 // a on an approval answered from the other computer keeps the rule where the session runs:

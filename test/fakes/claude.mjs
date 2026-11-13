@@ -146,6 +146,22 @@ if(cfg.accounts?.limited?.includes(account)){console.log(JSON.stringify({type:'r
 const used=cfg.accounts?.usage?.[account]??{fiveHour:0.36,weekly:0.71};
 console.log(JSON.stringify({type:'rate_limit_event',rate_limit_info:{unifiedWindows:{five_hour:{utilization:used.fiveHour,resetsAt:Math.floor(Date.now()/1000)+10800},seven_day:{utilization:used.weekly,resetsAt:Math.floor(Date.now()/1000)+604800}}}}));
 console.error('A harmless diagnostic on stderr.');
+// steps (mode): a turn that shows its work as the real CLI writes it without partial messages:
+// one assistant row per block. A thinking block carries its text only with --thinking-display
+// summarized; without it the text is empty, as Claude Code's default (omitted) sends it. gate
+// (fake.json): a file the turn waits for while its command runs, so a test sees it running.
+if(mode==='steps'){
+ const shown=args.includes('--thinking-display')&&args[args.indexOf('--thinking-display')+1]==='summarized';
+ const say=content=>console.log(JSON.stringify({type:'assistant',message:{id:'msg_fake',role:'assistant',content:[content]},parent_tool_use_id:null,session_id:session}));
+ const done=(id,content,error=false)=>console.log(JSON.stringify({type:'user',message:{role:'user',content:[{type:'tool_result',tool_use_id:id,content,...(error?{is_error:true}:{})}]},parent_tool_use_id:null,session_id:session}));
+ say({type:'thinking',thinking:shown?'The coupon code should compare in upper case. I will read the module first.':'',signature:'sig-fake'});
+ say({type:'tool_use',id:'toolu_read',name:'Read',input:{file_path:path.join(process.cwd(),'src','coupon.mjs')}});done('toolu_read','export const normalize = code => code;');
+ say({type:'tool_use',id:'toolu_test',name:'Bash',input:{command:'npm test',description:'Run the tests'}});
+ if(cfg.gate){while(!fs.existsSync(cfg.gate))await new Promise(resolve=>setTimeout(resolve,20));}
+ done('toolu_test','Exit code 1\nnot ok 1 - normalizes coupons',true);
+ say({type:'text',text:'The test fails on lower case codes. Fixing normalize.'});
+ say({type:'tool_use',id:'toolu_reply',name:'StructuredOutput',input:result});done('toolu_reply','Structured output provided successfully');
+}
 // relay: like the real CLI, a tool call the permission mode would prompt for goes to the
 // --permission-prompt-tool server from --mcp-config: initialize, tools/list, then approve for a
 // touch outside the workspace. Allowed, the touch happens; denied, the result reports the denial.

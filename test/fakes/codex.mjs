@@ -75,5 +75,19 @@ if(tooLong){const message="Codex ran out of room in the model's context window. 
 if(Array.isArray(cfg.commands)&&args.some(a=>/^default_permissions=|^sandbox_mode=/.test(a))){cfg.commands.forEach((command,i)=>{const r=spawnSync('/bin/sh',['-c',command],{env:process.env,encoding:'utf8'});const item={id:`item_${i+1}`,type:'command_execution',command:`/bin/zsh -c '${command}'`};console.log(JSON.stringify({type:'item.started',item:{...item,aggregated_output:'',exit_code:null,status:'in_progress'}}));console.log(JSON.stringify({type:'item.completed',item:{...item,aggregated_output:`${r.stdout??''}${r.stderr??''}`,exit_code:r.status,status:r.status===0?'completed':'failed'}}));});}
 // A lead run shows one sandboxed command; in declined mode the auto reviewer refused it.
 else if(args.some(a=>/^default_permissions=|^sandbox_mode=/.test(a))){const status=mode==='declined'?'declined':'completed';console.log(JSON.stringify({type:'item.started',item:{id:'item_1',type:'command_execution',command:'/bin/zsh -lc \'npm test\'',aggregated_output:'',exit_code:null,status:'in_progress'}}));console.log(JSON.stringify({type:'item.completed',item:{id:'item_1',type:'command_execution',command:'/bin/zsh -lc \'npm test\'',aggregated_output:status==='completed'?'ok\n':'',exit_code:status==='completed'?0:null,status}}));if(status==='declined'){result.outcome='needs_input';result.question='The test run was declined. Allow npm test?';}}
+// steps (mode): a turn that shows its work as exec --json writes it. A reasoning item comes only
+// with -c model_reasoning_summary set to something other than none: every model in the release's
+// catalog defaults to none, and then the stream has no reasoning item. gate (fake.json): a file
+// the turn waits for while its command runs.
+if(mode==='steps'){
+ const summary=args.flatMap((a,i)=>args[i-1]==='-c'&&/^model_reasoning_summary=/.test(a)?[a.split('=')[1].replace(/"/g,'')]:[]).at(-1)??'none';
+ const item=(type,value)=>console.log(JSON.stringify({type,item:value}));
+ if(summary!=='none')item('item.completed',{id:'item_10',type:'reasoning',text:'**Reading the coupon module**\n\nThe codes should compare in upper case.'});
+ item('item.started',{id:'item_11',type:'command_execution',command:"/bin/zsh -c 'npm test'",aggregated_output:'',exit_code:null,status:'in_progress'});
+ if(cfg.gate){while(!fs.existsSync(cfg.gate))await new Promise(resolve=>setTimeout(resolve,20));}
+ item('item.completed',{id:'item_11',type:'command_execution',command:"/bin/zsh -c 'npm test'",aggregated_output:'not ok 1\n',exit_code:1,status:'failed'});
+ item('item.completed',{id:'item_12',type:'agent_message',text:'The test fails on lower case codes. Fixing normalize.'});
+ item('item.completed',{id:'item_13',type:'file_change',changes:[{path:path.join(process.cwd(),'src','coupon.mjs'),kind:'update'}],status:'completed'});
+}
 console.log(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:JSON.stringify(result)}}));
 console.log(JSON.stringify({type:'turn.completed',usage:{input_tokens:0,output_tokens:0}}));

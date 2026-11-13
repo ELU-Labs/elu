@@ -119,12 +119,19 @@ async function acp() {
       case 'session/prompt': {
         const session = sessions.get(p.sessionId); if (!session) return fail(-32602, 'unknown session');
         const text = (p.prompt ?? []).filter(block => block?.type === 'text').map(block => block.text).join('\n');
-        const update = chunk => send({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: p.sessionId, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: chunk } } } });
+        const change = value => send({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: p.sessionId, update: value } });
+        const update = chunk => change({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: chunk } });
+        // Its thought and each tool call it asks about go out as session updates, as ACP sends them.
+        change({ sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: 'Reading the request.' } });
         update('Working on it.\n');
         const ask = async attempt => {
           const title = attempt.tool === 'write_to_file' ? `Write ${attempt.input.TargetFile}` : attempt.tool === 'run_command' ? `Run ${attempt.input.CommandLine}` : `${attempt.tool} ${attempt.input.Url ?? attempt.input.query ?? ''}`.trim();
-          const answer = await request('session/request_permission', { sessionId: p.sessionId, toolCall: { toolCallId: `call-${nextId}`, title, kind: KIND[attempt.tool], rawInput: attempt.input }, options: [{ optionId: 'allow-once', name: 'Allow', kind: 'allow_once' }, { optionId: 'reject-once', name: 'Reject', kind: 'reject_once' }] });
-          return answer?.outcome?.outcome === 'selected' && answer.outcome.optionId === 'allow-once' ? 'allow' : 'deny';
+          const toolCallId = `call-${nextId}`;
+          change({ sessionUpdate: 'tool_call', toolCallId, title, kind: KIND[attempt.tool], status: 'pending', rawInput: attempt.input });
+          const answer = await request('session/request_permission', { sessionId: p.sessionId, toolCall: { toolCallId, title, kind: KIND[attempt.tool], rawInput: attempt.input }, options: [{ optionId: 'allow-once', name: 'Allow', kind: 'allow_once' }, { optionId: 'reject-once', name: 'Reject', kind: 'reject_once' }] });
+          const allowed = answer?.outcome?.outcome === 'selected' && answer.outcome.optionId === 'allow-once';
+          change({ sessionUpdate: 'tool_call_update', toolCallId, status: allowed ? 'completed' : 'failed' });
+          return allowed ? 'allow' : 'deny';
         };
         const result = await turn(text, { cwd: session.cwd, skip: false, sandbox: false, ask, dir: path.join(brain, p.sessionId) });
         // The runner's conversation schema rides in the prompt: an answer turn.

@@ -61,8 +61,8 @@ function environment(t, values) {
   Object.assign(process.env, values);
   resources(t).files.push(() => { for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } });
 }
-function setup(t, mode = 'normal') {
-  const p = project({ after: close => resources(t).files.push(close) }), fake = fakeClis(p.parent, { mode });
+function setup(t, mode = 'normal', options = {}) {
+  const p = project({ after: close => resources(t).files.push(close) }), fake = fakeClis(p.parent, { mode, ...options });
   environment(t, { ...fake.env, XDG_CONFIG_HOME: path.join(p.parent, 'personal'), NO_COLOR: '1' });
   assert.equal(cli(p.root, ['init', '--yes'], fake.env).status, 0);
   git(p.root, ['add', '.']); git(p.root, ['commit', '-m', 'Configure checks']);
@@ -1979,6 +1979,45 @@ test('a message sent while the session works waits in its chat; Up takes it back
   assert.equal(projectSnapshot(p.repo).tasks[0].state, 'stopped'); assert.equal(sent().length, 2);
 });
 
+// The owner's case: "why I'm not seeing anything of the model? I wanna see what is doing". While
+// a turn works, its thinking and each tool call show under the working line as they happen, a
+// command still running with ●. When it ends they fold into one line above the reply, which
+// Ctrl-O opens and folds for every turn, and a click opens or folds for that turn alone.
+test('a working turn shows its thinking and tool calls as they happen, then folds them above its reply', { timeout: 30000 }, async t => {
+  const gate = path.join(temp(t), 'gate'), p = setup(t, 'steps', { intent: 'answer', gate }), v = await view(t, { repo: p.repo }), panels = v.current.panels;
+  const flat = () => panels.chat.getText().replace(/\s+/g, ' '), lines = () => panels.chat.getText().split('\n');
+  await send(v, 'Why do lower case coupons fail?');
+  await until(() => /Opus is working ✻ The coupon code should compare in upper case\. I will read the module first\. ✓ Read: src\/coupon\.mjs ● Run: npm test type a message any time/.test(flat()), 'the thought, the file read and the command still running', 15000);
+  assert.equal(projectSnapshot(p.repo).tasks[0].state, 'running');
+  assert.doesNotMatch(flat(), /Opus is working model: started/, 'not the line that never changed');
+  const frames = [{ step: 'working', text: v.frame() }];
+  // The command ends, then the turn: the steps fold into one line above the reply.
+  fs.writeFileSync(gate, '');
+  await until(() => projectSnapshot(p.repo).tasks[0].state === 'answered' && lines().some(line => /^▸ 4 steps in \d+s · ctrl\+o shows them$/.test(line.trim())), 'the folded line', 15000);
+  assert.match(flat(), /┃ Why do lower case coupons fail\? ▸ 4 steps in \d+s · ctrl\+o shows them [^┃]+┃ Looked\./, 'above the reply');
+  assert.doesNotMatch(flat(), /✻ The coupon code|Run: npm test/, 'folded');
+  frames.push({ step: 'folded', text: v.frame() });
+  // Ctrl-O opens every turn's steps, in the message box too, and folds them again.
+  panels.ask.focus(); panels.ask.readInput(); await until(() => panels.ask.__listener, 'message box');
+  v.input.write('\x0f');
+  await until(() => /▾ 4 steps in \d+s · ctrl\+o hides them ✻ The coupon code should compare in upper case\. I will read the module first\. ✓ Read: src\/coupon\.mjs ✗ Run: npm test • The test fails on lower case codes\. Fixing normalize\. [^┃]+┃ Looked\./.test(flat()), 'open, the failed command marked');
+  assert.equal(panels.ask.getValue(), '', 'nothing typed');
+  frames.push({ step: 'open', text: v.frame() });
+  v.input.write('\x0f'); await until(() => /▸ 4 steps/.test(flat()) && !/✗ Run: npm test/.test(flat()), 'folded again');
+  // Out of the box, the chat's keys name it; a click on the line opens that turn alone.
+  v.input.write('\x1b'); await until(() => v.current.screen.focused !== panels.ask, 'out of the box');
+  panels.chat.focus(); v.current.screen.render(); await until(() => /ctrl\+o steps/.test(panels.keys.getText()), 'ctrl+o in the key bar');
+  const row = (panels.chat._clines ?? []).findIndex(line => /^▸ 4 steps/.test(String(line).replace(/\x1b\[[\d;]*m/g, '').trimStart()));
+  assert.ok(row >= 0, 'the line is drawn');
+  panels.chat.scrollTo(row); v.current.screen.render();
+  const at = () => panels.chat.itop + row - panels.chat.childBase;
+  click(v, panels.chat, 3, at());
+  await until(() => /▾ 4 steps in \d+s · ctrl\+o hides them ✻ The coupon code[^]*✗ Run: npm test/.test(flat()), 'the click opened that turn');
+  click(v, panels.chat, 3, at());
+  await until(() => /▸ 4 steps/.test(flat()) && !/✗ Run: npm test/.test(flat()), 'a second click folds it');
+  captureFrames('live-steps', frames);
+});
+
 // Three lines that read wrong, or lost a message.
 test('checks read as running, a waiting turn of a schedule names the schedule, and a message typed on a waiting row waits beside it', { timeout: 40000 }, async t => {
   const p = setup(t, 'slow'); saveBot({ name: 'sec', vendor: 'claude', instructions: 'Review the change for leaked secrets.' });
@@ -2160,7 +2199,7 @@ test('the list shows live agents and stops, retries, and starts work from its ro
   await send(v, '/tasks'); await until(() => v.current.view === 'tasks', 'Tasks');
   const board = panels.board, spinner = '[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]';
   // The row has the spinner and the session's title. Its latest step shows beside the list, in the session.
-  await until(() => new RegExp(`${spinner} Keep working`).test(cursor(v)) && /Opus is working\n\nmodel: .+\n\ntype a message any time · \/stop to stop/.test(panels.chat.getText()) && /^Keep working on the board {2}· {2}working {2}· {2}Ask/.test(panels.header.getText()), 'live row, with the work under way beside it');
+  await until(() => new RegExp(`${spinner} Keep working`).test(cursor(v)) && /Opus is working\n\n• Working on the requested change\.\n\ntype a message any time · \/stop to stop/.test(panels.chat.getText()) && /^Keep working on the board {2}· {2}working {2}· {2}Ask/.test(panels.header.getText()), 'live row, with the work under way beside it');
   assert.match(cursor(v), /0m\d\d$/, 'a running row counts its time');
   assert.match(rows(v)[0], /\+ New session/); assert.match(rows(v)[2], /RUNNING 1/);
   board.focus(); await until(() => /s stop/.test(panels.keys.getText()), 's stop in the key bar'); v.input.write('s');

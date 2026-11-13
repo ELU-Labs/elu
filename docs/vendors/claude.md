@@ -46,6 +46,12 @@ config file and disabled hooks. `--max-budget-usd` is passed only when the sessi
 has a spending limit (`/budget`) or the run is a teammate's question. The approval relay is the
 one server ELU adds to that file; it is never in the allow list.
 
+Every launch, Read only too, passes `--thinking-display summarized`, so the chat can show what
+the model thinks while it works. Without it a print run sends each thinking block of the newer
+models with its text empty. Claude Code 2.1.318 to 2.1.323 accept the flag but leave it out of
+`--help`, as they do `--permission-prompt-tool`. Read from the 2.1.323 binary; not seen with
+the real service yet.
+
 A folder you name with `/permissions folders add` is read and never written in Ask and
 Auto: `Edit` and `Write` deny rules cover it and the sandbox's `denyWrite` lists it, the
 way protected paths are kept. Claude Code lets a deny win over an allow, so a folder that

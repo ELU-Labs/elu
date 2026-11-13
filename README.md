@@ -99,6 +99,8 @@ Type these in the message box. `/` alone lists every command, and `/help` explai
 
 You can send a message at any time. One sent while the session is working waits in the chat and is sent by itself when that turn ends; several go together, in order. `↑` in the empty message box takes the newest one back so you can change it.
 
+While the model or a bot works, the chat shows what it does as it happens: each thought, each tool call (● running, ✓ done, ✗ failed), its plan, and what it writes on the way. When the turn ends they fold into one line above its reply, such as `▸ 12 steps in 1m 12s`. `ctrl+o` opens or folds the steps of every turn, in the message box too; a click on that line opens or folds that turn's. A session on your other computer shows the same.
+
 | Type | What it does |
 | --- | --- |
 | `/new` | Starts a new session |

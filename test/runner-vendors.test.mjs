@@ -14,6 +14,7 @@ import * as agy from '../lib/adapters/agy.mjs';
 import * as claude from '../lib/adapters/claude.mjs';
 import { saveRule } from '../lib/permission-rules.mjs';
 import { shimsBase } from '../lib/never-shims.mjs';
+import { runSteps } from '../lib/run-activity.mjs';
 
 // Every vendor through the runner, against the fakes: Codex leads with its
 // own launch and parse, Grok takes the prompt from a file under a private HOME, and an ACP
@@ -263,6 +264,45 @@ test('an Antigravity session refuses a push that a script makes over ACP in Ask 
   const full = await f.controller.ask(`Run this command: ${publish.script}. Reply with the summary "headless".`, null, { permissions: 'full' }).finished;
   assert.equal(full.state, 'answered', JSON.stringify(full.error)); assert.ok(f.calls().at(-1).args.includes('-p'));
   assert.equal(publish.code(), '0'); assert.deepEqual(publish.refs(), ['refs/heads/from-script', 'refs/tags/v2']);
+});
+
+// What each vendor did reaches the chat from its run's log (lib/run-activity.mjs). Codex sends
+// its reasoning only because the launch asks for a summary of it; Grok Build headless streams
+// its thought, each tool call and its text; over ACP Grok Build and Antigravity send their
+// thought and each tool call they asked about. The reply itself is never a step.
+const shown = steps => steps.map(step => [step.kind, step.text, ...(step.status ? [step.status] : []), ...(step.note ? [step.note] : [])]);
+test('a Codex run asks for its reasoning summary; its log shows the reasoning, the command that failed, its prose and its edit', async t => {
+  const f = setup(t, 'codex', { mode: 'steps' });
+  const task = await f.controller.ask('Why do lower case coupons fail?', null, { permissions: 'auto' }).finished;
+  const call = f.calls().find(call => call.args[0] === 'exec'), at = call.args.indexOf('model_reasoning_summary="auto"');
+  assert.ok(at > 0 && call.args[at - 1] === '-c', 'the launch asks for the reasoning summary');
+  assert.deepEqual(shown(runSteps(task.runs[0].logFile, { cwd: task.worktree })).slice(-4), [['thinking', '**Reading the coupon module**\n\nThe codes should compare in upper case.'], ['tool', 'Run: npm test', 'failed', 'exit 1'], ['text', 'The test fails on lower case codes. Fixing normalize.'], ['tool', 'Edit: src/coupon.mjs', 'ok']]);
+});
+
+test('a Grok Build headless run streams its thought, tool calls and text; the reply is read from the stream and is not a step', async t => {
+  const f = setup(t, 'grok');
+  fs.mkdirSync(path.join(f.parent, '.grok')); fs.writeFileSync(path.join(f.parent, '.grok', 'auth.json'), '{}\n', { mode: 0o600 });
+  proven('grok', f.bin, '1.0.77', { relay: false });
+  const task = await f.controller.ask(`Run the command ${f.marker} then reply done with the summary "ran it".`, null, { permissions: 'full' }).finished;
+  assert.equal(task.state, 'answered', JSON.stringify(task.error)); assert.equal(task.result.summary, 'ran it'); assert.equal(fs.readFileSync(f.ran, 'utf8'), 'ran');
+  const call = f.calls().at(-1); assert.equal(call.args[call.args.indexOf('--output-format') + 1], 'streaming-json');
+  assert.deepEqual(shown(runSteps(task.runs[0].logFile)), [['thinking', 'Reading the request.'], ['tool', `Run ${f.marker}`, 'ok'], ['text', 'Done reading.']]);
+  assert.equal(task.runs[0].model, 'grok-4.6', 'the end event names the model');
+});
+
+test('over ACP, Grok Build and Antigravity runs show their thought and each tool call the owner was asked about', async t => {
+  for (const vendor of ['grok', 'agy']) {
+    const f = setup(t, vendor);
+    if (vendor === 'grok') { fs.mkdirSync(path.join(f.parent, '.grok')); fs.writeFileSync(path.join(f.parent, '.grok', 'auth.json'), '{}\n', { mode: 0o600 }); }
+    proven(vendor, f.bin, vendor === 'grok' ? '1.0.77' : '1.5.4', { relay: true });
+    const prompt = vendor === 'grok' ? `Run the command ${f.marker} then reply done with the summary "ran it".` : `Run this command: ${f.marker}. Reply with the summary "ran it".`;
+    const pending = f.controller.ask(prompt, null, { permissions: 'ask' }).finished;
+    await answer('deny', { vendor });
+    const task = await pending, steps = shown(runSteps(task.runs[0].logFile));
+    assert.deepEqual(steps.slice(0, 1), [['thinking', 'Reading the request.']], vendor);
+    assert.ok(steps.some(step => step[0] === 'tool' && step[1] === `Run ${f.marker}` && step[2] === 'failed'), `${vendor}: the call the owner denied, failed: ${JSON.stringify(steps)}`);
+    assert.ok(!steps.some(step => /"outcome"/.test(step[1] ?? '')), `${vendor}: never the reply`);
+  }
 });
 
 test('a Codex lead whose command was declined reports the denial and asks', async t => {

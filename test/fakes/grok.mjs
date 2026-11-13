@@ -2,7 +2,8 @@
 // it follows the vendor's docs. fakeClis() in helpers.mjs copies it next to
 // fake.json, which holds the test's mode and the files it records to. It reads
 // --prompt-file and never stdin, prints the --output-format json object with the -s
-// session id, writes only where the flags allow (bypassPermissions anywhere; otherwise
+// session id (or, with --output-format streaming-json, one event per line: its thought, each
+// tool call and how it ended, the text in chunks, then end), writes only where the flags allow (bypassPermissions anywhere; otherwise
 // inside --cwd, never under a read-only sandbox or GROK_WRITE_FILE=0), runs a command or
 // fetches a URL only under bypassPermissions, keeps sessions under $GROK_HOME/sessions for
 // -r, serves `agent stdio` with a permission request for anything the rules do not allow,
@@ -30,9 +31,18 @@ if (args[0] === 'login') { console.error('fake grok: login is interactive'); pro
 
 // What the prompt asks for, done as far as the launch allows. ask() decides an action the
 // rules neither allow nor forbid: the relay over ACP, nothing in headless mode.
-async function act(prompt, record, { bypass, canWrite, canShell, canFetch, cwd, ask }) {
+// report(call, status): each action as a tool call, started (in_progress) and ended
+// (completed or failed), for the formats that show them.
+async function act(prompt, record, { bypass, canWrite, canShell, canFetch, cwd, ask, report = () => {} }) {
   const blocked = [], did = [];
-  const allow = async (action, free) => bypass || free || (ask ? ask(action) : false);
+  let calls = 0;
+  const allow = async (action, free) => {
+    const call = { toolCallId: `call_${++calls}`, title: action.title, kind: action.kind, toolName: { edit: 'search_replace', execute: 'run_terminal_cmd', fetch: 'web_fetch' }[action.kind], rawInput: action.rawInput };
+    report(call, 'in_progress');
+    const yes = bypass || free || (ask ? await ask(action, call) : false);
+    report(call, yes ? 'completed' : 'failed');
+    return yes;
+  };
   if (/create (a |another )?file|files? at/i.test(prompt)) {
     for (const file of [...prompt.matchAll(/(\/\S+?\.txt)\b/g)].map(match => match[1])) {
       const inside = path.resolve(file).startsWith(cwd + path.sep);
@@ -98,12 +108,15 @@ if (args.includes('agent') && args.includes('stdio')) {
         const record = live.get(row.params?.sessionId); if (!record) return error(-32000, 'Unknown session.');
         const text = (row.params?.prompt ?? []).filter(part => part?.type === 'text').map(part => part.text).join('\n');
         if (cfg.inputs) fs.appendFileSync(cfg.inputs, JSON.stringify({ vendor, args, input: text }) + '\n');
-        const ask = async action => {
-          const answer = await request('session/request_permission', { sessionId: record.id, toolCall: { toolCallId: `call_${nextId}`, title: action.title, kind: action.kind, status: 'pending', rawInput: action.rawInput }, options: [{ optionId: 'allow', name: 'Allow', kind: 'allow_once' }, { optionId: 'allow_always', name: 'Always allow', kind: 'allow_always' }, { optionId: 'reject', name: 'Reject', kind: 'reject_once' }] });
+        const ask = async (action, call) => {
+          const answer = await request('session/request_permission', { sessionId: record.id, toolCall: { toolCallId: call?.toolCallId ?? `call_${nextId}`, title: action.title, kind: action.kind, status: 'pending', rawInput: action.rawInput }, options: [{ optionId: 'allow', name: 'Allow', kind: 'allow_once' }, { optionId: 'allow_always', name: 'Always allow', kind: 'allow_always' }, { optionId: 'reject', name: 'Reject', kind: 'reject_once' }] });
           return answer?.outcome?.outcome === 'selected' && String(answer.outcome.optionId).startsWith('allow');
         };
-        send({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: record.id, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Working. ' } } } });
-        const result = await act(text, record, { bypass: record.yolo || mode === 'leaky', canWrite, canShell: true, canFetch: true, cwd: record.cwd, ask });
+        const update = change => send({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: record.id, update: change } });
+        update({ sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: 'Reading the request.' } });
+        update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Working. ' } });
+        const report = (call, status) => update(status === 'in_progress' ? { sessionUpdate: 'tool_call', ...call, status, content: [], locations: [] } : { sessionUpdate: 'tool_call_update', toolCallId: call.toolCallId, status });
+        const result = await act(text, record, { bypass: record.yolo || mode === 'leaky', canWrite, canShell: true, canFetch: true, cwd: record.cwd, ask, report });
         record.turns.push(text); save(record);
         send({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: record.id, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: resultText(result) } } } });
         return reply({ stopReason: mode === 'max-turns' ? 'max_turn_requests' : 'end_turn' });
@@ -144,7 +157,19 @@ else {
   if (load(session)) fail('That session id is already in use.');
   record = { id: session, cwd, sandbox, turns: [] };
 }
-const result = await act(prompt, record, { bypass, canWrite, canShell, canFetch, cwd, ask: null });
+const streaming = value('--output-format') === 'streaming-json', line = row => console.log(JSON.stringify(row));
+if (streaming) line({ type: 'thought', data: 'Reading the request.' });
+const report = streaming ? (call, status) => line(status === 'in_progress' ? { type: 'tool_call', ...call, status, content: [], locations: [] } : { type: 'tool_call_update', toolCallId: call.toolCallId, status, content: [], rawOutput: {}, locations: [] }) : undefined;
+const result = await act(prompt, record, { bypass, canWrite, canShell, canFetch, cwd, ask: null, report });
 record.turns.push(prompt); save(record);
+const usage = { input_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 5, reasoning_tokens: 0, total_tokens: 15 }, modelUsage = { 'grok-4.6': { inputTokens: 10, outputTokens: 5, cacheReadInputTokens: 0, modelCalls: 1 } };
+// The answer as text chunks, a response boundary, then end with what the json object carries but the text.
+if (streaming) {
+  const text = mode === 'max-turns' ? 'Still working on it.' : `Done reading. ${resultText(result)}`;
+  for (let at = 0; at < text.length; at += 40) line({ type: 'text', data: text.slice(at, at + 40) });
+  line({ type: 'usage', messageId: 'resp_1', stopReason: 'end_turn', usage, signature: 'sig' });
+  line({ type: 'end', stopReason: mode === 'max-turns' ? 'max_turn_requests' : 'end_turn', sessionId: session, requestId: 'req-1', cwd, num_turns: mode === 'max-turns' ? 3 : 1, ...(mode === 'max-turns' ? {} : { usage, modelUsage }) });
+  process.exit(0);
+}
 if (mode === 'max-turns') { console.log(JSON.stringify({ text: 'Still working on it.', stopReason: 'max_turn_requests', sessionId: session, requestId: 'req-1', num_turns: 3 })); process.exit(0); }
-console.log(JSON.stringify({ text: resultText(result), stopReason: 'end_turn', sessionId: session, requestId: 'req-1', num_turns: 1, usage: { input_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 5, reasoning_tokens: 0, total_tokens: 15 }, modelUsage: { 'grok-4.6': { inputTokens: 10, outputTokens: 5, cacheReadInputTokens: 0, modelCalls: 1 } } }));
+console.log(JSON.stringify({ text: resultText(result), stopReason: 'end_turn', sessionId: session, requestId: 'req-1', num_turns: 1, usage, modelUsage }));
