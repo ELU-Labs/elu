@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { makeTeam, newHome, withHome, registeredProject, liveTask } from './peer-helpers.mjs';
+import { fakeClis } from './helpers.mjs';
 import { createIdentity } from '../lib/peer/identity.mjs';
 import { bothMine, dropStrangers, markMine, markedMine, mineRows, noteTheirs, unmarkMine } from '../lib/peer/mine.mjs';
 import { NOT_MINE, UPDATE, UPDATE_LIST, hostMethods, hostTick, listTick, relist, remoteCommand, remoteConnected, remoteMachines, remoteSessions, viewMethods, viewTick, watchId } from '../lib/peer/remote.mjs';
@@ -14,7 +15,7 @@ import { leaveOp, merge } from '../lib/peer/roster.mjs';
 import { createInvite, redeemCode, takeMineOffer } from '../lib/peer/invite.mjs';
 import { pendingRequests, updateRequest } from '../lib/workspace.mjs';
 import { requestApproval, pendingApprovals } from '../lib/approvals.mjs';
-import { enqueue } from '../lib/conductor.mjs';
+import { Conductor, enqueue } from '../lib/conductor.mjs';
 import { boardRows, remoteRow, rowActions, rowTitle } from '../lib/board.mjs';
 import { remoteSessions as remoteGlue } from '../lib/terminal-remote.mjs';
 import { teamPath } from '../lib/peer/roster.mjs';
@@ -139,8 +140,8 @@ test('a session from my other computer starts as my own, with its bots, in the p
   withHome(devbox.home, () => {
     markMine(devbox.identity.key, laptop.identity.key); noteTheirs(laptop.identity.key, true);
     const from = connection(laptop.identity.key), ctx = context(devbox.identity, { [laptop.identity.key]: from }), methods = hostMethods(ctx);
-    // No project chosen for the team yet: said plainly.
-    assert.throws(() => methods['elu.remote.start'](START, from), /This computer has no project for the team yet\. On it, open the project in ELU Code and run \/access there/);
+    // No project on this computer at all: said plainly.
+    assert.throws(() => methods['elu.remote.start'](START, from), { message: 'Open ELU Code once on this computer so it has a project.' });
     const project = registeredProject(t); saveTeamAccess(team.teamId, { root: project.root });
     assert.throws(() => methods['elu.remote.start']({ ...START, bots: ['nobody'] }, from), { message: '@nobody is not a bot on this computer. Make it there, or start without it.' });
     const started = methods['elu.remote.start'](START, from);
@@ -157,6 +158,63 @@ test('a session from my other computer starts as my own, with its bots, in the p
     assert.throws(() => methods['elu.remote.send']({ id: crypto.randomUUID(), text: 'x' }, from), { message: 'That session is not on this computer.' });
     assert.deepEqual(methods['elu.remote.stop']({ id: START.id }, from), { stopping: true });
     assert.deepEqual(pendingRequests(project.root), []);
+  });
+});
+
+// The devbox with no team setting: sessions from my laptop run where my own sessions there run.
+test('with no team setting, a session from my other computer runs in the only project there, the home folder too, to the end', async t => {
+  const { laptop, devbox } = machines(t);
+  const parent = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'elu-code-remote-home-')));
+  t.after(() => fs.rmSync(parent, { recursive: true, force: true }));
+  const home = path.join(parent, 'home'); fs.mkdirSync(home);
+  const fake = fakeClis(parent, { mode: 'answer' }), names = ['PATH', 'HOME', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'CLAUDE_CONFIG_DIR'];
+  const previous = Object.fromEntries(names.map(name => [name, process.env[name]]));
+  Object.assign(process.env, fake.env, { HOME: home, XDG_CONFIG_HOME: devbox.home });
+  let conductor = null;
+  try {
+    // He runs the app from his home folder there, a folder that is no repository, and never chose a project with /access.
+    const repo = projectFolder(home); registerProject(repo);
+    assert.equal(repo.common, null);
+    markMine(devbox.identity.key, laptop.identity.key); noteTheirs(laptop.identity.key, true);
+    const from = connection(laptop.identity.key), methods = hostMethods(context(devbox.identity, { [laptop.identity.key]: from }));
+    const started = methods['elu.remote.start']({ ...START, id: crypto.randomUUID(), text: 'Where are the tests?', bots: [] }, from);
+    assert.equal(started.project, 'home');
+    const [request] = pendingRequests(home);
+    assert.equal(request.mine.machine, laptop.identity.key); assert.equal(request.origin, undefined);
+    // The conductor runs it there as a session typed there would run.
+    conductor = new Conductor({ tickMs: 20 }).start();
+    for (const at = Date.now(); pendingRequests(home).find(row => row.id === request.id)?.state !== 'done';) {
+      if (Date.now() - at > 30000) throw new Error(`Timed out: ${JSON.stringify(pendingRequests(home))}`);
+      await new Promise(done => setTimeout(done, 20));
+    }
+    const task = readTask(repo, pendingRequests(home).find(row => row.id === request.id).taskId);
+    assert.equal(task.state, 'answered'); assert.equal(task.worktree, home); assert.equal(task.origin.mine, true); assert.equal(task.origin.peer, undefined);
+  } finally {
+    await conductor?.stop();
+    for (const [name, value] of Object.entries(previous)) { if (value === undefined) delete process.env[name]; else process.env[name] = value; }
+  }
+});
+
+test('a team setting still decides where a session from my other computer runs; without one, of several projects the one with the newest session does', t => {
+  const { team, laptop, devbox } = machines(t);
+  withHome(devbox.home, () => {
+    markMine(devbox.identity.key, laptop.identity.key); noteTheirs(laptop.identity.key, true);
+    const from = connection(laptop.identity.key), methods = hostMethods(context(devbox.identity, { [laptop.identity.key]: from }));
+    const start = () => methods['elu.remote.start']({ ...START, id: crypto.randomUUID(), bots: [] }, from);
+    const older = registeredProject(t), newer = registeredProject(t);
+    chat(older.root, 1, { minutes: 30 }); chat(newer.root, 1, { minutes: 5 });
+    start(); assert.equal(pendingRequests(newer.root).length, 1); assert.equal(pendingRequests(older.root).length, 0);
+    // A session that started long ago and works now counts from when it started working.
+    chat(older.root, 2, { minutes: 90, state: 'running', activeSince: new Date().toISOString() });
+    start(); assert.equal(pendingRequests(older.root).length, 1);
+    // The project /access chose wins over the newest.
+    chat(newer.root, 2, { minutes: 0, activeSince: new Date(Date.now() + 60000).toISOString() });
+    saveTeamAccess(team.teamId, { root: older.root });
+    start(); assert.equal(pendingRequests(older.root).length, 2); assert.equal(pendingRequests(newer.root).length, 1);
+    // A teammate's computer is refused as before, and nothing is queued.
+    const kim = connection('e'.repeat(64));
+    assert.throws(() => methods['elu.remote.start']({ ...START, id: crypto.randomUUID(), bots: [] }, kim), { message: NOT_MINE });
+    assert.equal(pendingRequests(older.root).length + pendingRequests(newer.root).length, 3);
   });
 });
 
