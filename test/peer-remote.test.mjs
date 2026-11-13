@@ -628,6 +628,76 @@ test('the model and effort of each entry travel with it to my other computer, ch
   assert.deepEqual(again, []);
 });
 
+// Nothing of a session on my other computer is cut on its way here: an entry or a diff longer
+// than one event carries goes in several, in order, and what one notification does not hold is
+// asked for (elu.remote.since), each line on the link under its limit.
+test('a chat entry, a review and a diff of any length reach the computer that follows the session whole', async t => {
+  const { laptop, devbox, project, toHost, toViewer, hostCtx, viewCtx, viewer, host } = pair(t), at = n => new Date(Date.now() - 60000 + n * 1000).toISOString();
+  const answer = `Here is the whole plan.\n${'Every step of the plan, in full. '.repeat(40000)}THE END \u{1F600}`;
+  const generated = `${'export const line = "a long generated line";\n'.repeat(30000)}// LAST LINE\n`;
+  withHome(devbox.home, () => {
+    const { repo, worktree } = liveTask(project.root, { id: '1', goal: 'Plan the coupons', files: { 'src/generated.mjs': generated } });
+    assert.equal(spawnSync('git', ['-C', worktree, 'add', 'src/generated.mjs']).status, 0);
+    const task = readTask(repo, '1');
+    task.messages = [{ at: at(0), text: 'Plan the coupons', to: '@lead' }, { at: at(1), from: '@lead', bot: 'lead', text: answer }];
+    task.reviews = [{ role: 'bot:reviewer', round: 1, at: at(2), result: { summary: 'Thirty things to fix.', comments: Array.from({ length: 30 }, (_, n) => ({ id: `c${n + 1}`, severity: 'must_fix', body: `Comment ${n + 1}: ${'x'.repeat(1000)}` })) } }];
+    saveTask(repo, task); relist();
+  });
+  const lines = [];
+  toViewer.request = async (method, params) => { const result = await withHome(devbox.home, () => host[method](params, toHost)); lines.push(Buffer.byteLength(JSON.stringify({ jsonrpc: '2.0', id: 1, result }))); return result; };
+  await withHome(laptop.home, () => listTick(viewCtx));
+  const item = withHome(laptop.home, () => remoteMachines())[0].sessions[0];
+  await withHome(laptop.home, () => remoteCommand(viewCtx, { type: 'remoteWatch', to: devbox.identity.key, ref: item.ref }));
+  withHome(devbox.home, () => hostTick(hostCtx));
+  const pushed = toHost.sent.filter(([method]) => method === 'elu.remote.events');
+  for (const [method, params] of pushed) { lines.push(Buffer.byteLength(JSON.stringify({ jsonrpc: '2.0', method, params }))); withHome(laptop.home, () => viewer[method](params, connection(devbox.identity.key))); }
+  const seen = () => withHome(laptop.home, () => remoteSessions().find(row => row.id === item.id));
+  // The rest is asked for, a few requests at a time, until nothing is missing.
+  for (let n = 0, now = Date.now(); n < 60 && seen().behind; n++) await withHome(laptop.home, () => viewTick(viewCtx, now += 2000));
+  const view = seen();
+  assert.equal(view.behind, false);
+  assert.ok(lines.length > 4 && lines.every(size => size < FRAME_MAX), 'each line on the link is under its limit');
+  const lead = view.entries.find(entry => entry.bot === 'lead'), review = view.entries.find(entry => entry.bot === 'reviewer');
+  assert.ok(lead.text === answer, 'every character of the answer');
+  assert.match(review.text, /^Thirty things to fix\.\nmust_fix: Comment 1: x+\n/); assert.match(review.text, /\nmust_fix: Comment 30: x{1000}$/);
+  assert.ok(view.diff.patch.length > generated.length && view.diff.patch.includes('+// LAST LINE'), 'every line of the diff');
+  assert.equal(view.diff.patch.includes('The rest of the diff is on the other computer'), false);
+  assert.match(view.diff.summary, /^1 file · \+30001 −0$/);
+  // Looked at again, the host sends none of it twice.
+  const before = toHost.sent.length;
+  withHome(devbox.home, () => hostTick(hostCtx, Date.now() + 1));
+  assert.deepEqual(toHost.sent.slice(before).flatMap(([, params]) => params.items.flatMap(row => row.events)).filter(event => /^(entry|diff)/.test(event.type)), []);
+});
+
+test('a long session keeps its newest 4000 events there, and a computer that was away longer goes on from the oldest kept', async t => {
+  const { laptop, devbox, project, toHost, hostCtx, viewCtx, viewer } = pair(t), at = () => new Date().toISOString();
+  withHome(devbox.home, () => { chat(project.root, 1, { goal: 'Plan the coupons', messages: [{ at: at(), text: 'Plan the coupons', to: '@lead' }] }); relist(); });
+  await withHome(laptop.home, () => listTick(viewCtx));
+  const item = withHome(laptop.home, () => remoteMachines())[0].sessions[0];
+  await withHome(laptop.home, () => remoteCommand(viewCtx, { type: 'remoteWatch', to: devbox.identity.key, ref: item.ref }));
+  withHome(devbox.home, () => {
+    hostTick(hostCtx);
+    const folder = path.join(process.env.XDG_CONFIG_HOME, 'elu-code', 'peer', 'remote', 'host'), file = path.join(folder, `${item.id}.json`), log = path.join(folder, `${item.id}.jsonl`);
+    const row = JSON.parse(fs.readFileSync(file, 'utf8')), lines = [];
+    // 6100 events, among them an answer in two events of which only the second will be kept.
+    for (let seq = row.seq + 1; seq <= 6100; seq++) lines.push(JSON.stringify(seq === 2101 ? { seq, at: at(), type: 'entry', role: '@lead', bot: 'lead', text: 'Half of an answer', more: true } : seq === 2102 ? { seq, at: at(), type: 'entry+', text: ' and its orphaned rest' } : { seq, at: at(), type: 'step', text: `step ${seq}` }));
+    fs.appendFileSync(log, `${lines.join('\n')}\n`); fs.writeFileSync(file, JSON.stringify({ ...row, seq: 6100 }));
+    const repo = repository(project.root), task = readTask(repo, '1'); task.messages.push({ at: at(), from: '@lead', bot: 'lead', text: 'Planned.' }); saveTask(repo, task);
+    hostTick(hostCtx, Date.now() + 1);
+    const kept = fs.readFileSync(log, 'utf8').trim().split('\n').map(line => JSON.parse(line).seq);
+    assert.equal(kept.length, 4000); assert.deepEqual([kept[0], kept.at(-1)], [2102, 6101]);
+    assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).first, 2102);
+    assert.deepEqual(fs.readdirSync(folder).filter(name => name.endsWith('.tmp')), []);
+  });
+  for (const [method, params] of toHost.sent.filter(([method]) => method === 'elu.remote.events')) withHome(laptop.home, () => viewer[method](params, connection(devbox.identity.key)));
+  const seen = () => withHome(laptop.home, () => remoteSessions().find(row => row.id === item.id));
+  assert.equal(seen().behind, true);
+  for (let n = 0, now = Date.now(); n < 20 && seen().behind; n++) await withHome(laptop.home, () => viewTick(viewCtx, now += 2000));
+  assert.equal(seen().behind, false); assert.equal(seen().seq, 6101);
+  assert.deepEqual(seen().entries.map(entry => entry.text), ['Plan the coupons', 'Planned.'], 'the rest of an answer whose start is gone is not shown as one');
+  assert.equal(seen().steps.at(-1).text, 'step 6100');
+});
+
 test('a session started there by hand is watched from here: live, continued, stopped and answered as one started from here', async t => {
   const { laptop, devbox, project, toHost, hostCtx, viewCtx, viewer } = pair(t);
   withHome(devbox.home, () => { chat(project.root, 1, { goal: 'Make coupons upper case', state: 'answered', messages: [{ at: new Date().toISOString(), text: 'Make coupons upper case' }, { at: new Date().toISOString(), from: 'Lead', text: 'Done: codes are upper case now.' }] }); relist(); });
