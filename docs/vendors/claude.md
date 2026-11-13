@@ -12,6 +12,29 @@ or Linux with no display) says to open the link Claude Code prints. Tested relea
 [../permissions.md](../permissions.md); this page is how `claude` is launched
 for each.
 
+## Messages you send while a turn works
+
+Every turn of yours in your own session, and every turn of a bot you wrote to, starts with
+`--input-format stream-json`, in every mode, Read only too: the prompt goes in as one user
+message and the input stays open until the turn writes its `result` line. A message you
+send while the turn works goes on that input at once, as one more user message
+(`{"type":"user","message":{"role":"user","content":...},"parent_tool_use_id":null}`),
+with a line that tells the model you wrote again during its turn and that its reply answers
+that too. Claude Code takes a user message that comes while it works in at the turn's next
+step, and the turn goes on with it; the one reply answers everything. The chat shows your
+message where you sent it, with "Sent to the running turn." under it, and the session's
+history keeps it once. Several go in the order you sent them. Only a message for the one
+working turns go: yours to the model while the model works, yours to a bot while that bot
+works. A message to someone else waits for the turn to end, and so does every message sent
+after it. Read from the 2.1.323 program (a queued prompt is folded into a running turn at
+its next tool step; one that comes after the last step runs as one more turn of the same
+run, with a `result` line of its own, after the input closes) and from its change log
+("queued prompts sent as content blocks over --input-format stream-json ... merged into one
+turn"). When a message comes after the last step, ELU shows both replies, in order. A
+question of Claude Code's on that input outside Ask for approval is refused at once, as a
+closed input refused it before. A teammate's question never takes messages. Driven with the
+stand-in CLI; not yet seen with the real service.
+
 ## Read only
 
 The launch: `--restricted --permission-mode dontAsk --permission-prompts none`,
@@ -32,7 +55,7 @@ Code memory, when there is one.
 | `--permission-mode` | `default` | `auto` | `bypassPermissions` |
 | `--permission-prompts` / `--permission-prompt-tool` | `host` / `mcp__elu-code-approval__approve` | same | same |
 | `--restricted` / `--safe-mode` | no | no | no |
-| `--input-format` | `stream-json`: the prompt is one user message and the input stays open for the network questions | text | text |
+| `--input-format` | `stream-json`: the prompt is one user message and the input stays open for your messages and the network questions | `stream-json`, for your messages | `stream-json`, for your messages |
 | `--tools` | `Read,Grep,Glob,Edit,Write,Bash,WebFetch,WebSearch` | same | same |
 | `--allowedTools` | your MCP servers, `Read`, `Grep`, `Glob`, `Edit` and `Write` on the workspace | same | none |
 | `--disallowedTools` | `Agent,Task,NotebookEdit,PowerShell,Monitor`; a turn with helpers, below | same | same |

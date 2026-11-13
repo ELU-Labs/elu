@@ -89,6 +89,17 @@ cannot add such files itself.
 The prompt goes on standard input, never on the command line, so other users on the
 machine cannot read it with `ps`.
 
+## Messages you send while a turn works
+
+`agy -p` runs one prompt; `--input-format stream-json` runs a turn for each line it reads,
+one after the other, never into the turn that runs; an ACP turn answers one
+`session/prompt`. So a message you send while Antigravity works waits in the chat, "Sent
+when this turn ends.", and Enter in the empty message box sends it now: the turn stops as
+`/stop` stops it and what waits starts the next turn at once. Over ACP the next turn goes
+on in the conversation that was stopped (`session/resume`). A headless run names its
+conversation only in the line it ends with, so after a stopped headless turn the next one
+starts from the chat.
+
 ## What each mode enforces
 
 | | Read only | Ask for approval | Approve for me | Full access |

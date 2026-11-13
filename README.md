@@ -97,7 +97,7 @@ first turn depends on the vendor and the mode:
 
 Type these in the message box. `/` alone lists every command, and `/help` explains the keys.
 
-You can send a message at any time. One sent while the session is working waits in the chat and is sent by itself when that turn ends; several go together, in order. `↑` in the empty message box takes the newest one back so you can change it.
+You can send a message at any time. On Claude Code, one sent while the session is working goes to that turn at once, and the chat says "Sent to the running turn." under it: the model reads it at its next step and its reply answers it too. On Codex, Grok Build and Antigravity, which take no message while their turn works, it waits in the chat and is sent by itself when that turn ends; several go together, in order. Enter in the empty message box sends it now: the turn stops, its changes kept, and your message starts the next turn, in the same vendor session where it can go on. `↑` in the empty message box takes the newest one back so you can change it. The same holds for a session on your other computer, and for a message to a bot while that bot works.
 
 | Type | What it does |
 | --- | --- |
@@ -112,6 +112,7 @@ You can send a message at any time. One sent while the session is working waits 
 | `/changes` | Shows what this session changed; `/chat` goes back |
 | `/publish` | Shows the exact push and draft pull request, then asks you |
 | `/stop` | Stops the running response. A message you sent while it ran is sent next; `/stop` again cancels that message |
+| Enter (empty box) | While a turn works and a message of yours waits for it to end, sends that message now: the turn stops as `/stop` stops it and the message starts the next turn, in the same vendor session where it can go on. Claude Code needs none of this: a message you send while it works goes to that turn at once |
 | `/schedule in 1h check the build` | Starts a session later or on a schedule: `/schedule [when] [message]`. `/schedule ` lists times such as `in 5m`, `in 1h` and `daily 9:00`. Each run is a new session with the model, mode and bots of the form (a bot with its own schedule is left out); it does not see the chat it was made in. A schedule gets Full access only when you pick it for that schedule, and the form asks you once before saving it |
 | `/budget 5` | Limits this session to 5 dollars; `/budget off` removes the limit |
 | `/standup` | Asks every open session of yours, here and on your other computers, and your teammates' shared ones, for an update, in a new Standup session. See [Standup](#standup) |
