@@ -416,6 +416,25 @@ test('an install that comes while the login item is being removed waits for the 
   assert.deepEqual(item.calls().slice(before).map(call => call.args[1]), ['disable', 'daemon-reload', 'enable'], 'the removal first, whole, then the install');
 });
 
+test('on Linux a timer that is still loaded after its files went is stopped by its own next run with nothing on', async t => {
+  home(t); project(t); const item = standIn(t, 'linux', { config: process.env.XDG_CONFIG_HOME });
+  item.install();
+  const link = path.join(path.dirname(item.files()[1]), 'timers.target.wants', 'elu-code-scheduler.timer'), linked = () => { try { return fs.lstatSync(link).isSymbolicLink(); } catch { return false; } };
+  assert.ok(linked(), 'enabling it linked it');
+  // The files go without a disable. systemd still holds the timer, and goes on starting the service every minute.
+  for (const file of item.files()) fs.rmSync(file);
+  assert.deepEqual(item.loaded(), ['elu-code-scheduler.timer']); assert.ok(linked());
+  // ELU, open, finds nothing to remove and asks systemd for nothing: the timer's own run ends it.
+  const before = item.calls().length; assert.deepEqual(item.uninstall(), { removed: false }); assert.equal(item.calls().length, before);
+  const tick = tickScript(item, 'linux', '');
+  assert.deepEqual(await item.job(tick), { status: 0, signal: null, stdout: 'fired 0\n', stderr: '' });
+  assert.deepEqual(item.calls().slice(before), [{ name: 'systemctl', args: ['--user', 'stop', 'elu-code-scheduler.timer'], fromJob: true }], 'stopped: disable fails on a unit with no file');
+  assert.deepEqual(item.loaded(), []); assert.equal(linked(), false, 'the link that enabled it is gone too');
+  // Run by hand with nothing loaded, the stop fails and the run still ends well. Asked for again, the login item loads.
+  assert.deepEqual(await item.job(tick), { status: 0, signal: null, stdout: 'fired 0\n', stderr: '' });
+  assert.equal(item.install().changed, true); assert.deepEqual(item.loaded(), ['elu-code-scheduler.timer']); assert.ok(linked());
+});
+
 test('a login item that could not be loaded leaves no files that would read as loaded, so the next ask loads it', t => {
   home(t);
   for (const [platform, verb] of [['darwin', 'bootstrap'], ['linux', 'enable']]) {
