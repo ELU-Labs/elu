@@ -20,7 +20,9 @@ import { readCaps } from '../lib/peer/intake.mjs';
 import { savePeerPolicy, savePeerSettings } from '../lib/peer/settings.mjs';
 import { share } from '../lib/peer/shares.mjs';
 import { saveRemotePlans } from '../lib/peer/plans.mjs';
-import { approveStandup, hostStandup, teamStandupAsk, teamStandupCommand, teamStandupRead, waitingStandups } from '../lib/peer/standup.mjs';
+import { approveStandup, hostStandup, hostStandupRead, teamStandupAsk, teamStandupCommand, teamStandupRead, waitingStandups } from '../lib/peer/standup.mjs';
+import { remoteCommand } from '../lib/peer/remote.mjs';
+import { FRAME_MAX } from '../lib/peer/transport.mjs';
 import { peerRunUsd } from '../lib/adapters/claude.mjs';
 import { STANDUP_QUESTION, newRound, standupOpen, standupStage } from '../lib/standup.mjs';
 import { runStandupRound, standupPlan } from '../lib/standup-round.mjs';
@@ -237,6 +239,51 @@ test("a teammate's round spends from their allowance, is checked again when appr
   // Their conductor runs an older build: told back as older, never as an empty answer.
   const older = await teamStandupCommand({ ...ctx, session: () => ({ remoteHello: { cards: 1, standup: 1 }, request: async () => ({ older: true }) }) }, { type: 'teamStandup', to: sara, round: newRound(), cards: [card.id] });
   assert.deepEqual(older, { older: true });
+});
+
+// What a session answers leaves its computer whole, for my other computer and for a teammate:
+// nothing is cut at 4000 characters there. One read answers with about 500 KB of updates at
+// most, so each answer fits one line on the link; the rest come with the next read, and an
+// update longer than that comes in parts, which the asking computer joins.
+test('an update leaves the answering computer whole, for my other computer and for a teammate, in as many reads as its length takes', async t => {
+  const { teamId, founder, member } = makeTeam(t);
+  const p = project(t), fake = fakeClis(p.parent, { mode: 'answer' }); environment(t, { ...fake.env, XDG_CONFIG_HOME: founder.home });
+  git(p.root, ['remote', 'add', 'origin', 'https://github.com/example/shop.git']);
+  const controller = new ProjectController(projectFolder(p.root)); controller.draftConfig.checks = []; registerProject(controller.repo);
+  const tasks = []; for (const goal of ['Explain coupons', 'Explain refunds', 'Explain taxes']) tasks.push(await controller.ask(goal).finished);
+  const other = member.identity.key, KEY = '0123456789abcdef', refs = tasks.map(task => `${KEY}:${task.id}`);
+  const texts = ['Short update.', `Long update.\n${'A line of the update that matters. '.repeat(1000)}END1`, `Longer than one read holds.\n${'Every word of this update counts. '.repeat(40000)}END2 \u{1F600}`];
+  const answer = round => tasks.forEach((task, n) => { const now = readTask(controller.repo, task.id); now.messages.push({ at: new Date().toISOString(), text: texts[n], from: 'Opus 5.5', who: 'Opus 5.5', standup: round, answer: true, sent: texts[n] }); saveTask(controller.repo, now); });
+  // My other computer asks.
+  const round = newRound();
+  assert.equal(hostStandup({ round, refs }, other, { projectKey: () => KEY }).asked.length, 3);
+  answer(round);
+  // A build that cuts updates at 4000 characters itself is sent no more than that, in one answer as before.
+  assert.deepEqual(hostStandupRead({ round }, other).answers.map(row => row.text.length), [13, 4000, 4000]);
+  // This build reads them whole: every answer is one line on the link, and the parts are joined here.
+  markMine(founder.identity.key, other); noteTheirs(other, true);
+  const lines = [], asked = [];
+  const ctx = { me: founder.identity, session: () => ({ remoteHello: { remote: 1, standup: 1 }, request: async (method, params) => { asked.push([method, params]); const result = hostStandupRead(params, other); lines.push(Buffer.byteLength(JSON.stringify({ jsonrpc: '2.0', id: 1, result }))); return result; } }) };
+  const got = new Map();
+  for (let n = 0; n < 6 && got.size < 3; n++) for (const row of (await remoteCommand(ctx, { type: 'remoteStandupRead', to: other, round, refs: refs.filter(ref => !got.has(ref)) })).answers) got.set(row.ref, row);
+  assert.deepEqual(refs.map(ref => got.get(ref).text === texts[refs.indexOf(ref)]), [true, true, true], 'every character of every update');
+  assert.deepEqual(refs.map(ref => got.get(ref).who), ['Opus 5.5', 'Opus 5.5', 'Opus 5.5']);
+  assert.ok(lines.length > 1 && lines.every(size => size < FRAME_MAX * 0.75), `each answer fits one line on the link: ${lines.join(' ')}`);
+  assert.ok(asked.every(([method, params]) => method === 'elu.remote.standupRead' && params.parts === 1));
+  // A teammate asks the same sessions through their cards: the same updates, whole, as the teammate check left them.
+  const repos = localRepos(), [repo] = repos.values();
+  saveProofs(other, [repoProof(other, founder.identity.key, repo.repoId, repo.commit)]);
+  const cards = tasks.map(task => sessionCards({ owner: 'ana', repos }).find(value => value.taskId === task.id).card.id);
+  saveTeamAccess(teamId, { handling: 'auto' });
+  const teamRound = newRound(), host = { me: founder.identity, repos: () => repos, kick: () => {}, event: () => {} };
+  assert.equal(teamStandupAsk(host, other, { round: teamRound, cards }).state, 'asked');
+  answer(teamRound);
+  assert.deepEqual(teamStandupRead(other, { round: teamRound }).answers.map(row => row.text.length), [13, 4000, 4000]);
+  const sizes = [], asker = { me: member.identity, session: () => ({ remoteHello: { cards: 1, standup: 1 }, request: async (method, params) => { const result = teamStandupRead(other, params); sizes.push(Buffer.byteLength(JSON.stringify({ jsonrpc: '2.0', id: 1, result }))); return result; } }) };
+  const told = new Map();
+  for (let n = 0; n < 6 && told.size < 3; n++) for (const row of (await teamStandupCommand(asker, { type: 'teamStandupRead', to: founder.identity.key, round: teamRound, cards: cards.filter(card => !told.has(card)) })).answers) told.set(row.card, row);
+  assert.deepEqual(cards.map(card => told.get(card).text === texts[cards.indexOf(card)]), [true, true, true]);
+  assert.ok(sizes.length > 1 && sizes.every(size => size < FRAME_MAX * 0.75));
 });
 
 test('an answer turn is not activity: the session keeps when it last worked and its place in Sessions', async t => {

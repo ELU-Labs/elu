@@ -25,7 +25,7 @@ import { markMine, noteTheirs, unmarkMine } from '../lib/peer/mine.mjs';
 import { BINDING } from '../lib/peer/a2a.mjs';
 import { PeerDaemon } from '../lib/peer/daemon.mjs';
 import { Session } from '../lib/peer/rpc.mjs';
-import { BOARDS_MAX, BYTES_MAX, DONE_MS, KEEP_MS, PLANS_MAX, SHOWN_MAX, boardBy, boardPlans, boardWho, cleanBoards, firstCommit, cleanPlan, cleanTold, cleanPlans, fitPlans, heardPlans, planRows, planSharing, prunePlans, remoteBoards, remotePlans, saveRemoteBoards, saveRemotePlans, teammatePlanParts, teammatePlans, toldBoards } from '../lib/peer/plans.mjs';
+import { BOARDS_MAX, BYTES_MAX, DONE_MS, KEEP_MS, PLANS_MAX, boardBy, boardPlans, boardWho, cleanBoards, firstCommit, cleanPlan, cleanTold, cleanPlans, fitPlans, heardPlans, planRows, planSharing, prunePlans, remoteBoards, remotePlans, saveRemoteBoards, saveRemotePlans, teammatePlanParts, teammatePlans, toldBoards } from '../lib/peer/plans.mjs';
 
 const ORIGIN = 'https://github.com/elu-labs/sample.git', OTHER = 'https://github.com/elu-labs/docs.git';
 const REPO = 'a'.repeat(64);
@@ -238,9 +238,9 @@ test('teammates\' Tasks count only in a project this machine shares with a team 
     // A stopped daemon knows nobody as online.
     state([ana.key, bob.key], { running: false }); assert.equal(teammatePlans(app.root, now)[0].online, false);
     state();
-    // At most SHOWN_MAX of one teammate's Tasks in one project.
+    // Every one of a teammate's Tasks in one project: ELU sets no count of its own.
     saveRemotePlans(ana.key, Array.from({ length: PLANS_MAX }, (_, n) => forApp({ id: `t-${n}`, title: `Task ${n}` })), now);
-    assert.equal(teammatePlans(app.root, now)[0].tasks.length, SHOWN_MAX);
+    assert.equal(teammatePlans(app.root, now)[0].tasks.length, PLANS_MAX);
     // A teammate removed from the team is not shown, even before what they told is deleted; with no daemon state, nobody is.
     saveRemotePlans(bob.key, [forDocs({ id: 't-b2', title: 'Bob in docs' })], now);
     assert.deepEqual(seen(docs.root).map(row => row[0]), ['bob']);
@@ -286,7 +286,7 @@ test('a turn is told teammates\' Tasks as data inside a peer block, without desc
     // Every Task they tell, each goal whole: ELU sets no limit of its own on what a turn reads.
     saveRemotePlans(ana.key, Array.from({ length: PLANS_MAX }, (_, n) => told({ repoId: mine.repoId, id: `t-${n}`, title: `Task ${n} ${'x'.repeat(60)}`, goal: 'g'.repeat(500) })), now);
     const long = teammatePlanParts(app.root, now)[0];
-    assert.equal((long.match(/^- Task/gm) ?? []).length, SHOWN_MAX); assert.equal((long.match(new RegExp(`  Goal: ${'g'.repeat(500)}$`, 'gm')) ?? []).length, SHOWN_MAX);
+    assert.equal((long.match(/^- Task/gm) ?? []).length, PLANS_MAX); assert.equal((long.match(new RegExp(`  Goal: ${'g'.repeat(500)}$`, 'gm')) ?? []).length, PLANS_MAX);
   });
 });
 

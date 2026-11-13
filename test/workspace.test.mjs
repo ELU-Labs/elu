@@ -98,11 +98,12 @@ test('saved requests are personal, survive a new controller, and stay out of pro
 test('a message is added to a request only while that request still waits to start', t => {
   const f = fixture(t), first = saveRequest(f.root, 'First', null, { state: 'queued' });
   assert.equal(addToRequest(f.root, first.id, 'Second').goal, 'First\n\nSecond'); assert.deepEqual(pendingRequests(f.root).map(row => [row.id, row.goal, row.state]), [[first.id, 'First\n\nSecond', 'queued']]);
-  // Over one message's length it is not added, and nothing changes.
-  assert.equal(addToRequest(f.root, first.id, 'x'.repeat(16000)), null);
-  // Once the conductor has taken the request it is not added either.
+  // However long the two are together: ELU sets no length of its own for a message.
+  const long = 'x'.repeat(40000);
+  assert.equal(addToRequest(f.root, first.id, long).goal, `First\n\nSecond\n\n${long}`);
+  // Once the conductor has taken the request it is not added.
   for (const state of ['starting', 'running', 'blocked']) { updateRequest(f.root, first.id, { state }); assert.equal(addToRequest(f.root, first.id, 'Third'), null, state); }
-  assert.equal(addToRequest(f.root, 'request-none', 'Third'), null); assert.equal(pendingRequests(f.root)[0].goal, 'First\n\nSecond');
+  assert.equal(addToRequest(f.root, 'request-none', 'Third'), null); assert.equal(pendingRequests(f.root)[0].goal, `First\n\nSecond\n\n${long}`);
 });
 
 test('the dashboard can read a new project before history or settings exist', t => {

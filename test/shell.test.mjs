@@ -132,3 +132,12 @@ test('the lead gets the owner\'s commands with the next message; a session that 
   await controller.ask('Answer the question from @sara.', asked.id, { origin, readOnly: true, context: 'And the tests?' }).finished;
   assert.doesNotMatch(inputs().at(-1).input, /private-notes|The owner ran this/);
 });
+
+test('the chat a bot reads holds every ! command of the session, not the newest 20', async t => {
+  const p = project(t), fake = fakeClis(p.parent, { mode: 'answer' });
+  environment(t, { ...fake.env, HOME: p.parent, GIT_AUTHOR_NAME: 'Test Owner', GIT_AUTHOR_EMAIL: 'owner@example.invalid', GIT_COMMITTER_NAME: 'Test Owner', GIT_COMMITTER_EMAIL: 'owner@example.invalid' });
+  const controller = new ProjectController(projectFolder(p.root)), repo = controller.repo;
+  const first = await controller.ask('Where is coupon normalization?', null, { permissions: 'ask' }).finished;
+  for (let n = 0; n < 30; n++) recordShell(repo, first.id, row({ command: `echo ${n}`, cwd: repo.root }));
+  assert.deepEqual(conversationEntries(repo, first).filter(entry => entry.shell).map(entry => entry.text.split('\n')[0]), Array.from({ length: 30 }, (_, n) => `$ echo ${n}`));
+});

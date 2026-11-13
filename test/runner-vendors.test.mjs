@@ -8,7 +8,7 @@ import { ProjectController } from '../lib/projects.mjs';
 import { projectFolder } from '../lib/workspace.mjs';
 import { taskDir, readTask, taskTitle, setTitle } from '../lib/state.mjs';
 import { answerApproval, pendingApprovals } from '../lib/approvals.mjs';
-import { atomic, personalDirectory } from '../lib/util.mjs';
+import { atomic, fileLines, logLines, personalDirectory } from '../lib/util.mjs';
 import { ADAPTERS } from '../lib/adapters/index.mjs';
 import * as agy from '../lib/adapters/agy.mjs';
 import * as claude from '../lib/adapters/claude.mjs';
@@ -415,6 +415,57 @@ test('a name the owner set before the first reply is never replaced by the reply
 // What Codex 0.166.0-alpha.5.1 printed for a turn in which a step was refused, as the service
 // sent it (the home folder shortened). Its reply says needs_input and leaves question empty.
 const BLOCKED = fileURLToPath(new URL('./fixtures/codex-blocked.jsonl', import.meta.url));
+
+// A run's log may be larger than any text this computer can hold (the JavaScript engine stops
+// near 512 MB). The runner never reads it as one text: it goes through it a line at a time.
+// Here every read of a run's log as one text fails the way it does for such a log.
+function logsTooLargeForOneText(t) {
+  const real = fs.readFileSync, refused = [];
+  fs.readFileSync = function (file, ...rest) {
+    if (typeof file === 'string' && file.endsWith('.log')) { refused.push(file); throw Object.assign(new Error('Cannot create a string longer than 0x1fffffe8 characters'), { code: 'ERR_STRING_TOO_LONG' }); }
+    return real.call(this, file, ...rest);
+  };
+  t.after(() => { fs.readFileSync = real; });
+  return refused;
+}
+test('a run whose log is too large for one text is read a line at a time: its reply, what it cost and why it failed', async t => {
+  const refused = logsTooLargeForOneText(t), asOneText = {};
+  for (const vendor of ['claude', 'codex', 'grok', 'agy']) {
+    const f = setup(t, vendor), before = refused.length;
+    if (vendor === 'grok') { fs.mkdirSync(path.join(f.parent, '.grok')); fs.writeFileSync(path.join(f.parent, '.grok', 'auth.json'), '{}\n', { mode: 0o600 }); proven('grok', f.bin, '1.0.77', { relay: false }); }
+    if (vendor === 'agy') proven('agy', f.bin, '1.5.4', { relay: false });
+    const task = await f.controller.ask('Where is coupon normalization?', null, { permissions: 'ask' }).finished;
+    assert.equal(task.state, 'answered', `${vendor}: ${JSON.stringify(task.error)}`);
+    assert.equal(task.runs.length, 1, vendor); assert.equal(task.runs[0].code, 0, vendor);
+    assert.ok(task.result.summary, vendor);
+    if (vendor === 'claude') assert.equal(task.runs[0].costUsd, 0);
+    asOneText[vendor] = refused.length > before;
+  }
+  // Claude Code and Codex print a stream of JSON lines, which is never read as one text. The
+  // other two print one JSON value: read as one text first, then a line at a time.
+  assert.deepEqual(asOneText, { claude: false, codex: false, grok: true, agy: true });
+  // Why a run failed is read from the same lines, gone through more than once.
+  const dir = fs.mkdtempSync(path.join(fs.realpathSync(process.env.TMPDIR ?? '/tmp'), 'elu-code-lines-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const log = rows => { const file = path.join(dir, `${Math.random().toString(16).slice(2)}.out`); fs.writeFileSync(file, rows.map(row => typeof row === 'string' ? row : JSON.stringify(row)).join('\n') + '\n'); return logLines(file); };
+  const noCredits = log([{ type: 'system', subtype: 'init', session_id: 's', model: 'claude-opus-5-5', mcp_servers: [] }, { type: 'result', subtype: 'success', is_error: true, api_error: 'model_requires_usage_credits', api_error_status: 400, result: 'This model requires usage credits.' }]);
+  assert.equal(claude.classify(noCredits), 'model-unavailable');
+  assert.deepEqual(claude.vendorError(noCredits, { name: () => 'Opus 5.5' }), { status: 400, code: 'model_requires_usage_credits', model: 'claude-opus-5-5', cause: 'model-unavailable', text: 'Claude says this account is out of usage credits for Opus 5.5.' });
+  assert.throws(() => claude.parse(noCredits), { message: 'Claude could not finish.' });
+  assert.equal(ADAPTERS.codex.classify(log([{ type: 'turn.started' }, { type: 'turn.failed', error: { message: "You've hit your usage limit." } }])), 'quota');
+  assert.equal(ADAPTERS.grok.classify(log([{ type: 'error', message: 'Too many requests (429)' }])), 'rate-limit');
+  assert.equal(agy.classify(log(['Working…', 'Error: RESOURCE_EXHAUSTED', 'the input token count 2000000 exceeds the maximum number of tokens allowed'])), 'too-long');
+  // One JSON value printed over several lines, after other lines, is still found.
+  assert.deepEqual(agy.extractJson(log(['Starting…', '{"note":"not the result"}', '{', '  "structured_output": { "outcome": "done" }', '}'])), { structured_output: { outcome: 'done' } });
+});
+test('the lines of a file are read in parts, in order: a line across two parts, an empty line, and a last line with no newline', t => {
+  const dir = fs.mkdtempSync(path.join(fs.realpathSync(process.env.TMPDIR ?? '/tmp'), 'elu-code-lines-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, 'run.log'), lines = ['{"a":1}', '', 'x'.repeat(100), 'caf\u00e9 \u{1F600} '.repeat(20), 'last'];
+  fs.writeFileSync(file, lines.join('\n'));
+  for (const part of [1, 3, 7, 64, 1024 * 1024]) assert.deepEqual([...fileLines(file, { part })], lines, `in parts of ${part}`);
+  fs.writeFileSync(file, `${lines.join('\n')}\n`);
+  assert.deepEqual([...fileLines(file, { part: 5 })], lines, 'a newline at the end starts no line');
+  assert.deepEqual([...fileLines(path.join(dir, 'missing.log'))], []);
+});
 
 test('a Codex reply that says needs_input with no question is read, and the model is started once', async t => {
   const f = setup(t, 'codex', { replay: BLOCKED });
