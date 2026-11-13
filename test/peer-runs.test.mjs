@@ -33,6 +33,8 @@ import { acceptIncoming, processOutbox } from '../lib/peer/replies.mjs';
 import { checkRoot, saveTeamAccess } from '../lib/peer/access.mjs';
 import { HOME_QUESTION, HOME_TARGET, homeOrAbove, homeRefusal } from '../lib/util.mjs';
 import { getRecord, thread } from '../lib/peer/taskstore.mjs';
+import { createAsk, getAsk } from '../lib/peer/asks.mjs';
+import { peerItems } from '../lib/peer/index.mjs';
 
 const SARA = 'b'.repeat(64), ME = 'a'.repeat(64);
 const origin = (kind = 'ask', extra = {}) => ({ kind, peer: SARA, name: 'sara', a2aTaskId: 'task-1', threadId: 'thread-1', hop: 1, ...extra });
@@ -377,6 +379,47 @@ test('Auto starts a teammate\'s message at once as the owner\'s own session: nev
   assert.ok(work, 'the editing turn ran');
   assert.ok(work.input.includes(RULES_ACCEPTED)); assert.ok(!work.input.includes(RULES_PROPOSE)); assert.ok(work.input.includes(WAIT_RULE));
   assert.equal(work.args.includes('--max-budget-usd'), false);
+});
+
+test('once the owner approves the Task a teammate\'s message led to and its work is done, the result goes back to that teammate\'s thread', async t => {
+  const p = setup(t, 'normal'), sara = teammate(p), teamId = everyTeam()[0].id;
+  saveTeamAccess(teamId, { handling: 'auto', root: p.root });
+  // Sara's machine: the message she sent, and what her daemon does with what comes back.
+  const saraEvents = [], saraCtx = { me: { key: SARA, name: 'sara' }, kick: () => {}, event: text => saraEvents.push(text), push: () => {}, session: () => null, dial: () => {} };
+  const saraSide = intakeMethods(saraCtx);
+  const asked = createAsk(saraCtx, { to: sara.me.key, kind: 'ask', text: HANDOFF, threadId: 'thread-1' });
+  const record = sara.send(HANDOFF, { kind: 'ask' });
+  conduct(t);
+  await until(() => request(p.root, sara.rowOf(record).id)?.state === 'done', 'own session', 60000);
+  const id = getRecord(record.task.id).localTaskId ?? request(p.root, sara.rowOf(record).id).taskId;
+  processOutbox(sara.ctx);
+  assert.ok(getRecord(record.task.id).reply.text.endsWith(PLAN_WAITS));
+  assert.match(PLAN_WAITS, /result comes to this thread/); assert.doesNotMatch(PLAN_WAITS, /no further reply/);
+  // The owner approves the Task, as the terminal does, and its work runs.
+  const [proposed] = sessionTasks(p.repo, id);
+  approveTask(p.repo, id);
+  const approved = enqueue(p.root, `Approved the Task: ${proposed.title}`, { continuationTaskId: id, priority: 0, approved: true });
+  await until(() => request(p.root, approved.id)?.state === 'done', 'approved Task', 60000);
+  const done = readTask(p.repo, id), summary = (done.reply ?? done.result).summary;
+  assert.ok(summary);
+  // The owner's daemon sends the result into the thread, to Sara's machine.
+  const sent = [];
+  const ctx = { ...sara.ctx, dial: () => {}, session: key => key === SARA ? { request: async (method, params) => { sent.push(method); return { task: saraSide.SendMessage(params, { key: sara.me.key }) }; } } : null };
+  processOutbox(ctx);
+  await until(() => thread('thread-1').some(line => line.dir === 'in' && line.kind === 'result'), 'the result at sara');
+  assert.deepEqual(sent, ['SendMessage']);
+  assert.ok(sara.events.includes('result to @sara'), sara.events.join('\n'));
+  const out = thread('thread-1').find(line => line.dir === 'out' && line.kind === 'result'), got = thread('thread-1').find(line => line.dir === 'in' && line.kind === 'result');
+  assert.equal(out.peer, SARA); assert.equal(out.text, summary);
+  assert.equal(got.peer, sara.me.key); assert.equal(got.text, summary);
+  assert.ok(saraEvents.includes('result from @ana'), saraEvents.join('\n'));
+  // At Sara's it reads as the owner's message in her thread, and starts nothing there.
+  assert.equal(getAsk(asked.id).result.text, summary);
+  assert.equal(pendingRequests(p.root).filter(row => row.origin?.threadId === 'thread-1' && row.state !== 'done').length, 0);
+  // Sent once: the outbox entry is gone, and the owner's list shows no extra row for it.
+  processOutbox(ctx);
+  assert.equal(thread('thread-1').filter(line => line.kind === 'result').length, 2);
+  assert.equal(peerItems().filter(row => row.threadId === 'thread-1' && ['asked', 'answer'].includes(row.kind) && row.peer === SARA).length, 0);
 });
 
 test('a teammate\'s later message keeps the mode the owner gave its session, and waits when that is Full access', async t => {
