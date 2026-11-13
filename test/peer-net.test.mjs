@@ -44,7 +44,7 @@ import { createAsk, dismissAsk, reconnect, reviewText, teammate, tickAsks, teamA
 import { RETRY_MS, checkInviterProof, inviteKeys, joinerProof, openInvites, parseInvite, redeemCode } from '../lib/peer/invite.mjs';
 import { base32, canonical } from '../lib/peer/canonical.mjs';
 import * as peer from '../lib/peer/index.mjs';
-import { bothMine, mineRows as readMine } from '../lib/peer/mine.mjs';
+import { bothMine, mineRows as readMine, noteTheirs } from '../lib/peer/mine.mjs';
 import { boardRows } from '../lib/board.mjs';
 import { botKey, botVendors, botsFile, canShare, removeBot, saveBot } from '../lib/bots.mjs';
 import { dashboardSnapshot } from '../lib/projects.mjs';
@@ -292,7 +292,8 @@ test('intake checks membership, caps and shares, is idempotent, and cancels a wa
     assert.match(reason(methods.SendMessage({ message: message({ text: 'x', messageId: 'm-4', ext: { kind: 'ask', from: { key: 'c'.repeat(64), name: 'eve' } } }) }, { key: 'c'.repeat(64) })), /not on a team/);
     assert.throws(() => methods.SendMessage({ message: message({ text: 'x', messageId: 'm-6', ext: { kind: 'ask', from: { key: 'c'.repeat(64), name: 'eve' } } }) }, session), /does not match/);
     savePeerSettings({ caps: { peerRunsPerDay: 1 } }); // m-1 already used today's only run.
-    assert.match(reason(send('x', { id: 'm-7', thread: 'thread-b' })), /daily request limit/);
+    assert.match(reason(send('x', { id: 'm-7', thread: 'thread-b' })), /daily request limit for this teammate\./);
+    noteTheirs(ana.key, true); assert.match(reason(send('x', { id: 'm-7b', thread: 'thread-c' })), /daily request limit for this computer\./, 'to another computer of its owner it is a computer'); noteTheirs(ana.key, false);
     assert.throws(() => methods.GetTask({ id: first.id }, { key: 'c'.repeat(64) }), error => error.details.rpc.code === ErrorCode.TASK_NOT_FOUND);
     const canceled = methods.CancelTask({ id: first.id }, session);
     assert.equal(canceled.status.state, 'TASK_STATE_CANCELED');
@@ -405,7 +406,10 @@ test('a message reaches a teammate who shares no project and waits; y with the o
     // The real refusals still refuse.
     assert.match(reason(send('x', 'm-4', { project: 'nope' })), /No project named nope is shared\./);
     assert.match(reason(send('   ', 'm-5')), /The message has no text\./);
-    savePeerPolicy(ana.key, { muted: true }); assert.match(reason(send('x', 'm-6')), /not taking requests/); savePeerPolicy(ana.key, { muted: false });
+    savePeerPolicy(ana.key, { muted: true }); assert.match(reason(send('x', 'm-6')), /^This teammate is not taking requests from you\.$/);
+    // To another computer of its owner's this machine is a computer, never a teammate.
+    noteTheirs(ana.key, true); assert.equal(reason(send('x', 'm-6b')), 'This computer is not taking requests from you.'); noteTheirs(ana.key, false);
+    savePeerPolicy(ana.key, { muted: false });
     assert.match(reason(methods.SendMessage({ message: message({ text: 'x', messageId: 'm-7', ext: { kind: 'ask', from: { key: 'c'.repeat(64), name: 'eve' } } }) }, { key: 'c'.repeat(64) })), /not on a team/);
     // A question for a shared bot still needs a project to read.
     saveBot({ name: 'docs', instructions: 'Answer from the docs.', shared: true });
