@@ -8,7 +8,6 @@ import { EventEmitter } from 'node:events';
 import { project, fakeClis, cli, git, temp, approveProjectFiles, autoApprove, keyLike } from './helpers.mjs';
 import { repository } from '../lib/git.mjs';
 import { ProjectController, projectSnapshot, dashboardSnapshot, claimView, registerProject, registeredProjects, nameProject, savedProjectName, personalDirectory, setupCommitPlan, commitSetup, taskDetails } from '../lib/projects.mjs';
-import { LIMIT } from '../lib/project-settings.mjs';
 import { answerTrust, pendingTrust, trustedText, unusedTrust } from '../lib/project-trust.mjs';
 import { launchTerminal, geometry, plain, foldersNamed } from '../lib/terminal.mjs';
 import { WHEEL_FRAME_MS } from '../lib/wheel.mjs';
@@ -441,11 +440,11 @@ test('project settings edit instructions and context in place: Enter adds a line
   v.input.write('\x13'); await until(() => dialogRows(v, 'Project sample app')[2] === 'Context       The API lives in src/.', 'context saved');
   assert.equal(fs.readFileSync(path.join(p.root, '.elu-code', 'context.md'), 'utf8'), 'The API lives in src/.\nTests in test/.\n');
   v.input.write('\r'); await until(() => editor(v, 'Context · sample app')?.__listener, 'context editor once more');
-  editor(v, 'Context · sample app').setValue('x'.repeat(LIMIT + 1)); v.input.write('\x13');
-  await until(() => editor(v, 'Context · sample app')?.__listener && /Keep the context under 100 KB\./.test(v.frame()), 'refused, with the reason over the keys');
-  assert.equal(editor(v, 'Context · sample app').getValue().length, LIMIT + 1, 'the text is kept');
-  v.input.write('\x1b'); await until(() => modal(v, 'Project sample app'), 'back in the settings');
-  assert.equal(fs.readFileSync(path.join(p.root, '.elu-code', 'context.md'), 'utf8'), 'The API lives in src/.\nTests in test/.\n');
+  // A long context is saved whole: ELU sets no size limit of its own.
+  const long = Array.from({ length: 2100 }, (_, n) => `Note ${n}: ${'x'.repeat(100)}`).join('\n');
+  editor(v, 'Context · sample app').setValue(long); v.input.write('\x13');
+  await until(() => fs.readFileSync(path.join(p.root, '.elu-code', 'context.md'), 'utf8') === `${long}\n`, 'saved whole');
+  await until(() => modal(v, 'Project sample app') && !editor(v, 'Context · sample app')?.__listener, 'back in the settings');
   v.input.write('\x1b'); await until(() => !modal(v, 'Project sample app') && v.current.screen.focused === panels.projectsList, 'Esc closes the settings and the list keeps focus');
   assert.ok(!fs.readFileSync(p.calls, 'utf8').includes('"-p"'), 'no lead runs');
 });
@@ -3838,7 +3837,7 @@ test("a project's own instructions are asked about on screen before they are use
   assert.equal(trustedText(p.root, 'instructions.md'), 'Answer in French.\n'); assert.deepEqual(unusedTrust(p.root).map(row => row.state), ['declined']);
 });
 
-test('a file that changed, grew too large or went missing after he approved it keeps his text in force: the project page shows that text, and the choices are to keep it or to take the change', { timeout: 60000 }, async t => {
+test('a file that changed or went missing after he approved it keeps his text in force: the project page shows that text, and the choices are to keep it or to take the change', { timeout: 60000 }, async t => {
   const p = setup(t, 'answer'), file = path.join(p.root, '.elu-code/context.md'); registerProject(p.repo);
   fs.writeFileSync(file, 'The API lives in src/.\n'); approveProjectFiles(p.root);
   // The file changed since, and he kept his when he was asked.
@@ -3858,13 +3857,6 @@ test('a file that changed, grew too large or went missing after he approved it k
   assert.match(v.frame(), /You kept the notes you approved on [A-Z][a-z]{2} \d{1,2}, \d{4}\. The file in the/); assert.match(v.frame(), /- The API lives in src\/\./); assert.match(v.frame(), /\+ The API lives in lib\/\./);
   v.input.write('\r'); await until(() => KEPT.test(status()), 'kept, and said so');
   assert.equal(trustedText(p.root, 'context.md'), 'The API lives in src/.\n');
-  // Too large to review: it is never offered for use.
-  fs.writeFileSync(file, 'x'.repeat(100 * 1024 + 1));
-  await again('Too large · .elu-code/context.md');
-  assert.deepEqual(dialogRows(v, 'Too large · .elu-code/context.md'), ['Keep the approved one']);
-  assert.match(v.frame(), /notes file is too large to review: 101 KB, and the limit/); assert.match(v.frame(), /It is not used\. The version you approved on/);
-  v.input.write('\r'); await until(() => !modal(v, 'Too large · .elu-code/context.md') && modal(v, PAGE), 'the page again');
-  assert.equal(trustedText(p.root, 'context.md'), 'The API lives in src/.\n'); assert.equal(dialogRows(v, PAGE)[2], 'Context       The API lives in src/.');
   // Gone: his text is shown, and going without it is his to choose.
   fs.unlinkSync(file);
   await again('Gone · .elu-code/context.md');

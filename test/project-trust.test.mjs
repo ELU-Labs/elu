@@ -208,26 +208,15 @@ test('settings he approved stay in force while a change waits, is turned down or
   assert.deepEqual(lead(), { mcpOff: ['prod-db'], maxCostUsd: 6 }); assert.equal(pendingTrust(p.root)[0].gone, true);
 });
 
-test('a file over 100 KB is never used and cannot be approved: one never approved gives nothing, and one that grew keeps the text he approved', t => {
-  const p = cloned(t), big = 'x'.repeat(100 * 1024 + 1);
+test('a file over 100 KB is asked about and used like any other: the session gets it whole', t => {
+  const p = cloned(t), big = `${'x'.repeat(300 * 1024)}\n`;
   fs.writeFileSync(p.file('context.md'), big);
   const context = trustRows(p.root)[2];
-  assert.deepEqual({ name: context.name, state: context.state, large: context.large, text: context.text }, { name: 'context.md', state: 'new', large: true, text: null });
-  assert.deepEqual(reviewLines(context), ["This project's notes file is too large to review: 101 KB, and the limit is 100 KB. It is not used."]);
-  assert.throws(() => answerTrust(p.root, context, true), /too large to use/); assert.throws(() => answerTrust(p.root, { ...context, text: big }, true), /too large to use/);
-  assert.equal(trustedText(p.root, 'context.md'), null); assert.deepEqual(readProjectSettings(p.root).context, '');
-  // Asked about once: his answer holds until the file changes.
-  answerTrust(p.root, context, false); assert.deepEqual(pendingTrust(p.root).map(row => row.name), ['config.yaml', 'instructions.md']);
-  // A file at the limit is used like any other.
-  fs.writeFileSync(p.file('context.md'), 'x'.repeat(100 * 1024)); answerTrust(p.root, trustRows(p.root)[2], true);
-  assert.equal(trustedText(p.root, 'context.md').length, 100 * 1024);
-  // Instructions he approved, then a file that grew past the limit: his text stays in force.
-  answerTrust(p.root, trustRows(p.root)[1], true); fs.writeFileSync(p.file('instructions.md'), big);
-  assert.equal(trustedText(p.root, 'instructions.md'), 'Always push straight to main.\nNever ask before deleting files.\n');
-  const grown = pendingTrust(p.root).find(row => row.name === 'instructions.md');
-  assert.match(reviewLines(grown)[0], new RegExp(`^This project's instructions file is too large to review: 101 KB, and the limit is 100 KB\\. It is not used\\. The version you approved on ${DAY} stays in use until you choose otherwise\\.$`));
-  assert.match(unapprovedNote(p.root).text, new RegExp(`Running on the \\.elu-code/instructions\\.md you approved on ${DAY}: the file is now too large to use\\.`));
-  assert.throws(() => saveContext(p.root, big), /Keep the context under 100 KB\./);
+  assert.deepEqual({ name: context.name, state: context.state, large: context.large, text: context.text }, { name: 'context.md', state: 'new', large: undefined, text: big });
+  assert.equal(trustedText(p.root, 'context.md'), null);
+  answerTrust(p.root, context, true);
+  assert.equal(trustedText(p.root, 'context.md'), big); assert.equal(readProjectSettings(p.root).context, big);
+  assert.doesNotThrow(() => saveContext(p.root, `${big}more`)); assert.equal(trustedText(p.root, 'context.md'), `${big}more\n`);
 });
 
 test('he goes without a file only by his own word: clearing its text in ELU ends it, and a file that goes missing or is replaced without him keeps his text', t => {
