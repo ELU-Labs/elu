@@ -29,6 +29,21 @@ test('a long output keeps its start and its end', () => {
   assert.equal(fitOutput('short'), 'short');
 });
 
+test('a long output is kept whole for the lead, the chat shows its start and end, and every command reaches the lead', async t => {
+  const dir = temp(t), node = JSON.stringify(process.execPath);
+  const result = await runShell(`${node} -e "process.stdout.write('START' + 'x'.repeat(50000) + 'END')"`, { cwd: dir }).done;
+  assert.equal(result.code, 0); assert.ok(result.output.length < OUTPUT_MAX + 200, 'the chat keeps OUTPUT_MAX');
+  assert.equal(result.whole, `START${'x'.repeat(50000)}END`, 'all of it, for a model');
+  const state = temp(t), repo = { state, root: dir }; fs.mkdirSync(path.join(state, 'tasks', '8'), { recursive: true });
+  recordShell(repo, '8', { at: '2026-01-01T10:00:00.000Z', command: 'make', cwd: dir, ...result });
+  assert.ok(shellText(shellRows(repo, '8')[0]).includes('characters cut'), 'the chat row is the fitted one');
+  assert.ok(shellMessages(repo, '8')[0].output.includes(`START${'x'.repeat(50000)}END`), 'the lead reads it whole');
+  assert.ok(shellMessages(repo, '8', { short: true })[0].output.includes('characters cut'), 'its short form is the chat row');
+  for (let n = 0; n < 30; n++) recordShell(repo, '8', { at: new Date(Date.UTC(2026, 0, 1, 11, n)).toISOString(), command: `echo ${n}`, cwd: dir, output: `${n}`, code: 0 });
+  assert.equal(shellMessages(repo, '8').length, 31, 'every command'); assert.equal(shellMessages(repo, '8', { short: true }).length, 20, 'the newest 20 in the short form');
+  assert.equal(shellRows(repo, '8').length, 20, 'the chat shows the newest 20');
+});
+
 test('a command runs in its folder and returns both streams and its exit code', async t => {
   const dir = temp(t), seen = [];
   const run = runShell('pwd; echo problem >&2; exit 3', { cwd: dir, onOutput: () => seen.push(run.tail()) });
