@@ -33,7 +33,7 @@ import { acceptIncoming, processOutbox } from '../lib/peer/replies.mjs';
 import { checkRoot, saveTeamAccess } from '../lib/peer/access.mjs';
 import { HOME_QUESTION, HOME_TARGET, homeOrAbove, homeRefusal } from '../lib/util.mjs';
 import { getRecord, thread } from '../lib/peer/taskstore.mjs';
-import { applyTask, createAsk, getAsk } from '../lib/peer/asks.mjs';
+import { applyTask, asks as sentAsks, createAsk, dropHeldResult, getAsk, sendHeldResult } from '../lib/peer/asks.mjs';
 import { peerItems } from '../lib/peer/index.mjs';
 
 const SARA = 'b'.repeat(64), ME = 'a'.repeat(64);
@@ -423,6 +423,121 @@ test('once the owner approves the Task a teammate\'s message led to and its work
   // Sara's row for the thread shows the newest word in it: the result, not the plan.
   applyTask(saraCtx, sara.me.key, a2aTask({ contextId: 'thread-1', state: TaskState.COMPLETED, artifacts: [artifact({ name: 'Answer', text: 'The plan.' })] }), asked.id);
   assert.equal(peerItems().find(row => row.id === `answer:${asked.id}`)?.text, summary);
+});
+
+// A teammate's message that led to a plan the owner then approves, as the test above: the
+// owner's daemon context with a line to Sara's machine, and what went over it.
+async function plannedBySara(t) {
+  const p = setup(t, 'normal'), sara = teammate(p), teamId = everyTeam()[0].id;
+  saveTeamAccess(teamId, { handling: 'auto', root: p.root });
+  const saraEvents = [], saraCtx = { me: { key: SARA, name: 'sara' }, kick: () => {}, event: text => saraEvents.push(text), push: () => {}, session: () => null, dial: () => {} };
+  const saraSide = intakeMethods(saraCtx);
+  const record = sara.send(HANDOFF, { kind: 'ask' });
+  conduct(t);
+  await until(() => request(p.root, sara.rowOf(record).id)?.state === 'done', 'own session', 60000);
+  const id = getRecord(record.task.id).localTaskId ?? request(p.root, sara.rowOf(record).id).taskId;
+  processOutbox(sara.ctx);
+  const sent = [];
+  const ctx = { ...sara.ctx, dial: () => {}, session: key => key === SARA ? { request: async (method, params) => { sent.push(method); return { task: saraSide.SendMessage(params, { key: sara.me.key }) }; } } : null };
+  const turn = async (goal, fields = {}) => { const row = enqueue(p.root, goal, { continuationTaskId: id, priority: 0, ...fields }); await until(() => request(p.root, row.id)?.state === 'done', goal, 60000); return row; };
+  const approve = async () => { const [proposed] = sessionTasks(p.repo, id); approveTask(p.repo, id); return turn(`Approved the Task: ${proposed.title}`, { approved: true }); };
+  const results = dir => thread('thread-1').filter(line => line.kind === 'result' && (!dir || line.dir === dir));
+  const summary = () => { const done = readTask(p.repo, id); return (done.reply ?? done.result).summary; };
+  return { p, sara, saraCtx, saraEvents, id, ctx, sent, turn, approve, results, summary };
+}
+const heldResults = () => peerItems().filter(row => row.kind === 'held' && row.result);
+
+test('a result for a teammate whose replies the owner checks first waits with his held replies, and y sends it', async t => {
+  const s = await plannedBySara(t);
+  createAsk(s.saraCtx, { to: s.sara.me.key, kind: 'ask', text: HANDOFF, threadId: 'thread-1' });
+  savePeerPolicy(SARA, { holdReplies: true });
+  await s.approve();
+  processOutbox(s.ctx);
+  // Nothing went out: the result waits where held replies do, with its text to read.
+  assert.deepEqual(s.sent, []); assert.equal(s.results().length, 0);
+  const [held] = heldResults();
+  assert.ok(held, JSON.stringify(peerItems().map(row => [row.id, row.kind])));
+  assert.match(held.id, /^held:result-/); assert.equal(held.peer, SARA); assert.equal(held.threadId, 'thread-1'); assert.equal(held.blocked, false);
+  assert.equal(held.text, s.summary());
+  assert.ok(s.sara.events.includes('result for @sara ready'), s.sara.events.join('\n'));
+  assert.equal(thread('thread-1').at(-1).dir, 'local');
+  // y: it goes into the thread once, and no longer waits.
+  sendHeldResult(s.ctx, held.id.slice('held:result-'.length));
+  await until(() => s.results('in').length === 1, 'the held result at sara');
+  assert.deepEqual(s.sent, ['SendMessage']); assert.equal(s.results('out')[0].text, s.summary());
+  assert.equal(heldResults().length, 0);
+  assert.throws(() => sendHeldResult(s.ctx, held.id.slice('held:result-'.length)), /No result is waiting/);
+});
+
+test('a result with a possible secret is held as blocked: it goes only once edited, or is dropped', async t => {
+  const s = await plannedBySara(t), KEY = `AKIA${'A1B2'.repeat(4)}`;
+  createAsk(s.saraCtx, { to: s.sara.me.key, kind: 'ask', text: HANDOFF, threadId: 'thread-1' });
+  s.p.extra({ summary: `Done. The key is ${KEY}.` });
+  await s.approve();
+  processOutbox(s.ctx);
+  assert.deepEqual(s.sent, []);
+  const [held] = heldResults(), ref = held?.id.slice('held:result-'.length);
+  assert.ok(held, s.sara.events.join('\n')); assert.equal(held.blocked, true);
+  assert.ok(s.sara.events.includes('result for @sara blocked: possible secret'), s.sara.events.join('\n'));
+  assert.throws(() => sendHeldResult(s.ctx, ref), /possible secret\. Edit it/);
+  assert.throws(() => sendHeldResult(s.ctx, ref, { text: `Still ${KEY}` }), /possible secret/);
+  assert.equal(heldResults().length, 1);
+  sendHeldResult(s.ctx, ref, { text: 'Done. Coupon codes are uppercase now.' });
+  await until(() => s.results('in').length === 1, 'the edited result at sara');
+  assert.equal(s.results('in')[0].text, 'Done. Coupon codes are uppercase now.'); assert.equal(heldResults().length, 0);
+  // n on another held one: dropped, and nothing more goes out.
+  savePeerPolicy(SARA, { holdReplies: true });
+  fs.writeFileSync(peerFile('outbox', 'result-request-00000000-0000-4000-8000-000000000001.json'), JSON.stringify({ requestId: 'request-00000000-0000-4000-8000-000000000001', root: s.p.root, peer: SARA, name: 'sara', threadId: 'thread-1', taskId: s.id, outcome: 'completed', text: 'A second result.', finishedAt: new Date().toISOString() }));
+  processOutbox(s.ctx);
+  const [second] = heldResults(); assert.equal(second.text, 'A second result.');
+  dropHeldResult(s.ctx, second.id.slice('held:result-'.length));
+  assert.equal(heldResults().length, 0); assert.deepEqual(s.sent, ['SendMessage']); assert.equal(s.results().length, 2);
+});
+
+test('approved work that stops on a question sends its result once the owner\'s later turn finishes the Task, and only once', async t => {
+  const s = await plannedBySara(t);
+  createAsk(s.saraCtx, { to: s.sara.me.key, kind: 'ask', text: HANDOFF, threadId: 'thread-1' });
+  s.p.extra({ workQuestion: true });
+  await s.approve();
+  processOutbox(s.ctx);
+  // The run stopped on a question for the owner: the Task is not finished, so nothing is sent.
+  assert.equal(sessionTasks(s.p.repo, s.id).at(-1).state, 'approved');
+  assert.equal(readTask(s.p.repo, s.id).reply?.outcome ?? readTask(s.p.repo, s.id).result?.outcome, 'needs_input');
+  assert.deepEqual(s.sent, []); assert.equal(s.results().length, 0);
+  // The owner answers in the session, and that turn finishes the Task: its result goes now.
+  s.p.extra({ summary: 'Coupon codes are uppercase now.' });
+  await s.turn('Yes, go on.');
+  assert.equal(sessionTasks(s.p.repo, s.id).at(-1).state, 'done');
+  processOutbox(s.ctx);
+  await until(() => s.results('in').length === 1, 'the result at sara');
+  assert.equal(s.results('in')[0].text, 'Coupon codes are uppercase now.'); assert.deepEqual(s.sent, ['SendMessage']);
+  assert.ok(s.saraEvents.includes('result from @ana'), s.saraEvents.join('\n'));
+  // A later turn in the finished session sends no second result.
+  await s.turn('Thanks.');
+  processOutbox(s.ctx);
+  await new Promise(resolve => setTimeout(resolve, 200));
+  assert.deepEqual(s.sent, ['SendMessage']); assert.equal(s.results().length, 2);
+});
+
+test('a result continues the chat the message came from when answers from that teammate continue it', t => {
+  const p = setup(t, 'normal'), sara = teammate(p);
+  const events = [], saraCtx = { me: { key: SARA, name: 'sara' }, kick: () => {}, event: text => events.push(text), push: () => {}, session: () => null, dial: () => {} };
+  const saraSide = intakeMethods(saraCtx);
+  const asked = createAsk(saraCtx, { to: sara.me.key, kind: 'ask', text: HANDOFF, threadId: 'thread-9', root: p.root, chatTaskId: '7' });
+  const result = text => saraSide.SendMessage({ message: message({ text, contextId: 'thread-9', messageId: crypto.randomUUID(), ext: { kind: 'result', project: null, hop: 1, from: { key: sara.me.key, name: 'ana' } } }) }, { key: sara.me.key });
+  const continued = () => pendingRequests(p.root).filter(row => row.continuationTaskId === '7' && row.origin?.threadId === 'thread-9');
+  // Off: the result is kept in the thread and the chat is left alone.
+  result('Half of it is done.');
+  assert.equal(continued().length, 0); assert.equal(getAsk(asked.id).result.text, 'Half of it is done.');
+  // On, as for an answer: the chat goes on with the result as peer data, read-only.
+  savePeerPolicy(sara.me.key, { autoContinue: true });
+  result('Coupon codes are uppercase now.');
+  const [row] = continued();
+  assert.ok(row, events.join('\n'));
+  assert.match(row.goal, /^Continue with the result from @ana shown in the peer data block\.$/);
+  assert.equal(row.context, 'Coupon codes are uppercase now.'); assert.equal(row.readOnly, true); assert.equal(row.origin.kind, 'answer'); assert.equal(row.origin.peer, sara.me.key);
+  assert.ok(getAsk(asked.id).resultContinuedAt);
+  assert.equal(sentAsks().filter(ask => ask.kind === 'result').length, 0);
 });
 
 test('a teammate\'s later message keeps the mode the owner gave its session, and waits when that is Full access', async t => {
