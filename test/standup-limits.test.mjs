@@ -218,6 +218,12 @@ test("a teammate's round spends from their allowance, is checked again when appr
   teamStandupAsk(ctx, sara, { round: full, cards: [card.id] });
   assert.equal(pendingRequests(p.root).filter(value => value.standupFor?.round === full).length, 0);
   assert.deepEqual(teamStandupRead(sara, { round: full }).answers.map(value => [value.text, value.failed]), [['It was not asked: the daily request limit for this teammate.', true]]);
+  // To another computer of its owner's this machine is a computer, never a teammate.
+  noteTheirs(sara, true);
+  const fullMine = newRound();
+  teamStandupAsk(ctx, sara, { round: fullMine, cards: [card.id] });
+  assert.deepEqual(teamStandupRead(sara, { round: fullMine }).answers.map(value => [value.text, value.failed]), [['It was not asked: the daily request limit for this computer.', true]]);
+  noteTheirs(sara, false);
   savePeerSettings({ caps: { peerRunsPerDay: 20 } });
   // Manual: a teammate muted after asking is declined when the owner says y.
   saveTeamAccess(teamId, { handling: 'manual' });
