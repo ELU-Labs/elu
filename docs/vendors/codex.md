@@ -46,7 +46,9 @@ when this turn ends.", and Enter in the empty message box sends it now: the turn
 in the order sent, as one message. Outside Read only the next turn goes on in the thread
 that was stopped (`codex exec resume <thread id>`, the id read from the stopped run's
 `thread.started` line), so Codex keeps what it was doing. A Read only turn starts a new
-thread each time, as before, and reads the chat.
+thread each time, as before, so there the next turn is given what the stopped one wrote and
+did, read from its log: each message, each command with its exit code and what it printed
+(one still running is marked as stopped), and the files it changed.
 
 ## What the owner sees
 

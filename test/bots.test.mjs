@@ -425,7 +425,7 @@ test('a running bot is the session\'s active role, and stopping it leaves a note
   assert.deepEqual(task.messages.slice(-2).map(({ at, ...row }) => row), [{ text: 'Take your time.', to: '@scout' }, { text: 'Stopped before answering. Write to @scout again and it picks up where it stopped.', from: '@scout', bot: 'scout', failed: true }]);
   // The stopped turn named its vendor session at launch, so the owner's next message to the bot resumes it.
   const stopped = f.calls('claude').at(-1), named = stopped.args[stopped.args.indexOf('--session-id') + 1];
-  assert.match(named, /^[a-f0-9-]{36}$/); assert.deepEqual(task.interrupted, { 'bot:scout': { vendor: 'claude', id: named } });
+  assert.match(named, /^[a-f0-9-]{36}$/); assert.deepEqual(task.interrupted, { 'bot:scout': { vendor: 'claude', id: named, log: live.activeLog } });
   f.mode('answer');
   const next = await f.controller.ask('continue', first.id, { bot: 'scout' }).finished, resumed = f.calls('claude').at(-1);
   assert.equal(resumed.args[resumed.args.indexOf('--resume') + 1], named, 'the same vendor session'); assert.equal(resumed.args.includes('--session-id'), false);
@@ -447,7 +447,9 @@ test('a stopped bot whose vendor names no session at launch says its next turn s
   await new Promise(resolve => setTimeout(resolve, 150));
   await f.controller.stop(first.id); await assert.rejects(run.finished);
   let task = readTask(f.repo, first.id);
-  assert.equal(task.messages.at(-1).text, 'Stopped before answering. The next message to @critic starts from the chat.'); assert.equal(task.interrupted, undefined);
+  assert.equal(task.messages.at(-1).text, 'Stopped before answering. The next message to @critic starts from the chat.');
+  // No vendor session to go on in: the stopped run's log is kept, for what it said and did.
+  assert.deepEqual(Object.keys(task.interrupted), ['bot:critic']); assert.equal(task.interrupted['bot:critic'].id, undefined); assert.match(path.basename(task.interrupted['bot:critic'].log), /^bot-critic-.+\.log$/);
   // A session id that the vendor no longer knows: the turn is not lost, it starts from the chat.
   task.interrupted = { 'bot:scout': { vendor: 'claude', id: '99999999-9999-4999-8999-999999999999' } }; saveTask(f.repo, task);
   patch('claude', "if(args.includes('--resume')&&args[args.indexOf('--resume')+1].startsWith('9999')){if(cfg.calls)fs.appendFileSync(cfg.calls,JSON.stringify({vendor,args})+'\\n');console.error('No conversation found with session ID');process.exit(1);}");

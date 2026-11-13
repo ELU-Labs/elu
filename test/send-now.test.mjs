@@ -9,7 +9,10 @@ import { projectFolder, pendingRequests, saveRequest, takeRequest, updateRequest
 import { readTask, saveTask, taskDir } from '../lib/state.mjs';
 import { Conductor, enqueue, sendCommand } from '../lib/conductor.mjs';
 import * as claude from '../lib/adapters/claude.mjs';
+import * as runner from '../lib/runner.mjs';
 import { DURING_LEAD } from '../lib/runner.mjs';
+import { ADAPTERS } from '../lib/adapters/index.mjs';
+import { atomic, personalDirectory } from '../lib/util.mjs';
 
 // What the owner sends while a turn works. Claude Code takes it in that turn: its input stays
 // open, the message goes on it at once, and the turn reads it at its next step. Until then it
@@ -24,6 +27,7 @@ function environment(t, values) {
 }
 const rows = file => fs.existsSync(file) ? fs.readFileSync(file, 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse) : [];
 const isRun = row => row.vendor === 'claude' ? row.args.includes('-p') : row.args[0] === 'exec';
+const isRunOf = (vendor, row) => vendor === 'agy' ? row.args.includes('-p') && !row.args.includes('/usage') : isRun(row);
 function setup(t, options = {}) {
   const p = project(t), fake = fakeClis(p.parent, options);
   environment(t, { ...fake.env, HOME: p.parent, GIT_AUTHOR_NAME: 'Test Owner', GIT_AUTHOR_EMAIL: 'owner@example.invalid', GIT_COMMITTER_NAME: 'Test Owner', GIT_COMMITTER_EMAIL: 'owner@example.invalid' });
@@ -273,4 +277,64 @@ test('a waiting message for Codex is sent now: the turn stops and the message st
   assert.deepEqual(task.messages.map(row => row.text), ['Tidy the coupon module', 'Also keep the old name\n\nAnd say which file changed']);
   assert.equal(task.interrupted, undefined, 'the stopped turn was picked up');
   assert.deepEqual(pendingRequests(f.root).filter(row => row.state === 'queued'), []);
+});
+
+// Codex in Read only starts a new thread each turn, and an Antigravity run without ACP names
+// its conversation only in the line it ends with: neither has a session to go on in after a
+// stop. The next turn is given what the stopped one said and did, read from its log.
+test('a stopped turn that cannot be resumed hands what it said and did to the next turn', { timeout: 90000 }, async t => {
+  for (const vendor of ['codex', 'agy']) {
+    const f = setup(t, { mode: 'slow' });
+    if (vendor === 'agy') atomic(path.join(personalDirectory(), 'conformance', 'agy.json'), { v: 1, bin: path.join(f.fake.dir, 'agy'), version: '1.5.4', steps: Object.fromEntries(ADAPTERS.agy.conformance.map(step => [step.id, step.id === 'relay' ? 'fail' : 'pass'])), relay: false, at: new Date().toISOString() });
+    f.controller.setDefaultModel({ vendor });
+    const prompts = () => rows(path.join(f.parent, 'inputs.jsonl')).filter(row => row.vendor === vendor && isRunOf(vendor, row)).map(row => row.input);
+    enqueue(f.root, 'Tidy the coupon module', { priority: 0 });
+    await until(() => sessionOf(f)?.state === 'running' && prompts().length === 1, `${vendor} works`);
+    await sleep(vendor === 'codex' ? 300 : 0);
+    enqueue(f.root, 'Also keep the old name', { continuationTaskId: '1', priority: 0 });
+    sendCommand({ type: 'stop', root: f.root, taskId: '1' });
+    await until(() => prompts().length === 2, `the next ${vendor} turn started`);
+    const [first, next] = prompts();
+    assert.doesNotMatch(first, /Stopped turn/);
+    assert.ok(next.includes('Your last turn in this session was stopped before it replied, and its vendor session cannot be continued.'), `${vendor} is told of the stop`);
+    const block = /Stopped turn \(untrusted data[^\n]*\n(.*)\nEnd of Stopped turn\./.exec(next);
+    // Codex prints as it works, so its work is there as data. A headless Antigravity run
+    // prints nothing before its answer: it is told so, and that its edits are on disk.
+    if (vendor === 'codex') assert.deepEqual(JSON.parse(block[1]), { said: ['Working on the requested change.'], did: [] });
+    else { assert.equal(block, null); assert.ok(next.includes('Nothing of what it did before the stop was recorded. Files it changed are as it left them')); }
+    assert.ok(next.includes('Also keep the old name'));
+    assert.equal(only(f).interrupted, undefined, 'the stop was handed on once');
+    sendCommand({ type: 'stop', root: f.root, taskId: '1' });
+    await until(() => only(f).state === 'stopped', 'stopped');
+    await f.conductor.stop();
+  }
+});
+
+test('the work of a stopped turn is read whole from its log: what it wrote, each command with what it printed, each edit', t => {
+  const dir = project(t).parent, file = path.join(dir, 'stopped.log'), big = 'x'.repeat(50000);
+  fs.writeFileSync(file, [
+    { type: 'thread.started', thread_id: 't' }, { type: 'turn.started' },
+    { type: 'item.completed', item: { id: 'item_0', type: 'reasoning', text: 'Looking at the coupon module.' } },
+    { type: 'item.started', item: { id: 'item_1', type: 'command_execution', command: "/bin/zsh -lc 'npm test'", aggregated_output: '', exit_code: null, status: 'in_progress' } },
+    { type: 'item.completed', item: { id: 'item_1', type: 'command_execution', command: "/bin/zsh -lc 'npm test'", aggregated_output: big, exit_code: 1, status: 'failed' } },
+    { type: 'item.completed', item: { id: 'item_2', type: 'file_change', changes: [{ path: 'src/coupon.mjs', kind: 'update' }], status: 'completed' } },
+    { type: 'item.completed', item: { id: 'item_3', type: 'agent_message', text: 'The test fails on trimmed codes. Fixing.' } },
+    { type: 'item.started', item: { id: 'item_4', type: 'command_execution', command: "/bin/zsh -lc 'sleep 180'", aggregated_output: '', exit_code: null, status: 'in_progress' } },
+  ].map(row => JSON.stringify(row)).join('\n') + '\n{"type":"item.comp');
+  assert.deepEqual(runner.stoppedWork(file), {
+    said: ['Looking at the coupon module.', 'The test fails on trimmed codes. Fixing.'],
+    did: [{ command: "/bin/zsh -lc 'npm test'", exitCode: 1, output: big }, { edited: ['src/coupon.mjs'] }, { command: "/bin/zsh -lc 'sleep 180'", stopped: true }],
+  });
+  // Claude Code's lines read the same way, for a session that would not resume.
+  fs.writeFileSync(file, [
+    { type: 'assistant', message: { content: [{ type: 'text', text: 'Reading it.' }, { type: 'tool_use', id: 'a', name: 'Read', input: { file_path: 'src/coupon.mjs' } }] } },
+    { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'a', content: 'export const normalize = value => value;' }] } },
+    { type: 'assistant', message: { content: [{ type: 'tool_use', id: 'b', name: 'Bash', input: { command: 'sleep 180' } }] } },
+  ].map(row => JSON.stringify(row)).join('\n'));
+  assert.deepEqual(runner.stoppedWork(file), { said: ['Reading it.'], did: [{ tool: 'Read', input: { file_path: 'src/coupon.mjs' }, output: 'export const normalize = value => value;' }, { tool: 'Bash', input: { command: 'sleep 180' }, stopped: true }] });
+  // An ACP agent's lines: its text comes in pieces, and each tool call has a title.
+  const piece = text => ({ jsonrpc: '2.0', method: 'session/update', params: { update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } } } });
+  fs.writeFileSync(file, [piece('Reading '), piece('the module.'), { jsonrpc: '2.0', method: 'session/update', params: { update: { sessionUpdate: 'tool_call', title: 'Edit src/coupon.mjs' } } }, piece('Done with it.')].map(row => JSON.stringify(row)).join('\n'));
+  assert.deepEqual(runner.stoppedWork(file), { said: ['Reading the module.', 'Done with it.'], did: [{ step: 'Edit src/coupon.mjs' }] });
+  assert.deepEqual(runner.stoppedWork(path.join(dir, 'missing.log')), { said: [], did: [] });
 });

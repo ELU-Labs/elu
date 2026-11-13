@@ -97,8 +97,9 @@ one after the other, never into the turn that runs; an ACP turn answers one
 when this turn ends.", and Enter in the empty message box sends it now: the turn stops as
 `/stop` stops it and what waits starts the next turn at once. Over ACP the next turn goes
 on in the conversation that was stopped (`session/resume`). A headless run names its
-conversation only in the line it ends with, so after a stopped headless turn the next one
-starts from the chat.
+conversation only in the line it ends with, and prints nothing of its work before that
+line. So after a stopped headless turn the next one starts from the chat, and is told that
+the turn before it was stopped and that the files it changed are as it left them.
 
 ## What each mode enforces
 
