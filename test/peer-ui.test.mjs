@@ -377,6 +377,26 @@ for (const [columns, rows] of [[140, 50], [80, 24]]) test(`a click on a heading 
   assert.ok(!['Channels', '', 'Direct messages'].includes(at()));
 });
 
+// In a bar too short to show every row, the cursor came up to the first row under a heading with that heading
+// scrolled out of view over it: the first channel showed with no Channels over it until Up left the bar.
+test('a heading of the Team bar stays in view over its first row when the bar is short, at 80x24', { timeout: 30000 }, async t => {
+  const { v } = await teamView(t, { columns: 80, rows: 24, peer: fakePeer({ items: [] }) });
+  const [bar] = v.panels.teamLists, at = () => plainItem(bar.items[bar.selected]).trim(), shown = () => v.lines().slice(bar.atop, bar.atop + bar.height).map(line => line.slice(bar.aleft, bar.aleft + 20).trim());
+  await until(() => bar.items.length > 5, 'the bar');
+  const all = bar.items.map(item => plainItem(item).trim());
+  assert.ok(bar.height < all.length && bar.height > 2, 'the bar is shorter than its rows');
+  bar.focus(); bar.select(all.length - 1); await until(() => bar.childBase > 0 && shown().at(-1) === all.at(-1), 'the bar is scrolled to its last row');
+  const up = async to => { for (let from = at(); !to.test(at()); from = at()) { v.input.write('\x1b[A'); await until(() => at() !== from, `Up from ${from}`); } };
+  // Up to the first direct chat: Direct messages is drawn over it, at the top of the bar.
+  await up(/^● @sara/); await until(() => shown()[0] === 'Direct messages' && /^● @sara/.test(shown()[1]), `Direct messages over @sara, now ${shown().join(' | ')}`);
+  // Up to the first channel: Channels is drawn over it, with the focus still on the bar.
+  await up(/^# general/); await until(() => shown()[0] === 'Channels' && /^# general/.test(shown()[1]), `Channels over #general, now ${shown().join(' | ')}`);
+  assert.equal(v.current.screen.focused, bar); assert.equal(bar.childBase, 0);
+  // Down again keeps one row a key, and the cursor in view.
+  v.input.write('\x1b[B'); await until(() => at() === '+ Add channel' && shown().includes('+ Add channel'), 'Down from the first channel');
+  v.input.write('\x1b[B'); await until(() => /^● @sara/.test(at()) && shown().some(line => /^● @sara/.test(line)), 'Down to the first direct chat');
+});
+
 test('a message that starts with ! in Chats runs in a shell and is never asked to the team', async t => {
   const { v, peer } = await teamView(t);
   await send(v, '!echo not-for-the-team');
