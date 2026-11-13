@@ -32,7 +32,7 @@ import { MESSAGES_PER_DAY, count, intakeMethods } from '../lib/peer/intake.mjs';
 import { PeerDaemon } from '../lib/peer/daemon.mjs';
 import { frames, writeFrame, FRAME_MAX } from '../lib/peer/transport.mjs';
 import { Session } from '../lib/peer/rpc.mjs';
-import { THREAD_MAX, RETAIN_MS, audit, getRecord, lookup, prune, remember, saveRecord, thread, verifyThread } from '../lib/peer/taskstore.mjs';
+import { RETAIN_MS, audit, getRecord, lookup, prune, remember, saveRecord, thread, verifyThread } from '../lib/peer/taskstore.mjs';
 import { acceptIncoming, processOutbox, sendReply, syncRecords } from '../lib/peer/replies.mjs';
 import { task as a2aTask, TaskState } from '../lib/peer/a2a.mjs';
 import { peerDataBlock } from '../lib/peer/peerdata.mjs';
@@ -200,11 +200,20 @@ test('thread audit lines are hash chained', t => {
     assert.ok(verifyThread(lines));
     assert.equal(verifyThread([lines[0], { ...lines[1], text: 'Edited.' }]), false);
     assert.equal(audit('../x', { dir: 'in', peer: key, kind: 'ask', text: 'x' }), null);
-    // Lines are appended, the chain holds across a long line, and a full thread stops growing.
+    // Lines are appended and the chain holds across a long line.
     audit(id, { dir: 'in', peer: key, kind: 'ask', text: 'q'.repeat(150000) }); audit(id, { dir: 'out', peer: key, kind: 'answer', text: 'ok' });
     assert.ok(verifyThread(thread(id))); assert.equal(thread(id).length, 4);
-    fs.appendFileSync(peerFile('threads', `${id}.jsonl`), 'x'.repeat(THREAD_MAX));
-    assert.equal(audit(id, { dir: 'in', peer: key, kind: 'ask', text: 'more' }), null);
+    // A text of any length is kept whole, the chain holds after a line of several megabytes,
+    // and a long thread goes on recording. ELU 0.1.19 cut a text at 160000 characters and
+    // wrote nothing more to a thread over 4 MiB.
+    const long = `${'Coupon codes are uppercase now. '.repeat(100000)}The end.`;
+    assert.ok(long.length > 3 * 1024 * 1024);
+    audit(id, { dir: 'in', peer: key, kind: 'result', text: long }); audit(id, { dir: 'out', peer: key, kind: 'ask', text: 'Thanks.' });
+    audit(id, { dir: 'in', peer: key, kind: 'result', text: long });
+    assert.equal(audit(id, { dir: 'out', peer: key, kind: 'ask', text: 'more' })?.text, 'more');
+    const kept = thread(id);
+    assert.equal(kept.length, 8); assert.ok(kept[4].text === long && kept[6].text === long, 'every character of a long text is in the thread');
+    assert.equal(kept[5].prev, kept[4].hash); assert.ok(verifyThread(kept));
     // Old finished records and quiet threads are pruned; open records stay.
     const old = new Date(Date.now() - RETAIN_MS - 60000).toISOString();
     const done = saveRecord({ task: a2aTask({ id: 'done-1', contextId: 'thread-1', state: TaskState.REJECTED, statusMessage: 'no' }), peer: key, threadId: 'thread-1', createdAt: old });
@@ -2268,6 +2277,59 @@ test('autoAccept answers end to end, autoContinue queues the chat, and a secret 
   await run(sara.home, { type: 'approve', id: held.id, text: 'Use the key from your own vault.' });
   const fixed = await until(() => askRecord(ana.home, secret.askId)?.state === 'answered' && askRecord(ana.home, secret.askId), 'edited reply');
   assert.equal(fixed.answer.text, 'Use the key from your own vault.');
+});
+
+test('a result of any length reaches the teammate whole: over 16000 characters as it is, and over 1 MiB in pieces; both threads keep every character and the chat continues with all of it', async t => {
+  const { ana, sara, side } = await pair(t);
+  const mine = withHome(ana.home, () => registeredProject(t));
+  withHome(ana.home, () => savePeerPolicy(sara.identity.key, { autoContinue: true }));
+  await daemon(t, ana.home, { conductor: false }); await daemon(t, sara.home, { conductor: false });
+  await connected(ana, sara);
+  const { askId } = await run(ana.home, { type: 'ask', to: 'sara', text: 'Make coupon codes uppercase.', root: mine.root, chatTaskId: '7' });
+  const threadId = askRecord(ana.home, askId).threadId;
+  await until(() => item(sara.home, 'incoming'), 'the message at sara');
+  // What the approved work did, as the conductor leaves it for the daemon (Conductor.result).
+  const tell = text => withHome(sara.home, () => {
+    const requestId = `request-${crypto.randomUUID()}`; fs.mkdirSync(peerFile('outbox'), { recursive: true });
+    fs.writeFileSync(peerFile('outbox', `result-${requestId}.json`), JSON.stringify({ requestId, root: side.root, peer: ana.identity.key, name: 'ana', threadId, taskId: '1', outcome: 'done', text, finishedAt: new Date().toISOString() }));
+  });
+  const lines = (home, dir) => withHome(home, () => thread(threadId)).filter(line => line.kind === 'result' && line.dir === dir).map(line => line.text);
+  const continued = () => withHome(ana.home, () => pendingRequests(mine.root)).filter(row => row.origin?.kind === 'answer' && row.continuationTaskId === '7').map(row => row.context);
+
+  // Over 16000 characters: ELU 0.1.19 refused to send it and the teammate never heard.
+  const long = `${Array.from({ length: 400 }, (_, index) => `Step ${index + 1}: normalize returns the coupon code in upper case.`).join('\n')}\nThe end.`;
+  assert.ok(long.length > 16000 && long.length < 160000, String(long.length));
+  tell(long);
+  await until(() => askRecord(ana.home, askId)?.result?.text === long, 'the long result at ana');
+  assert.deepEqual(lines(sara.home, 'out'), [long]); assert.deepEqual(lines(ana.home, 'in'), [long]);
+  assert.deepEqual(continued(), [long]);
+
+  // Sara checks what goes to Ana first, and writes a much longer result in its place: over
+  // 1 MiB, more than one line on the link carries, so it goes ahead of its message in pieces.
+  withHome(sara.home, () => savePeerPolicy(ana.identity.key, { holdReplies: true }));
+  tell('Done.');
+  const held = await until(() => item(sara.home, 'held', row => row.result), 'the held result');
+  const huge = `${Array.from({ length: 30000 }, (_, index) => `Step ${index + 1}: normalize returns the coupon code in upper case, and the coupon test passes.`).join('\n')}\nThe end.`;
+  assert.ok(Buffer.byteLength(huge) > 2 * 1024 * 1024, String(huge.length));
+  await run(sara.home, { type: 'approve', id: held.id, text: huge });
+  await until(() => askRecord(ana.home, askId)?.result?.text === huge, 'the result over 1 MiB at ana', 120000);
+  assert.deepEqual(lines(sara.home, 'out'), [long, huge]); assert.deepEqual(lines(ana.home, 'in'), [long, huge]);
+  assert.deepEqual(continued(), [long, huge]);
+  // The thread reads whole on both sides, and its chain holds after the long lines.
+  for (const home of [ana.home, sara.home]) {
+    assert.ok(withHome(home, () => peer.threadMessages(threadId)).some(row => row.text === huge), 'the thread shows every character');
+    assert.ok(verifyThread(withHome(home, () => thread(threadId))));
+  }
+  // A second one that long takes each thread past 4 MiB: what comes after is still recorded.
+  withHome(sara.home, () => savePeerPolicy(ana.identity.key, { holdReplies: false }));
+  tell(`${huge}\nAgain.`);
+  await until(() => askRecord(ana.home, askId)?.result?.text === `${huge}\nAgain.`, 'the second long result at ana', 120000);
+  tell('All done.');
+  await until(() => askRecord(ana.home, askId)?.result?.text === 'All done.', 'the result after a long thread');
+  for (const home of [ana.home, sara.home]) {
+    const kept = withHome(home, () => thread(threadId));
+    assert.equal(kept.at(-1).text, 'All done.'); assert.ok(verifyThread(kept));
+  }
 });
 
 // Relaying: on loopback hyperdht takes the LAN shortcut, so the testnet runs on a LAN
