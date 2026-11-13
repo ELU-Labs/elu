@@ -2504,6 +2504,11 @@ test('what a join says: the line while it waits, and the reason when the two com
   assert.equal(joinWait({ stage: 'relay', via: null }, 9, 'Esc'), 'Found them. Connecting through another computer… 9 s. Esc cancels.');
   // Every line that counts fits the two rows an 80-column app has for it, a long name and three digits of seconds included.
   for (const progress of [null, { stage: 'connecting' }, { stage: 'retrying' }, { stage: 'relay', via: `your computer ${'m'.repeat(32)}` }]) assert.ok(joinWait(progress, 180, 'Esc').length <= 92, joinWait(progress, 180, 'Esc'));
+  // In a shell the line is redrawn in place, so it is kept to one row: it drops what the search needs first, then is cut.
+  assert.equal(joinWait(null, 3, 'Ctrl-C', 79), 'Looking for the person who invited you… 3 s. Ctrl-C cancels.');
+  assert.equal(joinWait(null, 3, 'Ctrl-C', 120), 'Looking for the person who invited you… 3 s. Their ELU must be open. Ctrl-C cancels.');
+  assert.equal(joinWait({ stage: 'retrying' }, 31, 'Ctrl-C', 79), 'Found them, but could not connect yet. Trying again… 31 s. Ctrl-C cancels.');
+  assert.equal(joinWait({ stage: 'relay', via: 'your computer studio' }, 9, 'Ctrl-C', 40), 'Found them. Connecting through your com…');
   const end = ' Join again from another network, or while ELU is open on another computer on your team or theirs.';
   assert.equal(noRoute({ theirs: 3, mine: 2 }), `Found their computer, but could not connect: their network gives every connection a new port, as a phone hotspot does. No other computer was online to pass it along.${end}`);
   assert.equal(noRoute({ theirs: 2, mine: 3, tried: ['your computer studio'] }), `Found their computer, but could not connect: your network gives every connection a new port, as a phone hotspot does. Your computer studio could not pass it along either.${end}`);
