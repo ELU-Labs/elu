@@ -110,11 +110,11 @@ test('hooks of another tool that Grok Build would run: outside Full access the o
   // The first message, in Ask for approval: the check, then the question, then the turn.
   const pending = f.send('Reply done with the summary "with hooks".', null, { permissions: 'ask' });
   const asked = await question();
-  assert.equal(asked.summary, `Run Grok Build with ${names}`);
+  assert.equal(asked.summary, `Run ${names}`); assert.equal(asked.vendor, 'grok');
   assert.equal(answerApproval(asked.id, 'allow'), true);
   const task = await pending;
   assert.equal(task.state, 'answered', why(task)); assert.equal(task.result.summary, 'with hooks');
-  assert.deepEqual(said(task), [FIRST, 'Grok Build 1.0.77 passed its check on this machine.', `Grok Build would also run ${names} on this machine. Asked once: y lets it, n keeps Grok Build to Full access.`]);
+  assert.deepEqual(said(task), [FIRST, 'Grok Build 1.0.77 passed its check on this machine.', `Grok Build would also run ${names} on this machine. You are asked once: yes lets it, no keeps Grok Build to Full access.`]);
   assert.equal(checkResult('grok', { bin: f.bin, version: '1.0.77' }).answer, 'allow');
   // Asked once: the next message, in another mode, starts with no question.
   const second = await f.send('Reply done with the summary "not asked".', null, { permissions: 'auto' });
