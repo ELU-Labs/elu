@@ -1528,6 +1528,21 @@ test('setup commits require an unchanged preview and never include another stage
   assert.equal(git(p.root, ['status', '--porcelain']), '');
 });
 
+test("a standup answered while the model waits leaves its question where it was, in one block", async t => {
+  const p = setup(t, 'question'), v = await view(t, { repo: p.repo });
+  await send(v, 'Normalize coupon codes');
+  await until(() => projectSnapshot(p.repo).tasks[0]?.state === 'needs_input', 'lead question');
+  await until(() => v.current.panels.chat.getContent().includes('Which format?'), 'visible question');
+  // The rows a standup's answer turn adds (lib/runner.mjs runStandup), after the question.
+  const task = projectSnapshot(p.repo).tasks[0], round = 'standup-0123456789abcdef', at = new Date(Date.now() + 1000).toISOString();
+  saveTask(p.repo, { ...readTask(p.repo, task.id), messages: [...readTask(p.repo, task.id).messages, { at, text: 'You ask: standup', from: 'Standup', standup: round, line: true }, { at, text: 'Waiting on the format.', from: 'Opus 5.5', who: 'Opus 5.5', standup: round, answer: true }, { at, text: 'Sent to your Standup', from: 'Standup', standup: round, line: true }] });
+  await until(() => v.current.panels.chat.getContent().includes('Sent to your Standup'), 'the standup rows');
+  const chat = v.current.panels.chat.getContent();
+  assert.equal(chat.split('is waiting for you').length, 2, 'one block holds the reply and its question');
+  assert.equal(chat.split('Which format?').length, 2, 'the question shows once');
+  assert.ok(chat.indexOf('is waiting for you') < chat.indexOf('Which format?') && chat.indexOf('Which format?') < chat.indexOf('You ask: standup'), 'the question stays above the standup');
+});
+
 test('stopping an owned task records stopped state and closes its process group', async t => {
   const p = setup(t, 'slow'), controller = new ProjectController(p.repo);
   const plan = await controller.plan('Wait for my next instruction');

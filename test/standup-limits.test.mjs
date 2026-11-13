@@ -22,7 +22,7 @@ import { share } from '../lib/peer/shares.mjs';
 import { saveRemotePlans } from '../lib/peer/plans.mjs';
 import { approveStandup, hostStandup, teamStandupAsk, teamStandupCommand, teamStandupRead, waitingStandups } from '../lib/peer/standup.mjs';
 import { peerRunUsd } from '../lib/adapters/claude.mjs';
-import { STANDUP_QUESTION, newRound, standupOpen } from '../lib/standup.mjs';
+import { STANDUP_QUESTION, newRound, standupOpen, standupStage } from '../lib/standup.mjs';
 import { runStandupRound, standupPlan } from '../lib/standup-round.mjs';
 import { boardsFor } from '../lib/standup-kanban.mjs';
 
@@ -245,6 +245,19 @@ test('an answer turn is not activity: the session keeps when it last worked and 
   assert.equal(after.activeSince, before.activeSince);
   assert.equal(lastActivity(after), lastActivity(before));
   assert.deepEqual([row().group, row().order, row().time], [place.group, place.order, place.time]);
+});
+
+test('the Standup says what it does while it runs: waiting for the sessions, then writing the summary', () => {
+  const at = ms => new Date(Date.parse('2026-11-12T12:00:00Z') + ms).toISOString();
+  const standup = (messages, fields = {}) => ({ state: 'running', activeRole: null, standup: { rounds: [{ round: 'standup-0000000000000000', at: at(1000) }] }, messages, ...fields });
+  const summary = { at: at(500), text: 'Summary of this round.', from: 'Standup', standupChat: true, line: true, summary: true };
+  assert.equal(standupStage(standup([summary])), 'round', "a new round, after the last one's summary");
+  assert.equal(standupStage(standup([{ at: at(2000), text: 'Asking 2 sessions', standupChat: true, line: true }])), 'round');
+  assert.equal(standupStage(standup([{ ...summary, at: at(3000) }])), 'summary');
+  assert.equal(standupStage(standup([{ ...summary, at: at(3000) }], { activeRole: 'lead' })), 'summary', 'while its model works on it too');
+  assert.equal(standupStage(standup([{ at: at(4000), text: 'Make sure the Kanban is right.' }])), null, "the owner's own message");
+  assert.equal(standupStage(standup([], { state: 'answered' })), null);
+  assert.equal(standupStage({ state: 'running', messages: [] }), null, 'not a Standup');
 });
 
 test("the Standup's model reads the owner's other computers apart from his teammates", async t => {
