@@ -2423,6 +2423,8 @@ test('a join goes through another computer of the joiner when the two cannot con
   assert.match(daemonLog(sara.home), /invite join: found [0-9a-f]{8}, try 1 failed: HOLEPUNCH_ABORTED/, 'the direct try came first, and failed');
   assert.match(daemonLog(box.home), new RegExp(`passing along ${sara.identity.key.slice(0, 8)} and ${a.key.slice(0, 8)}`));
   await until(() => relayed(sara.home, ana.teamId, a.key) && relayed(ana.home, ana.teamId, sara.identity.key), 'both sides online through the relay');
+  // The computer that carries is itself reached directly, by the one that asked it.
+  assert.equal(memberOf(sara.home, own.teamId, box.identity.key).path, 'direct'); assert.equal(memberOf(box.home, own.teamId, sara.identity.key).path, 'direct');
   // The other computer only passes bytes along: it is on nobody's team because of it.
   assert.deepEqual(withHome(ana.home, () => team(ana.teamId)).members.map(m => m.name), ['ana', 'sara']);
   assert.equal(withHome(box.home, () => team(ana.teamId)), null);
@@ -2452,6 +2454,7 @@ test('a join goes through a teammate of the inviter when the two cannot connect 
   assert.deepEqual(joined, { id: crew.teamId, name: 'core', inviter: { name: 'ana', fingerprint: ana.identity.key.slice(0, 8) }, via: 'a computer on their side' });
   await until(() => relayed(sara, crew.teamId, ana.identity.key) && relayed(ana.home, crew.teamId, saraKey), 'both sides online through the relay');
   assert.deepEqual(withHome(ana.home, () => team(crew.teamId)).members.map(m => m.name), ['ana', 'li', 'sara']);
+  assert.equal(memberOf(ana.home, crew.teamId, li.identity.key).path, 'direct', 'the teammate that carries is itself reached directly');
   // Ana asks her teammate to carry the two of them from now on, and tells sara which relay that is.
   const kept = await until(() => { const mine = withHome(ana.home, () => savedRoutes())[saraKey]?.mine ?? []; return mine.length ? mine : null; }, 'ana keeps a relay for sara');
   assert.deepEqual(kept.map(entry => entry.helper), [li.identity.key]);
