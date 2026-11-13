@@ -1142,7 +1142,7 @@ test('the invite window shows a short code and copies it; a drag over its row co
   await until(() => ask.getValue() === `/join ${copied[0]}`, 'the box holds the paste as it came');
   v.input.write('\r'); await answerJoin(v);
   await until(() => peer.calls.some(row => row[0] === 'joinTeam'), 'joined');
-  assert.deepEqual(peer.calls.find(row => row[0] === 'joinTeam').slice(1), ['k7qm-x2pd-9fhw']);
+  assert.deepEqual(peer.calls.find(row => row[0] === 'joinTeam').slice(1, 2), ['k7qm-x2pd-9fhw']);
 });
 
 test('a code pasted into the message box with /join, broken by line breaks, spaces, tabs and CRLF as a terminal hands it over, joins with that code', async t => {
@@ -1192,9 +1192,45 @@ test('share, invite and join use the open project', async t => {
   const shares = () => peer.calls.filter(row => row[0] === 'share').length, before = shares();
   await send(v, '/join K7QM X2PD 9FHW'); await answerJoin(v);
   await until(() => /Joined Docs with sara\. Their messages start sessions here, as if you typed them\./.test(v.panels.status.getText()), 'joined');
-  assert.deepEqual(peer.calls.find(row => row[0] === 'joinTeam').slice(1), ['k7qm-x2pd-9fhw']);
+  assert.deepEqual(peer.calls.find(row => row[0] === 'joinTeam').slice(1, 2), ['k7qm-x2pd-9fhw']);
   assert.equal(shares(), before, 'nothing shared');
   assert.deepEqual(peer.calls.find(row => row[0] === 'saveTeamAccess').slice(1), ['team-2', { handling: 'auto', rules: '', root: p.root }]);
+});
+
+test('/join counts while it looks for the inviter and says their ELU must be open; Esc cancels it at once; a join that goes through clears the line', async t => {
+  const p = project(later(t)); environment(t, p.parent);
+  const peer = fakePeer(), v = await view(t, { repo: repository(p.root), peer }), status = () => v.panels.status.getText();
+  // A join that waits, as one does while the inviter's ELU is closed: the daemon answers a cancel a moment later.
+  let held = null; const signals = [];
+  peer.joinTeam = (code, options = {}) => {
+    peer.calls.push(['joinTeam', code]); signals.push(options.signal);
+    return new Promise((resolve, reject) => { held = { resolve, reject }; options.signal?.addEventListener('abort', () => setTimeout(() => reject(new Error('Join cancelled. You did not join.')), 400)); });
+  };
+  await send(v, '/join k7qm-x2pd-9fhw'); await answerJoin(v);
+  await until(() => /Looking for the person who invited you… 0 s\. Their ELU must be open\. Esc cancels\./.test(status()), 'the line as the search starts');
+  await until(() => /Looking for the person who invited you… 1 s\. Their ELU must be open\. Esc cancels\./.test(status()), 'one second counted');
+  await until(() => /Looking for the person who invited you… 2 s\. Their ELU must be open\. Esc cancels\./.test(status()), 'two seconds counted');
+  // Esc says so at once, before the daemon has answered, and the count stops.
+  v.input.write('\x1b');
+  await until(() => /Join cancelled\. You did not join\./.test(status()), 'cancelled');
+  assert.equal(signals[0].aborted, true, 'the join was told to stop');
+  await new Promise(resolve => setTimeout(resolve, 1300));
+  assert.match(status(), /Join cancelled\. You did not join\./, 'the line no longer counts');
+  assert.doesNotMatch(status(), /Looking for/);
+  assert.deepEqual(peer.calls.filter(row => row[0] === 'saveTeamAccess'), [], 'nothing was saved for a team it did not join');
+  // The same wait, and this time the inviter answers: the line says it joined and stops counting.
+  await send(v, '/join k7qm-x2pd-9fhw'); await answerJoin(v);
+  await until(() => /Looking for the person who invited you… 1 s\./.test(status()), 'counting again');
+  held.resolve({ id: 'team-2', name: 'Docs', inviter: { name: 'sara', fingerprint: 'bbbbbbbb' } });
+  await until(() => /^› Joined Docs with sara\./.test(status()), 'joined');
+  await new Promise(resolve => setTimeout(resolve, 1300));
+  assert.match(status(), /^› Joined Docs with sara\./, 'the line stays as it joined');
+  // One that gives up shows the daemon's reason and what to do, whole.
+  await send(v, '/join k7qm-x2pd-9fhw'); await answerJoin(v);
+  await until(() => /Looking for the person who invited you…/.test(status()), 'a third search');
+  held.reject(new Error('Nobody answered for this code. Their ELU is closed or offline, or the code was already used or is older than 24 h. Ask them to open ELU and send a new code with /invite.'));
+  await until(() => /Nobody answered for this code\./.test(status().replace(/\s+/g, ' ')), 'why it gave up');
+  assert.match(status().replace(/\s+/g, ' '), /Their ELU is closed or offline, or the code was already used or is older than 24 h\. Ask them to open ELU and send a new code with \/invite\./);
 });
 
 test('/join asks to join first, then what teammates can do here: Cancel or Esc joins nothing, Enter twice takes Auto with no rules', async t => {

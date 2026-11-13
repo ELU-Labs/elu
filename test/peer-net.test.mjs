@@ -1272,6 +1272,46 @@ test('intake writes nothing for strangers or muted teammates, keeps no text on r
   });
 });
 
+test('a join that gives up says why and what to do; a cancelled one stops at once; a computer that is not connected is told so without the wait', async t => {
+  const home = newHome(t);
+  await withHome(home, async () => {
+    const me = createIdentity({ name: 'sara' }), code = 'k7qm-x2pd-9fhw';
+    const made = network => Object.assign(new PeerDaemon({ conductor: () => {} }), { me, node: { dial() {}, leave() {}, joinTopic: () => null, leaveTopic() {}, ...(network ? { network } : {}) } });
+    const timed = async promise => { const started = Date.now(), error = await promise.then(() => null, caught => caught); return { message: error?.message ?? null, ms: Date.now() - started }; };
+    const connected = () => ({ bootstrapped: true, online: true, answers: 12 });
+    // Nobody on the code's topic: when the time is up it says what that means and what to do.
+    const gaveUp = await timed(made(connected).join(code, { timeoutMs: 1500 }));
+    assert.equal(gaveUp.message, 'Nobody answered for this code. Their ELU is closed or offline, or the code was already used or is older than 24 h. Ask them to open ELU and send a new code with /invite.');
+    // Cancelled while it looks: the join ends now, and the daemon is left with no join under way.
+    const looking = made(connected), joining = timed(looking.command({ type: 'join', code }));
+    await until(() => looking.shortJoin?.keys, 'the search under way', 20000);
+    assert.deepEqual(await looking.command({ type: 'joinCancel' }), { cancelled: true });
+    const cancelled = await joining;
+    assert.equal(cancelled.message, 'Join cancelled. You did not join.');
+    assert.equal(looking.shortJoin, null);
+    assert.deepEqual(await looking.command({ type: 'joinCancel' }), { cancelled: false }, 'nothing under way to cancel');
+    // Cancelled in the moment before the search starts, while the code's keys are worked out.
+    const early = made(connected), first = timed(early.command({ type: 'join', code }));
+    assert.deepEqual(await early.command({ type: 'joinCancel' }), { cancelled: true });
+    assert.equal((await first).message, 'Join cancelled. You did not join.');
+    assert.equal(early.shortJoin, null);
+    // Not connected at all: the first lookup is over and no node answered. It says so at once.
+    const offline = 'This computer is not connected to the network, so it cannot look for them. Check your internet connection, then join again.';
+    const alone = await timed(made(() => ({ bootstrapped: true, online: true, answers: 0 })).join(code));
+    assert.equal(alone.message, offline); assert.ok(alone.ms < 15000, `said after ${alone.ms} ms`);
+    const dropped = await timed(made(() => ({ bootstrapped: true, online: false, answers: 40 })).join(code));
+    assert.equal(dropped.message, offline); assert.ok(dropped.ms < 15000, `said after ${dropped.ms} ms`);
+    // Still starting up is not offline: it keeps looking until the first lookup is over.
+    let net = { bootstrapped: false, online: true, answers: 0 };
+    const starting = made(() => net), slow = timed(starting.join(code));
+    await until(() => starting.shortJoin?.keys, 'the search under way', 20000);
+    await new Promise(resolve => setTimeout(resolve, 1500));
+    assert.ok(starting.shortJoin?.keys, 'still looking while the network starts');
+    net = { bootstrapped: true, online: true, answers: 0 };
+    assert.equal((await slow).message, offline);
+  });
+});
+
 test('a shutdown is honoured whatever an old setting says, unless it predates the daemon', async t => {
   const home = newHome(t), exits = [];
   await withHome(home, async () => {
