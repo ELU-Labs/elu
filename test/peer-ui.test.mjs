@@ -522,18 +522,18 @@ test('h and o on a teammate turn hold replies and auto-continue on and off: the 
   // h holds my replies and results to her; the line and the status say so.
   v.input.write('h');
   await until(() => inside(v) === 'Hold replies: on · Auto-continue: off · h and o change them', 'hold replies on');
-  await until(() => /Holding replies to @sara\. Each reply and result waits for you: y sends it, e edits it first, n drops it\./.test(status()), 'what h did');
+  await until(() => /Holding replies to @sara: y sends each one, e edits it, n drops it\./.test(status()), 'what h did');
   assert.deepEqual(settings(), [['sara', 'holdReplies', true]]);
   // From her threads the same keys act on her.
   threads.focus(); v.input.write('o');
-  await until(() => inside(v) === 'Hold replies: on · Auto-continue: on · h and o change them' && /Auto-continue is on for @sara\. Their answer or result continues the chat you asked from\./.test(status()), 'auto-continue on');
+  await until(() => inside(v) === 'Hold replies: on · Auto-continue: on · h and o change them' && /Auto-continue on for @sara: their answer or result continues your chat\./.test(status()), 'auto-continue on');
   v.input.write('h');
-  await until(() => inside(v) === 'Hold replies: off · Auto-continue: on · h and o change them' && /Replies to @sara go when they are ready\. One with a possible secret still waits for you\./.test(status()), 'hold replies off');
+  await until(() => inside(v) === 'Hold replies: off · Auto-continue: on · h and o change them' && /Replies to @sara go when ready\. One with a possible secret still waits\./.test(status()), 'hold replies off');
   // Her screen says both, and h and o there change them.
   bar.focus(); selectRow(bar, /@sara\s+direct/); v.input.write('t'); await until(() => modal(v, 'Teammate @sara'), 'her screen');
   assert.match(dialogBody(v, 'Teammate @sara'), /Hold replies: off · your replies and results go to them when ready\.\nAuto-continue: on · their answer or result continues the chat you asked from\.\n\nt trusts them · h holds replies · o turns auto-continue off/);
   v.input.write('o');
-  await until(() => !modal(v, 'Teammate @sara') && /Auto-continue is off for @sara\. Their answers wait in their thread; c continues with one\./.test(status()), 'o on her screen');
+  await until(() => !modal(v, 'Teammate @sara') && /Auto-continue off for @sara: their answers wait here; c continues one\./.test(status()), 'o on her screen');
   await until(() => inside(v) === 'Hold replies: off · Auto-continue: off · h and o change them', 'both off again');
   assert.deepEqual(settings(), [['sara', 'holdReplies', true], ['sara', 'autoContinue', true], ['sara', 'holdReplies', false], ['sara', 'autoContinue', false]]);
   // On a channel there is no teammate to set it for.
@@ -549,6 +549,13 @@ test('h and o on a teammate turn hold replies and auto-continue on and off: the 
   await openRow(v, /@sara/, '@sara');
   await until(() => v.current.screen.width === 80 && /^Hold replies: off · Auto-continue: off/.test(inside(v) ?? ''), 'the line at 80 columns');
   assertPanes(v, 80);
+  // What h and o say is whole on the status line there: nothing is cut.
+  const said = () => status().trim();
+  bar.focus(); selectRow(bar, /@sara/); v.input.write('h');
+  await until(() => said() === '› Holding replies to @sara: y sends each one, e edits it, n drops it.', 'h at 80 columns');
+  v.input.write('o'); await until(() => said() === '› Auto-continue on for @sara: their answer or result continues your chat.', 'o at 80 columns');
+  v.input.write('h'); await until(() => said() === '› Replies to @sara go when ready. One with a possible secret still waits.', 'h again at 80 columns');
+  v.input.write('o'); await until(() => said() === '› Auto-continue off for @sara: their answers wait here; c continues one.', 'o again at 80 columns');
 });
 
 test('e on a held reply or a held result opens its whole text in the message box: Enter sends the edited text, a refused edit stays in the box, Esc leaves it held, and n drops a result as a result', { timeout: 30000 }, async t => {
@@ -572,7 +579,7 @@ test('e on a held reply or a held result opens its whole text in the message box
   v.input.write('e');
   await until(() => v.current.screen.focused === ask && ask.getValue() === WHOLE, 'the whole result in the box');
   await until(() => label() === 'Edit the result for @sara · Enter sends it · Esc leaves it held' && keys() === 'enter send the edited result  esc leave it held', 'the box says it is an edit');
-  assert.match(status(), /It may hold a secret\. Take that out, then Enter sends it to @sara\. Esc leaves it held\./);
+  assert.match(status(), /Take out the possible secret\. Enter sends it to @sara, Esc leaves it held\./);
   assert.ok(v.panels.palette.hidden, 'no command list over an edit');
   // Enter with the secret still in it: refused, and the text stays in the box as an edit.
   await until(() => ask.__listener, 'the box reads'); ask.submit();
@@ -623,7 +630,7 @@ test('e on a reply or a result that waits in Sessions opens its text to edit in 
   v.input.write('e');
   await until(() => v.current.view === 'chats' && v.current.screen.focused === ask && ask.getValue() === WHOLE, 'the result in the box of Chats');
   await until(() => ask._label.getText().trim() === 'Edit the result for @sara · Enter sends it · Esc leaves it held' && keys() === 'enter send the edited result  esc leave it held', 'the box says it is an edit');
-  assert.match(status(), /It may hold a secret\. Take that out, then Enter sends it to @sara\. Esc leaves it held\./);
+  assert.match(status(), /Take out the possible secret\. Enter sends it to @sara, Esc leaves it held\./);
   // Esc leaves it held, with the cursor on it in her threads: y, e and n act on it from there.
   const [, threads] = v.panels.teamLists;
   v.input.write('\x1b');
@@ -649,7 +656,7 @@ test('@name in an open session asks that teammate from the session, and /ask say
   ask.focus(); await until(() => /@name ask a bot or a teammate/.test(keys()), 'the key bar names teammates');
   // /ask is not a command. With a teammate of that name the box keeps the part that asks them.
   await send(v, '/ask @sara where are the tax rates?');
-  await until(() => /Unknown command: \/ask\. A teammate is asked by name: Enter sends this to @sara\./.test(status()), 'what to do instead');
+  await until(() => /Unknown command: \/ask\. Ask by name: Enter sends this to @sara\./.test(status()), 'what to do instead');
   assert.equal(ask.getValue(), '@sara where are the tax rates?'); assert.deepEqual(peer.sent(), [], 'nothing was sent yet');
   await until(() => label() === 'Ask @sara · teammate', 'the box says who gets it');
   // Enter sends it to her from this session: her answer can continue it.
