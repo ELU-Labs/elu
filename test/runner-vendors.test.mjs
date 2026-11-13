@@ -312,9 +312,6 @@ test('over ACP, Grok Build and Antigravity runs show their thought and each tool
 // permission request of those two itself: the owner is never asked. Where ACP is not proven,
 // or cannot start, the turn runs headless and the session says its run prints only at the end.
 const agySet = (f, value) => { const file = path.join(f.fake.dir, 'fake.json'); fs.writeFileSync(file, JSON.stringify({ ...JSON.parse(fs.readFileSync(file, 'utf8')), agy: value })); };
-// The stand-in attempts a file once for each time the prompt names it, and the runner's prompt
-// carries the owner's message more than once: a step that repeats is read once, as it last stood.
-const each = steps => [...new Map(steps.map(step => [`${step[0]}\0${step[1]}`, step])).values()];
 // What the chat reads of a turn while it works: the session as saved, each time it changed.
 async function watching(f, turn, look) {
   let done = false; turn.finished.then(() => { done = true; }, () => { done = true; });
@@ -328,7 +325,7 @@ test('an Antigravity turn in Full access shows its thought and both tool calls o
   const task = await watching(f, f.controller.ask(`Create the file ${made} with the text "x". Run this command: ${f.marker}. Reply with the summary "live".`, null, { permissions: 'full' }), now => {
     asked.push(...pendingApprovals()); if (now.activeSilent) silent.push(now.activeSilent);
     if (now.state !== 'running' || !now.activeLog) return;
-    const steps = JSON.stringify(each(shown(runSteps(now.activeLog)))); if (seen.at(-1) !== steps) seen.push(steps);
+    const steps = JSON.stringify(shown(runSteps(now.activeLog))); if (seen.at(-1) !== steps) seen.push(steps);
   });
   assert.equal(task.state, 'answered', JSON.stringify(task.error)); assert.equal(task.result.summary, 'live'); assert.deepEqual(f.calls().at(-1).args, ['acp']);
   assert.equal(fs.readFileSync(made, 'utf8'), 'elu-code\n', 'written outside the project'); assert.equal(fs.readFileSync(f.ran, 'utf8'), 'ran');
@@ -337,8 +334,8 @@ test('an Antigravity turn in Full access shows its thought and both tool calls o
   assert.deepEqual(asked, [], 'no permission request reached the owner'); assert.equal(task.approvals, undefined); assert.deepEqual(silent, [], 'an ACP run is not one that prints at the end');
   const [ran] = task.runs;
   assert.equal(ran.permissions, 'full'); assert.equal(ran.effectivePermissions, 'full'); assert.equal(ran.denials, undefined); assert.equal(task.activeSilent, undefined);
-  assert.deepEqual(each(shown(runSteps(ran.logFile))), [thought, said, write('ok'), run('ok'), ['text', 'Here is the result:']], 'the steps stay with the run');
-  assert.ok(fs.readFileSync(ran.logFile, 'utf8').split('\n').filter(line => line.includes('"session/request_permission"')).length >= 2, 'the vendor asked for the write and for the command, and ELU answered');
+  assert.deepEqual(shown(runSteps(ran.logFile)), [thought, said, write('ok'), run('ok'), ['text', 'Here is the result:']], 'the steps stay with the run');
+  assert.equal(fs.readFileSync(ran.logFile, 'utf8').split('\n').filter(line => line.includes('"session/request_permission"')).length, 2, 'the vendor asked for the write and for the command, and ELU answered both');
   // The next turn resumes the conversation over ACP, as a headless one would with --conversation.
   const second = await f.controller.ask('Reply with the summary "again".', task.id).finished;
   assert.equal(second.state, 'answered', JSON.stringify(second.error)); assert.equal(second.runs[1].session, ran.session); assert.match(fs.readFileSync(second.runs[1].logFile, 'utf8'), /"method":"session\/resume"|"result":\{"sessionId"/);
@@ -357,8 +354,9 @@ test('an Antigravity turn in Full access that the owner stops ends what it start
   assert.equal(stopped, true); assert.equal(readTask(f.controller.repo, turn.id).state, 'stopped', JSON.stringify(task.error));
   await sleep(2500);
   assert.equal(fs.existsSync(late), false, 'the command the turn started ended with it');
-  const kept = [...(task.runs ?? []), ...(task.stops ?? [])].map(row => shown(runSteps(row.logFile)));
-  assert.deepEqual(kept, [[['thinking', 'Reading the request.'], ['text', 'Working on it.'], ['tool', `Run ${slow}`, 'running']]], 'what it printed is kept, once');
+  // As a headless turn that was stopped: no run of the session, and what it printed is kept with the stops.
+  assert.deepEqual(task.runs ?? [], [], 'a stopped turn is no run'); assert.equal(task.error.message, 'Stopped by the owner.');
+  assert.deepEqual((task.stops ?? []).map(row => [row.role, shown(runSteps(row.logFile))]), [['lead', [['thinking', 'Reading the request.'], ['text', 'Working on it.'], ['tool', `Run ${slow}`, 'running']]]]);
 });
 
 test('an Antigravity turn in Read only runs over ACP and writes nothing inside or outside the project, also where the vendor asks instead of refusing; the owner is asked nothing', async t => {
@@ -375,11 +373,11 @@ test('an Antigravity turn in Read only runs over ACP and writes nothing inside o
   assert.deepEqual(f.calls().at(-1).args, ['acp']); assert.equal(first.permissions, undefined, 'a session with no mode is read only'); untouched('its own rules', first);
   assert.equal(first.result.outcome, 'blocked'); assert.equal(first.runs[0].permissions, undefined);
   const tools = steps => steps.filter(step => step[0] === 'tool'), inside = task => path.join(task.worktree ?? f.root, 'inside.txt');
-  assert.deepEqual(tools(each(shown(runSteps(first.runs[0].logFile)))), [['tool', `Write ${inside(first)}`, 'failed'], ['tool', `Write ${outside}`, 'failed'], ['tool', `Run ${f.marker}`, 'failed']], 'each refused call shows as a step');
+  assert.deepEqual(tools(shown(runSteps(first.runs[0].logFile))), [['tool', `Write ${inside(first)}`, 'failed'], ['tool', `Write ${outside}`, 'failed'], ['tool', `Run ${f.marker}`, 'failed']], 'each refused call shows as a step');
   agySet(f, { asksDenied: true });
   const second = await watching(f, f.controller.ask(text, null), () => asked.push(...pendingApprovals()));
   assert.deepEqual(f.calls().at(-1).args, ['acp']); untouched('ELU\'s answers', second);
-  assert.deepEqual([...new Set(second.runs[0].denials.map(row => `${row.tool}: ${row.summary}`))].slice(0, 3), [`edit: Write ${inside(second)}`, `edit: Write ${outside}`, `execute: Run ${f.marker}`]);
+  assert.deepEqual(second.runs[0].denials.slice(0, 3), [{ tool: 'edit', summary: `Write ${inside(second)}` }, { tool: 'edit', summary: `Write ${outside}` }, { tool: 'execute', summary: `Run ${f.marker}` }]);
   assert.deepEqual(asked, [], 'no permission request reached the owner'); assert.equal(second.approvals, undefined);
 });
 

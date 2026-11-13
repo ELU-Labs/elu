@@ -64,10 +64,11 @@ function permit(tool, input, { cwd, skip, sandbox, review = false, free = false 
   if (review && ['write_to_file', 'run_command'].includes(tool)) return { verdict: 'ask', rule: 'review' };
   return { verdict: 'allow' };
 }
-// The "model": it attempts exactly what the prompt names.
+// The "model": it attempts exactly what the prompt names, a file once however often the
+// prompt names it (the runner's prompt carries the owner's message more than once).
 function plan(text, cwd) {
   const attempts = [], clean = value => value.replace(/[.,;]+$/, '');
-  for (const m of text.matchAll(/\b[Cc]reate (?:a |the )?file (?:named )?(\S+)/g)) attempts.push({ tool: 'write_to_file', input: { TargetFile: path.resolve(cwd, clean(m[1])), CodeContent: 'elu-code\n' } });
+  for (const m of text.matchAll(/\b[Cc]reate (?:a |the )?file (?:named )?(\S+)/g)) { const file = path.resolve(cwd, clean(m[1])); if (!attempts.some(attempt => attempt.input.TargetFile === file)) attempts.push({ tool: 'write_to_file', input: { TargetFile: file, CodeContent: 'elu-code\n' } }); }
   const run = /\b[Rr]un (?:this |the )?command(?: and report its output)?:?\s+(\S+)/.exec(text); if (run) attempts.push({ tool: 'run_command', input: { CommandLine: clean(run[1]), Cwd: cwd } });
   const url = /\b[Ff]etch (https?:\/\/\S+)/.exec(text); if (url) attempts.push({ tool: 'read_url', input: { Url: clean(url[1]) } });
   const search = /\b[Ss]earch the web for ([^.\n]+)/.exec(text); if (search) attempts.push({ tool: 'search_web', input: { query: search[1] } });

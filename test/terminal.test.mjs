@@ -2051,6 +2051,82 @@ test('a long turn shows its thought as a token count, how long its silent comman
   captureFrames('live-steps-real', frames);
 });
 
+// Antigravity as the session's model. Its Full access turn ran headless, which prints nothing
+// until its result: for as long as the turn took the chat said "Antigravity is working" and
+// no more. Over ACP its thought and each tool call show as they happen, and ELU answers every
+// permission request itself. Where ACP is not proven here, or cannot start, the turn still
+// runs headless: the chat then counts its time and says the program reports only when it ends.
+import { saveDefaultMode } from '../lib/modes.mjs';
+import { parseYaml, stringifyYaml } from '../lib/yaml.mjs';
+import { ADAPTERS } from '../lib/adapters/index.mjs';
+import { pendingApprovals } from '../lib/approvals.mjs';
+// relay: whether its one-time check proved ACP on this machine. The rest are the stand-in's switches.
+// The project holds two commands for a turn to run: one that leaves ran.txt, and a slow one that leaves late.txt.
+function antigravity(t, { relay, ...switches }) {
+  const p = setup(t, 'answer'), file = path.join(p.root, '.elu-code', 'config.yaml'), config = parseYaml(fs.readFileSync(file, 'utf8'));
+  Object.assign(config.roles.lead, { vendor: 'agy', maxCostUsd: null }); fs.writeFileSync(file, stringifyYaml(config));
+  fs.writeFileSync(path.join(p.root, 'marker.sh'), '#!/bin/sh\nprintf ran > ran.txt\n', { mode: 0o755 }); fs.writeFileSync(path.join(p.root, 'slow.sh'), '#!/bin/sh\nsleep 3\nprintf late > late.txt\n', { mode: 0o755 });
+  git(p.root, ['add', '.']); git(p.root, ['commit', '-m', 'Run sessions on Antigravity']); approveProjectFiles(p.root);
+  const fake = path.join(p.dir, 'fake.json'), set = value => fs.writeFileSync(fake, JSON.stringify({ ...JSON.parse(fs.readFileSync(fake, 'utf8')), agy: value }));
+  const proven = relay => { const record = path.join(personalDirectory(), 'conformance', 'agy.json'); fs.mkdirSync(path.dirname(record), { recursive: true }); fs.writeFileSync(record, JSON.stringify({ v: 1, bin: path.join(p.dir, 'agy'), version: '1.5.4', steps: Object.fromEntries(ADAPTERS.agy.conformance.map(step => [step.id, relay || step.id !== 'relay' ? 'pass' : 'fail'])), relay, at: new Date().toISOString() })); };
+  // The launches that are turns: not the release or sign-in probes.
+  const turns = () => fs.readFileSync(p.calls, 'utf8').trim().split('\n').map(line => JSON.parse(line)).filter(call => call.vendor === 'agy' && !call.args.includes('/usage') && !['--version', '--help'].includes(call.args[0])).map(call => call.args[0]);
+  set(switches); proven(relay); saveDefaultMode('full');
+  return { ...p, set, proven, turns };
+}
+test('an Antigravity turn in Full access shows its thought and each tool call as they happen and asks for nothing, then folds them above its reply; stopped, its steps stay', { timeout: 60000 }, async t => {
+  const p = antigravity(t, { relay: true, pace: 300 }), made = name => path.join(projectSnapshot(p.repo).tasks[0].worktree, name);
+  const v = await view(t, { repo: p.repo }), panels = v.current.panels, flat = () => panels.chat.getText().replace(/\s+/g, ' ');
+  // Whatever would reach the owner while the turns run: a request among the approvals, or its card in the chat.
+  const asked = [], watch = setInterval(() => { try { asked.push(...pendingApprovals().map(row => row.summary)); if (/Waiting for your approval/.test(flat())) asked.push('the chat asks'); } catch { /* Between two writes. */ } }, 20);
+  t.after(() => clearInterval(watch));
+  await send(v, 'Create the file notes.txt with the text "x". Run this command: ./marker.sh. Reply with the summary "Wrote the notes."');
+  await until(() => /Antigravity is working ✻ Reading the request\. • Working on it\. type a message any time/.test(flat()), 'its thought, before any tool call', 15000);
+  const frames = [{ step: 'thinking', text: v.frame() }];
+  await until(() => /• Working on it\. ● Write[^✓●✗]*notes\.txt type a message any time/.test(flat()), 'the write as it starts', 15000);
+  await until(() => /✓ Write[^✓●✗]*notes\.txt ● Run[^✓●✗]*marker\.sh type a message any time/.test(flat()), 'the write ended, the command as it starts', 15000);
+  frames.push({ step: 'the command runs', text: v.frame() });
+  await until(() => /✓ Write[^✓●✗]*notes\.txt ✓ Run[^✓●✗]*marker\.sh type a message any time/.test(flat()), 'both calls ended, the reply not there yet', 15000);
+  assert.equal(projectSnapshot(p.repo).tasks[0].state, 'running'); assert.equal(fs.readFileSync(made('ran.txt'), 'utf8'), 'ran'); assert.equal(fs.readFileSync(made('notes.txt'), 'utf8'), 'elu-code\n');
+  assert.doesNotMatch(flat(), /reports only when it ends/, 'a run that shows its steps is not one that prints at the end');
+  await until(() => projectSnapshot(p.repo).tasks[0].state === 'answered' && /▸ 5 steps in \d+s · ctrl\+o shows them [^┃]+┃ Wrote the notes\./.test(flat()), 'the steps fold above the reply', 15000);
+  frames.push({ step: 'folded', text: v.frame() });
+  assert.deepEqual(p.turns(), ['acp']); assert.equal(projectSnapshot(p.repo).tasks[0].permissions, 'full');
+  // Another session, stopped while its command runs: the command ends with the turn, and the steps it showed stay.
+  await send(v, '/new'); await until(() => v.current.session === 'new', 'the new session form');
+  await send(v, 'Run this command: ./slow.sh. Reply with the summary "late".');
+  await until(() => /● Run[^✓●✗]*slow\.sh type a message any time/.test(flat()), 'the slow command as it starts', 15000);
+  const stopping = v.current.session; await send(v, '/stop');
+  await until(() => readTask(p.repo, stopping).state === 'stopped' && /▸ 3 steps in \d+s · stopped · ctrl\+o shows them/.test(flat()), 'the stopped turn keeps its steps', 15000);
+  frames.push({ step: 'stopped', text: v.frame() });
+  await new Promise(resolve => setTimeout(resolve, 3500));
+  assert.equal(fs.existsSync(path.join(readTask(p.repo, stopping).worktree, 'late.txt')), false, 'the command it started ended with it');
+  assert.deepEqual(asked, [], 'nothing was asked of the owner'); assert.deepEqual(p.turns(), ['acp', 'acp']);
+  captureFrames('antigravity-live-steps', frames);
+});
+
+test('where ACP is not proven or cannot start, an Antigravity turn counts its time in the chat and says the program reports only when it ends', { timeout: 60000 }, async t => {
+  const p = antigravity(t, { relay: false, pace: 2500 });
+  const v = await view(t, { repo: p.repo }), panels = v.current.panels, flat = () => panels.chat.getText().replace(/\s+/g, ' ');
+  const worked = () => Number(/ is working (\d+)s so far\. Antigravity reports only when it ends\. type a message any time/.exec(flat())?.[1]);
+  // Not proven: the check's relay step did not pass here.
+  await send(v, 'Reply with the summary "Printed at the end."');
+  await until(() => Number.isFinite(worked()), 'the line that counts', 15000);
+  const first = worked(), frames = [{ step: 'headless, counting', text: v.frame() }];
+  await until(() => worked() > first, 'it counts on', 5000);
+  await until(() => projectSnapshot(p.repo).tasks[0].state === 'answered' && /┃ Printed at the end\./.test(flat()), 'the reply', 15000);
+  assert.doesNotMatch(flat(), /reports only when it ends|steps in \d+s/, 'the line goes with the run, and a headless run has no steps to fold');
+  assert.deepEqual(p.turns(), ['-p']); assert.equal(projectSnapshot(p.repo).tasks[0].activeSilent, undefined);
+  // Proven, but `agy acp` ends at once: the same turn runs headless, and the chat says so the same way.
+  p.proven(true); p.set({ pace: 2500, acpFails: true });
+  await send(v, 'Reply with a second answer.');
+  await until(() => p.turns().length === 3 && Number.isFinite(worked()), 'the line again, once ACP could not start', 20000);
+  frames.push({ step: 'ACP could not start', text: v.frame() });
+  await until(() => projectSnapshot(p.repo).tasks[0].state === 'answered' && projectSnapshot(p.repo).tasks[0].runs.length === 2 && !/reports only when it ends/.test(flat()), 'the second reply, and the line gone with its run', 15000);
+  assert.deepEqual(p.turns(), ['-p', 'acp', '-p']);
+  captureFrames('antigravity-prints-at-end', frames);
+});
+
 // Three lines that read wrong, or lost a message.
 test('checks read as running, a waiting turn of a schedule names the schedule, and a message typed on a waiting row waits beside it', { timeout: 40000 }, async t => {
   const p = setup(t, 'slow'); saveBot({ name: 'sec', vendor: 'claude', instructions: 'Review the change for leaked secrets.' });
