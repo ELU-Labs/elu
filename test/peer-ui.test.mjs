@@ -604,6 +604,31 @@ test('e on a held reply or a held result opens its whole text in the message box
   await until(() => /Dropped the result\. Nothing was sent to @sara\./.test(status()), 'what n did');
 });
 
+test('e on a reply or a result that waits in Sessions opens its text to edit in Chats, and a draft of yours has no e', { timeout: 20000 }, async t => {
+  const p = project(later(t)); environment(t, p.parent); registerProject(repository(p.root));
+  const SECRET = `AKIA${'A1B2'.repeat(4)}`, WHOLE = `Lowercase input is covered by a test now. The key is ${SECRET}`;
+  const peer = fakePeer({ items: [
+    { id: 'held:result-r1', kind: 'held', result: true, blocked: true, problems: ['aws-access-key'], peer: SARA, name: 'sara', project: null, text: WHOLE, question: 'Add a test.', at: ago(1), state: 'held', threadId: 'th-2' },
+    { id: 'draft-1', kind: 'draft', peer: LI, name: 'li', text: 'Which schema?', at: ago(3) },
+  ] });
+  peer.heldText = id => id === 'held:result-r1' ? WHOLE : null;
+  const v = await view(t, { dashboard: true, peer });
+  const board = v.panels.board, ask = v.panels.ask, keys = () => v.panels.keys.getText().trim(), status = () => v.panels.status.getText();
+  await until(() => board.items.some(item => /result for @sara/.test(plainItem(item))), 'the held result in Sessions');
+  // A draft of yours is sent or dropped; only what waits to go to a teammate is edited.
+  board.focus(); selectRow(board, /ask @li\?/); await until(() => /^y send {2}n discard {2}enter read/.test(keys()), 'a draft has no e');
+  selectRow(board, /result for @sara/); await until(() => /^y send {2}n discard {2}e edit {2}enter read/.test(keys()), 'e on the row');
+  await until(() => v.panels.chat.getText().includes('y send · n discard · e edit · enter read · c discard'), 'e beside the list');
+  // e: Chats, on that teammate, with the whole text in the message box.
+  v.input.write('e');
+  await until(() => v.current.view === 'chats' && v.current.screen.focused === ask && ask.getValue() === WHOLE, 'the result in the box of Chats');
+  await until(() => ask._label.getText().trim() === 'Edit the result for @sara · Enter sends it · Esc leaves it held' && keys() === 'enter send the edited result  esc leave it held', 'the box says it is an edit');
+  assert.match(status(), /It may hold a secret\. Take that out, then Enter sends it to @sara\. Esc leaves it held\./);
+  await until(() => ask.__listener, 'the box reads'); ask.setValue('Lowercase input is covered by a test now.'); ask.submit();
+  await until(() => /Sending the edited result to @sara\./.test(status()), 'the edited result went');
+  assert.deepEqual(peer.sent().filter(row => row.type === 'approve').map(row => [row.id, row.text]), [['held:result-r1', 'Lowercase input is covered by a test now.']]);
+});
+
 test('@name in an open session asks that teammate from the session, and /ask says so and leaves the question ready to send', { timeout: 30000 }, async t => {
   const p = project(later(t)); environment(t, p.parent);
   const repo = repository(p.root), at = new Date().toISOString();
