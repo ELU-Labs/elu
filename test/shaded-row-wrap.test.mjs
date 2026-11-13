@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { PassThrough } from 'node:stream';
 import blessed from 'blessed';
 import { chatBlock, ink, wrapText, keepRows } from '../lib/terminal-visuals.mjs';
+import { editable } from '../lib/editor.mjs';
 
 // The pane beside the list as the app sets it up (lib/terminal.mjs): a border, two columns of
 // padding each side, a scroll bar, and rows the app wrapped to the pane (chatWidth). blessed
@@ -77,4 +78,78 @@ test('a row wider than the pane is still wrapped, so nothing runs past the edge'
   assert.equal(rows.slice(0, -1).join(''), 'one two three four five six seven eight nine ten eleven twelve', 'no word is lost');
   assert.deepEqual(pane._clines.rtof, [...Array(rows.length - 1).fill(0), 1], 'each shown row knows its line');
   assert.deepEqual(pane._clines.ftor, [[...Array(rows.length - 1).keys()], [rows.length - 1]]);
+});
+
+// The other panes, as the app sets them up: a list (its rows are one line high), a one-row
+// text (the title over a session, the key bar), the text box of a dialog, the message box as
+// the editor lays it out, and a pane that does not wrap (the Changes view). keepRows on the
+// screen keeps the rows of each, whenever it is put there.
+function paired(t) {
+  const make = () => { const output = new PassThrough(); output.isTTY = true; output.columns = 220; output.rows = 12; output.resume(); const input = new PassThrough(); input.isTTY = true; input.setRawMode = () => {}; const screen = blessed.screen({ input, output, terminal: 'xterm-256color', fullUnicode: true, warnings: false }); t.after(() => screen.destroy()); return screen; };
+  return { kept: keepRows(make()), plain: make() };
+}
+// A row of words exactly `room` columns wide: "et", its last word, is the one blessed moved down.
+const filling = room => { const words = 'alpha beta gamma delta epsilon zeta eta theta iota kappa lambda'.split(' '); let row = ''; for (let at = 0; row.length < room - 12; at++) row += `${words[at % words.length]} `; return `${row}${'m'.repeat(room - row.length - 3)} et`; };
+const PANES = {
+  // lib/terminal.mjs pane(): the list's last column is its scroll bar, so a row has one less.
+  'a list row': (screen, room, text) => { const list = blessed.list({ parent: screen, top: 0, left: 0, width: room + 1, height: 4, tags: true, scrollbar: { ch: '┃' } }); list.setItems([ink(text, 'muted', true), 'short']); return list.items[0]; },
+  'a one-row text': (screen, room, text) => blessed.text({ parent: screen, top: 0, left: 0, width: room, height: 1, tags: true, content: ink(text, 'text', true, true) }),
+  'the text box of a dialog': (screen, room, text) => { const modal = blessed.box({ parent: screen, top: 0, left: 0, width: room + 3, height: 8, border: 'line' }); const box = blessed.box({ parent: modal, top: 1, left: 1, width: '100%-2', height: '100%-2', scrollable: true, tags: true, scrollbar: { ch: '|' } }); box.setContent(`${ink(text, 'orange', true)}\nshort`); return box; },
+  'a pane that does not wrap': (screen, room, text) => blessed.box({ parent: screen, top: 0, left: 0, width: room + 2, height: 4, border: 'line', tags: true, wrap: false, content: `${ink(text, 'muted', true)}\nshort` }),
+};
+
+test('on a screen that keeps its rows, a row that fills a list, a one-row text, a dialog or a pane that does not wrap is whole at every width', t => {
+  const { kept, plain } = paired(t), bare = pane => pane._clines.map(row => row.replace(/\x1b\[[\d;]*m/g, ''));
+  for (const [kind, build] of Object.entries(PANES)) {
+    let split = 0;
+    for (let room = 20; room <= 200; room++) {
+      const text = filling(room), pane = build(kept, room, text), alone = build(plain, room, text);
+      assert.equal(bare(pane)[0], text, `${kind} at ${room}`);
+      assert.equal(pane._clines.ftor[0].length, 1, `${kind}: one row at ${room}`);
+      if (bare(alone)[0] !== text) split++;
+      for (const el of [pane, alone]) { let top = el; while (top.parent && top.parent.type !== 'screen') top = top.parent; top.destroy(); }
+    }
+    // What this guards: without it blessed moves "et" to a second row, which a one-row pane never shows.
+    if (kind !== 'a pane that does not wrap') assert.equal(split, 181, `${kind}: blessed alone wraps the row again at every width`);
+  }
+});
+
+test('a row with a character that is two units of the string and one column of the screen is whole too, also where the pane does not wrap', t => {
+  const { kept, plain } = paired(t), bare = pane => pane._clines.map(row => row.replace(/\x1b\[[\d;]*m/g, ''));
+  for (const [kind, build] of Object.entries(PANES)) {
+    let broken = 0;
+    for (let room = 20; room <= 200; room++) {
+      // Two letters from the mathematical alphabet near the start, and the row still as wide as the pane.
+      const text = `𝐀𝐁 ${filling(room - 3)}`, pane = build(kept, room, text), alone = build(plain, room, text);
+      assert.equal(blessed.unicode.strWidth(text), room);
+      assert.equal(bare(pane)[0], text, `${kind} at ${room}`);
+      if (bare(alone)[0] !== text) broken++;
+      for (const el of [pane, alone]) { let top = el; while (top.parent && top.parent.type !== 'screen') top = top.parent; top.destroy(); }
+    }
+    assert.equal(broken, 181, `${kind}: blessed alone wraps or cuts the row at every width`);
+  }
+});
+
+test('a pane put on the screen later, and one inside another, keep their rows; a row wider than its pane is still wrapped', t => {
+  const { kept } = paired(t), text = filling(40);
+  const outer = blessed.box({ parent: kept, top: 0, left: 0, width: 60, height: 10, border: 'line' }), inner = blessed.box({ parent: outer, top: 0, left: 0, width: 50, height: 8, border: 'line' });
+  const deep = blessed.text({ parent: inner, top: 0, left: 0, width: 40, height: 2, tags: true, content: ink(text, 'muted', true) });
+  assert.deepEqual(deep._clines.map(row => row.replace(/\x1b\[[\d;]*m/g, '')), [text]);
+  // Built on its own, then put on the screen: its text is laid out when it gets there.
+  const loose = blessed.text({ screen: kept, top: 0, left: 0, width: 40, height: 2, tags: true, content: ink(text, 'muted', true) });
+  kept.append(loose);
+  assert.deepEqual(loose._clines.map(row => row.replace(/\x1b\[[\d;]*m/g, '')), [text]);
+  const wide = blessed.text({ parent: kept, top: 0, left: 0, width: 30, height: 4, tags: true, content: ink(text, 'muted', true) });
+  assert.ok(wide._clines.length > 1 && wide._clines.every(row => row.replace(/\x1b\[[\d;]*m/g, '').length <= 30), 'a row wider than the pane is wrapped');
+});
+
+test('the message box shows the rows its editor laid out: one that fills the box and holds such a character is not wrapped again', t => {
+  const { kept, plain } = paired(t);
+  const box = screen => editable(blessed.textarea({ parent: screen, top: 0, left: 0, width: 40, height: 6, border: 'line', inputOnFocus: false, padding: { left: 1, right: 1 } }));
+  const [field, alone] = [box(kept), box(plain)], room = field.editorView().width, value = `𝐀 ${filling(room - 2)} and the rest of the message`;
+  for (const each of [field, alone]) each.setValue(value);
+  const rows = field.editorView().rows.map(row => value.slice(row.start, row.end));
+  assert.equal(blessed.unicode.strWidth(rows[0]), room, 'the first row fills the box');
+  assert.deepEqual(field._clines.map(row => row.trimEnd()), rows, 'the box shows the rows the cursor is placed by');
+  assert.equal(alone._clines.length, rows.length + 1, 'blessed alone wraps the first row again, under the cursor');
 });
