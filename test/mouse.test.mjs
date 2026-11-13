@@ -542,6 +542,26 @@ test('Shift and Up or Down highlight in the message box by lines, scroll it to t
   assert.ok(!v.current.screen.destroyed, 'Ctrl-C with a highlight does not quit');
 });
 
+test('Shift+Up, plain Up and Down scroll the message box only as far as the cursor needs, one key at a time', async t => {
+  const v = await view(t), value = numbered(12);
+  await typing(v, value);
+  assert.equal(v.ask.height - v.ask.iheight, 4, 'the box shows four lines');
+  assert.equal(v.ask.childBase, 8, 'and its last four');
+  // Row r of the numbered lines ends at r * 8 + 7, where the cursor stays as it goes up and down.
+  const step = async (keys, row, base, what) => {
+    v.input.write(keys);
+    await until(() => v.ask.cursor === row * 8 + 7, what); await pause(30);
+    assert.equal(v.ask.childBase, base, `${what}: the view moves only to keep the cursor in it`);
+    assert.deepEqual(drawnBox(v).rows, rowsInView(v), `${what}: the box draws that view`);
+  };
+  for (let row = 10; row >= 0; row--) await step(SHIFT.up, row, Math.min(8, row), `Shift+Up to line ${row + 1}`);
+  for (let row = 1; row <= 11; row++) await step(SHIFT.down, row, Math.max(0, row - 3), `Shift+Down to line ${row + 1}`);
+  assert.equal(v.current.selection.active, false, 'back where it began, nothing is highlighted');
+  for (let row = 10; row >= 0; row--) await step('\x1b[A', row, Math.min(8, row), `Up to line ${row + 1}`);
+  for (let row = 1; row <= 11; row++) await step('\x1b[B', row, Math.max(0, row - 3), `Down to line ${row + 1}`);
+  assert.equal(v.ask.getValue(), value, 'the text stays');
+});
+
 test('with a highlight made by the keys, typing or a paste replaces it, Backspace removes it, and a plain arrow ends it', async t => {
   const v = await view(t);
   await typing(v, 'hello world');
