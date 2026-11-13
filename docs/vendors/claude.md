@@ -17,16 +17,35 @@ for each.
 Every turn of yours in your own session, and every turn of a bot you wrote to, starts with
 `--input-format stream-json`, in every mode, Read only too: the prompt goes in as one user
 message and the input stays open until the turn writes its `result` line. A message you
-send while the turn works goes on that input at once, as one more user message
-(`{"type":"user","message":{"role":"user","content":...},"parent_tool_use_id":null}`),
+send while the turn works goes on that input at once, as one more user message with a uuid
+(`{"type":"user","message":{"role":"user","content":...},"parent_tool_use_id":null,"uuid":...,"origin":{"kind":"human"}}`),
 with a line that tells the model you wrote again during its turn and that its reply answers
 that too. Claude Code takes a user message that comes while it works in at the turn's next
-step, and the turn goes on with it; the one reply answers everything. The chat shows your
-message where you sent it, with "Sent to the running turn." under it, and the session's
-history keeps it once. Several go in the order you sent them. Only a message for the one
-working turns go: yours to the model while the model works, yours to a bot while that bot
-works. A message to someone else waits for the turn to end, and so does every message sent
-after it. Read from the 2.1.323 program (a queued prompt is folded into a running turn at
+step, and the turn goes on with it; the one reply answers everything. For a message with a
+uuid it writes `command_lifecycle` lines (`queued`, `started`, `completed`, or `cancelled`).
+Until `started`, the message waits in the chat with "Waiting for the current command to
+finish." under it: behind one long command, the next step is when that command ends. Once
+`started` comes, the chat shows your message where you sent it, with "Sent to the running
+turn." under it, and the session's history keeps it once. Several go in the order you sent
+them. Only a message for the one working turns go: yours to the model while the model
+works, yours to a bot while that bot works. A message to someone else waits for the turn to
+end, and so does every message sent after it.
+
+Enter in the empty message box sends a waiting message now. ELU writes Claude Code's own
+control request for it (`{"subtype":"interrupt","send_now":true,"message_uuid":...}`).
+Claude Code answers `delivering` when the command the turn waits on can move to the
+background: the command keeps running there, the turn reads your message at once and goes
+on. It answers `stopped` when nothing can move: the turn is cut, its `result` line says
+`error_during_execution`, and your message starts the next turn of the same run, in the
+same session, with nothing started again. `↑` takes a waiting message back with
+`{"subtype":"cancel_async_message","message_uuid":...}`; one the turn already took stays
+sent, and the chat says so. All of this is used only when the run's first line names the
+capabilities `msg_lifecycle_v1` and `interrupt_send_now_v1`. A Claude Code release that
+names neither gets no message while it works: there a message waits for the turn to end,
+and Enter stops the turn first, as on the other vendors. Read from the 2.1.322 program; the
+messages above were driven with the stand-in CLI, not yet with the real service.
+
+Read from the 2.1.323 program (a queued prompt is folded into a running turn at
 its next tool step; one that comes after the last step runs as one more turn of the same
 run, with a `result` line of its own, after the input closes) and from its change log
 ("queued prompts sent as content blocks over --input-format stream-json ... merged into one

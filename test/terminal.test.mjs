@@ -1109,8 +1109,8 @@ test('a message with no @name goes to whoever the owner last wrote to in the ses
   // @model alone sends nothing and waits for the message.
   await send(v, '@model'); await until(() => /Write your message after @model\./.test(panels.status.getText()) && panels.ask.getValue() === '@model ', 'the box keeps @model');
   panels.ask.setValue(''); assert.equal(roles().length, 5);
-  // A message sent while a bot works goes to its turn at once, named for that bot.
-  answers('slow');
+  // A message sent while a bot works goes to its turn, named for that bot: the turn takes it at its next step.
+  fs.writeFileSync(fake, JSON.stringify({ ...JSON.parse(fs.readFileSync(fake, 'utf8')), mode: 'listen', steps: 150, stepMs: 200 }));
   await send(v, '@sec Still there?'); await until(() => /@sec is working/.test(chat()), 'the bot at work');
   await send(v, 'and the deploy key?');
   await until(() => /You → @sec {2}\d{1,2}:\d\d [AP]M\n┃ and the deploy key\? *\nSent to the running turn\./.test(chat()), 'the message went to the bot\'s turn');
@@ -1157,12 +1157,12 @@ test('a bot at work is named in the chat; one that is stopped or cannot answer s
   await until(() => /You → @sec {2}\d{1,2}:\d\d [AP]M\n┃ Is the token in config\.js a secret\?/.test(chat()) && /@sec {2}\d{1,2}:\d\d [AP]M\n┃ Could not answer\./.test(chat()), 'and so does the chat');
   assert.match(panels.chat.content, /\{203-fg\}\{bold\}@sec\{\/bold\}/, 'behind a red bar'); assert.equal(tasks()[0].state, 'answered');
   // While the bot works the chat names it, and a second message waits under the name it was written to.
-  answers('slow');
+  fs.writeFileSync(fake, JSON.stringify({ ...JSON.parse(fs.readFileSync(fake, 'utf8')), mode: 'listen', steps: 150, stepMs: 200 }));
   const started = () => fs.readFileSync(p.calls, 'utf8').split('\n').filter(line => line.includes('"-p"')).length, before = started();
   await send(v, '@sec Still there?'); await until(() => /@sec is working/.test(chat()) && /@sec working/.test(panels.header.getText()), 'the bot is shown at work');
   // The session reads as working before the vendor starts. The run has read its mode once its call is recorded; only then may the mode change.
   await until(() => started() > before, 'the slow run has started');
-  // Written to the bot while it works, a message goes to its turn at once.
+  // Written to the bot while it works, a message goes to its turn, which takes it at its next step.
   await send(v, '@sec And the deploy key?'); await until(() => /You → @sec {2}\d{1,2}:\d\d [AP]M\n┃ And the deploy key\? *\nSent to the running turn\./.test(chat()), 'sent to the bot\'s turn');
   // /stop ends the bot's turn without touching the lead's answer; the next message to it is answered.
   answers('answer');
@@ -2069,6 +2069,60 @@ test('a message sent while Claude Code works goes to its turn, and the chat says
   assert.equal(task().runs.length, 1, 'one turn');
 });
 
+// The owner's report: the model sat in one long command, his message read "Sent to the running
+// turn", and nothing read it until the command ended. It waits, and the chat says so; Enter
+// sends it now with Claude Code's own interrupt, and the same turn goes on with it.
+test('a message sent while Claude Code runs a long command waits for the command, and Enter sends it now: the same turn answers it', { timeout: 60000 }, async t => {
+  const p = setup(t, 'command'); fakeClis(p.parent, { mode: 'command', commandMs: 60000 });
+  const v = await view(t, { repo: p.repo }), panels = v.current.panels, chat = () => panels.chat.getText(), task = () => projectSnapshot(p.repo).tasks[0];
+  const controls = () => { const file = path.join(p.dir, 'controls.jsonl'); return fs.existsSync(file) ? fs.readFileSync(file, 'utf8').trim().split('\n').map(JSON.parse) : []; };
+  await send(v, 'Run the long check');
+  await until(() => task()?.activeInbox === true && /Opus is working/.test(chat()), 'the model works and takes messages');
+  await send(v, 'Also cover refunds');
+  await until(() => /You \(waiting\)[^\n]*\n[^\n]*Also cover refunds *\nWaiting for the current command to finish\.\nEnter sends it now · ↑ takes it back/.test(chat()), 'it waits for the command, and the keys are named');
+  await new Promise(resolve => setTimeout(resolve, 600));
+  assert.doesNotMatch(chat(), /Sent to the running turn\./, 'not said before the turn took it');
+  assert.deepEqual(pendingRequests(p.root).filter(row => row.state === 'queued').map(row => row.goal), ['Also cover refunds']); assert.deepEqual(controls(), []);
+  panels.ask.focus(); panels.ask.readInput(); await until(() => panels.ask.__listener, 'message box');
+  await until(() => /^enter send it now {2}↑ take it back/.test(panels.keys.getText().trim()), 'the key bar names it');
+  v.input.write('\r');
+  await until(() => /Sending now\. The running turn takes your message and goes on\./.test(panels.status.getText()), 'what Enter says');
+  await until(() => /You {2}\d{1,2}:\d\d [AP]M\n┃ Also cover refunds *\nSent to the running turn\./.test(chat()), 'the turn took it');
+  assert.doesNotMatch(chat(), /\(waiting\)/);
+  assert.deepEqual(controls().map(row => [row.subtype, row.send_now]), [['interrupt', true]]);
+  await until(() => task().state === 'answered', 'the turn answers');
+  assert.equal(task().runs.length, 1, 'the same run: nothing stopped');
+  assert.deepEqual(task().messages.map(row => [row.text, row.during === true]), [['Run the long check', false], ['Also cover refunds', true]]);
+  await until(() => /› Opus answered/.test(panels.status.getText()), 'the status line says it answered');
+});
+
+test('Up takes a message back from the running turn before it is read, and one the turn already took stays sent', { timeout: 60000 }, async t => {
+  const p = setup(t, 'command'); fakeClis(p.parent, { mode: 'command', commandMs: 60000 });
+  const v = await view(t, { repo: p.repo }), panels = v.current.panels, chat = () => panels.chat.getText(), task = () => projectSnapshot(p.repo).tasks[0];
+  const controls = () => { const file = path.join(p.dir, 'controls.jsonl'); return fs.existsSync(file) ? fs.readFileSync(file, 'utf8').trim().split('\n').map(JSON.parse) : []; };
+  const waiting = () => pendingRequests(p.root).filter(row => row.state === 'queued').map(row => row.goal);
+  await send(v, 'Run the long check');
+  await until(() => task()?.activeInbox === true && /Opus is working/.test(chat()), 'the model works and takes messages');
+  await send(v, 'Also cover refunds');
+  await until(() => /Also cover refunds *\nWaiting for the current command to finish\./.test(chat()) && pendingRequests(p.root).some(row => row.turn), 'it waits on the turn\'s input');
+  panels.ask.focus(); panels.ask.readInput(); await until(() => panels.ask.__listener, 'message box');
+  v.input.write('\x1b[A');
+  await until(() => panels.ask.getValue() === 'Also cover refunds' && waiting().length === 0, 'it is back in the box');
+  assert.match(panels.status.getText(), /Taken back\. Enter sends it again · ↓ drops it\./);
+  assert.deepEqual(controls().map(row => row.subtype), ['cancel_async_message'], 'taken back from Claude Code too');
+  await until(() => !/\(waiting\)/.test(chat()), 'nothing waits');
+  assert.equal(task().state, 'running', 'the turn goes on'); assert.deepEqual(task().messages.map(row => row.text), ['Run the long check']);
+  // Sent again and sent now: the turn takes it, and Up has nothing to take back.
+  v.input.write('\r');
+  await until(() => waiting().length === 1 && pendingRequests(p.root).some(row => row.turn), 'it waits again');
+  await until(() => panels.ask.getValue() === '', 'the box is empty');
+  panels.ask.focus(); panels.ask.readInput(); await until(() => panels.ask.__listener, 'message box'); v.input.write('\r');
+  await until(() => /Sent to the running turn\./.test(chat()), 'the turn took it');
+  assert.deepEqual(waiting(), []);
+  await until(() => task().state === 'answered', 'the turn answers');
+  assert.equal(task().runs.length, 1); assert.deepEqual(task().messages.map(row => row.text), ['Run the long check', 'Also cover refunds']);
+});
+
 // A vendor that cannot take a message during its turn: Enter in the empty box sends what
 // waits now. The turn stops as /stop stops it, and the message starts the next turn at once.
 test('Enter in an empty box sends a waiting message now: the turn stops and the message starts the next one', { timeout: 40000 }, async t => {
@@ -2083,7 +2137,7 @@ test('Enter in an empty box sends a waiting message now: the turn stops and the 
   panels.ask.focus(); panels.ask.readInput(); await until(() => panels.ask.__listener, 'message box');
   await until(() => /^enter send it now {2}↑ take it back/.test(panels.keys.getText().trim()), 'the key bar names it');
   v.input.write('\r');
-  await until(() => /Sending now\. This turn stops and your messages start the next one · \/stop cancels them\./.test(panels.status.getText()), 'what Enter says');
+  await until(() => /Sending now\. This turn stops and your messages start the next one · ↑ takes one back\./.test(panels.status.getText()), 'what Enter says');
   await until(() => sent().length === 2 && task().state === 'running' && waiting().length === 0, 'the waiting messages started the next turn');
   assert.deepEqual(sent(), ['Keep working on the board', 'Also cover refunds\n\nAnd keep the old name']);
   assert.ok(task().runs.length >= runs);
