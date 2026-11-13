@@ -6,11 +6,13 @@ import { temp, project, fakeClis, git } from './helpers.mjs';
 import { ProjectController } from '../lib/projects.mjs';
 import { projectFolder } from '../lib/workspace.mjs';
 import { readTask, setTitle, taskDir } from '../lib/state.mjs';
-import { TASK_LIMITS, approveTask, checkProposal, currentTask, liveTodos, planFile, planSchema, readPlanReply, rejectTask, reportProgress, sessionTasks, sharedTask, taskEta } from '../lib/plan.mjs';
+import { TASK_LIMITS, approveTask, checkProposal, currentTask, fileTodos, liveTodos, planFile, planSchema, readPlanReply, rejectTask, reportProgress, sessionTasks, sharedTask, taskEta } from '../lib/plan.mjs';
 import { conversationSchema } from '../lib/config.mjs';
 import { boardRows, rowBadge } from '../lib/board.mjs';
 import { clockTime, etaText, taskCard as drawCard, taskState } from '../lib/terminal-plan.mjs';
 import { visible } from '../lib/terminal-visuals.mjs';
+import { atomic, personalDirectory } from '../lib/util.mjs';
+import { ADAPTERS } from '../lib/adapters/index.mjs';
 // The card as its text reads on screen, without the style marks.
 const taskCard = (plan, options) => visible(drawCard(plan, options));
 
@@ -19,9 +21,9 @@ function environment(t, values) {
   t.after(() => { for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } });
 }
 // A project with one source file and a passing-after-the-edit test, and the stand-in vendors.
-function fixture(t, mode = 'normal', vendor = 'claude') {
+function fixture(t, mode = 'normal', vendor = 'claude', { home = false } = {}) {
   const p = project(t), fake = fakeClis(p.parent, { mode });
-  environment(t, { ...fake.env, GIT_AUTHOR_NAME: 'Test Owner', GIT_AUTHOR_EMAIL: 'owner@example.invalid', GIT_COMMITTER_NAME: 'Test Owner', GIT_COMMITTER_EMAIL: 'owner@example.invalid' });
+  environment(t, { ...fake.env, ...(home ? { HOME: p.parent } : {}), GIT_AUTHOR_NAME: 'Test Owner', GIT_AUTHOR_EMAIL: 'owner@example.invalid', GIT_COMMITTER_NAME: 'Test Owner', GIT_COMMITTER_EMAIL: 'owner@example.invalid' });
   const controller = new ProjectController(projectFolder(p.root)); controller.draftConfig.roles.lead.vendor = vendor;
   return { ...p, fake, controller, repo: controller.repo };
 }
@@ -138,6 +140,60 @@ test('claude: a later turn of the same session ticks a step an earlier turn made
   assert.equal(launch.args[launch.args.indexOf('--resume') + 1], waits.runs.at(-1).session);
   assert.match(log, /"name":"TaskUpdate","input":\{"taskId":"2","status":"completed"\}/); assert.doesNotMatch(log, /TaskCreate/);
   fs.writeFileSync(gate, ''); await second;
+});
+
+// Antigravity and Grok Build through the same Task flow. In Ask for approval, once the relay check passed on this
+// machine, the turn runs over ACP and sends its list as plan updates. In Full access it runs headless and prints
+// its answer only when it ends: there it keeps the list in a file of the run, which is read while it works.
+const proven = (vendor, bin, version) => atomic(path.join(personalDirectory(), 'conformance', `${vendor}.json`), { v: 1, bin, version, steps: Object.fromEntries(ADAPTERS[vendor].conformance.map(step => [step.id, 'pass'])), relay: true, at: new Date().toISOString() });
+for (const [vendor, label, version] of [['agy', 'Antigravity', '1.5.4'], ['grok', 'Grok Build', '1.0.77']]) for (const [mode, how] of [['ask', 'from its plan updates over ACP in Ask for approval'], ['full', 'from the list it keeps in a file, headless in Full access']]) test(`${label}: a working turn ticks the Task's subtasks ${how}, while it runs`, async t => {
+  const f = fixture(t, 'normal', vendor, { home: true }), gate = path.join(f.parent, 'go-on'), settings = path.join(f.fake.dir, 'fake.json');
+  fs.writeFileSync(settings, JSON.stringify({ ...JSON.parse(fs.readFileSync(settings, 'utf8')), plan: true, live: gate }));
+  if (vendor === 'grok') { fs.mkdirSync(path.join(f.parent, '.grok')); fs.writeFileSync(path.join(f.parent, '.grok', 'auth.json'), '{}\n', { mode: 0o600 }); }
+  proven(vendor, path.join(f.fake.dir, vendor), version);
+  const calls = () => fs.readFileSync(f.fake.calls, 'utf8').trim().split('\n').map(JSON.parse).filter(call => call.vendor === vendor);
+  // The first turn plans: the Task waits for the owner, and no list is asked for yet.
+  const asked = await f.controller.ask('Uppercase coupon codes', null, { permissions: mode }).finished;
+  assert.equal(currentTask(f.repo, asked.id).state, 'proposed', JSON.stringify(asked.error));
+  approveTask(f.repo, asked.id);
+  const finished = f.controller.ask('Approved the Task: Uppercase coupons', asked.id, { approved: true }).finished;
+  const live = await shows(f, asked.id, 'done,doing');
+  assert.equal(readTask(f.repo, asked.id).state, 'running');
+  assert.deepEqual(live.subtasks, [{ id: 's1', text: 'Change normalize', state: 'done' }, { id: 's2', text: 'Run the coupon test', state: 'doing' }]);
+  assert.equal(taskState(live), 'approved · 1 of 2 subtasks done');
+  const args = calls().at(-1).args; let folder = null;
+  if (mode === 'ask') assert.deepEqual(args.slice(vendor === 'agy' ? -1 : -2), vendor === 'agy' ? ['acp'] : ['agent', 'stdio']);
+  else {
+    // Headless, as Full access runs these two: the turn was told where to keep its list.
+    assert.ok(args.includes(vendor === 'agy' ? '--dangerously-skip-permissions' : '--prompt-file'));
+    const work = inputs(f).filter(row => row.vendor === vendor).at(-1).input, named = /Keep the Task's subtasks in the file ("[^\n]+?") as you work: a JSON list/.exec(work);
+    assert.ok(named, 'the prompt names the file'); assert.match(work, /The owner sees that list as the Task's subtasks while this turn runs\./);
+    folder = path.dirname(JSON.parse(named[1])); assert.equal(fs.statSync(folder).mode & 0o777, 0o700);
+  }
+  fs.writeFileSync(gate, '');
+  const done = await finished;
+  assert.notEqual(done.kind, 'conversation', JSON.stringify(done.error));
+  const after = currentTask(f.repo, asked.id);
+  assert.equal(after.state, 'done'); assert.deepEqual(after.subtasks.map(step => step.state), ['done', 'done']);
+  // The file goes with the run.
+  if (folder) assert.equal(fs.existsSync(folder), false);
+});
+
+test('the list a headless turn keeps in a file: read when it changes, and a file that does not read changes nothing', t => {
+  const dir = temp(t), file = path.join(dir, 'todo.json'), read = fileTodos(file);
+  assert.equal(read(), null, 'no file yet');
+  fs.writeFileSync(file, '[{"text":"Change normalize","state":"doi');
+  assert.equal(read(), null, 'half written');
+  fs.writeFileSync(file, JSON.stringify([{ text: 'Change normalize', state: 'doing' }, { text: 'Run the coupon test', state: 'todo' }]));
+  assert.deepEqual(read(), [{ id: 's1', text: 'Change normalize', state: 'doing' }, { id: 's2', text: 'Run the coupon test', state: 'todo' }]);
+  assert.equal(read(), null, 'nothing changed');
+  // The states as a model's own to-do tool names them read too, and so does a list under subtasks.
+  fs.writeFileSync(file, JSON.stringify({ subtasks: [{ text: 'Change normalize', state: 'completed' }, { text: 'Run the coupon test', state: 'in_progress' }, { text: '' }, 7] }));
+  assert.deepEqual(read().map(step => step.state), ['done', 'doing']);
+  // Never a link to another file, and never a file that is no list.
+  fs.rmSync(file); fs.writeFileSync(path.join(dir, 'other.json'), JSON.stringify([{ text: 'From elsewhere', state: 'done' }])); fs.symlinkSync(path.join(dir, 'other.json'), file);
+  assert.equal(read(), null);
+  fs.rmSync(file); fs.writeFileSync(file, '"done"'); assert.equal(read(), null);
 });
 
 // Lines in the shape each vendor prints them, with made-up content (test/fixtures/live-todos.json).

@@ -69,6 +69,22 @@ async function perform({ tool, input }) {
   if (tool === 'read_url') { try { const r = await fetch(input.Url); return `Fetched ${input.Url}: ${r.status}.`; } catch (error) { return `Fetch failed: ${error.message}`; } }
   return `Searched the web for ${input.query}.`;
 }
+// plan (fake.json): a request for a change comes back as a Task, and the turn that works on an approved one reports
+// every subtask done, as a model told to plan first does (lib/plan.mjs). has: whether the reply's schema has that field.
+const TASK = { title: 'Uppercase coupons', description: 'Make normalize return the coupon code in upper case.', goal: 'Coupon codes compare equal whatever their case.', objectives: ['normalize returns the code in upper case', 'The coupon test passes'], priority: 'medium', severity: 'low' };
+const STEPS = ['Change normalize', 'Run the coupon test'];
+function planned(result, text, has) {
+  if (!cfg.plan) return result;
+  if (has('task') && !text.includes('Approved Task (untrusted data')) Object.assign(result, { intent: 'edit', task: [TASK] });
+  if (has('subtasks')) Object.assign(result, { subtasks: STEPS.map(step => ({ text: step, state: 'done' })), objectivesMet: [1, 2], etaMinutes: null });
+  return result;
+}
+// live (fake.json): a file; a turn told to keep its to-do list shows it, first step done and the next in hand, and goes
+// on once that file exists. Over ACP it sends a plan update, as the standard has it. A headless run prints nothing
+// until it ends: told to keep the list in a file, it writes that file where the launch lets it write anywhere.
+const liveGate = async () => { const until = Date.now() + 30000; while (!fs.existsSync(cfg.live) && Date.now() < until) await new Promise(resolve => setTimeout(resolve, 50)); };
+const writeList = (file, states) => fs.writeFileSync(file, JSON.stringify(STEPS.map((text, index) => ({ text, state: states[index] }))));
+
 // One turn: ask is the ACP permission request (null in headless mode), dir the conversation's folder.
 async function turn(text, { cwd, skip, sandbox, ask, dir }) {
   const done = [], denied = [];
@@ -100,9 +116,13 @@ async function headless() {
   const schema = flag('--json-schema') ? readJson(flag('--json-schema')) : null;
   // slow: prints nothing for half a minute first, as a headless run does while it works.
   if (cfg.mode === 'slow') await new Promise(resolve => setTimeout(resolve, 30000));
+  const named = cfg.live && args.includes('--dangerously-skip-permissions') ? /Keep the Task's subtasks in the file ("[^\n]+?") as you work/.exec(text)?.[1] : null, list = named ? JSON.parse(named) : null;
+  if (list) { writeList(list, ['done', 'doing']); await liveGate(); }
   const result = await turn(text, { cwd, skip: args.includes('--dangerously-skip-permissions'), sandbox: args.includes('--sandbox'), ask: null, dir });
+  if (list) writeList(list, ['done', 'done']);
   if (schema?.properties?.intent) { result.intent = 'answer'; if (schema.properties.repository) result.repository = ''; }
   if (cfg.name !== undefined && schema?.properties?.name) result.name = cfg.name;
+  planned(result, text, name => Boolean(schema?.properties?.[name]));
   console.log(JSON.stringify({ conversationId: id, model: 'gemini-3-pro', structured_output: result, stats: { turns: 1 } }, null, 2));
 }
 async function acp() {
@@ -121,8 +141,7 @@ async function acp() {
         const text = (p.prompt ?? []).filter(block => block?.type === 'text').map(block => block.text).join('\n');
         const update = chunk => send({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: p.sessionId, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: chunk } } } });
         update('Working on it.\n');
-        // live (fake.json): a file; the turn sends its plan, first step done and the next in hand, as the real one does when it keeps a to-do list, and goes on once that file exists.
-        if (cfg.live) { send({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: p.sessionId, update: { sessionUpdate: 'plan', entries: [{ content: 'Change normalize', priority: 'medium', status: 'completed' }, { content: 'Run the coupon test', priority: 'medium', status: 'in_progress' }] } } }); const until = Date.now() + 30000; while (!fs.existsSync(cfg.live) && Date.now() < until) await new Promise(resolve => setTimeout(resolve, 50)); }
+        if (cfg.live && /Keep the Task's subtasks in your own to-do list/.test(text)) { send({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: p.sessionId, update: { sessionUpdate: 'plan', entries: [{ content: STEPS[0], priority: 'medium', status: 'completed' }, { content: STEPS[1], priority: 'medium', status: 'in_progress' }] } } }); await liveGate(); }
         const ask = async attempt => {
           const title = attempt.tool === 'write_to_file' ? `Write ${attempt.input.TargetFile}` : attempt.tool === 'run_command' ? `Run ${attempt.input.CommandLine}` : `${attempt.tool} ${attempt.input.Url ?? attempt.input.query ?? ''}`.trim();
           const answer = await request('session/request_permission', { sessionId: p.sessionId, toolCall: { toolCallId: `call-${nextId}`, title, kind: KIND[attempt.tool], rawInput: attempt.input }, options: [{ optionId: 'allow-once', name: 'Allow', kind: 'allow_once' }, { optionId: 'reject-once', name: 'Reject', kind: 'reject_once' }] });
@@ -132,6 +151,7 @@ async function acp() {
         // The runner's conversation schema rides in the prompt: an answer turn.
         if (/"intent"\s*:\s*\{/.test(text)) { result.intent = 'answer'; if (/"repository"\s*:\s*\{/.test(text)) result.repository = ''; }
         if (cfg.name !== undefined && /"name"\s*:\s*\{"type"/.test(text)) result.name = cfg.name;
+        planned(result, text, name => new RegExp(`"${name}"\\s*:\\s*\\{`).test(text));
         update(`Here is the result:\n${JSON.stringify(result, null, 2)}\n`);
         reply({ stopReason: 'end_turn' }); break;
       }

@@ -204,7 +204,7 @@ test('run() hands on each ACP plan update as it comes, and it reads as subtasks 
   const read = liveTodos(), seen = [];
   // The stand-in waits for the gate after its plan: the list is read before the turn ends.
   const onRow = row => { const steps = read(row); if (steps) { seen.push({ steps, running: !fs.existsSync(gate) }); fs.writeFileSync(gate, ''); } };
-  const done = await grok.run({ bin: w.bin, role: lead(), mode: 'auto', cwd: w.repo, env: w.env, logFile: path.join(w.dir, 'plan.log'), processFile: path.join(w.dir, 'plan.pid'), timeoutSeconds: 30, prompt: 'Reply done with the summary "planned".', onRow });
+  const done = await grok.run({ bin: w.bin, role: lead(), mode: 'auto', cwd: w.repo, env: w.env, logFile: path.join(w.dir, 'plan.log'), processFile: path.join(w.dir, 'plan.pid'), timeoutSeconds: 30, prompt: 'Keep the Task\'s subtasks in your own to-do list as you work. Reply done with the summary "planned".', onRow });
   assert.equal(done.result.outcome, 'done');
   assert.deepEqual(seen, [{ steps: [{ id: 's1', text: 'Change normalize', state: 'done' }, { id: 's2', text: 'Run the coupon test', state: 'doing' }], running: true }]);
 });

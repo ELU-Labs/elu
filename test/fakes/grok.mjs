@@ -28,6 +28,23 @@ if (args.includes('--version')) { console.log('1.0.77'); process.exit(0); }
 if (args.includes('--help')) { console.log('--output-format --permission-mode --sandbox --max-turns --cwd --no-auto-update --tools --disallowed-tools --allow --deny --prompt-file --prompt-json --no-alt-screen --no-memory --no-subagents --disable-web-search --session-id --resume --model'); process.exit(0); }
 if (args[0] === 'login') { console.error('fake grok: login is interactive'); process.exit(2); }
 
+// plan (fake.json): a request for a change comes back as a Task, and the turn that works on an approved one reports
+// every subtask done, as a model told to plan first does (lib/plan.mjs). The reply's schema rides in the prompt.
+const TASK = { title: 'Uppercase coupons', description: 'Make normalize return the coupon code in upper case.', goal: 'Coupon codes compare equal whatever their case.', objectives: ['normalize returns the code in upper case', 'The coupon test passes'], priority: 'medium', severity: 'low' };
+const STEPS = ['Change normalize', 'Run the coupon test'];
+function planned(result, prompt) {
+  if (!cfg.plan) return result;
+  if (/"task"\s*:\s*\{/.test(prompt) && !prompt.includes('Approved Task (untrusted data')) Object.assign(result, { intent: 'edit', task: [TASK] });
+  if (/"subtasks"\s*:\s*\{/.test(prompt)) Object.assign(result, { subtasks: STEPS.map(text => ({ text, state: 'done' })), objectivesMet: [1, 2], etaMinutes: null });
+  return result;
+}
+// live (fake.json): a file; a turn told to keep its to-do list shows it, first step done and the next in hand, and goes
+// on once that file exists. Over ACP it sends a plan update, as the standard has it. A headless run prints nothing
+// until it ends: told to keep the list in a file, it writes that file where the launch lets it write anywhere.
+const liveGate = async () => { const until = Date.now() + 30000; while (!fs.existsSync(cfg.live) && Date.now() < until) await new Promise(resolve => setTimeout(resolve, 50)); };
+const listFile = prompt => { const named = /Keep the Task's subtasks in the file ("[^\n]+?") as you work/.exec(prompt)?.[1]; return named ? JSON.parse(named) : null; };
+const writeList = (file, states) => fs.writeFileSync(file, JSON.stringify(STEPS.map((text, index) => ({ text, state: states[index] }))));
+
 // What the prompt asks for, done as far as the launch allows. ask() decides an action the
 // rules neither allow nor forbid: the relay over ACP, nothing in headless mode.
 async function act(prompt, record, { bypass, canWrite, canShell, canFetch, cwd, ask }) {
@@ -60,7 +77,7 @@ async function act(prompt, record, { bypass, canWrite, canShell, canFetch, cwd, 
   // The runner's conversation schema rides in the prompt: an answer turn.
   if (/"intent"\s*:\s*\{/.test(prompt)) { result.intent = 'answer'; if (/"repository"\s*:\s*\{/.test(prompt)) result.repository = ''; }
   if (cfg.name !== undefined && /"name"\s*:\s*\{"type"/.test(prompt)) result.name = cfg.name;
-  return result;
+  return planned(result, prompt);
 }
 const resultText = result => mode === 'invalid' ? JSON.stringify({ outcome: 'nope' }) : mode === 'fenced' ? `Here it is:\n\`\`\`json\n${JSON.stringify(result)}\n\`\`\`\n` : JSON.stringify(result);
 
@@ -103,8 +120,7 @@ if (args.includes('agent') && args.includes('stdio')) {
           return answer?.outcome?.outcome === 'selected' && String(answer.outcome.optionId).startsWith('allow');
         };
         send({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: record.id, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Working. ' } } } });
-        // live (fake.json): a file; the turn sends its plan, first step done and the next in hand, as the real one does when it keeps a to-do list, and goes on once that file exists.
-        if (cfg.live) { send({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: record.id, update: { sessionUpdate: 'plan', entries: [{ content: 'Change normalize', priority: 'medium', status: 'completed' }, { content: 'Run the coupon test', priority: 'medium', status: 'in_progress' }] } } }); const until = Date.now() + 30000; while (!fs.existsSync(cfg.live) && Date.now() < until) await new Promise(resolve => setTimeout(resolve, 50)); }
+        if (cfg.live && /Keep the Task's subtasks in your own to-do list/.test(text)) { send({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: record.id, update: { sessionUpdate: 'plan', entries: [{ content: STEPS[0], priority: 'medium', status: 'completed' }, { content: STEPS[1], priority: 'medium', status: 'in_progress' }] } } }); await liveGate(); }
         const result = await act(text, record, { bypass: record.yolo || mode === 'leaky', canWrite, canShell: true, canFetch: true, cwd: record.cwd, ask });
         record.turns.push(text); save(record);
         send({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: record.id, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: resultText(result) } } } });
@@ -146,7 +162,10 @@ else {
   if (load(session)) fail('That session id is already in use.');
   record = { id: session, cwd, sandbox, turns: [] };
 }
+const todoFile = cfg.live && bypass ? listFile(prompt) : null;
+if (todoFile) { writeList(todoFile, ['done', 'doing']); await liveGate(); }
 const result = await act(prompt, record, { bypass, canWrite, canShell, canFetch, cwd, ask: null });
+if (todoFile) writeList(todoFile, ['done', 'done']);
 record.turns.push(prompt); save(record);
 if (mode === 'max-turns') { console.log(JSON.stringify({ text: 'Still working on it.', stopReason: 'max_turn_requests', sessionId: session, requestId: 'req-1', num_turns: 3 })); process.exit(0); }
 console.log(JSON.stringify({ text: resultText(result), stopReason: 'end_turn', sessionId: session, requestId: 'req-1', num_turns: 1, usage: { input_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 5, reasoning_tokens: 0, total_tokens: 15 }, modelUsage: { 'grok-4.6': { inputTokens: 10, outputTokens: 5, cacheReadInputTokens: 0, modelCalls: 1 } } }));
