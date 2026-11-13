@@ -7,8 +7,8 @@ Labels: **[run]** checked by running the tested release of `codex` against a loc
 ## Install and sign in
 
 - `npm i -g @openai/codex` (a user prefix, no sudo).
-- `codex login` and choose ChatGPT. ELU Code reads `codex login status` and accepts only `Logged in using ChatGPT` [run]. An API key sign-in exits 0 too, so it is reported as signed out and the status line says `Codex: sign in with ChatGPT. Run: codex login`. No key variable is read or passed.
-- If another `codex` shim comes first on your PATH (the cmux shim does on some machines), put the real binary first. ELU Code launches with `features.hooks=false`; whether that neutralizes a shim's hooks is [unverified].
+- `codex login` and choose ChatGPT. ELU reads `codex login status` and accepts only `Logged in using ChatGPT` [run]. An API key sign-in exits 0 too, so it is reported as signed out and the status line says `Codex: sign in with ChatGPT. Run: codex login`. No key variable is read or passed.
+- If another `codex` shim comes first on your PATH (the cmux shim does on some machines), put the real binary first. ELU launches with `features.hooks=false`; whether that neutralizes a shim's hooks is [unverified].
 
 ## What each mode launches
 
@@ -30,7 +30,7 @@ The `elu_ask` profile is one `-c permissions.elu_ask=…` value with `default_pe
 - `":slash_tmp"="read"` and `":tmpdir"="read"`: the shared temp folders the workspace sandbox adds are read-only again [run]. The `sandbox_workspace_write.exclude_*` keys do nothing under a profile [run], so they are not passed.
 - Each named folder `"<dir>"="read"`: readable, not writable, the same entry a protected file gets below.
 - Each protected file `"<path>"="read"`: readable, not writable [run]. The structural checks still run afterwards.
-- Home secrets, ELU Code's state folder and the repository's `.git/elu-code` as `"<path>"="deny"`: a shell `cat` or `ls` there never starts and no item is reported [run]. The reviewer model in Approve for me sees the same deny list in its context [run].
+- Home secrets, ELU's state folder and the repository's `.git/elu-code` as `"<path>"="deny"`: a shell `cat` or `ls` there never starts and no item is reported [run]. The reviewer model in Approve for me sees the same deny list in its context [run].
 
 A profile value containing `*`, `?`, `[`, `]`, `{` or `}` is refused before launch: Codex reads those as patterns.
 
@@ -51,7 +51,7 @@ These lines come from real turns on 0.166.0-alpha.5.1 with a ChatGPT sign-in, no
 - With the host on, in Ask for approval and in Approve for me: a command runs as `/bin/zsh -lc '…'` and arrives as a `command_execution` item, a patch as a `file_change` item, and the adapter reads the stream. No other kind of item appeared.
 - The sandbox still refused: a write beside the workspace (`Operation not permitted`), a patch to a protected file (rejected, no item, no denial record) and a host lookup by `curl`.
 - The never list: with `allow_login_shell=false` a command runs as `/bin/zsh -c '…'`, and `command -v git` inside the sandbox names the stand-in. In Ask for approval, `npm test` whose script ran `git push` to an origin on another machine (an `ssh://` URL to a name that does not resolve) printed `git push is never allowed, in any mode.`, the push exited 126, ssh was never started, and the run kept the refusal for the chat. The same script's push to a bare repository inside the project went to the real git, and the sandbox of the mode refused its write (`remote unpack failed`). Approve for me was seen with the same refusal before local pushes were let through. With a login shell (`-lc`) the stand-in folder lands behind `/usr/bin` on macOS and would refuse nothing. Asked to run `git push` itself, the model declined, citing its instructions.
-- After a refused step the model answers `needs_input`, names what it needs in the summary and leaves `question` empty (three turns of three). ELU Code reads that reply as it is. Refusing it started a second session that ran the turn's commands again.
+- After a refused step the model answers `needs_input`, names what it needs in the summary and leaves `question` empty (three turns of three). ELU reads that reply as it is. Refusing it started a second session that ran the turn's commands again.
 - Not seen: Full access with the real service, a declined escalation in Approve for me, and what a code-mode cell can do without calling a tool.
 
 ## Not enforced or not verified

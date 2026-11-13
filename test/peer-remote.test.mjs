@@ -142,7 +142,7 @@ test('a session from my other computer starts as my own, with its bots, in the p
     markMine(devbox.identity.key, laptop.identity.key); noteTheirs(laptop.identity.key, true);
     const from = connection(laptop.identity.key), ctx = context(devbox.identity, { [laptop.identity.key]: from }), methods = hostMethods(ctx);
     // No project on this computer at all: said plainly.
-    assert.throws(() => methods['elu.remote.start'](START, from), { message: 'Open ELU Code once on this computer so it has a project.' });
+    assert.throws(() => methods['elu.remote.start'](START, from), { message: 'Open ELU once on this computer so it has a project.' });
     const project = registeredProject(t); saveTeamAccess(team.teamId, { root: project.root });
     assert.throws(() => methods['elu.remote.start']({ ...START, bots: ['nobody'] }, from), { message: '@nobody is not a bot on this computer. Make it there, or start without it.' });
     const started = methods['elu.remote.start'](START, from);
@@ -659,7 +659,7 @@ test('a computer of mine on an older build is listed as one to update, and nothi
     const missing = connection(devbox.identity.key); missing.request = async method => { missing.sent.push([method]); const error = new Error('Method not found'); error.details = { rpc: { code: -32601 } }; throw error; };
     await listTick(context(laptop.identity, { [devbox.identity.key]: missing }));
     assert.equal(remoteMachines()[0].older, true);
-    assert.equal(UPDATE_LIST('devbox'), 'Update ELU Code on devbox to see its sessions here.');
+    assert.equal(UPDATE_LIST('devbox'), 'Update ELU on devbox to see its sessions here.');
     // Not asked again for ten minutes.
     await listTick(context(laptop.identity, { [devbox.identity.key]: missing })); assert.equal(missing.sent.length, 1);
     // A build from before sessions on other computers is asked nothing at all.
@@ -745,7 +745,7 @@ test("Sessions groups my computer's sessions of this repository under its name, 
   // An offline computer keeps its last list, and says so; an older one says to update it.
   machinesFile[0].older = true;
   const older = remoteGlue({ facade, peerRead: () => status, peerCommand: async () => ({}), chatMessage: () => '', ink: text => text, colour: false }).sections(now, '/work/shop').filter(line => !line.spacer).map(text);
-  assert.deepEqual(older.slice(0, 2), ['On devbox · offline', 'Update ELU Code on devbox to see its sessions here.']);
+  assert.deepEqual(older.slice(0, 2), ['On devbox · offline', 'Update ELU on devbox to see its sessions here.']);
 });
 
 // The owner's two computers as they are: projects that are folders holding clones, with no

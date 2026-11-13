@@ -108,7 +108,7 @@ test('the lead error names what is wrong', () => {
   assert.equal(vendorProblem('claude', [{ vendor: 'claude', available: true, supported: false, signedIn: true, release: '2.1.321', reason: 'This untested version is missing required flags: --verbose.' }]), 'Claude Code 2.1.321: This untested version is missing required flags: --verbose.');
 });
 
-test('ELU Code finds a lead installed in ~/.local/bin when PATH lacks it, as under tmux or a login service', (t) => {
+test('ELU finds a lead installed in ~/.local/bin when PATH lacks it, as under tmux or a login service', (t) => {
   const p = project(t), f = fakeClis(p.parent), home = path.join(p.parent, 'home'), local = path.join(home, '.local', 'bin');
   fs.mkdirSync(local, { recursive: true }); fs.copyFileSync(path.join(f.dir, 'claude'), path.join(local, 'claude')); fs.chmodSync(path.join(local, 'claude'), 0o755);
   // The PATH a non-login shell gets: system folders only.

@@ -1,6 +1,6 @@
 ---
 name: Idea
-about: Something ELU Code should do, or do differently
+about: Something ELU should do, or do differently
 labels: enhancement
 ---
 

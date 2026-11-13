@@ -204,7 +204,7 @@ test('at most 20 of your sessions are asked, newest first; the rest, offline and
   ];
   const plan = await standupPlan({ root: f.root, id: '999' }, { sources: { computers, teammates: () => [] } });
   assert.equal(plan.asked.length, 20); assert.equal(plan.asked[0].title, 'Explain coupons');
-  assert.deepEqual(plan.notAsked.map(row => row.why).sort(), ['@devbox runs an older ELU Code', '@mini is offline', 'more than 20 of your sessions', 'more than 20 of your sessions'].sort());
+  assert.deepEqual(plan.notAsked.map(row => row.why).sort(), ['@devbox runs an older ELU', '@mini is offline', 'more than 20 of your sessions', 'more than 20 of your sessions'].sort());
   // A round never sends a computer whose hello lacks standup: 1 the question.
   const sent = [];
   const peer = { peerStatus: () => ({ running: true }), sendPeerCommand: body => { sent.push(body); return { id: 'x' }; }, awaitCommand: async () => ({}) };

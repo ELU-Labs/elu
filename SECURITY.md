@@ -13,7 +13,7 @@ Fixes are made on `main`; there are no older versions that get fixes.
 
 ## What is trusted
 
-ELU Code launches installed vendor CLIs. The executables and your local installation are
+ELU launches installed vendor CLIs. The executables and your local installation are
 trusted. Repository content, check scripts, prompts, and model responses are untrusted.
 Only the owner can approve a push.
 
@@ -26,7 +26,7 @@ It depends on the session's permission mode ([docs/permissions.md](docs/permissi
 
 - **Read only** is the profile of every reviewer, every question for a shared bot and every task
   saved without a mode. It gives no shell tools unless the Claude role declares explicit
-  command prefixes. ELU Code adds none by itself: the test and build scripts it finds in a
+  command prefixes. ELU adds none by itself: the test and build scripts it finds in a
   project run only as checks, inside the check sandbox, and a prefix reaches the model only
   from the project's settings file (`roles.lead.commands`). Ordinary questions in Read only
   have only read-only file tools, with no shell, workspace creation, or check execution.
@@ -62,7 +62,7 @@ draft never attaches a file, and a picture in a folder that holds secrets is ref
 hard link in another folder to a file in such a folder is not recognized, and is attached.
 "A picture" means a file whose first bytes say PNG, JPEG, GIF or WebP: the rest of the file
 is not checked, and it is sent as it is, with what it records about the place, the device
-and the time. A picture a teammate sends you is kept in ELU Code's private folder under a
+and the time. A picture a teammate sends you is kept in ELU's private folder under a
 name made here, readable only by you, and is never run. When you accept their question, its
 run can read the shared project and a copy of those pictures, and nothing else. The copy
 sits in the temporary directory, closed to other users, until the run ends; another session
@@ -73,7 +73,7 @@ gave it and the bots that work in that session; every other launcher asks or den
 Unsupported policies stop before a role launches. In Read only, Ask for approval and
 Approve for me, task metadata and source checks stay outside agent write access: the file
 tools and the sandboxed shell may not change the repository's Git folder or the protected
-project files, and may not read ELU Code's records in that folder; a command that leaves
+project files, and may not read ELU's records in that folder; a command that leaves
 the sandbox asks first. Full access can change them, as it can change anything your user
 can.
 
@@ -96,19 +96,19 @@ only role keeps its command prefixes).
 Claude shell roles are labelled "temp folder writable": shared temp directories are denied,
 but the vendor can retain its own writable temporary folder outside the worktree. This
 exception is visible in `elu policy show`. In Read only, Ask for approval and Approve for
-me ELU Code names that folder itself where its path is short enough for Claude Code to
+me ELU names that folder itself where its path is short enough for Claude Code to
 use: a private one under your cache folder, or in your runtime folder where that path is
 too long, made for the run and removed when it ends (`docs/vendors/claude.md`).
 
-## When ELU Code connects to teammates
+## When ELU connects to teammates
 
-ELU Code makes no peer connection until this machine makes a team or tries to join one
+ELU makes no peer connection until this machine makes a team or tries to join one
 with a code. Someone who never invites anyone and never joins a team starts no peer daemon
 and connects to nothing. A join starts the daemon for the join: it announces this machine's
 key on HyperDHT and looks for the inviter, and when the join fails it stops again within
 about two minutes. Once the machine makes a team (`/invite`, `elu team create`,
 `elu invite`) or joins one (`/join`, `elu join`), the peer daemon runs in the background,
-also while ELU Code is closed, so teammates can reach it: it announces this machine's key on
+also while ELU is closed, so teammates can reach it: it announces this machine's key on
 HyperDHT and connects to its teammates
 ([docs/peer-network.md](docs/peer-network.md#layers)).
 
@@ -117,12 +117,12 @@ leave each team (`/leave` or `elu team leave`); once the machine is on no team, 
 stops. It stops too when an admin removes this machine from its last team. The person who
 made a team cannot leave it, so their machine stays reachable while they keep the team.
 `elu peer uninstall` stops the daemon and removes its login item, and `elu uninstall` stops
-it too, but only until ELU Code next opens or an `elu` peer command runs while the machine
+it too, but only until ELU next opens or an `elu` peer command runs while the machine
 is still on a team.
 
 ## Update check
 
-Once a day, as the app opens, ELU Code asks `https://registry.npmjs.org/@elu-labs/elu/latest`
+Once a day, as the app opens, ELU asks `https://registry.npmjs.org/@elu-labs/elu/latest`
 for the latest version number, in the background, and keeps the answer and the time in its
 state folder. `elu update` asks the same address. Neither sends anything about you or your
 projects. `ELU_NO_UPDATE_CHECK=1` turns the daily check off. `elu update` installs with
@@ -134,7 +134,7 @@ Each team has one setting on your machine, asked by `/join` and by your first `/
 that team, and changed with `/access` or `elu access`:
 
 - **Auto** (the default for a new team): a teammate's message starts a session at once, as
-  if you had typed it into ELU Code, in the project you joined or invited from. Its first
+  if you had typed it into ELU, in the project you joined or invited from. Its first
   turn runs in that project folder itself, not in a worktree. Like your own turns it reads
   your home folder (not the secret folders) and uses your MCP servers and Claude Code
   memory. It runs in your default permission mode, except that a session nobody started by
@@ -154,7 +154,7 @@ that team, and changed with `/access` or `elu access`:
   and folders first; n declines.
 - A teammate's message never runs in your home folder, or a folder above it, and its session
   never edits a repository there, in any mode: that would reach every file of yours. When the
-  only project it could run in is your home folder, it waits, and y says to open ELU Code in
+  only project it could run in is your home folder, it waits, and y says to open ELU in
   the project folder and approve it again. Its session shows the teammate's own words, under
   their name, and is never sent again as yours.
 - A team whose setting was never set (joined with an earlier version) is Manual with no
@@ -170,7 +170,7 @@ questions, do not edit files." They go, under the heading "The owner's rules for
 teammates", into the prompt of every turn of every session a teammate starts here, and the
 model is told to follow them, to refuse what they forbid and say so, and to only propose
 when they say to change nothing until you accept. They are a guard in what the model is
-told, not a limit ELU Code enforces: a model can get them wrong. A session gets the rules
+told, not a limit ELU enforces: a model can get them wrong. A session gets the rules
 of every team its project belongs to here, so the sender cannot pick a team with laxer
 ones. Once you approve a Task, that approval counts as your acceptance of the work inside
 its goal. What is enforced is the permission mode, the Task approval before an edit, and
@@ -185,13 +185,13 @@ cost a vendor does not report counts as that whole amount. These sessions share 
 slots with teammates' questions, so they never fill every slot of yours.
 
 A question for one of your shared bots is answered by that bot, read only, after you
-accept it, as before. A machine on ELU Code 0.1.6 or earlier refuses a message when its
+accept it, as before. A machine on ELU 0.1.6 or earlier refuses a message when its
 owner shares no project; the sender is then told that the teammate needs to update.
 
 ## What teammates are told
 
 A project is shared with `elu share` or `/share`, and also when a teammate is added:
-`elu invite` shares the folder it runs in when it is an ELU Code project (`--project PATH`
+`elu invite` shares the folder it runs in when it is an ELU project (`--project PATH`
 names another), and `/invite` the open project. A join shares only after the joiner says
 so: `/join` asks before it shares the open project, and after `elu join` with a short code
 it takes `elu share` (a long code from 0.1.3, which names the inviter's key, still shares as
@@ -348,7 +348,7 @@ The never list (push, tag, merge, deploy, publish, and adding or removing an MCP
 with `claude mcp add`, `add-json`, `add-from-claude-desktop`, `remove`, `elu mcp add` or
 `elu mcp remove`) is enforced only where the means are missing: Read only and Ask for approval, with the one exception below. In Approve for me
 and Full access it is prompt text plus the vendor's deny rules, which match command text
-and can be sidestepped by an obscured command. ELU Code's own publish step still needs
+and can be sidestepped by an obscured command. ELU's own publish step still needs
 your confirmation and still refuses a default branch in every mode.
 
 One entry can open. A bot that is allowed to merge pull requests (`@elu` comes allowed; a
@@ -365,7 +365,7 @@ all. So every vendor's session, in every mode but Read only, also gets stand-in 
 a private folder (`~/.local/share/elu-code/never-list`, mode 0700) goes first on the
 session's PATH with one script per command word, and each refuses the never-list call by
 name whatever runs it, a script or `sh -c` included. Claude Code builds PATH again for
-each command, so ELU Code names a one-line file in `CLAUDE_ENV_FILE` that puts the folder
+each command, so ELU names a one-line file in `CLAUDE_ENV_FILE` that puts the folder
 back in front. This was seen with the real Codex and the real Claude Code in Ask for
 approval and Approve for me, not in Full access; with Antigravity and Grok Build only in
 tests against stand-in tools. They are a tripwire as well, not a sandbox. These get
@@ -399,7 +399,7 @@ was kept from a request that left it; or apply in a session a teammate started. 
 your other computer started is yours, so they apply there, from that machine's own rules. Where a
 vendor runs commands with no sandbox (Antigravity, Grok Build, Claude Code where its sandbox
 cannot start), every command counts as leaving it. Arguments are checked each time only for
-secrets, ELU Code's own files and git options that run a program or write a file, so `npm
+secrets, ELU's own files and git options that run a program or write a file, so `npm
 test` allows `npm test -- anything else`, and a script the rule allows runs whatever the
 project put in it. The read and git defaults answer a command only inside the sandbox. Rules live in your personal directory, mode 0600, and
 are read again on every request; a file that cannot be read allows nothing.
@@ -408,23 +408,23 @@ are read again on every request; a file that cannot be read allows nothing.
 
 A project's own settings and instructions (`.elu-code/config.yaml`, `instructions.md` and
 `context.md`) come with its folder, so they count as yours only once you have approved
-their exact content on this machine. ELU Code shows a file that is new or changed and asks
+their exact content on this machine. ELU shows a file that is new or changed and asks
 once whether to use it. Until you approve a first version, sessions run on the default
 settings and without those instructions. After that, the version you approved last stays in
 use until you approve a change: a file that changed, that you turned down or that was
 removed does not put the defaults back. A file over 100 KB is never used. Scripted runs
 are refused while the settings file in the folder is not one you approved. Your answers are
-kept by content hash, with the text you approved last, in ELU Code's own state folder,
+kept by content hash, with the text you approved last, in ELU's own state folder,
 never in the project. Like approvals, this is not a boundary against a process that already
 runs as your user: a Full access session can write that folder, and so can a command that
 was approved to leave the sandbox in Ask for approval or in Approve for me, where the
 approver is the vendor's reviewer model. With a Codex model, the repository's own
 `AGENTS.md` reaches the model as Codex itself reads it, and this step does not cover it.
 
-ELU Code starts one MCP server of its own, the approval relay, and only for a session with
+ELU starts one MCP server of its own, the approval relay, and only for a session with
 permissions: a dependency-free process that turns Claude Code's permission prompts into
 requests you answer in the terminal. Its Claude launcher otherwise uses strict MCP
-configuration, holding only the servers ELU Code passes, and loads no settings files
+configuration, holding only the servers ELU passes, and loads no settings files
 (`--setting-sources ''`). The Codex reviewer ignores user configuration and refuses
 project or managed configuration that has not passed isolation tests.
 
@@ -438,7 +438,7 @@ mode), Ask for approval and Approve for me they are allowed by name, and Full ac
 allows everything. They run as their own processes, so neither the shell sandbox nor the
 never list covers them: a server that can push, merge, post or send mail can do so
 without asking you. Their settings, which can hold tokens, are copied for each run into a
-private file in ELU Code's state folder and removed when the run ends.
+private file in ELU's state folder and removed when the run ends.
 
 You add a server, and a key never goes through the chat. The model is told to ask you to
 type `/mcp add` when it needs a server you do not have, never to ask for a key in the chat,
@@ -453,7 +453,7 @@ box or its history, sent to a model or a teammate, or written to a log or a sess
 `elu mcp add` refuses a key on its own command line, in a header, a variable or the URL, so
 it never has you put one in your shell history, and asks for it with echo off or reads it
 from standard input. Claude Code's own command
-saves the server (`claude mcp add-json --scope user`); ELU Code never writes that file.
+saves the server (`claude mcp add-json --scope user`); ELU never writes that file.
 That command takes the settings only on its command line, so for the second it runs, any
 process on this computer that runs as you, a Full access session included, or as another
 account that can list processes could read the key. What it prints back is shown with the
@@ -461,11 +461,11 @@ key taken out. A key counts wherever a server's settings hold one: a header, a v
 bearer token among its arguments, or its URL (a password before the `@`, a query value such
 as `api_key=`, or a long path segment of letters and digits). A message from the message box
 that holds a server config (an `mcpServers` block, or one server with only a server's
-fields, such as a `url` or a `command`) is not sent, wherever it was written: ELU Code
+fields, such as a `url` or a `command`) is not sent, wherever it was written: ELU
 offers to add the server, and the box keeps only your other words. So is a
 `claude mcp add` or `claude mcp add-json` line, typed with `!` in front or without: it is
 not run, since in an open session a command's line joins the chat the model reads, and
-ELU Code offers to add the server instead. A config or line that holds a key is never sent
+ELU offers to add the server instead. A config or line that holds a key is never sent
 or run as it is; one without a key is sent, or run, if you press Enter on it again. Text
 that looks like a server's settings with a key in it but does not read as one is never sent
 either: take the key out, or use `/mcp add`. In an open session, a `!` command that holds a
@@ -498,22 +498,22 @@ no policy.
 
 ## Credentials
 
-Agents do not receive cloud or GitHub credentials from ELU Code's inherited environment.
-Vendor authentication remains the vendor CLI's responsibility. ELU Code never signs you in.
+Agents do not receive cloud or GitHub credentials from ELU's inherited environment.
+Vendor authentication remains the vendor CLI's responsibility. ELU never signs you in.
 It never reads Claude Code's sign-in, in the macOS Keychain or in its credentials file, and
 it sends no request of its own with any vendor sign-in.
 
 The Usage tab shows plan usage. Claude usage comes from the rate limit lines Claude Code
-writes to its own output during a session that ELU Code runs. No request is made for it,
+writes to its own output during a session that ELU runs. No request is made for it,
 and until such a session has run, the tab says so.
 
-Codex usage comes from Codex's own `app-server` command: ELU Code starts it and asks it for
+Codex usage comes from Codex's own `app-server` command: ELU starts it and asks it for
 your plan's rate limits, so the request with your Codex sign-in is made by Codex. It starts
 in an empty private folder with MCP servers, hooks, apps, plugins and analytics turned off,
-and no thread or turn is ever started. ELU Code asks for this check whenever `codex` is on
+and no thread or turn is ever started. ELU asks for this check whenever `codex` is on
 your PATH, including when you have it only for the check sandbox:
 
-- when you open a project that is set up, unless another ELU Code window already has it
+- when you open a project that is set up, unless another ELU window already has it
   open, and when you finish setting one up;
 - when you start a session or send a message;
 - every minute while a session, or the new session form, is on screen;
@@ -554,7 +554,7 @@ information. Inspect the exact body before approving publication.
 
 ## What the tests prove
 
-Compiler and fake-CLI tests establish ELU Code's behavior. Sandbox probes establish the
+Compiler and fake-CLI tests establish ELU's behavior. Sandbox probes establish the
 installed helper's boundaries. Actual agent enforcement requires live tests on the exact
 vendor release, including commands launched by a test script, outside writes, synthetic
 secret reads, network requests, protected edits, configured MCP servers, and cancellation.
@@ -572,12 +572,12 @@ helper cannot mount read-only hook inputs there.
 
 ## Antigravity and Grok Build
 
-Antigravity CLI runs under a private HOME holding only ELU Code's settings and hook; its
+Antigravity CLI runs under a private HOME holding only ELU's settings and hook; its
 rules and that hook were designed from Google's documentation, and the steps of its
-one-time check, which ELU Code runs before your first message to it, are the only proof on
+one-time check, which ELU runs before your first message to it, are the only proof on
 a given machine. Google's FAQ says that using third-party software to access Antigravity
 violates its terms and can get the account suspended or terminated, and that wrapping
-`agy` in other applications is not supported on consumer plans. ELU Code wraps it: using
+`agy` in other applications is not supported on consumer plans. ELU wraps it: using
 it is the owner's decision, and the owner's account carries the risk. Antigravity's deny
 rules and hook match command text: in Approve for me and Full access the never list is a
 tripwire, not a boundary.

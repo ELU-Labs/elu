@@ -74,7 +74,7 @@ test('work that cannot go on in this session says why and to start a new session
   assert.equal(blocked('The saved hooks are missing or changed. Start a new task before publishing.'), 'The saved hooks are missing or changed. Start a new session with /new.');
   // Every new session in such a repository is refused the same way, so /new is never the way out.
   const submodules = said({ error: { message: 'Submodules are not supported for checked tasks.' } });
-  assert.equal(submodules.text, 'ELU Code cannot edit a repository that has submodules. Ask about it here instead.'); assert.doesNotMatch(submodules.text, /\/new/);
+  assert.equal(submodules.text, 'ELU cannot edit a repository that has submodules. Ask about it here instead.'); assert.doesNotMatch(submodules.text, /\/new/);
   const driver = said({ error: { message: 'Git attribute filter=lfs enables an executable driver.' } });
   assert.equal(driver.text, "Git runs a program for the filter=lfs attribute in this repository. Remove filter.lfs from Git's config, then type continue.");
   assert.doesNotMatch(driver.text, /\/new/);
@@ -89,7 +89,7 @@ test('work that cannot go on in this session says why and to start a new session
 });
 
 test('a stop, a review or checks that did not pass, and older stored lines each end with one thing to do', () => {
-  assert.equal(said({ state: 'stopped', error: { message: 'ELU Code stopped before this response finished. Retry to continue.' } }).text, 'ELU Code stopped before this response finished. Type continue to carry on.');
+  assert.equal(said({ state: 'stopped', error: { message: 'ELU stopped before this response finished. Retry to continue.' } }).text, 'ELU stopped before this response finished. Type continue to carry on.');
   assert.equal(said({ state: 'stopped', error: { message: 'Stopped by the owner.' } }).text, 'You stopped it. Your changes are kept. Type continue to carry on.');
   assert.equal(said({ state: 'stopped', error: null }).text, 'Stopped before it finished. Your changes are kept. Type continue to carry on.');
   assert.equal(said({ error: { message: 'The model did not answer every must-fix finding.' } }).text, 'The model did not answer every must-fix finding. Type continue to work on them.');

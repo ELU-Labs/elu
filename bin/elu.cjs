@@ -4,7 +4,7 @@
 'use strict';
 var MINIMUM = 22;
 if (!(parseInt(process.versions.node, 10) >= MINIMUM)) {
-  process.stderr.write('ELU Code needs Node ' + MINIMUM + ' or newer; this is Node ' + process.versions.node + '.\n');
+  process.stderr.write('ELU needs Node ' + MINIMUM + ' or newer; this is Node ' + process.versions.node + '.\n');
   process.exit(1);
 }
 require('./start.cjs');

@@ -103,8 +103,8 @@ test('a message over a limit, or naming a picture in a folder that holds secrets
   refused(five.join(' '), /^This message names 5 pictures; a message can carry up to 4\.$/);
   const three = [1, 2, 3].map(n => { const file = path.join(home, `six${n}.png`); hollow(file, 6 * MB); return file; });
   refused(three.join(' '), /^These pictures are 18 MB together; a message can carry up to 16 MB\.$/);
-  // A folder on the secrets list, and ELU Code's own state folder. ~/Library is the one that stays open.
-  for (const folder of ['.ssh', '.aws', '.config', '.gnupg']) { picture(path.join(home, folder, 'key.png'), 400); refused(`'${path.join(home, folder, 'key.png')}'`, /^key\.png is in a folder ELU Code keeps private, so it can't be sent\.$/); }
+  // A folder on the secrets list, and ELU's own state folder. ~/Library is the one that stays open.
+  for (const folder of ['.ssh', '.aws', '.config', '.gnupg']) { picture(path.join(home, folder, 'key.png'), 400); refused(`'${path.join(home, folder, 'key.png')}'`, /^key\.png is in a folder ELU keeps private, so it can't be sent\.$/); }
   picture(path.join(personalDirectory(), 'peer', 'inside.png'), 400);
   refused(path.join(personalDirectory(), 'peer', 'inside.png'), /keeps private/);
   // A link out of an open folder into a closed one is followed before the check.
@@ -123,7 +123,7 @@ test('a message over a limit, or naming a picture in a folder that holds secrets
   assert.equal(sizeText(340 * 1024), '340 KB'); assert.equal(sizeText(1.24 * MB), '1.2 MB'); assert.equal(MESSAGE_MAX, 16 * MB);
 });
 
-test('a teammate\'s question run is given its one pictures folder only when the folder is ELU Code\'s own and holds nothing but pictures', t => {
+test('a teammate\'s question run is given its one pictures folder only when the folder is ELU\'s own and holds nothing but pictures', t => {
   const base = ownTemp(t), cwd = project(t).root, session = '12345678-1234-4234-8234-123456789abc', role = readRole('claude');
   const launch = extra => claude.compile({ role, cwd, commonDir: path.join(cwd, '.git'), session, peer: true, ...extra });
   const dirs = args => args.flatMap((arg, index) => arg === '--add-dir' ? [args[index + 1]] : []);
@@ -135,7 +135,7 @@ test('a teammate\'s question run is given its one pictures folder only when the 
   // Nothing else in the launch changes.
   const withFolder = launch({ pictures: good }), at = withFolder.indexOf('--add-dir');
   assert.deepEqual([...withFolder.slice(0, at), ...withFolder.slice(at + 2)], launch({}));
-  const no = /A teammate's pictures must be in ELU Code's own pictures folder\./;
+  const no = /A teammate's pictures must be in ELU's own pictures folder\./;
   // Only a teammate's question run, which stays read-only.
   assert.throws(() => claude.compile({ role, cwd, session, pictures: good }), /Only a teammate's question run is given a pictures folder\./);
   assert.throws(() => launch({ pictures: good, mode: 'ask' }), /A peer run stays read-only/);
@@ -296,13 +296,13 @@ test('a build from before pictures takes the message as text, and a teammate on 
     assert.equal(puts.length, 1, 'it stops at the first piece'); assert.equal(messages.length, 1);
     assert.deepEqual(messages[0].parts, [{ text: 'What is wrong in Shot one.png here?' }]);
     assert.equal(done.pictures.unsent, 'version'); assert.equal(done.pictures.sentAt, undefined);
-    assert.equal(unsentLine(done.pictures, 'sara'), "@sara's ELU Code can't take pictures yet. The text went without them.");
+    assert.equal(unsentLine(done.pictures, 'sara'), "@sara's ELU can't take pictures yet. The text went without them.");
     assert.deepEqual(staged(), [], 'the copies for sending are gone');
     const row = peer.peerItems().find(item => item.kind === 'asked');
-    assert.equal(row.pictures.count, '1 picture'); assert.equal(row.pictures.unsent, "@sara's ELU Code can't take pictures yet. The text went without them.");
+    assert.equal(row.pictures.count, '1 picture'); assert.equal(row.pictures.unsent, "@sara's ELU can't take pictures yet. The text went without them.");
     assert.equal(chatRows()[0], '→ you asked @sara, 1 picture not sent · What is wrong in Shot one.png here?');
-    assert.match(chatRows()[1], /^↳ \S.* · @sara's ELU Code can't take pictures yet\. The text went without them\.$/);
-    assert.match(peer.threadMessages(done.threadId)[0].text, /^What is wrong in Shot one\.png here\?\nPictures not sent: Shot one\.png \(\d+ KB\)\n@sara's ELU Code can't take pictures yet\./);
+    assert.match(chatRows()[1], /^↳ \S.* · @sara's ELU can't take pictures yet\. The text went without them\.$/);
+    assert.match(peer.threadMessages(done.threadId)[0].text, /^What is wrong in Shot one\.png here\?\nPictures not sent: Shot one\.png \(\d+ KB\)\n@sara's ELU can't take pictures yet\./);
   });
 });
 

@@ -163,12 +163,12 @@ test('the same rule says which sessions are open everywhere: an answered chat is
   ] }];
   const plan = await standupPlan({ root: f.root, id: '999' }, { sources: { computers: () => [], teammates: people } });
   assert.deepEqual(plan.asked.map(row => row.title).sort(), ['Answered chat', 'Older open card']);
-  assert.deepEqual(plan.notAsked.map(row => [row.title, row.where, row.why]), [['Older card', '@kim', '@kim runs an older ELU Code, which does not say whether it answered']]);
+  assert.deepEqual(plan.notAsked.map(row => [row.title, row.where, row.why]), [['Older card', '@kim', '@kim runs an older ELU, which does not say whether it answered']]);
   // The round says so in its list of sessions not asked.
   const peer = { peerStatus: () => ({ running: true }), sendPeerCommand: body => ({ id: body.type }), awaitCommand: async () => ({ state: 'declined', asked: [], skipped: [] }) };
   const standup = createConversation(f.repo, f.controller.draftConfig, '/standup');
   const { task: round } = await runStandupRound(f.repo, standup.id, { sources: { computers: () => [], teammates: people, peer }, times: TIMES });
-  assert.match(round.messages.map(row => row.text).join('\n'), /- Older card · on @kim · Done · @kim runs an older ELU Code, which does not say whether it answered/);
+  assert.match(round.messages.map(row => row.text).join('\n'), /- Older card · on @kim · Done · @kim runs an older ELU, which does not say whether it answered/);
 });
 
 test('a session another computer would not ask is dropped without a word, and not counted as not asked', async t => {

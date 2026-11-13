@@ -81,7 +81,7 @@ if(cfg.noCredits&&modelArg===cfg.noCredits){console.log(JSON.stringify({type:'sy
 const tooLong=cfg.tooLong!==undefined&&input.includes('Review as @')&&(cfg.tooLong==='all'||cfg.tooLong==='files'&&/"content":"|"excerpts":\[/.test(input)||typeof cfg.tooLong==='number'&&input.length>cfg.tooLong);
 if(tooLong){console.log(JSON.stringify({type:'system',subtype:'init',session_id:session,model:reported,permissionMode:'default',mcp_servers:[]}));console.log(JSON.stringify({type:'result',subtype:'success',is_error:true,duration_ms:120,num_turns:1,result:'Prompt is too long',session_id:session,total_cost_usd:nothingSpent}));process.exit(1);}
 if(mode==='no-sandbox'){console.error('Error: sandbox required but unavailable: bubblewrap (bwrap) not installed, socat not installed');console.error('  sandbox.failIfUnavailable is set.');console.log(JSON.stringify({type:'result',subtype:'error_during_execution',is_error:true,session_id:session}));process.exit(1);}
-// An answer turn with permissions has Write in its tools, but a lead that is told ELU Code prepares the workspace does not edit there.
+// An answer turn with permissions has Write in its tools, but a lead that is told ELU prepares the workspace does not edit there.
 const edit=(args[args.indexOf('--tools')+1]??'').split(',').includes('Write')&&!conversation;
 if(edit&&mode==='scaffold'){
  fs.mkdirSync('src',{recursive:true});fs.mkdirSync('test',{recursive:true});
@@ -136,7 +136,7 @@ const promptTool=args.includes('--permission-prompt-tool')?args[args.indexOf('--
 // read once, then the command. A command that fails is shown with its exit code.
 // note (fake.json): the real CLI writes a note of its working folder after each command, in
 // <CLAUDE_CODE_TMPDIR, or /tmp>/claude-<uid>, and goes back to /tmp when that path is longer
-// than 44 bytes. Its sandbox, as ELU Code sets it for every mode but Full access, denies writes
+// than 44 bytes. Its sandbox, as ELU sets it for every mode but Full access, denies writes
 // under /tmp: there the command ends 1 whatever it did.
 const uid=process.getuid?.()??0;const named=process.env.CLAUDE_CODE_TMPDIR;const own=named&&Buffer.byteLength(path.join(named,`claude-${uid}`))<=44?path.join(named,`claude-${uid}`):null;
 const noted=i=>{if(!cfg.note||permissionMode==='bypassPermissions')return '';if(!own)return `sh: operation not permitted: /tmp/claude-${uid}/cwd-${i}\n`;fs.mkdirSync(own,{recursive:true,mode:0o700});fs.writeFileSync(path.join(own,`cwd-${i}`),process.cwd());return '';};

@@ -1,6 +1,6 @@
 # Claude Code
 
-Sessions and reviews. Sign-in is `claude`'s own; ELU Code never reads your sign-in
+Sessions and reviews. Sign-in is `claude`'s own; ELU never reads your sign-in
 token. The Usage tab names the account from `~/.claude.json` (email, organization,
 plan and rate limit tier) and shows only the five-hour and weekly usage windows that
 Claude Code prints during sessions. Tested releases:
@@ -35,12 +35,12 @@ Code memory, when there is one.
 | `--add-dir` | each folder of the session; an answer turn (yours, or a working bot's) also gets your home folder and a private copy of your Claude Code memory when there is one | same | same |
 | Sandbox | on where it starts, never required; a host a command connects to asks you, and one you allowed stays allowed in the session; unsandboxed commands ask you | on where it starts, never required, no network; unsandboxed commands go to the reviewer | off |
 | Asks | web tools; answer turns also edits in the project folder | answer-turn edits only | none |
-| Denies | protected paths, writes in the folders of the session, secret reads, ELU Code state, the never list | same, without dependency files | secret reads, ELU Code state, the never list |
+| Denies | protected paths, writes in the folders of the session, secret reads, ELU state, the never list | same, without dependency files | secret reads, ELU state, the never list |
 
 Every profile keeps `--setting-sources ''`, `--strict-mcp-config` with a private
 config file and disabled hooks. `--max-budget-usd` is passed only when the session
 has a spending limit (`/budget`) or the run is a teammate's question. The approval relay is the
-one server ELU Code adds to that file; it is never in the allow list.
+one server ELU adds to that file; it is never in the allow list.
 
 A folder you name with `/permissions folders add` is read and never written in Ask and
 Auto: `Edit` and `Write` deny rules cover it and the sandbox's `denyWrite` lists it, the
@@ -74,7 +74,7 @@ tasks, and force the helpers' model when the bot names one.
 Stand-in commands (`lib/never-shims.mjs`) cover what those rules cannot read: a
 script, `sh -c`, `npm test`. Claude Code starts each command from a snapshot of
 your shell setup, which builds PATH again, so a folder put first on the PATH it was
-started with ends up behind the system's. ELU Code sets `CLAUDE_ENV_FILE` to a
+started with ends up behind the system's. ELU sets `CLAUDE_ENV_FILE` to a
 one-line file that puts the folder first again; Claude Code runs that file ahead of
 each command. Seen on 2.1.322 in Ask for approval and in Approve for me: `npm test`
 whose script ran `git push` to an origin on another machine printed `git push is
@@ -84,10 +84,10 @@ the real service: Full access.
 
 Claude Code keeps files of its own while it runs. After every command it writes a
 note of its working folder, and its sandboxed commands are given the same folder as
-`TMPDIR`. Its own place for them is `/tmp/claude-<uid>`, and the sandbox ELU Code
+`TMPDIR`. Its own place for them is `/tmp/claude-<uid>`, and the sandbox ELU
 sets for Read only, Ask for approval and Approve for me denies writes under `/tmp`,
 so every sandboxed command ended `Exit code 1` whatever it did. In those modes ELU
-Code names a private folder of the run in `CLAUDE_CODE_TMPDIR`:
+names a private folder of the run in `CLAUDE_CODE_TMPDIR`:
 `<cache folder>/elu/<two letters>`, yours alone to read, made for the run and
 removed when it ends. The cache folder is `XDG_CACHE_HOME`, or `~/.cache`. Claude
 Code uses a named folder for sandboxed commands only while `<folder>/claude-<uid>`
@@ -101,7 +101,7 @@ folder was gone after the run. Not seen with the real service: Approve for me, R
 only, Linux, the runtime folder.
 
 A sandboxed command reads the repository's Git folder. The sandbox's `denyRead`
-holds only ELU Code's records in it (`<Git folder>/elu-code`) and `denyWrite` holds
+holds only ELU's records in it (`<Git folder>/elu-code`) and `denyWrite` holds
 the whole folder; a teammate's question keeps the whole folder in `denyRead`. Seen
 on 2.1.322 in Ask for approval, in an answer turn: `git status`, `git diff` and
 `git log` ran in the sandbox with no approval asked; `git commit` ended 128 on
@@ -136,7 +136,7 @@ not list makes Claude Code ask on its own output: a `control_request` with subty
 prompt given as text, its input is closed once the prompt is read, the question cannot be
 sent, and the host is denied with `(user denied)` though nobody was asked. Read from the
 2.1.322 program, and seen in use: `curl https://elu.dev/api/mcp` ended
-`CONNECT tunnel failed, response 403` in an Ask session. So in Ask ELU Code passes
+`CONNECT tunnel failed, response 403` in an Ask session. So in Ask ELU passes
 `--input-format stream-json`, writes the prompt as one user message, answers each question
 from your answer under Needs you (or a rule of yours), and closes the input after the
 `result` line. A host you allowed is in `sandbox.network.allowedDomains` for the later turns

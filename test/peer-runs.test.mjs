@@ -212,7 +212,7 @@ test("a teammate's question asks the owner nothing: it is answered without the p
   assert.equal(value.state, 'answered'); assert.notEqual(outbox(row.id).outcome, 'failed'); assert.equal(outbox(row.id).error, null);
   const calls = p.prompts(); assert.equal(calls.length, 1);
   assert.doesNotMatch(calls[0].input, /deploy key|Project instructions \(owner\)|Running without|not approved/);
-  assert.deepEqual(value.messages.filter(message => message.from === 'ELU Code').map(message => message.text), ["Running without this project's .elu-code/config.yaml and .elu-code/instructions.md: you have not approved them on this machine. To review them, open Projects and choose this project."]);
+  assert.deepEqual(value.messages.filter(message => message.from === 'ELU').map(message => message.text), ["Running without this project's .elu-code/config.yaml and .elu-code/instructions.md: you have not approved them on this machine. To review them, open Projects and choose this project."]);
   assert.doesNotMatch(outbox(row.id).text, /Running without|not approved/, 'the line is for the owner, not the teammate');
 });
 
@@ -579,7 +579,7 @@ function homeAt(t, folder) {
   t.after(() => { if (previous === undefined) delete process.env.HOME; else process.env.HOME = previous; });
   return fs.realpathSync(folder);
 }
-const HOME_NOTE = /This message would run in your home folder\. Answer y when ELU Code asks, or open ELU Code in the project folder for core and approve it there\.$/;
+const HOME_NOTE = /This message would run in your home folder\. Answer y when ELU asks, or open ELU in the project folder for core and approve it there\.$/;
 test('a teammate\'s message never runs in the home folder: y, w and an older Auto setting leave it waiting with a plain line, and approving from the project runs it as their words', async t => {
   const p = setup(t, 'answer'), sara = teammate(p), teamId = everyTeam()[0].id;
   unshare('app');

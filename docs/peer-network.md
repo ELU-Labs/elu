@@ -1,6 +1,6 @@
 # Peer network
 
-How two ELU Code installs find each other, what they send, and how a team keeps its list of
+How two ELU installs find each other, what they send, and how a team keeps its list of
 members. This page is also the A2A custom binding document (A2A v1.0.1 §12 requires one for a
 custom binding). The commands a person types are in the [README](../README.md#teammates).
 
@@ -102,7 +102,7 @@ Extension `urn:elu-code:a2a-ext:peer:v1`:
 - `kind` is one of `ask`, `review`, `handoff`, `answer`.
 - `project` is a share handle or repository id, or null for the team's project.
   - The receiver takes a named project only when it shared it with a team both machines are on. A project shared with another team is refused in the same words as one that is not shared.
-  - With null, the receiver uses the project of its [setting](#what-teammates-can-do-here) for the team, else the share chosen for the team, else its one share. Without any, the message is still taken (SUBMITTED) and waits for the owner, who approves it in a project he has open. ELU Code 0.1.6 and earlier refuse it instead, with "They have not shared a project, so there is nothing of theirs to ask about yet."; a newer sender shows that refusal as a line saying the teammate needs to update.
+  - With null, the receiver uses the project of its [setting](#what-teammates-can-do-here) for the team, else the share chosen for the team, else its one share. Without any, the message is still taken (SUBMITTED) and waits for the owner, who approves it in a project he has open. ELU 0.1.6 and earlier refuse it instead, with "They have not shared a project, so there is nothing of theirs to ask about yet."; a newer sender shows that refusal as a line saying the teammate needs to update.
   - A share saved by a build from before shares kept their teams is open to every team of the receiver's until it is shared again.
 - `room: {team, channel}` says where a team ask was sent. `team` is the team id. `channel` is the channel id, or null for `#general`.
   - The receiver keeps the room only when both machines are on that team and, for a channel, both are in it. Otherwise it drops the room and shows a team ask with no channel.
@@ -129,7 +129,7 @@ Each machine keeps one setting per team in `peer/access.json` = `{teamId: {handl
 
 Task state mapping:
 
-| ELU Code | A2A |
+| ELU | A2A |
 |---|---|
 | waiting for the owner to approve | SUBMITTED |
 | run in progress | WORKING |
@@ -154,8 +154,8 @@ Two machines of the same owner (a laptop and a devbox, say) can each start and w
   - Off with `ELU_NO_GITHUB_PAIRING=1`, or with `/mine auto off` (`elu mine auto off`), saved as `githubPairing: false` in `peer/settings.json`; `/mine auto on` turns it on again. Turning it off keeps the computers already paired. It never runs in a test or CI run (`NODE_TEST_CONTEXT`, `CI`) unless that run sets `ELU_GITHUB_PAIRING=1`.
 - An invite made with `mine: true` (`elu invite --mine`; good for 1 hour by default) marks nothing by itself on either side. The `elu.invite.prove` result carries `mineOffer: true`, and the joiner's app asks "Is <name>'s computer yours too?" (No first; Esc is no). On the command line only `elu join CODE --mine` says yes. A yes marks the inviter on the joiner and sends `elu.mine {mine: true}`; the inviter marks the joiner back only on that, from the key its mine code admitted, once, within a week of the join. A `mineOffer` from the other side is never enough to mark anything.
 - A machine already on the team that uses a mine code is refused, and the code stays unused: both sides are told to run `/mine` on each machine instead.
-- `hello` carries `remote: 1`. A build without it is older: it is never sent the methods below, and every action toward it says "@name needs to update ELU Code to run sessions from here." Nothing falls back to an ask.
-- `hello` carries `files: 1` on a build that takes files (`elu.remote.files`). Files are never sent to a computer whose hello says `remote: 1` without it, nor to one that answers Method not found: the owner is told "@name needs to update ELU Code to receive files."
+- `hello` carries `remote: 1`. A build without it is older: it is never sent the methods below, and every action toward it says "@name needs to update ELU to run sessions from here." Nothing falls back to an ask.
+- `hello` carries `files: 1` on a build that takes files (`elu.remote.files`). Files are never sent to a computer whose hello says `remote: 1` without it, nor to one that answers Method not found: the owner is told "@name needs to update ELU to receive files."
 
 Wire, on the existing connection:
 
@@ -188,7 +188,7 @@ Every session on a computer of mine, not only the ones started from here:
 - What the viewer asks a host on its own (lists and catch-ups) stays within 8 requests in 10 s per host, and watches made by the cursor within 14 with them, under the connection's limit of 20. A watch past that is refused for a moment ("<name> is busy") and asked again 5 s later. What the owner does (send, stop, answer, a watch by key) is never held back, but counts.
 - `elu.remote.watch` makes a listed session one the viewer follows: from then on it has numbered events, and `since`, `send`, `stop`, `answer` and `task` take its `id` as for a session started from the viewer. The `id` is the UUID made from SHA-256 of `watch`, the viewer's key, the host's key and `ref`, so both sides know it before the answer. A watch lasts a week after its last event or watch. A command to a watch the host let go is answered "That session is not on this computer.": the viewer drops its view, watches it again once and sends the command again. A view whose listing shows activity more than 2 minutes after its last event is dropped too, and the session is watched again when opened.
 - Sessions on the viewer shows, after its own, a heading per computer of mine ("On devbox · online" or "offline"): the sessions there that work in a repository the open project holds (its own, and each one its Kanban has a board for: the clones its folder holds and the ones its recent sessions work in, as the daemon last found them, read again every minute), and the ones started from the viewer, newest first. A session listed with no `repoId` (an older build, or one in no repository) shows when its project there has the same `repoId` as the open project. With none of them, the heading says "No sessions of this project. Projects lists its others." when that computer has sessions this project does not show, else "No sessions yet." Each row takes its time and its place from the listing. What waits for the owner there, in any project (the home folder too): an approval, a Task to approve or a question, also shows under Needs you, marked "on devbox". Those sessions are part of the open project, whatever folder their project is there (a folder of clones, the home folder). A project of that computer shows in Projects as "<project> on devbox" only while it has sessions not shown under the heading, with how many ("2 sessions not in this project"); one whose sessions all show, or that has none, is not listed. Enter there lists those sessions under a heading of their own. A row is watched when the cursor rests on it for 300 ms, and not while its computer is offline ("<name> is offline. What it listed last is shown."). A watch that failed is asked again after 30 s, not on every draw.
-- A computer of mine whose build answers `elu.remote.list` with Method not found, or that does not say `remote: 1`, shows "Update ELU Code on <name> to see its sessions here." and is asked again after 10 minutes.
+- A computer of mine whose build answers `elu.remote.list` with Method not found, or that does not say `remote: 1`, shows "Update ELU on <name> to see its sessions here." and is asked again after 10 minutes.
 - Both methods are refused, as the others, unless the sender's key is mine on the host. Nothing about a computer is listed, watched or sent to a key that is not.
 
 ### Files
@@ -198,9 +198,9 @@ A message to a session on another computer of yours can take files and folders f
 **What is sent**
 
 - A message typed to such a session that names files or folders here (absolute, `~/`, quoted, or with spaces escaped as a dropped file is) asks one line first: "Send 14 files (2.1 MB), including 1 key file, from this computer with this message?". y sends them with the message, n sends the text alone. `/send PATH...` sends files alone after the same line. Both computers are yours, so anything you can read may go, key files included; the line names them.
-- A folder goes whole, except its `.git`, a link that leads out of it, a link to a folder in it, and anything that is not a file or a folder (the line says how many were left out). ELU Code's own state folder never goes.
+- A folder goes whole, except its `.git`, a link that leads out of it, a link to a folder in it, and anything that is not a file or a folder (the line says how many were left out). ELU's own state folder never goes.
 - At most 5,000 files and 200 MB a send. Over that, the line says so and offers the text alone.
-- A Claude Code session of yours (its relay, `elu-code-approval`) has two tools: `list_other_sessions` (each computer of yours, and its sessions' id, title, state and the question or approval they wait on) and `send_to_session` `{session, paths, message?}`. A send reads only what that session may read: never ELU Code's state, the home's secret folders or an untracked file whose name may hold a secret, and in Approve for me nothing outside the folders its turn reads (its workspace, the folders added with `/permissions folders`, and the home only in a turn that reads across it). Paths are compared by what they are on disk, and those closed folders and secret names without case, so another spelling of the same file is the same file. Each file is copied only if it is still the file that was checked, never through a link. A teammate's session on that computer, such as a handoff accepted there, is not listed and takes no files. In Ask for approval each send is an approval for you, naming the session, its computer and the paths. Sessions on other models do not have these tools.
+- A Claude Code session of yours (its relay, `elu-code-approval`) has two tools: `list_other_sessions` (each computer of yours, and its sessions' id, title, state and the question or approval they wait on) and `send_to_session` `{session, paths, message?}`. A send reads only what that session may read: never ELU's state, the home's secret folders or an untracked file whose name may hold a secret, and in Approve for me nothing outside the folders its turn reads (its workspace, the folders added with `/permissions folders`, and the home only in a turn that reads across it). Paths are compared by what they are on disk, and those closed folders and secret names without case, so another spelling of the same file is the same file. Each file is copied only if it is still the file that was checked, never through a link. A teammate's session on that computer, such as a handoff accepted there, is not listed and takes no files. In Ask for approval each send is an approval for you, naming the session, its computer and the paths. Sessions on other models do not have these tools.
 
 **On the wire**
 
@@ -225,7 +225,7 @@ A message you type to a teammate or a channel takes along the pictures it names.
 - A file counts as a picture when its first bytes say PNG, JPEG, GIF or WebP. Its ending does not matter. Any other path stays the text it was. Nothing else in the file is checked, and it is sent unchanged: what a photo records about the place, the device and the time goes with it.
 - Only a message you typed carries pictures. A model's draft (sent by hand or by itself), a review, the command line and the local A2A endpoint never attach a file, so a model cannot send a file out by naming its path.
 - A path in text you pasted into the message box is a path you typed. The line that says how many pictures went (`with 2 pictures`) is shown after the message is sent.
-- A picture in a folder that holds secrets (`~/.ssh`, `~/.aws`, `~/.config` and the rest of that list, and ELU Code's own state folder) is refused. `~/Library` is the one folder of the list that stays open, because screenshot tools save there. A hard link in another folder to a file in such a folder is not recognized, and is attached.
+- A picture in a folder that holds secrets (`~/.ssh`, `~/.aws`, `~/.config` and the rest of that list, and ELU's own state folder) is refused. `~/Library` is the one folder of the list that stays open, because screenshot tools save there. A hard link in another folder to a file in such a folder is not recognized, and is attached.
 
 **Limits**
 
@@ -248,7 +248,7 @@ Over a limit, the message is not sent, it stays in the message box, and one line
 
 - Pieces are taken only from a teammate who is not muted. Each picture is checked again: its first bytes, its size and its SHA-256.
 - A finished picture waits in `pictures/in/<sender key>/` for the message that names it. One that waits longer than 10 minutes is removed.
-- When the message is accepted, its pictures move to `pictures/kept/<sender key>/<task id>/1.png` and so on: a folder only you can read, names made here, never the sender's path. The sender's file name is kept as cleaned text. A kept file is known as a picture by its first bytes only; it is readable by you alone (0600) and ELU Code never runs it.
+- When the message is accepted, its pictures move to `pictures/kept/<sender key>/<task id>/1.png` and so on: a folder only you can read, names made here, never the sender's path. The sender's file name is kept as cleaned text. A kept file is known as a picture by its first bytes only; it is readable by you alone (0600) and ELU never runs it.
 - In Chats, the row says how many pictures came and how large (`@kim asks you with 2 pictures (1.5 MB)`), and the opened message lists each name and size. The sender's row says `with 2 pictures`.
 - A refused message keeps no pictures. Kept pictures are removed with the message's record.
 - Caps, so a teammate cannot fill the disk: 32 MB or 16 pictures on their way from one teammate, 64 MB kept from one teammate, 256 MB kept in all. Over the first, the sender tries again later. Over the others, the text arrives without the pictures and the sender's row says so.
@@ -265,7 +265,7 @@ Over a limit, the message is not sent, it stays in the message box, and one line
 
 **Older builds**
 
-- A teammate on a build from before pictures answers `elu.picture.put` with "Method not found". The sender then sends the text alone, with the pictures' names in it, and the row says `@kim's ELU Code can't take pictures yet. The text went without them.`
+- A teammate on a build from before pictures answers `elu.picture.put` with "Method not found". The sender then sends the text alone, with the pictures' names in it, and the row says `@kim's ELU can't take pictures yet. The text went without them.`
 - A message from such a build has no file part and is taken as before.
 
 ## Roster

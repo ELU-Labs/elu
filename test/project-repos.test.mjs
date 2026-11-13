@@ -116,7 +116,7 @@ async function until(check, message, timeout = 20000) {
   const end = Date.now() + timeout;
   while (!check()) { if (Date.now() > end) assert.fail(`Timed out waiting for ${message}`); await new Promise(resolve => setTimeout(resolve, 25)); }
 }
-test('MCP settings never sit in the temp folder: a turn that ends or is stopped removes its own, and leftovers go when ELU Code starts', async t => {
+test('MCP settings never sit in the temp folder: a turn that ends or is stopped removes its own, and leftovers go when ELU starts', async t => {
   const f = hub(t, 'answer'), state = path.join(f.home, 'personal', 'elu-code'), shared = path.join(f.home, 'tmp');
   fs.mkdirSync(shared); fs.mkdirSync(path.join(f.home, 'claude')); environment(t, { TMPDIR: shared });
   fs.writeFileSync(path.join(f.home, 'claude', '.claude.json'), JSON.stringify({ mcpServers: { elu: { type: 'http', url: 'https://elu.example/mcp', headers: { Authorization: 'Bearer secret' } } } }));
@@ -148,7 +148,7 @@ test('MCP servers come from Claude Code by name, through a private file', t => {
   fs.writeFileSync(path.join(f.home, 'claude', '.claude.json'), JSON.stringify({ mcpServers: { elu: { type: 'http', url: 'https://elu.example/mcp', headers: { Authorization: 'Bearer secret' } }, other: { type: 'http', url: 'https://other.example' } } }));
   const servers = writeServers(['elu'], f.root);
   assert.equal(fs.statSync(servers.file).mode & 0o777, 0o600); assert.deepEqual(Object.keys(JSON.parse(fs.readFileSync(servers.file, 'utf8')).mcpServers), ['elu']);
-  // The file holds a token, so it is in ELU Code's own state folder, which every session is
+  // The file holds a token, so it is in ELU's own state folder, which every session is
   // denied, and never in the temp folder, which a session can read.
   const state = path.join(f.home, 'personal', 'elu-code');
   assert.equal(path.dirname(servers.folder), state); assert.match(path.basename(servers.folder), new RegExp(`^mcp-${process.pid}-`)); assert.equal(fs.statSync(servers.folder).mode & 0o777, 0o700);

@@ -74,7 +74,7 @@ test('a new session gets the personal default; a follow-up inherits mode, place 
   // The never list by name, once, with the read-only way to list tags.
   assert.equal(prompt.split('Never run these, alone or inside a longer command line, in any mode: git push, git tag, git merge, gh pr merge, gh release, npm publish, pnpm publish, yarn publish, cargo publish, firebase deploy, vercel deploy, gcloud run deploy, gcloud app deploy, fly deploy, kubectl apply, terraform apply, claude mcp add, claude mcp add-json, claude mcp add-from-claude-desktop, claude mcp remove, elu mcp add, elu mcp remove. To list tags use git for-each-ref --sort=-creatordate refs/tags or git describe --tags, never git tag.').length, 2);
   assert.match(prompt, /This session runs with Approve for me: you have a shell, the internet, and the MCP tools you were given; an action outside the project or the sandbox is reviewed before it runs\./);
-  assert.match(prompt, /The repository's own ELU Code config \(roles, network, commands\) does not limit this session\./);
+  assert.match(prompt, /The repository's own ELU config \(roles, network, commands\) does not limit this session\./);
   const policy = fs.readFileSync(path.join(taskDir(f.controller.repo, first.id), 'policy.yaml'), 'utf8');
   // A follow-up without choices keeps the session's.
   const second = await f.controller.ask('And the tests?', first.id).finished;
@@ -558,9 +558,9 @@ test('a session with a spending limit keeps it when its conversation becomes an 
   assert.equal(valueOf(turns.at(-1).args, '--max-budget-usd'), '7', 'the editing run is launched with the limit');
 });
 
-// ELU Code keeps its records of every session in the repository's Git folder. A Read only
+// ELU keeps its records of every session in the repository's Git folder. A Read only
 // session runs in the project folder, where that folder is inside the working directory.
-test('a Read only session may not read ELU Code\'s records in the Git folder, with the file tools or from a command', async t => {
+test('a Read only session may not read ELU\'s records in the Git folder, with the file tools or from a command', async t => {
   const f = setup(t, 'answer'), common = fs.realpathSync(path.join(f.root, '.git')), records = path.join(common, 'elu-code');
   const task = await f.controller.ask('Explain the change', null).finished;
   assert.equal(task.state, 'answered', JSON.stringify(task.error));
@@ -572,8 +572,8 @@ test('a Read only session may not read ELU Code\'s records in the Git folder, wi
 });
 
 // git needs to read the repository to answer status, diff and log. A sandboxed command reads
-// the Git folder for that and may not write there; ELU Code's records in it stay closed.
-test('in Read only, Ask for approval and Approve for me a sandboxed command reads the repository\'s Git folder, and none of ELU Code\'s records in it', async t => {
+// the Git folder for that and may not write there; ELU's records in it stay closed.
+test('in Read only, Ask for approval and Approve for me a sandboxed command reads the repository\'s Git folder, and none of ELU\'s records in it', async t => {
   const f = setup(t, 'answer'), common = fs.realpathSync(path.join(f.root, '.git')), records = path.join(common, 'elu-code');
   for (const [permissions, label] of [['ask', 'Ask for approval'], ['auto', 'Approve for me'], [undefined, 'Read only']]) {
     const task = await f.controller.ask('Where is coupon normalization?', null, permissions ? { permissions } : undefined).finished;

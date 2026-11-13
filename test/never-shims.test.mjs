@@ -89,7 +89,7 @@ test('the folder is private, first on PATH once, and written again when anything
   for (const name of fs.readdirSync(f.all)) assert.equal(mode(path.join(f.all, name)), '755', name);
   assert.equal(shimPath(['/usr/bin', f.merge, f.all, '/bin'].join(path.delimiter)), [f.all, '/usr/bin', '/bin'].join(path.delimiter));
   assert.equal(shimPath(['/usr/bin', f.all].join(path.delimiter), { merge: true }), [f.merge, '/usr/bin'].join(path.delimiter));
-  // The folder goes on the PATH a session is given and nowhere else: ELU Code's own checks run the real commands.
+  // The folder goes on the PATH a session is given and nowhere else: ELU's own checks run the real commands.
   const mine = process.env.PATH; shimPath(mine); assert.equal(process.env.PATH, mine); assert.equal(mine.split(path.delimiter).some(entry => entry.startsWith(shimsBase())), false);
   // What a session left behind: a changed stand-in, a link in its place, a program of its own.
   const git = path.join(f.all, 'git'), text = fs.readFileSync(git, 'utf8'), before = fs.statSync(path.join(f.all, 'npm')).mtimeMs;

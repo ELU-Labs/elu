@@ -383,7 +383,7 @@ test('a message reaches a teammate who shares no project and waits; y with the o
     assert.equal(item.kind, 'incoming'); assert.equal(item.text, 'testing if you see this message?'); assert.equal(item.name, 'ana');
     assert.deepEqual(peer.threadMessages('thread-m-1').map(row => [row.from, row.name, row.text]), [['peer', 'ana', 'testing if you see this message?']]);
     // y needs a project: with none it stays waiting; with the one the owner has open it starts there, as his own session.
-    assert.throws(() => acceptIncoming(ctx, first.id, { how: 'own' }), /Open ELU Code in the project teammates work in/);
+    assert.throws(() => acceptIncoming(ctx, first.id, { how: 'own' }), /Open ELU in the project teammates work in/);
     assert.equal(getRecord(first.id).waiting, true);
     assert.throws(() => acceptIncoming(ctx, first.id, { how: 'own', root: '/nowhere' }), /Open a project of yours/);
     const { root } = registeredProject(t);
@@ -505,14 +505,14 @@ test('elu access shows and changes what teammates can do here; --auto with --man
   });
 });
 
-test('a sender whose teammate runs an ELU Code that refuses messages without a shared project is told to have them update', t => {
+test('a sender whose teammate runs an ELU that refuses messages without a shared project is told to have them update', t => {
   const crew = makeTeam(t), ana = crew.founder;
   withHome(ana.home, () => {
     const ctx = { me: loadIdentity(), event: () => {}, kick: () => {}, dial: () => {}, session: () => null };
     const ask = createAsk(ctx, { to: 'sara', text: 'testing if you see this message?', byOwner: true });
     applyTask(ctx, crew.member.identity.key, a2aTask({ id: 'old-1', contextId: ask.threadId, state: TaskState.REJECTED, statusMessage: 'They have not shared a project, so there is nothing of theirs to ask about yet.' }), ask.id);
     assert.equal(getAsk(ask.id).state, 'rejected');
-    assert.equal(getAsk(ask.id).reason, '@sara needs to update ELU Code to get messages: their version takes them only when they share a project.');
+    assert.equal(getAsk(ask.id).reason, '@sara needs to update ELU to get messages: their version takes them only when they share a project.');
     const other = createAsk(ctx, { to: 'sara', text: 'and this?', byOwner: true });
     applyTask(ctx, crew.member.identity.key, a2aTask({ id: 'old-2', contextId: other.threadId, state: TaskState.REJECTED, statusMessage: 'This teammate is not taking requests from you.' }), other.id);
     assert.equal(getAsk(other.id).reason, 'This teammate is not taking requests from you.', 'other refusals are shown as they are');
@@ -1512,7 +1512,7 @@ test('elu peer trust and untrust resolve a roster name, refuse unknown and ambig
     assert.deepEqual(result.peer, { key: sara.key, name: 'sara', trusted: true }); assert.equal(peers()[sara.key].trusted, true);
     const listed = await peerCli(['peers'], {}), lines = listed.lines;
     assert.match(lines.find(line => line.includes(' sara ')), /offline  trusted$/); assert.doesNotMatch(lines.find(line => line.includes(' ana ')), /trusted/);
-    assert.match(listed.message, /^The peer daemon is not running\. It starts when you open ELU Code, invite or ask\. /);
+    assert.match(listed.message, /^The peer daemon is not running\. It starts when you open ELU, invite or ask\. /);
     for (const gone of [['peer'], ['peer', 'on'], ['peer', 'off'], ['peer', 'status']]) await assert.rejects(peerCli(gone, {}), new RegExp(`Unknown command: ${gone.join(' ')}\\. Use elu peer install\\|uninstall or elu peer trust\\|untrust @NAME\\.$`));
     await assert.rejects(peerCli(['peer', 'trust', '@nobody'], {}), /No teammate is named @nobody\./);
     await assert.rejects(peerCli(['peer', 'trust'], {}), /Use elu peer trust @NAME\./);
@@ -1687,7 +1687,7 @@ test('a daemon from another version is restarted when the daemon is started and 
   await stopCurrent();
   // One that ignores the shutdown: refused with what to do, and no invite is made.
   const stubborn = await old('no'), before = fs.readFileSync(teamPath(made.id, 'invites.json'), 'utf8');
-  await assert.rejects(peer.createInvite(made.id, { hours: 1 }), /The peer daemon of another version of ELU Code did not stop\. Wait a moment, then try again\./);
+  await assert.rejects(peer.createInvite(made.id, { hours: 1 }), /The peer daemon of another version of ELU did not stop\. Wait a moment, then try again\./);
   assert.equal(fs.readFileSync(teamPath(made.id, 'invites.json'), 'utf8'), before);
   assert.equal(stubborn.child.exitCode, null);
 });

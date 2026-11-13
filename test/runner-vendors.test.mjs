@@ -96,8 +96,8 @@ for (const [mode, label] of [['ask', 'Ask for approval'], ['auto', 'Approve for 
 }
 
 // Claude Code writes a note of its working folder after every command. Its own place for that
-// is under /tmp, where its sandbox as ELU Code sets it denies writes, so every command ended
-// "Exit code 1" whatever it did. ELU Code names a private folder of the run instead.
+// is under /tmp, where its sandbox as ELU sets it denies writes, so every command ended
+// "Exit code 1" whatever it did. ELU names a private folder of the run instead.
 const printedBy = run => fs.readFileSync(run.logFile, 'utf8').trim().split('\n').map(line => JSON.parse(line)).filter(row => row.type === 'user').map(row => row.message.content[0].content);
 for (const [mode, label] of [['ask', 'Ask for approval'], ['auto', 'Approve for me']]) {
   test(`a Claude Code session in ${label} keeps Claude Code's own temporary files in a private folder of the run, so a command that worked is not shown as failed`, async t => {

@@ -17,7 +17,7 @@ test('the installed command runs through npm-style package and executable links'
   const direct = command(process.execPath, [CLI, '--help'], prefix);
   const installed = command(executable, ['--help'], prefix);
   assert.equal(installed.status, 0, installed.stderr);
-  assert.match(installed.stdout, /ELU Code/);
+  assert.match(installed.stdout, /ELU/);
   assert.equal(installed.stdout, direct.stdout);
   assert.equal(installed.stderr, '');
 

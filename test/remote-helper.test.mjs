@@ -62,7 +62,7 @@ test('a helper starts named after the session it helps, and every turn of it is 
   assert.match(block, /It waits for the owner's answer to: Which batch results should I use\?\n1\. The ones in ~\/e2e\n2\. Run them again/);
   assert.match(block, /\(4 earlier entries are left out here for length\)/);
   for (let index = 0; index < HELPER_ENTRIES_MAX + 4; index++) assert.equal(new RegExp(`\\nentry ${index}(?![0-9])`).test(block), index >= 4, `entry ${index}`);
-  assert.match(block, new RegExp(`\\[ELU Code cut this entry here: it is ${HELPER_ENTRY_CHARS + 500 + `entry ${HELPER_ENTRIES_MAX + 2} `.length} characters long, and this is its start\\.\\]`));
+  assert.match(block, new RegExp(`\\[ELU cut this entry here: it is ${HELPER_ENTRY_CHARS + 500 + `entry ${HELPER_ENTRIES_MAX + 2} `.length} characters long, and this is its start\\.\\]`));
   assert.match(block, /--- Opus 5\.5 \(the agent there\)/);
   // The next message continues the same helper, which is told again, with what the session said since.
   followed({ state: 'answered', question: null, choices: [] });

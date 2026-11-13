@@ -359,7 +359,7 @@ test('Shift letters and typed text never fail silently, and nothing opens an ext
   v.input.write('maybe'); v.input.write('\r');
   await until(() => /Nothing was done\. Press y or n\./.test(status()), 'typed text explains');
   assert.ok(!peer.sent().some(row => row.id === 'draft-1'), 'the draft is untouched');
-  // blessed opens $EDITOR on e, Ctrl-E and a right-click; ELU Code types in place instead.
+  // blessed opens $EDITOR on e, Ctrl-E and a right-click; ELU types in place instead.
   const editors = []; screen.readEditor = (...args) => { editors.push(args); args.at(-1)?.(null, null); };
   const ask = v.panels.ask; ask.focus(); ask.readInput(); await until(() => ask._reading, 'reading');
   v.input.write('\r'); await new Promise(resolve => setTimeout(resolve, 50));
@@ -1481,7 +1481,7 @@ test('/leave says when no teammate was online to hear it, and when the daemon co
   peer.teamChange = async command => { peer.calls.push(['teamChange', command]); return { team: 'team-1', name: 'Core', told: false, daemon: false, stopping: false }; };
   await leave();
   await until(() => /You left Core\. Your teammates were not told, since the peer daemon could not start\. It tells them once it can\./.test(status()), 'written here');
-  const STALE = 'The peer daemon of another version of ELU Code did not stop. Wait a moment, then try again.';
+  const STALE = 'The peer daemon of another version of ELU did not stop. Wait a moment, then try again.';
   peer.teamChange = async command => { peer.calls.push(['teamChange', command]); throw new Error(STALE); };
   await leave();
   await until(() => status().includes(STALE), 'refused');
@@ -1744,7 +1744,7 @@ test('a card of my other computer opens as mine: its whole Task, you and that co
   // From an older build there: it has a Task that did not come with the card.
   panels.kanbanLists[3].focus(); panels.kanbanLists[3].select(0); v.input.write('\r');
   await until(() => rowsOf(v, title).includes('No Task yet'), 'an older build');
-  assert.ok(rowsOf(v, title).some(line => /It has a Task\. Update ELU Code on sara-box to see it here\./.test(line)));
+  assert.ok(rowsOf(v, title).some(line => /It has a Task\. Update ELU on sara-box to see it here\./.test(line)));
   v.input.write('\x1b'); await until(() => !modal(v, title), 'Esc closes it');
 });
 

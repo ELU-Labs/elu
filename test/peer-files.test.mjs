@@ -214,13 +214,13 @@ test('only a computer that is mine on both sides may send, and an older host is 
   // A host whose hello says nothing of files: nothing is sent.
   p.toViewer.remoteHello = { remote: 1 };
   await assert.rejects(sendIt(), { message: FILES_UPDATE('@mac') });
-  assert.equal(FILES_UPDATE('@mac'), '@mac needs to update ELU Code to receive files.');
+  assert.equal(FILES_UPDATE('@mac'), '@mac needs to update ELU to receive files.');
   assert.equal(p.calls.filter(([method]) => method === 'elu.remote.files').length, 0);
   // One that does not know the method answers Method not found: the same line.
   p.toViewer.remoteHello = { remote: 1, files: 1 };
   const request = p.toViewer.request;
   p.toViewer.request = (method, params) => { if (method !== 'elu.remote.files') return request(method, params); const error = new Error('Method not found'); error.details = { rpc: { code: -32601 } }; throw error; };
-  await assert.rejects(sendIt(), { message: '@mac needs to update ELU Code to receive files.' });
+  await assert.rejects(sendIt(), { message: '@mac needs to update ELU to receive files.' });
   // The copies for sending go either way.
   withHome(p.laptop.home, () => assert.deepEqual(outgoing(), []));
 });
@@ -286,18 +286,18 @@ test("a session's tool sends only what the session may read, lists only my compu
     server.send({ jsonrpc: '2.0', id: 1, method: 'tools/list' });
     assert.deepEqual((await server.next(row => row.id === 1)).result.tools.map(tool => tool.name), [TOOL_NAME, LIST_TOOL, SEND_TOOL]);
     const call = async (id, name, args) => { server.send({ jsonrpc: '2.0', id, method: 'tools/call', params: { name, arguments: args } }); return (await server.next(row => row.id === id)).result; };
-    // An untracked .env in the workspace, ELU Code's own state and a secret folder of the home: refused, nothing staged.
-    for (const [n, file, why] of [[2, path.join(project.root, '.env'), /may hold a secret and Git does not track it/], [3, path.join(env, 'elu-code'), /ELU Code's own state/], [4, path.join(HOME, '.ssh', 'id_ed25519'), /in a folder this session may not read/]]) {
+    // An untracked .env in the workspace, ELU's own state and a secret folder of the home: refused, nothing staged.
+    for (const [n, file, why] of [[2, path.join(project.root, '.env'), /may hold a secret and Git does not track it/], [3, path.join(env, 'elu-code'), /ELU's own state/], [4, path.join(HOME, '.ssh', 'id_ed25519'), /in a folder this session may not read/]]) {
       const said = await call(n, SEND_TOOL, { session: p.id, paths: [file], message: 'x' });
       assert.equal(said.isError, true, file); assert.match(said.content[0].text, why, file);
     }
     // The same, spelled in other letter case: on a disk that does not tell case apart it is the
     // same file or folder (compared on disk); on one that does, a stand-in of that name is made,
-    // and secret folders, ELU Code's state and secret names are closed without case there too.
+    // and secret folders, ELU's state and secret names are closed without case there too.
     const spelled = (file, body) => { if (!fs.existsSync(file)) { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, body); } return file; };
     const upperState = path.join(path.dirname(env), path.basename(env).toUpperCase(), 'elu-code');
     spelled(path.join(upperState, 'peer', 'note.json'), '{}');
-    for (const [n, file, why] of [[40, spelled(path.join(HOME, '.SSH', 'id_ed25519'), 'PRIVATE KEY'), /in a folder this session may not read/], [41, spelled(path.join(project.root, '.ENV'), 'TOKEN=1\n'), /may hold a secret and Git does not track it/], [42, upperState, /ELU Code's own state/]]) {
+    for (const [n, file, why] of [[40, spelled(path.join(HOME, '.SSH', 'id_ed25519'), 'PRIVATE KEY'), /in a folder this session may not read/], [41, spelled(path.join(project.root, '.ENV'), 'TOKEN=1\n'), /may hold a secret and Git does not track it/], [42, upperState, /ELU's own state/]]) {
       const said = await call(n, SEND_TOOL, { session: p.id, paths: [file], message: 'x' });
       assert.equal(said.isError, true, file); assert.match(said.content[0].text, why, file);
     }

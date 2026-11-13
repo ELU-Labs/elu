@@ -13,7 +13,7 @@ session; a turn that is not your own session's runs read only.
 | Edits outside it | no | asks | a reviewer model decides; on Antigravity refused, and on Claude Code an answer turn's edit asks | yes |
 | Shell inside the vendor sandbox | no | yes; Antigravity runs no sandbox, so every command asks | yes | yes, no sandbox |
 | Shell outside it, network, web tools | no | asks | a reviewer model decides | yes |
-| Secrets and ELU Code state | no | no | no | file tools denied; a shell can read |
+| Secrets and ELU state | no | no | no | file tools denied; a shell can read |
 | Never list (push, tag, merge, deploy, publish) | blocked | blocked; every escape asks | stand-in commands and, except on Codex, deny rules; a command that gets past them gets through if the reviewer allows it | stand-in commands, prompt text and, except on Codex, deny rules; no sandbox behind them |
 | Runs in | worktree | worktree or a named branch | same | also here |
 | Checks | sandboxed, no network, structural limits | same | no network; dependency files may change | network on; only secret paths and deleted tests block |
@@ -31,7 +31,7 @@ has passed on this machine. Elsewhere the action is denied and reported, and the
 model returns `needs_input` naming what it needs. "A reviewer model decides" is the
 vendor's own reviewer, such as Claude Code's auto mode.
 
-A reply ELU Code cannot read is asked for once more. Claude Code is asked in the
+A reply ELU cannot read is asked for once more. Claude Code is asked in the
 same session, which has done the work already, and the chat says it was asked for
 its reply again. Another vendor, or a Claude Code session that cannot be picked
 up, starts once more for the same message. The chat then says it was started
@@ -41,9 +41,9 @@ is read as it is.
 
 Read only has no shell unless the project's settings file names command prefixes
 for the model (`roles.lead.commands` in `.elu-code/config.yaml`, for example
-`npm test`). ELU Code never adds one by itself. The test and build scripts it
+`npm test`). ELU never adds one by itself. The test and build scripts it
 finds in a project run as checks after an edit, inside the check sandbox. A
-settings file counts only after you have approved it on this machine: ELU Code
+settings file counts only after you have approved it on this machine: ELU
 shows it and asks when it is new or changed. Until you approve a change, the
 settings you approved last stay in use.
 
@@ -51,7 +51,7 @@ The workspace is the place you picked: a worktree on a new task branch, a
 worktree with a named branch checked out, or, in Full access, the checkout
 itself with its current branch and a dirty tree allowed. Folders are extra
 directories in your home that the model may read this session, added with
-`/permissions folders add <path>`; they are never a secret folder or ELU Code's
+`/permissions folders add <path>`; they are never a secret folder or ELU's
 state. A folder that holds one of those is refused too, and a link counts as
 where it leads: with `~/.config` linked to `~/dotfiles/config`, `~/dotfiles` is
 refused. In Ask for approval and Approve for me a folder is read and never written:
@@ -69,8 +69,8 @@ bot's when you write to it. Claude Code is given the home folder with `--add-dir
 those turns; Codex reads anywhere in every turn; Grok Build allows `Read` and `Grep`
 with no path. On Claude Code a command that stays in the sandbox also reads outside the
 workspace without asking. Antigravity keeps its file tool to the workspace and folders.
-The secret folders (`~/.ssh`, `~/.aws`, `~/.config`, `~/Library` and the rest) and ELU
-Code's state stay closed, as the table says. Your session's answer turns, and a working
+The secret folders (`~/.ssh`, `~/.aws`, `~/.config`, `~/Library` and the rest) and ELU's
+state stay closed, as the table says. Your session's answer turns, and a working
 bot's until the session's work is published, also get a list of up to 60 Git
 repositories found in your home, so the model can find the code you mean.
 
@@ -134,7 +134,7 @@ stand-in for `git` lets them through:
   A worktree under the temporary directory of a repository kept elsewhere is that
   repository, and is refused.
 
-The temporary directory is the one ELU Code itself was started with, and `/tmp`;
+The temporary directory is the one ELU itself was started with, and `/tmp`;
 a session cannot name another by changing `TMPDIR`.
 
 Stand-in commands are not a sandbox. A full path to the real command
@@ -164,15 +164,15 @@ What a sandboxed command can read that way:
 The sandbox has no network of its own: a sandboxed command reaches only a host you allowed
 when asked (see Network below), so it cannot send any of it anywhere else. What it prints
 goes to the model, as all output does, and into the session's record.
-ELU Code's own records in the folder (`.git/elu-code`) stay closed to commands and
+ELU's own records in the folder (`.git/elu-code`) stay closed to commands and
 to the file tools. A teammate's question reads none of the Git folder.
 
 ## Approvals
 
-Claude Code is started with ELU Code's approval relay as its permission prompt
+Claude Code is started with ELU's approval relay as its permission prompt
 tool: a small MCP server over stdio, started from the same private config file
 as your own servers, with one tool. When Claude would prompt, the call becomes a
-request under ELU Code's personal directory and the terminal shows it under
+request under ELU's personal directory and the terminal shows it under
 Needs you. Allow lets the action run; deny tells the model not to retry it
 another way; no answer within 20 minutes counts as a denial. The turn's limits
 (below) wait while a request is open, and the conductor does not treat the wait
@@ -199,7 +199,7 @@ It is not offered for a bot's scheduled turn or a turn that runs read only.
 
 In Ask for approval, a sandboxed command that connects to a host (`curl https://elu.dev`,
 `npm view`) asks you under Needs you as "Network access to elu.dev". Claude Code asks this
-on its own output, not through the relay, so ELU Code starts it with the prompt as a
+on its own output, not through the relay, so ELU starts it with the prompt as a
 stream-json message (`--input-format stream-json`), keeps its input open and writes your
 answer back. Allow lets that host through for the rest of the session: Claude Code keeps it
 for the run, and later turns of the session start with it in the sandbox's allowed hosts.
@@ -224,7 +224,7 @@ projects**. A rule is kept narrow:
   or `git branch`, keeps the exact command. So do programs that read the files you name
   (`cat`, `grep`, `rg`, `ls`, `head`, `tail` and the like) and `git fetch`, `clone` and
   `ls-remote`.
-- The arguments are checked each time a rule answers: one that names a secret or ELU Code's
+- The arguments are checked each time a rule answers: one that names a secret or ELU's
   own files, or a git option that runs a program or writes a file (`--output`, `--ext-diff`,
   `--no-index`, `--upload-pack`), asks.
 - A line that joins or wraps commands (`;`, `&&`, `||`, `$( )`, backticks, a redirect, a
@@ -298,7 +298,7 @@ estimate of the work in minutes. You approve it with `y`, reject it
 with `n`, or change it with a message. This holds in every mode, Full access included, for
 the session's model and for a bot that works, such as `@lead`.
 
-ELU Code enforces this much, on every vendor:
+ELU enforces this much, on every vendor:
 
 - The editing turn starts only for a Task you approved. That is the turn that runs in the
   session's workspace and is followed by the checks and the review. A reply that asks for
@@ -355,7 +355,7 @@ Approve for me.
   policy does not change.
 - A switch made while a turn runs is saved at once, and so are the spending
   limit, the folders and the bots. The turn in progress keeps the mode it
-  started with, with one exception: after a switch to Full access, ELU Code
+  started with, with one exception: after a switch to Full access, ELU
   allows that turn's approvals for you, the one that waits and the ones it asks
   next. Three kinds stay yours to answer: a removal with `rm` or `rmdir`, an
   MCP tool, and a command too long to show whole. The never list is not asked,
@@ -402,8 +402,8 @@ command and Approve for me sends every command to the reviewer.
 
 The Permissions picker says which case this machine is: "No OS sandbox here" when
 a tool is not installed, "The OS sandbox cannot start here" when both are installed
-and `bwrap` cannot start. ELU Code finds out by starting `bwrap` once, around a
-command that does nothing, when the picker first opens; start ELU Code again after
+and `bwrap` cannot start. ELU finds out by starting `bwrap` once, around a
+command that does nothing, when the picker first opens; start ELU again after
 a fix.
 
 Ubuntu 24.04 stops a program from making user namespaces unless an AppArmor

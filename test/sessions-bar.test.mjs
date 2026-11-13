@@ -153,7 +153,7 @@ test('a row that is not a session shows its own text and keys beside the list', 
 
 // The owner's list on 2026-11-12: session 3 runs his newest message; two older "I approve" were
 // refused before he updated, and a teammate's question waits.
-const REFUSED = "A teammate's message never runs in your home folder. Open ELU Code in the project folder, then approve again.";
+const REFUSED = "A teammate's message never runs in your home folder. Open ELU in the project folder, then approve again.";
 const ownerTask = { id: '3', state: 'running', activeRole: 'lead', activeSince: at(1), goal: 'ELU Issues', title: 'ELU Issues', createdAt: at(700), runs: [{ role: 'lead', at: at(1) }], messages: [{ at: at(700), text: 'ELU Issues' }, { at: at(1), text: 'you have my approval' }] };
 const ownerQueue = [
   { id: 'request-1', goal: 'I approve', state: 'blocked', reason: REFUSED, continuationTaskId: '3', taskId: null, createdAt: at(649) },

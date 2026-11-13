@@ -95,18 +95,18 @@ test('the new-version line: at most one check a day, kept in the state folder, a
   const dir = personal(t), file = path.join(dir, 'update-check.json'), now = Date.parse('2026-11-12T09:00:00Z');
   let calls = 0, answer = '3.3.0';
   const latest = async () => { calls++; return answer; }, check = (options = {}) => updateNotice({ env: {}, current: '3.2.1', latest, now, ...options });
-  assert.equal(await check(), 'ELU Code 3.3.0 is out. /quit, then elu update.');
-  assert.equal(noticeText('3.3.0'), 'ELU Code 3.3.0 is out. /quit, then elu update.');
+  assert.equal(await check(), 'ELU 3.3.0 is out. /quit, then elu update.');
+  assert.equal(noticeText('3.3.0'), 'ELU 3.3.0 is out. /quit, then elu update.');
   assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { checkedAt: '2026-11-12T09:00:00.000Z', version: '3.3.0' });
   // The same day reads what was kept and asks nothing.
-  assert.equal(await check({ now: now + 23 * 3600000 }), 'ELU Code 3.3.0 is out. /quit, then elu update.');
+  assert.equal(await check({ now: now + 23 * 3600000 }), 'ELU 3.3.0 is out. /quit, then elu update.');
   assert.equal(calls, 1);
   // Once current, nothing is said.
   assert.equal(await check({ current: '3.3.0', now: now + 3600000 }), null);
   assert.equal(await check({ current: '3.10.0', now: now + 3600000 }), null);
   // A day later it asks again.
   answer = '3.4.0';
-  assert.equal(await check({ now: now + 25 * 3600000 }), 'ELU Code 3.4.0 is out. /quit, then elu update.');
+  assert.equal(await check({ now: now + 25 * 3600000 }), 'ELU 3.4.0 is out. /quit, then elu update.');
   assert.equal(calls, 2);
   // Offline: nothing new is said, the last version seen is kept, and the next check is a day on.
   fs.rmSync(file); answer = null;
@@ -115,7 +115,7 @@ test('the new-version line: at most one check a day, kept in the state folder, a
   assert.equal(await check({ now: now + 3600000 }), null); assert.equal(calls, 3);
   // A kept time in the future is not trusted.
   fs.writeFileSync(file, JSON.stringify({ checkedAt: '2027-01-01T00:00:00Z', version: '3.2.1' })); answer = '3.5.0';
-  assert.equal(await check(), 'ELU Code 3.5.0 is out. /quit, then elu update.'); assert.equal(calls, 4);
+  assert.equal(await check(), 'ELU 3.5.0 is out. /quit, then elu update.'); assert.equal(calls, 4);
   // Off: ELU_NO_UPDATE_CHECK=1, and in tests.
   fs.rmSync(file);
   assert.equal(await check({ env: { ELU_NO_UPDATE_CHECK: '1' } }), null);
@@ -128,23 +128,23 @@ test('elu update installs the newer version where elu is and says so; when curre
   personal(t);
   const r = await registry(t), s = installed(t), env = { ELU_UPDATE_REGISTRY: r.url };
   const done = await s.update({ env });
-  assert.equal(done.message, 'Updated ELU Code 3.2.1 → 3.3.0. Open it again with elu.');
+  assert.equal(done.message, 'Updated ELU 3.2.1 → 3.3.0. Open it again with elu.');
   assert.deepEqual(s.calls.map(call => call.args), [['prefix', '--global'], ['install', '--global', '--ignore-scripts', '@elu-labs/elu@3.3.0']]);
-  assert.deepEqual(s.said, ['Installing ELU Code 3.3.0: npm install --global --ignore-scripts @elu-labs/elu@3.3.0\n']);
+  assert.deepEqual(s.said, ['Installing ELU 3.3.0: npm install --global --ignore-scripts @elu-labs/elu@3.3.0\n']);
   assert.equal(JSON.parse(fs.readFileSync(path.join(s.root, 'package.json'), 'utf8')).version, '3.3.0');
   for (const call of s.calls) assert.equal(call.options.cwd, s.home);
   // Current now.
   s.calls.length = 0;
-  assert.equal((await s.update({ env })).message, 'ELU Code 3.3.0 is the latest.');
+  assert.equal((await s.update({ env })).message, 'ELU 3.3.0 is the latest.');
   r.state.body = { version: '3.2.9' };
-  assert.equal((await s.update({ env })).message, 'ELU Code 3.3.0 is the latest.', 'an older latest is not a downgrade');
+  assert.equal((await s.update({ env })).message, 'ELU 3.3.0 is the latest.', 'an older latest is not a downgrade');
   // Offline.
   const offline = await s.update({ env: { ELU_UPDATE_REGISTRY: 'http://127.0.0.1:9/x' } });
   assert.deepEqual([offline.success, offline.message], [false, 'Could not reach the npm registry. Check your connection, then run elu update again.']);
   // Open in another terminal: nothing is replaced under it.
   r.state.body = { version: '3.4.0' };
   const open = await s.update({ env, apps: () => 1 });
-  assert.deepEqual([open.success, open.message], [false, 'ELU Code is open in another terminal. /quit it there, then run elu update again.']);
+  assert.deepEqual([open.success, open.message], [false, 'ELU is open in another terminal. /quit it there, then run elu update again.']);
   assert.deepEqual(s.calls, []);
   // A failed install says how to update by hand.
   const failed = await runUpdate({ home: s.home, npm: ['npm'], apps: () => 0, run: (npm, args) => args[0] === 'prefix' ? { status: 0, stdout: `${s.prefix}\n`, stderr: '' } : { status: 1, stdout: '', stderr: 'npm error code EACCES\n' }, env: { HOME: s.home, PATH: `${path.join(s.prefix, 'bin')}:/usr/bin`, ...env } });
@@ -179,9 +179,9 @@ test('elu update from the command line asks the registry and prints one line', a
   const env = { HOME: home, XDG_CONFIG_HOME: path.join(home, '.config'), PATH: `${path.join(prefix, 'bin')}:/usr/bin:/bin`, ELU_UPDATE_REGISTRY: r.url };
   const current = await cli(['update'], home, env);
   assert.equal(current.status, 0, current.stderr);
-  assert.equal(current.stdout, `ELU Code ${VERSION} is the latest.\n`);
+  assert.equal(current.stdout, `ELU ${VERSION} is the latest.\n`);
   const json = await cli(['update', '--json'], home, env);
-  assert.equal(JSON.parse(json.stdout).message, `ELU Code ${VERSION} is the latest.`);
+  assert.equal(JSON.parse(json.stdout).message, `ELU ${VERSION} is the latest.`);
   const offline = await cli(['update'], home, { ...env, ELU_UPDATE_REGISTRY: 'http://127.0.0.1:9/x' });
   assert.equal(offline.status, 1);
   assert.match(offline.stdout + offline.stderr, /Could not reach the npm registry\./);
@@ -230,7 +230,7 @@ test('elu update stops the old peer daemon, waits until it is gone, and starts t
   };
   const first = await old('yes');
   const done = await s.update({ env: { ELU_UPDATE_REGISTRY: r.url } });
-  assert.equal(done.message, 'Updated ELU Code 3.2.1 → 3.3.0. Open it again with elu.');
+  assert.equal(done.message, 'Updated ELU 3.2.1 → 3.3.0. Open it again with elu.');
   // The old one had exited before the new one was started, from the copy just installed.
   assert.equal(first.child.exitCode, 0);
   await until(() => fs.existsSync(mark), 'the new daemon started');
@@ -239,7 +239,7 @@ test('elu update stops the old peer daemon, waits until it is gone, and starts t
   fs.rmSync(mark); fs.rmSync(peerFile('state.json')); r.state.body = { version: '3.4.0' };
   const stubborn = await old('no');
   const stuck = await s.update({ env: { ELU_UPDATE_REGISTRY: r.url }, waitMs: 1000 });
-  assert.equal(stuck.message, 'Updated ELU Code 3.3.0 → 3.4.0. Open it again with elu.\nThe old peer daemon did not stop. Open ELU Code and it restarts it.');
+  assert.equal(stuck.message, 'Updated ELU 3.3.0 → 3.4.0. Open it again with elu.\nThe old peer daemon did not stop. Open ELU and it restarts it.');
   assert.equal(stubborn.child.exitCode, null); assert.equal(fs.existsSync(mark), false);
 });
 
@@ -253,13 +253,13 @@ test('elu update stops an idle conductor and leaves one with sessions running to
   fs.writeFileSync(path.join(dir, 'conductor', 'state.json'), JSON.stringify({ pid: busy.pid, stopped: false, heartbeatAt: new Date().toISOString(), runs: [{ root: '/x', taskId: '1' }] }));
   assert.equal(conductorAlive(), true);
   const kept = await s.update({ env });
-  assert.equal(kept.message, 'Updated ELU Code 3.2.1 → 3.3.0. Open it again with elu.\n1 session is still running or queued on 3.2.1. New sessions start on the new version once it ends.');
+  assert.equal(kept.message, 'Updated ELU 3.2.1 → 3.3.0. Open it again with elu.\n1 session is still running or queued on 3.2.1. New sessions start on the new version once it ends.');
   assert.equal(busy.exitCode, null);
   assert.equal(fs.existsSync(path.join(dir, 'conductor', 'commands')) ? fs.readdirSync(path.join(dir, 'conductor', 'commands')).length : 0, 0);
   // Sessions only queued keep it too.
   fs.writeFileSync(path.join(dir, 'conductor', 'state.json'), JSON.stringify({ pid: busy.pid, stopped: false, heartbeatAt: new Date().toISOString(), runs: [], queued: 2 }));
   r.state.body = { version: '3.3.1' };
-  assert.equal((await s.update({ env })).message, 'Updated ELU Code 3.3.0 → 3.3.1. Open it again with elu.\n2 sessions are still running or queued on 3.3.0. New sessions start on the new version once they end.');
+  assert.equal((await s.update({ env })).message, 'Updated ELU 3.3.0 → 3.3.1. Open it again with elu.\n2 sessions are still running or queued on 3.3.0. New sessions start on the new version once they end.');
   assert.equal(busy.exitCode, null);
   busy.kill('SIGKILL'); await gone; fs.rmSync(path.join(dir, 'conductor.lock'));
   // An idle conductor, the real one: stopped, and gone before elu update returns.
@@ -267,7 +267,7 @@ test('elu update stops an idle conductor and leaves one with sessions running to
   t.after(() => { conductor.kill('SIGKILL'); return ended; });
   await until(() => conductorAlive(), 'the conductor running');
   r.state.body = { version: '3.4.0' };
-  assert.equal((await s.update({ env })).message, 'Updated ELU Code 3.3.1 → 3.4.0. Open it again with elu.');
+  assert.equal((await s.update({ env })).message, 'Updated ELU 3.3.1 → 3.4.0. Open it again with elu.');
   assert.equal(conductorAlive(), false);
   await ended;
 });
