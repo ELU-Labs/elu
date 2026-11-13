@@ -381,7 +381,7 @@ shell, no web, no Task and none of your MCP servers; Full access runs as Approve
 another vendor runs it Read only. It runs once a round and is never
 retried on its own. Then you talk to
 it: each message goes to that model with the updates and this computer's Kanban boards for
-the projects involved, teammates' cards on them read-only. It can keep the Kanban right: in
+the projects involved, your other computers' sessions and teammates' cards on them read-only. It can keep the Kanban right: in
 a Claude Code session with permissions it lists the boards, adds a To do card that says where
 it came from ("from @billing on @kim"), changes a To do card's text, moves a card or session
 to Done or back, and removes a card it added. It never changes another computer's board or a

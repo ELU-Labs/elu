@@ -13,7 +13,8 @@ import { lastActivity, readBoard, setDone } from '../lib/kanban.mjs';
 import { boardRows } from '../lib/board.mjs';
 import { createConversation } from '../lib/runner.mjs';
 import { saveTeamAccess } from '../lib/peer/access.mjs';
-import { localRepos, repoProof, saveProofs, sessionCards } from '../lib/peer/cards.mjs';
+import { localRepos, repoProof, saveCards, saveLocalRepos, saveProofs, sessionCards } from '../lib/peer/cards.mjs';
+import { markMine, noteTheirs } from '../lib/peer/mine.mjs';
 import { peerFile } from '../lib/peer/paths.mjs';
 import { readCaps } from '../lib/peer/intake.mjs';
 import { savePeerPolicy, savePeerSettings } from '../lib/peer/settings.mjs';
@@ -23,6 +24,7 @@ import { approveStandup, hostStandup, teamStandupAsk, teamStandupCommand, teamSt
 import { peerRunUsd } from '../lib/adapters/claude.mjs';
 import { STANDUP_QUESTION, newRound, standupOpen } from '../lib/standup.mjs';
 import { runStandupRound, standupPlan } from '../lib/standup-round.mjs';
+import { boardsFor } from '../lib/standup-kanban.mjs';
 
 // What a standup may cost and start: never run again on its own, counted against the agent
 // limit while its model works, never queued for an older conductor, a summary turn that only
@@ -243,4 +245,27 @@ test('an answer turn is not activity: the session keeps when it last worked and 
   assert.equal(after.activeSince, before.activeSince);
   assert.equal(lastActivity(after), lastActivity(before));
   assert.deepEqual([row().group, row().order, row().time], [place.group, place.order, place.time]);
+});
+
+test("the Standup's model reads the owner's other computers apart from his teammates", async t => {
+  const { teamId, founder, member } = makeTeam(t);
+  const p = project(t), fake = fakeClis(p.parent, { mode: 'answer' }); environment(t, { ...fake.env, XDG_CONFIG_HOME: founder.home });
+  git(p.root, ['remote', 'add', 'origin', 'https://github.com/example/shop.git']);
+  const controller = new ProjectController(projectFolder(p.root)); controller.draftConfig.checks = []; registerProject(controller.repo);
+  await controller.ask('Explain coupons').finished;
+  const repos = localRepos(), [repo] = repos.values(), other = member.identity.key, me = founder.identity.key;
+  saveLocalRepos(repos);
+  saveProofs(other, [repoProof(other, me, repo.repoId, repo.commit)]);
+  fs.mkdirSync(peerFile(), { recursive: true });
+  fs.writeFileSync(peerFile('state.json'), JSON.stringify({ key: me, running: true, at: new Date().toISOString(), teams: [{ id: teamId, members: [{ key: me, online: true }, { key: other, online: true, box: 'devbox' }] }] }));
+  saveCards(other, me, [{ repoId: repo.repoId, id: '0123456789abcdef', title: 'Flaky test', column: 'done', by: 'ana', at: new Date().toISOString() }], { repos });
+  const standup = createConversation(controller.repo, controller.draftConfig, '/standup');
+  const board = () => boardsFor(controller.repo, readTask(controller.repo, standup.id))[0];
+  assert.deepEqual(board().teammates, [{ who: '@ana', title: 'Flaky test', column: 'Done' }]);
+  assert.equal(board().otherComputers, undefined);
+  // Once it is his own other computer, its session is his, named by that computer.
+  markMine(me, other); noteTheirs(other, true);
+  assert.deepEqual(board().otherComputers, [{ computer: '@devbox', title: 'Flaky test', column: 'Done' }]);
+  assert.equal(board().otherComputersReadOnly, true);
+  assert.equal(board().teammates, undefined);
 });
