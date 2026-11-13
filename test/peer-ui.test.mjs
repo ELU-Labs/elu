@@ -344,6 +344,39 @@ for (const [columns, rows] of [[140, 50], [80, 24]]) test(`the key bar says wher
   assert.equal(focused(), ask);
 });
 
+// A click on a heading or on the blank row puts the cursor on the row next to it, the way the click went from
+// the cursor; a heading with no row over it gives the row under it.
+for (const [columns, rows] of [[140, 50], [80, 24]]) test(`a click on a heading of the Team bar lands on the row next to it at ${columns}x${rows}`, { timeout: 30000 }, async t => {
+  const { v } = await teamView(t, { columns, rows, peer: fakePeer({ items: [] }) });
+  const [bar] = v.panels.teamLists, at = () => plainItem(bar.items[bar.selected]).trim(), open = () => v.panels.teamBoxes[1]._label.getText().trim(), keys = () => v.panels.keys.getText().trim();
+  await until(() => bar.items.length > 5 && open() === '#general', 'the bar opens on #general');
+  const all = bar.items.map(item => plainItem(item).trim()), place = pattern => all.findIndex(line => pattern.test(line));
+  assert.deepEqual(all.slice(0, 6).map(line => line.replace(/^(● @sara).*/, '$1')), ['Channels', '# general  3', '+ Add channel', '', 'Direct messages', '● @sara']);
+  // The cursor starts on one row and the mouse presses another, where that row is drawn now (a short bar scrolls).
+  const click = async (from, to) => {
+    bar.focus(); bar.select(to); bar.select(from); await until(() => bar.selected === from, `the cursor on row ${from}`);
+    const y = bar.atop + to - bar.childBase; assert.ok(to >= bar.childBase && y < bar.atop + bar.height, `row ${to} shows`);
+    await until(() => bar.items[to].lpos?.yi === y && bar.items[from].lpos?.yi === bar.atop + from - bar.childBase, `row ${to} is drawn where the mouse presses`);
+    v.input.write(`\x1b[<0;${bar.aleft + 4};${y + 1}M`); v.input.write(`\x1b[<0;${bar.aleft + 4};${y + 1}m`);
+    await until(() => bar.selected !== from || to === from, `a click on row ${to} from row ${from} moves the cursor`); return at();
+  };
+  const general = place(/^# general/), add = place(/^\+ Add channel/), blank = all.indexOf(''), direct = all.indexOf('Direct messages'), sara = place(/^● @sara/), li = place(/^○ @li/);
+  // Going down: the heading gives the first direct chat under it, and the threads beside the bar are that person's.
+  assert.match(await click(general, direct), /^● @sara/); await until(() => open() === '@sara' && keys() === 'enter write  t trust  n new channel  tab threads', '@sara opens, with a person\'s keys');
+  assert.equal(v.current.screen.focused, bar);
+  assert.match(await click(add, blank), /^● @sara/);
+  // Going up: the row over the blank row.
+  assert.equal(await click(sara, direct), '+ Add channel'); await until(() => keys() === 'enter new channel  ↑↓ choose', 'the add row\'s keys');
+  assert.equal(await click(li, blank), '+ Add channel');
+  // The first heading has no row over it: the first channel, from wherever the cursor was.
+  assert.equal(await click(add, 0), '# general  3'); await until(() => open() === '#general' && keys() === 'enter write  n new channel  tab threads', '#general opens');
+  // A bar too short to show both rows at once cannot have this click.
+  if (bar.height > sara) assert.equal(await click(sara, 0), '# general  3');
+  // A row that can be chosen takes the click itself.
+  assert.match(await click(sara, li), /^○ @li/); await until(() => open() === '@li', '@li opens with a click');
+  assert.ok(!['Channels', '', 'Direct messages'].includes(at()));
+});
+
 test('a message that starts with ! in Chats runs in a shell and is never asked to the team', async t => {
   const { v, peer } = await teamView(t);
   await send(v, '!echo not-for-the-team');
