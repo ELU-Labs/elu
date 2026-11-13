@@ -9,7 +9,7 @@ import { projectSnapshot, registerProject } from '../lib/projects.mjs';
 import { saveTask } from '../lib/state.mjs';
 import { pendingRequests, removeRequest, updateRequest, takeRequest } from '../lib/workspace.mjs';
 import { Conductor, enqueue, sendCommand, saveConductorSettings, conductorStatus, retryRequest } from '../lib/conductor.mjs';
-import { boardRows, barCells } from '../lib/board.mjs';
+import { boardRows, barCells, rowCard } from '../lib/board.mjs';
 import { saveSchedule, runScheduleNow, parseWhen } from '../lib/schedules.mjs';
 import { saveBot } from '../lib/bots.mjs';
 import { runBotSchedules } from '../lib/bot-schedules.mjs';
@@ -69,6 +69,25 @@ test('a session that a schedule starts has the bots the schedule kept', async t 
   runScheduleNow(row.id, new Date(), { start: () => true }); conduct(t);
   await until(() => projectSnapshot(p.repo).tasks[0]?.state === 'answered', 'the scheduled run');
   assert.deepEqual(projectSnapshot(p.repo).tasks[0].bots, ['reviewer', 'qa']);
+});
+
+// The owner picked Full access for this schedule, so its run is a session in Full access:
+// Full's policy, with no sandbox around the network, and nobody asked.
+test('a session that a Full access schedule starts runs in Full access', async t => {
+  const p = setup(t);
+  const row = saveSchedule({ root: p.root, goal: 'Check the build', when: parseWhen('every 3h'), permissions: 'full', picked: true });
+  runScheduleNow(row.id, new Date(), { start: () => true }); conduct(t);
+  await until(() => projectSnapshot(p.repo).tasks[0]?.state === 'answered', 'the scheduled run');
+  const [run] = projectSnapshot(p.repo).tasks;
+  assert.equal(run.permissions, 'full');
+  assert.deepEqual(run.runs.filter(value => value.role === 'lead').map(value => [value.permissions, value.effectivePermissions]), [['full', 'full']]);
+  const lead = fs.readFileSync(p.calls, 'utf8').trim().split('\n').map(JSON.parse).filter(call => call.vendor === 'claude' && call.args.includes('-p'))[0];
+  const flag = name => lead.args[lead.args.indexOf(name) + 1];
+  assert.equal(flag('--permission-mode'), 'bypassPermissions');
+  const settings = JSON.parse(flag('--settings'));
+  assert.deepEqual(settings.sandbox, { enabled: false }, 'no sandbox, so the network is not fenced');
+  assert.equal(settings.permissions.ask, undefined, 'and nothing asks');
+  assert.match(boardRows([projectSnapshot(p.repo)], Date.now(), { schedules: [row] }).filter(value => value.kind === 'schedule').map(value => rowCard(value).text).join('\n'), /Each run has Full access\./);
 });
 
 test('a bot with its own schedule is left out of the sessions a schedule starts, so its schedule never runs there', async t => {

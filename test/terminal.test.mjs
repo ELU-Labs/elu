@@ -2612,10 +2612,10 @@ test('a scheduled draft that follows the default gets Approve for me at most, an
   await send(v, '/new'); await until(() => !panels.compose.hidden && /Permissions {2}Full access/.test(text()), 'form');
   pickRow(panels.composeList, /When/); v.input.write('\r'); await until(() => modal(v, 'When'), 'the list of times');
   dialogList(v, 'When').select(5); v.input.write('\r');
-  await until(() => /Schedules run with Approve for me at most\./.test(status()) && /Permissions {2}Approve for me/.test(text()), 'capped');
+  await until(() => /A schedule gets Full access only when you pick it for that schedule\./.test(status()) && /Permissions {2}Approve for me/.test(text()), 'capped');
   await send(v, '/permissions default ask'); await until(() => /New sessions start with Ask for approval, this one too\./.test(status()) && /Permissions {2}Ask for approval/.test(text()), 'follows down');
   await send(v, '/permissions default full');
-  await until(() => /New sessions start with Full access, this scheduled one with Approve for me\. Schedules run with Approve for me at most\./.test(status().replace(/\s+/g, ' ')) && /Permissions {2}Approve for me/.test(text()), 'never full');
+  await until(() => /New sessions start with Full access, this scheduled one with Approve for me\. A schedule gets Full access only when you pick it for that schedule\./.test(status().replace(/\s+/g, ' ')) && /Permissions {2}Approve for me/.test(text()), 'never full');
   await send(v, 'Check dependencies for updates'); await until(() => /Scheduled daily 9:00/.test(status()), 'scheduled');
   assert.equal(listSchedules().find(row => row.goal === 'Check dependencies for updates')?.permissions, 'auto');
   assert.equal('picked' in listSchedules().find(row => row.goal === 'Check dependencies for updates'), false, 'it follows the default at each run');
@@ -2647,7 +2647,7 @@ test('a mode picked in a form opened from Kanban does not carry into the next ne
   await send(v, '/new'); await until(() => !panels.compose.hidden && /Permissions {2}Ask for approval/.test(text()), 'a fresh form');
   pickRow(panels.composeList, /When/); v.input.write('\r'); await until(() => modal(v, 'When'), 'the list of times');
   dialogList(v, 'When').select(5); v.input.write('\r');
-  await send(v, '/permissions auto'); await until(() => /Approve for me for this session\./.test(status()), 'auto picked');
+  await send(v, '/permissions auto'); await until(() => /Approve for me for this schedule\./.test(status()), 'auto picked');
   await send(v, 'Check dependencies for updates'); await until(() => /Scheduled daily 9:00/.test(status()), 'scheduled');
   assert.equal(listSchedules().find(row => row.goal === 'Check dependencies for updates')?.permissions, 'auto');
   assert.equal(listSchedules().find(row => row.goal === 'Check dependencies for updates')?.picked, true, 'picked, so a lower default leaves it');
@@ -2943,20 +2943,54 @@ test('/publish in a session whose turn runs says to wait for the reply, never th
   assert.doesNotMatch(status(), /holds this lock/);
 });
 
-test('a schedule offers only Ask for approval and Approve for me', { timeout: 20000 }, async t => {
+// A schedule may run in Full access when the owner picks it for that schedule. Before it is
+// saved the form says what that means and asks once: when he picks it with a time set, or
+// when he saves a schedule whose Full access he picked for a session first.
+test('a schedule offers Full access, says what it means and asks once', { timeout: 30000 }, async t => {
   const p = setup(t), loginItem = { install: () => ({ installed: true }), uninstall: () => ({ removed: true }) };
   const v = await view(t, { repo: p.repo, loginItem }), panels = v.current.panels, status = () => panels.status.getText(), text = () => composeText(v);
+  const said = () => dialogText(v, 'Full access').replace(/\s+/g, ' ');
   await wide(v);
   await send(v, '/new'); await until(() => !panels.compose.hidden, 'form');
-  await send(v, '/permissions full'); await dialog(v, 'Full access', 'y'); await until(() => /Permissions {2}Full access/.test(text()), 'full');
   pickRow(panels.composeList, /When/); v.input.write('\r'); await until(() => modal(v, 'When'), 'the list of times');
-  dialogList(v, 'When').select(5); v.input.write('\r');
-  await until(() => /Schedules run with Approve for me at most\./.test(status()) && /Permissions {2}Approve for me/.test(text()), 'capped');
+  dialogList(v, 'When').select(5); v.input.write('\r'); await until(() => /Runs daily 9:00/.test(status()), 'a time is set');
   pickRow(panels.composeList, /Permissions/); v.input.write('\r'); await until(() => modal(v, 'Permissions'), 'picker');
   const picker = dialogText(v, 'Permissions');
-  assert.doesNotMatch(picker, /Full access/); assert.match(picker, /Schedules run with Approve for me at most\./);
-  v.input.write('1'); await until(() => /Ask for approval for this session\./.test(status()), 'ask');
-  await send(v, '/permissions full'); await until(() => /Schedules run with Approve for me at most\./.test(status()), 'full refused');
+  assert.match(picker, /Full access/); assert.match(picker, /Each run of a schedule has nobody watching\./);
+  v.input.write('3'); await until(() => modal(v, 'Full access'), 'the schedule line');
+  assert.match(said(), /Each run has Full access with nobody watching: it reads anything, runs any command and uses the internet without asking\. The never list is refused by name only: a command that names it another way can get through\./);
+  assert.match(said(), /Use it for this schedule\? y\/N/);
+  await dialog(v, 'Full access', 'y'); await until(() => /Full access for this schedule\./.test(status()) && /Permissions {2}Full access/.test(text()), 'full');
+  // Full access or not, a schedule never runs in your checkout: Here is refused when it is picked, not when it is saved.
+  const noHere = () => /A schedule never runs in your checkout as it is\. Set Runs in to New worktree or a branch\./.test(status().replace(/\s+/g, ' '));
+  pickRow(panels.composeList, /Runs in/); v.input.write('\r'); await until(() => modal(v, 'Runs in'), 'where');
+  v.input.write('3'); await until(noHere, 'Here is refused in the picker');
+  assert.match(text(), /Runs in {6}New worktree/);
+  await send(v, '/place worktree'); await until(() => /New worktree for this schedule\./.test(status()), 'a worktree is said for the schedule');
+  await send(v, '/place here'); await until(noHere, 'and by /place');
+  assert.match(text(), /Runs in {6}New worktree/);
+  // Asked once: saving it asks nothing more.
+  await send(v, 'Triage the backlog'); await until(() => /Scheduled daily 9:00/.test(status()), 'scheduled with no second question');
+  const first = listSchedules().find(row => row.goal === 'Triage the backlog');
+  assert.deepEqual([first?.permissions, first?.picked], ['full', true]);
+  // Full access picked for the session first, then a time: the schedule line comes when it is saved, once.
+  await send(v, '/new'); await until(() => !panels.compose.hidden && !/Scheduled/.test(status()), 'a fresh form');
+  await send(v, '/permissions full'); await dialog(v, 'Full access', 'y'); await until(() => /Full access for this session\./.test(status()), 'full for the session');
+  await send(v, '/schedule every 3h'); await until(() => /Runs every 3h/.test(status()) && /Permissions {2}Full access/.test(text()), 'kept, since it was picked');
+  await send(v, 'Check the build');
+  await until(() => modal(v, 'Full access') && /nobody watching/.test(said()), 'asked when it is saved');
+  await dialog(v, 'Full access', 'n'); await until(() => /Not saved\./.test(status()), 'declined');
+  assert.equal(listSchedules().some(row => row.goal === 'Check the build'), false);
+  await until(() => panels.ask.getValue() === 'Check the build', 'the message stays in the box');
+  await send(v, 'Check the build'); await dialog(v, 'Full access', 'y');
+  await until(() => /Scheduled every 3h/.test(status()), 'saved');
+  assert.equal(modal(v, 'Full access'), undefined, 'and not asked again');
+  assert.equal(listSchedules().find(row => row.goal === 'Check the build')?.permissions, 'full');
+  // Picked down again with a time set: no Full access, nothing asked.
+  await send(v, '/new'); await until(() => !panels.compose.hidden && !/Scheduled/.test(status()), 'a third form');
+  pickRow(panels.composeList, /When/); v.input.write('\r'); await until(() => modal(v, 'When'), 'the list of times, again');
+  dialogList(v, 'When').select(5); v.input.write('\r'); await until(() => /Runs daily 9:00/.test(status()), 'a time');
+  await send(v, '/permissions ask'); await until(() => /Ask for approval for this schedule\./.test(status()), 'ask');
   await send(v, 'Check dependencies for updates'); await until(() => /Scheduled daily 9:00/.test(status()), 'scheduled');
   assert.equal(listSchedules().find(row => row.goal === 'Check dependencies for updates')?.permissions, 'ask');
 });
