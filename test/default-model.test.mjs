@@ -18,7 +18,6 @@ import { share } from '../lib/peer/shares.mjs';
 import { message } from '../lib/peer/a2a.mjs';
 import { intakeMethods } from '../lib/peer/intake.mjs';
 import { saveTeamAccess } from '../lib/peer/access.mjs';
-import { getRecord } from '../lib/peer/taskstore.mjs';
 import { saveBot } from '../lib/bots.mjs';
 import * as models from '../lib/models.mjs';
 
@@ -67,7 +66,7 @@ test("on a computer with only Grok Build, a teammate's message starts a session 
   assert.equal(run.vendor, 'grok'); assert.equal(task.state, 'answered', JSON.stringify(task.error));
 });
 
-test('a new session, Standup and a bot that names no model run on Grok Build there; a bot that names its model keeps it', async t => {
+test('a new session and a bot that names no model run on Grok Build there; a bot that names its model keeps it', async t => {
   const p = setup(t), controller = new ProjectController(projectFolder(p.root));
   assert.deepEqual(controller.defaultModel(), { vendor: 'grok', model: null });
   const task = await controller.ask('Where is coupon normalization?').finished;
