@@ -78,7 +78,6 @@ async function view(t, repo) {
   input.write('d'); await until(() => rendered.sessionView === 'changes' && rendered.screen.focused === rendered.panels.changes && v.lines().some(line => line.includes(OLD)), 'its changes');
   return v;
 }
-const everything = dir => fs.readdirSync(dir, { withFileTypes: true }).flatMap(item => item.isDirectory() ? everything(path.join(dir, item.name)) : item.isFile() ? [fs.readFileSync(path.join(dir, item.name), 'utf8')] : []).join('\n');
 
 test('Changes: a click on the + or the + key notes a line, the note stays with the session, a changed line keeps its note, and s sends them', async t => {
   const s = session(t), first = await view(t, s.repo);
@@ -109,10 +108,10 @@ test('Changes: a click on the + or the + key notes a line, the note stays with t
   assert.equal(fs.existsSync(s.notes), false, 'sent notes are not kept');
   // The chat shows next, with the message that went.
   await until(() => again.current.sessionView === 'chat', 'the chat after the notes went');
-  const kept = everything(s.repo.state);
-  assert.match(kept, /Notes on your changes\. Change what each one asks:/);
-  assert.match(kept, /lib\/price\.mjs, removed line 2: export const price = \(value\) => value;\\nSay why the old one went/);
-  assert.match(kept, /lib\/price\.mjs, line 2 as it was when I wrote this note \(it has changed since\): export const price = \(value\) => value \* \(1 \+ tax\);\\nRound it to cents/);
+  const chat = () => again.current.panels.chat.getText().split('\n').map(line => line.replace(/┃/g, '').trim()).filter(Boolean).join(' ');
+  await until(() => /Notes on your changes\. Change what each one asks:/.test(chat()), 'the message in the chat');
+  assert.match(chat(), /lib\/price\.mjs, removed line 2: export const price = \(value\) => value; Say why the old one went/);
+  assert.match(chat(), /lib\/price\.mjs, line 2 as it was when I wrote this note \(it has changed since\): export const price = \(value\) => value \* \(1 \+ tax\); Round it to cents/);
 });
 
 const PATCH = (from, to) => ['diff --git a/src/a.mjs b/src/a.mjs', 'index 1111111..2222222 100644', '--- a/src/a.mjs', '+++ b/src/a.mjs', '@@ -1,3 +1,3 @@', ...from.map(line => `-${line}`), ...to.map(line => `+${line}`), ' same', ''].join('\n');
