@@ -123,7 +123,7 @@ test("the summary turn only answers: Full access runs as Approve for me, with no
   // The owner's own message in the Standup runs in the session's mode, as any of his messages.
   await f.controller.ask('Make sure the Kanban is right.', standup.id).finished;
   assert.equal(valueOf(inputs(f.fake).at(-1).args, '--permission-mode'), 'bypassPermissions');
-  assert.match(valueOf(inputs(f.fake).at(-1).args, '--tools'), /Edit/, 'his own messages keep the tools of his mode');
+  assert.equal(valueOf(inputs(f.fake).at(-1).args, '--tools'), 'default', 'his own messages keep the tools of his mode: every tool in Full access');
 });
 
 test("a Claude Code session answers in a fork of its vendor session; its next turn resumes its own", async t => {
