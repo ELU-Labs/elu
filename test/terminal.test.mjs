@@ -3450,7 +3450,7 @@ test('Usage: a on a computer with no browser signs a new Codex account in with i
   signInAs('second@example.com'); panels.usageList.select(rowOf(/^Codex/)); v.input.write('a');
   await until(() => /Added second@example\.com\./.test(status()), 'added with a device code');
   assert.deepEqual([started[0].vendor, started[0].args], ['codex', ['login', '--device-auth']]);
-  assert.deepEqual(started[0].lines, ['Signing in a new Codex account. ELU comes back when it ends.', 'This computer has no browser: open the link Codex prints on any computer and enter the code it shows.']);
+  assert.deepEqual(started[0].lines, ['Signing in a new Codex account. ELU comes back when it ends.', 'No browser here: open the link Codex prints on any computer and enter its code.']);
   assert.match(started[0].out, /Enter this one-time code/);
   // Claude Code has no device code sign-in: its own, with where its link goes.
   signInAs('third@example.com'); panels.usageList.select(0); v.input.write('a');
