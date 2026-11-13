@@ -85,8 +85,11 @@ The result is saved under your ELU state. A different binary path or release has
 pass again, on your next message to it; until it does, no run starts, and a turn you did
 not send yourself says
 `Antigravity CLI has not been checked on this machine yet. Your first message to it runs the check.`
-If a required step fails, Antigravity stays off here, the session says which step was not
-proven, and your next message to it runs the check again. When `relay` fails,
+If a required step is not proven, Read only, Ask and Auto are off for Antigravity here, and
+the session says which step and why. Full access is never turned off by the check: it runs
+Antigravity as it is, and says the result once. Your next message runs the check again only
+when that can change the result; a step that failed because Antigravity did what the step
+forbids stays failed until `c` in the Usage tab checks again. When `relay` fails,
 Ask and Auto still run: blocked actions are denied and reported instead of asked live, and
 the permissions picker says so.
 
@@ -97,8 +100,9 @@ browser. It does this when the tab opens and it has not read this `agy` yet, whe
 usage check is due, and on `r`. The line then says
 `signed in · needs a one-time check (c runs it now)`, or `not signed in for ELU · s signs in`.
 `c` on that line runs the same check there, with each step under the line as it ends, and the
-line then says `ready`, or that the check failed and which step was not proven. Signed out,
-`c` asks first whether to sign in, then runs the check after the sign-in.
+line then says `ready`, or `Full access only (c checks again)` with the step that was not
+proven and why. Signed out, `c` asks first whether to sign in, then runs the check after the
+sign-in.
 
 ## The private HOME
 
