@@ -172,9 +172,10 @@ if(streaming){onLine=arrive;for(const line of lines.splice(0))if(!arrive(line))l
 // when the command it stands for went to the background (only where movable), 'cut' when the turn was cut.
 const pause=(ms,movable=false)=>new Promise(resolve=>{const end=how=>{clearTimeout(timer);working=null;resolve(how);};const timer=setTimeout(()=>end('done'),ms);working={cut:()=>end('cut'),...(movable?{move:()=>end('moved')}:{})};});
 let cutShort=false;
-// A stream-json run ends when its input does; one the host never closes fails the test. A user
-// message that still waits after a result runs as one more turn of the same run, as the real CLI
-// runs a queued prompt, with a result line of its own. afterMs (fake.json): how long that turn takes.
+// afterResult: what a stream-json run does after a result line. It ends when its input does, and
+// one the host never closes fails the test. A user message that still waits after a result runs
+// as one more turn of the same run, as the real CLI runs a queued prompt, with a result line of
+// its own. afterMs (fake.json): how long that turn takes.
 const afterResult=async()=>{
  if(!streaming)return;
  let timer;const arm=()=>{clearTimeout(timer);timer=setTimeout(()=>{console.error('The input was never closed after the result.');process.exit(3);},10000);};arm();
@@ -393,5 +394,6 @@ if(heard.length&&typeof result.summary==='string')result.summary=`${result.summa
 // A message the turn took in is completed before the turn's result line.
 for(const uuid of folded.splice(0))lifecycle(uuid,'completed');
 console.log(JSON.stringify({type:'result',is_error:false,session_id:session,total_cost_usd:0,...(denials.length?{permission_denials:denials}:{}),structured_output:mode==='invalid'||badReply?{outcome:'nope'}:result}));
+// A stream-json run ends when its input does; one the runner never closes fails the test.
 await afterResult();
 if(cfg.background){const {spawn}=await import('node:child_process');const child=spawn('/bin/sh',['-c',BACKGROUND],{stdio:'ignore'});fs.writeFileSync(path.join(path.dirname(process.argv[1]),'background.pid'),String(child.pid));await new Promise(resolve=>child.once('exit',resolve));}
