@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { runProcess, processIdentity, recoverProcess, agentEnv } from '../lib/process.mjs';
 import { temp } from './helpers.mjs';
 
@@ -41,4 +41,30 @@ test('recovery stops only the exact recorded process, never a reused PID', async
 test('role environments omit application credentials and nested-session control variables', () => {
   const env = agentEnv({ PATH: '/usr/bin', HOME: '/example', CLAUDECODE: '1', GH_TOKEN: 'synthetic', OPENAI_API_KEY: 'synthetic', ANTHROPIC_API_KEY: 'synthetic', CLOUDSDK_AUTH_ACCESS_TOKEN: 'synthetic', SECRET: 'synthetic' });
   assert.deepEqual(env, { PATH: '/usr/bin', HOME: '/example' });
+});
+// A stop ends everything the run started (lib/process.mjs endRun). The stand-in vendor prints
+// its result, starts a loop in a session of its own, as a vendor's background command runs,
+// and another whose parent leaves it behind at once (re-parented to init), then keeps running.
+test('a stop ends everything the run started: its background commands in a session of their own, and those whose parent already ended', async (t) => {
+  const cwd = temp(t), logFile = path.join(cwd, 'stop.log'), pids = path.join(cwd, 'pids.json');
+  const alive = pid => { const r = spawnSync('ps', ['-o', 'stat=', '-p', String(pid)], { encoding: 'utf8' }); return r.status === 0 && Boolean(r.stdout.trim()) && !r.stdout.trim().startsWith('Z'); };
+  const vendor = `const { spawn } = require('node:child_process'); const fs = require('node:fs');
+    console.log(JSON.stringify({ type: 'result', result: 'Which deploy?' }));
+    const loop = spawn('sh', ['-c', 'while :; do sleep 1; done'], { detached: true, stdio: 'ignore' });
+    const middle = spawn(process.execPath, ['-e', "const c=require('node:child_process').spawn('sh',['-c','while :; do sleep 1; done'],{detached:true,stdio:'ignore'});console.log(c.pid);c.unref()"], { stdio: ['ignore', 'pipe', 'ignore'] });
+    let out = ''; middle.stdout.on('data', data => { out += data; }); middle.on('close', () => fs.writeFileSync(${JSON.stringify(pids)}, JSON.stringify([loop.pid, Number(out.trim())])));
+    setInterval(() => {}, 1000);`;
+  const controller = new AbortController(); let ended = null, started = null;
+  const run = runProcess({ bin: process.execPath, args: ['-e', vendor], cwd, env: agentEnv(), logFile, timeoutSeconds: 60, signal: controller.signal, onStart: record => { started = record.pid; }, onEnded: rows => { ended = rows; } });
+  const until = Date.now() + 10000; while (!fs.existsSync(pids) && Date.now() < until) await new Promise(resolve => setTimeout(resolve, 20));
+  const [loop, orphan] = JSON.parse(fs.readFileSync(pids, 'utf8'));
+  t.after(() => { for (const pid of [loop, orphan]) { try { process.kill(pid, 'SIGKILL'); } catch {} } });
+  assert.equal(alive(loop), true); assert.equal(alive(orphan), true);
+  assert.notEqual(Number(spawnSync('ps', ['-o', 'ppid=', '-p', String(orphan)], { encoding: 'utf8' }).stdout.trim()), started, 'its parent already left it behind');
+  controller.abort(new Error('Stopped by the owner.'));
+  await assert.rejects(run, /Stopped by the owner/);
+  const gone = Date.now() + 3000; while ((alive(loop) || alive(orphan)) && Date.now() < gone) await new Promise(resolve => setTimeout(resolve, 20));
+  assert.deepEqual([alive(loop), alive(orphan)], [false, false], 'nothing the run started is left');
+  assert.deepEqual(ended?.map(row => row.pid).sort(), [loop, orphan].sort(), 'it names what it ended outside the vendor itself');
+  assert.match(fs.readFileSync(logFile, 'utf8'), /Which deploy\?/);
 });
