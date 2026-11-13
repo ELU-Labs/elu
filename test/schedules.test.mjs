@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { spawn } from 'node:child_process';
 import { parseWhen, splitWhen, nextRun, saveSchedule, listSchedules, runDue, runScheduleNow, pauseSchedule, removeSchedule, installScheduler, uninstallScheduler } from '../lib/schedules.mjs';
 import { atomic, personalDirectory } from '../lib/util.mjs';
 import { saveBot, removeBot } from '../lib/bots.mjs';
@@ -331,7 +332,7 @@ const tickScript = (item, platform, after) => script(item, 'tick.mjs', [
   after,
 ]);
 
-test('on macOS the login item removes itself in the one order launchd lets it finish: its file first, then its bootout by label, started last and not waited for', async t => {
+test('on macOS the login item removes itself in the one order launchd lets it finish: its file first, then its bootout by label, asked for last from a process group of its own', async t => {
   home(t); const p = project(t), item = standIn(t, 'darwin', { config: process.env.XDG_CONFIG_HOME }), plist = path.join(item.home, 'Library', 'LaunchAgents', 'dev.elu-code.scheduler.plist');
   const byLabel = { name: 'launchctl', args: ['bootout', `gui/${process.getuid()}/dev.elu-code.scheduler`] };
   // The stand-in ends a job that boots itself out, as launchd does. So the order the app uses,
@@ -347,6 +348,8 @@ test('on macOS the login item removes itself in the one order launchd lets it fi
   assert.deepEqual(ran, { status: null, signal: 'SIGTERM', stdout: 'fired 1\n', stderr: '' });
   assert.deepEqual(item.files(), [], 'the file went before the bootout ended the job'); assert.deepEqual(item.loaded(), []);
   assert.deepEqual(item.calls().at(-1), byLabel, 'by label, and from outside the job: its launchctl outlives it');
+  // The bootout was waited for with the lock held, and the tick ended there: nothing could load the login item again before it was out.
+  assert.equal(JSON.parse(fs.readFileSync(path.join(personalDirectory(), 'login-item.lock'), 'utf8')).identity === processIdentity(process.pid), false, 'the lock is still the ended tick\'s');
   // A login item whose file went without it is still loaded. Its next run with nothing on ends it too.
   item.install(); fs.rmSync(plist); assert.deepEqual(item.loaded(), [plist]);
   ran = await item.job(tick);
@@ -382,4 +385,44 @@ test("the tick leaves the login item while a schedule is on, a task's or a bot's
   setBotSchedule(repo, '4', 'nightly', false); ran = tick(); assert.equal(typeof ran.last, 'function'); ran.last(); assert.ok(await gone());
   // The real unloaders are refused inside the test runner, for the tick's own removal too.
   assert.throws(() => scheduleTick(new Date(), { start: () => true, item: { platform: 'darwin', home: item.home } }).last(), /Tests must not install login items/);
+});
+
+test('a schedule saved just as a tick is about to remove the login item keeps it', t => {
+  home(t); const p = project(t), item = standIn(t, 'linux');
+  dueOnce(p.root); item.install();
+  // The tick fires the last one-time run. Nothing is on, so it hands back the removal, to run last.
+  const ran = scheduleTick(new Date(), { start: () => true, item: item.options }); assert.equal(typeof ran.last, 'function');
+  // In that instant ELU, open, saves a schedule and asks for the login item, which is still there.
+  saveSchedule({ root: p.root, goal: 'Lint', when: parseWhen('every 1h') }); assert.equal(item.install().changed, false);
+  const before = item.calls().length;
+  assert.deepEqual(ran.last(), { removed: false }, 'asked again as it removes: a schedule is on');
+  assert.equal(item.files().length, 2); assert.deepEqual(item.loaded(), ['elu-code-scheduler.timer']); assert.equal(item.calls().length, before, 'systemd was asked for nothing');
+});
+
+test('an install that comes while the login item is being removed waits for the removal, then loads it again', async t => {
+  home(t); const p = project(t), item = standIn(t, 'linux', { config: process.env.XDG_CONFIG_HOME });
+  dueOnce(p.root); item.install();
+  // The tick's removal is held inside systemctl: it has looked, found no schedule on, and is at work.
+  fs.writeFileSync(item.hold, '');
+  const before = item.calls().length, running = item.job(tickScript(item, 'linux', ''));
+  await until(() => item.calls().length > before, 'the tick to ask systemd to disable its timer');
+  assert.deepEqual(item.calls().at(-1), { name: 'systemctl', args: ['--user', 'disable', '--now', 'elu-code-scheduler.timer'], fromJob: true });
+  // ELU, open, saves a schedule now and asks for the login item. Its files are still there, the same as it would write.
+  saveSchedule({ root: p.root, goal: 'Lint', when: parseWhen('every 1h') });
+  spawn('sh', ['-c', 'sleep 0.3; rm -f "$0"', item.hold], { stdio: 'ignore' }).unref();
+  assert.equal(item.install().changed, true, 'it did not take the files that were about to go for its own: it waited, then wrote and loaded them');
+  assert.deepEqual(await running, { status: 0, signal: null, stdout: 'fired 1\n', stderr: '' });
+  assert.equal(item.files().length, 2); assert.deepEqual(item.loaded(), ['elu-code-scheduler.timer']);
+  assert.deepEqual(item.calls().slice(before).map(call => call.args[1]), ['disable', 'daemon-reload', 'enable'], 'the removal first, whole, then the install');
+});
+
+test('a login item that could not be loaded leaves no files that would read as loaded, so the next ask loads it', t => {
+  home(t);
+  for (const [platform, verb] of [['darwin', 'bootstrap'], ['linux', 'enable']]) {
+    const item = standIn(t, platform);
+    const failing = (name, args, more) => { if (args.includes(verb)) throw new Error(`${name} could not load the scheduler: it is busy`); return item.run(name, args, more); };
+    assert.throws(() => item.install({ run: failing }), /could not load the scheduler: it is busy/);
+    assert.deepEqual(item.files(), [], `${platform}: nothing is left of the try`); assert.deepEqual(item.loaded(), []);
+    assert.equal(item.install().changed, true, `${platform}: asked again, it is written and loaded`); assert.equal(item.loaded().length, 1);
+  }
 });
