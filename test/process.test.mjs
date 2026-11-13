@@ -104,6 +104,29 @@ test('a stop ends everything the run started: its background commands in a sessi
   assert.deepEqual(ended?.map(row => row.pid).sort(), [loop, orphan].sort(), 'it names what it ended outside the vendor itself');
   assert.match(fs.readFileSync(logFile, 'utf8'), /Which deploy\?/);
 });
+// A turn that ends at its result is ended by the same helper (endRun), so the commands it left
+// in a session of their own, or whose parent already ended, end with it too. It is no stop:
+// nothing is reported as ended by one.
+test('a process that stays after the row ending its turn is ended with the commands it left in a session of their own, and those whose parent already ended', async (t) => {
+  const cwd = temp(t), logFile = path.join(cwd, 'result.log'), pids = path.join(cwd, 'pids.json');
+  const alive = pid => { const r = spawnSync('ps', ['-o', 'stat=', '-p', String(pid)], { encoding: 'utf8' }); return r.status === 0 && Boolean(r.stdout.trim()) && !r.stdout.trim().startsWith('Z'); };
+  const vendor = `const { spawn } = require('node:child_process'); const fs = require('node:fs');
+    console.log(JSON.stringify({ type: 'result', result: 'Which deploy?' }));
+    const loop = spawn('sh', ['-c', 'while :; do sleep 1; done'], { detached: true, stdio: 'ignore' });
+    const middle = spawn(process.execPath, ['-e', "const c=require('node:child_process').spawn('sh',['-c','while :; do sleep 1; done'],{detached:true,stdio:'ignore'});console.log(c.pid);c.unref()"], { stdio: ['ignore', 'pipe', 'ignore'] });
+    let out = ''; middle.stdout.on('data', data => { out += data; }); middle.on('close', () => fs.writeFileSync(${JSON.stringify(pids)}, JSON.stringify([loop.pid, Number(out.trim())])));
+    setInterval(() => {}, 1000);`;
+  let ended = null;
+  const started = Date.now(), r = await runProcess({ bin: process.execPath, args: ['-e', vendor], cwd, env: agentEnv(), logFile, timeoutSeconds: 60, finished: claude.finalEvent, onEnded: rows => { ended = rows; } });
+  const [loop, orphan] = JSON.parse(fs.readFileSync(pids, 'utf8'));
+  t.after(() => { for (const pid of [loop, orphan]) { try { process.kill(pid, 'SIGKILL'); } catch {} } });
+  assert.ok(Date.now() - started < 15000, 'ended after its result');
+  assert.deepEqual([r.code, r.endedAfterResult, r.timedOut], [0, true, false]);
+  assert.ok(r.left.length >= 2 && r.left.every(command => typeof command === 'string'), r.left.join('\n'));
+  const gone = Date.now() + 5000; while ((alive(loop) || alive(orphan)) && Date.now() < gone) await new Promise(resolve => setTimeout(resolve, 20));
+  assert.deepEqual([alive(loop), alive(orphan)], [false, false], 'nothing the turn left is running');
+  assert.equal(ended, null, 'the turn ended at its result: no stop is reported');
+});
 test('a limit that stops a run ends its background commands too', async (t) => {
   const cwd = temp(t), pid = path.join(cwd, 'loop.pid');
   const alive = id => { const r = spawnSync('ps', ['-o', 'stat=', '-p', String(id)], { encoding: 'utf8' }); return r.status === 0 && Boolean(r.stdout.trim()) && !r.stdout.trim().startsWith('Z'); };
