@@ -465,8 +465,13 @@ test('a stopped bot whose vendor names no session at launch says its next turn s
   assert.equal(during.state, 'running'); assert.deepEqual(during.messages.slice(-2).map(({ at, ...row }) => row), [{ text: 'continue', to: '@scout' }, { text: line, from: '@scout', bot: 'scout', quiet: true }]);
   fs.writeFileSync(gate, '');
   const next = await asked.finished;
-  const made = f.calls('claude').slice(before).map(row => row.args.includes('--resume') ? 'resume' : 'new');
-  assert.deepEqual(made, ['resume', 'new'], 'resumed first, then started from the chat');
+  // The resume ends at once with nothing printed, which is also how a program ends a launch
+  // whose option it does not take. So it is tried once more without the option that shows a
+  // run's work (lib/vendor-extras.mjs), and only then does the turn start from the chat. That
+  // second launch got no further, so the program is still given the option.
+  const tried = f.calls('claude').slice(before), made = tried.map(row => row.args.includes('--resume') ? 'resume' : 'new');
+  assert.deepEqual(made, ['resume', 'resume', 'new'], 'resumed first, then started from the chat');
+  assert.deepEqual(tried.map(row => row.args.includes('--thinking-display')), [true, false, true], 'the second resume is the launch without the option, and the fresh turn has it again');
   assert.equal(next.interrupted, undefined); assert.equal(next.messages.at(-1).bot, 'scout'); assert.notEqual(next.messages.at(-1).failed, true);
   // The line stays above the answer. The turn that started afresh read the chat as it stood
   // before that line, so the owner's message was the last thing in it.
