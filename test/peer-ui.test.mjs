@@ -10,6 +10,8 @@ import { launchTerminal } from '../lib/terminal.mjs';
 import { listBots, removeBot, saveBot } from '../lib/bots.mjs';
 import { boardRows, barCells, barColumns } from '../lib/board.mjs';
 import { readBoard } from '../lib/kanban.mjs';
+import { saveTask } from '../lib/state.mjs';
+import { helperLink } from '../lib/remote-helper.mjs';
 import { botTarget, chatBar, dmTarget, fitWords, ink, membersLine, peerName, roomTarget, teamPanes, threadTarget, visible } from '../lib/terminal-visuals.mjs';
 
 const ME = 'a'.repeat(64), SARA = 'b'.repeat(64), LI = 'c'.repeat(64);
@@ -741,6 +743,54 @@ test('a session on my other computer that waits for y or n shows n once in the k
   assert.doesNotMatch(keys(), /new session/);
 });
 
+test('over a session on my other computer the box writes to my agent here, started once and then continued, and @ that computer writes there', async t => {
+  const at = new Date().toISOString(), id = '44444444-4444-4444-8444-444444444444';
+  const remote = [{ id, machine: SARA, createdAt: at, lastAt: at, title: 'Native replay e2e handoff', state: 'needs_input', question: 'Which batch results?', choices: ['Mine', 'New ones'], steps: [], entries: [{ role: 'You', at, text: 'Start the handoff' }], approvals: [] }];
+  const p = project(later(t)); environment(t, p.parent);
+  const peer = fakePeer({ items: [], mine: [{ key: SARA, mine: true, theirs: true }], remote }), v = await view(t, { repo: repository(p.root), dashboard: true, peer });
+  const board = v.panels.board, ask = v.panels.ask, sentThere = () => peer.sent().filter(row => row.type === 'remoteSend');
+  await until(() => board.items.map(plainItem).some(row => /Native replay e2e handoff/.test(row)), 'the row of the session there');
+  board.focus(); selectRow(board, /on sara-box/);
+  await until(() => /Message your agent here/.test(ask._label.getText()), 'the box says where a message goes');
+  await until(() => /Answer it there: @sara-box 1/.test(v.panels.chat.getText()), 'how to answer the question there');
+  assert.match(v.panels.chat.getText(), /You → @sara-box/);
+  // No @name: the first message starts my agent here, in this project, as a new session that helps that one.
+  await send(v, 'can you help this remote agent with the files it needs');
+  await until(() => pendingRequests(p.root).some(row => row.helps), 'my agent here starts');
+  const first = pendingRequests(p.root).find(row => row.helps);
+  assert.deepEqual(first.helps, { machine: SARA, remoteId: id, name: 'sara-box', title: 'Native replay e2e handoff' });
+  assert.equal(first.goal, 'can you help this remote agent with the files it needs'); assert.equal(first.continuationTaskId, null);
+  assert.equal(helperLink(SARA, id).requestId, first.id);
+  assert.deepEqual(sentThere(), [], 'nothing went to the session there');
+  // Before it started, the next message goes with the first.
+  await send(v, 'and the logs');
+  await until(() => pendingRequests(p.root).find(row => row.id === first.id)?.goal === `${first.goal}\n\nand the logs`, 'with the first message');
+  // Once it started, the next one continues it: one helper for that session.
+  const repo = repository(p.root);
+  saveTask(repo, { id: '1', kind: 'conversation', goal: first.goal, state: 'answered', worktree: repo.root, base: null, branch: null, createdAt: at, runs: [], reviews: [], responses: [], messages: [{ at, text: first.goal }], sessions: {}, result: null, helps: first.helps });
+  updateRequest(p.root, first.id, { taskId: '1', state: 'done' });
+  board.focus(); selectRow(board, /on sara-box/);
+  await send(v, 'what does it still need?');
+  await until(() => pendingRequests(p.root).some(row => row.continuationTaskId === '1' && row.goal === 'what does it still need?'), 'the helper is continued');
+  assert.equal(pendingRequests(p.root).filter(row => row.helps).length, 1);
+  await until(() => /You \(waiting\)/.test(v.panels.chat.getText()), 'the message to it shows beside the session there');
+  // @ that computer, by its row's name or its owner's there, writes to the session there without it.
+  board.focus(); selectRow(board, /on sara-box/);
+  ask.focus(); ask.readInput(); await until(() => ask.__listener, 'message box');
+  // The key bar says the same: Enter writes to my agent here, @sara-box writes there.
+  await until(() => /enter send to your agent here {2}@sara-box writes there/.test(v.panels.keys.getText()), 'the keys say where Enter sends');
+  v.input.write('@sara-box 1');
+  await until(() => /Message the session on @sara-box/.test(ask._label.getText()), 'the box says it goes there');
+  await until(() => /enter send to @sara-box/.test(v.panels.keys.getText()), 'and the keys');
+  ask.submit();
+  await until(() => sentThere().length === 1, 'sent there');
+  assert.deepEqual(sentThere()[0], { type: 'remoteSend', id, text: '1' });
+  await send(v, '@sara Mine');
+  await until(() => sentThere().length === 2, 'sent there again');
+  assert.deepEqual(sentThere()[1], { type: 'remoteSend', id, text: 'Mine' });
+  assert.equal(pendingRequests(p.root).filter(row => row.continuationTaskId === '1').length, 1, 'neither went to my agent here');
+});
+
 test('Sessions lists every session of my other computer in this repository under its name, and Projects opens its other projects', async t => {
   const now = Date.now(), at = minutes => new Date(now - minutes * 60000).toISOString(), SHOP = 'e'.repeat(64);
   const p1 = '1'.repeat(16), p2 = '2'.repeat(16);
@@ -770,6 +820,96 @@ test('Sessions lists every session of my other computer in this repository under
   await until(() => peer.sent().some(row => row.type === 'remoteWatch' && row.ref === `${p2}:3`), 'watched there');
   assert.match(rows()[board.selected], /Tidy my notes/, 'the cursor is on it');
   assert.equal(peer.sent().find(row => row.type === 'remoteWatch').to, SARA);
+});
+
+// The wheel at a pane, as SGR reports in one read: up or down, a step each.
+const wheelAt = (v, widget, step, times = 1) => v.input.write(`\x1b[<${step < 0 ? 64 : 65};${widget.aleft + 3};${widget.atop + 3}M`.repeat(times));
+const pause = (ms = 150) => new Promise(resolve => setTimeout(resolve, ms));
+
+test('a session on my other computer stays where the owner scrolled it through every draw and every update, stays at the top, and follows its end again once he is back there', { timeout: 30000 }, async t => {
+  const at = new Date().toISOString(), said = n => Array.from({ length: n }, (_, index) => ({ role: index % 2 ? 'Claude' : 'You', at, text: `Line ${index + 1} of the long chat`, ...(index % 2 ? { lead: true } : {}) }));
+  const remote = [{ id: '33333333-3333-4333-8333-333333333333', machine: SARA, createdAt: at, lastAt: at, title: 'Read the long chat', state: 'answered', steps: [], approvals: [], entries: said(60) },
+    { id: '44444444-4444-4444-8444-444444444444', machine: SARA, createdAt: at, lastAt: at, title: 'A short one', state: 'answered', steps: [], approvals: [], entries: said(2) }];
+  const p = project(later(t)); environment(t, p.parent);
+  const peer = fakePeer({ items: [], mine: [{ key: SARA, mine: true, theirs: true }], remote }), v = await view(t, { repo: repository(p.root), dashboard: true, peer });
+  const board = v.panels.board, chat = v.panels.chat, ask = v.panels.ask;
+  await until(() => board.items.some(item => /Read the long chat/.test(plainItem(item))), 'the remote row');
+  board.focus(); selectRow(board, /Read the long chat/);
+  await until(() => /Runs on @sara-box/.test(chat.getContent()) && chat.getScrollPerc(true) === 100, 'its chat, at the end');
+  // The owner's cursor stays in the message box while he scrolls the chat with the trackpad.
+  ask.focus(); await until(() => /Message your agent here · @sara-box/.test(ask._label.getText()), 'the message box names it');
+  const end = chat.childBase;
+  wheelAt(v, chat, -1, 10); await until(() => chat.childBase === end - 10, 'ten lines up');
+  // The app draws every 30 ms here: none of those draws takes the chat back to its end.
+  await pause(300);
+  assert.equal(chat.childBase, end - 10, 'it stays on the lines he chose');
+  // More arrives below: the place is kept.
+  remote[0].entries = [...remote[0].entries, { role: 'Claude', at, text: 'Arrived while he read', lead: true }, ...said(6)];
+  await until(() => /Arrived while he read/.test(chat.getContent()), 'the new lines'); await pause(150);
+  assert.equal(chat.childBase, end - 10, 'what arrives below does not move it');
+  // Up past the top it stays at the top, through every draw and update.
+  wheelAt(v, chat, -1, 400); await until(() => chat.childBase === 0, 'the top');
+  await pause(300);
+  assert.equal(chat.childBase, 0, 'at the top it stays at the top');
+  remote[0].entries = [...remote[0].entries, { role: 'Claude', at, text: 'Arrived at the top', lead: true }];
+  await until(() => /Arrived at the top/.test(chat.getContent()), 'more new lines'); await pause(150);
+  assert.equal(chat.childBase, 0, 'and never starts again from the bottom');
+  // Back at the end, it follows the newest line again.
+  wheelAt(v, chat, 1, 600); await until(() => chat.getScrollPerc(true) === 100, 'the end');
+  remote[0].entries = [...remote[0].entries, { role: 'Claude', at, text: 'The newest line', lead: true }];
+  await until(() => /The newest line/.test(chat.getContent()), 'the newest line'); await pause(150);
+  assert.equal(chat.getScrollPerc(true), 100, 'it follows the end again');
+  // Scrolled up, then another row and back: it opens at its end again.
+  const before = chat.childBase;
+  wheelAt(v, chat, -1, 20); await until(() => chat.childBase === before - 20, 'up again');
+  board.focus(); selectRow(board, /A short one/); await until(() => !/Line 60 of the long chat/.test(chat.getContent()), 'the other row');
+  selectRow(board, /Read the long chat/); await until(() => /Line 60 of the long chat/.test(chat.getContent()), 'the long chat again');
+  await until(() => chat.getScrollPerc(true) === 100, 'opened at its end');
+});
+
+test('a session on my other computer keeps the lines the owner reads while its oldest entries leave the top and new ones land above its changes and its Task', { timeout: 30000 }, async t => {
+  // The viewer keeps the last 200 entries of a session; this one has said more than that.
+  const KEPT = 200, at = new Date().toISOString(), entry = n => ({ role: n % 2 ? 'Claude' : 'You', at, text: `Line ${n} of the long chat`, ...(n % 2 ? { lead: true } : {}) });
+  const upTo = n => Array.from({ length: n }, (_, index) => entry(index + 1)).slice(-KEPT);
+  const patch = Array.from({ length: 40 }, (_, index) => `+ changed line ${index + 1}`).join('\n'), subtasks = Array.from({ length: 30 }, (_, index) => ({ text: `Step ${index + 1} of the plan`, state: index ? 'todo' : 'doing' }));
+  const session = { id: '55555555-5555-4555-8555-555555555555', machine: SARA, createdAt: at, lastAt: at, title: 'Read the long chat', state: 'running', approvals: [], entries: upTo(230),
+    steps: [{ at, text: 'Reading the cart' }], diff: { summary: '1 file changed', patch }, plan: { title: 'Fix the totals', goal: 'Totals add up', priority: 'P2', severity: 'S3', state: 'approved', objectives: ['Totals add up'], subtasks, met: [] } };
+  const p = project(later(t)); environment(t, p.parent);
+  const peer = fakePeer({ items: [], mine: [{ key: SARA, mine: true, theirs: true }], remote: [session] }), v = await view(t, { repo: repository(p.root), dashboard: true, peer });
+  const board = v.panels.board, chat = v.panels.chat, ask = v.panels.ask;
+  // A line as it reads: no colour, and no bar before a message's text.
+  const bare = line => (line ?? '').replace(/\x1b\[[\d;]*m/g, '').replace(/^\s*┃/, '').trim();
+  const top = () => bare(chat._clines?.[chat.childBase]), lineOf = text => (chat._clines ?? []).findIndex(line => bare(line) === text);
+  // To a line, a wheel step a line, the owner's cursor in the message box.
+  const scrollTo = async text => { const to = lineOf(text); assert.ok(to >= 0, text); wheelAt(v, chat, Math.sign(to - chat.childBase), Math.abs(to - chat.childBase)); await until(() => top() === text, text); };
+  const more = async (entries, also = {}) => { const last = entries.at(-1).text; Object.assign(session, { entries, ...also }); await until(() => chat.getContent().includes(last), last); await pause(150); };
+  await until(() => board.items.some(item => /Read the long chat/.test(plainItem(item))), 'the remote row');
+  board.focus(); selectRow(board, /Read the long chat/);
+  await until(() => /Runs on @sara-box/.test(chat.getContent()) && chat.getScrollPerc(true) === 100, 'its chat, at the end');
+  ask.focus();
+  // Reading the changes: an entry lands above them, two leave the top, a step and a subtask move on.
+  await scrollTo('+ changed line 20');
+  await more([...upTo(230), { role: 'Claude', at, text: 'A longer answer\nthat takes\nfour lines\nof the pane', lead: true }, entry(231)].slice(-KEPT),
+    { steps: [...session.steps, { at, text: 'Running the tests' }], plan: { ...session.plan, subtasks: subtasks.map((step, index) => ({ ...step, state: index ? index === 1 ? 'doing' : 'todo' : 'done' })) } });
+  assert.equal(top(), '+ changed line 20', 'the changes stay where he reads them');
+  // Reading the chat: the oldest entries leave the top as new ones arrive.
+  await scrollTo('Line 150 of the long chat');
+  await more([...session.entries, ...Array.from({ length: 12 }, (_, index) => entry(232 + index))].slice(-KEPT));
+  assert.equal(top(), 'Line 150 of the long chat', 'the entry he reads stays at the top of the pane');
+  await pause(300);
+  assert.equal(top(), 'Line 150 of the long chat', 'and through every draw after');
+  // Reading a step when the work ends and the steps go: the place is the part after them, the Task.
+  await scrollTo('Reading the cart');
+  await more([...session.entries, entry(244)].slice(-KEPT), { state: 'answered' });
+  assert.match(top(), /^Task · /, 'the part after the steps, from its first line');
+  // At the top it stays at the top while the first entry there leaves.
+  wheelAt(v, chat, -1, 2000); await until(() => chat.childBase === 0, 'the top');
+  await more([...session.entries, entry(245), entry(246)].slice(-KEPT));
+  assert.equal(chat.childBase, 0, 'at the top it stays at the top');
+  // Back at the end, it follows the newest line again.
+  wheelAt(v, chat, 1, 2000); await until(() => chat.getScrollPerc(true) === 100, 'the end');
+  await more([...session.entries, entry(247)].slice(-KEPT));
+  assert.equal(chat.getScrollPerc(true), 100, 'it follows the newest line');
 });
 
 test('a thread shows under its channel, #general or its teammate, and a row counts what waits for me', () => {

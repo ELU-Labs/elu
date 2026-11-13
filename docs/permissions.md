@@ -7,7 +7,7 @@ session; a turn that is not your own session's runs read only.
 
 | | Read only | Ask for approval | Approve for me | Full access |
 | --- | --- | --- | --- | --- |
-| Who gets it | bots that review or answer, teammate questions, tasks saved without a mode | your session | your session | your session |
+| Who gets it | bots that review or answer, teammate questions, tasks saved without a mode | your session | your session; at most this for a schedule whose mode you did not pick and for a bot's scheduled turn | your session, and a schedule you pick it for |
 | Reads | the workspace; answer turns may read your home | without asking: the workspace, folders and, for answer turns, your home (below) | same | anything |
 | Edits in the workspace | edit turns only | yes | yes | yes |
 | Edits outside it | no | asks | a reviewer model decides; on Antigravity refused, and on Claude Code an answer turn's edit asks | yes |
@@ -92,7 +92,8 @@ bot's own model unless the bot was saved with another for them, as `@lead` was, 
 tools and the denied commands of the bot's turn, and they start no helpers of their own.
 A bot that is allowed to merge pull requests starts helpers only when it was saved with a
 model for them. A turn its schedule started runs with Approve for me at most, because
-nobody may be watching.
+nobody may be watching: a bot's schedule has no mode of its own, so you never pick Full
+access for it.
 
 One entry of the never list can open: a bot that is allowed to merge pull requests
 (`@elu` comes allowed; a bot you make is not) may run `gh pr merge` in its own working
@@ -338,7 +339,8 @@ Some turns wait for nobody:
 A teammate's message that starts a session by itself (Auto) or that you approve with y is
 not among them: that session runs in your default mode, and its Task waits for your
 approval as one you asked for would. One started by Auto has nobody watching it, so, like a
-schedule, it never runs with Full access: from Full it runs with Approve for me.
+schedule whose mode you did not pick, it never runs with Full access: from Full it runs with
+Approve for me.
 
 ## Lifecycle
 
@@ -359,7 +361,18 @@ schedule, it never runs with Full access: from Full it runs with Approve for me.
   asks, its vendor asks in every mode (Claude Code asks before `rm` or `rmdir`
   on your home, the working folder or a top-level folder), and you answer it.
 - The automatic edit task of a conversation inherits the conversation's choices.
-- A schedule stores `ask` or `auto`; it never runs with Full access. It also
+- A schedule stores the mode of the form it was made in. One whose mode you did
+  not pick yourself runs with your default at each run, and never above `auto`.
+  One you pick Full access for keeps `full`, and each of its runs starts in Full
+  access, with nobody watching: it reads anything, runs any command and uses the
+  internet without asking, and the never list is refused by name only, as in any
+  Full access session. Before it saves such a schedule, the form says so in one
+  line and asks you once. A schedule from an earlier version runs as it did; a
+  mode a schedule file names that this version does not know is refused, and that
+  run does not start. The other way round, an earlier version runs a Full access
+  schedule read only, and says nothing: the login item runs the installed copy,
+  also while you run a newer one through `npx`, so update that copy with
+  `elu update`. It also
   keeps the bots of the form it was made in, and, for a one-time schedule, a
   branch if one was set. A repeating schedule runs in a new worktree each time,
   since a branch is checked out in one place at a time, and a schedule never
