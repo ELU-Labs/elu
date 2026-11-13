@@ -1010,6 +1010,40 @@ test('paths are redacted outside the project and the home folder becomes ~', () 
   assert.equal(redactPaths(`${home}/other/file.txt and /usr/local/bin/node`), '[path] and [path]');
   assert.equal(redactPaths('nul\u0000byte'), 'nulbyte');
 });
+test('a path with spaces in a folder or file name is cut whole, and a sentence after a path is kept', () => {
+  const root = '/srv/shop', rest = 'Library/Application Support/CleanShot/media/media_8Qw4Rt2LmZ/CleanShot 2026-11-12 at 10.14.07@2x.png';
+  const whole = [
+    // In quotes, as a terminal writes a dropped file.
+    [`Screenshot in '/Users/sam/${rest}' done.`, "Screenshot in '[path]' done."], [`Open "/Users/sam/${rest}".`, 'Open "[path]".'],
+    [`See \`~/${rest}\` and src/a.js.`, 'See `[path]` and src/a.js.'], ["In '~/My Files/tax return 2025.pdf'.", "In '[path]'."],
+    // With escaped spaces.
+    [`Open /Users/sam/${rest.replaceAll(' ', '\\ ')} now.`, 'Open [path] now.'], ['Read ~/My\\ Files/notes.txt.', 'Read [path].'],
+    // Without quotes: names after a space start with a capital letter or a digit, up to a known file ending or the last folder.
+    [`Screenshot saved in ~/${rest}, tests next.`, 'Screenshot saved in [path], tests next.'], [`Done: fix in /Users/sam/${rest}.`, 'Done: fix in [path].'],
+    ['The shots are in ~/Library/Application Support/CleanShot/media.', 'The shots are in [path].'], ['Look in /Users/sam/Library/Application Support/ first.', 'Look in [path] first.'],
+    ['See ~/Desktop/Screenshot 2026-11-12 at 10.14.07 AM.png next.', 'See [path] next.'], ['See ~/Desktop/Screen Recording 2026-11-12 at 10.14.07 AM.MOV next.', 'See [path] next.'],
+    ['Open /Applications/Visual Studio Code.app first.', 'Open [path] first.'], ['Kept in ~/Google Drive/My Drive/Q3 Plan/Budget 2026.xlsx.', 'Kept in [path].'],
+    ['In /Users/sam/Library/Mobile Documents/com~apple~CloudDocs/Notes/Plan.md now.', 'In [path] now.'], ['Got ~/Downloads/report (1).pdf and ~/Downloads/Shot 2 (12).PNG.', 'Got [path] and [path].'],
+  ];
+  for (const [text, cut] of whole) {
+    assert.equal(redactPaths(text, { root }), cut, text);
+    assert.deepEqual(prepareOutgoing(text, { root }), { ok: true, text: cut, problems: [], pathsCut: true }, text);
+  }
+  const kept = [
+    ['Working on /srv/notes/billing and src/billing.mjs, tests next.', 'Working on [path] and src/billing.mjs, tests next.'],
+    ['Read ~/.ssh/config and wrote notes.md.', 'Read [path] and wrote notes.md.'], ['Run /usr/local/bin/node scripts/build.mjs twice.', 'Run [path] scripts/build.mjs twice.'],
+    ['Saved it in ~/Downloads as Report.pdf.', 'Saved it in [path] as Report.pdf.'], ['Edit /etc/app/hosts and then README.md.', 'Edit [path] and then README.md.'],
+    ['I read /var/log/syslog. Tests/a.mjs is next.', 'I read [path]. Tests/a.mjs is next.'], ['Fixed /srv/app/Makefile Then updated README.md.', 'Fixed [path] Then updated README.md.'],
+    ['Moved /tmp/out/2024 and 3 files to src/a.js.', 'Moved [path] and 3 files to src/a.js.'], ["It's in /tmp/a/b and that's fine.", "It's in [path] and that's fine."],
+  ];
+  for (const [text, cut] of kept) assert.equal(redactPaths(text, { root }), cut, text);
+  // A path inside the project is kept, spaces and quotes included; a quoted ~/ path never is.
+  const home = os.homedir(), project = path.join(home, 'work', 'sample app');
+  assert.equal(redactPaths(`Edit '${project}/src/My File.js' and '~/Other Notes/x.txt'.`, { root: project }), "Edit '~/work/sample app/src/My File.js' and '[path]'.");
+  // The secret check still reads the text as written.
+  const key = 'vAmVbhHlMdBWbegcq1jSMy0NM7XTN0nj5m_5p41Ww08';
+  assert.equal(prepareOutgoing(`Open '/Users/sam/My Keys/${key}' now.`, { root }).ok, false);
+});
 test('outgoing text is blocked on any secret and redacted either way', () => {
   const root = path.join(os.homedir(), 'proj');
   const clean = prepareOutgoing(`Look at ${root}/src/a.js and /var/log/system.log.`, { root });
