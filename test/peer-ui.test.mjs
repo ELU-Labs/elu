@@ -776,6 +776,26 @@ test('over a session on my other computer the box writes to my agent here, start
   assert.equal(pendingRequests(p.root).filter(row => row.continuationTaskId === '1').length, 1, 'neither went to my agent here');
 });
 
+test('/model NAME and a message over a session on my other computer: that session takes the model and the message goes there', async t => {
+  const at = new Date().toISOString(), id = '55555555-5555-4555-8555-555555555555';
+  const remote = [{ id, machine: SARA, createdAt: at, lastAt: at, title: 'Native replay e2e handoff', state: 'running', steps: [], entries: [{ role: 'You', at, text: 'Start the handoff' }], approvals: [] }];
+  const p = project(later(t)); environment(t, p.parent);
+  const before = process.env.PATH; process.env.PATH = fakeClis(p.parent).env.PATH; owned(t).files.push(() => { process.env.PATH = before; });
+  const peer = fakePeer({ items: [], mine: [{ key: SARA, mine: true, theirs: true }], remote }), v = await view(t, { repo: repository(p.root), dashboard: true, peer });
+  const board = v.panels.board, sentThere = () => peer.sent().filter(row => row.type === 'remoteSend');
+  await until(() => board.items.map(plainItem).some(row => /Native replay e2e handoff/.test(row)), 'the row of the session there');
+  board.focus(); selectRow(board, /Native replay e2e handoff/); await until(() => /@sara-box/.test(v.panels.ask._label.getText()), 'the box writes about the session there');
+  await send(v, '/model opus can you help this remote agent with the files it needs and instruction to start the handoff');
+  await until(() => sentThere().length === 1, 'sent there');
+  assert.deepEqual(sentThere()[0], { type: 'remoteSend', id, text: 'can you help this remote agent with the files it needs and instruction to start the handoff', model: { vendor: 'claude', model: 'opus' } });
+  await until(() => /Sent to the session on @sara-box\./.test(v.panels.status.getText()), 'the status says where it went');
+  board.focus(); selectRow(board, /Native replay e2e handoff/); await until(() => /@sara-box/.test(v.panels.ask._label.getText()), 'the box writes about the session there');
+  await send(v, '/model sonnet 5');
+  await until(() => sentThere().length === 2, 'the model alone');
+  assert.deepEqual(sentThere()[1], { type: 'remoteSend', id, text: '', model: { vendor: 'claude', model: 'claude-sonnet-5' } });
+  await until(() => /The session on @sara-box uses it from your next message\./.test(v.panels.status.getText()), 'the status says so');
+});
+
 test('Sessions lists every session of my other computer in this repository under its name, and Projects opens its other projects', async t => {
   const now = Date.now(), at = minutes => new Date(now - minutes * 60000).toISOString(), SHOP = 'e'.repeat(64);
   const p1 = '1'.repeat(16), p2 = '2'.repeat(16);
