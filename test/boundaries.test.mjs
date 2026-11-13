@@ -15,10 +15,13 @@ test('check and package configuration across supported toolchains is protected',
   }
 });
 test('ignored task output cannot be absent from the evidence digest', (t) => {
-  const {root}=project(t); fs.writeFileSync(path.join(root,'.gitignore'),'dist/\n');git(root,['add','.']);git(root,['commit','-m','Ignore generated output']);
+  const {root}=project(t); fs.writeFileSync(path.join(root,'.gitignore'),'generated/\ndist/\n');git(root,['add','.']);git(root,['commit','-m','Ignore generated output']);
   const base=git(root,['rev-parse','HEAD']);const before=changed(root,base);
+  fs.mkdirSync(path.join(root,'generated'));fs.writeFileSync(path.join(root,'generated/result.js'),'export default true;\n');
+  const after=changed(root,base);assert.notEqual(after.digest,before.digest);assert.deepEqual(after.ignored,['generated/result.js']);
+  // Build output in an ignored dist folder is not a change: it is never published, and the digest stays.
   fs.mkdirSync(path.join(root,'dist'));fs.writeFileSync(path.join(root,'dist/result.js'),'export default true;\n');
-  const after=changed(root,base);assert.notEqual(after.digest,before.digest);assert.deepEqual(after.ignored,['dist/result.js']);
+  const built=changed(root,base);assert.equal(built.digest,after.digest);assert.deepEqual(built.ignored,['generated/result.js']);assert.deepEqual(built.trees,['dist/']);
 });
 test('relative hooks in each worktree are inspected and changes block publication', (t) => {
   const {root,parent}=project(t);fs.mkdirSync(path.join(root,'.githooks'));fs.writeFileSync(path.join(root,'.githooks/pre-push'),'#!/bin/sh\nexit 0\n',{mode:0o755});
