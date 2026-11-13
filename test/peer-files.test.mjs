@@ -24,6 +24,9 @@ import { APPROVAL_SERVER, APPROVAL_TOOL } from '../lib/mcp.mjs';
 import { serve, LIST_TOOL, SEND_TOOL, TOOL_NAME } from '../lib/approval-server.mjs';
 import { answerApproval, pendingApprovals } from '../lib/approvals.mjs';
 import { parseCommand } from '../lib/terminal-commands.mjs';
+import { peerFile } from '../lib/peer/paths.mjs';
+import { sendToSession } from '../lib/peer/session-tools.mjs';
+import { sendsTo } from '../lib/remote-helper.mjs';
 
 // Files from one computer of mine to a session on another (lib/peer/files.mjs, remote.mjs).
 // The two daemons are joined by calls, each side's methods running in its own home, as in
@@ -342,6 +345,55 @@ test("a session's tool sends only what the session may read, lists only my compu
     const theirs = relay(t, argv('ask').map(value => value === 'saved' ? 'defaults' : value));
     theirs.send({ jsonrpc: '2.0', id: 30, method: 'tools/list' });
     assert.deepEqual((await theirs.next(row => row.id === 30)).result.tools.map(tool => tool.name), [TOOL_NAME]);
+  });
+});
+
+// The laptop's daemon, for a session's tool: running, the devbox online, and each command it
+// is given run as the daemon runs it (remoteCommand), its result written back.
+function daemon(t, p) {
+  const at = () => new Date().toISOString(), commands = [], dir = peerFile('commands'), stateFile = peerFile('state.json');
+  const state = () => fs.writeFileSync(stateFile, JSON.stringify({ running: true, at: at(), pid: process.pid, key: p.laptop.identity.key, teams: [{ id: p.team.teamId, members: [{ key: p.laptop.identity.key, name: 'ana', online: true }, { key: p.devbox.identity.key, name: 'ana', box: 'devbox', online: true }] }] }));
+  state(); fs.mkdirSync(dir, { recursive: true });
+  let busy = false;
+  const timer = setInterval(async () => {
+    if (busy) return; busy = true; state();
+    try {
+      for (const name of fs.readdirSync(dir).filter(name => /^\d+-[0-9a-f-]+\.json$/.test(name))) {
+        const file = path.join(dir, name), command = JSON.parse(fs.readFileSync(file, 'utf8')); fs.rmSync(file); commands.push(command);
+        let row; try { row = { ok: true, result: await remoteCommand(p.viewCtx, command) }; } catch (error) { row = { ok: false, error: error.message }; }
+        fs.writeFileSync(`${file.slice(0, -5)}.result.json.tmp`, JSON.stringify(row)); fs.renameSync(`${file.slice(0, -5)}.result.json.tmp`, `${file.slice(0, -5)}.result.json`);
+      }
+    } finally { busy = false; }
+  }, 20);
+  t.after(() => clearInterval(timer));
+  return commands;
+}
+
+test("a helper's tool sends a message alone, which every build there takes, and sends only to the session it helps", async t => {
+  const p = pair(t), OTHER = crypto.randomUUID();
+  await withHome(p.laptop.home, async () => {
+    const project = registeredProject(t), env = process.env.XDG_CONFIG_HOME, root = p.ref.split(':')[0];
+    const machines = path.join(env, 'elu-code', 'peer', 'remote', 'machines'); fs.mkdirSync(machines, { recursive: true });
+    fs.writeFileSync(path.join(machines, `${p.devbox.identity.key}.json`), JSON.stringify({ key: p.devbox.identity.key, listedAt: new Date().toISOString(), projects: [{ id: root, name: 'shop', repoId: null, home: false }], sessions: [{ id: p.id, ref: p.ref, project: root, title: 'Look at the batch results', state: 'needs_input', question: 'Which batch?', approvals: [], by: 'you' }, { id: OTHER, ref: `${root}:2`, project: root, title: 'Another of mine', state: 'answered', approvals: [], by: 'you' }] }));
+    const commands = daemon(t, p), from = { task: '7', root: project.root }, reads = () => null;
+    // No paths: the message goes alone, as one typed there from here does, and the helper's send is kept.
+    assert.equal(await sendToSession({ session: p.id, message: 'Use the second batch; it is in the inbox.' }, { reads, from, only: p.id }), 'Sent the message to the session on @devbox.');
+    assert.deepEqual(commands.map(({ at, ...row }) => row), [{ type: 'remoteSend', id: p.id, to: p.devbox.identity.key, ref: p.ref, text: 'Use the second batch; it is in the inbox.' }]);
+    withHome(p.devbox.home, () => assert.deepEqual(requestsFor(p.project.root).map(row => row.goal), ['Use the second batch; it is in the inbox.']));
+    assert.deepEqual(sendsTo(p.id).map(row => [row.task, row.root]), [['7', project.root]]);
+    await assert.rejects(sendToSession({ session: p.id, paths: [], message: '  ' }, { reads, from, only: p.id }), { message: 'Send files, a message, or both.' });
+    // Another session of mine there, or one that is none: the helper sends to neither.
+    for (const session of [OTHER, crypto.randomUUID()]) await assert.rejects(sendToSession({ session, message: 'x' }, { reads, from, only: p.id }), { message: `This session helps session ${p.id} only, and sends to no other.` });
+    assert.equal(commands.length, 1, 'nothing more went');
+    // The relay of a helper's turn says which session it helps.
+    const argv = ['--session', 's-helps', '--root', project.root, '--task', '7', '--role', 'lead', '--vendor', 'claude', '--log', path.join(path.dirname(env), 'helps.jsonl'), '--wait', '600', '--cwd', project.root, '--access', 'edit', '--rules', 'saved', '--sandboxed', 'no', '--mode', 'auto', '--folders', '[]', '--helps', p.id];
+    const server = relay(t, argv);
+    server.send({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: SEND_TOOL, arguments: { session: OTHER, message: 'x' } } });
+    const said = (await server.next(row => row.id === 1)).result;
+    assert.equal(said.isError, true); assert.match(said.content[0].text, /This session helps session .* only, and sends to no other\./);
+    server.send({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: SEND_TOOL, arguments: { session: p.id, message: 'Run it again.' } } });
+    assert.equal((await server.next(row => row.id === 2)).result.content[0].text, 'Sent the message to the session on @devbox.');
+    await assert.rejects(serve({ argv: [...argv.slice(0, -1), 'nope'] }), /--helps is a session id/);
   });
 });
 
