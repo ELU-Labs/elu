@@ -1684,6 +1684,7 @@ test('Kanban shows every session teammates run in the same repository, with who 
   panels.kanbanLists[2].focus(); panels.kanbanLists[2].select(0); v.input.write('\r');
   await until(() => rowsOf(v, "sara's session").includes('No Task yet'), 'no Task yet');
   assert.deepEqual(rowsOf(v, "sara's session").map(line => line.trimEnd()), ['Which tax rate?', 'Needs you', "Started by @li · on sara's machine sara-box", '', 'No Task yet', '', 'last activity 3m ago', '', 'It runs on their machine: only they can change it.']);
+  assert.equal(modal(v, "sara's session").children.some(child => child.type === 'button'), false, 'a teammate\'s card has no Go to session');
   v.input.write('\x1b'); await until(() => !modal(v, "sara's session"), 'Esc closes it');
   // The other repository's board: its own cards only.
   panels.kanbanPick.focus(); panels.kanbanPick.emit('press');
@@ -1726,8 +1727,9 @@ test('a card of my other computer opens as mine: its whole Task, you and that co
   for (const line of ['Goal', 'The search page answers in under a second.', 'Description', 'Objectives · 1 of 2 met', '  ✓ A timing test for the search page', 'Success criteria', '  · Three runs in a row answer in under a second', 'Subtasks · 1 of 3 done', '  ▸ Cache the query', 'last activity 1m ago']) assert.ok(rows.includes(line), line);
   assert.match(rows.find(line => /^ETA /.test(line)), / · in (24|25) min$/, 'the minutes left it last reported');
   assert.doesNotMatch(rows.join('\n'), /their machine|only they can change it|read-only/);
-  assert.match(hint(), /enter open the session/);
-  // Enter opens it in Sessions, with the cursor on it under its computer.
+  assert.match(hint(), /enter go to session/);
+  assert.equal(modal(v, title).children.find(child => child.type === 'button')?.getText().trim(), 'Go to session');
+  // Enter presses Go to session: it opens in Sessions, with the cursor on it under its computer.
   v.input.write('\r');
   await until(() => v.current.view === 'tasks' && !modal(v, title) && /Nightly checks/.test(plainItem(panels.board.items[panels.board.selected] ?? { getText: () => '' })), 'Sessions, on that session');
   assert.deepEqual(peer.sent(), []);
@@ -1736,7 +1738,7 @@ test('a card of my other computer opens as mine: its whole Task, you and that co
   panels.kanbanLists[2].focus(); panels.kanbanLists[2].select(0); v.input.write('\r');
   await until(() => rowsOf(v, title).includes('No Task yet'), 'no Task yet');
   assert.deepEqual(rowsOf(v, title).map(line => line.trimEnd()), ['Flaky upload', 'Needs you', 'you · sara-box', '', 'No Task yet', 'Find why uploads fail on slow networks', '', 'last activity 2m ago']);
-  assert.doesNotMatch(hint(), /enter open/);
+  assert.doesNotMatch(hint(), /enter (open|go to session)/); assert.equal(modal(v, title).children.some(child => child.type === 'button'), false, 'no Go to session');
   v.input.write('\x1b'); await until(() => !modal(v, title), 'Esc closes it');
   // From an older build there: it has a Task that did not come with the card.
   panels.kanbanLists[3].focus(); panels.kanbanLists[3].select(0); v.input.write('\r');

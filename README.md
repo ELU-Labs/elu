@@ -79,9 +79,9 @@ An approved Task gives its session its name, unless you named the session yourse
 
 On the Kanban tab a session with a Task shows as that Task: its title, how far it is, its
 priority and its severity. One that waits for your approval is under Needs you. Enter opens
-the whole Task: the goal, the objectives, the success criteria, the subtasks and the ETA;
-Enter again opens its session. A teammate's card, and one of your other computer's, open the
-same way.
+the whole Task, as does a click: the goal, the objectives, the success criteria, the subtasks
+and the ETA. Its Go to session button opens its session; Enter presses it. A teammate's card,
+and one of your other computer's, open the same way.
 
 After you approve, the model splits the work into subtasks and changes them as it likes.
 The card lists them as a checklist and marks the objectives the model reports met. Its ETA
