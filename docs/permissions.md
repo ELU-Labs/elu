@@ -7,7 +7,7 @@ session; a turn that is not your own session's runs read only.
 
 | | Read only | Ask for approval | Approve for me | Full access |
 | --- | --- | --- | --- | --- |
-| Who gets it | bots that review or answer, teammate questions, tasks saved without a mode | your session | your session; at most this for a schedule whose mode you did not pick and for a bot's scheduled turn | your session, and a schedule you pick it for |
+| Who gets it | bots that review or answer, teammate questions, tasks saved without a mode | your session | your session; at most this for a schedule whose mode you did not pick | your session with its bots' schedules, and a schedule you pick it for |
 | Reads | the workspace; answer turns may read your home | without asking: the workspace, folders and, for answer turns, your home (below) | same | anything |
 | Edits in the workspace | edit turns only | yes | yes | yes |
 | Edits outside it | no | asks | a reviewer model decides; on Antigravity refused, and on Claude Code an answer turn's edit asks | yes |
@@ -91,9 +91,10 @@ Code a working bot can start helpers when its instructions ask for them. They ru
 bot's own model unless the bot was saved with another for them, as `@lead` was, with the
 tools and the denied commands of the bot's turn, and they start no helpers of their own.
 A bot that is allowed to merge pull requests starts helpers only when it was saved with a
-model for them. A turn its schedule started runs with Approve for me at most, because
-nobody may be watching: a bot's schedule has no mode of its own, so you never pick Full
-access for it.
+model for them. A turn its schedule started runs in the session's mode too, Full access
+included: pick Full access for the session, when you start it or with `/permissions full`,
+and its bots' schedules run with it, with nobody watching. In a session that edits your
+checkout in place, they run while the session has Full access.
 
 Full access has no never list. A turn that runs with it, your session's or a working
 bot's, runs what your own shell could: `git push` (tags too), `git tag`, `git merge`,
@@ -201,7 +202,7 @@ the end (Antigravity and Grok Build without the live relay) has the cap alone.
 The keys are `y` allow and `n` deny. Where the session can be given Full access
 there is a third, `f`: it asks what `/permissions full` asks, then allows the
 action and switches the session to Full access, so that session stops asking.
-It is not offered for a bot's scheduled turn or a turn that runs read only.
+It is not offered for a turn that runs read only.
 
 ### Network
 
@@ -369,8 +370,7 @@ Approve for me.
   next. Three kinds stay yours to answer: a removal with `rm` or `rmdir`, an
   MCP tool, and a command too long to show whole. The never list is not asked,
   so it stays refused in that turn, which started without Full access; the next
-  turn runs it. A bot's scheduled turn is not answered this way: it runs
-  with Approve for me at most.
+  turn runs it.
 - A turn that starts in Full access is never answered for you. What it still
   asks, its vendor asks in every mode (Claude Code asks before `rm` or `rmdir`
   on your home, the working folder or a top-level folder), and you answer it.
