@@ -2470,6 +2470,34 @@ test('a coloured line under the chat that would fill the pane to its last column
   assert.equal(panels.chat._clines.length, panels.chat.getContent().split('\n').length, 'no row was wrapped again');
 });
 
+// The rows on the screen, as drawn, and the app's next draw on it.
+const screenRows = v => v.current.screen.lines.map(row => row.map(cell => cell[1]).join(''));
+async function nextDraw(v) { const before = v.current; await until(() => v.current !== before, 'a draw'); v.current.screen.render(); }
+// What a widget shows on its own rows of the screen.
+const drawnIn = (v, widget) => screenRows(v).slice(widget.atop, widget.atop + widget.height).map(row => row.slice(widget.aleft, widget.aleft + widget.width).trimEnd());
+// A row of words exactly `room` columns wide: "et", its last word, is the one blessed moved down.
+const fillingRow = room => { const words = 'alpha beta gamma delta epsilon zeta eta theta iota kappa lambda'.split(' '); let row = ''; for (let at = 0; row.length < room - 12; at++) row += `${words[at % words.length]} `; return `${row}${'m'.repeat(room - row.length - 3)} et`; };
+
+test('a message that fills the pane beside the list keeps its last word on its row, behind its bar, at 80 and at 140 columns', { timeout: 60000 }, async t => {
+  const p = setup(t, 'answer'); delete process.env.NO_COLOR;
+  const v = await view(t, { repo: p.repo }), panels = v.current.panels, bare = row => row.replace(/\x1b\[[\d;]*m/g, '');
+  for (const [width, height] of [[80, 24], [140, 50]]) {
+    await sized(v, width, height); await nextDraw(v);
+    // The pane's rows, less the bar and the space after it: the message's first row is exactly that wide.
+    const room = panels.chat.width - panels.chat.iwidth - 1 - 2, row = fillingRow(room);
+    await send(v, `${row} and the rest of it`);
+    // Sent, picked up and answered: it is the session's own message now, no longer one that waits.
+    await until(() => { const now = v.current.controller.snapshot(); return panels.chat.getText().includes(`┃ ${row}`) && !/\((waiting|queued)\)/.test(panels.chat.getText()) && now.tasks[0]?.state === 'answered' && !(now.queue ?? []).length; }, `the message in the chat at ${width}`, 20000);
+    const rows = panels.chat._clines.map(bare), at = rows.indexOf(`┃ ${row}`);
+    assert.ok(at > 0, `the row that fills the pane is one row at ${width}: ${JSON.stringify(rows.filter(line => line.startsWith('┃ alpha') || line.trim() === 'et'))}`);
+    assert.match(rows[at - 1], /^You {2}/, 'under its header'); assert.match(rows[at + 1], /^┃ and the rest of it *$/, 'and over the rest of the message');
+    assert.equal(panels.chat._clines.length, panels.chat.getContent().split('\n').length, `no row was wrapped again at ${width}`);
+    // On the screen: the whole row, then the scroll bar's column and the pane's edge.
+    panels.chat.scrollTo(at); v.current.screen.render();
+    assert.ok(drawnIn(v, panels.chat).some(line => line.includes(`┃ ${row} `)), `drawn as one row at ${width}`);
+  }
+});
+
 test("a session that stopped says why and the one thing to do under its last message, in the status row and on its row: the owner's 15-minute stop on a Full session with an approved Task says to type continue", { timeout: 30000 }, async t => {
   const p = setup(t); registerProject(p.repo);
   const at = new Date().toISOString(), log = path.join(p.parent, 'lead.log');
