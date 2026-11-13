@@ -258,6 +258,24 @@ test('Chats shows channels and direct messages beside the open one at 160x40', a
   assert.match(asked, /…$/); const words = asked.slice(0, -1).trim().split(' '); assert.ok(LONG.includes(words.at(-1)), 'cut at a word boundary');
 });
 
+test('a thread whose row is as wide as its pane keeps its last word, in colour as the app runs', async t => {
+  const parent = temp(later(t)); environment(t, parent); delete process.env.NO_COLOR;
+  const peer = fakePeer({ items: [] }), v = await view(t, { peer });
+  await send(v, '/chats'); await until(() => v.current.view === 'chats', 'Chats');
+  await openRow(v, /@sara/, '@sara');
+  // A list row stops one column short of its pane, and 中 takes two columns: the row fills the
+  // pane. blessed wrapped it again at its last space, and a list shows one row of each.
+  const list = v.panels.teamLists[1], room = list.width - 2, lead = '← @sara asks you · ', words = 'alpha beta gamma delta epsilon zeta eta theta iota kappa lambda'.split(' ');
+  let question = '中 '; for (let at = 0; question.length < room - lead.length - 12; at++) question += `${words[at % words.length]} `;
+  question += `${'m'.repeat(room - lead.length - question.length - 3)} et`;
+  peer.peerItems = () => [{ id: 'incoming-9', kind: 'incoming', peer: SARA, name: 'sara', project: 'web', text: question, at: ago(1), state: 'submitted', threadId: 'th-9' }];
+  const row = () => list.items.find(item => /asks you/.test(plainItem(item)));
+  await until(() => row(), 'the thread'); v.current.screen.render();
+  assert.equal(plainItem(row()).replace(/\x03/g, '').trimEnd(), `${lead}${question}`); assert.equal(plainItem(row()).replace(/\x03/g, '').trimEnd().length, room, 'one short of the pane, as every list row is');
+  assert.equal(row()._clines.length, 1, 'one row, not two');
+  assert.ok(v.lines()[row().atop].replace(/\x03/g, '').includes(`${lead}${question}`), 'the whole row is drawn, "et" with it');
+});
+
 test('Chats stacks the bar over threads at 80x24 without breaking borders', async t => {
   const { v } = await teamView(t, { columns: 80, rows: 24 });
   await until(() => v.panels.teamLists[1].items.length > 1 && v.panels.teamBoxes[1]._label.getText().trim() === '@sara', 'stacked panes');

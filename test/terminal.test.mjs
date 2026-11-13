@@ -2571,6 +2571,135 @@ test('a coloured line under the chat that would fill the pane to its last column
   assert.equal(panels.chat._clines.length, panels.chat.getContent().split('\n').length, 'no row was wrapped again');
 });
 
+// Every pane on the screen, as blessed laid it out: a line the app handed over that fits its
+// pane and still was wrapped a second time, or cut short. Each is named with its pane.
+function brokenRows(v) {
+  const found = [], bare = row => row.replace(/\x1b\[[\d;]*m/g, ''), cells = row => [...bare(row)].filter(ch => !/\p{M}|‍/u.test(ch)).length;
+  (function walk(el) {
+    const lines = el._clines;
+    if (lines?.fake && el.visible) {
+      const room = lines.width - (el.scrollbar ? 1 : 0) - (el.type === 'textarea' ? 1 : 0);
+      lines.fake.forEach((line, no) => {
+        const shown = lines.ftor[no].map(at => bare(lines[at]));
+        if (cells(line) <= room && (shown.length > 1 || shown[0] !== bare(line))) found.push(`${el.type} ${JSON.stringify(shown.map(row => row.replace(/\x03/g, '')))} (room ${room})`);
+      });
+    }
+    el.children.forEach(walk);
+  })(v.current.screen);
+  return found;
+}
+
+// The rows on the screen, as drawn, and the app's next draw on it.
+const screenRows = v => v.current.screen.lines.map(row => row.map(cell => cell[1]).join(''));
+async function nextDraw(v) { const before = v.current; await until(() => v.current !== before, 'a draw'); v.current.screen.render(); }
+// What a widget shows on its own rows of the screen.
+const drawnIn = (v, widget) => screenRows(v).slice(widget.atop, widget.atop + widget.height).map(row => row.slice(widget.aleft, widget.aleft + widget.width).trimEnd());
+// A row of words exactly `room` columns wide: "et", its last word, is the one blessed moved down.
+const fillingRow = room => { const words = 'alpha beta gamma delta epsilon zeta eta theta iota kappa lambda'.split(' '); let row = ''; for (let at = 0; row.length < room - 12; at++) row += `${words[at % words.length]} `; return `${row}${'m'.repeat(room - row.length - 3)} et`; };
+
+test('a message that fills the pane beside the list keeps its last word on its row, behind its bar, at 80 and at 140 columns', { timeout: 60000 }, async t => {
+  const p = setup(t, 'answer'); delete process.env.NO_COLOR;
+  const v = await view(t, { repo: p.repo }), panels = v.current.panels, bare = row => row.replace(/\x1b\[[\d;]*m/g, '');
+  for (const [width, height] of [[80, 24], [140, 50]]) {
+    await sized(v, width, height); await nextDraw(v);
+    // The pane's rows, less the bar and the space after it: the message's first row is exactly that wide.
+    const room = panels.chat.width - panels.chat.iwidth - 1 - 2, row = fillingRow(room);
+    await send(v, `${row} and the rest of it`);
+    // Sent, picked up and answered: it is the session's own message now, no longer one that waits.
+    await until(() => { const now = v.current.controller.snapshot(); return panels.chat.getText().includes(`┃ ${row}`) && !/\((waiting|queued)\)/.test(panels.chat.getText()) && now.tasks[0]?.state === 'answered' && !(now.queue ?? []).length; }, `the message in the chat at ${width}`, 20000);
+    const rows = panels.chat._clines.map(bare), at = rows.indexOf(`┃ ${row}`);
+    assert.ok(at > 0, `the row that fills the pane is one row at ${width}: ${JSON.stringify(rows.filter(line => line.startsWith('┃ alpha') || line.trim() === 'et'))}`);
+    assert.match(rows[at - 1], /^You {2}/, 'under its header'); assert.match(rows[at + 1], /^┃ and the rest of it *$/, 'and over the rest of the message');
+    assert.equal(panels.chat._clines.length, panels.chat.getContent().split('\n').length, `no row was wrapped again at ${width}`);
+    // On the screen: the whole row, then the scroll bar's column and the pane's edge.
+    panels.chat.scrollTo(at); v.current.screen.render();
+    assert.ok(drawnIn(v, panels.chat).some(line => line.includes(`┃ ${row} `)), `drawn as one row at ${width}`);
+  }
+});
+
+test('from 80 to 120 columns no pane wraps a row that fits it a second time: the title over a session keeps its state, the key bar its last word and the new session form the end of each hint', { timeout: 120000 }, async t => {
+  const p = twoSessions(t); delete process.env.NO_COLOR;
+  const v = await view(t, { repo: p.repo }), panels = v.current.panels;
+  // The widths where each one filled its row to the last column: there blessed wrapped it again, and its last word was not shown.
+  const filled = { title: [], keys: [], form: [] };
+  const sweep = async (where, check) => {
+    for (let width = 80; width <= 120; width++) {
+      await sized(v, width, 24); await nextDraw(v);
+      assert.deepEqual(brokenRows(v), [], `${where} at ${width} columns`);
+      check(width);
+    }
+  };
+  const keys = width => { const text = panels.keys.getText(); assert.deepEqual(drawnIn(v, panels.keys), [text.trimEnd()], `the key bar at ${width}`); if (text.length === panels.keys.width) filled.keys.push(width); };
+  await selectRow(v, /Which format/); await until(() => v.current.session === '5', 'its session shows');
+  await sweep('a session beside the list', width => {
+    const title = panels.header.getText();
+    assert.match(title, /waiting for you$/); assert.deepEqual(drawnIn(v, panels.header), [title], `the title at ${width}`);
+    if (title.length === panels.header.width) filled.title.push(width);
+    keys(width);
+  });
+  await selectRow(v, /\+ New session/);
+  await sweep('the new session form', width => {
+    for (const item of panels.composeList.items) { const text = item.getText().trimEnd(); assert.deepEqual(drawnIn(v, item), [text], `the form at ${width}`); if (text.length === item.width) filled.form.push(width); }
+    keys(width);
+  });
+  await send(v, '/kanban'); await until(() => v.current.view === 'kanban', 'Kanban');
+  await sweep('Kanban', keys);
+  assert.ok(filled.title.length && filled.keys.length && filled.form.length > 1, `each filled its row at some width: ${JSON.stringify(filled)}`);
+});
+
+test('the Changes view keeps the whole of a line that holds emoji, where blessed cut it short by a column for each, at 80 and at 140 columns', { timeout: 60000 }, async t => {
+  const p = setup(t); delete process.env.NO_COLOR; registerProject(p.repo);
+  liveTask(p.root, { id: '4', goal: 'Write the launch notes', state: 'ready', files: { 'NOTES.md': `🚀 ${'launch '.repeat(12)}\n🎉🎉 ${'x'.repeat(150)}\n` } });
+  const v = await view(t, { repo: p.repo }), panels = v.current.panels, bare = row => row.replace(/\x1b\[[\d;]*m/g, '');
+  await openTask(v, /Write the launch/); await send(v, '/changes'); await until(() => v.current.sessionView === 'changes' && /launch launch/.test(panels.changes.getText()), 'its changes');
+  for (const [width, height] of [[80, 24], [140, 50]]) {
+    await sized(v, width, height); await nextDraw(v);
+    const handed = panels.changes.getContent().split('\n').map(bare);
+    assert.ok(handed.some(row => row.includes('🚀')) && handed.some(row => row.includes('🎉🎉')), 'both lines show');
+    // An emoji is two units of the string and one cell here: blessed counted the units and cut the row that much short.
+    assert.deepEqual(panels.changes._clines.map(bare), handed, `every row is whole at ${width}`);
+    assert.deepEqual(brokenRows(v), [], `at ${width} columns`);
+  }
+});
+
+test('a Usage row cut to its pane keeps its end when one character in it is two columns wide', { timeout: 30000 }, async t => {
+  const p = setup(t), fake = fakeUsage(t); delete process.env.NO_COLOR;
+  fs.writeFileSync(path.join(fake.home, 'claude', '.claude.json'), JSON.stringify({ oauthAccount: { accountUuid: 'uuid-never-shown', emailAddress: 'owner@example.invalid', organizationName: 'Example', planDisplayName: `Max 中 ${'plan '.repeat(30)}`.trim(), userRateLimitTier: 'default_claude_max_20x', hasExtraUsageEnabled: false } }));
+  const v = await view(t, { repo: p.repo, usage: fake }), panels = v.current.panels, row = () => panels.usageList.items.find(item => /owner@example\.invalid/.test(item.getText()));
+  await send(v, '/usage'); await until(() => v.current.view === 'usage' && row(), 'the account in Usage'); await nextDraw(v);
+  // A list row stops one column short of its pane, and 中 takes two: this one is as wide as the pane.
+  const text = row().getText().replace(/\x03/g, '');
+  assert.ok(text.includes('中') && text.endsWith('...') && text.length === row().width - 1, `cut to the pane: ${text}`);
+  assert.deepEqual(drawnIn(v, row()).map(line => line.replace(/\x03/g, '')), [text], 'the whole row is drawn');
+  assert.deepEqual(brokenRows(v), []);
+});
+
+test('a note in a dialog that fills its text box keeps its last word on its row, at 80 and at 140 columns', { timeout: 60000 }, async t => {
+  const p = setup(t); delete process.env.NO_COLOR; readModels();
+  const v = await view(t, { repo: p.repo }), bare = row => row.replace(/\x1b\[[\d;]*m/g, '');
+  const field = () => modal(v, 'Add a model')?.children.find(child => child.type === 'textbox'), box = () => modal(v, 'Add a model').children.find(child => child.options?.scrollable);
+  const refused = async name => {
+    v.input.write('\x15'); await until(() => field().getValue() === '', 'an empty field'); v.input.write(name); await until(() => field().getValue() === name, 'the name typed'); v.input.write('\r');
+    await until(() => box().getText().includes(`${name} is not a model`) && /Enter again/.test(box().getText()), 'refused once');
+    return box().getContent().split('\n').map(bare).at(-1);
+  };
+  for (const [width, height] of [[80, 24], [140, 50]]) {
+    await sized(v, width, height); await nextDraw(v);
+    await send(v, '/model add'); await until(() => modal(v, 'Add a model · runs on') || field(), 'the dialog');
+    if (modal(v, 'Add a model · runs on')) v.input.write('\r');
+    await until(() => field()?.__listener, 'the name field');
+    // The note under a name the vendor does not list is as long as the name makes it: here it
+    // is exactly as wide as the text box, less its scroll bar's column.
+    const room = box().width - 1, first = await refused('m'.repeat(8)), note = await refused('m'.repeat(8 + room - first.length));
+    assert.equal(note.length, room, `the note fills the box at ${width}`); assert.match(note, / typed\.$/);
+    v.current.screen.render();
+    assert.equal(box()._clines.map(bare).at(-1), note, `one row at ${width}: ${JSON.stringify(box()._clines.map(bare).slice(-2))}`);
+    assert.ok(drawnIn(v, box()).includes(note), `drawn whole at ${width}`);
+    assert.deepEqual(brokenRows(v), [], `at ${width} columns`);
+    modal(v, 'Add a model').dismiss(); await until(() => !modal(v, 'Add a model'), 'the dialog closes');
+  }
+});
+
 test("a session that stopped says why and the one thing to do under its last message, in the status row and on its row: the owner's 15-minute stop on a Full session with an approved Task says to type continue", { timeout: 30000 }, async t => {
   const p = setup(t); registerProject(p.repo);
   const at = new Date().toISOString(), log = path.join(p.parent, 'lead.log');
