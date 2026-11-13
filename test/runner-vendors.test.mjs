@@ -265,6 +265,21 @@ test('an Antigravity session refuses a push that a script makes over ACP in Ask 
   assert.equal(publish.code(), '0'); assert.deepEqual(publish.refs(), ['refs/heads/from-script', 'refs/tags/v2']);
 });
 
+// Grok Build and Antigravity CLI run under a home of their own, so ~ in a command of theirs is
+// not the owner's. In Full access Git and gh still read his settings and his sign-in.
+for (const [vendor, version, say] of [['grok', '1.0.77', script => `Run the command ${script} then reply done with the summary "ran it".`], ['agy', '1.5.4', script => `Run this command: ${script}. Reply with the summary "headless".`]]) {
+  test(`a ${vendor} command in Full access reads the owner's Git settings and gh sign-in from under its own home`, async t => {
+    const f = setup(t, vendor), script = path.join(f.parent, 'who.sh'), out = path.join(f.parent, 'who.out'), gh = path.join(process.env.XDG_CONFIG_HOME, 'gh');
+    if (vendor === 'grok') { fs.mkdirSync(path.join(f.parent, '.grok')); fs.writeFileSync(path.join(f.parent, '.grok', 'auth.json'), '{}\n', { mode: 0o600 }); }
+    proven(vendor, f.bin, version, { relay: true });
+    fs.writeFileSync(path.join(f.parent, '.gitconfig'), '[user]\n\tname = Owner Settings\n'); fs.mkdirSync(gh, { recursive: true });
+    fs.writeFileSync(script, `#!/bin/sh\n{ git config --global user.name; printf '%s\\n' "$GH_CONFIG_DIR"; [ "$HOME" = ${JSON.stringify(f.parent)} ] && echo owner-home || echo own-home; } > ${JSON.stringify(out)} 2>&1\n`, { mode: 0o700 });
+    const full = await f.controller.ask(say(script), null, { permissions: 'full' }).finished;
+    assert.equal(full.state, 'answered', JSON.stringify(full.error));
+    assert.equal(fs.readFileSync(out, 'utf8'), `Owner Settings\n${gh}\nown-home\n`);
+  });
+}
+
 test('a Codex lead whose command was declined reports the denial and asks', async t => {
   const f = setup(t, 'codex', { mode: 'declined' });
   const task = await f.controller.ask('Trim spaces in coupon codes.', null, { permissions: 'ask' }).finished;

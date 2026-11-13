@@ -162,6 +162,24 @@ test('a Full access run gets the owner\'s whole environment, less the names that
   assert.equal(agentEnv({ ...owner, CODEX_HOME: '/home/o/.codex', CLAUDE_CONFIG_DIR: '/home/o/.claude' }, [], {}, { full: true }).CODEX_HOME, '/home/o/.codex');
 });
 
+test('a vendor that runs under a home of its own still finds the owner\'s Git settings and gh sign-in in Full access; lower modes get neither', t => {
+  const w = world(t), home = path.join(w.dir, 'owner'), own = path.join(path.resolve(personalDirectory()), 'grok-home'), owner = { PATH: '/bin', HOME: home };
+  fs.mkdirSync(path.join(home, '.config', 'gh'), { recursive: true }); fs.writeFileSync(path.join(home, '.gitconfig'), '[user]\n\tname = Owner\n'); fs.mkdirSync(own, { recursive: true });
+  const full = agentEnv(owner, [], { HOME: own }, { full: true });
+  assert.equal(full.HOME, own); assert.equal(full.GIT_CONFIG_GLOBAL, path.join(home, '.gitconfig')); assert.equal(full.GH_CONFIG_DIR, path.join(home, '.config', 'gh'));
+  const lower = agentEnv(owner, [], { HOME: own }); assert.equal(lower.GIT_CONFIG_GLOBAL, undefined); assert.equal(lower.GH_CONFIG_DIR, undefined);
+  // A vendor that runs in the owner's home needs no pointer, and what the owner set himself is kept.
+  const inHome = agentEnv(owner, [], {}, { full: true }); assert.equal(inHome.GIT_CONFIG_GLOBAL, undefined); assert.equal(inHome.GH_CONFIG_DIR, undefined);
+  const set = agentEnv({ ...owner, GIT_CONFIG_GLOBAL: '/etc/mine', GH_CONFIG_DIR: '/etc/gh' }, [], { HOME: own }, { full: true }); assert.equal(set.GIT_CONFIG_GLOBAL, '/etc/mine'); assert.equal(set.GH_CONFIG_DIR, '/etc/gh');
+  // Git settings kept under the config folder are found too, a config folder elsewhere is followed, and an owner with neither file gets no pointer.
+  fs.rmSync(path.join(home, '.gitconfig')); fs.mkdirSync(path.join(home, '.config', 'git')); fs.writeFileSync(path.join(home, '.config', 'git', 'config'), '');
+  assert.equal(agentEnv(owner, [], { HOME: own }, { full: true }).GIT_CONFIG_GLOBAL, path.join(home, '.config', 'git', 'config'));
+  const elsewhere = path.join(w.dir, 'xdg'); fs.mkdirSync(path.join(elsewhere, 'gh'), { recursive: true });
+  assert.equal(agentEnv({ ...owner, XDG_CONFIG_HOME: elsewhere }, [], { HOME: own }, { full: true }).GH_CONFIG_DIR, path.join(elsewhere, 'gh'));
+  fs.rmSync(path.join(home, '.config'), { recursive: true });
+  const bare = agentEnv(owner, [], { HOME: own }, { full: true }); assert.equal(bare.GIT_CONFIG_GLOBAL, undefined); assert.equal(bare.GH_CONFIG_DIR, undefined);
+});
+
 test('one Claude run that ends several turns is read by its last answer; what follows that answer does not undo it', () => {
   const init = { type: 'system', subtype: 'init', session_id: SESSION, model: 'claude-fable-5-2', permissionMode: 'bypassPermissions', mcp_servers: [] };
   const result = (summary, extra = {}) => ({ type: 'result', subtype: 'success', is_error: false, session_id: SESSION, total_cost_usd: 0.1, structured_output: { outcome: 'done', summary }, ...extra });
