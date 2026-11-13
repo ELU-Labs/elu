@@ -352,7 +352,7 @@ newest first; the rest are listed.
 Before asking, the chat says how many sessions it asks and on which computers. Each session
 answers in one turn of its own agent (its model, or the worker bot that works in it), on its
 own model and limits, in at most 8 lines, and that turn changes nothing: no edit, no Task,
-and the session stays where it was. A Claude Code session answers in a copy of its own
+and the session stays where it was, in Sessions and on the Kanban: answering is not activity. A Claude Code session answers in a copy of its own
 history, so its next turn goes on from its work; another vendor keeps the standup in that
 history. Its chat shows "@sam asks: standup", the update, and
 "Sent to @sam". A session that is working answers when its turn ends, or is listed as still

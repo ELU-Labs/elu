@@ -9,7 +9,8 @@ import { projectFolder, pendingRequests, updateRequest } from '../lib/workspace.
 import { readTask } from '../lib/state.mjs';
 import { Conductor, OLDER_CONDUCTOR, conductorTakesStandup, enqueue, saveConductorSettings } from '../lib/conductor.mjs';
 import { personalDirectory } from '../lib/usage.mjs';
-import { readBoard, setDone } from '../lib/kanban.mjs';
+import { lastActivity, readBoard, setDone } from '../lib/kanban.mjs';
+import { boardRows } from '../lib/board.mjs';
 import { createConversation } from '../lib/runner.mjs';
 import { saveTeamAccess } from '../lib/peer/access.mjs';
 import { localRepos, repoProof, saveProofs, sessionCards } from '../lib/peer/cards.mjs';
@@ -217,4 +218,18 @@ test("a teammate's round spends from their allowance, is checked again when appr
   // Their conductor runs an older build: told back as older, never as an empty answer.
   const older = await teamStandupCommand({ ...ctx, session: () => ({ remoteHello: { cards: 1, standup: 1 }, request: async () => ({ older: true }) }) }, { type: 'teamStandup', to: sara, round: newRound(), cards: [card.id] });
   assert.deepEqual(older, { older: true });
+});
+
+test('an answer turn is not activity: the session keeps when it last worked and its place in Sessions', async t => {
+  const f = setup(t);
+  const task = await f.controller.ask('Explain coupons').finished, before = readTask(f.repo, task.id);
+  const row = () => boardRows([{ name: 'shop', root: f.root, activity: [], tasks: [readTask(f.repo, task.id)], queue: [] }], Date.parse(before.createdAt) + 3600000).find(value => value.id === task.id);
+  const place = row();
+  await sleep(20);
+  await f.controller.ask(STANDUP_QUESTION, task.id, { standupFor: { round: newRound(), by: 'You' } }).finished;
+  const after = readTask(f.repo, task.id);
+  assert.ok(after.runs.length > before.runs.length, 'it answered');
+  assert.equal(after.activeSince, before.activeSince);
+  assert.equal(lastActivity(after), lastActivity(before));
+  assert.deepEqual([row().group, row().order, row().time], [place.group, place.order, place.time]);
 });
