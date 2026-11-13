@@ -1154,6 +1154,17 @@ test('/model takes the name it shows (/model opus 5.5), and a message after the 
   assert.equal(panels.ask.getValue(), '/model nosuch can you help'); panels.ask.setValue('');
   await send(v, '/model default opus 5.5'); await until(() => /start with Opus 5\.5 \(claude · opus\)\./.test(status()), 'the default by its shown name');
   await send(v, '/model default opus 5.5 now'); await until(() => /Use \/model default <name>\./.test(status()), 'a default takes no message'); panels.ask.setValue('');
+  // /help says it, with an example.
+  await send(v, '/help'); await until(() => modal(v, 'Commands'), 'help');
+  const help = dialogText(v, 'Commands').replace(/\s+/g, ' ');
+  assert.match(help, /Model: each session has its own\. \/model NAME changes it; the name it is shown by works too \(\/model opus 5\.5\), and a message after the name is sent on that model\. Over a session on your other computer, it changes that session’s model there\. \/model default NAME sets what new sessions start with, and \/model add adds one by name\./);
+  assert.match(help, /Examples: \/model sonnet \/model opus 5\.5 fix the build \/model default opus /); await dialog(v, 'Commands', '');
+  // A name and version Claude has no model for is never run as another model: Claude refuses it, and the session says why and what to do.
+  await send(v, '/model opus 9.9 and the docs?');
+  await until(() => tasks()[0].state === 'blocked', 'Claude refused the model');
+  assert.equal(models().at(-1), 'claude-opus-9-9'); assert.equal(tasks()[0].error.cause, 'model-unavailable');
+  assert.match(tasks()[0].error.message, /could not run: Claude says there is no model claude-opus-9-9 for this account\.$/);
+  await until(() => /could not run: Claude says there is no model claude-opus-9-9 for this account\. Choose another with \/model, then type continue\./.test(panels.chat.getText().replace(/\s+/g, ' ')), 'the chat says why and what to do');
 });
 
 // The first message of a session was written to a bot and the conductor has not picked it up: one with no @name goes with it, to that bot.
