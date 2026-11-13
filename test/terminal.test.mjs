@@ -4512,6 +4512,7 @@ test('PgUp and PgDn move a chat a page, in the chat and from the message box und
   // In the chat itself.
   v.input.write('\x1b'); await until(() => v.current.screen.focused !== ask, 'out of the box');
   chat.focus(); await until(() => v.current.screen.focused === chat, 'the chat');
+  await until(() => /↑↓ scroll {2}esc sessions {2}i type {2}pgup pgdn page/.test(v.current.panels.keys.getText()), 'the keys in the bar, in the chat');
   v.input.write('\x1b[6~'); await until(() => chat.getScrollPerc(true) === 100, 'a page down reaches the end');
   v.input.write('\x1b[5~'); await until(() => chat.childBase === end - page(), 'a page up in the chat');
 });
