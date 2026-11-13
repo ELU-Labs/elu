@@ -46,7 +46,7 @@ async function view(t, repo) {
   await until(() => rendered, 'first render');
   const v = {
     input, get current() { return rendered; }, get changes() { return rendered.panels.changes; },
-    lines: () => rendered.panels.changes.getText().split('\n'), status: () => rendered.panels.status.getText(),
+    lines: () => rendered.panels.changes.getText().split('\n'), flat: () => rendered.panels.changes.getText().split('\n').map(line => line.trim()).join(' '), status: () => rendered.panels.status.getText(),
     modal: title => rendered.screen.children.find(child => !child.destroyed && child.options?.label?.trim() === title),
     // A click as a terminal reports it: press, then release, in SGR form (1-based cells).
     click(x, y) { input.write(`\x1b[<0;${x + 1};${y + 1}M`); input.write(`\x1b[<0;${x + 1};${y + 1}m`); },
@@ -82,7 +82,7 @@ const everything = dir => fs.readdirSync(dir, { withFileTypes: true }).flatMap(i
 
 test('Changes: a click on the + or the + key notes a line, the note stays with the session, a changed line keeps its note, and s sends them', async t => {
   const s = session(t), first = await view(t, s.repo);
-  assert.match(first.lines().join('\n'), /\+ beside a line notes what should change\. Notes go to the model together\./);
+  assert.match(first.flat(), /\+ beside a line notes what should change\. Notes go to the model together\./);
   // A click on the line puts the cursor there: its + shows. A click on the + asks for the note.
   const added = first.row(NEW); first.click(added.mark + 12, added.y);
   await until(() => first.lines()[added.y - first.changes.atop - 1].startsWith('+'), 'the + beside the clicked line');
@@ -91,7 +91,7 @@ test('Changes: a click on the + or the + key notes a line, the note stays with t
   assert.match(first.modal('Note').children.find(child => child.options?.scrollable).getText(), /lib\/price\.mjs, line 2/);
   await first.type('Note', 'Round it to cents');
   await until(() => first.lines().some(line => /✎ Round it to cents/.test(line)), 'the note under its line');
-  assert.match(first.lines().join('\n'), /1 note\. s sends it to the model\./); assert.match(first.current.panels.keys.getText(), /s send notes/);
+  assert.match(first.flat(), /1 note\. s sends it to the model\./); assert.match(first.current.panels.keys.getText(), /s send notes/);
   // Up to the removed line, then the + key.
   first.input.write('\x1b[A'); await until(() => first.lines().find(line => line.includes(OLD)).startsWith('+'), 'the cursor on the removed line');
   first.input.write('+'); await first.type('Note', 'Say why the old one went');
@@ -101,13 +101,13 @@ test('Changes: a click on the + or the + key notes a line, the note stays with t
 
   // ELU starts again after the model changed the noted line once more.
   fs.writeFileSync(path.join(s.worktree, 'lib/price.mjs'), file(LATER));
-  const again = await view(t, s.repo), shown = again.lines().join('\n');
+  const again = await view(t, s.repo), shown = again.flat();
   assert.match(shown, /2 notes\. s sends them to the model together\./);
   assert.match(shown, /lib\/price\.mjs, line 2 has changed since this note\. It was: export const price = \(value\) => value \*/);
   assert.match(shown, /✎ Round it to cents/); assert.match(shown, /✎ Say why the old one went/);
   again.input.write('s'); await until(() => /Sent 2 notes to the model together\./.test(again.status()), 'the notes are sent');
   assert.equal(fs.existsSync(s.notes), false, 'sent notes are not kept');
-  assert.doesNotMatch(again.lines().join('\n'), /✎/);
+  assert.doesNotMatch(again.flat(), /✎/);
   const kept = everything(s.repo.state);
   assert.match(kept, /Notes on your changes\. Change what each one asks:/);
   assert.match(kept, /lib\/price\.mjs, removed line 2: export const price = \(value\) => value;\\nSay why the old one went/);
