@@ -781,19 +781,26 @@ test('/model NAME and a message over a session on my other computer: that sessio
   const remote = [{ id, machine: SARA, createdAt: at, lastAt: at, title: 'Native replay e2e handoff', state: 'running', steps: [], entries: [{ role: 'You', at, text: 'Start the handoff' }], approvals: [] }];
   const p = project(later(t)); environment(t, p.parent);
   const before = process.env.PATH; process.env.PATH = fakeClis(p.parent).env.PATH; owned(t).files.push(() => { process.env.PATH = before; });
-  const peer = fakePeer({ items: [], mine: [{ key: SARA, mine: true, theirs: true }], remote }), v = await view(t, { repo: repository(p.root), dashboard: true, peer });
+  let older = false;
+  const peer = fakePeer({ items: [], mine: [{ key: SARA, mine: true, theirs: true }], remote, refuse: command => older && command.type === 'remoteSend' && command.model ? 'Update ELU on @sara-box to change its model from here.' : null }), v = await view(t, { repo: repository(p.root), dashboard: true, peer });
   const board = v.panels.board, sentThere = () => peer.sent().filter(row => row.type === 'remoteSend');
   await until(() => board.items.map(plainItem).some(row => /Native replay e2e handoff/.test(row)), 'the row of the session there');
   board.focus(); selectRow(board, /Native replay e2e handoff/); await until(() => /@sara-box/.test(v.panels.ask._label.getText()), 'the box writes about the session there');
   await send(v, '/model opus can you help this remote agent with the files it needs and instruction to start the handoff');
   await until(() => sentThere().length === 1, 'sent there');
   assert.deepEqual(sentThere()[0], { type: 'remoteSend', id, text: 'can you help this remote agent with the files it needs and instruction to start the handoff', model: { vendor: 'claude', model: 'opus' } });
-  await until(() => /Sent to the session on @sara-box\./.test(v.panels.status.getText()), 'the status says where it went');
+  await until(() => /Sent to the session on @sara-box, now on Opus\./.test(v.panels.status.getText()), 'the status says where it went and names the model');
   board.focus(); selectRow(board, /Native replay e2e handoff/); await until(() => /@sara-box/.test(v.panels.ask._label.getText()), 'the box writes about the session there');
   await send(v, '/model sonnet 5');
   await until(() => sentThere().length === 2, 'the model alone');
   assert.deepEqual(sentThere()[1], { type: 'remoteSend', id, text: '', model: { vendor: 'claude', model: 'claude-sonnet-5' } });
-  await until(() => /The session on @sara-box uses it from your next message\./.test(v.panels.status.getText()), 'the status says so');
+  await until(() => /The session on @sara-box uses Sonnet 5 from your next message\./.test(v.panels.status.getText()), 'the status names the model');
+  // That computer runs an older ELU, which would send the message and keep the old model: one plain line, nothing sent, and the text stays.
+  older = true;
+  board.focus(); selectRow(board, /Native replay e2e handoff/); await until(() => /@sara-box/.test(v.panels.ask._label.getText()), 'the box writes about the session there');
+  await send(v, '/model opus 5.5 and the tests');
+  await until(() => /Update ELU on @sara-box to change its model from here\./.test(v.panels.status.getText()), 'the status says to update it');
+  assert.equal(v.panels.ask.getValue(), '/model opus 5.5 and the tests');
 });
 
 test('Sessions lists every session of my other computer in this repository under its name, and Projects opens its other projects', async t => {

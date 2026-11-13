@@ -1141,10 +1141,12 @@ test('/model takes the name it shows (/model opus 5.5), and a message after the 
   assert.equal(models().at(-1), 'sonnet'); assert.equal(panels.ask.getValue(), '');
   assert.equal(tasks()[0].messages.filter(row => !row.lead && !row.bot).at(-1)?.text, "can't you help this agent with the files it needs?");
   // A shown name of two words, then the message.
+  const said = [], setContent = panels.status.setContent.bind(panels.status); panels.status.setContent = text => { said.push(String(text)); return setContent(text); };
   await send(v, '/model opus 5.5 and the tax line?');
   await until(() => tasks()[0].runs.filter(run => run.role === 'lead').length === 3 && tasks()[0].state === 'answered', 'the second message went');
   assert.equal(models().at(-1), 'opus'); assert.equal(tasks()[0].messages.filter(row => !row.lead && !row.bot).at(-1)?.text, 'and the tax line?');
   await until(() => /Opus 5\.5 answered/.test(status()), 'the status line says it answered');
+  assert.ok(said.some(text => /Opus 5\.5 from this message\./.test(text)), 'the status line named the model the message went to'); panels.status.setContent = setContent;
   // A Claude name and version that is not a short name is the model of that version.
   await send(v, '/model sonnet 5'); await until(() => /Sonnet 5 from your next message\./.test(status()), 'a family and version');
   // No model at the start: refused, and the text stays in the box.
