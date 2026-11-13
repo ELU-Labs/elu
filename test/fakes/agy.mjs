@@ -121,6 +121,8 @@ async function acp() {
         const text = (p.prompt ?? []).filter(block => block?.type === 'text').map(block => block.text).join('\n');
         const update = chunk => send({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: p.sessionId, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: chunk } } } });
         update('Working on it.\n');
+        // live (fake.json): a file; the turn sends its plan, first step done and the next in hand, as the real one does when it keeps a to-do list, and goes on once that file exists.
+        if (cfg.live) { send({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: p.sessionId, update: { sessionUpdate: 'plan', entries: [{ content: 'Change normalize', priority: 'medium', status: 'completed' }, { content: 'Run the coupon test', priority: 'medium', status: 'in_progress' }] } } }); const until = Date.now() + 30000; while (!fs.existsSync(cfg.live) && Date.now() < until) await new Promise(resolve => setTimeout(resolve, 50)); }
         const ask = async attempt => {
           const title = attempt.tool === 'write_to_file' ? `Write ${attempt.input.TargetFile}` : attempt.tool === 'run_command' ? `Run ${attempt.input.CommandLine}` : `${attempt.tool} ${attempt.input.Url ?? attempt.input.query ?? ''}`.trim();
           const answer = await request('session/request_permission', { sessionId: p.sessionId, toolCall: { toolCallId: `call-${nextId}`, title, kind: KIND[attempt.tool], rawInput: attempt.input }, options: [{ optionId: 'allow-once', name: 'Allow', kind: 'allow_once' }, { optionId: 'reject-once', name: 'Reject', kind: 'reject_once' }] });

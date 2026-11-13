@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { liveTodos } from '../lib/plan.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -237,6 +238,17 @@ test('headless runs against the fake: locked soft-denies with exit 0, ask denies
   assert.equal(agy.probeSignIn({ bin: fake.bin, cwd: ws }), true);
   const probe = fake.last();
   assert.deepEqual(probe.args, ['-p', '/usage', '--output-format', 'json']); assert.equal(probe.home, path.join(path.resolve(personalDirectory()), 'agy-home', 'signin')); assert.equal(probe.autoUpdate, 'true');
+});
+
+test('over ACP each plan update is handed on as it comes, and reads as subtasks while the turn still runs', async t => {
+  const dir = home(t), ws = repo(dir), fake = install(dir), schemaFile = schemaAt(dir), gate = path.join(dir, 'go-on'), settings = path.join(dir, 'bin', 'fake.json');
+  fs.writeFileSync(settings, JSON.stringify({ ...JSON.parse(fs.readFileSync(settings, 'utf8')), live: gate }));
+  const read = liveTodos(), seen = [];
+  // The stand-in waits for the gate after its plan: the list is read before the turn ends.
+  const onRow = row => { const steps = read(row); if (steps) { seen.push({ steps, running: !fs.existsSync(gate) }); fs.writeFileSync(gate, ''); } };
+  const done = await agy.run({ bin: fake.bin, logFile: path.join(dir, 'plan.log'), timeoutSeconds: 60, relay: true, approvals: null, cwd: ws, protectedPaths: ['.git'], commonDir: path.join(ws, '.git'), schemaFile, session: crypto.randomUUID(), role: lead, mode: 'ask', prompt: 'Reply with the summary "planned".', onRow });
+  assert.equal(done.result.outcome, 'done');
+  assert.deepEqual(seen, [{ steps: [{ id: 's1', text: 'Change normalize', state: 'done' }, { id: 's2', text: 'Run the coupon test', state: 'doing' }], running: true }]);
 });
 
 test('over ACP a permission request reaches the approvals and the answer decides: allow writes, deny and timeout do not and are recorded', async t => {

@@ -103,6 +103,8 @@ if (args.includes('agent') && args.includes('stdio')) {
           return answer?.outcome?.outcome === 'selected' && String(answer.outcome.optionId).startsWith('allow');
         };
         send({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: record.id, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Working. ' } } } });
+        // live (fake.json): a file; the turn sends its plan, first step done and the next in hand, as the real one does when it keeps a to-do list, and goes on once that file exists.
+        if (cfg.live) { send({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: record.id, update: { sessionUpdate: 'plan', entries: [{ content: 'Change normalize', priority: 'medium', status: 'completed' }, { content: 'Run the coupon test', priority: 'medium', status: 'in_progress' }] } } }); const until = Date.now() + 30000; while (!fs.existsSync(cfg.live) && Date.now() < until) await new Promise(resolve => setTimeout(resolve, 50)); }
         const result = await act(text, record, { bypass: record.yolo || mode === 'leaky', canWrite, canShell: true, canFetch: true, cwd: record.cwd, ask });
         record.turns.push(text); save(record);
         send({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: record.id, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: resultText(result) } } } });

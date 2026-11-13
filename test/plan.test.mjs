@@ -6,7 +6,7 @@ import { temp, project, fakeClis, git } from './helpers.mjs';
 import { ProjectController } from '../lib/projects.mjs';
 import { projectFolder } from '../lib/workspace.mjs';
 import { readTask, setTitle, taskDir } from '../lib/state.mjs';
-import { TASK_LIMITS, approveTask, checkProposal, currentTask, planFile, planSchema, readPlanReply, rejectTask, reportProgress, sessionTasks, sharedTask, taskEta } from '../lib/plan.mjs';
+import { TASK_LIMITS, approveTask, checkProposal, currentTask, liveTodos, planFile, planSchema, readPlanReply, rejectTask, reportProgress, sessionTasks, sharedTask, taskEta } from '../lib/plan.mjs';
 import { conversationSchema } from '../lib/config.mjs';
 import { boardRows, rowBadge } from '../lib/board.mjs';
 import { clockTime, etaText, taskCard as drawCard, taskState } from '../lib/terminal-plan.mjs';
@@ -65,23 +65,25 @@ for (const vendor of ['claude', 'codex']) {
     assert.deepEqual(after.subtasks, [{ id: 's1', text: 'Change normalize', state: 'done' }, { id: 's2', text: 'Run the coupon test', state: 'done' }]);
   });
 
-  test(`${vendor}: a working turn ticks the Task's subtasks from the model's own to-do list while it runs, not only when it ends`, async t => {
+  // Claude Code keeps its list with TodoWrite or with the Task tools; both tick.
+  for (const liveTool of vendor === 'claude' ? ['todos', 'tasks'] : ['todos']) test(`${vendor}: a working turn ticks the Task's subtasks from the model's own to-do list (${liveTool}) while it runs, not only when it ends`, async t => {
     const f = fixture(t, 'normal', vendor), gate = path.join(f.parent, 'go-on'), settings = path.join(f.fake.dir, 'fake.json');
-    fs.writeFileSync(settings, JSON.stringify({ ...JSON.parse(fs.readFileSync(settings, 'utf8')), live: gate }));
+    fs.writeFileSync(settings, JSON.stringify({ ...JSON.parse(fs.readFileSync(settings, 'utf8')), live: gate, liveTool }));
     const asked = await f.controller.ask('Uppercase coupon codes', null, { permissions: 'ask' }).finished;
     approveTask(f.repo, asked.id);
     const finished = f.controller.ask('Approved the Task: Uppercase coupons', asked.id, { approved: true }).finished;
     // The model wrote its to-do list and is still working: the Task shows that list now.
     let live = null;
-    for (const until = Date.now() + 20000; Date.now() < until; await new Promise(resolve => setTimeout(resolve, 50))) { live = currentTask(f.repo, asked.id); if (live.subtasks.length) break; }
+    for (const until = Date.now() + 20000; Date.now() < until; await new Promise(resolve => setTimeout(resolve, 50))) { live = currentTask(f.repo, asked.id); if (live.subtasks.length === 2 && live.subtasks[0].state === 'done' && live.subtasks[1].state === 'doing') break; }
     assert.equal(readTask(f.repo, asked.id).state, 'running');
-    assert.deepEqual(live.subtasks, [{ id: 's1', text: 'Change normalize', state: 'done' }, { id: 's2', text: 'Run the coupon test', state: vendor === 'claude' ? 'doing' : 'todo' }]);
+    assert.deepEqual(live.subtasks, [{ id: 's1', text: 'Change normalize', state: 'done' }, { id: 's2', text: 'Run the coupon test', state: 'doing' }]);
     assert.equal(taskState(live), 'approved · 1 of 2 subtasks done');
     const work = inputs(f).find(row => row.input.includes('this turn does its work'));
     assert.match(work.input, /Keep your to-do list with your own to-do tool/);
     // The first turn, which plans, is launched without it.
     const launches = inputs(f).map(row => row.args.join(' '));
-    assert.doesNotMatch(launches[0], vendor === 'claude' ? /TodoWrite/ : /tools\.update_plan\.enabled=true/);
+    assert.doesNotMatch(launches[0], vendor === 'claude' ? /TodoWrite|TaskCreate/ : /tools\.update_plan\.enabled=true/);
+    if (vendor === 'claude') assert.match(launches.find(row => row.includes('TodoWrite')), /--tools \S*TodoWrite,TaskCreate,TaskUpdate,TaskList,TaskGet/);
     fs.writeFileSync(gate, '');
     const done = await finished;
     assert.notEqual(done.kind, 'conversation');
@@ -90,6 +92,12 @@ for (const vendor of ['claude', 'codex']) {
     assert.equal(after.state, 'done'); assert.deepEqual(after.subtasks.map(step => step.state), ['done', 'done']);
   });
 }
+
+// Lines in the shape each vendor prints them, with made-up content (test/fixtures/live-todos.json).
+for (const [name, lines] of Object.entries(JSON.parse(fs.readFileSync(new URL('./fixtures/live-todos.json', import.meta.url), 'utf8')))) test(`the model's own to-do list reads as the Task's subtasks, line by line: ${name}`, () => {
+  const read = liveTodos();
+  lines.forEach(({ row, reads }, index) => assert.deepEqual(read(row), reads, `line ${index + 1}`));
+});
 
 test('n rejects the Task: the session stays idle, nothing is edited, and the next request is planned again', async t => {
   const f = fixture(t);
