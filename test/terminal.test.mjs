@@ -3575,6 +3575,35 @@ test('a session opened from Kanban takes the whole width, and ‹ Kanban or Esc 
   await openTask(v, /Trim coupon/); await until(() => v.current.session === '4', 'that session is open'); assert.equal(v.current.view, 'tasks'); assert.equal(panels.back.hidden, true); assert.equal(panels.boardBox.hidden, false); assert.deepEqual([panels.chat.aleft, panels.chat.width], [30, 70]);
 });
 
+test('one click on any Kanban card opens it, also in a column without the focus; the wheel and the keys only move the cursor', { timeout: 30000 }, async t => {
+  const p = twoSessions(t), v = await view(t, { repo: p.repo }), panels = v.current.panels, focused = () => v.current.screen.focused;
+  const cards = () => v.current.screen.children.filter(child => !child.destroyed && child.options?.label?.trim() === 'Your session').length;
+  await sized(v, 100, 30);
+  const needs = panels.kanbanLists[2], at = pattern => needs.items.findIndex(item => pattern.test(item.getText()));
+  await send(v, '/kanban'); await until(() => v.current.view === 'kanban' && at(/Trim coupon codes/) >= 0 && at(/Which format/) >= 0, 'both sessions under Needs you');
+  // The cursor of Needs you is on the other card, and the focus is in To do.
+  needs.select(at(/Trim coupon codes/)); panels.kanbanLists[0].focus(); await until(() => focused() === panels.kanbanLists[0], 'To do has the focus');
+  const which = at(/Which format/); assert.notEqual(needs.selected, which);
+  click(v, needs.items[which]);
+  await until(() => cardRows(v)[0] === 'Which format should the export use', 'one click opens the card it lands on');
+  await pause(); assert.equal(cards(), 1, 'one card'); assert.equal(v.current.view, 'kanban'); assert.equal(v.current.session, null); assert.equal(needs.selected, which);
+  v.input.write('\x1b'); await until(() => !cardDialog(v), 'Esc closes it');
+  // A click on the card the cursor is already on opens it once, and never its session.
+  assert.equal(needs.selected, at(/Which format/)); click(v, needs.items[needs.selected]); await until(() => cardRows(v)[0] === 'Which format should the export use', 'a click on the selected card opens it');
+  await pause(); assert.equal(cards(), 1, 'one card'); assert.equal(v.current.view, 'kanban'); assert.equal(v.current.session, null);
+  v.input.write('\x1b'); await until(() => !cardDialog(v), 'Esc closes it again');
+  // A click on a column's title or on the empty rows under the cards opens nothing.
+  click(v, panels.kanbanBoxes[2], 2, 0); click(v, needs, 1, needs.height - 1); await pause();
+  assert.equal(cards(), 0); assert.equal(v.current.view, 'kanban');
+  // The wheel and the arrows move the cursor and open nothing.
+  needs.focus(); needs.select(0);
+  wheel(v, needs, 1, 0); await until(() => needs.selected === 1, 'the wheel moves the cursor down a card');
+  v.input.write('\x1b[A'); await until(() => needs.selected === 0, 'Up moves it back'); v.input.write('\x1b[B'); await until(() => needs.selected === 1, 'Down moves it again');
+  await pause(); assert.equal(cards(), 0, 'the wheel and the keys open nothing'); assert.equal(focused(), needs);
+  // Enter still opens the card under the cursor.
+  v.input.write('\r'); await until(() => cardDialog(v), 'Enter opens it'); await pause(); assert.equal(cards(), 1);
+});
+
 test('Task cards in narrow Kanban columns read their whole titles', { timeout: 30000 }, async t => {
   const p = setup(t, 'answer'); registerProject(p.repo);
   liveTask(p.root, { id: '4', goal: 'Round refund amounts', state: 'ready' }); liveTask(p.root, { id: '5', goal: 'Uppercase coupon codes', state: 'answered' });
@@ -3602,7 +3631,8 @@ test('Enter on my own Kanban card shows its whole Task with its success criteria
   pickRow(panels.kanbanLists[2], /Round refunds/); v.input.write('\r');
   await until(() => cardRows(v).length, 'Enter shows the card');
   const eta = Date.parse(approved.approvedAt) + 45 * 60000, rows = cardRows(v);
-  assert.deepEqual(rows.slice(0, rows.indexOf('') + 1), ['Round refunds to cents', 'in progress · priority high · severity low', 'you · this computer', '']);
+  // Its checks are done and it waits for /publish under Needs you: the column leads the Task's state.
+  assert.deepEqual(rows.slice(0, rows.indexOf('') + 1), ['Round refunds to cents', 'Needs you · in progress · priority high · severity low', 'you · this computer', '']);
   assert.deepEqual(rows.slice(rows.indexOf('Goal')), [
     'Goal', 'The amounts are right.', '', 'Description', 'One file changes.',
     '', 'Objectives · 1 of 2 met', '  ✓ It works', '  · Its test passes',
