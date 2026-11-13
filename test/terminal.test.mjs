@@ -1347,10 +1347,11 @@ test('with no project, Enter or + New session names this folder as a project fir
   // Up in the emptied box brings back what was sent, and Down past it empties the box again. From the start of an empty box, Left goes to the list.
   await new Promise(resolve => setImmediate(resolve)); panels.ask.clearValue(); v.input.write('\x1b[A');
   await until(() => panels.ask.getValue() === 'Fix the login bug' && v.current.screen.focused === panels.ask, 'Up brings back the message that was sent');
+  await until(() => / {2}↓ clear\b/.test(panels.keys.getText()), 'the key bar says what Down does with it');
   // Shift+Up in the box highlights its text; it does not walk what was sent.
   v.input.write('\x1b[1;2A'); await until(() => v.current.selection.text() === 'Fix the login bug', 'Shift+Up highlights to the start');
   assert.equal(panels.ask.getValue(), 'Fix the login bug'); assert.equal(v.current.screen.focused, panels.ask);
-  v.input.write('\x1b[B'); await until(() => panels.ask.getValue() === '' && v.current.screen.focused === panels.ask, 'Down past the newest empties the box');
+  v.input.write('\x1b[B'); await until(() => panels.ask.getValue() === '' && v.current.screen.focused === panels.ask && !/↓ clear/.test(panels.keys.getText()), 'Down past the newest empties the box');
   v.input.write('\x1b[D');
   await until(() => v.current.screen.focused === panels.board && /\+ New session/.test(cursor(v)), 'with no sessions, Left reaches + New session');
   v.input.write('\r'); await dialog(v, 'New project', 'Shop');
@@ -2057,6 +2058,7 @@ test('a message sent while the session works waits in its chat; Up takes it back
   await box(); v.input.write('\x1b[A');
   await until(() => waiting().length === 1 && panels.ask.getValue() === 'And keep the old name' && !/And keep the old name/.test(chat()), 'the newest is back in the box');
   assert.match(panels.status.getText(), /Taken back\. Enter sends it again · ↓ drops it\./);
+  await until(() => / {2}↓ drop\b/.test(panels.keys.getText()), 'the key bar says so too');
   v.input.write('\x1b[B'); await until(() => panels.ask.getValue() === '' && /Dropped\. It will not be sent\./.test(panels.status.getText()), 'dropped');
   assert.deepEqual(waiting(), ['Also cover refunds'], 'the other still waits');
   v.input.write('\x1b[A'); await until(() => waiting().length === 0 && panels.ask.getValue() === 'Also cover refunds', 'the one before it is back in the box');
