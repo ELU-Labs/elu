@@ -210,8 +210,9 @@ test('the RPC handler validates requests and maps errors without leaking interna
   assert.equal((await handle(rpcCall('SendMessage', { ...fixture('spec-6.1-send-message.json'), configuration: { taskPushNotificationConfig: { url: 'https://x' } } }))).error.code, -32003);
 
   const long = 'x'.repeat(20000);
+  // A question over what ELU 0.1.19 took (16000 characters) is taken like a review.
   const ask = message({ text: long, ext: EXT });
-  assert.match((await handle(rpcCall('SendMessage', { message: ask }))).error.message, /at most 16000/);
+  assert.ok((await handle(rpcCall('SendMessage', { message: ask }))).result.task);
   const review = message({ text: long, ext: { ...EXT, kind: 'review' } });
   assert.ok((await handle(rpcCall('SendMessage', { message: review }))).result.task);
 

@@ -78,7 +78,7 @@ test('a bot is saved with its defaults, and each field is checked with a line th
   assert.equal(saveBot({ ...bot, effort: ' HIGH ' }).effort, 'high'); assert.equal(saveBot({ ...bot, effort: '' }).effort, null);
   assert.throws(() => saveBot({ ...bot, instructions: '  \n' }), { message: 'Write what the bot does in its instructions.' });
   assert.equal(saveBot({ ...bot, instructions: 'line of a skill\n'.repeat(6000) }).instructions.length, 95999, 'a long skill file fits');
-  assert.throws(() => saveBot({ ...bot, instructions: 'x'.repeat(200001) }), { message: 'The instructions are 200,001 characters. Keep them under 200,000.' });
+  assert.equal(saveBot({ ...bot, instructions: 'x'.repeat(500000) }).instructions.length, 500000, 'instructions of any length are kept whole');
   assert.equal(saveBot({ ...bot, about: `  Reads \n the   diff ${'x'.repeat(200)}` }).about, `Reads the diff ${'x'.repeat(105)}`);
   for (const value of [null, 'scout', []]) assert.throws(() => saveBot(value), { message: 'A bot needs a name and instructions.' });
   assert.equal(saveBot({ ...bot, shared: 'yes' }).shared, false); assert.equal(saveBot({ ...bot, shared: true }).shared, true);

@@ -37,7 +37,7 @@ import { acceptIncoming, processOutbox, sendReply, syncRecords } from '../lib/pe
 import { task as a2aTask, TaskState } from '../lib/peer/a2a.mjs';
 import { peerDataBlock } from '../lib/peer/peerdata.mjs';
 import { peerCli } from '../lib/peer/cli.mjs';
-import { RULES_MAX, saveTeamAccess, teamAccess, teammateRules } from '../lib/peer/access.mjs';
+import { saveTeamAccess, teamAccess, teammateRules } from '../lib/peer/access.mjs';
 import { refuse } from '../lib/util.mjs';
 import { BOTS_TOLD, cleanBots, cleanBox, cleanRows, overlaps, statusRows, thisMachine } from '../lib/peer/status.mjs';
 import { createAsk, dismissAsk, reconnect, reviewText, teammate, tickAsks, teamAsk, dismissTeam, applyTask, getAsk, asks as allAsks } from '../lib/peer/asks.mjs';
@@ -420,7 +420,7 @@ test('what teammates can do here is saved per team, checked, and its rules reach
   withHome(sara.home, () => {
     assert.equal(teamAccess(crew.teamId), null, 'never set');
     assert.throws(() => saveTeamAccess(crew.teamId, { handling: 'full' }), /Choose auto or manual\./);
-    assert.throws(() => saveTeamAccess(crew.teamId, { rules: 'x'.repeat(RULES_MAX + 1) }), /Keep the rules to 1000 characters\./);
+    assert.equal(saveTeamAccess(crew.teamId, { rules: 'x'.repeat(5000) }).rules.length, 5000, 'rules of any length are kept whole');
     assert.throws(() => saveTeamAccess(crew.teamId, { folder: '/' }), /Unknown access setting: folder\./);
     assert.throws(() => saveTeamAccess(crew.teamId, { root: path.dirname(os.homedir()) }), /home folder cannot be/);
     assert.throws(() => saveTeamAccess('team', {}), /Choose a team\./);

@@ -70,6 +70,18 @@ test('automatic editing copies local source edits while keeping the owner checko
   await assert.rejects(controller.pushPlan(task.id), /pre-existing local edits/);
 });
 
+// The owner's request reaches the agent whole, however long: ELU sets no limit of its own.
+test('a request over 16000 characters reaches the agent whole', async t => {
+  const p = project(t), fake = fakeClis(p.parent); environment(t, fake.env);
+  const controller = autoApprove(new ProjectController(projectFolder(p.root)));
+  const goal = `Normalize coupon codes. ${'Keep every word of this long request. '.repeat(1000)}`.trim();
+  assert.ok(goal.length > 16000);
+  const task = await controller.ask(goal).finished;
+  assert.equal(task.state, 'ready', JSON.stringify(task.error));
+  const inputs = fs.readFileSync(path.join(p.parent, 'inputs.jsonl'), 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line).input ?? '');
+  assert.ok(inputs.some(input => input.includes(goal)), 'the whole request is in the prompt');
+});
+
 // Every local edit is copied, however large and however many: ELU sets no limit of its own.
 test('automatic editing copies a local file over 4 MiB and more than 5000 local files', async t => {
   const p = project(t), fake = fakeClis(p.parent); environment(t, fake.env);

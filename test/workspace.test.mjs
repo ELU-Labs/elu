@@ -45,6 +45,14 @@ test('initial history respects ignores, requires an unchanged preview, and commi
   assert.equal(fs.readFileSync(path.join(f.root, '.env'), 'utf8'), 'SYNTHETIC_PRIVATE_VALUE');
 });
 
+// The owner's message of any length is queued whole: ELU sets no limit of its own on it.
+test('a request of any length is queued whole', t => {
+  const f = fixture(t), long = 'Fix the coupon codes. '.repeat(5000);
+  assert.ok(long.length > 16000);
+  assert.equal(saveRequest(f.root, long, null, { state: 'queued' }).goal, long);
+  assert.throws(() => saveRequest(f.root, '  ', null, { state: 'queued' }), /Enter a request\./);
+});
+
 test('initial history takes a file over 4 MiB like any other', t => {
   const f = fixture(t), big = Buffer.alloc(5 * 1024 * 1024, 'a');
   fs.writeFileSync(path.join(f.root, 'data.bin'), big); fs.writeFileSync(path.join(f.root, 'source.mjs'), 'export const count = 1;\n');
