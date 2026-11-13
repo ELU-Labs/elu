@@ -408,10 +408,10 @@ test('changeRows takes line notes: the summary says how, each note shows under i
   rows = changeRows(changes, 80, false, { open: new Set([0]), notes });
   assert.equal(shown(rows[1]), '2 notes. s sends them to the model together.');
   const at = rows.findIndex(row => row === rows.find(row => shown(row).includes('return text.trim()')));
-  assert.deepEqual(rows.slice(at - 1, at + 2).map(row => [row.kind, shown(row)]), [
-    ['del', ' 9    -     return text;'], ['mark', '        ✎ why was this removed?'], ['add', '    9 +     return text.trim() // {bold}not a tag{/bold} {red-fg}'],
+  assert.deepEqual(rows.slice(at - 2, at + 2).map(row => [row.kind, shown(row)]), [
+    ['del', ' 9    -     return text;'], ['mark', '        ✎ why was this removed?'],
+    ['add', '    9 +     return text.trim() // {bold}not a tag{/bold} {red-fg}'], ['mark', '        ✎ keep the {bold} comment out'],
   ]);
-  assert.deepEqual([rows[at + 1].kind, shown(rows[at + 1])], ['mark', '        ✎ keep the {bold} comment out']);
   assert.equal(rows[at + 1].line.now, 9);
   for (const row of rows) assert.ok(widthOf(row) <= 80, shown(row));
   // Without the option the view is as it was.
