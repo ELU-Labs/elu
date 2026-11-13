@@ -2533,8 +2533,8 @@ test('the New session form picks Permissions, Where and Folders, and the session
   v.input.write('3'); await until(() => modal(v, 'Full access'), 'confirm');
   const confirm = dialogText(v, 'Full access');
   assert.match(confirm.replace(/\s+/g, ' '), /Full access: the model changes any file, runs any command and uses the internet without asking\./);
-  // Nothing but their names stops them in Full access, and the question says so.
-  assert.match(confirm.replace(/\s+/g, ' '), /Push, tag, merge, deploy and publish are refused by name only: a command that names them another way can get through\./); assert.doesNotMatch(confirm, /stay blocked/); assert.match(confirm, /Use it\? y\/N/);
+  // Full access runs them too, and the question says so plainly.
+  assert.match(confirm.replace(/\s+/g, ' '), /That includes push, tags, merges, publishing and deploys\./); assert.doesNotMatch(confirm, /stay blocked|refused by name/); assert.match(confirm, /Use it\? y\/N/);
   await dialog(v, 'Full access', 'n'); await until(() => !modal(v, 'Full access'), 'declined');
   assert.match(text(), /Permissions {2}Ask for approval/);
   pickRow(list, /Permissions/); v.input.write('\r'); await until(() => modal(v, 'Permissions'), 'picker again'); v.input.write('3'); await dialog(v, 'Full access', 'y');
@@ -2875,7 +2875,7 @@ test('a beside y and n keeps the rule for this project and allows what it covers
   click(v, panels.chat, 4, 1); await until(() => v.current.screen.focused === panels.chat, 'the chat is focused');
   v.input.write('a'); await until(() => modal(v, 'Always allow'), 'where');
   assert.deepEqual(dialogRows(v, 'Always allow').map(row => row.trim().replace(/\s+/g, ' ')), [`This project ${p.root.replace(os.homedir(), '~')}`, 'All my projects']);
-  assert.match(modal(v, 'Always allow').children.map(child => child.getText?.() ?? '').join('\n').replace(/\s+/g, ' '), /Run npm test, with any arguments, also outside the sandbox, without asking\. Push, tag, merge, deploy and publish stay blocked\./);
+  assert.match(modal(v, 'Always allow').children.map(child => child.getText?.() ?? '').join('\n').replace(/\s+/g, ' '), /Run npm test, with any arguments, also outside the sandbox, without asking\. Push, tag, merge, deploy and publish stay blocked outside Full access\./);
   v.input.write('\x1b'); await until(() => !modal(v, 'Always allow'), 'cancelled');
   assert.equal(answer('run-3-a'), null); assert.deepEqual(readStore().rules, []);
   // Enter on This project: kept, allowed now, and what else waits that it covers is allowed too.
@@ -2889,7 +2889,7 @@ test('a beside y and n keeps the rule for this project and allows what it covers
   wants('run-3-d', '3', 'git push origin main');
   await until(() => /Run: git push origin main outside the sandbox\nEsc, then y allow · n deny · f full access(?! · a)/.test(chat()) && !/a always/.test(chat()), 'no a for the never list');
   click(v, panels.chat, 4, 1); await until(() => v.current.screen.focused === panels.chat, 'the chat is focused again');
-  v.input.write('a'); await until(() => /That is on the never list, so it is never allowed\. y allows it once, n denies it\./.test(status()), 'why');
+  v.input.write('a'); await until(() => /That is on the never list, so it runs only in Full access\. y allows it once, n denies it\./.test(status()), 'why');
   assert.equal(modal(v, 'Always allow'), undefined); assert.equal(answer('run-3-d'), null);
   // On the session's row in the list a says the same, and opens no answer box.
   await send(v, '/permissions rules remove 99'); await until(() => /No rule has that number/.test(status()), 'another message first');
@@ -2983,7 +2983,7 @@ test('a schedule offers Full access, says what it means and asks once', { timeou
   const picker = dialogText(v, 'Permissions');
   assert.match(picker, /Full access/); assert.match(picker, /Each run of a schedule has nobody watching\./);
   v.input.write('3'); await until(() => modal(v, 'Full access'), 'the schedule line');
-  assert.match(said(), /Each run has Full access with nobody watching: it reads anything, runs any command and uses the internet without asking\. The never list is refused by name only: a command that names it another way can get through\./);
+  assert.match(said(), /Each run has Full access with nobody watching: it reads anything, runs any command and uses the internet without asking, push, tags, merges, publishing and deploys included\./);
   assert.match(said(), /Use it for this schedule\? y\/N/);
   await dialog(v, 'Full access', 'y'); await until(() => /Full access for this schedule\./.test(status()) && /Permissions {2}Full access/.test(text()), 'full');
   // Full access or not, a schedule never runs in your checkout: Here is refused when it is picked, not when it is saved.
@@ -3029,36 +3029,39 @@ test('a command refused for a never-list part names that part and never points a
     saveTask(p.repo, { ...readTask(p.repo, id), permissions, approvals, runs: [{ role: 'lead', vendor, session: 'session-1', at: new Date().toISOString(), logFile: log, permissions, denials }] });
   };
   const run = command => ({ tool: 'Bash', input: { command } });
-  // The owner's session: Full access, and two lines that each end with git tag.
-  blocked('6', 'Summarise the week', 'full', [
+  // The owner's session: Approve for me, and two lines that each end with git tag.
+  blocked('6', 'Summarise the week', 'auto', [
     run('cd /srv/app && git log --since="1 week ago" --oneline | wc -l; git merge-base HEAD origin/main; git tag --sort=-creatordate | head -3'),
     run('cd /srv/app; git log --since="1 week ago" --format=%an | sort | uniq -c; git tag --sort=-creatordate | head -3'),
   ]);
   await openTask(v, /Summarise the week/); await until(() => v.current.session === '6', 'his session is open');
-  await until(() => /Blocked: git tag is never allowed, in any mode \(part of: cd \/srv\/app && git log --since="1 week ago" --oneline \| wc -l; git merge-base HEAD/.test(chat()), 'the line names git tag');
-  assert.match(chat(), /Blocked: git tag is never allowed, in any mode \(part of: cd \/srv\/app; git log --since="1 week ago" --format=%an/);
+  await until(() => /Blocked: git tag is not allowed outside Full access \(part of: cd \/srv\/app && git log --since="1 week ago" --oneline \| wc -l; git merge-base HEAD/.test(chat()), 'the line names git tag');
+  assert.match(chat(), /Blocked: git tag is not allowed outside Full access \(part of: cd \/srv\/app; git log --since="1 week ago" --format=%an/);
   assert.doesNotMatch(chat(), /Blocked: Run cd/); assert.doesNotMatch(chat(), /\/permissions to allow more/);
   assert.equal(panels.chat._clines.length, panels.chat.getContent().split('\n').length, 'each line fits the pane beside the list');
-  // Full access and not the never list: a secret, the app's own file, the owner's own answer, and a rule it cannot name.
-  blocked('7', 'Read the keys', 'full', [{ tool: 'Read', input: { file_path: path.join(os.homedir(), '.ssh', 'id_ed25519') } }, run('rm -rf /srv/app/old'), run('cat notes.txt')],
+  // Full access, which has no never list: a secret, the app's own file, the owner's own answer, and a rule it cannot name,
+  // even on a line that holds git push.
+  blocked('7', 'Read the keys', 'full', [{ tool: 'Read', input: { file_path: path.join(os.homedir(), '.ssh', 'id_ed25519') } }, run('rm -rf /srv/app/old'), run('cat notes.txt && git push origin main')],
     [{ id: 'run-7-a', tool: 'Bash', summary: 'Run: rm -rf /srv/app/old', decision: 'deny', at: new Date().toISOString(), role: 'lead', session: 'session-1' }]);
   await openTask(v, /Read the keys/); await until(() => v.current.session === '7', 'the second session is open');
   await until(() => /Blocked: Read ~\/\.ssh\/id_ed25519\. Files that may hold secrets stay closed: open it yourself\./.test(chat()), 'a secret says so');
-  assert.match(chat(), /Stopped: Run rm -rf \/srv\/app\/old\. You said no; reply with what to do instead\./); assert.match(chat(), /Blocked: Run cat notes\.txt\. A rule no mode lifts refused it\./);
+  assert.match(chat(), /Stopped: Run rm -rf \/srv\/app\/old\. You said no; reply with what to do instead\./); assert.match(chat(), /Blocked: Run cat notes\.txt && git push origin main\. A rule no mode lifts refused it\./);
+  assert.doesNotMatch(chat(), /not allowed outside Full access/);
   assert.doesNotMatch(chat(), /\/permissions to allow more/);
   // Ask for approval: the never list is named, and the hint stays for what a wider mode would allow.
   blocked('8', 'Ship it', 'ask', [run('git push origin main'), run('npm install'), { tool: 'Edit', input: { file_path: path.join(personalDirectory(), 'config.json') } }]);
   await openTask(v, /Ship it/); await until(() => v.current.session === '8', 'the third session is open');
-  await until(() => /Blocked: git push is never allowed, in any mode \(git push origin main\)\. Run it yourself\./.test(chat()), 'the never list by name');
+  await until(() => /Blocked: git push is not allowed outside Full access \(git push origin main\)\. Run it yourself\./.test(chat()), 'the never list by name');
   // What a wider mode lifts names the command that gives it.
   assert.match(chat(), /Blocked: Run npm install\. Needs Full access: \/permissions full continues it\./); assert.match(chat(), /Blocked: Edit .+?config\.json\. ELU's own files stay closed in every mode\./);
   assert.doesNotMatch(chat(), /\/permissions to allow more/);
   // A stand-in command refused a push, once inside a script, and the turn went on to answer: the chat still says so, each refusal once.
+  // (A turn of an earlier version, which had stand-ins in Full access too.)
   const step = (command, never) => ({ tool: 'command_execution', summary: `Run: /bin/zsh -c '${command}'`, never });
   blocked('9', 'Sync the branch', 'full', [step('sh ./sync.sh', 'git push'), step('sh ./sync.sh', 'git push'), step('git push origin HEAD', 'git push')], [], { vendor: 'codex', state: 'answered' });
   await openTask(v, /Sync the branch/); await until(() => v.current.session === '9', 'the fourth session is open');
-  await until(() => /Blocked: git push is never allowed, in any mode \(part of: sh \.\/sync\.sh\)\./.test(chat()), 'a push refused inside a script is named');
-  assert.match(chat(), /Blocked: git push is never allowed, in any mode \(git push origin HEAD\)\./);
+  await until(() => /Blocked: git push is not allowed outside Full access \(part of: sh \.\/sync\.sh\)\./.test(chat()), 'a push refused inside a script is named');
+  assert.match(chat(), /Blocked: git push is not allowed outside Full access \(git push origin HEAD\)\./);
   assert.equal(chat().match(/part of: sh \.\/sync\.sh/g).length, 1); assert.doesNotMatch(chat(), /\/permissions to allow more/);
 });
 
@@ -3152,7 +3155,7 @@ test('each Blocked line says why and the one thing to do, and raising the mode t
   // A never-list command in the turn waits for him too.
   blocked('14', 'Ship the fix', 'ask', [{ tool: 'Bash', input: { command: 'git push origin main' } }, { tool: 'Bash', input: { command: 'npm install' } }]);
   await openTask(v, /Ship the fix/); await until(() => v.current.session === '14', 'the push session is open');
-  await until(() => /git push is never allowed/.test(chat()), 'the never list');
+  await until(() => /git push is not allowed outside Full access/.test(chat()), 'the never list');
   await send(v, '/permissions full'); await dialog(v, 'Full access', 'y');
   await until(() => /Full access from your next message\./.test(status()), 'no retry of the push');
   assert.deepEqual(continued('14'), []);

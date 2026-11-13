@@ -35,7 +35,7 @@ Code memory, when there is one.
 | `--add-dir` | each folder of the session; an answer turn (yours, or a working bot's) also gets your home folder and a private copy of your Claude Code memory when there is one | same | same |
 | Sandbox | on where it starts, never required; a host a command connects to asks you, and one you allowed stays allowed in the session; unsandboxed commands ask you | on where it starts, never required, no network; unsandboxed commands go to the reviewer | off |
 | Asks | web tools; answer turns also edits in the project folder | answer-turn edits only | none |
-| Denies | protected paths, writes in the folders of the session, secret reads, ELU state, the never list | same, without dependency files | secret reads, ELU state, the never list |
+| Denies | protected paths, writes in the folders of the session, secret reads, ELU state, the never list | same, without dependency files | secret reads, ELU state |
 
 Every profile keeps `--setting-sources ''`, `--strict-mcp-config` with a private
 config file and disabled hooks. `--max-budget-usd` is passed only when the session
@@ -50,7 +50,7 @@ projects, where a worktree sits beside its repository. Nor does a folder that ho
 cache folder where the run keeps its temporary files (below). Not seen with the real
 service yet.
 
-The never list as deny rules: `git push`, `git tag`, `git merge`, `gh pr merge`,
+The never list as deny rules, in Ask and Auto: `git push`, `git tag`, `git merge`, `gh pr merge`,
 `gh release`, `npm publish`, `pnpm publish`, `yarn publish`, `cargo publish`,
 `firebase deploy`, `vercel deploy`, `gcloud run deploy`, `gcloud app deploy`,
 `fly deploy`, `kubectl apply`, `terraform apply`, `claude mcp add`,
@@ -61,6 +61,8 @@ host you did not allow (a push to `github.com` asks you for that host, and it is
 as a rule) and the common directory is read-only, which is what holds. A bot that is
 allowed to merge pull requests (`@elu` comes allowed; a bot you make is not) runs its
 own working turn without the `gh pr merge` rule; in Ask that command asks you instead.
+Full access has none of these rules, no stand-in commands and no `CLAUDE_ENV_FILE`: a turn
+there runs push, tags, merges, publishing and deploys as your own shell would.
 
 A working bot's turn that may start helpers (see [../permissions.md](../permissions.md))
 is launched with these changes: `--tools` adds `Agent`; `--allowedTools` adds
@@ -71,16 +73,16 @@ and an `Agent` call that names a model or an isolation; and the settings and the
 environment turn off built-in agents, forked agents, helpers of helpers and background
 tasks, and force the helpers' model when the bot names one.
 
-Stand-in commands (`lib/never-shims.mjs`) cover what those rules cannot read: a
+In Ask and Auto, stand-in commands (`lib/never-shims.mjs`) cover what those rules cannot read: a
 script, `sh -c`, `npm test`. Claude Code starts each command from a snapshot of
 your shell setup, which builds PATH again, so a folder put first on the PATH it was
 started with ends up behind the system's. ELU sets `CLAUDE_ENV_FILE` to a
 one-line file that puts the folder first again; Claude Code runs that file ahead of
 each command. Seen on 2.1.322 in Ask for approval and in Approve for me: `npm test`
 whose script ran `git push` to an origin on another machine printed `git push is
-never allowed, in any mode.` and the push exited 126, and the run kept the refusal
-for the chat; the same turn without the file reached `/usr/bin/git`. Not seen with
-the real service: Full access.
+never allowed, in any mode.` (the words of that release; it now prints `git push is
+not allowed outside Full access.`) and the push exited 126, and the run kept the
+refusal for the chat; the same turn without the file reached `/usr/bin/git`.
 
 Claude Code keeps files of its own while it runs. After every command it writes a
 note of its working folder, and its sandboxed commands are given the same folder as

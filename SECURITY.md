@@ -15,7 +15,7 @@ Fixes are made on `main`; there are no older versions that get fixes.
 
 ELU launches installed vendor CLIs. The executables and your local installation are
 trusted. Repository content, check scripts, prompts, and model responses are untrusted.
-Only the owner can approve a push.
+Only the owner can approve a push, or give a session Full access, which pushes without asking.
 
 Prompts explain the task but are not security controls. This tool cannot prove a change is
 correct, and model review is not a substitute for a person reviewing a pull request.
@@ -43,7 +43,8 @@ It depends on the session's permission mode ([docs/permissions.md](docs/permissi
   turns, and a working bot's, also read your home folder without asking, except the
   secret folders ([docs/permissions.md](docs/permissions.md)).
 - **Full access** gives an unsandboxed shell. A Full access shell can read anything your
-  user can, except where the vendor's deny rules cover a file tool.
+  user can, except where the vendor's deny rules cover a file tool, and it pushes, tags,
+  merges, publishes and deploys without asking: the never list does not apply there.
 
 The helpers a bot hands work to run under the same mode and the same denied commands as
 the bot.
@@ -177,9 +178,9 @@ its goal. What is enforced is the permission mode, the Task approval before an e
 the per-teammate and per-team message and spending caps. The never list (push, merge, tag,
 deploy, publish, and adding or removing an MCP server) holds for every session a teammate starts as it does in that mode for
 your own (`docs/permissions.md`): in Ask for approval and Approve for me it is backed by
-the sandbox and deny rules; in Full access, which only a session you approve can have, it
-is stand-in commands, prompt text and deny rules with no sandbox behind them, and a
-teammate's message can then reach any file you can. Each turn a teammate's message starts
+the sandbox and deny rules; Full access, which only a session you approve can have, has
+none, so a teammate's message can then push, merge, tag, deploy and publish, and reach any
+file you can. Each turn a teammate's message starts
 may spend at most the per-request cap (`caps.runUsd`), which intake reserved for it; a
 cost a vendor does not report counts as that whole amount. These sessions share the peer
 slots with teammates' questions, so they never fill every slot of yours.
@@ -302,7 +303,7 @@ limits teammates get. Treat it like a login to this machine.
 - Only such a machine can start, continue, stop or answer a session here, or read its events.
   Everyone else, teammates included, is refused, and is never sent a session's events.
 - The never list, the sandbox, approvals and this machine's limits still apply to those
-  sessions, and push, merge and deploy stay blocked as they are for your own.
+  sessions as they do to your own: push, merge and deploy stay blocked outside Full access.
 - An invite code for another computer of yours works once, for 1 hour unless you choose
   otherwise. Anyone who uses it first becomes one of your computers, so type it on the other
   machine yourself and check `/mine` afterwards; `elu peers` shows each machine's fingerprint.
@@ -346,10 +347,14 @@ leave it or be removed.
 
 The never list (push, tag, merge, deploy, publish, and adding or removing an MCP server
 with `claude mcp add`, `add-json`, `add-from-claude-desktop`, `remove`, `elu mcp add` or
-`elu mcp remove`) is enforced only where the means are missing: Read only and Ask for approval, with the one exception below. In Approve for me
-and Full access it is prompt text plus the vendor's deny rules, which match command text
-and can be sidestepped by an obscured command. ELU's own publish step still needs
-your confirmation and still refuses a default branch in every mode.
+`elu mcp remove`) applies in every mode but Full access. It is enforced only where the
+means are missing: Read only and Ask for approval, with the one exception below. In Approve
+for me it is prompt text plus the vendor's deny rules, which match command text and can be
+sidestepped by an obscured command. Full access has no never list: you chose to let the
+model run what your own shell could, so it pushes, tags, merges, publishes, deploys and
+adds or removes MCP servers without asking, with no deny rules, stand-in commands or prompt
+line against them. ELU's own publish step still needs your confirmation and still
+refuses a default branch in every mode.
 
 One entry can open. A bot that is allowed to merge pull requests (`@elu` comes allowed; a
 bot you make is not) may run `gh pr merge` in its own working turn on Claude Code: its deny
@@ -358,16 +363,16 @@ you are asked before each merge. In Approve for me the reviewer model decides an
 not asked, and Full access does not ask. A turn its schedule started runs with Approve for
 me at most, so in a session set to Approve for me or Full access the hourly `@elu` can
 merge with nobody watching. Push, tag, `git merge`, deploy and publish stay blocked for
-that bot as for every other.
+that bot as for every other, outside Full access.
 
 A rule on command text does not see what a script runs, and Codex has no deny rules at
-all. So every vendor's session, in every mode but Read only, also gets stand-in commands:
+all. So every vendor's session in Ask for approval or Approve for me also gets stand-in commands:
 a private folder (`~/.local/share/elu-code/never-list`, mode 0700) goes first on the
 session's PATH with one script per command word, and each refuses the never-list call by
 name whatever runs it, a script or `sh -c` included. Claude Code builds PATH again for
 each command, so ELU names a one-line file in `CLAUDE_ENV_FILE` that puts the folder
 back in front. This was seen with the real Codex and the real Claude Code in Ask for
-approval and Approve for me, not in Full access; with Antigravity and Grok Build only in
+approval and Approve for me; with Antigravity and Grok Build only in
 tests against stand-in tools. They are a tripwire as well, not a sandbox. These get
 past them: a full path to the real command (`/usr/bin/git push`), a changed PATH, a Git
 alias (`git -c alias.p=push p`) and another program that does the same work (`gh api`,
@@ -376,10 +381,9 @@ alias (`git -c alias.p=push p`) and another program that does the same work (`gh
 the remote), and a `git merge` or `git tag` in a scratch repository that lies, links
 resolved, inside the system temporary directory. A push to another machine, or one git
 cannot place, is refused before anything is sent. A project kept under the temporary
-directory is treated as scratch. A session in Full access can also rewrite the folder; it is written
-again, and cleared of anything else, when the next session starts. In Ask for approval
-and Approve for me the vendor's sandbox, where it runs one, still stands behind them; in
-Full access nothing does.
+directory is treated as scratch. The folder is written again, and cleared of anything
+else, when the next session starts. The vendor's sandbox, where it runs one, still stands
+behind them. A session in Full access gets no stand-in folder on its PATH.
 
 ## Approvals
 
@@ -442,13 +446,13 @@ private file in ELU's state folder and removed when the run ends.
 
 You add a server, and a key never goes through the chat. The model is told to ask you to
 type `/mcp add` when it needs a server you do not have, never to ask for a key in the chat,
-and never to add or remove a server itself. Adding and removing one (`claude mcp add`,
-`add-json`, `add-from-claude-desktop`, `remove`, `elu mcp add`, `elu mcp remove`) is on the
-never list, and no session's file tools may read `~/.claude.json`. In Full access these
-are rules on command text, stand-in commands and prompt text, not a boundary: a model there
-runs as you, with no sandbox, and a full path to `claude`, a script, or a program or file
-tool that writes `~/.claude.json` itself can still add a server. `/mcp add` takes the key in
-a field that shows one dot for each character; the key is not drawn, kept in the message
+and, outside Full access, never to add or remove a server itself. Adding and removing one
+(`claude mcp add`, `add-json`, `add-from-claude-desktop`, `remove`, `elu mcp add`,
+`elu mcp remove`) is on the never list outside Full access, and no session's file tools
+may read `~/.claude.json`. In Full access the never list does not apply: a model there runs
+as you, with no sandbox, and can add or remove a server as you could; it is still told to
+keep keys out of the chat. `/mcp add` takes the key in a field that shows one dot for each
+character; the key is not drawn, kept in the message
 box or its history, sent to a model or a teammate, or written to a log or a session's files.
 `elu mcp add` refuses a key on its own command line, in a header, a variable or the URL, so
 it never has you put one in your shell history, and asks for it with echo off or reads it
@@ -579,12 +583,12 @@ a given machine. Google's FAQ says that using third-party software to access Ant
 violates its terms and can get the account suspended or terminated, and that wrapping
 `agy` in other applications is not supported on consumer plans. ELU wraps it: using
 it is the owner's decision, and the owner's account carries the risk. Antigravity's deny
-rules and hook match command text: in Approve for me and Full access the never list is a
-tripwire, not a boundary.
+rules and hook match command text: in Approve for me the never list is a tripwire, not a
+boundary, and Full access has none.
 
 Grok Build runs with a private HOME and every documented Claude/Cursor compatibility,
 telemetry and upload switch off; the `isolation` step of its one-time check is the only
 proof on a given machine, and the vendor's own issue
 [xai-org/grok-build-plugin-cc#34](https://github.com/xai-org/grok-build-plugin-cc/issues/34)
 says some switches are ignored. Grok's deny rules match command text: in Approve for me
-and Full access the never list is a tripwire, not a boundary.
+the never list is a tripwire, not a boundary, and Full access has none.
