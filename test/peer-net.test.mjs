@@ -1333,7 +1333,7 @@ test('a join is cancelled before any daemon has read it, and a daemon that never
     assert.deepEqual(queued(), ['join']);
     const started = Date.now(); stopper.abort();
     assert.equal(await joining, 'Join cancelled. You did not join.');
-    assert.ok(Date.now() - started < 6000, `cancelled after ${Date.now() - started} ms`);
+    assert.ok(Date.now() - started < 1000, `no daemon had read it, so it is cancelled at once: ${Date.now() - started} ms`);
     assert.deepEqual(queued(), ['joinCancel'], 'the join is taken back, and a daemon that had read it is told to stop');
     for (const name of fs.readdirSync(peerFile('commands'))) fs.rmSync(peerFile('commands', name));
     const dead = await peer.joinTeam(code, { startMs: 700 }).then(() => null, error => error.message);
