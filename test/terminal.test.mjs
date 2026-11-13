@@ -21,6 +21,7 @@ import { liveTask } from './peer-helpers.mjs';
 import { readBoard, sessionClosed, closeSession } from '../lib/kanban.mjs';
 import { proposeTask, approveTask as approvePlan, reportProgress, finishTask, reopenTask } from '../lib/plan.mjs';
 import { clockTime } from '../lib/terminal-plan.mjs';
+import { columns } from '../lib/width.mjs';
 import { saveTask, readTask, taskDir, taskTitle, setTitle, lock } from '../lib/state.mjs';
 import { processIdentity } from '../lib/process.mjs';
 import { activeLogin, listLogins } from '../lib/logins.mjs';
@@ -2549,13 +2550,14 @@ test('from 80 to 120 columns no pane wraps a row that fits it a second time: the
 test('the Changes view keeps the whole of a line that holds emoji, where blessed cut it short by a column for each, at 80 and at 140 columns', { timeout: 60000 }, async t => {
   const p = setup(t); delete process.env.NO_COLOR; registerProject(p.repo);
   liveTask(p.root, { id: '4', goal: 'Write the launch notes', state: 'ready', files: { 'NOTES.md': `🚀 ${'launch '.repeat(12)}\n🎉🎉 ${'x'.repeat(150)}\n` } });
-  const v = await view(t, { repo: p.repo }), panels = v.current.panels, bare = row => row.replace(/\x1b\[[\d;]*m/g, '');
+  // A row as blessed holds it has a cell after each emoji, for its second column.
+  const v = await view(t, { repo: p.repo }), panels = v.current.panels, bare = row => row.replace(/\x1b\[[\d;]*m/g, '').replace(/\x03/g, '');
   await openTask(v, /Write the launch/); await send(v, '/changes'); await until(() => v.current.sessionView === 'changes' && /launch launch/.test(panels.changes.getText()), 'its changes');
   for (const [width, height] of [[80, 24], [140, 50]]) {
     await sized(v, width, height); await nextDraw(v);
     const handed = panels.changes.getContent().split('\n').map(bare);
     assert.ok(handed.some(row => row.includes('🚀')) && handed.some(row => row.includes('🎉🎉')), 'both lines show');
-    // An emoji is two units of the string and one cell here: blessed counted the units and cut the row that much short.
+    // blessed counted an emoji as the two units of its string, with one cell, and cut the row that much short.
     assert.deepEqual(panels.changes._clines.map(bare), handed, `every row is whole at ${width}`);
     assert.deepEqual(brokenRows(v), [], `at ${width} columns`);
   }
@@ -2566,9 +2568,9 @@ test('a Usage row cut to its pane keeps its end when one character in it is two 
   fs.writeFileSync(path.join(fake.home, 'claude', '.claude.json'), JSON.stringify({ oauthAccount: { accountUuid: 'uuid-never-shown', emailAddress: 'owner@example.invalid', organizationName: 'Example', planDisplayName: `Max 中 ${'plan '.repeat(30)}`.trim(), userRateLimitTier: 'default_claude_max_20x', hasExtraUsageEnabled: false } }));
   const v = await view(t, { repo: p.repo, usage: fake }), panels = v.current.panels, row = () => panels.usageList.items.find(item => /owner@example\.invalid/.test(item.getText()));
   await send(v, '/usage'); await until(() => v.current.view === 'usage' && row(), 'the account in Usage'); await nextDraw(v);
-  // A list row stops one column short of its pane, and 中 takes two: this one is as wide as the pane.
+  // A list row stops one column short of its pane, 中 counted as the two columns it takes.
   const text = row().getText().replace(/\x03/g, '');
-  assert.ok(text.includes('中') && text.endsWith('...') && text.length === row().width - 1, `cut to the pane: ${text}`);
+  assert.ok(text.includes('中') && text.endsWith('...') && columns(text) === row().width - 1, `cut to the pane: ${text}`);
   assert.deepEqual(drawnIn(v, row()).map(line => line.replace(/\x03/g, '')), [text], 'the whole row is drawn');
   assert.deepEqual(brokenRows(v), []);
 });
