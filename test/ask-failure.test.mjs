@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { project, fakeClis } from './helpers.mjs';
-import { makeTeam, withHome } from './peer-helpers.mjs';
+import { makeTeam, withHome, registeredProject } from './peer-helpers.mjs';
 import { repository } from '../lib/git.mjs';
 import { registerProject } from '../lib/projects.mjs';
 import { saveTask } from '../lib/state.mjs';
@@ -15,6 +15,7 @@ import { createIdentity, loadIdentity } from '../lib/peer/identity.mjs';
 import { createTeam, teams as everyTeam } from '../lib/peer/roster.mjs';
 import { createInvite, redeemCode } from '../lib/peer/invite.mjs';
 import { share } from '../lib/peer/shares.mjs';
+import { saveTeamAccess } from '../lib/peer/access.mjs';
 import { markMine, noteTheirs } from '../lib/peer/mine.mjs';
 import { savePeerPolicy, savePeerSettings } from '../lib/peer/settings.mjs';
 import { message, task as a2aTask, TaskState } from '../lib/peer/a2a.mjs';
@@ -22,7 +23,9 @@ import { intakeMethods } from '../lib/peer/intake.mjs';
 import { acceptIncoming, processOutbox } from '../lib/peer/replies.mjs';
 import { getRecord } from '../lib/peer/taskstore.mjs';
 import { applyTask, createAsk, getAsk } from '../lib/peer/asks.mjs';
+import { hostMethods } from '../lib/peer/remote.mjs';
 import { peerItems } from '../lib/peer/index.mjs';
+import { remoteRow, rowTitle } from '../lib/board.mjs';
 import { teamPanes, visible } from '../lib/terminal-visuals.mjs';
 
 // A message from another computer started a session here, and the session failed. The
@@ -197,4 +200,33 @@ test('the sender keeps the reason, and Chats shows it whole: failed, why, and th
     applyTask(ctx, kai, a2aTask({ id: 'task-waits', contextId: waiting.threadId, state: TaskState.WORKING }));
     assert.equal(peerItems().find(item => item.id === `asked:${waiting.id}`).note, undefined);
   });
+});
+
+// A connection as the daemon hands it to a method, from the owner's laptop.
+const connection = key => ({ key, admitted: true, remoteHello: { remote: 1 }, sent: [], notify() {}, request: async () => { throw new Error('No answer'); } });
+test('a session on my other computer that failed lists and shows there with the same words, naming that computer', async t => {
+  const team = makeTeam(t, { founderName: 'ana', memberName: 'box' }), laptop = team.founder, devbox = team.member;
+  const shop = withHome(devbox.home, () => { const shop = registeredProject(t); saveTeamAccess(team.teamId, { root: shop.root }); savePeerSettings({ box: 'devbox' }); markMine(devbox.identity.key, laptop.identity.key); noteTheirs(laptop.identity.key, true); return shop; });
+  const ctx = { me: devbox.identity, session: () => null, name: key => key.slice(0, 4), box: () => null, log: () => {}, kick: () => {}, soon: () => {}, event: () => {} };
+  const host = hostMethods(ctx), from = connection(laptop.identity.key);
+  const listed = await withHome(devbox.home, () => {
+    const at = new Date().toISOString(), base = { kind: 'conversation', worktree: shop.root, base: null, branch: null, createdAt: at, runs: [], reviews: [], responses: [], messages: [], sessions: {}, result: null, activeRole: null };
+    saveTask(repository(shop.root), { ...base, id: '1', goal: 'add a note to the readme', state: 'blocked', origin: { kind: 'mine', mine: true, machine: laptop.identity.key, name: 'ana', remoteId: crypto.randomUUID() }, error: { message: 'Grok Build is signed out. Run grok login to sign in, then send again.' } });
+    // One that is not waiting for its owner keeps its error as it is.
+    saveTask(repository(shop.root), { ...base, id: '2', goal: 'an older one', state: 'answered', error: { message: 'An older note.' } });
+    return host['elu.remote.list']({ since: null, after: null, limit: 100 }, from);
+  });
+  const row = id => listed.sessions.find(session => session.ref.endsWith(`:${id}`));
+  assert.equal(row(1).error, 'Grok Build is signed out. Sign Grok Build in on @devbox, then send it again.');
+  assert.equal(row(2).error, 'An older note.');
+  // Sessions on the laptop shows it on that session's row.
+  const shown = remoteRow({ id: 'r1', machine: devbox.identity.key, state: 'blocked', title: 'add a note to the readme', error: row(1).error, createdAt: new Date().toISOString() }, 'devbox');
+  assert.equal(shown.now, 'Grok Build is signed out. Sign Grok Build in on @devbox, then send it again.');
+  // Its row ends with the one thing to do, in a few words, where there is room for all of it.
+  assert.equal(rowTitle(shown), 'on devbox · add a note to the readme · sign Grok Build in');
+  assert.equal(rowTitle(shown, Date.now(), 57), 'on devbox · add a note to the readme · sign Grok Build in');
+  assert.equal(rowTitle(shown, Date.now(), 56), 'on devbox · add a note to the readme');
+  assert.equal(rowTitle({ ...shown, grouped: true }), 'add a note to the readme · sign Grok Build in');
+  // One that works, or ended well, says nothing more.
+  assert.equal(rowTitle(remoteRow({ id: 'r2', machine: devbox.identity.key, state: 'answered', title: 'an older one', createdAt: new Date().toISOString() }, 'devbox')), 'on devbox · an older one');
 });
