@@ -375,8 +375,9 @@ for its sessions is listed, not asked.
 
 When the round ends, the Standup's own model reads every update and sums it up: what is
 done, what is in progress, what is blocked or waits for someone, and who. That turn starts
-with nobody watching, so it only answers and keeps the Kanban: no edits, no Task, none of
-your MCP servers, and Full access runs as Approve for me. It runs once a round and is never
+with nobody watching, so it only answers and keeps the Kanban: it reads, with no edits, no
+shell, no web, no Task and none of your MCP servers; Full access runs as Approve for me, and
+another vendor runs it Read only. It runs once a round and is never
 retried on its own. Then you talk to
 it: each message goes to that model with the updates and this computer's Kanban boards for
 the projects involved, teammates' cards on them read-only. It can keep the Kanban right: in

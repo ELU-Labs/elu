@@ -104,7 +104,7 @@ test('while the conductor here runs an older build, nothing of a standup is queu
   assert.equal(enqueue(f.root, '/standup', { standup: true }).standup, true);
 });
 
-test("the summary turn only answers: Full access runs as Approve for me, with no Task and no edit", async t => {
+test("the summary turn only answers: Full access runs as Approve for me, with no Task, no edit, no shell and no web", async t => {
   const f = setup(t);
   await f.controller.ask('Explain coupons').finished;
   let over = false; const loop = answering(f.controller, () => over);
@@ -115,9 +115,13 @@ test("the summary turn only answers: Full access runs as Approve for me, with no
   assert.match(turn.input, /Give a short summary/);
   assert.equal(valueOf(turn.args, '--permission-mode'), 'auto');
   assert.deepEqual(JSON.parse(valueOf(turn.args, '--json-schema')).properties.intent.enum, ['answer']);
+  // It reads, and has the Kanban tools its relay serves: nothing that edits, runs a command or fetches.
+  assert.equal(valueOf(turn.args, '--tools'), 'Read,Grep,Glob');
+  for (const name of ['Edit', 'Write', 'Bash', 'WebFetch', 'WebSearch']) assert.ok(valueOf(turn.args, '--disallowedTools').split(',').includes(name), name);
   // The owner's own message in the Standup runs in the session's mode, as any of his messages.
   await f.controller.ask('Make sure the Kanban is right.', standup.id).finished;
   assert.equal(valueOf(inputs(f.fake).at(-1).args, '--permission-mode'), 'bypassPermissions');
+  assert.match(valueOf(inputs(f.fake).at(-1).args, '--tools'), /Edit/, 'his own messages keep the tools of his mode');
 });
 
 test("a Claude Code session answers in a fork of its vendor session; its next turn resumes its own", async t => {
