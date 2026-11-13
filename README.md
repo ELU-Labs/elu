@@ -296,7 +296,8 @@ and see its live work. Inviting a teammate shares one too: `elu invite` shares t
 run it in when it is an ELU project (`--project PATH` names another), and `/invite`
 the open project. Joining shares no project of yours, but the Kanban board needs no share:
 every session you run in a repository a teammate also has is on their Kanban, with its title,
-its column, who started it and which machine, and theirs are on yours. Nothing else about it
+its column, who started it, which machine and its approved Task, and theirs are on yours, so
+their agents also know what yours is working on. Nothing else about it
 is sent: no chat, file or path. `/share off` in a project keeps it off both ways. The wire
 format is in [docs/peer-network.md](docs/peer-network.md).
 
