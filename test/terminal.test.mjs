@@ -1123,6 +1123,37 @@ test('a message with no @name goes to whoever the owner last wrote to in the ses
   await until(() => /^ Message Opus · /.test(label()), 'the title names the model');
 });
 
+test('/model takes the name it shows (/model opus 5.5), and a message after the name goes to the session on that model', { timeout: 40000 }, async t => {
+  const p = setup(t, 'answer'), fake = path.join(p.dir, 'fake.json');
+  fs.writeFileSync(fake, JSON.stringify({ ...JSON.parse(fs.readFileSync(fake, 'utf8')), models: { opus: 'claude-opus-5-5', sonnet: 'claude-sonnet-5-5' } }));
+  const v = await view(t, { repo: p.repo }), panels = v.current.panels, status = () => panels.status.getText(), label = () => panels.ask._label.getText();
+  const tasks = () => v.current.controller.snapshot().tasks;
+  const models = () => fs.readFileSync(p.calls, 'utf8').trim().split('\n').map(line => JSON.parse(line)).filter(call => call.vendor === 'claude' && call.args.includes('-p')).map(call => call.args[call.args.indexOf('--model') + 1]);
+  await send(v, 'Where is the cart total?'); await until(() => tasks()[0]?.state === 'answered', 'the model answered');
+  await until(() => /^ Message Opus 5\.5 · /.test(label()), 'the box names the model as Opus 5.5');
+  // The name as the box shows it.
+  await send(v, '/model sonnet'); await until(() => /Sonnet from your next message\./.test(status()), 'sonnet');
+  await send(v, '/model opus 5.5'); await until(() => /Opus 5\.5 from your next message\./.test(status()), 'the shown name is taken');
+  assert.equal(panels.ask.getValue(), '');
+  // A name and then a message: the model changes and the message goes, as typed, to that model.
+  await send(v, "/model sonnet can't you help this agent with the files it needs?");
+  await until(() => tasks()[0].runs.filter(run => run.role === 'lead').length === 2 && tasks()[0].state === 'answered', 'the message went to the session');
+  assert.equal(models().at(-1), 'sonnet'); assert.equal(panels.ask.getValue(), '');
+  assert.equal(tasks()[0].messages.filter(row => !row.lead && !row.bot).at(-1)?.text, "can't you help this agent with the files it needs?");
+  // A shown name of two words, then the message.
+  await send(v, '/model opus 5.5 and the tax line?');
+  await until(() => tasks()[0].runs.filter(run => run.role === 'lead').length === 3 && tasks()[0].state === 'answered', 'the second message went');
+  assert.equal(models().at(-1), 'opus'); assert.equal(tasks()[0].messages.filter(row => !row.lead && !row.bot).at(-1)?.text, 'and the tax line?');
+  await until(() => /Opus 5\.5 answered/.test(status()), 'the status line says it answered');
+  // A Claude name and version that is not a short name is the model of that version.
+  await send(v, '/model sonnet 5'); await until(() => /Sonnet 5 from your next message\./.test(status()), 'a family and version');
+  // No model at the start: refused, and the text stays in the box.
+  await send(v, '/model nosuch can you help'); await until(() => /No model named nosuch\./.test(status()), 'unknown');
+  assert.equal(panels.ask.getValue(), '/model nosuch can you help'); panels.ask.setValue('');
+  await send(v, '/model default opus 5.5'); await until(() => /start with Opus 5\.5 \(claude · opus\)\./.test(status()), 'the default by its shown name');
+  await send(v, '/model default opus 5.5 now'); await until(() => /Use \/model default <name>\./.test(status()), 'a default takes no message'); panels.ask.setValue('');
+});
+
 // The first message of a session was written to a bot and the conductor has not picked it up: one with no @name goes with it, to that bot.
 test('a message with no @name sent before the first message to a bot is picked up goes with it to that bot', { timeout: 30000 }, async t => {
   const p = setup(t, 'answer'); saveBot({ name: 'sec', vendor: 'claude', instructions: 'Review the change for leaked secrets.' });
