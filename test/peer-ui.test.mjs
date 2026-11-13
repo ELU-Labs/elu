@@ -750,7 +750,7 @@ test('over a session on my other computer the box writes to my agent here, start
   const peer = fakePeer({ items: [], mine: [{ key: SARA, mine: true, theirs: true }], remote }), v = await view(t, { repo: repository(p.root), dashboard: true, peer });
   const board = v.panels.board, ask = v.panels.ask, sentThere = () => peer.sent().filter(row => row.type === 'remoteSend');
   await until(() => board.items.map(plainItem).some(row => /Native replay e2e handoff/.test(row)), 'the row of the session there');
-  board.focus(); selectRow(board, /Native replay e2e handoff/);
+  board.focus(); selectRow(board, /on sara-box/);
   await until(() => /Message your agent here/.test(ask._label.getText()), 'the box says where a message goes');
   await until(() => /Answer it there: @sara-box 1/.test(v.panels.chat.getText()), 'how to answer the question there');
   assert.match(v.panels.chat.getText(), /You → @sara-box/);
@@ -769,13 +769,13 @@ test('over a session on my other computer the box writes to my agent here, start
   const repo = repository(p.root);
   saveTask(repo, { id: '1', kind: 'conversation', goal: first.goal, state: 'answered', worktree: repo.root, base: null, branch: null, createdAt: at, runs: [], reviews: [], responses: [], messages: [{ at, text: first.goal }], sessions: {}, result: null, helps: first.helps });
   updateRequest(p.root, first.id, { taskId: '1', state: 'done' });
-  board.focus(); selectRow(board, /Native replay e2e handoff/);
+  board.focus(); selectRow(board, /on sara-box/);
   await send(v, 'what does it still need?');
   await until(() => pendingRequests(p.root).some(row => row.continuationTaskId === '1' && row.goal === 'what does it still need?'), 'the helper is continued');
   assert.equal(pendingRequests(p.root).filter(row => row.helps).length, 1);
   await until(() => /You \(waiting\)/.test(v.panels.chat.getText()), 'the message to it shows beside the session there');
   // @ that computer, by its row's name or its owner's there, writes to the session there without it.
-  board.focus(); selectRow(board, /Native replay e2e handoff/);
+  board.focus(); selectRow(board, /on sara-box/);
   ask.focus(); ask.readInput(); await until(() => ask.__listener, 'message box');
   v.input.write('@sara-box 1');
   await until(() => /Message the session on @sara-box/.test(ask._label.getText()), 'the box says it goes there');
