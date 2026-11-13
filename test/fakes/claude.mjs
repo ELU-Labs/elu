@@ -166,6 +166,41 @@ if(mode==='steps'){
  say({type:'text',text:'The test fails on lower case codes. Fixing normalize.'});
  say({type:'tool_use',id:'toolu_reply',name:'StructuredOutput',input:result});done('toolu_reply','Structured output provided successfully');
 }
+// live (mode): a long turn as Claude Code 2.1.322 writes it (the shapes of its real logs, with
+// made-up content). It counts a thought's tokens while it thinks (system/thinking_tokens) and
+// sends the thought with no text; only with live.text and --thinking-display summarized does
+// the text come. It starts one command in the background (task_started with is_backgrounded,
+// background_tasks_changed), then one that prints nothing for live.seconds (180), with a
+// tool_progress row every 30 seconds whose id is the call's with -heartbeat-N, and ends both
+// (task_notification, task_updated). live.speed: how many times faster than the clock the
+// silent command goes, for a test. live.think: how long it thinks, in ms. gate (fake.json): a
+// file the turn waits for before its command ends.
+if(mode==='live'){
+ const live=cfg.live??{},speed=live.speed??1,uuid=()=>crypto.randomUUID(),sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+ const row=value=>console.log(JSON.stringify(value));
+ const say=content=>row({type:'assistant',message:{id:'msg_fake',role:'assistant',content:[content]},parent_tool_use_id:null,session_id:session,uuid:uuid()});
+ const done=(id,content)=>row({type:'user',message:{role:'user',content:[{type:'tool_result',tool_use_id:id,content}]},parent_tool_use_id:null,session_id:session,uuid:uuid()});
+ const system=(subtype,fields)=>row({type:'system',subtype,...fields,uuid:uuid(),session_id:session});
+ const shown=live.text===true&&args.includes('--thinking-display')&&args[args.indexOf('--thinking-display')+1]==='summarized';
+ const target=live.tokens??1240,parts=8;let counted=0;
+ for(let n=0;n<parts;n++){const next=n===parts-1?target:50+Math.round((target-50)*n/(parts-1));row({type:'system',subtype:'thinking_tokens',estimated_tokens:next,estimated_tokens_delta:next-counted,session_id:session,uuid:uuid()});counted=next;await sleep((live.think??400)/parts);}
+ say({type:'thinking',thinking:shown?'The coupon tests take a while. I will start the watcher, then run them.':'',signature:'sig-fake'});
+ say({type:'text',text:'Starting the watcher, then the tests.'});
+ const watch='toolu_01FakeWatch000000000000000',tests='toolu_01FakeTests000000000000000',watching={task_id:'bfakewtch',run_id:'0fakewtch-00000001'},testing={task_id:'bfaketest',run_id:'0faketest-00000001'};
+ say({type:'tool_use',id:watch,name:'Bash',input:{command:'npm run watch',description:'Start the watcher',run_in_background:true}});
+ system('task_started',{...watching,tool_use_id:watch,description:'npm run watch',is_backgrounded:true,task_type:'local_bash'});
+ done(watch,'Command running in background with ID: bfakewtch');
+ system('background_tasks_changed',{tasks:[{...watching,task_type:'local_bash',description:'npm run watch'}]});
+ say({type:'tool_use',id:tests,name:'Bash',input:{command:'npm test',description:'Run the tests'}});
+ system('task_started',{...testing,tool_use_id:tests,description:'npm test',is_backgrounded:false,task_type:'local_bash'});
+ for(let n=0;(n+1)*30<=(live.seconds??180);n++){await sleep(30000/speed);row({type:'tool_progress',tool_use_id:`${tests}-heartbeat-${n}`,tool_name:'Bash',parent_tool_use_id:tests,elapsed_time_seconds:(n+1)*30,heartbeat:true,session_id:session,uuid:uuid()});}
+ if(cfg.gate){while(!fs.existsSync(cfg.gate))await sleep(20);}
+ system('task_notification',{...testing,tool_use_id:tests,status:'completed',output_file:'',summary:'npm test'});
+ done(tests,'ok 1 - normalizes coupons');
+ system('task_updated',{...watching,patch:{status:'completed',end_time:Date.now()}});
+ system('background_tasks_changed',{tasks:[]});
+ say({type:'tool_use',id:'toolu_reply',name:'StructuredOutput',input:result});done('toolu_reply','Structured output provided successfully');
+}
 // relay: like the real CLI, a tool call the permission mode would prompt for goes to the
 // --permission-prompt-tool server from --mcp-config: initialize, tools/list, then approve for a
 // touch outside the workspace. Allowed, the touch happens; denied, the result reports the denial.

@@ -2018,6 +2018,40 @@ test('a working turn shows its thinking and tool calls as they happen, then fold
   captureFrames('live-steps', frames);
 });
 
+// What real Claude Code sends in a long turn, which is all the owner had for ten minutes:
+// a thought with no text, counted in tokens; a command that prints nothing, with a heartbeat
+// every half minute; and a command it left running in the background. The stand-in writes
+// those rows in their real shapes, its silent command going 600 times faster than the clock.
+// A turn stopped with /stop is no run of the session, and its steps stay in the chat.
+test('a long turn shows its thought as a token count, how long its silent command has run and its background command; stopped, its steps stay', { timeout: 60000 }, async t => {
+  const gate = path.join(temp(t), 'gate'), p = setup(t, 'live', { intent: 'answer', gate, live: { speed: 600, seconds: 180, think: 200 } }), v = await view(t, { repo: p.repo }), panels = v.current.panels;
+  const flat = () => panels.chat.getText().replace(/\s+/g, ' ');
+  await send(v, 'Run the coupon tests');
+  await until(() => /Opus is working ✻ thought · 1\.2k tokens • Starting the watcher, then the tests\. ✓ Run: npm run watch ● Run: npm test · 3m \d+s ● 1 background command: npm run watch(?: · \d+s)? type a message any time/.test(flat()), 'the count, the command three minutes in, and the background command', 15000);
+  // The command prints nothing more, and its line still counts every second.
+  const ran = () => Number(/● Run: npm test · 3m (\d+)s/.exec(flat())?.[1]), first = ran();
+  await until(() => ran() > first, 'the line counts on between heartbeats', 5000);
+  await until(() => /● 1 background command: npm run watch · \d+s/.test(flat()), 'the background command says how long', 5000);
+  const frames = [{ step: 'working', text: v.frame() }];
+  // Stopped: the turn's steps fold into its line, which says so, above the stop line.
+  await send(v, '/stop');
+  await until(() => projectSnapshot(p.repo).tasks[0].state === 'stopped' && /▸ 4 steps in \d+s · stopped · ctrl\+o shows them/.test(flat()), 'the stopped turn keeps its steps', 15000);
+  assert.equal(projectSnapshot(p.repo).tasks[0].runs.length, 0, 'a stopped turn is no run');
+  frames.push({ step: 'stopped', text: v.frame() });
+  panels.ask.focus(); panels.ask.readInput(); await until(() => panels.ask.__listener, 'message box');
+  v.input.write('\x0f');
+  await until(() => /▾ 4 steps in \d+s · stopped · ctrl\+o hides them ✻ thought · 1\.2k tokens • Starting the watcher, then the tests\. ✓ Run: npm run watch ■ Run: npm test · stopped after 3m \d+s/.test(flat()), 'open: the command it was cut in, and for how long it had run');
+  assert.doesNotMatch(flat(), /background command|● Run/, 'nothing of it still runs');
+  frames.push({ step: 'stopped, open', text: v.frame() });
+  // The chat goes on: the stopped turn stays where it happened, and the next one has its own.
+  fs.writeFileSync(gate, '');
+  await send(v, 'Carry on');
+  await until(() => projectSnapshot(p.repo).tasks[0].state === 'answered' && /┃ Looked\./.test(flat()), 'the next turn answered', 15000);
+  assert.match(flat(), /┃ Run the coupon tests ▾ 4 steps in \d+s · stopped · ctrl\+o hides them [^┃]*■ Run: npm test · stopped after 3m \d+s [^┃]*┃ Carry on ▾ 4 steps in \d+s · ctrl\+o hides them ✻ thought · 1\.2k tokens [^┃]*✓ Run: npm test · 3m \d+s [^┃]*┃ Looked\./, 'both turns, each in its place; the finished command keeps its total');
+  frames.push({ step: 'carried on', text: v.frame() });
+  captureFrames('live-steps-real', frames);
+});
+
 // Three lines that read wrong, or lost a message.
 test('checks read as running, a waiting turn of a schedule names the schedule, and a message typed on a waiting row waits beside it', { timeout: 40000 }, async t => {
   const p = setup(t, 'slow'); saveBot({ name: 'sec', vendor: 'claude', instructions: 'Review the change for leaked secrets.' });

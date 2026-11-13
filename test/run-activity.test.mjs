@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { runSteps, runsOfEntries, runSeconds } from '../lib/run-activity.mjs';
+import { runSteps, endedSteps, runsOfEntries, runSeconds } from '../lib/run-activity.mjs';
 import { stepLines, stepsLine, STEPS_LINE, workedFor } from '../lib/terminal-visuals.mjs';
 import { temp } from './helpers.mjs';
 
@@ -122,4 +122,132 @@ test('steps draw one under another, wrapped under their first word, and fold int
   assert.equal(stepsLine(1, null, true, false), '▾ 1 step · ctrl+o hides it');
   assert.ok(STEPS_LINE.test('▸ 1 step · ctrl+o shows it') && !STEPS_LINE.test('┃ ▸ 1 step in 3s'));
   assert.deepEqual([workedFor(42), workedFor(185), workedFor(3840), workedFor(null)], ['42s', '3m 5s', '1h 4m', null]);
+});
+
+// What real Claude Code 2.1.322 writes in a long turn, and the first builder's reader took none
+// of: the owner saw "Opus 5.5 is working / model: started" for ten minutes with nothing else.
+// The rows are in the shapes of real logs, with made-up content. A log carries no times, so a
+// row's time is the log's last write when it was read: each part below is written at its time.
+const SESSION = '0e2f1a54-7c3b-4d19-9a6e-5b8c2d7f4a10', ID = () => '4f1c2b7e-9d3a-4e58-8b61-0a7c5d2e9f34';
+const TEST = 'toolu_01Qm7RtYpL2nXv8KcWd4HsZb', WATCH = 'toolu_01Bn5VgTjM9rPx3LqWz6KdYc';
+const real = {
+  tokens: (total, delta) => ({ type: 'system', subtype: 'thinking_tokens', estimated_tokens: total, estimated_tokens_delta: delta, session_id: SESSION, uuid: ID() }),
+  say: content => ({ type: 'assistant', message: { id: 'msg_01', role: 'assistant', content: [content] }, parent_tool_use_id: null, session_id: SESSION, uuid: ID() }),
+  result: (id, content = 'ok') => ({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content }] }, parent_tool_use_id: null, session_id: SESSION, uuid: ID() }),
+  beat: (id, n) => ({ type: 'tool_progress', tool_use_id: `${id}-heartbeat-${n}`, tool_name: 'Bash', parent_tool_use_id: id, elapsed_time_seconds: (n + 1) * 30, heartbeat: true, session_id: SESSION, uuid: ID() }),
+  started: (task, id, description, background = false) => ({ type: 'system', subtype: 'task_started', task_id: task, run_id: `0${task}-85fcba98`, tool_use_id: id, description, is_backgrounded: background, task_type: 'local_bash', uuid: ID(), session_id: SESSION }),
+  notified: (task, id, summary, status = 'completed') => ({ type: 'system', subtype: 'task_notification', task_id: task, run_id: `0${task}-85fcba98`, tool_use_id: id, status, output_file: '', summary, uuid: ID(), session_id: SESSION }),
+  background: tasks => ({ type: 'system', subtype: 'background_tasks_changed', tasks: tasks.map(([task, description]) => ({ task_id: task, run_id: `0${task}-85fcba98`, task_type: 'local_bash', description })), uuid: ID(), session_id: SESSION }),
+  updated: (task, status) => ({ type: 'system', subtype: 'task_updated', task_id: task, run_id: `0${task}-85fcba98`, patch: { status, end_time: 1794504985020 }, uuid: ID(), session_id: SESSION }),
+};
+// Adds rows to a log as written at that time (ms).
+const writeAt = (file, at, rows) => { fs.appendFileSync(file, rows.map(row => JSON.stringify(row)).join('\n') + '\n'); fs.utimesSync(file, at / 1000, at / 1000); };
+const drawn = (steps, now) => stepLines(steps, { width: 100, colour: false, now }).split('\n');
+
+test('Claude Code sends a thought with no text: its tokens count up live, and its text takes their place when it comes', t => {
+  const dir = temp(t), file = path.join(dir, 'lead.log'), T = Date.now() - 3600000;
+  writeAt(file, T, [{ type: 'system', subtype: 'init', session_id: SESSION, model: 'claude-opus-5-5', claude_code_version: '2.1.322' }, real.tokens(50, 50), real.tokens(209, 159)]);
+  assert.deepEqual(runSteps(file), [{ kind: 'thinking', text: '', tokens: 209, live: true }]);
+  assert.deepEqual(drawn(runSteps(file), T), ['✻ thinking · 209 tokens']);
+  writeAt(file, T + 2000, [real.tokens(1240, 1031)]);
+  assert.deepEqual(drawn(runSteps(file), T), ['✻ thinking · 1.2k tokens'], 'it counts up');
+  // The thought's own block, as every one of 40 real logs had it: no text, only a signature.
+  writeAt(file, T + 3000, [real.say({ type: 'thinking', thinking: '', signature: 'EuYBCkYIBxgCKkD' }), real.say({ type: 'text', text: 'Running the tests.' })]);
+  assert.deepEqual(drawn(runSteps(file), T), ['✻ thought · 1.2k tokens', '• Running the tests.'], 'the thought is over, and its count stays');
+  // The next thought counts from its own start.
+  writeAt(file, T + 4000, [real.tokens(50, 50), real.tokens(130, 80)]);
+  assert.deepEqual(drawn(runSteps(file), T).slice(-1), ['✻ thinking · 130 tokens']);
+  // With its text (a release and model that send it), the text is the step.
+  writeAt(file, T + 5000, [real.say({ type: 'thinking', thinking: 'The codes should compare in upper case.', signature: 'EuYBCkYIBxgCKkD' })]);
+  assert.deepEqual(runSteps(file).at(-1), { kind: 'thinking', text: 'The codes should compare in upper case.' });
+  assert.deepEqual(drawn(runSteps(file), T), ['✻ thought · 1.2k tokens', '• Running the tests.', '✻ The codes should compare in upper case.']);
+  assert.deepEqual(drawn([{ kind: 'thinking', text: '', tokens: 999, live: true }, { kind: 'thinking', text: '', tokens: 123456 }], T), ['✻ thinking · 999 tokens', '✻ thought · 123k tokens']);
+});
+
+test('a command that prints nothing says how long it has run, second by second and between heartbeats, and keeps its total when it ends', t => {
+  const dir = temp(t), file = path.join(dir, 'lead.log'), T = Date.now() - 3600000, minute = 60000;
+  writeAt(file, T, [real.say({ type: 'tool_use', id: TEST, name: 'Bash', input: { command: 'npm test', description: 'Run the tests' } }), real.started('bumf0lxl0', TEST, 'npm test')]);
+  assert.deepEqual(runSteps(file), [{ kind: 'tool', text: 'Run: npm test', status: 'running', since: T }], 'timed from the call');
+  assert.deepEqual(drawn(runSteps(file), T + 1000), ['● Run: npm test'], 'not in its first second');
+  assert.deepEqual(drawn(runSteps(file), T + 7000), ['● Run: npm test · 7s']);
+  assert.deepEqual(drawn(runSteps(file), T + 29000), ['● Run: npm test · 29s'], 'before any heartbeat');
+  // A heartbeat every half minute, each written when it says.
+  for (let n = 0; n < 4; n++) writeAt(file, T + (n + 1) * 30000, [real.beat(TEST, n)]);
+  const running = runSteps(file);
+  assert.equal(running[0].since, T, 'the heartbeats agree with the start');
+  assert.deepEqual(drawn(running, T + 2 * minute + 10000), ['● Run: npm test · 2m 10s'], 'between two heartbeats');
+  assert.deepEqual(drawn(running, T + 2 * minute + 11000), ['● Run: npm test · 2m 11s'], 'a second later');
+  assert.equal(runSteps(file), running, 'nothing new in the log: the same steps, so only the clock moves the line');
+  writeAt(file, T + 3 * minute + 10000, [real.notified('bumf0lxl0', TEST, 'npm test'), real.result(TEST, 'ok 1 - normalizes coupons')]);
+  assert.deepEqual(runSteps(file), [{ kind: 'tool', text: 'Run: npm test', status: 'ok', seconds: 190 }]);
+  assert.deepEqual(drawn(runSteps(file), T + 60 * minute), ['✓ Run: npm test · 3m 10s'], 'its total stays');
+});
+
+test('a log first read while its command runs takes the start from the last heartbeat; a call that failed keeps its note and its time', t => {
+  const dir = temp(t), file = path.join(dir, 'lead.log'), T = Date.now() - 3600000;
+  // The app was opened ten minutes into the command: every row is read at once.
+  writeAt(file, T, [real.say({ type: 'tool_use', id: TEST, name: 'Bash', input: { command: "timeout 590 bash -c 'tail -n 0 -f build.log | grep -m1 done'" } }), real.started('bfejhqp0c', TEST, "timeout 590 bash -c 'tail -n 0 -f build.log | grep -m1 done'"), ...Array.from({ length: 19 }, (_, n) => real.beat(TEST, n))]);
+  assert.equal(runSteps(file)[0].since, T - 570000, 'it had run 570 seconds when the last heartbeat was written');
+  assert.deepEqual(drawn(runSteps(file), T + 12000), ["● Run: timeout 590 bash -c 'tail -n 0 -f build.log | grep -m1 done' · 9m 42s"]);
+  // A heartbeat for a call the log never showed, or one that already ended, changes nothing.
+  writeAt(file, T + 20000, [real.beat('toolu_01NeverSeen00000000000000', 0), { type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: TEST, content: 'Exit code 124', is_error: true }] }, parent_tool_use_id: null, session_id: SESSION, uuid: ID() }, real.beat(TEST, 19)]);
+  assert.deepEqual(runSteps(file), [{ kind: 'tool', text: "Run: timeout 590 bash -c 'tail -n 0 -f build.log | grep -m1 done'", status: 'failed', seconds: 590 }]);
+  assert.deepEqual(drawn(runSteps(file), T + 30000), ["✗ Run: timeout 590 bash -c 'tail -n 0 -f build.log | grep -m1 done' · 9m 50s"]);
+  // Codex: a command is timed from the item that started it to the item that ended it.
+  const codex = path.join(dir, 'codex.log'), item = (type, status, extra = {}) => ({ type, item: { id: 'item_1', type: 'command_execution', command: "/bin/zsh -lc 'npm test'", aggregated_output: '', exit_code: null, status, ...extra } });
+  writeAt(codex, T, [{ type: 'thread.started', thread_id: SESSION }, { type: 'turn.started' }, item('item.started', 'in_progress')]);
+  assert.deepEqual(drawn(runSteps(codex), T + 65000), ['● Run: npm test · 1m 5s']);
+  writeAt(codex, T + 80000, [item('item.completed', 'failed', { exit_code: 1 })]);
+  assert.deepEqual(drawn(runSteps(codex), T + 900000), ['✗ Run: npm test · exit 1 · 1m 20s']);
+});
+
+test('the commands a turn has running in the background are one line, with how long, until they end', t => {
+  const dir = temp(t), file = path.join(dir, 'lead.log'), T = Date.now() - 3600000, minute = 60000;
+  writeAt(file, T, [real.say({ type: 'tool_use', id: WATCH, name: 'Bash', input: { command: 'while true; do gh run list -L 1; sleep 60; done', description: 'Watch the build', run_in_background: true } }),
+    real.started('bd27w0ond', WATCH, 'while true; do gh run list -L 1; sleep 60; done', true), real.result(WATCH, 'Command running in background with ID: bd27w0ond'),
+    real.background([['bd27w0ond', 'while true; do gh run list -L 1; sleep 60; done']])]);
+  assert.deepEqual(runSteps(file), [{ kind: 'tool', text: 'Run: while true; do gh run list -L 1; sleep 60; done', status: 'ok', seconds: 0 }, { kind: 'background', text: 'while true; do gh run list -L 1; sleep 60; done', count: 1, since: T }]);
+  assert.deepEqual(drawn(runSteps(file), T + 4 * minute), ['✓ Run: while true; do gh run list -L 1; sleep 60; done', '● 1 background command: while true; do gh run list -L 1; sleep 60; done · 4m 0s'], 'a turn that waits on its own loop says so');
+  // The turn goes on: the line stays last. A second command joins it, counted from the oldest.
+  writeAt(file, T + minute, [real.tokens(50, 50), real.say({ type: 'thinking', thinking: '', signature: 'EuYBCkYIBxgCKkD' }), real.say({ type: 'tool_use', id: TEST, name: 'Bash', input: { command: 'npm run dev' } }), real.started('bx81kq0zt', TEST, 'npm run dev'),
+    real.background([['bd27w0ond', 'while true; do gh run list -L 1; sleep 60; done'], ['bx81kq0zt', 'npm run dev']])]);
+  assert.deepEqual(drawn(runSteps(file), T + 5 * minute).slice(-2), ['● Run: npm run dev · 4m 0s', '● 2 background commands: while true; do gh run list -L 1; sleep 60; done, npm run dev · 5m 0s']);
+  // One fails, as task_updated says; the other is gone from the next list.
+  writeAt(file, T + 6 * minute, [real.updated('bd27w0ond', 'failed')]);
+  assert.deepEqual(drawn(runSteps(file), T + 7 * minute).slice(-1), ['● 1 background command: npm run dev · 6m 0s']);
+  writeAt(file, T + 8 * minute, [real.background([])]);
+  assert.equal(runSteps(file).some(step => step.kind === 'background'), false);
+  // A command that ended in the foreground was never one: task_started alone adds no line.
+  const plain = path.join(dir, 'plain.log');
+  writeAt(plain, T, [real.say({ type: 'tool_use', id: TEST, name: 'Bash', input: { command: 'npm test' } }), real.started('bumf0lxl0', TEST, 'npm test'), real.notified('bumf0lxl0', TEST, 'npm test'), real.result(TEST)]);
+  assert.deepEqual(runSteps(plain).map(step => step.kind), ['tool']);
+  // A task_notification ends a background command too.
+  const noted = path.join(dir, 'noted.log');
+  writeAt(noted, T, [real.started('bd27w0ond', WATCH, 'npm run watch', true), real.notified('bd27w0ond', WATCH, 'npm run watch', 'killed')]);
+  assert.deepEqual(runSteps(noted), []);
+});
+
+test('a run that ended leaves no call running: it was stopped there, a thought it counted is over, and its background commands are gone', () => {
+  const since = Date.UTC(2026, 10, 13, 10, 0, 0), steps = Object.freeze([{ kind: 'thinking', text: '', tokens: 1240, live: true }, { kind: 'tool', text: 'Read: src/coupon.mjs', status: 'ok' }, { kind: 'tool', text: 'Run: sleep 600', status: 'running', since }, { kind: 'background', text: 'npm run watch', count: 1, since }].map(Object.freeze));
+  const ended = endedSteps(steps, since + 130000);
+  assert.deepEqual(ended, [{ kind: 'thinking', text: '', tokens: 1240 }, { kind: 'tool', text: 'Read: src/coupon.mjs', status: 'ok' }, { kind: 'tool', text: 'Run: sleep 600', status: 'stopped', seconds: 130 }]);
+  assert.equal(endedSteps(steps, since + 130000), ended, 'the same list each time it is drawn');
+  assert.deepEqual(drawn(ended, since + 999999), ['✻ thought · 1.2k tokens', '✓ Read: src/coupon.mjs', '■ Run: sleep 600 · stopped after 2m 10s']);
+  assert.deepEqual(drawn(endedSteps(steps, NaN), since), ['✻ thought · 1.2k tokens', '✓ Read: src/coupon.mjs', '■ Run: sleep 600 · stopped'], 'an end with no time');
+  const done = Object.freeze([Object.freeze({ kind: 'tool', text: 'Read: a', status: 'ok' })]);
+  assert.equal(endedSteps(done, since), done, 'nothing to end');
+  assert.equal(stepsLine(5, 130, false, false, { stopped: true }), '▸ 5 steps in 2m 10s · stopped · ctrl+o shows them');
+  assert.ok(STEPS_LINE.test(stepsLine(1, null, true, false, { stopped: true })));
+});
+
+test('a turn that ended with no reply stays where it happened: before the message that came next, or after the last', () => {
+  const at = minute => new Date(Date.UTC(2026, 10, 13, 10, minute)).toISOString(), run = (role, start, end, extra = {}) => ({ role, startedAt: at(start), at: at(end), ...extra });
+  const old = run('lead', 0, 1), stopped = run('lead', 4, 6, { stopped: true }), answer = run('lead', 8, 9), last = run('lead', 11, 12, { stopped: true });
+  const first = { role: 'You', at: at(3), text: 'Run the tests' }, next = { role: 'You', at: at(7), text: 'Carry on' }, reply = { role: 'Opus', lead: true, at: at(9), text: 'They pass.' }, again = { role: 'You', at: at(10), text: 'Once more' };
+  const { owned, before, after, left } = runsOfEntries([first, next, reply, again], [old, stopped, answer, last]);
+  assert.deepEqual(owned.get(reply), [answer]);
+  assert.deepEqual([...before], [[next, [stopped]]], 'the stopped turn sits before the message that came after it');
+  assert.deepEqual(after, [last], 'the newest one, after everything');
+  assert.deepEqual(left, [old, stopped, last]);
+  assert.deepEqual(runsOfEntries([], [stopped]).after, [stopped]);
 });
