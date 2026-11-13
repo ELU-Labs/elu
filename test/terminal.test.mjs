@@ -3501,7 +3501,7 @@ test('Usage on a Mac: Antigravity says it is not signed in for ELU at once, c of
   for (const name of ['open', 'xdg-open']) fs.writeFileSync(path.join(openers, name), `#!/bin/sh\necho "$@" >> ${JSON.stringify(opened)}\n`, { mode: 0o755 });
   environment(t, { PATH: `${process.env.PATH}${path.delimiter}${openers}` });
   // Grok Build signed out, its login on: the owner never ran grok, so there is no ~/.grok.
-  fs.writeFileSync(fakeFile, JSON.stringify({ ...JSON.parse(fs.readFileSync(fakeFile, 'utf8')), grok: { login: true } }));
+  fs.writeFileSync(fakeFile, JSON.stringify({ ...JSON.parse(fs.readFileSync(fakeFile, 'utf8')), grok: { login: true, browser: true } }));
   fake.vendors = () => detect(p.root, { ...process.env, HOME: fake.home });
   // The sign-in as the terminal runs it, where the owner types the code once agy asks for it.
   const started = []; let v = null;
@@ -3510,11 +3510,11 @@ test('Usage on a Mac: Antigravity says it is not signed in for ELU at once, c of
   fake.spawn = (bin, args, options) => {
     const row = { args, stdio: options.stdio, home: options.env.HOME, path: options.env.PATH, before: v.raw.length, during: null, printed: '', signals: listening() }; started.push(row);
     const child = spawn(bin, args, { env: options.env, stdio: ['pipe', 'pipe', 'pipe'] });
-    // agy asks for the code the browser shows; grok login for Enter once the browser is done.
+    // agy asks for the code the browser shows; grok login waits until the owner confirms its code in the browser.
     const read = chunk => {
       row.printed += chunk; if (row.typed) return;
-      const answer = /paste the authorization code here and press Enter:/.test(row.printed) ? '4/0AeanS0b-fake-code\n' : /Press Enter here when it has\./.test(row.printed) ? '\n' : null;
-      if (answer) { row.typed = true; row.during = v.raw.length; child.stdin.write(answer); }
+      const code = /paste the authorization code here and press Enter:/.test(row.printed), approval = /Waiting for authorization\.\.\./.test(row.printed);
+      if (code || approval) { row.typed = true; row.during = v.raw.length; if (code) child.stdin.write('4/0AeanS0b-fake-code\n'); else fs.writeFileSync(path.join(p.dir, 'grok-approved'), ''); }
     };
     child.stdout.on('data', read); child.stderr.on('data', read);
     return child;
@@ -3568,7 +3568,7 @@ test('Usage on a Mac: Antigravity says it is not signed in for ELU at once, c of
   v.input.write('s');
   await until(() => /^Grok Build {2}signed in · needs a one-time check \(c runs it now\)$/m.test(text()), 'Grok signed in', 30000);
   assert.deepEqual([started[1].args, started[1].home], [['login'], path.join(personalDirectory(), 'grok-home')]);
-  assert.match(started[1].printed, /Waiting for the sign-in to finish in the browser\. Press Enter here when it has\.\nSigned in to Grok\./);
+  assert.match(started[1].printed, /Confirm this code in your browser:\n\n {2}FAKE-CODE\n[\s\S]*Waiting for authorization\.\.\.\nSigned in\.\n$/);
   assert.equal(fs.statSync(path.join(fake.home, '.grok', 'auth.json')).isFile(), true);
   assert.doesNotMatch(text(), /Grok Build is not signed in/);
   assert.match(status(), /Grok Build is signed in for ELU\./);

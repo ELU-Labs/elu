@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { temp, fakeClis } from './helpers.mjs';
 import * as agy from '../lib/adapters/agy.mjs';
 import * as grok from '../lib/adapters/grok.mjs';
@@ -213,9 +213,49 @@ test('Grok Build: s runs grok login under the HOME and GROK_HOME ELU runs it wit
   assert.equal(fs.statSync(path.join(m.home, '.grok')).mode & 0o777, 0o700, 'his ~/.grok, made as grok makes it');
   assert.deepEqual(command.args, ['login']);
   assert.equal(command.env.HOME, grok.privateHome()); assert.equal(command.env.GROK_HOME, grok.grokHome());
-  const signIn = spawnSync(row.bin, command.args, { env: command.env, input: '\n', encoding: 'utf8' });
-  assert.equal(signIn.status, 0, signIn.stderr);
+  // grok prints a link and a code, and waits until the owner confirms the code on that page; it reads no input.
+  const signIn = await new Promise(resolve => {
+    const child = spawn(row.bin, command.args, { env: command.env, stdio: ['ignore', 'pipe', 'pipe'] }); let printed = '', approved = false;
+    const read = chunk => { printed += chunk; if (!approved && /Waiting for authorization\.\.\./.test(printed)) { approved = true; fs.writeFileSync(path.join(m.fake.dir, 'grok-approved'), ''); } };
+    child.stdout.on('data', read); child.stderr.on('data', read); child.on('close', status => resolve({ status, printed }));
+  });
+  assert.equal(signIn.status, 0, signIn.printed);
+  assert.match(signIn.printed, /Confirm this code in your browser:\n\n {2}FAKE-CODE\n/);
   // Through ELU's link: the owner's own token file, which his own grok reads too.
   assert.equal(fs.existsSync(path.join(m.home, '.grok', 'auth.json')), true);
+  assert.deepEqual(await grok.readSignIn({ env: m.env }), { signedIn: true, reason: null });
+});
+
+// Which way grok writes auth.json was not watched. Written in place, the token goes through
+// ELU's link into the owner's own file (above). Written as a new file moved over the link, it
+// stays in ELU's Grok home, where ELU's runs read it; the owner's own sign-in wins once it is newer.
+test('Grok Build: a token written over ELU\'s link instead of through it signs every ELU run in, the check passes, and the owner\'s own newer sign-in takes its place', { timeout: 120000 }, async t => {
+  const m = machine(t, { grok: { login: true, tokenWrite: 'rename' } });
+  fs.rmSync(path.join(m.home, '.grok'), { recursive: true });
+  const command = grok.signInTerminal({ env: m.env }), row = await m.row('grok'), link = path.join(grok.grokHome(), 'auth.json'), real = path.join(m.home, '.grok', 'auth.json');
+  assert.equal(fs.readlinkSync(link), real);
+  const signIn = await new Promise(resolve => {
+    const child = spawn(row.bin, command.args, { env: command.env, stdio: ['ignore', 'pipe', 'pipe'] }); let printed = '', approved = false;
+    const read = chunk => { printed += chunk; if (!approved && /Waiting for authorization\.\.\./.test(printed)) { approved = true; fs.writeFileSync(path.join(m.fake.dir, 'grok-approved'), ''); } };
+    child.stdout.on('data', read); child.stderr.on('data', read); child.on('close', status => resolve({ status, printed }));
+  });
+  assert.equal(signIn.status, 0, signIn.printed);
+  // ELU's link is now a file of grok's own, and nothing is at the owner's place.
+  assert.equal(fs.lstatSync(link).isFile(), true); assert.equal(fs.existsSync(real), false);
+  assert.deepEqual(await grok.readSignIn({ env: m.env }), { signedIn: true, reason: null });
+  // Preparing a run keeps it, and the check runs its steps on it and passes.
+  grok.childEnv({ mode: 'ask', home: m.home }); assert.equal(fs.lstatSync(link).isFile(), true);
+  assert.equal(await checkOnFirstUse(row, { cwd: m.home, environment: m.env }), true);
+  assert.deepEqual(Object.entries(conformanceState('grok').steps).filter(([, status]) => status !== 'pass').map(([id]) => id), []);
+  assert.equal(fs.lstatSync(link).isFile(), true);
+  // The owner signs in in his terminal later: his file is the newer one, and ELU's runs use it through the link again.
+  const now = Math.floor(Date.now() / 1000); fs.utimesSync(link, now - 100, now - 100);
+  fs.writeFileSync(real, '{"token":"never-read"}\n', { mode: 0o600 });
+  grok.childEnv({ mode: 'ask', home: m.home });
+  assert.equal(fs.readlinkSync(link), real);
+  // A refresh written over the link after that is the newer one again, and is kept.
+  fs.utimesSync(real, now - 50, now - 50); fs.writeFileSync(`${link}.new`, '{"token":"never-read"}\n', { mode: 0o600 }); fs.renameSync(`${link}.new`, link);
+  grok.childEnv({ mode: 'ask', home: m.home });
+  assert.equal(fs.lstatSync(link).isFile(), true);
   assert.deepEqual(await grok.readSignIn({ env: m.env }), { signedIn: true, reason: null });
 });
