@@ -27,8 +27,9 @@ function environment(t, values) {
   const previous = Object.fromEntries(Object.keys(values).map(key => [key, process.env[key]])); Object.assign(process.env, values);
   t.after(() => { for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } });
 }
-function setup(t, mode = 'normal') {
-  const p = project(t), fake = fakeClis(p.parent, { mode });
+// commands: what the fake Claude Code runs in each turn that has the approval relay.
+function setup(t, mode = 'normal', { commands = undefined } = {}) {
+  const p = project(t), fake = fakeClis(p.parent, { mode, commands });
   environment(t, { ...fake.env, HOME: p.parent, GIT_AUTHOR_NAME: 'Test Owner', GIT_AUTHOR_EMAIL: 'owner@example.invalid', GIT_COMMITTER_NAME: 'Test Owner', GIT_COMMITTER_EMAIL: 'owner@example.invalid' });
   const work = path.join(p.parent, 'notes'); fs.mkdirSync(work);
   const controller = autoApprove(new ProjectController(projectFolder(p.root)));
@@ -461,6 +462,46 @@ test('an approval waiting for the owner is not quiet: the turn waits past the qu
   assert.ok(answered.length >= 1);
   assert.ok(task.runs.filter(run => run.role === 'lead').every(run => run.code === 0), 'the run was not stopped while it waited');
   assert.ok(['ready', 'unverified'].includes(task.state), task.error?.message);
+});
+
+// The owner's case: a long test run inside a turn prints nothing until it ends, and the
+// vendor prints nothing while it runs. The turn is working all the while.
+test('a command that runs silently inside a turn, longer than the quiet limit, does not stop it', async t => {
+  const f = setup(t, 'normal', { commands: ['sleep 4'] }); quickClock(t); f.controller.draftConfig.checks = [];
+  const started = Date.now(), task = await f.controller.ask('Normalize coupon codes', null, { permissions: 'full' }).finished;
+  assert.ok(['ready', 'unverified'].includes(task.state), task.error?.message);
+  assert.ok(Date.now() - started > 8000, 'the planning turn and the editing turn each ran the command for twice the quiet limit');
+  const leads = task.runs.filter(run => run.role === 'lead'); assert.ok(leads.length >= 2 && leads.every(run => run.code === 0));
+  assert.match(fs.readFileSync(leads.at(-1).logFile, 'utf8'), /"tool_result"/, 'the command reported its end');
+  assert.equal(fs.readFileSync(path.join(task.worktree, 'src/coupon.mjs'), 'utf8'), 'export const normalize = (value) => value.toUpperCase();\n');
+});
+
+test('a command that never ends still stops the turn at the cap, in one line', async t => {
+  const f = setup(t, 'normal', { commands: ['sleep 60'] }); quickClock(t, 1, 3); f.controller.draftConfig.checks = [];
+  const started = Date.now(), run = f.controller.ask('Normalize coupon codes', null, { permissions: 'full' });
+  await assert.rejects(run.finished, /Stopped after 3 seconds, the most one turn may run\. /);
+  assert.ok(Date.now() - started < 30000, 'stopped by the cap, not by the command ending');
+  assert.doesNotMatch(readTask(f.controller.repo, run.id).error.message, /no output/);
+});
+
+// A check is a command too: one that prints nothing for long, such as a slow test suite, is
+// working. timeoutSeconds is the quiet limit of the model's turn; it no longer cuts a check.
+test('a check that prints nothing for longer than the quiet limit and timeoutSeconds passes', async t => {
+  const f = setup(t); quickClock(t, 1);
+  f.controller.draftConfig.roles.lead.timeoutSeconds = 1; f.controller.draftConfig.checks = [{ name: 'slow-tests', command: ['sh', '-c', 'sleep 3'] }];
+  const task = await f.controller.ask('Normalize coupon codes', null, { permissions: 'full' }).finished;
+  const check = task.evidence.results.find(row => row.name === 'slow-tests');
+  assert.deepEqual([check.status, check.details], ['passed', undefined], JSON.stringify(check));
+  assert.equal(task.state, 'ready', task.error?.message);
+});
+
+test('a check that never ends is stopped at the cap of a turn and says so', async t => {
+  const f = setup(t); quickClock(t, 1, 3);
+  f.controller.draftConfig.checks = [{ name: 'endless-tests', command: ['sh', '-c', 'sleep 60'] }];
+  const started = Date.now(), task = await f.controller.ask('Normalize coupon codes', null, { permissions: 'full' }).finished;
+  const check = task.evidence.results.find(row => row.name === 'endless-tests');
+  assert.deepEqual([check.status, check.details], ['failed', ['Stopped after 3 seconds, the most one check may run.']], JSON.stringify(check));
+  assert.ok(Date.now() - started < 40000, 'stopped by the cap, not by the command ending');
 });
 
 test('bypassPermissions never asks: a full session touches without an approval', async t => {

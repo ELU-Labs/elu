@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { project, fakeClis, config, approveProjectFiles } from './helpers.mjs';
+import { project, fakeClis, config, approveProjectFiles, approvingConductor } from './helpers.mjs';
 import { repository } from '../lib/git.mjs';
 import { projectSnapshot, registerProject } from '../lib/projects.mjs';
 import { saveTask } from '../lib/state.mjs';
@@ -370,7 +370,9 @@ function quickClock(t, quietSeconds, capSeconds) {
   const before = { ...turnClock }; Object.assign(turnClock, { quietSeconds, capSeconds }); t.after(() => Object.assign(turnClock, before));
 }
 
-test('a check that stops making progress is stopped and retried once; a quiet model turn is left to its own limits', async t => {
+// A check and a model's turn both have their own limits (lib/turn-limits.mjs): a check that
+// prints nothing, such as a slow test suite, is working, and so is a turn running one.
+test('a quiet check, like a quiet model turn, is left to its own limits; one quiet past the cap is stopped and retried once', async t => {
   const p = setup(t), conductor = new Conductor({ stallMs: 50 }), stops = [];
   const controller = { repo: p.repo, stop: async (id, message) => { stops.push([id, message]); } };
   const sent = enqueue(p.root, 'Run the checks'); updateRequest(p.root, sent.id, { state: 'running' });
@@ -381,10 +383,28 @@ test('a check that stops making progress is stopped and retried once; a quiet mo
     conductor.runs.set(id, { root: p.root, requestId: id === '1' ? sent.id : null, taskId: id, goal: 'Run the checks', origin: null, attempts: 0, controller, quietSince: Date.now(), mark: null });
   }
   conductor.watch(); await new Promise(resolve => setTimeout(resolve, 120)); conductor.watch();
-  assert.deepEqual(stops, [['1', 'No progress for 1 minutes. Retrying.']], 'only the check; the model turns are the runner\'s to stop');
+  assert.deepEqual(stops, [], 'past the stall time, none is stopped: each is its own limits\' to stop');
+  // Quiet for a minute past the cap, which neither the runner nor the checks let happen.
+  for (const run of conductor.runs.values()) run.quietSince -= (turnClock.capSeconds + 61) * 1000;
+  conductor.watch();
+  assert.deepEqual(stops, ['1', '2', '3'].map(id => [id, 'No progress for 121 minutes. Retrying.']));
   const checks = conductor.runs.get('1'); conductor.finish(checks, new Error('Stopped.'));
   const retried = request(p.root, sent.id);
   assert.deepEqual([retried.state, retried.attempts, retried.continuationTaskId, retried.reason], ['queued', 1, '1', 'It stopped making progress. Retrying.']);
+});
+
+// The owner's case, through the conductor: the project's test suite runs as a check and prints
+// nothing for longer than the stall time.
+test('a check that prints nothing for longer than the stall time runs to its end and passes', async t => {
+  const p = setup(t, 'normal');
+  config(p.root, value => { value.checks = [{ name: 'slow-tests', command: ['sh', '-c', 'sleep 2'] }]; return value; }); approveProjectFiles(p.root);
+  const sent = enqueue(p.root, 'Normalize coupon codes', { permissions: 'full' });
+  const conductor = approvingConductor(new Conductor({ tickMs: 20, stallMs: 300 })); LIVE.get(t).push(conductor); conductor.start();
+  await until(() => request(p.root, sent.id)?.state === 'done', 'the finished request', 30000);
+  const done = request(p.root, sent.id), finished = task(p.repo, done.taskId);
+  assert.equal(done.attempts ?? 0, 0, 'not stopped and retried');
+  assert.equal(finished.state, 'ready', JSON.stringify(finished.error));
+  assert.equal(finished.evidence.results.find(row => row.name === 'slow-tests').status, 'passed');
 });
 
 test('a Claude turn that prints nothing is stopped by its quiet limit in one line, and not retried', async t => {

@@ -157,7 +157,9 @@ const promptTool=args.includes('--permission-prompt-tool')?args[args.indexOf('--
 // commands (fake.json): what the model runs this turn, in a session with permissions. Each starts
 // the way the real CLI starts one: a shell whose PATH was built again with the system folders
 // first (its snapshot of the owner's shell setup), then the script named in CLAUDE_ENV_FILE,
-// read once, then the command. A command that fails is shown with its exit code.
+// read once, then the command. The tool call is printed before the command runs and its
+// result after, as the real CLI prints them, with nothing between however long it takes.
+// A command that fails is shown with its exit code.
 // note (fake.json): the real CLI writes a note of its working folder after each command, in
 // <CLAUDE_CODE_TMPDIR, or /tmp>/claude-<uid>, and goes back to /tmp when that path is longer
 // than 44 bytes. Its sandbox, as ELU sets it for every mode but Full access, denies writes
@@ -188,8 +190,7 @@ function fenceArgs(fenced){
 if(Array.isArray(cfg.commands)&&promptTool){
  const {spawnSync}=await import('node:child_process');const named=process.env.CLAUDE_ENV_FILE;const ahead=named&&fs.existsSync(named)?fs.readFileSync(named,'utf8').trim():'';
  const fenced=cfg.fence&&sandbox?.enabled===true&&spawnSync('bwrap',['--version']).status===0;
- cfg.commands.forEach((command,i)=>{const id=`toolu_fake_${i+1}`;const script=['-c',`PATH="/usr/bin:/bin:$PATH"\n${ahead}\neval "$1"`,'sh',command];const r=fenced?spawnSync('bwrap',[...fenceArgs(sandbox.filesystem??{}),'/bin/sh',...script],{env:process.env,encoding:'utf8'}):spawnSync('/bin/sh',script,{env:process.env,encoding:'utf8'});const denied=noted(i+1);if(denied&&r.status===0)r.status=1;const out=`${r.stdout}${r.stderr}${denied}`;
-  console.log(JSON.stringify({type:'assistant',message:{content:[{type:'tool_use',id,name:'Bash',input:{command,description:'Run it'}}]}}));
+ cfg.commands.forEach((command,i)=>{const id=`toolu_fake_${i+1}`;const script=['-c',`PATH="/usr/bin:/bin:$PATH"\n${ahead}\neval "$1"`,'sh',command];console.log(JSON.stringify({type:'assistant',message:{content:[{type:'tool_use',id,name:'Bash',input:{command,description:'Run it'}}]}}));const r=fenced?spawnSync('bwrap',[...fenceArgs(sandbox.filesystem??{}),'/bin/sh',...script],{env:process.env,encoding:'utf8'}):spawnSync('/bin/sh',script,{env:process.env,encoding:'utf8'});const denied=noted(i+1);if(denied&&r.status===0)r.status=1;const out=`${r.stdout}${r.stderr}${denied}`;
   console.log(JSON.stringify({type:'user',message:{content:[{type:'tool_result',tool_use_id:id,content:r.status===0?out:`Exit code ${r.status}\n${out}`,...(r.status===0?{}:{is_error:true})}]}}));});
 }
 // network (fake.json): hosts a sandboxed command of this turn connects to, in order. As in the real
