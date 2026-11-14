@@ -1447,6 +1447,18 @@ test('at 80x24 what a key on a bot\'s page just did shows under the page, not be
   assert.deepEqual(drawn(), ['› @nightly does not run by itself.']);
 });
 
+test('sessions an earlier version still finishes are named in the status line when its conductor hands over just after the app opens', { timeout: 30000 }, async t => {
+  const p = setup(t), { conductorFolder } = await import('../lib/conductor-files.mjs'), { VERSION } = await import('../lib/conductor.mjs');
+  const v = await view(t, { repo: p.repo }), panels = v.current.panels, said = () => panels.status.getScreenLines().map(row => row.trim()).join(' ');
+  await new Promise(resolve => setTimeout(resolve, 300));
+  assert.doesNotMatch(said(), /started before the update/, 'nothing to name as it opens');
+  // The conductor from before the update lets go a moment later: its session is now one that finishes on that version.
+  const id = '0f0e0d0c-0b0a-4990-8807-060504030201', file = path.join(conductorFolder(), `draining-${id}.json`);
+  fs.mkdirSync(conductorFolder(), { recursive: true }); fs.writeFileSync(file, JSON.stringify({ id, pid: process.pid, version: '0.0.1', runs: [{ root: p.root, requestId: 'r1' }], heartbeatAt: new Date().toISOString() }));
+  resources(t).files.push(() => fs.rmSync(file, { force: true }));
+  await until(() => said() === `› 1 session started before the update finishes on 0.0.1. New ones start on ${VERSION}.`, 'the note', 5000);
+});
+
 test('Tasks reads every project without writing or starting a vendor', async t => {
   const one = setup(t), two = project(t); assert.equal(cli(two.root, ['init', '--yes'], one.env).status, 0);
   registerProject(one.repo); registerProject(repository(two.root));
