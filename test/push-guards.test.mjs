@@ -254,3 +254,30 @@ test('Ctrl-C stops the command line\'s push and its guard; a push left by an ELU
   const gone = readTask(p.repo, '1'); gone.pushRun = { ...record, at: new Date().toISOString() }; saveTask(p.repo, gone);
   assert.equal(pushStopNote(projectSnapshot(p.repo).tasks.find(row => row.id === '1')), 'ELU closed during the push, so it may not have finished: /publish pushes it again.');
 });
+
+// A look that finds the session's lock held, as while another ELU works in it, cannot settle a
+// push a killed ELU left. It leaves the push to a later look, so an ELU that stays open (the
+// login item's schedule tick) settles it once the lock frees, not only an ELU opened after.
+test("a push left by a killed ELU is settled by the same open ELU once the session's lock frees", { timeout: 120000 }, async t => {
+  const p = guarded(t, busyGuard), env = { ...process.env, ...p.fake.env, PATH: process.env.PATH }; ownFolder(t, p);
+  const plan = await preparePublish(p.repo, p.task);
+  const run = spawn(process.execPath, [CLI, 'run', '1', '--publish', '--approve-push', plan.confirmationId, '--json'], { cwd: p.root, env, stdio: 'ignore' });
+  t.after(() => { try { run.kill('SIGKILL'); } catch { /* Ended. */ } });
+  await until(() => guardPid(p), 'the guard to start');
+  const guard = guardPid(p), record = readTask(p.repo, '1').pushRun;
+  assert.ok(record?.pid);
+  await new Promise(resolve => { run.on('close', resolve); run.kill('SIGKILL'); });
+  // Another ELU holds the session's lock.
+  const holder = spawn(process.execPath, ['--input-type=module', '-e', `import { lock } from ${JSON.stringify(new URL('../lib/state.mjs', import.meta.url).href)}; lock({ state: ${JSON.stringify(p.repo.state)} }, 'task-1'); console.log('held'); setInterval(() => {}, 1000);`], { stdio: ['ignore', 'pipe', 'inherit'] });
+  t.after(() => { try { holder.kill('SIGKILL'); } catch { /* Ended. */ } });
+  await new Promise(resolve => holder.stdout.once('data', resolve));
+  const left = () => projectSnapshot(p.repo).tasks.find(row => row.id === '1');
+  assert.ok(left().pushRun, 'left while another ELU holds the session');
+  assert.equal(pushStopNote(left()), null); assert.equal(alive(guard), true);
+  // The lock frees: the same process settles the push on a later look.
+  await new Promise(resolve => { holder.on('close', resolve); holder.kill('SIGKILL'); });
+  await until(() => !left().pushRun, 'the push to be settled', 15000);
+  assert.equal(pushStopNote(left()), 'ELU closed during the push, before its pre-push guard finished. Nothing was pushed.');
+  await until(() => !alive(guard) && !alive(record.pid), 'git and the guard to end', 5000);
+  assert.equal(p.pushed(), false); lock(p.repo, 'task-1')();
+});
