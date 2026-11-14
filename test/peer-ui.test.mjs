@@ -479,7 +479,7 @@ test('a thread dialog acts on the letter it names, only while its field is empty
   await until(() => threads.items.length === 5, 'threads');
   const open = async (list, pattern, title, hint) => { list.focus(); selectRow(list, pattern); v.input.write('\r'); await until(() => modal(v, title) && v.text().includes(hint), hint); };
   // Enter reads an ask; w in the dialog opens the picker, Enter starts it in the picked mode.
-  await open(threads, /asks you/, 'Thread with @sara', 'y approves: it starts now, as if you typed it. w picks the mode first. n declines.');
+  await open(threads, /asks you/, 'Thread with @sara', 'y starts it now, as if you typed it. w picks the mode first. n declines.');
   v.input.write('w'); await until(() => modal(v, 'Accept'), 'accept picker'); v.input.write('\r');
   // The daemon runs it as the owner's session in the picked mode; the dialog only sends the command.
   await until(() => peer.sent().some(row => row.type === 'work' && row.id === 'incoming:task-ask' && row.permissions === 'ask'), 'ask accepted from the dialog');
