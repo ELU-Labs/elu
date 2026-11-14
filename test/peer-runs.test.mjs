@@ -62,9 +62,12 @@ function setup(t, mode = 'normal') {
   const inputs = path.join(p.parent, 'inputs.jsonl'), extra = path.join(p.parent, 'extra.json');
   const file = path.join(fake.dir, 'claude'); let script = fs.readFileSync(file, 'utf8');
   const read = 'else for await (const chunk of process.stdin) input+=chunk;', mark = "const session='12345678";
-  assert.ok(script.includes(read) && script.includes(mark), 'helpers.mjs fake CLI changed shape');
+  // The cost of the turn's own answer: the result the stand-in ends with, not the one a turn
+  // cut short prints, nor the one that answers a message taken in while it worked.
+  const answer = "console.log(JSON.stringify({type:'result',is_error:false,session_id:session,total_cost_usd:0";
+  assert.ok(script.includes(read) && script.includes(mark) && script.includes(answer), 'helpers.mjs fake CLI changed shape');
   script = script.replace(read, `${read}\nconst extra=fs.existsSync(${JSON.stringify(extra)})?JSON.parse(fs.readFileSync(${JSON.stringify(extra)},'utf8')):{};`)
-    .replace('total_cost_usd:0', 'total_cost_usd:extra.cost??0').replace(mark, `if(extra.slow)await new Promise(resolve=>setTimeout(resolve,extra.slow));if(extra.intent&&schema?.properties?.intent)result.intent=extra.intent;if(schema?.properties?.asks)result.asks=extra.asks??[];if(extra.summary)result.summary=extra.summary;if(extra.workQuestion&&!conversation){result.outcome='needs_input';result.question='Shall I go on?';result.choices=[];}\n${mark}`);
+    .replace(answer, `${answer.slice(0, -1)}extra.cost??0`).replace(mark, `if(extra.slow)await new Promise(resolve=>setTimeout(resolve,extra.slow));if(extra.intent&&schema?.properties?.intent)result.intent=extra.intent;if(schema?.properties?.asks)result.asks=extra.asks??[];if(extra.summary)result.summary=extra.summary;if(extra.workQuestion&&!conversation){result.outcome='needs_input';result.question='Shall I go on?';result.choices=[];}\n${mark}`);
   fs.writeFileSync(file, script, { mode: 0o755 });
   const previous = { PATH: process.env.PATH, XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME };
   Object.assign(process.env, fake.env);

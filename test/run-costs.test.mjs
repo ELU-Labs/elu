@@ -60,6 +60,26 @@ test('runs recorded before 0.1.20 cost what each added, in the helper, a Session
   assert.deepEqual(spend.runCosts(null), []); assert.deepEqual(spend.runCosts({ runs: [null, 'x'] }), [null, null]);
 });
 
+// Antigravity and Grok Build over ACP send a turn's tokens with its answer. They count where
+// every run's spend is worked out: from the run's record, and from its log for a run recorded
+// without them. Neither vendor reports a cost.
+test('a run over ACP counts the tokens its vendor sent with the turn where runs are added up, and no cost', t => {
+  const log = logs(t), answer = result => ({ jsonrpc: '2.0', id: 4, result });
+  const runs = [
+    { role: 'lead', vendor: 'agy', at: AT, code: 0, costUsd: null, model: 'gemini-3-flash', tokens: counted([1200, 120, 200, 10]), logFile: log('lead-1.log', [answer({ stopReason: 'end_turn', usage: { inputTokens: 1200, outputTokens: 120, cachedReadTokens: 200, cachedWriteTokens: 10 } })]) },
+    { role: 'lead', vendor: 'agy', at: AT, code: 0, costUsd: null, logFile: log('lead-2.log', [answer({ stopReason: 'end_turn', usage: { inputTokens: 7, outputTokens: 2 } })]) },
+    { role: 'lead', vendor: 'grok', at: AT, code: 0, costUsd: null, logFile: log('lead-3.log', [answer({ stopReason: 'end_turn', _meta: { usage: { inputTokens: 40, outputTokens: 5, cachedReadTokens: 30 } } })]) },
+    // A turn whose answer carried no tokens reports none, never zeros.
+    { role: 'lead', vendor: 'agy', at: AT, code: 0, costUsd: null, logFile: log('lead-4.log', [answer({ stopReason: 'end_turn' })]) },
+  ];
+  const task = { id: '1', goal: 'Checkout page', createdAt: AT, runs };
+  assert.deepEqual(spend.runSpends(task).map(row => row.tokens), [counted([1200, 120, 200, 10]), counted([7, 2, 0, 0]), counted([10, 5, 30, 0]), null]);
+  assert.deepEqual(spend.runCosts(task), [null, null, null, null]);
+  // The Usage tab's row adds them up, and says its cost is not reported.
+  const [row] = spend.agentSpend([{ root: '/work/shop', tasks: [task] }], { now: Date.parse(AT) + 60000 }).rows;
+  assert.deepEqual(row.tokens, counted([1217, 127, 230, 10])); assert.equal(row.costUsd, null); assert.equal(spend.costText(row), 'not reported');
+});
+
 function environment(t, values) {
   const previous = Object.fromEntries(Object.keys(values).map(key => [key, process.env[key]])); Object.assign(process.env, values);
   t.after(() => { for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } });
