@@ -2339,6 +2339,17 @@ test('a login item that could not be loaded is asked for again by the 30-second 
   check(); check(); assert.deepEqual(calls, ['install', 'install', 'install'], 'loaded now, and nothing moved');
 });
 
+test('a schedule saved while its login item cannot be loaded says so where it can be read, at 80 columns too', { timeout: 30000 }, async t => {
+  const p = setup(t), why = 'systemctl could not load the scheduler: Failed to connect to bus: No medium found';
+  const loginItem = { install: () => { throw new Error(why); }, uninstall: () => ({ removed: false }) };
+  const v = await view(t, { repo: p.repo, loginItem }), status = () => v.current.panels.status.getText().replace(/\s+/g, ' ');
+  // The message line holds two rows. What keeps the schedule from running while ELU is closed is said right after when it runs.
+  await send(v, '/schedule in 5m check the build'); await until(() => /Scheduled once/.test(status()), 'saved');
+  assert.equal(v.current.screen.width, 80); assert.match(status(), /^› Scheduled once \w{3} \w{3} \d+ \d+:\d\d\. It runs only while ELU is open: systemctl could/);
+  await wide(v); await send(v, '/schedule in 6m check the tests'); await until(() => /Scheduled once/.test(status()) && listSchedules().length === 2, 'saved wide');
+  assert.match(status(), new RegExp(`^› Scheduled once \\w{3} \\w{3} \\d+ \\d+:\\d\\d\\. It runs only while ELU is open: ${why}$`), 'the whole reason, with nothing after it');
+});
+
 test("a schedule taken off a bot on its page takes the login item with it at once, and one given back there brings it back", { timeout: 30000 }, async t => {
   const p = setup(t), calls = [];
   const loginItem = { install: () => { calls.push('install'); return { installed: true }; }, uninstall: () => { calls.push('uninstall'); return { removed: true }; } };
