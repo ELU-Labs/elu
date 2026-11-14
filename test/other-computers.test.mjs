@@ -18,6 +18,7 @@ import { applyTask, createAsk, getAsk, reconnect, tickAsks } from '../lib/peer/a
 import { peerItems } from '../lib/peer/index.mjs';
 import { peerCli } from '../lib/peer/cli.mjs';
 import * as visuals from '../lib/terminal-visuals.mjs';
+import { yourComputer } from '../lib/terminal-commands.mjs';
 
 const { clockTime, teamPanes, visible } = visuals, sentState = (...args) => visuals.sentState(...args);
 import { markMine, mineRows, noteTheirs } from '../lib/peer/mine.mjs';
@@ -121,11 +122,11 @@ function three(t, mode = 'slow-answer') {
   Object.assign(process.env, fake.env);
   t.after(() => { for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } });
   const repo = repository(p.root); registerProject(repo);
-  const laptop = { home: fake.env.XDG_CONFIG_HOME, identity: createIdentity({ name: 'ali' }) }, team = createTeam(laptop.identity, 'shop');
+  const laptop = { home: fake.env.XDG_CONFIG_HOME, identity: createIdentity({ name: 'ana' }) }, team = createTeam(laptop.identity, 'shop');
   saveTeamAccess(team.id, { root: p.root, handling: 'auto' });
   const joins = () => {
-    const home = newHome(t), identity = withHome(home, () => createIdentity({ name: 'ali' }));
-    redeemCode(createInvite(laptop.identity, team.id, { hours: 1 }), identity.key, 'ali');
+    const home = newHome(t), identity = withHome(home, () => createIdentity({ name: 'ana' }));
+    redeemCode(createInvite(laptop.identity, team.id, { hours: 1 }), identity.key, 'ana');
     return { home, identity };
   };
   const devbox = joins(), studio = joins(), log = readLog(team.id).ops, all = [laptop, devbox, studio];
@@ -134,7 +135,7 @@ function three(t, mode = 'slow-answer') {
   // The laptop's daemon as far as a message goes; what it tells the sender reaches the studio as the wire would carry it.
   const online = new Map(), dialed = [], events = [];
   const sender = { me: studio.identity, session: key => online.get(key) ?? null, dial: key => dialed.push(key), event: text => events.push(text), kick: () => {} };
-  const receiver = { me: laptop.identity, kick: () => {}, event: () => {}, boxName: () => 'laptop', name: () => 'ali', push: (key, task) => { if (key === studio.identity.key && online.has(laptop.identity.key)) withHome(studio.home, () => applyTask(sender, laptop.identity.key, task)); } };
+  const receiver = { me: laptop.identity, kick: () => {}, event: () => {}, boxName: () => 'laptop', name: () => 'ana', push: (key, task) => { if (key === studio.identity.key && online.has(laptop.identity.key)) withHome(studio.home, () => applyTask(sender, laptop.identity.key, task)); } };
   const methods = intakeMethods(receiver);
   const wire = { request: async (method, params) => { const out = withHome(laptop.home, () => methods[method](params, { key: studio.identity.key })); return method === 'SendMessage' ? { task: out } : out; } };
   online.set(devbox.identity.key, { request: async () => { throw new Error('Not asked.'); } });
@@ -159,7 +160,7 @@ test('a message to a computer of mine that is not connected says so, then follow
   assert.ok(!line(sentAt + 61000).done);
   const waiting = threadRows(m, [{ ...m.item(ask.id), at: new Date(Date.now() - 61000).toISOString() }]);
   assert.deepEqual(waiting, ['→ you asked @laptop · Can you see this one?', '   ↳ not connected to @laptop yet (1m) · it goes as soon as it connects']);
-  assert.equal(boardRows([], sentAt + 61000, { items: [m.item(ask.id)], online: new Set([m.devbox.identity.key]) }).find(row => row.kind === 'peer').now, '@ali offline · will retry');
+  assert.equal(boardRows([], sentAt + 61000, { items: [m.item(ask.id)], online: new Set([m.devbox.identity.key]) }).find(row => row.kind === 'peer').now, '@ana offline · will retry');
   for (const text of [line(sentAt).text, line(sentAt + 61000).text, ...waiting]) assert.doesNotMatch(text, /waiting for it to confirm|\bpending\b/);
   // A minute later the laptop connects: the message goes by itself, and the line says when it got there.
   m.online.set(to, m.wire);
@@ -213,9 +214,22 @@ test('a message from another computer of mine whose session cannot start comes b
   const item = peerItems().find(value => value.kind === 'failed');
   assert.equal(item.reason, here); assert.equal(records().find(record => record.task.id === item.taskId).failure, here);
   assert.deepEqual(teamPanes({ status: { key: to, teams: [] }, agents: [], items: [{ ...item, name: 'studio' }] }, [30, 30, 400], false)[2].map(value => visible(value.line)), ['← @studio asks you · Can you see this one?', `   ↳ your model could not answer · ${here}`]);
+  // elu peers names the computer as elu mine does (the name its daemon heard), not the owner's name on the team, which all his computers share.
+  const heard = (one, names) => withHome(one.home, () => fs.writeFileSync(peerFile('state.json'), JSON.stringify({ key: one.identity.key, teams: [{ id: m.team.id, members: names.map(([other, box]) => ({ key: other.identity.key, box })) }] })));
+  heard(m.laptop, [[m.studio, 'studio'], [m.devbox, 'devbox']]); heard(m.studio, [[m.laptop, 'laptop'], [m.devbox, 'devbox']]);
   const told = await peerCli(['peers'], {});
-  assert.ok(told.lines.includes(`failed  @ali  Can you see this one? · ${here}`), told.lines.join('\n'));
+  assert.ok(told.lines.includes(`failed  @studio  Can you see this one? · ${here}`), told.lines.join('\n'));
   // The same command on the sender names the reason whole too.
   const there = await withHome(m.studio.home, () => peerCli(['peers'], {}));
-  assert.ok(there.lines.includes(`failed  @ali  Can you see this one? · ${why} Check that claude runs in your terminal on @laptop, then send it again.`), there.lines.join('\n'));
+  assert.ok(there.lines.includes(`failed  @laptop  Can you see this one? · ${why} Check that claude runs in your terminal on @laptop, then send it again.`), there.lines.join('\n'));
+});
+
+test('a computer of mine that has not confirmed while it is offline says offline, the reason, wherever the app says it waits', () => {
+  const D = 'd'.repeat(64), ME = 'k'.repeat(64);
+  const frame = online => ({ status: { key: ME, teams: [{ id: 'team-1', name: 'Core', members: [{ key: ME, name: 'ana' }, { key: D, name: 'devbox', online, path: 'direct', mine: true, waiting: true }] }] }, items: [] });
+  const bar = (online, width) => visuals.visible(visuals.chatBar(frame(online), width, false).find(row => row.value?.type === 'member').line).replace(/\s+/g, ' ').trim();
+  assert.deepEqual([bar(false, 78), bar(false, 40), bar(true, 78)], ['○ @devbox offline · not confirmed yet', '○ @devbox offline · unconfirmed', '● @devbox waiting for it to confirm']);
+  assert.deepEqual([yourComputer({ waiting: true, online: false }), yourComputer({ waiting: true, online: true }), yourComputer({ waiting: true }), yourComputer({ online: false })], ['your computer · offline, not confirmed yet', 'your computer · waiting for it to confirm', 'your computer · waiting for it to confirm', 'your computer']);
+  const glue = online => remoteGlue({ facade: { mineRows: () => [{ key: D, mine: true, theirs: false }], remoteSessions: () => [] }, peerRead: () => ({ key: ME, name: 'ana', box: 'laptop', teams: [{ members: [{ key: ME, name: 'ana' }, { key: D, name: 'ana', box: 'devbox', online }] }] }), peerCommand: async () => ({}), chatMessage: ({ text }) => text, ink: text => text, colour: false });
+  assert.deepEqual([glue(false).words(D), glue(true).words(D)], ['your computer · offline, not confirmed yet', 'your computer · waiting for it to confirm']);
 });
