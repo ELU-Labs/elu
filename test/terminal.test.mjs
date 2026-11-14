@@ -1965,6 +1965,20 @@ test('Tab cycles the areas and the command menu keeps focus in the message box',
   assert.equal(calls.some(call => call.args.includes('-p') || call.args[0] === 'exec'), false, 'navigation must not start a model');
 });
 
+// On the New session form's rows a letter is not a message, so / starts a command in the box
+// there, and the rest of what is typed follows it: /permissions full then sets the form.
+test('/ typed on the New session form starts a command in the box: /permissions full gives the form Full access', async t => {
+  const p = setup(t), v = await view(t, { repo: p.repo }), panels = v.current.panels;
+  const form = () => panels.composeList.items.map(item => item.getText().trimEnd().replace(/ {2,}/g, '  '));
+  await until(() => panels.ask.__listener && v.current.session === 'new', 'the form');
+  v.input.write('\t'); await until(() => v.current.screen.focused === panels.composeList, 'Tab reaches the form over the box');
+  v.type('/permissions full');
+  await until(() => panels.ask.getValue() === '/permissions full', 'the box holds the command');
+  assert.equal(v.current.screen.focused, panels.ask);
+  v.input.write('\r'); await dialog(v, 'Full access', 'y');
+  await until(() => form().some(row => /^Permissions  Full access/.test(row)), 'the form says Full access');
+});
+
 test('a new session opens beside the list; mouse and keys move between Sessions, Chats and the session', { timeout: 20000 }, async t => {
   const p = setup(t, 'answer'); delete process.env.NO_COLOR;
   const v = await view(t, { repo: p.repo }), frames = [];
@@ -5256,6 +5270,29 @@ test('Usage: Antigravity and Grok Build show their sign-in before their one-time
   // Signed out, Antigravity says how to sign in, after r.
   fs.writeFileSync(path.join(p.dir, 'fake.json'), JSON.stringify({ ...JSON.parse(fs.readFileSync(path.join(p.dir, 'fake.json'), 'utf8')), agy: { signedIn: false } }));
   v.input.write('r'); await until(() => /^Antigravity \(agy\) not signed in for ELU · s signs in$/m.test(text()), 'Antigravity signed out', 20000);
+});
+
+// A Usage line's letter acts at once (s signs in, a adds an account). / starts a command in the
+// box instead, as on a Sessions row, and every key after it goes there: /usage typed on
+// Antigravity's line runs /usage and never starts its sign-in. The same on Projects' rows.
+test('Usage: / on a line starts a command in the box, so /usage never reaches the line\'s s or a', { timeout: 30000 }, async t => {
+  const p = setup(t), signIns = [], fake = fakeUsage(t, { signIn: async ({ vendor }) => { signIns.push(vendor); } });
+  const v = await view(t, { repo: p.repo, usage: fake }), panels = v.current.panels, status = () => panels.status.getText();
+  const rowOf = pattern => panels.usageList.items.findIndex(item => pattern.test(item.getText()));
+  await send(v, '/usage'); await until(() => v.current.view === 'usage' && /Usage updated \d\d:\d\d/.test(status()), 'Usage tab');
+  panels.usageList.focus(); panels.usageList.select(rowOf(/^Antigravity \(agy\) not signed in/));
+  await until(() => v.current.screen.focused === panels.usageList && /s sign in/.test(panels.keys.getText()), 'on the Antigravity line');
+  v.type('/usage');
+  await until(() => panels.ask.getValue() === '/usage', 'the box holds the command');
+  assert.equal(v.current.screen.focused, panels.ask);
+  assert.deepEqual(signIns, []); assert.doesNotMatch(status(), /sign|account|install/i);
+  v.input.write('\r'); await until(() => panels.ask.getValue() === '' && v.current.view === 'usage', 'it ran');
+  assert.deepEqual(signIns, []); assert.doesNotMatch(status(), /sign|account|install/i);
+  // Projects' rows: o opens a project and c brings one in; /projects goes to the box.
+  await send(v, '/projects'); await until(() => v.current.view === 'projects', 'Projects');
+  panels.projectsList.focus(); await until(() => v.current.screen.focused === panels.projectsList, 'the list');
+  v.type('/projects'); await until(() => panels.ask.getValue() === '/projects' && v.current.screen.focused === panels.ask, 'typed on a project');
+  assert.equal(v.current.view, 'projects'); assert.ok(!v.current.screen.children.some(child => !child.destroyed && child.type === 'box' && child.options?.label && child !== panels.projectsBox && /Open|Bring/.test(child.options.label)), 'no dialog opened');
 });
 
 // The owner's Mac on 0.1.19: the temp folder is under /var, a link; Antigravity CLI is signed
