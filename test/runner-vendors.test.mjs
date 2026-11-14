@@ -301,7 +301,8 @@ test('a Grok Build turn over ACP whose command runs silently past the quiet limi
 const shown = steps => steps.map(step => [step.kind, step.text, ...(step.status ? [step.status] : []), ...(step.note ? [step.note] : [])]);
 test('a Codex run asks for its reasoning summary; its log shows the reasoning, the command that failed, its prose and its edit', async t => {
   const f = setup(t, 'codex', { mode: 'steps' });
-  const task = await f.controller.ask('Why do lower case coupons fail?', null, { permissions: 'auto' }).finished;
+  // Ask for approval: the session rests after this one turn, with its Task waiting, so the log read is that turn's.
+  const task = await f.controller.ask('Why do lower case coupons fail?', null, { permissions: 'ask' }).finished;
   const call = f.calls().find(call => call.args[0] === 'exec'), at = call.args.indexOf('model_reasoning_summary="auto"');
   assert.ok(at > 0 && call.args[at - 1] === '-c', 'the launch asks for the reasoning summary');
   assert.deepEqual(shown(runSteps(task.runs[0].logFile, { cwd: task.worktree })).slice(-4), [['thinking', '**Reading the coupon module**\n\nThe codes should compare in upper case.'], ['tool', 'Run: npm test', 'failed', 'exit 1'], ['text', 'The test fails on lower case codes. Fixing normalize.'], ['tool', 'Edit: src/coupon.mjs', 'ok']]);

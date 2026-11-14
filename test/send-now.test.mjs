@@ -269,7 +269,8 @@ test('a waiting message for Codex is sent now: the turn stops and the message st
   assert.equal(only(f).state, 'running');
   // Send now: the stop /stop sends. The waiting messages start the next turn at once, joined.
   sendCommand({ type: 'stop', root: f.root, taskId: '1' });
-  await until(() => f.calls('codex').length === 2 && only(f).state === 'answered', 'the next turn ran');
+  // Full access approves the Task that turn answers with, so its work goes on in the same thread and then ends.
+  await until(() => f.calls('codex').length >= 2 && !['running', 'preparing'].includes(only(f).state), 'the next turn ran', 40000);
   const [first, next] = f.calls('codex');
   assert.notEqual(first.args[1], 'resume');
   assert.deepEqual(next.args.slice(0, 3), ['exec', 'resume', '12345678-1234-4234-8234-123456789abc'], 'it went on in the thread that was stopped');

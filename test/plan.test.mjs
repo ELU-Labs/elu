@@ -6,7 +6,7 @@ import { temp, project, fakeClis, git } from './helpers.mjs';
 import { ProjectController } from '../lib/projects.mjs';
 import { projectFolder } from '../lib/workspace.mjs';
 import { readTask, setTitle, taskDir } from '../lib/state.mjs';
-import { TASK_LIMITS, approveTask, checkProposal, currentTask, planFile, planSchema, readPlanReply, rejectTask, reportProgress, sessionTasks, sharedTask, taskEta } from '../lib/plan.mjs';
+import { TASK_LIMITS, approveTask, approvesTasks, checkProposal, currentTask, planFile, planSchema, readPlanReply, rejectTask, reportProgress, saysYes, sessionTasks, sharedTask, taskEta, turnPlan } from '../lib/plan.mjs';
 import { conversationSchema } from '../lib/config.mjs';
 import { boardRows, rowBadge } from '../lib/board.mjs';
 import { clockTime, etaText, taskCard as drawCard, taskState } from '../lib/terminal-plan.mjs';
@@ -19,8 +19,9 @@ function environment(t, values) {
   t.after(() => { for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } });
 }
 // A project with one source file and a passing-after-the-edit test, and the stand-in vendors.
-function fixture(t, mode = 'normal', vendor = 'claude') {
-  const p = project(t), fake = fakeClis(p.parent, { mode });
+// more: anything else fake.json holds for the stand-ins (test/helpers.mjs fakeClis).
+function fixture(t, mode = 'normal', vendor = 'claude', more = {}) {
+  const p = project(t), fake = fakeClis(p.parent, { mode, ...more });
   environment(t, { ...fake.env, GIT_AUTHOR_NAME: 'Test Owner', GIT_AUTHOR_EMAIL: 'owner@example.invalid', GIT_COMMITTER_NAME: 'Test Owner', GIT_COMMITTER_EMAIL: 'owner@example.invalid' });
   const controller = new ProjectController(projectFolder(p.root)); controller.draftConfig.roles.lead.vendor = vendor;
   return { ...p, fake, controller, repo: controller.repo };
@@ -265,4 +266,153 @@ test('a Task saved before success criteria and estimates loads unchanged and rea
   const moved = reportProgress(f.repo, asked.id, { eta: 20 });
   assert.equal(moved.etaMinutes, 20); assert.equal(taskEta(moved), Date.parse(moved.etaAt) + 20 * 60000);
   assert.equal(reportProgress(f.repo, asked.id, {}), null, 'nothing to report changes nothing');
+});
+
+// Full access and Approve for me approve the Task for the owner (approvesTasks): it is written
+// and shown, nobody waits, and the agent is never told that somebody must approve.
+for (const [mode, name] of [['full', 'Full access'], ['auto', 'Approve for me']]) {
+  test(`${name}: a request for a code change writes its Task and does the work, and nobody approves`, async t => {
+    const f = fixture(t, 'normal', 'claude', { tells: true });
+    const done = await f.controller.ask('Uppercase coupon codes', null, { permissions: mode }).finished;
+    // One message of the owner's, one planning turn, one working turn: no key and no typed approval.
+    assert.notEqual(done.kind, 'conversation'); assert.equal(turns(done), 2);
+    assert.deepEqual(done.messages.filter(row => !row.from && !row.to && !row.quiet).map(row => row.text), ['Uppercase coupon codes']);
+    assert.match(fs.readFileSync(path.join(done.worktree, 'src/coupon.mjs'), 'utf8'), /toUpperCase/); assert.match(source(f), /=> value;/);
+    // The Task is on record as any other, approved by the mode, and done.
+    const task = currentTask(f.repo, done.id);
+    assert.deepEqual([task.title, task.state, task.approvedBy, task.startedBy, task.by, task.edit], ['Uppercase coupons', 'done', mode, 'owner', 'lead', null]); assert.ok(task.approvedAt); assert.deepEqual(task.met, [1, 2]);
+    assert.deepEqual([readTask(f.repo, done.id).title, readTask(f.repo, done.id).titleBy], ['Uppercase coupons', 'task']);
+    assert.equal(sharedTask(task).approvedBy, mode); assert.equal(sharedTask(task).edit, undefined);
+    assert.match(taskCard({ ...task, state: 'approved' }, { width: 70, colour: false }), new RegExp(`medium priority · low severity · approved by ${name}\n`));
+    // The planning turn was told the mode approves, never that the owner must, and it answered so.
+    const [first] = inputs(f), told = first.input;
+    assert.match(told, new RegExp(`This session runs with ${name}, which approves the Task: it is recorded as approved by ${name}, nobody has to approve it, and the work goes on at once\\.`));
+    assert.match(told, /Never tell the owner that a Task waits for approval and never ask them to approve one\./);
+    assert.doesNotMatch(told, /Plan first|change nothing in this turn|only after they approve|waits for the owner's approval/);
+    const work = inputs(f).find(row => row.input.includes('this turn does its work')).input;
+    assert.match(work, new RegExp(`This session's ${name} approved the Task below, and this turn does its work`)); assert.doesNotMatch(work, /The owner approved the Task below/);
+  });
+}
+
+test('Ask for approval keeps the approval: the Task waits, and a plainly typed yes in any words starts it', async t => {
+  const f = fixture(t, 'normal', 'claude', { tells: true });
+  const asked = await f.controller.ask('Uppercase coupon codes', null, { permissions: 'ask' }).finished;
+  assert.equal(asked.state, 'answered'); assert.equal(currentTask(f.repo, asked.id).state, 'proposed'); assert.match(source(f), /=> value;/);
+  assert.match(asked.result.summary, /One Task is below for your approval\./);
+  // The agent is told that the owner's own words approve, as the key does.
+  assert.match(inputs(f)[0].input, /The owner approves or rejects the Task, with a key or by saying so in a message, and the work starts only after they approve\./);
+  // A few words that all say go need no model turn: the work starts at once.
+  const done = await f.controller.ask('yes go ahead', asked.id).finished;
+  assert.notEqual(done.kind, 'conversation'); assert.equal(turns(done), 2); assert.equal(currentTask(f.repo, asked.id).state, 'done');
+  assert.equal(currentTask(f.repo, asked.id).approvedBy, undefined, 'the owner approved it, not the mode');
+  assert.match(fs.readFileSync(path.join(done.worktree, 'src/coupon.mjs'), 'utf8'), /toUpperCase/);
+  assert.match(inputs(f).find(row => row.input.includes('this turn does its work')).input, /The owner approved the Task below, and this turn does its work/);
+});
+
+test('an approval typed in other words is read by the turn that answers it, and the work starts after that reply', async t => {
+  const f = fixture(t);
+  const asked = await f.controller.ask('Uppercase coupon codes', null, { permissions: 'ask' }).finished;
+  // A question about the Task approves nothing: the turn is offered approved and leaves it false.
+  const still = await f.controller.ask('Is the coupon test part of this, and would you go ahead without it?', asked.id).finished;
+  assert.equal(still.state, 'answered'); assert.equal(currentTask(f.repo, asked.id).state, 'proposed'); assert.match(source(f), /=> value;/);
+  const offered = inputs(f).at(-1);
+  assert.match(offered.input, /A plain approval in their message counts, in any words \(yes go ahead, sounds good, do it\): then set approved to true and leave task empty/);
+  assert.equal(JSON.parse(offered.args[offered.args.indexOf('--json-schema') + 1]).properties.approved.type, 'boolean');
+  // His words approve it. They are no short yes, so the model reads them and says so; the editing turn follows with no key.
+  const text = 'That plan is what I wanted, so go ahead and keep the test as it is';
+  assert.equal(saysYes(text), false);
+  const done = await f.controller.ask(text, asked.id).finished;
+  assert.notEqual(done.kind, 'conversation'); assert.equal(turns(done), 4); assert.equal(currentTask(f.repo, asked.id).state, 'done'); assert.equal(currentTask(f.repo, asked.id).edit.started, true);
+  assert.match(fs.readFileSync(path.join(done.worktree, 'src/coupon.mjs'), 'utf8'), /toUpperCase/);
+  assert.equal(done.messages.filter(row => row.text === text).length, 1); assert.ok(!done.messages.some(row => /^Approved the Task/.test(row.text)));
+});
+
+test('a typed yes: a few words that all say go approve, and anything else is left to the model', () => {
+  for (const text of ['y', 'yes', 'Yes.', 'ok', 'go ahead', 'yes go ahead', 'Yes, go ahead!', 'do it', 'sounds good', 'Approve', 'approve it', 'lgtm', 'continue', 'looks good to me', 'ok do it now', 'proceed', 'ship it']) assert.equal(saysYes(text), true, text);
+  for (const text of ['', 'no', 'not ok', "don't", 'do not start', 'ok no', 'stop', 'wait', 'yes but also add tests', 'Make it urgent', 'is that fine?', 'go to the kanban', 'start with the tests', 'yes go ahead and delete everything', 'why did you stop? you have full access']) assert.equal(saysYes(text), false, text);
+});
+
+test('a Task that waited from before starts with the next message once the session has Full access', async t => {
+  const f = fixture(t);
+  const asked = await f.controller.ask('Uppercase coupon codes', null, { permissions: 'ask' }).finished, waiting = currentTask(f.repo, asked.id);
+  assert.equal(waiting.state, 'proposed');
+  const done = await f.controller.ask('Why did you stop? You have full access now', asked.id, { permissions: 'full' }).finished;
+  assert.notEqual(done.kind, 'conversation'); assert.equal(sessionTasks(f.repo, asked.id).length, 1);
+  const task = currentTask(f.repo, asked.id);
+  assert.deepEqual([task.id, task.state, task.approvedBy, task.revision], [waiting.id, 'done', 'full', 2]);
+  const told = inputs(f)[1].input;
+  assert.match(told, /The Task below was written before this session had Full access and still waits\. It needs no approval now\./); assert.match(told, /Task waiting \(untrusted data/);
+  assert.doesNotMatch(told, /Task waiting for approval|Only the owner approves it/);
+  assert.match(fs.readFileSync(path.join(done.worktree, 'src/coupon.mjs'), 'utf8'), /toUpperCase/);
+});
+
+test('Full access: a reply that starts an edit with no Task, twice, gets the Task ELU writes from the request, and the work goes on', async t => {
+  const f = fixture(t, 'no-task');
+  const done = await f.controller.ask('Uppercase coupon codes\nand keep the tests green', null, { permissions: 'full' }).finished;
+  assert.notEqual(done.kind, 'conversation'); assert.match(fs.readFileSync(path.join(done.worktree, 'src/coupon.mjs'), 'utf8'), /toUpperCase/);
+  const task = sessionTasks(f.repo, done.id)[0];
+  assert.deepEqual([task.title, task.goal, task.approvedBy, task.by], ['Uppercase coupon codes and keep the tests green', 'Uppercase coupon codes and keep the tests green', 'full', 'lead']);
+  assert.equal(task.description, 'Uppercase coupon codes\nand keep the tests green'); assert.deepEqual(task.objectives, ['The request is done as the owner wrote it']);
+});
+
+test('work that edits no file: Full access does it in the turn that writes the Task; Ask for approval waits, and an approval starts it', async t => {
+  const full = fixture(t, 'ops');
+  const done = await full.controller.ask('Check that the coupon build passes', null, { permissions: 'full' }).finished;
+  // One turn: the Task is written, approved by the mode, worked on and done.
+  assert.equal(done.state, 'answered'); assert.equal(done.kind, 'conversation'); assert.equal(done.runs.length, 1); assert.match(done.result.summary, /Ran the build check: it passed\./);
+  const task = currentTask(full.repo, done.id);
+  assert.deepEqual([task.title, task.state, task.approvedBy, task.met], ['Check the coupon build', 'done', 'full', [1, 2]]);
+  assert.match(inputs(full)[0].input, /Work that changes no repository file, such as running commands, reading logs or operating a tool, do now, in this turn, and report it in subtasks and objectivesMet\./);
+  const ask = fixture(t, 'ops');
+  const asked = await ask.controller.ask('Check that the coupon build passes', null, { permissions: 'ask' }).finished;
+  assert.equal(asked.state, 'answered'); assert.equal(currentTask(ask.repo, asked.id).state, 'proposed'); assert.match(asked.result.summary, /One Task is below for your approval\./);
+  const after = await ask.controller.ask('The plan is right, so go ahead with the check', asked.id).finished;
+  assert.equal(after.state, 'answered'); assert.equal(after.runs.length, 3); assert.equal(currentTask(ask.repo, asked.id).state, 'done'); assert.match(after.result.summary, /Ran the build check: it passed\./);
+  assert.ok(after.messages.some(row => row.text === 'Approved the Task: Check the coupon build'));
+});
+
+test("a session a teammate's message started keeps the owner's approval in every mode, and a schedule keeps its own rule", t => {
+  const dir = temp(t);
+  assert.equal(approvesTasks('full'), true); assert.equal(approvesTasks('auto'), true); assert.equal(approvesTasks('ask'), false); assert.equal(approvesTasks('locked'), false); assert.equal(approvesTasks(null), false);
+  const repo = { root: dir, common: path.join(dir, '.git') };
+  // The runner gives a teammate's session no mode here (mode: null), and an unattended turn keeps its own rule.
+  assert.equal(turnPlan(repo, '1', { mode: null, owner: false }).approves, null);
+  assert.equal(turnPlan(repo, '1', { mode: 'full', unattended: 'schedule' }).approves, null);
+  assert.equal(turnPlan(repo, '1', { mode: 'full', owner: true }).approves, 'full'); assert.equal(turnPlan(repo, '1', { mode: 'full', owner: true }).mayApprove, false);
+});
+
+test('a step that fails is the agent\'s to fix: it goes another way and the work ends done, after an approval and in Full access', async t => {
+  for (const mode of ['ask', 'full']) {
+    const f = fixture(t, 'normal', 'claude', { failStep: true });
+    let done = await f.controller.ask('Uppercase coupon codes', null, { permissions: mode }).finished;
+    if (mode === 'ask') done = await f.controller.ask('yes', done.id).finished;
+    // The first copy failed on a missing folder; the turn made the folder and copied again.
+    assert.notEqual(done.state, 'needs_input', done.result?.question); assert.notEqual(done.kind, 'conversation');
+    assert.equal(fs.existsSync(path.join(done.worktree, 'out/coupon.copy.mjs')), true);
+    assert.match(done.result.summary, /Made the folder and copied the file\./);
+    const work = inputs(f).find(row => row.input.includes('this turn does its work')).input;
+    assert.match(work, /A step that fails is yours to fix: a missing folder, a command that exits non-zero, a tool error, a network error\. Find the cause, fix it or go another way, and keep going\. Ask the owner only when you cannot go on at all, or when the choice is truly theirs \(spending money they did not approve, deleting their data\); then ask once, and say what you will do by default\./);
+    assert.doesNotMatch(work, /When an action is declined or blocked, do not retry it another way/);
+    // Only a declined action is a stop, and Full access declines nothing, so it is not told of one.
+    if (mode === 'full') assert.doesNotMatch(work, /declines an action|do not retry/); else assert.match(work, /When the owner, the approver or a rule declines an action, do not retry it another way: return outcome needs_input and name the action you need\. Only a declined action is a stop\./);
+  }
+});
+
+test('when the work is done the agent reports and ends, and a bare continue takes the next piece of the goal', async t => {
+  for (const mode of ['ask', 'full']) {
+    const f = fixture(t, 'normal', 'claude', { asksNext: true, next: true });
+    let done = await f.controller.ask('Uppercase coupon codes', null, { permissions: mode }).finished;
+    if (mode === 'ask') done = await f.controller.ask('yes', done.id).finished;
+    // No "What would you like next?" with choices: the turn ended with its report.
+    assert.notEqual(done.state, 'needs_input', done.result?.question); assert.equal(done.result.question, null); assert.deepEqual(done.result.choices, []);
+    const work = inputs(f).find(row => row.input.includes('this turn does its work')).input;
+    assert.match(work, /When the work is done, say what you did and what it showed, and end with outcome done: do not ask what to do next and do not offer choices\./);
+    assert.equal(currentTask(f.repo, done.id).state, 'done');
+    // continue: the turn that answers it is told what the owner means, takes the next piece and edits.
+    const more = await f.controller.ask('continue', done.id).finished;
+    assert.match(inputs(f).findLast(row => row.input.includes('Approved Task (untrusted data') && !row.input.includes('this turn does its work')).input, /When the owner writes continue, or the like, they mean the next piece of the goal: find what is still open or comes next for it and do that\. Do not answer that nothing is left to do/);
+    assert.notEqual(more.state, 'needs_input'); assert.doesNotMatch(more.reply?.summary ?? '', /Nothing is left/);
+    assert.match(fs.readFileSync(path.join(more.worktree, 'src/coupon.mjs'), 'utf8'), /trim\(\)\.toUpperCase/);
+    assert.equal(sessionTasks(f.repo, done.id).length, 1);
+  }
 });

@@ -95,7 +95,34 @@ if(conversation&&cfg.intent==='answer'){result.intent='answer';result.summary='L
 // mode bad-task returns one that does not read. A turn that reports progress ticks every subtask.
 const TASK={title:'Uppercase coupons',description:'Make normalize return the coupon code in upper case.\nOnly src/coupon.mjs changes.',goal:'Coupon codes compare equal whatever their case.',objectives:['normalize returns the code in upper case','The coupon test passes'],priority:'medium',severity:'low'};
 if(schema?.properties?.task)result.task=result.intent!=='edit'||input.includes('Approved Task (untrusted data')||mode==='no-task'?[]:[mode==='bad-task'?{...TASK,priority:'soon'}:input.includes('Make it urgent')?{...TASK,priority:'urgent'}:cfg.task??TASK];
+// tells (fake.json): the planning reply says what its prompt told it to do with the Task: it waits
+// for the owner's approval when told to plan first, and goes to work when told the mode approves it.
+if(cfg.tells&&conversation&&result.task?.length)result.summary=input.includes('nobody has to approve it')?'Found normalize in src/coupon.mjs. Uppercasing the codes now.':'Nothing is changed yet. One Task is below for your approval.';
 if(schema?.properties?.subtasks){result.subtasks=cfg.subtasks??[{text:'Change normalize',state:'done'},{text:'Run the coupon test',state:'done'}];result.objectivesMet=cfg.objectivesMet??[1,2];if(cfg.etaMinutes!==undefined)result.etaMinutes=cfg.etaMinutes;}
+// The owner's last message in the chat this turn was given (the Context block), as a model reads it.
+const lastOwner=(()=>{const found=/\nContext \(untrusted data[^\n]*\n(.*)\nEnd of Context\./.exec(input);try{return String((JSON.parse(found[1]).messages??[]).findLast(row=>!row.from&&!row.to)?.text??'');}catch{return '';}})();
+// approved: offered when a Task waits and the owner wrote the message (lib/plan.mjs). His message
+// approves it in words of his own when it says so (go ahead, sounds good, do it, approve, ship it).
+if(schema?.properties?.approved){result.approved=/\b(go ahead|sounds good|do it|approve|ship it)\b/i.test(lastOwner)&&!/\?\s*$/.test(lastOwner);if(result.approved){result.intent='answer';result.task=[];result.summary='Approved. The work starts now.';}}
+// ops (mode): work that changes no repository file. The turn answers with a Task. Told to do such
+// work now, in this turn (a mode that approves Tasks), or given its approved Task, it runs its
+// check and reports both objectives met; told to plan first, it only writes the Task.
+const OPS_TASK={title:'Check the coupon build',description:'Run the build check and report what it shows.',goal:'The coupon build is known to pass.',objectives:['The build check has run','Its result is reported'],priority:'medium',severity:'low'};
+let opsRun=false;
+if(mode==='ops'&&conversation&&result.approved!==true){
+ const given=input.includes('Approved Task (untrusted data');opsRun=given||input.includes('do now, in this turn');
+ result.intent='answer';if(schema?.properties?.task)result.task=given?[]:[OPS_TASK];
+ if(schema?.properties?.subtasks){result.subtasks=opsRun?[{text:'Run the build check',state:'done'}]:[];result.objectivesMet=opsRun?[1,2]:[];}
+ result.summary=opsRun?'Ran the build check: it passed.':'Nothing is changed yet. One Task is below for your approval.';
+}
+// next (fake.json): what the turn that answers a bare continue does. Told that continue means
+// the next piece of the goal, it takes it (intent edit, and its editing turn trims spaces too);
+// not told, it answers that nothing is left, as a model that waits to be asked does.
+const continued=/^continue\b/i.test(lastOwner.trim());
+if(cfg.next&&conversation&&continued){
+ if(input.includes('they mean the next piece of the goal')){result.intent='edit';result.summary='Next for the goal: trim spaces before the code is compared.';if(schema?.properties?.task)result.task=[];}
+ else{result.intent='answer';result.summary='Nothing is left that I can do.';if(schema?.properties?.task)result.task=[];}
+}
 const session='12345678-1234-4234-8234-123456789abc';
 // badReply (fake.json): 'once' gives a reply that cannot be read until the session is asked again; 'lost' also
 // refuses that session, as the real one does a session it cannot find, and reads well once the message starts over.
@@ -243,7 +270,24 @@ if(edit&&cfg.install===true&&!fs.existsSync('node_modules/pkg')){
 if(edit&&cfg.install==='link'){try{fs.lstatSync('tool-link');}catch{fs.symlinkSync('src/coupon.mjs','tool-link');}}
 // insert (fake.json): { file, at, text }, lines an editing turn also puts in that file after line at, once.
 if(edit&&cfg.insert){const {file,at,text}=cfg.insert;const lines=fs.readFileSync(file,'utf8').split('\n');if(!lines.includes(text.split('\n')[0]))fs.writeFileSync(file,[...lines.slice(0,at),text,...lines.slice(at)].join('\n'));}
-if(edit&&input.includes('Trim spaces'))fs.writeFileSync('src/coupon.mjs','export const normalize = (value) => value.trim().toUpperCase();\n');
+if(edit&&(input.includes('Trim spaces')||cfg.next&&continued))fs.writeFileSync('src/coupon.mjs','export const normalize = (value) => value.trim().toUpperCase();\n');
+// A command of this turn as the real CLI prints it: the call, then its result, with the exit code when it failed.
+const step=async(id,command)=>{const {spawnSync}=await import('node:child_process');say({type:'assistant',message:{content:[{type:'tool_use',id,name:'Bash',input:{command,description:'Run it'}}]}});const r=spawnSync('/bin/sh',['-c',command],{encoding:'utf8'}),out=`${r.stdout}${r.stderr}`;say({type:'user',message:{content:[{type:'tool_result',tool_use_id:id,content:r.status===0?out||'(no output)':`Exit code ${r.status}\n${out}`,...(r.status===0?{}:{is_error:true})}]}});return r.status===0;};
+if(opsRun)await step('toolu_fake_ops','node --check src/coupon.mjs');
+// failStep (fake.json): the editing turn's first command fails, because the folder it writes to
+// is missing. The stand-in then does what its prompt says, as a model does. Told that a failed
+// step is its own to fix, it makes the folder and runs the command again. Told not to retry
+// another way when an action is blocked, it stops and asks, as models told so did.
+if(cfg.failStep&&edit){
+ const copy='cp src/coupon.mjs out/coupon.copy.mjs';
+ if(!await step('toolu_fake_fail_1',copy)){
+  if(input.includes('A step that fails is yours to fix')){await step('toolu_fake_fail_2',`mkdir -p out && ${copy}`);result.summary='The out folder was missing, so the copy failed. Made the folder and copied the file.';}
+  else{result.outcome='needs_input';result.question='The copy failed: the out folder is missing. I was told not to retry another way. Should I create it?';result.choices=['Create it','Stop'];}
+ }
+}
+// asksNext (fake.json): what the editing turn does when its work is done. Told to report and end,
+// it does; not told, it asks what to do next and offers choices, as models did.
+if(cfg.asksNext&&edit&&result.outcome==='done'&&!input.includes('do not ask what to do next')){result.outcome='needs_input';result.question='What would you like next?';result.choices=['Add tests','Open a pull request','Nothing'];}
 // chatty: keeps printing, a line every 200 ms for ticks (fake.json, 15 by default), longer than
 // a test's quiet limit, then finishes. stall: an edit turn makes its edit, prints one line and
 // then prints nothing for a minute, as a turn that stopped working does.
