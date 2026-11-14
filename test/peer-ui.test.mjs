@@ -2716,8 +2716,9 @@ for (const [columns, rows] of [[140, 50], [80, 24]]) test(`a session on my other
   const left = cursorLine(v);
   v.input.write('\x1b'); await until(() => v.current.sessionView === 'chat' && focused() === board, 'Esc goes back to the row');
   assert.equal(changes.hidden, true); assert.match(chat.getText(), /Changes · 7 files · \+76 −5 · d opens them/);
-  // d in its pane does the same, and Esc goes back to the pane.
-  chat.focus(); await until(() => /d changes/.test(keys()), 'the pane names d');
+  // Tab reaches its chat as it does for a session here (the list, the box, the chat). d in the pane does the same, and Esc goes back to the pane.
+  v.input.write('\t'); await until(() => focused() === v.panels.ask, 'Tab from the row: the message box');
+  v.input.write('\t'); await until(() => focused() === chat && /d changes/.test(keys()), 'then its chat, which names d');
   v.input.write('d'); await until(() => v.current.sessionView === 'changes' && focused() === changes, 'd in its pane');
   assert.equal(cursorLine(v), left, 'where he left it');
   v.input.write('\x1b'); await until(() => v.current.sessionView === 'chat' && focused() === chat, 'Esc goes back to the pane');
@@ -2794,4 +2795,19 @@ test('the Changes of a session here and of the same session followed from anothe
   selectRow(board, /Followed from afar/); v.input.write('d');
   await until(() => v.current.sessionView === 'changes' && focused() === changes && /^ 3 files changed · \+10 −1$/.test(changeLines(v)[0]), 'the Changes of the session there');
   assert.deepEqual(changeLines(v).slice(1), here.slice(1));
+});
+
+test('at 80x24 the line that says a session’s changes are not here yet is whole, on the rows it needs, with no cursor beside it', { timeout: 30000 }, async t => {
+  const at = new Date().toISOString(), SHOP = 'e'.repeat(64), P = '1'.repeat(16), id = '71111111-1111-4111-8111-111111111118';
+  const machines = [{ key: SARA, listedAt: at, older: false, projects: [{ id: P, name: 'shop', repoId: SHOP, home: false }], sessions: [{ id, ref: `${P}:1`, project: P, title: 'Report', state: 'ready', at, createdAt: at, approvals: [], by: 'you', who: null }] }];
+  const p = project(later(t)); environment(t, p.parent);
+  const peer = fakePeer({ items: [], mine: [{ key: SARA, mine: true, theirs: true }], machines, remote: [], repoId: SHOP }), v = await view(t, { columns: 80, rows: 24, repo: repository(p.root), dashboard: true, peer });
+  const { board, changes } = v.panels;
+  await until(() => board.items.some(item => /Report/.test(plainItem(item))), 'the listed row');
+  board.focus(); selectRow(board, /Report/); v.input.write('d');
+  await until(() => v.current.sessionView === 'changes' && /has not sent/.test(changes.getText()), 'the line');
+  const rows = changeLines(v).filter(Boolean);
+  assert.equal(rows.length, 2, rows.join('|'));
+  assert.equal(rows.map(row => row.trim()).join(' '), '@sara-box has not sent its changes yet. Asking for them…');
+  assert.ok(rows.every(row => !row.includes('▌') && row.length <= changes.width - 2));
 });
