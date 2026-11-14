@@ -2250,6 +2250,32 @@ test('a request for an edit shows its Task: n rejects it, a message revises it, 
   await send(v, '/kanban'); await until(() => v.current.view === 'kanban' && panels.kanbanLists[2].items.some(item => /^Uppercase coupons {2}ready to publish( · |$)/.test(item.getText())), 'the Task on the board, under Needs you, its detail cut between parts');
 });
 
+test('Full access approves a Task: a session that has it goes straight on to the work, and giving it to a session whose Task waits starts that work', { timeout: 90000 }, async t => {
+  const p = setup(t), v = await view(t, { repo: p.repo }), panels = v.current.panels, chat = () => panels.chat.getText(), status = () => panels.status.getText();
+  const named = goal => projectSnapshot(p.repo).tasks.find(task => task.goal === goal), edited = task => fs.readFileSync(path.join(task.worktree, 'src/coupon.mjs'), 'utf8');
+  await wide(v);
+  // In Ask for approval the Task waits. Giving the session Full access approves it, with nothing more typed.
+  await send(v, 'Uppercase coupon codes');
+  await until(() => named('Uppercase coupon codes')?.plan?.state === 'proposed' && named('Uppercase coupon codes').state === 'answered' && /Task · waits for your approval\nUppercase coupons\n/.test(chat()), 'the Task waits');
+  await send(v, '/permissions full'); await dialog(v, 'Full access', 'y');
+  await until(() => /Full access\. It approved the Task, and the work starts\./.test(status()), 'the mode approved it');
+  await until(() => named('Uppercase coupon codes').state === 'ready', 'the work', 30000);
+  const first = named('Uppercase coupon codes');
+  assert.equal(first.plan.state, 'done'); assert.equal(first.plan.approvedBy, 'full'); assert.match(edited(first), /toUpperCase/);
+  assert.ok(first.messages.some(row => row.text === 'Full access approved the Task: Uppercase coupons'));
+  await until(() => /Task · done · 2 of 2 objectives reported met\nUppercase coupons\nmedium priority · low severity · approved by Full access\n/.test(chat()), 'the card says what approved it');
+  // A new session that starts in Full access never waits: the Task is written, and the work follows at once.
+  await send(v, '/new'); await until(() => !panels.compose.hidden, 'a new form');
+  await send(v, '/permissions full'); await dialog(v, 'Full access', 'y'); await until(() => /Full access for this session\./.test(status()), 'full for the new session');
+  await send(v, 'Uppercase coupon codes again');
+  await until(() => named('Uppercase coupon codes again')?.state === 'ready', 'the second session works', 30000);
+  const second = named('Uppercase coupon codes again');
+  assert.equal(second.plan.state, 'done'); assert.equal(second.plan.approvedBy, 'full'); assert.match(edited(second), /toUpperCase/);
+  assert.deepEqual(second.messages.filter(row => !row.bot && !row.from).map(row => row.text), ['Uppercase coupon codes again'], 'nothing more was typed');
+  await until(() => /Task · done · 2 of 2 objectives reported met\nUppercase coupons\nmedium priority · low severity · approved by Full access\n/.test(chat()), 'its card says the same');
+  assert.doesNotMatch(chat(), /waits for your approval|for your approval/);
+});
+
 test('a prompt responds despite local edits and the conversation survives reopening', async t => {
   const p = setup(t, 'answer'); fs.writeFileSync(path.join(p.root, 'owner.txt'), 'keep this work\n');
   const before = git(p.root, ['rev-parse', 'HEAD']), v = await view(t, { repo: p.repo });
