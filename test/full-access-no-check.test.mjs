@@ -24,7 +24,9 @@ function environment(t, values) {
   t.after(() => { for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } });
 }
 function machine(t, { lead = 'grok', grok = {}, mode = 'answer', signedIn = true } = {}) {
-  const p = project(t), fake = fakeClis(p.parent, { mode }), config = path.join(fake.dir, 'fake.json'), gate = path.join(p.parent, 'check-gate');
+  // Whatever a check was doing ends with the test, before the test's folders go.
+  let ends = null; t.after(() => { try { if (ends) fs.writeFileSync(ends, ''); } catch { /* The folder is gone already. */ } });
+  const p = project(t), fake = fakeClis(p.parent, { mode }), config = path.join(fake.dir, 'fake.json'), gate = ends = path.join(p.parent, 'check-gate');
   // No other vendor is installed: a wrapper that exits 127 stands wherever one would be found on PATH.
   for (const other of ['claude', 'codex', 'agy', 'grok'].filter(vendor => vendor !== lead)) fs.writeFileSync(path.join(fake.dir, other), '#!/bin/sh\nexit 127\n', { mode: 0o755 });
   const set = value => fs.writeFileSync(config, JSON.stringify({ ...JSON.parse(fs.readFileSync(config, 'utf8')), grok: { checkSeconds: SLOW, checkGate: gate, ...value } }));
@@ -42,8 +44,6 @@ function machine(t, { lead = 'grok', grok = {}, mode = 'answer', signedIn = true
     const first = async () => { for (;;) { if (inputs().some(row => row.input.includes(words))) return Date.now() - sent; if (Date.now() - sent > 120000) throw new Error('the turn did not begin within two minutes'); await sleep(25); } };
     return { finished, first, sent };
   };
-  // Whatever a check was doing ends with the test.
-  t.after(() => fs.writeFileSync(gate, ''));
   return { ...p, fake, controller, calls, send, set, gate, release: () => fs.writeFileSync(gate, ''), bin: path.join(fake.dir, lead), lock: path.join(personalDirectory(), 'conformance', `${lead}.lock`), record: path.join(personalDirectory(), 'conformance', `${lead}.json`) };
 }
 // The model turns a stand-in was started for: a prompt, never a read of its release, its help or its sign-in.
