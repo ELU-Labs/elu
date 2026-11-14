@@ -1659,6 +1659,8 @@ test('a session started for my other computer while it is offline goes as soon a
   const [row] = shownRows();
   assert.equal(row.id, begun.id); assert.equal(rowTitle(row), 'Tidy the login form');
   assert.deepEqual(rowBadge(row), { icon: '·', tone: 'muted', title: 'on devbox · not sent yet' });
+  // Nothing works on it yet, so its row counts how long it has waited, as a queued one does, not a running clock.
+  assert.equal(row.time, 'just now');
   const pane = withHome(laptop.home, () => glue.view(row, 200));
   assert.match(pane, /You → @devbox \(not sent yet\)\nTidy the login form/);
   assert.match(pane, /@devbox is offline\. Your message goes as soon as it connects\. \/stop cancels it\./);
