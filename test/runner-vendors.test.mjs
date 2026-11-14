@@ -16,6 +16,7 @@ import { saveRule } from '../lib/permission-rules.mjs';
 import { shimsBase } from '../lib/never-shims.mjs';
 import { runSteps } from '../lib/run-activity.mjs';
 import { takesExtra } from '../lib/vendor-extras.mjs';
+import { agentSpend, agentTable, shortModel } from '../lib/agent-spend.mjs';
 
 // Every vendor through the runner, against the fakes: Codex leads with its
 // own launch and parse, Grok takes the prompt from a file under a private HOME, and an ACP
@@ -419,6 +420,68 @@ test('an Antigravity turn in Full access over ACP is stopped when it prints noth
   const started = Date.now(), printed = await f.controller.ask('Reply with the summary "slow".', null, { permissions: 'full' }).finished;
   assert.equal(printed.state, 'answered', JSON.stringify(printed.error)); assert.equal(printed.result.summary, 'slow'); assert.ok(Date.now() - started >= 2500, 'it was silent for longer than the quiet limit');
   assert.deepEqual(turns(), ['acp', '-p']);
+});
+
+// Over ACP the model is the session's own, so ELU sets the one the session chose before it
+// asks anything, the way the protocol offers it. The run keeps the model the vendor then
+// named and the tokens it sent with the turn, and the Usage tab's row shows both.
+const agentRow = (f, task) => agentTable(agentSpend([{ root: f.root, tasks: [task] }]).rows, { width: 120 })[1];
+test('an Antigravity turn over ACP runs on the model the session chose, in Full access too, and keeps the tokens the vendor sent; where it sent none the row says not reported', async t => {
+  const f = setup(t, 'agy'); f.controller.draftConfig.roles.lead.model = 'gemini-3-flash';
+  proven('agy', f.bin, '1.5.4', { relay: true });
+  const turns = () => f.calls().filter(call => !call.args.includes('/usage') && !['--version', '--help'].includes(call.args[0]));
+  const first = await f.controller.ask('Reply with the summary "chosen".', null, { permissions: 'full' }).finished;
+  assert.equal(first.state, 'answered', JSON.stringify(first.error)); assert.deepEqual(turns().map(call => call.args), [['acp']], 'over ACP, where the steps show');
+  const [run] = first.runs;
+  assert.equal(run.model, 'gemini-3-flash'); assert.match(fs.readFileSync(run.logFile, 'utf8'), /"config_option_update".*"currentValue":"gemini-3-flash"/, 'the vendor switched the session to it');
+  assert.deepEqual(run.tokens, { input: 1200, output: 120, cacheRead: 200, cacheWrite: 10 }, 'thought tokens the total counts apart are output');
+  assert.match(agentRow(f, first), new RegExp(`^@lead +.* +${shortModel('gemini-3-flash', 'agy')} +1\\.2k · 120 · 200 `));
+  // The model the owner picks next is set on the resumed conversation the same way.
+  f.controller.setModel(first.id, { vendor: 'agy', model: 'gemini-3-pro' });
+  const second = await f.controller.ask('Reply with the summary "other".', first.id).finished;
+  assert.equal(second.state, 'answered', JSON.stringify(second.error)); assert.equal(second.runs[1].session, run.session); assert.equal(second.runs[1].model, 'gemini-3-pro');
+  // Ask for approval takes the chosen model over ACP as well.
+  const asking = await f.controller.ask('Reply with the summary "asking".', null, { permissions: 'ask' }).finished;
+  assert.equal(asking.state, 'answered', JSON.stringify(asking.error)); assert.equal(asking.runs[0].model, 'gemini-3-flash'); assert.deepEqual(turns().at(-1).args, ['acp']);
+  // A vendor that ends its turn without tokens: nothing is counted, and the row says so.
+  agySet(f, { noUsage: true });
+  const bare = await f.controller.ask('Reply with the summary "bare".', null, { permissions: 'full' }).finished;
+  assert.equal(bare.state, 'answered', JSON.stringify(bare.error)); assert.equal(bare.runs[0].tokens, undefined); assert.equal(bare.runs[0].model, 'gemini-3-flash');
+  assert.match(agentRow(f, bare), new RegExp(`^@lead +.* +${shortModel('gemini-3-flash', 'agy')} +not reported`));
+  // A vendor whose ACP session names no model and takes none. Full access keeps the chosen
+  // model: the turn runs headless, which names it on the command line.
+  agySet(f, { acpNoModels: true });
+  const printed = await f.controller.ask('Reply with the summary "printed".', null, { permissions: 'full' }).finished;
+  assert.equal(printed.state, 'answered', JSON.stringify(printed.error)); assert.equal(printed.runs[0].model, 'gemini-3-flash');
+  const [live, headless] = turns().slice(-2);
+  assert.deepEqual(live.args, ['acp']); assert.equal(headless.args[0], '-p'); assert.equal(headless.args[headless.args.indexOf('--model') + 1], 'gemini-3-flash'); assert.ok(headless.args.includes('--dangerously-skip-permissions'));
+  // Ask for approval cannot ask from a headless run, so it does not start on another model: it says why.
+  const asked = f.controller.ask('Reply with the summary "refused".', null, { permissions: 'ask' });
+  const refused = await asked.finished.catch(() => readTask(f.controller.repo, asked.id));
+  assert.match(refused.error?.message ?? '', /^Antigravity could not finish\. It offers no way to choose a model over ACP\./, JSON.stringify(refused.error)); assert.deepEqual(turns().at(-1).args, ['acp'], 'nothing ran headless');
+  // With no model chosen there is nothing to set: the session runs the vendor's own, and the run names it.
+  delete f.controller.draftConfig.roles.lead.model;
+  const own = await f.controller.ask('Reply with the summary "own".', null, { permissions: 'ask' }).finished;
+  assert.equal(own.state, 'answered', JSON.stringify(own.error)); assert.equal(own.runs[0].model, undefined); assert.deepEqual(turns().at(-1).args, ['acp']);
+});
+
+test('a Grok Build turn over ACP starts on the model the session chose, switches a session it resumes to the one chosen since, and keeps the tokens the vendor sent', async t => {
+  const f = setup(t, 'grok'); f.controller.draftConfig.roles.lead.model = 'grok-4.6-fast';
+  fs.mkdirSync(path.join(f.parent, '.grok')); fs.writeFileSync(path.join(f.parent, '.grok', 'auth.json'), '{}\n', { mode: 0o600 });
+  proven('grok', f.bin, '1.0.77', { relay: true });
+  const first = await f.controller.ask('Reply done with the summary "chosen".', null, { permissions: 'ask' }).finished;
+  assert.equal(first.state, 'answered', JSON.stringify(first.error));
+  assert.deepEqual(f.calls().at(-1).args.slice(-4), ['agent', '--model', 'grok-4.6-fast', 'stdio'], 'an agent option: after agent, before the transport');
+  const [run] = first.runs;
+  assert.equal(run.model, 'grok-4.6-fast'); assert.deepEqual(run.tokens, { input: 10, output: 5, cacheRead: 30, cacheWrite: 0 }, 'the input without what the cache held');
+  assert.match(agentRow(f, first), new RegExp(`^@lead +.* +${shortModel('grok-4.6-fast', 'grok').replace(/\./g, '\\.')} +10 · 5 · 30 `));
+  // The session keeps the model it started on. The owner picks another: the resumed session is switched before it is asked anything.
+  f.controller.setModel(first.id, { vendor: 'grok', model: 'grok-4.6' });
+  const second = await f.controller.ask('Reply done with the summary "other".', first.id).finished;
+  assert.equal(second.state, 'answered', JSON.stringify(second.error)); assert.equal(second.runs[1].session, run.session, 'the same session');
+  assert.deepEqual(f.calls().at(-1).args.slice(-4), ['agent', '--model', 'grok-4.6', 'stdio']);
+  assert.equal(second.runs[1].model, 'grok-4.6'); assert.match(fs.readFileSync(second.runs[1].logFile, 'utf8'), /"config_option_update".*"currentValue":"grok-4\.6"\}?/, 'the vendor switched the session');
+  assert.deepEqual(second.runs[1].tokens, { input: 10, output: 5, cacheRead: 30, cacheWrite: 0 });
 });
 
 // The option each launch above carries is one a release may not take. `claude <any flag>

@@ -5,8 +5,9 @@
 // that never asks), asksDenied (an ACP server that asks about what its rules deny, where it
 // should refuse by itself), acpEditsFreely (an ACP server that edits the workspace without
 // reading its rules), acpFails (`agy acp` ends at once, as a release without it would),
-// pace (milliseconds a headless run waits before it prints, and an ACP run before each of
-// its steps). Run from test/fakes/ directly, with no fake.json beside it, it exits 2:
+// acpNoModels (an ACP session that names no model and takes none), noUsage (an ACP turn
+// that ends without its tokens), pace (milliseconds a headless run waits before it prints,
+// and an ACP run before each of its steps). Run from test/fakes/ directly, with no fake.json beside it, it exits 2:
 // no path may reach the source file as a program. It honors what the adapter relies on:
 // the private HOME's settings.json and hooks.json (the hook command really runs),
 // --sandbox, --dangerously-skip-permissions, --conversation under
@@ -14,6 +15,9 @@
 // the tool), the /usage sign-in probe, and `acp`: every tool call goes out as a session
 // update, when it starts and when it ends, and session/request_permission asks. A session
 // with no mode set reviews: it asks before each command and each write that no rule allows.
+// An ACP session names its model as the protocol does, a `model` config option changed with
+// session/set_config_option, keeps it with the conversation, and ends each turn with the
+// protocol's `usage`. Headless, --model names the model and the output repeats it.
 import fs from 'node:fs'; import path from 'node:path'; import crypto from 'node:crypto'; import readline from 'node:readline'; import { spawnSync } from 'node:child_process';
 const args = process.argv.slice(2);
 let cfg = null; try { cfg = JSON.parse(fs.readFileSync(path.join(path.dirname(process.argv[1]), 'fake.json'), 'utf8')); } catch { /* Not installed as a test CLI. */ }
@@ -32,6 +36,7 @@ const notice = (tool, rule) => process.stderr.write(`agy: soft-denied ${tool} ($
 const ACTION = { write_to_file: 'write_file', run_command: 'command', read_url: 'read_url', search_web: null };
 const KIND = { write_to_file: 'edit', run_command: 'execute', read_url: 'fetch', search_web: 'search' };
 const pause = () => new Promise(resolve => setTimeout(resolve, Number.isFinite(agy.pace) ? agy.pace : 0));
+const MODELS = ['gemini-3-pro', 'gemini-3-flash'];
 
 // The hooks.json PreToolUse entries whose matcher names the tool run, with the call on stdin.
 function hookDecision(tool, input, cwd) {
@@ -118,19 +123,28 @@ async function headless() {
   const result = await turn(text, { cwd, skip: args.includes('--dangerously-skip-permissions'), sandbox: args.includes('--sandbox'), ask: null, dir });
   if (schema?.properties?.intent) { result.intent = 'answer'; if (schema.properties.repository) result.repository = ''; }
   if (cfg.name !== undefined && schema?.properties?.name) result.name = cfg.name;
-  console.log(JSON.stringify({ conversationId: id, model: 'gemini-3-pro', structured_output: result, stats: { turns: 1 } }, null, 2));
+  console.log(JSON.stringify({ conversationId: id, model: flag('--model') ?? MODELS[0], structured_output: result, stats: { turns: 1 } }, null, 2));
 }
 async function acp() {
   if (agy.acpFails) { console.error('agy: unknown command "acp"'); process.exit(1); }
   const send = value => process.stdout.write(`${JSON.stringify(value)}\n`);
   const waiting = new Map(), sessions = new Map(); let nextId = 100;
   const request = (method, params) => new Promise(resolve => { const id = nextId++; waiting.set(id, resolve); send({ jsonrpc: '2.0', id, method, params }); });
+  // The conversation's model: the first one listed until it is changed, kept beside its turns.
+  const modelOf = id => { try { return fs.readFileSync(path.join(brain, id, 'model'), 'utf8'); } catch { return MODELS[0]; } };
+  const opened = id => ({ sessionId: id, ...(agy.acpNoModels ? {} : { configOptions: [{ id: 'model', name: 'Model', category: 'model', type: 'select', currentValue: modelOf(id), options: MODELS.map(value => ({ value, name: value })) }] }) });
   async function handle(row) {
     const reply = result => send({ jsonrpc: '2.0', id: row.id, result }), fail = (code, message) => send({ jsonrpc: '2.0', id: row.id, error: { code, message } }), p = row.params ?? {};
     switch (row.method) {
       case 'initialize': reply({ protocolVersion: 1, agentCapabilities: { loadSession: true }, authMethods: [] }); break;
-      case 'session/new': { if (agy.signedIn === false) return fail(-32000, 'authentication required'); const id = crypto.randomUUID(); fs.mkdirSync(path.join(brain, id), { recursive: true }); sessions.set(id, { cwd: p.cwd }); reply({ sessionId: id }); break; }
-      case 'session/resume': { if (typeof p.sessionId !== 'string' || !fs.existsSync(path.join(brain, p.sessionId))) return fail(-32602, 'conversation not found'); sessions.set(p.sessionId, { cwd: p.cwd }); reply({ sessionId: p.sessionId }); break; }
+      case 'session/new': { if (agy.signedIn === false) return fail(-32000, 'authentication required'); const id = crypto.randomUUID(); fs.mkdirSync(path.join(brain, id), { recursive: true }); sessions.set(id, { cwd: p.cwd }); reply(opened(id)); break; }
+      case 'session/resume': { if (typeof p.sessionId !== 'string' || !fs.existsSync(path.join(brain, p.sessionId))) return fail(-32602, 'conversation not found'); sessions.set(p.sessionId, { cwd: p.cwd }); reply(opened(p.sessionId)); break; }
+      case 'session/set_config_option': {
+        if (agy.acpNoModels) return fail(-32601, 'Method not found'); if (!sessions.has(p.sessionId)) return fail(-32602, 'unknown session');
+        if (p.configId !== 'model' || !MODELS.includes(p.value)) return fail(-32602, `unknown model: ${JSON.stringify(p.value)}`);
+        fs.writeFileSync(path.join(brain, p.sessionId, 'model'), p.value);
+        const { configOptions } = opened(p.sessionId); send({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: p.sessionId, update: { sessionUpdate: 'config_option_update', configOptions } } }); reply({ configOptions }); break;
+      }
       case 'session/set_mode': { if (!sessions.has(p.sessionId)) return fail(-32602, 'unknown session'); if (!['accept-edits', 'auto'].includes(p.modeId)) return fail(-32602, 'unknown mode'); sessions.get(p.sessionId).mode = p.modeId; reply({}); break; }
       case 'session/prompt': {
         const session = sessions.get(p.sessionId); if (!session) return fail(-32602, 'unknown session');
@@ -161,7 +175,8 @@ async function acp() {
         if (/"intent"\s*:\s*\{/.test(text)) { result.intent = 'answer'; if (/"repository"\s*:\s*\{/.test(text)) result.repository = ''; }
         if (cfg.name !== undefined && /"name"\s*:\s*\{"type"/.test(text)) result.name = cfg.name;
         update(`Here is the result:\n${JSON.stringify(result, null, 2)}\n`);
-        reply({ stopReason: 'end_turn' }); break;
+        // The turn's tokens, as the protocol names them: input apart from the cache, thought apart from output.
+        reply({ stopReason: 'end_turn', ...(agy.noUsage ? {} : { usage: { totalTokens: 1530, inputTokens: 1200, outputTokens: 80, thoughtTokens: 40, cachedReadTokens: 200, cachedWriteTokens: 10 } }) }); break;
       }
       case 'session/cancel': break;
       default: fail(-32601, 'Method not found');

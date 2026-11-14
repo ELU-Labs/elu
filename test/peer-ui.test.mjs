@@ -1838,7 +1838,7 @@ test('Usage lists the top ten agents by cost with their tokens, t shows the last
   list.focus(); await until(() => v.current.screen.focused === list, 'list focused');
   assert.match(v.panels.keys.getText(), /d details {2}r refresh {2}t 7 days/);
   v.input.write('t'); await until(() => rows().includes('Top agents, last 7 days'), 'the week');
-  assert.match(agentRows()[0], /^@lead +Speed up the build +claude +— +\$50\.00 +57%$/);
+  assert.match(agentRows()[0], /^@lead +Speed up the build +claude +not reported +\$50\.00 +57%$/);
   assert.match(agentRows()[1], /^@lead +Remote job +on sara-box .* \$25\.00 +29%$/);
   assert.ok(rows().includes('ELU spend today at least $12.40'), 'the spend line stays today');
   v.input.write('t'); await until(() => rows().includes('Top agents today'), 'today again');

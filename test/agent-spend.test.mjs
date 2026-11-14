@@ -113,11 +113,29 @@ test('what a computer of mine sends is checked, and a build that sends nothing i
   assert.ok(cleanTopAgents({ today: { rows: Array.from({ length: 30 }, (_, at) => ({ ref: `${'c'.repeat(16)}:${at + 1}` })) } }).today.rows.length <= TOP_AGENTS);
 });
 
+test('an ACP run records the tokens its vendor sent with the turn, however it names them, and none where it sent none', () => {
+  const log = (...rows) => rows.map(row => JSON.stringify(row)).join('\n'), answer = result => ({ jsonrpc: '2.0', id: 4, result });
+  const meter = { jsonrpc: '2.0', method: 'session/update', params: { sessionId: 's', update: { sessionUpdate: 'usage_update', used: 53000, size: 200000 } } };
+  // The protocol's own usage: input apart from the cache, and thought tokens are output where the total counts them apart.
+  assert.deepEqual(runUsage('agy', log(meter, answer({ stopReason: 'end_turn', usage: { totalTokens: 1530, inputTokens: 1200, outputTokens: 80, thoughtTokens: 40, cachedReadTokens: 200, cachedWriteTokens: 10 } }))), { tokens: { input: 1200, output: 120, cacheRead: 200, cacheWrite: 10 }, model: null });
+  assert.deepEqual(runUsage('agy', log(answer({ stopReason: 'end_turn', usage: { totalTokens: 1280, inputTokens: 1200, outputTokens: 80, thoughtTokens: 40 } }))).tokens, { input: 1200, output: 80, cacheRead: 0, cacheWrite: 0 }, 'a total that holds the thought tokens inside the output adds none twice');
+  // Grok Build: _meta.usage, whose inputTokens is the whole prompt, cache included.
+  assert.deepEqual(runUsage('grok', log(answer({ stopReason: 'end_turn', _meta: { usage: { inputTokens: 40, outputTokens: 5, totalTokens: 45, cachedReadTokens: 30, cacheCreationTokens: 4 } } }))).tokens, { input: 6, output: 5, cacheRead: 30, cacheWrite: 4 });
+  // Input and output alone, under _meta.quota.
+  assert.deepEqual(runUsage('agy', log(answer({ stopReason: 'end_turn', _meta: { quota: { token_count: { input_tokens: 900, output_tokens: 30 } } } }))).tokens, { input: 900, output: 30, cacheRead: 0, cacheWrite: 0 });
+  // Two turns of one run add up.
+  assert.deepEqual(runUsage('agy', log(answer({ stopReason: 'end_turn', usage: { inputTokens: 5, outputTokens: 1 } }), answer({ stopReason: 'end_turn', usage: { inputTokens: 7, outputTokens: 2 } }))).tokens, { input: 12, output: 3, cacheRead: 0, cacheWrite: 0 });
+  // No tokens with the turn: not reported, whatever the context meter said, and never zeros.
+  assert.deepEqual(runUsage('agy', log(meter, answer({ stopReason: 'end_turn' }))), { tokens: null, model: null });
+  assert.deepEqual(runUsage('grok', log(answer({ stopReason: 'end_turn', _meta: { usage: { usageIsIncomplete: true } } }))), { tokens: null, model: null });
+  assert.equal(tokensText(runUsage('agy', log(answer({ stopReason: 'end_turn' }))).tokens), 'not reported');
+});
+
 test('tokens read compact, costs and shares say only what was reported', () => {
   assert.deepEqual([0, 950, 1000, 1234, 9949, 9950, 34000, 999499, 999500, 1200000, 12345678, 1100000000, 25e9].map(compact), ['0', '950', '1k', '1.2k', '9.9k', '10k', '34k', '999k', '1M', '1.2M', '12M', '1.1B', '25B']);
   assert.equal(compact(-1), '—'); assert.equal(compact(NaN), '—');
   assert.equal(tokensText({ input: 1200000, output: 340000, cacheRead: 8100000, cacheWrite: 5 }), '1.2M · 340k · 8.1M');
-  assert.equal(tokensText(null), '—');
+  assert.equal(tokensText(null), 'not reported');
   assert.equal(costText({ costUsd: 12.4 }), '$12.40'); assert.equal(costText({ costUsd: null }), '—');
   assert.equal(shareText({ costUsd: 12.4 }, 97.51), '13%'); assert.equal(shareText({ costUsd: 0.1 }, 97.51), '<1%'); assert.equal(shareText({ costUsd: null }, 97.51), '—'); assert.equal(shareText({ costUsd: 1 }, 0), '—');
 });
@@ -131,7 +149,7 @@ test('the table labels the cost once, and a narrow pane drops whole columns righ
   assert.equal(wide.length, 3);
   assert.match(wide[0], /^Agent +Session +Model +in · out · cache +Cost \(API price\) +Share$/);
   assert.match(wide[1], /^@lead +Make the coupon codes upper case everywhere +opus 5\.5 +1\.2M · 34k · 8\.1M +\$12\.40 +62%$/);
-  assert.match(wide[2], /^@pair +Make the coupon .* +on devbox +gpt-6\.1-sol +— +— +—$/);
+  assert.match(wide[2], /^@pair +Make the coupon .* +on devbox +gpt-6\.1-sol +not reported +— +—$/);
   assert.equal(wide.join('\n').match(/Cost \(API price\)/g).length, 1, 'the cost column is labelled once');
   const headers = width => agentTable(rows, { width, total: 20 })[0].split(/ {2,}/);
   let last = null;

@@ -6,8 +6,11 @@
 // tool call and how it ended, the text in chunks, then end), writes only where the flags allow (bypassPermissions anywhere; otherwise
 // inside --cwd, never under a read-only sandbox or GROK_WRITE_FILE=0), runs a command or
 // fetches a URL only under bypassPermissions, keeps sessions under $GROK_HOME/sessions for
-// -r, serves `agent stdio` with a permission request for anything the rules do not allow,
-// and answers `inspect --json`, listing home-level Claude files whenever they exist (issue #34).
+// -r, serves `agent stdio` with a permission request for anything the rules do not allow
+// (`agent --model <id> stdio` starts sessions on that model; a session names its model as a
+// `model` config option, keeps it, takes session/set_config_option with the value as
+// { value: id }, and ends a turn with its tokens under _meta.usage, where inputTokens is
+// the whole prompt, cache included), and answers `inspect --json`, listing home-level Claude files whenever they exist (issue #34).
 // Modes: signed-out, invalid (bad result), fenced (result in a code fence), max-turns,
 // leaky (writes whatever the flags say), claude-bleed (inspect reports a Claude instruction).
 import fs from 'node:fs'; import path from 'node:path'; import crypto from 'node:crypto'; import { spawnSync } from 'node:child_process';
@@ -92,6 +95,9 @@ if (args.includes('agent') && args.includes('stdio')) {
   const send = row => process.stdout.write(`${JSON.stringify(row)}\n`);
   const waiting = new Map(), live = new Map(); let nextId = 100;
   const canWrite = !values('--deny').includes('Write');
+  // The models this account may run, and a session's own as its config option.
+  const MODELS = ['grok-4.6', 'grok-4.6-fast'], started = value('--model') ?? value('-m') ?? MODELS[0];
+  const options = record => [{ id: 'model', name: 'Model', category: 'model', type: 'select', currentValue: record.model ?? MODELS[0], options: MODELS.map(id => ({ value: id, name: id })) }];
   const request = (method, params) => new Promise(resolve => { const id = nextId++; waiting.set(id, resolve); send({ jsonrpc: '2.0', id, method, params }); });
   async function handle(row) {
     const reply = result => send({ jsonrpc: '2.0', id: row.id, result }), error = (code, message) => send({ jsonrpc: '2.0', id: row.id, error: { code, message } });
@@ -100,12 +106,20 @@ if (args.includes('agent') && args.includes('stdio')) {
       case 'authenticate': return signedIn && row.params?.methodId === 'cached_token' ? reply({}) : error(-32000, 'Not logged in. Run grok login.');
       case 'session/new': {
         if (!signedIn) return error(-32000, 'Not logged in. Run grok login.');
-        const record = { id: crypto.randomUUID(), cwd: row.params?.cwd ?? process.cwd(), sandbox: 'off', turns: [], yolo: row.params?._meta?.yoloMode === true, auto: row.params?._meta?.autoMode === true };
-        live.set(record.id, record); save(record); return reply({ sessionId: record.id, configOptions: [] });
+        const record = { id: crypto.randomUUID(), cwd: row.params?.cwd ?? process.cwd(), sandbox: 'off', turns: [], model: started, yolo: row.params?._meta?.yoloMode === true, auto: row.params?._meta?.autoMode === true };
+        live.set(record.id, record); save(record); return reply({ sessionId: record.id, configOptions: options(record) });
       }
       case 'session/load': {
         const record = load(row.params?.sessionId); if (!record) return error(-32000, `Session not found: ${row.params?.sessionId}`);
-        record.cwd = row.params?.cwd ?? record.cwd; live.set(record.id, record); return reply({ configOptions: [] });
+        record.cwd = row.params?.cwd ?? record.cwd; live.set(record.id, record); return reply({ configOptions: options(record) });
+      }
+      case 'session/set_config_option': {
+        const record = live.get(row.params?.sessionId); if (!record) return error(-32000, 'Unknown session.');
+        const id = row.params?.value?.value;
+        if (row.params?.configId !== 'model' || typeof id !== 'string' || !MODELS.includes(id)) return error(-32602, 'Invalid params: value must be a string id.');
+        record.model = id; save(record);
+        send({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: record.id, update: { sessionUpdate: 'config_option_update', configOptions: options(record) } } });
+        return reply({ configOptions: options(record) });
       }
       case 'session/prompt': {
         const record = live.get(row.params?.sessionId); if (!record) return error(-32000, 'Unknown session.');
@@ -122,7 +136,8 @@ if (args.includes('agent') && args.includes('stdio')) {
         const result = await act(text, record, { bypass: record.yolo || mode === 'leaky', canWrite, canShell: true, canFetch: true, cwd: record.cwd, ask, report });
         record.turns.push(text); save(record);
         send({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: record.id, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: resultText(result) } } } });
-        return reply({ stopReason: mode === 'max-turns' ? 'max_turn_requests' : 'end_turn' });
+        // The turn's tokens ride on the answer: inputTokens is the whole prompt, 10 of it new, 30 read from the cache.
+        return reply({ stopReason: mode === 'max-turns' ? 'max_turn_requests' : 'end_turn', _meta: { usage: { inputTokens: 40, outputTokens: 5, totalTokens: 45, cachedReadTokens: 30, cacheCreationTokens: 0, reasoningTokens: 2, modelUsage: { [record.model ?? MODELS[0]]: { inputTokens: 40, outputTokens: 5, modelCalls: 1 } }, usageIsIncomplete: false } } });
       }
       default: return error(-32601, 'Method not found');
     }
