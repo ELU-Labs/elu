@@ -4,13 +4,15 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { project, fakeClis, vendorPath, autoApprove } from './helpers.mjs';
+import { project, fakeClis, vendorPath, autoApprove, git } from './helpers.mjs';
 import { repository } from '../lib/git.mjs';
 import { ProjectController, conversationEntries, registerProject } from '../lib/projects.mjs';
 import { readTask } from '../lib/state.mjs';
 import { pendingRequests, projectFolder } from '../lib/workspace.mjs';
 import { Conductor } from '../lib/conductor.mjs';
-import { atomic, personalDirectory } from '../lib/util.mjs';
+import { atomic, personalDirectory, findBin } from '../lib/util.mjs';
+import { bwrapStarts, noSandboxLine } from '../lib/sandbox.mjs';
+import { stopLine } from '../lib/stop-line.mjs';
 import { ADAPTERS } from '../lib/adapters/index.mjs';
 import { CAPS } from '../lib/vendors.mjs';
 import { conformanceState } from '../lib/conformance.mjs';
@@ -39,14 +41,27 @@ function environment(t, values) {
 }
 const RELEASE = { grok: '1.0.77', agy: '1.5.4' };
 const LIVE = new WeakMap();
+// The system's own sandbox, which a project's checks run in where Codex is not installed:
+// bubblewrap on Linux, sandbox-exec on macOS. PATH without it: each folder that holds it is
+// replaced by a folder of links to the rest of that folder.
+const SYSTEM_SANDBOX = process.platform === 'linux' ? Boolean(findBin('bwrap') && bwrapStarts(findBin('bwrap'))) : process.platform === 'darwin' && Boolean(findBin('sandbox-exec'));
+function withoutSandbox(parent, PATH) {
+  const names = ['bwrap', 'sandbox-exec'];
+  return PATH.split(path.delimiter).filter(Boolean).map((folder, index) => {
+    if (!names.some(name => fs.existsSync(path.join(folder, name)))) return folder;
+    const links = path.join(parent, `nosandbox-${index}`);
+    if (!fs.existsSync(links)) { fs.mkdirSync(links); for (const name of fs.readdirSync(folder)) if (!names.includes(name)) { try { fs.symlinkSync(path.join(folder, name), path.join(links, name)); } catch { /* Left out. */ } } }
+    return links;
+  }).join(path.delimiter);
+}
 // checked: the one-time check of each vendor that needs one has passed on this computer.
 // helper: the owner named the sandbox his project's checks run in (ELU_CODE_SANDBOX_HELPER),
-// which no vendor on PATH gives here; checks never run outside it.
-function setup(t, { keep = ['grok'], fake: options = { mode: 'answer' }, checked = true, helper = false } = {}) {
+// which no vendor on PATH gives here. sandbox: false, the computer has no sandbox of its own either.
+function setup(t, { keep = ['grok'], fake: options = { mode: 'answer' }, checked = true, helper = false, sandbox = true } = {}) {
   LIVE.set(t, []); t.after(async () => { for (const conductor of LIVE.get(t)) await conductor.stop(); });
   const p = project(t), fake = fakeClis(p.parent, options), only = vendorPath(p.parent, fake.dir, keep);
   // The check keeps its throwaway folder under TMPDIR: a real folder here, so it runs wherever the suite does.
-  environment(t, { ...fake.env, ...(helper ? { ELU_CODE_SANDBOX_HELPER: path.join(fake.dir, 'codex') } : {}), PATH: only.PATH, HOME: p.parent, TMPDIR: fs.realpathSync(os.tmpdir()), GIT_AUTHOR_NAME: 'Test Owner', GIT_AUTHOR_EMAIL: 'owner@example.invalid', GIT_COMMITTER_NAME: 'Test Owner', GIT_COMMITTER_EMAIL: 'owner@example.invalid' });
+  environment(t, { ...fake.env, ...(helper ? { ELU_CODE_SANDBOX_HELPER: path.join(fake.dir, 'codex') } : {}), PATH: sandbox ? only.PATH : withoutSandbox(p.parent, only.PATH), HOME: p.parent, TMPDIR: fs.realpathSync(os.tmpdir()), GIT_AUTHOR_NAME: 'Test Owner', GIT_AUTHOR_EMAIL: 'owner@example.invalid', GIT_COMMITTER_NAME: 'Test Owner', GIT_COMMITTER_EMAIL: 'owner@example.invalid' });
   // Grok Build is signed in.
   fs.mkdirSync(path.join(p.parent, '.grok')); fs.writeFileSync(path.join(p.parent, '.grok', 'auth.json'), '{}\n', { mode: 0o600 });
   if (checked) for (const vendor of keep.filter(name => CAPS[name].conformance)) atomic(path.join(personalDirectory(), 'conformance', `${vendor}.json`), { v: 1, bin: fs.realpathSync(path.join(only.dir, vendor)), version: RELEASE[vendor], steps: Object.fromEntries(ADAPTERS[vendor].conformance.map(step => [step.id, 'pass'])), relay: vendor === 'grok', at: new Date().toISOString() });
@@ -203,4 +218,49 @@ test("a teammate's question on a computer without Claude Code is not run: both s
   // What hardening protects is kept: no model was given the question on another vendor's launch.
   assert.deepEqual(p.calls().filter(call => call.args.includes('--prompt-file') || call.args.includes('stdio')), []);
   for (const vendor of ['codex', 'agy', 'grok']) assert.equal(CAPS[vendor].peer, false, vendor);
+});
+
+// A test of the project's own that passes only where its check is fenced in: it cannot write
+// beside the project. Or, with fenced false, only where it is not.
+function sandboxTest(p, fenced) {
+  const file = path.join(p.parent, 'written-by-the-check.txt');
+  fs.writeFileSync(path.join(p.root, 'test/fence.test.mjs'), `import {test} from 'node:test'; import assert from 'node:assert/strict'; import fs from 'node:fs';\ntest('fence', () => { let wrote = true; try { fs.writeFileSync(${JSON.stringify(file)}, 'yes'); } catch { wrote = false; } assert.equal(wrote, ${!fenced}); });\n`);
+  git(p.root, ['add', '.']); git(p.root, ['commit', '-m', 'Add a fence test']);
+  return file;
+}
+
+test("on a computer with only Grok Build and no Codex, an edit's checks run in the system's own sandbox, and it reaches ready", { skip: !SYSTEM_SANDBOX && 'this computer has no sandbox of its own' }, async t => {
+  const p = setup(t, { fake: { mode: 'normal', grok: 'edits' } }), written = sandboxTest(p, true), controller = autoApprove(new ProjectController(projectFolder(p.root)));
+  assert.equal(findBin('codex'), null, 'no Codex here');
+  const task = await controller.ask('Normalize coupon codes', null, { permissions: 'ask' }).finished;
+  assert.equal(task.error, null, JSON.stringify(task.error)); assert.equal(task.state, 'ready');
+  assert.ok(task.evidence.results.some(row => row.logFile) && task.evidence.results.every(row => row.status === 'passed'), JSON.stringify(task.evidence.results));
+  assert.equal(fs.existsSync(written), false, 'the check was fenced in');
+  assert.equal(task.reviewStatus, 'passed'); assert.deepEqual([...new Set(task.runs.map(run => run.vendor))], ['grok']);
+  assert.deepEqual(p.calls().filter(call => call.vendor === 'codex'), [], 'nothing started Codex');
+});
+
+test('on a computer with no sandbox at all, Full access runs the checks as they are, and the edit reaches ready', async t => {
+  const p = setup(t, { fake: { mode: 'normal', grok: 'edits' }, sandbox: false }), written = sandboxTest(p, false), controller = autoApprove(new ProjectController(projectFolder(p.root)));
+  const task = await controller.ask('Normalize coupon codes', null, { permissions: 'full' }).finished;
+  assert.equal(task.error, null, JSON.stringify(task.error)); assert.equal(task.state, 'ready');
+  assert.ok(task.evidence.results.some(row => row.logFile) && task.evidence.results.every(row => row.status === 'passed'), JSON.stringify(task.evidence.results));
+  assert.equal(fs.readFileSync(written, 'utf8'), 'yes', 'nothing fenced the check in');
+});
+
+test('on a computer with no sandbox at all, a session in Ask is told so before its work starts, with the step that fixes it; Full access then does it', async t => {
+  const p = setup(t, { fake: { mode: 'normal', grok: 'edits' }, sandbox: false }), controller = autoApprove(new ProjectController(projectFolder(p.root)));
+  const line = noSandboxLine();
+  assert.match(line, /^This computer has no sandbox for the project's checks\. Install (?:bubblewrap|Codex): .+, then type continue\.$/);
+  const run = controller.ask('Normalize coupon codes', null, { permissions: 'ask' });
+  await assert.rejects(run.finished, error => error.message === line);
+  const stopped = readTask(p.repo, run.id);
+  assert.equal(stopped.state, 'blocked'); assert.equal(stopLine(stopped).text, line, 'the chat says it, as it is');
+  // Nothing was edited: no editing turn ran, and no workspace was made for one.
+  assert.deepEqual(stopped.runs.map(row => row.role), ['lead']);
+  assert.equal(fs.existsSync(path.join(p.repo.worktrees, run.id)), false);
+  assert.equal(fs.readFileSync(path.join(p.root, 'src/coupon.mjs'), 'utf8'), 'export const normalize = (value) => value;\n');
+  const task = await controller.ask('continue', run.id, { permissions: 'full' }).finished;
+  assert.equal(task.error, null, JSON.stringify(task.error)); assert.equal(task.state, 'ready');
+  assert.ok(task.evidence.results.every(row => row.status === 'passed'), JSON.stringify(task.evidence.results));
 });

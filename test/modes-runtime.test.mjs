@@ -316,7 +316,7 @@ test('place branch runs in a worktree with that branch checked out, as it is', a
   await assert.rejects(f.controller.ask('Normalize coupon codes', null, { permissions: 'auto', place: 'branch:feat/missing' }).finished, /Branch not found: feat\/missing/);
 });
 
-test('place here runs in the checkout itself with a dirty tree; checks keep the network on in full', async t => {
+test('place here runs in the checkout itself with a dirty tree; in full the checks run with no sandbox', async t => {
   const f = setup(t);
   fs.writeFileSync(path.join(f.root, 'src/owner.mjs'), 'export const owner = true;\n');
   const head = git(f.root, ['rev-parse', 'HEAD']);
@@ -331,9 +331,9 @@ test('place here runs in the checkout itself with a dirty tree; checks keep the 
   const names = task.evidence.results.map(row => row.name);
   assert.ok(!names.includes('secret-paths') && names.includes('no-deleted-tests'));
   for (const name of ['changed-lines', 'no-binary-changes', 'protected-paths', 'unchanged-scripts', 'no-dependency-changes']) assert.equal(names.includes(name), false, `${name} is skipped in full`);
-  const sandboxed = f.calls().filter(call => call.vendor === 'codex' && call.args[0] === 'sandbox' && call.args.includes('--'));
-  assert.ok(sandboxed.length >= 1, 'the checks ran in the sandbox');
-  assert.ok(sandboxed.every(call => call.args.some(arg => arg.includes('network={enabled=true}'))), 'full keeps the network on for checks');
+  // Full access is everything: the checks ran, and passed, as in the owner's terminal, with the network and no sandbox.
+  assert.ok(task.evidence.results.some(row => row.logFile && row.status === 'passed'), JSON.stringify(task.evidence.results));
+  assert.deepEqual(f.calls().filter(call => call.vendor === 'codex' && call.args[0] === 'sandbox'), [], 'no check ran in a sandbox');
   // A `here` task on the default branch has no branch of its own to publish; nothing is committed first.
   await assert.rejects(f.controller.pushPlan(task.id), /default branch/);
   assert.equal(git(f.root, ['rev-parse', 'HEAD']), head);
