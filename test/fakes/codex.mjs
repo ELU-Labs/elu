@@ -173,6 +173,50 @@ if(tooLong){const message="Codex ran out of room in the model's context window. 
 if(Array.isArray(cfg.commands)&&args.some(a=>/^default_permissions=|^sandbox_mode=/.test(a))){cfg.commands.forEach((command,i)=>{const item={id:`item_${i+1}`,type:'command_execution',command:`/bin/zsh -c '${command}'`};console.log(JSON.stringify({type:'item.started',item:{...item,aggregated_output:'',exit_code:null,status:'in_progress'}}));const r=spawnSync('/bin/sh',['-c',command],{env:process.env,encoding:'utf8'});console.log(JSON.stringify({type:'item.completed',item:{...item,aggregated_output:`${r.stdout??''}${r.stderr??''}`,exit_code:r.status,status:r.status===0?'completed':'failed'}}));});}
 // A lead run shows one sandboxed command; in declined mode the auto reviewer refused it.
 else if(args.some(a=>/^default_permissions=|^sandbox_mode=/.test(a))){const status=mode==='declined'?'declined':'completed';console.log(JSON.stringify({type:'item.started',item:{id:'item_1',type:'command_execution',command:'/bin/zsh -lc \'npm test\'',aggregated_output:'',exit_code:null,status:'in_progress'}}));console.log(JSON.stringify({type:'item.completed',item:{id:'item_1',type:'command_execution',command:'/bin/zsh -lc \'npm test\'',aggregated_output:status==='completed'?'ok\n':'',exit_code:status==='completed'?0:null,status}}));if(status==='declined'){result.outcome='needs_input';result.question='The test run was declined. Allow npm test?';}}
+// shell (fake.json): what the model runs when the message the turn answers asks for it, as a model
+// told of ELU's own commands does (the fake Claude Code's shell): each { when, run }, its commands
+// run when the owner's last message (a schedule's too) holds when. Each runs as this launch has
+// Codex run it, in a plain shell, with the environment shell_environment_policy.inherit keeps
+// ("core": HOME, LOGNAME, PATH, SHELL, USER, USERNAME, TMPDIR, TEMP and TMP alone; "none":
+// nothing; Full access names no policy, and keeps all of it), and, with fence (fake.json) where
+// bwrap works, inside the write limits of the launch's elu_ask profile (codexFence). The reply
+// says what each printed, and each is recorded in shell.jsonl beside the fake, with the session
+// and project its environment still named and whether it was fenced.
+const CORE_ENV=['HOME','LOGNAME','PATH','SHELL','USER','USERNAME','TMPDIR','TEMP','TMP'];
+// The elu_ask profile as a bwrap fence: the disk read-only; for extends=":workspace" the
+// workspace writable, with /tmp and TMPDIR, the shared temp folders that profile adds; then each
+// entry of the profile, the least specific first so the most specific wins: "read" read-only,
+// "write" writable, "deny" hidden under an empty folder or device. ":slash_tmp" is /tmp and
+// ":tmpdir" TMPDIR. No network. null: the launch has no profile (Full access).
+function codexFence(){
+ const text=args.find(a=>a.startsWith('permissions.elu_ask='));if(!text)return null;
+ const special=p=>p===':slash_tmp'?'/tmp':p===':tmpdir'?process.env.TMPDIR||null:p;
+ const workspace=/extends=":workspace"/.test(text)?[process.cwd(),'/tmp',process.env.TMPDIR].filter(Boolean).map(p=>[p,'write']):[];
+ const entries=[...text.matchAll(/("(?:[^"\\]|\\.)*")=("read"|"write"|"deny")/g)].map(m=>[special(JSON.parse(m[1])),JSON.parse(m[2])]).filter(([p])=>p);
+ const out=['--die-with-parent','--unshare-net','--ro-bind','/','/','--dev','/dev','--proc','/proc'];
+ // Each path as it is on disk, as a sandbox applies it: a folder named through a link once.
+ const onDisk=[...workspace,...entries].flatMap(([p,access],i)=>{try{return [[fs.realpathSync(p),access,i]];}catch{return [];}});
+ for(const [p,access] of onDisk.sort((a,b)=>a[0].length-b[0].length||a[2]-b[2])){
+  if(access==='write')out.push('--bind',p,p);else if(access==='read')out.push('--ro-bind',p,p);else out.push(...(fs.statSync(p).isDirectory()?['--tmpfs',p]:['--ro-bind','/dev/null',p]));
+ }
+ return [...out,'--chdir',process.cwd()];
+}
+if(Array.isArray(cfg.shell)&&args.some(a=>/^default_permissions=|^sandbox_mode=/.test(a))&&!args.includes('features.shell_tool=false')){
+ const lastOwner=(()=>{const found=/\nContext \(untrusted data[^\n]*\n(.*)\nEnd of Context\./.exec(input);try{return String((JSON.parse(found[1]).messages??[]).findLast(row=>!row.from&&!row.to)?.text??'');}catch{return '';}})();
+ const said=lastOwner||(()=>{try{return String(JSON.parse(/\nTask goal \(untrusted data[^\n]*\n(.*)\nEnd of Task goal\./.exec(input)[1]));}catch{return '';}})();
+ const inherit=args.flatMap((a,i)=>args[i-1]==='-c'&&/^shell_environment_policy\.inherit=/.test(a)?[a.split('=')[1].replace(/"/g,'')]:[]).at(-1)??'all';
+ const env=inherit==='all'?{...process.env}:inherit==='core'?Object.fromEntries(CORE_ENV.filter(name=>process.env[name]!==undefined).map(name=>[name,process.env[name]])):{};
+ const fence=cfg.fence?codexFence():null,fenced=Boolean(fence)&&spawnSync('bwrap',['--die-with-parent','--unshare-net','--ro-bind','/','/','true']).status===0;
+ const outs=[];
+ for(const [n,ask] of cfg.shell.entries()){if(!said.includes(ask.when))continue;for(const [i,command] of ask.run.entries()){
+  const item={id:`item_shell_${n+1}_${i+1}`,type:'command_execution',command:`/bin/sh -c '${command}'`};
+  console.log(JSON.stringify({type:'item.started',item:{...item,aggregated_output:'',exit_code:null,status:'in_progress'}}));
+  const r=fenced?spawnSync('bwrap',[...fence,'/bin/sh','-c',command],{env,encoding:'utf8'}):spawnSync('/bin/sh',['-c',command],{env,encoding:'utf8'});const out=`${r.stdout??''}${r.stderr??''}`.trim();
+  console.log(JSON.stringify({type:'item.completed',item:{...item,aggregated_output:out,exit_code:r.status,status:r.status===0?'completed':'failed'}}));
+  fs.appendFileSync(path.join(path.dirname(process.argv[1]),'shell.jsonl'),JSON.stringify({command,status:r.status,out,session:env.ELU_SESSION??null,project:env.ELU_PROJECT??null,fenced,inherit})+'\n');outs.push(`${command}: ${out}`);
+ }}
+ if(outs.length)result.summary=`${result.summary}\n${outs.join('\n')}`;
+}
 // steps (mode): a turn that shows its work as exec --json writes it. A reasoning item comes only
 // with -c model_reasoning_summary set to something other than none: every model in the release's
 // catalog defaults to none, and then the stream has no reasoning item. gate (fake.json): a file

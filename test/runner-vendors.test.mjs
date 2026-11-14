@@ -134,16 +134,17 @@ for (const [mode, label] of [['ask', 'Ask for approval'], ['auto', 'Approve for 
 // The commands run as Claude Code runs them: from a shell whose PATH starts with the system
 // folders again, so gh is not run here (the one found first may be a real one).
 test('a Claude Code session in Full access runs push and tags, in a script too: no deny rule, no stand-in, none put back on PATH', async t => {
-  const f = setup(t, 'claude', { commands: [...FULL_COMMANDS, 'printf "%s" "${CLAUDE_ENV_FILE:-none}"', 'command -v git'] }), w = fullWorld(f);
+  const f = setup(t, 'claude', { commands: [...FULL_COMMANDS, 'cat "${CLAUDE_ENV_FILE:?none}"', 'command -v git'] }), w = fullWorld(f);
   const task = await f.controller.ask('Publish it.', null, { permissions: 'full' }).finished;
   assert.equal(task.state, 'answered', JSON.stringify(task.error));
   const [run] = task.runs, printed = fs.readFileSync(run.logFile, 'utf8').trim().split('\n').map(line => JSON.parse(line)).filter(row => row.type === 'user').map(row => row.message.content[0].content);
   assert.ok(printed.every(out => !out.startsWith('Exit code')), printed.join('\n'));
   assert.equal(printed[1].trim(), 'backup/from-session', 'git push -u set the upstream');
   assert.deepEqual(w.refs(), ['refs/heads/any-option', 'refs/heads/from-script', 'refs/heads/from-session', 'refs/tags/v1']);
-  // The one file Claude Code runs before each command puts ELU's own elu first (lib/session-commands.mjs), and no stand-in.
+  // The one file Claude Code runs before each command puts the turn's own elu first (lib/session-commands.mjs), and no stand-in.
   const envFile = printed[FULL_COMMANDS.length];
-  assert.ok(envFile !== 'none' && !fs.readFileSync(envFile, 'utf8').includes(shimsBase()), 'no file puts a stand-in folder back on PATH');
+  assert.match(envFile, /^export PATH='[^']*\/elu-code-own-[^/']+\/bin':"\$PATH"\n/, "the turn's own elu goes first");
+  assert.ok(!envFile.includes(shimsBase()), 'no file puts a stand-in folder back on PATH');
   assert.ok(!printed[FULL_COMMANDS.length + 1].startsWith(shimsBase()), 'git is the real one');
   assert.ok(printed[6].trim().split(path.delimiter).every(dir => dir !== shimsBase() && !dir.startsWith(`${shimsBase()}${path.sep}`)), 'no stand-in folder on the PATH');
   assert.equal(run.denials, undefined, 'nothing was refused');

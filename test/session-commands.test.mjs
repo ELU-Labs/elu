@@ -1,6 +1,8 @@
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { project, fakeClis, autoApprove, approvingConductor, CLI } from './helpers.mjs';
@@ -15,7 +17,8 @@ import { SCHEDULE_NOTE } from '../lib/bots.mjs';
 import { allowedBy } from '../lib/permission-rules.mjs';
 import { ADAPTERS } from '../lib/adapters/index.mjs';
 import { atomic, personalDirectory } from '../lib/util.mjs';
-import { OWN_COMMANDS, SESSIONS_HELP, SCHEDULES_HELP, TEAMMATE_REFUSAL } from '../lib/session-commands.mjs';
+import { OWN_COMMANDS, SESSIONS_HELP, SCHEDULES_HELP, TEAMMATE_REFUSAL, checkRequest, runOwnCommand } from '../lib/session-commands.mjs';
+import { answerApproval, pendingApprovals } from '../lib/approvals.mjs';
 
 // ELU from inside a session (README, "ELU from a session"): elu sessions and elu schedules,
 // from the owner's shell and from a turn, through the app's own records and locks.
@@ -109,6 +112,124 @@ test('a session told "archive this chat and start a new session that says hello"
   assert.deepEqual(json(elu(f, ['sessions', '--all', '--json'])).sessions.map(row => [row.id, row.archived]).sort(), [[first.id, true], [hello.id, false]].sort());
 });
 
+// Codex below Full access runs each command in its sandbox, with the core environment alone:
+// the fake runs it the same way, and with fence inside the profile's write limits where bwrap
+// works (test/fakes/codex.mjs shell). The turn's elu hands each command to ELU, which runs it.
+const BWRAP = spawnSync('bwrap', ['--die-with-parent', '--unshare-net', '--ro-bind', '/', '/', 'true']).status === 0;
+const waiting = (f, start) => pendingApprovals({ root: f.root }).find(row => row.summary.startsWith(start));
+const bothDone = (f, request) => sessions(f).some(task => task.goal === 'hello' && task.state === 'answered') && pendingRequests(f.root).find(row => row.id === request.id)?.state === 'done';
+async function endsArchivedWithHello(f, request, mode) {
+  await until(() => bothDone(f, request), 'both sessions');
+  const first = sessions(f).find(task => task.goal === ASK), hello = sessions(f).find(task => task.goal === 'hello');
+  await until(() => closed(f, first.id), 'the archive');
+  assert.ok(sessionClosed(readBoard(f.repo), readTask(f.repo, first.id)));
+  assert.ok(!closed(f, hello.id), 'the new session is in the list'); assert.equal(hello.permissions, mode);
+  assert.match(readTask(f.repo, first.id).result.summary, /is archived when this turn ends/);
+  return { first, hello };
+}
+async function codexStarted(t, mode, fake = {}) {
+  const f = setup(t, { shell: SHELL, fence: true, ...fake });
+  f.controller.setDefaultModel({ vendor: 'codex' });
+  f.conduct(); await until(() => conductorAlive(), 'the conductor');
+  return { f, request: enqueue(f.root, ASK, { priority: 0, typed: true, permissions: mode, bots: [] }) };
+}
+
+for (const [mode, label] of [['auto', 'Approve for me'], ['full', 'Full access']]) {
+  test(`a Codex session in ${label} told "${ASK}" ends archived, with the new session started`, { timeout: 90000 }, async t => {
+    const { f, request } = await codexStarted(t, mode);
+    const { first } = await endsArchivedWithHello(f, request, mode);
+    const ran = f.rows('shell.jsonl');
+    assert.deepEqual(ran.map(row => [row.command, row.status, row.out]), [['elu sessions archive this', 0, `Session ${first.id} "${ASK}" is archived when this turn ends.`], ['elu sessions new "hello"', 0, `Started a new session with ${label}: "hello". It shows in Sessions.`]]);
+    // Below Full access the commands had none of the session's environment, and could write
+    // only the turn's own folder; in Full access they had all of it.
+    assert.deepEqual(ran.map(row => [row.inherit, row.session, row.fenced]), mode === 'full' ? [['all', first.id, false], ['all', first.id, false]] : [['core', null, BWRAP], ['core', null, BWRAP]]);
+    assert.deepEqual(readTask(f.repo, first.id).approvals ?? [], [], 'nothing was asked');
+    assert.ok(f.inputs('codex').filter(row => OWN_COMMANDS.every(line => row.input.includes(line))).length >= 2, 'both sessions were told');
+  });
+}
+
+test('a Codex session in Ask for approval asks before each command, which waits for the answer, runs once allowed, and changes nothing once declined', { timeout: 120000 }, async t => {
+  const { f, request } = await codexStarted(t, 'ask');
+  await until(() => waiting(f, 'Run: elu sessions archive this'), 'the first question');
+  const first = sessions(f).find(task => task.goal === ASK);
+  // The command waits for the answer, and nothing has changed.
+  assert.equal(first.state, 'running'); assert.equal(f.rows('shell.jsonl').length, 0);
+  assert.ok(!fs.existsSync(path.join(f.repo.state, 'tasks', first.id, 'archive.json')));
+  assert.equal(waiting(f, 'Run: elu sessions archive this').summary, 'Run: elu sessions archive this');
+  assert.ok(answerApproval(waiting(f, 'Run: elu sessions archive this').id, 'allow'));
+  await until(() => waiting(f, 'Run: elu sessions new hello'), 'the second question');
+  assert.ok(!sessions(f).some(task => task.goal === 'hello'), 'no new session before the answer');
+  assert.deepEqual(f.rows('shell.jsonl').map(row => [row.command, row.status]), [['elu sessions archive this', 0]]);
+  assert.ok(answerApproval(waiting(f, 'Run: elu sessions new hello').id, 'allow'));
+  await endsArchivedWithHello(f, request, 'ask');
+  assert.deepEqual(f.rows('shell.jsonl').map(row => [row.command, row.status, row.session]), [['elu sessions archive this', 0, null], ['elu sessions new "hello"', 0, null]]);
+  assert.deepEqual(readTask(f.repo, first.id).approvals.map(row => [row.tool, row.summary, row.decision]), [['Bash', 'Run: elu sessions archive this', 'allow'], ['Bash', 'Run: elu sessions new hello', 'allow']]);
+  // Declined: the command says so, and nothing changes.
+  const again = enqueue(f.root, ASK, { priority: 0, typed: true, permissions: 'ask', bots: [] });
+  for (const start of ['Run: elu sessions archive this', 'Run: elu sessions new hello']) { await until(() => waiting(f, start), start); assert.ok(answerApproval(waiting(f, start).id, 'deny')); }
+  await until(() => pendingRequests(f.root).find(row => row.id === again.id)?.state === 'done', 'the second turn');
+  const second = sessions(f).find(task => task.goal === ASK && task.id !== first.id);
+  assert.deepEqual(f.rows('shell.jsonl').slice(2).map(row => [row.status, row.out]), [[1, 'The owner did not allow elu sessions archive this. Nothing was changed. Do not try it another way.'], [1, 'The owner did not allow elu sessions new hello. Nothing was changed. Do not try it another way.']]);
+  assert.equal(readTask(f.repo, second.id).state, 'answered');
+  assert.ok(!closed(f, second.id) && !fs.existsSync(path.join(f.repo.state, 'tasks', second.id, 'archive.json')));
+  assert.equal(sessions(f).filter(task => task.goal === 'hello').length, 1);
+});
+
+test("requests put in a Codex turn's folder by hand are held to its own session and mode, and read as data", { timeout: 90000 }, async t => {
+  // Each request is written straight into the folder, as a model that read the turn's elu could.
+  const drop = 'd="$(dirname "$(command -v elu)")/../requests"';
+  const answered = id => `i=0; while [ ! -f "$d/${id}.answer.json" ] && [ $i -lt 400 ]; do sleep 0.05; i=$((i+1)); done; cat "$d/${id}.answer.json"`;
+  const put = (write) => { const id = crypto.randomBytes(12).toString('hex'); return `${drop}; ${write(`"$d/${id}.request.json"`)}; ${answered(id)}`; };
+  const forged = (session, mode, argv) => put(file => `printf '%s' '${JSON.stringify({ v: 1, id: 'x', session, mode, argv, at: '2026-11-14T00:00:00.000Z' })}' > ${file}`);
+  // A link to a request kept elsewhere is not followed.
+  const elsewhere = fs.mkdtempSync(path.join(os.tmpdir(), 'elu-linked-')), linked = path.join(elsewhere, 'linked.json');
+  t.after(() => fs.rmSync(elsewhere, { recursive: true, force: true }));
+  fs.writeFileSync(linked, JSON.stringify({ v: 1, session: '2', mode: 'auto', argv: ['sessions', 'rename', 'this', 'Linked'] }));
+  const f = setup(t, { fence: true, shell: [{ when: 'forge them', run: [
+    forged('1', 'auto', ['sessions', 'archive', '1']),
+    forged('2', 'full', ['sessions', 'new', 'sneaky', '--mode', 'full']),
+    put(file => `ln -s ${JSON.stringify(linked)} ${file}`),
+    put(file => `printf 'not a request' > ${file}`),
+    forged('2', 'auto', ['sessions', 'rename', 'this', 'Forged']),
+  ] }] });
+  const other = await f.controller.ask('Where is normalization?', null, { permissions: 'ask' }).finished;
+  assert.equal(String(other.id), '1');
+  f.controller.setDefaultModel({ vendor: 'codex' });
+  f.conduct(); await until(() => conductorAlive(), 'the conductor');
+  const request = enqueue(f.root, 'forge them', { priority: 0, typed: true, permissions: 'auto', bots: [] });
+  await until(() => pendingRequests(f.root).find(row => row.id === request.id)?.state === 'done', 'the turn');
+  const forging = sessions(f).find(task => task.goal === 'forge them');
+  assert.equal(String(forging.id), '2');
+  const answers = f.rows('shell.jsonl').map(row => { assert.equal(row.status, 0, row.out); return JSON.parse(row.out); });
+  const unread = { code: 1, err: 'ELU could not read this request. Nothing was changed.\n' };
+  assert.deepEqual(answers.slice(0, 4), [
+    { code: 1, err: 'This request names session "1", not the session it came from. Nothing was changed.\n' },
+    { code: 1, err: "This request asks for Full access, more than this session's Approve for me. Nothing was changed.\n" },
+    unread, unread,
+  ]);
+  // Its own session, at its own mode: the same as the command itself.
+  assert.equal(answers[4].code, 0, answers[4].err);
+  assert.equal(readTask(f.repo, '2').title, 'Forged');
+  assert.ok(!closed(f, '1')); assert.ok(!pendingRequests(f.root).some(row => row.goal === 'sneaky'));
+  assert.ok(f.rows('shell.jsonl').every(row => row.inherit === 'core' && row.fenced === BWRAP));
+});
+
+test('Grok Build in Ask for approval asks once for each command over ACP, and ELU runs what the owner allowed without asking again', { timeout: 120000 }, async t => {
+  const f = setup(t, { shell: SHELL });
+  fs.mkdirSync(path.join(f.parent, '.grok')); fs.writeFileSync(path.join(f.parent, '.grok', 'auth.json'), '{}\n', { mode: 0o600 });
+  atomic(path.join(personalDirectory(), 'conformance', 'grok.json'), { v: 1, bin: path.join(f.dir, 'grok'), version: '1.0.77', steps: Object.fromEntries(ADAPTERS.grok.conformance.map(step => [step.id, 'pass'])), relay: true, at: new Date().toISOString() });
+  f.controller.setDefaultModel({ vendor: 'grok' });
+  f.conduct(); await until(() => conductorAlive(), 'the conductor');
+  const request = enqueue(f.root, ASK, { priority: 0, typed: true, permissions: 'ask', bots: [] });
+  for (const start of ['Run elu sessions archive this', 'Run elu sessions new']) { await until(() => waiting(f, start), start); assert.ok(answerApproval(waiting(f, start).id, 'allow')); }
+  const { first } = await endsArchivedWithHello(f, request, 'ask');
+  assert.deepEqual(f.rows('shell.jsonl').map(row => [row.command, row.status]), [['elu sessions archive this', 0], ['elu sessions new "hello"', 0]]);
+  // The two questions Grok Build asked, and none of ELU's own after them.
+  const approvals = readTask(f.repo, first.id).approvals;
+  assert.deepEqual(approvals.map(row => row.decision), ['allow', 'allow']);
+  assert.ok(approvals.every(row => !/-own-[0-9]+$/.test(row.id)), JSON.stringify(approvals));
+});
+
 test('a schedule whose message says the same does it on each run', { timeout: 120000 }, async t => {
   const f = setup(t, { shell: SHELL });
   f.conduct(); await until(() => conductorAlive(), 'the conductor');
@@ -142,17 +263,25 @@ test("a session that keeps its schedule on its record (scheduleId) is listed wit
   assert.match(elu(f, ['sessions']).stdout, / {2}"Check the build" {2}· from schedule every 3h\n/);
 });
 
-test("a teammate's question is never told the commands, and they refuse to run from it", async t => {
-  const f = setup(t);
+test("a teammate's question is never told the commands, has no elu of its own, and they refuse to run from it", async t => {
+  const f = setup(t, { envs: true });
   const peer = await f.controller.ask('Answer the question from @sara.', null, { origin: origin('ask'), readOnly: true, context: 'Where is normalization?' }).finished;
   const own = await f.controller.ask('Where is normalization?', null, { permissions: 'ask' }).finished;
   const [asked, mine] = f.inputs('claude');
   assert.ok(!asked.input.includes(OWN_COMMANDS[0]) && !asked.input.includes('elu sessions'), "the teammate's question is not told");
   assert.ok(mine.input.includes(OWN_COMMANDS[0]) && mine.input.includes(OWN_COMMANDS[1]), "the owner's session is told");
+  // Only the owner's own turn was started with a folder to hand commands to ELU through.
+  const launched = f.leads().filter(call => call.own);
+  assert.ok(launched.length > 0 && launched.every(call => /\/elu-code-own-[^/]+\/bin$/.test(call.own) && call.session === String(own.id)), JSON.stringify(f.leads()));
+  assert.ok(!f.leads().some(call => call.session === String(peer.id)), "the teammate's run has none");
   for (const args of [['sessions'], ['sessions', 'archive', String(own.id)], ['sessions', 'new', 'hello'], ['schedules'], ['schedules', 'add', 'every', '3h', 'check', 'the', 'build']]) {
     const r = elu(f, args, { session: peer.id });
     assert.equal(r.status, 1, args.join(' ')); assert.equal(r.stderr, `${TEAMMATE_REFUSAL}\n`);
+    // Handed to ELU as from the teammate's run, the same.
+    assert.deepEqual(await runOwnCommand(args, { repo: f.repo, taskId: peer.id, mode: 'full' }), { code: 1, err: `${TEAMMATE_REFUSAL}\n` });
   }
+  // A request naming the teammate's session, put in the owner's turn's folder, is not run there.
+  assert.throws(() => checkRequest({ session: String(peer.id), mode: 'ask', argv: ['sessions', 'archive', String(own.id)] }, { taskId: own.id, mode: 'ask' }), /not the session it came from/);
   assert.ok(!closed(f, own.id)); assert.deepEqual(listSchedules(), []);
 });
 
@@ -211,13 +340,21 @@ test('each vendor of the owner\'s session is told the commands; the shell can ru
   assert.equal(allowedBy('Bash', { command: 'elu sessions archive this' }, { ...ctx, mode: 'ask' }), null);
   assert.equal(allowedBy('Bash', { command: 'elu uninstall --yes' }, { ...ctx, mode: 'auto' }), null);
   assert.equal(allowedBy('Bash', { command: 'elu sessions archive this && rm -rf src' }, { ...ctx, mode: 'auto' }), null);
-  // Codex: in Full access it is told; its sandbox below it keeps ELU's files from every command, so there it is not.
+  // Codex: told in every mode. Below Full access its sandbox keeps ELU's own files and the
+  // session's environment from commands, so the turn's elu hands each one to ELU through a
+  // folder of the turn's own, the one place the profile lets a command write besides the work.
   f.controller.setDefaultModel({ vendor: 'codex' });
-  await f.controller.ask('Where is normalization? codex full', null, { permissions: 'full' }).finished;
-  await f.controller.ask('Where is normalization? codex ask', null, { permissions: 'ask' }).finished;
+  for (const mode of ['ask', 'auto', 'full']) await f.controller.ask(`Where is normalization? codex ${mode}`, null, { permissions: mode }).finished;
   const codex = f.inputs('codex');
-  assert.ok(OWN_COMMANDS.every(line => codex.find(row => row.input.includes('codex full')).input.includes(line)));
-  assert.ok(!codex.find(row => row.input.includes('codex ask')).input.includes(OWN_COMMANDS[0]));
+  for (const mode of ['ask', 'auto', 'full']) assert.ok(OWN_COMMANDS.every(line => codex.find(row => row.input.includes(`codex ${mode}`)).input.includes(line)), `Codex in ${mode} is told`);
+  const profiles = f.rows('../calls.jsonl').filter(call => call.vendor === 'codex' && call.args.includes('default_permissions="elu_ask"')).map(call => call.args.find(arg => arg.startsWith('permissions.elu_ask=')));
+  assert.equal(profiles.length, 2, 'Ask for approval and Approve for me');
+  for (const value of profiles) {
+    const writes = [...value.matchAll(/"([^"]+)"="write"/g)].map(match => match[1]);
+    assert.ok(writes.length > 0 && writes.every(dir => /\/elu-code-own-[^/]+\/requests$/.test(dir)), value);
+    assert.ok(writes.every(dir => !fs.existsSync(path.dirname(dir))), 'the folder goes with the turn');
+    assert.ok(value.includes(`${JSON.stringify(personalDirectory())}="deny"`), "ELU's own files stay denied");
+  }
   // Grok Build and Antigravity: told in every mode with permissions.
   fs.mkdirSync(path.join(f.parent, '.grok')); fs.writeFileSync(path.join(f.parent, '.grok', 'auth.json'), '{}\n', { mode: 0o600 });
   atomic(path.join(personalDirectory(), 'conformance', 'grok.json'), { v: 1, bin: path.join(f.dir, 'grok'), version: '1.0.77', steps: Object.fromEntries(ADAPTERS.grok.conformance.map(step => [step.id, 'pass'])), relay: true, at: new Date().toISOString() });
