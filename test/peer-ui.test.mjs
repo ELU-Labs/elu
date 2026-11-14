@@ -1191,6 +1191,38 @@ test('over a session on my other computer whose Task waits, a plainly typed yes 
   await until(() => pendingRequests(p.root).some(row => row.helps), 'the yes goes to my agent here');
   assert.equal(sent('remoteTask').length, 2); assert.equal(sent('remoteSend').length, 1);
 });
+// A run on my other computer that waits to start there says in its title row what it waits
+// for, in the words its chat says it, never only "starting": it is not at work.
+test('a run that waits to start on my other computer says in its title row what it waits for, at 140 and at 80 columns', async t => {
+  const at = new Date().toISOString(), id = '66666666-6666-4666-8666-666666666666';
+  const p = project(later(t)); environment(t, p.parent);
+  const remote = [{ id, machine: SARA, createdAt: at, lastAt: at, title: 'Check the nightly build', text: 'Check the nightly build', project: 'billing', state: 'starting', queued: true, waits: { on: 'slot', running: 1, limit: 1 }, mode: 'auto', place: 'worktree', steps: [], entries: [], approvals: [] }];
+  const peer = fakePeer({ items: [], mine: [{ key: SARA, mine: true, theirs: true }], remote }), v = await view(t, { columns: 140, rows: 50, repo: repository(p.root), dashboard: true, peer });
+  const board = v.panels.board, header = () => v.panels.header.getText().trim().replace(/ {2}· {2}/g, ' · ');
+  const titled = async (want, what) => { try { await until(() => typeof want === 'string' ? header() === want : want.test(header()), what); } catch { assert.fail(`${what}: "${header()}"`); } };
+  const redraw = (columns, rows) => { v.output.columns = columns; v.output.rows = rows; v.output.emit('resize'); };
+  await until(() => board.items.map(plainItem).some(row => /Check the nightly build/.test(row)), 'its row');
+  board.focus(); selectRow(board, /Check the nightly build/);
+  // Its chat says the wait in a sentence; the title row says it in a few words, never "starting".
+  await until(() => /Waiting for a free slot: 1 of 1 session is running\. \/slots on @sara-box changes it\./.test(v.panels.chat.getText()), 'its chat says what it waits for');
+  await titled('billing · Check the nightly build · waiting for a free slot · Auto', 'the title at 140 columns');
+  redraw(80, 24); await until(() => v.current.screen.width === 80, '80 columns');
+  // The request is cut to the room left, at a word; the wait and the mode stay whole.
+  await titled(/^Check the[\w ]*… · waiting for a free slot · Auto$/, 'the title at 80 columns');
+  // Each other wait in its own words.
+  Object.assign(remote[0], { waits: { on: 'teammates', running: 1, limit: 1 } }); redraw(140, 50);
+  await titled('billing · Check the nightly build · waiting for a teammate slot · Auto', 'a teammate slot');
+  Object.assign(remote[0], { waits: { on: 'turn' } }); redraw(140, 50);
+  await titled('billing · Check the nightly build · waiting for the current turn · Auto', 'the current turn of its session');
+  Object.assign(remote[0], { waits: { on: 'time', until: new Date(Date.now() + 300000).toISOString(), why: 'The model was busy.' } }); redraw(140, 50);
+  await titled('billing · Check the nightly build · waiting to try again · Auto', 'a time');
+  // One kept here until that computer connects says so, as its row does.
+  Object.assign(remote[0], { waits: undefined, queued: undefined, unsent: true }); redraw(140, 50);
+  await titled('billing · Check the nightly build · not sent yet · Auto', 'not sent yet');
+  // Once it starts there it is at work.
+  Object.assign(remote[0], { unsent: undefined, state: 'running' }); redraw(140, 50);
+  await titled('billing · Check the nightly build · working · Auto', 'at work');
+});
 // A session on my other computer beside the list is named over it as a session here is: its
 // project, its request, its state and its mode, cut to the room as a session here is.
 test('a session on my other computer beside the list has its title row: project, request, state and mode, at 140 and at 80 columns', async t => {
