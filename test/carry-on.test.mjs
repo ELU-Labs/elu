@@ -96,9 +96,9 @@ test('carried on once: a second window, or the app opened again before the turn 
   await until(() => readTask(p.repo, id).state === 'answered', 'the carried on turn');
 });
 
-test('in Ask for approval and Read only a session stopped at the cap waits for a reply; so do one the owner archived, a teammate\'s, and one stopped for any other reason', async t => {
+test('in Ask for approval and Read only a session stopped at the cap waits for a reply; so do one the owner archived, a teammate\'s, one stopped for any other reason, and one whose reply already waits for its turn', async t => {
   const p = setup(t), conductor = conduct(t);
-  const ask = await capStopped(t, p, 'ask'), quiet = await capStopped(t, p, 'full'), theirs = await capStopped(t, p, 'full'), locked = await capStopped(t, p, 'full'), archived = await capStopped(t, p, 'auto');
+  const ask = await capStopped(t, p, 'ask'), quiet = await capStopped(t, p, 'full'), theirs = await capStopped(t, p, 'full'), locked = await capStopped(t, p, 'full'), archived = await capStopped(t, p, 'auto'), replied = await capStopped(t, p, 'full');
   await conductor.stop(); LIVE.get(t).length = 0;
   const change = (id, fields) => { const task = readTask(p.repo, id); Object.assign(task, fields); saveTask(p.repo, task); };
   // Stopped by the quiet limit, which this version still has: the owner's reply carries it on.
@@ -106,10 +106,13 @@ test('in Ask for approval and Read only a session stopped at the cap waits for a
   change(theirs, { origin: { kind: 'handoff', peer: 'b'.repeat(64), name: 'sara', threadId: 'thread-1', own: true } });
   { const task = readTask(p.repo, locked); delete task.permissions; saveTask(p.repo, task); }
   await new Promise(resolve => setTimeout(resolve, 5)); closeSession(p.repo, archived);
+  // The owner replied before the app was closed, and the reply has not had its turn: that reply carries it on.
+  enqueue(p.root, 'Go on', { continuationTaskId: replied });
   const sent = [];
   assert.equal(carryOnCapped({ enqueue: (...args) => { sent.push(args); } }), 0); assert.deepEqual(sent, []);
-  for (const id of [ask, theirs, locked, archived]) assert.equal(stopLine(readTask(p.repo, id)).text, 'Stopped by a time limit an earlier version had. Reply to carry on.', id);
+  for (const id of [ask, theirs, locked, archived, replied]) assert.equal(stopLine(readTask(p.repo, id)).text, 'Stopped by a time limit an earlier version had. Reply to carry on.', id);
   assert.equal(stopLine(readTask(p.repo, quiet)).text, 'Stopped after 10 minutes with no output. Reply to carry on.');
+  assert.equal(readTask(p.repo, replied).error.carried, undefined, 'left for the app\'s next open, should that reply be taken back');
   // The owner gives the first one Full access: the app's next open carries it on.
   change(ask, { permissions: 'full' });
   assert.equal(carryOnCapped({ enqueue: (...args) => { sent.push(args); } }), 1); assert.deepEqual(sent.map(args => args[2].continuationTaskId), [ask]);
