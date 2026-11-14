@@ -50,7 +50,7 @@ test('a computer with only Grok Build: the first message below Full access runs 
   const first = await f.send('Reply done with the summary "grok answered".', null, { permissions: 'ask' });
   // Before: "Grok Build did not pass its check on this machine, so it stays off here. Not proven:
   // no other tool's settings reach its turn (Claude or Cursor configuration reached the run:
-  // cursor, cursor, cursor). Your next message to it runs the check again."
+  // cursor, cursor, cursor). Your next message to it outside Full access runs the check again."
   assert.equal(first.state, 'answered', why(first)); assert.equal(first.result.summary, 'grok answered');
   assert.deepEqual(notPassed(), [], 'every step passed, the one that reads what else it loads too');
   assert.deepEqual(said(first), [FIRST, 'Grok Build 1.0.77 passed its check on this machine.']);

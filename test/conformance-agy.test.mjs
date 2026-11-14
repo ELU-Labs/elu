@@ -447,5 +447,5 @@ test('the conformance steps pass against the fake and record relay; a vendor tha
   fake.set({ signedIn: false });
   const out = await runConformance('agy', { bin: fake.bin, version: '1.5.4', scratch: scratch('s4'), env: process.env, log: line => log.push(line) });
   assert.equal(out.steps.signin, 'fail'); assert.ok(log.some(line => line === 'signin: fail: not signed in for ELU; sign it in with s on its line in the Usage tab'));
-  assert.throws(() => requireConformance('agy', { bin: fake.bin, version: '1.5.4' }), /^EluCodeError: Antigravity CLI \(the agy command\) did not pass its check on this machine, so it runs in Full access only here\. Not proven: it is signed in \(not signed in for ELU; sign it in with s on its line in the Usage tab\), and \d more\. Your next message to it runs the check again\.$/);
+  assert.throws(() => requireConformance('agy', { bin: fake.bin, version: '1.5.4' }), /^EluCodeError: Antigravity CLI \(the agy command\) did not pass its check on this machine, so it runs in Full access only here\. Not proven: it is signed in \(not signed in for ELU; sign it in with s on its line in the Usage tab\), and \d more\. Your next message to it outside Full access runs the check again\.$/);
 });

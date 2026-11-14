@@ -407,7 +407,7 @@ test('a required step that is not proven turns off Read only and the two asking 
   const third = await runConformance('grok', { bin: out.bin, version: '1.0.77', scratch: path.join(out.dir, 'scratch'), env: out.env });
   assert.equal(third.steps.signin, 'fail'); assert.equal(third.steps.relay, 'fail');
   // Signing in changes this one: the next message checks again.
-  assert.throws(() => requireConformance('grok', { bin: out.bin, version: '1.0.77' }), /^EluCodeError: Grok Build \(the grok command\) did not pass its check on this machine, so it runs in Full access only here\. Not proven: it is signed in \(not signed in; sign it in with s on its line in the Usage tab\), and \d more\. Your next message to it runs the check again\.$/);
+  assert.throws(() => requireConformance('grok', { bin: out.bin, version: '1.0.77' }), /^EluCodeError: Grok Build \(the grok command\) did not pass its check on this machine, so it runs in Full access only here\. Not proven: it is signed in \(not signed in; sign it in with s on its line in the Usage tab\), and \d more\. Your next message to it outside Full access runs the check again\.$/);
   assert.equal(checkResult('grok', { bin: out.bin, version: '1.0.77' }).again, true);
 });
 

@@ -77,12 +77,13 @@ What a result turns off:
 
 - **A required step is not proven.** Read only, Ask and Auto are off, and the session says
   which step and why, for example
-  `Grok Build did not pass its check on this machine, so it runs in Full access only here. Not proven: a read-only turn runs no command (locked run ran a shell command).`
-  Full access is never turned off by the check: it runs Grok as it is, and says the result
-  once, also when you switch such a session to Full access. In a Full access session a bot
-  that only answers, a shadow and a review run on it too. Your next message runs the check again only when that can change the result (you
-  signed in, say). A step that failed because Grok did what the step forbids stays failed
-  until `c` in the Usage tab checks again.
+  `Grok Build (the grok command) did not pass its check on this machine, so it runs in Full access only here. Not proven: a read-only turn runs no command (locked run ran a shell command).`
+  Full access is never turned off by the check: it runs Grok as it is. A session that the
+  failed check stopped says the result once when you switch it to Full access. In a Full
+  access session a bot that only answers, a shadow and a review run on it too. Your next
+  message outside Full access runs the check again only when that can change the result
+  (you signed in, say). A step that failed because Grok did what the step forbids stays
+  failed until `c` in the Usage tab checks again.
 - **`relay` fails.** Ask and Auto still work, but a blocked action is reported instead of
   asked: `Grok can't ask live here. Blocked actions are reported.`
 - **`isolation` finds something.** Nothing is turned off by that alone. Text the model reads

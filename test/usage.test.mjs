@@ -200,7 +200,7 @@ test('the Usage tab names the active account per vendor, lists the others, and h
   assert.match(text, /^ {12}5h  \[------\]    —   not reported$/m); assert.match(text, /^ {12}wk  \[#-----\]   12%  resets /m);
   assert.match(text, /^ {12}old@example.invalid · last seen \w{3} \d+ · wk 100% then$/m);
   assert.match(text, /^ {12}old@example.invalid · last seen \w{3} \d+ · wk 100% then\n {12}enter use · a add account · x forget$/m); assert.match(text, /^Codex {7}owner@example.invalid · Team · active$/m); assert.match(text, /^ {12}5h  \[##----\]   34%  resets /m);
-  assert.match(text, /^Antigravity \(agy\) not signed in for ELU · s signs in$/m); assert.match(text, /^Grok Build {2}not installed$/m);
+  assert.match(text, /^Antigravity not signed in for ELU · s signs in$/m); assert.match(text, /^Grok Build {2}not installed$/m);
   const details = usageDetailLines(claude, new Date(now)).join('\n');
   assert.match(details, /owner@example.invalid · Max 20x · default_claude_max_20x\nReported \d\d:\d\d\n\n5h  \[------\]    —   not reported\nwk  \[#-----\]   12%  resets /); assert.match(details, /Other accounts\nold@example.invalid · Pro · first seen/);
   assert.deepEqual(usageDetailLines(grok), ['Not installed.']); assert.deepEqual(usageDetailLines(agy), ['Not signed in for ELU. s signs it in.']);

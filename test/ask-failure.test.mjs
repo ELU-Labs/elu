@@ -110,7 +110,7 @@ test('each way a session a teammate\'s message started can fail is told in plain
   assert.equal(uncheckedText('grok'), 'Grok Build (the grok command) has not been checked on this machine yet. Your first message to it outside Full access runs the check; Full access needs none.');
   // The check is run there with c in the Usage tab, in any mode: a message runs it only below Full access.
   assert.equal(ended(p, kai, { error: uncheckedText('grok'), session: {} }), 'Grok Build (the grok command) has not been checked on @kai yet. Run the check of Grok Build with c on its line in the Usage tab of ELU on @kai, then send it again.');
-  assert.equal(ended(p, kai, { error: 'Grok Build (the grok command) did not pass its check on this machine (not proven: it asks before it writes). Your next message to it runs the check again.', session: {} }),
+  assert.equal(ended(p, kai, { error: 'Grok Build (the grok command) did not pass its check on this machine (not proven: it asks before it writes). Your next message to it outside Full access runs the check again.', session: {} }),
     'Grok Build (the grok command) did not pass its check on @kai (not proven: it asks before it writes). Run the check of Grok Build with c on its line in the Usage tab of ELU on @kai, then send it again.');
   // The run was stopped there, or ended with nothing to send.
   assert.equal(ended(p, kai, { error: 'Stopped by the owner.', outcome: 'stopped', session: { state: 'stopped' } }), 'It was stopped on @kai before it finished. Send it again.');
