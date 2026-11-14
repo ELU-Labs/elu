@@ -1736,13 +1736,13 @@ test('in Chats a teammate’s computer that marked this one as its own says so o
   // The line under the chat says it once, with the command that agrees.
   const said = /@sara-box says it is your computer\. \/mine @sara-box agrees\./;
   await until(() => said.test(status()), 'the line that says so', 8000);
-  // Its row goes by the name /mine finds it by, and says the same in the words the bar has room for.
-  await until(() => bar.items.some(item => /^● @sara-box\s+says it is yours( · \/mine @sara-box agrees)?$/.test(plainItem(item).trimEnd())), 'its row in the bar');
+  // Its row goes by the name /mine finds it by, and says that alone: Enter on it agrees.
+  await until(() => bar.items.some(item => /^● @sara-box\s+says it is yours$/.test(plainItem(item).trimEnd())), 'its row in the bar');
   const member = (asks, online = true) => ({ status: { key: ME, teams: [{ id: 'team-1', name: 'Core', members: [{ key: ME, name: 'ana' }, { key: SARA, name: 'sara-box', online, path: 'direct', asks }] }] }, items: [] });
   const drawn = (frame, width) => visible(chatBar(frame, width, false).find(row => row.value?.type === 'member').line).replace(/\s+/g, ' ').trim();
-  assert.equal(drawn(member('sara-box'), 78), '● @sara-box says it is yours · /mine @sara-box agrees');
+  assert.equal(drawn(member('sara-box'), 78), '● @sara-box says it is yours');
   assert.equal(drawn(member('sara-box'), 40), '● @sara-box says it is yours');
-  assert.equal(drawn(member('sara-box', false), 78), '○ @sara-box offline · says it is yours · /mine @sara-box agrees');
+  assert.equal(drawn(member('sara-box', false), 78), '○ @sara-box offline · says it is yours');
   assert.equal(drawn(member(undefined), 40), '● @sara-box direct', 'a teammate that says nothing reads as before');
   // Its screen says it too, and why GitHub did not pair the two.
   const title = 'Teammate @sara-box · says it is your computer';
@@ -1755,6 +1755,27 @@ test('in Chats a teammate’s computer that marked this one as its own says so o
   assert.doesNotMatch(status(), said, 'said once');
   // One command agrees: the row says yours at once.
   await send(v, '/mine @sara-box');
+  await until(() => peer.sent().some(command => command.type === 'mine' && command.key === SARA), 'the mark sent');
+  mine[0] = { key: SARA, mine: true, theirs: true, at: ago(0), theirsAt: ago(1) };
+  await until(() => /@sara-box is yours\./.test(status()), 'the line that it is yours');
+  await until(() => bar.items.some(item => /^● @sara-box\s+yours · direct$/.test(plainItem(item).trimEnd())), 'its row says yours');
+});
+
+test('in Chats Enter on a computer that says it is mine agrees, and a computer one of mine said is mine, on an older ELU, says to update it', { timeout: 30000 }, async t => {
+  const mine = [{ key: SARA, mine: false, theirs: true, at: null, theirsAt: ago(1) }, { key: LI, mine: true, theirs: false, at: ago(2), auto: 'vouch', by: 'd'.repeat(64), older: true }];
+  const peer = fakePeer({ items: [], mine, answer: command => command.type === 'mine' ? { both: true } : null });
+  const { v } = await teamView(t, { peer }), [bar] = v.panels.teamLists, status = () => v.panels.status.getText(), keys = () => v.panels.keys.getText().trim();
+  // Li is on 0.1.25: another computer of mine said it is mine, and it cannot take that until it updates.
+  await until(() => bar.items.some(item => /^○ @li\s+update ELU on @li$/.test(plainItem(item).trimEnd())), 'its row says to update ELU there');
+  const member = older => ({ status: { key: ME, teams: [{ id: 'team-1', name: 'Core', members: [{ key: ME, name: 'ana' }, { key: LI, name: 'li', online: true, path: 'direct', mine: true, waiting: true, self: 'ana', older }] }] }, items: [] });
+  const drawn = (frame, width) => visible(chatBar(frame, width, false).find(row => row.value?.type === 'member').line).replace(/\s+/g, ' ').trim();
+  assert.equal(drawn(member(true), 78), '● @li update ELU on @li');
+  assert.equal(drawn(member(false), 78), '● @li waiting for @li to agree · run /mine @ana there', 'one marked by hand waits as before');
+  // Enter on the row that says it is yours agrees.
+  await until(() => bar.items.some(item => /^● @sara-box\s+says it is yours$/.test(plainItem(item).trimEnd())), 'its row says it is yours');
+  selectRow(bar, /@sara-box/); bar.focus();
+  await until(() => /^enter agree/.test(keys()), 'the key bar says Enter agrees');
+  v.input.write('\r');
   await until(() => peer.sent().some(command => command.type === 'mine' && command.key === SARA), 'the mark sent');
   mine[0] = { key: SARA, mine: true, theirs: true, at: ago(0), theirsAt: ago(1) };
   await until(() => /@sara-box is yours\./.test(status()), 'the line that it is yours');
