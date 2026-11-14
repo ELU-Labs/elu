@@ -9,6 +9,7 @@ import { repository } from '../lib/git.mjs';
 import { launchTerminal } from '../lib/terminal.mjs';
 import { Conductor } from '../lib/conductor.mjs';
 import { saveTask, firstWords, firstLine, taskTitle, teammateText } from '../lib/state.mjs';
+import { columns, head } from '../lib/width.mjs';
 
 // Long text on screen: the idle app with a long message open, a dialog through a change of the
 // window's size. The app is the real one, on streams, as in terminal.test.mjs.
@@ -114,8 +115,9 @@ test('the name of a session is read from the start of its message, whatever the 
   // The same words as reading the whole message gives, for every shape of white space.
   const whole = (value, width) => {
     const text = String(value ?? '').replace(/\s+/g, ' ').trim();
-    if (text.length <= width) return text;
-    const cut = text.slice(0, width - 1), space = cut.lastIndexOf(' '), ends = /[\s,;:.!?]/.test(text[width - 1]);
+    // Counted in columns, as a row is: a wide character takes two, and is never cut in half.
+    if (columns(text) <= width) return text;
+    const cut = head(text, width - 1), space = cut.lastIndexOf(' '), ends = /[\s,;:.!?]/.test(text[cut.length]);
     return `${(ends || space <= 0 ? cut : cut.slice(0, space)).replace(/[\s,;:.!?-]+$/, '')}…`;
   };
   const parts = ['word', 'a', 'longer-word,', ' ', '  ', '\n', '\t', '\n\n', '.', 'x'.repeat(70), ' '.repeat(5000), 'é', '🙂'];
