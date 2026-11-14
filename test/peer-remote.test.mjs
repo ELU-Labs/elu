@@ -849,7 +849,7 @@ test('a computer of mine lists every session here, whoever started it, a page at
 // there as they leave Sessions here, and a run that waits to start takes the name the owner
 // gave the last one.
 test("a schedule's run shows on my other computer as a schedule's from its start, with its wording, and the runs it archived leave the list", async t => {
-  const { devbox, project, toHost, host } = pair(t), list = since => withHome(devbox.home, () => { relist(); return host['elu.remote.list'](since ? { since } : {}, toHost); });
+  const { devbox, project, toHost, host, hostCtx } = pair(t), list = since => withHome(devbox.home, () => { relist(); return host['elu.remote.list'](since ? { since } : {}, toHost); });
   const shown = listed => Object.fromEntries(listed.sessions.map(value => [value.ref.split(':').at(-1), [value.title, value.by, value.state]]));
   const row = withHome(devbox.home, () => {
     const row = saveSchedule({ root: project.root, goal: 'Check the nightly build\nand say what failed', when: parseWhen('every 3h') });
@@ -874,7 +874,14 @@ test("a schedule's run shows on my other computer as a schedule's from its start
     chat(project.root, 3, { goal: row.goal, minutes: 1, scheduleId: row.id }); setTitle(repository(project.root), '3', 'Nightly review');
     runScheduleNow(row.id, new Date(), { start: () => true });
   });
-  assert.deepEqual(list().sessions.map(value => [value.title, value.by, value.state]), [['Nightly review', 'schedule', 'starting']]);
+  const [waiting] = list().sessions;
+  assert.deepEqual([waiting.title, waiting.by, waiting.state], ['Nightly review', 'schedule', 'starting']);
+  // Followed from here while it waits, it goes by that name too.
+  const watched = withHome(devbox.home, () => host['elu.remote.watch']({ ref: waiting.ref }, toHost));
+  assert.equal(watched.title, 'Nightly review');
+  withHome(devbox.home, () => hostTick(hostCtx));
+  const pushed = toHost.sent.filter(([method]) => method === 'elu.remote.events').flatMap(([, params]) => params.items).filter(item => item.id === watched.id).flatMap(item => item.events);
+  assert.deepEqual(pushed.filter(event => event.state).map(event => [event.state, event.title]), [['starting', 'Nightly review']]);
 });
 
 // A message longer than one line on the link (1 MiB) goes ahead of its request in elu.text.put
