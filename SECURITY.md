@@ -243,10 +243,22 @@ repository, and is kept only from someone who proved it. For a public repository
 get the history, so any teammate can. `/share off` in a project keeps its sessions and its
 repositories to itself, and shows no teammate's session in it.
 
+**A project you share is the exception.** Sharing a project with a team is your say that its
+members may see it, so the cards of the sessions in that project's own repository also go to
+the members of that team who have no clone, and they keep them without a proof. They see them
+on the project's team board, which the project's row in their Projects tab opens. `/share off`
+and unsharing stop it.
+
 Every teammate on any of your teams is also told, whatever the status of your shares, this
 machine's name (the peer setting `box`, by default the first part of its host name), the
 bots you share and what each is for, the names of the projects shared with their team, and
 the repository ids (a hash of the `origin` remote) and first commit ids of those projects.
+The members of a team a project is shared with are also told that project's name and its git
+address, so it shows in their Projects tab and they can clone it: the `origin` remote when it
+is an https, http, ssh or git address, without any password or token that is written in it
+(an https address goes with no user at all). A remote that is a folder of this machine is
+never sent, and neither is the project's path. Neither is told of a project turned off with
+`/share off`. A teammate who clones it uses their own git sign-in: ELU sends none.
 Nothing else about your work is told: not a Task you have not approved or a rejected one,
 the rest of your request, the chat, file contents or absolute paths. A teammate's question
 and its answer are another matter, covered above.

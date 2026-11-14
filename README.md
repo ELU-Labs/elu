@@ -51,7 +51,7 @@ as `.env`, stops it until `.gitignore` keeps that file out.
 | Tab | What it shows |
 | --- | --- |
 | Sessions | Every session across your projects. The selected one is open beside the list. Typing on a row writes a message to it; a row's key is its letter, then Enter. |
-| Projects | Your projects. `n` makes one, `o` makes another the active one. |
+| Projects | Your projects. `n` makes one, `o` makes another the active one. A project a teammate shares that is not on this computer is listed too, as `ELU   shared by @ali   on @ali-mac`: Enter opens its team board, and `c` clones it here. |
 | Kanban | The open project's tasks and sessions: To do, In progress, Needs you, Done. On a team, everyone with a clone of the same repository shares one board: every session a teammate, or another computer of yours, runs in it shows in the same columns with who started it and on which machine, to read only. A project whose folder holds several repositories has a board for each. `/share off` keeps a project off it both ways. |
 | Chats | Your team's channels, your teammates and your bots. |
 | Bots | Your bots. `n` makes one, Enter opens one. |
@@ -320,6 +320,16 @@ every session you run in a repository a teammate also has is on their Kanban, wi
 its column, who started it and which machine, and theirs are on yours. Nothing else about it
 is sent: no chat, file or path. `/share off` in a project keeps it off both ways. The wire
 format is in [docs/peer-network.md](docs/peer-network.md).
+
+Teammates on a team a project is shared with see it in their Projects tab, also with no copy
+of it: its name, who shares it and on which machine. What they are told is the project's
+name, its handle and its git address (the `origin` remote, never with a password or a token
+in it), and the title, column and starter of each session in it. Enter on the row opens the
+project's team board, where the message box writes to whoever shares it: the message starts a
+session on their computer, under what they chose for the team. `c` clones the project from its
+git address into a folder you name; from then on it is a project of yours and the one row for
+it. A project with no git address says so: copy its folder to your computer and run ELU in
+it. `/share off`, unsharing the project, or leaving the team takes the row away.
 
 Teammates on a team a project is shared with also see the work in it: for each live
 editing task, the first line of its request and the paths of the files it changed, and the
