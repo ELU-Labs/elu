@@ -1467,8 +1467,8 @@ test('beside a window that has the project, /stop still stops a session here, an
   // The window that has it: its process, when it started, and its terminal when it has one.
   const started = clockTime(new Date(processIdentity(process.pid).slice(0, 24)));
   await until(() => /That window is/.test(status()), 'why it was not sent');
-  assert.match(status().replace(/\s+/g, ' '), new RegExp(`^› View only: another ELU window has this project\\. Close it, or /takeover here\\. That window is process ${process.pid}, started ${started}(, in terminal \\S+)?\\.$`));
-  assert.equal(panels.ask.getValue(), 'Also cover refunds', 'the message stays in the box');
+  assert.match(status().replace(/\s+/g, ' '), new RegExp(`^› View only: another ELU window has this project\\. Close it, or /takeover here\\. That window is process ${process.pid}, started ${started}(, in terminal \\S+)?\\. ↑ brings back what you typed\\.$`));
+  assert.equal(panels.ask.getValue(), '', 'the box is clear for a command, and ↑ brings the message back');
   assert.deepEqual(tasks()[0].messages.map(row => row.text), ['Keep working on the board'], 'nothing was sent');
   await send(second, '/stop'); await until(() => /Stopping\. Changes and chat history are kept\./.test(status()), 'the stop is taken');
   await until(() => tasks()[0].state === 'stopped', 'the session stopped');
@@ -1625,25 +1625,26 @@ test('every line of a view-only window shows whole at 80 columns, and names the 
   const other = staying(t); await until(() => psLine(other.child.pid), 'the other window');
   fs.writeFileSync(file, JSON.stringify({ pid: other.child.pid, identity: psLine(other.child.pid) }));
   const v = await view(t, { repo: p.repo }), panels = v.current.panels, label = () => panels.ask._label.getText();
-  const short = '› View only: the ELU window in pts/18 has it. Close it, or /takeover here.';
+  // A message it refuses leaves the box clear, and the line says how to get it back.
+  const short = '› View only: the ELU window in pts/18 has it. Close it, or /takeover here.', back = ' ↑ brings back what you typed.';
   await until(() => statusShown(v) === '› View only: another ELU window has this project. Close it, or /takeover here.' && label() === ' View only: another window has it · /takeover ', 'what it says on opening');
   assert.equal(panels.status.height, 2); assert.ok(label().length <= panels.ask.width - 4);
-  await send(v, 'Rename billing'); await shows(v, short, 'why it was not sent, whole');
-  assert.equal(panels.ask.getValue(), 'Rename billing', 'the message stays in the box');
+  await send(v, 'Rename billing'); await shows(v, short + back, 'why it was not sent, whole');
+  assert.equal(panels.ask.getValue(), '', 'the box is clear');
   // In a tab without the list the row is one line across the screen: still whole.
   click(v, panels.tabs[2]); await until(() => v.current.view === 'kanban', 'Kanban');
-  await send(v, '/model default opus'); await shows(v, short, 'refused in Kanban, whole'); assert.equal(panels.status.height, 1);
+  await send(v, '/model default opus'); await shows(v, short + back, 'refused in Kanban, whole'); assert.equal(panels.status.height, 2);
   click(v, panels.tabs[0]); await until(() => v.current.view === 'tasks', 'Sessions');
-  await send(v, 'Rename billing'); await shows(v, short, 'refused again');
+  await send(v, 'Rename billing'); await shows(v, short + back, 'refused again');
   // With room, the box names that window's terminal and the line its process and when it started.
   await wide(v);
   await until(() => label() === ' View only: another ELU window has it, in terminal pts/18 · close it, or /takeover ', 'the box names the terminal');
-  await until(() => new RegExp(`^› View only: another ELU window has this project\\. Close it, or /takeover here\\. That window is process ${other.child.pid}, started \\d{1,2}:\\d\\d [AP]M, in terminal pts/18\\.$`).test(statusShown(v)), 'the whole line with room');
-  await sized(v, 80, 24); await until(() => statusShown(v) === short && label() === ' View only: another window has it · /takeover ', 'short again at 80');
+  await until(() => new RegExp(`^› View only: another ELU window has this project\\. Close it, or /takeover here\\. That window is process ${other.child.pid}, started \\d{1,2}:\\d\\d [AP]M, in terminal pts/18\\. ↑ brings back what you typed\\.$`).test(statusShown(v)), 'the whole line with room');
+  await sized(v, 80, 24); await until(() => statusShown(v) === short + back && label() === ' View only: another window has it · /takeover ', 'short again at 80');
   // Under a Task that waits for approval, which has the row's first line: still whole.
   await openTask(v, /Round refund/); await send(v, 'Also cover refunds');
   const waits = '? Needs you · Esc, then y approve · n reject...';
-  await shows(v, `${waits} ${short}`, 'whole under the Task that waits'); assert.equal(panels.status.height, 3);
+  await shows(v, `${waits} ${short}${back}`, 'whole under the Task that waits');
   await send(v, '/takeover'); await shows(v, `${waits} › Asked the other ELU window to let go of this project.`, 'asked');
   other.child.kill('SIGKILL'); await other.ended;
   await shows(v, `${waits} › The other ELU window has closed. This window can make changes now.`, 'it says it took the project', 4000);
@@ -1693,6 +1694,128 @@ test('windows in different time zones ask each other for the project, and each k
   await until(() => /let go/.test(said), 'what was asked reaches the window that has the project');
   assert.equal(mine.retry(), true); assert.equal(mine.holderOpen, true, 'that window let go, and is still open');
   mine.release();
+});
+
+// A view-only window (another ELU window has the project) offers only what it can do.
+test('a view-only window says so on Kanban, offers no key that adds or changes a task, and a message it refuses leaves the box clear with ↑ to bring it back', { timeout: 30000 }, async t => {
+  const p = setup(t), { addCard } = await import('../lib/kanban.mjs');
+  addCard(p.repo, 'Rename the billing module');
+  const first = await view(t, { repo: p.repo }), second = await view(t, { repo: p.repo }), panels = second.current.panels;
+  const label = v => v.current.panels.ask._label.getText(), bar = v => v.current.panels.keys.getText().trim(), said = () => panels.status.getScreenLines().map(row => row.trim()).join(' ');
+  const cards = () => readBoard(p.repo).cards.map(card => card.text), todo = v => v.current.panels.kanbanLists[0];
+  // What a view-only window says when it refuses: the window that has the project, and with room which one it is.
+  const REFUSED = String.raw`View only: (?:another ELU window has this project|the ELU window in \S+ has it)\. Close it, or /takeover here\.(?: That window is [^↑]+?\.)?`, refusal = (tail = '') => new RegExp(`^› ${REFUSED}${tail}$`), BACK = String.raw` ↑ brings back what you typed\.`;
+  await until(() => second.current.controller?.readOnly === true && first.current.controller?.readOnly === false, 'the second window is view only');
+  for (const v of [first, second]) { await send(v, '/kanban'); await until(() => v.current.view === 'kanban' && todo(v).items.some(item => /^Rename the/.test(item.getText())), 'the card under To do'); }
+  // The window that has the project offers the task; the view-only one says what it is and offers none of it.
+  await until(() => / Add a task to To do · /.test(label(first)) && /^enter add to To do/.test(bar(first)), 'the first window adds tasks');
+  await until(() => /View only/.test(label(second)) && !/Add a task/.test(label(second)), 'the box says it is view only');
+  assert.equal(bar(second), '/ commands'); assert.equal(panels.newCard.hidden, true, 'no + New task button'); assert.equal(first.current.panels.newCard.hidden, false);
+  pickRow(todo(second), /^Rename the/); await until(() => bar(second) === '←→ columns', 'no start, edit, delete or new task on a card');
+  pickRow(todo(first), /^Rename the/); await until(() => bar(first) === '⇧→ start  enter edit  x delete  ←→ columns  n new task', 'the first window keeps them');
+  // Each of those keys is refused there, in one line, and changes nothing.
+  for (const [name, ch] of [['n', 'n'], ['x', 'x'], ['enter', '\r'], ['S-right', '>']]) {
+    panels.status.setContent(''); todo(second).focus(); second.input.write(ch);
+    await until(() => refusal().test(said()), `${name} is refused`);
+    assert.equal(second.current.screen.children.some(child => !child.destroyed && ['New task', 'Edit task'].includes(child.options?.label?.trim())), false, `${name} opens no dialog`);
+  }
+  // Enter on a column with nothing in it offers no task either.
+  panels.status.setContent(''); second.current.panels.kanbanLists[1].focus(); second.input.write('\r'); await until(() => said() === '› Nothing here.', 'an empty column');
+  first.current.panels.kanbanLists[1].focus(); first.input.write('\r'); await until(() => /Nothing here\. n adds a task to To do\./.test(first.current.panels.status.getText()), 'the first window names the key');
+  // A task typed in the box is refused too: nothing is added, the box is clear for a command, and ↑ brings the text back.
+  await send(second, 'Add retries to the uploader');
+  await until(() => refusal(BACK).test(said()), 'the refusal says so');
+  assert.equal(panels.ask.getValue(), '', 'the box is clear'); assert.deepEqual(cards(), ['Rename the billing module']);
+  panels.ask.focus(); panels.ask.readInput(); await until(() => panels.ask.__listener, 'the box reads');
+  second.input.write('\x1b[A'); await until(() => panels.ask.getValue() === 'Add retries to the uploader', '↑ brings it back');
+  panels.ask.clearValue();
+  // The same in Sessions: a message for a new session is refused, and the box is clear.
+  await send(second, '/sessions'); await until(() => second.current.view === 'tasks' && second.current.session === 'new', 'the new session form');
+  panels.ask.focus(); panels.ask.readInput(); await until(() => bar(second) === '/ commands  esc sessions', 'its box offers no send');
+  await send(second, 'Fix the flaky upload test');
+  await until(() => refusal(BACK).test(said().replace(/\s+/g, ' ')), 'refused in Sessions, on as many rows as it needs');
+  assert.equal(panels.ask.getValue(), ''); assert.deepEqual(pendingRequests(p.root), []);
+  second.input.write('\x1b[A'); await until(() => panels.ask.getValue() === 'Fix the flaky upload test', '↑ brings that one back');
+  // In the window that has the project the same text is a task.
+  await send(first, 'Add retries to the uploader'); await until(() => cards().length === 2, 'added there');
+  assert.deepEqual(cards().sort(), ['Add retries to the uploader', 'Rename the billing module']);
+});
+
+test('with TERM=dumb ELU says the terminal cannot draw it and what to do, and draws nothing', async t => {
+  environment(t, { TERM: 'dumb' });
+  const input = new PassThrough(), output = new PassThrough(); input.isTTY = output.isTTY = true; input.setRawMode = () => {}; output.columns = 80; output.rows = 24;
+  let raw = ''; output.on('data', value => { raw += value.toString(); });
+  const said = await launchTerminal({ input, output, peer: null }).then(() => null, error => error.message);
+  assert.equal(said, 'ELU cannot draw in this terminal: it is set to TERM=dumb.\nOpen ELU in a terminal window. If this is one, run:\n  TERM=xterm-256color elu');
+  // No row of it is cut by a terminal of 80 columns, and the command to copy has a row of its own.
+  assert.ok(said.split('\n').every(row => row.length < 80)); assert.equal(said.split('\n').at(-1).trim(), 'TERM=xterm-256color elu');
+  assert.equal(raw, '', 'nothing was drawn');
+});
+
+test('the status line shows a long message whole on as many rows as it needs, and the pane above gives them up, in every view at 80x24', { timeout: 60000 }, async t => {
+  const p = setup(t), v = await view(t, { repo: p.repo, peer: null }), panels = v.current.panels, g = geometry(80, 24);
+  const drawn = () => panels.status.getScreenLines().map(row => row.trimEnd()), whole = () => drawn().map((row, at) => at ? row.replace(/^ {2}/, '') : row.replace(/^› /, '')).join(' ');
+  // What /bots answers to words it does not know is one long line.
+  const LONG = 'Use /bots, /bots add NAME, /bots remove NAME, /bots schedule on NAME, /bots schedule off NAME, /bots run NAME or /bots color NAME COLOR.';
+  const above = { tasks: () => panels.chat.hidden ? panels.compose : panels.chat, kanban: () => panels.kanbanBoxes[0], bots: () => panels.botsBox, projects: () => panels.projectsBox, usage: () => panels.usageBox };
+  for (const [name, pane] of Object.entries(above)) {
+    // A new view starts with no message: the pane above has all its rows.
+    await send(v, `/${name === 'tasks' ? 'sessions' : name}`); await until(() => v.current.view === name && drawn().length === 1 && pane().atop + pane().height === g.statusTop, `${name}, with its rows`);
+    await send(v, '/bots frob x'); await until(() => /^› /.test(drawn()[0] ?? '') && drawn().length > 1, `a long line in ${name}`);
+    const rows = drawn();
+    assert.equal(whole(), LONG, `${name}: nothing is cut`);
+    assert.ok(rows.every(row => row.length < panels.status.width), `${name}: every row fits`);
+    assert.deepEqual([panels.status.height, panels.status.atop + panels.status.height - 1], [rows.length, g.statusTop], `${name}: it ends on the row over the box`);
+    assert.ok(pane().atop + pane().height <= panels.status.atop, `${name}: the pane above ends over it`);
+  }
+});
+
+test('the row of a Task that waits for approval keeps its keys whole and ends at Enter or the Task at every width from 80 to 140 columns', { timeout: 120000 }, async t => {
+  // In colour, as the app runs: a coloured row as wide as its place loses its last word to the next row.
+  const p = setup(t); delete process.env.NO_COLOR;
+  liveTask(p.root, { id: '5', goal: 'Uppercase coupon codes', state: 'answered' });
+  proposeTask(p.repo, '5', { title: 'Uppercase coupons', description: 'One file changes.', goal: 'Coupon codes compare equal whatever their case.', objectives: ['It works', 'Its test passes'], priority: 'high', severity: 'low' });
+  const v = await view(t, { repo: p.repo }), panels = v.current.panels, drawn = () => panels.status.getScreenLines().map(line => line.replace(/\x1b\[[^m]*m/g, '').trimEnd());
+  await openTask(v, /Uppercase coupon/); await until(() => v.current.session === '5' && /^\? /.test(drawn()[0] ?? ''), 'the Task waits');
+  const KEYS = /^\? (?:Needs you · Esc, then y approve · n reject, then Enter|Esc, then y approve · n reject, then Enter|Esc, y approve · n reject, Enter|Esc, y · n, Enter)(?: · Task: .+)?$/;
+  for (let width = 80; width <= 140; width++) {
+    await sized(v, width, 30); await until(() => panels.status.width === width - panels.boardBox.width - 2 && /^\? /.test(drawn()[0] ?? ''), `drawn at ${width}`);
+    const rows = drawn();
+    assert.deepEqual([rows.length, panels.status.height], [1, 1], `one row at ${width}: ${rows.join(' | ')}`);
+    assert.match(rows[0], KEYS, `the keys are whole at ${width}`); assert.ok(rows[0].length < panels.status.width, `it fits at ${width}`);
+  }
+});
+
+test('at 80x24 what a key on a bot\'s page just did shows under the page, not behind it', { timeout: 30000 }, async t => {
+  const p = setup(t); noBots(); readModels();
+  saveBot({ name: 'nightly', vendor: 'claude', schedule: 'every 1h', instructions: 'Tidy the notes.' });
+  const v = await view(t, { repo: p.repo }), panels = v.current.panels, page = () => modal(v, 'Bot @nightly');
+  const drawn = () => panels.status.getScreenLines().map(row => row.trimEnd()), screenRow = y => v.frame().split('\n')[y];
+  await send(v, '/bots'); await until(() => v.current.view === 'bots' && panels.botsList.items.length === 1, 'one bot');
+  panels.botsList.focus(); v.input.write('\r'); await until(() => page(), 'its page');
+  dialogList(v, 'Bot @nightly').select(4); v.input.write('\r'); await dialog(v, 'Schedule', '');
+  await until(() => page() && /does not run by itself/.test(panels.status.getText()), 'the page is back and the line is set');
+  // The page covers the row the line has in the view, so the line is right under the page, over nothing of it.
+  assert.ok(page().atop <= geometry(80, 24).statusTop && page().atop + page().height > geometry(80, 24).statusTop, 'the page covers the status row');
+  await until(() => panels.status.atop === page().atop + page().height, 'right under the page'); assert.deepEqual(drawn(), ['› @nightly does not run by itself.']);
+  assert.equal(panels.status.atop, page().atop + page().height); assert.ok(panels.status.atop < geometry(80, 24).keysTop, 'over the key bar');
+  await until(() => /› @nightly does not run by itself\./.test(screenRow(panels.status.atop)), 'and it is what the screen shows there');
+  // Closed, the line is back over the message box.
+  v.input.write('\x1b'); await until(() => !page(), 'closed');
+  await until(() => panels.status.atop === geometry(80, 24).statusTop && panels.status.aleft === 1, 'the line is back in its row');
+  assert.deepEqual(drawn(), ['› @nightly does not run by itself.']);
+});
+
+test('sessions an earlier version still finishes are named in the status line when its conductor hands over just after the app opens', { timeout: 30000 }, async t => {
+  const p = setup(t), { conductorFolder } = await import('../lib/conductor-files.mjs'), { VERSION } = await import('../lib/conductor.mjs');
+  const v = await view(t, { repo: p.repo }), panels = v.current.panels, said = () => panels.status.getScreenLines().map(row => row.trim()).join(' ');
+  await new Promise(resolve => setTimeout(resolve, 300));
+  assert.doesNotMatch(said(), /started before the update/, 'nothing to name as it opens');
+  // The conductor from before the update lets go a moment later: its session is now one that finishes on that version.
+  const id = '0f0e0d0c-0b0a-4990-8807-060504030201', file = path.join(conductorFolder(), `draining-${id}.json`);
+  fs.mkdirSync(conductorFolder(), { recursive: true }); fs.writeFileSync(file, JSON.stringify({ id, pid: process.pid, version: '0.0.1', runs: [{ root: p.root, requestId: 'r1' }], heartbeatAt: new Date().toISOString() }));
+  resources(t).files.push(() => fs.rmSync(file, { force: true }));
+  await until(() => said() === `› 1 session started before the update finishes on 0.0.1. New ones start on ${VERSION}.`, 'the note', 5000);
 });
 
 test('Tasks reads every project without writing or starting a vendor', async t => {
