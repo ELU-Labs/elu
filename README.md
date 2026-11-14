@@ -526,10 +526,12 @@ once a round, to approve or decline, and a decline is named in your Standup. Eac
 sessions answers at most once a round, is told their rules for teammates, and what comes back
 is checked as any answer to a teammate is: paths are cut, and an update that may hold a
 secret is not sent. You get the update text, the card's title, the agent's name and the
-computer, nothing else. Each answer turn counts as one of your requests there and spends from
-your daily allowance there, as any message of yours that runs on their computer, so a full
-round can use up the day's requests. A computer that still runs an older build of ELU
-for its sessions is listed, not asked.
+computer, nothing else. A round counts as one of your requests there. What a session has on
+record costs nothing; each model update spends from your daily allowance there what it cost,
+so with the limits as they come a round asks every session. When a limit there is reached, each
+session it stops says which, such as "Not asked: you have used the $5.00 a day this teammate's
+computer allows you." A computer that still runs an older build of ELU for its sessions is
+listed, not asked.
 
 While the model updates are still being written, the Standup's own model writes a first
 summary from the records alone, and says so. When the round ends, it reads every update,
