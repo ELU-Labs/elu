@@ -17,7 +17,7 @@ import { shimsBase } from '../lib/never-shims.mjs';
 import { turnClock } from '../lib/turn-limits.mjs';
 import { runSteps } from '../lib/run-activity.mjs';
 import { takesExtra } from '../lib/vendor-extras.mjs';
-import { agentName, agentSpend, agentTable, shortModel } from '../lib/agent-spend.mjs';
+import { agentSpend, agentTable, modelLabel } from '../lib/agent-spend.mjs';
 
 // Every vendor through the runner, against the fakes: Codex leads with its
 // own launch and parse, Grok takes the prompt from a file under a private HOME, and an ACP
@@ -504,11 +504,11 @@ test('an Antigravity turn in Full access over ACP that prints nothing for the qu
 
 // Over ACP the model is the session's own, so ELU sets the one the session chose before it
 // asks anything, the way the protocol offers it. The run keeps the model the vendor then
-// named and the tokens it sent with the turn, and the Usage tab's row shows both.
-const agentRow = (f, task) => agentTable(agentSpend([{ root: f.root, tasks: [task] }]).rows, { width: 120 })[1];
-// A session's own agent is named by the model it ran on (lib/agent-spend.mjs agentName).
-const leadName = (vendor, model) => agentName('lead', {}, [{ vendor, model }]).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-test('an Antigravity turn over ACP runs on the model the session chose, in Full access too, and keeps the tokens the vendor sent; where it sent none the row says not reported', async t => {
+// named and the tokens it sent with the turn, and the Usage tab's row shows both: the model by
+// its name, then In, Out and Cache, then the cost at the model's list price.
+const agentRow = (f, task) => agentTable(agentSpend([{ root: f.root, tasks: [task] }]).rows, { width: 120 }).rows[0];
+const modelCell = model => modelLabel(model).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+test('an Antigravity turn over ACP runs on the model the session chose, in Full access too, and keeps the tokens the vendor sent; where it sent none the row shows a dash', async t => {
   const f = setup(t, 'agy'); f.controller.draftConfig.roles.lead.model = 'gemini-3-flash';
   proven('agy', f.bin, '1.5.4', { relay: true });
   const turns = () => f.calls().filter(call => !call.args.includes('/usage') && !['--version', '--help'].includes(call.args[0]));
@@ -517,7 +517,7 @@ test('an Antigravity turn over ACP runs on the model the session chose, in Full 
   const [run] = first.runs;
   assert.equal(run.model, 'gemini-3-flash'); assert.match(fs.readFileSync(run.logFile, 'utf8'), /"config_option_update".*"currentValue":"gemini-3-flash"/, 'the vendor switched the session to it');
   assert.deepEqual(run.tokens, { input: 1200, output: 120, cacheRead: 200, cacheWrite: 10 }, 'thought tokens the total counts apart are output');
-  assert.match(agentRow(f, first), new RegExp(`^${leadName('agy', 'gemini-3-flash')} +.* +${shortModel('gemini-3-flash', 'agy')} +1\\.2k · 120 · 200 `));
+  assert.match(agentRow(f, first), new RegExp(`^.+ +${modelCell('gemini-3-flash')} +1\\.2k +120 +200 +\\$0\\.00 `));
   // The model the owner picks next is set on the resumed conversation the same way.
   f.controller.setModel(first.id, { vendor: 'agy', model: 'gemini-3-pro' });
   const second = await f.controller.ask('Reply with the summary "other".', first.id).finished;
@@ -525,11 +525,11 @@ test('an Antigravity turn over ACP runs on the model the session chose, in Full 
   // Ask for approval takes the chosen model over ACP as well.
   const asking = await f.controller.ask('Reply with the summary "asking".', null, { permissions: 'ask' }).finished;
   assert.equal(asking.state, 'answered', JSON.stringify(asking.error)); assert.equal(asking.runs[0].model, 'gemini-3-flash'); assert.deepEqual(turns().at(-1).args, ['acp']);
-  // A vendor that ends its turn without tokens: nothing is counted, and the row says so.
+  // A vendor that ends its turn without tokens: nothing is counted, and the row shows dashes.
   agySet(f, { noUsage: true });
   const bare = await f.controller.ask('Reply with the summary "bare".', null, { permissions: 'full' }).finished;
   assert.equal(bare.state, 'answered', JSON.stringify(bare.error)); assert.equal(bare.runs[0].tokens, undefined); assert.equal(bare.runs[0].model, 'gemini-3-flash');
-  assert.match(agentRow(f, bare), new RegExp(`^${leadName('agy', 'gemini-3-flash')} +.* +${shortModel('gemini-3-flash', 'agy')} +not reported`));
+  assert.match(agentRow(f, bare), new RegExp(`^.+ +${modelCell('gemini-3-flash')} +— +— +— +— +—$`));
   // A vendor whose ACP session names no model and takes none. Full access keeps the chosen
   // model: the turn runs headless, which names it on the command line.
   agySet(f, { acpNoModels: true });
@@ -556,7 +556,7 @@ test('a Grok Build turn over ACP starts on the model the session chose, switches
   assert.deepEqual(f.calls().at(-1).args.slice(-4), ['agent', '--model', 'grok-4.6-fast', 'stdio'], 'an agent option: after agent, before the transport');
   const [run] = first.runs;
   assert.equal(run.model, 'grok-4.6-fast'); assert.deepEqual(run.tokens, { input: 10, output: 5, cacheRead: 30, cacheWrite: 0 }, 'the input without what the cache held');
-  assert.match(agentRow(f, first), new RegExp(`^${leadName('grok', 'grok-4.6-fast')} +.* +${shortModel('grok-4.6-fast', 'grok').replace(/\./g, '\\.')} +10 · 5 · 30 `));
+  assert.match(agentRow(f, first), new RegExp(`^.+ +${modelCell('grok-4.6-fast')} +10 +5 +30 +— +—$`), 'a model with no list price shows a dash');
   // The session keeps the model it started on. The owner picks another: the resumed session is switched before it is asked anything.
   f.controller.setModel(first.id, { vendor: 'grok', model: 'grok-4.6' });
   const second = await f.controller.ask('Reply done with the summary "other".', first.id).finished;

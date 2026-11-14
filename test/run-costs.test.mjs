@@ -12,7 +12,7 @@ import { boardRows } from '../lib/board.mjs';
 import { stopLine } from '../lib/stop-line.mjs';
 import { Conductor } from '../lib/conductor.mjs';
 import { peerFile } from '../lib/peer/paths.mjs';
-import { spendLine } from '../lib/terminal.mjs';
+import { usageTotal } from '../lib/terminal.mjs';
 
 // What a run cost by itself, wherever a session's runs are added up: its budget, its stop
 // line, its row and its reply to a teammate. Claude Code reports what a whole session has spent
@@ -62,8 +62,9 @@ test('runs recorded before 0.1.20 cost what each added, in the helper, a Session
 
 // Antigravity and Grok Build over ACP send a turn's tokens with its answer. They count where
 // every run's spend is worked out: from the run's record, and from its log for a run recorded
-// without them. Neither vendor reports a cost.
-test('a run over ACP counts the tokens its vendor sent with the turn where runs are added up, and no cost', t => {
+// without them. Neither vendor reports a cost: a run that named its model costs that model's
+// list price, and one that named none has no known cost.
+test("a run over ACP counts the tokens its vendor sent with the turn where runs are added up, at its model's list price", t => {
   const log = logs(t), answer = result => ({ jsonrpc: '2.0', id: 4, result });
   const runs = [
     { role: 'lead', vendor: 'agy', at: AT, code: 0, costUsd: null, model: 'gemini-3-flash', tokens: counted([1200, 120, 200, 10]), logFile: log('lead-1.log', [answer({ stopReason: 'end_turn', usage: { inputTokens: 1200, outputTokens: 120, cachedReadTokens: 200, cachedWriteTokens: 10 } })]) },
@@ -74,10 +75,12 @@ test('a run over ACP counts the tokens its vendor sent with the turn where runs 
   ];
   const task = { id: '1', goal: 'Checkout page', createdAt: AT, runs };
   assert.deepEqual(spend.runSpends(task).map(row => row.tokens), [counted([1200, 120, 200, 10]), counted([7, 2, 0, 0]), counted([10, 5, 30, 0]), null]);
-  assert.deepEqual(spend.runCosts(task), [null, null, null, null]);
-  // The Usage tab's row adds them up, and says its cost is not reported.
+  // gemini-3-flash, per million: $0.50 input and cache write, $0.05 cached, $3 output.
+  const costs = spend.runCosts(task);
+  near(costs[0], (1200 * 0.5 + 200 * 0.05 + 10 * 0.5 + 120 * 3) / 1e6, 'gemini-3-flash'); assert.deepEqual(costs.slice(1), [null, null, null]);
+  // The Usage tab's row adds them up: at least the priced run's cost.
   const [row] = spend.agentSpend([{ root: '/work/shop', tasks: [task] }], { now: Date.parse(AT) + 60000 }).rows;
-  assert.deepEqual(row.tokens, counted([1217, 127, 230, 10])); assert.equal(row.costUsd, null); assert.equal(spend.costText(row), 'not reported');
+  assert.deepEqual(row.tokens, counted([1217, 127, 230, 10])); near(row.costUsd, costs[0]); assert.equal(row.partial, true); assert.equal(spend.costText(row), '≥$0.00');
 });
 
 function environment(t, values) {
@@ -144,11 +147,11 @@ test('a turn the owner stops is kept with what it had used; Usage shows it, and 
   const [stop] = task.stops, named = valueOf(f.turns()[0].args, '--session-id');
   assert.deepEqual({ ...stop, startedAt: null, at: null, logFile: null }, { role: 'lead', vendor: 'claude', logFile: null, session: named, startedAt: null, at: null, asked: 'opus', model: OPUS, tokens: counted(EACH.tokens) });
   assert.ok(fs.existsSync(stop.logFile) && Date.parse(stop.startedAt) <= Date.parse(stop.at));
-  // Usage: its tokens under the model its first line named, and no cost, which Claude Code says only when a turn ends. The line under the table says so.
+  // Usage: its tokens under the model its first line named, and no cost, which Claude Code says only when a turn ends: a dash.
   const usage = () => spend.agentSpend([{ root: f.repo.root, tasks: [readTask(f.repo, run.id)] }], { now: Date.now() });
   let today = usage();
   assert.deepEqual(today.rows.map(row => [row.agent, row.tokens, row.costUsd, row.started, row.unpriced]), [['Opus 5.5', counted(EACH.tokens), null, true, ['claude']]]);
-  assert.equal(spend.costText(today.rows[0]), 'not reported'); assert.equal(today.runs, 1); assert.deepEqual(today.unpriced, ['claude']);
+  assert.equal(spend.costText(today.rows[0]), '—'); assert.equal(today.runs, 1); assert.deepEqual(today.unpriced, ['claude']);
   // It does not use up the session's budget: the next turn may spend all of it.
   f.controller.setBudget(run.id, 1); assert.equal(f.controller.budget(run.id).spent, 0);
   // Where the stopped session cannot be picked up again (its record is taken away here, as when a
@@ -249,7 +252,7 @@ test('an agent that did not start stays in the top ten on a busy day, and the ch
   assert.equal(all.length, 13); assert.equal(all.at(-1).started, false);
   const shown = spend.topRows(all);
   assert.deepEqual(shown.map(row => row.title), ['Job 12', 'Job 11', 'Job 10', 'Job 9', 'Job 8', 'Job 7', 'Job 6', 'Job 5', 'Job 4', 'Refused review']);
-  assert.match(spend.agentTable(shown, { width: 130, total: 78 }).at(-1), /^@reviewer +Refused review +opus 5\.5 +did not start +\$0\.00 +0%$/);
+  assert.match(spend.agentTable(shown, { width: 130, total: 78 }).rows.at(-1), /^@reviewer Refused review \(did not start\) +Opus 5\.5 +— +— +— +\$0\.00 +0%$/);
   // What a computer of mine sends is chosen the same way.
   assert.deepEqual(spend.topAgentsWire(projects, now).today.rows.map(row => row.title).slice(-2), ['Job 4', 'Refused review']);
   // Nothing failed: the ten that cost most, as before.
@@ -276,11 +279,11 @@ test('two computers on different builds: 0.1.20 says which one counts the old wa
   const older = { today: { costUsd: 9, partial: false, rows: [{ ref: `${'a'.repeat(16)}:3`, agent: '@lead', title: 'Search speed', model: 'opus 5.5', tokens: null, costUsd: 9, partial: false, at: AT }] }, week: { costUsd: 9, partial: false, rows: [] } };
   const there = spend.cleanTopAgents(older);
   assert.equal(there.own, false);
-  // Usage says so under the table, and beside that computer's part of the spend line.
-  assert.equal(spend.OLD_COUNT('devbox'), 'devbox: older ELU, its costs may be too high. Update ELU there.');
-  const here = spend.agentSpend(projects, { now });
-  assert.equal(spendLine([{ name: 'this computer', spend: here }, { name: 'devbox', spend: there.today, old: true }]), 'ELU spend today $11.00: this computer $2.00, devbox $9.00 (older ELU)');
-  assert.equal(spendLine([{ name: 'this computer', spend: here }, { name: 'devbox', spend: spend.cleanTopAgents(sent).today }]), 'ELU spend today $4.00: this computer $2.00, devbox $2.00');
+  // Usage says so beside that computer's part of the total under the table.
+  const here = spend.agentSpend(projects, { now }), part = (name, period, extra = {}) => ({ name, costUsd: period.costUsd, partial: period.partial, runs: period.runs, ...extra });
+  const foot = parts => spend.agentTable(here.rows, { width: 100, total: 2, foot: usageTotal(parts) }).foot.map(line => line.trim());
+  assert.deepEqual(foot([part('here', here), part('devbox', there.today, { old: true })]), ['Today  $11.00', 'here $2.00 · devbox $9.00 (older ELU)']);
+  assert.deepEqual(foot([part('here', here), part('devbox', spend.cleanTopAgents(sent).today)]), ['Today  $4.00', 'here $2.00 · devbox $2.00']);
   // A viewer on 0.1.19 keeps every row a 0.1.20 computer sends, with its cost and tokens; the session's own agent reads @lead there.
   const read = cleanAs019(sent);
   assert.deepEqual(read.today.rows.map(row => [row.agent, row.title, row.model, row.costUsd, row.tokens]), [['@lead', 'Checkout page', 'opus 5.5', 1.5, counted([1, 2, 3, 4])], ['@lead', 'Checkout page', 'opus 5.5', 0.5, counted([1, 2, 3, 4])]]);

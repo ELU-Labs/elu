@@ -5122,7 +5122,7 @@ test('Usage shows each account with the usage its sessions reported, r checks ag
   await until(() => /Usage updated \d\d:\d\d/.test(status()), 'first check');
   assert.match(text(), /^Claude {6}owner@example.invalid · Max 20x · active\n {12}Usage shows after your next session on Claude Code\.\n {12}old@example.invalid · last seen Nov 9 · wk 100% then\n {12}enter use · a add account · x forget$/m);
   await until(() => /^Codex {7}owner@example.invalid · Team · active\n {12}5h  \[#-----\]   18%/m.test(text()), 'the Codex block');
-  assert.match(text(), /^Antigravity \(agy\) not signed in for ELU · s signs in\nGrok Build {2}not installed\n\nTop agents today\nNo agent has run today\.\nELU spend today \$0\.00$/m);
+  assert.match(text(), /^Antigravity \(agy\) not signed in for ELU · s signs in\nGrok Build {2}not installed\n\nTop agents today\nNo agent has run today\.$/m);
   assert.ok(panels.usageList.items.every(item => item.getText().length <= 76), 'every line fits the pane');
   // A session on Claude Code reports its windows. r checks again now and records them with the account.
   const saved = JSON.parse(fs.readFileSync(usageFile, 'utf8'));
@@ -5162,7 +5162,7 @@ test('Usage at 80x24 and at 140x50: Down from the last account goes into Top age
     v.input.write('\x1b[B');
     await until(() => list.selected === rowOf(/Uppercase coup/), `Down from Grok Build to the agent at ${columns}x${rows}`);
     assert.equal(v.current.screen.focused, list);
-    assert.ok([rowOf(/^Top agents today$/), rowOf(/^Agent /), list.selected].every(shown), `the heading, the table's header and the agent are in view at ${columns}x${rows}`);
+    assert.ok([rowOf(/^Top agents today$/), rowOf(/^Session /), list.selected].every(shown), `the heading, the table's header and the agent are in view at ${columns}x${rows}`);
     await until(() => /enter open/.test(panels.keys.getText()), 'the keys of an agent');
     v.input.write('\x1b[A');
     await until(() => list.selected === rowOf(/^Grok Build/), `Up from the agent to Grok Build at ${columns}x${rows}`);
@@ -5671,7 +5671,7 @@ test('Usage with a vendor that says nothing for 30 seconds: the tab opens at onc
   await until(() => /^Reading what is installed and signed in here…$/m.test(text()), 'the tab says it is reading', 5000);
   assert.ok(Date.now() - opened < 5000, `the tab took ${Date.now() - opened} ms to open`);
   // The agents and today's spend are there already, under the line that says what is being read.
-  assert.match(text(), /^Reading what is installed and signed in here…\n\nTop agents today\nNo agent has run today\.\nELU spend today \$0\.00$/);
+  assert.match(text(), /^Reading what is installed and signed in here…\n\nTop agents today\nNo agent has run today\.$/);
   // Keys work while it reads: t changes the period of the agents list, and back.
   panels.usageList.focus(); await until(() => v.current.screen.focused === panels.usageList, 'list focused');
   v.input.write('t'); await until(() => /^Top agents, last 7 days$/m.test(text()), 't shows 7 days', 2000);

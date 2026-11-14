@@ -229,13 +229,17 @@ test('a Kanban card keeps its title and its detail inside its column at every wi
 });
 
 test('a Usage row keeps its columns under their headers at every width from 20 to 200', t => {
-  const AGENTS = TEXTS.map((title, at) => ({ agent: at % 2 ? '@审查' : '@lead', title, where: at % 3 ? 'on 开发机' : '', model: 'opus 5.5', tokens: { input: 1200000, output: 34000, cacheRead: 8100000, cacheWrite: 0 }, costUsd: 12.4 - at, partial: false }));
+  const AGENTS = TEXTS.map((title, at) => ({ agent: at % 2 ? '@审查' : '@lead', title, where: at % 3 ? '开发机' : 'here', model: 'opus 5.5', tokens: { input: 1200000, output: 34000, cacheRead: 8100000, cacheWrite: 0 }, costUsd: 12.4 - at, partial: false }));
   sweep(t, 'Usage', (screen, width) => {
-    const frame = framed(screen, width, AGENTS.length + 3), list = listIn(frame), room = Math.max(8, list.width - 2), table = agentTable(AGENTS, { width: room, total: 60 });
-    list.setItems(table.map(text => ink(cut(text, room, '...'), 'text', true)));
-    // Each column starts in the same screen column on every row: the header's.
-    const model = table[0].indexOf('Model'); if (model >= 0) for (const row of table.slice(1)) { assert.equal(columns(head(row, model)), model, `no character straddles the model column at ${width}: ${row}`); assert.ok(row.slice(head(row, model).length).startsWith('opus 5.5'), `the model is under its header at ${width}: ${row}`); }
-    return { top: frame, height: AGENTS.length + 3, framed: true, rows: table.map((text, at) => [at + 1, 1, text, room]) };
+    const frame = framed(screen, width, AGENTS.length + 4), list = listIn(frame), room = Math.max(8, list.width - 2), table = agentTable(AGENTS, { width: room, total: 60 }), lines = [table.head, table.rule, ...table.rows];
+    list.setItems(lines.map(text => ink(cut(text, room, '...'), 'text', true)));
+    // Each column starts in the same screen column on every row: the header's. A cost ends where its header ends.
+    const model = table.head.indexOf('Model'), cost = table.head.indexOf('Cost');
+    for (const row of table.rows) {
+      if (model >= 0) { assert.equal(columns(head(row, model)), model, `no character straddles the model column at ${width}: ${row}`); assert.ok(row.slice(head(row, model).length).startsWith('Opus'), `the model is under its header at ${width}: ${row}`); }
+      if (cost >= 0) { const before = head(row, cost + 4); assert.equal(columns(before), cost + 4, `no character straddles the cost column at ${width}: ${row}`); assert.match(before, /\$\d+\.\d\d$/, `the cost ends under its header at ${width}: ${row}`); }
+    }
+    return { top: frame, height: AGENTS.length + 4, framed: true, rows: lines.map((text, at) => [at + 1, 1, text, room]) };
   });
 });
 

@@ -129,7 +129,7 @@ test("a day's top agents: each agent named as the chat names it, one row per age
     // Yesterday's turn of the same session is the base, not part of today.
     ['Opus 5.5', 'Checkout page', 'opus 5.5', 4, [40, 7000, 1700000]],
     ['@lead', 'Login form', 'fable 5.2', 1.3, [16, 7000, 280000]],
-    // One row for the session that moved from Opus to Codex: both models, Codex's tokens counted, its cost not reported.
+    // One row for the session that moved from Opus to Codex: both models, Codex's tokens counted. Codex named no model, so its cost is not known.
     ['Opus 5.5 + Codex', 'Cart totals', 'opus 5.5 + codex', 1.2, [46 + 20000 + 20000 + 50000, 9700 + 900 + 400 + 2000, 981000 + 60000 + 30000 + 350000]],
     ['Opus 5.5', 'Password reset email flow', 'opus 5.5', 0.45, [6, 3200, 60000]],
     // The reviewer never started (Claude Code refused its input): the model it was asked for, nothing spent.
@@ -141,31 +141,34 @@ test("a day's top agents: each agent named as the chat names it, one row per age
   assert.equal(Number(today.costUsd.toFixed(2)), 61.75); assert.equal(today.partial, true); assert.deepEqual(today.unpriced, ['codex']);
 });
 
-test("on another computer of mine the rows read the same, every row with a cost has tokens, a lower bound says why, and the spend line counts that computer", t => {
+test("on another computer of mine the rows read the same, every row with a cost has tokens, a lower bound reads ≥, and the total counts that computer", t => {
   bots(t);
   const wire = cleanTopAgents(JSON.parse(JSON.stringify(topAgentsWire(records(t), NOW))), ref => `id-${ref}`);
-  const rows = wire.today.rows.map(row => ({ ...row, where: 'on devbox' }));
-  const wide = agentTable(rows, { width: 138, total: wire.today.costUsd });
-  assert.match(wide[0], /^Agent +Session +Model +in · out · cache +Cost \(API price\) +Share$/);
-  const line = name => wide.find(row => row.includes(name));
-  assert.match(wide[1], /^Opus 5\.5 +Search speed +on devbox +opus 5\.5 +404 · 172k · 52M +\$18\.50 +30%$/);
-  assert.match(line('Checkout page'), /^Opus 5\.5 +Checkout page +on devbox +opus 5\.5 +40 · 7k · 1\.7M +\$4\.00 +6%$/);
-  assert.match(line('Cart totals'), /^Opus 5\.5 \+ Codex +Cart totals +on devbox +opus 5\.5 \+ codex +90k · 13k · 1\.4M +\$1\.20 \+ codex +2%$/);
-  assert.match(line('@reviewer'), /^@reviewer +Login form +on devbox +opus 5\.5 +did not start +\$0\.00 +0%$/);
-  assert.ok(!wide.some(row => /@lead +Checkout page|—/.test(row)), 'no @lead for a solo agent, and no dash');
-  assert.equal(wide.filter(row => /Search speed/.test(row)).length, 2, 'two agents in Search speed: the session\'s own and the @lead bot');
-  // 80 columns: the cost and tokens stay; the share and the model (the agent names it) go, and a
-  // name of two models is cut before a session's title is.
-  const narrow = agentTable(rows, { width: 76, total: wire.today.costUsd });
-  assert.match(narrow[0], /^Agent +Session +in · out · cache +Cost$/);
-  for (const row of narrow) assert.ok(row.length <= 76, row);
-  assert.match(narrow.find(row => row.includes('90k')), /^Opus 5\.5 … +Cart totals +on devbox +90k · 13k · 1\.4M +\$1\.20 \+ codex$/);
-  assert.equal(narrow.filter(row => / Search speed /.test(row)).length, 2); assert.ok(narrow.some(row => /^Opus 5\.5 +Login form /.test(row)));
-  assert.match(narrow.find(row => row.startsWith('@reviewer')), /did not start +\$0\.00$/);
-  // The spend line: what every computer shown spent today, each one's part, at least that as Codex reported no cost.
-  assert.equal(terminal.spendLine([{ name: 'this computer', spend: agentSpend([], { now: NOW }) }, { name: 'devbox', spend: wire.today }]), 'ELU spend today at least $61.75: this computer $0.00, devbox at least $61.75');
-  assert.equal(terminal.spendLine([{ name: 'this computer', spend: agentSpend([], { now: NOW }) }], ['devbox']), 'ELU spend today $0.00; waiting for devbox');
-  assert.equal(terminal.spendLine([{ name: 'this computer', spend: agentSpend([], { now: NOW }) }], [], ['devbox']), 'ELU spend today $0.00; devbox offline, not counted');
+  const rows = wire.today.rows.map(row => ({ ...row, where: 'devbox' }));
+  // Nothing ran here today; devbox sent its list; the laptop is offline.
+  const idle = agentSpend([], { now: NOW }), parts = [{ name: 'here', costUsd: idle.costUsd, partial: idle.partial, runs: idle.runs }, { name: 'devbox', costUsd: wire.today.costUsd, partial: wire.today.partial, runs: wire.today.runs }, { name: 'laptop', note: 'offline' }];
+  const total = terminal.usageTotal(parts);
+  const wide = agentTable(rows, { width: 136, total: total.costUsd, foot: total });
+  assert.match(wide.head, /^Session +Computer +Model +In +Out +Cache +Cost +Share$/);
+  const line = name => wide.rows.find(row => row.includes(name));
+  assert.match(wide.rows[0], /^Search speed +devbox +Opus 5\.5 +404 +172k +52M +\$18\.50 +30%$/);
+  assert.match(line('Checkout page'), /^Checkout page +devbox +Opus 5\.5 +40 +7k +1\.7M +\$4\.00 +6%$/);
+  assert.match(line('Cart totals'), /^Cart totals +devbox +Opus 5\.5 \+ Codex +90k +13k +1\.4M +≥\$1\.20 +2%$/);
+  assert.match(line('@reviewer'), /^@reviewer Login form \(did not start\) +devbox +Opus 5\.5 +— +— +— +\$0\.00 +0%$/);
+  assert.ok(!wide.rows.some(row => /@lead Checkout page/.test(row)), 'no @lead for a solo agent');
+  assert.equal(wide.rows.filter(row => /Search speed/.test(row)).length, 2, 'two agents in Search speed: the session\'s own and the @lead bot');
+  assert.ok(wide.rows.some(row => /^@lead Search speed +devbox +Fable 5\.2 /.test(row)));
+  // The total: every computer shown, at least that as Codex's cost is not known, and each one's part.
+  assert.deepEqual(wide.foot.map(text => text.trim()), ['Today  ≥$61.75', 'here $0.00 · devbox ≥$61.75 · laptop offline']);
+  // 80 columns: Cache, In, Out and Computer go; the session, the model, the cost and the share stay.
+  const narrow = agentTable(rows, { width: 76, total: total.costUsd, foot: total });
+  assert.match(narrow.head, /^Session +Model +Cost +Share$/);
+  for (const row of [narrow.head, narrow.rule, ...narrow.rows, ...narrow.foot]) assert.ok(row.length <= 76, row);
+  assert.match(narrow.rows.find(row => row.startsWith('Cart totals')), /^Cart totals +Opus 5\.5 \+ Codex +≥\$1\.20 +2%$/);
+  assert.equal(narrow.rows.filter(row => / ?Search speed /.test(row)).length, 2); assert.ok(narrow.rows.some(row => /^Login form +Opus 5\.5 /.test(row)));
+  assert.match(narrow.rows.find(row => row.startsWith('@reviewer')), /\(did not start\) +Opus 5\.5 +\$0\.00 +0%$/);
+  // Before devbox sends its list, the total counts what is known and names it.
+  assert.deepEqual(terminal.usageTotal([parts[0], { name: 'devbox', note: 'waiting' }]), { label: 'Today', costUsd: 0, partial: false, runs: 0, parts: [parts[0], { name: 'devbox', note: 'waiting' }] });
 });
 
 test("today on a computer of mine is the viewer's today: runs before the viewer's midnight are yesterday's", t => {
