@@ -183,7 +183,7 @@ async function view(p, { columns, rows, ...options }) {
     }
     input.destroy(); output.destroy();
   });
-  return { input, get current() { return rendered; }, get panels() { return rendered.panels; }, lines() { return rendered.screen.lines.map(row => row.map(cell => cell[1]).join('')); } };
+  return { input, output, get current() { return rendered; }, get panels() { return rendered.panels; }, lines() { return rendered.screen.lines.map(row => row.map(cell => cell[1]).join('')); } };
 }
 // The cursor on the row that matches: its session shows beside the list.
 async function onRow(v, pattern) {
@@ -294,4 +294,38 @@ test('an entry from the other computer that says no time is drawn after the entr
   const at = seconds => new Date(Date.UTC(2026, 10, 13, 9, 0, seconds)).toISOString();
   assert.equal(taskPlace([{ at: at(0) }, { at: at(10) }, { at: at(20) }, { at: null }], { by: 'lead', proposedAt: at(15) }), 2);
   assert.equal(taskPlace([{ at: at(0) }, { at: at(10) }, { at: null }, { at: at(20) }], { by: 'lead', proposedAt: at(15) }), 3);
+});
+
+// The window made smaller or larger: a chat longer than its pane, at its end, stays at its
+// end, so the newest message stays in view. One the owner scrolled up stays where he put it.
+const pause = ms => new Promise(done => setTimeout(done, ms));
+const resizeTo = async (v, columns, rows) => { v.output.columns = columns; v.output.rows = rows; v.output.emit('resize'); await until(() => v.current.screen.width === columns && v.current.screen.height === rows, `${columns}x${rows}`); await pause(200); };
+// The last row the pane shows on the screen, and the last row of its chat.
+const ends = v => { const said = rowsOf(v.panels.chat.getText()), screen = onScreen(v); return { shown: screen.shown.at(-1)?.trim() ?? '', last: said.at(-1)?.trim() ?? '' }; };
+const LINES = 'The report adds every row and keeps its totals in cents, so nothing is rounded on the way.';
+const LONG = {
+  here: { state: 'answered', replies: Array.from({ length: 30 }, (_, index) => [9 - index * 0.3, `Reply ${index + 1}. ${LINES} ${LINES}`]), asked: Array.from({ length: 29 }, (_, index) => [8.85 - index * 0.3, `Question ${index + 2} about the totals.`]), waiting: [[0.1, 'Also update the docs']] },
+  remote: { state: 'answered', waiting: [{ at: ago(0), text: 'Also update the docs', state: 'queued' }], entries: Array.from({ length: 60 }, (_, index) => index % 2 ? { role: 'Claude', lead: true, at: ago(9 - index * 0.15), text: `Reply ${index}. ${LINES} ${LINES}` } : { role: 'You', at: ago(9 - index * 0.15), text: `Question ${index + 1} about the totals.` }) },
+};
+for (const kind of ['here', 'remote']) test(`a chat longer than its pane, at its end, stays at its end when the window is made smaller or larger: a session ${kind === 'here' ? 'here' : 'on another computer'}`, { timeout: 90000 }, async t => {
+  const p = start(t); if (kind === 'here') localSession(p, LONG.here);
+  const v = await view(p, { columns: 140, rows: 50, repo: p.repo, dashboard: true, peer: fakePeer(kind === 'here' ? {} : { remote: [remoteView(LONG.remote)] }) });
+  await onRow(v, /Fix the report|Question 1/);
+  const { chat } = v.panels;
+  await until(() => flat(chat.getText()).includes('Also update the docs'), 'its chat'); await pause(200);
+  assert.ok(rowsOf(chat.getText()).length > 2 * chat.height, 'the chat is longer than the pane');
+  let end = ends(v); assert.equal(end.shown, end.last, `not at its end at 140x50:\n${onScreen(v).rows.join('\n')}`);
+  for (const [columns, rows] of [[80, 24], [140, 50], [100, 30], [80, 24], [120, 40], [90, 26]]) {
+    await resizeTo(v, columns, rows); end = ends(v);
+    assert.equal(end.shown, end.last, `not at its end at ${columns}x${rows}:\n${onScreen(v).rows.join('\n')}`);
+  }
+  // Paged up by the owner: it stays on the lines he paged to, at every size.
+  await resizeTo(v, 140, 50); chat.focus(); v.input.write('\x1b[5~'); await pause(200); v.input.write('\x1b[5~'); await pause(200);
+  const first = flat(onScreen(v).shown[0]).split(' ').slice(0, 4).join(' ');
+  assert.notEqual(ends(v).shown, ends(v).last, 'paged up');
+  for (const [columns, rows] of [[80, 24], [120, 40], [140, 50]]) {
+    await resizeTo(v, columns, rows); end = ends(v);
+    assert.notEqual(end.shown, end.last, `back at the end at ${columns}x${rows}, though he paged up`);
+    assert.ok(flat(onScreen(v).shown.join('\n')).includes(first), `"${first}" left the pane at ${columns}x${rows}:\n${onScreen(v).rows.join('\n')}`);
+  }
 });
