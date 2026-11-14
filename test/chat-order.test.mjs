@@ -329,3 +329,19 @@ for (const kind of ['here', 'remote']) test(`a chat longer than its pane, at its
     assert.ok(flat(onScreen(v).shown.join('\n')).includes(first), `"${first}" left the pane at ${columns}x${rows}:\n${onScreen(v).rows.join('\n')}`);
   }
 });
+
+// While a session here works: nothing is drawn under the owner's waiting message, and the
+// hint that a message goes any time and /stop stops the turn is in the key bar under the box.
+for (const [columns, rows] of [[140, 50], [80, 24]]) test(`the app at ${columns}x${rows}, a working session here: /stop is named under the message box, not between the steps and a waiting message`, { timeout: 60000 }, async t => {
+  const p = start(t); localSession(p, HERE['a working session with steps and one waiting message'].make);
+  const v = await view(p, { columns, rows, repo: p.repo, dashboard: true, peer: fakePeer() });
+  await onRow(v, /Fix the report/);
+  const { chat, ask, keys } = v.panels;
+  await until(() => flat(chat.getText()).includes('Use CSV for it') && flat(chat.getText()).includes('Run: npm test'), 'its chat beside the list');
+  const said = flat(chat.getText());
+  assert.doesNotMatch(said, /type a message any time|\/stop to stop/, `a hint is drawn in the chat:\n${chat.getText()}`);
+  assert.doesNotMatch(said.slice(said.indexOf('Run: npm test'), said.indexOf('(waiting)')), /\/stop|message/, 'something is between the live steps and the waiting message');
+  ask.focus();
+  await until(() => /(?:^| {2})\/stop stop(?: {2}|$)/.test(keys.getText().trim()), `/stop in the key bar: ${keys.getText().trim()}`);
+  assert.ok(keys.getText().trim().length <= columns - 2, 'the key bar fits');
+});

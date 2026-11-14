@@ -2893,8 +2893,9 @@ test('a message sent while the session works waits in its chat; Up takes it back
   const waiting = () => pendingRequests(p.root).filter(row => row.state === 'queued').map(row => row.goal), sent = () => projectSnapshot(p.repo).tasks[0]?.messages.map(row => row.text) ?? [];
   await send(v, '/model default codex'); await until(() => /New sessions in .+ start with Codex/.test(panels.status.getText()), 'Codex for new sessions');
   await send(v, 'Keep working on the board');
-  await until(() => projectSnapshot(p.repo).tasks[0]?.activeRole === 'lead' && /Codex is working\n\n.+\n\ntype a message any time · \/stop to stop/.test(chat()), 'the hint under the working line');
-  assert.doesNotMatch(chat(), /interrupt/);
+  // That a message goes any time and /stop stops the turn is said under the message box, not in the chat.
+  await until(() => projectSnapshot(p.repo).tasks[0]?.activeRole === 'lead' && /Codex is working\n\n.+$/.test(chat()) && /enter send {2}\/stop stop/.test(panels.keys.getText()), 'the working line, and /stop in the key bar');
+  assert.doesNotMatch(chat(), /interrupt|type a message any time/);
   await send(v, 'Also cover refunds');
   await until(() => /You \(waiting\)[^\n]*\n[^\n]*Also cover refunds *\nSent when this turn ends\.\nEnter sends it now · ↑ takes it back/.test(chat()), 'the waiting message, with its keys');
   assert.equal(panels.ask.getValue(), '', 'the box is cleared'); assert.deepEqual(waiting(), ['Also cover refunds']); assert.deepEqual(sent(), ['Keep working on the board'], 'the running turn goes on');
@@ -2937,7 +2938,7 @@ test('a working turn shows its thinking and tool calls as they happen, then fold
   const gate = path.join(temp(t), 'gate'), p = setup(t, 'steps', { intent: 'answer', gate }), v = await view(t, { repo: p.repo }), panels = v.current.panels;
   const flat = () => panels.chat.getText().replace(/\s+/g, ' '), lines = () => panels.chat.getText().split('\n');
   await send(v, 'Why do lower case coupons fail?');
-  await until(() => /Opus is working ✻ The coupon code should compare in upper case\. I will read the module first\. ✓ Read: src\/coupon\.mjs ● Run: npm test type a message any time/.test(flat()), 'the thought, the file read and the command still running', 15000);
+  await until(() => /Opus is working ✻ The coupon code should compare in upper case\. I will read the module first\. ✓ Read: src\/coupon\.mjs ● Run: npm test ?$/.test(flat()), 'the thought, the file read and the command still running', 15000);
   assert.equal(projectSnapshot(p.repo).tasks[0].state, 'running');
   assert.doesNotMatch(flat(), /Opus is working model: started/, 'not the line that never changed');
   const frames = [{ step: 'working', text: v.frame() }];
@@ -2977,7 +2978,7 @@ test('a long turn shows its thought as a token count, how long its silent comman
   const gate = path.join(temp(t), 'gate'), p = setup(t, 'live', { intent: 'answer', gate, live: { speed: 600, seconds: 180, think: 200 } }), v = await view(t, { repo: p.repo }), panels = v.current.panels;
   const flat = () => panels.chat.getText().replace(/\s+/g, ' ');
   await send(v, 'Run the coupon tests');
-  await until(() => /Opus is working ✻ thought · 1\.2k tokens • Starting the watcher, then the tests\. ✓ Run: npm run watch ● Run: npm test · 3m \d+s ● 1 background command: npm run watch · 3m \d+s type a message any time/.test(flat()), 'the count, the command three minutes in, and the background command that started before it', 15000);
+  await until(() => /Opus is working ✻ thought · 1\.2k tokens • Starting the watcher, then the tests\. ✓ Run: npm run watch ● Run: npm test · 3m \d+s ● 1 background command: npm run watch · 3m \d+s ?$/.test(flat()), 'the count, the command three minutes in, and the background command that started before it', 15000);
   // The command prints nothing more, and its line still counts every second.
   const ran = () => Number(/● Run: npm test · 3m (\d+)s/.exec(flat())?.[1]), first = ran();
   await until(() => ran() > first, 'the line counts on between heartbeats', 5000);
@@ -3126,12 +3127,12 @@ test('an Antigravity turn in Full access shows its thought and each tool call as
   const asked = [], watch = setInterval(() => { try { asked.push(...pendingApprovals().map(row => row.summary)); if (/Waiting for your approval/.test(flat())) asked.push('the chat asks'); } catch { /* Between two writes. */ } }, 20);
   t.after(() => clearInterval(watch));
   await send(v, 'Create the file notes.txt with the text "x". Run this command: ./marker.sh. Reply with the summary "Wrote the notes."');
-  await until(() => /Antigravity is working ✻ Reading the request\. • Working on it\. type a message any time/.test(flat()), 'its thought, before any tool call', 15000);
+  await until(() => /Antigravity is working ✻ Reading the request\. • Working on it\. ?$/.test(flat()), 'its thought, before any tool call', 15000);
   const frames = [{ step: 'thinking', text: v.frame() }];
-  await until(() => /• Working on it\. ● Write[^✓●✗]*notes\.txt type a message any time/.test(flat()), 'the write as it starts', 15000);
-  await until(() => /✓ Write[^✓●✗]*notes\.txt ● Run[^✓●✗]*marker\.sh type a message any time/.test(flat()), 'the write ended, the command as it starts', 15000);
+  await until(() => /• Working on it\. ● Write[^✓●✗]*notes\.txt ?$/.test(flat()), 'the write as it starts', 15000);
+  await until(() => /✓ Write[^✓●✗]*notes\.txt ● Run[^✓●✗]*marker\.sh ?$/.test(flat()), 'the write ended, the command as it starts', 15000);
   frames.push({ step: 'the command runs', text: v.frame() });
-  await until(() => /✓ Write[^✓●✗]*notes\.txt ✓ Run[^✓●✗]*marker\.sh type a message any time/.test(flat()), 'both calls ended, the reply not there yet', 15000);
+  await until(() => /✓ Write[^✓●✗]*notes\.txt ✓ Run[^✓●✗]*marker\.sh ?$/.test(flat()), 'both calls ended, the reply not there yet', 15000);
   assert.equal(projectSnapshot(p.repo).tasks[0].state, 'running'); assert.equal(fs.readFileSync(made('ran.txt'), 'utf8'), 'ran'); assert.equal(fs.readFileSync(made('notes.txt'), 'utf8'), 'elu-code\n');
   assert.doesNotMatch(flat(), /reports only when it ends/, 'a run that shows its steps is not one that prints at the end');
   await until(() => projectSnapshot(p.repo).tasks[0].state === 'answered' && /▸ 5 steps in \d+s · ctrl\+o shows them [^┃]+┃ Wrote the notes\./.test(flat()), 'the steps fold above the reply', 15000);
@@ -3140,7 +3141,7 @@ test('an Antigravity turn in Full access shows its thought and each tool call as
   // Another session, stopped while its command runs: the command ends with the turn, and the steps it showed stay.
   await send(v, '/new'); await until(() => v.current.session === 'new', 'the new session form');
   await send(v, 'Run this command: ./slow.sh. Reply with the summary "late".');
-  await until(() => /● Run[^✓●✗]*slow\.sh type a message any time/.test(flat()), 'the slow command as it starts', 15000);
+  await until(() => /● Run[^✓●✗]*slow\.sh ?$/.test(flat()), 'the slow command as it starts', 15000);
   const stopping = v.current.session; await send(v, '/stop');
   await until(() => readTask(p.repo, stopping).state === 'stopped' && /▸ 3 steps in \d+s · stopped · ctrl\+o shows them/.test(flat()), 'the stopped turn keeps its steps', 15000);
   frames.push({ step: 'stopped', text: v.frame() });
@@ -3153,7 +3154,7 @@ test('an Antigravity turn in Full access shows its thought and each tool call as
 test('where ACP is not proven or cannot start, an Antigravity turn counts its time in the chat and says the program reports only when it ends', { timeout: 60000 }, async t => {
   const p = antigravity(t, { relay: false, pace: 2500 });
   const v = await view(t, { repo: p.repo }), panels = v.current.panels, flat = () => panels.chat.getText().replace(/\s+/g, ' ');
-  const worked = () => Number(/ is working (\d+)s so far\. Antigravity reports only when it ends\. type a message any time/.exec(flat())?.[1]);
+  const worked = () => Number(/ is working (\d+)s so far\. Antigravity reports only when it ends\. ?$/.exec(flat())?.[1]);
   // Not proven: the check's relay step did not pass here.
   await send(v, 'Reply with the summary "Printed at the end."');
   await until(() => Number.isFinite(worked()), 'the line that counts', 15000);
@@ -3392,7 +3393,7 @@ test('the list shows live agents and stops, retries, and starts work from its ro
   await send(v, '/tasks'); await until(() => v.current.view === 'tasks', 'Tasks');
   const board = panels.board, spinner = '[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]';
   // The row has the spinner and the session's title. Its latest step shows beside the list, in the session.
-  await until(() => new RegExp(`${spinner} Keep working`).test(cursor(v)) && /Opus is working\n\n• Working on the requested change\.\n\ntype a message any time · \/stop to stop/.test(panels.chat.getText()) && /^Keep working on the board {2}· {2}working {2}· {2}Ask/.test(panels.header.getText()), 'live row, with the work under way beside it');
+  await until(() => new RegExp(`${spinner} Keep working`).test(cursor(v)) && /Opus is working\n\n• Working on the requested change\.$/.test(panels.chat.getText()) && /^Keep working on the board {2}· {2}working {2}· {2}Ask/.test(panels.header.getText()), 'live row, with the work under way beside it');
   assert.match(cursor(v), /0m\d\d$/, 'a running row counts its time');
   assert.match(rows(v)[0], /\+ New session/); assert.match(rows(v)[2], /RUNNING 1/);
   board.focus(); await until(() => /s stop/.test(panels.keys.getText()), 's stop in the key bar'); v.input.write('s');
