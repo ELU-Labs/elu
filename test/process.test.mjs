@@ -127,6 +127,35 @@ test('a process that stays after the row ending its turn is ended with the comma
   assert.deepEqual([alive(loop), alive(orphan)], [false, false], 'nothing the turn left is running');
   assert.equal(ended, null, 'the turn ended at its result: no stop is reported');
 });
+// The turn is over only once what it left is gone: a command that ignores being asked to end
+// (SIGTERM) is ended before the turn returns, never on a timer that an exit of ELU would skip.
+test('a turn ended at its result returns only once a command it left that ignores being asked to end is gone', async (t) => {
+  const cwd = temp(t), logFile = path.join(cwd, 'deaf.log'), pidFile = path.join(cwd, 'loop.pid');
+  const alive = pid => { const r = spawnSync('ps', ['-o', 'stat=', '-p', String(pid)], { encoding: 'utf8' }); return r.status === 0 && Boolean(r.stdout.trim()) && !r.stdout.trim().startsWith('Z'); };
+  const vendor = `const loop = require('node:child_process').spawn('sh', ['-c', "trap '' TERM; while :; do sleep 1; done"], { detached: true, stdio: 'ignore' });
+    require('node:fs').writeFileSync(${JSON.stringify(pidFile)}, String(loop.pid)); console.log(JSON.stringify({ type: 'result', result: 'Done.' })); setInterval(() => {}, 1000);`;
+  const r = await runProcess({ bin: process.execPath, args: ['-e', vendor], cwd, env: agentEnv(), logFile, timeoutSeconds: 60, finished: claude.finalEvent });
+  const loop = Number(fs.readFileSync(pidFile, 'utf8')); t.after(() => { try { process.kill(-loop, 'SIGKILL'); } catch {} });
+  await new Promise(resolve => setTimeout(resolve, 200));
+  assert.deepEqual([r.endedAfterResult, alive(loop)], [true, false], 'gone when the turn returned');
+});
+// ELU itself exits in the two seconds between asking and ending: a conductor an update
+// replaced leaves as soon as its last turn is over. The vendor here ignores being asked too,
+// so the turn has not returned when the process exits.
+test('ELU exiting just after a turn ended at its result still ends what the turn left', async (t) => {
+  const cwd = temp(t), pidFile = path.join(cwd, 'pids.json'), lib = new URL('../lib/process.mjs', import.meta.url).href, claudeLib = new URL('../lib/adapters/claude.mjs', import.meta.url).href;
+  const alive = pid => { const r = spawnSync('ps', ['-o', 'stat=', '-p', String(pid)], { encoding: 'utf8' }); return r.status === 0 && Boolean(r.stdout.trim()) && !r.stdout.trim().startsWith('Z'); };
+  const vendor = `process.on('SIGTERM', () => {}); const loop = require('node:child_process').spawn('sh', ['-c', "trap '' TERM; while :; do sleep 1; done"], { detached: true, stdio: 'ignore' });
+    require('node:fs').writeFileSync(${JSON.stringify(pidFile)}, JSON.stringify([process.pid, loop.pid])); console.log(JSON.stringify({ type: 'result', result: 'Done.' })); setInterval(() => {}, 1000);`;
+  const elu = `import { runProcess, agentEnv, afterResult } from ${JSON.stringify(lib)}; import { finalEvent } from ${JSON.stringify(claudeLib)};
+    afterResult.graceSeconds = 0.2; setTimeout(() => process.exit(0), 1500);
+    runProcess({ bin: process.execPath, args: ['-e', ${JSON.stringify(vendor)}], cwd: ${JSON.stringify(cwd)}, env: agentEnv(), logFile: ${JSON.stringify(path.join(cwd, 'exit.log'))}, timeoutSeconds: 60, finished: finalEvent });`;
+  const r = spawnSync(process.execPath, ['--input-type=module', '-e', elu], { encoding: 'utf8', timeout: 20000 });
+  assert.equal(r.status, 0, r.stderr);
+  const [vendorPid, loop] = JSON.parse(fs.readFileSync(pidFile, 'utf8')); t.after(() => { for (const pid of [vendorPid, loop]) { try { process.kill(-pid, 'SIGKILL'); } catch {} } });
+  await new Promise(resolve => setTimeout(resolve, 300));
+  assert.deepEqual([alive(vendorPid), alive(loop)], [false, false], 'nothing of the turn outlives ELU');
+});
 test('a limit that stops a run ends its background commands too', async (t) => {
   const cwd = temp(t), pid = path.join(cwd, 'loop.pid');
   const alive = id => { const r = spawnSync('ps', ['-o', 'stat=', '-p', String(id)], { encoding: 'utf8' }); return r.status === 0 && Boolean(r.stdout.trim()) && !r.stdout.trim().startsWith('Z'); };

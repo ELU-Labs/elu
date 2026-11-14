@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { spawnSync } from 'node:child_process';
 import { startAcp } from '../lib/acp-client.mjs';
 
 const SERVER = fileURLToPath(new URL('./fakes/acp-server.mjs', import.meta.url));
@@ -84,4 +85,34 @@ test('the time limit kills the server unless the run is held; an abort kills it 
   assert.equal((await aborted.client.exit).signal, 'SIGKILL');
   await assert.rejects(startAcp({ bin: process.execPath, args: [SERVER], cwd: limited.dir, env: process.env, logFile: path.join(limited.dir, 'run.log') }), /EEXIST/, 'a log is written once');
   await assert.rejects(startAcp({ bin: '', logFile: path.join(limited.dir, 'other.log') }), /needs a program/);
+});
+
+// A turn of an ACP vendor (Antigravity, Grok) ends everything it started, as any vendor's
+// does (endRun in lib/process.mjs): at a limit, at a stop, and when the turn is over.
+const alive = pid => { const r = spawnSync('ps', ['-o', 'stat=', '-p', String(pid)], { encoding: 'utf8' }); return r.status === 0 && Boolean(r.stdout.trim()) && !r.stdout.trim().startsWith('Z'); };
+const gone = async pid => { for (const until = Date.now() + 3000; alive(pid) && Date.now() < until;) await sleep(20); return !alive(pid); };
+test('a limit that stops the server ends the background commands it started in sessions of their own, and names them', async t => {
+  let ended = null;
+  const { client } = await start(t, { quietSeconds: 1, timeoutSeconds: 60, onEnded: rows => { ended = rows; } });
+  const { pid } = await client.request('background'); t.after(() => { try { process.kill(-pid, 'SIGKILL'); } catch {} });
+  assert.equal(alive(pid), true);
+  assert.equal((await client.exit).stoppedBy, 'quiet');
+  assert.equal(await gone(pid), true, 'nothing the turn started is left');
+  assert.deepEqual(ended?.map(row => row.pid), [pid]);
+});
+test('a stop ends the server\'s background commands and names them', async t => {
+  const controller = new AbortController(); let ended = null;
+  const { client } = await start(t, { signal: controller.signal, onEnded: rows => { ended = rows; } });
+  const { pid } = await client.request('background'); t.after(() => { try { process.kill(-pid, 'SIGKILL'); } catch {} });
+  controller.abort(); await client.exit;
+  assert.equal(await gone(pid), true);
+  assert.deepEqual(ended?.map(row => row.pid), [pid]);
+});
+test('closing the server once its turn is over ends what it left running, also what ignores being asked to end', async t => {
+  let ended = null;
+  const { client } = await start(t, { onEnded: rows => { ended = rows; } });
+  const { pid } = await client.request('background', { deaf: true }); t.after(() => { try { process.kill(-pid, 'SIGKILL'); } catch {} });
+  await client.close(); await sleep(100);
+  assert.equal(alive(pid), false, 'gone when the turn is closed');
+  assert.equal(ended, null, 'the turn was over: no stop is reported');
 });

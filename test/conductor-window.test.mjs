@@ -79,11 +79,12 @@ for (const [name, module] of [['0.1.16', v16], ['0.1.17', v17]]) {
   });
 }
 
-// Run from its own folder (npx), the 0.1.16 conductor never sees an update and stays until it
-// has been idle for 10 minutes. The conductor beside it stays as long, so what the window
-// sends later never finds that one alone. The 0.1.16 conductor ticks only when the test says,
-// as above: in one process with this version's, its 20 ms tick can come before the change of
-// the request file is read, which no ELU window's send waits for.
+// Run from its own folder (npx), the 0.1.16 conductor never sees an update. Idle, it is told
+// to leave, which it reads at its next tick; until it has gone, the conductor beside it stays
+// whatever its own idle time, so what the window sends later never finds that one alone. The
+// 0.1.16 conductor ticks only when the test says, as above: in one process with this
+// version's, its 20 ms tick can come before the change of the request file is read, which no
+// ELU window's send waits for.
 test('the conductor beside an idle 0.1.16 one never leaves first, so what an ELU window of 0.1.16 sends later still runs on the new version', async t => {
   const p = setup(t), old = running(t, v16.Conductor, { version: '0.1.16', tickMs: HOUR });
   await until(() => olderConductor() !== null, 'the 0.1.16 conductor to write its status');

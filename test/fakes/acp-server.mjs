@@ -3,7 +3,8 @@
 // plus a session/request_permission request it waits on, never answers `slow`, echoes
 // `echo` (with how many notifications it received), and exits 3 on `exit`. `command` is a
 // tool call that runs for params.ms printing nothing: a tool_call update in progress, then,
-// unless params.ms is null, one that says it completed, and the reply.
+// unless params.ms is null, one that says it completed, and the reply. `background` starts a
+// loop in a session of its own, as an agent's background command runs, and replies its pid.
 import readline from 'node:readline';
 const send = value => process.stdout.write(`${JSON.stringify(value)}\n`);
 const waiting = new Map(); let notifications = 0, nextId = 100;
@@ -37,6 +38,8 @@ async function handle(row) {
       update('tool_call_update', 'completed'); reply({ ran: true });
       break;
     }
+    // A command the agent leaves running in a session of its own; deaf: it ignores being asked to end.
+    case 'background': { const { spawn } = await import('node:child_process'); const loop = spawn('sh', ['-c', `${row.params?.deaf ? "trap '' TERM; " : ''}while :; do sleep 1; done`], { detached: true, stdio: 'ignore' }); loop.unref(); reply({ pid: loop.pid }); break; }
     case 'slow': break;
     case 'exit': process.exit(3);
     default: send({ jsonrpc: '2.0', id: row.id, error: { code: -32601, message: 'Method not found' } });
