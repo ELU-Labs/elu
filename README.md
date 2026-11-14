@@ -172,10 +172,10 @@ works. The app shows each change at once.
   words `/schedule` takes), `pause N`, `resume N`, `delete N` and `run N` change them.
 
 A session started from a session gets that session's mode, or a lower one with `--mode`. In
-Ask for approval the model asks you before it runs one; Approve for me and Full access run
-them. A teammate's question or review is never told about them and cannot run them. Codex
-below Full access runs every command in a sandbox that keeps ELU's own files from it, so there
-the model is not told about them.
+Ask for approval you are asked before one runs; Approve for me and Full access run them. Every
+vendor's session has them, in every mode. Inside a sandbox the command hands itself to ELU,
+which runs it only for that session and no higher than its mode. A teammate's question or
+review is never told about them and cannot run them.
 
 ## Keys
 

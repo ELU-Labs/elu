@@ -424,10 +424,22 @@ copy of the request.
 
 ELU's own commands, `elu sessions` and `elu schedules` ([README](../README.md#elu-from-a-session)),
 run without asking in Approve for me, as one command alone, and are asked for in Ask for
-approval like any other command. They read and write ELU's own files, which the sandbox
-denies, so Claude Code runs them outside it (`excludedCommands`). Only a turn of your own
-session has them on its PATH, with the session it runs in; a teammate's question or review
-never does, and a command run from one is refused.
+approval like any other command. Only a turn of your own session has them, on every vendor:
+its PATH starts with an `elu` of that turn's own. That `elu` reads none of ELU's files and
+needs nothing from the environment. It writes the command into a folder ELU made for the turn
+and prints ELU's answer. ELU, outside any sandbox, refuses a request that names another
+session or a higher mode than the turn's, then runs it with the code your shell's `elu` uses.
+
+- Claude Code runs them outside its sandbox (`excludedCommands`), and asks you first in Ask
+  for approval.
+- Grok Build and Antigravity run every command outside a sandbox, and ask you over ACP.
+- Codex runs them in its sandbox, which may write that one folder and still none of ELU's
+  files. It asks nobody, so in Ask for approval ELU asks you itself, under Needs you, and the
+  command waits for your answer. If Codex ended the command before you answered, nothing runs.
+
+Where the vendor already asked you about the same command in this turn, your answer stands and
+ELU does not ask again. A teammate's question or review never has them, and a command run
+from one is refused.
 
 Every vendor that asks goes through the relay: Claude Code through its permission prompt
 tool, Antigravity and Grok Build over ACP. The relay checks the never list, then your

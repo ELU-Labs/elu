@@ -144,8 +144,9 @@ host you did not allow (a push to `github.com` asks you for that host, and it is
 as a rule) and the common directory is read-only, which is what holds. A bot that is
 allowed to merge pull requests (`@elu` comes allowed; a bot you make is not) runs its
 own working turn without the `gh pr merge` rule; in Ask that command asks you instead.
-Full access has none of these rules, no stand-in commands and no `CLAUDE_ENV_FILE`: a turn
-there runs push, tags, merges, publishing and deploys as your own shell would.
+Full access has none of these rules and no stand-in commands, and its `CLAUDE_ENV_FILE` only
+puts the turn's own `elu` first: a turn there runs push, tags, merges, publishing and deploys
+as your own shell would.
 
 A turn that works on an approved Task is launched with Claude Code's to-do tools, in every
 mode: `--tools` adds `TaskCreate,TaskUpdate,TaskList,TaskGet,TodoWrite`, and Ask and Auto
