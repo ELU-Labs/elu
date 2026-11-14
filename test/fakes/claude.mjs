@@ -103,7 +103,9 @@ if(cfg.noCredits&&modelArg===cfg.noCredits){console.log(JSON.stringify({type:'sy
 const tooLong=cfg.tooLong!==undefined&&input.includes('Review as @')&&(cfg.tooLong==='all'||cfg.tooLong==='files'&&/"content":"|"excerpts":\[/.test(input)||typeof cfg.tooLong==='number'&&input.length>cfg.tooLong);
 // standupTooLong (fake.json): a Standup turn over that many characters, refused the same way.
 const standupTooLong=typeof cfg.standupTooLong==='number'&&input.includes("owner's Standup")&&input.length>cfg.standupTooLong;
-if(tooLong||standupTooLong){console.log(JSON.stringify({type:'system',subtype:'init',session_id:session,model:reported,permissionMode:'default',mcp_servers:[]}));console.log(JSON.stringify({type:'result',subtype:'success',is_error:true,duration_ms:120,num_turns:1,result:'Prompt is too long',session_id:session,total_cost_usd:nothingSpent}));process.exit(1);}
+// promptTooLong (fake.json): any prompt over that many characters, refused the same way.
+const promptTooLong=typeof cfg.promptTooLong==='number'&&input.length>cfg.promptTooLong;
+if(tooLong||standupTooLong||promptTooLong){console.log(JSON.stringify({type:'system',subtype:'init',session_id:session,model:reported,permissionMode:'default',mcp_servers:[]}));console.log(JSON.stringify({type:'result',subtype:'success',is_error:true,duration_ms:120,num_turns:1,result:'Prompt is too long',session_id:session,total_cost_usd:nothingSpent}));process.exit(1);}
 if(mode==='no-sandbox'){console.error('Error: sandbox required but unavailable: bubblewrap (bwrap) not installed, socat not installed');console.error('  sandbox.failIfUnavailable is set.');console.log(JSON.stringify({type:'result',subtype:'error_during_execution',is_error:true,session_id:session}));process.exit(1);}
 // An answer turn with permissions has Write in its tools, but a lead that is told ELU prepares the workspace does not edit there.
 const edit=(args[args.indexOf('--tools')+1]??'').split(',').includes('Write')&&!conversation;
