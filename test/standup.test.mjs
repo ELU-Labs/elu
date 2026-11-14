@@ -207,6 +207,76 @@ test('a round shows and asks open sessions, a working one beside its turn, leave
   assert.equal(readTask(f.repo, a.id).state, 'answered');
 });
 
+// The round's time ends the wait for a question no session has started on. An answer turn that
+// runs is a turn like any other: no clock of ELU's stops it, and the round waits for it.
+test("the round's time takes back a question nothing has started on, and an answer turn that still runs then is waited for, not stopped", async t => {
+  const f = setup(t), times = { ...TIMES, capMs: 1000 };
+  const a = await f.controller.ask('Explain coupons').finished;
+  const standup = createConversation(f.repo, f.controller.draftConfig, '/standup');
+  const lines = task => task.messages.filter(row => row.standupChat).map(row => row.text);
+  // Nothing takes the question: the round waits its time, takes the question back and names the session as missing, with why.
+  const first = await runStandupRound(f.repo, standup.id, { sources: none, times });
+  assert.equal(first.answered, 0); assert.equal(first.listed, 0);
+  assert.match(lines(first.task)[0], /^1 session on 1 computer \(1 here\)\. .*Model updates: 0 written, 1 missing\. Missing: Explain coupons here \(no answer in 0 minutes\)\.$/);
+  const missed = first.task.messages.findLast(row => row.update);
+  assert.match(missed.from, /^Explain coupons · .+ here$/); assert.match(missed.text, /(^|\n\n)No model update: no answer in 0 minutes$/);
+  assert.equal(lines(first.task).at(-1), 'Standup done · 1 session on 1 computer · 0 model updates · 1 missing · 0 not asked');
+  assert.equal(pendingRequests(f.root).filter(row => row.standupFor).length, 0, 'taken back');
+  const before = lines(first.task).length;
+  // The question is taken at once, and its answer turn is still running when the round's time is up.
+  let took = 0, over = false;
+  const loop = (async () => {
+    while (!over) {
+      for (const row of pendingRequests(f.root).filter(value => value.standupFor && value.state === 'queued')) {
+        updateRequest(f.root, row.id, { state: 'running' }); took = Date.now();
+        await sleep(times.capMs + 500);
+        await f.controller.ask(row.goal, row.continuationTaskId, { standupFor: row.standupFor }).finished;
+        updateRequest(f.root, row.id, { state: 'done', reason: 'Finished.' });
+      }
+      await sleep(5);
+    }
+  })();
+  const started = Date.now(), second = await runStandupRound(f.repo, standup.id, { sources: none, times });
+  over = true; await loop;
+  assert.ok(took && took - started < times.capMs, 'taken within the round\'s time');
+  assert.ok(Date.now() - started > times.capMs + 500, 'the answer came after the round\'s time');
+  assert.equal(second.answered, 1, JSON.stringify(second.task.messages.slice(-3))); assert.equal(second.listed, 0);
+  const written = second.task.messages.findLast(row => row.update);
+  assert.match(written.from, /^Explain coupons · .+ here$/); assert.match(written.text, /\n\n(?!Model update:|No model update:)\S/, `the update is in the block: ${written.text}`);
+  assert.equal(lines(second.task).at(-1), 'Standup done · 1 session on 1 computer · 1 model update · 0 not asked');
+  assert.doesNotMatch(lines(second.task).slice(before).join('\n'), /no answer in/);
+  assert.equal(readTask(f.repo, a.id).state, 'answered');
+});
+
+test("an answer turn that still runs on another computer at the round's time is waited for; only then is the question nothing started on taken back there", async t => {
+  const f = setup(t), times = { ...TIMES, capMs: 1000 }, mini = 'e'.repeat(64), docs = '0123456789abcdef:1', flaky = '0123456789abcdef:2';
+  const session = (ref, title) => ({ here: false, where: '@mini', key: mini, ref, title, at: Date.now(), state: 'answered', waits: null, last: '' });
+  const computers = () => [{ key: mini, name: '@mini', online: true, standup: true, sessions: [session(docs, 'Docs'), session(flaky, 'Flaky test')] }];
+  // Docs has taken its question and its answer turn runs until after the round's time; Flaky test's question is never started.
+  const sent = [], began = Date.now(); let answeredAt = 0;
+  const peer = { peerStatus: () => ({ running: true }), sendPeerCommand: body => { sent.push({ ...body, at: Date.now() }); return { id: String(sent.length) }; }, awaitCommand: async id => {
+    const body = sent[Number(id) - 1];
+    if (body.type === 'remoteStandup') return { asked: body.refs.map(ref => ({ ref, title: ref === docs ? 'Docs' : 'Flaky test' })), skipped: [] };
+    if (body.type !== 'remoteStandupRead') return { stopped: 1 };
+    if (!body.refs.includes(docs) || Date.now() - began < times.capMs + 400) return { answers: [], pending: body.refs.map(ref => ({ ref, working: false, queued: ref !== docs })) };
+    answeredAt = Date.now();
+    return { answers: [{ ref: docs, title: 'Docs', who: 'Opus', text: 'Fixing the links.', at: new Date().toISOString() }], pending: [{ ref: flaky, working: false, queued: true }] };
+  } };
+  const standup = createConversation(f.repo, f.controller.draftConfig, '/standup');
+  const { task, answered, listed } = await runStandupRound(f.repo, standup.id, { sources: { computers, teammates: () => [], peer }, times });
+  assert.equal(answered, 1, JSON.stringify(task.messages.slice(-3))); assert.equal(listed, 0);
+  assert.ok(answeredAt - began > times.capMs, 'it answered after the round\'s time');
+  const update = task.messages.find(row => row.update && row.from.startsWith('Docs · ')); assert.equal(update.from, 'Docs · Opus on @mini'); assert.match(update.text, /(^|\n\n)Fixing the links\.$/);
+  // The one nothing started on is named as missing, with why, in its block and in the first line.
+  const missed = task.messages.find(row => row.update && row.from.startsWith('Flaky test · ')); assert.match(missed.from, /^Flaky test · (?:.+ )?on @mini$/); assert.match(missed.text, /(^|\n\n)No model update: no answer in 0 minutes$/);
+  const said = task.messages.filter(row => row.standupChat && !row.update).map(row => row.text);
+  assert.match(said[0], /^2 sessions on 1 computer \(2 on @mini\)\. .*Model updates: 1 written, 1 missing\. Missing: Flaky test on @mini \(no answer in 0 minutes\)\.$/);
+  assert.equal(said.at(-1), 'Standup done · 2 sessions on 1 computer · 1 model update · 1 missing · 0 not asked');
+  // Nothing was stopped there while the answer turn ran.
+  const stops = sent.filter(body => body.type === 'remoteStandupStop');
+  assert.equal(stops.length, 1); assert.ok(stops[0].at >= answeredAt); assert.equal(stops[0].to, mini);
+});
+
 test("every one of your sessions and your teammates' is asked, newest first; offline and older computers are listed, and an older one is never sent the question", async t => {
   const f = setup(t);
   const first = await f.controller.ask('Explain coupons').finished, model = readTask(f.repo, first.id);

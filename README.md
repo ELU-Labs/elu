@@ -510,8 +510,11 @@ that line: "Missing: Email logs on @devbox (@devbox is offline)". The line under
 says how many model updates are still being written. Then come the sessions not asked, and
 one line: "Standup done · 9 sessions on 4 computers · 8 model updates · 1 missing · 2 not
 asked". `/stop` stops waiting and takes back every question not answered yet, on your other
-computers and your teammates' too, so none runs later in a session. Nothing runs on a timer:
-only `/standup` and `@everyone` ask.
+computers and your teammates' too, so none runs later in a session. A question no session has
+started on is taken back after 10 minutes and named as missing. After 30 minutes the round
+ends and takes back what is still not answered, except that a model update that is being
+written is waited for, however long it takes. Nothing runs on a timer: only `/standup` and
+`@everyone` ask.
 
 On a teammate's computer their own setting decides, as for any message from you: Auto asks
 their sessions at once; Manual shows them "@sam asks every session for a standup update"
