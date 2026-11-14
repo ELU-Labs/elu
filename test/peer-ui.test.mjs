@@ -1195,6 +1195,18 @@ test('at 80x24 /peers and the line of a join that names the shared project show 
   assert.ok(v.panels.teamBoxes.every(box => box.atop + box.height <= status.atop), 'the panes of Chats end over the three rows');
 });
 
+// A teammate's request under the cursor in Sessions: the pane beside the list names its keys.
+// At 80 columns that bar was too long, and what it left out was the page keys.
+test('at 80 columns the keys of a teammate\'s card in the pane beside the list end at the page keys', { timeout: 30000 }, async t => {
+  const p = project(later(t)); environment(t, p.parent);
+  const v = await view(t, { columns: 80, rows: 24, repo: repository(p.root), peer: fakePeer() }), board = v.panels.board, bar = () => v.panels.keys.getText().trim();
+  await until(() => board.items.some(item => /reply to @sara/.test(plainItem(item))), 'the reply that waits to be sent');
+  board.focus(); selectRow(board, /reply to @sara/); await until(() => /^y send {2}n discard/.test(bar()), 'its keys in the list');
+  v.panels.chat.focus();
+  await until(() => bar() === 'y send  n discard  c discard  letter ⏎  ↑↓ scroll  esc back  pgup pgdn page', 'the pane\'s keys at 80');
+  assert.ok(bar().length <= v.panels.keys.width);
+});
+
 // The wheel at a pane, as SGR reports in one read: up or down, a step each.
 const wheelAt = (v, widget, step, times = 1) => v.input.write(`\x1b[<${step < 0 ? 64 : 65};${widget.aleft + 3};${widget.atop + 3}M`.repeat(times));
 const pause = (ms = 150) => new Promise(resolve => setTimeout(resolve, ms));
@@ -1351,7 +1363,7 @@ test("PgUp and PgDn page a teammate's message beside the Sessions list, from the
   ask.clearValue(); ask.cancel();
   // A click on the card gives it the keys.
   clickAt(v, chat); await until(() => v.current.screen.focused === chat, 'the card has the focus');
-  await until(() => /^y accept {2}n decline {2}c decline\b.*↑↓ scroll {2}esc sessions\b/.test(keys()), 'the keys in the card');
+  await until(() => /^y accept {2}n decline {2}c decline\b.*↑↓ scroll {2}esc (?:sessions|back) {2}pgup pgdn page$/.test(keys()), 'the keys in the card, to the page keys');
   v.input.write(PGUP); await until(() => chat.childBase === 0, 'a page up in the card');
   v.input.write(PGDN); await until(() => chat.childBase === end, 'a page down in the card');
   // Where all of it shows, there is nothing to page and the bar does not offer it.
