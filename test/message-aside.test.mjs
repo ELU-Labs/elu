@@ -88,6 +88,23 @@ test('a question sent to a turn that takes no message is answered beside it with
   assert.ok(next.includes('How far are you?') && next.includes('Two of three steps are done. It is running the tests now.') && next.includes(ASIDE_ANSWERED));
 });
 
+// Team access Auto starts a session as if the owner had typed the teammate's message. His
+// message to it in the middle of a turn that takes none is answered beside it, as in his own.
+test('a session a teammate\'s message started as the owner\'s own answers his question beside its turn, as one he typed does', { timeout: 90000 }, async t => {
+  const f = setup(t, { mode: 'slow', extra: { byInput: SIDE } });
+  const origin = { kind: 'handoff', peer: 'b'.repeat(64), name: 'sara', a2aTaskId: 'task-1', threadId: 'thread-1', hop: 1, own: true };
+  enqueue(f.root, 'Work on the handoff from @sara shown in the peer data block.', { origin, context: 'Tidy the coupon module', permissions: 'full', place: { kind: 'worktree' }, folders: [] });
+  await until(() => sessionOf(f)?.state === 'running' && sessionOf(f).activeDeaf === true, 'the turn works and takes no message');
+  const sent = enqueue(f.root, 'How far are you?', { continuationTaskId: '1', priority: 0 }), asked = Date.now();
+  await until(() => request(f, sent.id)?.state === 'done' || request(f, sent.id)?.aside?.state === 'failed', 'the answer beside the turn');
+  assert.equal(request(f, sent.id).aside.error, undefined, 'not refused');
+  assert.ok(Date.now() - asked < 10000, 'within seconds, not when the turn ends');
+  assert.deepEqual([request(f, sent.id).reason, request(f, sent.id).aside.kind, request(f, sent.id).aside.text], [ASIDE_ANSWERED, 'question', 'Two of three steps are done. It is running the tests now.']);
+  assert.equal(only(f).state, 'running', 'the turn goes on');
+  sendCommand({ type: 'stop', root: f.root, taskId: '1' });
+  await until(() => only(f).state !== 'running', 'stopped');
+});
+
 test('an instruction sent to such a turn is answered beside it and says it asks for work: it keeps its place for the next turn, and stopping the turn starts it at once', { timeout: 90000 }, async t => {
   const f = setup(t, { mode: 'slow', extra: { byInput: SIDE } });
   enqueue(f.root, 'Tidy the coupon module', { priority: 0, permissions: 'full' });
