@@ -173,7 +173,9 @@ answer to the turn. There `inputTokens` is the whole prompt, so ELU takes the ca
 and the cache write out of it, as Grok's headless output does. The Usage tab's top agents
 show them, priced at the model's API list price where Grok reported no cost; a turn that
 carried none shows a dash, never 0, and so does the cost of one whose count Grok says may be
-incomplete (`usage_is_incomplete`, `cost_is_partial`, `usageIsIncomplete`). Grok's spend
+incomplete (`usage_is_incomplete`, `usageIsIncomplete`). `cost_is_partial` says only that some
+calls had no cost: Grok then leaves every cost out, the tokens are whole, and they are priced
+at list as usual. Grok's spend
 covers every turn the run made and none of an earlier run of its session, so a resumed
 session's run counts its own.
 

@@ -68,6 +68,19 @@ test('Grok Build and Antigravity runs are priced the same way, and a cost the ve
   near(spend.costUsd, 0.52 + 0.9 + 0.26 + 0.9, 'the day'); assert.equal(spend.partial, false);
 });
 
+// Grok's headless guide: cost_is_partial says some calls had no cost, so Grok leaves every cost
+// out; the tokens are whole. Only usage_is_incomplete says the tokens may miss some.
+test('a Grok Build run whose cost Grok says is partial has every token, and is priced at list from them', t => {
+  const dir = temp(t), logFile = path.join(dir, 'grok.log');
+  // grok-4.6, per million: $2 input, $0.50 cached, $6 output. 100k + 40k cached in, 10k out: $0.28.
+  const result = { text: '{"outcome":"done","summary":"ok"}', stopReason: 'end_turn', sessionId: 's1', cost_is_partial: true, usage: { input_tokens: 100000, cache_read_input_tokens: 40000, cache_creation_input_tokens: 0, output_tokens: 10000 }, modelUsage: { 'grok-4.6': { inputTokens: 100000, outputTokens: 10000, cacheReadInputTokens: 40000 } } };
+  fs.writeFileSync(logFile, `${JSON.stringify(result)}\n`);
+  const grok = task(1, 'Search', [{ role: 'lead', vendor: 'grok', at: at(1), model: 'grok-4.6', logFile, costUsd: null }]);
+  near(runCosts(grok)[0], 0.28, 'grok-4.6 at list');
+  const spend = agentSpend(projects([grok]), { now: NOW });
+  assert.equal(costText(spend.rows[0]), '$0.28'); assert.equal(spend.partial, false);
+});
+
 test('a model with no known price shows a dash, never 0, and is left out of the total', t => {
   const dir = temp(t);
   const grokFast = { role: 'lead', vendor: 'grok', at: at(1), model: 'grok-4.6-fast', tokens: { input: 1000, output: 100, cacheRead: 5000, cacheWrite: 0 }, costUsd: null };
