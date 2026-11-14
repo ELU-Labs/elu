@@ -65,7 +65,11 @@ press Enter.
 Ask for a change to code or files, or for work that needs planning, and the first reply is
 a Task: a title, a description, the goal, the objectives that say when it is done, a
 priority, a severity, the success criteria that show it is done, and the model's estimate
-of the work. Nothing is edited yet.
+of the work.
+
+With Full access or Approve for me the mode approves the Task: the card says so, nothing
+waits for you, and the work goes on in the same message. With Ask for approval or Read
+only nothing is edited yet, and the Task waits for you:
 
 | Do | What happens |
 | --- | --- |
@@ -73,7 +77,8 @@ of the work. Nothing is edited yet.
 | Esc, then `n` | Rejects it. Nothing is changed. |
 | Type a message | Changes the Task. The card shows the new revision. |
 
-Typing `yes` and Enter approves too. A question gets a plain answer and no Task. A follow-up
+An approval you type counts too, in your own words: `yes`, `go ahead`, `sounds good, do it`.
+A question gets a plain answer and no Task. A follow-up
 inside an approved Task's goal starts at once; a new piece of work gets a Task of its own.
 An approved Task gives its session its name, unless you named the session yourself.
 
@@ -83,13 +88,18 @@ the whole Task, as does a click: the goal, the objectives, the success criteria,
 and the ETA. Its Go to session button opens its session; Enter presses it. A teammate's card,
 and one of your other computer's, open the same way.
 
-After you approve, the model splits the work into subtasks and changes them as it likes.
+After approval, the model splits the work into subtasks and changes them as it likes.
 The card lists them as a checklist and marks the objectives the model reports met. Its ETA
 is approval plus the estimate, and follows the minutes left the model reports as it works. The
 Task is done when every objective is reported met and the turn, with its checks and
-review, has ended. A new message opens it again.
+review, has ended. A new message opens it again, and `continue` takes the next piece of
+its goal.
 
-ELU starts the edit only for a Task you approved. What the model can still do in its
+A step that fails is the agent's to fix: it finds the cause and goes on. It asks you only
+when it cannot go on at all, or when the choice is truly yours. When the work is done it
+says what it did and ends.
+
+ELU starts the edit only for an approved Task. What the model can still do in its
 first turn depends on the vendor and the mode:
 [docs/permissions.md](docs/permissions.md#plan-first).
 
