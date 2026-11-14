@@ -3,10 +3,10 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { PassThrough } from 'node:stream';
-import { project, fakeClis, cli, git } from './helpers.mjs';
+import { project, fakeClis, cli, git, keyThenEnter } from './helpers.mjs';
 import { repository } from '../lib/git.mjs';
 import { saveTask, taskDir } from '../lib/state.mjs';
-import { proposeTask } from '../lib/plan.mjs';
+import { proposeTask, currentTask } from '../lib/plan.mjs';
 import { COMMANDS } from '../lib/terminal-commands.mjs';
 import { launchTerminal } from '../lib/terminal.mjs';
 import { buildChanges } from '../lib/diff.mjs';
@@ -39,10 +39,10 @@ function session(t, { colour = false } = {}) {
   saveTask(repo, { id: '1', goal: 'Add tax to prices', state: 'ready', worktree, branch: 'feat/task-1', base, createdAt: new Date().toISOString(), runs: [], reviews: [], messages: [], sessions: {} });
   return { repo, worktree, notes: path.join(taskDir(repo, '1'), 'line-notes.json') };
 }
-// shows: text the view holds once the session's changes are read. waits: the session's Task
-// waits for approval, so its row keeps y and n and any other letter typed on it starts a
-// message: its Changes open with a click on their name over the chat.
-async function view(t, repo, { columns = 100, rows = 30, shows = OLD, waits = false } = {}) {
+// shows: text the view holds once the session's changes are read. A row's key is its letter,
+// then Enter (keyThenEnter): d on the session's row opens its Changes. click: they open with
+// a click on their name over the chat instead.
+async function view(t, repo, { columns = 100, rows = 30, shows = OLD, click = false } = {}) {
   const input = new PassThrough(), output = new PassThrough();
   input.isTTY = output.isTTY = true; input.setRawMode = () => {}; output.columns = columns; output.rows = rows;
   output.on('data', () => {});
@@ -50,6 +50,7 @@ async function view(t, repo, { columns = 100, rows = 30, shows = OLD, waits = fa
   const finished = launchTerminal({ repo, input, output, refreshMs: 30, startConductor: () => false, onRender: value => { rendered = value; } });
   finished.then(() => { closed = true; }, () => { closed = true; });
   await until(() => rendered, 'first render');
+  keyThenEnter(input, () => rendered);
   const v = {
     input, get current() { return rendered; }, get changes() { return rendered.panels.changes; },
     lines: () => rendered.panels.changes.getText().split('\n'), flat: () => rendered.panels.changes.getText().split('\n').map(line => line.trim()).join(' '), status: () => rendered.panels.status.getText(),
@@ -86,7 +87,7 @@ async function view(t, repo, { columns = 100, rows = 30, shows = OLD, waits = fa
   const board = rendered.panels.board, named = () => board.items.findIndex(item => /Add tax to prices/.test(item.getText()));
   await until(() => named() >= 0, 'the session in the list');
   board.focus(); board.select(named()); await until(() => rendered.session === '1', 'the session shown');
-  if (waits) { const names = rendered.panels.sessionTabs; await until(() => !names.hidden && names.width > 9, 'Chat and Changes over the chat'); v.click(names.aleft + 8, names.atop); }
+  if (click) { const names = rendered.panels.sessionTabs; await until(() => !names.hidden && names.width > 9, 'Chat and Changes over the chat'); v.click(names.aleft + 8, names.atop); }
   else input.write('d');
   await until(() => rendered.sessionView === 'changes' && rendered.screen.focused === rendered.panels.changes && v.lines().some(line => line.includes(shows)), 'its changes');
   return v;
@@ -152,13 +153,25 @@ test('Changes: the line under the mouse shows a +, and one click on that + opens
 test('Changes: at 80 columns in colour, under a Task that waits for approval, the row under it says the note was sent', async t => {
   const s = session(t, { colour: true });
   proposeTask(s.repo, '1', { title: 'Uppercase coupons', description: 'One file changes.', goal: 'Codes compare equal whatever their case.', objectives: ['It works'], priority: 'medium', severity: 'low' });
-  const v = await view(t, s.repo, { columns: 80, rows: 24, waits: true }), removed = v.row(OLD);
+  const v = await view(t, s.repo, { columns: 80, rows: 24, click: true }), removed = v.row(OLD);
   v.click(removed.mark, removed.y); await v.type('Note', 'Say why this went');
   await until(() => v.lines().some(line => /✎ Say why this went/.test(line)), 'the note under its line');
   v.input.write('s'); await until(() => /Sent your note to the model\./.test(v.status()), 'the note is sent');
   // The two rows of the status as the screen draws them: what waits, cut to the row, and the message under it.
   const status = v.current.panels.status, drawn = v.screen().slice(status.atop, status.atop + status.height).map(row => row.slice(status.aleft, status.aleft + status.width).trimEnd());
-  assert.deepEqual(drawn, ['? Needs you · Esc, then y approve · n reject...', '› Sent your note to the model.']);
+  assert.deepEqual(drawn, ['? Esc, then y approve · n reject, then Enter...', '› Sent your note to the model.']);
+});
+
+test('Changes: the row of a session whose Task waits for approval names d, and d then Enter opens its Changes before the Task is approved', async t => {
+  const s = session(t);
+  proposeTask(s.repo, '1', { title: 'Uppercase coupons', description: 'One file changes.', goal: 'Codes compare equal whatever their case.', objectives: ['It works'], priority: 'medium', severity: 'low' });
+  // view() selects the row and presses d, then Enter: the changes show, with the Task still waiting.
+  const v = await view(t, s.repo, { columns: 80, rows: 24 }), keys = () => v.current.panels.keys.getText();
+  assert.equal(currentTask(s.repo, '1').state, 'proposed', 'looking at the changes decided nothing');
+  assert.ok(v.lines().some(line => line.includes(NEW)), 'the changed line shows');
+  // Esc goes back to the row, and its key bar names d beside y and n.
+  v.input.write('\x1b'); await until(() => v.current.sessionView === 'chat' && v.current.screen.focused === v.current.panels.board, 'back on the row');
+  await until(() => /^y approve {2}n reject {2}d changes {2}enter open {2}letter then enter {2}tab next$/.test(keys().trim()), 'the key bar names d');
 });
 
 test('Changes: with every change gone the notes stay, the view says how to send them, and s sends them', async t => {

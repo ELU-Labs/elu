@@ -1105,7 +1105,7 @@ test('a shared project with no git address says how to get it here, the board of
   await until(() => /› No git address\. Copy its folder here, open a terminal in it and run ELU\.$/.test(status()), 'no address');
   // A teammate on an older ELU sends no address: the line says which side needs the update.
   selectRow(list, /Old one/); v.input.write('c');
-  await until(() => /› No git address: @sara needs ELU 0\.1\.20\. Or copy its folder here and run ELU\.$/.test(status()), 'an older teammate');
+  await until(() => /› No git address: @sara needs ELU 0\.1\.20\. Copy its folder here and run ELU\.$/.test(status()), 'an older teammate');
   // Its board at 80 columns: the box's title is the longest form that fits.
   v.input.write('\r'); await until(() => v.current.view === 'kanban' && /Message @sara/.test(panels.ask._label.getText()), 'the team board');
   assert.match(status(), /› Old one, shared by @sara on @sara-box\. The box below writes to @sara\.$/);

@@ -1955,6 +1955,11 @@ test('on a row that waits on an approval y, n, f and a act with Enter, and a mes
   const lone = async (key, does) => { await onRow(); v.type(key); await until(() => ask.getValue() === key && new RegExp(`enter ${does} · keep typing to write a message`).test(keys()), `the line under the box names ${key}`); await pause(150); };
   const asks = async (name, command) => { wants(name, command); await onRow(); await until(() => panels.chat.getText().includes(`Run: ${command} outside the sandbox\nEsc, then y allow · n deny · f full access · a always, then Enter`), `the chat asks for ${command}`); };
   await asks('run-a', 'npm test');
+  // d then Enter shows what the session changed, to read before the answer. Esc goes back to the row.
+  await lone('d', 'shows its changes'); assert.equal(v.current.sessionView, 'chat');
+  v.type('\r'); await until(() => v.current.sessionView === 'changes' && v.current.screen.focused === panels.changes, 'd then Enter shows its changes');
+  assert.equal(answer('run-a'), null, 'looking at the changes answered nothing');
+  v.input.write('\x1b'); await until(() => v.current.sessionView === 'chat' && v.current.screen.focused === panels.board, 'Esc goes back to the row');
   // What the owner typed: it starts with y, the key that allows. Nothing is answered, and Enter sends it as a message.
   await onRow(); v.type('yes but also run the tests');
   await until(() => ask.getValue() === 'yes but also run the tests' && v.current.screen.focused === ask, 'the message is in the box');
@@ -2253,8 +2258,12 @@ test('a request for an edit shows its Task: n rejects it, a message revises it, 
   // Nothing was edited and no workspace was made: the session rests as an answer leaves it.
   assert.equal(session().state, 'answered'); assert.equal(session().kind, 'conversation'); assert.match(source(), /=> value;/);
   // Esc leaves the box for the session's row, under Needs you, and the row takes y and n.
-  v.input.write('\x1b'); await until(() => v.current.screen.focused === panels.board && /y approve {2}n reject {2}enter open/.test(panels.keys.getText()), 'the keys of its row');
+  v.input.write('\x1b'); await until(() => v.current.screen.focused === panels.board && /y approve {2}n reject {2}d changes {2}enter open {2}letter then enter {2}tab next/.test(panels.keys.getText()), 'the keys of its row');
   assert.match(rows(v).join('\n'), /NEEDS YOU 1 /); assert.match(cursor(v), /\? Uppercase coupon codes/);
+  // d, then Enter, shows what the session changed before the Task is approved. Esc goes back to its row.
+  v.input.write('d'); await until(() => v.current.sessionView === 'changes' && v.current.screen.focused === panels.changes, 'd then Enter shows its changes');
+  assert.equal(session().plan.state, 'proposed', 'looking at the changes decided nothing');
+  v.input.write('\x1b'); await until(() => v.current.sessionView === 'chat' && v.current.screen.focused === panels.board, 'Esc goes back to the row');
   v.input.write('n'); await until(() => session().plan.state === 'rejected' && /Task rejected\. Nothing was changed\./.test(status()), 'rejected');
   await until(() => /Task rejected: Uppercase coupons/.test(chat()), 'the rejection in the chat');
   assert.match(source(), /=> value;/); assert.deepEqual(pendingRequests(p.root).filter(row => row.state !== 'done'), [], 'a rejection starts nothing');
