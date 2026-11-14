@@ -3091,7 +3091,8 @@ test('a question to a session whose turn takes no message is answered in its cha
   // A question: within seconds its answer is in the chat, marked as written beside the turn, and the turn goes on.
   const asked = Date.now();
   await send(v, 'How far are you?');
-  await until(() => /┃ How far are you\?[\s\S]*· beside the turn[\s\S]*Two of three steps are done\.[\s\S]*Answered\s+beside\s+the\s+running\s+turn,\s+from\s+what\s+it\s+has\s+done\s+so\s+far\.\s+The\s+turn\s+goes\s+on\.[\s\S]*Codex is working/.test(chat()), 'the answer beside the turn, in the chat');
+  // It shows under the working line and its steps, where he typed it, so a turn with many steps never pushes it out of sight.
+  await until(() => /Codex is working[\s\S]*type a message any time[\s\S]*┃ How far are you\?[\s\S]*· beside the turn[\s\S]*Two of three steps are done\.[\s\S]*Answered\s+beside\s+the\s+running\s+turn,\s+from\s+what\s+it\s+has\s+done\s+so\s+far\.\s+The\s+turn\s+goes\s+on\.\s*$/.test(chat()), 'the answer beside the turn, at the end of the chat');
   assert.ok(Date.now() - asked < 10000, 'within seconds');
   await until(() => /Answered\s+beside\s+the\s+running\s+turn/.test(status()), 'the status line says so too');
   assert.equal(task().state, 'running'); assert.deepEqual(pendingRequests(p.root).filter(row => row.state === 'queued'), [], 'nothing is left to run');
@@ -3109,6 +3110,8 @@ test('a question to a session whose turn takes no message is answered in its cha
   await until(() => sent().includes('Rename the helper too'), 'it started the next turn');
   await until(() => !/You \(answered/.test(chat()), 'its row of a message that has not run is gone');
   assert.equal(chat().split('How far are you?').length, 2, 'the answered question shows once');
+  // Once its turn is over it is part of the chat, in its place: after the first message and before the one that started the next turn.
+  assert.match(chat(), /Keep working on the board[\s\S]*┃ How far are you\?[\s\S]*Two of three steps are done\.[\s\S]*┃ Rename the helper too/);
 });
 
 // Antigravity as the session's model. Its Full access turn ran headless, which prints nothing
