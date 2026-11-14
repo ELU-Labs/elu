@@ -34,8 +34,11 @@ function setup(t, options = {}) {
   const controller = autoApprove(new ProjectController(projectFolder(p.root))); registerProject(controller.repo);
   const calls = vendor => rows(fake.calls).filter(row => row.vendor === vendor && isRun(row));
   const absorbed = () => rows(path.join(fake.dir, 'absorbed.jsonl'));
+  // The session's own turns: a message to a turn that takes none is also answered by a run
+  // beside it (test/message-aside.test.mjs), which is not one of them.
+  const turns = vendor => rows(path.join(p.parent, 'inputs.jsonl')).filter(row => row.vendor === vendor && isRunOf(vendor, row) && !row.input.includes('you run beside it'));
   const conductor = new Conductor({ tickMs: 20 }).start(); t.after(() => conductor.stop());
-  return { ...p, fake, controller, repo: controller.repo, calls, absorbed, conductor };
+  return { ...p, fake, controller, repo: controller.repo, calls, turns, absorbed, conductor };
 }
 async function until(check, message, timeout = 20000) {
   const started = Date.now();
@@ -209,8 +212,8 @@ test('without the capability in its init row, a message waits for the turn to en
   await sleep(600); assert.deepEqual(controls(f), []);
   // Send now there is the stop /stop sends, and the message starts the next turn.
   sendCommand({ type: 'stop', root: f.root, taskId: '1' });
-  await until(() => f.calls('claude').length === 2 && only(f).messages.length === 2, 'the next turn started');
-  const [first, next] = f.calls('claude');
+  await until(() => f.turns('claude').length === 2 && only(f).messages.length === 2, 'the next turn started');
+  const [first, next] = f.turns('claude');
   assert.equal(next.args[next.args.indexOf('--resume') + 1], first.args[first.args.indexOf('--session-id') + 1]);
   assert.deepEqual(only(f).messages.map(row => [row.text, row.during === true]), [['Run the long check', false], ['Also keep the old name', false]]);
   sendCommand({ type: 'stop', root: f.root, taskId: '1' });
@@ -270,8 +273,8 @@ test('a waiting message for Codex is sent now: the turn stops and the message st
   // Send now: the stop /stop sends. The waiting messages start the next turn at once, joined.
   sendCommand({ type: 'stop', root: f.root, taskId: '1' });
   // Full access approves the Task that turn answers with, so its work goes on in the same thread and then ends.
-  await until(() => f.calls('codex').length >= 2 && !['running', 'preparing'].includes(only(f).state), 'the next turn ran', 40000);
-  const [first, next] = f.calls('codex');
+  await until(() => f.turns('codex').length >= 2 && !['running', 'preparing'].includes(only(f).state), 'the next turn ran', 40000);
+  const [first, next] = f.turns('codex');
   assert.notEqual(first.args[1], 'resume');
   assert.deepEqual(next.args.slice(0, 3), ['exec', 'resume', '12345678-1234-4234-8234-123456789abc'], 'it went on in the thread that was stopped');
   const task = only(f);
@@ -288,7 +291,7 @@ test('a stopped turn that cannot be resumed hands what it said and did to the ne
     const f = setup(t, { mode: 'slow' });
     if (vendor === 'agy') atomic(path.join(personalDirectory(), 'conformance', 'agy.json'), { v: 1, bin: path.join(f.fake.dir, 'agy'), version: '1.5.4', steps: Object.fromEntries(ADAPTERS.agy.conformance.map(step => [step.id, step.id === 'relay' ? 'fail' : 'pass'])), relay: false, at: new Date().toISOString() });
     f.controller.setDefaultModel({ vendor });
-    const prompts = () => rows(path.join(f.parent, 'inputs.jsonl')).filter(row => row.vendor === vendor && isRunOf(vendor, row)).map(row => row.input);
+    const prompts = () => f.turns(vendor).map(row => row.input);
     enqueue(f.root, 'Tidy the coupon module', { priority: 0 });
     await until(() => sessionOf(f)?.state === 'running' && prompts().length === 1, `${vendor} works`);
     await sleep(vendor === 'codex' ? 300 : 0);

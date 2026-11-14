@@ -12,6 +12,7 @@ import { remoteRow } from '../lib/board.mjs';
 import { taskPlace } from '../lib/terminal-plan.mjs';
 import { proposeTask, approveTask, planFile } from '../lib/plan.mjs';
 import { saveRequest } from '../lib/workspace.mjs';
+import { ASIDE_ANSWERED, saveAside } from '../lib/message-aside.mjs';
 import { saveTask, readTask, taskDir, lock } from '../lib/state.mjs';
 import { processIdentity } from '../lib/process.mjs';
 
@@ -19,6 +20,8 @@ import { processIdentity } from '../lib/process.mjs';
 // the session's Changes line and its Task card; over a working one, above the turn's working
 // line and live steps. A chat reads in time order: what he sent last, which the session has
 // not read yet, is the last thing in it, right above the message box, and nothing is under it.
+// A message answered beside the turn that still works (lib/message-aside.mjs) is there too, with
+// its answer, right under the working line and its steps.
 // These are the rows of the pane, for a session on another computer and for one here.
 
 const ME = 'a'.repeat(64), BOX = 'b'.repeat(64);
@@ -30,21 +33,25 @@ const approved = at => ({ ...TASK, state: 'approved', proposedAt: at, approvedAt
 const PATCH = ['diff --git a/src/report.mjs b/src/report.mjs', 'index 1111111..2222222 100644', '--- a/src/report.mjs', '+++ b/src/report.mjs', '@@ -1,1 +1,2 @@', '-export const total = () => 0;', '+export const total = rows => rows.reduce((sum, row) => sum + row, 0);', '+export const count = rows => rows.length;', 'New file: docs/report.md\n# Report\n'].join('\n');
 const STEPS = [{ kind: 'tool', text: 'Read: src/report.mjs', status: 'ok' }, { kind: 'tool', text: 'Run: npm test', status: 'running' }];
 
-// The four scenes, as a session on another computer sends them. Each: the view, and what its
+// The scenes, as a session on another computer sends them. Each: the view, and what its
 // pane reads top to bottom (every text is found after the one before it), ending with last.
 const SCENES = {
   'a finished session with a Task and changes and one waiting message': {
     view: { state: 'ready', finished: true, plan: approved(ago(9)), diff: { summary: '2 files · +2 −1', patch: PATCH }, waiting: [{ at: ago(0), text: 'Also update the docs', state: 'queued' }],
       entries: [{ role: 'You', at: ago(10), text: 'Fix the report' }, { role: 'Claude', lead: true, at: ago(9.5), text: 'Here is the Task for it.' }, { role: 'Claude', lead: true, at: ago(5), text: 'Done. The totals add up.' }] },
-    order: ['Fix the report', 'Here is the Task for it.', 'Task · approved', 'Done. The totals add up.', '(waiting)', 'Also update the docs'], last: 'Waiting to start.' },
+    order: ['Fix the report', 'Here is the Task for it.', 'Task · approved', 'Done. The totals add up.', '(starts next)', 'Also update the docs'], last: 'Starts next on @my-box.' },
   'a working session with steps and one waiting message': {
-    view: { state: 'running', held: 1, plan: approved(ago(8.9)), waiting: [{ at: ago(0), text: 'Use CSV for it', state: 'turn' }], runs: [{ run: 'run-1', role: 'lead', startedAt: ago(1), at: null, steps: STEPS }],
+    view: { state: 'running', held: 1, plan: approved(ago(8.9)), waiting: [{ at: ago(0), text: 'Use CSV for it', state: 'turn', takes: 'beside' }], runs: [{ run: 'run-1', role: 'lead', startedAt: ago(1), at: null, steps: STEPS }],
       entries: [{ role: 'You', at: ago(10), text: 'Fix the report' }, { role: 'Claude', lead: true, at: ago(9), text: 'Here is the Task for it.' }, { role: 'You', at: ago(1), text: 'Go on with it' }] },
-    order: ['Fix the report', 'Here is the Task for it.', 'Task · approved', 'Go on with it', 'Working on @my-box', 'Read: src/report.mjs', 'Run: npm test', '(waiting)', 'Use CSV for it', 'It reads this when its current turn ends.'], last: 'sends it now.' },
+    order: ['Fix the report', 'Here is the Task for it.', 'Task · approved', 'Go on with it', 'Working on @my-box', 'Read: src/report.mjs', 'Run: npm test', '(answered in a moment)', 'Use CSV for it', 'takes no message while it works'], last: 'sends it now: that stops the turn on @my-box and the command that is running' },
+  'a working session with steps and a message answered beside its turn': {
+    view: { state: 'running', beside: 3, plan: approved(ago(8.9)), runs: [{ run: 'run-1', role: 'lead', startedAt: ago(1), at: null, steps: STEPS }],
+      entries: [{ role: 'You', at: ago(10), text: 'Fix the report' }, { role: 'Claude', lead: true, at: ago(9), text: 'Here is the Task for it.' }, { role: 'You', at: ago(1), text: 'Go on with it' }, { role: 'You', at: ago(0.3), text: 'How far are you?', beside: true }, { role: 'Codex · beside the turn', at: ago(0.2), text: 'Two of three steps are done.', update: true, beside: true }, { role: 'ELU', at: ago(0.2), text: ASIDE_ANSWERED, line: true, beside: true }] },
+    order: ['Fix the report', 'Here is the Task for it.', 'Task · approved', 'Go on with it', 'Working on @my-box', 'Read: src/report.mjs', 'Run: npm test', 'How far are you?', 'beside the turn', 'Two of three steps are done.', 'Answered beside the running turn'], last: 'The turn goes on.' },
   'two waiting messages': {
     view: { state: 'answered', waiting: [{ at: ago(2), text: 'First of the two', state: 'queued', reason: 'Waiting for a free slot: 1 of 1 session is running. /slots changes it.' }, { at: ago(1), text: 'Second of the two', state: 'queued' }],
       entries: [{ role: 'You', at: ago(10), text: 'Fix the report' }, { role: 'Claude', lead: true, at: ago(9), text: 'It is fixed.' }] },
-    order: ['Fix the report', 'It is fixed.', '(waiting)', 'First of the two', '/slots', '(waiting)', 'Second of the two'], last: 'Waiting to start.' },
+    order: ['Fix the report', 'It is fixed.', '(starts next)', 'First of the two', '/slots', '(starts next)', 'Second of the two'], last: 'Starts next on @my-box.' },
   'a Task that waits for approval with nothing after it': {
     view: { state: 'answered', plan: proposed(ago(9)),
       entries: [{ role: 'You', at: ago(10), text: 'Fix the report' }, { role: 'Claude', lead: true, at: ago(9.5), text: 'Here is the Task for it.' }] },
@@ -115,9 +122,9 @@ test('a session on another computer: its question, why it stopped, an approval, 
   // Why it stopped, and that this computer is catching up with it.
   assert.deepEqual(keys({ state: 'stopped', error: 'Claude Code is not signed in on that computer.', behind: true, entries, waiting }), ['runs', 'behind', 'entry', 'entry', 'error', 'waiting']);
   // An approval there: above the message, which says where the approval is.
-  const asks = app.parts(partRow({ state: 'running', approvals: [{ id: 'a-1', role: 'lead', summary: 'Run: npm test', at: ago(2) }], entries, waiting: [{ at: ago(1), text: 'yes', state: 'turn' }] }), 96);
+  const asks = app.parts(partRow({ state: 'running', approvals: [{ id: 'a-1', role: 'lead', summary: 'Run: npm test', at: ago(2) }], entries, waiting: [{ at: ago(1), text: 'yes', state: 'turn', takes: 'end' }] }), 96);
   assert.deepEqual(asks.map(part => part.key.split('\0')[0]), ['runs', 'entry', 'entry', 'approval', 'waiting']);
-  assert.match(asks.at(-1).text, /It reads this when its current turn ends\. The approval above still needs your answer\.$/);
+  assert.match(asks.at(-1).text, /It starts when the running turn on @my-box ends\. The approval above still needs your answer\.$/);
   // A computer whose ELU lists no waiting messages says that one waits under the steps, as before.
   assert.deepEqual(keys({ state: 'running', held: 1, runs: [{ run: 'run-1', role: 'lead', startedAt: ago(1), at: null, steps: STEPS }], entries }), ['runs', 'entry', 'entry', 'working', 'live', 'held']);
   // Earlier messages still there: the line that counts them stays right above the oldest one held.
@@ -127,10 +134,10 @@ test('a session on another computer: its question, why it stopped, an approval, 
   const helper = { model: 'Opus 5.5', title: 'Help', working: true, stopped: null, sends: [], approvals: [], entries: [{ role: 'You', at: ago(8), text: 'Help it' }, { role: 'Opus 5.5', lead: true, at: ago(7), text: 'I will.' }, { role: 'You', at: ago(0.5), text: 'And the tests', waiting: true }] };
   const both = app.parts(partRow({ state: 'running', runs: [{ run: 'run-1', role: 'lead', startedAt: ago(1), at: null, steps: STEPS }], entries: [...entries, { role: 'Claude', lead: true, at: ago(0.2), text: 'One more thing.' }], waiting: [{ at: ago(1), text: 'CSV', state: 'turn' }] }), 96, helper);
   assert.deepEqual(both.map(part => part.key.split('\0')[0]), ['runs', 'entry', 'entry', 'here', 'here', 'entry', 'here-working', 'working', 'live', 'waiting', 'here']);
-  assert.match(both.at(-1).text, /^You \(waiting\): And the tests$/);
+  assert.match(both.at(-1).text, /^You \(starts next\): And the tests$/);
   // One not followed here yet: the message to his agent here is still last.
   const listed = app.parts(partRow({ state: 'answered', entries: [] }, { watched: false }), 96, { ...helper, entries: [helper.entries[2], helper.entries[0], helper.entries[1]] });
-  assert.deepEqual(listed.map(part => part.key.split('\0')[0]), ['listed', 'opening', 'here', 'here', 'here']); assert.match(listed.at(-1).text, /^You \(waiting\): And the tests$/);
+  assert.deepEqual(listed.map(part => part.key.split('\0')[0]), ['listed', 'opening', 'here', 'here', 'here']); assert.match(listed.at(-1).text, /^You \(starts next\): And the tests$/);
 });
 
 // The app itself, at two sizes.
@@ -221,7 +228,7 @@ for (const [columns, rows] of [[140, 50], [80, 24]]) for (const [name, scene] of
 const say = content => ({ type: 'assistant', message: { id: 'm', role: 'assistant', content: [content] }, parent_tool_use_id: null, session_id: 's' });
 const done = id => ({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: 'out' }] } });
 const logged = (file, rows) => fs.writeFileSync(file, rows.map(row => JSON.stringify(row)).join('\n') + '\n');
-function localSession(p, { state, replies = [], asked = [], live = false, plan = null, waiting = [] }) {
+function localSession(p, { state, replies = [], asked = [], live = false, plan = null, waiting = [], aside = [] }) {
   const id = '4', { repo, worktree } = liveTask(p.root, { id, goal: 'Fix the report', state: 'ready' }), dir = taskDir(repo, id);
   fs.mkdirSync(dir, { recursive: true });
   const runs = replies.map(([minutes, text], index) => { const logFile = path.join(dir, `lead-${index + 1}.log`); logged(logFile, [{ type: 'system', subtype: 'init', model: 'claude-opus-5-5' }, { type: 'result', structured_output: { outcome: 'done', summary: text } }]); return { role: 'lead', vendor: 'claude', logFile, code: 0, startedAt: ago(minutes + 0.2), at: ago(minutes) }; });
@@ -242,18 +249,23 @@ function localSession(p, { state, replies = [], asked = [], live = false, plan =
     fs.writeFileSync(planFile(repo, id), JSON.stringify(kept));
   }
   for (const [minutes, text] of waiting) saveRequest(p.root, text, null, { state: 'queued', priority: 0, continuationTaskId: id, attempts: 0, notBefore: null, queuedAt: ago(minutes), createdAt: ago(minutes) });
+  // A question answered beside the running turn, kept beside its record while that turn holds it.
+  aside.forEach(([minutes, message, text], index) => saveAside(repo, id, { request: `aside-${index + 1}`, message, bot: null, askedAt: ago(minutes), at: ago(minutes - 0.1), runs: [], text, who: 'Opus 5.5', kind: 'question', shown: true }));
   return repo;
 }
 const HERE = {
   'a finished session with a Task and changes and one waiting message': {
     make: { state: 'ready', replies: [[9.5, 'Here is the Task for it.'], [5, 'Done. The totals add up.']], plan: { minutes: 9.4, approved: true }, waiting: [[0.1, 'Also update the docs']] },
-    order: ['Fix the report', 'Here is the Task for it.', 'Task · approved', 'Done. The totals add up.', '(waiting)', 'Also update the docs'] },
+    order: ['Fix the report', 'Here is the Task for it.', 'Task · approved', 'Done. The totals add up.', '(starts next)', 'Also update the docs'] },
   'a working session with steps and one waiting message': {
     make: { state: 'running', live: true, replies: [[9, 'Here is the Task for it.']], plan: { minutes: 8.9, approved: true }, asked: [[1, 'Go on with it']], waiting: [[0.1, 'Use CSV for it']] },
-    order: ['Fix the report', 'Here is the Task for it.', 'Task · approved', 'Go on with it', 'is working', 'Read: src/report.mjs', 'Run: npm test', '(waiting)', 'Use CSV for it'] },
+    order: ['Fix the report', 'Here is the Task for it.', 'Task · approved', 'Go on with it', 'is working', 'Read: src/report.mjs', 'Run: npm test', '(read or answered in a moment)', 'Use CSV for it'] },
+  'a working session with steps and a message answered beside its turn': {
+    make: { state: 'running', live: true, replies: [[9, 'Here is the Task for it.']], plan: { minutes: 8.9, approved: true }, asked: [[1, 'Go on with it']], aside: [[0.3, 'How far are you?', 'Two of three steps are done.']] },
+    order: ['Fix the report', 'Here is the Task for it.', 'Task · approved', 'Go on with it', 'is working', 'Read: src/report.mjs', 'Run: npm test', 'How far are you?', 'beside the turn', 'Two of three steps are done.', 'Answered beside the running turn'] },
   'two waiting messages': {
     make: { state: 'answered', replies: [[9, 'It is fixed.']], waiting: [[2, 'First of the two'], [1, 'Second of the two']] },
-    order: ['Fix the report', 'It is fixed.', '(waiting)', 'First of the two', '(waiting)', 'Second of the two'] },
+    order: ['Fix the report', 'It is fixed.', '(starts next)', 'First of the two', '(starts next)', 'Second of the two'] },
   'a Task that waits for approval with nothing after it': {
     make: { state: 'answered', replies: [[9.5, 'Here is the Task for it.']], plan: { minutes: 9.4, approved: false } },
     order: ['Fix the report', 'Here is the Task for it.', 'Task · waits for your approval', 'Fix the report totals'], last: 'or type what to change' },
@@ -270,9 +282,10 @@ for (const [columns, rows] of [[140, 50], [80, 24]]) for (const [name, scene] of
   assert.doesNotMatch(flat(said), /Changes · |d opens them/);
   if (scene.last) endsWith(said, scene.last);
   // Under his last waiting message: only what says when it goes and the keys for it. No Task, no steps, no reply.
-  else assert.doesNotMatch(rest, /Task ·|is working|Read: |Run: |Objectives|Claude|Opus|Checks complete|\(waiting\)/, `something is drawn under what he sent last:\n${said}`);
-  // In the order he sent them, each once.
-  assert.deepEqual([...said.matchAll(/\(waiting\)/g)].length, waiting.length);
+  else assert.doesNotMatch(rest, /Task ·|is working|Read: |Run: |Objectives|Claude|Opus|Checks complete|\(waiting\)|You \(/, `something is drawn under what he sent last:\n${said}`);
+  // In the order he sent them, each once, and none says only that it waits.
+  for (const text of waiting) assert.equal(said.split(text).length - 1, 1, `"${text}" is not shown once:\n${said}`);
+  assert.doesNotMatch(said, /\(waiting\)/);
   // On the screen: the pane ends with the end of the chat, and the message box starts right under it.
   const screen = onScreen(v), end = rowsOf(said).at(-1).trim().split(/\s+/).at(-1); assert.ok(screen.box >= screen.under && screen.box - screen.under <= 1, 'the message box is under the pane, after the status row at most');
   assert.ok(screen.shown.at(-1).trim().endsWith(end), `the pane on the screen does not end with the end of the chat ("${end}"):\n${screen.rows.join('\n')}`);
@@ -340,7 +353,7 @@ for (const [columns, rows] of [[140, 50], [80, 24]]) test(`the app at ${columns}
   await until(() => flat(chat.getText()).includes('Use CSV for it') && flat(chat.getText()).includes('Run: npm test'), 'its chat beside the list');
   const said = flat(chat.getText());
   assert.doesNotMatch(said, /type a message any time|\/stop to stop/, `a hint is drawn in the chat:\n${chat.getText()}`);
-  assert.doesNotMatch(said.slice(said.indexOf('Run: npm test'), said.indexOf('(waiting)')), /\/stop|message/, 'something is between the live steps and the waiting message');
+  assert.doesNotMatch(said.slice(said.indexOf('Run: npm test'), said.indexOf('(read or answered in a moment)')), /\/stop|message/, 'something is between the live steps and the waiting message');
   ask.focus();
   await until(() => /(?:^| {2})\/stop stop(?: {2}|$)/.test(keys.getText().trim()), `/stop in the key bar: ${keys.getText().trim()}`);
   assert.ok(keys.getText().trim().length <= columns - 2, 'the key bar fits');
@@ -366,4 +379,40 @@ test('the Changes tab of a session here counts its changes without being opened,
   fs.rmSync(path.join(worktree, 'src', 'extra.mjs')); git(worktree, ['checkout', '--', '.']);
   saveTask(repo, { ...readTask(repo, '4'), state: 'answered' });
   await until(() => tab() === 'Chat   Changes', `no count with no changes: "${tab()}"`);
+});
+
+// The tab's count of a session here, read without its Changes open, is what the session itself
+// changed (lib/session-work.mjs): one that moved to a newer main and committed on a branch of
+// its own is not counted the files other people landed on main in between.
+test('the Changes tab of a session here that moved to a newer main counts only its own work, without being opened', { timeout: 60000 }, async t => {
+  const p = start(t), repo = localSession(p, { state: 'answered', replies: [[9, 'It is fixed.']] }), worktree = readTask(repo, '4').worktree;
+  const v = await view(p, { columns: 140, rows: 50, repo: p.repo, dashboard: true, peer: fakePeer() });
+  await onRow(v, /Fix the report/);
+  const { sessionTabs, changes } = v.panels, tab = () => sessionTabs.getText().trim();
+  await until(() => tab() === 'Chat   Changes 1', `its one changed file: "${tab()}"`);
+  // Other people land forty files on main. The session moves to that main, on a branch of its own, and commits one file there.
+  for (let at = 0; at < 40; at++) fs.writeFileSync(path.join(p.root, `landed-${at}.txt`), `landed ${at}\n`);
+  git(p.root, ['add', '-A']); git(p.root, ['commit', '-q', '-m', 'Land forty files']);
+  git(worktree, ['checkout', '-q', '-b', 'fix/report-rows', 'main']);
+  fs.writeFileSync(path.join(worktree, 'src', 'rows.mjs'), 'export const rows = [];\n'); git(worktree, ['add', 'src/rows.mjs']); git(worktree, ['commit', '-q', '-m', 'Add the rows']);
+  assert.equal(git(worktree, ['diff', '--name-only', readTask(repo, '4').base, '--']).stdout.split('\n').filter(Boolean).length, 42, 'its folder against the commit it started from holds the forty too');
+  saveTask(repo, { ...readTask(repo, '4'), state: 'ready' });
+  await until(() => tab() === 'Chat   Changes 2', `its own two files when its state changed: "${tab()}"`);
+  await pause(1200); assert.equal(tab(), 'Chat   Changes 2');
+  assert.equal(changes.hidden, true, 'its Changes were never opened');
+});
+
+test('the Changes tab of a session here counts a commit made in its folder between turns, at the next draw', { timeout: 60000 }, async t => {
+  const p = start(t), repo = localSession(p, { state: 'answered', replies: [[9, 'It is fixed.']] }), worktree = readTask(repo, '4').worktree;
+  const v = await view(p, { columns: 140, rows: 50, repo: p.repo, dashboard: true, peer: fakePeer() });
+  await onRow(v, /Fix the report/);
+  const { sessionTabs, changes } = v.panels, tab = () => sessionTabs.getText().trim();
+  await until(() => tab() === 'Chat   Changes 1', `its one changed file: "${tab()}"`);
+  // Between turns, with nothing about the session's state changing, a second file is committed in its folder.
+  fs.writeFileSync(path.join(worktree, 'src', 'rows.mjs'), 'export const rows = [];\n'); git(worktree, ['add', 'src/rows.mjs']); git(worktree, ['commit', '-q', '-m', 'Add the rows']);
+  await pause(2000); v.current.screen.emit('resize');
+  await pause(1200); assert.equal(tab(), 'Chat   Changes 1', 'a fresh count is not read again on every draw');
+  await pause(8000); v.current.screen.emit('resize');
+  await until(() => tab() === 'Chat   Changes 2', `the commit counts once the count is ten seconds old and the screen changes: "${tab()}"`);
+  assert.equal(changes.hidden, true, 'its Changes were never opened');
 });
