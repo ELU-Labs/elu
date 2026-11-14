@@ -257,3 +257,18 @@ test('the line for a message I sent says where it is in every state, and never t
   for (const item of [{ ...base, state: 'pending' }, delivered, { ...base, state: 'working' }, { ...base, state: 'held' }]) for (const where of [{}, { online: true }, { mine: true }, { mine: true, online: true }]) assert.doesNotMatch(line(item, where).text, /waiting for it to confirm/i);
   assert.equal(line(null), null);
 });
+
+test('a message delivered to a computer where messages are accepted by hand says it waits for a yes there', async t => {
+  const m = three(t), to = m.laptop.identity.key;
+  saveTeamAccess(m.team.id, { root: m.root, handling: 'manual' });
+  const ask = withHome(m.studio.home, () => createAsk(m.sender, { to, kind: 'ask', text: 'Can you see this one?', byOwner: true }));
+  m.online.set(to, m.wire);
+  await withHome(m.studio.home, () => reconnect(m.sender, to));
+  const delivered = withHome(m.studio.home, () => getAsk(ask.id)), waits = 'It waits for a yes on @laptop: messages there are accepted by hand (Chats, then y).';
+  assert.equal(delivered.state, 'submitted');
+  // Delivered is not started: the line and the thread say what it waits for there.
+  assert.equal(sentState(m.item(ask.id), { who: '@laptop', online: true, mine: true }).text, `Delivered to @laptop at ${clockTime(delivered.deliveredAt)}. ${waits}`);
+  assert.deepEqual(threadRows(m, [m.item(ask.id)], { connected: true, width: 400 }), ['→ you asked @laptop · Can you see this one?', `   ↳ delivered at ${clockTime(delivered.deliveredAt)} · ${waits}`]);
+  // Nothing started on the laptop: it waits there for its owner.
+  assert.equal(projectSnapshot(m.repo).tasks.length, 0); assert.equal(peerItems().find(item => item.kind === 'incoming')?.text, 'Can you see this one?');
+});
