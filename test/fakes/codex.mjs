@@ -25,6 +25,8 @@ const codexHome=process.env.CODEX_HOME??path.join(process.env.HOME??'','.codex')
 // begun from its rollout when a run resumes it, as the real one reports it. A new thread's id is
 // a UUIDv7. model: what a run started without --model runs on (the real one names it in the
 // rollout only). Without codexTurn a turn reports no tokens and the thread is a fixed one.
+// printed: bytes an exec turn prints before its answer (reasoning items of 64KB), for a log
+// longer than ELU reads whole.
 const turnUse=cfg.codexTurn??null,pad2=n=>String(n).padStart(2,'0');
 const newThread=()=>{const ms=Date.now().toString(16).padStart(12,'0'),r=crypto.randomBytes(10).toString('hex');return `${ms.slice(0,8)}-${ms.slice(8)}-7${r.slice(0,3)}-${'89ab'[r.charCodeAt(3)%4]}${r.slice(4,7)}-${r.slice(7,19)}`;};
 const rolloutOf=thread=>{const walk=dir=>{let entries=[];try{entries=fs.readdirSync(dir,{withFileTypes:true});}catch{return null;}for(const entry of entries){const file=path.join(dir,entry.name);const found=entry.isDirectory()?walk(file):entry.name.endsWith(`-${thread}.jsonl`)?file:null;if(found)return found;}return null;};return walk(path.join(codexHome,'sessions'));};
@@ -215,6 +217,7 @@ if(mode==='steps'){
 // live (fake.json): a file; a turn launched with the plan tool on prints its to-do list, first
 // step done, as the real one prints a todo_list item, and goes on once that file exists.
 if(cfg.live&&args.includes('tools.update_plan.enabled=true')){console.log(JSON.stringify({type:'item.started',item:{id:'item_todo',type:'todo_list',items:[{text:'Change normalize',completed:true},{text:'Run the coupon test',completed:false}]}}));const until=Date.now()+30000;while(!fs.existsSync(cfg.live)&&Date.now()<until)await new Promise(resolve=>setTimeout(resolve,50));}
+if(turnUse?.printed){const text='x'.repeat(65536);for(let at=0;at<turnUse.printed;at+=text.length)console.log(JSON.stringify({type:'item.completed',item:{id:`item_long_${at}`,type:'reasoning',text}}));}
 // summary (a byInput rule): what this reply says.
 if(typeof cfg.summary==='string')result.summary=cfg.summary;
 console.log(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:JSON.stringify(result)}}));

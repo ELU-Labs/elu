@@ -237,6 +237,38 @@ test('a session on Codex whose thread goes on over several turns spends each tur
   near(JSON.parse(fs.readFileSync(peerFile('outbox', 'request-2.json'), 'utf8')).costUsd, 3.3, 'reply');
 });
 
+// A log longer than 16MB is read at its end, and the thread a Codex run went on with is named on
+// its first line (thread.started). When the run ends its record still names ELU's own launch id,
+// so the thread comes from that first line, else from the thread the run resumed.
+test('a Codex run whose log is longer than ELU reads whole still counts only its own share of the thread it went on with', async t => {
+  const f = setup(t, 'answer');
+  f.set({ codexTurn: { requests: [{ input_tokens: 10_000, cached_input_tokens: 10_000, output_tokens: 99_900 }] } });
+  environment(t, { CODEX_HOME: path.join(f.parent, 'codex-home') });
+  f.controller.setDefaultModel({ vendor: 'codex', model: 'gpt-6.1-sol' });
+  const first = await f.controller.ask('Where is coupon normalization?', null, { permissions: 'full' }).finished, id = first.id;
+  assert.equal(first.state, 'answered', JSON.stringify(first.error));
+  // The second turn prints 17MB before its answer.
+  f.set({ codexTurn: { requests: [{ input_tokens: 10_000, cached_input_tokens: 10_000, output_tokens: 99_900 }], printed: 17 * 1024 * 1024 } });
+  const next = await f.controller.ask('And the tests?', id).finished;
+  assert.equal(next.state, 'answered', JSON.stringify(next.error));
+  const task = readTask(f.repo, id);
+  assert.ok(fs.statSync(task.runs[1].logFile).size > 16 * 1024 * 1024, 'the second log is longer than 16MB');
+  // Each run keeps its own dollar's worth, not the thread's two.
+  assert.deepEqual(task.runs.map(run => run.tokens), Array(2).fill(counted([0, 99_900, 10_000, 0])));
+  spend.runCosts(task).forEach((cost, at) => near(cost, 1, `run ${at + 1}`));
+});
+
+test('a Codex run whose log names no thread counts from the thread it resumed', t => {
+  const log = logs(t), totals = [[1_000_000, 100_000, 10_000, 50_000], [3_000_000, 300_000, 30_000, 150_000]];
+  const runs = [
+    { role: 'lead', vendor: 'codex', at: AT, session: THREAD, code: 0, costUsd: null, model: 'gpt-6.1-sol', logFile: log('lead-1.log', codexRows(THREAD, totals[0])) },
+    // As the runner reads it when it ends: its record names ELU's launch id, and its log only the thread's total.
+    { role: 'lead', vendor: 'codex', at: AT, session: 'launch-2', code: 0, costUsd: null, model: 'gpt-6.1-sol', logFile: log('lead-2.log', codexRows(THREAD, totals[1]).slice(1)) },
+  ];
+  const spent = spend.ownRunSpend(runs, 1, index => spend.logSpend(runs[index].logFile, runs[index].vendor), { thread: THREAD });
+  assert.deepEqual(spent.tokens, counted([1_800_000, 20_000, 200_000, 100_000]));
+});
+
 // A Codex run started with no model runs on Codex's own default, which plain `codex exec`
 // names nowhere in what it prints: only Codex's record of the thread names it (turn_context).
 test("a Codex run on Codex's own default model is named by Codex's record of its thread, and priced", async t => {
