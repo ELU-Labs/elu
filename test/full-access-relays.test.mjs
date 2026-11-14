@@ -46,7 +46,7 @@ async function follow(f, run, switchTo) {
   try {
     while (!done) {
       for (const row of pendingApprovals({ root: f.root })) asked.set(row.id, row);
-      if (asked.size && !switched) { switched = true; assert.equal(readTask(f.controller.repo, run.id).state, 'running'); f.controller.setPermissions(run.id, switchTo); }
+      if (asked.size && !switched && switchTo) { switched = true; assert.equal(readTask(f.controller.repo, run.id).state, 'running'); f.controller.setPermissions(run.id, switchTo); }
       await sleep(25);
     }
     return { task: await finished, asked: [...asked.values()] };
@@ -117,6 +117,26 @@ test('Full access: an edit made by a shell command that runs a script which rewr
     assert.deepEqual(asked.map(row => row.summary), started === 'full' ? [] : ['Run: sh scripts/upper.sh']);
     assert.equal(task.permissions, 'full');
   }
+});
+
+test('below Full access, an approval nobody answers is not a no: the turn is told so, goes on with the rest and ends saying what still waits; a no stops it', { timeout: 90000 }, async t => {
+  // Nobody answers: the wait runs out.
+  const f = setup(t, { mode: 'relay', intent: 'answer', asks: [REMOVE], wait: 2, tells: true });
+  const { task, asked } = await follow(f, f.controller.ask('Clean up the build', null, { permissions: 'ask' }), null);
+  assert.deepEqual(asked.map(row => row.summary), ['Run: rm -rf build outside the sandbox']);
+  assert.equal(task.state, 'answered', JSON.stringify(task.error));
+  assert.deepEqual(task.approvals.map(row => [row.tool, row.decision, row.wait]), [['Bash', 'timeout', 2]]);
+  const told = rows(f.fake.calls).find(row => row.approval).approval.decision;
+  assert.equal(told.behavior, 'deny'); assert.match(told.message, /^No answer from the owner within 1 minutes\. Do not retry it another way\. Nobody declined it\. Go on with the work that does not need it, and say at the end what still waits for their answer\.$/);
+  assert.equal(task.result.summary, 'Did the rest. Still waits for your answer: rm -rf build.');
+  assert.deepEqual(rows(path.join(f.fake.dir, 'ran.jsonl')), [], 'the call itself did not run');
+  // The owner says no: that is a declined action, and the turn stops on it.
+  const g = setup(t, { mode: 'relay', intent: 'answer', asks: [REMOVE], tells: true });
+  const run = g.controller.ask('Clean up the build', null, { permissions: 'ask' });
+  for (let pending = []; !pending.length;) { await sleep(25); pending = pendingApprovals({ root: g.root }); if (pending.length) answerApproval(pending[0].id, 'deny'); }
+  const stopped = await run.finished;
+  assert.equal(stopped.state, 'needs_input'); assert.equal(stopped.result.question, 'I needed this and it was not allowed: rm -rf build.');
+  assert.match(rows(g.fake.calls).find(row => row.approval).approval.decision.message, /^The owner declined this\. Do not retry it another way\./);
 });
 
 test('a session set to Full access while its turn waits on the approval relay: the call that waits is allowed, and each one after it is allowed without asking', { timeout: 90000 }, async t => {

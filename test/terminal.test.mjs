@@ -2792,6 +2792,32 @@ test('a request for an edit shows its Task: n rejects it, a message revises it, 
   await send(v, '/kanban'); await until(() => v.current.view === 'kanban' && panels.kanbanLists[2].items.some(item => /^Uppercase coupons {2}ready to publish( · |$)/.test(item.getText())), 'the Task on the board, under Needs you, its detail cut between parts');
 });
 
+test('Full access approves a Task: a session that has it goes straight on to the work, and giving it to a session whose Task waits starts that work', { timeout: 90000 }, async t => {
+  const p = setup(t), v = await view(t, { repo: p.repo }), panels = v.current.panels, chat = () => panels.chat.getText(), status = () => panels.status.getText();
+  const named = goal => projectSnapshot(p.repo).tasks.find(task => task.goal === goal), edited = task => fs.readFileSync(path.join(task.worktree, 'src/coupon.mjs'), 'utf8');
+  await wide(v);
+  // In Ask for approval the Task waits. Giving the session Full access approves it, with nothing more typed.
+  await send(v, 'Uppercase coupon codes');
+  await until(() => named('Uppercase coupon codes')?.plan?.state === 'proposed' && named('Uppercase coupon codes').state === 'answered' && /Task · waits for your approval\nUppercase coupons\n/.test(chat()), 'the Task waits');
+  await send(v, '/permissions full'); await dialog(v, 'Full access', 'y');
+  await until(() => /Full access\. It approved the Task, and the work starts\./.test(status()), 'the mode approved it');
+  await until(() => named('Uppercase coupon codes').state === 'ready', 'the work', 30000);
+  const first = named('Uppercase coupon codes');
+  assert.equal(first.plan.state, 'done'); assert.equal(first.plan.approvedBy, 'full'); assert.match(edited(first), /toUpperCase/);
+  assert.ok(first.messages.some(row => row.text === 'Full access approved the Task: Uppercase coupons'));
+  await until(() => /Task · done · 2 of 2 objectives reported met\nUppercase coupons\nmedium priority · low severity · approved by Full access\n/.test(chat()), 'the card says what approved it');
+  // A new session that starts in Full access never waits: the Task is written, and the work follows at once.
+  await send(v, '/new'); await until(() => !panels.compose.hidden, 'a new form');
+  await send(v, '/permissions full'); await dialog(v, 'Full access', 'y'); await until(() => /Full access for this session\./.test(status()), 'full for the new session');
+  await send(v, 'Uppercase coupon codes again');
+  await until(() => named('Uppercase coupon codes again')?.state === 'ready', 'the second session works', 30000);
+  const second = named('Uppercase coupon codes again');
+  assert.equal(second.plan.state, 'done'); assert.equal(second.plan.approvedBy, 'full'); assert.match(edited(second), /toUpperCase/);
+  assert.deepEqual(second.messages.filter(row => !row.bot && !row.from).map(row => row.text), ['Uppercase coupon codes again'], 'nothing more was typed');
+  await until(() => /Task · done · 2 of 2 objectives reported met\nUppercase coupons\nmedium priority · low severity · approved by Full access\n/.test(chat()), 'its card says the same');
+  assert.doesNotMatch(chat(), /waits for your approval|for your approval/);
+});
+
 test('a prompt responds despite local edits and the conversation survives reopening', async t => {
   const p = setup(t, 'answer'); fs.writeFileSync(path.join(p.root, 'owner.txt'), 'keep this work\n');
   const before = git(p.root, ['rev-parse', 'HEAD']), v = await view(t, { repo: p.repo });
@@ -4226,8 +4252,9 @@ test('a saved request whose mode was picked keeps it in any window, sent again o
   await send(v, 'Add a retry budget, with jitter');
   await until(() => started('Add a retry budget, with jitter'), 'session');
   assert.equal(started('Add a retry budget, with jitter').permissions, 'full');
-  // Its turn ends first: the line it leaves would otherwise take the place of the retry's.
-  await until(() => /Opus answered/.test(status()), 'first turn done');
+  // Its work ends first: the line it leaves would otherwise take the place of the retry's. Full
+  // access approves the Task, so the session goes on to the work and ends ready.
+  await until(() => /› ready/.test(status()) && started('Add a retry budget, with jitter').state === 'ready', 'first session done');
   await selectRow(v, /Rename billing/); v.input.write('r');
   await until(() => /Queued again\./.test(status()) && !/the default now/.test(status()), 'retried as it was');
   await until(() => started('Rename billing'), 'second session');
@@ -4676,6 +4703,15 @@ test('each Blocked line says why and the one thing to do, and raising the mode t
   await send(v, '/permissions full'); await dialog(v, 'Full access', 'y');
   await until(() => /Full access\. Continuing where it stopped\./.test(status()), 'continues in the mode it has');
   assert.deepEqual(continued('15'), ['Continue where you stopped: this session now has Full access. Try again only this: Edit /srv/shared/deps.json; Run npm install. Do not retry anything the owner said no to or that is never allowed.']);
+  // A turn that went on after an approval nobody answered and ended without a question still
+  // says so: the one thing it left undone is never passed over in silence. What else it was
+  // refused shows only while the session waits.
+  blocked('16', 'Tidy the notes', 'ask', [{ tool: 'Edit', tool_use_id: 'toolu_w', input: { file_path: '/srv/shared/notes.md' } }, { tool: 'Bash', tool_use_id: 'toolu_x', input: { command: 'npm install' } }],
+    [{ id: 'launch-1-toolu_w', tool: 'Edit', summary: 'Edit: /srv/shared/notes.md', decision: 'timeout', wait: 1200, at, role: 'lead', session: 'launch-1' }]);
+  saveTask(p.repo, { ...readTask(p.repo, '16'), state: 'answered' });
+  await openTask(v, /Tidy the notes/); await until(() => v.current.session === '16', 'the answered session is open');
+  await until(() => /Not done: Edit \/srv\/shared\/notes\.md\. No answer in 20 minutes; reply to try again\./.test(chat()), 'an unanswered approval is said after a turn that went on');
+  assert.doesNotMatch(chat(), /Run npm install|Stopped:/);
   // A session with no mode is read only, and Ask for approval continues it.
   blocked('12', 'Rename the helper', undefined, [{ tool: 'Edit', input: { file_path: '/srv/app/src/a.ts' } }]);
   await openTask(v, /Rename the helper/); await until(() => v.current.session === '12', 'the third session is open');

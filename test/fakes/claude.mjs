@@ -528,7 +528,9 @@ if(mode==='relay'&&promptTool&&(permissionMode!=='bypassPermissions'||cfg.asksIn
   const reply=await call('tools/call',{name:promptTool.split('__')[2],arguments:{tool_name:ask.tool_name,input:ask.input,tool_use_id:ask.id},_meta:{progressToken:1}});
   const decision=JSON.parse(reply.result.content[0].text);
   if(decision.behavior==='allow'){if(ask.touch)fs.writeFileSync(target,'');else fs.appendFileSync(path.join(path.dirname(process.argv[1]),'ran.jsonl'),JSON.stringify(ask.input)+'\n');if(ask.run){const {spawnSync}=await import('node:child_process');spawnSync('/bin/sh',['-c',ask.input.command],{encoding:'utf8'});}}
-  else denials.push({tool_name:ask.tool_name,tool_use_id:ask.id,tool_input:ask.input});
+  else{denials.push({tool_name:ask.tool_name,tool_use_id:ask.id,tool_input:ask.input});
+   // tells (fake.json): the turn does what the denial says. Told that nobody declined the call, it goes on and says what still waits; told no, it stops and asks.
+   if(cfg.tells){const what=ask.input?.command??ask.tool_name;if(/Go on with the work that does not need it/.test(decision.message??''))result.summary=`Did the rest. Still waits for your answer: ${what}.`;else{result.outcome='needs_input';result.question=`I needed this and it was not allowed: ${what}.`;result.choices=[];}}}
   if(cfg.calls)fs.appendFileSync(cfg.calls,JSON.stringify({vendor,args:[],approval:{tools,decision,progress:progress.length}})+'\n');
  }
  child.stdin.end();
