@@ -179,7 +179,8 @@ A session started from a session gets that session's mode, or a lower one with `
 Ask for approval you are asked before one runs; Approve for me and Full access run them. Every
 vendor's session has them, in every mode. Inside a sandbox the command hands itself to ELU,
 which runs it only for that session and no higher than its mode. A teammate's question or
-review is never told about them and cannot run them.
+review, or a session a teammate's message started, is never told about them and cannot run
+them.
 
 ## Keys
 

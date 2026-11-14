@@ -438,8 +438,8 @@ session or a higher mode than the turn's, then runs it with the code your shell'
   command waits for your answer. If Codex ended the command before you answered, nothing runs.
 
 Where the vendor already asked you about the same command in this turn, your answer stands and
-ELU does not ask again. A teammate's question or review never has them, and a command run
-from one is refused.
+ELU does not ask again. A teammate's question or review never has them, nor does a session a
+teammate's message started, in any mode, and a command run from one is refused.
 
 Every vendor that asks goes through the relay: Claude Code through its permission prompt
 tool, Antigravity and Grok Build over ACP. The relay checks the never list, then your
