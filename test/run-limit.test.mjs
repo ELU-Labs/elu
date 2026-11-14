@@ -226,6 +226,7 @@ test('each wait has one sentence, and what another computer sends is read field 
   assert.equal(waitText({ on: 'slot', running: 6, limit: 2 }), 'Waiting for a free slot: 6 sessions are running, and 2 run at once. /slots changes it.');
   assert.equal(waitText({ on: 'turn' }), "Waiting for this session's current turn to end.");
   assert.equal(waitText({ on: 'teammates', running: 1, limit: 1 }), 'Waiting for a free teammate slot: 1 of 1 is in use.');
+  assert.equal(waitText({ on: 'teammates', running: 3, limit: 2 }), 'Waiting for a free teammate slot: 3 are in use, and 2 run at once.');
   assert.equal(waitText({ on: 'teammates', running: 0, limit: 0 }), "Waiting: no slot is set for teammates' work on this computer.");
   assert.equal(waitText(null), null);
   // No limit: there is no number to say "of", so there is no sentence, no heading and nothing to send.
@@ -419,6 +420,9 @@ test("a teammate's message he accepts with his own key starts at once, past /slo
   assert.deepEqual(p.pass(), accepted.map(row => row.goal).sort());
   for (const row of accepted) assert.equal(request(p.root, row.id).waits, undefined, row.goal);
   for (const row of accepted) removeRequest(p.root, row.id);
+  // The two that are a teammate's work (y on a message, and the answer) count among the teammate
+  // runs as they work, so more run than the teammate slots.
+  p.run({ origin: accepted[0].origin }); p.run({ origin: accepted[2].origin });
   // One the conductor held for the home folder, which his y on its card lets start (retryRequest), starts at once too.
   const home = enqueue(p.root, "A teammate's handoff", { ...teammate('handoff', { own: true }), permissions: undefined });
   assert.equal(home.state, 'waiting');
@@ -431,10 +435,10 @@ test("a teammate's message he accepts with his own key starts at once, past /slo
   const auto = fromAna(p.root, kai.send('Check the coupon module'));
   assert.equal(auto.state, 'queued'); assert.equal(auto.typed, undefined); assert.equal(ownerTyped(auto), false);
   assert.deepEqual(p.pass(), []);
-  assert.deepEqual(request(p.root, auto.id).waits, { on: 'teammates', running: 1, limit: 1 });
-  assert.equal(waitingText(request(p.root, auto.id)), 'Waiting for a free teammate slot: 1 of 1 is in use.');
-  // The teammate slot frees while every slot of his is taken: it waits for a slot, as a scheduled run does.
-  p.conductor.runs.delete('run-1');
+  assert.deepEqual(request(p.root, auto.id).waits, { on: 'teammates', running: 3, limit: 1 });
+  assert.equal(waitingText(request(p.root, auto.id)), 'Waiting for a free teammate slot: 3 are in use, and 1 runs at once.');
+  // The teammate slots free while every slot of his is taken: it waits for a slot, as a scheduled run does.
+  for (const id of ['run-1', 'run-2', 'run-3']) p.conductor.runs.delete(id);
   assert.deepEqual(p.pass(), []);
   assert.deepEqual(request(p.root, auto.id).waits, { on: 'slot', running: 1, limit: 1 });
   assert.equal(waitingText(request(p.root, auto.id)), 'Waiting for a free slot: 1 of 1 session is running. /slots changes it.');
