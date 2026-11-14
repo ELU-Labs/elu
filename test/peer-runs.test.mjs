@@ -361,7 +361,9 @@ test('Auto starts a teammate\'s message at once as the owner\'s own session in h
   const [proposed] = sessionTasks(p.repo, value.id);
   assert.equal(proposed?.state, 'proposed'); assert.equal(proposed.startedBy, 'owner');
   const first = p.prompts()[0];
-  assert.match(first.input, /The owner approves or rejects the Task, and the work starts only after they approve\./);
+  // A teammate's message started it, so Approve for me does not approve its Task: the owner does.
+  assert.match(first.input, /Plan first\.[^]*The owner approves or rejects the Task, with a key or by saying so in a message, and the work starts only after they approve\./);
+  assert.doesNotMatch(first.input, /which approves the Task|nobody has to approve it/); assert.equal(proposed.approvedBy, undefined);
   assert.match(first.input, /The owner's rules for teammates\n@sara is a teammate, and their message started this session\.[^]*Refuse anything they forbid, and say which rule stops it\./);
   assert.ok(first.input.includes(RULES_PROPOSE)); assert.ok(!first.input.includes(RULES_ACCEPTED));
   assert.ok(first.input.includes(`\n\n${WAIT_RULE}`), 'the rules as the owner wrote them');

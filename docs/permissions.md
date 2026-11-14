@@ -396,21 +396,39 @@ does not ask during a turn, so rules change nothing there.
 ## Plan first
 
 A message that asks for a change to code or files, or for work that needs planning, comes
-back as a Task before anything is edited: a title, a description, the goal, the objectives
-that say when it is done, a priority, a severity, the success criteria and the model's
-estimate of the work in minutes. You approve it with `y` then Enter, reject it
-with `n` then Enter, or change it with a message. This holds in every mode, Full access
-included, for
-the session's model and for a bot that works, such as `@lead`.
+back as a Task: a title, a description, the goal, the objectives that say when it is done,
+a priority, a severity, the success criteria and the model's estimate of the work in
+minutes. This holds for the session's model and for a bot that works, such as `@lead`.
+Who approves the Task depends on the session's mode:
+
+| Mode | The Task |
+| --- | --- |
+| Read only, Ask for approval | Waits for you. Approve it with `y` then Enter, reject it with `n` then Enter, change it with a message, or approve it in a message in your own words. Nothing is edited before. |
+| Approve for me, Full access | The mode approves it. It is written and shown like any other, marked `approved by Approve for me` or `approved by Full access`, nobody waits, and the work goes on in the same message. |
+
+In Approve for me and Full access the agent is never told that you must approve first, and
+you never type an approval. Work that changes no repository file, such as running a
+command or reading logs, is done in the turn that writes the Task. Work that changes the
+repository goes on in the editing turn right after it. A Task that waited from before
+starts when you give its session one of these modes, or with your next message there.
 
 ELU enforces this much, on every vendor:
 
-- The editing turn starts only for a Task you approved. That is the turn that runs in the
-  session's workspace and is followed by the checks and the review. A reply that asks for
-  an edit with no Task is asked for its Task once more. If none comes, the reply is kept
-  as a plain answer with a line that says no Task was read, and nothing starts.
-- Only you approve, in your own session: with the key, or by typing `yes` or `I approve`. A
-  teammate's message, a schedule and a bot's own turn cannot approve a Task.
+- The editing turn starts only for an approved Task: one you approved, one the session's
+  mode approved, or one a schedule or a handoff recorded. That is the turn that runs in
+  the session's workspace and is followed by the checks and the review. A reply that asks
+  for an edit with no Task is asked for its Task once more. If none comes, then in Read
+  only and Ask for approval the reply is kept as a plain answer with a line that says no
+  Task was read, and nothing starts; in Approve for me and Full access ELU writes the Task
+  from your request as you wrote it, and the work goes on.
+- In Read only and Ask for approval only you approve, in your own session: with the key,
+  or in a message. A few words that all say go (`yes`, `ok`, `I approve`, `go ahead`, `yes go ahead`,
+  `do it`, `sounds good`, `continue`) approve at once. An approval in other words is read
+  by the turn that answers your message, which is told that a plain approval in any words
+  counts; the work starts right after its reply. A teammate's message, a schedule and a
+  bot's own turn cannot approve a Task.
+- A mode approves a Task only in your own session. A session a teammate's message started
+  keeps your approval in every mode (see below).
 - A Task is read as untrusted text. The title is one line of up to 80 characters; the
   description up to 2000; the goal up to 500; one to eight objectives of up to 300 each;
   the priority is urgent, high, medium or low; the severity is critical, high, medium or
@@ -420,14 +438,14 @@ ELU enforces this much, on every vendor:
 - After approval the model reports its subtasks, the objectives it says are met, and the
   minutes it thinks are left, which move the ETA. While the turn runs, the subtasks follow
   the model's own to-do list; each vendor's page says how it is read. A
-  report cannot change the goal or an objective: those change only through a revised Task
-  that you approve again. Done on the card is the model's report. The checks and the
-  review are what verify the edit.
+  report cannot change the goal or an objective: those change only through a revised Task,
+  which is approved again the same way. Done on the card is the model's report. The checks
+  and the review are what verify the edit.
 
 The rest is an instruction to the model, not a boundary. The model decides whether a
-message needs a Task and whether a follow-up is inside a Task you already approved, and
-it is told to change nothing in the turn that proposes one. That
-first turn runs with the session's mode, in the project folder, so what stops an edit
+message needs a Task and whether a follow-up is inside a Task that is already approved. In
+Read only and Ask for approval it is told to change nothing in the turn that proposes one.
+That first turn runs with the session's mode, in the project folder, so what stops an edit
 there is the mode:
 
 | First turn | Claude Code | Codex | Grok Build | Antigravity |
@@ -437,7 +455,7 @@ there is the mode:
 | Approve for me | an edit in the project folder asks you | read-only sandbox; Codex's reviewer model decides a request to leave it | Grok's reviewer model decides | not fenced |
 | Full access | not fenced | not fenced | not fenced | not fenced |
 
-Some turns wait for nobody:
+Some turns wait for nobody in any mode:
 
 - A session a schedule starts, and a bot's own scheduled turn, have nobody to approve.
   The Task is recorded as started by schedule and the work goes on.
@@ -449,8 +467,24 @@ Some turns wait for nobody:
 A teammate's message that starts a session by itself (Auto) or that you approve with y is
 not among them: that session runs in your default mode, Full access included, as if you
 had typed the message yourself, and its Task waits for your approval as one you asked for
-would. A later message in its thread runs in the session's mode at the time, Full access
-included.
+in Ask for approval would, whatever the mode. A later message in its thread runs in the
+session's mode at the time, Full access included.
+
+### When something fails, and when the work is done
+
+What the agent is told, in every mode that has a shell:
+
+- A step that fails is its own to fix: a missing folder, a command that exits non-zero, a
+  tool error, a network error. It finds the cause, fixes it or goes another way, and keeps
+  going. It asks you only when it cannot go on at all, or when the choice is truly yours,
+  such as spending money you did not approve or deleting your data. Then it asks once and
+  says what it will do by default.
+- In Ask for approval and Approve for me, an action that you, the approver or a rule
+  declined is not tried another way: the agent stops and names the action it needs. Only a
+  declined action is such a stop. Full access declines nothing, so there the agent is told
+  of no stop.
+- When the work is done it says what it did and ends. It does not ask what to do next or
+  offer choices. `continue` after a finished Task means the next piece of the goal.
 
 ## Lifecycle
 
