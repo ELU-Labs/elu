@@ -190,7 +190,8 @@ none, so a teammate's message can then push, merge, tag, deploy and publish, and
 file you can. Each turn a teammate's message starts
 may spend at most the per-request cap (`caps.runUsd`), which intake reserved for it; a
 cost a vendor does not report counts as that whole amount. These sessions share the peer
-slots with teammates' questions, so they never fill every slot of yours.
+slots with teammates' questions, so they never fill every slot of yours. One you accept
+yourself with y or w starts at once.
 
 A question for one of your shared bots is answered by that bot, read only, after you
 accept it, as before. A machine on ELU 0.1.6 or earlier refuses a message when its

@@ -4845,7 +4845,9 @@ test('a teammate message is approved as your own session, worked on in a mode pi
   await until(() => /Approved @sara\. It runs as your session; the reply goes back to this thread\./.test(status()), 'approve line');
   // w in the thread picks the mode, place and folders first.
   await open('li'); v.input.write('\r'); await until(() => modal(v, 'Thread with @li'), 'task dialog');
-  assert.match(dialogText(v, 'Thread with @li'), /y approves: it starts as if you typed it\. w picks the mode first\. n declines\./); assert.match(dialogText(v, 'Thread with @li'), new RegExp(token('b')));
+  assert.match(dialogText(v, 'Thread with @li'), /y starts it now, as if you typed it\. w picks the mode first\. n declines\./); assert.match(dialogText(v, 'Thread with @li'), new RegExp(token('b')));
+  // The accept line is whole on one row of this 80-column screen.
+  assert.ok((modal(v, 'Thread with @li').children.find(child => child.options?.scrollable)._clines ?? []).some(line => String(line).replace(/\x1b\[[\d;]*m/g, '').trim() === 'y starts it now, as if you typed it. w picks the mode first. n declines.'), 'the accept line on one row');
   v.input.write('w'); await until(() => modal(v, 'Accept'), 'accept picker for a task');
   const work = dialogText(v, 'Accept');
   assert.match(work, /Permissions {2}Ask for approval {6}1 to change/); assert.match(work, /Runs in {6}New worktree {10}2 to change/);
@@ -6518,6 +6520,18 @@ test('kill -TERM puts the terminal back at once, before the sessions have stoppe
     const quiet = v.raw.length; await pause(200); assert.equal(v.raw.length, quiet);
   } finally { release(); }
   await v.finished;
+});
+
+// What /slots limits, in /help's line for it: whole on one row of an 80-column screen.
+test("/help's line for /slots says a limit holds back what starts by itself and never what you type", { timeout: 15000 }, async t => {
+  const p = setup(t), v = await view(t, { repo: p.repo });
+  await send(v, '/help'); await until(() => modal(v, 'Commands'), 'help');
+  const body = modal(v, 'Commands').children.find(child => child.options?.scrollable), drawn = (body._clines ?? []).map(line => String(line).replace(/\x1b\[[\d;]*m/g, '').trim());
+  const at = drawn.indexOf('/slots [number|off]');
+  assert.ok(at >= 0, drawn.join('\n'));
+  assert.equal(drawn[at + 1], 'Limit what starts by itself; what you type always starts', 'the whole line on one row');
+  assert.match(drawn[at + 2], /^\//, 'the next row is the next command');
+  await dialog(v, 'Commands', '');
 });
 
 test('/help says c archives a session and names /archive, as the key bar does', { timeout: 15000 }, async t => {
