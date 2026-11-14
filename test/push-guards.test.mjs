@@ -202,8 +202,12 @@ test('Ctrl-C stops the command line\'s push and its guard; a push left by an ELU
   assert.ok(record?.pid);
   run.child.kill('SIGKILL'); await run.ended;
   assert.equal(alive(left), true, 'the guard goes on by itself'); assert.equal(alive(record.pid), true, 'and so does git');
+  // Its guard had not finished, which is before Git sends anything: nothing was pushed.
   const task = projectSnapshot(p.repo).tasks.find(row => row.id === '1');
-  assert.equal(task.pushRun, undefined); assert.equal(pushStopNote(task), 'ELU closed during the push, so it may not have finished: /publish pushes it again.');
+  assert.equal(task.pushRun, undefined); assert.equal(pushStopNote(task), 'ELU closed during the push, before its pre-push guard finished. Nothing was pushed.');
   await until(() => !alive(left) && !alive(record.pid), 'git and the guard to end', 5000);
   assert.equal(p.pushed(), false); lock(p.repo, 'task-1')();
+  // One whose guards had finished, and that ended by itself: ELU cannot tell how far it got.
+  const gone = readTask(p.repo, '1'); gone.pushRun = { ...record, at: new Date().toISOString() }; saveTask(p.repo, gone);
+  assert.equal(pushStopNote(projectSnapshot(p.repo).tasks.find(row => row.id === '1')), 'ELU closed during the push, so it may not have finished: /publish pushes it again.');
 });
