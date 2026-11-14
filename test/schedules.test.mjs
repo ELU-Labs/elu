@@ -475,7 +475,7 @@ for (const platform of ['linux', 'darwin']) {
 // to start", and every later run of its schedule was skipped for it, which started nothing.
 // left: such a run of an hourly schedule, queued a moment ago with no conductor to take it.
 const leftQueued = root => { const row = dueHourly(root); assert.equal(runDue(new Date(), { start: () => false }), 1); return pendingRequests(root).find(request => request.scheduleId === row.id); };
-// The version whose login item ran here last. 0.1.19 and earlier kept none.
+// The version whose login item ran here last. 0.1.19 and earlier kept none; 0.0.1 is no version of ELU.
 const ranAs = version => atomic(path.join(personalDirectory(), 'scheduler.json'), { version });
 const holdsLock = () => { const file = path.join(personalDirectory(), 'conductor.lock'); fs.writeFileSync(file, JSON.stringify({ pid: process.pid, identity: processIdentity(process.pid) })); return () => fs.rmSync(file); };
 
@@ -488,12 +488,12 @@ test("the login item's first run after an update starts what the earlier version
   assert.equal(tick(), 0); assert.equal(starts, 1, 'the first run after the update asks for the conductor'); assert.equal(state(), 'queued');
   assert.equal(tick(), 0); assert.equal(tick(), 0); assert.equal(starts, 1, 'a later run does not: the queue is left as it is');
   // The next update: once again.
-  ranAs('0.1.19'); assert.equal(tick(), 0); assert.equal(tick(), 0); assert.equal(starts, 2);
+  ranAs('0.0.1'); assert.equal(tick(), 0); assert.equal(tick(), 0); assert.equal(starts, 2);
   // While a conductor runs, it takes the queue itself.
-  const release = holdsLock(); ranAs('0.1.19'); assert.equal(tick(), 0); assert.equal(starts, 2);
+  const release = holdsLock(); ranAs('0.0.1'); assert.equal(tick(), 0); assert.equal(starts, 2);
   // The owner stops that conductor himself. What is queued then waits until work is queued, after an update too.
   assert.equal(spawnSync(process.execPath, [CLI, 'conductor', 'stop'], { encoding: 'utf8', timeout: 30000 }).stdout, 'The conductor stops its runs, keeps their history, and exits. It starts again when work is queued.\n');
-  release(); ranAs('0.1.19'); assert.equal(tick(), 0); assert.equal(tick(), 0); assert.equal(starts, 2, 'his stop holds'); assert.equal(state(), 'queued');
+  release(); ranAs('0.0.1'); assert.equal(tick(), 0); assert.equal(tick(), 0); assert.equal(starts, 2, 'his stop holds'); assert.equal(state(), 'queued');
 });
 
 test("a run the login item queues itself on its first run after an update asks for the conductor once", t => {
