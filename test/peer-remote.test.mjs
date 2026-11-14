@@ -623,7 +623,7 @@ test('a session on another computer is drawn in parts, each keyed by what it sho
   assert.equal(new Set(before.map(part => part.key)).size, before.length, 'no two parts share a key');
   // The entries that stay keep their keys; so do the parts below them.
   for (const part of before.filter(part => !/Entry [12]$/.test(part.text))) assert.ok(after.some(other => other.key === part.key && other.text === part.text), part.text);
-  assert.ok(!after.some(part => before.slice(0, 2).some(gone => gone.key === part.key)), 'the entries that left the top are gone');
+  assert.ok(!after.some(part => before.filter(gone => /Entry [12]$/.test(gone.text)).some(gone => gone.key === part.key)), 'the entries that left the top are gone');
   assert.equal(after.filter(part => /Entry 5$/.test(part.text)).length, 2, 'the same entry twice is drawn twice');
 });
 
@@ -1952,7 +1952,7 @@ test("a teammate named like my computer keeps their session on my other computer
   assert.deepEqual(offered(), []);
 });
 
-test('the Changes of a session on my other computer are read once and whole, named in its chat in one line, and asked for when the tab opens before they were sent', async () => {
+test('the Changes of a session on my other computer are read once and whole, never a line of its chat, and asked for when the tab opens before they were sent', async () => {
   const ME = 'a'.repeat(64), D = 'd'.repeat(64), at = new Date().toISOString(), sent = [];
   const status = { key: ME, name: 'ana', teams: [{ id: 'team-1', members: [{ key: ME, name: 'ana', online: true }, { key: D, name: 'ana', box: 'devbox', online: true }] }] };
   const make = peerCommand => remoteGlue({ facade: { mineRows: () => [], remoteSessions: () => [] }, peerRead: () => status, peerCommand, chatMessage: ({ title, text }) => `${title}\n${text}`, ink: text => text, colour: false, restMs: 1e9 });
@@ -1964,11 +1964,8 @@ test('the Changes of a session on my other computer are read once and whole, nam
   assert.deepEqual([first.note, first.changes.files.map(file => [file.path, file.status, file.added, file.removed]), first.changes.added, first.changes.removed], [null, [['src/cart.mjs', 'modified', 2, 1], ['docs/notes.md', 'added', 1, 0]], 3, 1]);
   assert.equal(glue.changes(row({ diff: { summary: '2 files · +3 −1', patch: ` ${patch}`.slice(1) } })).changes, first.changes, 'the same text is not read again');
   assert.notEqual(glue.changes(row({ diff: { summary: '2 files · +4 −1', patch: `${patch}more\n` } })).changes, first.changes);
-  // Its chat names them in one line and never holds the diff. A narrow pane leaves the key out.
-  const parts = glue.parts(row({ diff: { summary: '2 files · +3 −1', patch } }), 80), named = parts.filter(part => part.key.startsWith('changes'));
-  assert.deepEqual(named.map(part => part.text), ['Changes · 2 files · +3 −1 · d opens them']);
-  assert.ok(parts.every(part => !/diff --git|@@|cart\.items|index 1111111/.test(part.text)));
-  assert.deepEqual(glue.parts(row({ diff: { summary: '2 files · +3 −1', patch } }), 30).filter(part => part.key.startsWith('changes')).map(part => part.text), ['Changes · 2 files · +3 −1']);
+  // Its chat holds no line for them and never the diff, at any width: the name of its Changes tab counts them, as for a session here.
+  for (const width of [80, 30]) assert.ok(glue.parts(row({ diff: { summary: '2 files · +3 −1', patch } }), width).every(part => !part.key.startsWith('changes') && !/Changes ·|d opens them|diff --git|@@|cart\.items|index 1111111/.test(part.text)));
   // Followed here with nothing changed, still arriving, or behind: a line says which.
   assert.deepEqual(glue.changes(row()), { changes: null, tone: 'muted', note: 'No changes yet.' });
   assert.equal(glue.changes(row({ diff: { summary: 'No changes', patch: '' } })).note, 'No changes yet.');
