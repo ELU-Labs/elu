@@ -146,7 +146,7 @@ test('a session from my other computer starts as my own, with its bots, in the p
     markMine(devbox.identity.key, laptop.identity.key); noteTheirs(laptop.identity.key, true);
     const from = connection(laptop.identity.key), ctx = context(devbox.identity, { [laptop.identity.key]: from }), methods = hostMethods(ctx);
     // No project on this computer at all: said plainly.
-    assert.throws(() => methods['elu.remote.start'](START, from), { message: 'Open ELU once on this computer so it has a project.' });
+    assert.throws(() => methods['elu.remote.start'](START, from), { message: 'No project is open there yet. Open ELU once on that computer, in the folder to work in, then send it again.' });
     const project = registeredProject(t); saveTeamAccess(team.teamId, { root: project.root });
     assert.throws(() => methods['elu.remote.start']({ ...START, bots: ['nobody'] }, from), { message: '@nobody is not a bot on this computer. Make it there, or start without it.' });
     const started = methods['elu.remote.start'](START, from);
