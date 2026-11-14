@@ -3644,6 +3644,30 @@ test('a task scheduled from + New task lists under Scheduled and pauses, runs no
   assert.deepEqual(calls, ['install', 'uninstall', 'install', 'uninstall'], 'the last schedule removes the login item');
 });
 
+// r queues the schedule's new run and archives the earlier one. Enter on the schedule's row
+// before the new run's session exists opens the new run, which shows its session once it
+// starts, never the earlier run r just archived.
+test("Enter on a schedule's row right after r opens the new run, not the earlier one r archived", async t => {
+  const p = setup(t), loginItem = { install: () => ({ installed: true }), uninstall: () => ({ removed: true }) };
+  const schedule = saveSchedule({ root: p.root, goal: 'Check the build', when: parseWhen('every 2h') });
+  const { repo } = liveTask(p.root, { id: '1', goal: 'Check the build', state: 'answered' });
+  saveTask(repo, { ...readTask(repo, '1'), scheduleId: schedule.id });
+  // No conductor runs yet, so the new run waits to start for as long as the test needs.
+  const v = await view(t, { repo: p.repo, conductor: false, startConductor: () => true, loginItem }), panels = v.current.panels;
+  await selectRow(v, /◷/);
+  v.input.write('r');
+  await until(() => pendingRequests(p.root).some(row => row.scheduleId === schedule.id) && readBoard(repo).archived.includes('1'), 'r queues the new run and archives the earlier one');
+  await until(() => /◷/.test(cursor(v)) && v.current.screen.focused === panels.board, 'back on the schedule row');
+  v.input.write('\r');
+  await until(() => v.current.session !== null, 'Enter opens a run');
+  assert.notEqual(v.current.session, '1', 'not the earlier run r archived');
+  await until(() => v.current.session === 'request' && /Check the build/.test(cursor(v)) && /Schedule \(queued\)/.test(panels.chat.getText()), 'the new run, waiting to start, with its row under the cursor');
+  // Once it starts it is its session, and its row stays under the cursor.
+  const conductor = new Conductor({ tickMs: 20 }).start(); resources(t).views.push(() => conductor.stop());
+  await until(() => v.current.session === '2' && /Check the build/.test(cursor(v)), 'its session, once it starts');
+  assert.equal(readTask(repo, '2').scheduleId, schedule.id);
+});
+
 test('the login item is there exactly while a task schedule is on: pausing the last one unloads it on macOS, resuming loads it again', { timeout: 30000 }, async t => {
   const p = setup(t), item = standIn(t, 'darwin'), plist = path.join(item.home, 'Library', 'LaunchAgents', 'dev.elu-code.scheduler.plist');
   for (const when of ['every 1h', 'every 2h']) saveSchedule({ root: p.root, goal: 'Check dependencies for updates', when: parseWhen(when) });
