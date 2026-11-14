@@ -213,7 +213,7 @@ test('with no team setting, a session from my other computer runs in the only pr
     // Each vendor's own list is read before the name is given up, so this one answers a moment later.
     await assert.rejects(async () => methods['elu.remote.send']({ id: started.id, text: 'nosuch and the tests', model: true }, from), { message: 'No model named nosuch. /model lists them; /model add adds one by name.' });
     assert.deepEqual(sessionModel(repo, readTask(repo, task.id)), { vendor: 'claude', model: 'opus' }); assert.deepEqual(pendingRequests(home).map(row => row.id).filter(id => !before.includes(id)), [], 'nothing was sent');
-    for (const model of [true, undefined]) assert.throws(() => methods['elu.remote.send']({ id: started.id, text: ' ', model }, from), /Write the message in 1 to/);
+    for (const model of [true, undefined]) assert.throws(() => methods['elu.remote.send']({ id: started.id, text: ' ', model }, from), /Write the message first\./);
   } finally {
     await conductor?.stop();
     for (const [name, value] of Object.entries(previous)) { if (value === undefined) delete process.env[name]; else process.env[name] = value; }
@@ -1221,30 +1221,30 @@ test('a session followed here by the id both machines give it shows once in Sess
   const listed = (task, title, minutes, extra = {}) => ({ id: crypto.randomUUID(), ref: `${p}:${task}`, project: p, title, state: 'running', at: ago(minutes), createdAt: ago(minutes + 1), approvals: [], by: 'you', who: null, repoId: SHOP, ...extra });
   const view = (id, title, minutes, extra = {}) => ({ id, machine: D, createdAt: ago(minutes + 1), lastAt: ago(minutes), state: 'running', title, project: null, entries: [], steps: [], approvals: [], ...extra });
   const wants = [{ id: 'approval-1', role: 'lead', summary: 'Run npm test', at: ago(1) }];
-  const roll = listed(10, 'Roll', 1, { state: 'needs_input', question: 'Roll now?' }), backlog = listed(9, 'Session backlog', 2, { by: 'teammate', who: 'kim', approvals: wants });
-  const healing = listed(7, 'Self healing', 3), mine = crypto.randomUUID(), started = listed(6, 'Started from the laptop', 4, { by: 'mine', remoteId: mine });
+  const roll = listed(10, 'Roll', 1, { state: 'needs_input', question: 'Roll now?' }), backlog = listed(9, 'Shipping labels', 2, { by: 'teammate', who: 'kim', approvals: wants });
+  const healing = listed(7, 'Sales export', 3), mine = crypto.randomUUID(), started = listed(6, 'Started from the laptop', 4, { by: 'mine', remoteId: mine });
   const fresh = crypto.randomUUID();
   const views = [
     // Followed here under the listed id, with no place there: an earlier build made these.
-    view(roll.id, 'Roll', 1, { state: 'needs_input', question: 'Roll now?', handoff: true }), view(backlog.id, 'Session backlog', 2, { approvals: wants, handoff: true }),
+    view(roll.id, 'Roll', 1, { state: 'needs_input', question: 'Roll now?', handoff: true }), view(backlog.id, 'Shipping labels', 2, { approvals: wants, handoff: true }),
     // Paired by its place, and by the id it has here: as before.
-    view(crypto.randomUUID(), 'Self healing', 3, { ref: healing.ref, project: 'shop' }), view(mine, 'Started from the laptop', 4),
+    view(crypto.randomUUID(), 'Sales export', 3, { ref: healing.ref, project: 'shop' }), view(mine, 'Started from the laptop', 4),
     // Handed off just now: not listed yet.
     view(fresh, 'Your handoff', 0, { state: 'starting', handoff: true })];
   const machinesFile = [{ key: D, listedAt: ago(0), older: false, projects: [{ id: p, name: 'shop', repoId: SHOP, home: false }], sessions: [roll, backlog, healing, started] }];
   const facade = { mineRows: () => [{ key: D, mine: true, theirs: true }], remoteSessions: () => views, remoteMachines: () => machinesFile, projectRepoId: root => root === '/work/shop' ? SHOP : null };
   const commands = [], glue = remoteGlue({ facade, peerRead: () => status, peerCommand: async command => { commands.push(command); return { answered: true }; }, chatMessage: () => '', ink: text => text, colour: false, restMs: 0 });
   const rows = glue.sections(now, '/work/shop').filter(line => line.row).map(line => line.row);
-  assert.deepEqual(rows.map(row => row.remote.title), ['Your handoff', 'Roll', 'Session backlog', 'Self healing', 'Started from the laptop'], 'each once');
+  assert.deepEqual(rows.map(row => row.remote.title), ['Your handoff', 'Roll', 'Shipping labels', 'Sales export', 'Started from the laptop'], 'each once');
   const by = title => rows.find(row => row.remote.title === title);
-  for (const [title, item] of [['Roll', roll], ['Session backlog', backlog]]) { assert.equal(by(title).id, item.id); assert.equal(by(title).ref, item.ref, 'the view takes the listed place'); assert.equal(by(title).watched, true); assert.equal(by(title).listed, true); }
-  assert.equal(by('Session backlog').by, 'teammate');
+  for (const [title, item] of [['Roll', roll], ['Shipping labels', backlog]]) { assert.equal(by(title).id, item.id); assert.equal(by(title).ref, item.ref, 'the view takes the listed place'); assert.equal(by(title).watched, true); assert.equal(by(title).listed, true); }
+  assert.equal(by('Shipping labels').by, 'teammate');
   assert.equal(by('Your handoff').listed, false); assert.equal(by('Your handoff').by, 'here');
-  assert.equal(by('Self healing').ref, healing.ref); assert.equal(by('Self healing').id, views[2].id);
+  assert.equal(by('Sales export').ref, healing.ref); assert.equal(by('Sales export').id, views[2].id);
   assert.equal(by('Started from the laptop').id, mine); assert.equal(by('Started from the laptop').ref, started.ref); assert.equal(by('Started from the laptop').by, 'mine');
   // Needs you: each waiting session once, and the board lists it once.
   const waiting = glue.rows(now);
-  assert.deepEqual(waiting.map(row => row.remote.title).sort(), ['Roll', 'Session backlog']);
+  assert.deepEqual(waiting.map(row => row.remote.title).sort(), ['Roll', 'Shipping labels']);
   assert.equal(boardRows([], now, { remote: waiting }).filter(row => row.kind === 'remote').length, 2);
   // y answers it by the id it is followed by here: no second watch.
   await glue.action(waiting.find(row => row.approval), 'accept');

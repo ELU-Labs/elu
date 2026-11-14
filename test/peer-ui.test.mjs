@@ -1157,11 +1157,11 @@ test('a session on my other computer that waits for y or n shows n once in the k
 
 test('over a session on my other computer the box writes to my agent here, started once and then continued, and @ that computer writes there', async t => {
   const at = new Date().toISOString(), id = '44444444-4444-4444-8444-444444444444';
-  const remote = [{ id, machine: SARA, createdAt: at, lastAt: at, title: 'Native replay e2e handoff', state: 'needs_input', question: 'Which batch results?', choices: ['Mine', 'New ones'], steps: [], entries: [{ role: 'You', at, text: 'Start the handoff' }], approvals: [] }];
+  const remote = [{ id, machine: SARA, createdAt: at, lastAt: at, title: 'Nested routes e2e handoff', state: 'needs_input', question: 'Which batch results?', choices: ['Mine', 'New ones'], steps: [], entries: [{ role: 'You', at, text: 'Start the handoff' }], approvals: [] }];
   const p = project(later(t)); environment(t, p.parent);
   const peer = fakePeer({ items: [], mine: [{ key: SARA, mine: true, theirs: true }], remote }), v = await view(t, { repo: repository(p.root), dashboard: true, peer });
   const board = v.panels.board, ask = v.panels.ask, sentThere = () => peer.sent().filter(row => row.type === 'remoteSend');
-  await until(() => board.items.map(plainItem).some(row => /Native replay e2e handoff/.test(row)), 'the row of the session there');
+  await until(() => board.items.map(plainItem).some(row => /Nested routes e2e handoff/.test(row)), 'the row of the session there');
   board.focus(); selectRow(board, /on sara-box/);
   await until(() => /Message your agent here/.test(ask._label.getText()), 'the box says where a message goes');
   await until(() => /Answer it there: @sara-box 1/.test(v.panels.chat.getText()), 'how to answer the question there');
@@ -1170,7 +1170,7 @@ test('over a session on my other computer the box writes to my agent here, start
   await send(v, 'can you help this remote agent with the files it needs');
   await until(() => pendingRequests(p.root).some(row => row.helps), 'my agent here starts');
   const first = pendingRequests(p.root).find(row => row.helps);
-  assert.deepEqual(first.helps, { machine: SARA, remoteId: id, name: 'sara-box', title: 'Native replay e2e handoff' });
+  assert.deepEqual(first.helps, { machine: SARA, remoteId: id, name: 'sara-box', title: 'Nested routes e2e handoff' });
   assert.equal(first.goal, 'can you help this remote agent with the files it needs'); assert.equal(first.continuationTaskId, null);
   assert.equal(helperLink(SARA, id).requestId, first.id);
   assert.deepEqual(sentThere(), [], 'nothing went to the session there');
@@ -1479,7 +1479,7 @@ test('Sessions names a message from my other computer by the name it shows under
 
 test('/model NAME and a message over a session on my other computer go there as typed: that computer reads the name, and the status names the model it took', async t => {
   const at = new Date().toISOString(), id = '55555555-5555-4555-8555-555555555555';
-  const remote = [{ id, machine: SARA, createdAt: at, lastAt: at, title: 'Native replay e2e handoff', state: 'running', steps: [], entries: [{ role: 'You', at, text: 'Start the handoff' }], approvals: [] }];
+  const remote = [{ id, machine: SARA, createdAt: at, lastAt: at, title: 'Nested routes e2e handoff', state: 'running', steps: [], entries: [{ role: 'You', at, text: 'Start the handoff' }], approvals: [] }];
   const p = project(later(t)); environment(t, p.parent);
   const before = process.env.PATH; process.env.PATH = fakeClis(p.parent).env.PATH; owned(t).files.push(() => { process.env.PATH = before; });
   // What the other computer answers: the model it read at the start of the text, by the name it shows it by, and whether words came after it.
@@ -1491,8 +1491,8 @@ test('/model NAME and a message over a session on my other computer go there as 
   const answer = peer.awaitCommand; peer.awaitCommand = async (...args) => { const out = await answer(...args), command = peer.last; return command.type === 'remoteSend' && command.model ? { id, model: took(command.text)[1], sent: command.text.replace(took(command.text)[0], '').trim() !== '' } : out; };
   const v = await view(t, { repo: repository(p.root), dashboard: true, peer });
   const board = v.panels.board, sentThere = () => peer.sent().filter(row => row.type === 'remoteSend'), status = () => v.panels.status.getText().replace(/\s+/g, ' ');
-  const over = async () => { board.focus(); selectRow(board, /Native replay e2e handoff/); await until(() => /@sara-box/.test(v.panels.ask._label.getText()), 'the box writes about the session there'); };
-  await until(() => board.items.map(plainItem).some(row => /Native replay e2e handoff/.test(row)), 'the row of the session there');
+  const over = async () => { board.focus(); selectRow(board, /Nested routes e2e handoff/); await until(() => /@sara-box/.test(v.panels.ask._label.getText()), 'the box writes about the session there'); };
+  await until(() => board.items.map(plainItem).some(row => /Nested routes e2e handoff/.test(row)), 'the row of the session there');
   await over(); await send(v, '/model opus can you help this remote agent with the files it needs and instruction to start the handoff');
   await until(() => sentThere().length === 1, 'sent there');
   assert.deepEqual(sentThere()[0], { type: 'remoteSend', id, text: 'opus can you help this remote agent with the files it needs and instruction to start the handoff', model: true });

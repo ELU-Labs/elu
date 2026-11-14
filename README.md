@@ -51,7 +51,7 @@ as `.env`, stops it until `.gitignore` keeps that file out.
 | Tab | What it shows |
 | --- | --- |
 | Sessions | Every session across your projects. The selected one is open beside the list. Typing on a row writes a message to it; a row's key is its letter, then Enter. |
-| Projects | Your projects. `n` makes one, `o` makes another the active one. A project a teammate shares that is not on this computer is listed too, as `ELU   shared by @ali   on @ali-mac`: Enter opens its team board, and `c` clones it here. |
+| Projects | Your projects. `n` makes one, `o` makes another the active one. A project a teammate shares that is not on this computer is listed too, as `ELU   shared by @aki   on @aki-mac`: Enter opens its team board, and `c` clones it here. |
 | Kanban | The open project's tasks and sessions: To do, In progress, Needs you, Done. On a team, everyone with a clone of the same repository shares one board: every session a teammate, or another computer of yours, runs in it shows in the same columns with who started it and on which machine, to read only. A project whose folder holds several repositories has a board for each. `/share off` keeps a project off it both ways. |
 | Chats | Your team's channels, your teammates and your bots. |
 | Bots | Your bots. `n` makes one, Enter opens one. |
@@ -448,7 +448,7 @@ history, so its next turn goes on from its work; another vendor keeps the standu
 history. Its chat shows "@sam asks: standup", the update, and
 "Sent to @sam". A session that is working answers when its turn ends, or is listed as still
 working after 10 minutes. Answers show in the Standup as they come, each titled with its
-session, agent and computer: "ELU Issues · Opus 5.5 on @devbox", "Self Healing · Opus 5.5
+session, agent and computer: "Email logs · Opus 5.5 on @devbox", "Sales Export · Opus 5.5
 here", "Billing · @billing on @kim". Then come the sessions not asked, those that declined,
 and those still working, then one line: "Standup done · 9 sessions on 4 computers · 2 not
 asked". `/stop` stops waiting. Nothing runs on a timer: only `/standup` and `@everyone` ask.
