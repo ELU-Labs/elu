@@ -657,6 +657,31 @@ test('an approved run that is queued again after a rate limit starts again and f
   assert.equal(thread('thread-1').filter(line => line.text === STOPPED).length, 0);
 });
 
+test('a Task approved by typing yes whose run is queued again after a rate limit starts again and finishes: the yes is kept once, one result, no stop notice', async t => {
+  const s = await plannedBySara(t);
+  createAsk(s.saraCtx, { to: s.sara.me.key, kind: 'ask', text: HANDOFF, threadId: 'thread-1' });
+  s.p.extra({ workRate: true });
+  // He types yes in the session: the message carries no approved mark.
+  const row = enqueue(s.p.root, 'yes', { continuationTaskId: s.id, priority: 0 });
+  await until(() => request(s.p.root, row.id)?.state === 'queued' && request(s.p.root, row.id).attempts === 1, 'the retry queued', 60000);
+  assert.equal(request(s.p.root, row.id).reason, 'Rate limited. Retrying shortly.'); assert.equal(request(s.p.root, row.id).approved, undefined);
+  assert.equal(sessionTasks(s.p.repo, s.id).at(-1).edit.started, true);
+  processOutbox(s.ctx); assert.equal(s.results().length, 0);
+  s.p.extra({ summary: 'Coupon codes are uppercase now.' });
+  updateRequest(s.p.root, row.id, { notBefore: null });
+  await until(() => ['done', 'blocked'].includes(request(s.p.root, row.id)?.state), 'the retried run', 60000);
+  assert.deepEqual([request(s.p.root, row.id).state, request(s.p.root, row.id).reason], ['done', 'Finished.']);
+  assert.equal(sessionTasks(s.p.repo, s.id).at(-1).state, 'done'); assert.equal(sessionTasks(s.p.repo, s.id).length, 1);
+  // The chat keeps his yes once, as it keeps one approval made with the key.
+  const texts = readTask(s.p.repo, s.id).messages.map(m => m.text);
+  assert.equal(texts.filter(text => text === 'yes').length, 1, JSON.stringify(texts));
+  assert.match(fs.readFileSync(path.join(readTask(s.p.repo, s.id).worktree, 'src/coupon.mjs'), 'utf8'), /toUpperCase/);
+  processOutbox(s.ctx);
+  await until(() => s.results('in').length === 1, 'the result at sara');
+  assert.equal(s.results('in')[0].text, 'Coupon codes are uppercase now.'); assert.deepEqual(s.sent, ['SendMessage']);
+  assert.equal(thread('thread-1').filter(line => line.text === STOPPED).length, 0);
+});
+
 test('an approved run that stops making progress is queued again, starts again and finishes, approved once', async t => {
   const s = await plannedBySara(t), [conductor] = LIVE.get(t);
   createAsk(s.saraCtx, { to: s.sara.me.key, kind: 'ask', text: HANDOFF, threadId: 'thread-1' });
