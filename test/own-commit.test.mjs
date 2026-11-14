@@ -317,6 +317,7 @@ for (const [commit, branch] of [['once', 'feat/task-1'], ['twice', 'feat/task-1'
     const done = await f.controller.push(task.id, plan.confirmationId);
     assert.deepEqual([done.pushed, done.pr, done.commit], [true, 'https://github.com/example/sample/pull/7', head]);
     assert.deepEqual(there.pushes(), [`${head}:refs/heads/${branch}`]);
+    assert.equal(committedLine(readTask(f.repo, task.id)), `Committed on ${branch} at ${head.slice(0, 7)} and pushed.`, 'what /publish pushed reads as pushed');
     const created = there.gh().find(args => args[1] === 'create');
     assert.ok(created.includes('--draft')); assert.equal(created[created.indexOf('--head') + 1], branch);
   });

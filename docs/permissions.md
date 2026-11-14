@@ -57,6 +57,10 @@ Full access is everything. A turn that runs with it has no limit of ELU's:
   proves the other three modes and nothing Full access needs, so a Full access turn never
   runs it and never waits for one, its own or another session's
   ([Grok Build](vendors/grok.md#the-one-time-check)).
+- **Publishing.** `/publish` pushes to the pull request that is open for the branch,
+  such as one the model opened itself, whether or not it is a draft, and leaves its text
+  as it is. Below Full access `/publish` pushes only to a branch with no pull request, or
+  with one draft it can keep as a draft.
 
 What stays, and why:
 
