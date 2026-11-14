@@ -427,7 +427,10 @@ if(Array.isArray(cfg.hostAsks)&&streaming){let n=0;for(const ask of cfg.hostAsks
  fs.appendFileSync(path.join(path.dirname(process.argv[1]),'host-asks.jsonl'),JSON.stringify({tool_name:ask.tool_name,allowed,reply})+'\n');
  if(!allowed)denials.push({tool_name:ask.tool_name,tool_use_id:use,tool_input:ask.input});
 }}
-if(mode==='relay'&&promptTool&&permissionMode!=='bypassPermissions'){
+// asksInFull (fake.json): the turn asks through the relay in bypassPermissions too, as the real CLI
+// still does there for some writes. An ask with work: true is asked only by an editing turn, and one
+// with run: true is a shell command the turn really runs once it is allowed.
+if(mode==='relay'&&promptTool&&(permissionMode!=='bypassPermissions'||cfg.asksInFull)){
  const {spawn}=await import('node:child_process');const readline=await import('node:readline');
  const server=servers[promptTool.split('__')[1]];if(!server)throw new Error('The approval relay is not in --mcp-config.');
  // wait (fake.json): how many seconds the relay waits for the owner, in place of its twenty minutes.
@@ -439,11 +442,11 @@ if(mode==='relay'&&promptTool&&permissionMode!=='bypassPermissions'){
  child.stdin.write(JSON.stringify({jsonrpc:'2.0',method:'notifications/initialized'})+'\n');
  const tools=(await call('tools/list',{})).result.tools.map(tool=>tool.name);
  const target=path.join(path.dirname(process.argv[1]),'touched');
- const asks=Array.isArray(cfg.asks)?cfg.asks.map((ask,i)=>({...ask,id:`toolu_fake_ask_${i+1}`})):[{tool_name:'Bash',input:{command:`touch ${target}`},id:'toolu_fake_touch',touch:true}];
+ const asks=Array.isArray(cfg.asks)?cfg.asks.filter(ask=>!ask.work||edit).map((ask,i)=>({...ask,id:`toolu_fake_ask_${i+1}`})):[{tool_name:'Bash',input:{command:`touch ${target}`},id:'toolu_fake_touch',touch:true}];
  for(const ask of asks){
   const reply=await call('tools/call',{name:promptTool.split('__')[2],arguments:{tool_name:ask.tool_name,input:ask.input,tool_use_id:ask.id},_meta:{progressToken:1}});
   const decision=JSON.parse(reply.result.content[0].text);
-  if(decision.behavior==='allow'){if(ask.touch)fs.writeFileSync(target,'');else fs.appendFileSync(path.join(path.dirname(process.argv[1]),'ran.jsonl'),JSON.stringify(ask.input)+'\n');}
+  if(decision.behavior==='allow'){if(ask.touch)fs.writeFileSync(target,'');else fs.appendFileSync(path.join(path.dirname(process.argv[1]),'ran.jsonl'),JSON.stringify(ask.input)+'\n');if(ask.run){const {spawnSync}=await import('node:child_process');spawnSync('/bin/sh',['-c',ask.input.command],{encoding:'utf8'});}}
   else denials.push({tool_name:ask.tool_name,tool_use_id:ask.id,tool_input:ask.input});
   if(cfg.calls)fs.appendFileSync(cfg.calls,JSON.stringify({vendor,args:[],approval:{tools,decision,progress:progress.length}})+'\n');
  }
