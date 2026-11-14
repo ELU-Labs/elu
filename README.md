@@ -397,7 +397,10 @@ in to GitHub with `gh` as the same account pair by themselves. Otherwise run
 it asks if the laptop is yours too (or `elu join CODE --mine`). A devbox already on your team
 needs no code: run `/mine @devbox` on the laptop and `/mine @laptop` on the devbox. From then on, `@devbox fix the flaky test` in the
 new session box starts the session on the devbox, with the mode, model and bots you picked.
-It shows in Sessions marked "on devbox", live, and its approvals wait on both machines. It is
+It shows in Sessions marked "on devbox", live, and its approvals wait on both machines. Its
+chat names what it changed in one line, and `d` opens its Changes beside the chat, as for a
+session here: the files with their counts, each change under the file and the line it is at,
+`[` and `]` between files, `n` and `p` between changes. It is
 your own session there, so your rules apply, and `a` on its approval, from either machine,
 keeps the rule on the devbox, where it runs. When the devbox's home folder is one of its projects,
 the box first asks which folder the session works in there: its projects, the home folder, and

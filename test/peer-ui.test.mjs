@@ -5,7 +5,7 @@ import { PassThrough } from 'node:stream';
 import { project, temp, fakeClis, keyThenEnter } from './helpers.mjs';
 import { liveTask } from './peer-helpers.mjs';
 import { repository } from '../lib/git.mjs';
-import { claimView, registerProject } from '../lib/projects.mjs';
+import { claimView, registerProject, taskDetails } from '../lib/projects.mjs';
 import { saveRequest, pendingRequests, updateRequest } from '../lib/workspace.mjs';
 import { launchTerminal } from '../lib/terminal.mjs';
 import { listBots, removeBot, saveBot } from '../lib/bots.mjs';
@@ -1147,11 +1147,11 @@ test('a session on my other computer that waits for y or n shows n once in the k
   await until(() => /New session on @sara-box/.test(ask._label.getText()), 'the label names the computer');
   ask.clearValue(); ask.cancel();
   board.focus(); selectRow(board, /wants to run ls/);
-  await until(() => /y allow {2}n deny {2}enter open {2}letter then enter {2}tab next/.test(keys()), 'approval keys');
+  await until(() => /y allow {2}n deny {2}enter open {2}d changes {2}letter then enter {2}tab next/.test(keys()), 'approval keys');
   assert.doesNotMatch(keys(), /new session/);
   // A Task waiting in a session started from here waits under Needs you, marked with the computer.
   selectRow(board, /on sara-box · Uppercase plan/);
-  await until(() => /y approve {2}n reject {2}enter open {2}letter then enter {2}tab next/.test(keys()), 'Task keys');
+  await until(() => /y approve {2}n reject {2}enter open {2}d changes {2}letter then enter {2}tab next/.test(keys()), 'Task keys');
   assert.doesNotMatch(keys(), /new session/);
 });
 
@@ -1884,7 +1884,7 @@ test('a session on my other computer keeps the lines the owner reads while its o
   // The viewer keeps the last 200 entries of a session; this one has said more than that.
   const KEPT = 200, at = new Date().toISOString(), entry = n => ({ role: n % 2 ? 'Claude' : 'You', at, text: `Line ${n} of the long chat`, ...(n % 2 ? { lead: true } : {}) });
   const upTo = n => Array.from({ length: n }, (_, index) => entry(index + 1)).slice(-KEPT);
-  const patch = Array.from({ length: 40 }, (_, index) => `+ changed line ${index + 1}`).join('\n'), subtasks = Array.from({ length: 30 }, (_, index) => ({ text: `Step ${index + 1} of the plan`, state: index ? 'todo' : 'doing' }));
+  const patch = ['diff --git a/src/totals.mjs b/src/totals.mjs', '--- a/src/totals.mjs', '+++ b/src/totals.mjs', '@@ -1,0 +1,40 @@', ...Array.from({ length: 40 }, (_, index) => `+changed line ${index + 1}`)].join('\n'), subtasks = Array.from({ length: 30 }, (_, index) => ({ text: `Step ${index + 1} of the plan`, state: index ? 'todo' : 'doing' }));
   const session = { id: '55555555-5555-4555-8555-555555555555', machine: SARA, createdAt: at, lastAt: at, title: 'Read the long chat', state: 'running', approvals: [], entries: upTo(230),
     steps: [{ at, text: 'Reading the cart' }], diff: { summary: '1 file changed', patch }, plan: { title: 'Fix the totals', goal: 'Totals add up', priority: 'P2', severity: 'S3', state: 'approved', objectives: ['Totals add up'], subtasks, met: [] } };
   const p = project(later(t)); environment(t, p.parent);
@@ -1900,11 +1900,13 @@ test('a session on my other computer keeps the lines the owner reads while its o
   board.focus(); selectRow(board, /Read the long chat/);
   await until(() => /Runs on @sara-box/.test(chat.getContent()) && chat.getScrollPerc(true) === 100, 'its chat, at the end');
   ask.focus();
-  // Reading the changes: an entry lands above them, two leave the top, a step and a subtask move on.
-  await scrollTo('+ changed line 20');
+  // Reading the line of its changes: an entry lands above it, two leave the top, a step and a subtask move on.
+  const CHANGED = 'Changes · 1 file · +40 −0 · d opens them';
+  assert.equal(lineOf('+changed line 20'), -1, 'the chat names the changes, and never holds them');
+  await scrollTo(CHANGED);
   await more([...upTo(230), { role: 'Claude', at, text: 'A longer answer\nthat takes\nfour lines\nof the pane', lead: true }, entry(231)].slice(-KEPT),
     { steps: [...session.steps, { at, text: 'Running the tests' }], plan: { ...session.plan, subtasks: subtasks.map((step, index) => ({ ...step, state: index ? index === 1 ? 'doing' : 'todo' : 'done' })) } });
-  assert.equal(top(), '+ changed line 20', 'the changes stay where he reads them');
+  assert.equal(top(), CHANGED, 'the line stays where he reads it');
   // Reading the chat: the oldest entries leave the top as new ones arrive.
   await scrollTo('Line 150 of the long chat');
   await more([...session.entries, ...Array.from({ length: 12 }, (_, index) => entry(232 + index))].slice(-KEPT));
@@ -2078,7 +2080,7 @@ test("in Chats PgUp and PgDn move a page in the open one's threads, in the threa
 test('a session on my other computer shows every line of its changes, and its earlier messages load as the owner pages up to the oldest one here', { timeout: 30000 }, async t => {
   const began = Date.now() - 400 * 60000, at = n => new Date(began + n * 60000).toISOString(), entry = n => ({ n, role: n % 2 ? 'Claude' : 'You', at: at(n), text: `Line ${n} of the long chat`, ...(n % 2 ? { lead: true } : {}) });
   const range = (from, to) => Array.from({ length: to - from + 1 }, (_, index) => entry(from + index));
-  const patch = Array.from({ length: 300 }, (_, index) => `+ changed line ${index + 1}`).join('\n');
+  const patch = ['diff --git a/notes.txt b/notes.txt', '--- a/notes.txt', '+++ b/notes.txt', '@@ -1,0 +1,300 @@', ...Array.from({ length: 300 }, (_, index) => `+changed line ${index + 1}`)].join('\n');
   const session = { id: '66666666-6666-4666-8666-666666666666', machine: SARA, createdAt: at(0), lastAt: at(300), title: 'Read the long chat', state: 'answered', approvals: [], entries: range(221, 300), steps: [], diff: { summary: '1 file changed', patch }, plan: null };
   const p = project(later(t)); environment(t, p.parent);
   const peer = fakePeer({ items: [], mine: [{ key: SARA, mine: true, theirs: true }], remote: [session] }), v = await view(t, { repo: repository(p.root), dashboard: true, peer });
@@ -2089,8 +2091,9 @@ test('a session on my other computer shows every line of its changes, and its ea
   board.focus(); selectRow(board, /Read the long chat/);
   await until(() => /Runs on @sara-box/.test(chat.getContent()) && chat.getScrollPerc(true) === 100, 'its chat, at the end');
   ask.focus();
-  // Every line of its changes: ELU 0.1.19 showed the first 120 and three dots.
-  assert.match(chat.getContent(), /\+ changed line 300\b/); assert.match(chat.getContent(), /\+ changed line 121\b/);
+  // Every line of its changes: ELU 0.1.19 showed the first 120 and three dots in the chat. The
+  // chat names them in one line now, and its Changes tab holds every one (read at the end).
+  assert.match(chat.getContent(), /Changes · 1 file · \+300 −0 · d opens them/); assert.doesNotMatch(chat.getContent(), /changed line \d/);
   // The line over its oldest entry here counts the ones before it, and says how to get them.
   assert.match(chat.getContent(), /220 earlier messages are on @sara-box\. Page up to load them\./);
   await pause(300);
@@ -2117,6 +2120,11 @@ test('a session on my other computer shows every line of its changes, and its ea
   await until(() => chat.getContent().includes('Line 1 of the long chat') && !/earlier message/.test(chat.getContent()), 'the first entry, and no line over it');
   wheelAt(v, chat, -1, 3000); await until(() => chat.childBase === 0, 'the top'); await pause(400);
   assert.equal(asked().length, 2, 'nothing more to ask for at the first entry');
+  // Its Changes tab holds every line of its changes, to the last one.
+  const changes = v.panels.changes;
+  board.focus(); v.input.write('d'); await until(() => v.current.sessionView === 'changes' && /1 file changed · \+300 −0/.test(changes.getText()), 'its Changes');
+  v.input.write('\x1b[F'); await until(() => /300 \+ changed line 300/.test(changes.getText()), 'the last line of its changes');
+  assert.doesNotMatch(changes.getText(), /not shown|more character|not read/);
 });
 
 test('a thread shows under its channel, #general or its teammate, and a row counts what waits for me', () => {
@@ -3325,4 +3333,185 @@ test('@ my other computer asks which folder the session works in there, when its
     await until(() => starts().length === before + 1, said);
     assert.equal(modal(v, title), undefined, `${said}: not asked`); assert.equal('folder' in starts().at(-1), false, said);
   }
+});
+
+// What a session's computer sends of its changes: 7 files, +76 −5. One of them is the line the
+// owner could not read in the chat, a template literal of about 400 characters.
+const WIDE = tail => `    lines.push(\`\\nMatching orders with the same coupon on this page (\${d.matchingOrders.length} returned; \${Math.min(d.matchingOrders.length, 5)} shown; \${Math.max(0, d.matchingOrders.length - 5)} omitted; may include this order's own sample; matched by page + coupon code, not by customer — some may belong to a different customer, so do not report their dates, totals${tail} as this order's):\`);`;
+function sentChanges() {
+  const lines = (count, text) => Array.from({ length: count }, (_, index) => text(index + 1));
+  const file = (name, at, around, removed, added, after = []) => [`diff --git a/${name} b/${name}`, 'index 1111111..2222222 100644', `--- a/${name}`, `+++ b/${name}`, `@@ -${at},${removed.length + after.length} +${at},${added.length + after.length} @@${around ? ` ${around}` : ''}`, ...removed.map(line => `-${line}`), ...added.map(line => `+${line}`), ...after.map(line => ` ${line}`)].join('\n');
+  return [
+    file('README.md', 3, '', ['A small shop.'], lines(10, n => `Readme line ${n}`)),
+    file('src/cart.mjs', 2, 'export function addItem(cart, item) {', ['  cart.items.push(item);'], lines(9, n => `  cart.step${n}(item);`), ['  return cart;']),
+    file('src/coupon.mjs', 1, '', ['export const normalize = (value) => value;'], ['export const normalize = (value) => value.toUpperCase();']),
+    file('src/report/format.mjs', 644, 'function formatOrderDetail(d, ctx = {}) {', [WIDE(' or buyers')], [WIDE(', buyers or notes'), ...lines(6, n => `      // Note ${n} on each row.`)], ['    });']),
+    file('src/totals.mjs', 2, 'export function total(cart) {', ['  return 0;'], lines(11, n => `  sum += step${n}(cart);`)),
+    file('test/cart.test.mjs', 8, '', [], lines(16, n => `// Test line ${n}`)),
+    `New file: docs/changes.md\n${lines(22, n => `Step ${n} of the work.`).join('\n')}\n`,
+  ].join('\n');
+}
+// The rows of the Changes pane as they read: the cursor's mark first, no spaces at the end.
+const changeLines = v => v.panels.changes.getText().split('\n').map(row => row.replace(/┃$/, '').trimEnd());
+const cursorLine = v => changeLines(v).find(row => row.startsWith('▌')) ?? '';
+const squeezed = row => row.replace(/ {2,}/g, '  ');
+
+for (const [columns, rows] of [[140, 50], [80, 24]]) test(`a session on my other computer has a Changes tab of its own at ${columns}x${rows}: its chat names the changes in one line, d opens them, and they read as files and hunks`, { timeout: 60000 }, async t => {
+  const at = new Date().toISOString();
+  const session = { id: '66666666-6666-4666-8666-666666666666', machine: SARA, createdAt: at, lastAt: at, title: 'Fix the report', state: 'needs_input', question: 'Which format?', choices: ['Uppercase', 'Lowercase'], approvals: [], steps: [],
+    entries: [{ role: 'You', at, text: 'Fix the report' }, { role: 'Claude', at, text: 'I changed the report and the cart.', lead: true }], diff: { summary: '7 files · +76 −5', patch: sentChanges() } };
+  const p = project(later(t)); environment(t, p.parent);
+  const peer = fakePeer({ items: [], mine: [{ key: SARA, mine: true, theirs: true }], remote: [session] }), v = await view(t, { columns, rows, repo: repository(p.root), dashboard: true, peer });
+  const { board, chat, changes, sessionTabs } = v.panels, keys = () => v.panels.keys.getText().trim(), focused = () => v.current.screen.focused;
+  await until(() => board.items.some(item => /Fix the report/.test(plainItem(item))), 'the remote row');
+  board.focus(); selectRow(board, /Fix the report/);
+  // The chat: one line for the changes, under the question. Never the diff.
+  await until(() => /Changes · 7 files · \+76 −5 · d opens them/.test(chat.getText()), 'the one line');
+  assert.equal(chat.getText().split('\n').filter(line => /Changes · /.test(line)).length, 1);
+  assert.doesNotMatch(chat.getText(), /diff --git|index 1111111|@@ -|\+\+\+ b\/|--- a\/|Readme line|Matching orders/);
+  assert.ok(chat.getText().indexOf('Which format?') < chat.getText().indexOf('Changes · 7 files'));
+  // The same two tabs a session here has, and d among the row's keys.
+  assert.equal(sessionTabs.hidden, false); assert.equal(sessionTabs.getText().trim(), 'Chat   Changes 7'); assert.equal(changes.hidden, true);
+  assert.match(keys(), /enter open {2}c remove {2}d changes/);
+  // d on its row: the files, each with its counts, the cursor on the first.
+  v.input.write('d');
+  await until(() => v.current.sessionView === 'changes' && focused() === changes && /7 files changed/.test(changes.getText()), 'd on its row opens Changes');
+  assert.equal(chat.hidden, true);
+  assert.deepEqual(changeLines(v).slice(0, 9).map(squeezed), [' 7 files changed · +76 −5', '', '▌▸ README.md  +10 −1', ' ▸ src/cart.mjs  +9 −1', ' ▸ src/coupon.mjs  +1 −1', ' ▸ src/report/format.mjs  +7 −1', ' ▸ src/totals.mjs  +11 −1', ' ▸ test/cart.test.mjs  +16 −0', ' ▸ docs/changes.md  new  +22 −0']);
+  // The key bar names the keys between files, between changes, and the page keys.
+  assert.equal(keys(), columns >= 100 ? '↑↓ move  enter unfold  [ ] file  n p change  pgup pgdn page  esc chat  tab next' : '↑↓ move  enter unfold  [ ] file  n p change  pgup pgdn page  esc chat');
+  // ] to the file with the long line, Enter unfolds it: one hunk, said in words.
+  v.input.write(']]]'); await until(() => /^▌▸ src\/report\/format\.mjs/.test(cursorLine(v)), '] moves between files');
+  v.input.write('['); await until(() => /^▌▸ src\/coupon\.mjs/.test(cursorLine(v)), '[ goes back a file');
+  v.input.write(']\r'); await until(() => /^▌▾ src\/report\/format\.mjs/.test(cursorLine(v)), 'Enter unfolds it');
+  const shown = changeLines(v), from = shown.findIndex(row => row.startsWith('▌'));
+  assert.match(shown[from + 1], columns >= 100 ? /^ src\/report\/format\.mjs · line 644 · function formatOrderDetail\(d, ctx = \{\}\) \{$/ : /format\.mjs · line 644 · function/);
+  assert.match(shown[from + 2], /^ 644 {5}- {5}lines\.push\(`\\nMatching orders/);
+  // The long line goes on under its own text: the rows after its first hold no number and no sign.
+  // In a pane too short to hold the removed line and the added one, the rest is a page away.
+  const added = shown.findIndex(row => /^ {5}644 \+ {5}lines\.push\(/.test(row));
+  assert.ok(rows === 24 ? added < 0 : added > from + 3, 'the added line starts on a row of its own');
+  for (const row of shown.slice(from + 3, added < 0 ? shown.length : added)) assert.match(row, /^ {15,}\S/, row);
+  if (added >= 0) assert.match(shown[added + 1], /^ {15,}\S/);
+  // Nothing of Git's own header is drawn, and no row is wider than the pane.
+  for (const row of changeLines(v)) { assert.doesNotMatch(row, /diff --git|index 1111111|^.(?:---|\+\+\+) |@@/); assert.ok(row.length <= changes.width - 2, row); }
+  // n to the next change, opening the folded file on the way; p back.
+  v.input.write('n'); await until(() => /^▌.*format\.mjs · line 644/.test(cursorLine(v)), 'n goes to the change');
+  // Where the rows are more than the pane holds, the change comes to its top.
+  if (rows === 24) assert.equal(changeLines(v)[0], cursorLine(v));
+  assert.equal(keys(), '↑↓ move  [ ] file  n p change  pgup pgdn page  esc chat  tab next');
+  v.input.write('n'); await until(() => /^▌.*totals\.mjs · line 2 · export function total/.test(cursorLine(v)), 'n opens the next file and goes to its change');
+  v.input.write('p'); await until(() => /^▌.*format\.mjs · line 644/.test(cursorLine(v)), 'p goes back a change');
+  v.input.write('['); await until(() => /^▌▾ src\/report\/format\.mjs/.test(cursorLine(v)), '[ from inside a file goes to its name');
+  // PgDn and PgUp move a page.
+  const before = changeLines(v).join('\n');
+  v.input.write('\x1b[6~'); await until(() => changeLines(v).join('\n') !== before, 'a page down');
+  const paged = changeLines(v).join('\n');
+  v.input.write('\x1b[5~'); await until(() => changeLines(v).join('\n') !== paged, 'a page up');
+  // Tab moves on from the view as it does for a session here: the tabs, the list, the box, the view.
+  v.input.write('\t'); await until(() => v.panels.tabs.includes(focused()), 'Tab leaves the view');
+  v.input.write('\t'); await until(() => focused() === board, 'to the list');
+  v.input.write('\t'); await until(() => focused() === v.panels.ask, 'to the message box');
+  v.input.write('\t'); await until(() => focused() === changes, 'and back to Changes');
+  // Esc goes back to the chat, and to the row d was pressed on.
+  board.focus(); v.input.write('d'); await until(() => focused() === changes, 'd again');
+  const left = cursorLine(v);
+  v.input.write('\x1b'); await until(() => v.current.sessionView === 'chat' && focused() === board, 'Esc goes back to the row');
+  assert.equal(changes.hidden, true); assert.match(chat.getText(), /Changes · 7 files · \+76 −5 · d opens them/);
+  // Tab reaches its chat as it does for a session here (the list, the box, the chat). d in the pane does the same, and Esc goes back to the pane.
+  v.input.write('\t'); await until(() => focused() === v.panels.ask, 'Tab from the row: the message box');
+  v.input.write('\t'); await until(() => focused() === chat && /d changes/.test(keys()), 'then its chat, which names d');
+  v.input.write('d'); await until(() => v.current.sessionView === 'changes' && focused() === changes, 'd in its pane');
+  assert.equal(cursorLine(v), left, 'where he left it');
+  v.input.write('\x1b'); await until(() => v.current.sessionView === 'chat' && focused() === chat, 'Esc goes back to the pane');
+  // A click on the tab's name opens it too, and a message sent from there shows in the chat.
+  sessionTabs.emit('click', { x: sessionTabs.aleft + 9, y: sessionTabs.atop }); await until(() => v.current.sessionView === 'changes', 'a click on Changes');
+  await send(v, '@sara-box 1'); await until(() => v.current.sessionView === 'chat', 'the chat shows what was sent');
+  assert.ok(peer.sent().some(row => row.type === 'remoteSend' && row.text === '1'));
+});
+
+test('the Changes of a session its computer has not sent yet say so and ask for them when the tab opens, and a long diff opens at once, whole', { timeout: 60000 }, async t => {
+  const now = Date.now(), at = new Date(now).toISOString(), SHOP = 'e'.repeat(64), P = '1'.repeat(16), id = '71111111-1111-4111-8111-111111111117';
+  const machines = [{ key: SARA, listedAt: at, older: false, projects: [{ id: P, name: 'shop', repoId: SHOP, home: false }], sessions: [{ id, ref: `${P}:1`, project: P, title: 'Fix the report', state: 'ready', at, createdAt: at, approvals: [], by: 'you', who: null }] }];
+  const remote = [], p = project(later(t)); environment(t, p.parent);
+  const peer = fakePeer({ items: [], mine: [{ key: SARA, mine: true, theirs: true }], machines, remote, repoId: SHOP }), v = await view(t, { columns: 140, rows: 50, repo: repository(p.root), dashboard: true, peer });
+  const { board, changes, sessionTabs } = v.panels;
+  await until(() => board.items.some(item => /Fix the report/.test(plainItem(item))), 'the listed row');
+  board.focus(); selectRow(board, /Fix the report/); v.input.write('d');
+  await until(() => v.current.sessionView === 'changes' && /@sara-box has not sent its changes yet\. Asking for them…/.test(changes.getText()), 'it says they are not here yet');
+  await until(() => peer.sent().some(row => row.type === 'remoteWatch' && row.ref === `${P}:1` && row.to === SARA), 'and asks for them');
+  assert.equal(sessionTabs.getText().trim(), 'Chat   Changes');
+  // They arrive: 300 files of 200 lines, a new file of 30,000 lines and one line of 50,000 characters.
+  const many = Array.from({ length: 300 }, (_, file) => [`diff --git a/src/f${file}.mjs b/src/f${file}.mjs`, `--- a/src/f${file}.mjs`, `+++ b/src/f${file}.mjs`, '@@ -1,100 +1,100 @@', ...Array.from({ length: 100 }, (_, line) => `-old ${line}`), ...Array.from({ length: 100 }, (_, line) => `+new ${line}`)].join('\n')).join('\n');
+  const patch = [many, `New file: big.txt\n${Array.from({ length: 30000 }, (_, line) => `line ${line + 1}`).join('\n')}\n`, `New file: wide.txt\n${'word '.repeat(10000)}\n`].join('\n');
+  const started = Date.now();
+  remote.push({ id, ref: `${P}:1`, machine: SARA, createdAt: at, lastAt: at, title: 'Fix the report', state: 'ready', approvals: [], steps: [], entries: [{ role: 'You', at, text: 'Fix the report' }], diff: { summary: '302 files · +60001 −30000', patch } });
+  await until(() => /302 files changed · \+60,001 −30,000/.test(changes.getText()), 'the changes, once they are here');
+  // The app looks for what arrived every half second; the view itself takes a moment.
+  assert.ok(Date.now() - started < 3000, `it took ${Date.now() - started} ms`);
+  assert.equal(sessionTabs.getText().trim(), 'Chat   Changes 302');
+  assert.doesNotMatch(changes.getText(), /not shown|not read|truncated/);
+  assert.match(cursorLine(v), /^▌▸ src\/f0\.mjs +\+100 −100$/, 'a long list starts folded, the cursor on its first file');
+  // The end of the list, and the end of the longest file: every line is there.
+  v.input.write('\x1b[F'); await until(() => /^▌▸ wide\.txt +new +\+1 −0$/.test(cursorLine(v)), 'End goes to the last file');
+  v.input.write('['); await until(() => /^▌▸ big\.txt +new +\+30,000 −0$/.test(cursorLine(v)), 'the file before it');
+  const opened = Date.now();
+  v.input.write('\r'); await until(() => /^▌▾ big\.txt/.test(cursorLine(v)) && changeLines(v).some(row => / {5}1 \+ line 1$/.test(row)), 'its 30,000 lines open');
+  assert.ok(Date.now() - opened < 3000, `unfolding took ${Date.now() - opened} ms`);
+  v.input.write('\x1b[F'); await until(() => /^▌▸ wide\.txt/.test(cursorLine(v)) && changeLines(v).some(row => /30000 \+ line 30000$/.test(row)), 'its last line is one End away');
+  v.input.write('\r\x1b[F'); await until(() => /^▌ +(?:word ?)+$/.test(cursorLine(v)), 'the line of 50,000 characters, to its end');
+  assert.doesNotMatch(changes.getText(), /not shown|more character/);
+});
+
+test('the Changes of a session here and of the same session followed from another computer read the same, with the same keys', { timeout: 60000 }, async t => {
+  const p = project(later(t)); environment(t, p.parent); registerProject(repository(p.root));
+  const files = { 'src/coupon.mjs': 'export const normalize = (value) => value.trim().toUpperCase();\n', 'src/report.mjs': `export function report(d) {\n  const lines = [];\n${WIDE(', buyers or notes')}\n  return lines;\n}\n`, 'docs/notes.md': '# Notes\n\nOne.\nTwo.\n' };
+  const { repo } = liveTask(p.root, { id: '1', goal: 'Fix the coupons', files });
+  // What this session's computer sends of it is what a computer that follows it shows.
+  const at = new Date().toISOString(), patch = taskDetails(repo, '1').diff;
+  const session = { id: '88888888-8888-4888-8888-888888888888', machine: SARA, createdAt: at, lastAt: at, title: 'Followed from afar', state: 'ready', approvals: [], steps: [], entries: [{ role: 'You', at, text: 'Fix the coupons' }], diff: { summary: '3 files', patch } };
+  const peer = fakePeer({ items: [], mine: [{ key: SARA, mine: true, theirs: true }], remote: [session] }), v = await view(t, { columns: 140, rows: 50, repo, dashboard: true, peer });
+  const { board, chat, changes } = v.panels, keys = () => v.panels.keys.getText().trim(), focused = () => v.current.screen.focused;
+  await until(() => board.items.some(item => /Followed from afar/.test(plainItem(item))) && board.items.some(item => /Fix the coupons/.test(plainItem(item))), 'both rows');
+  // Here: d on its row opens its Changes, three files unfolded, each hunk under its place in words.
+  board.focus(); selectRow(board, /Fix the coupons/); v.input.write('d');
+  await until(() => v.current.sessionView === 'changes' && focused() === changes && /3 files changed/.test(changes.getText()), 'the Changes of the session here');
+  // A session here takes line notes, and says how in a row under the summary. One followed from another computer does not.
+  assert.match(changeLines(v)[1], /^ \+ beside a line notes what should change\. Notes go to the model together\.$/);
+  const here = changeLines(v).filter((_, index) => index !== 1);
+  assert.match(here[0], /· 3 files changed · \+10 −1$/);
+  assert.equal(squeezed(here[2]), '▌▾ src/coupon.mjs  +1 −1');
+  assert.deepEqual(here.slice(3, 7), [' src/coupon.mjs · line 1', ' 1   - export const normalize = (value) => value;', '   1 + export const normalize = (value) => value.trim().toUpperCase();', '']);
+  assert.ok(here.some(row => /^ src\/report\.mjs · line 1$/.test(row)) && here.some(row => /^ docs\/notes\.md · line 1$/.test(row)));
+  for (const row of here) assert.doesNotMatch(row, /diff --git|^.index [0-9a-f]|^.(?:---|\+\+\+) |@@/);
+  assert.equal(keys(), '↑↓ move  enter fold  [ ] file  n p change  pgup pgdn page  esc chat  tab next');
+  v.input.write(']'); await until(() => /^▌▾ docs\/notes\.md/.test(cursorLine(v)), '] to the next file');
+  v.input.write('n'); await until(() => /^▌docs\/notes\.md · line 1$/.test(cursorLine(v)), 'n to its change');
+  v.input.write('n'); await until(() => /^▌src\/report\.mjs · line 1$/.test(cursorLine(v)), 'n to the next one');
+  v.input.write('pp'); await until(() => /^▌src\/coupon\.mjs · line 1$/.test(cursorLine(v)), 'p back to the first');
+  // d in its chat opens them too, and Esc goes back to the chat.
+  v.input.write('\x1b'); await until(() => v.current.sessionView === 'chat' && focused() === board, 'Esc');
+  chat.focus(); await until(() => /d changes/.test(keys()), 'the chat names d');
+  v.input.write('d'); await until(() => v.current.sessionView === 'changes' && focused() === changes, 'd in its chat');
+  v.input.write('\x1b'); await until(() => v.current.sessionView === 'chat' && focused() === chat, 'Esc goes back to its chat');
+  // There: the same files and the same rows under the summary, drawn by the same code.
+  v.input.write('\x1b'); await until(() => focused() === board, 'back to the list');
+  selectRow(board, /Followed from afar/); v.input.write('d');
+  await until(() => v.current.sessionView === 'changes' && focused() === changes && /^ 3 files changed · \+10 −1$/.test(changeLines(v)[0]), 'the Changes of the session there');
+  assert.deepEqual(changeLines(v).slice(1), here.slice(1));
+});
+
+test('at 80x24 the line that says a session’s changes are not here yet is whole, on the rows it needs, with no cursor beside it', { timeout: 30000 }, async t => {
+  const at = new Date().toISOString(), SHOP = 'e'.repeat(64), P = '1'.repeat(16), id = '71111111-1111-4111-8111-111111111118';
+  const machines = [{ key: SARA, listedAt: at, older: false, projects: [{ id: P, name: 'shop', repoId: SHOP, home: false }], sessions: [{ id, ref: `${P}:1`, project: P, title: 'Report', state: 'ready', at, createdAt: at, approvals: [], by: 'you', who: null }] }];
+  const p = project(later(t)); environment(t, p.parent);
+  const peer = fakePeer({ items: [], mine: [{ key: SARA, mine: true, theirs: true }], machines, remote: [], repoId: SHOP }), v = await view(t, { columns: 80, rows: 24, repo: repository(p.root), dashboard: true, peer });
+  const { board, changes } = v.panels;
+  await until(() => board.items.some(item => /Report/.test(plainItem(item))), 'the listed row');
+  board.focus(); selectRow(board, /Report/); v.input.write('d');
+  await until(() => v.current.sessionView === 'changes' && /has not sent/.test(changes.getText()), 'the line');
+  const rows = changeLines(v).filter(Boolean);
+  assert.equal(rows.length, 2, rows.join('|'));
+  assert.equal(rows.map(row => row.trim()).join(' '), '@sara-box has not sent its changes yet. Asking for them…');
+  assert.ok(rows.every(row => !row.includes('▌') && row.length <= changes.width - 2));
 });

@@ -19,6 +19,7 @@ import { requestApproval, pendingApprovals } from '../lib/approvals.mjs';
 import { Conductor, enqueue } from '../lib/conductor.mjs';
 import { boardRows, remoteRow, rowActions, rowTitle } from '../lib/board.mjs';
 import { remoteSessions as remoteGlue } from '../lib/terminal-remote.mjs';
+import { sessionChanges } from '../lib/diff.mjs';
 import { teamPath } from '../lib/peer/roster.mjs';
 import { readTask, saveTask, taskDir, taskPlace } from '../lib/state.mjs';
 import { spawnSync } from 'node:child_process';
@@ -653,7 +654,7 @@ test('a from my other computer keeps the rule on the computer the session runs o
   // The laptop is told what a would keep, and is offered a only where a rule can be kept.
   assert.deepEqual(seen.approvals.map(item => [item.id, item.always ?? null]), [['approval-a1', 'Run npm test, with any arguments'], ['approval-a2', 'Run npm test, with any arguments'], ['approval-a3', null]]);
   const row = remoteRow(seen, 'devbox');
-  assert.deepEqual(rowActions(row).map(([key]) => key), ['y', 'n', 'a', 'enter']);
+  assert.deepEqual(rowActions(row).map(([key]) => key), ['y', 'n', 'a', 'enter', 'd']);
   const glue = remoteGlue({ facade: { mineRows: () => [], remoteSessions: () => [] }, peerRead: () => null, peerCommand: command => withHome(laptop.home, () => remoteCommand(viewCtx, command)), chatMessage: ({ text }) => text, ink: text => text, colour: false });
   assert.match(glue.view(row, 80), /Esc, then y allow · n deny · a always, then Enter/);
   assert.equal(await glue.action(row, 'always', 'project'), 'Allowed. From now on, without asking on @devbox: Run npm test, with any arguments (this project).');
@@ -711,7 +712,7 @@ test('Sessions lists a session on my other computer, says where, and offers its 
   const now = Date.parse('2026-11-11T10:00:00Z'), view = { id: START.id, machine: 'a'.repeat(64), createdAt: '2026-11-11T09:59:00Z', lastAt: '2026-11-11T09:59:30Z', state: 'running', title: 'Make coupons upper case', approvals: [], steps: [{ text: 'Reading src/coupon.mjs' }] };
   const running = remoteRow(view, 'devbox', now);
   assert.equal(running.group, 1); assert.equal(rowTitle(running, now), 'on devbox · Make coupons upper case');
-  assert.deepEqual(rowActions(running), [['enter', 'open'], ['s', 'stop']]);
+  assert.deepEqual(rowActions(running), [['enter', 'open'], ['s', 'stop'], ['d', 'changes']]);
   const asking = remoteRow({ ...view, approvals: [{ id: 'approval-1', role: 'bot:reviewer', summary: 'Run ls', at: '2026-11-11T09:59:40Z' }] }, 'devbox', now);
   assert.equal(asking.group, 0); assert.equal(rowTitle(asking, now), 'on devbox · @reviewer wants to run ls');
   assert.deepEqual(rowActions(asking).slice(0, 2), [['y', 'allow'], ['n', 'deny']]);
@@ -1032,6 +1033,30 @@ test('a viewer that holds only the newest 200 of a long chat gets the ones it le
   assert.deepEqual(texts(), all.slice(-280));
   await withHome(laptop.home, () => remoteCommand(viewCtx, { type: 'remoteOlder', id: item.id })); await flow();
   assert.deepEqual(texts(), all, 'to the first entry');
+});
+
+test('a new file of any size in a session on my other computer reaches the computer that follows it whole, and a binary one is only named', async t => {
+  const { laptop, devbox, project, toHost, toViewer, hostCtx, viewCtx, viewer, host } = pair(t);
+  // 6,000 lines, about 170,000 bytes: well past the 64,000 a preview held.
+  const notes = `${Array.from({ length: 6000 }, (_, n) => `Note ${n + 1} of the new file.`).join('\n')}\n`;
+  withHome(devbox.home, () => { liveTask(project.root, { id: '1', goal: 'Write the notes', files: { 'docs/notes.md': notes, 'art/logo.bin': Buffer.concat([Buffer.from([137, 0, 1, 2]), Buffer.alloc(300000, 65)]) } }); relist(); });
+  toViewer.request = (method, params) => withHome(devbox.home, () => host[method](params, toHost));
+  await withHome(laptop.home, () => listTick(viewCtx));
+  const item = withHome(laptop.home, () => remoteMachines())[0].sessions[0];
+  await withHome(laptop.home, () => remoteCommand(viewCtx, { type: 'remoteWatch', to: devbox.identity.key, ref: item.ref }));
+  withHome(devbox.home, () => hostTick(hostCtx));
+  for (const [method, params] of toHost.sent.filter(([name]) => name === 'elu.remote.events')) withHome(laptop.home, () => viewer[method](params, connection(devbox.identity.key)));
+  const seen = () => withHome(laptop.home, () => remoteSessions().find(row => row.id === item.id));
+  for (let n = 0, now = Date.now(); n < 60 && seen().behind; n++) await withHome(laptop.home, () => viewTick(viewCtx, now += 2000));
+  const patch = seen().diff.patch;
+  assert.equal(patch.includes('[File preview truncated.]'), false);
+  assert.ok(patch.includes(`New file: docs/notes.md\n${notes}`), 'every line of the new file');
+  assert.ok(patch.includes('New file: art/logo.bin\n(binary content)') && patch.length < notes.length + 1000, 'the binary file is named, not sent');
+  // The Changes tab reads it as two new files, the text one whole from its line 1.
+  const changes = sessionChanges(patch), text = changes.files.find(file => file.path === 'docs/notes.md');
+  assert.deepEqual([changes.files.length, changes.added, changes.cut, text.added, text.note ?? null], [2, 6000, false, 6000, null]);
+  assert.deepEqual([text.hunks[0].lines[0], text.hunks[0].lines.at(-1)].map(line => [line.now, line.text]), [[1, 'Note 1 of the new file.'], [6000, 'Note 6000 of the new file.']]);
+  assert.equal(changes.files.find(file => file.path === 'art/logo.bin').binary, true);
 });
 
 test('a long session keeps its newest 4000 events there, and a computer that was away longer goes on from the oldest kept', async t => {
@@ -1574,7 +1599,7 @@ test("Sessions groups my computer's sessions of this repository under its name, 
   const said = glue.view({ ...old, remote: { ...old.remote, entries: [{ role: 'You', at: ago(3), text: 'Check the build' }, { role: 'Opus 5.5', lead: true, at: ago(2), text: 'It builds.' }, { role: '@reviewer', bot: 'reviewer', at: ago(1), text: 'Looks right.' }, { role: 'Shell', shell: true, at: ago(0), text: '$ ls' }] } }, 80);
   assert.match(said, /You → @devbox: Check the build[\s\S]*Opus 5\.5 on @devbox: It builds\.[\s\S]*@reviewer on @devbox: Looks right\.[\s\S]*Shell on @devbox: \$ ls/);
   await pause(0); assert.deepEqual(commands.at(-1), { type: 'remoteWatch', to: D, ref: `${p.shop}:1`, cursor: true });
-  assert.deepEqual(rowActions(listedRow), [['enter', 'open']], 'it stays as long as it is there: nothing to remove');
+  assert.deepEqual(rowActions(listedRow), [['enter', 'open'], ['d', 'changes']], 'it stays as long as it is there: nothing to remove');
   // Another project open here, of no repository: only what was started from here.
   assert.deepEqual(glue.sections(now, '/work/elsewhere').filter(line => line.row).map(line => rowTitle(line.row, now)), ['Started from the laptop']);
   // Projects: its other projects, as "<project> on <name>".
@@ -1865,4 +1890,47 @@ test("a teammate named like my computer keeps their session on my other computer
   assert.deepEqual(await list(true), { 'Run the evals': ['teammate', 'ana'], 'Fix the login redirect': ['teammate', 'Ana'], 'Check the build': ['teammate', 'ana'] });
   assert.deepEqual(routes(), { 'Run the evals': 'there', 'Fix the login redirect': 'there', 'Check the build': 'there' });
   assert.deepEqual(offered(), []);
+});
+
+test('the Changes of a session on my other computer are read once and whole, named in its chat in one line, and asked for when the tab opens before they were sent', async () => {
+  const ME = 'a'.repeat(64), D = 'd'.repeat(64), at = new Date().toISOString(), sent = [];
+  const status = { key: ME, name: 'ana', teams: [{ id: 'team-1', members: [{ key: ME, name: 'ana', online: true }, { key: D, name: 'ana', box: 'devbox', online: true }] }] };
+  const make = peerCommand => remoteGlue({ facade: { mineRows: () => [], remoteSessions: () => [] }, peerRead: () => status, peerCommand, chatMessage: ({ title, text }) => `${title}\n${text}`, ink: text => text, colour: false, restMs: 1e9 });
+  const glue = make(async command => { sent.push(command); return {}; });
+  const row = (view = {}, extra = {}) => ({ ...remoteRow({ id: START.id, machine: D, createdAt: at, state: 'ready', title: 'Fix the report', entries: [{ role: 'You', at, text: 'Fix the report' }], steps: [], approvals: [], ...view }, 'devbox'), listed: true, watched: true, ref: 'p:1', online: true, ...extra });
+  const patch = ['diff --git a/src/cart.mjs b/src/cart.mjs', 'index 1111111..2222222 100644', '--- a/src/cart.mjs', '+++ b/src/cart.mjs', '@@ -2,2 +2,3 @@ export function addItem(cart, item) {', '-  cart.items.push(item);', '+  cart.items.push({ ...item });', '+  cart.count++;', '   return cart;', 'New file: docs/notes.md\n# Notes\n'].join('\n');
+  // Sent: read into files once for each text, however often the pane is drawn.
+  const first = glue.changes(row({ diff: { summary: '2 files · +3 −1', patch } }));
+  assert.deepEqual([first.note, first.changes.files.map(file => [file.path, file.status, file.added, file.removed]), first.changes.added, first.changes.removed], [null, [['src/cart.mjs', 'modified', 2, 1], ['docs/notes.md', 'added', 1, 0]], 3, 1]);
+  assert.equal(glue.changes(row({ diff: { summary: '2 files · +3 −1', patch: ` ${patch}`.slice(1) } })).changes, first.changes, 'the same text is not read again');
+  assert.notEqual(glue.changes(row({ diff: { summary: '2 files · +4 −1', patch: `${patch}more\n` } })).changes, first.changes);
+  // Its chat names them in one line and never holds the diff. A narrow pane leaves the key out.
+  const parts = glue.parts(row({ diff: { summary: '2 files · +3 −1', patch } }), 80), named = parts.filter(part => part.key.startsWith('changes'));
+  assert.deepEqual(named.map(part => part.text), ['Changes · 2 files · +3 −1 · d opens them']);
+  assert.ok(parts.every(part => !/diff --git|@@|cart\.items|index 1111111/.test(part.text)));
+  assert.deepEqual(glue.parts(row({ diff: { summary: '2 files · +3 −1', patch } }), 30).filter(part => part.key.startsWith('changes')).map(part => part.text), ['Changes · 2 files · +3 −1']);
+  // Followed here with nothing changed, still arriving, or behind: a line says which.
+  assert.deepEqual(glue.changes(row()), { changes: null, tone: 'muted', note: 'No changes yet.' });
+  assert.equal(glue.changes(row({ diff: { summary: 'No changes', patch: '' } })).note, 'No changes yet.');
+  assert.equal(glue.changes(row({ partialDiff: { summary: '9 files', patch: 'diff --git a/x b/x' } })).note, 'Its changes are arriving from @devbox…');
+  assert.equal(glue.changes(row({ behind: true })).note, 'Catching up with @devbox…');
+  assert.ok(!glue.parts(row(), 80).some(part => part.key.startsWith('changes')), 'no line in the chat without changes');
+  assert.deepEqual(sent, []);
+  // Not followed here yet: drawing the tab asks nothing, opening it asks at once, and once only while the answer is on its way.
+  const waiting = row({}, { watched: false });
+  assert.deepEqual(glue.changes(waiting), { changes: null, tone: 'muted', note: '@devbox has not sent its changes yet. Asking for them…' });
+  assert.deepEqual(sent, []);
+  glue.changes(waiting, { fetch: true });
+  assert.deepEqual(sent, [{ type: 'remoteWatch', to: D, ref: 'p:1', cursor: true }], 'asked the moment the tab opens, with no wait for the cursor to rest');
+  glue.changes(waiting, { fetch: true }); glue.parts(waiting, 80);
+  assert.equal(sent.length, 1);
+  // One that is followed is never asked for again, and an offline computer is not asked at all.
+  glue.changes(row({ diff: { summary: '2 files · +3 −1', patch } }), { fetch: true });
+  const away = row({}, { watched: false, online: false });
+  assert.deepEqual(glue.changes(away, { fetch: true }), { changes: null, tone: 'muted', note: '@devbox is offline. Its changes show here once it is back.' });
+  assert.equal(sent.length, 1);
+  // A computer that refuses says why, in the tab.
+  const refusing = make(async () => { throw new Error('@devbox: Not now.'); });
+  refusing.changes(waiting, { fetch: true }); await pause(0);
+  assert.deepEqual(refusing.changes(waiting), { changes: null, tone: 'orange', note: '@devbox: Not now.' });
 });
