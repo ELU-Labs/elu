@@ -13,7 +13,7 @@ import { saveTask } from '../lib/state.mjs';
 import { addCard } from '../lib/kanban.mjs';
 import { columns, units, unitWidth, head, tail, cut, padEnd, padStart, unitBefore, unitAfter } from '../lib/width.mjs';
 import { cellText } from '../lib/terminal-cells.mjs';
-import { chatBlock, chatBar, teamPanes, membersLine, fitWords, ink, keyHints, keepRows, visible, wrapText, roomTarget } from '../lib/terminal-visuals.mjs';
+import { chatBlock, chatBar, teamPanes, membersLine, fitWords, ink, keyHints, keepRows, remote, visible, wrapText, roomTarget } from '../lib/terminal-visuals.mjs';
 import { boardRows, barCells, barColumns, rowTitle } from '../lib/board.mjs';
 import { fitCard, fitTeammateCard } from '../lib/kanban.mjs';
 import { agentTable } from '../lib/agent-spend.mjs';
@@ -84,6 +84,22 @@ test('a text cut for width is cut between two characters, with its mark, and nev
       assert.equal(unitBefore(text, index), index === 0 ? 0 : bounds.findLast(start => start < index), `before ${index} in ${text}`);
       assert.equal(unitAfter(text, index), index >= text.length ? text.length : bounds.find(start => start > index), `after ${index} in ${text}`);
     }
+  }
+});
+
+// Some texts are capped by length before they reach a row: a blocked command at 80, a
+// teammate's text at its limit, the end of a long path. The cap can fall inside an emoji, and
+// the half it leaves is no character: it takes no column and is not drawn.
+test('a text capped by length in the middle of an emoji shows no half of it, and its row keeps its columns', t => {
+  const whole = 'Run npm test 🚀', capped = whole.slice(0, -1), ending = `…${whole.slice(-1)} done`;
+  assert.equal(columns(capped), 13); assert.equal(columns(`${capped}…`), 14); assert.equal(columns(ending), 6);
+  assert.equal(columns(padEnd(`${capped}…`, 18)), 18);
+  assert.equal(columns(remote(`${'a'.repeat(29)}🚀 and more`, 30)), 29);
+  const { screen, terms, show } = stage(t, 40, 6);
+  framed(screen, 20, 4, { content: `${capped}…\n${ending}` }); show();
+  for (const [kind, term] of Object.entries(terms)) {
+    assert.equal(term.grid[1].slice(0, 20).join(''), `│Run npm test …${' '.repeat(4)}│`, `the ${kind} terminal, a cap that ends in half an emoji`);
+    assert.equal(term.grid[2].slice(0, 20).join(''), `│… done${' '.repeat(12)}│`, `the ${kind} terminal, a cap that starts in half an emoji`);
   }
 });
 
