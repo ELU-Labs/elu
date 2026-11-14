@@ -314,6 +314,8 @@ A push with `/publish` has no time limit either, in every mode, and nor do the p
 pre-push guards it runs. A guard, or the push itself, that prints nothing for 10 minutes is
 stopped and says so: "Stopped the pre-push guard after 10 minutes with no output. Nothing was
 pushed."
+A guard that fails says so with the last lines it printed: "The pre-push guard failed, so
+nothing was pushed. It said: …"
 ELU 0.1.24 and earlier stopped a guard, and the push, after 2 minutes; a session from then
 keeps its guards again, without that limit, at its next `/publish`.
 

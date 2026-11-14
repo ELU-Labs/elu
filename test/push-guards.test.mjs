@@ -65,3 +65,20 @@ test('guards kept by an earlier version, which stopped them after two minutes, a
   const done = await publish(p.repo, task, preview.confirmationId);
   assert.equal(done.pushed, true); assert.equal(p.pushed(), true);
 });
+
+// A guard that fails as guards do, with a non-zero exit, says why in its own words: the app
+// shows its last lines, short, and that nothing was pushed, not only that git could not finish.
+test('a pre-push guard that fails says its own last lines, short, and that nothing was pushed', { timeout: 60000 }, async t => {
+  const long = 'x'.repeat(300);
+  const p = guarded(t, `#!/bin/sh\nfor i in 1 2 3 4 5 6; do echo "step $i"; done\necho "${long}"\nsleep 0.3\nprintf '\\033[31mlint: 2 problems in src/coupon.mjs\\033[0m\\n' >&2\nexit 3\n`);
+  const preview = await preparePublish(p.repo, p.task);
+  const error = await publish(p.repo, p.task, preview.confirmationId).then(() => null, value => value);
+  assert.ok(error, 'the push failed');
+  assert.equal(error.message, `The pre-push guard failed, so nothing was pushed. It said: step 6 · ${'x'.repeat(159)}… · lint: 2 problems in src/coupon.mjs`);
+  assert.equal(p.pushed(), false);
+  // One that prints nothing says that.
+  const quiet = guarded(t, '#!/bin/sh\nexit 1\n');
+  const plan = await preparePublish(quiet.repo, quiet.task);
+  await assert.rejects(() => publish(quiet.repo, quiet.task, plan.confirmationId), { message: 'The pre-push guard failed, so nothing was pushed. It printed nothing.' });
+  assert.equal(quiet.pushed(), false);
+});
