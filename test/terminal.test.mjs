@@ -3793,6 +3793,15 @@ test('each Blocked line says why and the one thing to do, and raising the mode t
   await send(v, '/permissions full'); await dialog(v, 'Full access', 'y');
   await until(() => /Full access\. Continuing where it stopped\./.test(status()), 'continues in the mode it has');
   assert.deepEqual(continued('15'), ['Continue where you stopped: this session now has Full access. Try again only this: Edit /srv/shared/deps.json; Run npm install. Do not retry anything the owner said no to or that is never allowed.']);
+  // A turn that went on after an approval nobody answered and ended without a question still
+  // says so: the one thing it left undone is never passed over in silence. What else it was
+  // refused shows only while the session waits.
+  blocked('16', 'Tidy the notes', 'ask', [{ tool: 'Edit', tool_use_id: 'toolu_w', input: { file_path: '/srv/shared/notes.md' } }, { tool: 'Bash', tool_use_id: 'toolu_x', input: { command: 'npm install' } }],
+    [{ id: 'launch-1-toolu_w', tool: 'Edit', summary: 'Edit: /srv/shared/notes.md', decision: 'timeout', wait: 1200, at, role: 'lead', session: 'launch-1' }]);
+  saveTask(p.repo, { ...readTask(p.repo, '16'), state: 'answered' });
+  await openTask(v, /Tidy the notes/); await until(() => v.current.session === '16', 'the answered session is open');
+  await until(() => /Not done: Edit \/srv\/shared\/notes\.md\. No answer in 20 minutes; reply to try again\./.test(chat()), 'an unanswered approval is said after a turn that went on');
+  assert.doesNotMatch(chat(), /Run npm install|Stopped:/);
   // A session with no mode is read only, and Ask for approval continues it.
   blocked('12', 'Rename the helper', undefined, [{ tool: 'Edit', input: { file_path: '/srv/app/src/a.ts' } }]);
   await openTask(v, /Rename the helper/); await until(() => v.current.session === '12', 'the third session is open');

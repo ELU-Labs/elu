@@ -182,7 +182,14 @@ tool: a small MCP server over stdio, started from the same private config file
 as your own servers, with one tool. When Claude would prompt, the call becomes a
 request under ELU's personal directory and the terminal shows it under
 Needs you. Allow lets the action run; deny tells the model not to retry it
-another way; no answer within 20 minutes counts as a denial. The turn's limits
+another way. The request shows in every ELU window of yours that lists the
+session, on this computer and on your other computers: its row says what it
+waits for, any of those windows can answer it, and the terminal bell rings once.
+No answer within 20 minutes is not a no: the action does not run, and the model
+is told that nobody declined it, to go on with the work that does not need it,
+and to say at the end what still waits for your answer. The session then shows
+`Not done: ... No answer in 20 minutes; reply to try again.` under the reply, or
+`Stopped: ...` when the turn could not go on without it. The turn's limits
 (below) wait while a request is open, and the conductor does not treat the wait
 as a stall. Every decision is kept with the task, and blocked actions are kept
 on the run. In Full access the relay allows every call at once: nobody is asked

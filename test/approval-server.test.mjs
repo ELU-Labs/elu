@@ -111,6 +111,8 @@ test('no answer within the wait is a denial that names the wait, and progress is
   const reply = await server.next(row => row.id === 11);
   const text = JSON.parse(reply.result.content[0].text);
   assert.equal(text.behavior, 'deny'); assert.match(text.message, /No answer from the owner within 1 minutes?\. Do not retry it another way/);
+  // Nobody declined it: the agent is told to go on with the rest, not to stop the turn there.
+  assert.match(text.message, /Nobody declined it\. Go on with the work that does not need it, and say at the end what still waits for their answer\.$/);
   const progress = server.rows.filter(row => row.method === 'notifications/progress');
   assert.ok(progress.length >= 1); assert.equal(progress[0].params.progressToken, 'p1'); assert.match(progress[0].params.message, /Waiting for the owner: Run: curl/);
   assert.equal(readApprovalLog(path.join(dir, 'approvals.jsonl')).at(-1).decision, 'timeout');
