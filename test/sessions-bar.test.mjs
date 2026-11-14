@@ -81,6 +81,13 @@ test('a session reads as its title, never its number, and any other row as what 
   assert.equal(rowTitle(find(one, 'schedule'), now), 'daily 9:00 · Check the nightly build and list what failed');
   const later = boardRows([{ ...shop, tasks: [], queue: [{ id: 'request-c', goal: 'Try again', state: 'queued', notBefore: new Date(now + 30000).toISOString(), queuedAt: at(1) }, { id: 'request-d', goal: 'Continue it', state: 'queued', continuationTaskId: '7', queuedAt: at(0) }] }], now);
   assert.deepEqual(later.map(row => rowTitle(row, now)), ['retry 30s · Try again', 'Continue it']);
+  // What the conductor said a queued one waits for (lib/waiting.mjs): a free slot is said once, in the Queued heading, with a
+  // shorter form for a narrow list; its session's turn is said on its row, where the row has room for both.
+  const held = boardRows([{ ...shop, tasks: [], queue: [{ id: 'request-f', goal: 'Rename the order model', state: 'queued', queuedAt: at(1), waits: { on: 'slot', running: 4, limit: 4 } }, { id: 'request-g', goal: 'Go on', state: 'queued', continuationTaskId: '7', queuedAt: at(0), waits: { on: 'turn' } }] }], now);
+  const of = id => held.find(row => row.request.id === id);
+  assert.deepEqual([rowTitle(of('request-f'), now), rowTitle(of('request-g'), now), rowTitle(of('request-g'), now, 12)], ['Rename the order model', 'after this turn · Go on', 'Go on']);
+  assert.deepEqual(boardSections(held).find(line => line.header === 'Queued').said, ['4 of 4 running', '4 of 4']);
+  assert.equal(boardSections(later).find(line => line.header === 'Queued').said, undefined);
   // The icon in front says the state, in the colour the row had before.
   assert.deepEqual(['3', '2', '4', '1', '5'].map(id => { const [icon] = barCells(find(one, 'task', id), 30, now); return [icon.text.trim().replace(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/, 'spin'), icon.tone]; }), [['?', 'orange'], ['spin', 'blue'], ['✓', 'green'], ['✓', 'green'], ['?', 'orange']], 'a session that waits for an approval has no spinner');
   assert.deepEqual([barCells(find(one, 'request', 'request-b'), 30, now)[0], barCells(find(one, 'schedule'), 30, now)[0]].map(cell => [cell.text, cell.tone]), [['✗ ', 'red'], ['◷ ', 'blue']]);
