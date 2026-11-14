@@ -263,7 +263,7 @@ test("over a session of mine there, what I type goes to that session, as if type
   // While it works there, the line says at once what its running turn does with the message, as that computer tells it.
   const busy = takes => glue({ answer: () => ({ id: ID, working: true, ...(takes ? { takes } : {}) }) }).glue.send(replied, 'and the tests');
   assert.equal(await busy('turn'), 'Sent to Codex on @aki-devbox. Its running turn reads it at its next step.');
-  assert.equal(await busy('beside'), 'Sent to Codex on @aki-devbox. It is being answered now, beside its running turn.');
+  assert.equal(await busy('beside'), 'Sent to Codex on @aki-devbox. It is answered at once, beside its running turn.');
   assert.equal(await busy('soon'), 'Sent to Codex on @aki-devbox. Its running turn reads it at its next step, or it is answered beside the turn.');
   // A computer on an older ELU says only that it works: what it can and cannot do is said.
   assert.equal(await busy(), 'Sent to Codex on @aki-devbox. @aki-devbox runs an older ELU: this starts when its turn ends. Nothing reads or answers it before.');
@@ -306,7 +306,7 @@ test('a message to a session there that has not run yet says in its pane what ha
   assert.match(shown([{ at: at(20), text: 'yes', state: 'turn', takes: 'soon' }]), /\(read or answered in a moment\): yes\nThe running turn on @aki-devbox reads it at its next step, or it is answered beside the turn\.\n/);
   // One answered beside the turn that only asked is a message of the chat: his words, the answer, and the line that says where it came from.
   const asked = app.view(remoteRow({ ...base, entries: [...base.entries, { role: 'You', at: at(20), text: 'How far are you?' }, { role: 'GPT-5.6 · beside the turn', at: at(22), text: 'Two of three steps are done.', update: true }, { role: 'ELU', at: at(22), text: 'Answered beside the running turn, from what it has done so far. The turn goes on.', line: true }] }, 'aki-devbox', T), 120);
-  assert.match(asked, /You → @aki-devbox: How far are you\?\n\nGPT-5\.6 · beside the turn on @aki-devbox: Two of three steps are done\.\n\nAnswered beside the running turn, from what it has done so far\. The turn goes on\.\n/);
+  assert.match(asked, /You → @aki-devbox: How far are you\?\n\nGPT-5\.6 on @aki-devbox · beside the turn: Two of three steps are done\.\n\nAnswered beside the running turn, from what it has done so far\. The turn goes on\.\n/);
   // A computer on an older ELU says only that the session works: what it can and cannot do is said, with the key where it takes it.
   assert.match(shown([{ at: at(20), text: 'yes', state: 'turn' }], { held: 1 }), new RegExp(`You → @aki-devbox \\(starts when its turn ends\\): yes\\n@aki-devbox runs an older ELU: this starts when its turn ends\\. Nothing reads or answers it before\\.\\n${stop}\\n`));
   assert.match(shown([{ at: at(20), text: 'yes', state: 'turn' }]), /\(starts when its turn ends\): yes\n@aki-devbox runs an older ELU: [^\n]+\nIt cannot be sent now from here either\. Updating ELU on @aki-devbox answers a message at once\.\n/);

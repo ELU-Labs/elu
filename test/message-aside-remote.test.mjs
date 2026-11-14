@@ -82,7 +82,7 @@ test('a message from my other computer to a session whose turn takes none is ans
   look();
   assert.deepEqual(seen().entries.slice(-3).map(entry => [entry.role.replace(/^.* · /, '· '), entry.text, entry.update === true, entry.line === true]), [['You', 'How far are you?', false, false], ['· beside the turn', 'Two of three steps are done. It is running the tests now.', true, false], ['ELU', ASIDE_ANSWERED, false, true]]);
   assert.equal(seen().waiting?.length ?? 0, 0, 'nothing of it is left to run');
-  assert.match(pane(), /You → @box: How far are you\?\n\n[^\n]+ · beside the turn on @box: Two of three steps are done\. It is running the tests now\.\n\nAnswered beside the running turn, from what it has done so far\. The turn goes on\.\n\nWorking on @box/);
+  assert.match(pane(), /You → @box: How far are you\?\n\n[^\n]+ on @box · beside the turn: Two of three steps are done\. It is running the tests now\.\n\nAnswered beside the running turn, from what it has done so far\. The turn goes on\.\n\nWorking on @box/);
   assert.doesNotMatch(pane(), /\(waiting\)|current turn ends/);
   // An instruction: answered beside the turn too, it says that it asks for work, and it keeps its place there.
   assert.deepEqual(host['elu.remote.send']({ id: started.id, text: 'Rename the helper too' }, toHost), { id: started.id, working: true, takes: 'beside' });
