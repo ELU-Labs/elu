@@ -123,7 +123,7 @@ While the model or a bot works, the chat shows what it does as it happens: each 
 | `/agent add fable` | Adds another model to this session as an agent; write `@fable` and what to do. Words after the model say what it is for, and `--name NAME` names it: `/agent add sonnet you review my SQL --name sql` |
 | `@pair is there a simpler way?` | Asks a bot. Your next messages in that session go to it too |
 | `@model and what do you think?` | Writes to the session's model again |
-| `/changes` | Shows what this session changed; `/chat` goes back. There, `+` on a line (or a click on its `+`) notes what should change, and `s` sends the notes to the model together |
+| `/changes` | Shows what this session changed; `/chat` goes back. A session on your other computer shows its changes the same way, whole, and its chat counts them in one line. In a session of this computer, `+` on a line (or a click on its `+`) notes what should change, and `s` sends the notes to the model together |
 | `/publish` | Shows the exact push and draft pull request, then asks you |
 | `/stop` | Stops the running response. Messages you sent while it ran then go at once, in order; `↑` takes one back first. Over a session on your other computer, it stops that session there |
 | Enter (empty box) | While a turn works and a message of yours waits, sends that message now. On Claude Code the command the turn waits on moves to the background and the same turn reads the message. On the other vendors the turn stops as `/stop` stops it and the message starts the next turn, in the same vendor session where it can go on |
