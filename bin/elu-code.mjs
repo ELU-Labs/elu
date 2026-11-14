@@ -7,12 +7,12 @@ import { repository, findRepository } from '../lib/git.mjs';
 import { initPlan, applyInit, uninstallPlan, applyUninstall } from '../lib/init.mjs';
 import { runPlan, runTask } from '../lib/runner.mjs';
 import { readTask, saveTask, taskDir, tasks, lock } from '../lib/state.mjs';
-import { runChecks, pinnedConfig } from '../lib/checks.mjs';
+import { runChecks } from '../lib/checks.mjs';
 import { policyReport, assertPolicy } from '../lib/policy.mjs';
 import { unsupportedVendors } from '../lib/detect.mjs';
 import { ADAPTERS } from '../lib/adapters/index.mjs';
 import { preparePublish, publish, prBody } from '../lib/publish.mjs';
-import { refuse, quote, readJson } from '../lib/util.mjs';
+import { refuse, quote, readJson, noSymlinks } from '../lib/util.mjs';
 import { recoverProcess, addUserBin } from '../lib/process.mjs';
 import {formatResult}from'../lib/format.mjs';
 import {botKey}from'../lib/bots.mjs';
@@ -160,13 +160,23 @@ export async function main(argv = process.argv.slice(2)) {
     return await confirm(plan, flags) ? applyInit(repo, plan) : { ...plan, needsConfirmation: !flags['dry-run'] };
   }
   if (command === 'policy' && words[1] === 'show') {
-    const { head } = await import('../lib/git.mjs');
-    const { config } = pinnedConfig(repo, head(repo.root));
+    // The policy as it stands in this folder: .elu-code/config.yaml as it is now, committed or
+    // not, once approved on this machine; with no file, the one new sessions get. A file that
+    // is not what the last commit holds is said, since elu run takes only a committed one.
+    const { baseFile } = await import('../lib/git.mjs'), { parseConfig, defaultConfig } = await import('../lib/config.mjs'), { NOT_APPROVED, trustedText } = await import('../lib/project-trust.mjs');
+    const file = path.join(repo.root, '.elu-code', 'config.yaml'); noSymlinks(file);
+    const text = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : null, approved = trustedText(repo.root, 'config.yaml');
+    if (text !== null && approved !== text) refuse(NOT_APPROVED);
+    const committed = baseFile(repo.root, 'HEAD', '.elu-code/config.yaml', { optional: true });
+    const config = text !== null ? parseConfig(text) : approved !== null ? parseConfig(approved) : defaultConfig();
+    const note = text === null ? `No .elu-code/config.yaml here, so this is ${approved !== null ? 'the one you approved last' : 'the default policy'}. elu init writes one.`
+      : committed === null ? 'This is .elu-code/config.yaml as it is now. It is not committed yet: elu run needs it committed.'
+        : committed !== text ? 'This is .elu-code/config.yaml as it is now. It differs from the last commit: elu run needs it committed.' : null;
     // Only the lead entry runs. Bots do the reviews, read-only, whatever an older config lists.
     const role = config.roles.lead; let refusal = null; try { assertPolicy(role); } catch (e) { refusal = e.message; }
     // The table names the OS sandbox among what enforces a rule; where it cannot start, say so.
-    const { shellSandboxLine } = await import('../lib/sandbox.mjs'), lines = shellSandboxLine();
-    return { ...(lines.length ? { lines } : {}), roles: [{ name: 'lead', ...policyReport(role), refusal }], unsupportedVendors: unsupportedVendors().map(({ bin, ...value }) => value) };
+    const { shellSandboxLine } = await import('../lib/sandbox.mjs'), lines = [...(note ? [note] : []), ...shellSandboxLine()];
+    return { ...(lines.length ? { lines } : {}), committed: text !== null && committed === text, roles: [{ name: 'lead', ...policyReport(role), refusal }], unsupportedVendors: unsupportedVendors().map(({ bin, ...value }) => value) };
   }
   if (command === 'run') {
     if (flags.publish) {
