@@ -201,7 +201,7 @@ test('a session in here mode, in the owner\'s own folder, counts what was commit
   assert.deepEqual(parts(changes), [['main', true, 2, 2, 1, STARTED]]);
   assert.equal(changes.note, NOTES.here);
   const rows = changeRows(changes, 120, false).map(row => visible(row.text));
-  assert.deepEqual(rows.slice(0, 2), [`2 files changed · +2 −1 · compared with ${STARTED}`, 'This session works in your own folder, so changes anyone else made there since it started count too.']);
+  assert.deepEqual(rows.slice(0, 2), [`2 files changed · +2 −1 · compared with ${STARTED}`, 'This session works in your own folder. What anyone changed there since it started counts too.']);
   // What the owner had not committed before the session started is not the session's: Git still lists it, the tab does not.
   assert.deepEqual(git(root, ['status', '--porcelain']).split('\n').map(line => line.trim().split(' ').pop()).sort(), ['docs/', 'owner/', 'package.json', 'test/coupon.test.mjs']);
   // What another computer is sent, what a teammate's board is told and what a review is shown leave it out the same.
@@ -218,6 +218,36 @@ test('a session in here mode, in the owner\'s own folder, counts what was commit
   const moved = taskPatch(repo, '2');
   assert.deepEqual(moved.parts.map(part => [part.branch, part.files, part.added, part.removed]), [['side', 1, 1, 0], ['main', 1, 1, 1]]);
   assert.deepEqual(names(moved), ['side.txt', 'src/coupon.mjs']);
+});
+
+test('what the owner committed in his own folder in the very second the session started there is not the session\'s', t => {
+  const { root, repo } = scene(t);
+  // The folder's first commit, its push and this commit are all that second's work: Git's record of the folder keeps whole seconds.
+  const base = commit(root, { 'owner.txt': 'the owner committed this and started the session at once\n' }, 'Owner work');
+  saveTask(repo, { id: '2', goal: 'Work here', state: 'ready', worktree: root, branch: null, base, createdAt: new Date().toISOString(), runs: [], reviews: [], messages: [], sessions: {}, permissions: 'full', place: { kind: 'here' } });
+  const before = taskPatch(repo, '2');
+  assert.deepEqual([names(before), before.parts.map(part => [part.branch, part.commits])], [[], [['main', 0]]]);
+  write(root, { 'src/coupon.mjs': 'export const normalize = (value) => value.trim();\n' }); git(root, ['add', '-A']); git(root, ['commit', '-q', '-m', 'Trim coupons']);
+  const after = taskPatch(repo, '2');
+  assert.deepEqual([names(after), after.parts.map(part => [part.branch, part.commits]), counts(after)], [['src/coupon.mjs'], [['main', 1]], [1, 1, 1]]);
+});
+
+test('in the owner\'s own folder with more files changed before the session than ELU can set aside, the tab says that some of them show too', async t => {
+  const { root, repo } = scene(t);
+  // Before the session the owner changed 2,003 files there and committed none of them, and made 30 new ones.
+  const bulk = Array.from({ length: 2003 }, (_, at) => `bulk/f${String(at).padStart(4, '0')}.txt`);
+  commit(root, Object.fromEntries(bulk.map(name => [name, 'one\n'])), 'Owner bulk');
+  write(root, { ...Object.fromEntries(bulk.map(name => [name, 'two\n'])), ...Object.fromEntries(Array.from({ length: 30 }, (_, at) => [`drafts/d${at}.md`, 'draft\n'])) });
+  await new Promise(done => setTimeout(done, 30));
+  saveTask(repo, { id: '2', goal: 'Work here', state: 'ready', worktree: root, branch: null, base: git(root, ['rev-parse', 'HEAD']), createdAt: new Date().toISOString(), runs: [], reviews: [], messages: [], sessions: {}, permissions: 'full', place: { kind: 'here' } });
+  write(root, { 'docs/here.md': 'edited here\n' });
+  // 2,000 of them are set aside, and every new file is. The three that are not show, and the tab says why.
+  const changes = taskPatch(repo, '2');
+  assert.deepEqual(names(changes), ['bulk/f2000.txt', 'bulk/f2001.txt', 'bulk/f2002.txt', 'docs/here.md']);
+  assert.equal(changes.note, NOTES.crowded);
+  assert.equal(changeRows(changes, 120, false).map(row => visible(row.text))[1], 'Your folder had over 2,000 changed files before this session started, so some of them show too.');
+  assert.equal(sessionChanges(sessionWire(repo, '2')).note, NOTES.crowded);
+  assert.deepEqual(sessionFiles(readTask(repo, '2')), ['bulk/f2000.txt', 'bulk/f2001.txt', 'bulk/f2002.txt', 'docs/here.md']);
 });
 
 test('a session that merged main into its branch, or rebased onto it, still shows only its own changes', t => {
@@ -258,11 +288,11 @@ test('where ELU cannot tell which commits are the session\'s it says so in one l
   const kept = fs.readFileSync(log); fs.writeFileSync(log, '');
   const blind = taskPatch(repo, '1');
   assert.deepEqual([names(blind), counts(blind), blind.note], [['notes.md'], [1, 1, 0], NOTES.blind]);
-  assert.deepEqual(changeRows(blind, 120, false).slice(0, 2).map(row => visible(row.text)), ['1 file changed · +1 −0 · compared with the last commit on fix/one', "ELU cannot tell which commits here are this session's, so this shows only what is not committed yet."]);
+  assert.deepEqual(changeRows(blind, 120, false).slice(0, 2).map(row => visible(row.text)), ['1 file changed · +1 −0 · compared with the last commit on fix/one', "ELU cannot tell which commits here are this session's, so only what is not committed shows."]);
   assert.deepEqual([sent(repo).counts, sent(repo).changes.note], [[1, 1, 0], NOTES.blind]);
   // With nothing uncommitted the line is still said, on this computer and on another.
   fs.rmSync(path.join(folder, 'notes.md'));
-  assert.deepEqual(changeRows(taskPatch(repo, '1'), 120, false).map(row => visible(row.text)), ['No changes yet.', "ELU cannot tell which commits here are this session's, so this shows only what is not committed yet."]);
+  assert.deepEqual(changeRows(taskPatch(repo, '1'), 120, false).map(row => visible(row.text)), ['No changes yet.', "ELU cannot tell which commits here are this session's, so only what is not committed shows."]);
   assert.equal(sessionChanges(sessionWire(repo, '1')).note, NOTES.blind);
   fs.writeFileSync(log, kept);
   // Another person pushes a branch that main does not have, and the session merges it into its own:
