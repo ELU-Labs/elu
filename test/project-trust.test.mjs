@@ -285,7 +285,8 @@ test('elu policy show reads .elu-code/config.yaml as it is now: before its first
   const file = path.join(p.root, '.elu-code/config.yaml'); fs.writeFileSync(file, read(file).replace('commands: []', 'commands: [npm test]')); approveProjectFiles(p.root);
   const changed = show();
   assert.equal(changed.json.lines[0], 'This is .elu-code/config.yaml as it is now. It differs from the last commit: elu run needs it committed.'); assert.equal(changed.json.committed, false);
-  assert.equal(cli(p.root, ['run', 'Normalize coupons', '--dry-run', '--yes'], fake.env).json.message, 'Commit policy changes before running a task.', 'elu run still takes only the committed one');
+  const run = cli(p.root, ['run', 'Normalize coupons', '--dry-run', '--yes'], fake.env);
+  assert.equal(run.status, 1); assert.match(run.json.message, /^Commit /, 'elu run still takes only the committed one');
 });
 
 test('a scheduled turn asks nothing: it runs without the unapproved files and its session says so in one line', async t => {
