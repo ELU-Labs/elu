@@ -800,6 +800,8 @@ test('a message that has not started on my other computer says here what it wait
   push();
   assert.deepEqual(seen(item.id).waits, { on: 'slot', running: 1, limit: 1 });
   assert.match(shown(item.id), new RegExp(`A message to it waits on @devbox\\. ${SLOT.replace(/[.:/]/g, '\\$&')}`));
+  // A view that lists the waiting messages themselves says it under each one, not twice.
+  assert.doesNotMatch(glue.view(remoteRow({ ...seen(item.id), waiting: [{ at, text: 'And the tests', state: 'queued', reason: SLOT }] }, 'devbox'), 200), /A message to it waits on @devbox/);
   // A session started from here that has not started there says it too, in place of only "Starting".
   const started = await withHome(laptop.home, () => remoteCommand(viewCtx, { type: 'remoteStart', to: devbox.identity.key, text: 'Tidy the login form', permissions: 'ask', place: null, model: null, bots: [] }));
   withHome(devbox.home, () => conductor.dispatch()); push();

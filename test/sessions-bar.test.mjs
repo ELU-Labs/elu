@@ -89,6 +89,8 @@ test('a session reads as its title, never its number, and any other row as what 
   assert.equal(line({ ...of('request-g'), request: { ...of('request-g').request, goal: 'Is the yearly plan covered?' } }, 38), '· after this turn · Is the yearly… now');
   assert.deepEqual(boardSections(held).find(line => line.header === 'Queued').said, ['4 of 4 running', '4 of 4']);
   assert.equal(boardSections(later).find(line => line.header === 'Queued').said, undefined);
+  // /slots lowered below what runs: nothing is interrupted, so the heading says both numbers.
+  assert.deepEqual(boardSections(boardRows([{ ...shop, tasks: [], queue: [{ id: 'request-h', goal: 'Later', state: 'queued', queuedAt: at(1), waits: { on: 'slot', running: 6, limit: 2 } }] }], now)).find(line => line.header === 'Queued').said, ['6 running, 2 at once', '2 at once']);
   // The icon in front says the state, in the colour the row had before.
   assert.deepEqual(['3', '2', '4', '1', '5'].map(id => { const [icon] = barCells(find(one, 'task', id), 30, now); return [icon.text.trim().replace(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/, 'spin'), icon.tone]; }), [['?', 'orange'], ['spin', 'blue'], ['✓', 'green'], ['✓', 'green'], ['?', 'orange']], 'a session that waits for an approval has no spinner');
   assert.deepEqual([barCells(find(one, 'request', 'request-b'), 30, now)[0], barCells(find(one, 'schedule'), 30, now)[0]].map(cell => [cell.text, cell.tone]), [['✗ ', 'red'], ['◷ ', 'blue']]);
