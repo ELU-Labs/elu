@@ -1133,9 +1133,9 @@ test('in Chats my other computer is yours in the bar, the box, its screen, the t
   // The threads with it name it the same way.
   assert.ok(threadLines(v).some(line => /@sara-box answered · Use the v2 endpoint\./.test(line)), threadLines(v).join('\n'));
   assert.ok(!threadLines(v).some(line => /@sara(?!-box)/.test(line)), 'no thread names it by its team name');
-  // Its screen: your computer, and t trusts it.
+  // Its screen: your computer, and t trusts it. What is held or continued is said of it, never of them.
   bar.focus(); v.input.write('t'); await until(() => modal(v, 'Your computer @sara-box'), 'its screen');
-  assert.match(body('Your computer @sara-box'), /Trust: not trusted · paths go out as \[path\]\.\n\nt trusts it$/);
+  assert.match(body('Your computer @sara-box'), /Trust: not trusted · paths go out as \[path\]\.\nHold replies: off · your replies and results go to it when ready\.\nAuto-continue: off · its answers wait in its thread\.\n\nt trusts it · h holds replies · o turns auto-continue on$/);
   assert.doesNotMatch(body('Your computer @sara-box'), /teammate|them|Waiting for it/i);
   v.input.write('t'); await until(() => modal(v, 'Trust @sara-box'), 'the confirm');
   assert.match(body('Trust @sara-box'), /Trust @sara-box\? Paths on this machine reach it as written\.\nSecrets are still held back\./);
