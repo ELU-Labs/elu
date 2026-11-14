@@ -25,7 +25,7 @@ import { getRecord } from '../lib/peer/taskstore.mjs';
 import { applyTask, createAsk, getAsk } from '../lib/peer/asks.mjs';
 import { hostMethods } from '../lib/peer/remote.mjs';
 import { peerItems } from '../lib/peer/index.mjs';
-import { remoteRow, rowTitle } from '../lib/board.mjs';
+import { boardRows, remoteRow, rowBadge, rowTitle } from '../lib/board.mjs';
 import { teamPanes, visible } from '../lib/terminal-visuals.mjs';
 import { remoteSessions as remoteGlue } from '../lib/terminal-remote.mjs';
 
@@ -190,6 +190,10 @@ test('the sender keeps the reason, and Chats shows it whole: failed, why, and th
       assert.equal(reply.map(row => row.trim()).join(' '), `↳ failed · ${text}`);
     }
     assert.deepEqual(rowsOf([item(declined)], 100), ['→ you asked @kai · add a note to the readme', '   ↳ rejected · The owner declined this request.']);
+    // Its row in Sessions says failed too, with the reason as its text; one the owner there declined says rejected.
+    const inSessions = id => boardRows([], Date.now(), { items: [item(id)] }).find(row => row.kind === 'peer');
+    assert.equal(inSessions(told).label, 'failed'); assert.equal(rowBadge(inSessions(told)).title, 'ask failed · @kai'); assert.equal(inSessions(told).now, why);
+    assert.equal(inSessions(declined).label, 'rejected'); assert.equal(rowBadge(inSessions(declined)).title, 'ask rejected · @kai'); assert.equal(inSessions(declined).now, 'The owner declined this request.');
     // A message that waits there says what it waits for.
     const waits = 'No project is set on @kai for teammates\' messages, so it waits for its owner. On @kai: open ELU in the project teammates work in, then use /access there.';
     const waiting = createAsk(ctx, { to: 'kai', text: 'and this one?', byOwner: true });
