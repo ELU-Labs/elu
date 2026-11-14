@@ -187,9 +187,11 @@ the per-teammate and per-team message and spending caps. The never list (push, m
 deploy, publish, and adding or removing an MCP server) holds for every session a teammate starts as it does in that mode for
 your own (`docs/permissions.md`): in Ask for approval and Approve for me it is backed by
 the sandbox and deny rules; Full access has none, so a teammate's message can then push,
-merge, tag, deploy and publish, and reach any file you can. Each turn a teammate's message starts
-may spend at most the per-request cap (`caps.runUsd`), which intake reserved for it; a
-cost a vendor does not report counts as that whole amount. These sessions share the peer
+merge, tag, deploy and publish, and reach any file you can. A session started as your own
+has no spending cap of ELU's on its turns, as one you typed; what it cost is charged to that
+teammate's daily allowance, and a cost a vendor does not report counts as the per-request
+amount (`caps.runUsd`) intake reserved for it. A teammate's question may spend at most that
+amount in each turn. These sessions share the peer
 slots with teammates' questions, so they never fill every slot of yours. One you accept
 yourself with y or w starts at once.
 
