@@ -11,7 +11,7 @@ import { runChecks } from '../lib/checks.mjs';
 import { policyReport, assertPolicy } from '../lib/policy.mjs';
 import { unsupportedVendors } from '../lib/detect.mjs';
 import { ADAPTERS } from '../lib/adapters/index.mjs';
-import { preparePublish, publish, prBody } from '../lib/publish.mjs';
+import { preparePublish, publish, prBody, pushesRunning, stopPushes } from '../lib/publish.mjs';
 import { refuse, quote, readJson, noSymlinks } from '../lib/util.mjs';
 import { recoverProcess, addUserBin } from '../lib/process.mjs';
 import {formatResult}from'../lib/format.mjs';
@@ -182,8 +182,16 @@ export async function main(argv = process.argv.slice(2)) {
     if (flags.publish) {
       if (flags.yes || flags['dry-run']) refuse('Publication uses its own exact push confirmation.');
       const task = readTask(repo, words[1]); const release = lock(repo, `task-${task.id}`);
+      // The push runs in a process group of its own, which Ctrl-C and a closing terminal do not
+      // reach: they stop it here, with its guards, and the line says what reached GitHub.
+      // Outside the push they end the command as they always did.
+      const signals = [];
+      for (const [signal, why] of flags['approve-push'] ? [['SIGINT', 'owner'], ['SIGTERM', 'closed'], ['SIGHUP', 'closed']] : []) {
+        const handler = () => { if (pushesRunning()) stopPushes(why); else { process.off(signal, handler); process.kill(process.pid, signal); } };
+        signals.push([signal, handler]); process.on(signal, handler);
+      }
       try { return flags['approve-push'] ? await publish(repo, task, flags['approve-push']) : await preparePublish(repo, task); }
-      finally { release(); }
+      finally { for (const [signal, handler] of signals) process.off(signal, handler); release(); }
     }
     if (flags['approve-push']) refuse('--approve-push requires --publish.');
     // A scripted run picks a mode too; ask needs someone at the terminal to answer.

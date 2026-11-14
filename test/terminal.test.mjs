@@ -4757,6 +4757,35 @@ test('/publish in a session whose turn runs says to wait for the reply, never th
   assert.doesNotMatch(status(), /holds this lock/);
 });
 
+// A push can run long (its pre-push guards have no time limit). /stop in the session stops it
+// with its guard, the line says what reached GitHub, /publish is not put back in the box, and
+// the chat keeps the line.
+test('/stop in a session stops its running push and pre-push guard, and says in one line that nothing was pushed', { timeout: 60000 }, async t => {
+  const p = setup(t), pid = path.join(p.parent, 'guard.pid'), bare = path.join(p.parent, 'remote.git');
+  fs.mkdirSync(path.join(p.root, '.githooks')); fs.writeFileSync(path.join(p.root, '.githooks/pre-push'), `#!/bin/sh\necho "guard started"\necho $$ > ${JSON.stringify(pid)}\nsleep 60\n`, { mode: 0o755 });
+  git(p.root, ['config', 'core.hooksPath', '.githooks']); git(p.root, ['add', '.']); git(p.root, ['commit', '-m', 'Guard pushes']);
+  assert.equal(cli(p.root, ['run', 'Normalize coupons', '--yes'], p.env).json.state, 'ready');
+  git(p.root, ['remote', 'add', 'origin', 'https://github.com/example/shop.git']); git(p.parent, ['init', '--bare', '-q', bare]);
+  // Git is the real one, pushing to a bare repository in place of GitHub; GitHub's command line is a stand-in.
+  const realGit = spawnSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).stdout.trim();
+  fs.writeFileSync(path.join(p.dir, 'git'), `#!${process.execPath}\nimport {spawnSync} from 'node:child_process';const args=process.argv.slice(2);if(args.includes('push'))args[args.indexOf('origin')]=${JSON.stringify(bare)};if(args.includes('ls-remote'))args[args.indexOf('ls-remote')+1]=${JSON.stringify(bare)};const r=spawnSync(${JSON.stringify(realGit)},args,{stdio:'inherit'});process.exit(r.status??1);\n`, { mode: 0o755 });
+  fs.writeFileSync(path.join(p.dir, 'gh'), `#!${process.execPath}\nconst args=process.argv.slice(2);if(args[0]==='repo')console.log(JSON.stringify({nameWithOwner:'example/shop',defaultBranchRef:{name:'main'},url:'https://github.com/example/shop'}));else console.log('[]');\n`, { mode: 0o755 });
+  const v = await view(t, { repo: p.repo }), panels = v.current.panels, status = () => panels.status.getText().replace(/\s+/g, ' ');
+  await openTask(v, /Normalize/); await until(() => v.current.session === '1', 'the session is open');
+  await send(v, '/publish'); await dialog(v, 'Push and open draft PR', 'y');
+  await until(() => fs.existsSync(pid) && /Pushing…/.test(status()), 'the push and its guard to run');
+  assert.match(status(), /Pushing… \/stop stops it\./);
+  const guard = Number(fs.readFileSync(pid, 'utf8')), alive = () => { try { process.kill(guard, 0); return true; } catch { return false; } };
+  await send(v, '/stop');
+  await until(() => /Stopped the push and its pre-push guard\. Nothing was pushed\./.test(status()), 'the line');
+  await until(() => !alive(), 'the guard to end', 5000);
+  assert.equal(panels.ask.getValue(), '', '/publish is not put back');
+  assert.equal(git(bare, ['for-each-ref', '--format=%(refname)']).trim(), '');
+  await until(() => /Stopped the push and its pre-push guard\. Nothing was pushed\./.test(panels.chat.getText().replace(/\s+/g, ' ')), 'the chat keeps it');
+  await send(v, '/stop');
+  await until(() => /Nothing is running in this chat\./.test(status()), 'nothing more to stop');
+});
+
 // A schedule may run in Full access when the owner picks it for that schedule. Before it is
 // saved the form says what that means and asks once: when he picks it with a time set, or
 // when he saves a schedule whose Full access he picked for a session first.
