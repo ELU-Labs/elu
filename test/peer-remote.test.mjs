@@ -48,7 +48,7 @@ function machines(t) {
   const team = makeTeam(t, { founderName: 'ana', memberName: 'box' });
   return { team, laptop: team.founder, devbox: team.member };
 }
-const METHODS = ['elu.remote.start', 'elu.remote.send', 'elu.remote.stop', 'elu.remote.answer', 'elu.remote.task', 'elu.remote.since', 'elu.remote.list', 'elu.remote.watch'];
+const METHODS = ['elu.remote.start', 'elu.remote.send', 'elu.remote.stop', 'elu.remote.answer', 'elu.remote.task', 'elu.remote.since', 'elu.remote.older', 'elu.remote.list', 'elu.remote.watch'];
 const START = { id: crypto.randomUUID(), text: 'Make coupons upper case', permissions: 'ask', place: null, model: null, bots: ['reviewer'] };
 
 test('a machine is mine only when both machines mark each other, and either side ends it', t => {
@@ -963,6 +963,75 @@ test('a chat entry, a review and a diff of any length reach the computer that fo
   const before = toHost.sent.length;
   withHome(devbox.home, () => hostTick(hostCtx, Date.now() + 1));
   assert.deepEqual(toHost.sent.slice(before).flatMap(([, params]) => params.items.flatMap(row => row.events)).filter(event => /^(entry|diff)/.test(event.type)), []);
+});
+
+test('a session followed from my other computer says how many entries it has, and paging up brings the ones before, a page at a time, to the first', async t => {
+  const { laptop, devbox, project, toHost, hostCtx, viewCtx, viewer } = pair(t), at = n => new Date(Date.parse('2026-01-01T00:00:00Z') + n * 60000).toISOString();
+  const message = n => n % 2 ? { at: at(n), from: '@lead', bot: 'lead', text: `Answer ${n + 1}` } : { at: at(n), text: `Message ${n + 1}`, to: '@lead' };
+  const said = count => Array.from({ length: count }, (_, n) => message(n));
+  withHome(devbox.home, () => { chat(project.root, 1, { goal: 'Message 1', messages: said(300) }); relist(); });
+  await withHome(laptop.home, () => listTick(viewCtx));
+  const item = withHome(laptop.home, () => remoteMachines())[0].sessions[0];
+  await withHome(laptop.home, () => remoteCommand(viewCtx, { type: 'remoteWatch', to: devbox.identity.key, ref: item.ref }));
+  const seen = () => withHome(laptop.home, () => remoteSessions().find(row => row.id === item.id)), texts = () => seen().entries.map(entry => entry.text);
+  // What the host has to say reaches the viewer, and the rest is asked for until nothing is missing.
+  let clock = Date.now();
+  const flow = async () => {
+    const from = toHost.sent.length; withHome(devbox.home, () => hostTick(hostCtx, clock += 1000));
+    for (const [method, params] of toHost.sent.slice(from).filter(([method]) => method === 'elu.remote.events')) withHome(laptop.home, () => viewer[method](params, connection(devbox.identity.key)));
+    for (let n = 0; n < 60 && seen().behind; n++) await withHome(laptop.home, () => viewTick(viewCtx, clock += 2000));
+  };
+  const older = async () => { await withHome(laptop.home, () => remoteCommand(viewCtx, { type: 'remoteOlder', id: item.id })); await flow(); };
+  const all = count => said(count).map(row => row.text);
+  // The first look: its newest 80, and how many the chat has.
+  await flow();
+  assert.deepEqual(texts(), all(300).slice(-80)); assert.equal(seen().entries[0].n, 221, 'the oldest one here says its place: 220 come before it');
+  // A session followed since ELU 0.1.19 holds its entries without a place: paged to the top, its
+  // computer is asked for them, sends those entries again, and each is kept once, with its place.
+  withHome(laptop.home, () => { const file = path.join(process.env.XDG_CONFIG_HOME, 'elu-code', 'peer', 'remote', 'view', `${item.id}.json`), row = JSON.parse(fs.readFileSync(file, 'utf8')); fs.writeFileSync(file, JSON.stringify({ ...row, entries: row.entries.map(({ n: _n, ...entry }) => entry) })); });
+  assert.equal(seen().entries.some(entry => entry.n), false);
+  await older();
+  assert.deepEqual(texts(), all(300).slice(-80)); assert.deepEqual(seen().entries.map(entry => entry.n), Array.from({ length: 80 }, (_, index) => 221 + index));
+  // Paged up to the oldest one held: the 80 before it, in their place.
+  await older();
+  assert.deepEqual(texts(), all(300).slice(-160));
+  // The chat goes on: the viewer holds its newest 200 again, and the count follows.
+  withHome(devbox.home, () => { const repo = repository(project.root), task = readTask(repo, '1'); task.messages = said(450); saveTask(repo, task); });
+  await flow();
+  assert.deepEqual(texts(), all(450).slice(-310), 'it lets none go once he paged up, and takes the new ones');
+  // Each page up brings 80 more, the ones that went out before among them, none twice, to the very first.
+  for (let pages = 0; pages < 4 && seen().entries.length < 450; pages++) await older();
+  assert.deepEqual(texts(), all(450), 'every entry, from the first, in order');
+  // At the first entry there is nothing more to ask, and nothing is sent again.
+  const before = toHost.sent.length; await older();
+  assert.deepEqual(toHost.sent.slice(before).flatMap(([, params]) => params.items.flatMap(row => row.events)).filter(event => /^entry/.test(event.type)), []);
+  assert.deepEqual(texts(), all(450));
+});
+
+test('a viewer that holds only the newest 200 of a long chat gets the ones it let go when its owner pages up', async t => {
+  const { laptop, devbox, project, toHost, hostCtx, viewCtx, viewer } = pair(t), at = n => new Date(Date.parse('2026-01-01T00:00:00Z') + n * 60000).toISOString();
+  const said = count => Array.from({ length: count }, (_, n) => n % 2 ? { at: at(n), from: '@lead', bot: 'lead', text: `Answer ${n + 1}` } : { at: at(n), text: `Message ${n + 1}`, to: '@lead' });
+  withHome(devbox.home, () => { chat(project.root, 1, { goal: 'Message 1', messages: said(100) }); relist(); });
+  await withHome(laptop.home, () => listTick(viewCtx));
+  const item = withHome(laptop.home, () => remoteMachines())[0].sessions[0];
+  await withHome(laptop.home, () => remoteCommand(viewCtx, { type: 'remoteWatch', to: devbox.identity.key, ref: item.ref }));
+  const seen = () => withHome(laptop.home, () => remoteSessions().find(row => row.id === item.id)), texts = () => seen().entries.map(entry => entry.text);
+  let clock = Date.now();
+  const flow = async () => {
+    const from = toHost.sent.length; withHome(devbox.home, () => hostTick(hostCtx, clock += 1000));
+    for (const [method, params] of toHost.sent.slice(from).filter(([method]) => method === 'elu.remote.events')) withHome(laptop.home, () => viewer[method](params, connection(devbox.identity.key)));
+    for (let n = 0; n < 60 && seen().behind; n++) await withHome(laptop.home, () => viewTick(viewCtx, clock += 2000));
+  };
+  await flow();
+  // 250 more arrive as they are said: the viewer keeps the newest 200, as before.
+  for (let count = 150; count <= 350; count += 50) { withHome(devbox.home, () => { const repo = repository(project.root), task = readTask(repo, '1'); task.messages = said(count); saveTask(repo, task); }); await flow(); }
+  const all = said(350).map(row => row.text);
+  assert.deepEqual(texts(), all.slice(-200)); assert.equal(seen().entries[0].n, 151);
+  // Paged up: the 80 before them come again, though the host sent them once already.
+  await withHome(laptop.home, () => remoteCommand(viewCtx, { type: 'remoteOlder', id: item.id })); await flow();
+  assert.deepEqual(texts(), all.slice(-280));
+  await withHome(laptop.home, () => remoteCommand(viewCtx, { type: 'remoteOlder', id: item.id })); await flow();
+  assert.deepEqual(texts(), all, 'to the first entry');
 });
 
 test('a long session keeps its newest 4000 events there, and a computer that was away longer goes on from the oldest kept', async t => {
