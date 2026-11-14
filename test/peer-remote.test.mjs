@@ -853,13 +853,17 @@ test('a message that has not started on my other computer says here what it wait
   await withHome(laptop.home, () => listTick(viewCtx));
   const item = withHome(laptop.home, () => remoteMachines())[0].sessions.find(row => row.title === 'Make coupons upper case');
   await withHome(laptop.home, () => remoteCommand(viewCtx, { type: 'remoteWatch', to: devbox.identity.key, ref: item.ref }));
-  let ticks = 0, ahead = 0;
-  const push = () => { withHome(devbox.home, () => hostTick(hostCtx, Date.now() + ahead + ++ticks)); withHome(laptop.home, () => viewer['elu.remote.events'](toHost.sent.filter(([method]) => method === 'elu.remote.events').at(-1)[1], connection(devbox.identity.key))); };
+  let ticks = 0;
+  const push = () => { withHome(devbox.home, () => hostTick(hostCtx, Date.now() + ++ticks)); withHome(laptop.home, () => viewer['elu.remote.events'](toHost.sent.filter(([method]) => method === 'elu.remote.events').at(-1)[1], connection(devbox.identity.key))); };
   const seen = id => withHome(laptop.home, () => remoteSessions().find(row => row.id === id)), shown = id => glue.view(remoteRow(seen(id), 'devbox'), 200);
   push(); await withHome(laptop.home, () => viewTick(viewCtx));
   assert.equal(seen(item.id).state, 'answered'); assert.equal(seen(item.id).waits, undefined);
   // It has been at rest for more than ten minutes, so its computer looks at it only every 30 s.
-  ahead = 11 * 60000; push();
+  withHome(devbox.home, () => {
+    const file = path.join(process.env.XDG_CONFIG_HOME, 'elu-code', 'peer', 'remote', 'host', `${item.id}.json`), long = new Date(Date.now() - 11 * 60000).toISOString();
+    fs.writeFileSync(file, JSON.stringify({ ...JSON.parse(fs.readFileSync(file, 'utf8')), createdAt: long, updatedAt: long }));
+  });
+  push();
   // A message from here continues it there. Its computer looks at it at once, a moment before the
   // conductor there passes the message over and notes why, and looks again when that is noted.
   await withHome(laptop.home, () => remoteCommand(viewCtx, { type: 'remoteSend', id: item.id, to: devbox.identity.key, ref: item.ref, text: 'And the tests' }));
