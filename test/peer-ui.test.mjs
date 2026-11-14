@@ -1356,7 +1356,7 @@ test('/stop over a session on my other computer stops it there, in a window that
 });
 
 // The owner, on his laptop, in a session that lives on his devbox ("Message Opus 5.5 on
-// @ali-devbox"), typed /rename and was told "Open a session to rename it. In Sessions, e
+// @devbox"), typed /rename and was told "Open a session to rename it. In Sessions, e
 // renames the selected one." Over a session on my other computer, /rename, /archive,
 // /archived, and e, c and u on its row work as they do on a session here; the work is done
 // there (the daemon's remoteRename and remoteArchive), and its row here shows it at once.
@@ -1718,9 +1718,9 @@ test('in Chats a computer of mine that has not marked this one back says it wait
   assert.equal(body(title).split('Not paired by GitHub').length - 1, 1, 'said once');
   modal(v, title).children.find(child => child.type === 'textbox').emit('cancel'); await until(() => !modal(v, title), 'closed again');
   // Signed in as another account than that computer: said so in its place.
-  peer.githubStatus = () => ({ state: 'ok', login: 'ali-ajam', at: new Date().toISOString() });
+  peer.githubStatus = () => ({ state: 'ok', login: 'octo-owner', at: new Date().toISOString() });
   bar.focus(); v.input.write('t'); await until(() => modal(v, title), 'its screen a third time');
-  assert.match(body(title), /\nNot paired by GitHub: this computer is signed in to GitHub as ali-ajam, and @sara-box is not\.\n\nKey: /);
+  assert.match(body(title), /\nNot paired by GitHub: this computer is signed in to GitHub as octo-owner, and @sara-box is not\.\n\nKey: /);
   modal(v, title).children.find(child => child.type === 'textbox').emit('cancel'); await until(() => !modal(v, title), 'closed a third time');
   await send(v, 'what runs there?');
   await until(() => /Sent to @sara-box, your computer\. Its reply shows in this thread\./.test(status()), 'the line after sending');

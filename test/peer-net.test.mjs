@@ -3019,30 +3019,30 @@ test('the computer that carries two teammates goes away without a word, as one w
 });
 
 test('a computer back after a long time is reached at once through the computer of the team that reaches it, from the teammate that cannot reach it directly too; that teammate says it is looking, never that there is no way', { ...skipLan, timeout: 300000 }, async t => {
-  // The owner's three computers, as their own: the Mac (li) and the devbox (ana) are paired, and
-  // the Grok box (sara) marked the Mac. The devbox and the Grok box cannot connect directly; the Mac reaches both.
+  // The owner's three computers, as their own: the laptop (li) and the devbox (ana) are paired, and
+  // the studio (sara) marked the laptop. The devbox and the studio cannot connect directly; the laptop reaches both.
   const bootstrap = await testnet(t, lan), { teamId, ana, sara, li } = trio(t), prod = { conductor: false, tickMs: 2000, statusMs: 10000 };
   for (const home of [ana.home, sara.home]) withHome(home, () => fs.rmSync(peerFile('mine.json'), { force: true }));
   for (const [here, there] of [[ana, li], [li, ana]]) withHome(here.home, () => { markMine(here.identity.key, there.identity.key); noteTheirs(there.identity.key, true); });
   withHome(sara.home, () => markMine(sara.identity.key, li.identity.key));
-  enable(ana.home, bootstrap, { box: 'devbox' }); enable(sara.home, bootstrap, { box: 'grokbot-box' }); enable(li.home, bootstrap, { box: 'macbookpro' });
+  enable(ana.home, bootstrap, { box: 'devbox' }); enable(sara.home, bootstrap, { box: 'studio' }); enable(li.home, bootstrap, { box: 'laptop' });
   await daemon(t, li.home, prod); await daemon(t, ana.home, { ...prod, noPunchTo: [sara.identity.key] });
-  await until(() => online(ana.home, li.identity.key) && online(li.home, ana.identity.key), 'the devbox and the Mac online');
-  // The Grok box has been away a while: the devbox's own tries to reach it now come many minutes apart.
+  await until(() => online(ana.home, li.identity.key) && online(li.home, ana.identity.key), 'the devbox and the laptop online');
+  // The studio has been away a while: the devbox's own tries to reach it now come many minutes apart.
   await new Promise(resolve => setTimeout(resolve, 75000));
-  // It comes back. Its own tries through the Mac do not get through, as on a network that lets few through.
+  // It comes back. Its own tries through the laptop do not get through, as on a network that lets few through.
   const back = Date.now(), said = new Set();
   await daemon(t, sara.home, { ...prod, noPunchTo: [ana.identity.key], throughFails: 1000 });
   const via = (home, key) => { const m = memberOf(home, teamId, key); return m?.online && m.path === 'relayed' ? m.via : null; };
   await until(() => {
     const m = memberOf(ana.home, teamId, sara.identity.key); if (m && !m.online) said.add(m.reach ?? 'offline');
-    return /^your computer (macbookpro|li)$/.test(via(ana.home, sara.identity.key) ?? '') && via(sara.home, ana.identity.key) === "li's computer";
-  }, 'the devbox and the Grok box online to each other through the Mac', 40000);
+    return /^your computer (laptop|li)$/.test(via(ana.home, sara.identity.key) ?? '') && via(sara.home, ana.identity.key) === "li's computer";
+  }, 'the devbox and the studio online to each other through the laptop', 40000);
   const took = Date.now() - back;
-  assert.ok(took < 40000, `within seconds of the Grok box coming back, not minutes: ${took} ms`);
+  assert.ok(took < 40000, `within seconds of the studio coming back, not minutes: ${took} ms`);
   assert.ok(!said.has('blocked'), `the devbox never said there was no way through while it looked: ${[...said].join(', ')}`);
-  assert.match(daemonLog(ana.home), /is there but cannot be connected to directly: through your computer (macbookpro|li)/);
-  assert.match(await peersText(ana.home), /● sara\s+member\s+online · through your computer (macbookpro|li)/);
+  assert.match(daemonLog(ana.home), /is there but cannot be connected to directly: through your computer (laptop|li)/);
+  assert.match(await peersText(ana.home), /● sara\s+member\s+online · through your computer (laptop|li)/);
 });
 
 test('a computer asked to carry for two teammates does it only while it reaches the other one, tells who runs a relay, and refuses a computer that is not on its team', async t => {

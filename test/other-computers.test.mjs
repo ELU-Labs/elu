@@ -235,17 +235,17 @@ test('a computer of mine that has not agreed while it is offline says offline, t
 });
 
 test('a computer that says it is mine is named, in the line and in its row, only by a name /mine finds it by', () => {
-  // Three computers of one owner, all called ali on the team: the one that says it is mine is
+  // Three computers of one owner, all called sam on the team: the one that says it is mine is
   // found by its box name, which comes a moment after it connects.
   const ME = 'k'.repeat(64), D = 'd'.repeat(64), G = 'e'.repeat(64);
   let box;
-  const status = () => ({ key: ME, name: 'ali', box: 'macbookpro', teams: [{ members: [{ key: ME, name: 'ali' }, { key: D, name: 'ali', box: 'devbox', online: true }, { key: G, name: 'ali', box, online: true }] }] });
+  const status = () => ({ key: ME, name: 'sam', box: 'laptop', teams: [{ members: [{ key: ME, name: 'sam' }, { key: D, name: 'sam', box: 'devbox', online: true }, { key: G, name: 'sam', box, online: true }] }] });
   const glue = remoteGlue({ facade: { mineRows: () => [{ key: G, mine: false, theirs: true, theirsAt: '2026-11-14T18:59:17.000Z' }], remoteSessions: () => [] }, peerRead: status, peerCommand: async () => ({}), chatMessage: ({ text }) => text, ink: text => text, colour: false });
-  assert.equal(glue.asking().size, 0, 'not while /mine @ali would find two computers');
+  assert.equal(glue.asking().size, 0, 'not while /mine @sam would find two computers');
   assert.equal(glue.asks(), null);
-  box = 'grokbot-box';
-  assert.deepEqual([...glue.asking(Date.now() + 1000).values()].map(row => row.name), ['grokbot-box']);
-  assert.equal(glue.asks(), '@grokbot-box says it is your computer. /mine @grokbot-box agrees.');
+  box = 'studio';
+  assert.deepEqual([...glue.asking(Date.now() + 1000).values()].map(row => row.name), ['studio']);
+  assert.equal(glue.asks(), '@studio says it is your computer. /mine @studio agrees.');
   assert.equal(glue.asks(), null, 'said once');
 });
 
