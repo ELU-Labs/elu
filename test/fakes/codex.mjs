@@ -4,6 +4,10 @@
 import fs from 'node:fs'; import path from 'node:path'; import {spawnSync} from 'node:child_process';
 const vendor=path.basename(process.argv[1]); const args=process.argv.slice(2);
 let cfg={}; try{cfg=JSON.parse(fs.readFileSync(path.join(path.dirname(process.argv[1]),'fake.json'),'utf8'));}catch{}
+// byInput (fake.json): rules [{includes, set}]. An exec launch whose prompt includes the text takes
+// those keys in place of the test's, the first rule that matches: a run beside a turn answers at
+// once while the turn itself never ends.
+let early=null;if(Array.isArray(cfg.byInput)&&args[0]==='exec'){early='';for await(const chunk of process.stdin)early+=chunk;const rule=cfg.byInput.find(rule=>early.includes(rule.includes));if(rule)cfg={...cfg,...rule.set};}
 const mode=cfg.mode??'normal';
 // accounts (fake.json): the account a run is on is the one auth.json names in CODEX_HOME (or
 // ~/.codex), as the real CLI keeps it; a call records it. accounts.loginAs: the account `codex
@@ -93,7 +97,7 @@ if(args[0]==='app-server'){
   // The model writes its answer; what came meanwhile is read first, and answered with the rest.
   takeQueued(state);if(!await pause(state,cfg.afterMs??20))return ended(state,'interrupted');takeQueued(state);
   const result=reply(texts.join('\n'),schema);if(heard.length)result.summary+=` Also took in what you sent while it worked: ${heard.join(' | ')}`;
-  item(state,'completed',{type:'agentMessage',id:`item_${++items}`,text:JSON.stringify(result)});
+  const said=JSON.stringify(result);item(state,'completed',{type:'agentMessage',id:`item_${++items}`,text:said});
   const total={totalTokens:32,inputTokens:20,cachedInputTokens:5,cacheWriteInputTokens:0,outputTokens:12,reasoningOutputTokens:2};
   note('thread/tokenUsage/updated',{threadId:thread,turnId:state.id,tokenUsage:{total,last:total,modelContextWindow:200000}});
   ended(state,'completed');
@@ -132,7 +136,7 @@ if(args[0]==='sandbox'){
  if(args.includes('elu-code-sandbox-probe')){console.log(JSON.stringify({writeDenied:true,networkDenied:true}));process.exit(0);}
  const r=spawnSync(run[0],run.slice(1),{stdio:'inherit',env:process.env});process.exit(r.status??1);
 }
-let input=''; for await (const chunk of process.stdin) input+=chunk;
+let input=early??''; if(early===null)for await (const chunk of process.stdin) input+=chunk;
 if(cfg.inputs)fs.appendFileSync(cfg.inputs, JSON.stringify({vendor,args,input})+'\n');
 // replay (fake.json): a file holding what a real launch printed, given back as it came. A launch
 // that is asked to correct its output answers as usual instead.
@@ -186,5 +190,7 @@ if(mode==='steps'){
 // live (fake.json): a file; a turn launched with the plan tool on prints its to-do list, first
 // step done, as the real one prints a todo_list item, and goes on once that file exists.
 if(cfg.live&&args.includes('tools.update_plan.enabled=true')){console.log(JSON.stringify({type:'item.started',item:{id:'item_todo',type:'todo_list',items:[{text:'Change normalize',completed:true},{text:'Run the coupon test',completed:false}]}}));const until=Date.now()+30000;while(!fs.existsSync(cfg.live)&&Date.now()<until)await new Promise(resolve=>setTimeout(resolve,50));}
+// summary (a byInput rule): what this reply says.
+if(typeof cfg.summary==='string')result.summary=cfg.summary;
 console.log(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:JSON.stringify(result)}}));
 console.log(JSON.stringify({type:'turn.completed',usage:{input_tokens:0,output_tokens:0}}));
