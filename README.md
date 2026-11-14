@@ -379,6 +379,11 @@ again. `/mine auto off` (or `ELU_NO_GITHUB_PAIRING=1`) turns this off.
 
 In a channel, `/invite @kim` adds a teammate you already have. `/invite` alone makes a
 code for someone new; the first time, it also makes your team, named after the open project.
+Once you are on a team, the code is for that team and no other team is made: with several
+it asks which, and only an admin of a team can make one. If you join someone else's team
+while your own still has nobody else on it, yours is closed and the line that says you
+joined says so: Chats then has one #general, with everyone in it. Nothing of yours is
+deleted. Two teams that both have other people each keep their own #general, named by team.
 
 ## Standup
 
