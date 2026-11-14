@@ -127,6 +127,19 @@ test("the summary turn only answers: Full access runs as Approve for me, with no
   assert.equal(valueOf(inputs(f.fake).at(-1).args, '--tools'), 'default', 'his own messages keep the tools of his mode: every tool in Full access');
 });
 
+test('a summary reply that asks to edit is taken as an answer: the Standup ends, never left preparing', async t => {
+  const f = setup(t);
+  await f.controller.ask('Explain coupons').finished;
+  // A vendor that does not hold its reply to the schema says edit, as the stand-in does in normal mode.
+  const file = path.join(f.fake.dir, 'fake.json'); fs.writeFileSync(file, JSON.stringify({ ...JSON.parse(fs.readFileSync(file, 'utf8')), mode: 'normal' }));
+  let over = false; const loop = answering(f.controller, () => over);
+  const standup = await f.controller.ask('/standup', null, { standup: true }).finished;
+  over = true; await loop;
+  assert.match(inputs(f.fake).at(-1).input, /Give a short summary/);
+  assert.equal(readTask(f.repo, standup.id).state, 'answered');
+  assert.equal(readTask(f.repo, standup.id).codingGoal, undefined);
+});
+
 test("a Claude Code session answers in a fork of its vendor session; its next turn resumes its own", async t => {
   const f = setup(t);
   // The fake Claude Code lists --fork-session in its help, as the real one does.
