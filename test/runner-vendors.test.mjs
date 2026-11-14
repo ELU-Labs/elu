@@ -220,6 +220,28 @@ test('a Claude Code session whose cache folder is too long keeps Claude Code\'s 
   assert.equal(at(own, { NODE_TEST_CONTEXT: 'child' }), null, 'a test never makes one in the real runtime folder');
 });
 
+// The owner's devbox: XDG_RUNTIME_DIR is unset in a shell that did not log in, and a long home
+// folder leaves no room under the cache folder. Without a folder of its own Claude Code kept
+// /tmp, where every sandboxed command failed. /run/user/<uid> is taken then, when it is there,
+// this user's, and closed to others (0700), as the login would have named it.
+test('with XDG_RUNTIME_DIR unset, Claude Code\'s temporary files go in /run/user/<uid> when it is this user\'s own private folder', t => {
+  const uid = process.getuid?.() ?? 0, mine = fs.mkdtempSync('/tmp/u-'); t.after(() => fs.rmSync(mine, { recursive: true, force: true }));
+  fs.chmodSync(mine, 0o700);
+  const at = (env = {}, dir = mine, who = uid) => claude.runtimeBase({ env, uid: who, userRun: dir });
+  assert.equal(at(), mine, 'unset: the user\'s own runtime folder');
+  const made = claude.privateTemp(null, at());
+  assert.equal(path.dirname(made), mine); assert.match(path.basename(made), /^elu[0-9a-z]{2}$/); assert.equal(fs.statSync(made).mode & 0o777, 0o700);
+  // XDG_RUNTIME_DIR, when set, is the one taken; a relative one is none.
+  const named = fs.mkdtempSync('/tmp/n-'); t.after(() => fs.rmSync(named, { recursive: true, force: true }));
+  assert.equal(at({ XDG_RUNTIME_DIR: named }), named); assert.equal(at({ XDG_RUNTIME_DIR: 'run/user' }), null);
+  // Not there, someone else's, open to others, or too long: none.
+  assert.equal(at({}, path.join(mine, 'gone')), null);
+  assert.equal(at({}, mine, uid + 1), null, 'another user\'s');
+  fs.chmodSync(mine, 0o755); assert.equal(at(), null, 'others can open it'); fs.chmodSync(mine, 0o700);
+  const long = path.join(mine, 'a-folder-name-long-enough'); fs.mkdirSync(long, { mode: 0o700 }); assert.equal(at({}, long), null);
+  assert.equal(at({ NODE_TEST_CONTEXT: 'child' }), null, 'a test never makes one in the real runtime folder');
+});
+
 // A script that pushes to the project's origin, on another machine, and keeps what git printed and its exit code.
 function pushScript(f) {
   const script = path.join(f.parent, 'push.sh'), out = path.join(f.parent, 'push.out');
