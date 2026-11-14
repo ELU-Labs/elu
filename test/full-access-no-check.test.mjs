@@ -33,10 +33,13 @@ function machine(t, { lead = 'grok', grok = {}, mode = 'answer', signedIn = true
   if (signedIn) { fs.mkdirSync(path.join(p.parent, '.grok')); fs.writeFileSync(path.join(p.parent, '.grok', 'auth.json'), '{}\n', { mode: 0o600 }); }
   const controller = new ProjectController(projectFolder(p.root)); Object.assign(controller.draftConfig.roles.lead, { vendor: lead, maxCostUsd: null });
   const calls = () => fs.existsSync(fake.calls) ? fs.readFileSync(fake.calls, 'utf8').trim().split('\n').map(JSON.parse) : [];
-  // A message as the app sends it. sent: when; first(): how long until the vendor's turn began.
+  // What the stand-in was given to answer, turn by turn: a step of a check among them.
+  const inputs = () => { const file = path.join(p.parent, 'inputs.jsonl'); return fs.existsSync(file) ? fs.readFileSync(file, 'utf8').trim().split('\n').map(JSON.parse) : []; };
+  // A message as the app sends it. sent: when; first(): how long until the vendor had the
+  // message itself, which is when its turn began.
   const send = (text, id, options) => {
-    const sent = Date.now(), before = turns(calls()).length, finished = controller.ask(text, id, options).finished;
-    const first = async () => { for (;;) { if (turns(calls()).length > before) return Date.now() - sent; if (Date.now() - sent > 60000) throw new Error('no turn began within a minute'); await sleep(25); } };
+    const sent = Date.now(), words = /summary "([^"]+)"/.exec(text)?.[1] ?? text, finished = controller.ask(text, id, options).finished;
+    const first = async () => { for (;;) { if (inputs().some(row => row.input.includes(words))) return Date.now() - sent; if (Date.now() - sent > 120000) throw new Error('the turn did not begin within two minutes'); await sleep(25); } };
     return { finished, first, sent };
   };
   // Whatever a check was doing ends with the test.
