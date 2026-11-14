@@ -224,9 +224,10 @@ approval and Approve for me do not fall back this way: their headless run cannot
 `/stop` ends an ACP turn and the commands it started, as it does a headless one. The steps
 it showed stay in the chat, and its line says `stopped`.
 
-The turn limits hold in both. Over ACP a turn that prints nothing for the quiet limit (10
-minutes, or the role's `timeoutSeconds`) is stopped, as with every vendor that prints as it
-works. A headless run prints only at the end, so it has no quiet limit, only the two-hour cap.
+Over ACP a turn that prints nothing for the quiet limit (10 minutes, or the role's
+`timeoutSeconds`) is stopped, as with every vendor that prints as it works. A headless run
+prints only at the end, so it has no limit of ELU's: it runs until it ends. `agy` ends a
+headless run by a timer of its own, which ELU sets to 23 days (`--print-timeout 2000000s`).
 
 ## The model and the tokens
 
@@ -274,7 +275,8 @@ one-time check is the proof, per machine. In particular, until a check says othe
 - on Linux with no keyring, where `agy` keeps its token file and whether it writes it in
   place (ELU handles both ways of writing it, and links both places it is reported at);
 - that `-p` reads the task from standard input, that `--print-timeout` takes seconds
-  (`900s`), and that the output names the conversation id (the `json` and `resume` steps);
+  (`2000000s`, 23 days: ELU has no time limit for a turn, and whether `agy` takes a value
+  that long was not seen with the real one), and that the output names the conversation id (the `json` and `resume` steps);
 - secret reads: `agy` has no read deny, so a read of a secret folder is stopped only by
   workspace-only access (Read only, Ask, Approve for me); Full access can read anything;
 - `agy acp` in Full access and Read only was seen only in tests against a stand-in `agy`,
