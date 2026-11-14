@@ -22,7 +22,7 @@ import { readBoard, sessionClosed, closeSession } from '../lib/kanban.mjs';
 import { proposeTask, approveTask as approvePlan, reportProgress, finishTask, reopenTask } from '../lib/plan.mjs';
 import { clockTime } from '../lib/terminal-plan.mjs';
 import { saveTask, readTask, taskDir, taskTitle, setTitle, lock } from '../lib/state.mjs';
-import { processIdentity } from '../lib/process.mjs';
+import { processIdentity, processRecord } from '../lib/process.mjs';
 import { activeLogin, listLogins } from '../lib/logins.mjs';
 import { detect } from '../lib/detect.mjs';
 import { conformanceState } from '../lib/conformance.mjs';
@@ -1188,6 +1188,44 @@ test('a bot at work is named in the chat; one that is stopped or cannot answer s
   assert.deepEqual(roles(tasks().find(row => row.goal === 'Is the cert pinned?')), ['lead']); assert.deepEqual(pendingRequests(p.root).filter(row => row.state !== 'done'), [], 'the saved request is gone');
 });
 
+// What the row under the session shows on the screen itself: its content may hold more than its
+// rows do. Drawn first: a draw that changed nothing leaves the screen's own copy of the row empty.
+const statusShown = v => {
+  v.current.screen.render();
+  const { status } = v.current.panels, rows = v.frame().replace(/\x1b\[[0-9;]*m/g, '').split('\n');
+  return rows.slice(status.atop, status.atop + status.height).map(row => row.slice(status.aleft, status.aleft + status.width)).join(' ').replace(/\s+/g, ' ').trim();
+};
+const shows = async (v, text, what, timeout) => {
+  try { await until(() => statusShown(v) === text, what, timeout); } catch (error) { throw new Error(`${error.message}: it shows ${JSON.stringify(statusShown(v))}`); }
+};
+// Another ELU window: a process of its own that claims the project, stays when asked to, and says what it got.
+const WINDOW = `import { claimView } from ${JSON.stringify(new URL('../lib/projects.mjs', import.meta.url).href)}; import { repository } from ${JSON.stringify(new URL('../lib/git.mjs', import.meta.url).href)}; const claim = claimView(repository(process.argv[1])); console.log(claim.readOnly ? 'view' : 'held'); if (process.argv[2] === 'stay') setInterval(() => {}, 1000); else claim.release();`;
+function otherWindow(t, root, env = {}) {
+  const child = spawn(process.execPath, ['--input-type=module', '-e', WINDOW, root, 'stay'], { env: { ...process.env, ...env }, stdio: ['ignore', 'pipe', 'inherit'] });
+  t.after(() => child.kill('SIGKILL'));
+  return { child, said: new Promise(resolve => child.stdout.once('data', chunk => resolve(String(chunk).trim()))), ended: new Promise(resolve => child.once('exit', resolve)) };
+}
+// A process that only stays, as a window of 0.1.19 for its lock: what that version wrote is the line ps printed for it.
+function staying(t) {
+  const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' }), ended = new Promise(resolve => child.once('exit', resolve));
+  t.after(() => child.kill('SIGKILL'));
+  return { child, ended };
+}
+const psLine = (pid, env = {}) => spawnSync('/bin/ps', ['-p', String(pid), '-o', 'lstart=', '-o', 'command='], { encoding: 'utf8', env: { ...process.env, ...env } }).stdout.trim();
+// The two locks of a project: the one in your folder, and the one in its repository.
+function viewLockFiles(repo) {
+  const claim = claimView(repo, { window: {} }), files = [path.join(personalDirectory(), fs.readdirSync(personalDirectory()).find(name => /^view-[0-9a-f]{64}\.lock$/.test(name))), path.join(repo.state, 'view.lock')];
+  for (const file of files) assert.ok(fs.existsSync(file), file);
+  claim.release(); return files;
+}
+// A ps that notes each time it is asked, and the terminal it names when given one.
+function notedPs(t, terminal = null) {
+  const bin = temp(t), log = path.join(bin, 'asked');
+  fs.writeFileSync(path.join(bin, 'ps'), `#!/bin/sh\necho "$*" >> ${JSON.stringify(log)}\n${terminal ? `case "$*" in *tty=*) echo ${terminal}; exit 0;; esac\n` : ''}exec /bin/ps "$@"\n`, { mode: 0o755 });
+  environment(t, { PATH: `${bin}${path.delimiter}${process.env.PATH}` });
+  return pid => { try { return fs.readFileSync(log, 'utf8').split('\n').filter(line => line.split(' ').includes(String(pid))).length; } catch { return 0; } };
+}
+
 test('a second project view is read-only and releases no writer lock', async t => {
   const p = setup(t), first = await view(t, { repo: p.repo });
   await first.current.controller.refreshUsage();
@@ -1198,7 +1236,7 @@ test('a second project view is read-only and releases no writer lock', async t =
   await send(second, '/new'); await until(() => second.current.panels.ask.__listener && /View only/.test(second.current.panels.ask._label.getText()), 'view-only form again');
   assert.doesNotMatch(second.current.panels.header.getContent(), /READ ONLY|View only/, 'the header names the session, not the window');
   assert.equal(fs.readFileSync(p.calls, 'utf8'), calls, 'a second view must not query a vendor');
-  assert.throws(() => second.current.controller.plan('Change text'), /View only: another ELU window has this project\. Close it, or \/takeover here\. That window is process \d+/);
+  assert.throws(() => second.current.controller.plan('Change text'), /View only: another ELU window has this project\. Close it, or \/takeover here\.$/);
   const claim = claimView(p.repo); assert.equal(claim.readOnly, true);
   key(second, 'q'); await second.finished;
   assert.equal(claimView(p.repo).readOnly, true);
@@ -1211,19 +1249,20 @@ test('a second project view is read-only and releases no writer lock', async t =
 test('a view-only window takes the project once the other window is gone, and /takeover moves it', async t => {
   const p = setup(t), first = await view(t, { repo: p.repo }), second = await view(t, { repo: p.repo });
   const label = v => v.current.panels.ask._label.getText(), status = v => v.current.panels.status.getText().replace(/\s+/g, ' ');
-  await until(() => /View only: another ELU window has it/.test(label(second)) && status(second).includes('View only: another ELU window has this project. Close it, or /takeover here.'), 'view-only line');
+  await until(() => label(second) === ' View only: another window has it · /takeover ' && statusShown(second) === '› View only: another ELU window has this project. Close it, or /takeover here.', 'view-only line');
   assert.throws(() => second.current.controller.queue('Rename billing'), /View only/);
   key(first, 'q'); await first.finished;
   // The first write after the other window is gone goes through, without reopening.
   assert.doesNotThrow(() => second.current.controller.queue('Rename billing'));
-  assert.equal(second.current.controller.readOnly, false); assert.match(status(second), /This window can make changes now\./);
+  // Both windows of this test are one process, so the first reads as still open: the line of a window that closed is in the tests below.
+  assert.equal(second.current.controller.readOnly, false); assert.equal(statusShown(second), '› This window can make changes now.');
   await until(() => !/View only/.test(label(second)), 'writable form');
   // A third window asks the second to let go: it can make changes, and the second says it is view-only.
   const third = await view(t, { repo: p.repo });
   await until(() => /View only/.test(label(third)), 'third is view-only');
   await send(third, '/takeover');
   await until(() => third.current.controller.readOnly === false && second.current.controller.readOnly === true, 'taken over');
-  await until(() => /View only: another ELU window took this project/.test(status(second)) && /View only/.test(label(second)) && !/View only/.test(label(third)), 'both say so');
+  await until(() => statusShown(second) === '› View only: another ELU window took this project. /takeover takes it back.' && /View only/.test(label(second)) && statusShown(third) === '› This window can make changes now.' && !/View only/.test(label(third)), 'both say so');
   assert.throws(() => second.current.controller.queue('Rename billing'), /View only/);
   // Once the third window closes, the second takes the project back by itself on its timer.
   key(third, 'q'); await third.finished;
@@ -1238,7 +1277,8 @@ test('/takeover says so when the other window does not let go', async t => {
   const v = await view(t, { repo: p.repo });
   await until(() => /View only/.test(v.current.panels.ask._label.getText()), 'view-only');
   await send(v, '/takeover');
-  await until(() => /The other ELU window did not let go\. Close it to make changes here\./.test(v.current.panels.status.getText().replace(/\s+/g, ' ')), 'not let go', 20000);
+  await shows(v, '› Asked the other ELU window to let go of this project.', 'asked');
+  await shows(v, '› The other ELU window did not let go. Close it to make changes here.', 'not let go', 20000);
   assert.equal(v.current.controller.readOnly, true);
   older.release(); await until(() => v.current.controller.readOnly === false, 'taken once the older window closed');
   key(v, 'q'); await v.finished;
@@ -1278,7 +1318,7 @@ test('beside a window that has the project, /stop still stops a session here, an
   await send(first, 'Keep working on the board'); await until(() => tasks()[0]?.activeRole === 'lead', 'the model working');
   const second = await view(t, { repo: p.repo }), panels = second.current.panels, status = () => panels.status.getText();
   await openTask(second, /Keep working/);
-  await until(() => /^ View only: another ELU window has it/.test(panels.ask._label.getText()), 'the box says another window has it');
+  await until(() => panels.ask._label.getText() === ' View only: another window has it · /takeover ', 'the box says another window has it, and what to type');
   await wide(second);
   // With room, the box names that window's terminal when it has one, and what to do.
   await until(() => /^ View only: another ELU window has it(, in terminal \S+)? · close it, or \/takeover $/.test(panels.ask._label.getText()), 'the box names the window and what to do');
@@ -1341,6 +1381,149 @@ test('a claim that takes the project over knows whether the window that had it l
   other.kill('SIGKILL'); await ended;
   assert.equal(next.retry(), true); assert.equal(next.holderOpen, false, 'that window closed');
   next.release();
+});
+
+// The owner's case as he saw it: one window open, and it said another window had the project.
+// One window alone is never view-only, whatever a window that ended left behind: its locks,
+// its number taken by another process since, a lock written in another time zone, and a lock
+// that names this very process, which never holds what it did not take.
+test('one window alone is never view-only, whatever a window that ended left behind', async t => {
+  const p = setup(t), locks = viewLockFiles(p.repo);
+  const was = staying(t); await until(() => psLine(was.child.pid), 'the window that ends');
+  const here = psLine(was.child.pid), elsewhere = psLine(was.child.pid, { TZ: process.env.TZ === 'Asia/Kolkata' ? 'America/Los_Angeles' : 'Asia/Kolkata' }), record = processRecord(was.child.pid);
+  assert.notEqual(here, elsewhere, 'the other time zone prints another line');
+  was.child.kill('SIGKILL'); await was.ended; await new Promise(resolve => setTimeout(resolve, 1100));
+  // What a window of 0.1.19 that started seven minutes earlier wrote, here and in the other time zone.
+  const earlier = text => `${text.slice(0, 14)}${String((Number(text.slice(14, 16)) + 53) % 60).padStart(2, '0')}${text.slice(16, 24)} node /usr/local/lib/node_modules/@elu-labs/elu/bin/elu-code.mjs`;
+  const now = staying(t); await until(() => psLine(now.child.pid), 'the process that has the number now');
+  const left = [
+    ['a window that ended', { pid: was.child.pid, identity: here }],
+    ['a window that ended, in another time zone', { pid: was.child.pid, identity: elsewhere }],
+    ['a window of this version that ended', record],
+    ['another process has its number now', { pid: now.child.pid, identity: earlier(here) }],
+    ['another process has its number now, and it was written in another time zone', { pid: now.child.pid, identity: earlier(elsewhere) }],
+    ['another process has the number of a window of this version', { ...record, pid: now.child.pid, identity: psLine(now.child.pid) }],
+    ['it names this very process', { pid: process.pid, identity: processIdentity(process.pid) }],
+    ['it names this very process, as this version writes it', processRecord()],
+  ];
+  for (const [what, value] of left) {
+    for (const file of locks) fs.writeFileSync(file, JSON.stringify(value));
+    const claim = claimView(p.repo, { window: {} });
+    assert.equal(claim.readOnly, false, what); assert.equal(claim.holder, null, what);
+    for (const file of locks) assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).born, processRecord().born, `${what}: the lock is this window's now`);
+    assert.equal(claim.retry(), true, what); claim.release();
+    for (const file of locks) assert.equal(fs.existsSync(file), false, what);
+  }
+  // The same in the app, with every kind left at once: it opens able to make changes, and says nothing of another window.
+  fs.writeFileSync(locks[0], JSON.stringify({ pid: now.child.pid, identity: earlier(elsewhere) })); fs.writeFileSync(locks[1], JSON.stringify({ pid: process.pid, identity: processIdentity(process.pid) }));
+  const said = [], v = await view(t, { repo: p.repo, onRender: value => said.push(`${value.panels.ask._label.getText()}\n${value.panels.status.getText()}`) });
+  await until(() => v.current.session === 'new' && v.current.panels.ask.__listener, 'the new session form');
+  assert.equal(v.current.controller.readOnly, false); assert.doesNotThrow(() => v.current.controller.queue('Rename billing'));
+  await send(v, '/takeover'); await shows(v, '› This window already makes the changes here.', 'it has the project');
+  assert.ok(said.length > 0 && !said.some(text => /View only|view only|READ ONLY/.test(text)), 'it never read view-only');
+  key(v, 'q'); await v.finished;
+});
+
+// Two windows whose processes run in different time zones, as one started from a terminal and
+// one from another login: each still sees that the other has the project. 0.1.19 compared the
+// line ps prints, which each time zone prints differently, so the second window took the
+// project from the first while both were open.
+test('a window in another time zone still has the project: the second is view-only beside it, and takes over once it closes', async t => {
+  const p = setup(t), zone = { TZ: process.env.TZ === 'Asia/Kolkata' ? 'America/Los_Angeles' : 'Asia/Kolkata' };
+  const first = otherWindow(t, p.root, zone); assert.equal(await first.said, 'held');
+  const late = claimView(p.repo, { window: {} });
+  assert.equal(late.readOnly, true, 'the window in the other time zone has the project'); assert.equal(late.holder.pid, first.child.pid);
+  assert.ok(Math.abs(Date.parse(late.holder.startedAt) - Date.now()) < 60000, `its start is read on this clock: ${late.holder.startedAt}`);
+  assert.equal(late.retry(), false); assert.equal(late.retry({ sure: false }), false);
+  first.child.kill('SIGKILL'); await first.ended;
+  assert.equal(late.retry({ sure: false }), true); assert.equal(late.holderOpen, false, 'that window closed');
+  // The other way round: this window has it, and one that opens in the other time zone is view-only and takes nothing.
+  const second = spawnSync(process.execPath, ['--input-type=module', '-e', WINDOW, p.root], { encoding: 'utf8', env: { ...process.env, ...zone } });
+  assert.equal(second.stdout.trim(), 'view', second.stderr); assert.equal(claimView(p.repo, { window: {} }).readOnly, true, 'this window still has it');
+  late.release();
+});
+
+// A view-only window looks once a second whether it can take its project. While the lock it
+// found is the same and its process is still there, it starts nothing to find out: 0.1.19's
+// way asked ps every second for as long as the window stayed open.
+test('a view-only window looks again without starting a process, and asks ps only when the answer could have changed', { timeout: 40000 }, async t => {
+  const p = setup(t), [file] = viewLockFiles(p.repo), asked = notedPs(t);
+  // A window of 0.1.19 has the project: only ps can tell whether its process is still that window.
+  const other = staying(t); await until(() => psLine(other.child.pid), 'the other window');
+  const record = JSON.stringify({ pid: other.child.pid, identity: psLine(other.child.pid) }); fs.writeFileSync(file, record);
+  const claim = claimView(p.repo, { window: {} }), start = Date.now();
+  assert.equal(claim.readOnly, true); assert.equal(claim.holder.pid, other.child.pid);
+  let before = asked(other.child.pid); assert.ok(before > 0, 'it asked ps who has the project');
+  for (let second = 1; second < 30; second++) assert.equal(claim.retry({ sure: false, now: start + second * 1000 }), false);
+  assert.equal(asked(other.child.pid), before, 'half a minute of looking started nothing');
+  // After half a minute it asks once: a process that ended without letting go may have left its number to another.
+  assert.equal(claim.retry({ sure: false, now: start + 31000 }), false); assert.ok(asked(other.child.pid) > before, 'asked again after half a minute'); before = asked(other.child.pid);
+  assert.equal(claim.retry({ sure: false, now: start + 32000 }), false); assert.equal(asked(other.child.pid), before);
+  // The lock is another one: asked at once.
+  fs.writeFileSync(file, `${record}\n`);
+  assert.equal(claim.retry({ sure: false, now: start + 33000 }), false); assert.ok(asked(other.child.pid) > before, 'asked when the lock changed'); before = asked(other.child.pid);
+  // Before a change to the project it always asks.
+  assert.equal(claim.retry(), false); assert.ok(asked(other.child.pid) > before, 'asked before a write'); claim.release();
+  // The app, open beside that window: three more seconds of its timer ask nothing, and it takes the project within seconds of that window closing.
+  const v = await view(t, { repo: p.repo });
+  await until(() => /View only/.test(v.current.panels.ask._label.getText()), 'view-only'); await new Promise(resolve => setTimeout(resolve, 1200));
+  before = asked(other.child.pid); await new Promise(resolve => setTimeout(resolve, 3300));
+  assert.equal(asked(other.child.pid), before, 'the open window started nothing to look again'); assert.equal(v.current.controller.readOnly, true);
+  other.child.kill('SIGKILL'); await other.ended;
+  await until(() => v.current.controller.readOnly === false && statusShown(v) === '› The other ELU window has closed. This window can make changes now.', 'it took the project', 4000);
+  key(v, 'q'); await v.finished;
+});
+
+// At 80 columns the row under the session is 48 wide and two lines tall. The line that
+// refused a change was cut there, after "That window is…". Every line a view-only window
+// says shows whole at 80 by 24, and the longer forms come with the room for them.
+test('every line of a view-only window shows whole at 80 columns, and names the other window with more room', { timeout: 40000 }, async t => {
+  const p = setup(t, 'answer'), [file] = viewLockFiles(p.repo); notedPs(t, 'pts/18'); registerProject(p.repo);
+  liveTask(p.root, { id: '4', goal: 'Round refund amounts', state: 'ready' });
+  proposeTask(p.repo, '4', { title: 'Round refunds to cents', description: 'One file changes.', goal: 'The amounts are right.', objectives: ['It works'], priority: 'high', severity: 'low', criteria: ['A refund of 10.005 reads 10.01'], estimateMinutes: 45 });
+  const other = staying(t); await until(() => psLine(other.child.pid), 'the other window');
+  fs.writeFileSync(file, JSON.stringify({ pid: other.child.pid, identity: psLine(other.child.pid) }));
+  const v = await view(t, { repo: p.repo }), panels = v.current.panels, label = () => panels.ask._label.getText();
+  const short = '› View only: the ELU window in pts/18 has it. Close it, or /takeover here.';
+  await until(() => statusShown(v) === '› View only: another ELU window has this project. Close it, or /takeover here.' && label() === ' View only: another window has it · /takeover ', 'what it says on opening');
+  assert.equal(panels.status.height, 2); assert.ok(label().length <= panels.ask.width - 4);
+  await send(v, 'Rename billing'); await shows(v, short, 'why it was not sent, whole');
+  assert.equal(panels.ask.getValue(), 'Rename billing', 'the message stays in the box');
+  // In a tab without the list the row is one line across the screen: still whole.
+  click(v, panels.tabs[2]); await until(() => v.current.view === 'kanban', 'Kanban');
+  await send(v, '/model default opus'); await shows(v, short, 'refused in Kanban, whole'); assert.equal(panels.status.height, 1);
+  click(v, panels.tabs[0]); await until(() => v.current.view === 'tasks', 'Sessions');
+  await send(v, 'Rename billing'); await shows(v, short, 'refused again');
+  // With room, the box names that window's terminal and the line its process and when it started.
+  await wide(v);
+  await until(() => label() === ' View only: another ELU window has it, in terminal pts/18 · close it, or /takeover ', 'the box names the terminal');
+  await until(() => new RegExp(`^› View only: another ELU window has this project\\. Close it, or /takeover here\\. That window is process ${other.child.pid}, started \\d{1,2}:\\d\\d [AP]M, in terminal pts/18\\.$`).test(statusShown(v)), 'the whole line with room');
+  await sized(v, 80, 24); await until(() => statusShown(v) === short && label() === ' View only: another window has it · /takeover ', 'short again at 80');
+  // Under a Task that waits for approval, which has the row's first line: still whole.
+  await openTask(v, /Round refund/); await send(v, 'Also cover refunds');
+  const waits = '? Needs you · Esc, then y approve · n reject...';
+  await shows(v, `${waits} ${short}`, 'whole under the Task that waits'); assert.equal(panels.status.height, 3);
+  await send(v, '/takeover'); await shows(v, `${waits} › Asked the other ELU window to let go of this project.`, 'asked');
+  other.child.kill('SIGKILL'); await other.ended;
+  await shows(v, `${waits} › The other ELU window has closed. This window can make changes now.`, 'it says it took the project', 4000);
+  assert.doesNotMatch(label(), /View only/);
+  key(v, 'q'); await v.finished;
+});
+
+// Two projects of one repository share its lock, so the second window is view-only beside the
+// first. /takeover asked in a file named after the asker's project, which the window that had
+// the repository never read.
+test('/takeover reaches a window that shows another project of the same repository', t => {
+  const p = setup(t), beside = path.join(p.parent, 'second tree');
+  git(p.root, ['worktree', 'add', '-q', beside, '-b', 'second']);
+  const one = claimView(p.repo, { window: {} }), two = claimView(repository(beside), { window: {} });
+  assert.equal(one.readOnly, false); assert.equal(two.readOnly, true, 'the repository is the first window\'s'); assert.equal(two.holder.pid, process.pid);
+  assert.equal(one.wanted(), false, 'nothing was asked yet');
+  two.ask();
+  assert.equal(two.wanted(), false, 'a view-only window is not the one asked'); assert.equal(one.wanted(), true, 'the first window is asked'); assert.equal(one.wanted(), false, 'once');
+  one.giveUp(); assert.equal(two.retry(), true); assert.equal(two.holderOpen, true, 'that window let go, and is still open');
+  assert.equal(one.retry(), false); one.ask(); assert.equal(two.wanted(), true, 'and it can ask for it back');
+  two.release(); assert.equal(one.retry(), true); assert.equal(one.wanted(), false, 'nothing is asked of the window that just took it'); one.release();
 });
 
 // Two windows on one computer need not run in one time zone: one in a terminal, one over a

@@ -121,7 +121,13 @@ While the model or a bot works, the chat shows what it does as it happens: each 
 | `@everyone did anyone touch auth?` | In a Standup session, asks the sessions of its last round again, with your question; `@everyone standup` asks for an update. Elsewhere it starts a Standup with the question |
 | `! git status` | Runs a shell command. In an open session the model gets the command and its output with your next message |
 | `/update` | Says how to update: `/quit`, then `elu update` |
+| `/takeover` | In a view-only window, moves the project to this window. The other window turns view only |
 | `/quit` | Closes ELU. Sessions that are running or queued go on in the background; `elu conductor stop` stops them |
+
+One ELU window at a time makes changes in a project. A second window on the same project
+opens view only: it shows everything and `/stop` works there, but it sends nothing. It takes
+the project by itself within seconds once the other window closes, and `/takeover` moves it
+at once.
 
 A schedule also runs while ELU is closed, through a login item, once ELU is
 installed (not run through `npx`). On macOS, while an agent works or a schedule is on, ELU
