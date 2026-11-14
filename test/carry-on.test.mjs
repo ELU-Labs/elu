@@ -13,6 +13,7 @@ import { boardRows, rowTitle } from '../lib/board.mjs';
 import { closeSession } from '../lib/kanban.mjs';
 import { CAP_CARRIED_LINE, CAP_CARRY_TEXT } from '../lib/turn-limits.mjs';
 import { carryOnCapped } from '../lib/carry-on.mjs';
+import { runsOfEntries } from '../lib/run-activity.mjs';
 
 // 0.1.19 and earlier stopped a turn that had run two hours, working or not, and left the
 // session waiting for a reply. After the update that session says what stopped it, and in
@@ -41,11 +42,13 @@ const request = (root, id) => pendingRequests(root).find(row => row.id === id);
 async function capStopped(t, p, mode) {
   const sent = enqueue(p.root, 'Review the coupon code', { permissions: mode });
   await until(() => request(p.root, sent.id)?.state === 'done', `the first turn in ${mode}`);
-  const id = request(p.root, sent.id).taskId, task = readTask(p.repo, id), log = path.join(path.dirname(task.runs[0].logFile), 'lead-capped.log');
+  // Its first turn ended a minute ago: the chat keeps a run with the reply written within seconds of it.
+  const id = request(p.root, sent.id).taskId, task = JSON.parse(JSON.stringify(readTask(p.repo, id)).replace(/"(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z)"/g, (_, at) => JSON.stringify(new Date(Date.parse(at) - 60000).toISOString())));
+  const log = path.join(path.dirname(task.runs[0].logFile), 'lead-capped.log');
   fs.writeFileSync(log, `${JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'Still reviewing.' }] } })}\n`);
-  const at = new Date().toISOString();
+  const at = new Date().toISOString(); await new Promise(resolve => setTimeout(resolve, 5));
   task.messages.push({ at, text: 'Go through every file' });
-  task.runs.push({ role: 'lead', vendor: 'claude', logFile: log, code: null, session: task.runs[0].session, startedAt: at, at, permissions: mode });
+  task.runs.push({ role: 'lead', vendor: 'claude', logFile: log, code: null, session: task.runs[0].session, startedAt: at, at: new Date().toISOString(), permissions: mode });
   Object.assign(task, { state: 'blocked', activeRole: null, activeLog: null, error: { message: 'Stopped after 2 hours, the most one turn may run. Reply to carry on.', cause: 'time-limit', logFile: log, timedOut: true, stoppedBy: 'cap' } });
   saveTask(p.repo, task);
   return id;
@@ -72,6 +75,9 @@ test('a session 0.1.19 stopped at its cap says so in its row and its chat, and i
     assert.deepEqual(said.map(entry => [entry.text, entry.line]), [[CAP_CARRIED_LINE, true]]); assert.equal(CAP_CARRIED_LINE, 'Stopped by a time limit an earlier version had. ELU told it to carry on.');
     assert.equal(entries.some(entry => entry.role === 'You' && entry.text === CAP_CARRY_TEXT), false);
     assert.ok(entries.indexOf(said[0]) > entries.findIndex(entry => entry.text === 'Go through every file'), 'after the message whose turn was stopped');
+    // What the stopped turn did stays above that line; the reply below it shows only the turn that carried on.
+    const placed = runsOfEntries(entries, task.runs), stopped = task.runs.find(run => /lead-capped\.log$/.test(run.logFile));
+    assert.deepEqual(placed.before.get(said[0]), [stopped]); assert.deepEqual(placed.owned.get(entries.at(-1)), [task.runs.at(-1)]);
     // The app opens again: nothing more is carried on.
     assert.equal(carryOnCapped({ enqueue }), 0, `${mode}: once`);
   }
