@@ -458,6 +458,28 @@ test("a teammate's standup: manual waits for the owner and a decline is told; au
   assert.deepEqual(await teamStandupCommand({ ...ctx, session: () => null }, { type: 'teamStandupRead', to: member.identity.key, round: newRound() }), { offline: true });
 });
 
+// A session a teammate's message started is never asked in a teammate's standup, though its
+// card is shared with them. The reason says so: to the teammate whose message started it, that
+// it was theirs; to anyone else, that a teammate's message did. Never that it is not shared.
+test("a teammate's standup skips a session a teammate's message started, and says that, not that it is not shared", async t => {
+  const { teamId, founder, member } = makeTeam(t);
+  const p = project(t), fake = fakeClis(p.parent, { mode: 'answer' }); environment(t, { ...fake.env, XDG_CONFIG_HOME: founder.home });
+  git(p.root, ['remote', 'add', 'origin', 'https://github.com/example/shop.git']);
+  const controller = new ProjectController(projectFolder(p.root)); controller.draftConfig.checks = []; registerProject(controller.repo);
+  const theirs = await controller.ask('Explain coupons').finished, other = await controller.ask('Explain carts').finished;
+  // Hers, taken on as the owner's own; another teammate's, through the same team.
+  saveTask(controller.repo, { ...readTask(controller.repo, theirs.id), origin: { kind: 'handoff', peer: member.identity.key, name: 'sara', threadId: 'thread-1', teams: [teamId], own: true } });
+  saveTask(controller.repo, { ...readTask(controller.repo, other.id), origin: { kind: 'handoff', peer: 'c'.repeat(64), name: 'kim', threadId: 'thread-2', teams: [teamId], own: true } });
+  const repos = localRepos(), [row] = repos.values();
+  saveProofs(member.identity.key, [repoProof(member.identity.key, founder.identity.key, row.repoId, row.commit)]);
+  const cards = sessionCards({ owner: 'ana', repos }), card = id => cards.find(value => value.taskId === id).card.id;
+  saveTeamAccess(teamId, { handling: 'auto' });
+  const asked = teamStandupAsk({ me: founder.identity, repos: () => repos, kick: () => {}, event: () => {} }, member.identity.key, { round: newRound(), cards: [card(theirs.id), card(other.id)] });
+  assert.deepEqual(asked.asked, []);
+  assert.deepEqual(asked.skipped, [{ card: card(theirs.id), why: 'your message started it' }, { card: card(other.id), why: "a teammate's message started it" }]);
+  assert.equal(pendingRequests(p.root).filter(value => value.standupFor).length, 0);
+});
+
 test('another computer of mine whose hello lacks standup: 1 is never sent the question', async () => {
   const requests = [], key = 'a'.repeat(64);
   const ctx = { session: () => ({ remoteHello: { remote: 1 }, request: async (...args) => { requests.push(args); return {}; } }) };
