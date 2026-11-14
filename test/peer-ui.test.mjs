@@ -1732,7 +1732,8 @@ test('at 80x24 /peers and the line of a join that names the shared project show 
   const statusTop = 24 - 1 - 6 - 1, fits = name => { assert.ok(drawn().every(row => row.length < status.width), `${name}: every row fits`); assert.equal(status.atop + status.height - 1, statusTop, `${name}: it ends over the box`); };
   // Two teammates online with long names: the line is longer than the two rows beside the list.
   const members = peer.peerStatus().teams[0].members; peer.peerStatus = () => ({ running: true, pid: 1, key: members[0].key, name: 'ana', fingerprint: 'aaaaaaaa', error: null, counters: { direct: 1, relayed: 1, failed: 0 }, teams: [{ id: 'team-1', name: 'Core', role: 'admin', members: [members[0], { ...members[1], name: 'sara-of-the-platform-team' }, { ...members[2], name: 'li-on-the-night-shift', online: true, path: 'relayed' }], channels: [] }] });
-  const PEERS = '2 of 2 teammates online: @sara-of-the-platform-team (direct), @li-on-the-night-shift (relayed)';
+  // The teammate whose connection another computer passes along is said as the Team list says it.
+  const PEERS = '2 of 2 teammates online: @sara-of-the-platform-team (direct), @li-on-the-night-shift (through another computer)';
   await send(v, '/peers'); await until(() => whole() === PEERS, `beside the list: ${drawn().join(' | ')}`);
   assert.ok(v.current.view === 'tasks' && drawn().length >= 3 && status.width < 50, 'on three rows or more beside the list'); fits('/peers beside the list');
   assert.ok(v.panels.compose.atop + v.panels.compose.height <= status.atop, 'the form above ends over it');
