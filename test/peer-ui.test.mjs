@@ -1236,6 +1236,40 @@ test('/join counts while it looks for the inviter and says their ELU must be ope
   assert.match(status().replace(/\s+/g, ' '), /Their ELU is closed or offline, or the code was already used or is older than 24 h\. Ask them to open ELU and send a new code with \/invite\./);
 });
 
+test('the Team list says how a teammate is reached in the room its row has: through which computer, never offline, and why when nothing gets through', () => {
+  const team = members => ({ key: ME, teams: [{ id: 'team-1', name: 'Core', members: [{ key: ME, name: 'ana' }, ...members], channels: [] }] });
+  const row = (member, width, extra = {}) => visible(chatBar({ status: team([{ key: SARA, name: 'sara', ...member }]), items: [], ...extra }, width, false).find(item => item.value?.type === 'member').line);
+  const through = { online: true, path: 'relayed', via: "li's computer" }, blocked = { online: false, reach: 'blocked' };
+  // The list beside the chat at 140 columns is 40 wide: the computer it goes through is named whole.
+  assert.equal(row(through, 40), "● @sara online · through li's computer");
+  assert.equal(row(through, 78), "● @sara          online · through li's computer", 'with room, in the column the other rows use');
+  assert.equal(row({ online: true, path: 'direct' }, 40), '● @sara          direct');
+  // Offline with why, in the longest words the row has room for; the window of the teammate says it whole.
+  assert.equal(row(blocked, 78), '○ @sara          offline · no computer on the team reaches you both');
+  assert.equal(row(blocked, 60), '○ @sara offline · no computer on the team reaches you both');
+  assert.equal(row(blocked, 50), '○ @sara offline · no computer reaches you both');
+  assert.equal(row(blocked, 40), '○ @sara offline · no way through');
+  assert.equal(row({ online: false }, 40), '○ @sara          offline', 'a teammate whose computer is off is only that');
+  // What else the row carries keeps its place.
+  assert.match(row(through, 40, { trusted: [SARA] }), /^● @sara online · through/); assert.ok(row(through, 40, { trusted: [SARA] }).length <= 40, 'cut to the row, still online');
+  assert.equal(row(blocked, 44, { trusted: [SARA] }), '○ @sara offline · no way through · trusted');
+});
+
+test('quitting ELU while /join is still looking ends that join first, as Esc does, and saves nothing', async t => {
+  const p = project(later(t)); environment(t, p.parent);
+  const peer = fakePeer(), v = await view(t, { repo: repository(p.root), peer });
+  const signals = []; let ended = 0;
+  // The join waits until it is told to stop, and then says it was cancelled, as the daemon's does.
+  peer.joinTeam = (code, options = {}) => { peer.calls.push(['joinTeam', code]); signals.push(options.signal); return new Promise((resolve, reject) => options.signal.addEventListener('abort', () => setTimeout(() => reject(new Error('Join cancelled. You did not join.')), 50))); };
+  peer.endJoins = () => { ended++; };
+  await send(v, '/join k7qm-x2pd-9fhw'); await answerJoin(v);
+  await until(() => /Looking for the person who invited you…/.test(v.panels.status.getText()), 'the search under way');
+  await send(v, '/quit');
+  await v.finished;
+  assert.equal(ended, 1, 'the join was ended before the app was gone'); assert.equal(signals[0].aborted, true, 'and told to stop');
+  assert.deepEqual(peer.calls.filter(row => row[0] === 'saveTeamAccess'), [], 'nothing was saved for a team it did not join');
+});
+
 test('/join says when it has found the inviter and what it is trying; a reason too long for the status row shows whole in a window', async t => {
   const p = project(later(t)); environment(t, p.parent);
   const peer = fakePeer(), v = await view(t, { repo: repository(p.root), peer }), status = () => v.panels.status.getText().replace(/\s+/g, ' ');
@@ -1253,7 +1287,7 @@ test('/join says when it has found the inviter and what it is trying; a reason t
   progress = { stage: 'relay', via: 'your computer studio' };
   await until(() => /Found them\. Connecting through your computer studio… \d+ s\. Esc cancels\./.test(status()), 'through another computer');
   held.resolve({ id: 'team-2', name: 'Docs', inviter: { name: 'sara', fingerprint: 'bbbbbbbb' }, via: 'your computer studio' });
-  await until(() => /^› Joined Docs with sara\. Their messages start sessions here, as if you typed them\./.test(status()), 'joined');
+  await until(() => /^› Joined Docs with sara\. Connected through your computer studio\. Their messages start sessions here, as if you typed them\./.test(status()), 'joined, and it says which computer it went through');
   // No way through: longer than the row holds, so a window shows the reason and what works, a sentence to a line.
   progress = null;
   await send(v, '/join k7qm-x2pd-9fhw'); await answerJoin(v);

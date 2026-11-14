@@ -49,7 +49,7 @@ import { bothMine, markMine, mineRows as readMine, noteTheirs } from '../lib/pee
 import { CARRY_MS, carryMethods, createCarrier, savedRoutes } from '../lib/peer/carry.mjs';
 import { inboxRoot } from '../lib/peer/files.mjs';
 import { reachText } from '../lib/peer/reach-text.mjs';
-import { openRelays, relayKeys, sealRelays } from '../lib/peer/invite.mjs';
+import { admitProven, inviterProof, openRelays, relayKeys, sealRelays } from '../lib/peer/invite.mjs';
 import { joinWait, noRoute } from '../lib/peer/join-text.mjs';
 import { boardRows } from '../lib/board.mjs';
 import { botKey, botVendors, botsFile, canShare, removeBot, saveBot } from '../lib/bots.mjs';
@@ -1347,6 +1347,122 @@ test('a join is cancelled before any daemon has read it, and a daemon that never
   });
 });
 
+// A long code as 0.1.3 made it, for an inviter that is never reached here.
+const farLongCode = () => { const hex = () => crypto.randomBytes(32).toString('hex'), value = { teamId: hex(), inviter: hex(), secret: hex(), expiresAt: Date.now() + 3600000 }; return { ...value, code: `elu-team:v1:${base32(Buffer.from(canonical(value)))}` }; };
+// A process id nobody has any more.
+const gonePid = () => spawnSync(process.execPath, ['-e', '']).pid;
+
+test('a join with an old long code is cancelled as one with a short code is: at once, with nothing left under way, and a join sent right after it is taken', async t => {
+  const home = newHome(t);
+  await withHome(home, async () => {
+    const me = createIdentity({ name: 'sara' }), { code, inviter } = farLongCode();
+    const made = () => Object.assign(new PeerDaemon({ conductor: () => {} }), { me, node: { dial() {}, leave() {}, joinTopic: () => null, leaveTopic() {} } });
+    const timed = async promise => { const started = Date.now(), error = await promise.then(() => null, caught => caught); return { message: error?.message ?? null, ms: Date.now() - started }; };
+    // Cancelled while it waits for the inviter: the join ends now, and the daemon is left with no join under way.
+    const looking = made(), joining = timed(looking.command({ type: 'join', code }));
+    await until(() => looking.joins.has(inviter), 'the join under way', 20000);
+    assert.deepEqual(await looking.command({ type: 'joinCancel' }), { cancelled: true });
+    const cancelled = await joining;
+    assert.equal(cancelled.message, 'Join cancelled. You did not join.'); assert.ok(cancelled.ms < 5000, `ended after ${cancelled.ms} ms`);
+    assert.equal(looking.joins.size, 0); assert.equal(looking.idle(Date.now()), false, 'nothing under way keeps it from stopping later');
+    assert.deepEqual(await looking.command({ type: 'joinCancel' }), { cancelled: false }, 'nothing under way to cancel');
+    // A join sent right after a cancel, read by the daemon in the same pass, is taken: what the
+    // cancelled one ends does not end it, and it can be cancelled in its turn.
+    const again = made(), one = timed(again.command({ type: 'join', code }));
+    await until(() => again.joins.has(inviter), 'the join under way', 20000);
+    const stopped = again.command({ type: 'joinCancel' }), two = timed(again.join(code, { timeoutMs: 20000 }));
+    assert.deepEqual(await stopped, { cancelled: true });
+    assert.equal((await one).message, 'Join cancelled. You did not join.');
+    await new Promise(resolve => setTimeout(resolve, 100));
+    assert.ok(again.joins.has(inviter), 'the second join is still under way');
+    assert.deepEqual(await again.command({ type: 'joinCancel' }), { cancelled: true });
+    const second = await two;
+    assert.equal(second.message, 'Join cancelled. You did not join.'); assert.ok(second.ms < 5000, `the second ended after ${second.ms} ms`);
+    assert.equal(again.joins.size, 0);
+    // Two joins at once are refused, long or short, whichever came first.
+    const both = made(), first = timed(both.command({ type: 'join', code }));
+    await until(() => both.joins.has(inviter), 'the join under way', 20000);
+    assert.equal((await timed(both.command({ type: 'join', code: farLongCode().code }))).message, 'Another join is already under way.');
+    assert.equal((await timed(both.command({ type: 'join', code: 'k7qm-x2pd-9fhw' }))).message, 'Another join is already under way.');
+    await both.command({ type: 'joinCancel' }); await first;
+  });
+});
+
+test('a join ends when whoever asked for it is gone, with a long code and a short one; it goes on while they are there', async t => {
+  const home = newHome(t);
+  await withHome(home, async () => {
+    const me = createIdentity({ name: 'sara' }), connected = () => ({ bootstrapped: true, online: true, answers: 12 });
+    const made = () => Object.assign(new PeerDaemon({ conductor: () => {} }), { me, node: { dial() {}, leave() {}, joinTopic: () => null, leaveTopic() {}, network: connected } });
+    const timed = async promise => { const started = Date.now(), error = await promise.then(() => null, caught => caught); return { message: error?.message ?? null, ms: Date.now() - started }; };
+    for (const code of ['k7qm-x2pd-9fhw', farLongCode().code]) {
+      // The app that asked quit, or its terminal was closed: nobody waits, so nothing joins later by itself.
+      const alone = made(), ended = await timed(alone.command({ type: 'join', code, pid: gonePid() }));
+      assert.equal(ended.message, 'Join cancelled. You did not join.'); assert.ok(ended.ms < 10000, `ended after ${ended.ms} ms`);
+      assert.equal(alone.shortJoin, null); assert.equal(alone.joins.size, 0);
+      assert.match(daemonLog(home), /whoever asked for the join is gone: join cancelled/);
+      // Asked by a process that is still there: it keeps looking, and gives up by itself.
+      const stays = await timed(made().join(code, { timeoutMs: 2500, asker: process.pid }));
+      assert.match(stays.message, /^(Nobody answered for this code\.|The inviter is not reachable\.)/); assert.ok(stays.ms >= 2400, `it looked for ${stays.ms} ms`);
+    }
+    // The app and the shell name themselves in the join they send, and quitting the app ends
+    // its join at once: one no daemon has read is taken back, and a daemon that has it is told to stop.
+    const queued = () => fs.readdirSync(peerFile('commands')).filter(name => !name.endsWith('.result.json')).map(name => JSON.parse(fs.readFileSync(peerFile('commands', name), 'utf8')));
+    fs.mkdirSync(path.dirname(peerFile('peer.lock')), { recursive: true }); fs.writeFileSync(peerFile('peer.lock'), JSON.stringify({ pid: process.pid, identity: processIdentity(process.pid) }));
+    const joining = peer.joinTeam('k7qm-x2pd-9fhw').then(() => null, error => error.message);
+    await until(() => queued().length === 1, 'the join sent', 5000);
+    assert.deepEqual(queued().map(row => [row.type, row.pid]), [['join', process.pid]]);
+    const started = Date.now(); peer.endJoins();
+    assert.deepEqual(queued().map(row => row.type), ['joinCancel'], 'taken back as the app quits, before it is gone');
+    assert.equal(await joining, 'Join cancelled. You did not join.'); assert.ok(Date.now() - started < 1000);
+  });
+});
+
+test('a join cancelled while its proof is with the inviter is never left half done: admitted, it stands on both computers; refused, it ends as cancelled', async t => {
+  const anaHome = newHome(t), saraHome = newHome(t), sara = withHome(saraHome, () => createIdentity({ name: 'sara' }));
+  // The inviter's side, worked out ahead: the code, and the roster as it is once this joiner is admitted.
+  const invited = withHome(anaHome, () => {
+    const me = createIdentity({ name: 'ana' }), made = createTeam(me, 'core'), code = createInvite(me, made.id, { hours: 1 }), keys = inviteKeys(code);
+    return { key: me.key, teamId: made.id, code, keys, admit: () => { admitProven(openInvites([made.id])[0], sara.key, 'sara'); return readLog(made.id).ops; } };
+  });
+  const connected = () => ({ bootstrapped: true, online: true, answers: 12 });
+  // The joiner's daemon with the inviter spoken for through a fake socket, up to the proof it sends.
+  const upToProof = async me => {
+    const d = Object.assign(new PeerDaemon({ conductor: () => {} }), { me, methods: {}, node: { dial() {}, leave() {}, joinTopic: () => null, leaveTopic() {}, network: connected, route() {}, connections: new Map() } });
+    let ended = null; const joining = d.command({ type: 'join', code: invited.code }).then(value => { ended = { value }; }, error => { ended = { error: error.message }; });
+    await until(() => d.shortJoin?.keys, 'the search under way', 20000);
+    const inviter = fakeSocket(), reply = id => inviter.frames().find(frame => frame.method === id);
+    d.attach(inviter.socket, invited.key, { topics: [Buffer.from(invited.keys.topic, 'hex')] }); inviter.say(hi);
+    const start = await until(() => reply('elu.invite.start'), 'the start', 5000), inviterNonce = crypto.randomBytes(32).toString('hex');
+    const fields = { topic: invited.keys.topic, joinerNonce: start.params.nonce, inviterNonce, inviter: invited.key, joiner: me.key };
+    inviter.say({ jsonrpc: '2.0', id: start.id, result: { nonce: inviterNonce, proof: inviterProof(invited.keys.prover, fields) } });
+    const prove = await until(() => reply('elu.invite.prove'), 'the proof', 5000);
+    // Esc now: the proof is with the inviter, who may already have admitted this machine.
+    assert.deepEqual(await d.command({ type: 'joinCancel' }), { cancelled: true });
+    await new Promise(resolve => setTimeout(resolve, 300));
+    assert.equal(ended, null, 'the join waits for the inviter\'s answer');
+    return { d, inviter, prove, joining, ended: () => ended };
+  };
+  // The inviter admitted: the join stands, and this machine is on the team as the inviter has it.
+  const ops = withHome(anaHome, () => invited.admit());
+  await withHome(saraHome, async () => {
+    const { d, inviter, prove, joining, ended } = await upToProof(sara);
+    inviter.say({ jsonrpc: '2.0', id: prove.id, result: { teamId: invited.teamId, inviter: invited.key, ops } });
+    await joining;
+    assert.deepEqual(ended().value, { id: invited.teamId, name: 'core', inviter: { name: 'ana', fingerprint: invited.key.slice(0, 8) } });
+    assert.deepEqual(team(invited.teamId).members.filter(m => !m.removed).map(m => m.name), ['ana', 'sara']);
+    assert.equal(d.shortJoin, null);
+  });
+  // The inviter refused: it ends as the cancel it was, and there is no team here.
+  const otherHome = newHome(t), omar = withHome(otherHome, () => createIdentity({ name: 'omar' }));
+  await withHome(otherHome, async () => {
+    const { d, inviter, prove, joining, ended } = await upToProof(omar);
+    inviter.say({ jsonrpc: '2.0', id: prove.id, error: { code: -32000, message: 'This invite was already used.' } });
+    await joining;
+    assert.equal(ended().error, 'Join cancelled. You did not join.');
+    assert.equal(team(invited.teamId), null); assert.equal(d.shortJoin, null);
+  });
+});
+
 test('a shutdown is honoured whatever an old setting says, unless it predates the daemon', async t => {
   const home = newHome(t), exits = [];
   await withHome(home, async () => {
@@ -2360,7 +2476,8 @@ test('a relayed connection carries an ask and its answer, and the relay refuses 
 // --- A join whose two computers cannot connect directly. The runner's noPunch stands in for
 // the two networks: no direct connection to a teammate or to whoever is found on a code's
 // topic, on a testnet at a LAN address as above. A computer started without it is reachable
-// by everyone, as one on an open network is. join shortens the waits.
+// by everyone, as one on an open network is. noPunchTo does the same for one pair only: no
+// direct connection to the computers it names, and every other one as usual. join shortens the waits.
 const quick = { connectMs: 30000, retryMs: 1500, carryMs: 2000 };
 const skipLan = { skip: lan ? false : 'This machine has no non-loopback IPv4 address for the testnet.', timeout: 240000 };
 const daemonLog = home => withHome(home, () => { const file = peerFile('daemon.log'); return fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : ''; });
@@ -2468,6 +2585,32 @@ test('a join goes through a teammate of the inviter when the two cannot connect 
   await until(() => relayed(sara, crew.teamId, ana.identity.key) && relayed(ana.home, crew.teamId, saraKey), 'back online through the relay');
 });
 
+test('a join whose app is gone in the middle of it leaves nothing half joined: no team here, nothing at the inviter, and the same code joins later', skipLan, async t => {
+  const bootstrap = await testnet(t, lan), ana = inviter(t, bootstrap), sara = newHome(t);
+  const saraKey = withHome(sara, () => createIdentity({ name: 'sara' }).key); enable(sara, bootstrap);
+  await daemon(t, sara, { conductor: false, join: quick });
+  // The app that asks, as a process of its own: it sends the join and waits, as /join does.
+  const script = `const peer = await import(${JSON.stringify(new URL('../lib/peer/index.mjs', import.meta.url).href)}); await peer.joinTeam(process.argv[1]).catch(() => {});`;
+  const app = spawn(process.execPath, ['--input-type=module', '-e', script, ana.code], { env: { ...process.env, XDG_CONFIG_HOME: sara }, stdio: 'ignore' });
+  t.after(() => app.kill('SIGKILL'));
+  await until(() => state(sara)?.join?.stage === 'looking', 'the join under way: nobody is on the code yet');
+  // The app is gone without a word: its terminal was closed, or it was killed.
+  app.kill('SIGKILL');
+  await until(() => state(sara) && !state(sara).join, 'the join ended by itself', 15000);
+  assert.match(daemonLog(sara), /whoever asked for the join is gone: join cancelled/);
+  // The inviter comes online a moment later: nothing joins behind the person's back.
+  const a = await daemon(t, ana.home, { conductor: false });
+  await new Promise(resolve => setTimeout(resolve, 6000));
+  assert.equal(withHome(sara, () => team(ana.teamId)), null, 'no team here');
+  assert.deepEqual(state(sara).teams, []);
+  assert.deepEqual(withHome(ana.home, () => team(ana.teamId)).members.map(m => m.name), ['ana'], 'nobody was added at the inviter');
+  assert.equal(withHome(ana.home, () => openInvites([ana.teamId])).length, 1, 'the code is still unused');
+  assert.equal(state(ana.home).teams[0].members.length, 1);
+  // Joining again with the same code works.
+  assert.deepEqual(await run(sara, { type: 'join', code: ana.code }, 120000), { id: ana.teamId, name: 'core', inviter: { name: 'ana', fingerprint: a.key.slice(0, 8) } });
+  await until(() => online(ana.home, saraKey) && online(sara, a.key), 'teammates online after the join');
+});
+
 // --- Two teammates who cannot connect directly, and a third computer on the team that reaches both. ---
 // Three computers on one team: ana made it, sara and li joined. ana and sara count each other as their own computers.
 function trio(t) {
@@ -2485,9 +2628,11 @@ test('two teammates who cannot connect directly reach each other through a third
   enable(ana.home, bootstrap, { box: 'vm' }); enable(sara.home, bootstrap, { box: 'laptop' }); enable(li.home, bootstrap, { box: 'studio' });
   const side = answering(t, sara.home);
   withHome(sara.home, () => savePeerPolicy(ana.identity.key, { autoAccept: true }));
-  // ana and sara are each on a network that connects to nobody directly; li is reachable by both.
+  // sara's computer has a home folder of its own, so what it receives lands in an inbox only this test writes to.
+  const house = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'elu-code-house-'))), inbox = inboxRoot({ home: house, env: {} }); t.after(() => fs.rmSync(house, { recursive: true, force: true }));
+  // ana and sara cannot connect to each other directly (noPunchTo, for that pair only); each connects to li as usual.
   let c = await daemon(t, li.home, { conductor: false, join: ways });
-  const a = await daemon(t, ana.home, { conductor: false, noPunch: true, join: ways }), b = await daemon(t, sara.home, { env: side.env, noPunch: true, join: ways });
+  const a = await daemon(t, ana.home, { conductor: false, noPunchTo: [sara.identity.key], join: ways }), b = await daemon(t, sara.home, { env: { ...side.env, HOME: house, XDG_DATA_HOME: '' }, noPunchTo: [ana.identity.key], join: ways });
   const through = (home, key) => { const m = memberOf(home, teamId, key); return Boolean(m?.online) && m.path === 'relayed' && m.via === "li's computer"; };
   await until(() => through(ana.home, sara.identity.key) && through(sara.home, ana.identity.key), 'ana and sara online to each other through li');
   // Both reach li directly, and li only passes bytes along.
@@ -2516,8 +2661,10 @@ test('two teammates who cannot connect directly reach each other through a third
   const files = withHome(ana.home, () => peer.stageFiles(peer.offerPaths([path.join(folder, 'notes.bin')])));
   const sent = await run(ana.home, { type: 'remoteFiles', id: started.id, text: '', files }, 120000);
   assert.equal(sent.files, 1); assert.equal(sent.bytes, bytes.length);
-  const landed = filesUnder(inboxRoot()).find(name => name.endsWith('notes.bin'));
-  assert.ok(landed, 'the file is in the session\'s inbox on the other computer'); assert.deepEqual(fs.readFileSync(path.join(inboxRoot(), landed)), bytes);
+  const landed = filesUnder(inbox).filter(name => name.endsWith('notes.bin'));
+  assert.equal(landed.length, 1, 'the file is in the session\'s inbox on the other computer');
+  // Compared as bytes: a failed deepEqual of two buffers this long builds a diff that takes all the memory there is.
+  assert.ok(fs.readFileSync(path.join(inbox, landed[0])).equals(bytes), 'with the bytes that were sent');
   assert.ok(state(ana.home).counters.relayed >= 1);
 
   // The computer that carried quits: each says the other is offline, and why.
@@ -2558,6 +2705,22 @@ test('the computer that carries two teammates is picked again when it goes away,
   assert.ok(kept.mine.some(entry => entry.helper === omar.key), 'the route names the computer that carries now');
 });
 
+test('the computer that carries two teammates goes away without a word, as one whose lid was closed: each says why the other is offline, and they are back through it when it returns', skipLan, async t => {
+  const bootstrap = await testnet(t, lan), { teamId, ana, sara, li } = trio(t), ways = { ...quick, wayMs: 1500, directMs: 600000 };
+  for (const at of [ana.home, sara.home, li.home]) enable(at, bootstrap);
+  let c = await daemon(t, li.home, { conductor: false, join: ways });
+  await daemon(t, ana.home, { conductor: false, noPunchTo: [sara.identity.key], join: ways }); await daemon(t, sara.home, { conductor: false, noPunchTo: [ana.identity.key], join: ways });
+  const via = (at, key) => { const m = memberOf(at, teamId, key); return m?.online && m.path === 'relayed' ? m.via : null; };
+  await until(() => via(ana.home, sara.identity.key) === "li's computer" && via(sara.home, ana.identity.key) === "li's computer", 'through li');
+  // No goodbye: the process is gone at once, and what it had announced is still out there.
+  c.child.kill('SIGKILL');
+  const blocked = (home, key) => { const m = memberOf(home, teamId, key); return m && !m.online && m.reach === 'blocked'; };
+  await until(() => blocked(ana.home, sara.identity.key) && blocked(sara.home, ana.identity.key), 'both say why the other is offline', 120000);
+  assert.equal(memberOf(ana.home, teamId, li.identity.key).reach ?? null, null, 'the one that is gone is only offline');
+  c = await daemon(t, li.home, { conductor: false, join: ways });
+  await until(() => via(ana.home, sara.identity.key) === "li's computer" && via(sara.home, ana.identity.key) === "li's computer", 'back through li', 120000);
+});
+
 test('a computer asked to carry for two teammates does it only while it reaches the other one, tells who runs a relay, and refuses a computer that is not on its team', async t => {
   const me = 'c'.repeat(64), a = 'a'.repeat(64), b = 'b'.repeat(64), stranger = 'd'.repeat(64), relay = 'e'.repeat(64);
   peerHome(t);
@@ -2596,6 +2759,12 @@ test('how a teammate is reached reads the same in the roster and in elu peers: d
   assert.equal(reachText({ online: true, path: 'relayed' }), 'online · through another computer');
   assert.equal(reachText({ online: false }), 'offline');
   assert.equal(reachText({ online: false, reach: 'blocked' }), 'offline · no computer on the team reaches you both');
+  // A row with less room says why in fewer words, and never only that they are offline.
+  assert.equal(reachText({ online: false, reach: 'blocked' }, { fit: 50 }), 'offline · no computer on the team reaches you both');
+  assert.equal(reachText({ online: false, reach: 'blocked' }, { fit: 49 }), 'offline · no computer reaches you both');
+  assert.equal(reachText({ online: false, reach: 'blocked' }, { fit: 30 }), 'offline · no way through');
+  assert.equal(reachText({ online: false, reach: 'blocked' }, { fit: 5 }), 'offline · no way through');
+  assert.equal(reachText({ online: false }, { fit: 5 }), 'offline');
   // Whole, for the window that shows one teammate.
   assert.equal(reachText({ online: false, reach: 'blocked' }, { whole: true }), 'offline. Their computer is on, but your two networks do not connect directly, and no computer on the team reaches you both. Open ELU on another computer on the team.');
   assert.equal(reachText({ online: true, path: 'relayed', via: 'your computer studio' }, { whole: true }), 'online, through your computer studio. Your two networks do not connect directly, so it passes the connection along. It cannot read it.');

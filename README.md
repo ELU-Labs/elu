@@ -273,6 +273,12 @@ computer that both can reach when one is on: another computer or teammate of you
 teammate of theirs, with ELU open. That computer passes along bytes it cannot read. If
 there is no way through, the join says why and what works.
 
+The same holds once you are on a team. Two teammates whose networks will not connect
+directly reach each other through any computer on the team that reaches both, with nothing
+to set up. `elu peers` and the Team list then say `online · through kim's computer`. They
+go back to a direct connection when one works, and move to another computer when that one
+closes. With no computer that reaches both, the row says so instead of a bare `offline`.
+
 There is nothing to turn on. Once your computer is on a team, a background process (the
 peer daemon) keeps it reachable by your teammates, also while ELU is closed. Until you
 invite someone or join a team, nothing starts and nothing connects. There is no off switch
