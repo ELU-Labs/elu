@@ -33,6 +33,7 @@ import { projectSnapshot, registerProject, registeredProjects, sessionModel } fr
 import { localRepos, saveLocalRepos } from '../lib/peer/cards.mjs';
 import { folderRemote } from '../lib/kanban-repos.mjs';
 import { closeSession } from '../lib/kanban.mjs';
+import { deleteSession } from '../lib/session-delete.mjs';
 import * as peerFacade from '../lib/peer/index.mjs';
 import { listEntries, usesSavedRules } from '../lib/permission-rules.mjs';
 import { getRecord, records, saveRecord } from '../lib/peer/taskstore.mjs';
@@ -1530,6 +1531,22 @@ test('cleaning up on my computer on an ELU before 0.1.26 names the version it ne
   // A teammate's computer that is not mine is refused there in one line, and nothing goes.
   assert.throws(() => withHome(devbox.home, () => host['elu.remote.delete']({ refs: [item.ref] }, connection('e'.repeat(64)))), { message: NOT_MINE });
   assert.ok(withHome(devbox.home, () => projectSnapshot(repository(project.root)).tasks.some(task => task.id === '1')));
+});
+
+test('a session deleted here while my other computer follows it is said gone there, and no look at it fails', async t => {
+  const { laptop, devbox, project, toHost, hostCtx, viewCtx } = pair(t);
+  withHome(devbox.home, () => { chat(project.root, 1, { goal: 'Make coupons upper case', messages: [{ at: new Date().toISOString(), text: 'Make coupons upper case' }] }); relist(); });
+  await withHome(laptop.home, () => listTick(viewCtx));
+  const item = withHome(laptop.home, () => remoteMachines()[0].sessions[0]);
+  await withHome(laptop.home, () => remoteCommand(viewCtx, { type: 'remoteWatch', to: devbox.identity.key, ref: item.ref }));
+  withHome(devbox.home, () => hostTick(hostCtx));
+  // Deleted here, by x or elu sessions delete, not from that computer.
+  const logged = []; hostCtx.log = line => logged.push(line);
+  withHome(devbox.home, () => { const repo = repository(project.root); closeSession(repo, '1'); deleteSession(repo, '1'); hostTick(hostCtx, Date.now() + 1); hostTick(hostCtx, Date.now() + 2); });
+  assert.deepEqual(logged, [], 'no look at it fails');
+  const states = toHost.sent.filter(([method]) => method === 'elu.remote.events').flatMap(([, params]) => params.items.flatMap(row => row.events)).filter(event => event.type === 'state');
+  assert.deepEqual([states.at(-1).state, states.at(-1).error], ['gone', 'The session was deleted on that computer.']);
+  assert.equal(states.filter(event => event.state === 'gone').length, 1, 'said once');
 });
 
 test('a watch its computer let go is made again: a reply still reaches the session, and a listing it never sent catches the view up', async t => {
