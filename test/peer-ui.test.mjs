@@ -2731,7 +2731,7 @@ test('/access on a team with teammates and no setting offers Manual first, so En
   const peer = fakePeer({ access: {} }), v = await view(t, { repo: repository(p.root), peer }), status = () => v.panels.status.getText();
   const list = () => modal(v, 'What teammates can do here').children.find(child => child.type === 'list');
   await send(v, '/access'); await until(() => modal(v, 'What teammates can do here'), 'the handling');
-  assert.match(status(), /Core now: Not set: messages wait for you to approve them\./); assert.equal(list().selected, 1);
+  assert.match(status(), /Core now: Manual · rules: none/); assert.equal(list().selected, 1);
   v.input.write('\r'); await closeDialog(v, 'Rules for teammates', '');
   await until(() => /Saved for Core: messages wait for you to approve them/.test(status()), 'saved');
   assert.equal(peer.access['team-1'].handling, 'manual');

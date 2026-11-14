@@ -100,7 +100,7 @@ test('two computers signed in to the same GitHub account pair with no step, from
   const glue = glueFor(laptop);
   assert.equal(glue.paired(), '@devbox is yours: both computers are signed in to GitHub as octo-user.');
   assert.equal(glue.paired(), null);
-  assert.equal(await glue.mine([]), '@devbox is yours (GitHub octo-user)');
+  assert.equal(await glue.mine([]), '@devbox is yours');
 });
 
 test('a teammate signed in to another GitHub account never pairs, whatever their gist says', async t => {
@@ -217,13 +217,15 @@ test('without gh, signed out, without the gist scope, on a timeout or a GitHub e
     assert.equal(laptop.read(() => githubStatus()).state, state);
     assert.equal(laptop.read(() => pairingHint()), HINT);
     const said = await glueFor(laptop).mine([]);
-    assert.equal(said, `@devbox is yours (GitHub octo-user). ${HINT}`);
+    assert.equal(said, `@devbox is yours. ${HINT}`);
     assert.equal(said.split(HINT).length, 2, 'said once');
   }
   assert.equal(HINT, 'Sign in to GitHub with gh auth login on both computers to pair them by themselves, or type /mine @name on each.');
   assert.ok(paired(laptop, devbox));
   // With nothing marked, the hint is how to pair.
-  assert.equal(await glueFor(devbox).mine([]).then(text => text.endsWith('yours (GitHub octo-user)')), true);
+  assert.equal(await glueFor(devbox).mine([]), '@laptop is yours');
+  const there = devbox.read(() => mineRows()).find(row => row.key === laptop.identity.key);
+  assert.deepEqual([there?.auto, there?.login], ['github', 'octo-user'], 'paired by GitHub on that side too');
   laptop.read(() => fs.rmSync(peerFile('mine.json')));
   assert.equal(await glueFor(laptop).mine([]), `No other computer is yours yet. ${HINT}`);
   // Working again, the hint is gone.

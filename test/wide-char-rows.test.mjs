@@ -534,7 +534,7 @@ test('the app at every width from 80 to 200: the settings of a project named wit
     assert.equal(cellsOf(top)[box.aleft + box.width - 1], '┐', `the dialog's corner at ${width}: ${top}`);
     const text = label => inside.find(row => row.includes(label));
     assert.ok(text(`Instructions  ${cut(TEXT, 48, '...')}`), `the instructions row, cut between two characters at ${width}:\n${inside.join('\n')}`);
-    assert.ok(text('Default model Opus · not chosen, so the first installed here') && text('This computer not chosen · Opus, the first installed here'), `the rows that name the model at ${width}:\n${inside.join('\n')}`);
+    assert.ok(text('Default model Opus') && text('This computer Opus'), `the rows that name the model at ${width}:\n${inside.join('\n')}`);
     assert.deepEqual(['● Active project', 'Instructions', 'Context', 'Default model', 'This computer', 'Archive'].map(label => columnOf(text(label), label)), Array(6).fill(box.aleft + 1), `every row starts in the dialog's first column at ${width}`);
   }
 });

@@ -169,9 +169,9 @@ export async function main(argv = process.argv.slice(2)) {
     if (text !== null && approved !== text) refuse(NOT_APPROVED);
     const committed = baseFile(repo.root, 'HEAD', '.elu-code/config.yaml', { optional: true });
     const config = text !== null ? parseConfig(text) : approved !== null ? parseConfig(approved) : defaultConfig();
-    const note = text === null ? `No .elu-code/config.yaml here, so this is ${approved !== null ? 'the one you approved last' : 'the default policy'}. elu init writes one.`
-      : committed === null ? 'This is .elu-code/config.yaml as it is now. It is not committed yet: elu run needs it committed.'
-        : committed !== text ? 'This is .elu-code/config.yaml as it is now. It differs from the last commit: elu run needs it committed.' : null;
+    const note = text === null ? `${approved !== null ? 'The policy you approved last' : 'The default policy'}. elu init writes .elu-code/config.yaml.`
+      : committed === null ? '.elu-code/config.yaml is not committed yet: elu run needs it committed.'
+        : committed !== text ? '.elu-code/config.yaml differs from the last commit: elu run needs it committed.' : null;
     // Only the lead entry runs. Bots do the reviews, read-only, whatever an older config lists.
     const role = config.roles.lead; let refusal = null; try { assertPolicy(role); } catch (e) { refusal = e.message; }
     // The table names the OS sandbox among what enforces a rule; where it cannot start, say so.

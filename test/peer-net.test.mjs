@@ -558,7 +558,7 @@ test('elu access shows and changes what teammates can do here; --auto with --man
     // Run outside any project: there --auto alone keeps the project set.
     t.after(() => process.chdir(was)); process.chdir(parent);
     const unset = await peerCli(['access'], {});
-    assert.equal(unset.access, null); assert.match(unset.lines[0], /core: not set\. Messages wait for you to approve them\./);
+    assert.equal(unset.access, null); assert.equal(unset.lines[0], 'core: Manual. elu access --auto or --manual changes it.');
     await assert.rejects(peerCli(['access'], { auto: true, manual: true }), /Choose --auto or --manual\./);
     const saved = await peerCli(['access'], { manual: true, rules: 'Only answer questions, do not edit files.', project: root });
     assert.equal(saved.message, 'Saved what teammates can do here.');
@@ -595,7 +595,7 @@ test('elu access --auto, --manual or --rules run in a project sets that project;
     const other = project(t); process.chdir(other.root);
     const unopened = await peerCli(['access'], { auto: true });
     assert.equal(unopened.access.root, fs.realpathSync(other.root));
-    assert.ok(unopened.lines.includes(`  Project: ${fs.realpathSync(other.root)} (open it in ELU so sessions can start there)`), unopened.lines.join('\n'));
+    assert.ok(unopened.lines.includes(`  Project: ${fs.realpathSync(other.root)} (open it in ELU)`), unopened.lines.join('\n'));
     // A linked worktree, as a session's, is not the project; nor is a folder outside one.
     process.chdir(first.root); await peerCli(['access'], { auto: true });
     const linked = path.join(first.parent, 'linked'); git(first.root, ['worktree', 'add', '-q', '-b', 'linked', linked]);
@@ -2188,7 +2188,7 @@ test('elu team leave and remove start the daemon for them, and a member on no te
     exits.push(() => { child.kill('SIGKILL'); return exited; });
     await until(() => withHome(home, () => peer.peerStatus().running && peer.peerStatus().stale), 'the old daemon running', 10000);
     const listed = await peerCli(['peers'], {});
-    assert.match(listed.message, /^No team yet, so nothing runs\./);
+    assert.match(listed.message, /^No team yet\. \d+ peer items?\./);
     await exited; await new Promise(resolve => setTimeout(resolve, 1500));
     assert.equal(peer.peerStatus().running, false, 'nothing started in its place');
     await assert.rejects(peerCli(['ask', '@ana', 'hi'], {}), /No team yet\. Create one with elu team create NAME, or join one with elu join CODE\./);
