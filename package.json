@@ -1,6 +1,6 @@
 {
   "name": "@elu-labs/elu",
-  "version": "0.1.20",
+  "version": "0.1.21",
   "description": "A full-screen terminal app that runs coding sessions on the AI command lines you already use, with bots that review and do work, and teammates you can ask.",
   "keywords": [
     "ai",
