@@ -1750,6 +1750,7 @@ test('the Task block of a session in Done on my other computer says how it ended
     const repo = chat(project.root, 1, { goal: 'Check the dependencies', state: 'answered', messages: [{ at, text: 'Check the dependencies' }, { at, from: 'Lead', text: 'Two packages are behind.' }] });
     proposeTask(repo, '1', { title: 'Nightly dependency check', description: 'Look for outdated packages.', goal: 'Every package is current.', objectives: ['List outdated packages', 'Open one update'], priority: 'high', severity: 'medium', estimateMinutes: 30 }, { startedBy: 'schedule' });
     const file = planFile(repo, '1'), value = JSON.parse(fs.readFileSync(file, 'utf8')); for (const row of value.tasks) row.proposedAt = row.approvedAt = at; fs.writeFileSync(file, JSON.stringify(value));
+    relist();
   });
   await withHome(laptop.home, () => listTick(viewCtx));
   const item = withHome(laptop.home, () => remoteMachines())[0].sessions.find(row => row.title === 'Nightly dependency check');
