@@ -479,7 +479,7 @@ test('a thread dialog acts on the letter it names, only while its field is empty
   await until(() => threads.items.length === 5, 'threads');
   const open = async (list, pattern, title, hint) => { list.focus(); selectRow(list, pattern); v.input.write('\r'); await until(() => modal(v, title) && v.text().includes(hint), hint); };
   // Enter reads an ask; w in the dialog opens the picker, Enter starts it in the picked mode.
-  await open(threads, /asks you/, 'Thread with @sara', 'y approves: it starts as if you typed it. w picks the mode first. n declines.');
+  await open(threads, /asks you/, 'Thread with @sara', 'y starts it now, as if you typed it. w picks the mode first. n declines.');
   v.input.write('w'); await until(() => modal(v, 'Accept'), 'accept picker'); v.input.write('\r');
   // The daemon runs it as the owner's session in the picked mode; the dialog only sends the command.
   await until(() => peer.sent().some(row => row.type === 'work' && row.id === 'incoming:task-ask' && row.permissions === 'ask'), 'ask accepted from the dialog');
@@ -1212,7 +1212,7 @@ test("over a session on my other computer that waits for my answer, a typed yes 
   assert.match(ask._label.getText(), / Message Opus 5\.5 on @sara-box /);
   v.input.write('\r');
   await until(() => sentThere().length === 1, 'sent there');
-  assert.deepEqual(sentThere()[0], { type: 'remoteSend', id, text: 'yes' });
+  assert.deepEqual(sentThere()[0], { type: 'remoteSend', id, text: 'yes', typed: true });
   await until(() => /Sent to Opus 5\.5 on @sara-box\./.test(status()) && ask.getValue() === '', 'the line says where it went');
   // No session is made on this computer, and no agent here is linked to that one.
   assert.deepEqual(pendingRequests(p.root), [], 'nothing was queued here');
@@ -1231,7 +1231,7 @@ test("over a session on my other computer that waits for my answer, a typed yes 
   // A second plain message continues it there the same way.
   await send(v, 'now go on to the next ones');
   await until(() => sentThere().length === 2, 'sent there again');
-  assert.deepEqual(sentThere()[1], { type: 'remoteSend', id, text: 'now go on to the next ones' });
+  assert.deepEqual(sentThere()[1], { type: 'remoteSend', id, text: 'now go on to the next ones', typed: true });
   // That computer's @name first, by its row's name or its owner's there, still means the session there.
   await send(v, '@sara-box 1'); await until(() => sentThere().length === 3, 'with its name');
   await send(v, '@sara and the tests'); await until(() => sentThere().length === 4, 'with its owner name there');
@@ -1270,7 +1270,7 @@ test("over a session on my other computer that waits for my answer, a typed yes 
   board.focus(); selectRow(board, /^(?!.*Help:).*Invoice totals fix/);
   await send(v, 'yes');
   await until(() => sentThere().length === 5, 'sent there');
-  assert.deepEqual(sentThere()[4], { type: 'remoteSend', id, text: 'yes' });
+  assert.deepEqual(sentThere()[4], { type: 'remoteSend', id, text: 'yes', typed: true });
   assert.equal(pendingRequests(p.root).filter(row => row.continuationTaskId === '1').length, 1, 'it did not go to my agent here');
 });
 
@@ -1312,7 +1312,7 @@ test("over a session on my other computer, its @name that is also a name on my t
   await until(() => /enter send to @sara-box/.test(v.panels.keys.getText()), 'and the keys');
   ask.submit();
   await until(() => peer.sent().some(row => row.type === 'remoteSend'), 'sent there');
-  assert.deepEqual(peer.sent().filter(row => row.type === 'remoteSend'), [{ type: 'remoteSend', id, text: 'second message' }]);
+  assert.deepEqual(peer.sent().filter(row => row.type === 'remoteSend'), [{ type: 'remoteSend', id, text: 'second message', typed: true }]);
   assert.deepEqual(peer.sent().filter(row => row.type === 'ask'), [], 'no teammate was asked anything');
 });
 
@@ -1592,20 +1592,20 @@ test('/model NAME and a message over a session on my other computer go there as 
   await until(() => board.items.map(plainItem).some(row => /Nested routes e2e handoff/.test(row)), 'the row of the session there');
   await over(); await send(v, '/model opus can you check which files that session is asking about and instruction to start the handoff');
   await until(() => sentThere().length === 1, 'sent there');
-  assert.deepEqual(sentThere()[0], { type: 'remoteSend', id, text: 'opus can you check which files that session is asking about and instruction to start the handoff', model: true });
+  assert.deepEqual(sentThere()[0], { type: 'remoteSend', id, text: 'opus can you check which files that session is asking about and instruction to start the handoff', model: true, typed: true });
   await until(() => /Sent to the session on @sara-box, now on Opus 5\.5\./.test(status()), 'the status says where it went and names the model as that computer does');
   // The name alone. No Opus ever ran on this computer, so it has no model it shows as Opus 5.5: the two words still go as typed, and no id is made up here.
   await over(); await send(v, '/model opus 5.5');
   await until(() => sentThere().length === 2, 'the model alone');
-  assert.deepEqual(sentThere()[1], { type: 'remoteSend', id, text: 'opus 5.5', model: true });
+  assert.deepEqual(sentThere()[1], { type: 'remoteSend', id, text: 'opus 5.5', model: true, typed: true });
   await until(() => /The session on @sara-box uses Opus 5\.5 from your next message\./.test(status()), 'the status names the model');
   await over(); await send(v, '/model sonnet 5');
   await until(() => sentThere().length === 3 && /The session on @sara-box uses Sonnet 5 from your next message\./.test(status()), 'a name and version');
-  assert.deepEqual(sentThere()[2], { type: 'remoteSend', id, text: 'sonnet 5', model: true });
+  assert.deepEqual(sentThere()[2], { type: 'remoteSend', id, text: 'sonnet 5', model: true, typed: true });
   // A model only that computer has: this one's /model would say there is none, and it is not asked.
   await over(); await send(v, '/model devbox-model  and the tests');
   await until(() => sentThere().length === 4 && /Sent to the session on @sara-box, now on devbox-model\./.test(status()), 'a model of that computer alone');
-  assert.deepEqual(sentThere()[3], { type: 'remoteSend', id, text: 'devbox-model  and the tests', model: true });
+  assert.deepEqual(sentThere()[3], { type: 'remoteSend', id, text: 'devbox-model  and the tests', model: true, typed: true });
   // A name that computer does not know: its own line, and the text stays to be corrected.
   await over(); await send(v, '/model nosuch and the tests');
   await until(() => /@sara-box: No model named nosuch\. \/model lists them; \/model add adds one by name\./.test(status()), 'that computer says it has no such model');
@@ -1906,7 +1906,7 @@ test('a session on my other computer stays where the owner scrolled it through e
   await until(() => chat.getScrollPerc(true) === 100, 'opened at its end');
 });
 
-test('a session on my other computer keeps the lines the owner reads while its oldest entries leave the top and new ones land above its changes and its Task', { timeout: 30000 }, async t => {
+test('a session on my other computer keeps the lines the owner reads while its oldest entries leave the top and new ones land above its Task and its steps', { timeout: 30000 }, async t => {
   // The viewer keeps the last 200 entries of a session; this one has said more than that.
   const KEPT = 200, at = new Date().toISOString(), entry = n => ({ role: n % 2 ? 'Claude' : 'You', at, text: `Line ${n} of the long chat`, ...(n % 2 ? { lead: true } : {}) });
   const upTo = n => Array.from({ length: n }, (_, index) => entry(index + 1)).slice(-KEPT);
@@ -1926,23 +1926,22 @@ test('a session on my other computer keeps the lines the owner reads while its o
   board.focus(); selectRow(board, /Read the long chat/);
   await until(() => /Runs on @sara-box/.test(chat.getContent()) && chat.getScrollPerc(true) === 100, 'its chat, at the end');
   ask.focus();
-  // Reading the line of its changes: an entry lands above it, two leave the top, a step and a subtask move on.
-  const CHANGED = 'Changes · 1 file · +40 −0 · d opens them';
-  assert.equal(lineOf('+changed line 20'), -1, 'the chat names the changes, and never holds them');
-  await scrollTo(CHANGED);
+  // Reading the first line of its Task: an entry lands above it, two leave the top, a step and a subtask move on.
+  assert.equal(lineOf('+changed line 20'), -1, 'the chat never holds the changes'); assert.ok(!(chat._clines ?? []).some(line => /Changes · /.test(bare(line))), 'nor a line that counts them');
+  await scrollTo('Task · approved · 0 of 30 subtasks done');
   await more([...upTo(230), { role: 'Claude', at, text: 'A longer answer\nthat takes\nfour lines\nof the pane', lead: true }, entry(231)].slice(-KEPT),
     { steps: [...session.steps, { at, text: 'Running the tests' }], plan: { ...session.plan, subtasks: subtasks.map((step, index) => ({ ...step, state: index ? index === 1 ? 'doing' : 'todo' : 'done' })) } });
-  assert.equal(top(), CHANGED, 'the line stays where he reads it');
+  assert.equal(top(), 'Task · approved · 1 of 30 subtasks done', 'the line stays where he reads it');
   // Reading the chat: the oldest entries leave the top as new ones arrive.
   await scrollTo('Line 150 of the long chat');
   await more([...session.entries, ...Array.from({ length: 12 }, (_, index) => entry(232 + index))].slice(-KEPT));
   assert.equal(top(), 'Line 150 of the long chat', 'the entry he reads stays at the top of the pane');
   await pause(300);
   assert.equal(top(), 'Line 150 of the long chat', 'and through every draw after');
-  // Reading a step when the work ends and the steps go: the place is the part after them, the Task.
-  await scrollTo('Reading the cart');
-  await more([...session.entries, entry(244)].slice(-KEPT), { state: 'answered' });
-  assert.match(top(), /^Task · /, 'the part after the steps, from its first line');
+  // Reading an entry when the Task above the steps changes and the work ends: the entry stays.
+  await scrollTo('Line 243 of the long chat');
+  await more([...session.entries, entry(244)].slice(-KEPT), { state: 'answered', plan: { ...session.plan, subtasks: subtasks.map(step => ({ ...step, state: 'done' })) } });
+  assert.equal(top(), 'Line 243 of the long chat', 'the entry he reads stays, whatever changed under it');
   // At the top it stays at the top while the first entry there leaves.
   wheelAt(v, chat, -1, 2000); await until(() => chat.childBase === 0, 'the top');
   await more([...session.entries, entry(245), entry(246)].slice(-KEPT));
@@ -2118,8 +2117,8 @@ test('a session on my other computer shows every line of its changes, and its ea
   await until(() => /Runs on @sara-box/.test(chat.getContent()) && chat.getScrollPerc(true) === 100, 'its chat, at the end');
   ask.focus();
   // Every line of its changes: ELU 0.1.19 showed the first 120 and three dots in the chat. The
-  // chat names them in one line now, and its Changes tab holds every one (read at the end).
-  assert.match(chat.getContent().replace(/\x1b\[[\d;]*m/g, ''), /Changes · 1 file · \+300 −0 · d opens them/); assert.doesNotMatch(chat.getContent(), /changed line \d/);
+  // chat holds none of them now, nor a line that counts them: the name of its Changes tab does, and the tab holds every one (read at the end).
+  assert.doesNotMatch(chat.getContent().replace(/\x1b\[[\d;]*m/g, ''), /Changes · |d opens them|changed line \d/); assert.equal(v.panels.sessionTabs.getText().trim(), 'Chat   Changes 1');
   // The line over its oldest entry here counts the ones before it, and says how to get them.
   assert.match(chat.getContent(), /220 earlier messages are on @sara-box\. Page up to load them\./);
   await pause(300);
@@ -3382,7 +3381,7 @@ const changeLines = v => v.panels.changes.getText().split('\n').map(row => row.r
 const cursorLine = v => changeLines(v).find(row => row.startsWith('▌')) ?? '';
 const squeezed = row => row.replace(/ {2,}/g, '  ');
 
-for (const [columns, rows] of [[140, 50], [80, 24]]) test(`a session on my other computer has a Changes tab of its own at ${columns}x${rows}: its chat names the changes in one line, d opens them, and they read as files and hunks`, { timeout: 60000 }, async t => {
+for (const [columns, rows] of [[140, 50], [80, 24]]) test(`a session on my other computer has a Changes tab of its own at ${columns}x${rows}: its name counts the changes, no line of the chat does, d opens them, and they read as files and hunks`, { timeout: 60000 }, async t => {
   const at = new Date().toISOString();
   const session = { id: '66666666-6666-4666-8666-666666666666', machine: SARA, createdAt: at, lastAt: at, title: 'Fix the report', state: 'needs_input', question: 'Which format?', choices: ['Uppercase', 'Lowercase'], approvals: [], steps: [],
     entries: [{ role: 'You', at, text: 'Fix the report' }, { role: 'Claude', at, text: 'I changed the report and the cart.', lead: true }], diff: { summary: '7 files · +76 −5', patch: sentChanges() } };
@@ -3391,11 +3390,10 @@ for (const [columns, rows] of [[140, 50], [80, 24]]) test(`a session on my other
   const { board, chat, changes, sessionTabs } = v.panels, keys = () => v.panels.keys.getText().trim(), focused = () => v.current.screen.focused;
   await until(() => board.items.some(item => /Fix the report/.test(plainItem(item))), 'the remote row');
   board.focus(); selectRow(board, /Fix the report/);
-  // The chat: one line for the changes, under the question. Never the diff.
-  await until(() => /Changes · 7 files · \+76 −5 · d opens them/.test(chat.getText()), 'the one line');
-  assert.equal(chat.getText().split('\n').filter(line => /Changes · /.test(line)).length, 1);
-  assert.doesNotMatch(chat.getText(), /diff --git|index 1111111|@@ -|\+\+\+ b\/|--- a\/|Readme line|Matching orders/);
-  assert.ok(chat.getText().indexOf('Which format?') < chat.getText().indexOf('Changes · 7 files'));
+  // The chat: no line for the changes, as a session here has none, and never the diff. Its question ends it.
+  await until(() => /Which format\?/.test(chat.getText()) && sessionTabs.getText().trim() === 'Chat   Changes 7', 'its chat, and the tab whose name counts its changes');
+  assert.doesNotMatch(chat.getText(), /Changes · |d opens them|diff --git|index 1111111|@@ -|\+\+\+ b\/|--- a\/|Readme line|Matching orders/);
+  assert.match(chat.getText().trimEnd(), /Type its number or your answer below\.$/);
   // The same two tabs a session here has, and d among the row's keys.
   assert.equal(sessionTabs.hidden, false); assert.equal(sessionTabs.getText().trim(), 'Chat   Changes 7'); assert.equal(changes.hidden, true);
   assert.match(keys(), /enter open {2}c remove {2}d changes/);
@@ -3443,7 +3441,7 @@ for (const [columns, rows] of [[140, 50], [80, 24]]) test(`a session on my other
   board.focus(); v.input.write('d'); await until(() => focused() === changes, 'd again');
   const left = cursorLine(v);
   v.input.write('\x1b'); await until(() => v.current.sessionView === 'chat' && focused() === board, 'Esc goes back to the row');
-  assert.equal(changes.hidden, true); assert.match(chat.getText(), /Changes · 7 files · \+76 −5 · d opens them/);
+  assert.equal(changes.hidden, true); assert.match(chat.getText(), /Which format\?/); assert.equal(sessionTabs.getText().trim(), 'Chat   Changes 7');
   // Tab reaches its chat as it does for a session here (the list, the box, the chat). d in the pane does the same, and Esc goes back to the pane.
   v.input.write('\t'); await until(() => focused() === v.panels.ask, 'Tab from the row: the message box');
   v.input.write('\t'); await until(() => focused() === chat && /d changes/.test(keys()), 'then its chat, which names d');

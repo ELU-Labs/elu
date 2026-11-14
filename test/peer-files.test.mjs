@@ -265,7 +265,7 @@ test('the message box offers the files a message names: y sends them with it, n 
     assert.equal(command.type, 'remoteFiles'); assert.equal(command.text, `Here is the key: ${b.key}`); assert.equal(command.files.count, 1); assert.ok(options.timeoutMs >= 60000);
     // n: the text alone, as before.
     assert.equal(await glue.send(row, `Here is the key: ${b.key}`, answer(false)), 'Sent to the session on @devbox.');
-    assert.deepEqual(commands.at(-1)[0], { type: 'remoteSend', id: row.id, text: `Here is the key: ${b.key}` });
+    assert.deepEqual(commands.at(-1)[0], { type: 'remoteSend', id: row.id, text: `Here is the key: ${b.key}`, typed: true });
     // A message that names nothing here is not asked about.
     const count = asked.length;
     await glue.send(row, 'And the tests in /no/such/folder', answer(true));
