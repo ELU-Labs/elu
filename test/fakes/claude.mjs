@@ -195,7 +195,9 @@ if(cfg.noCredits&&modelArg===cfg.noCredits){console.log(JSON.stringify({type:'sy
 const tooLong=cfg.tooLong!==undefined&&(cfg.tooLongOn??['Review as @']).some(text=>input.includes(text))&&(cfg.tooLong==='all'||cfg.tooLong==='files'&&/"content":"|"excerpts":\[/.test(input)||typeof cfg.tooLong==='number'&&input.length>cfg.tooLong);
 // standupTooLong (fake.json): a Standup turn over that many characters, refused the same way.
 const standupTooLong=typeof cfg.standupTooLong==='number'&&input.includes("owner's Standup")&&input.length>cfg.standupTooLong;
-if(tooLong||standupTooLong){console.log(JSON.stringify({type:'system',subtype:'init',session_id:session,model:reported,permissionMode:'default',mcp_servers:[]}));console.log(JSON.stringify({type:'result',subtype:'success',is_error:true,duration_ms:120,num_turns:1,result:'Prompt is too long',session_id:session,total_cost_usd:nothingSpent}));process.exit(1);}
+// promptTooLong (fake.json): any prompt over that many characters, refused the same way.
+const promptTooLong=typeof cfg.promptTooLong==='number'&&input.length>cfg.promptTooLong;
+if(tooLong||standupTooLong||promptTooLong){console.log(JSON.stringify({type:'system',subtype:'init',session_id:session,model:reported,permissionMode:'default',mcp_servers:[]}));console.log(JSON.stringify({type:'result',subtype:'success',is_error:true,duration_ms:120,num_turns:1,result:'Prompt is too long',session_id:session,total_cost_usd:nothingSpent}));process.exit(1);}
 if(mode==='no-sandbox'){console.error('Error: sandbox required but unavailable: bubblewrap (bwrap) not installed, socat not installed');console.error('  sandbox.failIfUnavailable is set.');console.log(JSON.stringify({type:'result',subtype:'error_during_execution',is_error:true,session_id:session}));process.exit(1);}
 // spend (fake.json): what a turn uses itself, { model, tokens: [in, out, cacheRead, cacheWrite], usd }.
 // As the real CLI, the session then has its own id (the one --session-id names, or the one
@@ -328,6 +330,22 @@ if(edit&&cfg.install==='link'){try{fs.lstatSync('tool-link');}catch{fs.symlinkSy
 // insert (fake.json): { file, at, text }, lines an editing turn also puts in that file after line at, once.
 if(edit&&cfg.insert){const {file,at,text}=cfg.insert;const lines=fs.readFileSync(file,'utf8').split('\n');if(!lines.includes(text.split('\n')[0]))fs.writeFileSync(file,[...lines.slice(0,at),text,...lines.slice(at)].join('\n'));}
 if(edit&&(input.includes('Trim spaces')||cfg.next&&continued))fs.writeFileSync('src/coupon.mjs','export const normalize = (value) => value.trim().toUpperCase();\n');
+// commit (fake.json): an editing turn commits its own work with Git, as an agent that was told
+// to commit does. 'once': one commit of everything it changed. 'twice': a second commit after
+// it. 'amend': the commit, then that commit amended. 'branch': a new branch first, and the
+// commit there. 'dirty': the commit, then one more edit that it leaves uncommitted. 'push':
+// the commit, then a push to origin. A turn that changed nothing since commits nothing.
+if(edit&&cfg.commit){
+ const {spawnSync}=await import('node:child_process');
+ const run=(...args)=>{const r=spawnSync('git',['-c','user.name=Agent','-c','user.email=agent@example.invalid',...args],{encoding:'utf8'});if(r.status!==0)throw new Error(`git ${args.join(' ')}: ${r.stderr}`);return r.stdout;};
+ const save=(message,...more)=>{run('add','-A');if(more.length||run('status','--porcelain').trim())run('commit','-q',...more,'-m',message);};
+ if(cfg.commit==='branch'&&run('branch','--show-current').trim()!=='agent/coupons')run('checkout','-q','-b','agent/coupons');
+ save('Normalize coupons');
+ if(cfg.commit==='twice'){fs.writeFileSync('notes.md','Coupons are upper case.\n');save('Add notes');}
+ if(cfg.commit==='amend'){fs.writeFileSync('notes.md','Coupons are upper case.\n');save('Normalize coupons, with notes','--amend');}
+ if(cfg.commit==='dirty')fs.writeFileSync('notes.md','Not committed yet.\n');
+ if(cfg.commit==='push')run('push','-q','origin','HEAD');
+}
 // A command of this turn as the real CLI prints it: the call, then its result, with the exit code when it failed.
 const step=async(id,command)=>{const {spawnSync}=await import('node:child_process');say({type:'assistant',message:{content:[{type:'tool_use',id,name:'Bash',input:{command,description:'Run it'}}]}});const r=spawnSync('/bin/sh',['-c',command],{encoding:'utf8'}),out=`${r.stdout}${r.stderr}`;say({type:'user',message:{content:[{type:'tool_result',tool_use_id:id,content:r.status===0?out||'(no output)':`Exit code ${r.status}\n${out}`,...(r.status===0?{}:{is_error:true})}]}});return r.status===0;};
 if(opsRun)await step('toolu_fake_ops','node --check src/coupon.mjs');
@@ -374,6 +392,10 @@ if(cfg.live&&todoTools.includes('TaskCreate')&&cfg.liveTool!=='todowrite'){
 }
 else if(cfg.live&&todoTools.includes('TodoWrite')&&cfg.liveTool==='todowrite'){console.log(JSON.stringify({type:'assistant',parent_tool_use_id:null,message:{content:[{type:'tool_use',id:'toolu_fake_todo',name:'TodoWrite',input:{todos:[{content:'Change normalize',status:'completed',activeForm:'Changing normalize'},{content:'Run the coupon test',status:'in_progress',activeForm:'Running the coupon test'}]}}]}}));await liveGate();}
 if(mode==='stall'&&edit){console.log(JSON.stringify({type:'assistant',message:{content:[{type:'text',text:'Edited the file. Thinking.'}]}}));await new Promise(resolve=>setTimeout(resolve,60000));}
+// quiet (fake.json): a turn prints one line and then nothing for a minute, as one that stopped working does, an answering
+// turn as an editing one. 'always': every launch. 'once': not the launch ELU starts in its place, which is told that the
+// turn before it printed nothing: that one goes on to its answer.
+if(cfg.quiet&&(cfg.quiet==='always'||!input.includes('ELU stopped it and started this one in its place'))){console.log(JSON.stringify({type:'assistant',message:{content:[{type:'text',text:'Reading the code. Thinking.'}]}}));await new Promise(resolve=>setTimeout(resolve,60000));}
 if(mode==='question'&&!args.includes('--resume')&&!input.includes('Uppercase')){result.outcome='needs_input';result.question='Which format?';result.choices=['Uppercase','Lowercase'];}
 if((mode==='review-fix'||mode==='review-block')&&input.includes('Address the review')){result.responses=[{id:'R1',action:mode==='review-fix'?'fixed':'disputed',reason:mode==='review-fix'?'Handled the edge case.':'The finding still needs owner input.'}];}
 // steps (mode): a turn that shows its work as the real CLI writes it without partial messages:

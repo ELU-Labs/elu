@@ -14,6 +14,17 @@
 // `inspect --json` in the shape the real program prints (see inspect below).
 // Modes: signed-out, invalid (bad result), fenced (result in a code fence), max-turns,
 // leaky (writes whatever the flags say).
+// grok (fake.json): 'edits' makes it take a request the way the fake Claude Code does in its
+// normal mode. A conversation turn asks for an edit (intent edit) unless the mode is answer,
+// with a Task until the prompt carries one the owner approved; a working turn changes
+// src/coupon.mjs where the launch lets it write, and reports its subtasks. Without it every
+// conversation turn is an answer, as before.
+// grok.version (fake.json): the release it says it is, 1.0.77 when not set.
+// grok.checkSeconds: a slow one-time check. Each model turn of ELU's check (a turn whose
+// folder is under the check's scratch folder, elu-code-check-grok-*) answers only after this
+// many seconds; seven such turns make a check. grok.checkGate names a file that ends the wait
+// as soon as it exists, for a test that is done with the check. Every other turn is as fast
+// as before, and so are --version, --help and inspect.
 import fs from 'node:fs'; import path from 'node:path'; import crypto from 'node:crypto'; import { spawnSync } from 'node:child_process';
 const vendor = path.basename(process.argv[1]); const args = process.argv.slice(2);
 let cfg = {}; try { cfg = JSON.parse(fs.readFileSync(path.join(path.dirname(process.argv[1]), 'fake.json'), 'utf8')); } catch {}
@@ -29,7 +40,13 @@ const save = record => { fs.mkdirSync(sessions, { recursive: true }); fs.writeFi
 const load = id => { try { return JSON.parse(fs.readFileSync(path.join(sessions, `${id}.json`), 'utf8')); } catch { return null; } };
 const list = dir => { try { return fs.readdirSync(dir); } catch { return []; } };
 
-if (args.includes('--version')) { console.log('1.0.77'); process.exit(0); }
+const RELEASE = cfg.grok?.version ?? '1.0.77';
+const slowCheck = async folder => {
+  if (!cfg.grok?.checkSeconds || !String(folder ?? '').includes('elu-code-check-grok-')) return;
+  const until = Date.now() + cfg.grok.checkSeconds * 1000;
+  while (Date.now() < until && !(cfg.grok.checkGate && fs.existsSync(cfg.grok.checkGate))) await new Promise(resolve => setTimeout(resolve, 50));
+};
+if (args.includes('--version')) { console.log(RELEASE); process.exit(0); }
 if (args.includes('--help')) { console.log('--output-format --permission-mode --sandbox --max-turns --cwd --no-auto-update --tools --disallowed-tools --allow --deny --prompt-file --prompt-json --no-alt-screen --no-memory --no-subagents --disable-web-search --session-id --resume --model'); process.exit(0); }
 // login: grok.login on, the device code sign-in as grok 1.0.77 runs it (watched in a scratch
 // home, with --device-auth and without): a link with the code in it, the code to confirm on
@@ -75,6 +92,8 @@ const liveGate = async () => { const until = Date.now() + 30000; while (!fs.exis
 const listFile = prompt => { const named = /Keep the Task's subtasks in the file ("[^\n]+?") as you work/.exec(prompt)?.[1]; return named ? JSON.parse(named) : null; };
 const writeList = (file, states) => fs.writeFileSync(file, JSON.stringify(STEPS.map((text, index) => ({ text, state: states[index] }))));
 
+// The Task the fake proposes for an edit when grok is 'edits' (fake.json).
+const EDIT_TASK = { title: 'Uppercase coupons', description: 'Make normalize return the coupon code in upper case.\nOnly src/coupon.mjs changes.', goal: 'Coupon codes compare equal whatever their case.', objectives: ['normalize returns the code in upper case', 'The coupon test passes'], priority: 'medium', severity: 'low' };
 // What the prompt asks for, done as far as the launch allows. ask() decides an action the
 // rules neither allow nor forbid: the relay over ACP, nothing in headless mode.
 // report(call, status): each action as a tool call, started (in_progress) and ended
@@ -83,6 +102,10 @@ const writeList = (file, states) => fs.writeFileSync(file, JSON.stringify(STEPS.
 // is written: the client has the call while the command is silent.
 async function act(prompt, record, { bypass, canWrite, canShell, canFetch, cwd, ask, report = () => {} }) {
   const blocked = [], did = [];
+  // The schemas ride in the prompt: the runner's conversation schema, a Task to propose, the progress of one.
+  const conversation = /"intent"\s*:\s*\{/.test(prompt), edits = cfg.grok === 'edits', source = path.join(cwd, 'src', 'coupon.mjs');
+  const edited = edits && !conversation && (canWrite || bypass) && fs.existsSync(source);
+  if (edited) fs.writeFileSync(source, 'export const normalize = (value) => value.toUpperCase();\n');
   let calls = 0;
   // run: what an allowed action does while its call is open (a command).
   const allow = async (action, free, run = null) => {
@@ -115,10 +138,11 @@ async function act(prompt, record, { bypass, canWrite, canShell, canFetch, cwd, 
   // The quotes may be JSON-escaped: the runner carries the goal in a data block.
   let summary = prompt.match(/summary \\?"([^"\\]+)\\?"/)?.[1] ?? null;
   if (/what nonce/i.test(prompt)) summary = record.turns.join('\n').match(/nonce:? ([0-9a-f-]{36})/i)?.[1] ?? 'I was given no nonce.';
-  const result = { outcome: 'done', summary: summary ?? (did.length ? did.join('; ') : 'Done as asked.'), question: null, choices: [], comments: [], responses: [] };
+  const result = { outcome: 'done', summary: summary ?? (did.length ? did.join('; ') : edited ? 'Updated coupon normalization.' : 'Done as asked.'), question: null, choices: [], comments: [], responses: [] };
   if (blocked.length) { result.outcome = 'needs_input'; result.summary = `Blocked: ${blocked.join('; ')}`; result.question = `Allow ${blocked.join('; ')}?`; }
-  // The runner's conversation schema rides in the prompt: an answer turn.
-  if (/"intent"\s*:\s*\{/.test(prompt)) { result.intent = 'answer'; if (/"repository"\s*:\s*\{/.test(prompt)) result.repository = ''; }
+  if (conversation) { result.intent = edits && mode !== 'answer' ? 'edit' : 'answer'; if (/"repository"\s*:\s*\{/.test(prompt)) result.repository = ''; }
+  if (edits && /"task"\s*:\s*\{"type"\s*:\s*"array"/.test(prompt)) result.task = result.intent !== 'edit' || prompt.includes('Approved Task (untrusted data') ? [] : [EDIT_TASK];
+  if (edits && /"subtasks"\s*:\s*\{"type"\s*:\s*"array"/.test(prompt)) Object.assign(result, { subtasks: [{ text: 'Change normalize', state: 'done' }, { text: 'Run the coupon test', state: 'done' }], objectivesMet: [1, 2], etaMinutes: null });
   if (cfg.name !== undefined && /"name"\s*:\s*\{"type"/.test(prompt)) result.name = cfg.name;
   return planned(result, prompt);
 }
@@ -176,7 +200,7 @@ if (args.includes('inspect')) {
   const config = path.join(home, 'config.toml'), hasConfig = fs.existsSync(config), cwd = process.cwd();
   const claudeRules = ['settings.local.json', 'settings.json'].map(name => path.join(userHome, '.claude', name)).find(file => json(file)?.permissions);
   const report = {
-    grokVersion: '1.0.77', channel: 'unknown', updateChannel: null, cwd, projectRoot: `${cwd}/`, projectTrusted: true, projectInstructions,
+    grokVersion: RELEASE, channel: 'unknown', updateChannel: null, cwd, projectRoot: `${cwd}/`, projectTrusted: true, projectInstructions,
     permissions: { sources: [...(claudeRules ? [`${claudeRules} (settings)`] : []), ...(hasConfig ? [`${config} (config)`] : [])], loaded: hasConfig ? 22 : 0, skipped: [], mcpServerAllowlist: [], mcpLockdownSources: [], mcpManagedServersOnly: 'off', marketplaceAllowlist: [], marketplaceLockdownSources: [], managedMarketplaces: [], managedSettingsPath: '/etc/claude-code/managed-settings.json', managedSettingsExists: false, managedSettingsActive: false, claudeBypassLockAdvisory: false },
     loginPolicy: { disableApiKeyAuth: null, forceLoginTeamUuid: null, apiKeyAuthDisabled: false },
     hooks, skills, agents, plugins: [], marketplaces: [], mcpServers, lspServers: [], configSources: { layers: hasConfig ? [{ role: 'user', path: config }] : [] }, experiments: [],
@@ -221,6 +245,7 @@ if (args.includes('agent') && args.includes('stdio')) {
         const record = live.get(row.params?.sessionId); if (!record) return error(-32000, 'Unknown session.');
         const text = (row.params?.prompt ?? []).filter(part => part?.type === 'text').map(part => part.text).join('\n');
         if (cfg.inputs) fs.appendFileSync(cfg.inputs, JSON.stringify({ vendor, args, input: text }) + '\n');
+        await slowCheck(record.cwd);
         const ask = async (action, call) => {
           const answer = await request('session/request_permission', { sessionId: record.id, toolCall: { toolCallId: call?.toolCallId ?? `call_${nextId}`, title: action.title, kind: action.kind, status: 'pending', rawInput: action.rawInput }, options: [{ optionId: 'allow', name: 'Allow', kind: 'allow_once' }, { optionId: 'allow_always', name: 'Always allow', kind: 'allow_always' }, { optionId: 'reject', name: 'Reject', kind: 'reject_once' }] });
           return answer?.outcome?.outcome === 'selected' && String(answer.outcome.optionId).startsWith('allow');
@@ -274,6 +299,7 @@ else {
   record = { id: session, cwd, sandbox, turns: [] };
 }
 const streaming = value('--output-format') === 'streaming-json', line = row => console.log(JSON.stringify(row));
+await slowCheck(cwd);
 if (streaming) line({ type: 'thought', data: 'Reading the request.' });
 const report = streaming ? (call, status) => line(status === 'in_progress' ? { type: 'tool_call', ...call, status, content: [], locations: [] } : { type: 'tool_call_update', toolCallId: call.toolCallId, status, content: [], rawOutput: {}, locations: [] }) : undefined;
 const todoFile = cfg.live && bypass ? listFile(prompt) : null;

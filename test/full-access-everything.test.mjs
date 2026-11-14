@@ -92,7 +92,9 @@ test('Grok Build in Full access starts in a path with glob characters, with its 
   const w = world(t, 'my [work] (v2) *'), lead = plainLead('grok');
   const odd = path.join(w.dir, 'notes {a,b}?'), runDir = path.join(w.dir, 'run [1] *'), home = path.join(w.dir, 'home'); for (const dir of [odd, runDir, path.join(home, '.grok')]) fs.mkdirSync(dir, { recursive: true });
   const base = { role: lead, cwd: w.cwd, session: SESSION, runDir };
-  assert.throws(() => grok.compile({ ...base, mode: 'full' }), /has not been checked on this machine yet/, 'the one-time check still comes first');
+  // Full access needs no check: it starts on a Grok Build that was never checked here. The other modes do not.
+  assert.equal(grok.compile({ ...base, mode: 'full' }).includes('bypassPermissions'), true);
+  for (const mode of ['locked', 'ask', 'auto']) assert.throws(() => grok.compile({ ...base, mode }), /has not been checked on this machine yet/, mode);
   grokChecked(path.join(w.dir, 'grok'));
   const full = grok.compile({ ...base, mode: 'full', folders: [odd] });
   assert.deepEqual(full, ['--no-auto-update', '--no-alt-screen', '--cwd', w.cwd, '--output-format', 'streaming-json', '--prompt-file', path.join(runDir, 'prompt.txt'), '--permission-mode', 'bypassPermissions', '--sandbox', 'off', '-s', SESSION]);
