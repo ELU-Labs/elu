@@ -319,16 +319,53 @@ test('where ELU cannot tell which commits are the session\'s it says so in one l
   assert.deepEqual(changeRows(taskPatch(repo, '1'), 120, false).map(row => visible(row.text)), ['No changes yet.', "ELU cannot tell which commits here are this session's, so only what is not committed shows."]);
   assert.equal(sessionChanges(sessionWire(repo, '1')).note, NOTES.blind);
   fs.writeFileSync(log, kept);
-  // Another person pushes a branch that main does not have, and the session merges it into its own:
-  // what the session changed since that merge is its own for certain.
+});
+
+// Another person's clone, which pushes branches that main does not have.
+function farAway(origin) {
   const far = path.join(path.dirname(origin), 'far');
   git(path.dirname(origin), ['clone', '-q', origin, far]); git(far, ['config', 'user.name', 'Far Away']); git(far, ['config', 'user.email', 'far@example.invalid']);
+  return far;
+}
+
+test('a session that merged a branch main does not have still shows all of its own work, compared with main and that branch merged', t => {
+  const { repo, folder, land, origin } = scene(t);
+  land({ 'landed/a.txt': 'a\n'.repeat(30) }, 'Land a file');
+  git(folder, ['fetch', '-q', 'origin']); git(folder, ['checkout', '-q', '-b', 'fix/one', 'origin/main']);
+  commit(folder, { 'src/one.mjs': 'export const one = 1;\n' }, 'Add one');
+  // Another person pushes a branch that main does not have, and the session merges it into its own.
+  const far = farAway(origin);
   git(far, ['checkout', '-q', '-b', 'feature', 'HEAD~1']); commit(far, { 'far/feature.txt': 'their feature\n'.repeat(10) }, 'Their feature'); git(far, ['push', '-q', 'origin', 'feature']);
-  git(folder, ['checkout', '-q', 'fix/one']); git(folder, ['fetch', '-q', 'origin']); git(folder, ['merge', '-q', '--no-edit', 'origin/feature']);
+  git(folder, ['fetch', '-q', 'origin']); git(folder, ['merge', '-q', '--no-edit', 'origin/feature']);
   commit(folder, { 'src/two.mjs': 'export const two = 2;\n' }, 'Add two');
+  write(folder, { 'notes.md': 'not committed\n' });
+  // Its work is compared with main and that branch as Git merges the two: neither's files count, all of its own do.
   const mixed = taskPatch(repo, '1');
-  assert.equal(mixed.note, NOTES.merge('fix/one'));
-  assert.deepEqual(names(mixed), ['src/two.mjs']);
-  assert.deepEqual(mixed.parts.map(part => [part.branch, part.compared]), [['fix/one', 'fix/one after the last merge this session made']]);
-  assert.doesNotMatch(JSON.stringify(names(mixed)), /far\/|landed\//);
+  assert.deepEqual([names(mixed).sort(), counts(mixed), mixed.note], [['notes.md', 'src/one.mjs', 'src/two.mjs'], [3, 3, 0], null]);
+  assert.deepEqual(mixed.parts.map(part => [part.branch, part.commits, part.compared]), [['fix/one', 3, 'main and feature, merged']]);
+  assert.equal(visible(changeRows(mixed, 120, false)[0].text), '3 files changed · +3 −0 · compared with main and feature, merged');
+  assert.deepEqual([sent(repo).names.sort(), sent(repo).counts, sent(repo).parts], [names(mixed).sort(), counts(mixed), parts(mixed)]);
+  assert.deepEqual(sessionFiles(readTask(repo, '1')), ['notes.md', 'src/one.mjs', 'src/two.mjs']);
+});
+
+test('where Git cannot put the two lines a session merged together itself, the tab says so and shows what the session changed since that merge', t => {
+  const { repo, folder, land, origin } = scene(t);
+  land({ 'shared.txt': 'one\ntwo\nthree\n' }, 'Land the shared file');
+  git(folder, ['fetch', '-q', 'origin']); git(folder, ['checkout', '-q', '-b', 'fix/one', 'origin/main']);
+  commit(folder, { 'src/one.mjs': 'export const one = 1;\n' }, 'Add one');
+  // A branch main does not have changes a line, and main changes the same line another way.
+  const far = farAway(origin);
+  git(far, ['checkout', '-q', '-b', 'clash']); commit(far, { 'shared.txt': 'one\ntwo on the branch\nthree\n' }, 'Change the shared line on a branch'); git(far, ['push', '-q', 'origin', 'clash']);
+  land({ 'shared.txt': 'one\ntwo on main\nthree\n' }, 'Change the shared line on main');
+  // The session merges main, then the branch, and settles the line by hand.
+  git(folder, ['fetch', '-q', 'origin']); git(folder, ['merge', '-q', '--no-edit', 'origin/main']);
+  assert.notEqual(command('git', ['-C', folder, 'merge', '-q', '--no-edit', 'origin/clash'], folder).status, 0);
+  write(folder, { 'shared.txt': 'one\ntwo settled\nthree\n' }); git(folder, ['add', '-A']); git(folder, ['commit', '-q', '--no-edit']);
+  commit(folder, { 'src/three.mjs': 'export const three = 3;\n' }, 'Add three');
+  const clash = taskPatch(repo, '1');
+  assert.equal(clash.note, NOTES.merge('fix/one'));
+  assert.deepEqual(names(clash), ['src/three.mjs']);
+  assert.deepEqual(clash.parts.map(part => [part.branch, part.compared]), [['fix/one', 'fix/one after the last merge this session made']]);
+  assert.deepEqual(changeRows(clash, 120, false).slice(0, 2).map(row => visible(row.text)), ['1 file changed · +1 −0 · compared with fix/one after the last merge this session made', 'This session merged other work into fix/one, so only its changes since that merge show.']);
+  assert.equal(sent(repo).changes.note, NOTES.merge('fix/one'));
 });
