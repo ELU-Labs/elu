@@ -4697,8 +4697,8 @@ test('a beside y and n keeps the rule for this project and allows what it covers
   await openTask(v, /Run the tes/); await until(() => v.current.session === '3', 'his session again');
   await send(v, '/permissions rules'); await until(() => modal(v, 'Allowed without asking'), 'the list');
   assert.deepEqual(dialogRows(v, 'Allowed without asking').map(row => row.replace(/\s+/g, ' ')), [
-    '1. on Read and search files in the project (default, all projects)', '2. on Git read commands: status, diff, log, show, branch, blame, inside the sandbox (default, all projects)',
-    "3. on The project's own test, lint, typecheck, format and build scripts, inside the sandbox (default, all projects)",
+    '1. on Read and search files in the project · all projects', '2. on Git read commands: status, diff, log, show, branch, blame, inside the sandbox · all projects',
+    "3. on The project's own test, lint, typecheck, format and build scripts, inside the sandbox · all projects",
     `4. Run npm test, with any arguments, also outside the sandbox · This project: ${p.root.replace(os.homedir(), '~')}`]);
   v.input.write('\x1b[B'); v.input.write('\x1b[B'); v.input.write('x');
   await until(() => /Turned off: The project's own test, lint/.test(status()) && /^3\. off/.test(dialogRows(v, 'Allowed without asking')[2] ?? ''), 'a default turned off, the list stays');
