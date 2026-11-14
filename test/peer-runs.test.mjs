@@ -1089,7 +1089,7 @@ test('a teammate\'s message never runs in the home folder: y, w and an older Aut
   registerProject(projectFolder(home));
   assert.equal(homeOrAbove(home), true); assert.equal(homeOrAbove(path.dirname(home)), true, 'a folder above home counts too'); assert.equal(homeOrAbove(p.root), false);
   // A message that names no project waits for the owner, with nothing queued anywhere.
-  const methods = intakeMethods(sara.ctx), WORDS = 'Get the issues from ELU, close the old ones';
+  const methods = intakeMethods(sara.ctx), WORDS = 'Fix the totals from May, check the old ones';
   const sendBare = (text, threadId) => getRecord(methods.SendMessage({ message: message({ text, contextId: threadId, ext: { kind: 'handoff', hop: 1, from: { key: SARA, name: 'sara' } } }) }, { key: SARA }).id);
   const record = sendBare(WORDS, 'thread-home');
   assert.equal(record.waiting, true); assert.equal(record.root, null);
@@ -1142,7 +1142,7 @@ test('a teammate\'s message never runs in the home folder: y, w and an older Aut
   assert.equal(first.role, '@sara'); assert.equal(first.text, WORDS);
   assert.equal(sessionGoal(value), WORDS); assert.equal(taskTitle({ ...value, title: undefined }), WORDS);
   const lead = p.prompts().at(-1).input;
-  assert.match(lead, /Work on the handoff from @sara shown in the peer data block/); assert.match(lead, /<<peer-data-[0-9a-f]{16} from="@sara"[^]*Get the issues from ELU, close the old ones/);
+  assert.match(lead, /Work on the handoff from @sara shown in the peer data block/); assert.match(lead, /<<peer-data-[0-9a-f]{16} from="@sara"[^]*Fix the totals from May, check the old ones/);
 });
 
 // The owner's layout: the project is his home folder, and the session, started by a message
