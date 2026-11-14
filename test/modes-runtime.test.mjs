@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { temp, project, fakeClis, git, autoApprove } from './helpers.mjs';
-import { ProjectController } from '../lib/projects.mjs';
+import { ProjectController, conversationEntries } from '../lib/projects.mjs';
 import { projectFolder, pendingRequests, saveRequest, updateRequest } from '../lib/workspace.mjs';
 import { repository } from '../lib/git.mjs';
 import { taskDir, readTask, saveTask, lock } from '../lib/state.mjs';
@@ -20,7 +20,7 @@ import { FULL_REPLY, READ_ONLY_REPLY, promptRules } from '../lib/runner.mjs';
 import { helperPrompt } from '../lib/adapters/claude.mjs';
 import { ruleFor, saveRule } from '../lib/permission-rules.mjs';
 import { turnClock } from '../lib/turn-limits.mjs';
-import { runSteps } from '../lib/run-activity.mjs';
+import { runSteps, runsOfEntries } from '../lib/run-activity.mjs';
 
 // Sessions with permissions, end to end against the fake CLIs.
 // The personal directory (XDG_CONFIG_HOME) and HOME both point into the test folder, so a
@@ -530,6 +530,10 @@ test('a quiet turn in Full access or Approve for me is carried on by ELU once, w
     assert.equal(valueOf(second.args, '--resume'), valueOf(first.args, '--session-id'), 'it goes on in the session that went quiet');
     assert.doesNotMatch(inputs[0].input, /printed nothing for/); assert.match(inputs[1].input, /Your last turn in this session printed nothing for 2 seconds, so ELU stopped it and started this one in its place\. Carry on from where it stopped/);
     assert.deepEqual(task.runs.filter(run => run.role === 'lead').map(run => run.code === 0), [false, true], 'the quiet run stays in the chat with its steps');
+    // In the chat: what the quiet run did, then ELU's line, then the reply with the steps of the run that carried on.
+    const entries = conversationEntries(f.controller.repo, task), line = entries.find(entry => entry.role === 'ELU'), placed = runsOfEntries(entries, task.runs);
+    assert.deepEqual(entries.map(entry => entry.role === 'ELU' ? 'line' : entry.lead ? 'reply' : 'you'), ['you', 'line', 'reply']);
+    assert.deepEqual(placed.before.get(line), [task.runs[0]]); assert.deepEqual(placed.owned.get(entries.at(-1)), [task.runs[1]]);
   }
 });
 
