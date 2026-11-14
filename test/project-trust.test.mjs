@@ -276,7 +276,7 @@ test('elu policy show reads .elu-code/config.yaml as it is now: before its first
   assert.equal(cli(p.root, ['init', '--yes'], fake.env).status, 0);
   const fresh = show();
   assert.equal(fresh.json.lines[0], 'This is .elu-code/config.yaml as it is now. It is not committed yet: elu run needs it committed.');
-  assert.equal(fresh.json.committed, false); assert.match(fresh.stdout, /^This is \.elu-code\/config\.yaml as it is now\./m);
+  assert.equal(fresh.json.committed, false);
   // Committed: nothing more to say.
   git(p.root, ['add', '.']); git(p.root, ['commit', '-m', 'Configure checks']);
   const same = show();

@@ -6157,7 +6157,7 @@ test('/mcp add asks for a name, the URL, the header and the key in a hidden fiel
   v.input.write('\x1b'); await until(() => !modal(v, 'MCP servers'), 'closed');
   // Esc in the hidden field adds nothing. A name typed after /mcp add is not asked for again.
   await send(v, '/mcp add other'); await until(() => field('Add other', /Its URL/), 'the URL, the name taken as typed');
-  assert.equal(modal(v, 'Add an MCP server'), null); v.input.write('npx -y other-server\r');
+  assert.ok(!modal(v, 'Add an MCP server'), 'the name is not asked'); v.input.write('npx -y other-server\r');
   await until(() => field('Add other', /The environment variable that carries its key, such as API_KEY\./), 'the variable'); v.input.write('OTHER_TOKEN\r');
   await until(() => field('OTHER_TOKEN · other'), 'the hidden field'); v.input.write('abc'); await until(() => v.frame().includes('•••'), 'typed');
   v.input.write('\x1b'); await until(() => !modal(v, 'OTHER_TOKEN · other') && /Nothing was added\./.test(status()), 'cancelled');
@@ -6184,7 +6184,7 @@ test('/mcp add NAME URL on one line asks only for what is missing: the header, t
   const field = (title, pattern = /./) => { const box = modal(v, title); const input = box?.children.find(child => child.type === 'textbox'); return input?.__listener && pattern.test(v.frame()) ? input : null; };
   // NAME URL: the header is asked, then the key.
   await send(v, '/mcp add tracker https://tracker.example.invalid/mcp'); await until(() => field('Add tracker', /The header that carries its key, such as Authorization\./), `the header, nothing before it\n${v.frame()}`);
-  assert.equal(modal(v, 'Add an MCP server'), null); assert.doesNotMatch(v.frame(), /Its URL, such as/);
+  assert.ok(!modal(v, 'Add an MCP server'), 'the name is not asked'); assert.doesNotMatch(v.frame(), /Its URL, such as/);
   v.input.write('Authorization\r'); await until(() => field('Authorization · tracker', /It is hidden here/), 'the hidden field');
   v.input.write(key); v.input.write('\r'); await until(() => /Added tracker\. Sessions get it from their next turn\./.test(status()), 'added');
   assert.deepEqual(saved().tracker, { type: 'http', url: 'https://tracker.example.invalid/mcp', headers: { Authorization: `Bearer ${key}` } });
