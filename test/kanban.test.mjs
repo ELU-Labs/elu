@@ -149,6 +149,15 @@ test('teammates\' Tasks are cards on the same columns, with their name, counted 
   assert.deepEqual(fitTeammateCard('Title', teammateLabel({ name: 'a'.repeat(40), box: 'b'.repeat(40) }), 20), { title: 'Title', detail: `${'a'.repeat(9)}…` });
 });
 
+test('Done holds every finished card, mine and teammates\', newest first, and counts them all', t => {
+  const p = project(t), repo = projectFolder(p.root), now = Date.now(), ago = minutes => new Date(now - minutes * 60000).toISOString();
+  const tasks = Array.from({ length: 27 }, (_, n) => task(String(n + 1), `Question ${n + 1}`, 'answered', { kind: 'conversation', createdAt: ago(60 - n) }));
+  const cards = Array.from({ length: 27 }, (_, n) => ({ repoId: 'e'.repeat(64), id: n.toString(16).padStart(16, '0'), title: `Cam question ${n + 1}`, column: 'done', by: 'cam', at: ago(120 - n) }));
+  const done = boardColumns(readBoard(repo), { tasks, queue: [] }, now, [], [{ peer: 'b'.repeat(64), name: 'cam', box: 'cbox', online: true, heardAt: ago(0), sessions: cards }]).find(column => column.column === 'done');
+  assert.equal(done.items.length, 54);
+  assert.deepEqual([done.items[0].title, done.items[26].title, done.items[27].title, done.items.at(-1).title], ['Question 27', 'Question 1', 'Cam question 27', 'Cam question 1']);
+});
+
 test('a session\'s place on the board is the column boardColumns shows it in, or none', t => {
   const p = project(t), repo = projectFolder(p.root), old = new Date(Date.now() - 30 * 86400000).toISOString();
   const tasks = [task('1', 'Speed up search', 'running'), task('2', 'Which cache?', 'needs_input'), task('3', 'What runner?', 'answered', { kind: 'conversation' }), task('6', 'Ancient', 'stopped', { createdAt: old }),
