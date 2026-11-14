@@ -1222,11 +1222,12 @@ test("a yes typed on my other computer answers the session that waits here, and 
   look(59000);
   assert.deepEqual(seen().waiting, []); assert.equal(seen().state, 'running');
   assert.ok(seen().entries.some(entry => entry.text === 'yes'), 'his answer is in its chat, as typed there');
-  // A message sent while it works is read when its turn ends: the laptop is told at once, and the pane says it.
-  assert.deepEqual(await send('now go on to the next ones'), { id: item.id, working: true });
+  // A message sent while it works: the laptop is told at once that it works and what its turn does
+  // with a message (here its turn has not said yet whether it takes one), and the pane says it.
+  assert.deepEqual(await send('now go on to the next ones'), { id: item.id, working: true, takes: 'soon' });
   const next = queue().find(row => row.goal === 'now go on to the next ones');
   look(60000);
-  assert.deepEqual(seen().waiting, [{ at: next.createdAt, text: 'now go on to the next ones', state: 'turn' }]);
+  assert.deepEqual(seen().waiting, [{ at: next.createdAt, text: 'now go on to the next ones', state: 'turn', takes: 'soon' }]);
   // A message to one of its bots waits under the bot's name, as typed.
   withHome(devbox.home, () => updateRequest(project.root, next.id, { bot: 'reviewer' }));
   look(61000);

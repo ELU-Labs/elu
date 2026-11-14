@@ -1265,7 +1265,7 @@ test("over a session on my other computer that waits for my answer, a typed yes 
   await send(v, '@here what does it still need?');
   await until(() => pendingRequests(p.root).some(row => row.continuationTaskId === '1' && row.goal === 'what does it still need?'), 'the helper is continued');
   assert.equal(pendingRequests(p.root).filter(row => row.helps).length, 1);
-  await until(() => /You \(waiting\)/.test(chat()), 'the message to it shows beside the session there');
+  await until(() => /You \(starts next\)/.test(chat()), 'the message to it shows beside the session there');
   // A plain message still goes to the session there, with my agent here at work beside it.
   board.focus(); selectRow(board, /^(?!.*Help:).*Invoice totals fix/);
   await send(v, 'yes');

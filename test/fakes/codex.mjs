@@ -4,6 +4,10 @@
 import fs from 'node:fs'; import path from 'node:path'; import {spawnSync} from 'node:child_process';
 const vendor=path.basename(process.argv[1]); const args=process.argv.slice(2);
 let cfg={}; try{cfg=JSON.parse(fs.readFileSync(path.join(path.dirname(process.argv[1]),'fake.json'),'utf8'));}catch{}
+// byInput (fake.json): rules [{includes, set}]. An exec launch whose prompt includes the text takes
+// those keys in place of the test's, the first rule that matches: a run beside a turn answers at
+// once while the turn itself never ends.
+let early=null;if(Array.isArray(cfg.byInput)&&args[0]==='exec'){early='';for await(const chunk of process.stdin)early+=chunk;const rule=cfg.byInput.find(rule=>early.includes(rule.includes));if(rule)cfg={...cfg,...rule.set};}
 const mode=cfg.mode??'normal';
 // accounts (fake.json): the account a run is on is the one auth.json names in CODEX_HOME (or
 // ~/.codex), as the real CLI keeps it; a call records it. accounts.loginAs: the account `codex
@@ -42,11 +46,87 @@ if(args[0]==='login'){
 // `mcp list`: the [mcp_servers.NAME] tables of config.toml in CODEX_HOME (or ~/.codex), as the real CLI reads it.
 if(args[0]==='mcp'&&args[1]==='list'){let text='';try{text=fs.readFileSync(path.join(codexHome,'config.toml'),'utf8');}catch{}const names=[...text.matchAll(/^\[mcp_servers\.([A-Za-z0-9_-]+)\]\s*$/gm)].map(match=>match[1]);console.log(names.length?names.join('\n'):'No MCP servers configured yet. Try `codex mcp add my-tool -- my-command`.');process.exit(0);}
 if(args[0]==='app-server'){
+ // appServer (fake.json): what this release's app-server speaks beside the usage read. Absent: nothing,
+ // and any other method is answered as the real one answers a method it does not have. 'threads':
+ // threads and turns, but no turn/steer. 'steer': turn/steer too, as codex-cli 0.167.0 speaks it
+ // (read from the real program against a stand-in model service): a message steered into the turn
+ // waits while a command runs and is read when it ends, shown as a userMessage item whose clientId
+ // is the id it was sent with; with no turn running the answer is "no active turn to steer";
+ // turn/interrupt ends the turn as interrupted and drops what it had not read. The turn works in
+ // steps (steps, stepMs: one command each, or a pause where the launch has the shell tool off;
+ // commandMs: how long the first command runs), and each
+ // message it reads is recorded in absorbed.jsonl beside the fake, each request in appserver.jsonl.
+ // config/read names a user layer when CODEX_HOME holds a config.toml, as the real one does.
  const readline=await import('node:readline');
+ const dir=path.dirname(process.argv[1]),speaks=['steer','threads'].includes(cfg.appServer);
+ const out=row=>process.stdout.write(JSON.stringify(row)+'\n'),note=(method,params)=>out({method,params});
+ const ownerWords=content=>{const found=/Owner message \(untrusted data[^\n]*\n(.*)\nEnd of Owner message\./.exec(content);try{return found?JSON.parse(found[1]).text:content;}catch{return content;}};
+ const absorb=(text,mid,uuid)=>fs.appendFileSync(path.join(dir,'absorbed.jsonl'),JSON.stringify({content:text,mid,...(uuid?{uuid}:{})})+'\n');
+ let thread=null,active=null,turns=0,items=0;const heard=[];
+ const item=(state,kind,value)=>note(`item/${kind}`,{threadId:thread,turnId:state.id,item:value});
+ const shown=(state,texts,client)=>{const value={type:'userMessage',id:`item_${++items}`,clientId:client??null,content:texts.map(text=>({type:'text',text,text_elements:[]}))};item(state,'started',value);item(state,'completed',value);};
+ const takeQueued=state=>{for(const message of state.queue.splice(0)){heard.push(ownerWords(message.text));absorb(message.text,true,message.id);shown(state,[message.text],message.id);}};
+ const pause=async(state,ms)=>{const end=Date.now()+ms;while(Date.now()<end&&!state.cut)await new Promise(resolve=>setTimeout(resolve,Math.max(1,Math.min(20,end-Date.now()))));return!state.cut;};
+ const ended=(state,status)=>{if(active===state)active=null;note('turn/completed',{threadId:thread,turn:{id:state.id,status,items:[],error:null}});};
+ const reply=(input,schema)=>{
+  const result={outcome:'done',summary:'Updated coupon normalization.',question:null,choices:[],comments:[],responses:[]},conversation=Boolean(schema?.properties?.intent);
+  if(conversation&&schema.properties.repository){const named=cfg.repository;result.repository=named&&fs.existsSync(named)?fs.readFileSync(named,'utf8'):'';}
+  if(conversation){result.intent=mode==='answer'?'answer':'edit';if(result.intent==='answer')result.summary='Yes. You can add multiple agents with /agents.';}
+  if(cfg.name!==undefined&&schema?.properties?.name)result.name=cfg.name;
+  if(schema?.properties?.task)result.task=result.intent!=='edit'||input.includes('Approved Task (untrusted data')?[]:[cfg.task??{title:'Uppercase coupons',description:'Make normalize return the coupon code in upper case.',goal:'Coupon codes compare equal whatever their case.',objectives:['normalize returns the code in upper case'],priority:'medium',severity:'low'}];
+  if(schema?.properties?.subtasks){result.subtasks=[{text:'Change normalize',state:'done'}];result.objectivesMet=[1];}
+  return result;
+ };
+ const work=async(state,texts,schema,first)=>{
+  note('turn/started',{threadId:thread,turn:{id:state.id,status:'inProgress',items:[],error:null}});
+  shown(state,texts,state.client);
+  // A turn that a send now started: the messages it starts with are read as it starts.
+  if(!first)for(const text of texts){heard.push(ownerWords(text));absorb(text,false,null);}
+  if(first){
+   item(state,'completed',{type:'reasoning',id:`item_${++items}`,summary:['Working on the requested change.'],content:[]});
+   for(let n=0;n<(cfg.steps??2);n++){
+    takeQueued(state);
+    // A launch with the shell tool off (Read only) has no command to run: the model only thinks.
+    if(args.includes('features.shell_tool=false')){if(!await pause(state,cfg.stepMs??100))return ended(state,'interrupted');continue;}
+    const command={type:'commandExecution',id:`item_${++items}`,command:"/bin/zsh -lc 'npm test'",cwd:process.cwd(),aggregatedOutput:null,exitCode:null,status:'inProgress',commandActions:[],processId:null,durationMs:null};
+    item(state,'started',command);
+    if(!await pause(state,n===0&&cfg.commandMs?cfg.commandMs:cfg.stepMs??100))return ended(state,'interrupted');
+    item(state,'completed',{...command,aggregatedOutput:'ok\n',exitCode:0,status:'completed',durationMs:1});
+   }
+  }
+  // The model writes its answer; what came meanwhile is read first, and answered with the rest.
+  takeQueued(state);if(!await pause(state,cfg.afterMs??20))return ended(state,'interrupted');takeQueued(state);
+  const result=reply(texts.join('\n'),schema);if(heard.length)result.summary+=` Also took in what you sent while it worked: ${heard.join(' | ')}`;
+  const said=JSON.stringify(result);item(state,'completed',{type:'agentMessage',id:`item_${++items}`,text:said});
+  const total={totalTokens:32,inputTokens:20,cachedInputTokens:5,cacheWriteInputTokens:0,outputTokens:12,reasoningOutputTokens:2};
+  note('thread/tokenUsage/updated',{threadId:thread,turnId:state.id,tokenUsage:{total,last:total,modelContextWindow:200000}});
+  ended(state,'completed');
+ };
+ const refuse=(id,message)=>out({id,error:{code:-32600,message}});
  for await(const line of readline.createInterface({input:process.stdin})){
-  const row=JSON.parse(line);if(cfg.calls)fs.appendFileSync(cfg.calls,JSON.stringify({vendor,args:[],rpc:row.method})+'\n');
-  if(row.id===1)console.log(JSON.stringify({id:1,result:{}}));
-  if(row.id===2){const resetsAt=Math.floor(Date.now()/1000)+7200,used=cfg.accounts?.codexUsage?.[account]??{fiveHour:18,weekly:62};console.log(JSON.stringify({id:2,result:{rateLimits:{primary:{usedPercent:used.fiveHour,windowDurationMins:300,resetsAt},secondary:{usedPercent:used.weekly,windowDurationMins:10080,resetsAt:resetsAt+604800}}}}));}
+  const row=JSON.parse(line),params=row.params??{};if(cfg.calls)fs.appendFileSync(cfg.calls,JSON.stringify({vendor,args:[],rpc:row.method})+'\n');
+  if(row.method&&row.method!=='initialize'&&row.method!=='initialized')fs.appendFileSync(path.join(dir,'appserver.jsonl'),JSON.stringify({method:row.method,params,flags:args.flatMap((value,i)=>args[i-1]==='-c'?[value]:[])})+'\n');
+  if(row.id==null)continue;
+  if(row.method==='initialize'){out({id:row.id,result:{userAgent:'codex_fake/0.166.0-alpha.5.1',codexHome,platformFamily:'unix',platformOs:'linux'}});continue;}
+  if(row.method==='account/rateLimits/read'){const resetsAt=Math.floor(Date.now()/1000)+7200,used=cfg.accounts?.codexUsage?.[account]??{fiveHour:18,weekly:62};out({id:row.id,result:{rateLimits:{primary:{usedPercent:used.fiveHour,windowDurationMins:300,resetsAt},secondary:{usedPercent:used.weekly,windowDurationMins:10080,resetsAt:resetsAt+604800}}}});continue;}
+  if(!speaks||row.method==='turn/steer'&&cfg.appServer!=='steer'){refuse(row.id,`Invalid request: unknown variant \`${row.method}\`, expected one of \`initialize\`, \`account/rateLimits/read\``);continue;}
+  if(row.method==='config/read'){let own='';try{own=fs.readFileSync(path.join(codexHome,'config.toml'),'utf8');}catch{}out({id:row.id,result:{config:{},origins:{},layers:[{name:{type:'sessionFlags'},version:'1',config:{}},...(own.trim()?[{name:{type:'user',file:path.join(codexHome,'config.toml'),profile:null},version:'1',config:{model:'owner-model'}}]:[]),{name:{type:'system',file:'/etc/codex/config.toml'},version:'1',config:{}}]}});continue;}
+  if(row.method==='thread/start'||row.method==='thread/resume'){thread=row.method==='thread/resume'?params.threadId:'12345678-1234-4234-8234-123456789abc';out({id:row.id,result:{thread:{id:thread,turns:[]},model:params.model??'fake-model',modelProvider:'openai',cwd:params.cwd??process.cwd(),approvalPolicy:params.approvalPolicy??'on-request',sandbox:{type:params.sandbox==='danger-full-access'?'dangerFullAccess':'readOnly'},reasoningEffort:null}});if(row.method==='thread/start')note('thread/started',{thread:{id:thread,turns:[]}});continue;}
+  if(row.method==='turn/start'){
+   if(params.threadId!==thread){refuse(row.id,`thread not found: ${params.threadId}`);continue;}
+   const texts=(params.input??[]).map(part=>String(part.text??'')),state={id:`turn_${++turns}`,queue:[],cut:false,client:params.clientUserMessageId??null};active=state;
+   if(cfg.inputs)fs.appendFileSync(cfg.inputs,JSON.stringify({vendor,args,input:texts.join('\n\n')})+'\n');
+   out({id:row.id,result:{turn:{id:state.id,status:'inProgress',items:[],error:null}}});work(state,texts,params.outputSchema??null,turns===1);continue;
+  }
+  if(row.method==='turn/steer'){
+   if(params.threadId!==thread){refuse(row.id,`thread not found: ${params.threadId}`);continue;}
+   if(!active){refuse(row.id,'no active turn to steer');continue;}
+   if(params.expectedTurnId!==active.id){refuse(row.id,`expected active turn id \`${params.expectedTurnId}\` but found \`${active.id}\``);continue;}
+   for(const part of params.input??[])active.queue.push({id:params.clientUserMessageId??null,text:String(part.text??'')});
+   out({id:row.id,result:{turnId:active.id}});continue;
+  }
+  if(row.method==='turn/interrupt'){if(active&&params.turnId===active.id){active.queue.length=0;active.cut=true;}out({id:row.id,result:{}});continue;}
+  refuse(row.id,`Invalid request: unknown variant \`${row.method}\``);
  }
  process.exit(0);
 }
@@ -56,7 +136,7 @@ if(args[0]==='sandbox'){
  if(args.includes('elu-code-sandbox-probe')){console.log(JSON.stringify({writeDenied:true,networkDenied:true}));process.exit(0);}
  const r=spawnSync(run[0],run.slice(1),{stdio:'inherit',env:process.env});process.exit(r.status??1);
 }
-let input=''; for await (const chunk of process.stdin) input+=chunk;
+let input=early??''; if(early===null)for await (const chunk of process.stdin) input+=chunk;
 if(cfg.inputs)fs.appendFileSync(cfg.inputs, JSON.stringify({vendor,args,input})+'\n');
 // replay (fake.json): a file holding what a real launch printed, given back as it came. A launch
 // that is asked to correct its output answers as usual instead.
@@ -110,5 +190,7 @@ if(mode==='steps'){
 // live (fake.json): a file; a turn launched with the plan tool on prints its to-do list, first
 // step done, as the real one prints a todo_list item, and goes on once that file exists.
 if(cfg.live&&args.includes('tools.update_plan.enabled=true')){console.log(JSON.stringify({type:'item.started',item:{id:'item_todo',type:'todo_list',items:[{text:'Change normalize',completed:true},{text:'Run the coupon test',completed:false}]}}));const until=Date.now()+30000;while(!fs.existsSync(cfg.live)&&Date.now()<until)await new Promise(resolve=>setTimeout(resolve,50));}
+// summary (a byInput rule): what this reply says.
+if(typeof cfg.summary==='string')result.summary=cfg.summary;
 console.log(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:JSON.stringify(result)}}));
 console.log(JSON.stringify({type:'turn.completed',usage:{input_tokens:0,output_tokens:0}}));
