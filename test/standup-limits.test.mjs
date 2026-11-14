@@ -185,7 +185,7 @@ test('the same rule says which sessions are open everywhere: an answered chat is
   assert.equal(standupOpen(readBoard(f.repo), readTask(f.repo, task.id)), false);
   // On the asker's side a teammate's card is asked by what their computer says, in any column,
   // and one moved to Done is not, as his own. A card of an older build in Done may have
-  // answered: it is listed with why, never dropped. A withheld card is never one to ask.
+  // answered: it is listed with why, never dropped. A withheld card in Done is not listed.
   const kim = 'f'.repeat(64), now = new Date().toISOString();
   const people = () => [{ peer: kim, name: 'kim', online: true, sessions: [
     { id: '0123456789abcdef', title: 'Answered chat', column: 'done', by: 'kim', at: now, standup: true },
