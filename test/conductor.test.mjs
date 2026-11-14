@@ -6,7 +6,8 @@ import { spawn, spawnSync } from 'node:child_process';
 import { project, fakeClis, config, approveProjectFiles, approvingConductor, CLI } from './helpers.mjs';
 import { repository } from '../lib/git.mjs';
 import { ProjectController, projectSnapshot, registerProject } from '../lib/projects.mjs';
-import { saveTask } from '../lib/state.mjs';
+import { saveTask, setTitle, taskTitle } from '../lib/state.mjs';
+import { readBoard } from '../lib/kanban.mjs';
 import { addToRequest, pendingRequests, removeRequest, updateRequest, takeRequest } from '../lib/workspace.mjs';
 import { Conductor, enqueue, sendCommand, saveConductorSettings, conductorStatus, conductorNote, conductorRunning, conductorAlive, olderConductor, retryRequest, startQueued, VERSION } from '../lib/conductor.mjs';
 // The conductor of 0.1.16 as published, which has no handover, on today's modules.
@@ -58,14 +59,27 @@ async function until(check, message, timeout = 15000) {
 const request = (root, id) => pendingRequests(root).find(row => row.id === id);
 const task = (repo, id) => projectSnapshot(repo).tasks.find(row => row.id === id);
 
-test('a session that a schedule starts is named by its first reply', async t => {
-  const p = setup(t, 'answer', { name: 'Dependency update check' });
+// The model would name each run (name); a schedule's run keeps the schedule's wording instead,
+// and archives the runs before it, so Sessions lists the schedule's run once.
+test("a schedule's run is named with the schedule's message and archives its earlier runs, so Sessions lists one", async t => {
+  const p = setup(t, 'answer', { name: 'Dependency update check' }), wording = 'Check the dependencies of this project for updates and tell…';
   const row = saveSchedule({ root: p.root, goal: 'Check the dependencies of this project for updates and tell me which ones are behind', when: parseWhen('daily 9:00') });
-  runScheduleNow(row.id, new Date(), { start: () => true }); conduct(t);
-  await until(() => projectSnapshot(p.repo).tasks[0]?.state === 'answered', 'the scheduled run');
-  const [named] = projectSnapshot(p.repo).tasks;
-  assert.deepEqual([named.title, named.titleBy, named.runs.length], ['Dependency update check', 'model', 1]);
-  assert.match(boardRows([projectSnapshot(p.repo)], Date.now()).map(row => barCells(row, 60, Date.now()).map(cell => cell.text).join('')).join('\n'), /Dependency update check/);
+  const shown = () => boardRows([projectSnapshot(p.repo)], Date.now()).filter(value => value.kind === 'task').map(value => barCells(value, 70, Date.now()).map(cell => cell.text).join('')).join('\n');
+  const runs = async count => {
+    runScheduleNow(row.id, new Date(), { start: () => true });
+    await until(() => projectSnapshot(p.repo).tasks.length === count && projectSnapshot(p.repo).tasks.every(value => value.state === 'answered') && pendingRequests(p.root).every(value => value.state === 'done'), `run ${count}`);
+  };
+  conduct(t);
+  for (const count of [1, 2, 3]) await runs(count);
+  let snapshot = projectSnapshot(p.repo);
+  assert.deepEqual(snapshot.tasks.map(value => [value.id, value.scheduleId, taskTitle(value), value.titleBy]), ['1', '2', '3'].map(id => [id, row.id, wording, undefined]));
+  assert.deepEqual([snapshot.closed, readBoard(p.repo).archived], [['1', '2'], ['1', '2']], '/archived lists the two earlier runs');
+  assert.equal(shown().split('\n').filter(line => line.includes('Check the dependencies')).length, 1); assert.doesNotMatch(shown(), /Dependency update check/);
+  // He renamed the latest run himself (e on its row): the next run takes his name, and that one is archived.
+  setTitle(p.repo, '3', 'Dependency review');
+  await runs(4); snapshot = projectSnapshot(p.repo);
+  assert.deepEqual([taskTitle(snapshot.tasks.at(-1)), snapshot.tasks.at(-1).titleBy, snapshot.closed], ['Dependency review', 'owner', ['1', '2', '3']]);
+  assert.match(shown(), /Dependency review/); assert.doesNotMatch(shown(), /Check the dependencies/);
 });
 
 test('a session that a schedule starts has the bots the schedule kept', async t => {
