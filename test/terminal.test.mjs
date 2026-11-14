@@ -5,7 +5,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { PassThrough } from 'node:stream';
 import { EventEmitter } from 'node:events';
-import { project, fakeClis, fakeKeychain, claudeKeychainNames, cli, git, temp, approveProjectFiles, autoApprove, keyLike } from './helpers.mjs';
+import { project, fakeClis, fakeKeychain, claudeKeychainNames, cli, git, temp, approveProjectFiles, autoApprove, keyLike, CLI } from './helpers.mjs';
 import { repository } from '../lib/git.mjs';
 import { ProjectController, projectSnapshot, dashboardSnapshot, claimView, registerProject, registeredProjects, nameProject, savedProjectName, personalDirectory, setupCommitPlan, commitSetup, taskDetails } from '../lib/projects.mjs';
 import { LIMIT } from '../lib/project-settings.mjs';
@@ -88,10 +88,11 @@ async function view(t, options = {}) {
   input.isTTY = output.isTTY = true; input.setRawMode = () => {}; output.columns = 80; output.rows = 24;
   let rendered, raw = ''; const events = [], started = Date.now();
   output.on('data', value => { raw += value.toString(); events.push([(Date.now() - started) / 1000, 'o', value.toString()]); });
-  // Each test runs its own conductor in this process, as the background one would.
-  const owned = resources(t);
-  if (!owned.conductor) { const conductor = new Conductor({ tickMs: 20 }).start(); owned.conductor = conductor; owned.views.push(() => conductor.stop()); }
-  const finished = launchTerminal({ usage: fakeUsage(t), ...options, input, output, refreshMs: 30, startConductor: () => false, onRender: value => { rendered = value; options.onRender?.(value); } });
+  // Each test runs its own conductor in this process, as the background one would. conductor:
+  // false opens ELU with none running, and startConductor is then what ELU calls to start one.
+  const owned = resources(t), { conductor: background = true, startConductor = () => false, ...given } = options;
+  if (background && !owned.conductor) { const conductor = new Conductor({ tickMs: 20 }).start(); owned.conductor = conductor; owned.views.push(() => conductor.stop()); }
+  const finished = launchTerminal({ usage: fakeUsage(t), ...given, input, output, refreshMs: 30, startConductor, onRender: value => { rendered = value; options.onRender?.(value); } });
   finished.catch(() => {});
   await until(() => rendered, 'first render');
   const state = { input, output, finished, get current() { return rendered; }, get raw() { return raw; }, get events() { return events; }, frame() { return rendered.screen.screenshot(0, output.columns, 0, output.rows); } };
@@ -2354,6 +2355,29 @@ test('a schedule saved while its login item cannot be loaded says so where it ca
   assert.equal(v.current.screen.width, 80); assert.match(status(), /^› Scheduled once \w{3} \w{3} \d+ \d+:\d\d\. It runs only while ELU is open: systemctl could/);
   await wide(v); await send(v, '/schedule in 6m check the tests'); await until(() => /Scheduled once/.test(status()) && listSchedules().length === 2, 'saved wide');
   assert.match(status(), new RegExp(`^› Scheduled once \\w{3} \\w{3} \\d+ \\d+:\\d\\d\\. It runs only while ELU is open: ${why}$`), 'the whole reason, with nothing after it');
+});
+
+// A run that waits with no conductor running: its conductor was ended from outside, by a
+// restart of the computer or, on Linux, by 0.1.19's login item with each of its runs.
+test('opening ELU starts what was left queued with no conductor running, and leaves it after the owner stopped the conductor himself', { timeout: 30000 }, async t => {
+  const p = setup(t);
+  let starts = 0; const startConductor = () => { starts++; return true; }, open = () => view(t, { repo: p.repo, conductor: false, startConductor });
+  const close = async v => { key(v, 'q'); await v.finished; };
+  // Nothing is queued: opening starts nothing.
+  await close(await open()); assert.equal(starts, 0);
+  const left = enqueue(p.root, 'Check the build', { priority: 1 });
+  const v = await open(); await until(() => starts === 1, 'the conductor to be asked for');
+  assert.equal(pendingRequests(p.root).find(row => row.id === left.id).state, 'queued', 'the stand-in started none, so the run still waits');
+  await close(v); assert.equal(starts, 1, 'asked once');
+  // The owner's own stop, of a conductor that runs: this process holds its lock, for the command to find one.
+  const held = path.join(personalDirectory(), 'conductor.lock'); fs.writeFileSync(held, JSON.stringify({ pid: process.pid, identity: processIdentity(process.pid) }));
+  const stop = spawnSync(process.execPath, [CLI, 'conductor', 'stop'], { encoding: 'utf8', timeout: 30000 }); assert.match(stop.stdout, /It starts again when work is queued\./);
+  fs.rmSync(held);
+  await close(await open()); assert.equal(starts, 1, 'what is queued waits until work is queued');
+  // Work is queued, which starts a conductor, and the stop is over. This one starts no run and
+  // is ended from outside: what it left queued is started again as ELU opens.
+  const next = new Conductor({ tickMs: 3600000 }); next.dispatch = () => {}; next.start(); await next.stop();
+  await close(await open()); assert.equal(starts, 2);
 });
 
 test("a schedule taken off a bot on its page takes the login item with it at once, and one given back there brings it back", { timeout: 30000 }, async t => {

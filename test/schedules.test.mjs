@@ -470,6 +470,67 @@ for (const platform of ['linux', 'darwin']) {
   });
 }
 
+// What 0.1.19 left on Linux: each run of its login item queued the due run and started the
+// conductor, which systemd ended with that run. So the run stayed queued, shown as "Waiting
+// to start", and every later run of its schedule was skipped for it, which started nothing.
+// left: such a run of an hourly schedule, queued a moment ago with no conductor to take it.
+const leftQueued = root => { const row = dueHourly(root); assert.equal(runDue(new Date(), { start: () => false }), 1); return pendingRequests(root).find(request => request.scheduleId === row.id); };
+// The version whose login item ran here last. 0.1.19 and earlier kept none.
+const ranAs = version => atomic(path.join(personalDirectory(), 'scheduler.json'), { version });
+const holdsLock = () => { const file = path.join(personalDirectory(), 'conductor.lock'); fs.writeFileSync(file, JSON.stringify({ pid: process.pid, identity: processIdentity(process.pid) })); return () => fs.rmSync(file); };
+
+test("the login item's first run after an update starts what the earlier version left queued, its later runs leave the queue as it is, and after the owner's own elu conductor stop nothing is started", t => {
+  home(t); const p = project(t), item = standIn(t, 'linux', { config: process.env.XDG_CONFIG_HOME });
+  registerProject(repository(p.root));
+  const left = leftQueued(p.root), state = () => pendingRequests(p.root).find(request => request.id === left.id).state; item.install();
+  let starts = 0; const tick = () => scheduleTick(new Date(), { start: () => { starts++; return true; }, item: item.options }).fired;
+  // Nothing is due: the schedule ran a moment ago and its run still waits. The conductor is asked for all the same.
+  assert.equal(tick(), 0); assert.equal(starts, 1, 'the first run after the update asks for the conductor'); assert.equal(state(), 'queued');
+  assert.equal(tick(), 0); assert.equal(tick(), 0); assert.equal(starts, 1, 'a later run does not: the queue is left as it is');
+  // The next update: once again.
+  ranAs('0.1.19'); assert.equal(tick(), 0); assert.equal(tick(), 0); assert.equal(starts, 2);
+  // While a conductor runs, it takes the queue itself.
+  const release = holdsLock(); ranAs('0.1.19'); assert.equal(tick(), 0); assert.equal(starts, 2);
+  // The owner stops that conductor himself. What is queued then waits until work is queued, after an update too.
+  assert.equal(spawnSync(process.execPath, [CLI, 'conductor', 'stop'], { encoding: 'utf8', timeout: 30000 }).stdout, 'The conductor stops its runs, keeps their history, and exits. It starts again when work is queued.\n');
+  release(); ranAs('0.1.19'); assert.equal(tick(), 0); assert.equal(tick(), 0); assert.equal(starts, 2, 'his stop holds'); assert.equal(state(), 'queued');
+});
+
+test("a run the login item queues itself on its first run after an update asks for the conductor once", t => {
+  home(t); const p = project(t), item = standIn(t, 'linux', { config: process.env.XDG_CONFIG_HOME });
+  registerProject(repository(p.root)); dueHourly(p.root); item.install();
+  let starts = 0; const tick = () => scheduleTick(new Date(), { start: () => { starts++; return true; }, item: item.options }).fired;
+  assert.equal(tick(), 1); assert.equal(starts, 1, 'once, for the run it queued');
+  assert.equal(tick(), 0); assert.equal(starts, 1);
+});
+
+// The exact case on the owner's Linux computer after the update, with ELU closed: the service
+// file and the queued run are what 0.1.19 left, nothing is due, and the login item runs.
+test('a run 0.1.19 left queued on Linux starts with the first run of the login item after the update, and finishes after that run has ended', { timeout: 120000, skip: process.platform !== 'linux' && 'The stand-in follows the processes a run leaves on Linux only.' }, async t => {
+  home(t); const p = project(t), repo = repository(p.root), item = standIn(t, 'linux', { config: process.env.XDG_CONFIG_HOME });
+  registerProject(repo); fakeClis(path.dirname(item.home), { mode: 'answer' });
+  const left = leftQueued(p.root); item.install();
+  const [service] = schedulerFiles(item.options);
+  fs.writeFileSync(service, from019(fs.readFileSync(service, 'utf8'))); item.run('systemctl', ['--user', 'daemon-reload']);
+  assert.doesNotMatch(item.units()['elu-code-scheduler.service'], /KillMode/, 'systemd holds the service as 0.1.19 wrote it');
+  assert.equal(conductorStatus().running, false); assert.equal(projectSnapshot(repo).tasks.length, 0);
+  const pause = ms => new Promise(resolve => setTimeout(resolve, ms)), settled = async ms => { for (const started = Date.now(); item.left().length && Date.now() - started < ms;) await pause(50); return !item.left().length; };
+  try {
+    const tick = script(item, 'tick-left.mjs', [`import { scheduleTick } from ${lib('bot-schedules.mjs')};`, "const { fired, last } = scheduleTick(new Date(), { item: { platform: 'linux' } });", 'process.stdout.write(`fired ${fired}, to remove: ${Boolean(last)}\\n`);']);
+    assert.deepEqual(await item.job(tick), { status: 0, signal: null, stdout: 'fired 0, to remove: false\n', stderr: '' });
+    assert.match(item.units()['elu-code-scheduler.service'], /^KillMode=process$/m, 'the service was brought up to date before anything was started');
+    // The tick is over, and systemd has ended what it does not leave. The run that was left goes on to its answer.
+    await until(() => projectSnapshot(repo).tasks[0]?.state === 'answered', 'the run that was left to finish after the tick ended', 90000);
+    assert.equal(String(pendingRequests(p.root).find(request => request.id === left.id)?.taskId), String(projectSnapshot(repo).tasks[0].id), 'it is the run 0.1.19 queued');
+    assert.ok(item.left().includes(conductorStatus().pid), 'the conductor that runs is the one the tick started');
+  } finally {
+    // That conductor is a real one. It is stopped before the test's folders go, whatever happened.
+    spawnSync(process.execPath, [CLI, 'conductor', 'stop'], { env: item.jobEnv(), timeout: 30000 });
+    if (!await settled(10000)) { for (const pid of item.left()) { try { process.kill(pid, 'SIGTERM'); } catch { /* It has ended. */ } } }
+    if (!await settled(10000)) { for (const pid of item.left()) { try { process.kill(pid, 'SIGKILL'); } catch { /* It has ended. */ } } }
+  }
+});
+
 test('a schedule saved just as a tick is about to remove the login item keeps it', t => {
   home(t); const p = project(t), item = standIn(t, 'linux');
   dueOnce(p.root); item.install();
