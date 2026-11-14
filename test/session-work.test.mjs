@@ -182,24 +182,37 @@ test('signed out of GitHub, a branch the session pushed shows no pull request, a
   assert.equal(gh.calls().length, 1);
 });
 
-test('a session in here mode, in the owner\'s own folder, counts what was committed and edited there since it started, and says so', t => {
+test('a session in here mode, in the owner\'s own folder, counts what was committed and edited there since it started, and says so', async t => {
   const { root, repo } = scene(t);
   // Before the session: the owner's own commit on another branch of this folder.
   git(root, ['checkout', '-q', '-b', 'side']);
   write(root, { 'side.txt': 'the owner made this long before\n' }); git(root, ['add', '-A']);
   assert.equal(command('git', ['-C', root, 'commit', '-q', '-m', 'Owner work on side'], root, { GIT_COMMITTER_DATE: '2020-01-01T00:00:00Z', GIT_AUTHOR_DATE: '2020-01-01T00:00:00Z' }).status, 0);
   assert.equal(command('git', ['-C', root, 'checkout', '-q', 'main'], root, { GIT_COMMITTER_DATE: '2020-01-01T00:00:01Z' }).status, 0);
+  // And what the owner had not committed there: an edit, a new file, and a file taken away.
+  write(root, { 'package.json': '{ "name": "sample", "private": true }\n', 'owner/draft.md': 'the owner was writing this\n' }); fs.rmSync(path.join(root, 'test/coupon.test.mjs'));
+  await new Promise(done => setTimeout(done, 30));
   const base = git(root, ['rev-parse', 'HEAD']);
   saveTask(repo, { id: '2', goal: 'Work here', state: 'ready', worktree: root, branch: null, base, createdAt: new Date().toISOString(), runs: [], reviews: [], messages: [], sessions: {}, permissions: 'full', place: { kind: 'here' } });
-  commit(root, { 'src/coupon.mjs': 'export const normalize = (value) => value.trim();\n' }, 'Trim coupons');
+  write(root, { 'src/coupon.mjs': 'export const normalize = (value) => value.trim();\n' }); git(root, ['add', 'src/coupon.mjs']); git(root, ['commit', '-q', '-m', 'Trim coupons']);
   write(root, { 'docs/here.md': 'edited here\n' });
   const changes = taskPatch(repo, '2');
   assert.deepEqual(names(changes), ['src/coupon.mjs', 'docs/here.md']);
   assert.deepEqual(parts(changes), [['main', true, 2, 2, 1, STARTED]]);
   assert.equal(changes.note, NOTES.here);
   const rows = changeRows(changes, 120, false).map(row => visible(row.text));
-  assert.deepEqual(rows.slice(0, 2), [`2 files changed · +2 −1 · compared with ${STARTED}`, 'This session works in your own folder, so changes anyone else made there count too.']);
-  assert.equal(sessionChanges(sessionWire(repo, '2')).note, NOTES.here);
+  assert.deepEqual(rows.slice(0, 2), [`2 files changed · +2 −1 · compared with ${STARTED}`, 'This session works in your own folder, so changes anyone else made there since it started count too.']);
+  // What the owner had not committed before the session started is not the session's: Git still lists it, the tab does not.
+  assert.deepEqual(git(root, ['status', '--porcelain']).split('\n').map(line => line.trim().split(' ').pop()).sort(), ['docs/', 'owner/', 'package.json', 'test/coupon.test.mjs']);
+  // What another computer is sent, what a teammate's board is told and what a review is shown leave it out the same.
+  const there = sessionChanges(sessionWire(repo, '2'));
+  assert.deepEqual([there.note, names(there), counts(there)], [NOTES.here, names(changes), counts(changes)]);
+  assert.deepEqual(sessionFiles(readTask(repo, '2')), ['docs/here.md', 'src/coupon.mjs']);
+  assert.doesNotMatch(taskDetails(repo, '2').diff, /package\.json|owner\/draft|coupon\.test/);
+  // The owner's file is the session's once the session writes it.
+  write(root, { 'owner/draft.md': 'the owner was writing this\nand the session went on\n' });
+  assert.deepEqual(names(taskPatch(repo, '2')), ['src/coupon.mjs', 'docs/here.md', 'owner/draft.md']);
+  fs.rmSync(path.join(root, 'owner'), { recursive: true });
   // It moves to the owner's older branch: that commit was made here before the session, so it is not the session's.
   git(root, ['stash', '-q', '-u']); git(root, ['checkout', '-q', 'side']); write(root, { 'side.txt': 'the owner made this long before\nand the session added this\n' });
   const moved = taskPatch(repo, '2');
