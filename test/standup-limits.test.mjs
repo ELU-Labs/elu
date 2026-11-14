@@ -59,7 +59,7 @@ function answering(controller, done) {
     }
   })();
 }
-const TIMES = { pollMs: 20, remoteMs: 20, waitMs: 0, capMs: 20000 };
+const TIMES = { pollMs: 20, remoteMs: 20, waitMs: 60000, capMs: 20000, recordsMs: 20 };
 
 test('a round and its questions are never run again on their own after a rate limit; other work is', t => {
   const f = setup(t), conductor = new Conductor();
@@ -181,7 +181,8 @@ test('a session another computer would not ask is dropped without a word, and no
   const { task, listed } = await runStandupRound(f.repo, standup.id, { sources: { computers, teammates: () => [], peer }, times: TIMES });
   assert.equal(listed, 0);
   assert.doesNotMatch(task.messages.map(row => row.text).join('\n'), /Old chat/);
-  assert.equal(task.messages.at(-1).text, 'Standup done · 0 sessions on 0 computers · 0 not asked');
+  assert.equal(task.messages.at(-1).text, 'Standup done · 0 sessions on 0 computers · 0 model updates · 0 not asked');
+  assert.match(task.messages.find(row => row.standupChat && row.line).text, /^No session is open to ask/);
 });
 
 test("a teammate's round spends from their allowance, is checked again when approved, and an older conductor there is told back", async t => {

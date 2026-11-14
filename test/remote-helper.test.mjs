@@ -258,7 +258,7 @@ test("over a session of mine there, what I type goes to that session, as if type
   assert.deepEqual(hereMention(replied, '@re'), []); assert.deepEqual(hereMention(replied, 'yes @'), []);
   // Sending: the text alone, and the line says it went there, to whom.
   assert.equal(await app.send(row, app.route(row, 'yes').text), 'Sent to the session on @aki-devbox.');
-  assert.deepEqual(commands.at(-1), { type: 'remoteSend', id: ID, text: 'yes' });
+  assert.deepEqual(commands.at(-1), { type: 'remoteSend', id: ID, text: 'yes', typed: true });
   assert.equal(await app.send(replied, 'yes'), 'Sent to Codex on @aki-devbox.');
   // While it works there, the line says at once that the message waits for its turn to end.
   const busy = glue({ answer: () => ({ id: ID, working: true }) });
@@ -286,7 +286,8 @@ test('a message to a session there that has not run yet shows in its pane as wai
   const { glue: app } = glue(), T = Date.now(), at = seconds => new Date(T - 60000 + seconds * 1000).toISOString();
   const base = { id: ID, machine: D, createdAt: at(0), lastAt: at(30), state: 'running', title: HELPS.title, approvals: [], steps: [], entries: [{ role: 'You', at: at(0), text: 'Start the handoff' }, { role: 'Opus 5.5', lead: true, at: at(10), text: 'On it.' }] };
   const shown = waiting => app.view(remoteRow({ ...base, waiting }, 'aki-devbox', T), 120);
-  assert.match(shown([{ at: at(20), text: 'yes', state: 'turn' }]), /Opus 5\.5 on @aki-devbox: On it\.\n\nYou → @aki-devbox \(waiting\): yes\nIt reads this when its current turn ends\./);
+  // It is the last thing in the pane, under the line that says the session works.
+  assert.match(shown([{ at: at(20), text: 'yes', state: 'turn' }]), /Opus 5\.5 on @aki-devbox: On it\.\n\nWorking on @aki-devbox\n\nYou → @aki-devbox \(waiting\): yes\nIt reads this when its current turn ends\.$/);
   assert.match(shown([{ at: at(20), text: 'yes', state: 'starting' }]), /You → @aki-devbox \(waiting\): yes\nStarting on @aki-devbox\./);
   assert.match(shown([{ at: at(20), text: 'yes', state: 'queued' }]), /You → @aki-devbox \(waiting\): yes\nWaiting to start\./);
   assert.match(shown([{ at: at(20), text: 'yes', state: 'queued', reason: 'Waiting for a free slot in this project.' }]), /\(waiting\): yes\nWaiting for a free slot in this project\./);
@@ -295,7 +296,7 @@ test('a message to a session there that has not run yet shows in its pane as wai
   assert.match(shown([{ at: at(20), text: 'yes', state: 'blocked' }]), /\(blocked\): yes\nIt did not start on @aki-devbox\. Send it again once that is fixed\./);
   // Typed while the session waits on an approval: the message does not answer it, and says so.
   const asks = app.view(remoteRow({ ...base, approvals: [{ id: 'approval-1', role: 'lead', summary: 'Run: npm test', at: at(15) }], waiting: [{ at: at(20), text: 'yes', state: 'turn' }] }, 'aki-devbox', T), 120);
-  assert.match(asks, /\(waiting\): yes\nIt reads this when its current turn ends\. The approval below still needs your answer\.\n\nWaiting for your approval on @aki-devbox/);
+  assert.match(asks, /Waiting for your approval on @aki-devbox\n[^]*\n\nYou → @aki-devbox \(waiting\): yes\nIt reads this when its current turn ends\. The approval above still needs your answer\.$/);
   // Two that wait keep the order they were sent in, each a part of its own; none shows once they ran.
   const parts = app.parts(remoteRow({ ...base, waiting: [{ at: at(20), text: 'yes', state: 'turn' }, { at: at(25), text: 'and the tests', state: 'turn' }] }, 'aki-devbox', T), 120);
   assert.deepEqual(parts.filter(part => part.key.startsWith('waiting')).map(part => part.text.split('\n')[0]), ['You → @aki-devbox (waiting): yes', 'You → @aki-devbox (waiting): and the tests']);

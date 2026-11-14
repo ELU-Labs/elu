@@ -66,7 +66,7 @@ test("on a computer with only Grok Build, a teammate's message starts a session 
   assert.equal(run.vendor, 'grok'); assert.equal(task.state, 'answered', JSON.stringify(task.error));
 });
 
-test('a new session and a bot that names no model run on Grok Build there; a bot that names its model keeps it', async t => {
+test('a new session and a bot saved for Claude Code run on Grok Build there, whether the bot names a model or not', async t => {
   const p = setup(t), controller = new ProjectController(projectFolder(p.root));
   assert.deepEqual(controller.defaultModel(), { vendor: 'grok', model: null });
   const task = await controller.ask('Where is coupon normalization?').finished;
@@ -77,12 +77,12 @@ test('a new session and a bot that names no model run on Grok Build there; a bot
   const run = readTask(p.repo, asked.id).runs.at(-1);
   assert.equal(run.role, 'bot:scout'); assert.equal(run.vendor, 'grok');
   assert.deepEqual(models.botHere({ name: 'scout', vendor: 'claude', model: null, effort: 'max', subagents: 'sonnet' }), { name: 'scout', vendor: 'grok', model: null, effort: null, subagents: null });
-  // One that names its model is not moved: it says why it cannot start.
+  // One that names its model runs there too: the model it names is Claude Code's, which is not here.
   saveBot({ name: 'judge', vendor: 'claude', model: 'opus', instructions: 'Judge it.' });
-  const judged = await controller.ask('And you?', task.id, { bot: 'judge' }).finished.then(value => JSON.stringify([value.error, value.messages.at(-1)]), error => error.message);
-  assert.match(judged, /@judge can't start\. Claude Code is not installed or not on your PATH\./);
-  // A review is only moved to a vendor that can review, which Grok Build cannot.
-  assert.equal(models.botHere({ name: 'scout', vendor: 'claude', model: null }, { review: true }).vendor, 'claude');
+  const judged = await controller.ask('And you?', task.id, { bot: 'judge' }).finished, judge = readTask(p.repo, judged.id).runs.at(-1);
+  assert.equal(judge.role, 'bot:judge'); assert.equal(judge.vendor, 'grok');
+  // A review moves to it as well: Grok Build reviews.
+  assert.equal(models.botHere({ name: 'scout', vendor: 'claude', model: null }, { review: true }).vendor, 'grok');
 });
 
 test("the default is the project's choice, else this computer's, else the first vendor installed; a saved one whose vendor is not installed is passed over and named", t => {

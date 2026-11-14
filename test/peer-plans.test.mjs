@@ -23,6 +23,7 @@ import { saveBot } from '../lib/bots.mjs';
 import { approveTask, planFile, proposeTask, sessionTasks } from '../lib/plan.mjs';
 import { markMine, noteTheirs, unmarkMine } from '../lib/peer/mine.mjs';
 import { BINDING } from '../lib/peer/a2a.mjs';
+import { PART_BYTES, listParts } from '../lib/peer/lists.mjs';
 import { PeerDaemon } from '../lib/peer/daemon.mjs';
 import { Session } from '../lib/peer/rpc.mjs';
 import { BOARDS_MAX, BYTES_MAX, DONE_MS, KEEP_MS, PLANS_MAX, boardBy, boardPlans, boardWho, cleanBoards, firstCommit, cleanPlan, cleanTold, cleanPlans, fitPlans, heardPlans, planRows, planSharing, prunePlans, remoteBoards, remotePlans, saveRemoteBoards, saveRemotePlans, teammatePlanParts, teammatePlans, toldBoards } from '../lib/peer/plans.mjs';
@@ -67,11 +68,11 @@ test('a told Task keeps only its own fields, each cleaned and within its limit, 
   // Dropped whole: not approved or done, a value outside its list, no title, no objective, a bad project or id.
   for (const bad of [{ state: 'proposed' }, { state: 'rejected' }, { priority: 'p0' }, { severity: 'blocker' }, { title: '\x1b[2J' }, { objectives: [] }, { objectives: ['One', '   '] }, { repoId: 'abc' }, { handle: '../x' }, { id: '../../x' }, { id: 5 }]) assert.equal(cleanPlan(told(bad)), null, JSON.stringify(bad));
   assert.equal(cleanPlan(null), null); assert.equal(cleanPlan('x'), null);
-  // A list: at most PLANS_MAX, one per Task, and nothing for what is not a list.
-  assert.equal(cleanPlans(Array.from({ length: 50 }, (_, n) => told({ id: `t-${n}` }))).length, PLANS_MAX);
+  // A list: every Task of it, one per Task, and nothing for what is not a list.
+  assert.equal(cleanPlans(Array.from({ length: 50 }, (_, n) => told({ id: `t-${n}` }))).length, 50);
   assert.equal(cleanPlans([told(), told({ title: 'Again' })]).length, 1);
   assert.deepEqual([cleanPlans({ 0: told() }), cleanPlans(null)], [[], []]);
-  // A message stays under its size: the oldest Tasks are left out first.
+  // The one message a build from before parts reads stays under its size: the oldest Tasks are left out first.
   const heavy = Array.from({ length: PLANS_MAX }, (_, n) => cleanPlan(told({ id: `t-${n}`, description: '\u{1F600}'.repeat(1000), subtasks: Array.from({ length: 30 }, () => ({ text: '\u{1F600}'.repeat(100), state: 'todo' })) })));
   const fitted = fitPlans(heavy);
   assert.ok(Buffer.byteLength(JSON.stringify(fitted)) <= BYTES_MAX); assert.equal(fitted[0].id, 't-0');
@@ -194,6 +195,90 @@ test('Tasks go only to teammates on a team the project is shared with, again whe
     saveRemotePlans(bob.key, [told()]);
     appendOp(second.id, makeOp(me, second.id, 'remove', { key: bob.key })); daemon.recheck();
     assert.equal(remotePlans(bob.key), null); assert.ok(remotePlans(ana.key));
+  });
+});
+
+// Every Task reaches a teammate's Kanban: ELU sets no limit of its own on how many.
+test('every Task of a teammate reaches the Kanban: a list too long for one message goes in parts the other side joins, and a build from before parts gets what it can read', async t => {
+  const crew = makeTeam(t), ana = crew.founder.identity, sara = crew.member, bob = withHome(newHome(t), () => createIdentity({ name: 'bob' }));
+  await withHome(sara.home, async () => {
+    const me = loadIdentity(), now = Date.now(), second = createTeam(me, 'side');
+    redeemCode(createInvite(me, second.id, { hours: 1 }), bob.key, bob.name);
+    const app = registeredProject(t, { origin: ORIGIN });
+    share(app.root, { handle: 'app', teams: [crew.teamId, second.id] });
+    // 45 sessions, each working on its own Task: more than the 30 a message held before.
+    const id = n => `t-${n.toString(16).padStart(8, '0')}`;
+    for (let n = 1; n <= 45; n++) writePlans(app.root, n, [plan({ id: id(n), title: `Task ${n}` })]);
+    assert.equal(planRows(now).length, 45, 'every Task is told');
+    const daemon = Object.assign(new PeerDaemon({ conductor: () => {}, testing: { lists: { paceMs: 1, retryMs: 1, againMs: 400 } } }), { me, node: { dial() {}, leave() {} } }); daemon.methods = daemon.extensions();
+    // A teammate's machine: it answers each part it is sent, as a build that joins parts does.
+    const connect = (who, teamId, extra = {}) => {
+      const wire = { out: '', answer: () => ({ result: { ok: true } }) }, socket = Object.assign(new EventEmitter(), { destroyed: false, destroy() { this.destroyed = true; this.emit('close'); } });
+      const frames = method => wire.out.split('\n').flatMap(line => { try { const frame = JSON.parse(line); return frame.method === method ? [frame] : []; } catch { return []; } });
+      socket.write = chunk => { wire.out += chunk; for (const line of String(chunk).split('\n')) { let frame = null; try { frame = JSON.parse(line); } catch { continue; } if (frame.method === 'elu.list.put' && Object.hasOwn(frame, 'id')) setImmediate(() => socket.emit('data', Buffer.from(`${JSON.stringify({ jsonrpc: '2.0', id: frame.id, ...wire.answer(frame.params) })}\n`))); } return true; };
+      daemon.attach(socket, who.key);
+      socket.emit('data', Buffer.from(`${JSON.stringify({ jsonrpc: '2.0', method: 'elu.hello', params: { binding: BINDING, a2aVersion: '1.0', name: who.name, teams: [{ id: teamId, ...head(teamId), ops: [] }], handles: [], ...extra } })}\n`));
+      return { socket, wire, frames, plans: () => frames('elu.plans').map(frame => frame.params), parts: () => frames('elu.list.put').map(frame => frame.params), say: frame => socket.emit('data', Buffer.from(`${JSON.stringify({ jsonrpc: '2.0', ...frame })}\n`)), results: () => wire.out.split('\n').flatMap(line => { try { const frame = JSON.parse(line); return Object.hasOwn(frame, 'result') || Object.hasOwn(frame, 'error') ? [frame] : []; } catch { return []; } }) };
+    };
+    const settle = (ms = 20) => new Promise(resolve => setTimeout(resolve, ms));
+    const until = async check => { for (let n = 0; n < 400 && !check(); n++) await settle(10); assert.ok(check(), 'it did not happen in time'); };
+    assert.equal(daemon.hello(ana.key).lists, 1, 'this build says in its hello that it joins a list sent in parts');
+    const toAna = connect(ana, crew.teamId, { plans: true, lists: 1 }), toBob = connect(bob, second.id, { plans: true });
+    // All 45 fit one message, and all 45 go in it.
+    assert.equal(toAna.plans().at(-1).tasks.length, 45);
+    assert.deepEqual(toAna.plans().at(-1).tasks.map(task => task.title).sort(), Array.from({ length: 45 }, (_, n) => `Task ${n + 1}`).sort());
+    // A build from before parts reads 30 of one message: it is sent the newest 30, as before.
+    assert.equal(toBob.plans().at(-1).tasks.length, PLANS_MAX);
+
+    // 400 sessions with long descriptions: about 2 MB, more than one message holds.
+    for (let n = 1; n <= 400; n++) writePlans(app.root, n, [plan({ id: id(n), title: `Task ${n}`, description: '\u{1F600}'.repeat(2000) })]);
+    const sentBefore = toAna.plans().length;
+    daemon.tellPlans();
+    await until(() => toAna.parts().some(part => part.last === true));
+    const parts = toAna.parts();
+    assert.ok(parts.length > 1, 'it goes in more than one part');
+    assert.equal(toAna.plans().length, sentBefore, 'and not in a message of its own');
+    assert.deepEqual([new Set(parts.map(part => part.id)).size, parts.map(part => part.seq), parts.map(part => part.last), new Set(parts.map(part => part.list)).size, parts[0].list], [1, parts.map((_, n) => n), parts.map((_, n) => n === parts.length - 1), 1, 'plans']);
+    for (const line of toAna.wire.out.split('\n')) assert.ok(Buffer.byteLength(line) < 1024 * 1024, 'every line fits the link');
+    for (const part of parts) assert.ok(Buffer.byteLength(JSON.stringify(part.rows)) <= BYTES_MAX);
+    const all = parts.flatMap(part => part.rows);
+    assert.equal(all.length, 400, 'every Task is in the parts'); assert.equal(new Set(all.map(task => task.id)).size, 400);
+    assert.ok(all.every(task => task.description.length === 2000), 'each whole');
+    // Nothing changed: it is not sent again.
+    await settle(); daemon.tellPlans(); await settle(); assert.equal(toAna.parts().length, parts.length);
+    // The older build still gets one message it can read: the newest that fit.
+    const old = toBob.plans().at(-1);
+    assert.equal(toBob.parts().length, 0); assert.ok(old.tasks.length > 0 && old.tasks.length <= PLANS_MAX); assert.ok(Buffer.byteLength(JSON.stringify(old.tasks)) <= BYTES_MAX);
+    // A part the other side did not take: the list is not told, and goes again from its first part after a while, not on every look.
+    toAna.wire.answer = part => part.seq === 1 ? { error: { code: -32602, message: 'That part of the list is out of order.' } } : { result: { ok: true } };
+    writePlans(app.root, 400, [plan({ id: id(400), title: 'Task 400 again', description: '\u{1F600}'.repeat(2000) })]);
+    daemon.tellPlans(); await until(() => toAna.parts().filter(part => part.seq === 1).length === 2);
+    await settle(); daemon.tellPlans(); await settle();
+    assert.equal(toAna.parts().filter(part => part.seq === 0).length, 2, 'not again at once');
+    toAna.wire.answer = () => ({ result: { ok: true } });
+    await settle(450); daemon.tellPlans(); await until(() => toAna.parts().filter(part => part.last).length === 2);
+    const again = toAna.parts().slice(parts.length + 2);
+    assert.deepEqual([again.map(part => part.seq), new Set(again.map(part => part.id)).size, again[0].id === parts[0].id], [again.map((_, n) => n), 1, false]);
+    assert.ok(again.flatMap(part => part.rows).some(task => task.title === 'Task 400 again')); assert.equal(again.flatMap(part => part.rows).length, 400);
+    await settle(); daemon.tellPlans(); await settle(); assert.equal(toAna.parts().filter(part => part.last).length, 2);
+
+    // The other way: a teammate's list in parts is joined, cleaned and kept whole; before its last part nothing changes.
+    toAna.say({ method: 'elu.plans', params: { tasks: [told({ title: 'The one before' })] } }); await settle();
+    const send = '0f0e0d0c-0b0a-4a0b-8c0d-0e0f0a0b0c0d', rows = Array.from({ length: 100 }, (_, n) => told({ id: `t-${n}`, title: `Theirs ${n}`, extra: 'x' }));
+    toAna.say({ id: 'p0', method: 'elu.list.put', params: { list: 'plans', id: send, seq: 0, last: false, rows: rows.slice(0, 40) } });
+    toAna.say({ id: 'p1', method: 'elu.list.put', params: { list: 'plans', id: send, seq: 1, last: false, rows: rows.slice(40, 80) } }); await settle();
+    assert.deepEqual(remotePlans(ana.key).tasks.map(task => task.title), ['The one before']);
+    toAna.say({ id: 'p2', method: 'elu.list.put', params: { list: 'plans', id: send, seq: 2, last: true, rows: rows.slice(80) } }); await settle();
+    const kept = remotePlans(ana.key).tasks;
+    assert.equal(kept.length, 100, 'every Task of the teammate is kept'); assert.deepEqual([kept[0].title, kept.at(-1).title, Object.hasOwn(kept[0], 'extra')], ['Theirs 0', 'Theirs 99', false]);
+    assert.deepEqual(['p0', 'p1', 'p2'].map(name => toAna.results().find(frame => frame.id === name)?.result), [{ ok: true }, { ok: true }, { ok: true }]);
+    // A part out of order is refused and changes nothing; so is one that names no list this build knows.
+    toAna.say({ id: 'q0', method: 'elu.list.put', params: { list: 'plans', id: send, seq: 5, last: true, rows: [told({ id: 't-x', title: 'Out of order' })] } });
+    toAna.say({ id: 'q1', method: 'elu.list.put', params: { list: 'secrets', id: send, seq: 0, last: true, rows: [] } }); await settle();
+    assert.equal(remotePlans(ana.key).tasks.length, 100);
+    assert.deepEqual(['q0', 'q1'].map(name => toAna.results().find(frame => frame.id === name)?.error?.message), ['That part of the list is out of order.', 'That is not a part of a list.']);
+    assert.equal(toAna.socket.destroyed, false);
+    toAna.socket.destroy(); toBob.socket.destroy();
   });
 });
 
@@ -729,6 +814,11 @@ test('my other computer is told each session\'s Task with its card, or its first
   const fitted = fitCards(big);
   assert.equal(fitted.length, 160, 'every card still goes'); assert.ok(Buffer.byteLength(JSON.stringify(fitted)) <= CARD_BYTES);
   assert.ok(fitted[0].task); assert.equal(fitted.at(-1).task, undefined);
+  // That is only for a build from before lists in parts. To any other, every card goes with its Task, in parts each within a message.
+  const sent = listParts(big);
+  assert.ok(sent.length > 1); assert.equal(sent.flat().length, 160); assert.ok(sent.flat().every(card => card.task.description.length === 4000));
+  for (const part of sent) assert.ok(Buffer.byteLength(JSON.stringify(part)) <= PART_BYTES);
+  assert.deepEqual(listParts([]), [[]]);
 });
 
 test('every session\'s Task goes with its card, without /share, to a teammate who proves they have the repository, and shows on their board and to their models', async t => {

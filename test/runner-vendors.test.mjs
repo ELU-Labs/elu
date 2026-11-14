@@ -270,9 +270,9 @@ test('an Antigravity session refuses a push that a script makes over ACP in Ask 
   assert.equal(full.approvals, undefined, 'Full access asked the owner nothing'); assert.equal(pendingApprovals().length, 0);
 });
 
-// The turn limits, shrunk for a test.
-function quickClock(t, quietSeconds, capSeconds = 7200) {
-  const before = { ...turnClock }; Object.assign(turnClock, { quietSeconds, capSeconds }); t.after(() => Object.assign(turnClock, before));
+// The quiet limit, the one clock a turn has, shrunk for a test.
+function quickClock(t, quietSeconds) {
+  const before = { ...turnClock }; Object.assign(turnClock, { quietSeconds }); t.after(() => Object.assign(turnClock, before));
 }
 // The owner's case: a long test run inside a turn prints nothing until it ends.
 test('a Codex turn whose command runs silently past the quiet limit is not stopped', async t => {
@@ -461,21 +461,23 @@ test('an Antigravity turn runs headless where ACP is not proven or cannot start,
   assert.deepEqual(turns().slice(-2).map(call => call.args[0]), ['acp', '-p']); assert.ok(turns().at(-1).args.includes('--sandbox')); assert.equal(fs.existsSync(made), false); assert.equal(third.result.outcome, 'blocked');
 });
 
-// The limits of a turn hold over ACP as they do for any turn that shows its steps: one that
-// prints nothing for the quiet limit is stopped. A headless run prints only at the end, so
-// silence says nothing about it and only the cap applies, as before.
-test('an Antigravity turn in Full access over ACP is stopped when it prints nothing for the quiet limit; headless it runs on to its result', async t => {
-  const f = setup(t, 'agy'); agySet(f, { pace: 2500 });
-  const { turnClock } = await import('../lib/turn-limits.mjs'), before = { ...turnClock }; Object.assign(turnClock, { quietSeconds: 1, capSeconds: 30 }); t.after(() => Object.assign(turnClock, before));
+// The quiet limit holds over ACP as it does for any turn that shows its steps: one that prints
+// nothing for it is stopped, and in Full access ELU tells it to carry on once, in the session it
+// stopped in, before the stop stands. A headless run prints only at the end, so silence says
+// nothing about it: it has no limit, and runs until it ends.
+test('an Antigravity turn in Full access over ACP that prints nothing for the quiet limit is carried on once, then stopped; headless it runs on to its result', async t => {
+  const f = setup(t, 'agy'); agySet(f, { pace: 2500 }); quickClock(t, 1);
   const turns = () => f.calls().filter(call => !call.args.includes('/usage') && !['--version', '--help'].includes(call.args[0])).map(call => call.args[0]);
   proven('agy', f.bin, '1.5.4', { relay: true });
   const turn = f.controller.ask('Reply with the summary "slow".', null, { permissions: 'full' });
   const quiet = await turn.finished.catch(() => readTask(f.controller.repo, turn.id));
-  assert.match(quiet.error?.message ?? '', /^Stopped after 1 second with no output\./, JSON.stringify(quiet.error)); assert.deepEqual(turns(), ['acp'], 'a limit is not a start that failed: nothing ran headless after it');
+  assert.match(quiet.error?.message ?? '', /^Stopped after 1 second with no output\./, JSON.stringify(quiet.error)); assert.equal(quiet.error.stoppedBy, 'quiet');
+  assert.deepEqual(turns(), ['acp', 'acp'], 'carried on once over ACP; a limit is not a start that failed, so nothing ran headless after it');
+  assert.deepEqual(quiet.messages.filter(row => row.from === 'ELU' && row.line).map(row => row.text), ['No output for 1 second. ELU told it to carry on.']);
   proven('agy', f.bin, '1.5.4', { relay: false });
   const started = Date.now(), printed = await f.controller.ask('Reply with the summary "slow".', null, { permissions: 'full' }).finished;
   assert.equal(printed.state, 'answered', JSON.stringify(printed.error)); assert.equal(printed.result.summary, 'slow'); assert.ok(Date.now() - started >= 2500, 'it was silent for longer than the quiet limit');
-  assert.deepEqual(turns(), ['acp', '-p']);
+  assert.deepEqual(turns(), ['acp', 'acp', '-p']);
 });
 
 // Over ACP the model is the session's own, so ELU sets the one the session chose before it

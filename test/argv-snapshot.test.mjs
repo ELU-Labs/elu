@@ -86,7 +86,9 @@ test('compile in the locked profile is byte-identical to the launch before modes
     assert.throws(() => claude.compile({ mode, role: lead, cwd, protectedPaths: ['.git'], commonDir: common, session }), /approval relay/);
     const argv = codex.compile({ mode, role: readRole('codex'), cwd, schemaFile });
     assert.notDeepEqual(argv, cases['codex reviewer'](), mode); assert.ok(argv.some(arg => /^(sandbox_mode|default_permissions)=/.test(arg)), mode);
-    assert.throws(() => grok.compile({ mode, role: lead, cwd, session, runDir: cwd }), /Grok Build has not been checked on this machine yet\. Your first message to it runs the check\./);
-    assert.throws(() => agy.compile({ mode, role: lead, cwd, schemaFile }), /Antigravity CLI has not been checked on this machine yet\. Your first message to it runs the check\./);
+    // Full access needs no check (test/full-access-no-check.test.mjs).
+    if (mode === 'full') continue;
+    assert.throws(() => grok.compile({ mode, role: lead, cwd, session, runDir: cwd }), /Grok Build \(the grok command\) has not been checked on this machine yet\. Your first message to it outside Full access runs the check; Full access needs none\./);
+    assert.throws(() => agy.compile({ mode, role: lead, cwd, schemaFile }), /Antigravity CLI \(the agy command\) has not been checked on this machine yet\. Your first message to it outside Full access runs the check; Full access needs none\./);
   }
 });

@@ -53,7 +53,7 @@ async function headless(w, { mode, prompt, role = lead(mode === 'locked' ? 'read
 test('compile refuses until this machine\'s check passed, then builds each profile\'s argv', t => {
   const w = world(t), runDir = runDirIn(w), folder = path.join(w.dir, 'evals'); fs.mkdirSync(folder);
   const base = { role: lead('read'), cwd: w.repo, session: SESSION, runDir };
-  assert.throws(() => grok.compile({ ...base, mode: 'locked' }), /^EluCodeError: Grok Build has not been checked on this machine yet\. Your first message to it runs the check\.$/);
+  assert.throws(() => grok.compile({ ...base, mode: 'locked' }), /^EluCodeError: Grok Build \(the grok command\) has not been checked on this machine yet\. Your first message to it outside Full access runs the check; Full access needs none\.$/);
   passed(w.bin);
   const home = fs.realpathSync(os.homedir()), personal = fs.realpathSync(w.personal);
   const secrets = [
@@ -349,7 +349,7 @@ test('run() relays an ACP permission request through the approval files: allow w
   await assert.rejects(grok.run(start('empty', { prompt: ' ' })), /needs a prompt/);
   const out = world(t, { signedIn: false }); passed(out.bin);
   const failure = await grok.run({ ...start('out', { prompt: 'x' }), bin: out.bin, env: out.env, cwd: out.repo, logFile: path.join(out.dir, 'out.log') }).then(() => null, error => error);
-  assert.match(failure.message, /could not finish/); assert.equal(failure.details.cause, 'auth'); assert.equal(failure.details.reason, 'Grok Build: not signed in. Sign it in with s on its line in the Usage tab.');
+  assert.match(failure.message, /could not finish/); assert.equal(failure.details.cause, 'auth'); assert.equal(failure.details.reason, 'Grok Build (the grok command): not signed in. Sign it in with s on its line in the Usage tab.');
   // A machine whose relay step failed keeps the headless fallback: ACP would skip the question.
   passed(out.bin, { relay: false });
   await assert.rejects(grok.run({ ...start('norelay', { prompt: 'x' }), bin: out.bin, env: out.env, cwd: out.repo }), /^EluCodeError: Grok Build can't ask live here\. Blocked actions are reported\.$/);
@@ -368,7 +368,7 @@ test('the conformance steps pass against the fake, hide the owner\'s Claude file
   assert.deepEqual(grok.conformance.map(step => [step.id, step.required]), [['signin', true], ['locked-no-write', true], ['locked-no-shell', true], ['locked-no-network', true], ['json', true], ['resume', true], ['relay', false], ['isolation', false]]);
   assert.equal(requireConformance('grok', { bin: w.bin, version: '1.0.77' }), true); assert.equal(conformanceState('grok').relay, true);
   assert.deepEqual(checkResult('grok', { bin: w.bin, version: '1.0.77' }), { failed: [], again: false, loads: [], runs: [], answer: null, unread: null, relay: true, version: '1.0.77' });
-  assert.throws(() => requireConformance('grok', { bin: w.bin, version: '1.0.78' }), /Grok Build has not been checked on this machine yet/, 'another release proves itself again');
+  assert.throws(() => requireConformance('grok', { bin: w.bin, version: '1.0.78' }), /Grok Build \(the grok command\) has not been checked on this machine yet/, 'another release proves itself again');
   const runDir = runDirIn(w);
   assert.ok(grok.compile({ role: lead('read'), mode: 'locked', cwd: w.repo, session: SESSION, runDir }).includes('--prompt-file'), 'launchable after the pass');
   // Every switch was off for the step, by the environment: the list names all thirteen and none is on.
@@ -396,7 +396,7 @@ test('a required step that is not proven turns off Read only and the two asking 
   assert.deepEqual([second.steps['locked-no-write'], second.steps['locked-no-shell'], second.steps['locked-no-network'], second.steps.relay, second.relay], ['fail', 'fail', 'fail', 'fail', false]);
   assert.equal(second.steps.json, 'pass');
   // It wrote in a read-only turn: checking again cannot change that, so nothing promises that it will.
-  const text = "Grok Build did not pass its check on this machine, so it runs in Full access only here. Not proven: a read-only turn writes no file (locked run wrote a file: created.txt), and 2 more. Switch this session to Full access to use it; c on its line in the Usage tab runs the check again.";
+  const text = "Grok Build (the grok command) did not pass its check on this machine, so it runs in Full access only here. Not proven: a read-only turn writes no file (locked run wrote a file: created.txt), and 2 more. Switch this session to Full access to use it; c on its line in the Usage tab runs the check again.";
   for (const mode of ['locked', 'ask', 'auto']) assert.throws(() => requireConformance('grok', { ...at, mode }), error => error.message === text, mode);
   assert.throws(() => requireConformance('grok', at), error => error.message === text, 'a turn that names no mode is read-only');
   assert.equal(requireConformance('grok', { ...at, mode: 'full' }), true, 'Full access runs it as it is');
@@ -407,7 +407,7 @@ test('a required step that is not proven turns off Read only and the two asking 
   const third = await runConformance('grok', { bin: out.bin, version: '1.0.77', scratch: path.join(out.dir, 'scratch'), env: out.env });
   assert.equal(third.steps.signin, 'fail'); assert.equal(third.steps.relay, 'fail');
   // Signing in changes this one: the next message checks again.
-  assert.throws(() => requireConformance('grok', { bin: out.bin, version: '1.0.77' }), /^EluCodeError: Grok Build did not pass its check on this machine, so it runs in Full access only here\. Not proven: it is signed in \(not signed in; sign it in with s on its line in the Usage tab\), and \d more\. Your next message to it runs the check again\.$/);
+  assert.throws(() => requireConformance('grok', { bin: out.bin, version: '1.0.77' }), /^EluCodeError: Grok Build \(the grok command\) did not pass its check on this machine, so it runs in Full access only here\. Not proven: it is signed in \(not signed in; sign it in with s on its line in the Usage tab\), and \d more\. Your next message to it outside Full access runs the check again\.$/);
   assert.equal(checkResult('grok', { bin: out.bin, version: '1.0.77' }).again, true);
 });
 
