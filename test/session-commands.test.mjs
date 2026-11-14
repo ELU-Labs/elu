@@ -129,6 +129,19 @@ test('a schedule whose message says the same does it on each run', { timeout: 12
   assert.match(elu(f, ['sessions', '--all']).stdout, /"archive this chat and start a new session that says hello" {2}· archived · from schedule every 3h\n/);
 });
 
+test("a session that keeps its schedule on its record (scheduleId) is listed with it once its request is gone", async t => {
+  const f = setup(t);
+  const row = saveSchedule({ root: f.root, project: 'sample app', goal: 'Check the build', when: parseWhen('every 3h'), permissions: 'auto', picked: true });
+  const run = await f.controller.ask('Check the build', null, { permissions: 'auto' }).finished;
+  const typed = await f.controller.ask('Check the build', null, { permissions: 'auto' }).finished;
+  // As a version that keeps the field writes it; no request and no lastTaskId names this session.
+  const file = path.join(f.repo.state, 'tasks', String(run.id), 'task.json');
+  atomic(file, { ...JSON.parse(fs.readFileSync(file, 'utf8')), scheduleId: row.id });
+  const listed = json(elu(f, ['sessions', '--json'])).sessions;
+  assert.deepEqual(listed.map(value => [value.id, value.schedule]), [[String(run.id), { id: row.id, label: 'every 3h' }], [String(typed.id), null]]);
+  assert.match(elu(f, ['sessions']).stdout, / {2}"Check the build" {2}· from schedule every 3h\n/);
+});
+
 test("a teammate's question is never told the commands, and they refuse to run from it", async t => {
   const f = setup(t);
   const peer = await f.controller.ask('Answer the question from @sara.', null, { origin: origin('ask'), readOnly: true, context: 'Where is normalization?' }).finished;
