@@ -6,7 +6,7 @@ import { project, fakeClis } from './helpers.mjs';
 import { repository } from '../lib/git.mjs';
 import { dashboardSnapshot, projectSnapshot, registerProject } from '../lib/projects.mjs';
 import { pendingRequests, updateRequest } from '../lib/workspace.mjs';
-import { Conductor, DEFAULT_SETTINGS, conductorSettings, enqueue, saveConductorSettings, sendCommand } from '../lib/conductor.mjs';
+import { Conductor, DEFAULT_SETTINGS, conductorSettings, enqueue, retryRequest, saveConductorSettings, sendCommand } from '../lib/conductor.mjs';
 import { boardRows, boardSections, rowTitle } from '../lib/board.mjs';
 import { cleanWait, waitOf, waitText, waitingText } from '../lib/waiting.mjs';
 import { personalDirectory } from '../lib/util.mjs';
@@ -79,6 +79,12 @@ test('with /slots 6, six sessions of one project run at once and the seventh wai
   await until(() => request(p.root, seventh.id)?.state === 'running', 'the older of the two to start next');
   assert.equal(request(p.root, eighth.id).state, 'queued');
   assert.equal(waitingText(request(p.root, eighth.id)), SLOT(6, 6));
+  // One that was blocked and is sent again starts with nothing kept of its earlier wait, until the conductor passes it over again.
+  updateRequest(p.root, eighth.id, { state: 'blocked', reason: 'It could not start.' });
+  assert.equal(waitOf(request(p.root, eighth.id)), null, 'one that is not queued waits for nothing');
+  const again = retryRequest(p.root, eighth.id);
+  assert.deepEqual([again.state, again.reason, again.waits], ['queued', 'Waiting to start.', undefined]);
+  await until(() => request(p.root, eighth.id)?.reason === SLOT(6, 6), 'the eighth to be told again');
 });
 
 test('8 sessions run at once until /slots says otherwise, and a number saved before stays as saved', async t => {
