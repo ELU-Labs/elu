@@ -516,6 +516,8 @@ test('a bot\'s must_fix sends the lead back, and the session cannot be published
   const blocked = await f.controller.ask('Normalize coupon codes', null, { bots: ['critic'] }).finished;
   assert.equal(blocked.state, 'blocked', JSON.stringify(blocked.error)); assert.equal(blocked.reviewStatus, 'blocked'); assert.deepEqual(blocked.bots, ['critic'], 'the bots follow the chat into its editing session');
   assert.deepEqual(blocked.reviews.map(review => [review.round, review.role, review.result.comments[0].severity]), [[1, 'bot:critic', 'must_fix'], [2, 'bot:critic', 'must_fix']]);
+  // Each review says when it was given: a chat on my other computer shows it there.
+  assert.ok(blocked.reviews.every((review, index) => Date.parse(review.at) >= Date.parse(blocked.createdAt) && (!index || Date.parse(review.at) >= Date.parse(blocked.reviews[index - 1].at))), 'each review says when it was given');
   const review = f.inputs('codex')[0], sent = f.calls('codex')[0].args;
   assert.match(review.input, /Review as @critic, a bot the owner added to this chat\. Review the supplied full changed-file contents and diff\./); assert.match(review.input, /Instructions from the owner for @critic:\nLook for edge cases\./);
   assert.match(review.input, /"source":\{"patch":/, 'it reviews what a reviewer reviews');

@@ -111,6 +111,8 @@ Type these in the message box. `/` alone lists every command, and `/help` explai
 
 You can send a message at any time. On Claude Code, one sent while the session is working goes to that turn: the model reads it at its next step, the chat then says "Sent to the running turn." under it, and the reply answers it too. Until the model reads it, behind a long command for as long as the command runs, the chat says "Waiting for the current command to finish.", and Enter in the empty message box sends it now: the command moves to the background and the same turn goes on with your message. On Codex, Grok Build and Antigravity, which take no message while their turn works, it waits in the chat and is sent by itself when that turn ends; several go together, in order. There Enter in the empty message box sends it now by stopping the turn, its changes kept: your message starts the next turn, in the same vendor session where it can go on, and where it cannot, with what the stopped turn had said and done. `↑` in the empty message box takes the newest one back so you can change it. The same holds for a session on your other computer, and for a message to a bot while that bot works.
 
+A chat reads in time order, here and for a session on your other computer. What you sent that has not been read yet is the last thing in it, right above the message box, with nothing under it; the working turn's steps are right above that. A session's Task sits after the reply that proposed it.
+
 While the model or a bot works, the chat shows what it does as it happens: each thought, each tool call (● running, ✓ done, ✗ failed), its plan, and what it writes on the way. A thought that comes without its text shows how many tokens it has taken so far, such as `✻ thinking · 1.2k tokens`. A call says how long it has run, second by second, such as `● Run: npm test · 2m 10s`, and keeps its total when it ends. Commands the turn left running in the background are one line, such as `● 1 background command: npm run watch · 4m 0s`. When the turn ends they fold into one line above its reply, such as `▸ 12 steps in 1m 12s`. A turn you stop with `/stop` keeps its steps, and its line says `stopped`. `ctrl+o` opens or folds the steps of every turn, in the message box too; a click on that line opens or folds that turn's. A session on your other computer shows the same. A program that prints only when it ends has no steps to show: the chat then counts the time under the working line, such as `1m 12s so far. Antigravity reports only when it ends.` Antigravity shows its steps in every permission mode where its one-time check proved `agy acp` on this machine, and runs that way otherwise ([docs/vendors/antigravity.md](docs/vendors/antigravity.md)).
 
 | Type | What it does |
@@ -123,9 +125,9 @@ While the model or a bot works, the chat shows what it does as it happens: each 
 | `/agent add fable` | Adds another model to this session as an agent; write `@fable` and what to do. Words after the model say what it is for, and `--name NAME` names it: `/agent add sonnet you review my SQL --name sql` |
 | `@pair is there a simpler way?` | Asks a bot. Your next messages in that session go to it too |
 | `@model and what do you think?` | Writes to the session's model again |
-| `/changes` | Shows what this session changed; `/chat` goes back. A session on your other computer shows its changes the same way, whole, and its chat counts them in one line. In a session of this computer, `+` on a line (or a click on its `+`) notes what should change, and `s` sends the notes to the model together |
+| `/changes` | Shows what this session changed; `/chat` goes back. The name of its Changes tab counts them (`Chat   Changes 7`) before you open it: a session of this computer counts again when a turn ends or its state changes, and one on your other computer shows its changes the same way, whole. In a session of this computer, `+` on a line (or a click on its `+`) notes what should change, and `s` sends the notes to the model together |
 | `/publish` | Shows the exact push and draft pull request, then asks you |
-| `/stop` | Stops the running response. Messages you sent while it ran then go at once, in order; `↑` takes one back first. Over a session on your other computer, it stops that session there |
+| `/stop` | Stops the running response. Messages you sent while it ran then go at once, in order; `↑` takes one back first. Over a session on your other computer, it stops that session there. While a session of this computer works, the key bar under the message box names it (`/stop stop`) |
 | Enter (empty box) | While a turn works and a message of yours waits, sends that message now. On Claude Code the command the turn waits on moves to the background and the same turn reads the message. On the other vendors the turn stops as `/stop` stops it and the message starts the next turn, in the same vendor session where it can go on |
 | `/schedule in 1h check the build` | Starts a session later or on a schedule: `/schedule [when] [message]`. `/schedule ` lists times such as `in 5m`, `in 1h` and `daily 9:00`. Each run is a new session with the model, mode and bots of the form (a bot with its own schedule is left out); it does not see the chat it was made in. A schedule gets Full access only when you pick it for that schedule, and the form asks you once before saving it |
 | `/budget 5` | Limits this session to 5 dollars; `/budget off` removes the limit |
@@ -409,8 +411,8 @@ in to GitHub with `gh` as the same account pair by themselves. Otherwise run
 it asks if the laptop is yours too (or `elu join CODE --mine`). A devbox already on your team
 needs no code: run `/mine @devbox` on the laptop and `/mine @laptop` on the devbox. From then on, `@devbox fix the flaky test` in the
 new session box starts the session on the devbox, with the mode, model and bots you picked.
-It shows in Sessions marked "on devbox", live, and its approvals wait on both machines. Its
-chat names what it changed in one line, and `d` opens its Changes beside the chat, as for a
+It shows in Sessions marked "on devbox", live, and its approvals wait on both machines. The
+name of its Changes tab counts what it changed, and `d` opens its Changes beside the chat, as for a
 session here: the files with their counts, each change under the file and the line it is at,
 `[` and `]` between files, `n` and `p` between changes. It is
 your own session there, so your rules apply, and `a` on its approval, from either machine,
@@ -425,8 +427,9 @@ typed it on the devbox: `yes`, the number of a choice or your own words answer t
 it waits on, and any other message continues it. The message box names its model and the
 computer ("Message Opus 5.5 on @devbox"), and its reply shows in the same pane. This works
 with ELU closed on the devbox, or open there in a view-only window: the devbox runs the
-session in the background. A message that has not run there yet shows in the pane as waiting,
-with why: its turn has not ended, no slot is free, or it could not start. With the devbox off,
+session in the background. A message that has not run there yet is the last thing in the pane,
+right above the message box, marked waiting, with why: its turn has not ended, no slot is free,
+or it could not start. With the devbox off,
 the line under the pane says so at once and your message stays in the box. `y`, `n` and `a`,
 each followed by Enter, still answer its approvals.
 Start a message with `@here` to ask an agent on the laptop for help with that session instead:

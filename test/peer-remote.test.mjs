@@ -625,7 +625,7 @@ test('a session on another computer is drawn in parts, each keyed by what it sho
   assert.equal(new Set(before.map(part => part.key)).size, before.length, 'no two parts share a key');
   // The entries that stay keep their keys; so do the parts below them.
   for (const part of before.filter(part => !/Entry [12]$/.test(part.text))) assert.ok(after.some(other => other.key === part.key && other.text === part.text), part.text);
-  assert.ok(!after.some(part => before.slice(0, 2).some(gone => gone.key === part.key)), 'the entries that left the top are gone');
+  assert.ok(!after.some(part => before.filter(gone => /Entry [12]$/.test(gone.text)).some(gone => gone.key === part.key)), 'the entries that left the top are gone');
   assert.equal(after.filter(part => /Entry 5$/.test(part.text)).length, 2, 'the same entry twice is drawn twice');
 });
 
@@ -925,6 +925,35 @@ test('the model and effort of each entry travel with it to my other computer, ch
   withHome(devbox.home, () => { const repo = repository(project.root), task = readTask(repo, '1'); delete task.messages[1].model; saveTask(repo, task); hostTick(hostCtx, Date.now() + 1); });
   const again = toHost.sent.filter(([method]) => method === 'elu.remote.events').slice(1).flatMap(([, params]) => params.items.flatMap(row => row.events)).filter(event => event.type === 'entry');
   assert.deepEqual(again, []);
+});
+
+// A bot's review is drawn on my other computer where it was given. An ELU up to 0.1.19 kept no
+// time with a review and sent it with none, and the viewer drew it above the first message.
+test("a bot's review goes to my other computer with the time it was given; one saved without a time goes with the end of the bot's run that gave it", async t => {
+  const { laptop, devbox, project, toHost, hostCtx, viewCtx, viewer } = pair(t), base = Date.now(), at = n => new Date(base - 60000 + n * 1000).toISOString();
+  const review = (role, round, summary, when) => ({ role, round, ...(when ? { at: when } : {}), result: { summary, comments: [] } });
+  withHome(devbox.home, () => {
+    chat(project.root, 1, { goal: 'Plan the coupons', messages: [{ at: at(0), text: 'Plan the coupons' }, { at: at(9), text: 'And the docs' }],
+      // @reviewer ran once and reviewed once: its review is as late as that run. @critic ran three times for two reviews: which run gave the second is not known.
+      runs: [{ role: 'bot:reviewer', at: at(2) }, { role: 'bot:critic', at: at(3) }, { role: 'bot:critic', at: at(5) }, { role: 'bot:critic', at: at(7) }],
+      reviews: [review('bot:reviewer', 1, 'Kept before reviews said when.'), review('bot:critic', 1, 'Said when.', at(4)), review('bot:critic', 2, 'No run to go by.')] });
+    relist();
+  });
+  await withHome(laptop.home, () => listTick(viewCtx));
+  const item = withHome(laptop.home, () => remoteMachines())[0].sessions[0];
+  await withHome(laptop.home, () => remoteCommand(viewCtx, { type: 'remoteWatch', to: devbox.identity.key, ref: item.ref }));
+  withHome(devbox.home, () => hostTick(hostCtx));
+  const pushed = () => toHost.sent.filter(([method]) => method === 'elu.remote.events'), reviews = list => list.filter(entry => entry.bot).map(entry => [entry.role, entry.at ?? null]);
+  const deliver = async from => { for (const [method, params] of pushed().slice(from)) withHome(laptop.home, () => viewer[method](params, connection(devbox.identity.key))); await withHome(laptop.home, () => viewTick(viewCtx)); };
+  assert.deepEqual(reviews(pushed().flatMap(([, params]) => params.items.flatMap(row => row.events)).filter(event => event.type === 'entry')), [['@reviewer · review 1', at(2)], ['@critic · review 1', at(4)], ['@critic · review 2', null]]);
+  await deliver(0);
+  const seen = () => withHome(laptop.home, () => remoteSessions().find(row => row.id === item.id));
+  assert.deepEqual(reviews(seen().entries), [['@reviewer · review 1', at(2)], ['@critic · review 1', at(4)], ['@critic · review 2', null]]);
+  // Its time known later (that computer updated): the viewer keeps it once, with its time.
+  const sent = pushed().length;
+  withHome(devbox.home, () => { const repo = repository(project.root), task = readTask(repo, '1'); task.reviews[2].at = at(8); saveTask(repo, task); hostTick(hostCtx, Date.now() + 1); });
+  await deliver(sent);
+  assert.deepEqual(reviews(seen().entries), [['@reviewer · review 1', at(2)], ['@critic · review 1', at(4)], ['@critic · review 2', at(8)]]);
 });
 
 // Nothing of a session on my other computer is cut on its way here: an entry or a diff longer
@@ -2009,7 +2038,7 @@ test("a teammate named like my computer keeps their session on my other computer
   assert.deepEqual(offered(), []);
 });
 
-test('the Changes of a session on my other computer are read once and whole, named in its chat in one line, and asked for when the tab opens before they were sent', async () => {
+test('the Changes of a session on my other computer are read once and whole, never a line of its chat, and asked for when the tab opens before they were sent', async () => {
   const ME = 'a'.repeat(64), D = 'd'.repeat(64), at = new Date().toISOString(), sent = [];
   const status = { key: ME, name: 'ana', teams: [{ id: 'team-1', members: [{ key: ME, name: 'ana', online: true }, { key: D, name: 'ana', box: 'devbox', online: true }] }] };
   const make = peerCommand => remoteGlue({ facade: { mineRows: () => [], remoteSessions: () => [] }, peerRead: () => status, peerCommand, chatMessage: ({ title, text }) => `${title}\n${text}`, ink: text => text, colour: false, restMs: 1e9 });
@@ -2021,11 +2050,8 @@ test('the Changes of a session on my other computer are read once and whole, nam
   assert.deepEqual([first.note, first.changes.files.map(file => [file.path, file.status, file.added, file.removed]), first.changes.added, first.changes.removed], [null, [['src/cart.mjs', 'modified', 2, 1], ['docs/notes.md', 'added', 1, 0]], 3, 1]);
   assert.equal(glue.changes(row({ diff: { summary: '2 files · +3 −1', patch: ` ${patch}`.slice(1) } })).changes, first.changes, 'the same text is not read again');
   assert.notEqual(glue.changes(row({ diff: { summary: '2 files · +4 −1', patch: `${patch}more\n` } })).changes, first.changes);
-  // Its chat names them in one line and never holds the diff. A narrow pane leaves the key out.
-  const parts = glue.parts(row({ diff: { summary: '2 files · +3 −1', patch } }), 80), named = parts.filter(part => part.key.startsWith('changes'));
-  assert.deepEqual(named.map(part => part.text), ['Changes · 2 files · +3 −1 · d opens them']);
-  assert.ok(parts.every(part => !/diff --git|@@|cart\.items|index 1111111/.test(part.text)));
-  assert.deepEqual(glue.parts(row({ diff: { summary: '2 files · +3 −1', patch } }), 30).filter(part => part.key.startsWith('changes')).map(part => part.text), ['Changes · 2 files · +3 −1']);
+  // Its chat holds no line for them and never the diff, at any width: the name of its Changes tab counts them, as for a session here.
+  for (const width of [80, 30]) assert.ok(glue.parts(row({ diff: { summary: '2 files · +3 −1', patch } }), width).every(part => !part.key.startsWith('changes') && !/Changes ·|d opens them|diff --git|@@|cart\.items|index 1111111/.test(part.text)));
   // Followed here with nothing changed, still arriving, or behind: a line says which.
   assert.deepEqual(glue.changes(row()), { changes: null, tone: 'muted', note: 'No changes yet.' });
   assert.equal(glue.changes(row({ diff: { summary: 'No changes', patch: '' } })).note, 'No changes yet.');
