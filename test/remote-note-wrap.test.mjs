@@ -17,7 +17,7 @@ test('the note under a session on another computer keeps the rows it was wrapped
   const plain = rows => rows.map(row => row.replace(/\x1b\[[\d;]*m/g, '').trimEnd());
   const session = by => ({ machine: 'devbox', by, remote: { machine: 'd'.repeat(64), project: 'shop', state: 'answered', entries: [] } });
   const said = {
-    mine: 'Runs on @devbox in shop. Type below to write to your agent here; start with @devbox to write to the session there.',
+    mine: 'Runs on @devbox in shop. Type below to write to it there. Start with @here to ask your agent here.',
     teammate: 'Runs on @devbox in shop. Type below to continue it there.',
   };
   try {
@@ -34,11 +34,11 @@ test('the note under a session on another computer keeps the rows it was wrapped
         pane.destroy();
       }
     }
-    // The owner's case: the row that ended "to the" is kept whole.
-    const at = [...Array(181).keys()].map(n => n + 20).find(room => wrapText(said.mine, room)[0].endsWith('to write to the'));
-    assert.ok(at, 'a width where the first row ends in "the"');
+    // The owner's case, a row that ended in a short word ("to the", now "to it"), is kept whole.
+    const at = [...Array(181).keys()].map(n => n + 20).find(room => wrapText(said.mine, room)[0].endsWith('to write to it'));
+    assert.ok(at, 'a width where the first row ends in "it"');
     const pane = blessed.box({ parent: screen, top: 0, left: 0, width: at + 7, height: 8, border: 'line', tags: true, scrollable: true, padding: { left: 2, right: 2 }, scrollbar: { ch: ' ' } });
     pane.setContent(glue.parts(session('mine'), at).find(part => part.key.startsWith('runs')).text);
-    assert.ok(!plain(pane._clines).includes('the'), `"the" is not on a row of its own at ${at}`);
+    assert.ok(!plain(pane._clines).includes('it'), `"it" is not on a row of its own at ${at}`);
   } finally { screen.destroy(); }
 });

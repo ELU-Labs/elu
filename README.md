@@ -65,7 +65,11 @@ press Enter.
 Ask for a change to code or files, or for work that needs planning, and the first reply is
 a Task: a title, a description, the goal, the objectives that say when it is done, a
 priority, a severity, the success criteria that show it is done, and the model's estimate
-of the work. Nothing is edited yet.
+of the work.
+
+With Full access or Approve for me the mode approves the Task: the card says so, nothing
+waits for you, and the work goes on in the same message. With Ask for approval or Read
+only nothing is edited yet, and the Task waits for you:
 
 | Do | What happens |
 | --- | --- |
@@ -73,9 +77,10 @@ of the work. Nothing is edited yet.
 | Esc, `n`, then Enter | Rejects it. Nothing is changed. |
 | Type a message | Changes the Task. The card shows the new revision. |
 
-Typing `yes` or `I approve` and Enter approves too. A question gets a plain answer and no
-Task. A follow-up inside an approved Task's goal starts at once; a new piece of work gets a
-Task of its own.
+An approval you type counts too, in your own words: `yes`, `I approve`, `go ahead`,
+`sounds good, do it`.
+A question gets a plain answer and no Task. A follow-up
+inside an approved Task's goal starts at once; a new piece of work gets a Task of its own.
 An approved Task gives its session its name, unless you named the session yourself.
 
 On the Kanban tab a session with a Task shows as that Task: its title, how far it is, its
@@ -84,14 +89,19 @@ the whole Task, as does a click: the goal, the objectives, the success criteria,
 and the ETA. Its Go to session button opens its session; Enter presses it. A teammate's card,
 and one of your other computer's, open the same way.
 
-After you approve, the model splits the work into subtasks and changes them as it likes.
+After approval, the model splits the work into subtasks and changes them as it likes.
 The card lists them as a checklist that follows the model's own to-do list while the turn
 runs, and marks the objectives the model reports met. Its ETA
 is approval plus the estimate, and follows the minutes left the model reports as it works. The
 Task is done when every objective is reported met and the turn, with its checks and
-review, has ended. A new message opens it again.
+review, has ended. A new message opens it again, and `continue` takes the next piece of
+its goal.
 
-ELU starts the edit only for a Task you approved. What the model can still do in its
+A step that fails is the agent's to fix: it finds the cause and goes on. It asks you only
+when it cannot go on at all, or when the choice is truly yours. When the work is done it
+says what it did and ends.
+
+ELU starts the edit only for an approved Task. What the model can still do in its
 first turn depends on the vendor and the mode:
 [docs/permissions.md](docs/permissions.md#plan-first).
 
@@ -395,21 +405,28 @@ each Git repository in the home folder, the cursor on where it would run. Enter 
 Esc sends nothing and keeps your message.
 Sessions also lists every other session on the devbox in the same repository under "On devbox": they are part of your project, in Sessions and on its Kanban ("you · devbox"), whichever of your computers started them.
 Projects lists a devbox project as "<project> on devbox" only for its sessions this project cannot show, and says how many.
-With a devbox session under the cursor, what you type goes to your agent here, on the laptop:
-the first message starts a session in the project open on the laptop, named "Help: " and the
-devbox session's title, and the next ones continue it. It is told which session it helps, what
-that session waits on and what it said last, and it reaches only that session, by sending it
-files with a message or a message alone (Claude Code; another model says what you should
+With a devbox session under the cursor, what you type goes to that session, as if you had
+typed it on the devbox: `yes`, the number of a choice or your own words answer the question
+it waits on, and any other message continues it. The message box names its model and the
+computer ("Message Opus 5.5 on @devbox"), and its reply shows in the same pane. This works
+with ELU closed on the devbox, or open there in a view-only window: the devbox runs the
+session in the background. A message that has not run there yet shows in the pane as waiting,
+with why: its turn has not ended, no slot is free, or it could not start. With the devbox off,
+the line under the pane says so at once and your message stays in the box. `y`, `n` and `a`,
+each followed by Enter, still answer its approvals.
+Start a message with `@here` to ask an agent on the laptop for help with that session instead:
+the first such message starts a session in the project open on the laptop, named "Help: " and
+the devbox session's title, and the next ones continue it. It is told which session it helps,
+what that session waits on and what it said last, and it reaches only that session, by sending
+it files with a message or a message alone (Claude Code; another model says what you should
 send). When the devbox session answers, your agent here goes on by itself, up to 4 times for
 each message of yours, unless you stopped it, and asks you when it needs a decision, a secret,
 or something only you can do. Its approvals wait on its own row in Sessions, and the devbox
 session's pane says so. Both agents show in the same pane, the devbox's as "Opus 5.5 on
 @devbox" and yours as "Opus 5.5 here", and the helper is also a session of its own in
-Sessions. Start a message with `@devbox` to write to the devbox session itself, and answer its
-question there the same way: `@devbox 1`. `y`, `n` and `a`, each followed by Enter, still
-answer its approvals. A
-teammate's session on the devbox, such as a handoff you accepted there, has no agent here:
-what you type goes to it. A message to a devbox session that names files or folders on the laptop asks
+Sessions. A teammate's session on the devbox, such as a handoff you accepted there, has no
+agent here: every word you type goes to it.
+A message to a devbox session that names files or folders on the laptop asks
 "Send 14 files (2.1 MB) from this computer with this message?": y sends them along, n sends
 the text alone. `/send PATH...` sends files without a message. They land in that session's
 inbox on the devbox, which it may read in every mode, and each path in your message points
@@ -550,6 +567,12 @@ Antigravity (`agy`) and Grok Build (`grok`) are checked once on each machine: yo
 message to one starts the check by itself. It takes about seven short turns on that vendor
 and a few minutes. The Usage tab shows whether each is signed in before that, and `c` on its
 line runs the check there and then. Vendor notes: [docs/vendors](docs/vendors).
+
+ELU starts the vendor command it finds first on your PATH, so one that another tool
+wraps, such as a terminal app with its own `claude` or `codex` script ahead of the real
+one, runs through that script in every mode. When a vendor's program does not start, the
+chat says so, with what its command printed: check that the command runs in your terminal,
+then type continue.
 
 Google's FAQ says that using another app to reach Antigravity breaks its terms and can get
 your account suspended or terminated. ELU wraps `agy`, so read

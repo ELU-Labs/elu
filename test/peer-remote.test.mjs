@@ -1109,6 +1109,77 @@ test('a session started there by hand is watched from here: live, continued, sto
   assert.deepEqual(kim.sent, []);
 });
 
+test("a yes typed on my other computer answers the session that waits here, and until it runs that computer is told why it waits: queued, nothing running it, starting, blocked, its turn", async t => {
+  const { laptop, devbox, project, toHost, hostCtx, viewCtx, viewer } = pair(t), at = new Date().toISOString();
+  let kicks = 0; hostCtx.kick = () => { kicks++; };
+  withHome(devbox.home, () => { chat(project.root, 1, { goal: 'Session backlog 3h', state: 'needs_input', messages: [{ at, text: 'Get the issues, close the ones that are not real' }], result: { outcome: 'needs_input', question: 'May the next turn close the ones that are not real and go on?', choices: [] } }); relist(); });
+  await withHome(laptop.home, () => listTick(viewCtx));
+  const item = withHome(laptop.home, () => remoteMachines())[0].sessions[0];
+  await withHome(laptop.home, () => remoteCommand(viewCtx, { type: 'remoteWatch', to: devbox.identity.key, ref: item.ref }));
+  const seen = () => withHome(laptop.home, () => remoteSessions().find(row => row.id === item.id));
+  const events = () => toHost.sent.filter(([method]) => method === 'elu.remote.events');
+  // One look there, ahead milliseconds from now, and what it sends arrives here.
+  let delivered = 0;
+  const look = (ahead = 0) => {
+    withHome(devbox.home, () => hostTick(hostCtx, Date.now() + ahead));
+    for (const [, params] of events().slice(delivered)) withHome(laptop.home, () => viewer['elu.remote.events'](params, connection(devbox.identity.key)));
+    delivered = events().length;
+  };
+  const send = text => withHome(laptop.home, () => remoteCommand(viewCtx, { type: 'remoteSend', id: item.id, to: devbox.identity.key, ref: item.ref, text }));
+  const queue = () => withHome(devbox.home, () => pendingRequests(project.root));
+  look(); await withHome(laptop.home, () => viewTick(viewCtx));
+  assert.equal(seen().state, 'needs_input'); assert.match(seen().question, /go on\?$/);
+  // Nothing waits, so nothing is said about it: a viewer from before gets no event it does not know.
+  assert.equal(seen().waiting, undefined);
+  assert.ok(!events().some(([, params]) => params.items.some(row => row.events.some(event => event.type === 'waiting'))));
+  // The owner's yes, typed on the laptop: it is the session's next message here, as typed here,
+  // and a conductor is asked for at once, whatever window is open here, or none.
+  assert.deepEqual(await send('yes'), { id: item.id }, 'it waits for him, so it reads this at once');
+  const [request] = queue();
+  assert.deepEqual([request.goal, request.continuationTaskId, request.state, request.origin, request.helps], ['yes', '1', 'queued', undefined, undefined]);
+  assert.equal(queue().length, 1, 'one message, and no other session');
+  assert.equal(kicks, 1);
+  // Until it runs, the laptop is told that it waits.
+  look();
+  assert.deepEqual(seen().waiting, [{ at: request.createdAt, text: 'yes', state: 'queued' }]);
+  // No conductor runs here and it still waits: the laptop is told so, and one is started again, not more than every half minute.
+  look(20000);
+  assert.deepEqual(seen().waiting, [{ at: request.createdAt, text: 'yes', state: 'stuck' }]); assert.equal(kicks, 2);
+  look(25000); assert.equal(kicks, 2);
+  look(55000); assert.equal(kicks, 3);
+  // The conductor takes it.
+  withHome(devbox.home, () => updateRequest(project.root, request.id, { state: 'starting', reason: 'Starting.' }));
+  look(56000);
+  assert.deepEqual(seen().waiting, [{ at: request.createdAt, text: 'yes', state: 'starting' }]);
+  // It could not start: the laptop is told why.
+  withHome(devbox.home, () => updateRequest(project.root, request.id, { state: 'blocked', blockedAt: new Date().toISOString(), reason: 'Claude Code is signed out on this computer.' }));
+  look(57000);
+  assert.deepEqual(seen().waiting, [{ at: request.createdAt, text: 'yes', state: 'blocked', reason: 'Claude Code is signed out on this computer.' }]);
+  // Sent again from the laptop once that is fixed: the one that did not start is spent, as it is here.
+  await pause(5); await send('yes');
+  const again = queue().find(row => row.id !== request.id);
+  look(58000);
+  assert.deepEqual(seen().waiting.map(row => [row.at, row.text]), [[again.createdAt, 'yes']]);
+  // It runs: nothing waits.
+  withHome(devbox.home, () => { chat(project.root, 1, { goal: 'Session backlog 3h', state: 'running', messages: [{ at, text: 'Get the issues, close the ones that are not real' }, { at: again.createdAt, text: 'yes' }] }); updateRequest(project.root, again.id, { state: 'running', taskId: '1', reason: 'Working.' }); });
+  look(59000);
+  assert.deepEqual(seen().waiting, []); assert.equal(seen().state, 'running');
+  assert.ok(seen().entries.some(entry => entry.text === 'yes'), 'his answer is in its chat, as typed there');
+  // A message sent while it works is read when its turn ends: the laptop is told at once, and the pane says it.
+  assert.deepEqual(await send('now start on the real ones'), { id: item.id, working: true });
+  const next = queue().find(row => row.goal === 'now start on the real ones');
+  look(60000);
+  assert.deepEqual(seen().waiting, [{ at: next.createdAt, text: 'now start on the real ones', state: 'turn' }]);
+  // A message to one of its bots waits under the bot's name, as typed.
+  withHome(devbox.home, () => updateRequest(project.root, next.id, { bot: 'reviewer' }));
+  look(61000);
+  assert.deepEqual(seen().waiting.map(row => row.text), ['@reviewer now start on the real ones']);
+  // The turn ends and the conductor runs it: nothing waits again.
+  withHome(devbox.home, () => updateRequest(project.root, next.id, { state: 'running', taskId: '1', reason: 'Working.' }));
+  look(62000);
+  assert.deepEqual(seen().waiting, []);
+});
+
 test("a teammate's session there is watched and answered from here by its place, with no watch first", async t => {
   const { laptop, devbox, project, hostCtx, viewCtx } = pair(t);
   withHome(devbox.home, () => { chat(project.root, 2, { goal: 'Fix the login redirect', state: 'running', origin: { kind: 'handoff', peer: 'e'.repeat(64), name: 'kim', threadId: null } }); requestApproval({ id: 'approval-4', root: project.root, taskId: '2', role: 'lead', vendor: 'claude', tool: 'Bash', input: { command: 'git status' } }); relist(); });
@@ -1660,7 +1731,7 @@ test("Projects lists my computer's project of this repository while Sessions lea
 // folder, neither with a repository of its own. Every session there that works in a repository
 // this project holds is part of this project: in Sessions under the computer's heading, and not
 // a second time in Projects.
-test("my computer's project is one with this one: Projects leaves it out while each of its sessions shows here, and lists it, with how many, for those that cannot", () => {
+test("my computer's project is one with this one: Projects leaves it out while each of its sessions shows here, and lists it, with how many, for those that cannot", async () => {
   const SHOP = 'a'.repeat(64), DOCS = 'f'.repeat(64), D = 'd'.repeat(64), now = Date.now(), ago = minutes => new Date(now - minutes * 60000).toISOString(), home = '5'.repeat(16);
   const status = { key: 'k'.repeat(64), name: 'ana', box: 'laptop', teams: [{ members: [{ key: 'k'.repeat(64), name: 'ana' }, { key: D, name: 'box', box: 'devbox', online: true }] }] };
   const session = (ref, title, minutes, extra = {}) => ({ id: crypto.randomUUID(), ref, project: home, title, state: 'answered', at: ago(minutes), createdAt: ago(minutes + 1), approvals: [], by: 'you', who: null, repoId: SHOP, ...extra });
@@ -1674,14 +1745,16 @@ test("my computer's project is one with this one: Projects leaves it out while e
   let view = glue();
   assert.deepEqual(shown(view), ['On devbox · online', 'By hand there', 'From the laptop', 'A message from kim']);
   assert.deepEqual(view.projects(now, '/work/projects'), [], 'every session there is part of this project');
-  // Mine, from the laptop: a plain message goes to the agent here, and no one is named as who started it.
+  // Mine, from the laptop: a plain message goes to it there, only @here asks the agent here, and no one is named as who started it.
   const rowOf = title => view.sections(now, '/work/projects').find(line => line.row?.remote.title === title).row;
   const laptops = rowOf('From the laptop'), kims = rowOf('A message from kim');
-  assert.deepEqual(view.route(laptops, 'check the numbers'), { to: 'here', text: 'check the numbers' });
-  assert.match(view.label(laptops), /Message your agent here/);
-  assert.doesNotMatch(view.view(laptops, 200), /Started by/); assert.match(view.view(laptops, 200), /Type below to write to your agent here/);
-  // A teammate's: named, and every message goes to it, as before.
+  assert.deepEqual(view.route(laptops, 'check the numbers'), { to: 'there', text: 'check the numbers' });
+  assert.deepEqual(view.route(laptops, '@here check the numbers'), { to: 'here', text: 'check the numbers' });
+  assert.equal(view.label(laptops), ' Message the session on @devbox ');
+  assert.doesNotMatch(view.view(laptops, 200), /Started by/); assert.match(view.view(laptops, 200), /Type below to write to it there\. Start with @here to ask your agent here\./);
+  // A teammate's: named, and every message goes to it, as before: it has no agent here.
   assert.deepEqual(view.route(kims, 'check the numbers'), { to: 'there', text: 'check the numbers' });
+  assert.deepEqual(view.route(kims, '@here check the numbers'), { to: 'there', text: '@here check the numbers' });
   assert.match(view.view(kims, 200), /Started by @kim\. Type below to continue it there\./);
   // Two that this project cannot show: one in no repository, one in a repository it does not
   // hold. Projects lists the project for those two only, and opening it shows them.
@@ -1690,13 +1763,24 @@ test("my computer's project is one with this one: Projects leaves it out while e
   assert.deepEqual(view.projects(now, '/work/projects').map(row => [row.name, row.sessions]), [['work on devbox', 2]]);
   view.openProject(D, home);
   assert.deepEqual(shown(view).slice(-3), ['work on devbox', 'Tidy my notes', 'Edit the docs']);
+  // A third waits for me: it is under Needs you here, in a project this one cannot show. Once I
+  // answer it from here it is listed under its computer, so what it does next shows where I
+  // wrote, and Projects counts the other two alone.
+  machinesFile[0].sessions.push(session(`${home}:6`, 'Sort my inbox', 0, { repoId: null, state: 'needs_input', question: 'Which folder?' }));
+  view = glue();
+  const waits = view.rows(now).find(row => row.remote.title === 'Sort my inbox');
+  assert.ok(waits, 'under Needs you here'); assert.ok(!shown(view).includes('Sort my inbox'), 'not under its computer yet');
+  assert.deepEqual(view.projects(now, '/work/projects').map(row => [row.name, row.sessions]), [['work on devbox', 3]]);
+  assert.equal(await view.send(waits, 'yes'), 'Sent to the session on @devbox.');
+  assert.deepEqual(shown(view), ['On devbox · online', 'Sort my inbox', 'By hand there', 'From the laptop', 'A message from kim']);
+  assert.deepEqual(view.projects(now, '/work/projects').map(row => [row.name, row.sessions]), [['work on devbox', 2]]);
   // No sessions there yet: nothing to open, so nothing in Projects, and the heading says so.
   machinesFile[0].sessions = []; views.length = 0; view = glue();
   assert.deepEqual(view.projects(now, '/work/projects'), []);
   assert.deepEqual(shown(view), ['On devbox · online', 'No sessions yet.']);
 });
 
-test("a session a message from my other computer started there is mine on its list, from before too, and goes to my agent here; a teammate's stays theirs, and an older host's row from my computer is read as mine", async t => {
+test("a session a message from my other computer started there is mine on its list, from before too, and my agent here can be asked for it; a teammate's stays theirs, and an older host's row from my computer is read as mine", async t => {
   const { laptop, devbox, project, toHost, toViewer, host } = pair(t), kim = 'e'.repeat(64), followed = crypto.randomUUID();
   const repo = withHome(devbox.home, () => {
     // Started by messages through the teammate path, as a build from before keeps them: no mine on the origin.
@@ -1728,7 +1812,8 @@ test("a session a message from my other computer started there is mine on its li
   const facade = { mineRows: peerFacade.mineRows, remoteSessions: peerFacade.remoteSessions, remoteMachines: peerFacade.remoteMachines, projectRepoId: () => row('Run the evals').repoId, projectRepoIds: () => [] };
   const routes = () => withHome(laptop.home, () => {
     const glue = remoteGlue({ facade, peerRead: () => status, peerCommand: async () => ({}), chatMessage: () => '', ink: text => text, colour: false, restMs: 1e9 });
-    return Object.fromEntries(glue.sections(Date.now(), '/work/shop').filter(line => line.row).map(line => [line.row.remote.title, glue.route(line.row, 'go on').to]));
+    // A plain message goes to either there; @here asks my agent here for mine alone.
+    return Object.fromEntries(glue.sections(Date.now(), '/work/shop').filter(line => line.row).map(line => { assert.equal(glue.route(line.row, 'go on').to, 'there'); return [line.row.remote.title, glue.route(line.row, '@here go on').to]; }));
   });
   assert.deepEqual(await list(), { 'Run the evals': ['mine', null], 'Fix the login redirect': ['teammate', 'kim'] });
   assert.deepEqual(routes(), { 'Run the evals': 'here', 'Fix the login redirect': 'there' });
@@ -1766,7 +1851,8 @@ test("a teammate named like my computer keeps their session on my other computer
   const facade = { mineRows: peerFacade.mineRows, remoteSessions: peerFacade.remoteSessions, remoteMachines: peerFacade.remoteMachines, projectRepoId: () => row('Run the evals').repoId, projectRepoIds: () => [] };
   const routes = () => withHome(laptop.home, () => {
     const glue = remoteGlue({ facade, peerRead: () => status, peerCommand: async () => ({}), chatMessage: () => '', ink: text => text, colour: false, restMs: 1e9 });
-    return Object.fromEntries(glue.sections(Date.now(), '/work/shop').filter(line => line.row).map(line => [line.row.remote.title, glue.route(line.row, 'go on').to]));
+    // A plain message goes to either there; @here asks my agent here for mine alone.
+    return Object.fromEntries(glue.sections(Date.now(), '/work/shop').filter(line => line.row).map(line => { assert.equal(glue.route(line.row, 'go on').to, 'there'); return [line.row.remote.title, glue.route(line.row, '@here go on').to]; }));
   });
   // What the laptop's own sessions may send to: only mine (lib/peer/session-tools.mjs).
   const offered = () => withHome(laptop.home, () => otherSessions().computers.flatMap(machine => machine.sessions.map(item => item.title)));
