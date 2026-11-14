@@ -3636,3 +3636,44 @@ test('at 80x24 the line that says a session’s changes are not here yet is whol
   assert.equal(rows.map(row => row.trim()).join(' '), '@sara-box has not sent its changes yet. Asking for them…');
   assert.ok(rows.every(row => !row.includes('▌') && row.length <= changes.width - 2));
 });
+
+test("a project's settings link it to the project of the same name on my other computer with one Enter, another or none can be chosen, an older computer there is named, and a text both changed is said once", { timeout: 30000 }, async t => {
+  const p = project(later(t)); environment(t, p.parent);
+  const repo = repository(p.root), there = [{ id: '1'.repeat(16), name: 'sample app', home: true }, { id: '2'.repeat(16), name: 'shop', home: false }], said = [];
+  const peer = fakePeer({ items: [], mine: [{ key: SARA, mine: true, theirs: true }] });
+  let links = [{ key: SARA, older: false, linked: null, same: { id: there[0].id, name: 'sample app' }, projects: there }];
+  peer.projectLinks = () => links;
+  peer.linkProject = (root, key, id) => { peer.calls.push(['linkProject', root, key, id]); const row = there.find(item => item.id === id); links = [{ ...links[0], linked: row ? { id: row.id, name: row.name } : null, same: row ? null : { id: there[0].id, name: 'sample app' } }]; };
+  peer.notesSaid = after => said.filter(row => row.at > after);
+  const v = await view(t, { repo, dashboard: true, peer }), list = v.panels.projectsList, status = () => v.panels.status.getText(), title = 'Project sample app';
+  const row = () => rowsOf(v, title).map(text => text.trimEnd()).find(text => /^Linked/.test(text));
+  await send(v, '/projects'); await until(() => v.current.view === 'projects' && list.items.some(item => /sample app/.test(plainItem(item))), 'Projects');
+  list.focus(); selectRow(list, /sample app/); v.input.write('\r');
+  await until(() => modal(v, title) && row(), 'its settings');
+  rowsOf(v, title).forEach((text, n) => assert.match(text, [/^● Active project/, /^Instructions/, /^Context/, /^Linked/, /^Default model/, /^This computer/, /^Archive/][n]));
+  assert.equal(row(), 'Linked        not linked · Enter links sample app on sara-box');
+  // One Enter links it.
+  await choose(v, title, /^Linked/);
+  await until(() => /Linked to sample app on sara-box\./.test(status()), 'linked');
+  assert.deepEqual(peer.calls.filter(call => call[0] === 'linkProject'), [['linkProject', repo.root, SARA, there[0].id]]);
+  await until(() => row() === 'Linked        sample app on sara-box', 'the row says which');
+  // Enter again: each project there, then none, with the linked one under the cursor.
+  await choose(v, title, /^Linked/);
+  await until(() => rowsOf(v, 'Link sample app').length, 'the choice');
+  assert.deepEqual(rowsOf(v, 'Link sample app').map(text => text.trim()), ['sample app on sara-box', 'shop on sara-box', 'Not linked']);
+  assert.equal(modal(v, 'Link sample app').children.find(child => child.type === 'list').selected, 0);
+  await choose(v, 'Link sample app', /^Not linked/);
+  await until(() => /Not linked to sara-box\./.test(status()) && row() === 'Linked        not linked · Enter links sample app on sara-box', 'unlinked');
+  assert.deepEqual(peer.calls.filter(call => call[0] === 'linkProject').at(-1), ['linkProject', repo.root, SARA, null]);
+  // ELU there is older: the row and Enter say so, naming it.
+  links = [{ key: SARA, older: true, linked: null, same: null, projects: [] }];
+  v.input.write('\x1b'); await until(() => !modal(v, title), 'closed');
+  list.focus(); selectRow(list, /sample app/); v.input.write('\r');
+  await until(() => row() === 'Linked        update ELU on sara-box', 'the older computer is named');
+  await choose(v, title, /^Linked/);
+  await until(() => /Update ELU on sara-box to share instructions and context with it\./.test(status()), 'what to do');
+  v.input.write('\x1b'); await until(() => !modal(v, title), 'closed again');
+  // A text both computers changed: said once, with where the other one is kept.
+  said.push({ at: Date.now(), text: 'Instructions of sample app changed here and on @sara-box: the newer, from @sara-box, is in use. The other is in ~/sample app/.elu-code/history/instructions-2026-11-14-101500.md.' });
+  await until(() => status().includes('Instructions of sample app changed here and on @sara-box'), 'said');
+});

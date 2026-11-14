@@ -46,7 +46,7 @@ test('a project has no skills: files left in .elu-code/skills are not read, list
   saveInstructions(root, 'Answer in French.'); saveContext(root, 'The API lives in src/.');
   assert.deepEqual(Object.keys(readProjectSettings(root)), ['instructions', 'context']);
   assert.equal(projectPromptParts(root).length, 2); assert.doesNotMatch(projectPromptParts(root).join('\n'), /skill|Deploy checklist/i);
-  assert.deepEqual(Object.keys(settings).sort(), ['LEARNED_HEADING', 'LEARNED_USE', 'learnedSection', 'projectFileParts', 'projectPromptParts', 'readProjectSettings', 'saveContext', 'saveInstructions']);
+  assert.deepEqual(Object.keys(settings).sort(), ['LEARNED_HEADING', 'LEARNED_USE', 'changingSettings', 'learnedSection', 'projectFileParts', 'projectPromptParts', 'readProjectSettings', 'saveContext', 'saveInstructions', 'savedText', 'syncText']);
   saveInstructions(root, ''); saveContext(root, '');
   assert.equal(read(file), '# Deploy checklist\n\nRun the smoke test first.\n', 'the owner\'s file stays on disk');
 });
