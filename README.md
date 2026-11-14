@@ -554,10 +554,14 @@ It keeps several Claude Code or Codex accounts signed in at once, so when one ru
 limit you switch instead of signing in again: `a` adds an account with the vendor's own
 sign-in, Enter on an account makes new turns use it, and `x` forgets one. Each account shows
 its own five-hour and weekly usage ([how accounts are kept](SECURITY.md#several-accounts)).
-Antigravity (`agy`) and Grok Build (`grok`) are checked once on each machine: your first
-message to one starts the check by itself. It takes about seven short turns on that vendor
-and a few minutes. The Usage tab shows whether each is signed in before that, and `c` on its
-line runs the check there and then. Vendor notes: [docs/vendors](docs/vendors).
+Antigravity (`agy`) and Grok Build (`grok`) are checked once on each machine, for each
+release of them. The check proves what Read only, Ask for approval and Approve for me stand
+on, so your first message to one in those modes starts it by itself and waits for it: eight
+steps, each a short turn on that vendor. The chat says how many are done and how long it
+has taken. Full access needs no check and never waits for one: the message runs at once,
+and `/permissions full` during a check runs the waiting message at once too. The Usage tab
+shows whether each is signed in, and `c` on its line runs the check there and then. Vendor
+notes: [docs/vendors](docs/vendors).
 
 ELU starts the vendor command it finds first on your PATH, so one that another tool
 wraps, such as a terminal app with its own `claude` or `codex` script ahead of the real

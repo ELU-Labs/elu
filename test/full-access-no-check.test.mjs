@@ -70,13 +70,13 @@ test('Full access, first use on this computer: a message to a Grok Build that wa
   // a few minutes." and then all eight steps, over a minute here, before the message was sent on.
   assert.equal(task.state, 'answered', why(task)); assert.equal(task.result.summary, 'hi back'); assert.equal(task.runs[0].vendor, 'grok'); assert.equal(task.runs[0].permissions, 'full');
   t.diagnostic(`first use: the turn began ${first} ms after the message, and the reply was there after ${whole} ms; a check here takes ${CHECK_MS} ms`);
-  assert.ok(first < 10000, `the turn began after ${first} ms`); assert.ok(whole < CHECK_MS / 2, `the reply took ${whole} ms`);
+  assert.ok(first < 3000, `the turn began after ${first} ms`); assert.ok(whole < CHECK_MS / 2, `the reply took ${whole} ms`);
   assert.deepEqual(said(task), [], 'nothing about a check in the chat'); assert.deepEqual(notes(f), [], 'and nothing under the working line');
   assert.deepEqual(checkTurns(f.calls()), [], 'no step of a check ran'); assert.equal(conformanceState('grok'), null, 'and there is no record of one'); assert.equal(fs.existsSync(f.lock), false);
   // The next message in the session, and one in a new Full access session: the same.
   for (const id of [task.id, null]) {
     const next = f.send('Reply done with the summary "again".', id, id ? undefined : { permissions: 'full' }), began = await next.first(), done = await next.finished;
-    assert.equal(done.state, 'answered', why(done)); assert.ok(began < 10000, `the turn began after ${began} ms`); assert.deepEqual(said(done), []);
+    assert.equal(done.state, 'answered', why(done)); assert.ok(began < 3000, `the turn began after ${began} ms`); assert.deepEqual(said(done), []);
   }
   assert.deepEqual(notes(f), []); assert.deepEqual(checkTurns(f.calls()), []); assert.equal(conformanceState('grok'), null);
 });
@@ -112,7 +112,7 @@ test('a new release of Grok Build: a Full access message runs at once on it with
   // Before: "Checking Grok Build again first: about seven short turns on it, a few minutes." and the whole check, in Full access too.
   assert.equal(task.state, 'answered', why(task)); assert.equal(task.result.summary, 'on the new release'); assert.equal(task.runs[0].permissions, 'full');
   t.diagnostic(`a new release: the turn began ${first} ms after the message`);
-  assert.ok(first < 10000, `the turn began after ${first} ms`);
+  assert.ok(first < 3000, `the turn began after ${first} ms`);
   assert.deepEqual(said(task), []); assert.deepEqual(notes(f), []); assert.deepEqual(checkTurns(f.calls()), []);
   assert.equal(conformanceState('grok').version, '1.0.77', 'the record is the old release\'s still');
   // Approve for me checks the new release first, and says that the program changed.
@@ -135,7 +135,7 @@ test('a check that did not pass before: a Full access message runs at once, chec
     passed(f, '1.0.77', steps); if (steps.json) atomic(f.record, { ...JSON.parse(fs.readFileSync(f.record, 'utf8')), stable: [] });
     const full = f.send('Reply done with the summary "in full".', null, { permissions: 'full' }), first = await full.first(), task = await full.finished;
     // Before: "Grok Build did not pass its check on this machine. Not proven: ... Full access runs it anyway; ..." in the chat.
-    assert.equal(task.state, 'answered', why(task)); assert.equal(task.runs[0].permissions, 'full'); assert.ok(first < 10000, `the turn began after ${first} ms`);
+    assert.equal(task.state, 'answered', why(task)); assert.equal(task.runs[0].permissions, 'full'); assert.ok(first < 3000, `the turn began after ${first} ms`);
     assert.deepEqual(said(task), []); assert.deepEqual(notes(f), []); assert.deepEqual(checkTurns(f.calls()), []);
   }
 });
@@ -150,7 +150,7 @@ test('a check that another session is running: a Full access message does not wa
   // Before: "Waiting for the check of Grok Build that is already running on this machine." until that check ended.
   assert.equal(second.state, 'answered', why(second)); assert.equal(second.result.summary, 'from the second'); assert.equal(second.runs[0].permissions, 'full');
   t.diagnostic(`beside another session's check: the turn began ${first} ms after the message`);
-  assert.ok(first < 10000, `the turn began after ${first} ms`); assert.deepEqual(said(second), []);
+  assert.ok(first < 3000, `the turn began after ${first} ms`); assert.deepEqual(said(second), []);
   assert.deepEqual(notes(f).filter(row => row.taskId === second.id), [], 'nothing about a check under its working line');
   assert.equal(aEnded, false); assert.equal(fs.existsSync(f.lock), true, 'the first session\'s check runs on');
   // A third session in Ask for approval waits for that check, and says what it waits for.
@@ -207,7 +207,7 @@ test('Antigravity CLI never checked, or updated since its check: a Full access m
   // Before: "One-time check of Antigravity CLI on this machine first: about seven short turns on it, a few minutes."
   assert.equal(task.state, 'answered', why(task)); assert.equal(task.result.summary, 'from agy'); assert.equal(task.runs[0].vendor, 'agy'); assert.equal(task.runs[0].permissions, 'full');
   t.diagnostic(`Antigravity CLI, first use: the turn began ${first} ms after the message`);
-  assert.ok(first < 10000, `the turn began after ${first} ms`);
+  assert.ok(first < 3000, `the turn began after ${first} ms`);
   assert.deepEqual(said(task), []); assert.deepEqual(notes(f), []); assert.equal(conformanceState('agy'), null);
   // Its steps show live over ACP only where a check proved that: this turn ran the way that needs no proof.
   assert.deepEqual(f.calls().filter(call => call.args.includes('acp')), [], 'not over ACP');
