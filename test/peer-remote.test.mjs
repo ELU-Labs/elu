@@ -1278,11 +1278,12 @@ test("a yes typed on my other computer answers the session that waits here, and 
   look(59000);
   assert.deepEqual(seen().waiting, []); assert.equal(seen().state, 'running');
   assert.ok(seen().entries.some(entry => entry.text === 'yes'), 'his answer is in its chat, as typed there');
-  // A message sent while it works is read when its turn ends: the laptop is told at once, and the pane says it.
-  assert.deepEqual(await send('now go on to the next ones'), { id: item.id, working: true });
+  // A message sent while it works: the laptop is told at once that it works and what its turn does
+  // with a message (here its turn has not said yet whether it takes one), and the pane says it.
+  assert.deepEqual(await send('now go on to the next ones'), { id: item.id, working: true, takes: 'soon' });
   const next = queue().find(row => row.goal === 'now go on to the next ones');
   look(60000);
-  assert.deepEqual(seen().waiting, [{ at: next.createdAt, text: 'now go on to the next ones', state: 'turn' }]);
+  assert.deepEqual(seen().waiting, [{ at: next.createdAt, text: 'now go on to the next ones', state: 'turn', takes: 'soon' }]);
   // A message to one of its bots waits under the bot's name, as typed.
   withHome(devbox.home, () => updateRequest(project.root, next.id, { bot: 'reviewer' }));
   look(61000);
@@ -1577,7 +1578,8 @@ test('a message that has not started on my other computer says here what it wait
   withHome(devbox.home, () => enqueue(project.root, 'Also the docs', { continuationTaskId: '1' }));
   push();
   assert.equal(seen(item.id).held, 1);
-  assert.match(shown(item.id), /Your message waits on @devbox while this turn works\. Enter in the empty message box sends it now\./);
+  // The newest message that waits for the turn says what happens to it, and names the key under it, last in the pane.
+  assert.match(shown(item.id), /Working on @devbox\n\nYou → @devbox \([^)\n]+\)\nAlso the docs\n[^\n]+\nEnter in the empty box sends it now: that stops the turn on @devbox and the command that is running$/);
   // What a computer sends is read field by field: a wait that is not one is dropped.
   withHome(laptop.home, () => viewer['elu.remote.events']({ items: [{ id: item.id, events: [{ seq: seen(item.id).seq + 1, type: 'state', state: 'answered', waits: { on: 'slot', running: 'many', limit: 1 }, held: 'x' }] }] }, connection(devbox.identity.key)));
   assert.equal(seen(item.id).waits, undefined); assert.equal(seen(item.id).held, undefined);
