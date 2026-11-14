@@ -87,6 +87,8 @@ test('a session reads as its title, never its number, and any other row as what 
   const of = id => held.find(row => row.request.id === id);
   assert.deepEqual([rowTitle(of('request-f'), now), rowTitle(of('request-g'), now), rowTitle(of('request-g'), now, 23), rowTitle(of('request-g'), now, 22)], ['Rename the order model', 'after this turn · Go on', 'after this turn · Go on', 'Go on']);
   assert.equal(line({ ...of('request-g'), request: { ...of('request-g').request, goal: 'Is the yearly plan covered?' } }, 38), '· after this turn · Is the yearly… now');
+  // One the running turn has on its input does not wait for the turn to end: its row is the message alone.
+  assert.equal(rowTitle({ ...of('request-g'), request: { ...of('request-g').request, turn: { run: 'run-7', uuid: 'a' } } }, now), 'Go on');
   assert.deepEqual(boardSections(held).find(line => line.header === 'Queued').said, ['4 of 4 running', '4 of 4']);
   assert.equal(boardSections(later).find(line => line.header === 'Queued').said, undefined);
   // /slots lowered below what runs: nothing is interrupted, so the heading says both numbers.

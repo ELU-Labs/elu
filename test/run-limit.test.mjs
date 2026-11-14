@@ -140,6 +140,9 @@ test('each wait has one sentence, and what another computer sends is read field 
   // A request the conductor has not looked at yet, and one that is no longer queued.
   assert.equal(waitingText({ state: 'queued', reason: 'Waiting to start.' }), 'Waiting to start.');
   assert.equal(waitOf({ state: 'running', waits: { on: 'slot', running: 4, limit: 4 } }), null);
+  // One the running turn has on its input is read after that turn's current command, as its reason says: it does not wait for the turn to end.
+  const taken = { state: 'queued', continuationTaskId: '1', turn: { run: 'run-1', uuid: 'a' }, reason: 'Waiting for the current command to finish.', waits: { on: 'turn' } };
+  assert.equal(waitOf(taken), null); assert.equal(waitingText(taken), 'Waiting for the current command to finish.');
   for (const value of [{ on: 'slot', running: '4', limit: 4 }, { on: 'slot', running: 4 }, { on: 'slot', running: -1, limit: 4 }, { on: 'other' }, { on: 'time', until: 'soon' }, 'slot', null]) assert.equal(cleanWait(value), null, JSON.stringify(value));
   assert.deepEqual(cleanWait({ on: 'slot', running: 4, limit: 4, more: 'x' }), { on: 'slot', running: 4, limit: 4 });
   assert.deepEqual(cleanWait({ on: 'time', until: '2026-11-13T10:00:00Z', why: 'Rate\u001b[31m limited.\n' }), { on: 'time', until: '2026-11-13T10:00:00.000Z', why: 'Rate limited.' });
