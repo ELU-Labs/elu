@@ -288,6 +288,26 @@ test('ELU opens on a computer an earlier version left on its own empty team and 
   assert.ok(fs.existsSync(withHome(c, () => peerFile('teams', side))));
 });
 
+test('an update notice that arrives as ELU opens is shown after the line that says a team was closed, not in its place', { timeout: 60000 }, async t => {
+  const a = newHome(t), b = newHome(t), c = newHome(t);
+  const elu = founded(a, 'ali', 'ELU');
+  withHome(b, () => createIdentity({ name: 'sara' })); admitTo(a, elu, b);
+  // C is on its own empty team and on ELU, as 0.1.19 left it, and a newer version is out.
+  withHome(c, () => createIdentity({ name: 'ali' }));
+  firstInvite(c); admitTo(a, elu, c);
+  const p = project(later(t)); useHome(t, c);
+  const notice = 'ELU 9.9.9 is out. /quit, then elu update.';
+  const updateCheck = async () => { await new Promise(resolve => setTimeout(resolve, 300)); return notice; };
+  const first = await view(t, { repo: repository(p.root), peer: calm(), updateCheck });
+  await until(() => first.status().includes(notice), 'the update notice', 5000);
+  assert.ok(first.status().includes(`Your team workspace had only you, so it was closed. ${notice}`), first.status());
+  // With no team closed at the start, the notice is the whole line, as before.
+  await first.close();
+  const second = await view(t, { repo: repository(p.root), peer: calm(), updateCheck });
+  await until(() => second.status().includes(notice), 'the update notice alone', 5000);
+  assert.doesNotMatch(second.status(), /closed/);
+});
+
 test('/join says in one sentence that my own empty team was closed, and that there are two teams when a join leaves two', { timeout: 60000 }, async t => {
   const c = newHome(t), elu = 'e'.repeat(64), own = 'f'.repeat(64);
   withHome(c, () => createIdentity({ name: 'ali' }));
