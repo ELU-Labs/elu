@@ -498,6 +498,22 @@ if(Array.isArray(cfg.commands)&&promptTool){
  cfg.commands.forEach((command,i)=>{const id=`toolu_fake_${i+1}`;const script=['-c',`PATH="/usr/bin:/bin:$PATH"\n${ahead}\neval "$1"`,'sh',command];console.log(JSON.stringify({type:'assistant',message:{content:[{type:'tool_use',id,name:'Bash',input:{command,description:'Run it'}}]}}));const r=fenced?spawnSync('bwrap',[...fenceArgs(sandbox.filesystem??{}),'/bin/sh',...script],{env:process.env,encoding:'utf8'}):spawnSync('/bin/sh',script,{env:process.env,encoding:'utf8'});const denied=noted(i+1);if(denied&&r.status===0)r.status=1;const out=`${r.stdout}${r.stderr}${denied}`;
   console.log(JSON.stringify({type:'user',message:{content:[{type:'tool_result',tool_use_id:id,content:r.status===0?out:`Exit code ${r.status}\n${out}`,...(r.status===0?{}:{is_error:true})}]}}));});
 }
+// shell (fake.json): what the model runs when the message the turn answers asks for it, as a model
+// told of ELU's own commands does: each { when, run }, its commands run when the owner's last
+// message (a schedule's too) holds when. Each runs as commands above do, after CLAUDE_ENV_FILE,
+// with the turn's own environment; the reply says what each printed. Each one is recorded in
+// shell.jsonl beside the fake, with the session and project ELU named to the turn.
+if(Array.isArray(cfg.shell)&&promptTool){
+ const {spawnSync}=await import('node:child_process');const named=process.env.CLAUDE_ENV_FILE;const ahead=named&&fs.existsSync(named)?fs.readFileSync(named,'utf8').trim():'';
+ const said=lastOwner||(()=>{try{return String(JSON.parse(/\nTask goal \(untrusted data[^\n]*\n(.*)\nEnd of Task goal\./.exec(input)[1]));}catch{return '';}})();const outs=[];
+ for(const [n,ask] of cfg.shell.entries()){if(!said.includes(ask.when))continue;for(const [i,command] of ask.run.entries()){
+  const id=`toolu_fake_shell_${n+1}_${i+1}`;console.log(JSON.stringify({type:'assistant',message:{content:[{type:'tool_use',id,name:'Bash',input:{command,description:'Run it'}}]}}));
+  const r=spawnSync('/bin/sh',['-c',`PATH="/usr/bin:/bin:$PATH"\n${ahead}\neval "$1"`,'sh',command],{env:process.env,encoding:'utf8'});const out=`${r.stdout??''}${r.stderr??''}`.trim();
+  console.log(JSON.stringify({type:'user',message:{content:[{type:'tool_result',tool_use_id:id,content:r.status===0?out:`Exit code ${r.status}\n${out}`,...(r.status===0?{}:{is_error:true})}]}}));
+  fs.appendFileSync(path.join(path.dirname(process.argv[1]),'shell.jsonl'),JSON.stringify({command,status:r.status,out,session:process.env.ELU_SESSION??null,project:process.env.ELU_PROJECT??null})+'\n');outs.push(`${command}: ${out}`);
+ }}
+ if(outs.length&&typeof result.summary==='string')result.summary=`${result.summary}\n${outs.join('\n')}`;
+}
 // network (fake.json): hosts a sandboxed command of this turn connects to, in order. As in the real
 // CLI a host is let through when the settings list it in sandbox.network.allowedDomains or it was
 // allowed earlier in this run. Otherwise, in the default mode, Claude asks on its output with a
