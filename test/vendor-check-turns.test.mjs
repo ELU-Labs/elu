@@ -5,7 +5,7 @@ import path from 'node:path';
 import { project, fakeClis } from './helpers.mjs';
 import { ProjectController } from '../lib/projects.mjs';
 import { projectFolder } from '../lib/workspace.mjs';
-import { createConversation } from '../lib/runner.mjs';
+import { SEND_AGAIN, createConversation } from '../lib/runner.mjs';
 import { readTask, saveTask } from '../lib/state.mjs';
 import { approveTask, proposeTask } from '../lib/plan.mjs';
 import { saveBot } from '../lib/bots.mjs';
@@ -122,4 +122,23 @@ test('in a Full access session a bot that only answers and a shadow run on an An
   // Below Full access the same bot is still refused, with what to do.
   const lower = await f.send('Reply done with the summary "below".', null, { permissions: 'auto' });
   await assert.rejects(f.send('Reply done.', lower.id, { bot: 'critic' }), error => AGY_REFUSAL.test(error.message) || assert.fail(error.message));
+});
+
+test('a session a failed check stopped says the check\'s result once when it is switched to Full access, and then runs', { timeout: 300000 }, async t => {
+  const f = machine(t, { mode: 'leaky' }), repo = f.controller.repo;
+  await assert.rejects(f.send('Is the coupon code trimmed?', null, { permissions: 'ask' }), error => error.message === REFUSAL);
+  const id = f.controller.snapshot().tasks[0].id;
+  assert.deepEqual(said(readTask(repo, id)), [FIRST]);
+  // Before: the switch said nothing, and neither did the message after it.
+  assert.equal(readTask(repo, id).error.message, REFUSAL);
+  f.controller.setPermissions(id, 'full');
+  assert.deepEqual(said(readTask(repo, id)), [FIRST, IN_FULL]);
+  // The refusal told him to switch to Full access. He has, so it no longer says that.
+  assert.equal(readTask(repo, id).error.message, SEND_AGAIN);
+  const task = await f.send('Reply done with the summary "now in full".', id);
+  assert.equal(task.state, 'answered', why(task)); assert.equal(task.result.summary, 'now in full'); assert.equal(task.runs.at(-1).permissions, 'full');
+  assert.deepEqual(said(task), [FIRST, IN_FULL], 'said once'); assert.equal(f.checks(), 1);
+  // Switched away and back: nothing is said a second time.
+  f.controller.setPermissions(id, 'auto'); f.controller.setPermissions(id, 'full');
+  assert.deepEqual(said(readTask(repo, id)), [FIRST, IN_FULL]);
 });
