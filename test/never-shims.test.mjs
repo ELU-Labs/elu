@@ -6,7 +6,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { temp } from './helpers.mjs';
 import { NEVER_COMMANDS, neverSentence, refusedIn } from '../lib/never-list.mjs';
-import { REFUSED, SHIM_VENDORS, scratchRoots, shimEnvFile, shimPath, shimScripts, shimsBase, withoutShims, writeShims } from '../lib/never-shims.mjs';
+import { REFUSED, SHIM_VENDORS, scratchRoots, shimEnvFile, shimFolder, shimPath, shimScripts, shimsBase, withoutShims, writeShims } from '../lib/never-shims.mjs';
 
 // The stand-ins in a throwaway folder, beside stub "real" commands that print what they got.
 // The stub git cannot say where a push would go or which repository a call acts on, so
@@ -18,7 +18,8 @@ function setup(t) {
   t.after(() => { if (was === undefined) delete process.env.XDG_DATA_HOME; else process.env.XDG_DATA_HOME = was; });
   const real = path.join(dir, 'real'); fs.mkdirSync(real);
   for (const name of Object.keys(shimScripts())) fs.writeFileSync(path.join(real, name), `#!/bin/sh\n${name === 'git' ? BLIND : ''}printf 'REAL ${name}'; for a do printf ' [%s]' "$a"; done; echo\n`, { mode: 0o755 });
-  const call = (folder, [name, ...args], PATH = `${folder}${path.delimiter}${real}`) => { const r = spawnSync(path.join(folder, name), args, { env: { PATH }, encoding: 'utf8' }); return { code: r.status, out: `${r.stdout}${r.stderr}`.trim() }; };
+  // A stand-in named as a vendor's own program (claude) is kept in a folder of its own beside the folder.
+  const call = (folder, [name, ...args], PATH = `${folder}${path.delimiter}${real}`) => { const r = spawnSync(path.join(shimFolder(name, { merge: path.basename(folder) === 'merge-allowed' }), name), args, { env: { PATH }, encoding: 'utf8' }); return { code: r.status, out: `${r.stdout}${r.stderr}`.trim() }; };
   const passed = ([name, ...args]) => ({ code: 0, out: ['REAL', name, ...args.map(arg => `[${arg}]`)].join(' ') });
   return { dir, real, call, passed, all: writeShims(), merge: writeShims({ merge: true }) };
 }
@@ -87,10 +88,16 @@ test('the folder is private, first on PATH once, and written again when anything
   assert.equal(path.dirname(f.all), shimsBase()); assert.equal(path.dirname(f.merge), shimsBase());
   assert.deepEqual([shimsBase(), f.all, f.merge].map(mode), ['700', '700', '700']);
   for (const name of fs.readdirSync(f.all)) assert.equal(mode(path.join(f.all, name)), '755', name);
-  assert.equal(shimPath(['/usr/bin', f.merge, f.all, '/bin'].join(path.delimiter)), [f.all, '/usr/bin', '/bin'].join(path.delimiter));
-  assert.equal(shimPath(['/usr/bin', f.all].join(path.delimiter), { merge: true }), [f.merge, '/usr/bin'].join(path.delimiter));
+  // The stand-in named claude has a folder to itself, first on the PATH of every session but Claude Code's own.
+  const own = shimFolder('claude'), ownMerge = shimFolder('claude', { merge: true });
+  assert.deepEqual([own, ownMerge].map(dir => [path.dirname(dir), mode(dir), fs.readdirSync(dir).join(), mode(path.join(dir, 'claude'))]), [[shimsBase(), '700', 'claude', '755'], [shimsBase(), '700', 'claude', '755']]);
+  assert.equal(fs.existsSync(path.join(f.all, 'claude')), false); assert.equal(shimFolder('git'), f.all); assert.equal(shimFolder('gh', { merge: true }), f.merge);
+  assert.equal(shimPath(['/usr/bin', f.merge, own, f.all, '/bin'].join(path.delimiter)), [own, f.all, '/usr/bin', '/bin'].join(path.delimiter));
+  assert.equal(shimPath(['/usr/bin', f.all].join(path.delimiter), { merge: true }), [ownMerge, f.merge, '/usr/bin'].join(path.delimiter));
+  assert.equal(shimPath(['/usr/bin', own, f.all, '/bin'].join(path.delimiter), { program: 'claude' }), [f.all, '/usr/bin', '/bin'].join(path.delimiter), 'Claude Code itself is started without it');
+  assert.equal(shimPath('/usr/bin', { program: 'codex' }), [own, f.all, '/usr/bin'].join(path.delimiter));
   // Full access: no stand-in folder at all, not even one an outer session left on PATH.
-  assert.equal(withoutShims(['/usr/bin', f.merge, f.all, shimsBase(), '/bin'].join(path.delimiter)), ['/usr/bin', '/bin'].join(path.delimiter));
+  assert.equal(withoutShims(['/usr/bin', f.merge, own, f.all, shimsBase(), ownMerge, '/bin'].join(path.delimiter)), ['/usr/bin', '/bin'].join(path.delimiter));
   // The folder goes on the PATH a session is given and nowhere else: ELU's own checks run the real commands.
   const mine = process.env.PATH; shimPath(mine); assert.equal(process.env.PATH, mine); assert.equal(mine.split(path.delimiter).some(entry => entry.startsWith(shimsBase())), false);
   // What a session left behind: a changed stand-in, a link in its place, a program of its own.
@@ -137,6 +144,8 @@ test('the file Claude Code runs ahead of each command puts the folder back in fr
   // snapshot of the owner's shell setup; then the file, then the command.
   const run = (named, command, start = [f.real, f.all, f.merge].join(path.delimiter)) => { const r = spawnSync('/bin/sh', ['-c', `PATH=${JSON.stringify(start)}\n${fs.readFileSync(named, 'utf8')}\n${command}`], { encoding: 'utf8' }); return `${r.stdout}${r.stderr}`.trim(); };
   assert.equal(run(file, 'command -v git'), path.join(f.all, 'git')); assert.equal(run(merge, 'command -v gh'), path.join(f.merge, 'gh'));
+  assert.equal(run(file, 'command -v claude'), path.join(shimFolder('claude'), 'claude')); assert.equal(run(merge, 'command -v claude'), path.join(shimFolder('claude', { merge: true }), 'claude'));
+  assert.equal(run(file, 'claude mcp add x 2>&1; echo $?'), `${neverSentence('claude mcp add')}.\n${REFUSED}`); assert.equal(run(file, 'claude mcp list'), 'REAL claude [mcp] [list]');
   assert.equal(run(file, 'git push 2>&1; echo $?'), `${neverSentence('git push')}.\n${REFUSED}`);
   assert.equal(run(file, 'git status'), 'REAL git [status]', 'every other call still reaches the real command');
   // A session in Full access can rewrite the file; the next launch writes it again, and leaves one that says the same alone.

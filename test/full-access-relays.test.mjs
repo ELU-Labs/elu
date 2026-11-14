@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { PassThrough } from 'node:stream';
-import { project, fakeClis, autoApprove } from './helpers.mjs';
+import { project, fakeClis, autoApprove, git } from './helpers.mjs';
 import { ProjectController, registerProject } from '../lib/projects.mjs';
 import { projectFolder } from '../lib/workspace.mjs';
 import { readTask } from '../lib/state.mjs';
@@ -46,7 +46,7 @@ async function follow(f, run, switchTo) {
   try {
     while (!done) {
       for (const row of pendingApprovals({ root: f.root })) asked.set(row.id, row);
-      if (asked.size && !switched) { switched = true; assert.equal(readTask(f.controller.repo, run.id).state, 'running'); f.controller.setPermissions(run.id, switchTo); }
+      if (asked.size && !switched && switchTo) { switched = true; assert.equal(readTask(f.controller.repo, run.id).state, 'running'); f.controller.setPermissions(run.id, switchTo); }
       await sleep(25);
     }
     return { task: await finished, asked: [...asked.values()] };
@@ -70,7 +70,9 @@ test('the approval relay of a turn that started in Full access allows every call
   const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'elu-code-full-')));
   environment(t, { XDG_CONFIG_HOME: path.join(dir, 'personal') }); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const log = path.join(dir, 'approvals.jsonl'), base = ['--session', 'sess-1', '--root', dir, '--task', '7', '--role', 'lead', '--vendor', 'claude', '--log', log, '--wait', '600'];
-  const asks = [REMOVE, { tool_name: 'Bash', input: { command: 'rm -rf ~' } }, TOOL, PUSH, { tool_name: 'Write', input: { file_path: '/etc/hosts', content: 'x' } }];
+  const asks = [REMOVE, { tool_name: 'Bash', input: { command: 'rm -rf ~' } }, TOOL, PUSH, { tool_name: 'Write', input: { file_path: '/etc/hosts', content: 'x' } },
+    // A script that rewrites files, and an edit: what a Full access turn once waited twenty minutes on.
+    { tool_name: 'Bash', input: { command: 'sh scripts/rewrite-imports.sh src && node tools/codemod.mjs --write src' } }, { tool_name: 'Edit', input: { file_path: path.join(dir, 'src/coupon.mjs'), old_string: 'value', new_string: 'value.trim()' } }];
   // With the owner's rules too: Full access is asked first, so the answer never depends on a rule.
   for (const [n, extra] of [[], ['--cwd', dir, '--access', 'edit', '--rules', 'saved', '--sandboxed', 'no']].entries()) {
     const server = relay(t, [...base, '--mode', 'full', '--folders', '[]', ...extra]);
@@ -90,6 +92,51 @@ test('the approval relay of a turn that started in Full access allows every call
   assert.deepEqual(pendingApprovals().map(row => row.summary), ['Run: rm -rf build outside the sandbox']);
   answerApproval(pendingApprovals()[0].id, 'deny');
   assert.match((await asking.next(90)).result.content[0].text, /"behavior":"deny"/);
+});
+
+// What a Full access session stopped on: its edit was a shell command that runs a script which
+// rewrites files, the vendor asked for it through the relay, and the request waited twenty
+// minutes for an answer nobody could give. Here the relay's wait is two seconds, so a request
+// that waited for the owner would be refused before the turn ends.
+test('Full access: an edit made by a shell command that runs a script which rewrites files waits for nobody, in a turn that started in Full access and in one set to it while the command waited', { timeout: 120000 }, async t => {
+  const SCRIPT = { tool_name: 'Bash', input: { command: 'sh scripts/upper.sh', description: 'Rewrite the code lists in upper case' }, run: true, work: true };
+  for (const started of ['full', 'ask']) {
+    const f = setup(t, { mode: 'relay', asks: [SCRIPT], asksInFull: true, ...(started === 'full' ? { wait: 2 } : {}) });
+    fs.mkdirSync(path.join(f.root, 'scripts')); fs.writeFileSync(path.join(f.root, 'src/codes.txt'), 'save\nspring\n');
+    fs.writeFileSync(path.join(f.root, 'scripts/upper.sh'), "#!/bin/sh\nfor f in src/*.txt; do tr a-z A-Z < \"$f\" > \"$f.new\" && mv \"$f.new\" \"$f\"; done\n");
+    git(f.root, ['add', '.']); git(f.root, ['commit', '-m', 'Add the code lists']);
+    const { task, asked } = await follow(f, f.controller.ask('Uppercase the code lists', null, { permissions: started }), 'full');
+    // The editing turn asked, the script ran in the session's workspace and rewrote the file, and the turn ended.
+    assert.ok(!['blocked', 'needs_input', 'stopped'].includes(task.state), `${started}: ${task.state} ${JSON.stringify(task.error)}`);
+    assert.equal(fs.readFileSync(path.join(task.worktree, 'src/codes.txt'), 'utf8'), 'SAVE\nSPRING\n', started);
+    assert.equal(fs.readFileSync(path.join(f.root, 'src/codes.txt'), 'utf8'), 'save\nspring\n', 'the checkout is as it was');
+    assert.deepEqual(rows(path.join(f.fake.dir, 'ran.jsonl')), [SCRIPT.input]);
+    assert.deepEqual(task.approvals.map(row => [row.tool, row.summary, row.decision, row.by]), [['Bash', 'Run: sh scripts/upper.sh', 'allow', 'full']]);
+    assert.deepEqual(task.runs.flatMap(run => run.denials ?? []), []); assert.deepEqual(pendingApprovals({ root: f.root }), []);
+    // Started in Full access, nothing was ever put to the owner; started below it, the one request that waited was answered by the switch.
+    assert.deepEqual(asked.map(row => row.summary), started === 'full' ? [] : ['Run: sh scripts/upper.sh']);
+    assert.equal(task.permissions, 'full');
+  }
+});
+
+test('below Full access, an approval nobody answers is not a no: the turn is told so, goes on with the rest and ends saying what still waits; a no stops it', { timeout: 90000 }, async t => {
+  // Nobody answers: the wait runs out.
+  const f = setup(t, { mode: 'relay', intent: 'answer', asks: [REMOVE], wait: 2, tells: true });
+  const { task, asked } = await follow(f, f.controller.ask('Clean up the build', null, { permissions: 'ask' }), null);
+  assert.deepEqual(asked.map(row => row.summary), ['Run: rm -rf build outside the sandbox']);
+  assert.equal(task.state, 'answered', JSON.stringify(task.error));
+  assert.deepEqual(task.approvals.map(row => [row.tool, row.decision, row.wait]), [['Bash', 'timeout', 2]]);
+  const told = rows(f.fake.calls).find(row => row.approval).approval.decision;
+  assert.equal(told.behavior, 'deny'); assert.match(told.message, /^No answer from the owner within 1 minutes\. Do not retry it another way\. Nobody declined it\. Go on with the work that does not need it, and say at the end what still waits for their answer\.$/);
+  assert.equal(task.result.summary, 'Did the rest. Still waits for your answer: rm -rf build.');
+  assert.deepEqual(rows(path.join(f.fake.dir, 'ran.jsonl')), [], 'the call itself did not run');
+  // The owner says no: that is a declined action, and the turn stops on it.
+  const g = setup(t, { mode: 'relay', intent: 'answer', asks: [REMOVE], tells: true });
+  const run = g.controller.ask('Clean up the build', null, { permissions: 'ask' });
+  for (let pending = []; !pending.length;) { await sleep(25); pending = pendingApprovals({ root: g.root }); if (pending.length) answerApproval(pending[0].id, 'deny'); }
+  const stopped = await run.finished;
+  assert.equal(stopped.state, 'needs_input'); assert.equal(stopped.result.question, 'I needed this and it was not allowed: rm -rf build.');
+  assert.match(rows(g.fake.calls).find(row => row.approval).approval.decision.message, /^The owner declined this\. Do not retry it another way\./);
 });
 
 test('a session set to Full access while its turn waits on the approval relay: the call that waits is allowed, and each one after it is allowed without asking', { timeout: 90000 }, async t => {
