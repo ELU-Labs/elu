@@ -68,9 +68,9 @@ then says `ready`, or that the check failed and which step was not proven.
 
 ## The private HOME
 
-In Full access a command the model runs still has this folder as `~`. ELU points Git and
-`gh` at your own settings and sign-in there (`GIT_CONFIG_GLOBAL`, `GH_CONFIG_DIR`, unless
-your shell sets them), and SSH finds your keys by itself. Seen with the stand-in only.
+In Full access `~` is a mirror of your home, so a command finds your sign-ins where it
+looks for them: see [Full access](#full-access-your-home-as-) below. The other modes run in
+the private HOME described here.
 
 `agy` reads `~/.gemini` for settings, hooks, MCP servers, plugins, skills and context files,
 and has no flag to turn that off. So ELU runs it with `HOME` set to a folder under its
@@ -91,6 +91,31 @@ plugins, skills, `GEMINI.md` or `AGENTS.md`. Context files inside the workspace
 (`AGENTS.md`, `GEMINI.md`, `.agents/rules/*.md`) do reach the prompt; `agy` has no flag to
 skip them, so a repository can steer the model. `.agents` is a protected path, so the model
 cannot add such files itself.
+
+### Full access: your home as `~`
+
+Full access is everything, so a command must find `~/.npmrc`, `~/.config/gcloud`, `~/.aws`,
+`~/.docker`, `~/.kube` and the rest as your terminal does. `agy` has no switch that moves
+`~/.gemini` away from `HOME`, so it cannot run in your home with ELU's settings. A Full
+access run gets `HOME` set to a folder of links beside the workspace's private one
+(`agy-home/<workspace>-full`):
+
+- every entry at the top of your home is a link to yours, made again before each run, so
+  what you added since is there and nothing of yours is copied;
+- `~/.claude`, `~/.claude.json`, `~/.codex`, `~/.cursor`, `~/.grok`, `~/.agents` and your
+  own `~/.gemini` are left out, and `~/.gemini` there is the workspace's private one: the
+  settings ELU wrote for the run, and the same conversations in every mode;
+- a file or folder a command makes at the top of `~` is moved to your home when the run
+  ends (or before the next one, if ELU was stopped). A file saved in place of yours
+  replaces yours when it is newer; renaming an entry renames yours. What cannot go to your
+  home (a coding tool's folder a run made, an older file than yours) is kept beside the
+  mirror in a folder ending `-full-aside`, never deleted;
+- removing an entry at the top of `~` removes the link only, and yours is linked again at
+  the next run. `find ~` and `du ~` see links: a command that walks your home needs its
+  full path.
+
+Seen with the stand-in only: no release of `agy` is proven until the one-time check passes
+on a signed-in machine.
 
 The prompt goes on standard input, never on the command line, so other users on the
 machine cannot read it with `ps`.
