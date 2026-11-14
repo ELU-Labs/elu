@@ -10,6 +10,7 @@ import { createIdentity } from '../lib/peer/identity.mjs';
 import { bothMine, dropStrangers, markMine, markedMine, mineRows, noteTheirs, unmarkMine } from '../lib/peer/mine.mjs';
 import { NOT_MINE, UPDATE, UPDATE_LIST, hostMethods, hostTick, listTick, relist, remoteCommand, remoteConnected, remoteMachines, remoteSessions, viewMethods, viewTick, watchId } from '../lib/peer/remote.mjs';
 import { repository } from '../lib/git.mjs';
+import { EluCodeError } from '../lib/util.mjs';
 import { saveTeamAccess } from '../lib/peer/access.mjs';
 import { leaveOp, merge, readLog } from '../lib/peer/roster.mjs';
 import { otherSessions } from '../lib/peer/session-tools.mjs';
@@ -1639,6 +1640,58 @@ test("a schedule's run that waits for a free slot on my other computer shows her
   // /stop on the other one cancels it there: it never starts.
   assert.equal(await withHome(laptop.home, () => glue.action(row('Weekly cleanup'), 'stop')), 'Cancelled on @devbox. It will not start.');
   assert.equal(saved('Weekly cleanup'), undefined);
+});
+
+// A session started from here for my other computer while it is offline is kept here, and
+// goes as soon as it connects, as a message in Chats does. What I add goes with it.
+test('a session started for my other computer while it is offline goes as soon as it connects, and says so until then', async t => {
+  const { laptop, devbox, project, toViewer, viewCtx } = pair(t), D = devbox.identity.key;
+  let online = false;
+  const ctx = { ...viewCtx, session: key => online ? viewCtx.session(key) : null };
+  const status = { key: laptop.identity.key, name: 'ana', box: 'laptop', teams: [{ members: [{ key: laptop.identity.key, name: 'ana' }, { key: D, name: 'box', box: 'devbox', online: false }] }] };
+  const facade = { mineRows: peerFacade.mineRows, remoteSessions: peerFacade.remoteSessions, remoteMachines: peerFacade.remoteMachines, projectRepoId: () => null, projectRepoIds: () => [] };
+  let n = 0;
+  const glue = remoteGlue({ facade, peerRead: () => status, peerCommand: async command => withHome(laptop.home, () => remoteCommand(ctx, command)), chatMessage: ({ title, text }) => `${title}\n${text}`, ink: text => text, colour: false, restMs: 1e9 });
+  const shownRows = () => withHome(laptop.home, () => glue.sections(Date.now() + 1000 * ++n, '/work/shop').filter(line => line.row).map(line => line.row));
+  // Typed as "@devbox Tidy the login form" in the new session box: nothing is refused.
+  const begun = await withHome(laptop.home, () => glue.start({ key: D, name: 'devbox' }, 'Tidy the login form', { permissions: 'ask', place: null, model: null, bots: [] }));
+  assert.equal(begun.line, '@devbox is offline. Your message goes as soon as it connects.');
+  const [row] = shownRows();
+  assert.equal(row.id, begun.id); assert.equal(rowTitle(row), 'Tidy the login form');
+  assert.deepEqual(rowBadge(row), { icon: '·', tone: 'muted', title: 'on devbox · not sent yet' });
+  const pane = withHome(laptop.home, () => glue.view(row, 200));
+  assert.match(pane, /You → @devbox \(not sent yet\)\nTidy the login form/);
+  assert.match(pane, /@devbox is offline\. Your message goes as soon as it connects\. \/stop cancels it\./);
+  // What he adds while it waits goes with it.
+  assert.equal(await withHome(laptop.home, () => glue.send(row, 'And the signup form')), 'Added to your message. It goes to @devbox as soon as it connects.');
+  // Nothing reaches the devbox while it is offline, however often this computer looks.
+  await withHome(laptop.home, () => viewTick(ctx));
+  assert.deepEqual(withHome(devbox.home, () => pendingRequests(project.root)), []);
+  // It connects: the session starts there, once, with both messages, and is followed here as one started there now is.
+  online = true;
+  await withHome(laptop.home, () => viewTick(ctx)); await withHome(laptop.home, () => viewTick(ctx, Date.now() + 60000));
+  const there = withHome(devbox.home, () => pendingRequests(project.root));
+  assert.deepEqual(there.map(request => [request.goal, request.mine?.remoteId]), [['Tidy the login form\n\nAnd the signup form', begun.id]]);
+  const view = withHome(laptop.home, () => remoteSessions().find(value => value.id === begun.id));
+  assert.equal(view.unsent, undefined); assert.equal(view.project, path.basename(project.root));
+  // One that computer refuses keeps its reason here, in place of a session.
+  online = false;
+  const second = await withHome(laptop.home, () => glue.start({ key: D, name: 'devbox' }, 'Rename the shop', { permissions: 'ask', place: null, model: null, bots: [] }));
+  online = true;
+  const asked = toViewer.request;
+  toViewer.request = async (method, params) => { if (method === 'elu.remote.start') throw new EluCodeError('Pick one of the folders listed.', { rpc: { code: -32602 } }); return asked(method, params); };
+  await withHome(laptop.home, () => viewTick(ctx, Date.now() + 120000));
+  toViewer.request = asked;
+  const refused = withHome(laptop.home, () => remoteSessions().find(value => value.id === second.id));
+  assert.deepEqual([refused.state, refused.unsent], ['blocked', undefined]); assert.match(refused.error, /Pick one of the folders listed\./);
+  // /stop on one not sent yet takes it back: nothing goes.
+  online = false;
+  const third = await withHome(laptop.home, () => glue.start({ key: D, name: 'devbox' }, 'Never mind this', { permissions: 'ask', place: null, model: null, bots: [] }));
+  const thirdRow = shownRows().find(value => value.id === third.id);
+  assert.equal(await withHome(laptop.home, () => glue.action(thirdRow, 'stop')), 'Cancelled. Nothing was sent to @devbox.');
+  online = true; await withHome(laptop.home, () => viewTick(ctx, Date.now() + 180000));
+  assert.equal(withHome(devbox.home, () => pendingRequests(project.root)).some(request => request.goal === 'Never mind this'), false);
+  assert.equal(withHome(laptop.home, () => remoteSessions()).some(value => value.id === third.id), false);
 });
 
 test('a session followed here by the id both machines give it shows once in Sessions and under Needs you, and a handoff not listed yet shows once', async () => {
