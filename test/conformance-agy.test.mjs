@@ -56,7 +56,7 @@ test('argv per profile is a fixed snapshot; settings and the hook are written pe
   const base = { cwd, protectedPaths: ['.git', 'package.json'], commonDir: path.join(cwd, '.git'), schemaFile, folders: [folder] };
   const tokens = [[schemaFile, '<schema>'], [folder, '<folder>'], [cwd, '<cwd>']];
   const tokenise = value => tokens.reduce((text, [from, to]) => text.split(from).join(to), value);
-  const common = ['-p', 'Your task is on standard input. Read it fully, then do exactly what it says.', '--output-format', 'json', '--json-schema', '<schema>', '--print-timeout', '7200s'];
+  const common = ['-p', 'Your task is on standard input. Read it fully, then do exactly what it says.', '--output-format', 'json', '--json-schema', '<schema>', '--print-timeout', '2000000s'];
   const expected = {
     locked: [...common, '--sandbox'],
     ask: [...common, '--add-dir', '<folder>'],

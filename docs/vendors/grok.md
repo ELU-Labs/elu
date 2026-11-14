@@ -148,8 +148,8 @@ each thought, tool call and piece of text comes as it happens and shows in the c
 answer is read from the text, and `end` closes the run with its usage. A program whose file
 does not hold `streaming-json` is started with `--output-format json`, which prints only at
 the end, and a launch that ends at once with nothing printed runs again that way (see
-[Claude Code](claude.md)). It keeps the two-hour
-cap of a turn and no quiet limit (see How long a turn runs in
+[Claude Code](claude.md)). It has no quiet limit and
+no time limit: it runs until it ends (see How long a turn runs in
 [permissions](../permissions.md)); `--max-turns` (40 for
 read-only turns, 120 for edit turns) bounds the model rounds, except in Full access, which
 has no turn cap of ELU's. Cost is not reported under a

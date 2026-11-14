@@ -69,8 +69,8 @@ What stays, and why:
   output. On Claude Code your own MCP servers are on, as in every mode (`/mcp`). Codex,
   Grok Build and Antigravity get no MCP servers from ELU in any mode.
 - A turn has to answer in the form ELU reads, and a turn that prints nothing for 10
-  minutes, or runs 2 hours, is stopped ([How long a turn runs](#how-long-a-turn-runs)).
-  That is how a vendor that hangs is told from one that works.
+  minutes is stopped ([How long a turn runs](#how-long-a-turn-runs)). That is how a
+  vendor that hangs is told from one that works. A turn that works is never stopped.
 - Codex cannot ask you a question in the middle of a turn: nobody could answer it there.
 - Grok Build and Antigravity do not start in your home itself: each loads settings from
   `~` that ELU cannot turn off (Grok Build the agents, plugins and permission rules of your
@@ -286,18 +286,30 @@ and nothing is refused, and the task keeps each as allowed by Full access.
 
 ### How long a turn runs
 
-A turn that is still working is never cut by the clock. It is stopped only when the vendor
-has printed nothing for 10 minutes, or after 2 hours, a safety cap. A command the model runs
-counts as working for as long as it runs, even when it prints nothing, such as a long test
-run: the 10 minutes count only while no command is running. Time a request waits for you
-counts toward neither, and the 10 minutes start again once it is answered. A stopped turn
-says so in the chat in one line, such as "Stopped after 10 minutes with no output. Your
+A turn that is still working runs until it ends, however long that takes, in every mode: no
+clock of ELU's stops work. It is stopped only when the vendor has printed nothing for 10
+minutes. A command the model runs counts as working for as long as it runs, even when it
+prints nothing, such as a long test run: the 10 minutes count only while no command is
+running. Time a request waits for you does not count, and the 10 minutes start again once
+it is answered.
+
+In Approve for me and Full access ELU tells a turn that went quiet to carry on, once, and
+the chat says so: "No output for 10 minutes. ELU told it to carry on." If the same turn goes
+quiet again, it stops. In Ask for approval and Read only it stops the first time. A stopped
+turn says so in the chat in one line, such as "Stopped after 10 minutes with no output. Your
 changes are kept. Reply to carry on." Its edits stay on disk, and your next message carries
 on. `roles.lead.timeoutSeconds` in `.elu-code/config.yaml` sets the 10 minutes; the 900 it
-says by default means the default, as 600 does. A vendor that prints its answer only at
-the end (Antigravity and Grok Build without the live relay) has the cap alone. So does each
-of the project's checks: a check runs until it ends, up to the same 2 hours, however long it
-prints nothing.
+says by default means the default, as 600 does.
+
+A vendor that prints its answer only at the end (Antigravity and Grok Build without the live
+relay) has no clock at all: silence says nothing about it, so it runs until it ends or you
+`/stop` it. So does each of the project's checks: a check runs until it ends, however long
+that takes.
+
+ELU 0.1.19 and earlier also stopped a turn after 2 hours, working or not. A session stopped
+that way says "Stopped by a time limit an earlier version had. Reply to carry on." In Approve
+for me and Full access ELU carries it on by itself the next time the app opens, once, and
+says so in the chat.
 
 The keys are `y` allow and `n` deny, each followed by Enter. Where the session can
 be given Full access there is a third, `f`: it asks what `/permissions full` asks,

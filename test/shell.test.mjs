@@ -60,7 +60,7 @@ test('a command gets no input, and possible secrets in its output are masked', a
   assert.doesNotMatch(secret.output, /abc123def456|ghp_abcdefghij/); assert.match(secret.output, /\[redacted\]/);
 });
 
-test('stop ends a command and what it started; the time limit does the same', async t => {
+test('stop ends a command and what it started; a row an earlier version stopped at its time limit still says so', async t => {
   const dir = temp(t), started = Date.now();
   const run = runShell('sleep 30 & sleep 30', { cwd: dir }); setTimeout(() => run.stop(), 200);
   const stopped = await run.done;
@@ -68,6 +68,17 @@ test('stop ends a command and what it started; the time limit does the same', as
   const timed = await runShell('echo first; sleep 30', { cwd: dir, limitMs: 300 }).done;
   assert.equal(timed.stopped, 'time'); assert.equal(timed.output, 'first');
   assert.equal(shellText(row({ ...timed, command: 'sleep 30' })), '$ sleep 30\nfirst\nstopped: it ran for 10 minutes');
+});
+
+// 0.1.19 and earlier stopped a command of the owner's that had run 10 minutes. A command is
+// work the owner asked for: it runs until it ends, or until he stops it.
+test('a command has no time limit: past the 10 minutes an earlier version allowed it is still running, and ends by itself', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const run = runShell('sleep 1; echo done', { cwd: temp(t) });
+  // Eleven minutes on ELU's own clock, while the command is still at work.
+  t.mock.timers.tick(11 * 60000); t.mock.timers.reset();
+  const ended = await run.done;
+  assert.deepEqual([ended.stopped, ended.code, ended.output], [null, 0, 'done']);
 });
 
 test('a command that leaves something running ends when its shell does', async t => {

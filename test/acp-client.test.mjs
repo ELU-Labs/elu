@@ -73,6 +73,17 @@ test('a tool call that runs silently past the quiet limit does not stop the serv
   const capped = await endless.client.exit; assert.equal(capped.timedOut, true); assert.equal(capped.stoppedBy, 'cap', 'a call that never ends still stops at the cap');
 });
 
+// A turn's prompt is one request, answered when the turn ends. ELU stops no turn that works,
+// so that request has no timer: 0.1.19 gave it the longest one there is, 24.8 days.
+test('a request with no time limit waits for as long as its answer takes, as a turn\'s prompt does', async t => {
+  const { client } = await start(t);
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const answer = client.request('command', { ms: 1500 }, { timeoutMs: null });
+  // Twenty-five days on ELU's own clock, while the server is still at work.
+  t.mock.timers.tick(2 ** 31); t.mock.timers.reset();
+  assert.deepEqual(await answer, { ran: true });
+});
+
 test('the time limit kills the server unless the run is held; an abort kills it at once', async t => {
   const [limited, held, aborted] = await Promise.all([
     start(t, { timeoutSeconds: 1 }),
