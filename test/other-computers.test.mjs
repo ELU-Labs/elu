@@ -1,16 +1,34 @@
-import test from 'node:test';
+import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
-import { makeTeam, withHome, registeredProject } from './peer-helpers.mjs';
+import fs from 'node:fs';
+import path from 'node:path';
+import { project, fakeClis } from './helpers.mjs';
+import { makeTeam, newHome, withHome, registeredProject } from './peer-helpers.mjs';
+import { registerProject } from '../lib/projects.mjs';
+import { Conductor, enqueue } from '../lib/conductor.mjs';
+import { stopLine } from '../lib/stop-line.mjs';
+import { peerFile } from '../lib/peer/paths.mjs';
+import { createIdentity } from '../lib/peer/identity.mjs';
+import { createTeam, merge, readLog } from '../lib/peer/roster.mjs';
+import { createInvite, redeemCode } from '../lib/peer/invite.mjs';
+import { intakeMethods } from '../lib/peer/intake.mjs';
+import { processOutbox, syncRecords } from '../lib/peer/replies.mjs';
+import { records } from '../lib/peer/taskstore.mjs';
+import { applyTask, createAsk, getAsk, reconnect, tickAsks } from '../lib/peer/asks.mjs';
+import { peerItems } from '../lib/peer/index.mjs';
+import { peerCli } from '../lib/peer/cli.mjs';
+import * as visuals from '../lib/terminal-visuals.mjs';
+
+const { clockTime, teamPanes, visible } = visuals, sentState = (...args) => visuals.sentState(...args);
 import { markMine, mineRows, noteTheirs } from '../lib/peer/mine.mjs';
 import { hostMethods, listTick, relist, remoteMachines, remoteSessions, viewMethods } from '../lib/peer/remote.mjs';
 import { repository } from '../lib/git.mjs';
 import { saveTeamAccess } from '../lib/peer/access.mjs';
 import { pendingRequests, updateRequest } from '../lib/workspace.mjs';
 import { requestApproval, pendingApprovals } from '../lib/approvals.mjs';
-import { enqueue } from '../lib/conductor.mjs';
 import { boardRows, remoteRow } from '../lib/board.mjs';
 import { remoteSessions as remoteGlue } from '../lib/terminal-remote.mjs';
-import { saveTask } from '../lib/state.mjs';
+import { saveTask, taskTitle } from '../lib/state.mjs';
 import { projectSnapshot } from '../lib/projects.mjs';
 
 // A connection as the daemon hands it to a method, recording what is sent to it.
@@ -80,4 +98,124 @@ test('a row of a session on a computer of mine counts from what that computer sa
   // An earlier version says nothing: a turn that works counts from the start of its run when this machine follows it.
   assert.equal(remoteRow({ ...view, runs: [{ run: 'r1', startedAt: '2026-11-10T06:00:00Z', at: '2026-11-10T06:10:00Z' }, { run: 'r2', startedAt: '2026-11-11T09:58:00Z', at: null }] }, 'devbox', now).time, '2m00');
   assert.equal(remoteRow(view, 'devbox', now).time, '28h00');
+});
+
+// ---- A message from one computer of mine to another ----
+
+const LIVE = new WeakMap(), STOP_MS = 20000;
+function giveUp(text) { console.error(`other-computers.test: ${text} Ending the test process.`); process.exit(1); }
+after(() => { setTimeout(() => giveUp('Something is still running 10 s after the last test.'), 10000).unref(); });
+async function until(check, what, timeout = 30000) {
+  const started = Date.now();
+  while (!await check()) { if (Date.now() - started > timeout) throw new Error(`Timed out waiting for ${what}`); await new Promise(resolve => setTimeout(resolve, 20)); }
+}
+// Three computers of one owner in three homes, on one team, each a computer of the others'.
+// The first (laptop) has the project and the stand-in vendors, takes its own computers'
+// messages by itself (Auto), and is the home the conductor runs in. The second (devbox) is
+// connected to the third all along. The third (studio) sends. A message goes between them
+// as the wire carries it: the laptop is reachable only while `online` holds it.
+function three(t, mode = 'slow-answer') {
+  LIVE.set(t, []);
+  t.after(async () => { for (const conductor of LIVE.get(t)) { const late = setTimeout(() => giveUp('A conductor did not stop.'), STOP_MS); try { await conductor.stop(); } finally { clearTimeout(late); } } });
+  const p = project(t), fake = fakeClis(p.parent, { mode }), previous = { PATH: process.env.PATH, XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME, XDG_DATA_HOME: process.env.XDG_DATA_HOME, CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR };
+  Object.assign(process.env, fake.env);
+  t.after(() => { for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } });
+  const repo = repository(p.root); registerProject(repo);
+  const laptop = { home: fake.env.XDG_CONFIG_HOME, identity: createIdentity({ name: 'ali' }) }, team = createTeam(laptop.identity, 'shop');
+  saveTeamAccess(team.id, { root: p.root, handling: 'auto' });
+  const joins = () => {
+    const home = newHome(t), identity = withHome(home, () => createIdentity({ name: 'ali' }));
+    redeemCode(createInvite(laptop.identity, team.id, { hours: 1 }), identity.key, 'ali');
+    return { home, identity };
+  };
+  const devbox = joins(), studio = joins(), log = readLog(team.id).ops, all = [laptop, devbox, studio];
+  for (const one of [devbox, studio]) withHome(one.home, () => { const { rejected } = merge(team.id, log); if (rejected.length) throw new Error(rejected[0].reason); });
+  for (const one of all) withHome(one.home, () => { for (const other of all) if (other !== one) { markMine(one.identity.key, other.identity.key); noteTheirs(other.identity.key, true); } });
+  // The laptop's daemon as far as a message goes; what it tells the sender reaches the studio as the wire would carry it.
+  const online = new Map(), dialed = [], events = [];
+  const sender = { me: studio.identity, session: key => online.get(key) ?? null, dial: key => dialed.push(key), event: text => events.push(text), kick: () => {} };
+  const receiver = { me: laptop.identity, kick: () => {}, event: () => {}, boxName: () => 'laptop', name: () => 'ali', push: (key, task) => { if (key === studio.identity.key && online.has(laptop.identity.key)) withHome(studio.home, () => applyTask(sender, laptop.identity.key, task)); } };
+  const methods = intakeMethods(receiver);
+  const wire = { request: async (method, params) => { const out = withHome(laptop.home, () => methods[method](params, { key: studio.identity.key })); return method === 'SendMessage' ? { task: out } : out; } };
+  online.set(devbox.identity.key, { request: async () => { throw new Error('Not asked.'); } });
+  const item = id => withHome(studio.home, () => peerItems().find(row => row.id.endsWith(`:${id}`) && ['asked', 'answer', 'rejected', 'expired'].includes(row.kind)));
+  const conduct = () => { const conductor = new Conductor({ tickMs: 20 }).start(); LIVE.get(t).push(conductor); return conductor; };
+  return { ...p, repo, fake, team, laptop, devbox, studio, sender, receiver, online, dialed, wire, item, conduct };
+}
+// The thread in Chats on the studio, as its rows read: the laptop shows as a computer of mine by its machine name.
+const threadRows = (m, items, { connected = false, width = 200 } = {}) => teamPanes({ status: { key: m.studio.identity.key, teams: [{ members: [{ key: m.laptop.identity.key, name: 'laptop', mine: true, online: connected }] }] }, agents: [], items: items.map(row => ({ ...row, name: 'laptop' })) }, [30, 30, width], false)[2].map(row => visible(row.line));
+
+test('a message to a computer of mine that is not connected says so, then follows the message: delivered, started there as a session, answered', async t => {
+  const m = three(t), to = m.laptop.identity.key;
+  const ask = withHome(m.studio.home, () => createAsk(m.sender, { to, kind: 'ask', text: 'Can you see this one?', byOwner: true }));
+  const sentAt = Date.parse(ask.createdAt), line = (now, connected = false) => sentState(m.item(ask.id), { who: '@laptop', online: connected, mine: true, now });
+  // The laptop is not connected: the line says that first, then for how long, and that the message goes by itself.
+  assert.deepEqual(m.dialed, [to]); assert.equal(m.item(ask.id).state, 'pending');
+  assert.equal(line(sentAt).text, '@laptop is offline. Your message goes as soon as it connects.');
+  assert.equal(line(sentAt + 40000).text, '@laptop is offline (40s). Your message goes as soon as it connects.');
+  withHome(m.studio.home, () => tickAsks(m.sender, sentAt + 30000));
+  assert.equal(m.item(ask.id).state, 'pending'); assert.deepEqual(m.dialed, [to, to], 'it is dialed again while the message waits');
+  assert.equal(line(sentAt + 61000).text, '@laptop is offline (1m). Your message goes as soon as it connects.');
+  assert.ok(!line(sentAt + 61000).done);
+  const waiting = threadRows(m, [{ ...m.item(ask.id), at: new Date(Date.now() - 61000).toISOString() }]);
+  assert.deepEqual(waiting, ['→ you asked @laptop · Can you see this one?', '   ↳ not connected to @laptop yet (1m) · it goes as soon as it connects']);
+  assert.equal(boardRows([], sentAt + 61000, { items: [m.item(ask.id)], online: new Set([m.devbox.identity.key]) }).find(row => row.kind === 'peer').now, '@ali offline · will retry');
+  for (const text of [line(sentAt).text, line(sentAt + 61000).text, ...waiting]) assert.doesNotMatch(text, /waiting for it to confirm|\bpending\b/);
+  // A minute later the laptop connects: the message goes by itself, and the line says when it got there.
+  m.online.set(to, m.wire);
+  await withHome(m.studio.home, () => reconnect(m.sender, to));
+  const delivered = withHome(m.studio.home, () => getAsk(ask.id));
+  assert.ok(['submitted', 'working'].includes(delivered.state), delivered.state); assert.ok(Number.isFinite(Date.parse(delivered.deliveredAt)));
+  if (delivered.state === 'submitted') {
+    assert.equal(line(Date.now(), true).text, `Delivered to @laptop at ${clockTime(delivered.deliveredAt)}.`);
+    // While that computer has not marked this one back, a delivered message says what ends the wait: never that it waits with no reason.
+    assert.equal(sentState(m.item(ask.id), { who: '@laptop', online: true, mine: true, unconfirmed: 'studio' }).text, `Delivered to @laptop at ${clockTime(delivered.deliveredAt)}. Waiting for it to confirm: on @laptop, type /mine @studio.`);
+    assert.deepEqual(threadRows(m, [m.item(ask.id)], { connected: true }), ['→ you asked @laptop · Can you see this one?', `   ↳ delivered at ${clockTime(delivered.deliveredAt)}`]);
+  }
+  // It starts a session there, as the laptop is set to (Auto): the line names the session as the laptop's Sessions list does.
+  m.conduct();
+  await until(() => { syncRecords(m.receiver); return withHome(m.studio.home, () => getAsk(ask.id)).startedAs; }, 'the session to start on the laptop');
+  const [session] = projectSnapshot(m.repo).tasks, name = withHome(m.studio.home, () => getAsk(ask.id)).startedAs;
+  assert.ok(session && name, 'a session there, and its name here'); assert.equal(name, taskTitle(session));
+  const working = m.item(ask.id);
+  if (working.kind === 'asked' && working.state === 'working') {
+    assert.equal(sentState(working, { who: '@laptop', online: true, mine: true }).text, `Started on @laptop as session "${name}".`);
+    assert.deepEqual(threadRows(m, [working], { connected: true }), ['→ you asked @laptop · Can you see this one?', `   ↳ started there as session "${name}"`]);
+  }
+  // Its answer ends it.
+  await until(() => { processOutbox(m.receiver); return withHome(m.studio.home, () => getAsk(ask.id)).state === 'answered'; }, 'the answer to come back');
+  const answered = sentState(m.item(ask.id), { who: '@laptop', online: true, mine: true });
+  assert.equal(answered.text, '@laptop answered. The reply is in Chats.'); assert.equal(answered.done, true);
+});
+
+test('a message from another computer of mine whose session cannot start comes back at once with why, and this computer says the same in Sessions, in Chats and in elu peers', async t => {
+  const m = three(t), to = m.laptop.identity.key;
+  // The vendor's command gives up as a turn starts, as a script in front of it that ends first does.
+  const front = path.join(m.parent, 'front'); fs.mkdirSync(front);
+  fs.writeFileSync(path.join(front, 'claude'), `#!/bin/sh\ncase " $* " in *' -p '*) ;; *) exec ${JSON.stringify(path.join(m.fake.dir, 'claude'))} "$@";; esac\necho "termapp: gave up: the claude command keeps coming back to this script." >&2\nexit 126\n`, { mode: 0o700 });
+  process.env.PATH = `${front}${path.delimiter}${process.env.PATH}`;
+  const ask = withHome(m.studio.home, () => createAsk(m.sender, { to, kind: 'ask', text: 'Can you see this one?', byOwner: true }));
+  m.online.set(to, m.wire);
+  await withHome(m.studio.home, () => reconnect(m.sender, to));
+  assert.notEqual(withHome(m.studio.home, () => getAsk(ask.id)).state, 'pending', 'the message is delivered');
+  m.conduct();
+  await until(() => { syncRecords(m.receiver); processOutbox(m.receiver); return withHome(m.studio.home, () => getAsk(ask.id)).state === 'failed'; }, 'the failure to come back');
+  // The sender: the line under the chat and the thread say it failed there, why, and the one thing to do.
+  const why = 'The model could not run: Claude Code did not start. The claude command said: termapp: gave up: the claude command keeps coming back to this script.';
+  const failed = m.item(ask.id), state = sentState(failed, { who: '@laptop', online: true, mine: true });
+  assert.equal(state.text, `Failed on @laptop: ${why} Check that claude runs in your terminal on @laptop, then send it again.`); assert.equal(state.done, true);
+  const thread = threadRows(m, [failed], { connected: true, width: 400 });
+  assert.deepEqual(thread, ['→ you asked @laptop · Can you see this one?', `   ↳ failed · ${why} Check that claude runs in your terminal on @laptop, then send it again.`]);
+  // The laptop: its session's row, its thread in Chats and elu peers give one reason, the session's own.
+  const here = `${why} Check that claude runs in your terminal, then type continue.`;
+  const row = boardRows([projectSnapshot(m.repo)], Date.now()).find(item => item.kind === 'task');
+  assert.equal(row.task.state, 'blocked'); assert.equal(stopLine(row.task).text, here);
+  const item = peerItems().find(value => value.kind === 'failed');
+  assert.equal(item.reason, here); assert.equal(records().find(record => record.task.id === item.taskId).failure, here);
+  assert.deepEqual(teamPanes({ status: { key: to, teams: [] }, agents: [], items: [{ ...item, name: 'studio' }] }, [30, 30, 400], false)[2].map(value => visible(value.line)), ['← @studio asks you · Can you see this one?', `   ↳ your model could not answer · ${here}`]);
+  const told = await peerCli(['peers'], {});
+  assert.ok(told.lines.includes(`failed  @ali  Can you see this one? · ${here}`), told.lines.join('\n'));
+  // The same command on the sender names the reason whole too.
+  const there = await withHome(m.studio.home, () => peerCli(['peers'], {}));
+  assert.ok(there.lines.includes(`failed  @ali  Can you see this one? · ${why} Check that claude runs in your terminal on @laptop, then send it again.`), there.lines.join('\n'));
 });

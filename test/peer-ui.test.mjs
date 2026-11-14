@@ -1395,7 +1395,7 @@ for (const [columns, rows] of [[160, 40], [140, 50], [80, 24]]) test(`at ${colum
   ask.submit();
   await until(() => peer.sent().some(row => row.type === 'ask' && row.to === SARA), 'asked');
   // Beside the list on a small screen a long line is cut at a word after two rows: its first sentence shows whole.
-  await until(() => (columns === 80 ? /Sent to @sara-box, your computer \(waiting for it to confirm\)\. / : /Sent to @sara-box, your computer \(waiting for it to confirm\)\. Its reply shows in this thread\./).test(status()), 'the line after sending');
+  await until(() => /Sent to @sara-box, your computer\. Its reply shows in this thread\./.test(status()), 'the line after sending');
   await send(v, '/peers');
   await until(() => (columns === 80 ? /^› 0 of 1 teammates online · 1 of 1 of your computers online: @sara-box \(direct\)/ : /^› 0 of 1 teammates online · 1 of 1 of your computers online: @sara-box \(direct\) · waiting for @sara-box to confirm$/).test(status().trim()), '/peers says which one waits');
   await send(v, '/mine');
@@ -1496,7 +1496,7 @@ test('in Chats a computer of mine that has not marked this one back says it wait
   assert.match(body(title), /^Waiting for it to confirm: on @sara-box, type \/mine @ana\.\n\nKey: /, 'and what ends the wait');
   modal(v, title).children.find(child => child.type === 'textbox').emit('cancel'); await until(() => !modal(v, title), 'closed');
   await send(v, 'what runs there?');
-  await until(() => /Sent to @sara-box, your computer \(waiting for it to confirm\)\. Its reply shows in this thread\./.test(status()), 'the line after sending');
+  await until(() => /Sent to @sara-box, your computer\. Its reply shows in this thread\./.test(status()), 'the line after sending');
   ask.focus(); ask.readInput(); await until(() => ask.__listener, 'message box'); ask.clearValue(); v.input.write('@sa');
   await until(() => rows().some(row => /^@sara-box your computer · waiting for it to confirm$/.test(row)), 'the @ list of Chats');
 });

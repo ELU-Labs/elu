@@ -26,7 +26,7 @@ import { applyTask, createAsk, getAsk } from '../lib/peer/asks.mjs';
 import { hostMethods } from '../lib/peer/remote.mjs';
 import { peerItems } from '../lib/peer/index.mjs';
 import { boardRows, remoteRow, rowBadge, rowTitle } from '../lib/board.mjs';
-import { teamPanes, visible } from '../lib/terminal-visuals.mjs';
+import { clockTime, teamPanes, visible } from '../lib/terminal-visuals.mjs';
 import { remoteSessions as remoteGlue } from '../lib/terminal-remote.mjs';
 
 // A message from another computer started a session here, and the session failed. The
@@ -200,7 +200,7 @@ test('the sender keeps the reason, and Chats shows it whole: failed, why, and th
     applyTask(ctx, kai, a2aTask({ id: 'task-waits', contextId: waiting.threadId, statusMessage: waits }), waiting.id);
     const row = peerItems().find(item => item.id === `asked:${waiting.id}`);
     assert.equal(row.state, 'submitted'); assert.equal(row.note, waits);
-    assert.equal(rowsOf([row], 200)[1], `   ↳ submitted · ${waits}`);
+    assert.equal(rowsOf([row], 200)[1], `   ↳ delivered at ${clockTime(row.deliveredAt)} · ${waits}`);
     // Once it runs, the note is gone.
     applyTask(ctx, kai, a2aTask({ id: 'task-waits', contextId: waiting.threadId, state: TaskState.WORKING }));
     assert.equal(peerItems().find(item => item.id === `asked:${waiting.id}`).note, undefined);

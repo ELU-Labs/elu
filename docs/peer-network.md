@@ -134,7 +134,7 @@ Task state mapping:
 | ELU | A2A |
 |---|---|
 | waiting for the owner to approve | SUBMITTED |
-| run in progress | WORKING |
+| run in progress | WORKING, with ext metadata `{session: "<its name>"}` once it has a session that Sessions lists there |
 | reply held for the owner's approval | WORKING, with ext metadata `{substate: "awaiting-owner"}` |
 | reply sent | COMPLETED, with the reply as one Artifact (text part) |
 | owner declined, or blocked by policy or caps | REJECTED, with a reason message |
@@ -142,6 +142,15 @@ Task state mapping:
 | asker cancelled | CANCELED |
 
 A FAILED task says why, and the one thing to do (`lib/peer/failure.mjs`): the stop line the answering machine shows its own user, put for a reader who is not at it. It names that machine (`@name` as the team calls its owner; its machine name for the owner's other computers), as in "Grok Build is signed out. Sign Grok Build in on @kai, then send it again." A teammate gets it with paths cut and no account named, a trusted teammate and the owner's other computers with paths kept, and a reason that may hold a secret stays on the answering machine. It is at most 300 characters. A SUBMITTED task may carry a message too: a machine with no project for teammates' messages says so, and what to do there, while the message waits for its owner. The sender shows both under its message in Chats and in the opened thread. A machine on 0.1.19 or earlier sends only "The run failed.", which the sender shows as "The run failed on @name. Update ELU there to see why."
+
+The sender follows its message (`sentState` in `lib/terminal-visuals.mjs`), in the line under the chat after it is sent (read again every two seconds while it is still the line shown) and in the reply row of its thread:
+
+- **Not connected yet.** The message is kept in `peer/asks/<id>.json` (`pending`) and goes by itself when that computer connects. The line says that first when the roster shows it offline: "@name is offline (1m). Your message goes as soon as it connects.", with how long it has waited.
+- **Delivered.** The first Task that comes back sets `deliveredAt`: "Delivered to @name at 20:14.", with what the message waits for there when that computer says it. To another computer of the owner's that has not marked this one back, it adds what ends that wait ("Waiting for it to confirm: on @name, type /mine @this-computer."); that it waits is never said with no reason.
+- **Started there.** A WORKING Task whose ext metadata names the session (`session`, the name its row in Sessions has on that computer) is kept as `startedAs`: 'Started on @name as session "<name>".' A teammate's question, which is answered in its thread there and not listed as a session, names none and reads "@name is working on it."
+- **Answered, or failed there.** "@name answered. The reply is in Chats." or "Failed on @name: <the reason and the one thing to do>".
+
+The answering machine keeps the same failure in its own words (`failure` on the record: the stop line of the session there, as its row in Sessions and the session itself show it). Its thread in Chats shows it under the message ("your model could not answer · <reason>"), the line under its chat says once that a message from @name failed there and why, and `elu peers` prints it whole: `failed  @name  <message> · <reason>`, on the sender's side with the reason that came back.
 
 ## Your other computers
 
