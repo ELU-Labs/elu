@@ -5129,6 +5129,20 @@ test('Usage at 80x24 and at 140x50: Down from the last account goes into Top age
   }
 });
 
+test('Usage with no agent today: Down from the last account goes to its line in Top agents, which offers t, and Up goes back', { timeout: 30000 }, async t => {
+  const p = setup(t), v = await view(t, { repo: p.repo, usage: fakeUsage(t) }), panels = v.current.panels, list = panels.usageList;
+  const rowOf = pattern => list.items.findIndex(item => pattern.test(item.getText()));
+  await send(v, '/usage'); await until(() => v.current.view === 'usage' && rowOf(/^No agent has run today\.$/) >= 0 && rowOf(/^Grok Build/) >= 0, 'the accounts and the empty list');
+  list.focus(); await until(() => v.current.screen.focused === list, 'list focused');
+  list.select(rowOf(/^Grok Build/)); v.input.write('\x1b[B');
+  await until(() => list.selected === rowOf(/^No agent has run today\.$/), 'Down from Grok Build to the line');
+  await until(() => panels.keys.getText().trim() === 'r refresh  t 7 days  tab next', 'the keys of that line');
+  v.input.write('\x1b[A'); await until(() => list.selected === rowOf(/^Grok Build/), 'Up back to Grok Build');
+  // Down from that line, the last one, leaves the list for the message box.
+  v.input.write('\x1b[B'); await until(() => list.selected === rowOf(/^No agent has run today\.$/), 'Down again');
+  v.input.write('\x1b[B'); await until(() => v.current.screen.focused === panels.ask, 'the message box');
+});
+
 test('Usage: a signs another account in with the vendor\'s own sign-in, Enter makes new turns use it, and x forgets only ELU\'s copy after y/N', { timeout: 30000 }, async t => {
   const p = setup(t), asked = [], fakeFile = path.join(p.dir, 'fake.json');
   const signInAs = loginAs => fs.writeFileSync(fakeFile, JSON.stringify({ ...JSON.parse(fs.readFileSync(fakeFile, 'utf8')), accounts: { loginAs, plan: 'Pro' } }));
