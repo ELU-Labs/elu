@@ -1,10 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { stopLine, logCause, logLimit, limitOf } from '../lib/stop-line.mjs';
-import { boardRows, rowTitle } from '../lib/board.mjs';
+import { stopLine, errorText, logCause, logLimit, limitOf } from '../lib/stop-line.mjs';
+import { boardRows, remoteRow, rowTitle } from '../lib/board.mjs';
+import { failureLine } from '../lib/peer/failure.mjs';
 import { STUCK_LINE } from '../lib/runner.mjs';
 import * as claude from '../lib/adapters/claude.mjs';
 import { signInCommand } from '../lib/vendors.mjs';
@@ -25,11 +27,28 @@ test("the owner's stopped session: 0.1.9's time limit, kept as could not finish,
   assert.equal(said({ error: { message: 'Antigravity could not finish.', cause: 'unknown', timedOut: true, stoppedBy: 'quiet' } }).text, 'Stopped before it finished. Your changes are kept. Type continue to carry on.');
 });
 
-test("0.1.11's quiet and cap lines already say what to do, and stay as they are", () => {
-  for (const message of ['Stopped after 10 minutes with no output. Your changes are kept. Reply to carry on.', 'Stopped after 2 hours, the most one turn may run. Reply to carry on.']) {
-    const stop = said({ error: { message, cause: 'quiet', timedOut: true, stoppedBy: 'quiet' } });
-    assert.equal(stop.text, message); assert.equal(stop.action, 'Reply to carry on.'); assert.equal(stop.short, 'reply to carry on');
-  }
+test("0.1.11's quiet line already says what to do, and stays as it is", () => {
+  const message = 'Stopped after 10 minutes with no output. Your changes are kept. Reply to carry on.';
+  const stop = said({ error: { message, cause: 'quiet', timedOut: true, stoppedBy: 'quiet' } });
+  assert.equal(stop.text, message); assert.equal(stop.action, 'Reply to carry on.'); assert.equal(stop.short, 'reply to carry on');
+});
+
+// 0.1.19 and earlier stopped a turn that had run two hours, working or not. This version has
+// no such limit, and a session stopped that way says so, however long ago it was saved.
+test('a session an earlier version stopped at its two-hour cap reads as stopped by a time limit this version does not have', () => {
+  const cap = { message: 'Stopped after 2 hours, the most one turn may run. Reply to carry on.', cause: 'time-limit', timedOut: true, stoppedBy: 'cap', logFile: null };
+  const stop = said({ kind: 'conversation', error: cap });
+  assert.equal(stop.text, 'Stopped by a time limit an earlier version had. Reply to carry on.');
+  assert.equal(stop.action, 'Reply to carry on.'); assert.equal(stop.short, 'reply to carry on');
+  // An editing turn's changes are on disk, as its own line said.
+  assert.equal(said({ error: { ...cap, message: 'Stopped after 2 hours, the most one turn may run. Your changes are kept. Reply to carry on.' } }).text, 'Stopped by a time limit an earlier version had. Your changes are kept. Reply to carry on.');
+  // A vendor over ACP that reported only that it could not finish, stopped at the cap.
+  assert.equal(said({ kind: 'conversation', error: { message: 'Antigravity could not finish.', cause: 'unknown', timedOut: true, stoppedBy: 'cap' } }).text, 'Stopped by a time limit an earlier version had. Reply to carry on.');
+  assert.equal(said({ error: { message: 'Antigravity could not finish.', cause: 'unknown', timedOut: true, stoppedBy: 'cap' } }).text, 'Stopped by a time limit an earlier version had. Your changes are kept. Reply to carry on.');
+  assert.doesNotMatch(stop.text, /2 hours|most one turn/);
+  // Its details say the same, and every other error reads there as it was saved.
+  assert.equal(errorText(session({ kind: 'conversation', error: cap })), 'Stopped by a time limit an earlier version had. Reply to carry on.');
+  assert.equal(errorText(session({ error: { message: 'The model could not finish.', cause: 'unknown', timedOut: true } })), 'The model could not finish.'); assert.equal(errorText(session({})), '');
 });
 
 test('a turn that could not finish names the cause when it is known, then the one thing to do', () => {
@@ -46,6 +65,54 @@ test('a turn that could not finish names the cause when it is known, then the on
   assert.equal(said({ error: { message: '@scout could not finish.', cause: 'rate-limit' } }).text, '@scout could not finish: the account hit its rate limit. Switch account in Usage, or type continue to try again.');
   // What Claude printed on stderr stays, with the action after it.
   assert.equal(said({ error: { message: 'The model could not finish. Error: sandbox required but unavailable', cause: 'unknown' } }).text, 'The model could not finish. Error: sandbox required but unavailable. Type continue to try again.');
+});
+
+// A run whose program never began: a wrapper of claude that could not start it printed why,
+// and the run ended with nothing in its log. What it printed stays, but none of its words is
+// the owner's action ("again" in them is no "try again"): the way on is to check the command,
+// on this computer, and from the other computer that sent the message. Its Sessions row says
+// as much where the whole action does not fit, here and there.
+test("a run whose program never began says what it printed, then to check its command; its words are never the owner's action, and its rows say it did not start", t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'stop-line-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const empty = path.join(dir, 'empty.log'); fs.writeFileSync(empty, '');
+  const message = 'The model could not finish. claude: the command could not start: it calls itself (a wrapper of claude found claude again)';
+  const failed = session({ title: 'Fix the footer links on the shop page', error: { message, cause: 'unknown', logFile: empty } });
+  const stop = stopLine(failed, { account: none });
+  assert.equal(stop.text, `${message}. Check that claude runs in your terminal, then type continue.`);
+  assert.equal(stop.action, 'Check that claude runs in your terminal, then type continue.');
+  // With no log to read, its words are still not the action: it is tried again.
+  assert.equal(stopLine(session({ error: { message, cause: 'unknown', logFile: null } }), { account: none }).text, `${message}. Type continue to try again.`);
+  // Its row here: the name, then the action where it fits; else that it did not start, never the name alone.
+  const now = Date.parse(at) + 60000, [row] = boardRows([{ name: 'shop', root: '/p/shop', activity: [], tasks: [failed], queue: [] }], now);
+  assert.equal(rowTitle(row, now), 'Fix the footer links on the shop page · check that claude runs in your terminal, then type continue');
+  assert.equal(rowTitle(row, now, 60), 'Fix the footer links on the shop page · claude did not start');
+  assert.equal(rowTitle(row, now, 24), 'claude did not start · Fix the footer links on the shop page');
+  // Narrower than those three words, as at 80 columns: what happened comes first, and whole.
+  assert.equal(rowTitle(row, now, 16), 'did not start · Fix the footer links on the shop page');
+  // The computer that sent it is told the same, with the way on from there.
+  const line = failureLine({ task: failed, at: '@devbox', mine: true });
+  assert.equal(line, `${message}. Check that claude runs in your terminal on @devbox, then send it again.`);
+  // And its row there says the same.
+  const there = { ...remoteRow({ id: crypto.randomUUID(), machine: 'd'.repeat(64), state: 'blocked', title: 'Fix the footer links on the shop page', error: line, createdAt: at, lastAt: at, entries: [], steps: [], approvals: [] }, 'devbox', now), grouped: true };
+  assert.equal(rowTitle(there, now), 'Fix the footer links on the shop page · check that claude runs in your terminal');
+  assert.equal(rowTitle(there, now, 30), 'claude did not start · Fix the footer links on the shop page');
+  assert.equal(rowTitle(there, now, 16), 'did not start · Fix the footer links on the shop page');
+});
+
+test("a run whose program's release could not be read never started: it says to check its command, here and on the computer that sent it, and its rows say it did not start", () => {
+  // As it is kept: the check refused it before any turn, so no run is recorded.
+  const message = 'Claude Code: This CLI is older than the oldest tested release, or its version could not be read.';
+  const failed = session({ kind: 'conversation', title: 'Fix the footer links on the shop page', runs: [], error: { message } });
+  const stop = stopLine(failed, { account: none });
+  assert.equal(stop.text, `${message} Check that claude runs in your terminal, then type continue.`);
+  const codex = stopLine(session({ runs: [], error: { message: 'Codex: This CLI is older than the oldest tested release, or its version could not be read.' } }), { account: none });
+  assert.equal(codex.action, 'Check that codex runs in your terminal, then type continue.');
+  const now = Date.parse(at) + 60000, [row] = boardRows([{ name: 'shop', root: '/p/shop', activity: [], tasks: [failed], queue: [] }], now);
+  assert.equal(rowTitle(row, now, 40), 'claude did not start · Fix the footer links on the shop page');
+  const line = failureLine({ task: failed, at: '@devbox', mine: true });
+  assert.match(line, /Check that claude runs in your terminal on @devbox, then send it again\.$/);
+  const there = { ...remoteRow({ id: crypto.randomUUID(), machine: 'd'.repeat(64), state: 'blocked', title: 'Fix the footer links on the shop page', error: line, createdAt: at, lastAt: at, entries: [], steps: [], approvals: [] }, 'devbox', now), grouped: true };
+  assert.equal(rowTitle(there, now, 30), 'claude did not start · Fix the footer links on the shop page');
 });
 
 test("an unknown cause is read from the run log's last result line: credits, rate limit, sign-in, network; a turn that went on to finish is no failure", t => {
@@ -211,7 +278,7 @@ test("a Claude run refused with an API error keeps Claude's words and gets the a
 
 test("a bot's or a reviewer's failed run names that run's vendor, not the lead's", () => {
   const runs = [{ role: 'lead', vendor: 'claude', at, logFile: '/runs/lead.log' }, { role: 'bot:checker', vendor: 'agy', at, logFile: '/runs/checker.log' }, { role: 'lead', vendor: 'claude', at, logFile: '/runs/lead-2.log' }];
-  assert.equal(said({ runs, error: { message: 'Antigravity could not finish.', cause: 'auth', logFile: '/runs/checker.log' } }).text, 'Antigravity could not finish: Antigravity CLI is signed out. Sign it in with s on its line in the Usage tab, then type continue.');
+  assert.equal(said({ runs, error: { message: 'Antigravity could not finish.', cause: 'auth', logFile: '/runs/checker.log' } }).text, 'Antigravity could not finish: Antigravity CLI (the agy command) is signed out. Sign it in with s on its line in the Usage tab, then type continue.');
   // A Codex bot whose log reads as signed out.
   const codex = [...runs, { role: 'bot:critic', vendor: 'codex', at, logFile: '/runs/critic.log' }];
   assert.equal(said({ runs: codex, error: { message: '@critic could not finish.', cause: 'unknown', logFile: '/runs/critic.log' } }, { logCause: () => 'auth' }).text, '@critic could not finish: Codex is signed out. Sign in again with ' + signInCommand('codex') + ', then type continue.');

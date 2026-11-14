@@ -16,6 +16,7 @@ import { readTask, saveTask } from '../lib/state.mjs';
 import { repository } from '../lib/git.mjs';
 import { offerFiles, offerPaths, stageFiles } from '../lib/peer/index.mjs';
 import { BYTES_MAX, FILES_MAX, PIECE, collectFiles, inboxRoot, landFiles, namedPaths, pathsInText, pieces, stageFiles as stageCollected, stagedFiles, takePiece } from '../lib/peer/files.mjs';
+import { checkFolders } from '../lib/modes.mjs';
 import { sessionReads } from '../lib/session-reads.mjs';
 import { remoteSessions as remoteGlue } from '../lib/terminal-remote.mjs';
 import * as claude from '../lib/adapters/claude.mjs';
@@ -134,6 +135,30 @@ test('a typed message offers the files it names, and they land whole in the sess
 
 // A message longer than one line on the link goes ahead of the last piece in elu.text.put
 // pieces (lib/peer/texts.mjs), and that piece names it: the session gets every character.
+// XDG_DATA_HOME is ELU's data folder wherever it is, as for the stand-in commands of the
+// never list: files sent with /send land there, not in .local/share of the home folder, and
+// the session may read them there in Ask for approval too.
+test('files sent to a session land under XDG_DATA_HOME, even outside the home folder, and the session may read them there', async t => {
+  const data = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'elu-code-data-'))); t.after(() => fs.rmSync(data, { recursive: true, force: true }));
+  process.env.XDG_DATA_HOME = data; t.after(() => { delete process.env.XDG_DATA_HOME; });
+  const p = pair(t), b = batch(t), files = withHome(p.laptop.home, () => stageFiles(offerPaths([b.key])));
+  await withHome(p.laptop.home, () => remoteCommand(p.viewCtx, { type: 'remoteFiles', id: p.id, to: p.devbox.identity.key, ref: p.ref, text: 'Here is the key.', files }));
+  withHome(p.devbox.home, () => {
+    const [request] = requestsFor(p.project.root), dir = landedDir(request.goal), inbox = path.dirname(dir);
+    assert.equal(inboxRoot(), path.join(data, 'elu-code', 'inbox'));
+    assert.ok(dir.startsWith(path.join(data, 'elu-code', 'inbox') + path.sep), dir); assert.ok(!dir.startsWith(HOME), 'not in the home folder');
+    assert.equal(fs.existsSync(path.join(HOME, '.local', 'share', 'elu-code', 'inbox', path.basename(inbox))), false);
+    assert.equal(fs.readFileSync(path.join(dir, 'id_ed25519'), 'utf8'), 'PRIVATE KEY');
+    const repo = repository(p.project.root), task = readTask(repo, '1');
+    assert.deepEqual(task.folders, [inbox], 'one of its folders, though outside the home folder');
+    const args = claude.compile({ role: { ...defaultConfig().roles.lead }, mode: 'ask', folders: task.folders, cwd: task.worktree, protectedPaths: ['.git'], commonDir: repo.common, session: crypto.randomUUID(), approval: { tool: APPROVAL_TOOL }, mcp: { file: path.join(os.tmpdir(), 'mcp.json'), names: [APPROVAL_SERVER] } });
+    assert.equal(args[args.indexOf(inbox) - 1], '--add-dir');
+  });
+  // Any other folder outside the home folder is still refused outside Full access.
+  assert.throws(() => checkFolders([data], { mode: 'ask' }), /Folders must be inside your home, not your home itself\./);
+  assert.throws(() => checkFolders([path.join(data, 'elu-code', 'inbox')], { mode: 'ask' }), /Folders must be inside your home/, 'the whole inbox is not one session\'s');
+});
+
 test('a message too long for one line on the link goes with its files whole, named on the last piece of the send', async t => {
   const p = pair(t), b = batch(t), put = textMethods(p.hostCtx, {})['elu.text.put'];
   p.toViewer.request = (method, params) => { p.calls.push([method, params]); return withHome(p.devbox.home, () => (method === 'elu.text.put' ? put : p.host[method])(params, p.toHost)); };
@@ -265,7 +290,7 @@ test('the message box offers the files a message names: y sends them with it, n 
     assert.equal(command.type, 'remoteFiles'); assert.equal(command.text, `Here is the key: ${b.key}`); assert.equal(command.files.count, 1); assert.ok(options.timeoutMs >= 60000);
     // n: the text alone, as before.
     assert.equal(await glue.send(row, `Here is the key: ${b.key}`, answer(false)), 'Sent to the session on @devbox.');
-    assert.deepEqual(commands.at(-1)[0], { type: 'remoteSend', id: row.id, text: `Here is the key: ${b.key}` });
+    assert.deepEqual(commands.at(-1)[0], { type: 'remoteSend', id: row.id, text: `Here is the key: ${b.key}`, typed: true });
     // A message that names nothing here is not asked about.
     const count = asked.length;
     await glue.send(row, 'And the tests in /no/such/folder', answer(true));

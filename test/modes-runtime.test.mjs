@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { temp, project, fakeClis, git, autoApprove } from './helpers.mjs';
-import { ProjectController } from '../lib/projects.mjs';
+import { ProjectController, conversationEntries } from '../lib/projects.mjs';
 import { projectFolder, pendingRequests, saveRequest, updateRequest } from '../lib/workspace.mjs';
 import { repository } from '../lib/git.mjs';
 import { taskDir, readTask, saveTask, lock } from '../lib/state.mjs';
@@ -20,7 +20,7 @@ import { FULL_REPLY, READ_ONLY_REPLY, promptRules } from '../lib/runner.mjs';
 import { helperPrompt } from '../lib/adapters/claude.mjs';
 import { ruleFor, saveRule } from '../lib/permission-rules.mjs';
 import { turnClock } from '../lib/turn-limits.mjs';
-import { runSteps } from '../lib/run-activity.mjs';
+import { runSteps, runsOfEntries } from '../lib/run-activity.mjs';
 
 // Sessions with permissions, end to end against the fake CLIs.
 // The personal directory (XDG_CONFIG_HOME) and HOME both point into the test folder, so a
@@ -245,7 +245,7 @@ test('a schedule gets Full access only when the owner picked it; an automatic re
 test("a bot's own scheduled turn runs with Full access in a Full access session; the model and the bot are told about /schedule", async t => {
   const f = setup(t, 'answer');
   saveBot({ name: 'nightly', vendor: 'claude', instructions: 'Tidy the notes.', schedule: 'every 1h' });
-  const chat = await f.controller.ask('Run the backlog check every 3 hours.', null, { bots: ['nightly'], permissions: 'full' }).finished;
+  const chat = await f.controller.ask('Check the build every 3 hours.', null, { bots: ['nightly'], permissions: 'full' }).finished;
   assert.equal(chat.permissions, 'full');
   assert.match(SCHEDULE_NOTE, /typing \/schedule, a time such as every 3h, and the message/); assert.match(SCHEDULE_NOTE, /you cannot create schedules or cron jobs yourself/);
   assert.ok(f.inputs()[0].input.includes(SCHEDULE_NOTE), "the model's answer turn is told");
@@ -316,7 +316,7 @@ test('place branch runs in a worktree with that branch checked out, as it is', a
   await assert.rejects(f.controller.ask('Normalize coupon codes', null, { permissions: 'auto', place: 'branch:feat/missing' }).finished, /Branch not found: feat\/missing/);
 });
 
-test('place here runs in the checkout itself with a dirty tree; checks keep the network on in full', async t => {
+test('place here runs in the checkout itself with a dirty tree; in full the checks run with no sandbox', async t => {
   const f = setup(t);
   fs.writeFileSync(path.join(f.root, 'src/owner.mjs'), 'export const owner = true;\n');
   const head = git(f.root, ['rev-parse', 'HEAD']);
@@ -331,9 +331,9 @@ test('place here runs in the checkout itself with a dirty tree; checks keep the 
   const names = task.evidence.results.map(row => row.name);
   assert.ok(!names.includes('secret-paths') && names.includes('no-deleted-tests'));
   for (const name of ['changed-lines', 'no-binary-changes', 'protected-paths', 'unchanged-scripts', 'no-dependency-changes']) assert.equal(names.includes(name), false, `${name} is skipped in full`);
-  const sandboxed = f.calls().filter(call => call.vendor === 'codex' && call.args[0] === 'sandbox' && call.args.includes('--'));
-  assert.ok(sandboxed.length >= 1, 'the checks ran in the sandbox');
-  assert.ok(sandboxed.every(call => call.args.some(arg => arg.includes('network={enabled=true}'))), 'full keeps the network on for checks');
+  // Full access is everything: the checks ran, and passed, as in the owner's terminal, with the network and no sandbox.
+  assert.ok(task.evidence.results.some(row => row.logFile && row.status === 'passed'), JSON.stringify(task.evidence.results));
+  assert.deepEqual(f.calls().filter(call => call.vendor === 'codex' && call.args[0] === 'sandbox'), [], 'no check ran in a sandbox');
   // A `here` task on the default branch has no branch of its own to publish; nothing is committed first.
   await assert.rejects(f.controller.pushPlan(task.id), /default branch/);
   assert.equal(git(f.root, ['rev-parse', 'HEAD']), head);
@@ -497,10 +497,16 @@ test('a session reads the .npmrc its repository tracks in Full and in Ask; an un
   }
 });
 
-// The turn limits, shrunk for a test: a turn that prints nothing for quietSeconds stops.
-function quickClock(t, quietSeconds = 2, capSeconds = 7200) {
-  const before = { ...turnClock }; Object.assign(turnClock, { quietSeconds, capSeconds }); t.after(() => Object.assign(turnClock, before));
+// The quiet limit, shrunk for a test: a turn that prints nothing for quietSeconds stops.
+// was: the two hours at which 0.1.19 and earlier stopped a turn that still worked, shrunk
+// the same way. Nothing reads it now, so a test that names it shows a turn outlasting it.
+function quickClock(t, quietSeconds = 2, was = 7200) {
+  const before = { ...turnClock }; Object.assign(turnClock, { quietSeconds, capSeconds: was }); t.after(() => { delete turnClock.capSeconds; Object.assign(turnClock, before); });
 }
+// What the stand-in Claude Code does besides its mode (test/fakes/claude.mjs).
+const fakeSet = (f, more) => { const file = path.join(f.fake.dir, 'fake.json'); fs.writeFileSync(file, JSON.stringify({ ...JSON.parse(fs.readFileSync(file, 'utf8')), ...more })); };
+// The lines ELU wrote in a session's chat.
+const eluLines = task => (task.messages ?? []).filter(row => row.from === 'ELU' && row.line).map(row => row.text);
 
 test('a turn that keeps printing is never cut by the clock, even past a timeoutSeconds the policy names', async t => {
   const f = setup(t, 'chatty'); quickClock(t);
@@ -512,7 +518,31 @@ test('a turn that keeps printing is never cut by the clock, even past a timeoutS
   assert.ok(task.runs.filter(run => run.role === 'lead').every(run => run.code === 0));
 });
 
-test('a turn that prints nothing for the quiet limit stops with one line, keeps its edits, and a frozen 900 reads as the default', async t => {
+// In Approve for me and Full access a turn the quiet limit stopped is told to carry on by ELU,
+// once, in the vendor session it stopped in, and the chat says so in one line.
+test('a quiet turn in Full access or Approve for me is carried on by ELU once, with one line in the chat, and goes on to its answer', async t => {
+  const f = setup(t, 'answer'); quickClock(t); fakeSet(f, { quiet: 'once' });
+  for (const mode of ['full', 'auto']) {
+    const before = f.leads().length, task = await f.controller.ask('Where is coupon normalization?', null, { permissions: mode }).finished;
+    assert.equal(task.state, 'answered', `${mode}: ${task.error?.message}`); assert.equal(task.error, null);
+    assert.deepEqual(eluLines(task), ['No output for 2 seconds. ELU told it to carry on.'], mode);
+    const [first, second] = f.leads().slice(before), inputs = f.inputs().slice(before); assert.equal(f.leads().length - before, 2, 'the turn that went quiet, and the one started in its place');
+    assert.equal(valueOf(second.args, '--resume'), valueOf(first.args, '--session-id'), 'it goes on in the session that went quiet');
+    assert.doesNotMatch(inputs[0].input, /printed nothing for/); assert.match(inputs[1].input, /Your last turn in this session printed nothing for 2 seconds, so ELU stopped it and started this one in its place\. Carry on from where it stopped/);
+    assert.deepEqual(task.runs.filter(run => run.role === 'lead').map(run => run.code === 0), [false, true], 'the quiet run stays in the chat with its steps');
+    // In the chat: what the quiet run did, then ELU's line, then the reply with the steps of the run that carried on.
+    const entries = conversationEntries(f.controller.repo, task), line = entries.find(entry => entry.role === 'ELU'), placed = runsOfEntries(entries, task.runs);
+    assert.deepEqual(entries.map(entry => entry.role === 'ELU' ? 'line' : entry.lead ? 'reply' : 'you'), ['you', 'line', 'reply']);
+    assert.deepEqual(placed.before.get(line), [task.runs[0]]); assert.deepEqual(placed.owned.get(entries.at(-1)), [task.runs[1]]);
+  }
+  // A session a teammate's message started as the owner's own (team access Auto) is carried on as his own is.
+  const before = f.leads().length, origin = { kind: 'handoff', peer: 'b'.repeat(64), name: 'sara', a2aTaskId: 'task-1', threadId: 'thread-1', hop: 1, own: true };
+  const theirs = await f.controller.ask('Work on the handoff from @sara shown in the peer data block.', null, { origin, context: 'Where is coupon normalization?', permissions: 'full' }).finished;
+  assert.equal(theirs.state, 'answered', theirs.error?.message); assert.deepEqual(eluLines(theirs), ['No output for 2 seconds. ELU told it to carry on.']);
+  assert.equal(f.leads().length - before, 2, 'the turn that went quiet, and the one started in its place');
+});
+
+test('a turn that goes quiet again after ELU carried it on stops with one line, keeps its edits, and a frozen 900 reads as the default', async t => {
   const f = setup(t, 'stall'); quickClock(t);
   // A session from before: its policy was frozen with the old default, which nobody chose.
   f.controller.draftConfig.roles.lead.timeoutSeconds = 900; f.controller.draftConfig.checks = [];
@@ -522,8 +552,22 @@ test('a turn that prints nothing for the quiet limit stops with one line, keeps 
   const task = readTask(f.controller.repo, run.id);
   assert.match(fs.readFileSync(path.join(taskDir(f.controller.repo, task.id), 'policy.yaml'), 'utf8'), /timeoutSeconds: 900/, 'the frozen policy still says 900 and still loads');
   assert.equal(task.state, 'blocked'); assert.equal(task.error.message, 'Stopped after 2 seconds with no output. Your changes are kept. Reply to carry on.');
+  assert.deepEqual([task.error.cause, task.error.stoppedBy], ['quiet', 'quiet']);
   assert.doesNotMatch(task.error.message, /could not finish/);
+  assert.deepEqual(eluLines(task), ['No output for 2 seconds. ELU told it to carry on.'], 'carried on once, and only once');
+  assert.equal(task.runs.filter(run => run.role === 'lead' && run.code !== 0).length, 2, 'the editing turn went quiet twice');
   assert.equal(fs.readFileSync(path.join(task.worktree, 'src/coupon.mjs'), 'utf8'), 'export const normalize = (value) => value.toUpperCase();\n', 'the edit stays on disk');
+});
+
+test('a quiet turn in Ask for approval or Read only stops and says so, as before: ELU carries nothing on there', async t => {
+  const f = setup(t, 'answer'); quickClock(t); fakeSet(f, { quiet: 'once' });
+  for (const mode of ['ask', undefined]) {
+    const before = f.leads().length, run = f.controller.ask('Where is coupon normalization?', null, mode ? { permissions: mode } : {});
+    await assert.rejects(run.finished, /Stopped after 2 seconds with no output\. Reply to carry on\.$/, String(mode));
+    const task = readTask(f.controller.repo, run.id);
+    assert.equal(task.state, 'blocked'); assert.equal(task.error.message, 'Stopped after 2 seconds with no output. Reply to carry on.');
+    assert.deepEqual(eluLines(task), [], `${mode}: nothing was carried on`); assert.equal(f.leads().length - before, 1, `${mode}: one launch`);
+  }
 });
 
 test('a turn that answered ends at its result: the command it left running in the background is stopped and named', async t => {
@@ -575,12 +619,27 @@ test('a silent command whose heartbeats come further apart than the quiet limit 
   assert.deepEqual([call?.status, call?.seconds >= 90], ['ok', true], `the step counts what the heartbeats said: ${JSON.stringify(call)}`);
 });
 
-test('a command that never ends still stops the turn at the cap, in one line', async t => {
-  const f = setup(t, 'normal', { commands: ['sleep 60'] }); quickClock(t, 1, 3); f.controller.draftConfig.checks = [];
-  const started = Date.now(), run = f.controller.ask('Normalize coupon codes', null, { permissions: 'full' });
-  await assert.rejects(run.finished, /Stopped after 3 seconds, the most one turn may run\. /);
-  assert.ok(Date.now() - started < 30000, 'stopped by the cap, not by the command ending');
-  assert.doesNotMatch(readTask(f.controller.repo, run.id).error.message, /no output/);
+// The owner's case: a long review in Full access had worked for two hours when 0.1.19 stopped
+// it at its cap. A turn that works runs until it ends: here its command outlasts that cap, shrunk.
+test('a turn whose command runs past the cap an earlier version had is not stopped: no clock cuts a turn that works', async t => {
+  const f = setup(t, 'normal', { commands: ['sleep 5'] }); quickClock(t, 1, 3); f.controller.draftConfig.checks = [];
+  const started = Date.now(), task = await f.controller.ask('Normalize coupon codes', null, { permissions: 'full' }).finished;
+  assert.ok(['ready', 'unverified'].includes(task.state), task.error?.message); assert.equal(task.error ?? null, null);
+  assert.ok(Date.now() - started > 10000, 'the planning turn and the editing turn each ran past the three seconds');
+  const leads = task.runs.filter(run => run.role === 'lead'); assert.ok(leads.length >= 2 && leads.every(run => run.code === 0));
+  assert.deepEqual(eluLines(task), [], 'and nothing had to be carried on');
+});
+
+test('a turn that keeps printing past the cap an earlier version had is not stopped, in Read only as in Full access', async t => {
+  const f = setup(t, 'chatty'); quickClock(t, 1, 2); f.controller.draftConfig.checks = [];
+  // The stand-in prints a line every 200 ms for five seconds, then answers.
+  fakeSet(f, { ticks: 25, intent: 'answer' });
+  for (const mode of [undefined, 'full']) {
+    const started = Date.now(), task = await f.controller.ask('Where is coupon normalization?', null, mode ? { permissions: mode } : {}).finished;
+    assert.ok(['answered', 'needs_input', 'ready', 'unverified'].includes(task.state), `${mode}: ${task.error?.message}`);
+    assert.ok(Date.now() - started > 5000, `${mode}: it printed for five seconds`);
+    assert.ok(task.runs.every(run => run.code === 0), String(mode));
+  }
 });
 
 // A check is a command too: one that prints nothing for long, such as a slow test suite, is
@@ -594,13 +653,14 @@ test('a check that prints nothing for longer than the quiet limit and timeoutSec
   assert.equal(task.state, 'ready', task.error?.message);
 });
 
-test('a check that never ends is stopped at the cap of a turn and says so', async t => {
+test('a check that runs past the cap an earlier version had passes: a check has no time limit', async t => {
   const f = setup(t); quickClock(t, 1, 3);
-  f.controller.draftConfig.checks = [{ name: 'endless-tests', command: ['sh', '-c', 'sleep 60'] }];
+  f.controller.draftConfig.checks = [{ name: 'long-tests', command: ['sh', '-c', 'sleep 6'] }];
   const started = Date.now(), task = await f.controller.ask('Normalize coupon codes', null, { permissions: 'full' }).finished;
-  const check = task.evidence.results.find(row => row.name === 'endless-tests');
-  assert.deepEqual([check.status, check.details], ['failed', ['Stopped after 3 seconds, the most one check may run.']], JSON.stringify(check));
-  assert.ok(Date.now() - started < 40000, 'stopped by the cap, not by the command ending');
+  const check = task.evidence.results.find(row => row.name === 'long-tests');
+  assert.deepEqual([check.status, check.details], ['passed', undefined], JSON.stringify(check));
+  assert.ok(Date.now() - started > 6000, 'the check ran to its end');
+  assert.equal(task.state, 'ready', task.error?.message);
 });
 
 test('bypassPermissions never asks: a full session touches without an approval', async t => {
@@ -776,7 +836,7 @@ test('a rule kept once answers the next session; defaults never ask; the never l
   assert.deepEqual(theirs.asked.map(row => [row.summary, row.rules]), [['Run: npm test outside the sandbox', 'defaults']]);
   assert.deepEqual(theirs.task.approvals.map(row => [row.decision, row.by ?? null]), [['allow', 'default'], ['deny', null]]);
   // One the owner's own other computer started (origin.mine, lib/peer/remote.mjs) uses his rules.
-  const mine = await settle(f.controller.ask('Run the tests.', null, { mine: { machine: 'c'.repeat(64), name: 'aki', remoteId: '0f0e0d0c-0b0a-4908-8706-050403020100' }, permissions: 'ask' }));
+  const mine = await settle(f.controller.ask('Run the tests.', null, { mine: { machine: 'c'.repeat(64), name: 'rio', remoteId: '0f0e0d0c-0b0a-4908-8706-050403020100' }, permissions: 'ask' }));
   assert.deepEqual(mine.asked, []); assert.equal(mine.task.origin.mine, true); assert.equal(mine.task.origin.peer, undefined);
   assert.deepEqual(mine.task.approvals.map(row => [row.decision, row.by, row.rule]), [['allow', 'default', 'git status'], ['allow', 'rule', 'npm test']]);
 });

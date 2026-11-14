@@ -18,7 +18,7 @@ session; a turn that is not your own session's runs read only.
 | Your environment | a short list (`PATH`, `HOME`, language, temp folder) | same | same | all of it: your SSH agent, your GitHub and cloud sign-ins, your proxy |
 | Never list (push, tag, merge, deploy, publish) | blocked | blocked; every escape asks | stand-in commands and, except on Codex, deny rules; a command that gets past them gets through if the reviewer allows it | none: the model runs them without asking |
 | Runs in | worktree | worktree or a named branch | same | also here |
-| Checks | sandboxed, no network, structural limits | same | no network; dependency files may change | network on; no structural limit blocks, what one finds is shown as a note |
+| Checks | sandboxed, no network, structural limits | same | no network; dependency files may change | no sandbox, as in your terminal; no structural limit blocks, what one finds is shown as a note |
 
 Secrets here are files Git does not track whose names look like secrets: `.env*`, `.npmrc`,
 `.netrc`, `.pypirc`, `auth.json`, `credentials`, `credentials.json`, `id_rsa`, `id_ed25519`,
@@ -53,6 +53,14 @@ Full access is everything. A turn that runs with it has no limit of ELU's:
   what one finds is shown as a note.
 - **Approvals.** Once a session has Full access, ELU allows everything its running turn
   asks, a removal and an MCP tool included.
+- **No wait.** A message runs at once. The one-time check of Antigravity and Grok Build
+  proves the other three modes and nothing Full access needs, so a Full access turn never
+  runs it and never waits for one, its own or another session's
+  ([Grok Build](vendors/grok.md#the-one-time-check)).
+- **Publishing.** `/publish` pushes to the pull request that is open for the branch,
+  such as one the model opened itself, whether or not it is a draft, and leaves its text
+  as it is. Below Full access `/publish` pushes only to a branch with no pull request, or
+  with one draft it can keep as a draft.
 
 What stays, and why:
 
@@ -65,8 +73,8 @@ What stays, and why:
   output. On Claude Code your own MCP servers are on, as in every mode (`/mcp`). Codex,
   Grok Build and Antigravity get no MCP servers from ELU in any mode.
 - A turn has to answer in the form ELU reads, and a turn that prints nothing for 10
-  minutes, or runs 2 hours, is stopped ([How long a turn runs](#how-long-a-turn-runs)).
-  That is how a vendor that hangs is told from one that works.
+  minutes is stopped ([How long a turn runs](#how-long-a-turn-runs)). That is how a
+  vendor that hangs is told from one that works. A turn that works is never stopped.
 - Codex cannot ask you a question in the middle of a turn: nobody could answer it there.
 - Grok Build and Antigravity do not start in your home itself: each loads settings from
   `~` that ELU cannot turn off (Grok Build the agents, plugins and permission rules of your
@@ -86,11 +94,11 @@ What stays, and why:
   - Claude Code and Codex run in your home.
 - What a vendor asks in every mode, ELU answers for you with yes, at once. Claude Code
   asks before `rm` or `rmdir` on your home, the working folder or a top-level folder.
-- Who gets Full access: your own sessions, the schedules of their bots, and the schedules
-  you pick it for. A bot's scheduled turn runs in its session's mode, Full access included.
-  A request to the local A2A endpoint is your own and runs your default mode as it is. A
-  teammate's message that starts by itself runs with Approve for me at most, and a
-  teammate's question runs read only.
+- Who gets Full access: your own sessions, the schedules of their bots, the schedules you
+  pick it for, and a session a teammate's message starts as your own: in your default mode
+  with team access Auto or your y, in the mode you pick with w. A bot's scheduled turn runs
+  in its session's mode, Full access included. A request to the local A2A endpoint is your
+  own and runs your default mode as it is. A teammate's question runs read only.
 
 Everything in the sections below about deny rules, the never list, the sandbox and
 approvals holds in the other modes.
@@ -282,18 +290,39 @@ and nothing is refused, and the task keeps each as allowed by Full access.
 
 ### How long a turn runs
 
-A turn that is still working is never cut by the clock. It is stopped only when the vendor
-has printed nothing for 10 minutes, or after 2 hours, a safety cap. A command the model runs
-counts as working for as long as it runs, even when it prints nothing, such as a long test
-run: the 10 minutes count only while no command is running. Time a request waits for you
-counts toward neither, and the 10 minutes start again once it is answered. A stopped turn
-says so in the chat in one line, such as "Stopped after 10 minutes with no output. Your
+A turn that is still working runs until it ends, however long that takes, in every mode: no
+clock of ELU's stops work. It is stopped only when the vendor has printed nothing for 10
+minutes. A command the model runs counts as working for as long as it runs, even when it
+prints nothing, such as a long test run: the 10 minutes count only while no command is
+running. Time a request waits for you does not count, and the 10 minutes start again once
+it is answered.
+
+In Approve for me and Full access ELU tells a turn that went quiet to carry on, once, and
+the chat says so: "No output for 10 minutes. ELU told it to carry on." If the same turn goes
+quiet again, it stops. In Ask for approval and Read only it stops the first time. A stopped
+turn says so in the chat in one line, such as "Stopped after 10 minutes with no output. Your
 changes are kept. Reply to carry on." Its edits stay on disk, and your next message carries
 on. `roles.lead.timeoutSeconds` in `.elu-code/config.yaml` sets the 10 minutes; the 900 it
-says by default means the default, as 600 does. A vendor that prints its answer only at
-the end (Antigravity and Grok Build without the live relay) has the cap alone. So does each
-of the project's checks: a check runs until it ends, up to the same 2 hours, however long it
-prints nothing.
+says by default means the default, as 600 does.
+
+A vendor that prints its answer only at the end (Antigravity and Grok Build without the live
+relay) has no clock at all: silence says nothing about it, so it runs until it ends or you
+`/stop` it. So does each of the project's checks: a check runs until it ends, however long
+that takes.
+
+A push with `/publish` has no time limit either, in every mode, and nor do the project's
+pre-push guards it runs. A guard, or the push itself, that prints nothing for 10 minutes is
+stopped and says so: "Stopped the pre-push guard after 10 minutes with no output. Nothing was
+pushed."
+A guard that fails says so with the last lines it printed: "The pre-push guard failed, so
+nothing was pushed. It said: …"
+ELU 0.1.24 and earlier stopped a guard, and the push, after 2 minutes; a session from then
+keeps its guards again, without that limit, at its next `/publish`.
+
+ELU 0.1.19 and earlier also stopped a turn after 2 hours, working or not. A session stopped
+that way says "Stopped by a time limit an earlier version had. Reply to carry on." In Approve
+for me and Full access ELU carries it on by itself the next time the app opens, once, and
+says so in the chat.
 
 The keys are `y` allow and `n` deny, each followed by Enter. Where the session can
 be given Full access there is a third, `f`: it asks what `/permissions full` asks,
@@ -414,9 +443,10 @@ Who approves the Task depends on the session's mode:
 | Approve for me, Full access | The mode approves it. It is written and shown like any other, marked `approved by Approve for me` or `approved by Full access`, nobody waits, and the work goes on in the same message. |
 
 In Approve for me and Full access the agent is never told that you must approve first, and
-you never type an approval. Work that changes no repository file, such as running a
-command or reading logs, is done in the turn that writes the Task. Work that changes the
-repository goes on in the editing turn right after it. A Task that waited from before
+you never type an approval. That holds whoever started the turn: you, a schedule, a bot's
+own schedule, or a teammate's message you work on as your own. Work that changes no
+repository file, such as running a command or reading logs, is done in the turn that
+writes the Task. Work that changes the repository goes on in the editing turn right after it. A Task that waited from before
 starts when you give its session one of these modes, or with your next message there.
 
 ELU enforces this much, on every vendor:
@@ -437,8 +467,8 @@ ELU enforces this much, on every vendor:
   approval in other words goes to the session there, as any message typed over it does.
   After `@here` either one is a message for your agent here. A teammate's message, a
   schedule and a bot's own turn cannot approve a Task.
-- A mode approves a Task only in your own session. A session a teammate's message started
-  keeps your approval in every mode (see below).
+- A mode approves a Task in your own session, and in one a teammate's message started that
+  you work on as your own (see below). A teammate's question makes no Task.
 - A Task is read as untrusted text. The title is one line of up to 80 characters; the
   description up to 2000; the goal up to 500; one to eight objectives of up to 300 each;
   the priority is urgent, high, medium or low; the severity is critical, high, medium or
@@ -467,18 +497,21 @@ there is the mode:
 
 Some turns wait for nobody in any mode:
 
-- A session a schedule starts, and a bot's own scheduled turn, have nobody to approve.
-  The Task is recorded as started by schedule and the work goes on.
+- A session a schedule starts, and a bot's own scheduled turn, have nobody to approve. In
+  Approve for me and Full access the turn is the one you get when you type the message: the
+  mode approves the Task, and the work is done in the same run, a job that changes no file
+  too. In Read only and Ask for approval the agent plans first, the Task is recorded as
+  started by schedule, and an edit goes on.
 - A teammate's handoff you chose to work on with `w` records its Task as started by a
-  handoff and goes on.
+  handoff and goes on. In Approve for me and Full access the mode approves it, as above.
 - A teammate's question and any read-only turn change nothing and make no Task.
 - `elu run "<goal>"` on the command line makes no Task.
 
-A teammate's message that starts a session by itself (Auto) or that you approve with y is
-not among them: that session runs in your default mode, Full access included, as if you
-had typed the message yourself, and its Task waits for your approval as one you asked for
-in Ask for approval would, whatever the mode. A later message in its thread runs in the
-session's mode at the time, Full access included.
+A teammate's message that starts a session by itself (Auto) or that you approve with y
+runs as if you had typed it yourself, in your default mode, Full access included. In
+Approve for me and Full access the mode approves its Task and the work starts at once; in
+Ask for approval the Task waits for your y. A later message in its thread, and a message
+you type there yourself, runs in the session's mode at the time, the same way.
 
 ### When something fails, and when the work is done
 
@@ -580,9 +613,10 @@ profile lets it, and has no profile for `bwrap`. This one does, saved as
 and loaded once with `sudo apparmor_parser -r /etc/apparmor.d/bwrap`. Nothing is
 installed or changed for you.
 
-The check sandbox (`codex sandbox`), which runs every project's checks whatever the
-vendor, is bubblewrap on Linux too. The Linux tests run with `bubblewrap` installed
-and an AppArmor profile like this one loaded.
+The check sandbox, which runs every project's checks outside Full access whatever the
+vendor, is bubblewrap on Linux too: through `codex sandbox` where Codex is installed,
+and started by ELU itself where it is not. The Linux tests run with `bubblewrap`
+installed and an AppArmor profile like this one loaded.
 
 ## Claude Code
 

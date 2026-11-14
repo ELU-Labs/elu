@@ -134,7 +134,7 @@ test('Changes: the line under the mouse shows a +, and one click on that + opens
   assert.deepEqual(marked(), [], 'no + before the mouse or the cursor is on a line');
   // The mouse over the text of a line: its + shows at the start of the row. The cursor stays where it was.
   v.move(added.mark + 20, added.y); await until(() => marked().length, 'a + beside the line under the mouse');
-  assert.deepEqual(marked(), [at(NEW)]); assert.ok(v.lines()[0].startsWith('▌'), 'the cursor has not moved');
+  assert.deepEqual(marked(), [at(NEW)]); assert.ok(v.lines()[at('▾ lib/price.mjs')].startsWith('▌'), 'the cursor has not moved: it is on the file, where the view put it');
   // It follows the mouse to the next line, and a row that is no line shows none.
   v.move(removed.mark + 3, removed.y); await until(() => marked()[0] === at(OLD), 'the + on the line the mouse moved to');
   assert.deepEqual(marked(), [at(OLD)]);
@@ -157,9 +157,10 @@ test('Changes: at 80 columns in colour, under a Task that waits for approval, th
   v.click(removed.mark, removed.y); await v.type('Note', 'Say why this went');
   await until(() => v.lines().some(line => /✎ Say why this went/.test(line)), 'the note under its line');
   v.input.write('s'); await until(() => /Sent your note to the model\./.test(v.status()), 'the note is sent');
-  // The two rows of the status as the screen draws them: what waits, its keys whole to Enter, and the message under it.
+  // The two rows of the status as the screen draws them: what waits, its keys whole to Enter, the Task's name
+  // in the room left, and the message under it.
   const status = v.current.panels.status, drawn = v.screen().slice(status.atop, status.atop + status.height).map(row => row.slice(status.aleft, status.aleft + status.width).trimEnd());
-  assert.deepEqual(drawn, ['? Esc, then y approve · n reject, then Enter', '› Sent your note to the model.']);
+  assert.deepEqual(drawn, ['? y approve · n reject, Enter · Task: Upperc...', '› Sent your note to the model.']);
 });
 
 test('Changes: the row of a session whose Task waits for approval names d, and d then Enter opens its Changes before the Task is approved', async t => {

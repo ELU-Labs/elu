@@ -28,8 +28,10 @@ with a line that tells the model you wrote again during its turn and that its re
 that too. Claude Code takes a user message that comes while it works in at the turn's next
 step, and the turn goes on with it; the one reply answers everything. For a message with a
 uuid it writes `command_lifecycle` lines (`queued`, `started`, `completed`, or `cancelled`).
-Until `started`, the message waits in the chat with "Waiting for the current command to
-finish." under it: behind one long command, the next step is when that command ends. Once
+Until `started`, the chat says under the message "The running turn reads it when the
+command it is running ends." while a command runs: behind one long command, the next step
+is when that command ends. While none runs it says "The running turn reads it at its next
+step.", and the status line says the same as the chat when the message is sent. Once
 `started` comes, the chat shows your message where you sent it, with "Sent to the running
 turn." under it, and the session's history keeps it once. Several go in the order you sent
 them. Only a message for the one working turns go: yours to the model while the model
@@ -46,8 +48,9 @@ same session, with nothing started again. `↑` takes a waiting message back wit
 `{"subtype":"cancel_async_message","message_uuid":...}`; one the turn already took stays
 sent, and the chat says so. All of this is used only when the run's first line names the
 capabilities `msg_lifecycle_v1` and `interrupt_send_now_v1`. A Claude Code release that
-names neither gets no message while it works: there a message waits for the turn to end,
-and Enter stops the turn first, as on the other vendors. Read from the 2.1.322 program; the
+names neither gets no message while it works: there a message is answered at once beside
+the turn, by a short read-only run on the session's model, and Enter stops the turn first,
+as on the vendors that take none. Read from the 2.1.322 program; the
 messages above were driven with the stand-in CLI, not yet with the real service.
 
 A turn ends at its `result` line. When Claude Code is still there three seconds after it,

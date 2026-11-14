@@ -23,7 +23,6 @@ import { saveRemotePlans } from '../lib/peer/plans.mjs';
 import { approveStandup, hostStandup, hostStandupRead, teamStandupAsk, teamStandupCommand, teamStandupRead, waitingStandups } from '../lib/peer/standup.mjs';
 import { remoteCommand } from '../lib/peer/remote.mjs';
 import { FRAME_MAX } from '../lib/peer/transport.mjs';
-import { peerRunUsd } from '../lib/adapters/claude.mjs';
 import { STANDUP_QUESTION, newRound, standupOpen, standupStage } from '../lib/standup.mjs';
 import { runStandupRound, standupPlan } from '../lib/standup-round.mjs';
 import { boardsFor } from '../lib/standup-kanban.mjs';
@@ -59,7 +58,7 @@ function answering(controller, done) {
     }
   })();
 }
-const TIMES = { pollMs: 20, remoteMs: 20, waitMs: 0, capMs: 20000 };
+const TIMES = { pollMs: 20, remoteMs: 20, waitMs: 60000, capMs: 20000, recordsMs: 20 };
 
 test('a round and its questions are never run again on their own after a rate limit; other work is', t => {
   const f = setup(t), conductor = new Conductor();
@@ -128,6 +127,38 @@ test("the summary turn only answers: Full access runs as Approve for me, with no
   assert.equal(valueOf(inputs(f.fake).at(-1).args, '--tools'), 'default', 'his own messages keep the tools of his mode: every tool in Full access');
 });
 
+test('a summary reply that asks to edit is taken as an answer: the Standup ends, never left preparing', async t => {
+  const f = setup(t);
+  await f.controller.ask('Explain coupons').finished;
+  // A vendor that does not hold its reply to the schema says edit, as the stand-in does in normal mode.
+  const file = path.join(f.fake.dir, 'fake.json'); fs.writeFileSync(file, JSON.stringify({ ...JSON.parse(fs.readFileSync(file, 'utf8')), mode: 'normal' }));
+  let over = false; const loop = answering(f.controller, () => over);
+  const standup = await f.controller.ask('/standup', null, { standup: true }).finished;
+  over = true; await loop;
+  assert.match(inputs(f.fake).at(-1).input, /Give a short summary/);
+  assert.equal(readTask(f.repo, standup.id).state, 'answered');
+  assert.equal(readTask(f.repo, standup.id).codingGoal, undefined);
+});
+
+// A Standup in a mode that approves Tasks by itself: its summary's edit is never a Task that
+// mode approves, which left the Standup preparing, and running in Sessions, until his next message.
+for (const [permissions, label] of [['full', 'Full access'], ['auto', 'Approve for me']]) {
+  test(`a Standup in ${label} whose summary reply asks to edit ends answered, with no Task its mode approves, never left preparing`, async t => {
+    const f = setup(t);
+    await f.controller.ask('Explain coupons').finished;
+    const file = path.join(f.fake.dir, 'fake.json'); fs.writeFileSync(file, JSON.stringify({ ...JSON.parse(fs.readFileSync(file, 'utf8')), mode: 'normal' }));
+    let over = false; const loop = answering(f.controller, () => over);
+    const standup = await Promise.race([f.controller.ask('/standup', null, { standup: true, permissions }).finished, sleep(20000).then(() => null)]);
+    over = true; await loop;
+    assert.ok(standup, 'the Standup turn finishes');
+    const saved = readTask(f.repo, standup.id);
+    assert.equal(saved.permissions, permissions);
+    assert.equal(saved.state, 'answered');
+    assert.equal(saved.codingGoal, undefined);
+    assert.equal(saved.result?.intent, 'answer');
+  });
+}
+
 test("a Claude Code session answers in a fork of its vendor session; its next turn resumes its own", async t => {
   const f = setup(t);
   // The fake Claude Code lists --fork-session in its help, as the real one does.
@@ -181,7 +212,8 @@ test('a session another computer would not ask is dropped without a word, and no
   const { task, listed } = await runStandupRound(f.repo, standup.id, { sources: { computers, teammates: () => [], peer }, times: TIMES });
   assert.equal(listed, 0);
   assert.doesNotMatch(task.messages.map(row => row.text).join('\n'), /Old chat/);
-  assert.equal(task.messages.at(-1).text, 'Standup done · 0 sessions on 0 computers · 0 not asked');
+  assert.equal(task.messages.at(-1).text, 'Standup done · 0 sessions on 0 computers · 0 model updates · 0 not asked');
+  assert.match(task.messages.find(row => row.standupChat && row.line).text, /^No session is open to ask/);
 });
 
 test("a teammate's round spends from their allowance, is checked again when approved, and an older conductor there is told back", async t => {
@@ -202,29 +234,29 @@ test("a teammate's round spends from their allowance, is checked again when appr
   saveRemotePlans(sara, [{ repoId: shared.repoId, handle: 'shop', id: 't-0a1b2c3d', revision: 1, title: 'Private plan of sara', description: 'Text', goal: 'Ship it.', objectives: ['One'], priority: 'high', severity: 'critical', state: 'approved', startedBy: 'owner', who: 'Opus 5.5', subtasks: [], met: [], approvedAt: new Date().toISOString(), doneAt: null, updatedAt: new Date().toISOString() }]);
   await controller.ask(STANDUP_QUESTION, task.id, { standupFor: { round: newRound(), by: 'You' } }).finished;
   assert.match(inputs(fake).at(-1).input, /Private plan of sara/, "the owner's own round is told teammates' Tasks");
-  // Auto: each session asked is one of sara's runs here and reserves what one run may spend.
+  // Auto: the round is one of sara's requests here; nothing is spent before an update runs.
   saveTeamAccess(teamId, { handling: 'auto' });
   const round = newRound();
   assert.equal(teamStandupAsk(ctx, sara, { round, cards: [card.id] }).state, 'asked');
-  assert.deepEqual([readCaps().peers[sara].runs, readCaps().peers[sara].usd], [1, peerRunUsd()]);
+  assert.deepEqual([readCaps().peers[sara].runs, readCaps().peers[sara].usd], [1, 0]);
   const [request] = pendingRequests(p.root).filter(value => value.standupFor?.round === round);
   await controller.ask(request.goal, task.id, { standupFor: request.standupFor }).finished;
   assert.doesNotMatch(inputs(fake).at(-1).input, /Private plan of sara/);
   assert.equal(teamStandupRead(sara, { round }).answers.length, 1);
-  assert.equal(readCaps().peers[sara].usd, 0, 'settled to what the turn cost');
+  assert.equal(readCaps().peers[sara].usd, 0, 'counted at what the turn cost');
   teamStandupRead(sara, { round });
-  assert.equal(readCaps().peers[sara].usd, 0, 'settled once');
+  assert.equal(readCaps().peers[sara].usd, 0, 'counted once');
   // Past the day's requests a session is not asked, and the asker reads why.
   savePeerSettings({ caps: { peerRunsPerDay: 1 } });
   const full = newRound();
   teamStandupAsk(ctx, sara, { round: full, cards: [card.id] });
   assert.equal(pendingRequests(p.root).filter(value => value.standupFor?.round === full).length, 0);
-  assert.deepEqual(teamStandupRead(sara, { round: full }).answers.map(value => [value.text, value.failed]), [['It was not asked: the daily request limit for this teammate.', true]]);
+  assert.deepEqual(teamStandupRead(sara, { round: full }).answers.map(value => [value.text, value.failed]), [["Not asked: you have used the 1 request a day this teammate's computer allows you.", true]]);
   // To another computer of its owner's this machine is a computer, never a teammate.
   noteTheirs(sara, true);
   const fullMine = newRound();
   teamStandupAsk(ctx, sara, { round: fullMine, cards: [card.id] });
-  assert.deepEqual(teamStandupRead(sara, { round: fullMine }).answers.map(value => [value.text, value.failed]), [['It was not asked: the daily request limit for this computer.', true]]);
+  assert.deepEqual(teamStandupRead(sara, { round: fullMine }).answers.map(value => [value.text, value.failed]), [['Not asked: you have used the 1 request a day this computer allows you.', true]]);
   noteTheirs(sara, false);
   savePeerSettings({ caps: { peerRunsPerDay: 20 } });
   // Manual: a teammate muted after asking is declined when the owner says y.
@@ -239,6 +271,47 @@ test("a teammate's round spends from their allowance, is checked again when appr
   // Their conductor runs an older build: told back as older, never as an empty answer.
   const older = await teamStandupCommand({ ...ctx, session: () => ({ remoteHello: { cards: 1, standup: 1 }, request: async () => ({ older: true }) }) }, { type: 'teamStandup', to: sara, round: newRound(), cards: [card.id] });
   assert.deepEqual(older, { older: true });
+});
+
+test("a teammate's standup asks every session: each model update counts what it cost, and a limit truly reached is said plainly on each line", async t => {
+  const { teamId, founder, member } = makeTeam(t);
+  const p = project(t), fake = fakeClis(p.parent, { mode: 'answer' }); environment(t, { ...fake.env, XDG_CONFIG_HOME: founder.home });
+  const file = path.join(fake.dir, 'fake.json'); fs.writeFileSync(file, JSON.stringify({ ...JSON.parse(fs.readFileSync(file, 'utf8')), spend: { model: 'claude-opus-5-5', tokens: [10, 200, 3000, 400], usd: 0.15 } }));
+  git(p.root, ['remote', 'add', 'origin', 'https://github.com/example/shop.git']);
+  const controller = new ProjectController(projectFolder(p.root)); controller.draftConfig.checks = []; registerProject(controller.repo);
+  for (let n = 1; n <= 26; n++) await controller.ask(`Question ${n}: what does coupons do?`).finished;
+  const repos = localRepos(), [row] = repos.values(), sara = member.identity.key, ctx = { me: founder.identity, repos: () => repos, kick: () => {}, event: () => {} };
+  saveProofs(sara, [repoProof(sara, founder.identity.key, row.repoId, row.commit)]);
+  const rows = sessionCards({ owner: 'ana', repos }), cards = rows.map(value => value.card);
+  assert.deepEqual([cards.length, cards.every(card => card.standup)], [26, true]);
+  saveTeamAccess(teamId, { handling: 'auto' });
+  const near = (value, wanted) => assert.ok(Math.abs(value - wanted) < 1e-6, `${value}, not ${wanted}`);
+  const answer = async round => { for (const request of pendingRequests(p.root).filter(value => value.standupFor?.round === round)) await controller.ask(request.goal, request.continuationTaskId, { standupFor: request.standupFor }).finished; return teamStandupRead(sara, { round }).answers; };
+  // With the limits as they come, all 26 are asked and answer. The round is one request; each
+  // update counts what it cost, and nothing is held or spent before one runs.
+  const round = newRound(), asked = teamStandupAsk(ctx, sara, { round, cards: cards.map(card => card.id) });
+  assert.deepEqual([asked.state, asked.asked.length, asked.skipped.length], ['asked', 26, 0]);
+  assert.deepEqual([readCaps().peers[sara].runs, readCaps().peers[sara].usd], [1, 0]);
+  const answers = await answer(round);
+  assert.equal(answers.length, 26); assert.deepEqual(answers.filter(value => value.failed).map(value => value.text), []);
+  assert.equal(readCaps().peers[sara].runs, 1); near(readCaps().peers[sara].usd, 26 * 0.15);
+  // A limit truly reached: no session is asked, and each line says which limit, plainly.
+  savePeerSettings({ caps: { peerUsdPerDay: 3.95 } });
+  const over = newRound(); teamStandupAsk(ctx, sara, { round: over, cards: cards.slice(0, 2).map(card => card.id) });
+  assert.equal(pendingRequests(p.root).filter(value => value.standupFor?.round === over).length, 0);
+  assert.deepEqual((await answer(over)).map(value => [value.text, value.failed]), Array(2).fill(["Not asked: you have used the $3.95 a day this teammate's computer allows you.", true]));
+  // Reached while the round runs: an update that would pass it is not run, and its session's chat here says why.
+  savePeerSettings({ caps: { peerUsdPerDay: 5 } });
+  const late = newRound(); teamStandupAsk(ctx, sara, { round: late, cards: cards.slice(0, 2).map(card => card.id) });
+  savePeerSettings({ caps: { peerUsdPerDay: 3.95 } });
+  assert.deepEqual((await answer(late)).map(value => [value.text, value.failed]), Array(2).fill(["Not asked: you have used the $3.95 a day this teammate's computer allows you.", true]));
+  const said = readTask(controller.repo, rows[0].taskId).messages.find(value => value.standup === late && value.failed);
+  assert.deepEqual([said.text, said.sent], ['Not asked: @sara has used the $3.95 a day this computer allows them.', "Not asked: you have used the $3.95 a day this teammate's computer allows you."]);
+  near(readCaps().peers[sara].usd, 26 * 0.15);
+  // The team's limit here, the same way.
+  savePeerSettings({ caps: { peerUsdPerDay: 5, teamUsdPerDay: 3.95 } });
+  const team = newRound(); teamStandupAsk(ctx, sara, { round: team, cards: [cards[0].id] });
+  assert.deepEqual((await answer(team)).map(value => value.text), ["Not asked: your team has used the $3.95 a day this teammate's computer allows it."]);
 });
 
 // What a session answers leaves its computer whole, for my other computer and for a teammate:

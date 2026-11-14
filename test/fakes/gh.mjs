@@ -7,6 +7,10 @@
 //   gh api gists/ID                                     the gist, files with their content
 //   gh api -X POST gists --input -                      a new gist from stdin
 //   gh api -X PATCH gists/ID --input -                  the files named on stdin replaced, the rest kept
+// and the one call lib/pulls.mjs makes:
+//   gh pr list --head BRANCH --state all --limit N --json number,url,state
+//                                                       the pull requests of that branch, a JSON list, from
+//                                                       $FAKE_GH_STORE/pulls.json: { BRANCH: [{ number, url, state }] }
 // The signed-in account is FAKE_GH_ACCOUNT (a login; none means signed out) with id
 // FAKE_GH_ID. Gists are kept per account in $FAKE_GH_STORE/<login>.json, and every call is
 // appended to $FAKE_GH_STORE/calls.jsonl. FAKE_GH_MODE: signedout, noscope (a token without
@@ -19,8 +23,9 @@ const args = process.argv.slice(2), env = process.env, store = env.FAKE_GH_STORE
 const input = args.includes('--input') ? fs.readFileSync(0, 'utf8') : '';
 if (store) fs.appendFileSync(path.join(store, 'calls.jsonl'), `${JSON.stringify({ account: login, args, input: input ? JSON.parse(input) : null })}\n`);
 const fail = (text, code = 1) => { process.stderr.write(`${text}\n`); process.exit(code); };
-if (args[0] !== 'api') fail(`unknown command "${args[0]}" for "gh"`);
-if (mode === 'slow') setInterval(() => {}, 1000);
+if (args[0] === 'pr') pulls();
+else if (args[0] !== 'api') fail(`unknown command "${args[0]}" for "gh"`);
+else if (mode === 'slow') setInterval(() => {}, 1000);
 else {
   if (mode === 'signedout' || !login) fail('To get started with GitHub CLI, please run:  gh auth login\nAlternatively, populate the GH_TOKEN environment variable with a GitHub API authentication token.', 4);
   if (mode === 'error') { process.stdout.write('{"message":"Server Error"}'); fail('gh: Server Error (HTTP 502)'); }
@@ -68,6 +73,13 @@ function main() {
     }
     fail(`fake gh: unknown call ${args.join(' ')}`);
   });
+}
+function pulls() {
+  if (mode === 'signedout' || !login) fail('To get started with GitHub CLI, please run:  gh auth login\nAlternatively, populate the GH_TOKEN environment variable with a GitHub API authentication token.', 4);
+  const head = args.indexOf('--head');
+  if (args[1] !== 'list' || head < 0 || !args.includes('--json')) fail(`fake gh: unknown call ${args.join(' ')}`);
+  let known = {}; try { known = JSON.parse(fs.readFileSync(path.join(store, 'pulls.json'), 'utf8')); } catch { /* No pull request yet. */ }
+  process.stdout.write(`${JSON.stringify(known[args[head + 1]] ?? [])}\n`);
 }
 function listed(gist) { return { ...gist, files: Object.fromEntries(Object.entries(gist.files).map(([name, file]) => [name, { filename: name, size: file.content.length }])) }; }
 function file() { return path.join(store, `${login}.json`); }

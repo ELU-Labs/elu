@@ -34,7 +34,8 @@ node --test test/schedules.test.mjs     # one file
 - The sandbox tests use the sandbox helper that ships with Codex, and are skipped when
   `codex` is not installed. CI installs the tested release first:
   `npm install --global --ignore-scripts @openai/codex@0.166.0-alpha.5.1`, and on Linux
-  also `bubblewrap`.
+  also `bubblewrap`. The tests of the system's own sandbox (`test/system-sandbox.test.mjs`)
+  run where bubblewrap (Linux) or sandbox-exec (macOS) is.
 - The peer tests run on a local test network; nothing leaves your computer.
 - `npm run test:live` calls the real Claude Code and costs money. Its tests are skipped
   unless `ELU_CODE_LIVE=1` is set.

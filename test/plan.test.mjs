@@ -12,6 +12,7 @@ import { boardRows, rowBadge } from '../lib/board.mjs';
 import { clockTime, etaText, taskCard as drawCard, taskState } from '../lib/terminal-plan.mjs';
 import { visible } from '../lib/terminal-visuals.mjs';
 import { atomic, personalDirectory } from '../lib/util.mjs';
+import { saveBot } from '../lib/bots.mjs';
 import { ADAPTERS } from '../lib/adapters/index.mjs';
 // The card as its text reads on screen, without the style marks.
 const taskCard = (plan, options) => visible(drawCard(plan, options));
@@ -401,7 +402,7 @@ test('the card and the list row say what waits, and markup in a Task shows as ty
   const asked = await f.controller.ask('Uppercase coupon codes').finished, plan = currentTask(f.repo, asked.id);
   const card = taskCard(plan, { width: 60, colour: false });
   assert.match(card, /^Task · waits for your approval\nUppercase coupons\nmedium priority · low severity\nETA not set\n/);
-  assert.match(card, /Goal: Coupon codes compare equal whatever their case\.\nObjectives\n  1\. normalize returns the code in upper case\n  2\. The coupon test passes\nSuccess criteria · not set\nEsc, then y approve · n reject, then Enter · or type what to change$/);
+  assert.match(card, /Goal: Coupon codes compare equal whatever their case\.\nObjectives\n  1\. normalize returns the code in upper case\n  2\. The coupon test passes\nSuccess criteria · not set\ny approve · n reject, then Enter · or type what to change$/);
   assert.match(taskCard(plan, { width: 60, colour: false, approval: true }), /y and n answer the approval below first/);
   assert.match(taskCard({ ...plan, revision: 3 }, { width: 60, colour: false }), /^Task · waits for your approval · revision 3\n/);
   const working = { ...plan, state: 'approved', subtasks: [{ id: 's1', text: 'Change normalize', state: 'done' }, { id: 's2', text: 'Run the test', state: 'doing' }, { id: 's3', text: 'Tidy', state: 'todo' }], met: [1] };
@@ -569,14 +570,70 @@ test('work that edits no file: Full access does it in the turn that writes the T
   assert.ok(after.messages.some(row => row.text === 'Approved the Task: Check the coupon build'));
 });
 
-test("a session a teammate's message started keeps the owner's approval in every mode, and a schedule keeps its own rule", t => {
+test("a schedule's turn and a handoff take the session's mode as the owner's own turn does; a teammate's question has none", t => {
   const dir = temp(t);
   assert.equal(approvesTasks('full'), true); assert.equal(approvesTasks('auto'), true); assert.equal(approvesTasks('ask'), false); assert.equal(approvesTasks('locked'), false); assert.equal(approvesTasks(null), false);
   const repo = { root: dir, common: path.join(dir, '.git') };
-  // The runner gives a teammate's session no mode here (mode: null), and an unattended turn keeps its own rule.
+  // The runner gives a teammate's question no mode (mode: null): nothing approves for it.
   assert.equal(turnPlan(repo, '1', { mode: null, owner: false }).approves, null);
-  assert.equal(turnPlan(repo, '1', { mode: 'full', unattended: 'schedule' }).approves, null);
+  // Approve for me and Full access approve whoever started the turn; Ask for approval keeps the rule each has.
+  for (const unattended of [false, 'schedule', 'handoff']) {
+    for (const mode of ['full', 'auto']) assert.equal(turnPlan(repo, '1', { mode, unattended }).approves, mode, `${mode} ${unattended}`);
+    assert.equal(turnPlan(repo, '1', { mode: 'ask', unattended }).approves, null);
+  }
   assert.equal(turnPlan(repo, '1', { mode: 'full', owner: true }).approves, 'full'); assert.equal(turnPlan(repo, '1', { mode: 'full', owner: true }).mayApprove, false);
+});
+
+// The owner's every-3-hours jobs run scripts, record verdicts and report: they change no file.
+// A schedule he saved with Full access or Approve for me does such a job in its run, as his own
+// turn in that mode does, and never says that a Task waits for his approval.
+for (const [mode, name] of [['full', 'Full access'], ['auto', 'Approve for me']]) {
+  test(`a schedule saved with ${name} does a job that changes no file in its run, and its Task is approved by ${name}`, async t => {
+    const f = fixture(t, 'ops', 'claude', { tells: true });
+    const done = await f.controller.ask('Review the session backlog and report what is left', null, { timed: true, permissions: mode }).finished;
+    assert.equal(done.state, 'answered'); assert.equal(done.runs.length, 1); assert.match(done.result.summary, /Ran the build check: it passed\./);
+    assert.doesNotMatch(done.result.summary, /for your approval/);
+    const task = currentTask(f.repo, done.id);
+    assert.deepEqual([task.title, task.state, task.approvedBy, task.startedBy, task.met], ['Check the coupon build', 'done', mode, 'schedule', [1, 2]]);
+    const told = inputs(f)[0].input;
+    assert.match(told, new RegExp(`This session runs with ${name}, which approves the Task: it is recorded as approved by ${name}, nobody has to approve it, and the work goes on at once\\.`));
+    assert.match(told, /Work that changes no repository file, such as running commands, reading logs or operating a tool, do now, in this turn/);
+    assert.doesNotMatch(told, /Plan first|change nothing in this turn|only after they approve/);
+    assert.match(taskCard(task, { width: 70, colour: false }), new RegExp(`approved by ${name}\n`));
+  });
+}
+
+test('a schedule saved with Full access makes its edit with the Task approved by Full access, and one in Ask for approval keeps the rule it had', async t => {
+  const f = fixture(t, 'normal', 'claude', { tells: true });
+  const done = await f.controller.ask('Uppercase coupon codes', null, { timed: true, permissions: 'full' }).finished;
+  assert.notEqual(done.kind, 'conversation'); assert.match(fs.readFileSync(path.join(done.worktree, 'src/coupon.mjs'), 'utf8'), /toUpperCase/);
+  const task = currentTask(f.repo, done.id);
+  assert.deepEqual([task.state, task.approvedBy, task.startedBy, task.edit], ['done', 'full', 'schedule', null]);
+  assert.match(inputs(f)[0].input, /nobody has to approve it/); assert.doesNotMatch(inputs(f)[0].input, /Plan first/);
+  assert.match(inputs(f).find(row => row.input.includes('this turn does its work')).input, /This session's Full access approved the Task below, and this turn does its work/);
+  // Ask for approval: the run plans first, its Task is recorded as started by schedule and approved, and the job that changes no file is only written.
+  const ask = fixture(t, 'ops');
+  const asked = await ask.controller.ask('Review the session backlog and report what is left', null, { timed: true, permissions: 'ask' }).finished;
+  const kept = currentTask(ask.repo, asked.id);
+  assert.deepEqual([kept.state, kept.approvedBy, kept.startedBy, kept.met], ['approved', undefined, 'schedule', []]);
+  assert.match(inputs(ask)[0].input, /Plan first\.[^]*A schedule started this turn and nobody is there to approve: the Task is recorded as started by schedule and the work goes on\./);
+  assert.match(taskCard(kept, { width: 70, colour: false }), /started by schedule\n/);
+});
+
+test("a bot's own scheduled turn in a Full access session does a job that changes no file in that turn", async t => {
+  const f = fixture(t, 'answer', 'claude', { home: true });
+  saveBot({ name: 'nightly', vendor: 'claude', instructions: 'Review the session backlog and report what is left.', schedule: 'every 3h' });
+  const chat = await f.controller.ask('Keep the backlog reviewed.', null, { bots: ['nightly'], permissions: 'full' }).finished;
+  assert.equal(currentTask(f.repo, chat.id), null, 'the owner asked a question: no Task yet');
+  // The stand-in now answers as for the job: it changes no file.
+  const settings = path.join(f.fake.dir, 'fake.json'); fs.writeFileSync(settings, JSON.stringify({ ...JSON.parse(fs.readFileSync(settings, 'utf8')), mode: 'ops' }));
+  const asked = inputs(f).length;
+  const run = await f.controller.ask('Do your scheduled work.', chat.id, { bot: 'nightly', scheduled: true }).finished;
+  const task = currentTask(f.repo, chat.id);
+  assert.deepEqual([task.state, task.approvedBy, task.startedBy, task.by, task.met], ['done', 'full', 'schedule', '@nightly', [1, 2]]);
+  assert.ok(run.messages.some(row => row.bot === 'nightly' && /Ran the build check: it passed\./.test(row.text)), JSON.stringify(run.messages));
+  const told = inputs(f).slice(asked).find(row => row.input.includes('You are @nightly')).input;
+  assert.match(told, /This session runs with Full access, which approves the Task/); assert.doesNotMatch(told, /Plan first/);
 });
 
 test('a step that fails is the agent\'s to fix: it goes another way and the work ends done, after an approval and in Full access', async t => {

@@ -8,10 +8,11 @@ import { repository } from '../lib/git.mjs';
 import { readTask } from '../lib/state.mjs';
 import { preparePublish, publish, destination } from '../lib/publish.mjs';
 
-function publishingFixture(t, { ignore = null } = {}) {
+function publishingFixture(t, { ignore = null, guard = false } = {}) {
   const p = project(t); const fake = fakeClis(p.parent);
   assert.equal(cli(p.root, ['init', '--yes'], fake.env).status, 0);
   if (ignore) fs.writeFileSync(path.join(p.root, '.gitignore'), ignore);
+  if (guard) { fs.mkdirSync(path.join(p.root, '.githooks')); fs.writeFileSync(path.join(p.root, '.githooks/pre-push'), '#!/bin/sh\nexit 0\n', { mode: 0o755 }); git(p.root, ['config', 'core.hooksPath', '.githooks']); }
   git(p.root, ['add', '.']); git(p.root, ['commit', '-m', 'Configure checks']);
   const r = cli(p.root, ['run', 'Normalize coupons', '--yes'], fake.env); assert.equal(r.json.state, 'ready', r.stdout);
   git(p.root, ['remote', 'add', 'origin', 'https://github.com/example/sample.git']);
@@ -38,6 +39,14 @@ test('publication needs exact approval, sends no logs, and pushes only the task 
   assert.ok(calls.some((c) => c.kind === 'gh' && c.args.includes('--draft') && c.args.includes('--body-file')));
   assert.equal(git(p.root, ['branch', '--show-current']), 'main');
   await assert.rejects(() => publish(p.repo, p.task, preview.confirmationId), /approval/);
+});
+test("the push guards run as the session's mode is when it publishes: with no sandbox in Full access, in one otherwise", async (t) => {
+  const p = publishingFixture(t, { guard: true }), dispatcher = () => fs.readFileSync(path.join(p.task.hooksDirectory, 'pre-push'), 'utf8');
+  assert.match(dispatcher(), /sandbox=\{"kind":"codex"/, 'kept in a sandbox when the task started');
+  p.task.permissions = 'full'; await preparePublish(p.repo, p.task);
+  assert.equal(p.task.hooksFull, true); assert.match(dispatcher(), /sandbox=null/); assert.equal(readTask(p.repo, '1').hooksFull, true);
+  p.task.permissions = 'ask'; await preparePublish(p.repo, p.task);
+  assert.equal(p.task.hooksFull, false); assert.match(dispatcher(), /sandbox=\{"kind":"codex"/);
 });
 test('a title change or a default-branch destination invalidates publication', async (t) => {
   const p = publishingFixture(t); const preview = await preparePublish(p.repo, p.task);

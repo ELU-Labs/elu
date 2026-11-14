@@ -13,9 +13,9 @@ import { launchTerminal, geometry, plain, foldersNamed } from '../lib/terminal.m
 import { WHEEL_FRAME_MS } from '../lib/wheel.mjs';
 import { projectFolder, saveRequest, pendingRequests, updateRequest } from '../lib/workspace.mjs';
 import { displayText } from '../lib/terminal-visuals.mjs';
-import { vendorText } from '../lib/terminal-commands.mjs';
+import { vendorText, typedCommand, needsArgument } from '../lib/terminal-commands.mjs';
 import { formatResult } from '../lib/format.mjs';
-import { Conductor, enqueue } from '../lib/conductor.mjs';
+import { Conductor, conductorSettings, enqueue } from '../lib/conductor.mjs';
 import { liveTask } from './peer-helpers.mjs';
 import { standIn } from './login-item-helpers.mjs';
 import { readBoard, sessionClosed, closeSession } from '../lib/kanban.mjs';
@@ -153,7 +153,7 @@ function captureFrames(name, frames) {
   const folder = process.env.ELU_CODE_CAPTURE_DIRECTORY; fs.mkdirSync(folder, { recursive: true });
   fs.writeFileSync(path.join(folder, `${name}.json`), JSON.stringify(frames, null, 2));
 }
-// The owner's yes to the Task a request for an edit comes back with: Esc, then y, as its card says.
+// The owner's yes to the Task a request for an edit comes back with: y from its row, after Esc.
 async function approveTask(v) {
   await until(() => /Task · waits for your approval/.test(v.current.panels.chat.getText()), 'the Task to approve', 15000);
   v.input.write('\x1b'); await until(() => v.current.screen.focused !== v.current.panels.ask, 'out of the message box');
@@ -643,44 +643,71 @@ test('a click outside a dialog with typed text keeps the dialog, its text and th
   assert.equal(registeredProjects().length, 1, 'no project was made');
 });
 
+test('/model NAME with no session open opens the new session form on that model, and /model computer takes the name a model is shown by', { timeout: 40000 }, async t => {
+  const p = setup(t, 'answer'), fake = path.join(p.dir, 'fake.json'); registerProject(p.repo);
+  fs.writeFileSync(fake, JSON.stringify({ ...JSON.parse(fs.readFileSync(fake, 'utf8')), models: { opus: 'claude-opus-5-5', sonnet: 'claude-sonnet-5-5' } }));
+  const v = await view(t, { repo: p.repo }), panels = v.current.panels, status = () => panels.status.getText().replace(/\s+/g, ' '), label = () => panels.ask._label.getText();
+  const tasks = () => v.current.controller.snapshot().tasks;
+  const models = () => fs.readFileSync(p.calls, 'utf8').trim().split('\n').map(line => JSON.parse(line)).filter(call => call.vendor === 'claude' && call.args.includes('-p')).map(call => call.args[call.args.indexOf('--model') + 1]);
+  // No session is open, and the new session form is not either: the Projects tab.
+  await send(v, '/projects'); await until(() => v.current.view === 'projects', 'the Projects tab');
+  await send(v, '/model sonnet'); await until(() => /Sonnet for this session\./.test(status()), 'the model is taken, not refused');
+  await until(() => v.current.session === 'new' && /New session → Sonnet · sample app/.test(label()), 'the new session form is open on it');
+  await send(v, 'Where is the cart total?'); await until(() => tasks()[0]?.state === 'answered', 'the model answered');
+  assert.equal(models().at(-1), 'sonnet', 'the first message went to the model named');
+  // The default is as it was: only that session is on it.
+  assert.equal(v.current.controller.startModel().model, 'opus');
+  // This computer's default by a name of two words, as /model and /model default take one: the model and its version.
+  await until(() => /^ Message Sonnet 5\.5 · /.test(label()), 'the box names the model as Sonnet 5.5');
+  await send(v, '/model computer sonnet 5.5'); await until(() => /This computer's default is Sonnet 5\.5 \(claude · claude-sonnet-5-5\)\./.test(status()), 'a name of two words is taken');
+  assert.deepEqual(computerDefault(), { vendor: 'claude', model: 'claude-sonnet-5-5' });
+  await send(v, '/model computer sonnet 5.5 now'); await until(() => /Use \/model computer <name>, or none\./.test(status()), 'a default takes no message'); panels.ask.setValue('');
+  await send(v, '/model computer none'); await until(() => computerDefault() === null, 'no choice again');
+  // The key bar's usage of /model names it, and /model alone still runs: every word of it is optional.
+  assert.equal(typedCommand('/model ').usage, '/model [name [message]|default <name>|computer <name>|add]');
+  assert.equal(needsArgument(typedCommand('/model ')), false);
+});
+
 test("a computer with only Grok Build: the project's settings show its default model and this computer's, Enter picks one, /model computer sets it, and a saved default that is not installed is said", { timeout: 60000 }, async t => {
   const p = setup(t, 'answer'); registerProject(p.repo);
   environment(t, { PATH: vendorPath(p.parent, p.dir, ['grok']).PATH });
   const v = await view(t, { repo: p.repo }), panels = v.current.panels, PAGE = 'Project sample app', status = () => panels.status.getText().replace(/\s+/g, ' ');
   const page = async () => { await send(v, '/projects'); await until(() => v.current.view === 'projects' && panels.projectsList.items.length === 1, 'the project row'); panels.projectsList.focus(); v.input.write('\r'); await until(() => modal(v, PAGE), 'the settings'); };
+  // The program is named in full wherever the app names it: the box a new session starts from.
+  assert.match(panels.ask._label.getText(), /New session → Grok Build · sample app/);
   await page();
   // Nothing is chosen: Grok Build is the first vendor installed, so new sessions start on it.
-  assert.deepEqual(dialogRows(v, PAGE).slice(3, 5), ['Default model Grok · not chosen, so the first installed here', 'This computer not chosen · Grok, the first installed here']);
+  assert.deepEqual(dialogRows(v, PAGE).slice(3, 5), ['Default model Grok Build · not chosen, so the first installed here', 'This computer not chosen · Grok Build, the first installed here']);
   // Enter on This computer opens the picker; none is offered beside the models.
   for (let at = 0; at < 3; at += 1) v.input.write('\x1b[B');
   await until(() => dialogList(v, PAGE).selected === 4, 'on This computer'); v.input.write('\r'); await until(() => modal(v, 'Model'), 'the picker');
-  assert.match(dialogText(v, 'Model').replace(/\s+/g, ' '), /No default for this computer: Grok \(grok\) is the first installed here\./);
+  assert.match(dialogText(v, 'Model').replace(/\s+/g, ' '), /No default for this computer: Grok Build \(grok\) is the first installed here\./);
   assert.match(dialogText(v, 'Model'), /none +no choice: the first one installed here/);
   await dialog(v, 'Model', 'grok');
-  await until(() => modal(v, PAGE) && dialogRows(v, PAGE)[4] === 'This computer Grok · used by every project that has not chosen', 'saved, and back in the settings');
-  assert.equal(dialogRows(v, PAGE)[3], "Default model Grok · this computer's default");
-  assert.match(status(), /This computer's default is Grok \(grok\)\./);
+  await until(() => modal(v, PAGE) && dialogRows(v, PAGE)[4] === 'This computer Grok Build · used by every project that has not chosen', 'saved, and back in the settings');
+  assert.equal(dialogRows(v, PAGE)[3], "Default model Grok Build · this computer's default");
+  assert.match(status(), /This computer's default is Grok Build \(grok\)\./);
   assert.deepEqual(computerDefault(), { vendor: 'grok', model: null });
   // Enter on Default model is the picker of /model default: the project's own choice wins.
   v.input.write('\x1b[A'); await until(() => dialogList(v, PAGE).selected === 3, 'on Default model'); v.input.write('\r'); await until(() => modal(v, 'Model'), 'the picker');
-  assert.match(dialogText(v, 'Model').replace(/\s+/g, ' '), /sample app uses this computer's default, Grok \(grok\)\./);
+  assert.match(dialogText(v, 'Model').replace(/\s+/g, ' '), /sample app uses this computer's default, Grok Build \(grok\)\./);
   assert.match(dialogText(v, 'Model'), /none +no choice: this computer's default/);
   await dialog(v, 'Model', 'grok');
-  await until(() => modal(v, PAGE) && dialogRows(v, PAGE)[3] === 'Default model Grok', 'the project has its own');
+  await until(() => modal(v, PAGE) && dialogRows(v, PAGE)[3] === 'Default model Grok Build', 'the project has its own');
   assert.equal(v.current.controller.startModel().from, 'project');
   v.input.write('\x1b'); await until(() => !modal(v, PAGE), 'closed');
   // none goes back to no choice, by command too.
-  await send(v, '/model default none'); await until(() => /sample app uses this computer's default, Grok \(grok\)\./.test(status()), "back on this computer's");
-  await send(v, '/model computer none'); await until(() => /No default for this computer: Grok \(grok\) is the first installed here\./.test(status()), 'no choice on this computer');
+  await send(v, '/model default none'); await until(() => /sample app uses this computer's default, Grok Build \(grok\)\./.test(status()), "back on this computer's");
+  await send(v, '/model computer none'); await until(() => /No default for this computer: Grok Build \(grok\) is the first installed here\./.test(status()), 'no choice on this computer');
   assert.equal(computerDefault(), null);
-  await send(v, '/model computer grok'); await until(() => /This computer's default is Grok \(grok\)\.$/.test(status().trim()), 'set by command');
+  await send(v, '/model computer grok'); await until(() => /This computer's default is Grok Build \(grok\)\.$/.test(status().trim()), 'set by command');
   // A saved default whose vendor is not installed here is said wherever the default is shown.
   saveComputerDefault({ vendor: 'claude', model: 'opus' });
   await send(v, '/model'); await until(() => /Opus is this computer's default, but Claude Code is not installed here\./.test(status()), 'said by /model');
   await page();
-  assert.deepEqual(dialogRows(v, PAGE).slice(3, 5), ['Default model Grok · not chosen, so the first installed here', 'This computer Grok · Opus is chosen, but Claude Code is not installed']);
+  assert.deepEqual(dialogRows(v, PAGE).slice(3, 5), ['Default model Grok Build · not chosen, so the first installed here', 'This computer Grok Build · Opus is chosen, but Claude Code is not installed']);
   v.input.write('\x1b'); await until(() => !modal(v, PAGE), 'closed');
-  await send(v, '/new'); await until(() => /Your message goes to Grok\. Opus is this computer's default, but Claude Code is not installed here\. Bots review/.test(panels.composeHint.getText().replace(/\s+/g, ' ')), 'said on the new session form');
+  await send(v, '/new'); await until(() => /Your message goes to Grok Build\. Opus is this computer's default, but Claude Code is not installed here\. Bots review/.test(panels.composeHint.getText().replace(/\s+/g, ' ')), 'said on the new session form');
 });
 
 test('the default model of a project that is not the active one is set from its settings too', { timeout: 60000 }, async t => {
@@ -1169,6 +1196,25 @@ test('@name in a session asks that bot, not the lead: @ offers the saved bots, t
 
 // The owner wrote to a bot, then sent "continue" with no name, and the session's model took
 // it. It goes to the bot they were talking to, and the title says so before it is sent.
+// Team access Auto starts a session as if the owner had typed the teammate's message. There too
+// his message with no @name goes to whoever he last wrote to, as in a session he typed.
+test('in a session a teammate\'s message started as the owner\'s own, a message with no @name goes to whoever he last wrote to', { timeout: 40000 }, async t => {
+  const p = setup(t, 'answer');
+  saveBot({ name: 'sec', vendor: 'claude', instructions: 'Review the change for leaked secrets.' });
+  const v = await view(t, { repo: p.repo }), panels = v.current.panels, label = () => panels.ask._label.getText();
+  v.output.columns = 120; v.output.rows = 30; v.output.emit('resize'); await until(() => v.current.screen.width === 120, 'room for whole lines');
+  const origin = { kind: 'handoff', peer: 'b'.repeat(64), name: 'sara', a2aTaskId: 'task-1', threadId: 'thread-1', hop: 1, own: true };
+  const first = await v.current.controller.ask('Work on the handoff from @sara shown in the peer data block.', null, { origin, context: 'Can I add multiple agents?', permissions: 'full' }).finished;
+  assert.equal(first.state, 'answered');
+  const task = () => v.current.controller.snapshot().tasks.find(row => row.id === first.id), roles = () => task().runs.map(run => run.role);
+  await openTask(v, /Can I add multiple/);
+  await send(v, '@sec Is the token a secret?'); await until(() => task().messages.at(-1)?.bot === 'sec' && task().state === 'answered', 'the bot answered', 20000);
+  await until(() => /^ Message @sec · @model writes to Opus $/.test(label()), 'the title names the bot');
+  await send(v, 'continue'); await until(() => roles().length === 3 && task().state === 'answered', 'the message with no name answered', 20000);
+  assert.deepEqual(roles(), ['lead', 'bot:sec', 'bot:sec'], 'the model did not take it');
+  assert.deepEqual(task().messages.filter(row => !row.bot && !row.from).map(row => row.to ? `${row.to} ${row.text}` : row.text), ['@sec Is the token a secret?', '@sec continue']);
+});
+
 test('a message with no @name goes to whoever the owner last wrote to in the session; the title names who gets it, and @model goes back to the model', { timeout: 40000 }, async t => {
   const p = setup(t, 'answer');
   saveBot({ name: 'sec', vendor: 'claude', instructions: 'Review the change for leaked secrets.' });
@@ -1643,7 +1689,7 @@ test('every line of a view-only window shows whole at 80 columns, and names the 
   await sized(v, 80, 24); await until(() => statusShown(v) === short + back && label() === ' View only: another window has it · /takeover ', 'short again at 80');
   // Under a Task that waits for approval, which has the row's first line: still whole.
   await openTask(v, /Round refund/); await send(v, 'Also cover refunds');
-  const waits = '? Esc, then y approve · n reject, then Enter';
+  const waits = '? y approve · n reject, Enter · Task: Round ...';
   await shows(v, `${waits} ${short}${back}`, 'whole under the Task that waits');
   await send(v, '/takeover'); await shows(v, `${waits} › Asked the other ELU window to let go of this project.`, 'asked');
   other.child.kill('SIGKILL'); await other.ended;
@@ -1779,7 +1825,7 @@ test('the row of a Task that waits for approval keeps its keys whole and ends at
   proposeTask(p.repo, '5', { title: 'Uppercase coupons', description: 'One file changes.', goal: 'Coupon codes compare equal whatever their case.', objectives: ['It works', 'Its test passes'], priority: 'high', severity: 'low' });
   const v = await view(t, { repo: p.repo }), panels = v.current.panels, drawn = () => panels.status.getScreenLines().map(line => line.replace(/\x1b\[[^m]*m/g, '').trimEnd());
   await openTask(v, /Uppercase coupon/); await until(() => v.current.session === '5' && /^\? /.test(drawn()[0] ?? ''), 'the Task waits');
-  const KEYS = /^\? (?:Needs you · Esc, then y approve · n reject, then Enter|Esc, then y approve · n reject, then Enter|Esc, y approve · n reject, Enter|Esc, y · n, Enter)(?: · Task: .+)?$/;
+  const KEYS = /^\? (?:Needs you · y approve · n reject, then Enter|y approve · n reject, then Enter|y approve · n reject, Enter|y · n, Enter)(?: · Task: .+)?$/;
   for (let width = 80; width <= 140; width++) {
     await sized(v, width, 30); await until(() => panels.status.width === width - panels.boardBox.width - 2 && /^\? /.test(drawn()[0] ?? ''), `drawn at ${width}`);
     const rows = drawn();
@@ -1936,6 +1982,37 @@ test('Tab cycles the areas and the command menu keeps focus in the message box',
   }
   const calls = fs.readFileSync(p.calls, 'utf8').trim().split('\n').map(JSON.parse);
   assert.equal(calls.some(call => call.args.includes('-p') || call.args[0] === 'exec'), false, 'navigation must not start a model');
+});
+
+// Up from a row past + New session reaches the tabs. What is typed there next is not lost: it
+// starts a message in the box, as on a row. q still quits from a tab and ? opens the help.
+test('a character typed on a tab after Up past + New session starts a message, so nothing typed is lost', async t => {
+  const p = setup(t, 'answer'); liveTask(p.root, { id: '4', goal: 'Trim coupon codes', state: 'answered' });
+  const v = await view(t, { repo: p.repo }), panels = v.current.panels;
+  await selectRow(v, /Trim coupon codes/);
+  v.input.write('\x1b[A'); await until(() => /\+ New session/.test(cursor(v)) && v.current.screen.focused === panels.board, 'Up reaches + New session');
+  v.input.write('\x1b[A'); await until(() => v.current.screen.focused === panels.tabs[0], 'Up past it reaches the tabs');
+  v.type('fix the coupon test');
+  await until(() => panels.ask.getValue() === 'fix the coupon test', 'every character is in the box');
+  assert.equal(v.current.screen.focused, panels.ask); assert.equal(v.current.view, 'tasks'); assert.equal(v.current.session, 'new');
+  // The same from a tab of another view: its box gets it.
+  panels.ask.clearValue(); await send(v, '/bots'); await until(() => v.current.view === 'bots', 'Bots');
+  panels.tabs[4].focus(); await until(() => v.current.screen.focused === panels.tabs[4], 'the Bots tab');
+  v.type('hello'); await until(() => panels.ask.getValue() === 'hello' && v.current.screen.focused === panels.ask, 'typed on the Bots tab');
+});
+
+// On the New session form's rows a letter is not a message, so / starts a command in the box
+// there, and the rest of what is typed follows it: /permissions full then sets the form.
+test('/ typed on the New session form starts a command in the box: /permissions full gives the form Full access', async t => {
+  const p = setup(t), v = await view(t, { repo: p.repo }), panels = v.current.panels;
+  const form = () => panels.composeList.items.map(item => item.getText().trimEnd().replace(/ {2,}/g, '  '));
+  await until(() => panels.ask.__listener && v.current.session === 'new', 'the form');
+  v.input.write('\t'); await until(() => v.current.screen.focused === panels.composeList, 'Tab reaches the form over the box');
+  v.type('/permissions full');
+  await until(() => panels.ask.getValue() === '/permissions full', 'the box holds the command');
+  assert.equal(v.current.screen.focused, panels.ask);
+  v.input.write('\r'); await dialog(v, 'Full access', 'y');
+  await until(() => form().some(row => /^Permissions  Full access/.test(row)), 'the form says Full access');
 });
 
 test('a new session opens beside the list; mouse and keys move between Sessions, Chats and the session', { timeout: 20000 }, async t => {
@@ -2463,7 +2540,7 @@ test('on a row that waits on an approval y, n, f and a act with Enter, and a mes
   const wants = (name, command) => requestApproval({ id: name, root: p.root, taskId: id, role: 'lead', vendor: 'claude', tool: 'Bash', input: { command, dangerouslyDisableSandbox: true }, cwd: p.root, access: 'read', rules: 'saved' });
   const onRow = async () => { await selectRow(v, /Check the build/); await until(() => /y allow {2}n deny {2}f full access {2}a always {2}d changes {2}enter open {2}letter then enter {2}tab next/.test(keys()), 'the keys of the row that waits, d among them'); };
   const lone = async (key, does) => { await onRow(); v.type(key); await until(() => ask.getValue() === key && new RegExp(`enter ${does} · keep typing to write a message`).test(keys()), `the line under the box names ${key}`); await pause(150); };
-  const asks = async (name, command) => { wants(name, command); await onRow(); await until(() => panels.chat.getText().includes(`Run: ${command} outside the sandbox\nEsc, then y allow · n deny · f full access · a always, then Enter`), `the chat asks for ${command}`); };
+  const asks = async (name, command) => { wants(name, command); await onRow(); await until(() => panels.chat.getText().includes(`Run: ${command} outside the sandbox\ny allow · n deny · f full access · a always, then Enter`), `the chat asks for ${command}`); };
   await asks('run-a', 'npm test');
   // d then Enter shows what the session changed, to read before the answer. Esc goes back to the row.
   await lone('d', 'shows its changes'); assert.equal(v.current.sessionView, 'chat');
@@ -2521,7 +2598,7 @@ test('in colour, the line of a session that waits on an approval keeps to one ro
   const v = await view(t, { repo: p.repo }), panels = v.current.panels, drawn = () => panels.status.getScreenLines().map(line => line.replace(/\x1b\[[^m]*m/g, ''));
   await sized(v, 140, 50); await openTask(v, /Check the build/); await until(() => v.current.session === '3', 'its session is open');
   requestApproval({ id: 'run-3-a', root: p.root, taskId: '3', role: 'lead', vendor: 'claude', tool: 'Bash', input: { command: 'npm install --save-dev prettier eslint typescript' } });
-  await until(() => /^\? Needs you · Esc, then y allow · n deny · f full access, then Enter · Run: npm install/.test(drawn()[0] ?? ''), 'the line that waits');
+  await until(() => /^\? Needs you · y allow · n deny · f full access, then Enter · Run: npm install/.test(drawn()[0] ?? ''), 'the line that waits');
   // What is asked is cut to the row. Its end is not pushed onto a second row.
   assert.deepEqual([drawn().length, panels.status.height], [1, 1]); assert.match(drawn()[0], /\.\.\.$/); assert.ok(drawn()[0].length < panels.status.width);
   // The last message shows under it, on the second row.
@@ -2531,8 +2608,8 @@ test('in colour, the line of a session that waits on an approval keeps to one ro
   answerApproval('run-3-a', 'deny');
   requestApproval({ id: 'run-3-b', root: p.root, taskId: '3', role: 'lead', vendor: 'claude', tool: 'Bash', input: { command: 'npm test', dangerouslyDisableSandbox: true }, cwd: p.root, access: 'read', rules: 'saved' });
   await sized(v, 80, 24);
-  await until(() => /^\? Esc, y · n · f · a, Enter · Run: npm test/.test(drawn()[0] ?? '') && drawn()[0].length < panels.status.width, 'the letters at 80 columns');
-  assert.match(panels.chat.getText().replace(/\s+/g, ' '), /Esc, then y allow · n deny · f full access · a always, then Enter/, 'the chat above says the words');
+  await until(() => /^\? y · n · f · a, Enter · Run: npm test/.test(drawn()[0] ?? '') && drawn()[0].length < panels.status.width, 'the letters at 80 columns');
+  assert.match(panels.chat.getText().replace(/\s+/g, ' '), /y allow · n deny · f full access · a always, then Enter/, 'the chat above says the words');
 });
 
 test('in the chat of a session opened from Kanban typing writes a message, and y then Enter answers what it waits on', { timeout: 40000 }, async t => {
@@ -2549,7 +2626,7 @@ test('in the chat of a session opened from Kanban typing writes a message, and y
   pickRow(column(), /Check the build/); v.input.write('\r'); await until(() => cardButton(v), 'Enter shows the card'); v.input.write('\r');
   await until(() => v.current.view === 'chat' && v.current.session === '3' && focused() === ask && panels.boardBox.hidden, 'its session, with no list beside it');
   requestApproval({ id: 'run-3-a', root: p.root, taskId: '3', role: 'lead', vendor: 'claude', tool: 'Bash', input: { command: 'npm install' } });
-  await until(() => /Run: npm install\nEsc, then y allow · n deny · f full access, then Enter/.test(chat()), 'the chat says how to answer');
+  await until(() => /Run: npm install\ny allow · n deny · f full access, then Enter/.test(chat()), 'the chat says how to answer');
   v.input.write('\x1b'); await until(() => focused() === panels.chat, 'Esc leaves the message box for the chat');
   // Typing there writes a message. q does not quit, and y at its start answers nothing.
   v.type('quick question'); await until(() => ask.getValue() === 'quick question' && focused() === ask, 'q starts a message');
@@ -2763,8 +2840,8 @@ test('a request for an edit shows its Task: n rejects it, a message revises it, 
   await wide(v);
   await send(v, 'Uppercase coupon codes');
   await until(() => session()?.plan?.state === 'proposed' && /Task · waits for your approval\nUppercase coupons\nmedium priority · low severity\n/.test(chat()), 'the Task in the chat');
-  assert.match(chat(), /medium priority · low severity\nETA not set\n[\s\S]*Goal: Coupon codes compare equal whatever their case\.\nObjectives\n {2}1\. normalize returns the code in upper case\n {2}2\. The coupon test passes\nSuccess criteria · not set\nEsc, then y approve · n reject, then Enter · or type what to change/);
-  await until(() => /\? Needs you · Esc, then y approve · n reject, then Enter · Task: Uppercase coupons/.test(status()), 'the status line');
+  assert.match(chat(), /medium priority · low severity\nETA not set\n[\s\S]*Goal: Coupon codes compare equal whatever their case\.\nObjectives\n {2}1\. normalize returns the code in upper case\n {2}2\. The coupon test passes\nSuccess criteria · not set\ny approve · n reject, then Enter · or type what to change/);
+  await until(() => /\? Needs you · y approve · n reject, then Enter · Task: Uppercase coupons/.test(status()), 'the status line');
   // Nothing was edited and no workspace was made: the session rests as an answer leaves it.
   assert.equal(session().state, 'answered'); assert.equal(session().kind, 'conversation'); assert.match(source(), /=> value;/);
   // Esc leaves the box for the session's row, under Needs you, and the row takes y and n.
@@ -2857,8 +2934,9 @@ test('moving to the list, and on to another row, keeps the lead working and keep
 });
 
 // The owner's case: the session is working and he sends another message. Nothing is refused
-// and nothing needs /stop. On a vendor that cannot take it during the turn (Codex here) it
-// waits in the chat and is the next turn by itself, and Enter sends it now.
+// and nothing needs /stop. On a vendor that cannot take it during the turn (Codex here) it is
+// answered beside the turn (test/message-aside.test.mjs; here that answer is still being
+// written), keeps its place in the chat while it has not run, and Enter sends it now.
 test('a message sent while the session works waits in its chat; Up takes it back and /stop sends it next', { timeout: 40000 }, async t => {
   // resumeMs: the turn the waiting message starts goes on in the stopped thread, and is still
   // working when the last /stop comes. One that had answered by then would keep its answer.
@@ -2866,15 +2944,18 @@ test('a message sent while the session works waits in its chat; Up takes it back
   const waiting = () => pendingRequests(p.root).filter(row => row.state === 'queued').map(row => row.goal), sent = () => projectSnapshot(p.repo).tasks[0]?.messages.map(row => row.text) ?? [];
   await send(v, '/model default codex'); await until(() => /New sessions in .+ start with Codex/.test(panels.status.getText()), 'Codex for new sessions');
   await send(v, 'Keep working on the board');
-  await until(() => projectSnapshot(p.repo).tasks[0]?.activeRole === 'lead' && /Codex is working\n\n.+\n\ntype a message any time · \/stop to stop/.test(chat()), 'the hint under the working line');
-  assert.doesNotMatch(chat(), /interrupt/);
+  // That a message goes any time and /stop stops the turn is said under the message box, not in the chat.
+  await until(() => projectSnapshot(p.repo).tasks[0]?.activeRole === 'lead' && projectSnapshot(p.repo).tasks[0].activeDeaf === true && /Codex is working\n\n.+$/.test(chat()) && /enter send {2}\/stop stop/.test(panels.keys.getText()), 'the working line, and /stop in the key bar');
+  assert.doesNotMatch(chat(), /interrupt|type a message any time/);
   await send(v, 'Also cover refunds');
-  await until(() => /You \(waiting\)[^\n]*\n[^\n]*Also cover refunds *\nSent when this turn ends\.\nEnter sends it now · ↑ takes it back/.test(chat()), 'the waiting message, with its keys');
+  await until(() => /You \(being answered now\)[^\n]*\n[^\n]*Also cover refunds *\nBeing\s+answered\s+now,\s+beside\s+the\s+running\s+turn\.\nEnter\s+in\s+the\s+empty\s+box\s+sends\s+it\s+now:[^·]*·\s+↑\s+takes\s+it\s+back/.test(chat()), 'the message, what happens to it, and its keys');
+  assert.doesNotMatch(chat(), /\(waiting\)|Sent when this turn ends/, 'it never says only that it waits');
+  assert.match(panels.status.getText(), /Sent\.\s+It\s+is\s+being\s+answered\s+now,\s+beside\s+the\s+running\s+turn\./, 'the status line says the same');
   assert.equal(panels.ask.getValue(), '', 'the box is cleared'); assert.deepEqual(waiting(), ['Also cover refunds']); assert.deepEqual(sent(), ['Keep working on the board'], 'the running turn goes on');
   assert.equal(projectSnapshot(p.repo).tasks[0].state, 'running');
   // A second one: the key is named on the newest.
   await send(v, 'And keep the old name');
-  await until(() => /Also cover refunds *\nSent when this turn ends\.\n\nYou \(waiting\)[^\n]*\n[^\n]*And keep the old name *\nSent when this turn ends\.\nEnter sends it now · ↑ takes it back/.test(chat()), 'two waiting messages');
+  await until(() => /Also cover refunds *\nBeing\s+answered\s+now,\s+beside\s+the\s+running\s+turn\.\n\nYou \(being answered now\)[^\n]*\n[^\n]*And keep the old name *\nBeing\s+answered\s+now,\s+beside\s+the\s+running\s+turn\.\nEnter\s+in\s+the\s+empty\s+box\s+sends\s+it\s+now:[^·]*·\s+↑\s+takes\s+it\s+back/.test(chat()), 'two messages that have not run');
   // Up in the empty box takes the newest back into the box. Down drops it, and Up takes the one before it.
   const box = async () => { panels.ask.focus(); panels.ask.readInput(); await until(() => panels.ask.__listener, 'message box'); };
   await box(); v.input.write('\x1b[A');
@@ -2884,7 +2965,7 @@ test('a message sent while the session works waits in its chat; Up takes it back
   v.input.write('\x1b[B'); await until(() => panels.ask.getValue() === '' && /Dropped\. It will not be sent\./.test(panels.status.getText()), 'dropped');
   assert.deepEqual(waiting(), ['Also cover refunds'], 'the other still waits');
   v.input.write('\x1b[A'); await until(() => waiting().length === 0 && panels.ask.getValue() === 'Also cover refunds', 'the one before it is back in the box');
-  await until(() => !/You \(waiting\)/.test(chat()), 'no waiting row');
+  await until(() => !/You \(being answered now\)/.test(chat()), 'no row of a message that has not run');
   assert.deepEqual(sent(), ['Keep working on the board'], 'neither was sent');
   // With nothing waiting, Up is what it was: the last thing sent.
   v.input.write('\x1b[B'); await until(() => panels.ask.getValue() === '', 'emptied');
@@ -2910,7 +2991,7 @@ test('a working turn shows its thinking and tool calls as they happen, then fold
   const gate = path.join(temp(t), 'gate'), p = setup(t, 'steps', { intent: 'answer', gate }), v = await view(t, { repo: p.repo }), panels = v.current.panels;
   const flat = () => panels.chat.getText().replace(/\s+/g, ' '), lines = () => panels.chat.getText().split('\n');
   await send(v, 'Why do lower case coupons fail?');
-  await until(() => /Opus is working ✻ The coupon code should compare in upper case\. I will read the module first\. ✓ Read: src\/coupon\.mjs ● Run: npm test type a message any time/.test(flat()), 'the thought, the file read and the command still running', 15000);
+  await until(() => /Opus is working ✻ The coupon code should compare in upper case\. I will read the module first\. ✓ Read: src\/coupon\.mjs ● Run: npm test ?$/.test(flat()), 'the thought, the file read and the command still running', 15000);
   assert.equal(projectSnapshot(p.repo).tasks[0].state, 'running');
   assert.doesNotMatch(flat(), /Opus is working model: started/, 'not the line that never changed');
   const frames = [{ step: 'working', text: v.frame() }];
@@ -2950,7 +3031,7 @@ test('a long turn shows its thought as a token count, how long its silent comman
   const gate = path.join(temp(t), 'gate'), p = setup(t, 'live', { intent: 'answer', gate, live: { speed: 600, seconds: 180, think: 200 } }), v = await view(t, { repo: p.repo }), panels = v.current.panels;
   const flat = () => panels.chat.getText().replace(/\s+/g, ' ');
   await send(v, 'Run the coupon tests');
-  await until(() => /Opus is working ✻ thought · 1\.2k tokens • Starting the watcher, then the tests\. ✓ Run: npm run watch ● Run: npm test · 3m \d+s ● 1 background command: npm run watch · 3m \d+s type a message any time/.test(flat()), 'the count, the command three minutes in, and the background command that started before it', 15000);
+  await until(() => /Opus is working ✻ thought · 1\.2k tokens • Starting the watcher, then the tests\. ✓ Run: npm run watch ● Run: npm test · 3m \d+s ● 1 background command: npm run watch · 3m \d+s ?$/.test(flat()), 'the count, the command three minutes in, and the background command that started before it', 15000);
   // The command prints nothing more, and its line still counts every second.
   const ran = () => Number(/● Run: npm test · 3m (\d+)s/.exec(flat())?.[1]), first = ran();
   await until(() => ran() > first, 'the line counts on between heartbeats', 5000);
@@ -2998,6 +3079,37 @@ test('a message sent while Claude Code works goes to its turn, and the chat says
 // The owner's report: the model sat in one long command, his message read "Sent to the running
 // turn", and nothing read it until the command ended. It waits, and the chat says so; Enter
 // sends it now with Claude Code's own interrupt, and the same turn goes on with it.
+// The owner's report: after the agent pushed its work, the status line still said "/publish to
+// review push". It says pushed, and the pull request when ELU knows one (lib/task-head.mjs publishWords).
+test('after the agent pushed its work, the status line and the chat say pushed, never /publish to review push', { timeout: 60000 }, async t => {
+  const p = setup(t, 'normal', { commit: 'push' });
+  const bare = path.join(p.parent, 'origin.git'); git(p.parent, ['init', '-q', '--bare', '--initial-branch=main', bare]); git(p.root, ['remote', 'add', 'origin', bare]);
+  const v = await view(t, { repo: p.repo }), panels = v.current.panels, chat = () => panels.chat.getText().replace(/\s+/g, ' '), status = () => panels.status.getText().replace(/\s+/g, ' ');
+  await send(v, '/permissions full'); await dialog(v, 'Full access', 'y');
+  await send(v, 'Make coupon codes uppercase.');
+  try { await until(() => /ready \| pushed · \/publish opens a draft pull request/.test(status()), 'the status line says pushed', 40000); } catch { assert.fail(`the status line says pushed: "${status()}" under "${chat().slice(-240)}"`); }
+  const task = projectSnapshot(p.repo).tasks[0];
+  assert.deepEqual([task.state, task.committed?.pushed], ['ready', true]);
+  assert.match(chat(), /Committed on feat\/task-1 at [0-9a-f]{7} and pushed\./);
+  assert.match(chat(), /Checks complete\. \/changes to inspect · pushed · \/publish opens a draft pull request/);
+  assert.doesNotMatch(chat() + status(), /review push/);
+});
+
+// The owner's report: sent while the turn ran no command, the status line said "The running
+// turn reads it at its next step." while the row under his message said it waits for the
+// command. Both say the same, and what is true then: at its next step.
+test('a message sent while the turn runs no command says, in the status line and under it, that the turn reads it at its next step', { timeout: 60000 }, async t => {
+  const p = setup(t, 'listen'); fakeClis(p.parent, { mode: 'listen', steps: 2, stepMs: 30000 });
+  const v = await view(t, { repo: p.repo }), panels = v.current.panels, chat = () => panels.chat.getText(), task = () => projectSnapshot(p.repo).tasks[0];
+  await send(v, 'Read the coupon rule');
+  await until(() => task()?.activeInbox === true && /Opus is working/.test(chat()) && /Read: src\/coupon\.mjs/.test(chat()), 'the model works, takes messages and ran a step');
+  await send(v, 'Also cover refunds');
+  await until(() => /› Sent\. The running turn reads it at its next step\./.test(panels.status.getText()), 'the status line');
+  await until(() => pendingRequests(p.root).some(row => row.goal === 'Also cover refunds' && row.turn), 'the turn holds it');
+  await until(() => /You \(read at the turn's next step\) {2}[^\n]*\n[^\n]*Also cover refunds *\nThe\s+running\s+turn\s+reads\s+it\s+at\s+its\s+next\s+step\.\nEnter sends it now · ↑ takes it back/.test(chat()), 'the row under it says the same');
+  assert.doesNotMatch(chat(), /command it is running/);
+});
+
 test('a message sent while Claude Code runs a long command waits for the command, and Enter sends it now: the same turn answers it', { timeout: 60000 }, async t => {
   const p = setup(t, 'command'); fakeClis(p.parent, { mode: 'command', commandMs: 60000 });
   const v = await view(t, { repo: p.repo }), panels = v.current.panels, chat = () => panels.chat.getText(), task = () => projectSnapshot(p.repo).tasks[0];
@@ -3005,7 +3117,8 @@ test('a message sent while Claude Code runs a long command waits for the command
   await send(v, 'Run the long check');
   await until(() => task()?.activeInbox === true && /Opus is working/.test(chat()), 'the model works and takes messages');
   await send(v, 'Also cover refunds');
-  await until(() => /You \(waiting\)[^\n]*\n[^\n]*Also cover refunds *\nWaiting for the current command to finish\.\nEnter sends it now · ↑ takes it back/.test(chat()), 'it waits for the command, and the keys are named');
+  await until(() => /› Sent\. The running turn reads it when the command it is running ends\./.test(panels.status.getText()), 'the status line says what the row says');
+  await until(() => /You \(read after the command\) {2}[^\n]*\n[^\n]*Also cover refunds *\nThe\s+running\s+turn\s+reads\s+it\s+when\s+the\s+command\s+it\s+is\s+running\s+ends\.\nEnter sends it now · ↑ takes it back/.test(chat()), 'it waits for the command, and the keys are named');
   await new Promise(resolve => setTimeout(resolve, 600));
   assert.doesNotMatch(chat(), /Sent to the running turn\./, 'not said before the turn took it');
   assert.deepEqual(pendingRequests(p.root).filter(row => row.state === 'queued').map(row => row.goal), ['Also cover refunds']); assert.deepEqual(controls(), []);
@@ -3030,7 +3143,7 @@ test('Up takes a message back from the running turn before it is read, and one t
   await send(v, 'Run the long check');
   await until(() => task()?.activeInbox === true && /Opus is working/.test(chat()), 'the model works and takes messages');
   await send(v, 'Also cover refunds');
-  await until(() => /Also cover refunds *\nWaiting for the current command to finish\./.test(chat()) && pendingRequests(p.root).some(row => row.turn), 'it waits on the turn\'s input');
+  await until(() => /Also cover refunds *\nThe\s+running\s+turn\s+reads\s+it\s+when\s+the\s+command\s+it\s+is\s+running\s+ends\./.test(chat()) && pendingRequests(p.root).some(row => row.turn), 'it waits on the turn\'s input');
   panels.ask.focus(); panels.ask.readInput(); await until(() => panels.ask.__listener, 'message box');
   v.input.write('\x1b[A');
   await until(() => panels.ask.getValue() === 'Also cover refunds' && waiting().length === 0, 'it is back in the box');
@@ -3058,7 +3171,7 @@ test('Enter in an empty box sends a waiting message now: the turn stops and the 
   await send(v, 'Keep working on the board');
   await until(() => task()?.activeRole === 'lead' && /Codex is working/.test(chat()), 'Codex works');
   await send(v, 'Also cover refunds'); await send(v, 'And keep the old name');
-  await until(() => waiting().length === 2 && /And keep the old name *\nSent when this turn ends\.\nEnter sends it now · ↑ takes it back/.test(chat()), 'both wait, and the keys are named');
+  await until(() => waiting().length === 2 && /And keep the old name *\nBeing\s+answered\s+now,\s+beside\s+the\s+running\s+turn\.\nEnter\s+in\s+the\s+empty\s+box\s+sends\s+it\s+now:[^·]*·\s+↑\s+takes\s+it\s+back/.test(chat()), 'neither has run, and the keys are named');
   const runs = task().runs.length;
   panels.ask.focus(); panels.ask.readInput(); await until(() => panels.ask.__listener, 'message box');
   await until(() => /^enter send it now {2}↑ take it back/.test(panels.keys.getText().trim()), 'the key bar names it');
@@ -3067,7 +3180,50 @@ test('Enter in an empty box sends a waiting message now: the turn stops and the 
   await until(() => sent().length === 2 && task().state === 'running' && waiting().length === 0, 'the waiting messages started the next turn');
   assert.deepEqual(sent(), ['Keep working on the board', 'Also cover refunds\n\nAnd keep the old name']);
   assert.ok(task().runs.length >= runs);
-  await until(() => !/\(waiting\)/.test(chat()), 'nothing waits');
+  await until(() => !/\(being answered now\)/.test(chat()), 'nothing is left to run');
+});
+
+// The owner's report: he wrote to a session in the middle of a long turn on a vendor whose
+// turn takes no message, and the chat said only "(waiting)" and that it is read when the turn
+// ends. Such a message is answered in the chat at once, by a run beside the turn
+// (test/message-aside.test.mjs): a question is done with that; an instruction says that it
+// asks for work, keeps its place, and names the one key that sends it now with what that costs.
+test('a question to a session whose turn takes no message is answered in its chat at once, beside the turn; an instruction is answered too, says it asks for work, and Enter sends it now', { timeout: 60000 }, async t => {
+  const p = setup(t, 'slow'), config = path.join(p.dir, 'fake.json');
+  fs.writeFileSync(config, JSON.stringify({ ...JSON.parse(fs.readFileSync(config, 'utf8')), byInput: [
+    { includes: 'Rename the helper', set: { mode: 'normal', summary: 'The turn is running the tests now.' } },
+    { includes: 'you run beside it', set: { mode: 'answer', summary: 'Two of three steps are done.' } }] }));
+  const v = await view(t, { repo: p.repo }), panels = v.current.panels, chat = () => panels.chat.getText(), status = () => panels.status.getText();
+  const task = () => projectSnapshot(p.repo).tasks[0], sent = () => task()?.messages.map(row => row.text) ?? [];
+  await send(v, '/model default codex'); await until(() => /start with Codex/.test(status()), 'Codex for new sessions');
+  await send(v, 'Keep working on the board');
+  await until(() => task()?.activeDeaf === true && /Codex is working/.test(chat()), 'Codex works, and its turn takes no message');
+  // A question: within seconds its answer is in the chat, marked as written beside the turn, and the turn goes on.
+  const asked = Date.now();
+  await send(v, 'How far are you?');
+  // It shows under the working line and its steps, where he typed it, so a turn with many steps never pushes it out of sight;
+  // no hint line sits between them (the key bar names /stop).
+  await until(() => /Codex is working[\s\S]*┃ How far are you\?[\s\S]*· beside the turn[\s\S]*Two of three steps are done\.[\s\S]*Answered\s+beside\s+the\s+running\s+turn,\s+from\s+what\s+it\s+has\s+done\s+so\s+far\.\s+The\s+turn\s+goes\s+on\.\s*$/.test(chat()), 'the answer beside the turn, at the end of the chat');
+  assert.ok(Date.now() - asked < 10000, 'within seconds');
+  await until(() => /Answered\s+beside\s+the\s+running\s+turn/.test(status()), 'the status line says so too');
+  assert.doesNotMatch(chat(), /type a message any time|\/stop to stop/); assert.match(panels.keys.getText(), /\/stop stop/);
+  assert.equal(task().state, 'running'); assert.deepEqual(pendingRequests(p.root).filter(row => row.state === 'queued'), [], 'nothing is left to run');
+  assert.doesNotMatch(chat(), /\(waiting\)|current turn ends|Sent when this turn ends/);
+  // An instruction: answered too, and it says that it asks for work and what the one key costs.
+  await send(v, 'Rename the helper too');
+  // At 80 columns the row's title says it in fewer words, on one row with its time.
+  await until(() => /You \(answered · next turn\) {2}[^\n]*\n┃ Rename the helper too[\s\S]*· beside the turn[\s\S]*The\s+turn\s+is\s+running\s+the\s+tests\s+now\.[\s\S]*Answered\s+beside\s+the\s+running\s+turn,[\s\S]*It\s+asks\s+for\s+work,\s+so\s+it\s+also\s+starts\s+the\s+next\s+turn\s+when\s+this\s+one\s+ends\.\s+Enter\s+in\s+the\s+empty\s+box\s+sends\s+it\s+now:\s+that\s+stops\s+the\s+turn\s+and\s+the\s+command\s+that\s+is\s+running\s+·\s+↑\s+takes\s+it\s+back/.test(chat()), 'the instruction, its answer, and the key');
+  assert.deepEqual(pendingRequests(p.root).filter(row => row.state === 'queued').map(row => row.goal), ['Rename the helper too'], 'it keeps its place');
+  assert.deepEqual(sent(), ['Keep working on the board'], 'the running turn goes on');
+  // Enter in the empty box: the turn stops and the message starts the next one.
+  panels.ask.focus(); panels.ask.readInput(); await until(() => panels.ask.__listener, 'message box');
+  v.input.write('\r');
+  await until(() => /Sending now\. This turn stops and your message starts the next one/.test(status()), 'what Enter says');
+  await until(() => sent().includes('Rename the helper too'), 'it started the next turn');
+  await until(() => !/You \(answered/.test(chat()), 'its row of a message that has not run is gone');
+  assert.equal(chat().split('How far are you?').length, 2, 'the answered question shows once');
+  // Once its turn is over it is part of the chat, in its place: after the first message and before the one that started the next turn.
+  assert.match(chat(), /Keep working on the board[\s\S]*┃ How far are you\?[\s\S]*Two of three steps are done\.[\s\S]*┃ Rename the helper too/);
 });
 
 // Antigravity as the session's model. Its Full access turn ran headless, which prints nothing
@@ -3099,12 +3255,12 @@ test('an Antigravity turn in Full access shows its thought and each tool call as
   const asked = [], watch = setInterval(() => { try { asked.push(...pendingApprovals().map(row => row.summary)); if (/Waiting for your approval/.test(flat())) asked.push('the chat asks'); } catch { /* Between two writes. */ } }, 20);
   t.after(() => clearInterval(watch));
   await send(v, 'Create the file notes.txt with the text "x". Run this command: ./marker.sh. Reply with the summary "Wrote the notes."');
-  await until(() => /Antigravity is working ✻ Reading the request\. • Working on it\. type a message any time/.test(flat()), 'its thought, before any tool call', 15000);
+  await until(() => /Antigravity is working ✻ Reading the request\. • Working on it\. ?$/.test(flat()), 'its thought, before any tool call', 15000);
   const frames = [{ step: 'thinking', text: v.frame() }];
-  await until(() => /• Working on it\. ● Write[^✓●✗]*notes\.txt type a message any time/.test(flat()), 'the write as it starts', 15000);
-  await until(() => /✓ Write[^✓●✗]*notes\.txt ● Run[^✓●✗]*marker\.sh type a message any time/.test(flat()), 'the write ended, the command as it starts', 15000);
+  await until(() => /• Working on it\. ● Write[^✓●✗]*notes\.txt ?$/.test(flat()), 'the write as it starts', 15000);
+  await until(() => /✓ Write[^✓●✗]*notes\.txt ● Run[^✓●✗]*marker\.sh ?$/.test(flat()), 'the write ended, the command as it starts', 15000);
   frames.push({ step: 'the command runs', text: v.frame() });
-  await until(() => /✓ Write[^✓●✗]*notes\.txt ✓ Run[^✓●✗]*marker\.sh type a message any time/.test(flat()), 'both calls ended, the reply not there yet', 15000);
+  await until(() => /✓ Write[^✓●✗]*notes\.txt ✓ Run[^✓●✗]*marker\.sh ?$/.test(flat()), 'both calls ended, the reply not there yet', 15000);
   assert.equal(projectSnapshot(p.repo).tasks[0].state, 'running'); assert.equal(fs.readFileSync(made('ran.txt'), 'utf8'), 'ran'); assert.equal(fs.readFileSync(made('notes.txt'), 'utf8'), 'elu-code\n');
   assert.doesNotMatch(flat(), /reports only when it ends/, 'a run that shows its steps is not one that prints at the end');
   await until(() => projectSnapshot(p.repo).tasks[0].state === 'answered' && /▸ 5 steps in \d+s · ctrl\+o shows them [^┃]+┃ Wrote the notes\./.test(flat()), 'the steps fold above the reply', 15000);
@@ -3113,7 +3269,7 @@ test('an Antigravity turn in Full access shows its thought and each tool call as
   // Another session, stopped while its command runs: the command ends with the turn, and the steps it showed stay.
   await send(v, '/new'); await until(() => v.current.session === 'new', 'the new session form');
   await send(v, 'Run this command: ./slow.sh. Reply with the summary "late".');
-  await until(() => /● Run[^✓●✗]*slow\.sh type a message any time/.test(flat()), 'the slow command as it starts', 15000);
+  await until(() => /● Run[^✓●✗]*slow\.sh ?$/.test(flat()), 'the slow command as it starts', 15000);
   const stopping = v.current.session; await send(v, '/stop');
   await until(() => readTask(p.repo, stopping).state === 'stopped' && /▸ 3 steps in \d+s · stopped · ctrl\+o shows them/.test(flat()), 'the stopped turn keeps its steps', 15000);
   frames.push({ step: 'stopped', text: v.frame() });
@@ -3126,7 +3282,7 @@ test('an Antigravity turn in Full access shows its thought and each tool call as
 test('where ACP is not proven or cannot start, an Antigravity turn counts its time in the chat and says the program reports only when it ends', { timeout: 60000 }, async t => {
   const p = antigravity(t, { relay: false, pace: 2500 });
   const v = await view(t, { repo: p.repo }), panels = v.current.panels, flat = () => panels.chat.getText().replace(/\s+/g, ' ');
-  const worked = () => Number(/ is working (\d+)s so far\. Antigravity reports only when it ends\. type a message any time/.exec(flat())?.[1]);
+  const worked = () => Number(/ is working (\d+)s so far\. Antigravity reports only when it ends\. ?$/.exec(flat())?.[1]);
   // Not proven: the check's relay step did not pass here.
   await send(v, 'Reply with the summary "Printed at the end."');
   await until(() => Number.isFinite(worked()), 'the line that counts', 15000);
@@ -3160,12 +3316,83 @@ test('checks read as running, a waiting turn of a schedule names the schedule, a
   await send(v, 'Keep working on the board'); await until(() => /Opus is working/.test(chat()) && v.current.session && v.current.session !== 'new', 'the model at work');
   const id = v.current.session, mine = () => pendingRequests(p.root).filter(row => row.continuationTaskId === id && row.state === 'queued' && !row.scheduled).map(row => row.goal);
   saveRequest(p.root, 'Check the nightly build', null, { state: 'queued', priority: 1, continuationTaskId: id, taskId: null, attempts: 0, notBefore: null, queuedAt: new Date().toISOString(), reason: 'Waiting to start.', bot: 'sec', scheduled: true });
-  await until(() => /Schedule → @sec \(waiting\) {2}\d{1,2}:\d\d [AP]M\n┃ Check the nightly build/.test(chat()), 'the waiting turn of the schedule'); assert.doesNotMatch(chat(), /You → @sec \(waiting\)/);
+  await until(() => /Schedule → @sec \(starts next turn\) {2}\d{1,2}:\d\d [AP]M\n┃ Check the nightly build/.test(chat()), 'the waiting turn of the schedule'); assert.doesNotMatch(chat(), /You → @sec \(/);
   // A waiting message opened from the list with Enter, and another one sent there: it waits beside the first. It does not take its place.
   await send(v, 'First waiting'); await until(() => mine().length === 1, 'one waits');
   await selectRow(v, /First waiting/); v.input.write('\r'); await until(() => v.current.screen.focused === panels.ask, 'the waiting row opened');
   await send(v, 'Second waiting'); await until(() => mine().includes('Second waiting'), 'the second saved');
   assert.deepEqual(mine(), ['First waiting', 'Second waiting']);
+});
+
+// Nothing limits how many sessions run at once until /slots sets a limit, for one project as
+// for several. A limit holds back only what starts by itself: what the owner types starts past
+// it, a scheduled run that waits for a slot says so, and /slots off removes the limit.
+test('/slots says there is no limit until it sets one; past the limit a session the owner starts runs and a scheduled run waits under Queued and says what for, and /slots off starts it', { timeout: 60000 }, async t => {
+  const p = setup(t, 'slow'), v = await view(t, { repo: p.repo }), panels = v.current.panels, status = () => panels.status.getText().replace(/\s+/g, ' '), chat = () => panels.chat.getText().replace(/\s+/g, ' ');
+  const saved = goal => pendingRequests(p.root).find(row => row.goal === goal);
+  // Each answer of /slots ends with what a limit holds back.
+  const RULE = ' What you type always starts; this number limits what starts by itself\\.', UNSET = ' What you type always starts; a limit holds back what starts by itself\\.';
+  await send(v, '/slots'); await until(() => new RegExp(`No limit on sessions at once\\. /slots 6 sets one\\.${UNSET}`).test(status()), 'no limit until one is set');
+  await send(v, '/slots 1'); await until(() => new RegExp(`At most 1 session runs at once\\. Running work is not interrupted\\.${RULE}`).test(status()), 'one at once');
+  await send(v, '/slots'); await until(() => new RegExp(`At most 1 session runs at once\\. /slots off removes the limit\\.${RULE}`).test(status()), 'the limit that is set');
+  await send(v, 'Check the coupon module'); await until(() => /Opus is working/.test(chat()), 'the first session works');
+  // A second session he starts himself runs too, past the one: nothing he types waits for a slot.
+  await send(v, '/new'); await until(() => v.current.session === 'new', 'the new session form');
+  await send(v, 'Fix the cart total'); await until(() => saved('Fix the cart total')?.state === 'running', 'his second session runs past the one');
+  assert.equal(saved('Fix the cart total').typed, true); assert.equal(saved('Fix the cart total').waits, undefined);
+  await until(() => rows(v).some(row => /RUNNING 2/.test(row)) && !rows(v).some(row => /QUEUED/.test(row)), 'both under Running');
+  // A scheduled run that comes due starts by itself: it waits for a slot. Its row is under Queued,
+  // whose heading says how many start at once (in a list this narrow; wider, also that 2 run), and
+  // its chat says the sentence with both numbers.
+  enqueue(p.root, 'Nightly check', { priority: 1, scheduleId: 'schedule-0000000a', permissions: 'ask' });
+  await until(() => saved('Nightly check')?.waits, 'the scheduled run is told what it waits for');
+  assert.deepEqual(saved('Nightly check').waits, { on: 'slot', running: 2, limit: 1 });
+  await until(() => rows(v).some(row => /^ QUEUED 1 · (2 running, )?1 at once( ─+)?$/.test(row)), 'the Queued heading');
+  await selectRow(v, /Nightly check/);
+  await until(() => /Waiting for a free slot: 2 sessions are running, and 1 runs at once\. \/slots changes it\. \/stop cancels it\./.test(chat()), 'the sentence in its chat');
+  assert.doesNotMatch(chat(), /Waiting to start/);
+  // /slots off removes the limit, and it starts, in the same project.
+  await send(v, '/slots off'); await until(() => new RegExp(`No limit on sessions at once\\. /slots 6 sets one\\.${UNSET}`).test(status()), 'the limit removed');
+  assert.equal(conductorSettings().maxAgents, null);
+  await until(() => saved('Nightly check')?.state === 'running', 'the scheduled run of the project runs');
+  await until(() => rows(v).some(row => /RUNNING 3/.test(row)) && !rows(v).some(row => /QUEUED/.test(row)), 'all under Running');
+  // Any whole number from 1 is a limit, and none, unlimited and 0 remove it as off does.
+  await send(v, '/slots 40'); await until(() => /At most 40 sessions run at once\. Running work is not interrupted\./.test(status()), 'forty at once');
+  assert.equal(conductorSettings().maxAgents, 40);
+  for (const word of ['none', 'unlimited', '0', 'OFF']) {
+    await send(v, '/slots 2'); await until(() => /At most 2 sessions run at once\. Running work is not interrupted\./.test(status()), 'two at once');
+    await send(v, `/slots ${word}`); await until(() => /No limit on sessions at once\. \/slots 6 sets one\./.test(status()), `/slots ${word}`);
+    assert.equal(conductorSettings().maxAgents, null, word);
+  }
+  // What it does not understand changes nothing and says the two forms.
+  await send(v, '/slots 3'); await until(() => /At most 3 sessions run at once\. Running work is not interrupted\./.test(status()), 'three at once');
+  for (const words of ['many', '2 3', '-1', '1.5', 'off now']) {
+    await send(v, '/slots'); await until(() => /At most 3 sessions run at once\. \/slots off removes the limit\./.test(status()), 'the limit as it is');
+    await send(v, `/slots ${words}`); await until(() => /Use \/slots 6 to set a limit, or \/slots off for no limit\./.test(status()), `/slots ${words}`);
+    assert.equal(conductorSettings().maxAgents, 3, words);
+  }
+});
+
+// A schedule's run that waits for a free slot is opened from Queued and typed into: what he
+// types always starts. It goes after the run's own message, which it never takes the place
+// of, and the run starts now, past the limit.
+test("typed into a schedule's run that waits for a free slot, the message goes with the schedule's own and the run starts now", { timeout: 60000 }, async t => {
+  const p = setup(t, 'slow'), v = await view(t, { repo: p.repo }), panels = v.current.panels, status = () => panels.status.getText().replace(/\s+/g, ' '), chat = () => panels.chat.getText().replace(/\s+/g, ' ');
+  const saved = goal => pendingRequests(p.root).find(row => row.goal.startsWith(goal));
+  await send(v, '/slots 1'); await until(() => /At most 1 session runs at once\./.test(status()), 'one at once');
+  await send(v, 'Check the coupon module'); await until(() => saved('Check the coupon module')?.state === 'running', 'the first session works');
+  enqueue(p.root, 'Nightly check', { priority: 1, scheduleId: 'schedule-0000000b', permissions: 'ask' });
+  await until(() => saved('Nightly check')?.waits, 'the scheduled run waits for a slot');
+  // Its chat says whose message it is: the schedule's, not his.
+  await selectRow(v, /Nightly check/); v.input.write('\r'); await until(() => v.current.screen.focused === panels.ask, 'the waiting row opened');
+  await until(() => /Schedule \(queued\)/.test(chat()), 'the schedule wrote it'); assert.doesNotMatch(chat(), /You \(queued\)/);
+  await send(v, 'Also check the docs build');
+  await until(() => /Added to this scheduled run\. It starts now\./.test(status()), 'said where it went');
+  assert.equal(saved('Nightly check').goal, 'Nightly check\n\nAlso check the docs build');
+  assert.equal(saved('Also check the docs build'), undefined, 'it never took the place of the schedule\'s message');
+  assert.equal(saved('Nightly check').scheduleId, 'schedule-0000000b'); assert.equal(saved('Nightly check').typed, true);
+  await until(() => saved('Nightly check')?.state === 'running', 'it starts now, past the one slot');
+  assert.equal(saved('Check the coupon module').state, 'running');
 });
 
 // The first message of a session waits a moment for the conductor. A second one sent in that
@@ -3212,7 +3439,8 @@ test('a message sent after its session started and before the screen drew it wai
   panels.ask.setValue('And the tests too'); panels.ask.submit();
   await until(() => rows().length === 2 || rows()[0][0] !== 'Keep working on the board', 'the message saved');
   assert.deepEqual(rows(), [['Keep working on the board', 'running', null], ['And the tests too', 'queued', id]], 'it waits behind the turn of that session');
-  await until(() => /You \(waiting\) {2}\d{1,2}:\d\d [AP]M\n┃ And the tests too/.test(panels.chat.getText()), 'and shows in its chat');
+  await until(() => /You \([a-z' ·]+\) {2}\d{1,2}:\d\d [AP]M\n┃ And the tests too/.test(panels.chat.getText()), 'and shows in its chat');
+  assert.doesNotMatch(panels.chat.getText(), /You \(waiting\)/);
   await new Promise(resolve => setTimeout(resolve, 300));
   assert.equal(tasks().length, 1, 'no second session started'); assert.equal(tasks()[0].goal, 'Keep working on the board');
   // /stop in the same moment of a second session stops that session's turn. It does not cancel the request that started it.
@@ -3327,10 +3555,10 @@ test('a message sent while an approval waits does not answer the approval', { ti
   requestApproval({ id: 'wait-1', root: p.root, taskId: id, role: 'lead', vendor: 'claude', tool: 'Bash', input: { command: 'npm test' } });
   await until(() => /Waiting for your approval\nCodex wants to:\nRun: npm test\n/.test(chat()), 'the approval in the chat');
   await send(v, 'Use the staging key');
-  await until(() => /You \(waiting\)[^\n]*\n[^\n]*Use the staging key *\nSent when this turn ends\.\nEnter sends it now · ↑ takes it back\nThe approval above still needs your\s+answer\./.test(chat()), 'the waiting message under the approval');
+  await until(() => /You \(being answered now\)[^\n]*\n[^\n]*Use the staging key *\nBeing\s+answered\s+now,\s+beside\s+the\s+running\s+turn\.\nEnter\s+in\s+the\s+empty\s+box\s+sends\s+it\s+now:[^·]*·\s+↑\s+takes\s+it\s+back\nThe approval above still needs your\s+answer\./.test(chat()), 'the message under the approval');
   assert.match(chat(), /Waiting for your approval/, 'the approval is still open');
   assert.deepEqual(pendingRequests(p.root).filter(row => row.state === 'queued').map(row => row.goal), ['Use the staging key']);
-  // As the chat says: Esc, then y.
+  // From the row too: Esc, then y.
   panels.ask.focus(); panels.ask.readInput(); await until(() => panels.ask.__listener, 'message box');
   v.input.write('\x1b'); await until(() => v.current.screen.focused !== panels.ask, 'Esc leaves the box');
   v.input.write('y'); await until(() => answer() === 'allow' && /Allowed\./.test(panels.status.getText()), 'y still answers it');
@@ -3344,7 +3572,7 @@ test('the list shows live agents and stops, retries, and starts work from its ro
   await send(v, '/tasks'); await until(() => v.current.view === 'tasks', 'Tasks');
   const board = panels.board, spinner = '[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]';
   // The row has the spinner and the session's title. Its latest step shows beside the list, in the session.
-  await until(() => new RegExp(`${spinner} Keep working`).test(cursor(v)) && /Opus is working\n\n• Working on the requested change\.\n\ntype a message any time · \/stop to stop/.test(panels.chat.getText()) && /^Keep working on the board {2}· {2}working {2}· {2}Ask/.test(panels.header.getText()), 'live row, with the work under way beside it');
+  await until(() => new RegExp(`${spinner} Keep working`).test(cursor(v)) && /Opus is working\n\n• Working on the requested change\.$/.test(panels.chat.getText()) && /^Keep working on the board {2}· {2}working {2}· {2}Ask/.test(panels.header.getText()), 'live row, with the work under way beside it');
   assert.match(cursor(v), /0m\d\d$/, 'a running row counts its time');
   assert.match(rows(v)[0], /\+ New session/); assert.match(rows(v)[2], /RUNNING 1/);
   board.focus(); await until(() => /s stop/.test(panels.keys.getText()), 's stop in the key bar'); v.input.write('s');
@@ -4289,7 +4517,7 @@ test('approvals wait under Needs you first; y allows, n denies, Enter shows one,
   await until(() => !rows(v).some(row => /wants to\b.*open:/.test(row)), 'denied row gone');
   await openTask(v, /\? Install the deps/); await until(() => v.current.session === '2', 'that session is open');
   requestApproval({ id: 'run-2-c', root: p.root, taskId: '2', role: 'lead', vendor: 'claude', tool: 'Edit', input: { file_path: '/elsewhere/notes.md' } });
-  await until(() => /Waiting for your approval\nOpus wants to:\nEdit: \/elsewhere\/notes\.md\nEsc, then y allow · n deny · f full access, then Enter/.test(chat()), 'approval in the chat');
+  await until(() => /Waiting for your approval\nOpus wants to:\nEdit: \/elsewhere\/notes\.md\ny allow · n deny · f full access, then Enter/.test(chat()), 'approval in the chat');
   // As the chat says: Esc leaves the box for the list, on the session's own row, and y answers there.
   v.input.write('\x1b'); await until(() => v.current.screen.focused === board && /\? Install the deps/.test(cursor(v)) && /y allow {2}n deny {2}f full access {2}d changes {2}enter open/.test(panels.keys.getText()), 'Esc, on the session’s row');
   v.input.write('y'); await until(() => answer('run-2-c') === 'allow' && /Allowed\./.test(status()), 'allowed from the session’s row');
@@ -4355,16 +4583,16 @@ test('f beside y and n allows what waits and gives the session Full access; wher
   running('3', 'List the models');
   await openTask(v, /List the mod/); await until(() => v.current.session === '3', 'his session is open');
   wants('run-3-a', '3', 'grep -rn model src'); wants('run-3-b', '3', 'ls lib');
-  // The chat and the status row name the key. At 80 columns the status row starts at Esc so the keys fit.
-  await until(() => /Run: grep -rn model src\nEsc, then y allow · n deny · f full access, then Enter/.test(chat()), 'the chat names f');
-  await until(() => status().split('\n')[0] === '? Esc, y allow · n deny · f full access, Enter', 'the status row names f, and Enter, at 80 columns'); assert.ok(fits());
+  // The chat and the status row name the key. At 80 columns the status row starts at the keys so they fit.
+  await until(() => /Run: grep -rn model src\ny allow · n deny · f full access, then Enter/.test(chat()), 'the chat names f');
+  await until(() => status().split('\n')[0] === '? y allow · n deny · f full access, then Enter', 'the status row names f, and Enter, at 80 columns'); assert.ok(fits());
   v.output.columns = 100; v.output.emit('resize');
-  await until(() => /^\? Esc, y allow · n deny · f full access, Enter · Run: grep/.test(status()), 'at 100 columns there is room for what is asked'); assert.ok(fits());
+  await until(() => /^\? y allow · n deny · f full access, then Enter · Run: grep/.test(status()), 'at 100 columns there is room for what is asked'); assert.ok(fits());
   v.output.columns = 120; v.output.emit('resize');
-  await until(() => /^\? Esc, then y allow · n deny · f full access, then Enter · Run: grep/.test(status()), 'at 120 columns the keys in words'); assert.ok(fits());
+  await until(() => /^\? Needs you · y allow · n deny · f full access, then Enter · Run: grep/.test(status()), 'at 120 columns the whole row'); assert.ok(fits());
   v.output.columns = 140; v.output.emit('resize');
-  await until(() => /^\? Needs you · Esc, then y allow · n deny · f full access, then Enter · Run: grep/.test(status()), 'at 140 columns the whole row'); assert.ok(fits());
-  v.output.columns = 80; v.output.emit('resize'); await until(() => v.current.screen.width === 80 && status().split('\n')[0] === '? Esc, y allow · n deny · f full access, Enter', 'back to 80 columns');
+  await until(() => /^\? Needs you · y allow · n deny · f full access, then Enter · Run: grep/.test(status()), 'at 140 columns the whole row'); assert.ok(fits());
+  v.output.columns = 80; v.output.emit('resize'); await until(() => v.current.screen.width === 80 && status().split('\n')[0] === '? y allow · n deny · f full access, then Enter', 'back to 80 columns');
   // From the session's row in the list f asks once, as /permissions full does. No leaves everything as it was.
   v.input.write('\x1b'); await until(() => v.current.screen.focused === panels.board && /y allow {2}n deny {2}f full access {2}d changes {2}enter open/.test(keys()), 'the list names f');
   v.input.write('f'); await dialog(v, 'Full access', 'n'); await until(() => !modal(v, 'Full access'), 'declined');
@@ -4379,11 +4607,40 @@ test('f beside y and n allows what waits and gives the session Full access; wher
   running('4', 'Sweep the logs', { activeRole: 'bot:scout', messages: [{ at: began, text: 'Sweep the logs', to: '@scout', scheduled: true }] });
   await openTask(v, /Sweep the l/); await until(() => v.current.session === '4', 'the other session is open');
   wants('run-4-a', '4', 'ls logs', 'bot:scout');
-  await until(() => /@scout wants to:\nRun: ls logs\nEsc, then y allow · n deny · f full access/.test(chat()), 'the chat names f');
+  await until(() => /@scout wants to:\nRun: ls logs\ny allow · n deny · f full access/.test(chat()), 'the chat names f');
   v.input.write('\x1b'); await until(() => v.current.screen.focused === panels.board && /y allow {2}n deny {2}f full access {2}d changes {2}enter open/.test(keys()), 'the list names f');
   v.input.write('f'); await dialog(v, 'Full access', 'y');
   await until(() => answer('run-4-a') === 'allow', 'allowed'); assert.equal(readTask(p.repo, '4').permissions, 'full');
   wants('run-4-b', '4', 'npm test', 'bot:scout'); await until(() => answer('run-4-b') === 'allow', 'what it asks next is allowed without a key');
+});
+
+// The chat and the status row say what works in an open session: the letter typed in its box,
+// then Enter, with no Esc first. y and n answered that way; f and a do too, as the line names them.
+test('an approval\'s letters work as its line says: n, a or f typed in the session\'s box, then Enter, answers it', { timeout: 40000 }, async t => {
+  const p = setup(t), v = await view(t, { repo: p.repo }), panels = v.current.panels, status = () => panels.status.getText().replace(/\s+/g, ' '), chat = () => panels.chat.getText();
+  const answer = id => { const file = path.join(approvalsDir(), `${id}.answer.json`); return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')).decision : null; };
+  const wants = (id, command) => requestApproval({ id, root: p.root, taskId: '3', role: 'lead', vendor: 'claude', tool: 'Bash', input: { command, dangerouslyDisableSandbox: true }, cwd: p.root, access: 'read', rules: 'saved' });
+  const began = new Date().toISOString(), owner = { pid: process.pid, identity: processIdentity(process.pid) };
+  liveTask(p.root, { id: '3', goal: 'Run the tests', state: 'ready' });
+  saveTask(p.repo, { ...readTask(p.repo, '3'), permissions: 'ask', state: 'running', activeRole: 'lead', activeSince: began, owner, messages: [{ at: began, text: 'Run the tests' }] });
+  resources(t).files.push(lock(p.repo, 'task-3'));
+  await wide(v); await openTask(v, /Run the tes/); await until(() => v.current.session === '3', 'his session is open');
+  wants('run-3-a', 'npm test');
+  await until(() => /Run: npm test outside the sandbox\ny allow · n deny · f full access · a always, then Enter/.test(chat()), 'the chat says the letter, then Enter');
+  await until(() => /^\? (?:Needs you · )?y allow · n deny · f full access · a always, then Enter · Run: npm test/.test(status()), 'the status row says the same');
+  assert.doesNotMatch(chat() + status(), /Esc/); assert.equal(v.current.screen.focused, panels.ask);
+  // n, then Enter, in the box denies it.
+  v.type('n'); v.input.write('\r'); await until(() => answer('run-3-a') === 'deny', 'n denies');
+  // a, then Enter: where to keep it, then allowed. It is never sent to the model as a message.
+  wants('run-3-b', 'npm test -- --watch'); await until(() => /Run: npm test -- --watch/.test(chat()), 'the next one');
+  v.type('a'); await until(() => /enter always allows this/.test(panels.keys.getText()), 'the line under the box says what Enter does');
+  v.input.write('\r'); await until(() => modal(v, 'Always allow'), 'a asks where'); v.input.write('\r');
+  await until(() => answer('run-3-b') === 'allow', 'a allows it');
+  // f, then Enter: Full access is asked once, then what waits is allowed.
+  wants('run-3-c', 'curl -s https://example.test/'); await until(() => /Run: curl -s https:\/\/example\.test\//.test(chat()), 'the third one');
+  v.type('f'); v.input.write('\r'); await dialog(v, 'Full access', 'y');
+  await until(() => answer('run-3-c') === 'allow' && readTask(p.repo, '3').permissions === 'full', 'f allows it with Full access');
+  assert.equal((readTask(p.repo, '3').messages ?? []).some(row => /^[naf]$/.test(row.text)), false, 'no letter went to the model');
 });
 
 // Approvals you give once: a beside y and n shows the rule, asks where, keeps it and allows.
@@ -4400,7 +4657,7 @@ test('a beside y and n keeps the rule for this project and allows what it covers
   running('3', 'Run the tests'); await wide(v);
   await openTask(v, /Run the tes/); await until(() => v.current.session === '3', 'his session is open');
   wants('run-3-a', '3', 'npm test'); wants('run-3-b', '3', 'npm test -- --watch'); wants('run-3-c', '3', 'curl -s https://example.test/');
-  await until(() => /Run: npm test outside the sandbox\nEsc, then y allow · n deny · f full access · a always, then Enter/.test(chat()), 'the chat names a');
+  await until(() => /Run: npm test outside the sandbox\ny allow · n deny · f full access · a always, then Enter/.test(chat()), 'the chat names a');
   v.input.write('\x1b'); await until(() => v.current.screen.focused === panels.board && /y allow {2}n deny {2}f full access {2}a always {2}d changes {2}enter open/.test(keys()), 'the list names a');
   // a shows the rule in plain words and asks where; Esc keeps nothing.
   click(v, panels.chat, 4, 1); await until(() => v.current.screen.focused === panels.chat, 'the chat is focused');
@@ -4418,7 +4675,7 @@ test('a beside y and n keeps the rule for this project and allows what it covers
   // The never list: no a, and pressing it says why.
   answerApproval('run-3-c', 'deny');
   wants('run-3-d', '3', 'git push origin main');
-  await until(() => /Run: git push origin main outside the sandbox\nEsc, then y allow · n deny · f full access, then Enter/.test(chat()) && !/a always/.test(chat()), 'no a for the never list');
+  await until(() => /Run: git push origin main outside the sandbox\ny allow · n deny · f full access, then Enter/.test(chat()) && !/a always/.test(chat()), 'no a for the never list');
   click(v, panels.chat, 4, 1); await until(() => v.current.screen.focused === panels.chat, 'the chat is focused again');
   v.input.write('a'); await until(() => /That is on the never list, so it runs only in Full access\. y allows it once, n denies it\./.test(status()), 'why');
   assert.equal(modal(v, 'Always allow'), undefined); assert.equal(answer('run-3-d'), null);
@@ -4429,7 +4686,7 @@ test('a beside y and n keeps the rule for this project and allows what it covers
   assert.equal(modal(v, 'Answer Run the tests'), undefined); assert.equal(answer('run-3-d'), null); answerApproval('run-3-d', 'deny');
   // A request whose session reads only the defaults (a teammate's) gets no a.
   wants('run-3-e', '3', 'cargo build', 'defaults');
-  await until(() => /Run: cargo build outside the sandbox\nEsc, then y allow · n deny · f full access, then Enter/.test(chat()) && !/a always/.test(chat()), 'no a with the defaults only');
+  await until(() => /Run: cargo build outside the sandbox\ny allow · n deny · f full access, then Enter/.test(chat()) && !/a always/.test(chat()), 'no a with the defaults only');
   answerApproval('run-3-e', 'deny');
   // A teammate's session: no a even where the request reads saved rules.
   running('4', 'Their question', { origin: { kind: 'handoff', peer: 'b'.repeat(64), name: 'sara', threadId: null } });
@@ -4468,7 +4725,7 @@ test('a turn that started in Full access shows what its vendor asks; one switche
   running('3', 'Clear the cache', 'full');
   await openTask(v, /Clear the ca/); await until(() => v.current.session === '3', 'the session is open');
   wants('run-3-a', '3', 'rm -rf /srv/cache'); wants('run-3-b', '3', 'ls lib');
-  await until(() => /wants to:\nRun: rm -rf \/srv\/cache\nEsc, then y allow · n deny, then Enter · esc later/.test(chat()), 'it waits for the owner, with y and n');
+  await until(() => /wants to:\nRun: rm -rf \/srv\/cache\ny allow · n deny, then Enter · esc later/.test(chat()), 'it waits for the owner, with y and n');
   await pause(); assert.equal(answer('run-3-a'), null); assert.equal(answer('run-3-b'), null);
   v.input.write('\x1b'); await until(() => v.current.screen.focused === panels.board, 'the list');
   v.input.write('n'); await until(() => answer('run-3-a') === 'deny', 'denied by hand'); v.input.write('y'); await until(() => answer('run-3-b') === 'allow', 'allowed by hand');
@@ -4485,7 +4742,7 @@ test('a turn that started in Full access shows what its vendor asks; one switche
   wants('run-4-d', '4', 'npm test'); await until(() => answer('run-4-d') === 'allow', 'what it asks next is allowed');
   wants('run-4-e', '4', 'sudo rmdir /data/old'); wants('run-4-f', '4', `echo ${'x'.repeat(260)}`);
   await until(() => answer('run-4-e') === 'allow' && answer('run-4-f') === 'allow', 'a removal and a long command are allowed with the rest');
-  assert.doesNotMatch(chat(), /Run: cd build && rm -rf old\nEsc, then y allow/);
+  assert.doesNotMatch(chat(), /Run: cd build && rm -rf old\ny allow/);
 });
 
 test('/publish in a session whose turn runs says to wait for the reply, never the lock line', { timeout: 20000 }, async t => {
@@ -4769,7 +5026,9 @@ test('a teammate message is approved as your own session, worked on in a mode pi
   await until(() => /Approved @sara\. It runs as your session; the reply goes back to this thread\./.test(status()), 'approve line');
   // w in the thread picks the mode, place and folders first.
   await open('li'); v.input.write('\r'); await until(() => modal(v, 'Thread with @li'), 'task dialog');
-  assert.match(dialogText(v, 'Thread with @li'), /y approves: it starts as if you typed it\. w picks the mode first\. n declines\./); assert.match(dialogText(v, 'Thread with @li'), new RegExp(token('b')));
+  assert.match(dialogText(v, 'Thread with @li'), /y starts it now, as if you typed it\. w picks the mode first\. n declines\./); assert.match(dialogText(v, 'Thread with @li'), new RegExp(token('b')));
+  // The accept line is whole on one row of this 80-column screen.
+  assert.ok((modal(v, 'Thread with @li').children.find(child => child.options?.scrollable)._clines ?? []).some(line => String(line).replace(/\x1b\[[\d;]*m/g, '').trim() === 'y starts it now, as if you typed it. w picks the mode first. n declines.'), 'the accept line on one row');
   v.input.write('w'); await until(() => modal(v, 'Accept'), 'accept picker for a task');
   const work = dialogText(v, 'Accept');
   assert.match(work, /Permissions {2}Ask for approval {6}1 to change/); assert.match(work, /Runs in {6}New worktree {10}2 to change/);
@@ -4835,16 +5094,16 @@ test('vendor rows say how to sign in, Google’s FAQ under agy, and that a vendo
     { vendor: 'codex', available: true, supported: true, signedIn: false, version: '0.166.0', support: 'lead and reviewer' },
     { vendor: 'claude', available: true, supported: true, signedIn: true, conformant: true, version: '2.1.319', support: 'lead and reviewer' },
   ] });
-  const lines = text.split('\n'), agy = lines.indexOf('  Antigravity: not signed in for ELU. Sign it in with s on its line in the Usage tab.');
+  const lines = text.split('\n'), agy = lines.indexOf('  Antigravity CLI (the agy command): not signed in for ELU. Sign it in with s on its line in the Usage tab.');
   assert.ok(agy > 0, 'the agy sign-in line');
   assert.equal(lines[agy + 1], "  Google's FAQ: wrapping agy in third-party agents is not supported on consumer plans. antigravity.google/docs/faq");
-  assert.ok(lines.includes('  Grok Build has not been checked on this machine yet. Your first message to it runs the check.'));
+  assert.ok(lines.includes('  Grok Build (the grok command) has not been checked on this machine yet. Your first message to it outside Full access runs the check; Full access needs none.'));
   assert.ok(lines.includes(`  Codex: sign in with ChatGPT. Run: ${signInCommand('codex')}`));
   assert.equal(lines.filter(line => /Google's FAQ/.test(line)).length, 1);
   assert.ok(!lines.some(line => /Claude Code: not signed in|Claude Code has not been checked/.test(line)));
-  assert.equal(vendorText({ vendor: 'grok', support: 'lead', available: true, supported: true, signedIn: true, conformant: false }), 'lead · checked on your next message to it');
+  assert.equal(vendorText({ vendor: 'grok', support: 'lead', available: true, supported: true, signedIn: true, conformant: false }), 'lead · Full access only until checked');
   // Never run yet, so neither its release nor its sign-in is known: the same words, not "not supported".
-  assert.equal(vendorText({ vendor: 'grok', support: 'sessions', available: true, supported: false, signedIn: null, version: null, conformant: false }), 'sessions · checked on your next message to it');
+  assert.equal(vendorText({ vendor: 'grok', support: 'sessions', available: true, supported: false, signedIn: null, version: null, conformant: false }), 'sessions · Full access only until checked');
   assert.equal(vendorText({ vendor: 'agy', support: 'lead', available: true, supported: true, signedIn: false }), 'lead · not signed in');
 });
 
@@ -4863,7 +5122,7 @@ test('Usage shows each account with the usage its sessions reported, r checks ag
   await until(() => /Usage updated \d\d:\d\d/.test(status()), 'first check');
   assert.match(text(), /^Claude {6}owner@example.invalid · Max 20x · active\n {12}Usage shows after your next session on Claude Code\.\n {12}old@example.invalid · last seen Nov 9 · wk 100% then\n {12}enter use · a add account · x forget$/m);
   await until(() => /^Codex {7}owner@example.invalid · Team · active\n {12}5h  \[#-----\]   18%/m.test(text()), 'the Codex block');
-  assert.match(text(), /^Antigravity not signed in for ELU · s signs in\nGrok Build {2}not installed\n\nTop agents today\nNo agent has run today\.\nELU spend today \$0\.00$/m);
+  assert.match(text(), /^Antigravity \(agy\) not signed in for ELU · s signs in\nGrok Build {2}not installed\n\nTop agents today\nNo agent has run today\.\nELU spend today \$0\.00$/m);
   assert.ok(panels.usageList.items.every(item => item.getText().length <= 76), 'every line fits the pane');
   // A session on Claude Code reports its windows. r checks again now and records them with the account.
   const saved = JSON.parse(fs.readFileSync(usageFile, 'utf8'));
@@ -4886,6 +5145,43 @@ test('Usage shows each account with the usage its sessions reported, r checks ag
   assert.doesNotMatch(v.raw, secrets); assert.doesNotMatch(v.frame(), secrets);
   const accounts = JSON.parse(fs.readFileSync(path.join(personalDirectory(), 'accounts.json'), 'utf8')).rows;
   assert.deepEqual(accounts.map(row => [row.vendor, row.account]).sort(), [['claude', 'old@example.invalid'], ['claude', 'owner@example.invalid'], ['codex', 'owner@example.invalid']]);
+});
+
+test('Usage at 80x24 and at 140x50: Down from the last account goes into Top agents, with the table in view, and Up goes back', { timeout: 30000 }, async t => {
+  const p = setup(t), now = new Date().toISOString();
+  saveTask(p.repo, { id: '1', kind: 'conversation', goal: 'Uppercase coupons', state: 'answered', worktree: p.root, base: null, branch: null, createdAt: now, runs: [{ role: 'lead', vendor: 'claude', at: now, costUsd: 1.5, model: 'claude-opus-5-5', logFile: path.join(p.parent, 'run.log') }], reviews: [], responses: [], messages: [], sessions: {}, result: null });
+  const v = await view(t, { repo: p.repo, usage: fakeUsage(t) }), panels = v.current.panels, list = panels.usageList;
+  const rowOf = pattern => list.items.findIndex(item => pattern.test(item.getText()));
+  // A row is on screen when it is among the list's rows in view.
+  const shown = index => index >= list.childBase && index < list.childBase + list.height - list.iheight;
+  await send(v, '/usage'); await until(() => v.current.view === 'usage' && rowOf(/Uppercase coup/) >= 0 && rowOf(/^Grok Build/) >= 0, 'the accounts and the agent');
+  list.focus(); await until(() => v.current.screen.focused === list, 'list focused');
+  for (const [columns, rows] of [[80, 24], [140, 50]]) {
+    v.output.columns = columns; v.output.rows = rows; v.output.emit('resize'); await until(() => v.current.screen.width === columns && v.current.screen.height === rows, `${columns}x${rows}`);
+    list.select(rowOf(/^Grok Build/)); v.current.screen.render();
+    v.input.write('\x1b[B');
+    await until(() => list.selected === rowOf(/Uppercase coup/), `Down from Grok Build to the agent at ${columns}x${rows}`);
+    assert.equal(v.current.screen.focused, list);
+    assert.ok([rowOf(/^Top agents today$/), rowOf(/^Agent /), list.selected].every(shown), `the heading, the table's header and the agent are in view at ${columns}x${rows}`);
+    await until(() => /enter open/.test(panels.keys.getText()), 'the keys of an agent');
+    v.input.write('\x1b[A');
+    await until(() => list.selected === rowOf(/^Grok Build/), `Up from the agent to Grok Build at ${columns}x${rows}`);
+    assert.ok(shown(list.selected));
+  }
+});
+
+test('Usage with no agent today: Down from the last account goes to its line in Top agents, which offers t, and Up goes back', { timeout: 30000 }, async t => {
+  const p = setup(t), v = await view(t, { repo: p.repo, usage: fakeUsage(t) }), panels = v.current.panels, list = panels.usageList;
+  const rowOf = pattern => list.items.findIndex(item => pattern.test(item.getText()));
+  await send(v, '/usage'); await until(() => v.current.view === 'usage' && rowOf(/^No agent has run today\.$/) >= 0 && rowOf(/^Grok Build/) >= 0, 'the accounts and the empty list');
+  list.focus(); await until(() => v.current.screen.focused === list, 'list focused');
+  list.select(rowOf(/^Grok Build/)); v.input.write('\x1b[B');
+  await until(() => list.selected === rowOf(/^No agent has run today\.$/), 'Down from Grok Build to the line');
+  await until(() => panels.keys.getText().trim() === 'r refresh  t 7 days  tab next', 'the keys of that line');
+  v.input.write('\x1b[A'); await until(() => list.selected === rowOf(/^Grok Build/), 'Up back to Grok Build');
+  // Down from that line, the last one, leaves the list for the message box.
+  v.input.write('\x1b[B'); await until(() => list.selected === rowOf(/^No agent has run today\.$/), 'Down again');
+  v.input.write('\x1b[B'); await until(() => v.current.screen.focused === panels.ask, 'the message box');
 });
 
 test('Usage: a signs another account in with the vendor\'s own sign-in, Enter makes new turns use it, and x forgets only ELU\'s copy after y/N', { timeout: 30000 }, async t => {
@@ -5106,9 +5402,9 @@ test('Usage: Antigravity and Grok Build show their sign-in before their one-time
   const calls = () => fs.readFileSync(p.calls, 'utf8').trim().split('\n').map(line => JSON.parse(line));
   await send(v, '/usage'); await until(() => v.current.view === 'usage' && !panels.usageBox.hidden, 'Usage tab');
   // Opening the tab reads both at once: no message to either, and no check yet.
-  await until(() => /^Antigravity signed in · needs a one-time check \(c runs it now\)$/m.test(text()), 'Antigravity signed in', 20000);
-  assert.match(text(), /^Grok Build {2}signed in · needs a one-time check \(c runs it now\)$/m);
-  assert.doesNotMatch(text(), /checked on your next message/);
+  await until(() => /^Antigravity \(agy\) signed in · Full access only \(c checks it\)$/m.test(text()), 'Antigravity signed in', 20000);
+  assert.match(text(), /^Grok Build {2}\(grok\) signed in · Full access only \(c checks it\)$/m);
+  assert.doesNotMatch(text(), /Full access only until checked/);
   assert.deepEqual(calls().filter(call => ['agy', 'grok'].includes(call.vendor)).map(call => [call.vendor, call.args]), [['agy', ['--version']], ['agy', ['--help']], ['agy', ['-p', '/usage', '--output-format', 'json']]], 'Grok was not run; Antigravity was asked only for its release, help and sign-in');
   assert.equal(conformanceState('grok'), null);
   // c on the Grok line: the same check a first message runs, its steps under the vendor as it goes.
@@ -5118,18 +5414,41 @@ test('Usage: Antigravity and Grok Build show their sign-in before their one-time
   v.input.write('c');
   await until(() => /^Grok Build {2}signed in · ready$/m.test(text()), 'Grok ready', 45000);
   clearInterval(watch);
-  assert.ok(seen.has('Grok Build  signed in · checking…'), [...seen].join('\n'));
-  assert.ok([...seen].some(line => /^Checking Grok Build, \d of 8 done/.test(line)), 'a step line showed while it ran');
-  assert.match(text(), /^Grok Build {2}signed in · ready\n {12}One-time check of Grok Build on this machine first: about seven\n {12}short turns on it, a few minutes\.\n {12}Grok Build 1\.0\.77 passed its check on this machine\.$/m);
+  assert.ok(seen.has('Grok Build  (grok) signed in · checking…'), [...seen].join('\n'));
+  assert.ok([...seen].some(line => /^Grok Build: \d of 8 steps, \d+s so far\./.test(line)), 'the counting line showed while it ran');
+  assert.match(text(), /^Grok Build {2}signed in · ready\n {12}Checking Grok Build \(the grok command\): 8 steps, once on this\n {12}machine for release 1\.0\.77\.\n {12}Grok Build 1\.0\.77 passed its check on this machine\.$/m);
   await until(() => /Grok Build is ready\./.test(status()), 'status');
   assert.deepEqual(Object.values(conformanceState('grok').steps).filter(step => step !== 'pass'), [], 'the check record is the session\'s');
-  assert.match(text(), /^Antigravity signed in · needs a one-time check \(c runs it now\)$/m, 'Antigravity is untouched');
+  assert.match(text(), /^Antigravity \(agy\) signed in · Full access only \(c checks it\)$/m, 'Antigravity is untouched');
   // r reads every vendor again; the finished check's lines go.
-  v.input.write('r'); await until(() => !/One-time check of Grok Build/.test(text()) && /Usage updated/.test(status()), 'r');
+  v.input.write('r'); await until(() => !/Checking Grok Build/.test(text()) && /Usage updated/.test(status()), 'r');
   assert.match(text(), /^Grok Build {2}signed in · ready$/m);
   // Signed out, Antigravity says how to sign in, after r.
   fs.writeFileSync(path.join(p.dir, 'fake.json'), JSON.stringify({ ...JSON.parse(fs.readFileSync(path.join(p.dir, 'fake.json'), 'utf8')), agy: { signedIn: false } }));
-  v.input.write('r'); await until(() => /^Antigravity not signed in for ELU · s signs in$/m.test(text()), 'Antigravity signed out', 20000);
+  v.input.write('r'); await until(() => /^Antigravity \(agy\) not signed in for ELU · s signs in$/m.test(text()), 'Antigravity signed out', 20000);
+});
+
+// A Usage line's letter acts at once (s signs in, a adds an account). / starts a command in the
+// box instead, as on a Sessions row, and every key after it goes there: /usage typed on
+// Antigravity's line runs /usage and never starts its sign-in. The same on Projects' rows.
+test('Usage: / on a line starts a command in the box, so /usage never reaches the line\'s s or a', { timeout: 30000 }, async t => {
+  const p = setup(t), signIns = [], fake = fakeUsage(t, { signIn: async ({ vendor }) => { signIns.push(vendor); } });
+  const v = await view(t, { repo: p.repo, usage: fake }), panels = v.current.panels, status = () => panels.status.getText();
+  const rowOf = pattern => panels.usageList.items.findIndex(item => pattern.test(item.getText()));
+  await send(v, '/usage'); await until(() => v.current.view === 'usage' && /Usage updated \d\d:\d\d/.test(status()), 'Usage tab');
+  panels.usageList.focus(); panels.usageList.select(rowOf(/^Antigravity \(agy\) not signed in/));
+  await until(() => v.current.screen.focused === panels.usageList && /s sign in/.test(panels.keys.getText()), 'on the Antigravity line');
+  v.type('/usage');
+  await until(() => panels.ask.getValue() === '/usage', 'the box holds the command');
+  assert.equal(v.current.screen.focused, panels.ask);
+  assert.deepEqual(signIns, []); assert.doesNotMatch(status(), /sign|account|install/i);
+  v.input.write('\r'); await until(() => panels.ask.getValue() === '' && v.current.view === 'usage', 'it ran');
+  assert.deepEqual(signIns, []); assert.doesNotMatch(status(), /sign|account|install/i);
+  // Projects' rows: o opens a project and c brings one in; /projects goes to the box.
+  await send(v, '/projects'); await until(() => v.current.view === 'projects', 'Projects');
+  panels.projectsList.focus(); await until(() => v.current.screen.focused === panels.projectsList, 'the list');
+  v.type('/projects'); await until(() => panels.ask.getValue() === '/projects' && v.current.screen.focused === panels.ask, 'typed on a project');
+  assert.equal(v.current.view, 'projects'); assert.ok(!v.current.screen.children.some(child => !child.destroyed && child.type === 'box' && child.options?.label && child !== panels.projectsBox && /Open|Bring/.test(child.options.label)), 'no dialog opened');
 });
 
 // The owner's Mac on 0.1.19: the temp folder is under /var, a link; Antigravity CLI is signed
@@ -5173,7 +5492,7 @@ test('Usage on a Mac: Antigravity says it is not signed in for ELU at once, c of
   const opening = Date.now();
   await send(v, '/usage'); await until(() => v.current.view === 'usage' && !panels.usageBox.hidden, 'Usage tab');
   // Within seconds, not after 30 silent ones, and with no browser opened by the read.
-  await until(() => /^Antigravity not signed in for ELU · s signs in$/m.test(text()), 'Antigravity not signed in for ELU', 15000);
+  await until(() => /^Antigravity \(agy\) not signed in for ELU · s signs in$/m.test(text()), 'Antigravity not signed in for ELU', 15000);
   assert.ok(Date.now() - opening < 15000, `${Date.now() - opening} ms`);
   assert.equal(fs.existsSync(opened), false, 'reading the sign-in opened no browser');
   panels.usageList.focus(); await until(() => v.current.screen.focused === panels.usageList, 'list focused');
@@ -5183,8 +5502,8 @@ test('Usage on a Mac: Antigravity says it is not signed in for ELU at once, c of
   idle = listening(); v.input.write('c');
   await until(() => modal(v, 'Sign in to Antigravity CLI'), 'the sign-in offered', 15000);
   assert.ok(most < 3000, `the app was held ${most} ms`);
-  assert.match(dialogText(v, 'Sign in to Antigravity CLI'), /Antigravity CLI is not signed in for ELU, so its check cannot run\.\nSign in now\? Its own sign-in runs here on a clean screen, and the check goes on after it\./);
-  assert.match(text(), /^Antigravity not signed in for ELU · s signs in\n {12}Antigravity CLI is not signed in for ELU\. Sign it in with s on\n {12}its line in the Usage tab\.$/m);
+  assert.match(dialogText(v, 'Sign in to Antigravity CLI'), /Antigravity CLI \(the agy command\) is not signed in for ELU, so its check cannot run\.\nSign in now\? Its own sign-in runs here on a clean screen, and the check goes on after it\./);
+  assert.match(text(), /^Antigravity \(agy\) not signed in for ELU · s signs in\n {12}Antigravity CLI \(the agy command\) is not signed in for ELU\. Sign\n {12}it in with s on its line in the Usage tab\.$/m);
   await dialog(v, 'Sign in to Antigravity CLI', 'y');
   // Back in ELU after the code: the check goes on by itself and ends ready.
   await until(() => /^Antigravity signed in · ready$/m.test(text()), 'Antigravity ready', 60000);
@@ -5201,20 +5520,20 @@ test('Usage on a Mac: Antigravity says it is not signed in for ELU at once, c of
   assert.deepEqual(first.signals, idle.map(count => count + 1)); assert.deepEqual(listening(), idle);
   assert.match(first.printed, /Authentication required\. Please visit the URL to log in:\n {2}https:\/\/accounts\.google\.com\/\S+\n\nWaiting for authentication \(timeout 60s\)\.\.\.\nOr, paste the authorization code here and press Enter:\nSigned in\./);
   assert.deepEqual(fs.readFileSync(opened, 'utf8').trim().split('\n').map(line => line.split('?')[0]), ['https://accounts.google.com/o/oauth2/auth'], 'the sign-in opened the browser once');
-  assert.match(text(), /^Antigravity signed in · ready\n {12}One-time check of Antigravity CLI on this machine first: about\n {12}seven short turns on it, a few minutes\.\n {12}Antigravity CLI 1\.5\.4 passed its check on this machine\.$/m);
+  assert.match(text(), /^Antigravity signed in · ready\n {12}Checking Antigravity CLI \(the agy command\): 8 steps, once on\n {12}this machine for release 1\.5\.4\.\n {12}Antigravity CLI 1\.5\.4 passed its check on this machine\.$/m);
   await until(() => /Antigravity CLI is ready\./.test(status()), 'status');
   // Grok Build, signed out: c offers its sign-in, and n leaves it signed out, saying what s does.
   panels.usageList.select(rowOf(/^Grok Build/)); await until(() => /c run check {2}s sign in/.test(panels.keys.getText()), 'Grok key bar');
   v.input.write('c');
   await until(() => modal(v, 'Sign in to Grok Build'), 'the Grok sign-in offered', 15000);
   await dialog(v, 'Sign in to Grok Build', 'n');
-  await until(() => /Grok Build is not signed in for ELU\. s signs it in\./.test(status()), 'declined');
-  assert.match(text(), /^Grok Build {2}not signed in for ELU · s signs in\n {12}Grok Build is not signed in for ELU\. Sign it in with s on its\n {12}line in the Usage tab\.$/m);
+  await until(() => /Grok Build \(the grok command\) is not signed in for ELU\. s signs it in\./.test(status()), 'declined');
+  assert.match(text(), /^Grok Build {2}\(grok\) not signed in for ELU · s signs in\n {12}Grok Build \(the grok command\) is not signed in for ELU\. Sign it\n {12}in with s on its line in the Usage tab\.$/m);
   assert.equal(started.length, 1, 'no sign-in ran');
   // s: grok login under ELU's HOME and Grok home; its token lands in the owner's own file, and
   // the line drops what the stopped check said.
   v.input.write('s');
-  await until(() => /^Grok Build {2}signed in · needs a one-time check \(c runs it now\)$/m.test(text()), 'Grok signed in', 30000);
+  await until(() => /^Grok Build {2}\(grok\) signed in · Full access only \(c checks it\)$/m.test(text()), 'Grok signed in', 30000);
   assert.deepEqual([started[1].args, started[1].home], [['login'], path.join(personalDirectory(), 'grok-home')]);
   assert.match(started[1].printed, /Confirm this code in your browser:\n\n {2}FAKE-CODE\n[\s\S]*Waiting for authorization\.\.\.\nSigned in\.\n$/);
   assert.equal(fs.statSync(path.join(fake.home, '.grok', 'auth.json')).isFile(), true);
@@ -5260,13 +5579,13 @@ test('Usage on a computer with no browser: s signs Grok Build in with its device
   const rowOf = pattern => panels.usageList.items.findIndex(item => pattern.test(item.getText()));
   const screenBefore = row => v.raw.slice(Math.max(0, row.before - 400), row.before);
   await send(v, '/usage'); await until(() => v.current.view === 'usage' && !panels.usageBox.hidden, 'Usage tab');
-  await until(() => /^Antigravity not signed in for ELU · s signs in$/m.test(text()), 'Antigravity not signed in for ELU', 15000);
-  assert.match(text(), /^Grok Build {2}not signed in for ELU · s signs in$/m);
+  await until(() => /^Antigravity \(agy\) not signed in for ELU · s signs in$/m.test(text()), 'Antigravity not signed in for ELU', 15000);
+  assert.match(text(), /^Grok Build {2}\(grok\) not signed in for ELU · s signs in$/m);
   panels.usageList.focus(); await until(() => v.current.screen.focused === panels.usageList, 'list focused');
   // Grok Build: grok login --device-auth, which needs no browser here.
   panels.usageList.select(rowOf(/^Grok Build/)); await until(() => /s sign in/.test(panels.keys.getText()), 's in the key bar');
   v.input.write('s');
-  await until(() => /^Grok Build {2}signed in · needs a one-time check \(c runs it now\)$/m.test(text()), 'Grok Build signed in', 30000);
+  await until(() => /^Grok Build {2}\(grok\) signed in · Full access only \(c checks it\)$/m.test(text()), 'Grok Build signed in', 30000);
   assert.deepEqual(started[0].args, ['login', '--device-auth']);
   assert.ok(screenBefore(started[0]).endsWith('\x1b[?2004l\x1b[H\x1b[2JSigning in to Grok Build. ELU comes back when it ends.\r\nNo browser here: open the link below on any computer and use the code under it.\r\n\r\n'), JSON.stringify(screenBefore(started[0])));
   assert.match(started[0].printed, /open this URL in your browser:\n\n {2}https:\/\/accounts\.x\.ai\/oauth2\/device\?user_code=FAKE-CODE\n[\s\S]*Confirm this code in your browser:\n\n {2}FAKE-CODE\n[\s\S]*Waiting for authorization\.\.\.\nSigned in\.\n$/);
@@ -5274,7 +5593,7 @@ test('Usage on a computer with no browser: s signs Grok Build in with its device
   await until(() => /Grok Build is signed in for ELU\./.test(status()), 'status');
   // Antigravity CLI: its sign-in prints the link and takes the code pasted under ELU's lines.
   panels.usageList.select(rowOf(/^Antigravity/)); v.input.write('s');
-  await until(() => /^Antigravity signed in · needs a one-time check \(c runs it now\)$/m.test(text()), 'Antigravity signed in', 30000);
+  await until(() => /^Antigravity \(agy\) signed in · Full access only \(c checks it\)$/m.test(text()), 'Antigravity signed in', 30000);
   assert.deepEqual([started[1].args, started[1].marks], [['-p', '/usage'], false], 'no paste marks while the sign-in has the terminal');
   assert.ok(screenBefore(started[1]).endsWith('\x1b[?2004l\x1b[H\x1b[2JSigning in to Antigravity CLI for ELU. ELU comes back when it ends.\r\nNo browser here: open the link below on any computer, then paste its code here.\r\nPress Enter after it. It waits 60 seconds for the code.\r\nIf the 60 seconds pass, it stops. Press s again for a new link and a new code.\r\n\r\n'), JSON.stringify(screenBefore(started[1])));
   assert.match(started[1].printed, /Or, paste the authorization code here and press Enter:\nSigned in\./);
@@ -5309,7 +5628,7 @@ test('Usage: Antigravity\'s sign-in screen says what happens when its 60 seconds
   v = await view(t, { repo: p.repo, usage: fake });
   const panels = v.current.panels, text = () => panels.usageList.items.map(item => item.getText()).join('\n'), status = () => panels.status.getText();
   await send(v, '/usage'); await until(() => v.current.view === 'usage' && !panels.usageBox.hidden, 'Usage tab');
-  await until(() => /^Antigravity not signed in for ELU · s signs in$/m.test(text()), 'Antigravity not signed in for ELU', 15000);
+  await until(() => /^Antigravity \(agy\) not signed in for ELU · s signs in$/m.test(text()), 'Antigravity not signed in for ELU', 15000);
   panels.usageList.focus(); await until(() => v.current.screen.focused === panels.usageList, 'list focused');
   panels.usageList.select(panels.usageList.items.findIndex(item => /^Antigravity/.test(item.getText()))); await until(() => /s sign in/.test(panels.keys.getText()), 's in the key bar');
   // Ended by the owner before the time was up: the sign-in did not finish, and nothing says the time ran out.
@@ -5323,13 +5642,13 @@ test('Usage: Antigravity\'s sign-in screen says what happens when its 60 seconds
   await until(() => /Antigravity CLI got no code in 60 seconds\. s starts again with a new link\./.test(status()), 'the time ran out', 30000);
   assert.match(started[1].printed, /Waiting for authentication \(timeout 4s\)\.\.\.\nOr, paste the authorization code here and press Enter:\nError: authentication timed out\./);
   assert.ok(status().trim().length <= 78, 'the status fits 80 columns');
-  assert.match(text(), /^Antigravity not signed in for ELU · s signs in$/m);
+  assert.match(text(), /^Antigravity \(agy\) not signed in for ELU · s signs in$/m);
   // s again: a sign-in of its own with another link, and the code pasted in time signs it in.
   owner = 'pastes'; v.input.write('s');
   await until(() => /Antigravity CLI is signed in for ELU\./.test(status()), 'signed in', 30000);
   const link = row => row.printed.match(/https:\/\/accounts\.google\.com\/\S+/)[0];
   assert.equal(started.length, 3); assert.notEqual(link(started[2]), link(started[1]));
-  assert.match(text(), /^Antigravity signed in · needs a one-time check \(c runs it now\)$/m);
+  assert.match(text(), /^Antigravity \(agy\) signed in · Full access only \(c checks it\)$/m);
 });
 
 // Antigravity CLI passed its check on this machine, so reading the vendors asks it for its
@@ -5870,7 +6189,7 @@ async function homeLayout(t, mode = 'normal') {
   const repo = projectFolder(fs.realpathSync(home)); registerProject(repo);
   return { ...p, home: repo.root, web, homeRepo: repo };
 }
-const TEAMMATE = { kind: 'handoff', peer: 'b'.repeat(64), name: 'aki', threadId: 'thread-1', own: true };
+const TEAMMATE = { kind: 'handoff', peer: 'b'.repeat(64), name: 'rio', threadId: 'thread-1', own: true };
 const lastClaude = p => fs.readFileSync(p.calls, 'utf8').trim().split('\n').map(line => JSON.parse(line)).filter(row => row.vendor === 'claude' && row.args.includes('-p')).at(-1).args;
 
 // "I approve" in a teammate-started session whose Task stopped, with the app opened at start.
@@ -5905,7 +6224,7 @@ test('the app opened in the repository: the same "I approve" runs the same way',
 test('the app: a teammate-started session that works in the home folder asks once before the owner\'s message goes; y keeps it and the message runs, n sends nothing', { timeout: 60000 }, async t => {
   const p = await homeLayout(t, 'answer');
   const controller = new ProjectController(p.homeRepo);
-  const first = await controller.ask('Work on the handoff from @aki shown in the peer data block.', null, { origin: { ...TEAMMATE, a2aTaskId: 'task-1', hop: 1 }, context: 'Where are the tests?', permissions: 'ask', home: true }).finished;
+  const first = await controller.ask('Work on the handoff from @rio shown in the peer data block.', null, { origin: { ...TEAMMATE, a2aTaskId: 'task-1', hop: 1 }, context: 'Where are the tests?', permissions: 'ask', home: true }).finished;
   await controller.close();
   const { homeAllowed: _allowed, ...rest } = readTask(p.homeRepo, first.id); saveTask(p.homeRepo, rest);
   const v = await view(t, { repo: p.homeRepo });
@@ -5930,7 +6249,7 @@ test('the app: a teammate-started session that works in the home folder asks onc
 // record, as one from before 0.1.9 is. Returns its id.
 async function homeTeammateSession(p) {
   const controller = new ProjectController(p.homeRepo);
-  const first = await controller.ask('Work on the handoff from @aki shown in the peer data block.', null, { origin: { ...TEAMMATE, a2aTaskId: 'task-1', hop: 1 }, context: 'Where are the tests?', permissions: 'ask', home: true }).finished;
+  const first = await controller.ask('Work on the handoff from @rio shown in the peer data block.', null, { origin: { ...TEAMMATE, a2aTaskId: 'task-1', hop: 1 }, context: 'Where are the tests?', permissions: 'ask', home: true }).finished;
   await controller.close();
   const { homeAllowed: _allowed, ...rest } = readTask(p.homeRepo, first.id); saveTask(p.homeRepo, rest);
   return first.id;
@@ -5939,25 +6258,25 @@ test('the app: a teammate\'s message held for a session in the home folder waits
   const p = await homeLayout(t, 'answer'), id = await homeTeammateSession(p);
   const v = await view(t, { repo: p.homeRepo }), status = () => v.current.panels.status.getText();
   await wide(v);
-  const row = enqueue(p.home, 'Work on the handoff from @aki shown in the peer data block.', { continuationTaskId: id, origin: { ...TEAMMATE, a2aTaskId: 'task-2', hop: 1 }, context: 'And the docs?', permissions: 'ask' });
+  const row = enqueue(p.home, 'Work on the handoff from @rio shown in the peer data block.', { continuationTaskId: id, origin: { ...TEAMMATE, a2aTaskId: 'task-2', hop: 1 }, context: 'And the docs?', permissions: 'ask' });
   const held = () => pendingRequests(p.home).find(value => value.id === row.id);
   await until(() => held()?.state === 'waiting', 'the conductor holds the message', 20000);
   assert.equal(held().reason, HOME_QUESTION);
   // Its row is under Needs you and says what it waits for.
-  await until(() => /NEEDS YOU/.test(rows(v).join('\n')) && rows(v).some(text => /@aki task/.test(text)), 'the row under Needs you').catch(error => { throw new Error(`${error.message}: ${rows(v).join(' | ')}`); });
-  await selectRow(v, /@aki task/);
+  await until(() => /NEEDS YOU/.test(rows(v).join('\n')) && rows(v).some(text => /@rio task/.test(text)), 'the row under Needs you').catch(error => { throw new Error(`${error.message}: ${rows(v).join(' | ')}`); });
+  await selectRow(v, /@rio task/);
   await until(() => /This session's project is your home folder\. Let it run here\?/.test(v.current.panels.chat.getText().replace(/\n┃ /g, ' ').replace(/\s+/g, ' ')), 'the question beside the list');
   // n: nothing changes, and it waits.
   v.input.write('y'); await dialog(v, 'Home folder', 'n');
   await until(() => /It waits for you\./.test(status()), 'n leaves it');
   assert.equal(held().state, 'waiting'); assert.equal(readTask(p.homeRepo, id).homeAllowed, undefined);
   // y: kept on the session, and the message runs.
-  await selectRow(v, /@aki task/);
+  await selectRow(v, /@rio task/);
   v.input.write('y');
   await until(() => modal(v, 'Home folder'), 'the question again');
   assert.match(dialogText(v, 'Home folder'), /This session's project is your home folder\. Let it run here\?\n\ny yes · n no/);
   await dialog(v, 'Home folder', 'y');
-  await until(() => /Approved @aki\. It runs in your home folder\./.test(status()), 'the approve line');
+  await until(() => /Approved @rio\. It runs in your home folder\./.test(status()), 'the approve line');
   assert.equal(readTask(p.homeRepo, id).homeAllowed, true);
   await until(() => held()?.state === 'done', 'the message ran', 30000);
   const value = readTask(p.homeRepo, id);
@@ -6029,10 +6348,9 @@ test('/mcp add asks for a name, the URL, the header and the key in a hidden fiel
   await send(v, '/mcp'); await until(() => modal(v, 'MCP servers'), 'the list');
   assert.match(dialogText(v, 'MCP servers'), /● on +elu/); assert.match(dialogText(v, 'MCP servers'), /\/mcp add adds one, and keeps its key out of the chat\. \/mcp remove NAME removes one\./);
   v.input.write('\x1b'); await until(() => !modal(v, 'MCP servers'), 'closed');
-  // Esc in the hidden field adds nothing.
-  await send(v, '/mcp add other'); await until(() => field('Add an MCP server'), 'the name, filled in');
-  assert.equal(field('Add an MCP server').getValue(), 'other'); v.input.write('\r');
-  await until(() => field('Add other', /Its URL/), 'the URL'); v.input.write('npx -y other-server\r');
+  // Esc in the hidden field adds nothing. A name typed after /mcp add is not asked for again.
+  await send(v, '/mcp add other'); await until(() => field('Add other', /Its URL/), 'the URL, the name taken as typed');
+  assert.ok(!modal(v, 'Add an MCP server'), 'the name is not asked'); v.input.write('npx -y other-server\r');
   await until(() => field('Add other', /The environment variable that carries its key, such as API_KEY\./), 'the variable'); v.input.write('OTHER_TOKEN\r');
   await until(() => field('OTHER_TOKEN · other'), 'the hidden field'); v.input.write('abc'); await until(() => v.frame().includes('•••'), 'typed');
   v.input.write('\x1b'); await until(() => !modal(v, 'OTHER_TOKEN · other') && /Nothing was added\./.test(status()), 'cancelled');
@@ -6048,6 +6366,42 @@ test('/mcp add asks for a name, the URL, the header and the key in a hidden fiel
   await send(v, '/mcp remove elu'); await until(() => /No MCP server named elu\. \/mcp lists yours\./.test(status()), 'gone');
   assert.deepEqual(filesHolding(p.parent, key), [], 'the key is in no file once removed: not in task files, logs or what the fake recorded');
   assert.ok(!v.raw.includes(key), 'and never on screen');
+});
+
+// The one-line form, as elu mcp add takes it: what is typed is not asked again; only the
+// rest is, and the key always in the hidden field.
+test('/mcp add NAME URL on one line asks only for what is missing: the header, then the key; with --header only the key; a command with --env only its key', { timeout: 60000 }, async t => {
+  const p = setup(t), key = keyLike('elu_live_', 'OneLine5Key', 'Typed0Here8'), file = path.join(p.parent, 'claude', '.claude.json');
+  const v = await view(t, { repo: p.repo }), panels = v.current.panels, status = () => panels.status.getText();
+  const saved = () => JSON.parse(fs.readFileSync(file, 'utf8')).mcpServers;
+  const field = (title, pattern = /./) => { const box = modal(v, title); const input = box?.children.find(child => child.type === 'textbox'); return input?.__listener && pattern.test(v.frame()) ? input : null; };
+  // NAME URL: the header is asked, then the key.
+  await send(v, '/mcp add tracker https://tracker.example.invalid/mcp'); await until(() => field('Add tracker', /The header that carries its key, such as Authorization\./), `the header, nothing before it\n${v.frame()}`);
+  assert.ok(!modal(v, 'Add an MCP server'), 'the name is not asked'); assert.doesNotMatch(v.frame(), /Its URL, such as/);
+  v.input.write('Authorization\r'); await until(() => field('Authorization · tracker', /It is hidden here/), 'the hidden field');
+  v.input.write(key); v.input.write('\r'); await until(() => /Added tracker\. Sessions get it from their next turn\./.test(status()), 'added');
+  assert.deepEqual(saved().tracker, { type: 'http', url: 'https://tracker.example.invalid/mcp', headers: { Authorization: `Bearer ${key}` } });
+  // NAME URL with no key: an empty header adds it as it is.
+  await send(v, '/mcp add docs https://docs.example.invalid/mcp'); await until(() => field('Add docs', /The header that carries its key/), 'the header');
+  v.input.write('\r'); await until(() => /Added docs\./.test(status()), 'added with no key');
+  assert.deepEqual(saved().docs, { type: 'http', url: 'https://docs.example.invalid/mcp' });
+  // NAME URL --header NAME: only the key is asked.
+  await send(v, '/mcp add files https://files.example.invalid/mcp --header X-Api-Key'); await until(() => field('X-Api-Key · files', /It is hidden here/), 'only the key');
+  v.input.write(key); v.input.write('\r'); await until(() => /Added files\./.test(status()), 'added');
+  assert.deepEqual(saved().files, { type: 'http', url: 'https://files.example.invalid/mcp', headers: { 'X-Api-Key': key } });
+  // NAME --env NAME COMMAND ARGS: the command keeps its own options; only the key is asked.
+  await send(v, '/mcp add gh --env GH_TOKEN npx -y gh-server --read-only'); await until(() => field('GH_TOKEN · gh', /It is hidden here/), 'only the key');
+  v.input.write(key); v.input.write('\r'); await until(() => /Added gh\./.test(status()), 'added');
+  assert.deepEqual(saved().gh, { type: 'stdio', command: 'npx', args: ['-y', 'gh-server', '--read-only'], env: { GH_TOKEN: key } });
+  // What does not fit is said, and nothing is asked or added.
+  await send(v, '/mcp add bad https://x.example.invalid/mcp --env TOKEN'); await until(() => /--env goes with a command\. A URL takes --header\./.test(status()), 'refused');
+  await send(v, '/mcp add bad https://x.example.invalid/mcp https://y.example.invalid/mcp'); await until(() => /Use \/mcp add NAME URL \[--header NAME\], or \/mcp add NAME \[--env NAME\] COMMAND \[ARGS\]\. What is left out is asked for\./.test(status()), 'refused');
+  assert.deepEqual(Object.keys(saved()).sort(), ['docs', 'files', 'gh', 'tracker']);
+  // A one-line add is kept out of what Up recalls, as a pasted config is.
+  panels.ask.focus(); panels.ask.readInput(); panels.ask.clearValue(); await until(() => panels.ask.__listener, 'message box');
+  v.input.write('\x1b[A'); await new Promise(resolve => setTimeout(resolve, 300));
+  assert.doesNotMatch(panels.ask.getValue(), /example\.invalid/);
+  assert.deepEqual(filesHolding(p.parent, key, [file]), [], 'the key is only in Claude Code\'s own file'); assert.ok(!v.raw.includes(key), 'and never on screen');
 });
 
 test('a pasted MCP config is never sent: ELU offers to add it, n leaves it in the box unsent, y adds it and the box keeps only the other words', { timeout: 60000 }, async t => {
@@ -6167,34 +6521,34 @@ function ownerState(p) {
   const newest = saveRequest(p.root, 'you have my approval', null, { state: 'running', priority: 0, continuationTaskId: '3', taskId: '3', attempts: 0, notBefore: null, queuedAt: latest, createdAt: latest });
   return { old, newest };
 }
-const ownerAsk = () => ({ id: 'in-aki', kind: 'incoming', peer: KEYS.li, name: 'aki', project: null, text: 'testing if u get my messages', at: ago(10 * 3600 + 100), state: 'submitted', threadId: 'th-aki', request: 'ask' });
+const ownerAsk = () => ({ id: 'in-rio', kind: 'incoming', peer: KEYS.li, name: 'rio', project: null, text: 'testing if u get my messages', at: ago(10 * 3600 + 100), state: 'submitted', threadId: 'th-rio', request: 'ask' });
 
 test("the owner's list: his one running session is one row, its spent messages leave the queue, and n in the pane beside the list declines the teammate's question", { timeout: 40000 }, async t => {
   const p = setup(t), { newest } = ownerState(p);
   const peer = fakePeer({ items: [ownerAsk()] }), v = await view(t, { repo: p.repo, peer }), panels = v.current.panels, status = () => panels.status.getText();
   await wide(v);
-  await until(() => rows(v).some(row => /@aki question/.test(row)) && rows(v).some(row => /Email logs/.test(row)), 'his rows');
+  await until(() => rows(v).some(row => /@rio question/.test(row)) && rows(v).some(row => /Email logs/.test(row)), 'his rows');
   // The first load takes the two old messages out of the queue for good; nothing else is touched.
   await until(() => pendingRequests(p.root).map(row => row.id).join() === newest.id, 'the spent messages leave the queue');
   const list = rows(v).join('\n');
   assert.match(list, /NEEDS YOU 1 /); assert.match(list, /RUNNING 1 /); assert.doesNotMatch(list, /I approve|NEEDS YOU [2-9]/);
   assert.equal(rows(v).filter(row => /Email logs/.test(row)).length, 1, 'one session, one row');
   // The question beside the list names its keys, and they work there: n declines it and starts nothing.
-  await selectRow(v, /@aki question/);
+  await selectRow(v, /@rio question/);
   await until(() => /y accept · n decline · enter read/.test(panels.chat.getText()), 'its keys beside the list');
   panels.chat.focus();
   await until(() => /y accept {2}n decline {2}c decline {2}letter then enter {2}↑↓ scroll {2}esc sessions/.test(panels.keys.getText()), 'the same keys while the pane has the focus');
   // Ctrl-Y and Ctrl-N there answer nothing.
   v.input.write('\x19'); v.input.write('\x0e'); await pause(300);
   assert.deepEqual(peer.sent.filter(c => ['approve', 'discard', 'work'].includes(c.type)), [], 'Ctrl-Y and Ctrl-N answer nothing');
-  assert.ok(rows(v).some(row => /@aki question/.test(row)), 'the question still waits');
+  assert.ok(rows(v).some(row => /@rio question/.test(row)), 'the question still waits');
   v.input.write('n');
-  await until(() => peer.sent.some(c => c.type === 'discard' && c.id === 'in-aki') && /Declined @aki's message\./.test(status()), 'n declines it from the pane');
+  await until(() => peer.sent.some(c => c.type === 'discard' && c.id === 'in-rio') && /Declined @rio's message\./.test(status()), 'n declines it from the pane');
   assert.equal(panels.ask.getValue(), ''); assert.deepEqual(pendingRequests(p.root).map(row => row.goal), ['you have my approval'], 'no session was started');
   assert.deepEqual(projectSnapshot(p.repo).tasks.map(task => task.id), ['3']);
   // y works there too.
   v.input.write('y');
-  await until(() => peer.sent.some(c => c.type === 'approve' && c.id === 'in-aki'), 'y accepts it from the pane');
+  await until(() => peer.sent.some(c => c.type === 'approve' && c.id === 'in-rio'), 'y accepts it from the pane');
 });
 
 test('c takes away whatever the list shows: a blocked message is removed, a teammate\'s message is declined, and a session with a message that did not run is archived with it', { timeout: 40000 }, async t => {
@@ -6295,7 +6649,7 @@ test('y or n alone in an open session answers what it waits on; with nothing wai
 test("Ctrl-C beside the list declines nothing: the teammate's question is never answered by it", { timeout: 30000 }, async t => {
   const p = setup(t), peer = fakePeer({ items: [ownerAsk()] }), v = await view(t, { repo: p.repo, peer }), panels = v.current.panels;
   await wide(v);
-  await selectRow(v, /@aki question/);
+  await selectRow(v, /@rio question/);
   await until(() => /y accept · n decline · enter read · c decline/.test(panels.chat.getText()), 'its keys beside the list');
   panels.chat.focus();
   await until(() => /y accept {2}n decline {2}c decline/.test(panels.keys.getText()), 'the pane has the focus');
@@ -6352,11 +6706,11 @@ test("a lone y or n taken as a key leaves nothing behind: not in the message box
   const peer = fakePeer({ items, results }), v = await view(t, { repo: p.repo, peer }), panels = v.current.panels;
   await wide(v);
   // Where n declines, the key bar does not also name it as new session.
-  await selectRow(v, /@aki question/);
+  await selectRow(v, /@rio question/);
   await until(() => panels.keys.getText().trim() === 'y accept  n decline  enter read  c decline  letter then enter  tab next', 'the question row keys').catch(error => { throw new Error(`${error.message}: ${panels.keys.getText()}`); });
   await send(v, 'n');
-  await until(() => peer.sent.some(c => c.type === 'discard' && c.id === 'in-aki') && /Declined @aki's message\./.test(status()), 'a lone n declines');
-  await until(() => !rows(v).some(row => /@aki question/.test(row)) && /Release notes/.test(cursor(v)), 'the question has left the list, and the cursor is on the session');
+  await until(() => peer.sent.some(c => c.type === 'discard' && c.id === 'in-rio') && /Declined @rio's message\./.test(status()), 'a lone n declines');
+  await until(() => !rows(v).some(row => /@rio question/.test(row)) && /Release notes/.test(cursor(v)), 'the question has left the list, and the cursor is on the session');
   assert.equal(panels.ask.getValue(), '');
   await selectRow(v, /\+ New session/);
   assert.equal(panels.ask.getValue(), '', 'the new session has no draft');
@@ -6442,6 +6796,18 @@ test('kill -TERM puts the terminal back at once, before the sessions have stoppe
     const quiet = v.raw.length; await pause(200); assert.equal(v.raw.length, quiet);
   } finally { release(); }
   await v.finished;
+});
+
+// What /slots limits, in /help's line for it: whole on one row of an 80-column screen.
+test("/help's line for /slots says a limit holds back what starts by itself and never what you type", { timeout: 15000 }, async t => {
+  const p = setup(t), v = await view(t, { repo: p.repo });
+  await send(v, '/help'); await until(() => modal(v, 'Commands'), 'help');
+  const body = modal(v, 'Commands').children.find(child => child.options?.scrollable), drawn = (body._clines ?? []).map(line => String(line).replace(/\x1b\[[\d;]*m/g, '').trim());
+  const at = drawn.indexOf('/slots [number|off]');
+  assert.ok(at >= 0, drawn.join('\n'));
+  assert.equal(drawn[at + 1], 'Limit what starts by itself; what you type always starts', 'the whole line on one row');
+  assert.match(drawn[at + 2], /^\//, 'the next row is the next command');
+  await dialog(v, 'Commands', '');
 });
 
 test('/help says c archives a session and names /archive, as the key bar does', { timeout: 15000 }, async t => {

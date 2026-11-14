@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { temp, git, fakeClis } from './helpers.mjs';
-import { projectFolder, createFolderPlan, createFolder, historyPlan, createHistory, pendingRequests, saveRequest, addToRequest, updateRequest } from '../lib/workspace.mjs';
+import { projectFolder, createFolderPlan, createFolder, historyPlan, createHistory, pendingRequests, saveRequest, addToRequest, updateRequest, ownerTyped } from '../lib/workspace.mjs';
 import { ProjectController, projectSnapshot, registerProject, dashboardSnapshot } from '../lib/projects.mjs';
 import { initPlan, applyInit } from '../lib/init.mjs';
 import { personalDirectory } from '../lib/usage.mjs';
@@ -104,6 +104,21 @@ test('a message is added to a request only while that request still waits to sta
   // Once the conductor has taken the request it is not added.
   for (const state of ['starting', 'running', 'blocked']) { updateRequest(f.root, first.id, { state }); assert.equal(addToRequest(f.root, first.id, 'Third'), null, state); }
   assert.equal(addToRequest(f.root, 'request-none', 'Third'), null); assert.equal(pendingRequests(f.root)[0].goal, `First\n\nSecond\n\n${long}`);
+});
+
+// What the owner types into a run that waits to start makes it his: it starts at once, past
+// a slot or a later time, as his key does (ownerTyped). A message added for him by ELU does not.
+test("a message the owner typed into a waiting run makes it his, so it starts now; the run keeps its own message first", t => {
+  const f = fixture(t), later = new Date(Date.now() + 3600000).toISOString();
+  const run = saveRequest(f.root, 'Check the nightly build', null, { state: 'queued', scheduleId: 'schedule-0000000e', attempts: 0, notBefore: later, waits: { on: 'slot', running: 1, limit: 1 }, reason: 'Waiting for a free slot: 1 of 1 session is running. /slots changes it.' });
+  assert.equal(ownerTyped(run), false);
+  const quiet = addToRequest(f.root, run.id, 'From a tool');
+  assert.deepEqual([quiet.typed, quiet.notBefore, quiet.waits], [undefined, later, { on: 'slot', running: 1, limit: 1 }]);
+  const joined = addToRequest(f.root, run.id, 'Also check the docs build', { typed: true });
+  assert.equal(joined.goal, 'Check the nightly build\n\nFrom a tool\n\nAlso check the docs build'); assert.equal(joined.scheduleId, 'schedule-0000000e');
+  const kept = pendingRequests(f.root)[0];
+  assert.deepEqual([kept.typed, kept.notBefore, kept.waits, kept.reason], [true, null, undefined, 'Waiting to start.']);
+  assert.equal(ownerTyped(kept), true);
 });
 
 test('the dashboard can read a new project before history or settings exist', t => {
