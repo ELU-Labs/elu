@@ -3060,6 +3060,21 @@ test('a message sent while Claude Code works goes to its turn, and the chat says
 // The owner's report: the model sat in one long command, his message read "Sent to the running
 // turn", and nothing read it until the command ended. It waits, and the chat says so; Enter
 // sends it now with Claude Code's own interrupt, and the same turn goes on with it.
+// The owner's report: sent while the turn ran no command, the status line said "The running
+// turn reads it at its next step." while the row under his message said it waits for the
+// command. Both say the same, and what is true then: at its next step.
+test('a message sent while the turn runs no command says, in the status line and under it, that the turn reads it at its next step', { timeout: 60000 }, async t => {
+  const p = setup(t, 'listen'); fakeClis(p.parent, { mode: 'listen', steps: 2, stepMs: 30000 });
+  const v = await view(t, { repo: p.repo }), panels = v.current.panels, chat = () => panels.chat.getText(), task = () => projectSnapshot(p.repo).tasks[0];
+  await send(v, 'Read the coupon rule');
+  await until(() => task()?.activeInbox === true && /Opus is working/.test(chat()) && /Read: src\/coupon\.mjs/.test(chat()), 'the model works, takes messages and ran a step');
+  await send(v, 'Also cover refunds');
+  await until(() => /› Sent\. The running turn reads it at its next step\./.test(panels.status.getText()), 'the status line');
+  await until(() => pendingRequests(p.root).some(row => row.goal === 'Also cover refunds' && row.turn), 'the turn holds it');
+  await until(() => /You \(read at the turn's next step\) {2}[^\n]*\n[^\n]*Also cover refunds *\nThe\s+running\s+turn\s+reads\s+it\s+at\s+its\s+next\s+step\.\nEnter sends it now · ↑ takes it back/.test(chat()), 'the row under it says the same');
+  assert.doesNotMatch(chat(), /command it is running/);
+});
+
 test('a message sent while Claude Code runs a long command waits for the command, and Enter sends it now: the same turn answers it', { timeout: 60000 }, async t => {
   const p = setup(t, 'command'); fakeClis(p.parent, { mode: 'command', commandMs: 60000 });
   const v = await view(t, { repo: p.repo }), panels = v.current.panels, chat = () => panels.chat.getText(), task = () => projectSnapshot(p.repo).tasks[0];
@@ -3067,6 +3082,7 @@ test('a message sent while Claude Code runs a long command waits for the command
   await send(v, 'Run the long check');
   await until(() => task()?.activeInbox === true && /Opus is working/.test(chat()), 'the model works and takes messages');
   await send(v, 'Also cover refunds');
+  await until(() => /› Sent\. The running turn reads it when the command it is running ends\./.test(panels.status.getText()), 'the status line says what the row says');
   await until(() => /You \(read after the command\) {2}[^\n]*\n[^\n]*Also cover refunds *\nThe\s+running\s+turn\s+reads\s+it\s+when\s+the\s+command\s+it\s+is\s+running\s+ends\.\nEnter sends it now · ↑ takes it back/.test(chat()), 'it waits for the command, and the keys are named');
   await new Promise(resolve => setTimeout(resolve, 600));
   assert.doesNotMatch(chat(), /Sent to the running turn\./, 'not said before the turn took it');

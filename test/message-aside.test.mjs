@@ -7,7 +7,7 @@ import { ProjectController, conversationEntries, projectSnapshot, registerProjec
 import { projectFolder, pendingRequests, takeRequest } from '../lib/workspace.mjs';
 import { readTask } from '../lib/state.mjs';
 import { Conductor, enqueue, sendCommand } from '../lib/conductor.mjs';
-import { ASIDE_ANSWERED, ASIDE_RUNNING, ASIDE_WORK, readAsides, waitingWords } from '../lib/message-aside.mjs';
+import { ASIDE_ANSWERED, ASIDE_RUNNING, ASIDE_WORK, readAsides, runsCommand, sentWords, waitingWords } from '../lib/message-aside.mjs';
 
 // The owner's report: he wrote to a session in the middle of a long turn on a vendor that
 // takes no message while it works, and the chat said only that his message waits for the turn
@@ -209,6 +209,29 @@ test('a message sent while the session runs its checks, when no turn could take 
   assert.match(f.inputs().findLast(row => row.input.includes(BESIDE)).input, /ELU is running the project's checks on what this session changed\./);
   sendCommand({ type: 'stop', root: f.root, taskId: id });
   await until(() => !['running', 'preparing'].includes(projectSnapshot(f.repo).tasks.find(task => task.id === id).state), 'stopped', 30000);
+});
+
+// A turn that holds his message reads it when the command it runs ends, or at its next step
+// when it runs none. The row under the message and the status line say the same, as it is now.
+test('a message the running turn holds is read when its command ends, or at its next step when no command runs; the status line says the same', () => {
+  const said = (row, options) => { const words = waitingWords(row, options); return [words.tag, ...words.lines, words.keys].filter(Boolean).join(' | '); };
+  const run = (text, status = 'running', extra = {}) => ({ kind: 'tool', text, status, ...extra });
+  // Whether a command runs now: the turn's own newest call is a command that has not ended.
+  assert.equal(runsCommand([run('Read: src/coupon.mjs', 'ok'), run('Run: npm test')]), true);
+  assert.equal(runsCommand([run('Run: npm test', 'ok'), { kind: 'text', text: 'The tests pass.' }]), false, 'the command ended');
+  assert.equal(runsCommand([run('Run: npm test', 'ok'), run('Read: src/coupon.mjs')]), false, 'a read is a step, not a command');
+  assert.equal(runsCommand([run('Run: npm test'), run('Read: lib/a.mjs', 'running', { sub: true })]), true, 'a helper agent\'s step is not the turn\'s');
+  assert.equal(runsCommand([]), false); assert.equal(runsCommand(null), false);
+  // No command runs: the turn reads it at its next step, and the row says so.
+  assert.equal(said({ state: 'queued', turn: { run: 'r', uuid: 'u' } }, { working: true, goes: true, command: false }), "read at the turn's next step | The running turn reads it at its next step. | Enter sends it now · ↑ takes it back");
+  assert.equal(waitingWords({ state: 'queued', turn: {} }, { working: true, goes: true, command: false }).short, 'read at next step');
+  assert.equal(said({ state: 'queued', turn: {} }, { working: true, goes: true, command: false, there: '@devbox', enter: false }), "read at the turn's next step | The running turn on @devbox reads it at its next step. | ↑ takes it back");
+  // A command runs: when it ends.
+  assert.equal(said({ state: 'queued', turn: {} }, { working: true, goes: true, command: true }), 'read when the running command ends | The running turn reads it when the command it is running ends. | Enter sends it now · ↑ takes it back');
+  // The status line once it is sent: the same.
+  assert.equal(sentWords({ goes: true }), 'The running turn reads it at its next step.');
+  assert.equal(sentWords({ goes: true, command: true }), 'The running turn reads it when the command it is running ends.');
+  assert.equal(sentWords({ goes: true, command: true, there: '@devbox' }), 'Its running turn reads it when the command it is running ends.');
 });
 
 test('what the chat says under a waiting message never is a bare "waiting": each state says what happens and when', () => {

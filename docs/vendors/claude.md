@@ -29,8 +29,9 @@ that too. Claude Code takes a user message that comes while it works in at the t
 step, and the turn goes on with it; the one reply answers everything. For a message with a
 uuid it writes `command_lifecycle` lines (`queued`, `started`, `completed`, or `cancelled`).
 Until `started`, the chat says under the message "The running turn reads it when the
-command it is running ends.": behind one long command, the next step is when that command
-ends. Once
+command it is running ends." while a command runs: behind one long command, the next step
+is when that command ends. While none runs it says "The running turn reads it at its next
+step.", and the status line says the same as the chat when the message is sent. Once
 `started` comes, the chat shows your message where you sent it, with "Sent to the running
 turn." under it, and the session's history keeps it once. Several go in the order you sent
 them. Only a message for the one working turns go: yours to the model while the model
