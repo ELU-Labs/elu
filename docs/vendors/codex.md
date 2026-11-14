@@ -41,15 +41,64 @@ Resume: `codex exec resume <thread_id> -` with the same `-c` set. `exec resume` 
 ## Messages you send while a turn works
 
 `codex exec` reads its prompt to the end of its input before it starts, and has no way to
-take more while it works. So a message you send to a Codex turn waits in the chat, "Sent
-when this turn ends.", and Enter in the empty message box sends it now: the turn stops as
-`/stop` stops it, its edits and the chat kept, and what waits starts the next turn at once,
-in the order sent, as one message. Outside Read only the next turn goes on in the thread
-that was stopped (`codex exec resume <thread id>`, the id read from the stopped run's
-`thread.started` line), so Codex keeps what it was doing. A Read only turn starts a new
-thread each time, as before, so there the next turn is given what the stopped one wrote and
-did, read from its log: each message, each command with its exit code and what it printed
-(one still running is marked as stopped), and the files it changed.
+take more while it works. The same program has a second interface that can:
+`codex app-server --listen stdio://`, JSON-RPC over standard input and output. There a turn
+is started with `turn/start`, and `turn/steer` (`threadId`, `expectedTurnId`, `input`) adds
+user input to the turn that runs: the model reads it at its next step, with the rest of the
+thread, and one reply answers everything [run: codex-cli 0.167.0, `turn/steer` during a
+running command, the model's next request held the message].
+
+So a turn of yours in your own session runs through the app-server where the installed
+Codex has `turn/steer`. ELU asks the program itself, once for each installed binary (its
+path, size and date): it starts the app-server, sends `initialize`, then `turn/steer` for a
+thread that does not exist. A program that answers that it has no such method, or has no
+app-server, keeps `codex exec` for every turn, as before. No list of versions decides it.
+
+Through the app-server everything `exec --json` gives stays: ELU starts the thread with
+the same `-c` keys, `cwd`, `sandbox`, `approvalPolicy` and model (`thread/start`, or
+`thread/resume` with the thread id), sends the same prompt and reply schema (`turn/start`,
+`outputSchema`), and writes each notification as the line `exec --json` prints for it
+(`thread.started`, `turn.started`, `item.started`, `item.completed`, `turn.completed` with
+the token usage, `turn.failed`), so steps, commands, edits, usage, the modes, the sandbox,
+the never list and the resume of the thread read as they did [run: the same Full access
+launch through exec and through the app-server gave the same lines, tools, schema, model
+and usage; a thread started one way resumed the other way with its history whole].
+
+A message you send while the turn works goes to it, and the chat shows it with "Sent to
+the running turn." once the turn read it. Codex cannot give a message back once it is
+steered, so while a command runs ELU holds the message until that command ends: the chat
+says "The running turn reads it when the command it is running ends.", `↑` takes it back
+until then, and Enter in the empty message box sends it now. Sent now, ELU stops the
+command and the turn (`turn/interrupt`) and starts the next turn of the same thread with
+your message at once, in the same run [run: two `sleep` processes went from running to
+none, and the same run answered with the message 3.5 seconds later]. A message steered
+between two steps cannot be taken back: the chat says the turn has it.
+
+The app-server has no `--ignore-user-config` and no `--ignore-rules`. Outside Full access,
+where ELU leaves your own Codex `config.toml` and rules out, a computer that has either
+keeps `codex exec` for that turn. In Full access the app-server reads your `config.toml`
+as Codex itself would, with ELU's own `-c` keys laid over it; the MCP servers it names stay,
+since `-c mcp_servers={}` does not take them away there [run].
+
+Where a turn runs through `codex exec` (a Codex without `turn/steer`, or the case above),
+it takes no message while it works. A message sent to it is answered at once beside the
+turn: a short read-only `codex exec` on the session's model, in a thread of its own, reads
+the chat and every step the turn has taken so far, and its answer shows in the chat,
+marked "Answered beside the running turn, from what it has done so far. The turn goes on."
+A question is done with that. A message that asks for work says so and starts the next turn
+when this one ends, and Enter in the empty message box sends it now: the turn stops as
+`/stop` stops it, its edits and the chat kept, and what has not run starts the next turn at
+once, in the order sent, as one message. Outside Read only the next turn goes on in the
+thread that was stopped (`codex exec resume <thread id>`, the id read from the stopped
+run's `thread.started` line), so Codex keeps what it was doing. A Read only turn starts a
+new thread each time, as before, so there the next turn is given what the stopped one wrote
+and did, read from its log: each message, each command with its exit code and what it
+printed (one still running is marked as stopped), and the files it changed.
+
+Proven with the installed codex-cli 0.167.0 spoken to over its app-server, with a stand-in
+model service in place of the real one; no turn was run on a real model or account. The
+approval requests the app-server sends a client were answered in tests with the stand-in
+only.
 
 ## What the owner sees
 

@@ -164,13 +164,20 @@ machine cannot read it with `ps`.
 
 `agy -p` runs one prompt; `--input-format stream-json` runs a turn for each line it reads,
 one after the other, never into the turn that runs; an ACP turn answers one
-`session/prompt`. So a message you send while Antigravity works waits in the chat, "Sent
-when this turn ends.", and Enter in the empty message box sends it now: the turn stops as
-`/stop` stops it and what waits starts the next turn at once. Over ACP the next turn goes
-on in the conversation that was stopped (`session/resume`). A headless run names its
-conversation only in the line it ends with, and prints nothing of its work before that
-line. So after a stopped headless turn the next one starts from the chat, and is told that
-the turn before it was stopped and that the files it changed are as it left them.
+`session/prompt`, and ACP has no request that adds to it. (Read from the program's help and
+the protocol; no installed Antigravity was asked for this again.) So Antigravity takes no
+message while its turn works, and a message you send then is answered at once beside the
+turn: a short read-only run on the session's model reads the chat and every step the turn
+has taken so far, and its answer shows in the chat, marked "Answered beside the running
+turn, from what it has done so far. The turn goes on." A question is done with that. A
+message that asks for work says so and starts the next turn when this one ends, and Enter
+in the empty message box sends it now: the turn stops as `/stop` stops it and what has not
+run starts the next turn at once. Over ACP the next turn goes on in the conversation that
+was stopped (`session/resume`). A headless run names its conversation only in the line it
+ends with, and prints nothing of its work before that line. So after a stopped headless
+turn the next one starts from the chat, and is told that the turn before it was stopped and
+that the files it changed are as it left them. A headless turn has no steps for the run
+beside it to read, so there the answer comes from the chat alone.
 
 ## What each mode enforces
 

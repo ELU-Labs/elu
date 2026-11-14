@@ -87,11 +87,18 @@ Grok reads as it reads `AGENTS.md`, are Grok's and do not count.
 
 A headless turn (`--prompt-file`) reads one prompt and an ACP turn answers one
 `session/prompt`; the program queues prompts sent during a turn of its own, but a client has
-no documented way to add to the one that runs. So a message you send while Grok Build works
-waits in the chat, "Sent when this turn ends.", and Enter in the empty message box sends it
-now: the turn stops as `/stop` stops it and what waits starts the next turn at once. The next
-turn goes on in the session that was stopped: the one the launch named with `-s`, or the
-ACP session from `session/new`, loaded with `session/load`.
+no documented way to add to the one that runs: ACP gives a client `session/prompt`, answered
+when the turn ends, and `session/cancel`, nothing between. (Read from the protocol and the
+program's own pages; no installed Grok Build was asked for this.) So Grok Build takes no
+message while its turn works, and a message you send then is answered at once beside the
+turn: a short read-only run on the session's model reads the chat and every step the turn
+has taken so far, and its answer shows in the chat, marked "Answered beside the running
+turn, from what it has done so far. The turn goes on." A question is done with that. A
+message that asks for work says so and starts the next turn when this one ends, and Enter
+in the empty message box sends it now: the turn stops as `/stop` stops it and what has not
+run starts the next turn at once. The next turn goes on in the session that was stopped:
+the one the launch named with `-s`, or the ACP session from `session/new`, loaded with
+`session/load`.
 
 ## How each mode runs
 
