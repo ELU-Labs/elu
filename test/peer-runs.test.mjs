@@ -15,6 +15,8 @@ import { validateResult, validateConversation, conversationSchema, resultSchema 
 import { protectedPath, protectedFiles } from '../lib/policy.mjs';
 import * as claude from '../lib/adapters/claude.mjs';
 import * as codex from '../lib/adapters/codex.mjs';
+import * as grok from '../lib/adapters/grok.mjs';
+import * as agy from '../lib/adapters/agy.mjs';
 import { READ_ONLY_REPLY, RULES_ACCEPTED, RULES_PROPOSE, STUCK_LINE, STUCK_REPLY, setPermissions } from '../lib/runner.mjs';
 import { isPeerRun, saveDefaultMode } from '../lib/modes.mjs';
 import { peerFile } from '../lib/peer/paths.mjs';
@@ -521,6 +523,69 @@ test('approved work that stops on a question sends its result once the owner\'s 
   assert.deepEqual(s.sent, ['SendMessage']); assert.equal(s.results().length, 2);
 });
 
+// A reply as long as a model may write it: over 20,000 characters, in plain words.
+const LONG_REPLY = `${Array.from({ length: 400 }, (_, index) => `Step ${index + 1}: normalize returns the coupon code in upper case.`).join('\n')}\nThe end.`;
+
+test('a result the model wrote itself reaches the teammate whole whatever its length: 20,000 characters arrive in the asker\'s thread, and the run does not fail for them', async t => {
+  assert.ok(LONG_REPLY.length > 20000, String(LONG_REPLY.length));
+  const s = await plannedBySara(t);
+  const asked = createAsk(s.saraCtx, { to: s.sara.me.key, kind: 'ask', text: HANDOFF, threadId: 'thread-1' });
+  // The model ends the approved work with a long account of it. ELU 0.1.19 answered one over
+  // 4,000 characters with "The run returned an invalid outcome or summary." and the work failed.
+  s.p.extra({ summary: LONG_REPLY });
+  await s.approve();
+  const done = readTask(s.p.repo, s.id);
+  assert.equal(done.error ?? null, null, JSON.stringify(done.error)); assert.ok(done.runs.every(run => !run.again), JSON.stringify(done.runs.map(run => run.again)));
+  assert.equal(sessionTasks(s.p.repo, s.id).at(-1).state, 'done');
+  assert.equal(s.summary(), LONG_REPLY, 'the session keeps every character the model wrote');
+  processOutbox(s.ctx);
+  await until(() => s.results('in').length === 1, 'the result at sara');
+  // Every character is in the thread on both computers, on the ask it answers, and in what the thread screen reads.
+  assert.deepEqual(s.sent, ['SendMessage']);
+  assert.equal(s.results('out')[0].text, LONG_REPLY); assert.equal(s.results('in')[0].text, LONG_REPLY);
+  assert.equal(getAsk(asked.id).result.text, LONG_REPLY);
+  assert.ok(threadMessages('thread-1').some(row => row.kind === 'result' && row.text === LONG_REPLY), 'the thread screen reads it whole');
+  assert.equal(s.results().filter(line => line.text === 'The approved work stopped before it was done.').length, 0);
+});
+
+test('a teammate\'s question answered at length is sent whole, also when a line of ELU\'s is added under it', async t => {
+  // The model asks to edit, which a teammate's question never does: its answer goes, with why.
+  const p = setup(t, 'normal'); p.extra({ intent: 'edit', summary: LONG_REPLY });
+  const row = ask(p.root); conduct(t);
+  await until(() => request(p.root, row.id)?.state === 'done', 'peer ask');
+  const value = task(p.repo, request(p.root, row.id).taskId);
+  assert.equal(value.state, 'answered', JSON.stringify(value.error));
+  assert.equal(value.result.summary, `${LONG_REPLY}\n\nEdit requests need the owner.`);
+  assert.equal(outbox(row.id).text, value.result.summary); assert.equal(outbox(row.id).outcome, 'done');
+});
+
+test('what a model writes is read whole whatever its length, from every vendor: its summary, its question, review text and a draft ask', () => {
+  const good = { outcome: 'done', summary: LONG_REPLY, question: null, choices: [], comments: [], responses: [] };
+  assert.equal(validateResult(good).summary, LONG_REPLY);
+  assert.equal(validateConversation({ ...good, intent: 'answer' }).summary, LONG_REPLY);
+  assert.equal(validateResult({ ...good, outcome: 'needs_input', question: LONG_REPLY }).question, LONG_REPLY);
+  const reviewed = validateResult({ ...good, comments: [{ id: 'R1', severity: 'must_fix', body: LONG_REPLY }], responses: [{ id: 'R1', action: 'disputed', reason: LONG_REPLY }] });
+  assert.equal(reviewed.comments[0].body, LONG_REPLY); assert.equal(reviewed.responses[0].reason, LONG_REPLY);
+  assert.equal(validateResult({ ...good, asks: [{ to: 'sara', project: '', question: LONG_REPLY }] }, { asks: true }).asks[0].question, LONG_REPLY);
+  // The shape each vendor is given asks for no length either.
+  for (const schema of [resultSchema({ asks: true }), conversationSchema({ asks: true })]) {
+    assert.equal(schema.properties.summary.maxLength, undefined); assert.equal(schema.properties.question.maxLength, undefined);
+    assert.equal(schema.properties.asks.items.properties.question.maxLength, undefined);
+    assert.equal(schema.properties.summary.minLength, 1);
+  }
+  // Text that is missing is still refused.
+  assert.throws(() => validateResult({ ...good, summary: ' ' }), /invalid outcome or summary/);
+  assert.throws(() => validateResult({ ...good, question: 7 }), /invalid question/);
+  assert.throws(() => validateResult({ ...good, comments: [{ id: 'R1', severity: 'must_fix', body: ' ' }] }), /Review text is missing/);
+  assert.throws(() => validateResult({ ...good, asks: [{ to: 'sara', project: '', question: ' ' }] }, { asks: true }), /A draft ask needs a question/);
+  // Each vendor's own output, read by its adapter: Claude Code, Codex, Grok Build and Antigravity.
+  const session = '12345678-1234-4234-8234-123456789abc', text = JSON.stringify(good);
+  assert.equal(claude.parse(JSON.stringify({ type: 'result', subtype: 'success', is_error: false, session_id: session, structured_output: good })).result.summary, LONG_REPLY);
+  assert.equal(codex.parse([{ type: 'thread.started', thread_id: session }, { type: 'item.completed', item: { type: 'agent_message', text } }, { type: 'turn.completed' }].map(row => JSON.stringify(row)).join('\n')).result.summary, LONG_REPLY);
+  assert.equal(grok.parse(JSON.stringify({ text, stopReason: 'end_turn', sessionId: session })).result.summary, LONG_REPLY);
+  assert.equal(agy.parseOutput(JSON.stringify({ conversationId: session, structured_output: good })).result.summary, LONG_REPLY);
+});
+
 test('approved work that fails again and again tells the teammate once for its Task, and its result still follows', async t => {
   const s = await plannedBySara(t), STOPPED = 'The approved work stopped before it was done.';
   createAsk(s.saraCtx, { to: s.sara.me.key, kind: 'ask', text: HANDOFF, threadId: 'thread-1' });
@@ -933,7 +998,7 @@ test('asks are accepted only where offered, and new agent config folders are pro
   assert.throws(() => validateResult({ ...good, asks }), /unknown field/);
   assert.deepEqual(validateResult({ ...good, asks }, { asks: true }), { ...good, asks });
   assert.deepEqual(validateResult(good, { asks: true }), good);
-  for (const bad of [[...asks, ...asks, ...asks, ...asks], [{ to: '', project: '', question: 'x' }], [{ to: 'sara', project: '', question: 'x'.repeat(2001) }], [{ to: 'sara', question: 'x' }], [{ ...asks[0], extra: 1 }]])
+  for (const bad of [[...asks, ...asks, ...asks, ...asks], [{ to: '', project: '', question: 'x' }], [{ to: 'sara', project: '', question: ' ' }], [{ to: 'sara', question: 'x' }], [{ ...asks[0], extra: 1 }]])
     assert.throws(() => validateResult({ ...good, asks: bad }, { asks: true }));
   assert.equal(validateConversation({ ...good, intent: 'edit' }).intent, 'edit');
   assert.throws(() => validateConversation({ ...good, intent: 'answer', asks }));
