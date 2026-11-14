@@ -197,6 +197,26 @@ test('a turn that is stopped while a message waits on its input loses nothing: t
   await until(() => only(f).state === 'stopped', 'stopped');
 });
 
+// Team access Auto: "you get the request and create a session as if I prompted you myself".
+// The work of such a session takes what the owner sends while it runs, as the work of one he typed does.
+test('the work of a session a teammate\'s message started as the owner\'s own takes what he sends while it works', { timeout: 90000 }, async t => {
+  const f = setup(t, { mode: 'listen', steps: 20, stepMs: 300 });
+  const origin = { kind: 'handoff', peer: 'b'.repeat(64), name: 'sara', a2aTaskId: 'task-1', threadId: 'thread-1', hop: 1, own: true };
+  enqueue(f.root, 'Work on the handoff from @sara shown in the peer data block.', { origin, context: 'Make normalize upper-case the coupon code.', permissions: 'full', place: { kind: 'worktree' }, folders: [] });
+  // Full access approves its Task, and the edit starts in the same request.
+  await until(() => { const task = sessionOf(f); return task?.kind !== 'conversation' && task?.state === 'running' && task.activeRole === 'lead' && (task.activeInbox === true || task.activeDeaf === true); }, 'its work turn runs', 60000);
+  assert.equal(only(f).activeInbox, true, 'the work turn takes his messages');
+  enqueue(f.root, 'Also keep the old name', { continuationTaskId: '1', priority: 0 });
+  await until(() => (only(f).messages ?? []).some(row => row.during), 'the work turn took it');
+  assert.equal(only(f).state, 'running', 'while it still works');
+  const work = f.turns('claude').at(-1);
+  assert.match(work.input, /this turn does its work/);
+  assert.ok(f.absorbed().some(row => row.mid && row.content.startsWith(DURING_LEAD) && row.content.includes('"text":"Also keep the old name"')), 'on the input of the work turn');
+  assert.deepEqual(pendingRequests(f.root).filter(row => row.reason === 'Sent to the running turn.').map(row => row.goal), ['Also keep the old name']);
+  await until(() => only(f).state !== 'running', 'the work ends', 60000);
+  assert.equal(only(f).messages.filter(row => row.text === 'Also keep the old name').length, 1, 'kept once');
+});
+
 // A Claude Code release whose init row names none of this takes no message while it works.
 test('without the capability in its init row, a message waits for the turn to end, and sent now the turn stops first', { timeout: 60000 }, async t => {
   const f = setup(t, { mode: 'command', commandMs: 30000, capabilities: false });

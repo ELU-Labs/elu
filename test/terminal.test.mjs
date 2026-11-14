@@ -1196,6 +1196,25 @@ test('@name in a session asks that bot, not the lead: @ offers the saved bots, t
 
 // The owner wrote to a bot, then sent "continue" with no name, and the session's model took
 // it. It goes to the bot they were talking to, and the title says so before it is sent.
+// Team access Auto starts a session as if the owner had typed the teammate's message. There too
+// his message with no @name goes to whoever he last wrote to, as in a session he typed.
+test('in a session a teammate\'s message started as the owner\'s own, a message with no @name goes to whoever he last wrote to', { timeout: 40000 }, async t => {
+  const p = setup(t, 'answer');
+  saveBot({ name: 'sec', vendor: 'claude', instructions: 'Review the change for leaked secrets.' });
+  const v = await view(t, { repo: p.repo }), panels = v.current.panels, label = () => panels.ask._label.getText();
+  v.output.columns = 120; v.output.rows = 30; v.output.emit('resize'); await until(() => v.current.screen.width === 120, 'room for whole lines');
+  const origin = { kind: 'handoff', peer: 'b'.repeat(64), name: 'sara', a2aTaskId: 'task-1', threadId: 'thread-1', hop: 1, own: true };
+  const first = await v.current.controller.ask('Work on the handoff from @sara shown in the peer data block.', null, { origin, context: 'Can I add multiple agents?', permissions: 'full' }).finished;
+  assert.equal(first.state, 'answered');
+  const task = () => v.current.controller.snapshot().tasks.find(row => row.id === first.id), roles = () => task().runs.map(run => run.role);
+  await openTask(v, /Can I add multiple/);
+  await send(v, '@sec Is the token a secret?'); await until(() => task().messages.at(-1)?.bot === 'sec' && task().state === 'answered', 'the bot answered', 20000);
+  await until(() => /^ Message @sec · @model writes to Opus $/.test(label()), 'the title names the bot');
+  await send(v, 'continue'); await until(() => roles().length === 3 && task().state === 'answered', 'the message with no name answered', 20000);
+  assert.deepEqual(roles(), ['lead', 'bot:sec', 'bot:sec'], 'the model did not take it');
+  assert.deepEqual(task().messages.filter(row => !row.bot && !row.from).map(row => row.to ? `${row.to} ${row.text}` : row.text), ['@sec Is the token a secret?', '@sec continue']);
+});
+
 test('a message with no @name goes to whoever the owner last wrote to in the session; the title names who gets it, and @model goes back to the model', { timeout: 40000 }, async t => {
   const p = setup(t, 'answer');
   saveBot({ name: 'sec', vendor: 'claude', instructions: 'Review the change for leaked secrets.' });

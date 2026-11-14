@@ -535,6 +535,11 @@ test('a quiet turn in Full access or Approve for me is carried on by ELU once, w
     assert.deepEqual(entries.map(entry => entry.role === 'ELU' ? 'line' : entry.lead ? 'reply' : 'you'), ['you', 'line', 'reply']);
     assert.deepEqual(placed.before.get(line), [task.runs[0]]); assert.deepEqual(placed.owned.get(entries.at(-1)), [task.runs[1]]);
   }
+  // A session a teammate's message started as the owner's own (team access Auto) is carried on as his own is.
+  const before = f.leads().length, origin = { kind: 'handoff', peer: 'b'.repeat(64), name: 'sara', a2aTaskId: 'task-1', threadId: 'thread-1', hop: 1, own: true };
+  const theirs = await f.controller.ask('Work on the handoff from @sara shown in the peer data block.', null, { origin, context: 'Where is coupon normalization?', permissions: 'full' }).finished;
+  assert.equal(theirs.state, 'answered', theirs.error?.message); assert.deepEqual(eluLines(theirs), ['No output for 2 seconds. ELU told it to carry on.']);
+  assert.equal(f.leads().length - before, 2, 'the turn that went quiet, and the one started in its place');
 });
 
 test('a turn that goes quiet again after ELU carried it on stops with one line, keeps its edits, and a frozen 900 reads as the default', async t => {
