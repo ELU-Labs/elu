@@ -96,6 +96,22 @@ test("a run whose program never began says what it printed, then to check its co
   assert.equal(rowTitle(there, now, 30), 'claude did not start · Fix the footer links on the shop page');
 });
 
+test("a run whose program's release could not be read never started: it says to check its command, here and on the computer that sent it, and its rows say it did not start", () => {
+  // As it is kept: the check refused it before any turn, so no run is recorded.
+  const message = 'Claude Code: This CLI is older than the oldest tested release, or its version could not be read.';
+  const failed = session({ kind: 'conversation', title: 'Fix the footer links on the shop page', runs: [], error: { message } });
+  const stop = stopLine(failed, { account: none });
+  assert.equal(stop.text, `${message} Check that claude runs in your terminal, then type continue.`);
+  const codex = stopLine(session({ runs: [], error: { message: 'Codex: This CLI is older than the oldest tested release, or its version could not be read.' } }), { account: none });
+  assert.equal(codex.action, 'Check that codex runs in your terminal, then type continue.');
+  const now = Date.parse(at) + 60000, [row] = boardRows([{ name: 'shop', root: '/p/shop', activity: [], tasks: [failed], queue: [] }], now);
+  assert.equal(rowTitle(row, now, 40), 'claude did not start · Fix the footer links on the shop page');
+  const line = failureLine({ task: failed, at: '@devbox', mine: true });
+  assert.match(line, /Check that claude runs in your terminal on @devbox, then send it again\.$/);
+  const there = { ...remoteRow({ id: crypto.randomUUID(), machine: 'd'.repeat(64), state: 'blocked', title: 'Fix the footer links on the shop page', error: line, createdAt: at, lastAt: at, entries: [], steps: [], approvals: [] }, 'devbox', now), grouped: true };
+  assert.equal(rowTitle(there, now, 30), 'claude did not start · Fix the footer links on the shop page');
+});
+
 test("an unknown cause is read from the run log's last result line: credits, rate limit, sign-in, network; a turn that went on to finish is no failure", t => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'stop-line-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const log = (name, rows) => { const file = path.join(dir, name); fs.writeFileSync(file, rows.map(row => JSON.stringify(row)).join('\n') + '\n'); return file; };
