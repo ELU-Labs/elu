@@ -297,6 +297,8 @@ for (const [vendor, name, version, folder, say] of HOMED) {
     assert.equal(fs.lstatSync(path.join(f.parent, '.made-in-run')).isFile(), true); assert.equal(fs.readFileSync(path.join(f.parent, '.made-in-run'), 'utf8'), 'made-in-run\n');
     assert.equal(fs.lstatSync(path.join(f.parent, '.newtool')).isDirectory(), true); assert.equal(fs.readFileSync(path.join(f.parent, '.newtool', 'token'), 'utf8'), 'token\n');
     assert.deepEqual(tools(), before, 'nothing under his own vendor folders was written');
+    // The model is told that ~ is links to his home, and where his home is.
+    assert.ok(f.inputs().at(-1).input.includes(`Your home folder (~) in this session is a folder of links to the entries at the top of the owner's home, ${f.parent}:`)); assert.ok(f.inputs().at(-1).input.includes(`use its path under ${f.parent}.`));
     // The next run in Full access has what he added since, and what the first run made.
     fs.writeFileSync(path.join(f.parent, '.terraformrc'), 'owner-terraform-token\n');
     fs.writeFileSync(script, `#!/bin/sh\n{ cat ~/.terraformrc ~/.made-in-run ~/.newtool/token; } > ${JSON.stringify(out)} 2>&1\n`, { mode: 0o700 });
@@ -316,6 +318,8 @@ for (const [vendor, name, version, folder, say] of HOMED) {
       assert.equal(task.state, 'answered', JSON.stringify(task.error));
       assert.equal(fs.readFileSync(out, 'utf8'), `${folder}\n`, 'the home holds the vendor\'s own folder and nothing else');
       assert.equal(fs.existsSync(path.join(f.parent, '.made-in-run')), false, 'what it made at the top of ~ stays in the private home');
+      // The Antigravity stand-in keeps no prompt over ACP.
+      if (vendor === 'grok') assert.equal(f.inputs().some(row => row.input.includes('Your home folder (~)')), false, 'and the model is told nothing about a home of links');
       assert.deepEqual(tools(), before);
     });
   }
