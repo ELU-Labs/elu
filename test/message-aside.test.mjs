@@ -162,6 +162,37 @@ test('Claude Code without the capability to take a message is answered beside it
   await until(() => only(f).state !== 'running' && (only(f).messages ?? []).some(row => row.aside), 'the turn to end and the record to take it');
 });
 
+// Grok Build and Antigravity read one prompt for a turn and take nothing after it (docs/vendors):
+// a message to a session on either is answered beside its turn the same way. The stand-in works
+// on its approved Task until the gate opens; a run beside it has no Task to carry out, so it
+// answers at once.
+for (const [vendor, name] of [['grok', 'Grok Build'], ['agy', 'Antigravity']]) {
+  test(`${name}, whose turn takes no message, is answered beside its turn the same way`, { timeout: 150000 }, async t => {
+    const gate = path.join(fs.mkdtempSync(path.join(fs.realpathSync(process.env.TMPDIR ?? '/tmp'), 'aside-gate-')), 'go'); t.after(() => fs.rmSync(path.dirname(gate), { recursive: true, force: true }));
+    const f = setup(t, { vendor, mode: 'normal', live: gate });
+    // The stand-in Grok Build is signed in, in this test's own home.
+    if (vendor === 'grok') { fs.mkdirSync(path.join(f.parent, '.grok')); fs.writeFileSync(path.join(f.parent, '.grok', 'auth.json'), '{}\n', { mode: 0o600 }); }
+    const prompts = () => f.inputs().map(row => row.input);
+    enqueue(f.root, 'Uppercase the coupon codes', { priority: 0, permissions: 'full' });
+    await until(() => sessionOf(f)?.state === 'running' && sessionOf(f).activeDeaf === true && prompts().some(text => /Keep the Task's subtasks in/.test(text)), 'the turn works on its Task and takes no message', 60000);
+    assert.equal(only(f).activeInbox, undefined);
+    const sent = enqueue(f.root, 'How far are you?', { continuationTaskId: '1', priority: 0 }), asked = Date.now();
+    await until(() => request(f, sent.id)?.aside?.state === 'answered', 'the answer beside the turn');
+    assert.ok(Date.now() - asked < 10000, 'within seconds, not when the turn ends');
+    assert.equal(only(f).state, 'running', 'the turn goes on');
+    // The run beside the turn was told so, and was given the chat and the message.
+    const side = prompts().find(text => text.includes(BESIDE));
+    assert.ok(side.includes('How far are you?') && side.includes('Uppercase the coupon codes'));
+    // Its reply reads as the answer to a question: the message is done with it, and the chat shows both now.
+    const answered = request(f, sent.id);
+    assert.deepEqual([answered.state, answered.reason, answered.aside.kind], ['done', ASIDE_ANSWERED, 'question']);
+    assert.deepEqual(shown(f).slice(-3).map(row => [row[0].replace(/^.* · /, '· '), row[2], row[3]]), [['You', false, false], ['· beside the turn', false, true], ['ELU', true, false]]);
+    assert.equal(shown(f).at(-2)[1], answered.aside.text);
+    fs.writeFileSync(gate, '');
+    await until(() => only(f).state !== 'running' && (only(f).messages ?? []).some(row => row.aside), 'the turn to end and the record to take it', 60000);
+  });
+}
+
 test('a message sent while the session runs its checks, when no turn could take it, is answered beside them the same way', { timeout: 120000 }, async t => {
   // The side run (read-only, so started with --permission-mode dontAsk) answers; the session's own turns edit.
   const f = setup(t, { vendor: 'claude', mode: 'normal', byMode: { dontAsk: { mode: 'answer' } } });
