@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { wrapText } from '../lib/terminal-visuals.mjs';
 import { stopLine } from '../lib/stop-line.mjs';
+import { joinWaiting } from '../lib/peer/cli.mjs';
 
 // A command the owner copies from a line is never broken across rows: the row that has no room
 // for all of it ends before it, so the command starts the next row whole.
@@ -35,4 +36,16 @@ test('a row ends before a command it has no room for, and a list item keeps its 
   assert.deepEqual(wrapText('- Sign in again with codex login --device-auth, then type continue.', 34), ['- Sign in again with', '  codex login --device-auth, then', '  type continue.']);
   // Words that only look like a command's start stay ordinary words.
   assert.deepEqual(wrapText('Codex login failed for the grok account', 16), ['Codex login', 'failed for the', 'grok account']);
+});
+
+// elu join draws its waiting line again in place each second. A line longer than the terminal
+// wrapped, and every count left a row of it behind.
+test('the waiting line of elu join fits one row of the terminal at every width, in fewer words where it must', () => {
+  assert.equal(joinWaiting(12, 120), 'Looking for the person who invited you… 12 s. Their ELU must be open. Ctrl-C cancels.');
+  assert.equal(joinWaiting(12, 80), 'Looking for who invited you… 12 s. Their ELU must be open. Ctrl-C cancels.');
+  assert.equal(joinWaiting(12, undefined), joinWaiting(12, 80), 'a terminal that gives no width counts as 80 columns');
+  assert.equal(joinWaiting(12, 60), 'Looking… 12 s. Their ELU must be open. Ctrl-C cancels.');
+  assert.equal(joinWaiting(12, 40), 'Looking… 12 s. Ctrl-C cancels.');
+  assert.equal(joinWaiting(12, 20), 'Looking… 12 s');
+  for (let columns = 20; columns <= 200; columns++) for (const seconds of [0, 9, 59, 600]) assert.ok(joinWaiting(seconds, columns).length < columns, `${columns} columns, ${seconds} s`);
 });
