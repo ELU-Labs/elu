@@ -9,6 +9,11 @@
 // and answers `inspect --json`, listing home-level Claude files whenever they exist (issue #34).
 // Modes: signed-out, invalid (bad result), fenced (result in a code fence), max-turns,
 // leaky (writes whatever the flags say), claude-bleed (inspect reports a Claude instruction).
+// grok (fake.json): 'edits' makes it take a request the way the fake Claude Code does in its
+// normal mode. A conversation turn asks for an edit (intent edit) unless the mode is answer,
+// with a Task until the prompt carries one the owner approved; a working turn changes
+// src/coupon.mjs where the launch lets it write, and reports its subtasks. Without it every
+// conversation turn is an answer, as before.
 import fs from 'node:fs'; import path from 'node:path'; import crypto from 'node:crypto'; import { spawnSync } from 'node:child_process';
 const vendor = path.basename(process.argv[1]); const args = process.argv.slice(2);
 let cfg = {}; try { cfg = JSON.parse(fs.readFileSync(path.join(path.dirname(process.argv[1]), 'fake.json'), 'utf8')); } catch {}
@@ -30,8 +35,13 @@ if (args[0] === 'login') { console.error('fake grok: login is interactive'); pro
 
 // What the prompt asks for, done as far as the launch allows. ask() decides an action the
 // rules neither allow nor forbid: the relay over ACP, nothing in headless mode.
+const TASK = { title: 'Uppercase coupons', description: 'Make normalize return the coupon code in upper case.\nOnly src/coupon.mjs changes.', goal: 'Coupon codes compare equal whatever their case.', objectives: ['normalize returns the code in upper case', 'The coupon test passes'], priority: 'medium', severity: 'low' };
 async function act(prompt, record, { bypass, canWrite, canShell, canFetch, cwd, ask }) {
   const blocked = [], did = [];
+  // The schemas ride in the prompt: the runner's conversation schema, a Task to propose, the progress of one.
+  const conversation = /"intent"\s*:\s*\{/.test(prompt), edits = cfg.grok === 'edits', source = path.join(cwd, 'src', 'coupon.mjs');
+  const edited = edits && !conversation && (canWrite || bypass) && fs.existsSync(source);
+  if (edited) fs.writeFileSync(source, 'export const normalize = (value) => value.toUpperCase();\n');
   const allow = async (action, free) => bypass || free || (ask ? ask(action) : false);
   if (/create (a |another )?file|files? at/i.test(prompt)) {
     for (const file of [...prompt.matchAll(/(\/\S+?\.txt)\b/g)].map(match => match[1])) {
@@ -55,10 +65,11 @@ async function act(prompt, record, { bypass, canWrite, canShell, canFetch, cwd, 
   // The quotes may be JSON-escaped: the runner carries the goal in a data block.
   let summary = prompt.match(/summary \\?"([^"\\]+)\\?"/)?.[1] ?? null;
   if (/what nonce/i.test(prompt)) summary = record.turns.join('\n').match(/nonce:? ([0-9a-f-]{36})/i)?.[1] ?? 'I was given no nonce.';
-  const result = { outcome: 'done', summary: summary ?? (did.length ? did.join('; ') : 'Done as asked.'), question: null, choices: [], comments: [], responses: [] };
+  const result = { outcome: 'done', summary: summary ?? (did.length ? did.join('; ') : edited ? 'Updated coupon normalization.' : 'Done as asked.'), question: null, choices: [], comments: [], responses: [] };
   if (blocked.length) { result.outcome = 'needs_input'; result.summary = `Blocked: ${blocked.join('; ')}`; result.question = `Allow ${blocked.join('; ')}?`; }
-  // The runner's conversation schema rides in the prompt: an answer turn.
-  if (/"intent"\s*:\s*\{/.test(prompt)) { result.intent = 'answer'; if (/"repository"\s*:\s*\{/.test(prompt)) result.repository = ''; }
+  if (conversation) { result.intent = edits && mode !== 'answer' ? 'edit' : 'answer'; if (/"repository"\s*:\s*\{/.test(prompt)) result.repository = ''; }
+  if (edits && /"task"\s*:\s*\{"type"\s*:\s*"array"/.test(prompt)) result.task = result.intent !== 'edit' || prompt.includes('Approved Task (untrusted data') ? [] : [TASK];
+  if (edits && /"subtasks"\s*:\s*\{"type"\s*:\s*"array"/.test(prompt)) Object.assign(result, { subtasks: [{ text: 'Change normalize', state: 'done' }, { text: 'Run the coupon test', state: 'done' }], objectivesMet: [1, 2], etaMinutes: null });
   if (cfg.name !== undefined && /"name"\s*:\s*\{"type"/.test(prompt)) result.name = cfg.name;
   return result;
 }

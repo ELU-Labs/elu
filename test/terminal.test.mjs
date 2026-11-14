@@ -14,7 +14,7 @@ import { launchTerminal, geometry, plain, foldersNamed } from '../lib/terminal.m
 import { WHEEL_FRAME_MS } from '../lib/wheel.mjs';
 import { projectFolder, saveRequest, pendingRequests, updateRequest } from '../lib/workspace.mjs';
 import { displayText } from '../lib/terminal-visuals.mjs';
-import { vendorText } from '../lib/terminal-commands.mjs';
+import { vendorText, typedCommand } from '../lib/terminal-commands.mjs';
 import { formatResult } from '../lib/format.mjs';
 import { Conductor, enqueue } from '../lib/conductor.mjs';
 import { liveTask } from './peer-helpers.mjs';
@@ -611,44 +611,69 @@ test('a click outside a dialog with typed text keeps the dialog, its text and th
   assert.equal(registeredProjects().length, 1, 'no project was made');
 });
 
+test('/model NAME with no session open opens the new session form on that model, and /model computer takes the name a model is shown by', { timeout: 40000 }, async t => {
+  const p = setup(t, 'answer'), fake = path.join(p.dir, 'fake.json'); registerProject(p.repo);
+  fs.writeFileSync(fake, JSON.stringify({ ...JSON.parse(fs.readFileSync(fake, 'utf8')), models: { opus: 'claude-opus-5-5', sonnet: 'claude-sonnet-5-5' } }));
+  const v = await view(t, { repo: p.repo }), panels = v.current.panels, status = () => panels.status.getText().replace(/\s+/g, ' '), label = () => panels.ask._label.getText();
+  const tasks = () => v.current.controller.snapshot().tasks;
+  const models = () => fs.readFileSync(p.calls, 'utf8').trim().split('\n').map(line => JSON.parse(line)).filter(call => call.vendor === 'claude' && call.args.includes('-p')).map(call => call.args[call.args.indexOf('--model') + 1]);
+  // No session is open, and the new session form is not either: the Projects tab.
+  await send(v, '/projects'); await until(() => v.current.view === 'projects', 'the Projects tab');
+  await send(v, '/model sonnet'); await until(() => /Sonnet for this session\./.test(status()), 'the model is taken, not refused');
+  await until(() => v.current.session === 'new' && /New session → Sonnet · sample app/.test(label()), 'the new session form is open on it');
+  await send(v, 'Where is the cart total?'); await until(() => tasks()[0]?.state === 'answered', 'the model answered');
+  assert.equal(models().at(-1), 'sonnet', 'the first message went to the model named');
+  // The default is as it was: only that session is on it.
+  assert.equal(v.current.controller.startModel().model, 'opus');
+  // This computer's default by the name the model is shown by, which is two words.
+  await send(v, '/model computer opus 5.5'); await until(() => /This computer's default is Opus 5\.5 \(claude · opus\)\./.test(status()), 'the shown name is taken');
+  assert.deepEqual(computerDefault(), { vendor: 'claude', model: 'opus' });
+  await send(v, '/model computer opus 5.5 now'); await until(() => /Use \/model computer <name>, or none\./.test(status()), 'a default takes no message'); panels.ask.setValue('');
+  await send(v, '/model computer none'); await until(() => computerDefault() === null, 'no choice again');
+  // The key bar's usage of /model names it.
+  assert.equal(typedCommand('/model ').usage, '/model [name [message]|default <name>|computer <name>|add]');
+});
+
 test("a computer with only Grok Build: the project's settings show its default model and this computer's, Enter picks one, /model computer sets it, and a saved default that is not installed is said", { timeout: 60000 }, async t => {
   const p = setup(t, 'answer'); registerProject(p.repo);
   environment(t, { PATH: vendorPath(p.parent, p.dir, ['grok']).PATH });
   const v = await view(t, { repo: p.repo }), panels = v.current.panels, PAGE = 'Project sample app', status = () => panels.status.getText().replace(/\s+/g, ' ');
   const page = async () => { await send(v, '/projects'); await until(() => v.current.view === 'projects' && panels.projectsList.items.length === 1, 'the project row'); panels.projectsList.focus(); v.input.write('\r'); await until(() => modal(v, PAGE), 'the settings'); };
+  // The program is named in full wherever the app names it: the box a new session starts from.
+  assert.match(panels.ask._label.getText(), /New session → Grok Build · sample app/);
   await page();
   // Nothing is chosen: Grok Build is the first vendor installed, so new sessions start on it.
-  assert.deepEqual(dialogRows(v, PAGE).slice(3, 5), ['Default model Grok · not chosen, so the first installed here', 'This computer not chosen · Grok, the first installed here']);
+  assert.deepEqual(dialogRows(v, PAGE).slice(3, 5), ['Default model Grok Build · not chosen, so the first installed here', 'This computer not chosen · Grok Build, the first installed here']);
   // Enter on This computer opens the picker; none is offered beside the models.
   for (let at = 0; at < 3; at += 1) v.input.write('\x1b[B');
   await until(() => dialogList(v, PAGE).selected === 4, 'on This computer'); v.input.write('\r'); await until(() => modal(v, 'Model'), 'the picker');
-  assert.match(dialogText(v, 'Model').replace(/\s+/g, ' '), /No default for this computer: Grok \(grok\) is the first installed here\./);
+  assert.match(dialogText(v, 'Model').replace(/\s+/g, ' '), /No default for this computer: Grok Build \(grok\) is the first installed here\./);
   assert.match(dialogText(v, 'Model'), /none +no choice: the first one installed here/);
   await dialog(v, 'Model', 'grok');
-  await until(() => modal(v, PAGE) && dialogRows(v, PAGE)[4] === 'This computer Grok · used by every project that has not chosen', 'saved, and back in the settings');
-  assert.equal(dialogRows(v, PAGE)[3], "Default model Grok · this computer's default");
-  assert.match(status(), /This computer's default is Grok \(grok\)\./);
+  await until(() => modal(v, PAGE) && dialogRows(v, PAGE)[4] === 'This computer Grok Build · used by every project that has not chosen', 'saved, and back in the settings');
+  assert.equal(dialogRows(v, PAGE)[3], "Default model Grok Build · this computer's default");
+  assert.match(status(), /This computer's default is Grok Build \(grok\)\./);
   assert.deepEqual(computerDefault(), { vendor: 'grok', model: null });
   // Enter on Default model is the picker of /model default: the project's own choice wins.
   v.input.write('\x1b[A'); await until(() => dialogList(v, PAGE).selected === 3, 'on Default model'); v.input.write('\r'); await until(() => modal(v, 'Model'), 'the picker');
-  assert.match(dialogText(v, 'Model').replace(/\s+/g, ' '), /sample app uses this computer's default, Grok \(grok\)\./);
+  assert.match(dialogText(v, 'Model').replace(/\s+/g, ' '), /sample app uses this computer's default, Grok Build \(grok\)\./);
   assert.match(dialogText(v, 'Model'), /none +no choice: this computer's default/);
   await dialog(v, 'Model', 'grok');
-  await until(() => modal(v, PAGE) && dialogRows(v, PAGE)[3] === 'Default model Grok', 'the project has its own');
+  await until(() => modal(v, PAGE) && dialogRows(v, PAGE)[3] === 'Default model Grok Build', 'the project has its own');
   assert.equal(v.current.controller.startModel().from, 'project');
   v.input.write('\x1b'); await until(() => !modal(v, PAGE), 'closed');
   // none goes back to no choice, by command too.
-  await send(v, '/model default none'); await until(() => /sample app uses this computer's default, Grok \(grok\)\./.test(status()), "back on this computer's");
-  await send(v, '/model computer none'); await until(() => /No default for this computer: Grok \(grok\) is the first installed here\./.test(status()), 'no choice on this computer');
+  await send(v, '/model default none'); await until(() => /sample app uses this computer's default, Grok Build \(grok\)\./.test(status()), "back on this computer's");
+  await send(v, '/model computer none'); await until(() => /No default for this computer: Grok Build \(grok\) is the first installed here\./.test(status()), 'no choice on this computer');
   assert.equal(computerDefault(), null);
-  await send(v, '/model computer grok'); await until(() => /This computer's default is Grok \(grok\)\.$/.test(status().trim()), 'set by command');
+  await send(v, '/model computer grok'); await until(() => /This computer's default is Grok Build \(grok\)\.$/.test(status().trim()), 'set by command');
   // A saved default whose vendor is not installed here is said wherever the default is shown.
   saveComputerDefault({ vendor: 'claude', model: 'opus' });
   await send(v, '/model'); await until(() => /Opus is this computer's default, but Claude Code is not installed here\./.test(status()), 'said by /model');
   await page();
-  assert.deepEqual(dialogRows(v, PAGE).slice(3, 5), ['Default model Grok · not chosen, so the first installed here', 'This computer Grok · Opus is chosen, but Claude Code is not installed']);
+  assert.deepEqual(dialogRows(v, PAGE).slice(3, 5), ['Default model Grok Build · not chosen, so the first installed here', 'This computer Grok Build · Opus is chosen, but Claude Code is not installed']);
   v.input.write('\x1b'); await until(() => !modal(v, PAGE), 'closed');
-  await send(v, '/new'); await until(() => /Your message goes to Grok\. Opus is this computer's default, but Claude Code is not installed here\. Bots review/.test(panels.composeHint.getText().replace(/\s+/g, ' ')), 'said on the new session form');
+  await send(v, '/new'); await until(() => /Your message goes to Grok Build\. Opus is this computer's default, but Claude Code is not installed here\. Bots review/.test(panels.composeHint.getText().replace(/\s+/g, ' ')), 'said on the new session form');
 });
 
 test('the default model of a project that is not the active one is set from its settings too', { timeout: 60000 }, async t => {

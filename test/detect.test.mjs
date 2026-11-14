@@ -26,7 +26,7 @@ function assertUnavailable(vendors) {
 // Registry vendors with no tested release: found on PATH, never run, never signed in, never conformant.
 // Their row says what they do here and what will start their one-time check.
 function assertNotYet(vendors) {
-  for (const [vendor, name, support] of [['agy', 'Antigravity CLI', 'sessions and reviews'], ['grok', 'Grok Build', 'sessions']]) {
+  for (const [vendor, name, support] of [['agy', 'Antigravity CLI', 'sessions and reviews'], ['grok', 'Grok Build', 'sessions and reviews']]) {
     const row = vendors.find((value) => value.vendor === vendor);
     assert.ok(row, vendor);
     assert.equal(row.available, true, vendor); assert.equal(row.supported, false, vendor);

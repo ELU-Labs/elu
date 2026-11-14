@@ -43,7 +43,7 @@ test('unpinned vendors are listed from PATH but never executed, and refuse to la
     assert.deepEqual(adapter.meta.supportedVersions, [], vendor);
     assert.equal(row.available, true, vendor); assert.equal(row.supported, false, vendor); assert.equal(row.version, null, vendor); assert.equal(row.signedIn, null, vendor);
     const unchecked = `${VENDOR_NAMES[vendor]} has not been checked on this machine yet. Your first message to it runs the check.`;
-    assert.equal(row.support, { agy: 'sessions and reviews', grok: 'sessions' }[vendor], vendor); assert.equal(row.conformant, false, vendor); assert.equal(row.reason, unchecked, vendor);
+    assert.equal(row.support, 'sessions and reviews', vendor); assert.equal(row.conformant, false, vendor); assert.equal(row.reason, unchecked, vendor);
     assert.throws(() => adapter.compile({ role: defaultConfig().roles.lead, cwd: p.root, schemaFile: path.join(p.parent, 'schema.json'), session: '12345678-1234-4234-8234-123456789abc', runDir: p.parent }), { name: 'EluCodeError', message: unchecked }, vendor);
     assert.throws(() => adapter.parse(''), /no JSON (?:run )?result/, vendor);
     assert.equal(adapter.classify(''), 'unknown', vendor);
