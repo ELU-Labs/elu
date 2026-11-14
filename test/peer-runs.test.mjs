@@ -240,7 +240,7 @@ test('recover writes an interrupted entry for a peer run left by a dead conducto
 
 test('peer runs use at most the peer slots, while owner work still starts', async t => {
   const p = setup(t, 'answer'); p.extra({ slow: 700 });
-  assert.equal(conductorSettings().maxAgents, 8);
+  assert.equal(conductorSettings().maxAgents, null, 'the owner set no limit of his own: the teammate slots hold all the same');
   const first = ask(p.root), second = ask(p.root), mine = enqueue(p.root, 'Owner question');
   const conductor = conduct(t); let most = 0, both = false;
   const peers = () => [...conductor.runs.values()].filter(run => run.origin?.kind === 'ask').length;

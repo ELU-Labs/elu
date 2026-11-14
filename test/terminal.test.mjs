@@ -15,7 +15,7 @@ import { projectFolder, saveRequest, pendingRequests, updateRequest } from '../l
 import { displayText } from '../lib/terminal-visuals.mjs';
 import { vendorText, typedCommand, needsArgument } from '../lib/terminal-commands.mjs';
 import { formatResult } from '../lib/format.mjs';
-import { Conductor, enqueue } from '../lib/conductor.mjs';
+import { Conductor, conductorSettings, enqueue } from '../lib/conductor.mjs';
 import { liveTask } from './peer-helpers.mjs';
 import { standIn } from './login-item-helpers.mjs';
 import { readBoard, sessionClosed, closeSession } from '../lib/kanban.mjs';
@@ -3195,13 +3195,14 @@ test('checks read as running, a waiting turn of a schedule names the schedule, a
   assert.deepEqual(mine(), ['First waiting', 'Second waiting']);
 });
 
-// How many sessions run at once is the one number /slots sets, for one project as for
-// several, and a session that waits for a slot says so.
-test('/slots says and sets how many sessions run at once, and a session past it waits under Queued and says what for', { timeout: 30000 }, async t => {
+// Nothing limits how many sessions run at once until /slots sets a limit, for one project as
+// for several. A session that waits for a slot says so, and /slots off removes the limit.
+test('/slots says there is no limit until it sets one, a session past the limit waits under Queued and says what for, and /slots off starts it', { timeout: 60000 }, async t => {
   const p = setup(t, 'slow'), v = await view(t, { repo: p.repo }), panels = v.current.panels, status = () => panels.status.getText(), chat = () => panels.chat.getText().replace(/\s+/g, ' ');
   const saved = goal => pendingRequests(p.root).find(row => row.goal === goal);
-  await send(v, '/slots'); await until(() => /8 sessions run at once\. Use \/slots <1-16> to change it\./.test(status()), 'the number until it is set');
-  await send(v, '/slots 1'); await until(() => /1 session runs at once\. Running work is not interrupted\./.test(status()), 'one at once');
+  await send(v, '/slots'); await until(() => /No limit on sessions at once\. \/slots 6 sets one\./.test(status()), 'no limit until one is set');
+  await send(v, '/slots 1'); await until(() => /At most 1 session runs at once\. Running work is not interrupted\./.test(status()), 'one at once');
+  await send(v, '/slots'); await until(() => /At most 1 session runs at once\. \/slots off removes the limit\./.test(status()), 'the limit that is set');
   await send(v, 'Check the coupon module'); await until(() => /Opus is working/.test(chat()), 'the first session works');
   await send(v, '/new'); await until(() => v.current.session === 'new', 'the new session form');
   await send(v, 'Fix the cart total'); await until(() => saved('Fix the cart total')?.waits, 'the second is told what it waits for');
@@ -3210,10 +3211,26 @@ test('/slots says and sets how many sessions run at once, and a session past it 
   await selectRow(v, /Fix the cart total/);
   await until(() => /Waiting for a free slot: 1 of 1 session is running\. \/slots changes it\. \/stop cancels it\./.test(chat()), 'the sentence in its chat');
   assert.doesNotMatch(chat(), /Waiting to start/);
-  // /slots 2 starts it, in the same project.
-  await send(v, '/slots 2'); await until(() => /2 sessions run at once\. Running work is not interrupted\./.test(status()), 'two at once');
+  // /slots off removes the limit, and it starts, in the same project.
+  await send(v, '/slots off'); await until(() => /No limit on sessions at once\. \/slots 6 sets one\./.test(status()), 'the limit removed');
+  assert.equal(conductorSettings().maxAgents, null);
   await until(() => saved('Fix the cart total')?.state === 'running', 'the second session of the project runs');
   await until(() => rows(v).some(row => /RUNNING 2/.test(row)) && !rows(v).some(row => /QUEUED/.test(row)), 'both under Running');
+  // Any whole number from 1 is a limit, and none, unlimited and 0 remove it as off does.
+  await send(v, '/slots 40'); await until(() => /At most 40 sessions run at once\. Running work is not interrupted\./.test(status()), 'forty at once');
+  assert.equal(conductorSettings().maxAgents, 40);
+  for (const word of ['none', 'unlimited', '0', 'OFF']) {
+    await send(v, '/slots 2'); await until(() => /At most 2 sessions run at once\. Running work is not interrupted\./.test(status()), 'two at once');
+    await send(v, `/slots ${word}`); await until(() => /No limit on sessions at once\. \/slots 6 sets one\./.test(status()), `/slots ${word}`);
+    assert.equal(conductorSettings().maxAgents, null, word);
+  }
+  // What it does not understand changes nothing and says the two forms.
+  await send(v, '/slots 3'); await until(() => /At most 3 sessions run at once\. Running work is not interrupted\./.test(status()), 'three at once');
+  for (const words of ['many', '2 3', '-1', '1.5', 'off now']) {
+    await send(v, '/slots'); await until(() => /At most 3 sessions run at once\. \/slots off removes the limit\./.test(status()), 'the limit as it is');
+    await send(v, `/slots ${words}`); await until(() => /Use \/slots 6 to set a limit, or \/slots off for no limit\./.test(status()), `/slots ${words}`);
+    assert.equal(conductorSettings().maxAgents, 3, words);
+  }
 });
 
 // The first message of a session waits a moment for the conductor. A second one sent in that
