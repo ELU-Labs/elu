@@ -4084,17 +4084,19 @@ test('x cleans up archived sessions, one or all: Learn, then delete or Delete, E
   v.input.write('x'); await until(() => modal(v, 'Clean up'), 'the clean-up question for all');
   assert.match(dialogNotes(v, 'Clean up'), /Deletes 2 archived sessions for good\. Learn first saves what you taught in them/);
   v.input.write('\x1b'); await until(() => !modal(v, 'Clean up'), 'closed');
-  // /archived clean: Learn, then delete. Their work is kept on their branches when asked.
+  // /archived clean: Learn, then delete. The work of the one that holds some is kept on its
+  // branch when asked; the other, with nothing on no remote, goes with its branch.
+  for (const args of [['checkout', '--', '.'], ['clean', '-fdq']]) git(path.join(p.repo.worktrees, '6'), args);
   await send(v, '/archived clean'); await until(() => modal(v, 'Clean up'), 'asked from /archived clean');
   v.input.write('\r'); await until(() => modal(v, 'Work not pushed'), 'their work on no remote');
-  assert.match(dialogNotes(v, 'Work not pushed'), /2 of them have 2 files not committed\./);
+  assert.match(dialogNotes(v, 'Work not pushed'), /1 of them has 1 file not committed\./);
   v.input.write('\r');
   await until(() => modal(v, 'Saved to the project context'), 'what was saved', 15000);
   assert.deepEqual(dialogRows(v, 'Saved to the project context').map(row => row.trim()), ['Use pnpm, not npm.']);
-  assert.match(dialogNotes(v, 'Saved to the project context'), /Deleted 2 sessions\. Kept the work of 2 on their branches\./);
+  assert.match(dialogNotes(v, 'Saved to the project context'), /Deleted 2 sessions\. Kept its work on feat\/task-5\./);
   assert.match(readProjectSettings(p.root).context, /Use pnpm, not npm\./);
   assert.deepEqual(tasks(p.repo).map(task => task.id), ['7']);
-  assert.deepEqual(branches(), ['feat/task-5', 'feat/task-6', 'feat/task-7', 'main']);
+  assert.deepEqual(branches(), ['feat/task-5', 'feat/task-7', 'main']);
   v.input.write('\r'); await until(() => !modal(v, 'Saved to the project context') && !rows(v).some(row => /ARCHIVED|Uppercase names|Round totals/.test(row)), 'nothing archived is left');
   assert.ok(rows(v).some(row => /Keep me/.test(row)));
 });
