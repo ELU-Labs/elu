@@ -1338,6 +1338,50 @@ test('a second project view is read-only and releases no writer lock', async t =
   const next = claimView(p.repo); assert.equal(next.readOnly, false); next.release();
 });
 
+// A view-only window (another ELU window has the project) offers only what it can do.
+test('a view-only window says so on Kanban, offers no key that adds or changes a task, and a message it refuses leaves the box clear with ↑ to bring it back', { timeout: 30000 }, async t => {
+  const p = setup(t), { addCard } = await import('../lib/kanban.mjs');
+  addCard(p.repo, 'Rename the billing module');
+  const first = await view(t, { repo: p.repo }), second = await view(t, { repo: p.repo }), panels = second.current.panels;
+  const label = v => v.current.panels.ask._label.getText(), bar = v => v.current.panels.keys.getText().trim(), said = () => panels.status.getScreenLines().map(row => row.trim()).join(' ');
+  const cards = () => readBoard(p.repo).cards.map(card => card.text), todo = v => v.current.panels.kanbanLists[0];
+  const REFUSED = 'This view is read-only. Use the first view to make changes.';
+  await until(() => second.current.controller?.readOnly === true && first.current.controller?.readOnly === false, 'the second window is view only');
+  for (const v of [first, second]) { await send(v, '/kanban'); await until(() => v.current.view === 'kanban' && todo(v).items.some(item => /^Rename the/.test(item.getText())), 'the card under To do'); }
+  // The window that has the project offers the task; the view-only one says what it is and offers none of it.
+  await until(() => / Add a task to To do · /.test(label(first)) && /^enter add to To do/.test(bar(first)), 'the first window adds tasks');
+  await until(() => /Read only/.test(label(second)) && !/Add a task/.test(label(second)), 'the box says it is view only');
+  assert.equal(bar(second), '/ commands'); assert.equal(panels.newCard.hidden, true, 'no + New task button'); assert.equal(first.current.panels.newCard.hidden, false);
+  pickRow(todo(second), /^Rename the/); await until(() => bar(second) === '←→ columns', 'no start, edit, delete or new task on a card');
+  pickRow(todo(first), /^Rename the/); await until(() => bar(first) === '⇧→ start  enter edit  x delete  ←→ columns  n new task', 'the first window keeps them');
+  // Each of those keys is refused there, in one line, and changes nothing.
+  for (const [name, ch] of [['n', 'n'], ['x', 'x'], ['enter', '\r'], ['S-right', '>']]) {
+    panels.status.setContent(''); todo(second).focus(); second.input.write(ch);
+    await until(() => said() === `› ${REFUSED}`, `${name} is refused`);
+    assert.equal(second.current.screen.children.some(child => !child.destroyed && ['New task', 'Edit task'].includes(child.options?.label?.trim())), false, `${name} opens no dialog`);
+  }
+  // Enter on a column with nothing in it offers no task either.
+  panels.status.setContent(''); second.current.panels.kanbanLists[1].focus(); second.input.write('\r'); await until(() => said() === '› Nothing here.', 'an empty column');
+  first.current.panels.kanbanLists[1].focus(); first.input.write('\r'); await until(() => /Nothing here\. n adds a task to To do\./.test(first.current.panels.status.getText()), 'the first window names the key');
+  // A task typed in the box is refused too: nothing is added, the box is clear for a command, and ↑ brings the text back.
+  await send(second, 'Add retries to the uploader');
+  await until(() => said() === `› ${REFUSED} ↑ brings back what you typed.`, 'the refusal says so');
+  assert.equal(panels.ask.getValue(), '', 'the box is clear'); assert.deepEqual(cards(), ['Rename the billing module']);
+  panels.ask.focus(); panels.ask.readInput(); await until(() => panels.ask.__listener, 'the box reads');
+  second.input.write('\x1b[A'); await until(() => panels.ask.getValue() === 'Add retries to the uploader', '↑ brings it back');
+  panels.ask.clearValue();
+  // The same in Sessions: a message for a new session is refused, and the box is clear.
+  await send(second, '/sessions'); await until(() => second.current.view === 'tasks' && second.current.session === 'new', 'the new session form');
+  panels.ask.focus(); panels.ask.readInput(); await until(() => bar(second) === '/ commands  esc sessions', 'its box offers no send');
+  await send(second, 'Fix the flaky upload test');
+  await until(() => said().replace(/\s+/g, ' ') === `› ${REFUSED} ↑ brings back what you typed.`, 'refused in Sessions, on as many rows as it needs');
+  assert.equal(panels.ask.getValue(), ''); assert.deepEqual(pendingRequests(p.root), []);
+  second.input.write('\x1b[A'); await until(() => panels.ask.getValue() === 'Fix the flaky upload test', '↑ brings that one back');
+  // In the window that has the project the same text is a task.
+  await send(first, 'Add retries to the uploader'); await until(() => cards().length === 2, 'added there');
+  assert.deepEqual(cards().sort(), ['Add retries to the uploader', 'Rename the billing module']);
+});
+
 test('the status line shows a long message whole on as many rows as it needs, and the pane above gives them up, in every view at 80x24', { timeout: 60000 }, async t => {
   const p = setup(t), v = await view(t, { repo: p.repo, peer: null }), panels = v.current.panels, g = geometry(80, 24);
   const drawn = () => panels.status.getScreenLines().map(row => row.trimEnd()), whole = () => drawn().map((row, at) => at ? row.replace(/^ {2}/, '') : row.replace(/^› /, '')).join(' ');
