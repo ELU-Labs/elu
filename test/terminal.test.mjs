@@ -1356,6 +1356,22 @@ test('the status line shows a long message whole on as many rows as it needs, an
   }
 });
 
+test('the row of a Task that waits for approval keeps its keys whole and ends at Enter or the Task at every width from 80 to 140 columns', { timeout: 120000 }, async t => {
+  // In colour, as the app runs: a coloured row as wide as its place loses its last word to the next row.
+  const p = setup(t); delete process.env.NO_COLOR;
+  liveTask(p.root, { id: '5', goal: 'Uppercase coupon codes', state: 'answered' });
+  proposeTask(p.repo, '5', { title: 'Uppercase coupons', description: 'One file changes.', goal: 'Coupon codes compare equal whatever their case.', objectives: ['It works', 'Its test passes'], priority: 'high', severity: 'low' });
+  const v = await view(t, { repo: p.repo }), panels = v.current.panels, drawn = () => panels.status.getScreenLines().map(line => line.replace(/\x1b\[[^m]*m/g, '').trimEnd());
+  await openTask(v, /Uppercase coupon/); await until(() => v.current.session === '5' && /^\? /.test(drawn()[0] ?? ''), 'the Task waits');
+  const KEYS = /^\? (?:Needs you · Esc, then y approve · n reject, then Enter|Esc, then y approve · n reject, then Enter|Esc, y approve · n reject, Enter|Esc, y · n, Enter)(?: · Task: .+)?$/;
+  for (let width = 80; width <= 140; width++) {
+    await sized(v, width, 30); await until(() => panels.status.width === width - panels.boardBox.width - 2 && /^\? /.test(drawn()[0] ?? ''), `drawn at ${width}`);
+    const rows = drawn();
+    assert.deepEqual([rows.length, panels.status.height], [1, 1], `one row at ${width}: ${rows.join(' | ')}`);
+    assert.match(rows[0], KEYS, `the keys are whole at ${width}`); assert.ok(rows[0].length < panels.status.width, `it fits at ${width}`);
+  }
+});
+
 test('at 80x24 what a key on a bot\'s page just did shows under the page, not behind it', { timeout: 30000 }, async t => {
   const p = setup(t); noBots(); readModels();
   saveBot({ name: 'nightly', vendor: 'claude', schedule: 'every 1h', instructions: 'Tidy the notes.' });
