@@ -209,6 +209,45 @@ test('a scratch home made in the temp folder, as mktemp -d gives on a Mac, runs 
   assert.deepEqual(saysLink(personalDirectory()), []);
 });
 
+// Grok Build and Antigravity in Full access run under a mirror of the owner's home, a folder of
+// links kept in ELU's state (lib/home-mirror.mjs). A home made with mktemp -d on a Mac, ELU's
+// state in it and the temp folder all lie under /var, which is a link.
+for (const [vendor, name, version, say] of [['grok', 'Grok Build', '1.0.77', script => `Run the command ${script} then reply done with the summary "ran it".`], ['agy', 'Antigravity', '1.5.4', script => `Run this command: ${script}. Reply with the summary "headless".`]]) {
+  test(`a home and a temp folder under /var, which is a link: a Full access command on ${name} reads the owner's sign-in under ~, and what it makes there is in his home`, { timeout: 120000 }, async t => {
+    const m = mac(t), scratch = path.join(m.temp, 'tmp.scratchhome'), onDisk = path.join(m.tempOnDisk, 'tmp.scratchhome');
+    fs.mkdirSync(scratch);
+    const fake = fakeClis(scratch, { mode: 'answer' });
+    environment(t, { ...fake.env, ...GIT, HOME: scratch, TMPDIR: `${m.temp}/` });
+    fs.mkdirSync(path.join(scratch, '.grok')); fs.writeFileSync(path.join(scratch, '.grok', 'auth.json'), '{}\n', { mode: 0o600 });
+    fs.writeFileSync(path.join(scratch, '.npmrc'), 'owner-npm-token\n', { mode: 0o600 }); fs.mkdirSync(path.join(scratch, '.claude')); fs.writeFileSync(path.join(scratch, '.claude', 'CLAUDE.md'), 'his instructions\n');
+    const sample = project(t); fs.cpSync(sample.root, path.join(scratch, 'sample app'), { recursive: true });
+    const controller = new ProjectController(projectFolder(path.join(scratch, 'sample app'))); Object.assign(controller.draftConfig.roles.lead, { vendor, maxCostUsd: null });
+    const state = path.join(onDisk, 'personal', 'elu-code'), named = path.join(scratch, 'personal', 'elu-code');
+    assert.deepEqual(personalDirectoryNames(), [state, named]);
+    atomic(path.join(state, 'conformance', `${vendor}.json`), { v: 1, bin: fs.realpathSync(path.join(fake.dir, vendor)), version, steps: Object.fromEntries({ grok, agy }[vendor].conformance.map(step => [step.id, 'pass'])), relay: true, at: new Date().toISOString() });
+    // Before a Full access run has made Grok Build's mirror, a mode with rules closes it under both of the folder's names.
+    if (vendor === 'grok') {
+      const rules = grok.compile({ mode: 'ask', role: readRole('grok'), cwd: controller.repo.root, protectedPaths: ['.git'], session: crypto.randomUUID(), runDir: path.join(onDisk, 'run') });
+      for (const dir of [state, named]) assert.equal(rules[rules.indexOf(`Read(${path.join(dir, 'grok-home-full')}/**)`) - 1], '--deny', dir);
+    }
+    const script = path.join(scratch, 'see.sh'), out = path.join(scratch, 'see.out');
+    fs.writeFileSync(script, `#!/bin/sh\ncd ~ || exit 1\n{ cat .npmrc; printf '%s\\n' "$HOME"; [ -e .claude ] && echo "sees ~/.claude"; echo made > .made-in-run; } > ${JSON.stringify(out)} 2>&1\n`, { mode: 0o700 });
+    const full = await controller.ask(say(script), null, { permissions: 'full' }).finished;
+    assert.equal(full.state, 'answered', JSON.stringify(full.error));
+    // ~ was the mirror, in ELU's state as it is on disk; his npm sign-in was read there and his Claude Code folder was not there.
+    const [token, home, ...more] = fs.readFileSync(out, 'utf8').trim().split('\n');
+    assert.equal(token, 'owner-npm-token'); assert.deepEqual(more, []);
+    assert.ok(vendor === 'grok' ? home === path.join(state, 'grok-home-full') : home.startsWith(path.join(state, 'agy-home') + path.sep) && home.endsWith('-full'), home);
+    assert.equal(fs.readlinkSync(path.join(home, '.npmrc')), `${scratch}${path.sep}.${path.sep}.npmrc`, 'each entry is a link to his, by the name his home has');
+    // What the command made at the top of ~ is a file in his home once the run has ended, and a link in the mirror.
+    assert.equal(fs.lstatSync(path.join(onDisk, '.made-in-run')).isFile(), true); assert.equal(fs.readFileSync(path.join(scratch, '.made-in-run'), 'utf8'), 'made\n');
+    assert.equal(fs.lstatSync(path.join(home, '.made-in-run')).isSymbolicLink(), true);
+    // Nothing ELU wrote says a link was refused.
+    assert.deepEqual(saysLink(personalDirectory()), []); assert.deepEqual(saysLink(controller.repo.state), []);
+    assert.doesNotMatch(JSON.stringify(readTask(controller.repo, full.id)), /symbolic link/i);
+  });
+}
+
 test('what the owner set up through a link is read where it is: his Git hooks folder and a vendor\'s home', t => {
   const m = mac(t), { root } = project(t);
   environment(t, { HOME: m.home, XDG_CONFIG_HOME: path.join(m.home, '.config'), TMPDIR: `${m.temp}${path.sep}` });
