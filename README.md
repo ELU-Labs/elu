@@ -73,8 +73,9 @@ of the work. Nothing is edited yet.
 | Esc, then `n` | Rejects it. Nothing is changed. |
 | Type a message | Changes the Task. The card shows the new revision. |
 
-Typing `yes` and Enter approves too. A question gets a plain answer and no Task. A follow-up
-inside an approved Task's goal starts at once; a new piece of work gets a Task of its own.
+Typing `yes` or `I approve` and Enter approves too. A question gets a plain answer and no
+Task. A follow-up inside an approved Task's goal starts at once; a new piece of work gets a
+Task of its own.
 An approved Task gives its session its name, unless you named the session yourself.
 
 On the Kanban tab a session with a Task shows as that Task: its title, how far it is, its
