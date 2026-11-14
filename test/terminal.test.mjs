@@ -6155,10 +6155,9 @@ test('/mcp add asks for a name, the URL, the header and the key in a hidden fiel
   await send(v, '/mcp'); await until(() => modal(v, 'MCP servers'), 'the list');
   assert.match(dialogText(v, 'MCP servers'), /● on +elu/); assert.match(dialogText(v, 'MCP servers'), /\/mcp add adds one, and keeps its key out of the chat\. \/mcp remove NAME removes one\./);
   v.input.write('\x1b'); await until(() => !modal(v, 'MCP servers'), 'closed');
-  // Esc in the hidden field adds nothing.
-  await send(v, '/mcp add other'); await until(() => field('Add an MCP server'), 'the name, filled in');
-  assert.equal(field('Add an MCP server').getValue(), 'other'); v.input.write('\r');
-  await until(() => field('Add other', /Its URL/), 'the URL'); v.input.write('npx -y other-server\r');
+  // Esc in the hidden field adds nothing. A name typed after /mcp add is not asked for again.
+  await send(v, '/mcp add other'); await until(() => field('Add other', /Its URL/), 'the URL, the name taken as typed');
+  assert.equal(modal(v, 'Add an MCP server'), null); v.input.write('npx -y other-server\r');
   await until(() => field('Add other', /The environment variable that carries its key, such as API_KEY\./), 'the variable'); v.input.write('OTHER_TOKEN\r');
   await until(() => field('OTHER_TOKEN · other'), 'the hidden field'); v.input.write('abc'); await until(() => v.frame().includes('•••'), 'typed');
   v.input.write('\x1b'); await until(() => !modal(v, 'OTHER_TOKEN · other') && /Nothing was added\./.test(status()), 'cancelled');
@@ -6174,6 +6173,42 @@ test('/mcp add asks for a name, the URL, the header and the key in a hidden fiel
   await send(v, '/mcp remove elu'); await until(() => /No MCP server named elu\. \/mcp lists yours\./.test(status()), 'gone');
   assert.deepEqual(filesHolding(p.parent, key), [], 'the key is in no file once removed: not in task files, logs or what the fake recorded');
   assert.ok(!v.raw.includes(key), 'and never on screen');
+});
+
+// The one-line form, as elu mcp add takes it: what is typed is not asked again; only the
+// rest is, and the key always in the hidden field.
+test('/mcp add NAME URL on one line asks only for what is missing: the header, then the key; with --header only the key; a command with --env only its key', { timeout: 60000 }, async t => {
+  const p = setup(t), key = keyLike('elu_live_', 'OneLine5Key', 'Typed0Here8'), file = path.join(p.parent, 'claude', '.claude.json');
+  const v = await view(t, { repo: p.repo }), panels = v.current.panels, status = () => panels.status.getText();
+  const saved = () => JSON.parse(fs.readFileSync(file, 'utf8')).mcpServers;
+  const field = (title, pattern = /./) => { const box = modal(v, title); const input = box?.children.find(child => child.type === 'textbox'); return input?.__listener && pattern.test(v.frame()) ? input : null; };
+  // NAME URL: the header is asked, then the key.
+  await send(v, '/mcp add tracker https://tracker.example.invalid/mcp'); await until(() => field('Add tracker', /The header that carries its key, such as Authorization\./), `the header, nothing before it\n${v.frame()}`);
+  assert.equal(modal(v, 'Add an MCP server'), null); assert.doesNotMatch(v.frame(), /Its URL, such as/);
+  v.input.write('Authorization\r'); await until(() => field('Authorization · tracker', /It is hidden here/), 'the hidden field');
+  v.input.write(key); v.input.write('\r'); await until(() => /Added tracker\. Sessions get it from their next turn\./.test(status()), 'added');
+  assert.deepEqual(saved().tracker, { type: 'http', url: 'https://tracker.example.invalid/mcp', headers: { Authorization: `Bearer ${key}` } });
+  // NAME URL with no key: an empty header adds it as it is.
+  await send(v, '/mcp add docs https://docs.example.invalid/mcp'); await until(() => field('Add docs', /The header that carries its key/), 'the header');
+  v.input.write('\r'); await until(() => /Added docs\./.test(status()), 'added with no key');
+  assert.deepEqual(saved().docs, { type: 'http', url: 'https://docs.example.invalid/mcp' });
+  // NAME URL --header NAME: only the key is asked.
+  await send(v, '/mcp add files https://files.example.invalid/mcp --header X-Api-Key'); await until(() => field('X-Api-Key · files', /It is hidden here/), 'only the key');
+  v.input.write(key); v.input.write('\r'); await until(() => /Added files\./.test(status()), 'added');
+  assert.deepEqual(saved().files, { type: 'http', url: 'https://files.example.invalid/mcp', headers: { 'X-Api-Key': key } });
+  // NAME --env NAME COMMAND ARGS: the command keeps its own options; only the key is asked.
+  await send(v, '/mcp add gh --env GH_TOKEN npx -y gh-server --read-only'); await until(() => field('GH_TOKEN · gh', /It is hidden here/), 'only the key');
+  v.input.write(key); v.input.write('\r'); await until(() => /Added gh\./.test(status()), 'added');
+  assert.deepEqual(saved().gh, { type: 'stdio', command: 'npx', args: ['-y', 'gh-server', '--read-only'], env: { GH_TOKEN: key } });
+  // What does not fit is said, and nothing is asked or added.
+  await send(v, '/mcp add bad https://x.example.invalid/mcp --env TOKEN'); await until(() => /--env goes with a command\. A URL takes --header\./.test(status()), 'refused');
+  await send(v, '/mcp add bad https://x.example.invalid/mcp https://y.example.invalid/mcp'); await until(() => /Use \/mcp add NAME URL \[--header NAME\], or \/mcp add NAME \[--env NAME\] COMMAND \[ARGS\]\. What is left out is asked for\./.test(status()), 'refused');
+  assert.deepEqual(Object.keys(saved()).sort(), ['docs', 'files', 'gh', 'tracker']);
+  // A one-line add is kept out of what Up recalls, as a pasted config is.
+  panels.ask.focus(); panels.ask.readInput(); panels.ask.clearValue(); await until(() => panels.ask.__listener, 'message box');
+  v.input.write('\x1b[A'); await new Promise(resolve => setTimeout(resolve, 300));
+  assert.doesNotMatch(panels.ask.getValue(), /example\.invalid/);
+  assert.deepEqual(filesHolding(p.parent, key, [file]), [], 'the key is only in Claude Code\'s own file'); assert.ok(!v.raw.includes(key), 'and never on screen');
 });
 
 test('a pasted MCP config is never sent: ELU offers to add it, n leaves it in the box unsent, y adds it and the box keeps only the other words', { timeout: 60000 }, async t => {
