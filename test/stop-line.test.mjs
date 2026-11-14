@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { stopLine, logCause, logLimit, limitOf } from '../lib/stop-line.mjs';
+import { stopLine, errorText, logCause, logLimit, limitOf } from '../lib/stop-line.mjs';
 import { boardRows, rowTitle } from '../lib/board.mjs';
 import { STUCK_LINE } from '../lib/runner.mjs';
 import * as claude from '../lib/adapters/claude.mjs';
@@ -44,6 +44,9 @@ test('a session an earlier version stopped at its two-hour cap reads as stopped 
   assert.equal(said({ kind: 'conversation', error: { message: 'Antigravity could not finish.', cause: 'unknown', timedOut: true, stoppedBy: 'cap' } }).text, 'Stopped by a time limit an earlier version had. Reply to carry on.');
   assert.equal(said({ error: { message: 'Antigravity could not finish.', cause: 'unknown', timedOut: true, stoppedBy: 'cap' } }).text, 'Stopped by a time limit an earlier version had. Your changes are kept. Reply to carry on.');
   assert.doesNotMatch(stop.text, /2 hours|most one turn/);
+  // Its details say the same, and every other error reads there as it was saved.
+  assert.equal(errorText(session({ kind: 'conversation', error: cap })), 'Stopped by a time limit an earlier version had. Reply to carry on.');
+  assert.equal(errorText(session({ error: { message: 'The model could not finish.', cause: 'unknown', timedOut: true } })), 'The model could not finish.'); assert.equal(errorText(session({})), '');
 });
 
 test('a turn that could not finish names the cause when it is known, then the one thing to do', () => {
