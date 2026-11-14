@@ -1963,6 +1963,9 @@ test("Sessions groups my computer's sessions of this repository under its name, 
   const restRow = slow.sections(now, '/work/shop').find(line => line.row?.ref === `${p.shop}:1`).row;
   slow.view(restRow, 80); await pause(0); assert.deepEqual(resting, []);
   await pause(50); slow.view(restRow, 80); assert.equal(resting.length, 1);
+  // Who started it shows from its first frame, before its events arrive: a schedule's run says so while it opens.
+  const nightly = slow.sections(now, '/work/shop').find(line => line.row?.ref === `${p.shop}:2`).row;
+  assert.match(slow.view(nightly, 80), /Opening it on @devbox… Started by a schedule\./);
   // A watch that fails says why, and is asked again only after a while, not on every draw.
   const failing = [], refused = remoteGlue({ facade, peerRead: () => status, peerCommand: async command => { failing.push(command); throw new Error('@devbox: Not now.'); }, chatMessage: () => '', ink: text => text, colour: false, restMs: 0 });
   const refusedRow = refused.sections(now, '/work/shop').find(line => line.row?.ref === `${p.shop}:1`).row;
