@@ -2787,6 +2787,11 @@ test('the Changes of a session here and of the same session followed from anothe
   v.input.write(']'); await until(() => /^▌▾ docs\/notes\.md/.test(cursorLine(v)), '] to the next file');
   v.input.write('n'); await until(() => /^▌docs\/notes\.md · line 1$/.test(cursorLine(v)), 'n to its change');
   v.input.write('n'); await until(() => /^▌src\/report\.mjs · line 1$/.test(cursorLine(v)), 'n to the next one');
+  // The terminal is made narrower and the rows wrap anew: the cursor stays at its change.
+  v.output.columns = 80; v.output.rows = 24; v.output.emit('resize');
+  await until(() => v.current.screen.width === 80 && /^▌.*report\.mjs · line 1/.test(cursorLine(v)), 'at 80 columns the cursor is still at that change');
+  v.output.columns = 140; v.output.rows = 50; v.output.emit('resize');
+  await until(() => v.current.screen.width === 140 && /^▌src\/report\.mjs · line 1$/.test(cursorLine(v)), 'and at 140 again');
   v.input.write('pp'); await until(() => /^▌src\/coupon\.mjs · line 1$/.test(cursorLine(v)), 'p back to the first');
   // d in its chat opens them too, and Esc goes back to the chat.
   v.input.write('\x1b'); await until(() => v.current.sessionView === 'chat' && focused() === board, 'Esc');
