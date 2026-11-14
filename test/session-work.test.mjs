@@ -191,7 +191,7 @@ test('a session in here mode, in the owner\'s own folder, counts what was commit
   assert.equal(command('git', ['-C', root, 'checkout', '-q', 'main'], root, { GIT_COMMITTER_DATE: '2020-01-01T00:00:01Z' }).status, 0);
   // And what the owner had not committed there: an edit, a new file, and a file taken away.
   write(root, { 'package.json': '{ "name": "sample", "private": true }\n', 'owner/draft.md': 'the owner was writing this\n' }); fs.rmSync(path.join(root, 'test/coupon.test.mjs'));
-  await new Promise(done => setTimeout(done, 30));
+  await new Promise(done => setTimeout(done, 120));
   const base = git(root, ['rev-parse', 'HEAD']);
   saveTask(repo, { id: '2', goal: 'Work here', state: 'ready', worktree: root, branch: null, base, createdAt: new Date().toISOString(), runs: [], reviews: [], messages: [], sessions: {}, permissions: 'full', place: { kind: 'here' } });
   write(root, { 'src/coupon.mjs': 'export const normalize = (value) => value.trim();\n' }); git(root, ['add', 'src/coupon.mjs']); git(root, ['commit', '-q', '-m', 'Trim coupons']);
@@ -238,7 +238,7 @@ test('in the owner\'s own folder with more files changed before the session than
   const bulk = Array.from({ length: 2003 }, (_, at) => `bulk/f${String(at).padStart(4, '0')}.txt`);
   commit(root, Object.fromEntries(bulk.map(name => [name, 'one\n'])), 'Owner bulk');
   write(root, { ...Object.fromEntries(bulk.map(name => [name, 'two\n'])), ...Object.fromEntries(Array.from({ length: 30 }, (_, at) => [`drafts/d${at}.md`, 'draft\n'])) });
-  await new Promise(done => setTimeout(done, 30));
+  await new Promise(done => setTimeout(done, 120));
   saveTask(repo, { id: '2', goal: 'Work here', state: 'ready', worktree: root, branch: null, base: git(root, ['rev-parse', 'HEAD']), createdAt: new Date().toISOString(), runs: [], reviews: [], messages: [], sessions: {}, permissions: 'full', place: { kind: 'here' } });
   write(root, { 'docs/here.md': 'edited here\n' });
   // 2,000 of them are set aside, and every new file is. The three that are not show, and the tab says why.
@@ -318,7 +318,25 @@ test('where ELU cannot tell which commits are the session\'s it says so in one l
   fs.rmSync(path.join(folder, 'notes.md'));
   assert.deepEqual(changeRows(taskPatch(repo, '1'), 120, false).map(row => visible(row.text)), ['No changes yet.', "ELU cannot tell which commits here are this session's, so only what is not committed shows."]);
   assert.equal(sessionChanges(sessionWire(repo, '1')).note, NOTES.blind);
+  // The record's file is not there at all: Git then tells of the branch in its place, which
+  // does not say what the folder did, so the same line is said.
+  write(folder, { 'notes.md': 'not committed\n' }); fs.rmSync(log);
+  const gone = taskPatch(repo, '1');
+  assert.deepEqual([names(gone), counts(gone), gone.note], [['notes.md'], [1, 1, 0], NOTES.blind]);
+  // The record lost its older lines, as Git drops them after a while: the commits it still
+  // tells of show, and the tab says that older ones may not.
   fs.writeFileSync(log, kept);
+  commit(folder, { 'src/two.mjs': 'export const two = 2;\n' }, 'Add two');
+  write(folder, { 'notes.md': 'not committed\n' });
+  assert.deepEqual([names(taskPatch(repo, '1')).sort(), taskPatch(repo, '1').note], [['notes.md', 'src/one.mjs', 'src/two.mjs'], null]);
+  const whole = fs.readFileSync(log, 'utf8');
+  fs.writeFileSync(log, `${whole.split('\n').filter(Boolean).at(-1)}\n`);
+  const partial = taskPatch(repo, '1');
+  assert.deepEqual([names(partial).sort(), counts(partial), partial.note], [['notes.md', 'src/two.mjs'], [2, 2, 0], NOTES.partial]);
+  assert.deepEqual(changeRows(partial, 120, false).slice(0, 2).map(row => visible(row.text).replace(/commit [0-9a-f]{8}/, 'commit X')), ['2 files changed · +2 −0 · compared with commit X, where this session branched', "Git no longer has this folder's whole record, so this session's older commits may not show."]);
+  assert.deepEqual([sent(repo).counts, sent(repo).changes.note], [[2, 2, 0], NOTES.partial]);
+  fs.writeFileSync(log, whole);
+  assert.equal(taskPatch(repo, '1').note, null);
 });
 
 // Another person's clone, which pushes branches that main does not have.
