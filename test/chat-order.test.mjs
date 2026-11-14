@@ -367,3 +367,24 @@ test('the Changes tab of a session here counts its changes without being opened,
   saveTask(repo, { ...readTask(repo, '4'), state: 'answered' });
   await until(() => tab() === 'Chat   Changes', `no count with no changes: "${tab()}"`);
 });
+
+// The tab's count of a session here, read without its Changes open, is what the session itself
+// changed (lib/session-work.mjs): one that moved to a newer main and committed on a branch of
+// its own is not counted the files other people landed on main in between.
+test('the Changes tab of a session here that moved to a newer main counts only its own work, without being opened', { timeout: 60000 }, async t => {
+  const p = start(t), repo = localSession(p, { state: 'answered', replies: [[9, 'It is fixed.']] }), worktree = readTask(repo, '4').worktree;
+  const v = await view(p, { columns: 140, rows: 50, repo: p.repo, dashboard: true, peer: fakePeer() });
+  await onRow(v, /Fix the report/);
+  const { sessionTabs, changes } = v.panels, tab = () => sessionTabs.getText().trim();
+  await until(() => tab() === 'Chat   Changes 1', `its one changed file: "${tab()}"`);
+  // Other people land forty files on main. The session moves to that main, on a branch of its own, and commits one file there.
+  for (let at = 0; at < 40; at++) fs.writeFileSync(path.join(p.root, `landed-${at}.txt`), `landed ${at}\n`);
+  git(p.root, ['add', '-A']); git(p.root, ['commit', '-q', '-m', 'Land forty files']);
+  git(worktree, ['checkout', '-q', '-b', 'fix/report-rows', 'main']);
+  fs.writeFileSync(path.join(worktree, 'src', 'rows.mjs'), 'export const rows = [];\n'); git(worktree, ['add', 'src/rows.mjs']); git(worktree, ['commit', '-q', '-m', 'Add the rows']);
+  assert.equal(git(worktree, ['diff', '--name-only', readTask(repo, '4').base, '--']).stdout.split('\n').filter(Boolean).length, 42, 'its folder against the commit it started from holds the forty too');
+  saveTask(repo, { ...readTask(repo, '4'), state: 'ready' });
+  await until(() => tab() === 'Chat   Changes 2', `its own two files when its state changed: "${tab()}"`);
+  await pause(1200); assert.equal(tab(), 'Chat   Changes 2');
+  assert.equal(changes.hidden, true, 'its Changes were never opened');
+});
