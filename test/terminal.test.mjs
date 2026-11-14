@@ -626,6 +626,7 @@ test('/model NAME with no session open opens the new session form on that model,
   // The default is as it was: only that session is on it.
   assert.equal(v.current.controller.startModel().model, 'opus');
   // This computer's default by the name the model is shown by, which is two words.
+  await until(() => /^ Message Sonnet 5\.5 · /.test(label()), 'the box names the model as Sonnet 5.5');
   await send(v, '/model computer sonnet 5.5'); await until(() => /This computer's default is Sonnet 5\.5 \(claude · sonnet\)\./.test(status()), 'the shown name is taken');
   assert.deepEqual(computerDefault(), { vendor: 'claude', model: 'sonnet' });
   await send(v, '/model computer sonnet 5.5 now'); await until(() => /Use \/model computer <name>, or none\./.test(status()), 'a default takes no message'); panels.ask.setValue('');
