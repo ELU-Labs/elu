@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url';
 import crypto from 'node:crypto';
 import { newHome, peerHome, withHome, makeTeam, registeredProject, answeringClis, liveTask } from './peer-helpers.mjs';
 import { CLI, keyLike } from './helpers.mjs';
-import { peerFile } from '../lib/peer/paths.mjs';
+import { peerFile, peerRepo } from '../lib/peer/paths.mjs';
 import { defaultBox, savePeerSettings, savePeerPolicy } from '../lib/peer/settings.mjs';
 import { createIdentity, identity as loadIdentity } from '../lib/peer/identity.mjs';
 import { appendOp, createTeam, head, makeOp, merge, readLog, setChannel, team, teamPath, teams as everyTeam } from '../lib/peer/roster.mjs';
@@ -22,12 +22,12 @@ import { share as shareWith, setTeamProject } from '../lib/peer/shares.mjs';
 const share = (root, options = {}) => shareWith(root, { teams: everyTeam().map(state => state.id), ...options });
 import { pendingRequests, removeRequest, updateRequest } from '../lib/workspace.mjs';
 import { repository } from '../lib/git.mjs';
-import { saveTask, taskPlace } from '../lib/state.mjs';
+import { lock, saveTask, taskPlace } from '../lib/state.mjs';
 import { projectFolder } from '../lib/workspace.mjs';
 import { registerProject } from '../lib/projects.mjs';
 import { setDone } from '../lib/kanban.mjs';
 import { saveDefaultMode } from '../lib/modes.mjs';
-import { BINDING, ErrorCode, message, peerExt } from '../lib/peer/a2a.mjs';
+import { BINDING, ErrorCode, artifact, createRpcHandler, message, peerExt } from '../lib/peer/a2a.mjs';
 import { MESSAGES_PER_DAY, count, intakeMethods } from '../lib/peer/intake.mjs';
 import { PeerDaemon } from '../lib/peer/daemon.mjs';
 import { frames, writeFrame, FRAME_MAX } from '../lib/peer/transport.mjs';
@@ -2406,6 +2406,66 @@ test('autoAccept answers end to end, autoContinue queues the chat, and a secret 
   await run(sara.home, { type: 'approve', id: held.id, text: 'Use the key from your own vault.' });
   const fixed = await until(() => askRecord(ana.home, secret.askId)?.state === 'answered' && askRecord(ana.home, secret.askId), 'edited reply');
   assert.equal(fixed.answer.text, 'Use the key from your own vault.');
+});
+
+// A teammate's result or answer and its line in the thread are kept together: the line is
+// written first, so whoever reads one on the message (its row, the thread screen) finds it in
+// the thread. The thread's lock held here stands for a thread that cannot be written just then.
+test('a result shows on a message only once its line is in the thread: while the thread is busy the teammate is told to try again, and sending it again writes each once', async t => {
+  const crew = makeTeam(t), sara = crew.member.identity;
+  await withHome(crew.founder.home, async () => {
+    const ctx = { me: loadIdentity(), kick: () => {}, event: () => {}, push: () => {}, session: () => null, dial: () => {} };
+    const handle = createRpcHandler(intakeMethods(ctx));
+    const asked = createAsk(ctx, { to: sara.key, text: 'Make coupon codes uppercase.', threadId: 'thread-kept' });
+    const send = (messageId, text) => handle({ jsonrpc: '2.0', id: 1, method: 'SendMessage', params: { message: message({ text, contextId: 'thread-kept', messageId, ext: { kind: 'result', project: null, hop: 1, from: { key: sara.key, name: 'sara' } } }) } }, { key: sara.key });
+    const lines = () => thread('thread-kept').filter(line => line.dir === 'in' && line.kind === 'result').map(line => line.text);
+    const first = crypto.randomUUID(), second = crypto.randomUUID();
+    let release = lock(peerRepo(), 'thread-thread-kept'), reply = await send(first, 'Coupon codes are uppercase now.');
+    assert.equal(getAsk(asked.id).result, undefined, 'no result on the message while its line is not in the thread');
+    assert.deepEqual(lines(), []); assert.equal(reply.error?.code, -32000, JSON.stringify(reply));
+    release();
+    reply = await send(first, 'Coupon codes are uppercase now.');
+    assert.equal(reply.result?.task.status.state, TaskState.COMPLETED, JSON.stringify(reply));
+    assert.equal(getAsk(asked.id).result.text, 'Coupon codes are uppercase now.'); assert.deepEqual(lines(), ['Coupon codes are uppercase now.']);
+    // The line is written and the message cannot be saved: sent again, the thread keeps one line of it.
+    release = lock(peerRepo(), 'asks'); reply = await send(second, 'The coupon test passes.');
+    assert.equal(reply.error?.code, -32000, JSON.stringify(reply)); assert.equal(getAsk(asked.id).result.text, 'Coupon codes are uppercase now.');
+    release();
+    for (let again = 0; again < 2; again++) assert.equal((await send(second, 'The coupon test passes.')).result?.task.status.state, TaskState.COMPLETED);
+    assert.equal(getAsk(asked.id).result.text, 'The coupon test passes.'); assert.deepEqual(lines(), ['Coupon codes are uppercase now.', 'The coupon test passes.']);
+    // The same words in a result of its own are a line of their own.
+    await send(crypto.randomUUID(), 'The coupon test passes.');
+    assert.deepEqual(lines(), ['Coupon codes are uppercase now.', 'The coupon test passes.', 'The coupon test passes.']); assert.ok(verifyThread(thread('thread-kept')));
+    assert.deepEqual(peer.threadMessages('thread-kept').map(row => [row.from, row.text]), [['me', 'Make coupon codes uppercase.'], ['peer', 'Coupon codes are uppercase now.'], ['peer', 'The coupon test passes.'], ['peer', 'The coupon test passes.']]);
+  });
+});
+
+test('an answer shows on a message only once its line is in the thread: while the thread is busy the message stays open and the teammate is asked again, and the line is written once', t => {
+  const crew = makeTeam(t), sara = crew.member.identity;
+  withHome(crew.founder.home, () => {
+    const ctx = { me: loadIdentity(), kick: () => {}, event: () => {}, push: () => {}, session: () => null, dial: () => {} };
+    const asked = createAsk(ctx, { to: sara.key, text: 'Where are coupon codes normalized?', threadId: 'thread-answered' });
+    const working = a2aTask({ contextId: 'thread-answered', state: TaskState.WORKING }), done = a2aTask({ id: working.id, contextId: 'thread-answered', state: TaskState.COMPLETED, artifacts: [artifact({ name: 'Answer', text: 'In src/coupon.mjs.' })] });
+    const lines = () => thread('thread-answered').filter(line => line.dir === 'in' && line.kind === 'answer').map(line => line.text);
+    applyTask(ctx, sara.key, working, asked.id);
+    assert.equal(getAsk(asked.id).state, 'working');
+    // The answer comes as the teammate's ELU tells it (elu.taskUpdate) while the thread is busy.
+    const release = lock(peerRepo(), 'thread-thread-answered');
+    assert.throws(() => applyTask(ctx, sara.key, done), /holds this lock/);
+    assert.equal(getAsk(asked.id).state, 'working', 'not answered while its line is not in the thread'); assert.equal(getAsk(asked.id).answer, null);
+    assert.deepEqual(lines(), []); assert.ok(getAsk(asked.id).pollAt > Date.now(), 'the teammate is asked for it again');
+    release();
+    // Asked again (GetTask), the same answer is kept: on the message and in the thread, once.
+    assert.equal(applyTask(ctx, sara.key, done, asked.id).state, 'answered');
+    assert.equal(getAsk(asked.id).answer.text, 'In src/coupon.mjs.'); assert.deepEqual(lines(), ['In src/coupon.mjs.']);
+    assert.equal(applyTask(ctx, sara.key, done, asked.id), null); assert.deepEqual(lines(), ['In src/coupon.mjs.']);
+    // A line that was written before the message could be saved is not written again.
+    const next = createAsk(ctx, { to: sara.key, text: 'And the tests?', threadId: 'thread-answered' }), later = a2aTask({ contextId: 'thread-answered', state: TaskState.COMPLETED, artifacts: [artifact({ name: 'Answer', text: 'In test/coupon.test.mjs.' })] });
+    audit('thread-answered', { dir: 'in', peer: sara.key, kind: 'answer', text: 'In test/coupon.test.mjs.', id: later.id });
+    assert.equal(getAsk(next.id).state, 'pending');
+    assert.equal(applyTask(ctx, sara.key, later, next.id).state, 'answered');
+    assert.deepEqual(lines(), ['In src/coupon.mjs.', 'In test/coupon.test.mjs.']); assert.ok(verifyThread(thread('thread-answered')));
+  });
 });
 
 test('a result of any length reaches the teammate whole: over 16000 characters as it is, and over 1 MiB in pieces; both threads keep every character and the chat continues with all of it', async t => {
