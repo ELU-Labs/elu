@@ -98,7 +98,10 @@ script, `sh -c`, `npm test`. Claude Code starts each command from a snapshot of
 your shell setup, which builds PATH again, so a folder put first on the PATH it was
 started with ends up behind the system's. ELU sets `CLAUDE_ENV_FILE` to a
 one-line file that puts the folder first again; Claude Code runs that file ahead of
-each command. Seen on 2.1.322 in Ask for approval and in Approve for me: `npm test`
+each command. The stand-in named `claude` is in a folder of its own that only this file
+puts on PATH. Claude Code itself is started without it, so a terminal app that wraps the
+vendor's command with its own `claude` script finds the real program, not the stand-in
+([why](../permissions.md#which-profile-a-turn-runs-with)). Seen on 2.1.322 in Ask for approval and in Approve for me: `npm test`
 whose script ran `git push` to an origin on another machine printed `git push is
 never allowed, in any mode.` (the words of that release; it now prints `git push is
 not allowed outside Full access.`) and the push exited 126, and the run kept the

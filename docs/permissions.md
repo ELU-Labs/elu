@@ -201,6 +201,16 @@ command with its arguments untouched; `git tag` alone and `git tag -l` only list
 tags and pass. The chat shows the refusal as a Blocked line even when the turn
 went on to answer.
 
+Another tool may wrap a command with a script of the same name that looks along PATH
+for the real one and runs the first other file it finds: a terminal app that wraps the
+vendor's command does, for `claude` and `codex`. Handed ELU's stand-in in place of the
+real program, such a script is handed straight back, and stops as a loop. So the
+stand-in named `claude` (it refuses `claude mcp add`) has a folder of its own, which is
+never on the PATH Claude Code itself is started with, and it takes that folder off PATH
+whenever it hands a call on. The stand-in for any other command does the same for a
+call that came back to it. The vendor's program is then reached through the other
+tool's script in every mode.
+
 Pushing to a folder on this machine and working in a scratch repository under the
 temporary directory are not publishing, and a project's own tests do both, so the
 stand-in for `git` lets them through:
