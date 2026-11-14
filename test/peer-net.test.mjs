@@ -1752,8 +1752,9 @@ test('elu team leave and elu team remove: plain refusals, and the op written her
 // Some computers make the user name from the address they sign in with (name_gmail_com).
 // Teammates see the name ELU offers if it is taken as offered, so no part of an address is in it.
 test('elu id with no --name never takes an email address for the name: the plain part of name_gmail_com, or --name asked for', async t => {
-  const names = ['name_gmail_com', 'first_last_gmail_com', 'name_yahoo_co_uk', 'sam_example_com', 'jane.doe@corp.example', 'jane_doe', 'box_two_dev', 'kim'];
-  assert.deepEqual(names.map(plainUserName), ['name', 'first_last', 'name', '', 'jane.doe', 'jane_doe', 'box_two_dev', 'kim']);
+  // sam_example_com and box_two_dev may be sam@example.com and box@two.dev: nothing is offered for them.
+  const names = ['name_gmail_com', 'first_last_gmail_com', 'name_yahoo_co_uk', 'sam_example_com', 'box_two_dev', 'jane.doe@corp.example', 'jane_doe', 'sam_dev_box', 'kim'];
+  assert.deepEqual(names.map(plainUserName), ['name', 'first_last', 'name', '', '', 'jane.doe', 'jane_doe', 'sam_dev_box', 'kim']);
   const previous = { USER: process.env.USER, LOGNAME: process.env.LOGNAME };
   t.after(() => { for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } });
   delete process.env.LOGNAME;
