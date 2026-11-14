@@ -615,11 +615,14 @@ another of your machines.
 
 ## Checks and evidence
 
-Check scripts and pre-push guards run inside Codex's OS sandbox (`codex sandbox`, or the
-copy `ELU_CODE_SANDBOX_HELPER` names), with an empty Codex home of their own, so Codex must
-be installed whatever vendor your sessions use, but need not be signed in. A check that
-cannot start in the sandbox fails; it never retries without isolation. Runtime directories
-needed by installed check programs are readable, not writable.
+Outside Full access, check scripts and pre-push guards run inside an OS sandbox: Codex's
+(`codex sandbox`, or the copy `ELU_CODE_SANDBOX_HELPER` names), with an empty Codex home of
+their own and no sign-in needed, or, where Codex is not installed, the system's own with the
+same limits: bubblewrap on Linux, sandbox-exec on macOS. Where the computer has none, an
+edit is refused before it starts. A check that cannot start in the sandbox fails; it never
+retries without isolation. Runtime directories needed by installed check programs are
+readable, not writable. In Full access checks and guards run as in your terminal, with no
+sandbox: Full access is everything.
 
 Checks have a fresh private temporary directory inside the task worktree. Shared system
 temporary directories are denied. Ignored output is included in the evidence digest and
