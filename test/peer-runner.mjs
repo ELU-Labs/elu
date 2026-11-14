@@ -2,7 +2,8 @@
 // its own XDG_CONFIG_HOME. argv[2] is JSON: {tickMs, statusMs, idleMs, conductor: true|false,
 // noPunch, noPunchTo, firewalled, abortFound, join, dropProveReply, github: {gapMs, everyMs} for GitHub pairing}. noPunch: no
 // direct connection to a teammate or to anyone found on a join's topic. noPunchTo: [key]: none
-// to those computers only, whoever dials; every other one connects as usual. firewalled: this node
+// to those computers only, whoever dials; every other one connects as usual. throughFails: N, with
+// noPunchTo: this computer's first N tries to those computers through a relay fail. firewalled: this node
 // is not reachable without a punch. abortFound: N direct tries of a join fail before one may
 // work. join: {connectMs, retryMs, carryMs, wayMs, directMs} for a join's waits and for two teammates who cannot connect
 // directly. A home on no team waits for its join, so by default it does not
@@ -17,7 +18,7 @@ let conductor = null, stopping = null;
 const startConductor = () => { if (options.conductor !== false && !conductor) conductor = new Conductor({ tickMs: 100, idleMs: 3600000 }).start(); };
 const closed = { quickFirewall: false, ephemeral: true }, punchless = { holepunch: () => false, localConnection: false, fastOpen: false };
 const testing = { ...options.noPunch ? { dht: closed, connect: punchless, found: punchless, noServerPunch: true } : {}, ...options.noPunchTo ? { dht: closed, connect: punchless, found: punchless, only: options.noPunchTo } : {}, ...options.firewalled ? { dht: closed } : {}, ...options.abortFound ? { dht: closed, found: punchless, foundFails: options.abortFound } : {},
-  ...options.join ? { join: options.join } : {}, ...options.dropProveReply ? { dropProveReply: true } : {}, ...options.github ? { github: options.github } : {} };
+  ...options.throughFails ? { throughFails: options.throughFails } : {}, ...options.join ? { join: options.join } : {}, ...options.dropProveReply ? { dropProveReply: true } : {}, ...options.github ? { github: options.github } : {} };
 const daemon = new PeerDaemon({ tickMs: options.tickMs ?? 200, statusMs: options.statusMs ?? 500, idleMs: options.idleMs ?? 3600000, conductor: startConductor, testing, onExit: () => shutdown() });
 async function shutdown() {
   stopping ??= (async () => { await daemon.stop().catch(() => {}); await conductor?.stop().catch(() => {}); process.exit(0); })();

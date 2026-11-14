@@ -1638,30 +1638,78 @@ test('in Chats my other computer is yours in the bar, the box, its screen, the t
   await until(() => /Choose a teammate or one of your computers first\./.test(status()), 'what t says with nobody chosen');
 });
 
-test('in Chats a computer of mine that has not marked this one back says it waits in the bar, the box, its screen and the @ list', { timeout: 30000 }, async t => {
+test('in Chats a computer of mine that has not marked this one back says it waits in the bar, the box, its screen and the @ list: whose agreement, and what to run there', { timeout: 30000 }, async t => {
   const peer = fakePeer({ items: [], mine: [{ key: SARA, mine: true, theirs: false }] });
   const { v } = await teamView(t, { peer }), [bar] = v.panels.teamLists, ask = v.panels.ask, palette = v.panels.palette;
   const label = () => ask._label.getText(), status = () => v.panels.status.getText(), body = title => modal(v, title).children.find(child => child.options?.scrollable).getText();
   const rows = () => palette.hidden ? [] : palette.items.map(item => item.getText().replace(/\s+/g, ' ').trim());
-  // Not mine yet, so the row says that it waits in place of yours, in the few words the bar has room for.
-  await until(() => bar.items.some(item => /^● @sara-box\s+waiting to confirm$/.test(plainItem(item).trimEnd())), 'its row in the bar');
+  // Not mine yet, so the row says whose agreement it waits for in place of yours, in the words the bar has room for.
+  await until(() => bar.items.some(item => /^● @sara-box\s+(waiting for @sara-box to agree( · run \/mine @ana there)?|waiting for it to agree)$/.test(plainItem(item).trimEnd())), 'its row in the bar');
   // A bar with the room for it, as under 100 columns, says it whole.
-  const member = (waiting, online = true) => ({ status: { key: ME, teams: [{ id: 'team-1', name: 'Core', members: [{ key: ME, name: 'ana' }, { key: SARA, name: 'sara-box', online, path: 'direct', mine: true, waiting }] }] }, items: [] });
+  const member = (waiting, online = true, self = undefined) => ({ status: { key: ME, teams: [{ id: 'team-1', name: 'Core', members: [{ key: ME, name: 'ana' }, { key: SARA, name: 'sara-box', online, path: 'direct', mine: true, waiting, self }] }] }, items: [] });
   const drawn = (frame, width) => visible(chatBar(frame, width, false).find(row => row.value?.type === 'member').line).replace(/\s+/g, ' ').trim();
-  assert.equal(drawn(member(true), 78), '● @sara-box waiting for it to confirm');
-  assert.equal(drawn(member(true), 40), '● @sara-box waiting to confirm');
+  assert.equal(drawn(member(true, true, 'ana'), 78), '● @sara-box waiting for @sara-box to agree · run /mine @ana there');
+  assert.equal(drawn(member(true, true, 'ana'), 60), '● @sara-box waiting for @sara-box to agree');
+  assert.equal(drawn(member(true), 78), '● @sara-box waiting for @sara-box to agree');
+  assert.equal(drawn(member(true), 40), '● @sara-box waiting for it to agree');
+  assert.equal(drawn(member(true), 36), '● @sara-box waiting for it to agree', 'beside the name alone, rather than fewer words in its column');
+  assert.equal(drawn(member(true), 30), '● @sara-box not agreed yet');
   assert.equal(drawn(member(false), 40), '● @sara-box yours · direct');
   assert.equal(drawn(member(false, false), 40), '○ @sara-box yours · offline');
   await openRow(v, /@sara-box/, '@sara-box');
   await until(() => label() === ' Message @sara-box · your computer · waiting for it to confirm ', 'the box of its direct chat');
-  const title = 'Your computer @sara-box · waiting for it to confirm';
+  const title = 'Your computer @sara-box · waiting for it to agree';
   bar.focus(); v.input.write('t'); await until(() => modal(v, title), 'its screen');
-  assert.match(body(title), /^Waiting for it to confirm: on @sara-box, type \/mine @ana\.\n\nKey: /, 'and what ends the wait');
+  assert.match(body(title), /^Waiting for @sara-box to agree: run \/mine @ana there\.\n\nKey: /, 'and what ends the wait');
   modal(v, title).children.find(child => child.type === 'textbox').emit('cancel'); await until(() => !modal(v, title), 'closed');
+  // This computer is not signed in to GitHub, so GitHub could not pair the two: its screen says so, once.
+  peer.githubStatus = () => ({ state: 'signedout', at: new Date().toISOString() });
+  bar.focus(); v.input.write('t'); await until(() => modal(v, title), 'its screen again');
+  assert.match(body(title), /^Waiting for @sara-box to agree: run \/mine @ana there\.\nNot paired by GitHub: this computer is not signed in to GitHub \(gh auth login\)\.\n\nKey: /);
+  assert.equal(body(title).split('Not paired by GitHub').length - 1, 1, 'said once');
+  modal(v, title).children.find(child => child.type === 'textbox').emit('cancel'); await until(() => !modal(v, title), 'closed again');
+  // Signed in as another account than that computer: said so in its place.
+  peer.githubStatus = () => ({ state: 'ok', login: 'ali-ajam', at: new Date().toISOString() });
+  bar.focus(); v.input.write('t'); await until(() => modal(v, title), 'its screen a third time');
+  assert.match(body(title), /\nNot paired by GitHub: this computer is signed in to GitHub as ali-ajam, and @sara-box is not\.\n\nKey: /);
+  modal(v, title).children.find(child => child.type === 'textbox').emit('cancel'); await until(() => !modal(v, title), 'closed a third time');
   await send(v, 'what runs there?');
   await until(() => /Sent to @sara-box, your computer\. Its reply shows in this thread\./.test(status()), 'the line after sending');
   ask.focus(); ask.readInput(); await until(() => ask.__listener, 'message box'); ask.clearValue(); v.input.write('@sa');
   await until(() => rows().some(row => /^@sara-box your computer · waiting for it to confirm$/.test(row)), 'the @ list of Chats');
+});
+
+test('in Chats a teammate’s computer that marked this one as its own says so once, in its row and on its screen, and /mine there agrees with one command', { timeout: 30000 }, async t => {
+  const mine = [{ key: SARA, mine: false, theirs: true, at: null, theirsAt: ago(1) }];
+  const peer = fakePeer({ items: [], mine, answer: command => command.type === 'mine' ? { both: true } : null });
+  peer.githubStatus = () => ({ state: 'signedout', at: new Date().toISOString() });
+  const { v } = await teamView(t, { peer }), [bar] = v.panels.teamLists, status = () => v.panels.status.getText(), body = title => modal(v, title).children.find(child => child.options?.scrollable).getText();
+  // The line under the chat says it once, with the command that agrees.
+  const said = /@sara-box says it is your computer\. \/mine @sara-box agrees\./;
+  await until(() => said.test(status()), 'the line that says so', 8000);
+  // Its row goes by the name /mine finds it by, and says the same in the words the bar has room for.
+  await until(() => bar.items.some(item => /^● @sara-box\s+says it is yours( · \/mine @sara-box agrees)?$/.test(plainItem(item).trimEnd())), 'its row in the bar');
+  const member = (asks, online = true) => ({ status: { key: ME, teams: [{ id: 'team-1', name: 'Core', members: [{ key: ME, name: 'ana' }, { key: SARA, name: 'sara-box', online, path: 'direct', asks }] }] }, items: [] });
+  const drawn = (frame, width) => visible(chatBar(frame, width, false).find(row => row.value?.type === 'member').line).replace(/\s+/g, ' ').trim();
+  assert.equal(drawn(member('sara-box'), 78), '● @sara-box says it is yours · /mine @sara-box agrees');
+  assert.equal(drawn(member('sara-box'), 40), '● @sara-box says it is yours');
+  assert.equal(drawn(member('sara-box', false), 78), '○ @sara-box offline · says it is yours · /mine @sara-box agrees');
+  assert.equal(drawn(member(undefined), 40), '● @sara-box direct', 'a teammate that says nothing reads as before');
+  // Its screen says it too, and why GitHub did not pair the two.
+  const title = 'Teammate @sara-box · says it is your computer';
+  selectRow(bar, /@sara-box/); bar.focus(); v.input.write('t'); await until(() => modal(v, title), 'its screen');
+  assert.match(body(title), /^@sara-box says it is your computer\. \/mine @sara-box agrees\.\nNot paired by GitHub: this computer is not signed in to GitHub \(gh auth login\)\.\n\nKey: /);
+  modal(v, title).children.find(child => child.type === 'textbox').emit('cancel'); await until(() => !modal(v, title), 'closed');
+  // Not said again while the app runs: another line takes its place and stays.
+  await send(v, '/peers'); await until(() => /teammates online/.test(status()), '/peers');
+  await new Promise(resolve => setTimeout(resolve, 2600));
+  assert.doesNotMatch(status(), said, 'said once');
+  // One command agrees: the row says yours at once.
+  await send(v, '/mine @sara-box');
+  await until(() => peer.sent().some(command => command.type === 'mine' && command.key === SARA), 'the mark sent');
+  mine[0] = { key: SARA, mine: true, theirs: true, at: ago(0), theirsAt: ago(1) };
+  await until(() => /@sara-box is yours\./.test(status()), 'the line that it is yours');
+  await until(() => bar.items.some(item => /^● @sara-box\s+yours · direct$/.test(plainItem(item).trimEnd())), 'its row says yours');
 });
 
 test('a message to someone who is not connected: the line under the chat and its open thread follow it while they are shown', { timeout: 40000 }, async t => {

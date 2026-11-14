@@ -228,10 +228,25 @@ test('a computer of mine that has not confirmed while it is offline says offline
   const D = 'd'.repeat(64), ME = 'k'.repeat(64);
   const frame = online => ({ status: { key: ME, teams: [{ id: 'team-1', name: 'Core', members: [{ key: ME, name: 'ana' }, { key: D, name: 'devbox', online, path: 'direct', mine: true, waiting: true }] }] }, items: [] });
   const bar = (online, width) => visuals.visible(visuals.chatBar(frame(online), width, false).find(row => row.value?.type === 'member').line).replace(/\s+/g, ' ').trim();
-  assert.deepEqual([bar(false, 78), bar(false, 40), bar(true, 78)], ['○ @devbox offline · not confirmed yet', '○ @devbox offline · unconfirmed', '● @devbox waiting for it to confirm']);
+  assert.deepEqual([bar(false, 78), bar(false, 40), bar(true, 78)], ['○ @devbox offline · waiting for @devbox to agree', '○ @devbox offline · not agreed yet', '● @devbox waiting for @devbox to agree']);
   assert.deepEqual([yourComputer({ waiting: true, online: false }), yourComputer({ waiting: true, online: true }), yourComputer({ waiting: true }), yourComputer({ online: false })], ['your computer · offline, not confirmed yet', 'your computer · waiting for it to confirm', 'your computer · waiting for it to confirm', 'your computer']);
   const glue = online => remoteGlue({ facade: { mineRows: () => [{ key: D, mine: true, theirs: false }], remoteSessions: () => [] }, peerRead: () => ({ key: ME, name: 'ana', box: 'laptop', teams: [{ members: [{ key: ME, name: 'ana' }, { key: D, name: 'ana', box: 'devbox', online }] }] }), peerCommand: async () => ({}), chatMessage: ({ text }) => text, ink: text => text, colour: false });
   assert.deepEqual([glue(false).words(D), glue(true).words(D)], ['your computer · offline, not confirmed yet', 'your computer · waiting for it to confirm']);
+});
+
+test('a computer that says it is mine is named, in the line and in its row, only by a name /mine finds it by', () => {
+  // Three computers of one owner, all called ali on the team: the one that says it is mine is
+  // found by its box name, which comes a moment after it connects.
+  const ME = 'k'.repeat(64), D = 'd'.repeat(64), G = 'e'.repeat(64);
+  let box;
+  const status = () => ({ key: ME, name: 'ali', box: 'macbookpro', teams: [{ members: [{ key: ME, name: 'ali' }, { key: D, name: 'ali', box: 'devbox', online: true }, { key: G, name: 'ali', box, online: true }] }] });
+  const glue = remoteGlue({ facade: { mineRows: () => [{ key: G, mine: false, theirs: true, theirsAt: '2026-11-14T18:59:17.000Z' }], remoteSessions: () => [] }, peerRead: status, peerCommand: async () => ({}), chatMessage: ({ text }) => text, ink: text => text, colour: false });
+  assert.equal(glue.asking().size, 0, 'not while /mine @ali would find two computers');
+  assert.equal(glue.asks(), null);
+  box = 'grokbot-box';
+  assert.deepEqual([...glue.asking(Date.now() + 1000).values()].map(row => row.name), ['grokbot-box']);
+  assert.equal(glue.asks(), '@grokbot-box says it is your computer. /mine @grokbot-box agrees.');
+  assert.equal(glue.asks(), null, 'said once');
 });
 
 test('the line for a message I sent says where it is in every state, and never that it waits with no reason', () => {
