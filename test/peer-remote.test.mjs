@@ -19,6 +19,7 @@ import { requestApproval, pendingApprovals } from '../lib/approvals.mjs';
 import { Conductor, enqueue } from '../lib/conductor.mjs';
 import { boardRows, remoteRow, rowActions, rowTitle } from '../lib/board.mjs';
 import { remoteSessions as remoteGlue } from '../lib/terminal-remote.mjs';
+import { sessionChanges } from '../lib/diff.mjs';
 import { teamPath } from '../lib/peer/roster.mjs';
 import { readTask, saveTask, taskPlace } from '../lib/state.mjs';
 import { spawnSync } from 'node:child_process';
@@ -775,6 +776,30 @@ test('a chat entry, a review and a diff of any length reach the computer that fo
   const before = toHost.sent.length;
   withHome(devbox.home, () => hostTick(hostCtx, Date.now() + 1));
   assert.deepEqual(toHost.sent.slice(before).flatMap(([, params]) => params.items.flatMap(row => row.events)).filter(event => /^(entry|diff)/.test(event.type)), []);
+});
+
+test('a new file of any size in a session on my other computer reaches the computer that follows it whole, and a binary one is only named', async t => {
+  const { laptop, devbox, project, toHost, toViewer, hostCtx, viewCtx, viewer, host } = pair(t);
+  // 6,000 lines, about 170,000 bytes: well past the 64,000 a preview held.
+  const notes = `${Array.from({ length: 6000 }, (_, n) => `Note ${n + 1} of the new file.`).join('\n')}\n`;
+  withHome(devbox.home, () => { liveTask(project.root, { id: '1', goal: 'Write the notes', files: { 'docs/notes.md': notes, 'art/logo.bin': Buffer.concat([Buffer.from([137, 0, 1, 2]), Buffer.alloc(300000, 65)]) } }); relist(); });
+  toViewer.request = (method, params) => withHome(devbox.home, () => host[method](params, toHost));
+  await withHome(laptop.home, () => listTick(viewCtx));
+  const item = withHome(laptop.home, () => remoteMachines())[0].sessions[0];
+  await withHome(laptop.home, () => remoteCommand(viewCtx, { type: 'remoteWatch', to: devbox.identity.key, ref: item.ref }));
+  withHome(devbox.home, () => hostTick(hostCtx));
+  for (const [method, params] of toHost.sent.filter(([name]) => name === 'elu.remote.events')) withHome(laptop.home, () => viewer[method](params, connection(devbox.identity.key)));
+  const seen = () => withHome(laptop.home, () => remoteSessions().find(row => row.id === item.id));
+  for (let n = 0, now = Date.now(); n < 60 && seen().behind; n++) await withHome(laptop.home, () => viewTick(viewCtx, now += 2000));
+  const patch = seen().diff.patch;
+  assert.equal(patch.includes('[File preview truncated.]'), false);
+  assert.ok(patch.includes(`New file: docs/notes.md\n${notes}`), 'every line of the new file');
+  assert.ok(patch.includes('New file: art/logo.bin\n(binary content)') && patch.length < notes.length + 1000, 'the binary file is named, not sent');
+  // The Changes tab reads it as two new files, the text one whole from its line 1.
+  const changes = sessionChanges(patch), text = changes.files.find(file => file.path === 'docs/notes.md');
+  assert.deepEqual([changes.files.length, changes.added, changes.cut, text.added, text.note ?? null], [2, 6000, false, 6000, null]);
+  assert.deepEqual([text.hunks[0].lines[0], text.hunks[0].lines.at(-1)].map(line => [line.now, line.text]), [[1, 'Note 1 of the new file.'], [6000, 'Note 6000 of the new file.']]);
+  assert.equal(changes.files.find(file => file.path === 'art/logo.bin').binary, true);
 });
 
 test('a long session keeps its newest 4000 events there, and a computer that was away longer goes on from the oldest kept', async t => {
