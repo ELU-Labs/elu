@@ -22,6 +22,7 @@ import { TaskState, message } from '../lib/peer/a2a.mjs';
 import { intakeMethods } from '../lib/peer/intake.mjs';
 import { acceptIncoming, processOutbox } from '../lib/peer/replies.mjs';
 import { getRecord } from '../lib/peer/taskstore.mjs';
+import { peerItems } from '../lib/peer/index.mjs';
 import { saveTeamAccess } from '../lib/peer/access.mjs';
 import { BUILT_IN_BOTS, botVendors, getBot, saveBot } from '../lib/bots.mjs';
 import { botLines, botNotes } from '../lib/terminal-bots.mjs';
@@ -196,6 +197,8 @@ test("a teammate's question on a computer without Claude Code is not run: both s
     const reply = getRecord(sent.id).task;
     assert.equal(reply.status.state, TaskState.FAILED); assert.equal(said(reply), asker);
     assert.deepEqual(kai.pushed.at(-1), { key: ANA, task: reply }, 'the teammate is told at once');
+    // No session holds the reason of a question that was refused: the owner reads it on the message in his own list.
+    assert.equal(peerItems().find(item => item.id === `failed:${sent.id}`)?.why, owner);
   }
   // What hardening protects is kept: no model was given the question on another vendor's launch.
   assert.deepEqual(p.calls().filter(call => call.args.includes('--prompt-file') || call.args.includes('stdio')), []);
