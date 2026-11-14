@@ -1501,6 +1501,32 @@ test('in Chats a computer of mine that has not marked this one back says it wait
   await until(() => rows().some(row => /^@sara-box your computer · waiting for it to confirm$/.test(row)), 'the @ list of Chats');
 });
 
+test('a message to someone who is not connected: the line under the chat and its open thread follow it while they are shown', { timeout: 40000 }, async t => {
+  // The daemon's list as the message goes on: kept until they connect, delivered, answered.
+  const items = [], at = new Date().toISOString(), base = { peer: LI, name: 'li', project: null, threadId: 'th-9' };
+  const peer = fakePeer({ items, answer: command => command.type === 'ask' ? { askId: '9' } : null });
+  peer.threadMessages = id => id === 'th-9' ? [{ from: 'me', kind: 'ask', text: 'Are the totals right?', at }] : [];
+  const { v } = await teamView(t, { peer }), [, threads] = v.panels.teamLists, status = () => v.panels.status.getText(), title = 'Thread with @li';
+  await openRow(v, /@li\s+offline/, '@li');
+  items.push({ ...base, id: 'asked:9', kind: 'asked', text: 'Are the totals right?', at, state: 'pending' });
+  await send(v, 'Are the totals right?');
+  // Offline in the roster when it is sent: the line says that first, never that it was sent with no more.
+  await until(() => /@li is offline(?: \(\d+s\))?\. Your message goes as soon as they connect\./.test(status()), 'offline is said first');
+  await until(() => threads.items.some(item => /not connected to @li yet/.test(plainItem(item))), 'its row in the thread');
+  threads.focus(); selectRow(threads, /you asked/); v.input.write('\r'); await until(() => modal(v, title), 'the thread');
+  const body = () => modal(v, title).children.find(child => child.options?.scrollable).getContent();
+  assert.match(body(), /↳ @li is offline[^\n]*\. Your message goes as soon as they connect\./);
+  // Delivered: the line and the open thread say so by themselves.
+  items[0] = { ...items[0], state: 'submitted', deliveredAt: at };
+  await until(() => /Delivered to @li at \d\d:\d\d\./.test(status()), 'delivered, under the chat');
+  await until(() => /↳ Delivered to @li at \d\d:\d\d\./.test(body()), 'delivered, in the open thread');
+  // Answered.
+  items[0] = { ...base, id: 'answer:9', kind: 'answer', text: 'Yes.', question: 'Are the totals right?', at, state: 'answered' };
+  await until(() => /@li answered\. The reply is in Chats\./.test(status()), 'answered, under the chat');
+  await until(() => /↳ @li answered\. The reply is in Chats\./.test(body()), 'answered, in the open thread');
+  await closeDialog(v, title);
+});
+
 test('/access says a message from my other computer follows the setting too, and names no teammate where every other member is mine', { timeout: 30000 }, async t => {
   const notes = (v, title) => modal(v, title).children.filter(child => child.type !== 'list').map(child => child.getText?.() ?? '').join('\n');
   await t.test('a team with a teammate and a computer of mine', async t => {
