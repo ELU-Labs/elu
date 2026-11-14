@@ -12,7 +12,7 @@ import { saveTask, taskPlace } from '../lib/state.mjs';
 import { projectFolder } from '../lib/workspace.mjs';
 import { registerProject } from '../lib/projects.mjs';
 import { boardColumns, closeSession, readBoard, setDone } from '../lib/kanban.mjs';
-import { BYTES_MAX as CARD_BYTES, NAME_MAX, TITLE_MAX, cardsFor, cleanCard, fitCards, cleanCards, cleanProofs, localRepos, proofsFor, repoProof, saveCards, saveLocalRepos, saveProofs, sessionCards, teammateSessions } from '../lib/peer/cards.mjs';
+import { BYTES_MAX as CARD_BYTES, NAME_MAX, TITLE_MAX, cardsFor, cleanCard, fitCards, cleanCards, cleanProofs, localRepos, proofsFor, repoProof, saveCards, saveLocalRepos, saveProofs, savedLocalRepos, sessionCards, teammateSessions } from '../lib/peer/cards.mjs';
 import { peerFile } from '../lib/peer/paths.mjs';
 import { createIdentity, identity as loadIdentity } from '../lib/peer/identity.mjs';
 import { appendOp, createTeam, head, makeOp, merge, readLog } from '../lib/peer/roster.mjs';
@@ -525,6 +525,23 @@ test('a told session card keeps only its own fields, each cleaned and within its
   const a = 'a'.repeat(64), b = 'b'.repeat(64), c = 'c'.repeat(64), first = '1'.repeat(40);
   assert.notEqual(repoProof(a, b, REPO, first), repoProof(b, a, REPO, first)); assert.notEqual(repoProof(a, b, REPO, first), repoProof(a, c, REPO, first)); assert.notEqual(repoProof(a, b, REPO, first), repoProof(a, b, REPO, '2'.repeat(40)));
   assert.deepEqual(cleanProofs([repoProof(a, b, REPO, first), 'x', 7, repoProof(a, b, REPO, first)]), [repoProof(a, b, REPO, first)]);
+});
+
+test('a project opened while the daemon runs is looked at at once: its Kanban and a standup see teammates\' cards within seconds, not 30 s later', t => {
+  const crew = makeTeam(t);
+  withHome(crew.founder.home, () => {
+    const daemon = Object.assign(new PeerDaemon({ conductor: () => {} }), { me: loadIdentity(), node: { dial() {}, leave() {} } }); daemon.methods = daemon.extensions();
+    const now = Date.now(), roots = () => [...savedLocalRepos().values()].flatMap(row => row.roots);
+    let looks = 0; const find = daemon.findRepos.bind(daemon); daemon.findRepos = (...args) => { looks++; return find(...args); };
+    daemon.lookForRepos(now); daemon.lookForRepos(now + 1000);
+    assert.deepEqual([looks, roots()], [1, []], 'nothing changed: not looked at again within 30 s');
+    // The app opens a project: the next tick looks at once, and repos.json has it.
+    const app = registeredProject(t, { origin: ORIGIN });
+    daemon.lookForRepos(now + 2000);
+    assert.deepEqual([looks, roots()], [2, [app.root]]);
+    daemon.lookForRepos(now + 3000); assert.equal(looks, 2);
+    daemon.lookForRepos(now + 32000); assert.equal(looks, 3, 'and every 30 s, as before');
+  });
 });
 
 test('every session in a repository a teammate proves they have is told them, from a project above its clones, and nothing else is', t => {
