@@ -328,6 +328,22 @@ if(edit&&cfg.install==='link'){try{fs.lstatSync('tool-link');}catch{fs.symlinkSy
 // insert (fake.json): { file, at, text }, lines an editing turn also puts in that file after line at, once.
 if(edit&&cfg.insert){const {file,at,text}=cfg.insert;const lines=fs.readFileSync(file,'utf8').split('\n');if(!lines.includes(text.split('\n')[0]))fs.writeFileSync(file,[...lines.slice(0,at),text,...lines.slice(at)].join('\n'));}
 if(edit&&(input.includes('Trim spaces')||cfg.next&&continued))fs.writeFileSync('src/coupon.mjs','export const normalize = (value) => value.trim().toUpperCase();\n');
+// commit (fake.json): an editing turn commits its own work with Git, as an agent that was told
+// to commit does. 'once': one commit of everything it changed. 'twice': a second commit after
+// it. 'amend': the commit, then that commit amended. 'branch': a new branch first, and the
+// commit there. 'dirty': the commit, then one more edit that it leaves uncommitted. 'push':
+// the commit, then a push to origin. A turn that changed nothing since commits nothing.
+if(edit&&cfg.commit){
+ const {spawnSync}=await import('node:child_process');
+ const run=(...args)=>{const r=spawnSync('git',['-c','user.name=Agent','-c','user.email=agent@example.invalid',...args],{encoding:'utf8'});if(r.status!==0)throw new Error(`git ${args.join(' ')}: ${r.stderr}`);return r.stdout;};
+ const save=(message,...more)=>{run('add','-A');if(more.length||run('status','--porcelain').trim())run('commit','-q',...more,'-m',message);};
+ if(cfg.commit==='branch'&&run('branch','--show-current').trim()!=='agent/coupons')run('checkout','-q','-b','agent/coupons');
+ save('Normalize coupons');
+ if(cfg.commit==='twice'){fs.writeFileSync('notes.md','Coupons are upper case.\n');save('Add notes');}
+ if(cfg.commit==='amend'){fs.writeFileSync('notes.md','Coupons are upper case.\n');save('Normalize coupons, with notes','--amend');}
+ if(cfg.commit==='dirty')fs.writeFileSync('notes.md','Not committed yet.\n');
+ if(cfg.commit==='push')run('push','-q','origin','HEAD');
+}
 // A command of this turn as the real CLI prints it: the call, then its result, with the exit code when it failed.
 const step=async(id,command)=>{const {spawnSync}=await import('node:child_process');say({type:'assistant',message:{content:[{type:'tool_use',id,name:'Bash',input:{command,description:'Run it'}}]}});const r=spawnSync('/bin/sh',['-c',command],{encoding:'utf8'}),out=`${r.stdout}${r.stderr}`;say({type:'user',message:{content:[{type:'tool_result',tool_use_id:id,content:r.status===0?out||'(no output)':`Exit code ${r.status}\n${out}`,...(r.status===0?{}:{is_error:true})}]}});return r.status===0;};
 if(opsRun)await step('toolu_fake_ops','node --check src/coupon.mjs');
