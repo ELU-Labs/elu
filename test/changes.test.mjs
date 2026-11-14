@@ -6,7 +6,7 @@ import blessed from 'blessed';
 import { project, git, command, keyLike } from './helpers.mjs';
 import { repository } from '../lib/git.mjs';
 import { saveTask } from '../lib/state.mjs';
-import { taskPatch } from '../lib/projects.mjs';
+import { sessionWire, taskPatch } from '../lib/projects.mjs';
 import { buildChanges, sessionChanges } from '../lib/diff.mjs';
 import { changeCounts, changeRows, changeSummary, noteKey, notesMessage } from '../lib/changes.mjs';
 import { parseDiff, LIMITS } from '../lib/diff.mjs';
@@ -107,8 +107,8 @@ test('parseDiff reads mode changes, binary files and paths with spaces', t => {
   git(root, ['add', 'new art.bin', 'empty.txt', 'link']);
   const files = parseDiff(patchOf(root));
   assert.deepEqual(files.map(file => [file.path, file.status, file.binary, file.note, file.hunks.length]), [
-    ['dir with space/run me.sh', 'modified', false, 'mode 100644 → 100755', 0], ['empty.txt', 'added', false, 'empty file', 0], ['link', 'added', false, 'symbolic link', 1], ['logo.bin', 'modified', true, 'binary file', 0],
-    ['new art.bin', 'added', true, 'binary file', 0], ['tool.sh', 'modified', false, 'mode 100644 → 100755', 1],
+    ['dir with space/run me.sh', 'modified', false, 'now runs as a program', 0], ['empty.txt', 'added', false, 'empty file', 0], ['link', 'added', false, 'symbolic link', 1], ['logo.bin', 'modified', true, 'binary file', 0],
+    ['new art.bin', 'added', true, 'binary file', 0], ['tool.sh', 'modified', false, 'now runs as a program', 1],
   ]);
   assertFaithful(root, files, ['link']);
   // Git shows a link it tracks as one line: where the link points.
@@ -134,7 +134,7 @@ test('parseDiff reads quoted paths', t => {
   // Git writes these names in quotes, with escapes.
   assert.match(text, /^diff --git "a\/caf\\303\\251 menu\.txt" "b\/caf\\303\\251 menu\.txt"$/m); assert.match(text, /^\+\+\+ "b\/we\\"ird\\tname\.txt"\t?$/m);
   assert.deepEqual(files.map(file => file.path.normalize('NFC')).sort(), [accent, script, odd].sort());
-  assert.equal(files.find(file => file.path.normalize('NFC') === script).note, 'mode 100644 → 100755');
+  assert.equal(files.find(file => file.path.normalize('NFC') === script).note, 'now runs as a program');
   assertFaithful(root, files);
   // The same names when Git is told not to escape them.
   assert.deepEqual(parseDiff(patchOf(root, ['-c', 'core.quotePath=false'])), files);
@@ -214,7 +214,7 @@ test('taskPatch holds a huge change to its limits and counts what it leaves out'
   assert.deepEqual([changes.files[299].added, changes.files[299].note], [1, '1 more line not shown']);
   assert.equal(changeSummary(changes), 'Changes 311');
   const rows = changeRows(changes, 100, false);
-  assert.match(shown(rows[0]), /^[0-9a-f]{8}\.\.\.feat\/task-1 · 311 files changed · \+23,089 −1$/);
+  assert.match(shown(rows[0]), /^311 files changed · \+23,089 −1 · compared with main as it was when this session started$/);
   // What is left out is said under the summary, on as many rows as the sentence needs.
   assert.deepEqual(rows.slice(1, 4).map(row => row.kind), ['note', 'note', 'blank']);
   assert.equal(rows.slice(1, 3).map(shown).join(' '), 'Not shown: 11 files · 3,090 changed lines. The totals leave out new files that were not read in full.');
@@ -308,7 +308,7 @@ const sample = () => buildChanges({ base: 'a1b2c3d4'.repeat(5), branch: 'feat/ta
 test('changeRows draws the summary, each file, its hunks and its numbered lines', () => {
   const rows = changeRows(sample(), 80, false);
   assert.deepEqual(rows.slice(0, 9).map(shown), [
-    'a1b2c3d4...feat/task-3 · 4 files changed · +6 −2',
+    '4 files changed · +6 −2',
     '',
     edge('▾ src/coupon.mjs', '+3 −1'),
     // The hunk says where it is in words: the file, the line of its first change, the function.
@@ -321,7 +321,7 @@ test('changeRows draws the summary, each file, its hunks and its numbered lines'
   ]);
   assert.deepEqual(rows.slice(0, 9).map(row => [row.kind, row.file]), [['summary', null], ['blank', null], ['file', 0], ['hunk', 0], ['context', 0], ['del', 0], ['add', 0], ['add', 0], ['add', 0]]);
   // Content is shown as it is written: braces are text, never a style.
-  assert.equal(rows[6].text, '    9 +     return text.trim() // {open}bold{close}not a tag{open}/bold{close} {open}red-fg{close}');
+  assert.equal(rows[6].text, '    9 +     return text{bold}{underline}.trim() // {open}bold{close}not a tag{open}/bold{close} {open}red-fg{close}{/underline}{/bold}');
   // A tab goes to the next multiple of 4, and a control character becomes a visible sign.
   const odd = rows.find(row => shown(row).includes('bell'));
   assert.equal(shown(odd), '   11 + ab  c␛[31m red ␇ bell');
@@ -335,16 +335,16 @@ test('changeRows draws the summary, each file, its hunks and its numbered lines'
   // Numbers are as wide as the largest one in their file.
   const second = rows.filter(row => row.file === 1).map(shown);
   assert.deepEqual(second, [
-    edge('▾ docs/old name.md → docs/guides/a much longer new name.md', '+1 −1'),
+    edge('▾ docs/guides/a much longer new name.md', 'renamed from docs/old name.md   +1 −1'),
     'docs/guides/a much longer new name.md · line 999',
     ' 998  998   context',
     ' 999      - 日本語のテキスト old',
     '      999 + 日本語のテキスト new e\u0301',
     '1000 1000   last',
-    '            \\ No newline at end of file',
+    '            no line break at the end of the file',
   ]);
   assert.deepEqual(rows.filter(row => row.file === 2).map(row => [row.kind, shown(row)]), [['file', edge('▾ logo.png', 'binary')]]);
-  assert.deepEqual(rows.filter(row => row.file === 3).map(shown), [edge('▾ notes/new.txt', 'new  +2 −0'), 'notes/new.txt · line 1', '  1 + one', '  2 + two']);
+  assert.deepEqual(rows.filter(row => row.file === 3).map(shown), [edge('▾ notes/new.txt', 'new   +2 −0'), 'notes/new.txt · line 1', '  1 + one', '  2 + two']);
   // Nothing of Git's own header reaches the view.
   for (const row of rows) assert.doesNotMatch(shown(row), /^(?:diff --git|index [0-9a-f]|--- |\+\+\+ |@@ )/);
   assert.equal(rows.filter(row => row.kind === 'blank').length, 4);
@@ -353,15 +353,15 @@ test('changeRows draws the summary, each file, its hunks and its numbered lines'
 test('changeRows folds files and keeps every row inside the width', () => {
   const changes = sample();
   assert.deepEqual(changeRows(changes, 80, false, { open: new Set() }).map(shown), [
-    'a1b2c3d4...feat/task-3 · 4 files changed · +6 −2', '',
-    edge('▸ src/coupon.mjs', '+3 −1'), edge('▸ docs/old name.md → docs/guides/a much longer new name.md', '+1 −1'), edge('▸ logo.png', 'binary'), edge('▸ notes/new.txt', 'new  +2 −0'),
+    '4 files changed · +6 −2', '',
+    edge('▸ src/coupon.mjs', '+3 −1'), edge('▸ docs/guides/a much longer new name.md', 'renamed from docs/old name.md   +1 −1'), edge('▸ logo.png', 'binary'), edge('▸ notes/new.txt', 'new   +2 −0'),
   ]);
   const one = changeRows(changes, 80, false, { open: new Set([3]) });
   assert.deepEqual(one.map(row => row.kind), ['summary', 'blank', 'file', 'file', 'file', 'file', 'hunk', 'add', 'add']);
   assert.deepEqual(one.filter(row => row.kind === 'file').map(row => shown(row)[0]), ['▸', '▸', '▸', '▾']);
-  // A path that does not fit loses its middle and keeps the file name. A rename keeps both ends.
+  // A path that does not fit loses its middle and keeps the file name. A rename with no room for its old path says so in a word.
   const narrow = changeRows({ ...changes, files: [{ ...changes.files[0], path: 'packages/storefront/src/components/checkout/CouponField.tsx', status: 'deleted' }, changes.files[1]] }, 40, false, { open: new Set() });
-  assert.deepEqual(narrow.slice(1).map(shown), ['', '▸ packa…/CouponField.tsx  deleted  +3 −1', '▸ d…/old name.md → …r new name.md  +1 −1']);
+  assert.deepEqual(narrow.slice(1).map(shown), ['', '▸ packa…/CouponField.tsx  deleted  +3 −1', '▸ …ch longer new name.md  renamed  +1 −1']);
   assert.equal(shown(changeRows({ ...changes, files: [{ ...changes.files[0], status: 'deleted' }] }, 60, false, { open: new Set() })[2]), edge('▸ src/coupon.mjs', 'deleted  +3 −1', 60));
   for (const colour of [true, false]) for (const open of [undefined, new Set(), new Set([0, 2])]) for (let width = 40; width <= 300; width++) {
     const rows = changeRows(changes, width, colour, { open });
@@ -378,8 +378,8 @@ test('changeRows colours added and removed lines, and reads the same without col
   assert.deepEqual(coloured.map(shown), bare.map(shown));
   assert.deepEqual(coloured.map(row => [row.kind, row.file]), bare.map(row => [row.kind, row.file]));
   // Green for added, red for removed, grey for the lines around them, and the numbers dimmer than all three.
-  assert.equal(coloured[6].text, '{241-fg}    9{/} {79-fg}+     return text.trim() // {open}bold{close}not a tag{open}/bold{close} {open}red-fg{close}{/}');
-  assert.equal(coloured[5].text, '{241-fg} 9   {/} {203-fg}-     return text;{/}');
+  assert.equal(coloured[6].text, '{241-fg}    9{/} {79-fg}+     return text{/}{121-fg}{bold}{underline}.trim() // {open}bold{close}not a tag{open}/bold{close} {open}red-fg{close}{/underline}{/bold}{/}');
+  assert.equal(coloured[5].text, '{241-fg} 9   {/} {203-fg}-     return text{/}{217-fg}{bold}{underline};{/underline}{/bold}{/}');
   assert.equal(coloured[4].text, '{241-fg} 8  8{/} {247-fg}      const text = String(value);{/}');
   // The place of a hunk is blue, the function around it grey.
   assert.equal(coloured[3].text, '{75-fg}src/coupon.mjs · line 9{/}{247-fg} · export function normalize(value) {open}{/}');
@@ -388,7 +388,8 @@ test('changeRows colours added and removed lines, and reads the same without col
   // Without colour the signs carry the meaning.
   for (const row of bare) assert.doesNotMatch(row.text, /-fg\}|-bg\}/);
   assert.deepEqual(bare.filter(row => row.file === 3 && row.kind === 'add').map(row => row.text), ['  1 + one', '  2 + two']);
-  assert.equal(bare[5].text, ' 9    -     return text;');
+  // The words that changed are bold and underlined, with or without colour.
+  assert.equal(bare[5].text, ' 9    -     return text{bold}{underline};{/underline}{/bold}');
 });
 
 test('changeRows masks secrets, hides Windows line ends and says what a limit left out', () => {
@@ -406,14 +407,14 @@ test('changeRows masks secrets, hides Windows line ends and says what a limit le
   assert.equal(rows.filter(row => row.kind === 'add').map(row => shown(row).slice(6)).join(''), 'z'.repeat(2000));
   // The summary uses separators, one file is singular, and a path cannot draw a style or a control.
   const big = changeRows({ base: 'origin/main', branch: 'feat/task-2', files: [{ ...file('a{bold}\x1b[2J.txt', ['x']), added: 2468, removed: 177 }], added: 2468, removed: 177, cut: false }, 80, false, { open: new Set() });
-  assert.deepEqual(big.map(shown), ['origin/main...feat/task-2 · 1 file changed · +2,468 −177', '', edge('▸ a{bold}␛[2J.txt', 'new  +2,468 −177')]);
+  assert.deepEqual(big.map(shown), ['1 file changed · +2,468 −177', '', edge('▸ a{bold}␛[2J.txt', 'new  +2,468 −177')]);
   assert.equal(changeSummary({ files: new Array(24).fill(null) }), 'Changes 24'); assert.equal(changeSummary({ files: [], hiddenFiles: 1200 }), 'Changes 1,200'); assert.equal(changeSummary(null), 'Changes');
 });
 
 test('changeRows takes line notes: the summary says how, each note shows under its line, and they go to the model as one message', () => {
   const changes = sample(), notes = new Map();
   let rows = changeRows(changes, 80, false, { open: new Set([0]), notes });
-  assert.deepEqual(rows.slice(0, 2).map(shown), ['a1b2c3d4...feat/task-3 · 4 files changed · +6 −2', '+ beside a line notes what should change. Notes go to the model together.']);
+  assert.deepEqual(rows.slice(0, 2).map(shown), ['4 files changed · +6 −2', '+ beside a line notes what should change. Notes go to the model together.']);
   // Every row of a line carries it, so a note can be put on any of them.
   const added = rows.find(row => shown(row).includes('return text.trim()')), removed = rows.find(row => row.kind === 'del');
   assert.deepEqual({ ...added.line, text: undefined }, { path: 'src/coupon.mjs', kind: 'add', old: null, now: 9, text: undefined });
@@ -548,4 +549,123 @@ test('changeRows makes a very long line readable at every width: the sign and th
   const line = 'const value = compute(first, second); '.repeat(28000), mega = sessionChanges(`New file: min.js\n${line}\n`), started = Date.now(), wide = changeRows(mega, 100, false);
   assert.ok(Date.now() - started < 3000, `a line of a megabyte took ${Date.now() - started} ms`);
   assert.ok(line.length > 1000000); assert.equal(joined(wide.filter(row => row.kind === 'add'), 100, 6)[0], line);
+});
+
+// The words a row stresses: bold and underlined, with or without colour.
+const marked = row => [...row.text.matchAll(/\{bold\}\{underline\}(.*?)\{\/underline\}\{\/bold\}/g)].map(found => found[1]);
+// One file with one hunk of these lines, as a session sends it.
+const hunkOf = lines => sessionChanges(['diff --git a/src/report.mjs b/src/report.mjs', 'index 1111111..2222222 100644', '--- a/src/report.mjs', '+++ b/src/report.mjs', `@@ -1,${lines.filter(line => line[0] !== '+').length} +1,${lines.filter(line => line[0] !== '-').length} @@`, ...lines, ''].join('\n'));
+const changed = (changes, width, colour = false) => changeRows(changes, width, colour).filter(row => row.kind === 'add' || row.kind === 'del');
+
+test('changeRows marks the words that changed inside a changed line, and only those: a line of 400 characters shows the few words that were added', () => {
+  // The line the owner could not read: about 400 characters, and only `, buyers or notes` was added.
+  const changes = hunkOf([' function report(d) {', `-${WIDE('')}`, `+${WIDE(', buyers or notes')}`, ' }']);
+  assert.deepEqual([WIDE('').length, WIDE(', buyers or notes').length], [390, 407]);
+  for (const colour of [true, false]) for (const width of [24, 30, 54, 76, 100, 136, 300, 500]) {
+    const rows = changed(changes, width, colour), added = rows.filter(row => row.kind === 'add'), removed = rows.filter(row => row.kind === 'del');
+    // The marks go on over the rows the line takes, and hold the added words and nothing else.
+    // A mark that goes on in the next row leaves out the space its row ends with.
+    assert.equal(added.flatMap(marked).join(' ').replace(/ +/g, ' ').replace(/^, /, ','), ',buyers or notes', `${width}`);
+    for (const text of added.flatMap(marked)) assert.equal(text, text.trim(), `${width}`);
+    // The removed line lost nothing that the added one does not have: it has no marks.
+    assert.deepEqual(removed.flatMap(marked), [], `${width}`);
+    // The marks change no character and no width.
+    assert.deepEqual(joined(rows, width, 6), [WIDE(''), WIDE(', buyers or notes')], `${width}`);
+    for (const row of rows) assert.ok(widthOf(row) <= width, `${width}: ${shown(row)}`);
+  }
+  // With colour the changed words are a lighter green, bold and underlined, and the rest of the line keeps its green.
+  assert.ok(changed(changes, 500, true)[1].text.endsWith("their dates, totals{/}{121-fg}{bold}{underline}, buyers or notes{/underline}{/bold}{/}{79-fg} as this order's):`);{/}"));
+  // Without colour, or in a terminal with few colours, they are bold and underlined all the same.
+  assert.ok(changed(changes, 500, false)[1].text.endsWith("their dates, totals{bold}{underline}, buyers or notes{/underline}{/bold} as this order's):`);"));
+  // A removed line's lost words are marked in a lighter red.
+  const both = changed(hunkOf([`-${WIDE(' or buyers')}`, `+${WIDE(', buyers or notes')}`]), 500, true);
+  assert.deepEqual(both.map(marked), [['or'], [',', 'or notes']]);
+  assert.match(both[0].text, /totals \{\/\}\{217-fg\}\{bold\}\{underline\}or\{\/underline\}\{\/bold\}\{\/\}\{203-fg\} buyers as this/);
+
+  // Lines are paired as a reader pairs them: each with the one most like it, wherever it stands in the change.
+  const moved = hunkOf(['-const alpha = readConfig(path, options);', '-const beta = computeTotals(orders);', '-return render(alpha, beta);', "+import fs from 'node:fs';", '+const beta = computeTotals(orders, coupons);', '+const alpha = readConfig(file, options);']);
+  assert.deepEqual(changed(moved, 100).map(row => [shown(row).slice(6), marked(row)]), [
+    ['const alpha = readConfig(path, options);', ['path']], ['const beta = computeTotals(orders);', []], ['return render(alpha, beta);', []],
+    ["import fs from 'node:fs';", []], ['const beta = computeTotals(orders, coupons);', [', coupons']], ['const alpha = readConfig(file, options);', ['file']],
+  ]);
+  // A line with nothing in common with the one beside it has no marks: it reads as a line removed and a line added.
+  assert.deepEqual(changed(hunkOf(['-const total = sum(cart.items);', "+throw new Error('Not here yet');"]), 100).map(marked), [[], []]);
+  assert.deepEqual(changed(hunkOf(['-alpha beta gamma delta', '+one two three four five']), 100).map(marked), [[], []]);
+  // Lines with no pair are left alone: only added, only removed, or more of one than of the other.
+  assert.deepEqual(changed(hunkOf(['+const fresh = true;', '+const more = 1;']), 100).map(marked), [[], []]);
+  assert.deepEqual(changed(hunkOf(['-const first = 1;', '+const first = 2;', '+const second = 2;']), 100).map(marked), [['1'], ['2'], []]);
+  // A change of the space before a line is marked too, and the same line moved is not a change of words.
+  assert.deepEqual(changed(hunkOf(['-return value;', '+    return value;']), 100).map(marked), [[], ['    ']]);
+  // What looks like a tag or a control character inside a changed word stays text.
+  const tags = changed(hunkOf(['-const tag = "{bold}";', '+const tag = "{red-fg}\x1b[31m";']), 100);
+  assert.deepEqual(tags.map(shown).map(text => text.slice(6)), ['const tag = "{bold}";', 'const tag = "{red-fg}␛[31m";']);
+  assert.deepEqual(tags.map(marked), [['bold'], ['red-fg', '␛[31m']]);
+  // A change of thousands of lines is marked as fast as it is drawn.
+  const large = hunkOf([...Array.from({ length: 4000 }, (_, at) => `-const value${at} = compute(first, ${at});`), ...Array.from({ length: 4000 }, (_, at) => `+const value${at} = compute(first, second, ${at});`)]), started = Date.now();
+  const drawn = changed(large, 100);
+  assert.ok(Date.now() - started < 4000, `marking 8,000 lines took ${Date.now() - started} ms`);
+  assert.deepEqual([drawn.length, marked(drawn[4000]), marked(drawn[7999])], [8000, ['second,'], ['second,']]);
+});
+
+// A session of real size: dozens of files in several folders, a renamed file, a deleted one, a
+// binary one, a new file of thousands of lines, one that only became a program, and a file
+// with twenty changes far apart.
+function sized(t) {
+  const steps = shift => Array.from({ length: 400 }, (_, at) => `export function step${at}(value) {\n  return value + ${at % 20 === 3 ? at + shift : at};\n}\n`).join('\n');
+  const before = { 'README.md': '# Shop\n\nA shop.\n', 'logo.png': Buffer.from([137, 80, 78, 71, 0, 1, 2, 3]), 'src/big.mjs': steps(0), 'src/old-name.mjs': numbered(40, at => `export const v${at} = ${at};`), 'src/gone.mjs': 'export const gone = 1;\nexport const more = 2;\n', 'scripts/run.sh': '#!/bin/sh\nexit 0\n' };
+  const after = { 'README.md': '# Shop\n\nA shop with orders.\n', 'logo.png': Buffer.from([137, 80, 78, 71, 9, 9, 9, 9, 9]), 'src/big.mjs': steps(1000), 'docs/generated/api.md': numbered(3200, at => `- entry ${at}`) };
+  for (let at = 0; at < 12; at++) { before[`src/orders/order-${at}.mjs`] = `export const order${at} = { id: ${at}, total: ${at * 10} };\n`; after[`src/orders/order-${at}.mjs`] = `export const order${at} = { id: ${at}, total: ${at * 10}, coupon: null };\n`; }
+  for (let at = 0; at < 9; at++) { before[`test/orders/order-${at}.test.mjs`] = `check('order ${at}');\n`; after[`test/orders/order-${at}.test.mjs`] = `check('order ${at}');\ncheck('coupon ${at}');\n`; }
+  for (let at = 0; at < 6; at++) after[`src/coupons/coupon-${at}.mjs`] = `export const coupon${at} = 'C${at}';\n`;
+  const made = session(t, before), { worktree } = made;
+  write(worktree, after); git(worktree, ['mv', 'src/old-name.mjs', 'src/orders/a-new-name.mjs']); git(worktree, ['rm', '-q', 'src/gone.mjs']); fs.chmodSync(path.join(worktree, 'scripts/run.sh'), 0o755);
+  git(worktree, ['add', '-A']); git(worktree, ['commit', '-q', '-m', 'Rework orders']); write(worktree, { 'notes/todo.md': 'later\n' });
+  return made;
+}
+// Text Git itself prints, which the view never shows.
+const RAW = /^\s*(?:diff --git |index [0-9a-f]{7}|--- (?:a\/|\/dev\/null)|\+\+\+ (?:b\/|\/dev\/null)|@@ |\\ No newline|similarity index|rename (?:from|to) |(?:new|deleted) file mode|(?:old|new) mode |Binary files |GIT binary patch)/;
+
+test('the Changes of a session of real size read as a list: files under their folders, what happened to each, the counts in columns, and nothing of Git\'s own text', t => {
+  const { repo } = sized(t), changes = taskPatch(repo, '1'), far = sessionChanges(sessionWire(repo, '1'));
+  assert.deepEqual([changes.files.length, changes.added, changes.removed], [35, 3249, 35]);
+  const rows = changeRows(changes, 100, false, { open: new Set() }), texts = rows.map(shown), mid = (left, state, counts) => edge(left, `${state}${counts}`, 100);
+  // The header: how many files and lines in all, and what they are compared with, in words.
+  assert.equal(texts[0], '35 files changed · +3,249 −35 · compared with main as it was when this session started');
+  // So many files are listed under their folders: the project's own files first, each name in the order a reader expects.
+  assert.deepEqual(rows.filter(row => row.kind === 'folder').map(shown), ['docs/generated/', 'notes/', 'scripts/', 'src/', 'src/coupons/', 'src/orders/', 'test/orders/']);
+  assert.deepEqual(texts.slice(texts.indexOf('src/orders/') + 1, texts.indexOf('test/orders/')).map(text => text.trim().split(/\s+/)[1]), ['a-new-name.mjs', ...Array.from({ length: 12 }, (_, at) => `order-${at}.mjs`)]);
+  // What happened to a file stands before its counts, and the counts stand in two columns down the whole list.
+  const listed = rows.filter(row => row.kind === 'file').map(shown);
+  assert.equal(listed.length, 35);
+  for (const wanted of [
+    mid('▸ README.md', '', '    +1  −1'), mid('▸ logo.png', '', 'binary'), mid('  ▸ api.md', 'new  ', '+3,200  −0'), mid('  ▸ todo.md', 'new  ', '    +1  −0'), mid('  ▸ run.sh', 'now runs as a program  ', ' '.repeat(10)),
+    mid('  ▸ big.mjs', '', '   +20 −20'), mid('  ▸ gone.mjs', 'deleted  ', '    +0  −2'), mid('  ▸ a-new-name.mjs', 'renamed from src/old-name.mjs  ', '    +0  −0'), mid('  ▸ order-11.mjs', '', '    +1  −1'), mid('  ▸ order-8.test.mjs', '', '    +1  −0'),
+  ]) assert.ok(listed.includes(wanted), wanted);
+  for (const text of listed) assert.equal(text.length, 100, text);
+  // The same list, as wide as the pane beside the sessions of a terminal 80 columns across.
+  const narrow = changeRows(changes, 52, false, { open: new Set() }).map(shown);
+  assert.deepEqual(narrow.slice(0, 4), ['35 files changed · +3,249 −35', 'compared with main as it was when this session', 'started', 'Not shown: 1,200 changed lines.']);
+  for (const wanted of [edge('  ▸ api.md', 'new  +3,200  −0', 52), edge('  ▸ gone.mjs', 'deleted      +0  −2', 52), edge('  ▸ a-new-name.mjs', 'renamed      +0  −0', 52), edge('  ▸ run.sh', `now runs as a program  ${' '.repeat(10)}`, 52)]) assert.ok(narrow.includes(wanted), wanted);
+  // The file with twenty changes: each one under its place in words, the line and the function.
+  const big = changes.files.findIndex(file => file.path === 'src/big.mjs'), opened = changeRows(changes, 100, false, { open: new Set([big]) });
+  const places = opened.filter(row => row.kind === 'hunk').map(shown);
+  assert.equal(places.length, 20);
+  assert.deepEqual(places.slice(0, 2), ['src/big.mjs · line 14 · export function step2(value) {', 'src/big.mjs · line 94 · export function step22(value) {']);
+  for (const place of places) assert.match(place, /^src\/big\.mjs · line \d+ · export function step\d+\(value\) \{$/);
+  // In a changed line of it only the number that changed is marked.
+  assert.deepEqual(opened.filter(row => row.kind === 'add' || row.kind === 'del').slice(0, 2).map(row => [shown(row).trim(), marked(row)]), [['14      -   return value + 3;', ['3']], ['14 +   return value + 1003;', ['1003']]]);
+  // Every file open, at every width a pane has: no row is wider than the pane, and none is text Git printed.
+  for (const record of [changes, far]) for (const width of [24, 40, 52, 76, 100, 138]) for (const row of changeRows(record, width, false)) {
+    assert.ok(widthOf(row) <= width, `${width}: ${shown(row)}`);
+    if (!['add', 'del', 'context'].includes(row.kind)) assert.doesNotMatch(shown(row), RAW, `${width}`);
+  }
+  // A file that only became a program says so once, and a deleted one shows the lines that went.
+  const some = new Set(['scripts/run.sh', 'src/gone.mjs', 'logo.png', 'src/orders/a-new-name.mjs'].map(name => changes.files.findIndex(file => file.path === name)));
+  const few = changeRows(changes, 100, false, { open: some }).map(shown);
+  assert.equal(few.filter(text => /now runs as a program/.test(text)).length, 1);
+  assert.deepEqual(few.slice(few.indexOf(mid('  ▾ gone.mjs', 'deleted  ', '    +0  −2')) + 1).slice(0, 3), ['src/gone.mjs · line 1', '1   - export const gone = 1;', '2   - export const more = 2;']);
+  // This computer shows up to 2,000 lines of one file and says what it left out. What another computer is sent is whole, and reads the same.
+  assert.equal(texts[1], 'Not shown: 1,200 changed lines.');
+  assert.deepEqual(changeRows(far, 100, false, { open: new Set() }).map(shown), texts.filter((_, at) => at !== 1));
+  assert.deepEqual([far.files.length, far.added, far.removed, far.cut, linesOf(far.files.find(file => file.path === 'docs/generated/api.md')).length], [35, 3249, 35, false, 3200]);
 });

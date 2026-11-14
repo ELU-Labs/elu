@@ -20,6 +20,8 @@ import { Conductor, enqueue, saveConductorSettings } from '../lib/conductor.mjs'
 import { boardRows, remoteRow, rowActions, rowBadge, rowTitle } from '../lib/board.mjs';
 import { remoteSessions as remoteGlue } from '../lib/terminal-remote.mjs';
 import { sessionChanges } from '../lib/diff.mjs';
+import { sessionFiles } from '../lib/session-work.mjs';
+import { peerFile } from '../lib/peer/paths.mjs';
 import { teamPath } from '../lib/peer/roster.mjs';
 import { readTask, saveTask, taskDir, taskPlace } from '../lib/state.mjs';
 import { spawnSync } from 'node:child_process';
@@ -1064,6 +1066,60 @@ test('a viewer that holds only the newest 200 of a long chat gets the ones it le
   assert.deepEqual(texts(), all.slice(-280));
   await withHome(laptop.home, () => remoteCommand(viewCtx, { type: 'remoteOlder', id: item.id })); await flow();
   assert.deepEqual(texts(), all, 'to the first entry');
+});
+
+// A session that moved to a newer main and committed on branches of its own: its folder against
+// the commit it started from counts what other people landed too. What its computer sends is
+// what the session itself changed, branch by branch.
+test('a session on my other computer that moved to a newer main and made branches there sends only what it changed itself, and the computer that follows it counts the same', async t => {
+  const { laptop, devbox, project, toHost, toViewer, hostCtx, viewCtx, viewer, host } = pair(t);
+  const run = (root, ...args) => { const done = spawnSync('git', ['-C', root, ...args], { encoding: 'utf8' }); assert.equal(done.status, 0, done.stderr); return done.stdout.trim(); };
+  const worktree = withHome(devbox.home, () => {
+    const made = liveTask(project.root, { id: '1', goal: 'Fix the totals', files: {} });
+    // Other people land forty files on main. The session moves to it and commits on a branch of its own, twice.
+    for (let at = 0; at < 40; at++) fs.writeFileSync(path.join(project.root, `landed-${at}.txt`), `landed ${at}\n`.repeat(20));
+    run(project.root, 'add', '-A'); run(project.root, 'commit', '-q', '-m', 'Land forty files');
+    for (const [branch, file, text] of [['fix/one', 'src/one.mjs', 'export const one = 1;\n'], ['fix/two', 'src/two.mjs', 'export const two = 2;\nexport const more = 3;\n']]) {
+      run(made.worktree, 'checkout', '-q', '-b', branch, 'main'); fs.writeFileSync(path.join(made.worktree, file), text); run(made.worktree, 'add', '-A'); run(made.worktree, 'commit', '-q', '-m', `Add ${file}`);
+    }
+    fs.writeFileSync(path.join(made.worktree, 'notes.md'), 'not committed\n');
+    // The session's folder against the commit it started from counts all forty.
+    assert.equal(run(made.worktree, 'diff', '--name-only', made.base, '--').split('\n').length, 41);
+    relist(); return made.worktree;
+  });
+  toViewer.request = (method, params) => withHome(devbox.home, () => host[method](params, toHost));
+  await withHome(laptop.home, () => listTick(viewCtx));
+  const item = withHome(laptop.home, () => remoteMachines())[0].sessions[0];
+  await withHome(laptop.home, () => remoteCommand(viewCtx, { type: 'remoteWatch', to: devbox.identity.key, ref: item.ref }));
+  const seen = () => withHome(laptop.home, () => remoteSessions().find(row => row.id === item.id));
+  const follow = async now => {
+    const before = toHost.sent.length; withHome(devbox.home, () => hostTick(hostCtx, now));
+    for (const [method, params] of toHost.sent.slice(before).filter(([name]) => name === 'elu.remote.events')) withHome(laptop.home, () => viewer[method](params, connection(devbox.identity.key)));
+    for (let n = 0; n < 60 && seen().behind; n++) await withHome(laptop.home, () => viewTick(viewCtx, now += 2000));
+    return seen().diff;
+  };
+  const diff = await follow(Date.now());
+  assert.equal(diff.summary, '3 files · +4 −0');
+  assert.doesNotMatch(diff.patch, /landed-/);
+  const changes = sessionChanges(diff.patch), BRANCHED = 'main as it was when this session branched';
+  assert.deepEqual(changes.parts.map(part => [part.branch, part.current, part.files, part.added, part.removed, part.compared]), [['fix/two', true, 2, 3, 0, BRANCHED], ['fix/one', false, 1, 1, 0, BRANCHED]]);
+  assert.deepEqual(changes.files.map(file => [file.branch, file.path, file.status]), [['fix/two', 'src/two.mjs', 'added'], ['fix/two', 'notes.md', 'added'], ['fix/one', 'src/one.mjs', 'added']]);
+  assert.deepEqual([changes.files.length, changes.added, changes.removed, changes.note], [3, 4, 0, null]);
+  // What its teammates' boards are told it changed is the same three files.
+  assert.deepEqual(withHome(devbox.home, () => sessionFiles(readTask(repository(project.root), '1'))), ['notes.md', 'src/one.mjs', 'src/two.mjs']);
+  // It stops with one more commit: the next look sends the new count.
+  withHome(devbox.home, () => { run(worktree, 'add', '-A'); run(worktree, 'commit', '-q', '-m', 'Add the notes'); const repo = repository(project.root); saveTask(repo, { ...readTask(repo, '1'), state: 'blocked' }); });
+  const later = await follow(Date.now() + 60000);
+  assert.equal(later.summary, '3 files · +4 −0');
+  assert.deepEqual(sessionChanges(later.patch).parts.map(part => [part.branch, part.commits, part.files]), [['fix/two', 2, 2], ['fix/one', 1, 1]]);
+  // A session that stopped is not read again while nothing about it moves. One whose changes an
+  // ELU from before this rule read last (it kept no rule number with what it read) is read once more.
+  const kept = withHome(devbox.home, () => { const file = peerFile('remote', 'host', `${item.id}.json`), row = JSON.parse(fs.readFileSync(file, 'utf8')); return { file, row }; });
+  assert.match(kept.row.diffMark, /^2:blocked:/);
+  withHome(devbox.home, () => fs.writeFileSync(path.join(worktree, 'late.md'), 'written after it stopped\n'));
+  assert.equal((await follow(Date.now() + 120000)).summary, '3 files · +4 −0');
+  withHome(devbox.home, () => { const row = JSON.parse(fs.readFileSync(kept.file, 'utf8')); fs.writeFileSync(kept.file, JSON.stringify({ ...row, diffMark: row.diffMark.replace(/^2:/, '') })); });
+  assert.equal((await follow(Date.now() + 180000)).summary, '4 files · +5 −0');
 });
 
 test('a new file of any size in a session on my other computer reaches the computer that follows it whole, and a binary one is only named', async t => {
