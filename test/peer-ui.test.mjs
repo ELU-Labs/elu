@@ -1835,51 +1835,67 @@ test('Usage lists the top ten agents by cost with their tokens, t shows the last
   conversation(2, 'Speed up the build', [{ role: 'lead', vendor: 'claude', at: threeDays, costUsd: 50 }]);
   // My other computer: one session there, and what its agents spent.
   const P = '5'.repeat(16), RID = '55555555-5555-4555-8555-555555555555';
-  const remoteRow = { ref: `${P}:5`, id: RID, agent: '@lead', title: 'Remote job', model: 'opus 5.5', tokens: { input: 900, output: 80, cacheRead: 40000, cacheWrite: 0 }, costUsd: 20, partial: false, at: now };
+  const remoteRow = { ref: `${P}:5`, id: RID, agent: 'Opus 5.5', title: 'Remote job', model: 'opus 5.5', tokens: { input: 900, output: 80, cacheRead: 40000, cacheWrite: 0 }, costUsd: 20, partial: false, at: now };
   const machines = [{ key: SARA, listedAt: now, older: false, projects: [{ id: P, name: 'shop', repoId: null, home: false }],
     sessions: [{ id: RID, ref: `${P}:5`, project: P, title: 'Remote job', state: 'answered', at: now, createdAt: now, approvals: [], by: 'you', who: null, repoId: null }],
     topAgents: { today: { costUsd: 20, partial: false, rows: [remoteRow] }, week: { costUsd: 25, partial: false, rows: [{ ...remoteRow, costUsd: 25 }] } } }];
   const peer = fakePeer({ items: [], mine: [{ key: SARA, mine: true, theirs: true }], machines });
   const v = await view(t, { repo: repository(p.root), dashboard: true, peer, usage: { env: { HOME: temp(t) }, vendors: () => [] } });
   const list = v.panels.usageList, rows = () => list.items.map(plainItem);
-  const agentRows = () => rows().slice(rows().findIndex(row => /^Agent /.test(row)) + 1).filter(row => /^@/.test(row));
+  // The agents' lines: after the table's header, before the lines under it.
+  const agentRows = () => rows().slice(rows().findIndex(row => /^Agent /.test(row)) + 1).filter(row => !/^(\+ |ELU spend today| {2}|\S+: update ELU)/.test(row));
   await send(v, '/usage'); await until(() => v.current.view === 'usage' && rows().includes('Top agents today'), 'the section');
   await until(() => agentRows().length === 3, 'three agents today');
   // Most cost first, with where it ran, the model, tokens, the cost at API price and its share of today's total ($32.40).
   assert.match(rows().find(row => /^Agent /.test(row)), /^Agent +Session +Model +in · out · cache +Cost \(API price\) +Share$/);
   assert.equal(rows().join('\n').match(/Cost \(API price\)/g).length, 1);
   const [first, second, third] = agentRows();
-  assert.match(first, /^@lead +Remote job +on sara-box +opus 5\.5 +900 · 80 · 40k +\$20\.00 +62%$/);
-  assert.match(second, /^@lead +Fix the coupons +opus 5\.5 +1\.2M · 34k · 8\.1M +\$12\.40 +38%$/);
-  assert.match(third, /^@pair +Fix the coupons +gpt-6\.1-sol +5k · 900 · 1k +— +—$/);
-  // The spend line is this computer's: what the section counts here, at least that, as Codex reported no cost.
-  assert.ok(rows().includes('ELU spend today at least $12.40'));
+  // A session's own agent reads as its model, as its chat does; a bot as @name.
+  assert.match(first, /^Opus 5\.5 +Remote job +on sara-box +opus 5\.5 +900 · 80 · 40k +\$20\.00 +62%$/);
+  assert.match(second, /^Opus 5\.5 +Fix the coupons +opus 5\.5 +1\.2M · 34k · 8\.1M +\$12\.40 +38%$/);
+  assert.match(third, /^@pair +Fix the coupons +gpt-6\.1-sol +5k · 900 · 1k +not reported +—$/);
+  // Under the table, why a cost is not reported; then the spend line of every computer shown, at least that, as Codex reported no cost.
+  assert.ok(rows().includes('+ codex: Codex reports tokens but no cost, so its runs add no dollars.'));
+  assert.ok(rows().includes('ELU spend today at least $32.40: this computer at least $12.40, sara-box $20.00'));
   assert.ok(rows().every(row => row.length <= list.width - 2), 'every line fits');
   // t: the last seven days. The keys say so.
   list.focus(); await until(() => v.current.screen.focused === list, 'list focused');
   assert.match(v.panels.keys.getText(), /d details {2}r refresh {2}t 7 days/);
   v.input.write('t'); await until(() => rows().includes('Top agents, last 7 days'), 'the week');
-  assert.match(agentRows()[0], /^@lead +Speed up the build +claude +— +\$50\.00 +57%$/);
-  assert.match(agentRows()[1], /^@lead +Remote job +on sara-box .* \$25\.00 +29%$/);
-  assert.ok(rows().includes('ELU spend today at least $12.40'), 'the spend line stays today');
+  assert.match(agentRows()[0], /^Claude +Speed up the build +claude +not reported +\$50\.00 +57%$/);
+  assert.match(agentRows()[1], /^Opus 5\.5 +Remote job +on sara-box .* \$25\.00 +29%$/);
+  assert.ok(rows().includes('ELU spend today at least $32.40: this computer at least $12.40, sara-box $20.00'), 'the spend line stays today');
   v.input.write('t'); await until(() => rows().includes('Top agents today'), 'today again');
   // Enter on a row here opens its session, in Sessions beside the list.
-  selectRow(list, /^@lead +Fix the coupons/); await until(() => /enter open/.test(v.panels.keys.getText()), 'enter opens');
+  selectRow(list, /^Opus 5\.5 +Fix the coupons/); await until(() => /enter open/.test(v.panels.keys.getText()), 'enter opens');
   v.input.write('\r'); await until(() => v.current.view === 'tasks' && v.current.session === '1', 'the session here');
   // Enter on a row of my other computer opens it in Sessions, under that computer.
   await send(v, '/usage'); await until(() => v.current.view === 'usage' && agentRows().length === 3, 'back in Usage');
-  list.focus(); selectRow(list, /^@lead +Remote job/); v.input.write('\r');
+  list.focus(); selectRow(list, /^Opus 5\.5 +Remote job/); v.input.write('\r');
   await until(() => v.current.view === 'tasks' && /Remote job/.test(plainItem(v.panels.board.items[v.panels.board.selected] ?? { getText: () => '' })), 'the session there, under the cursor');
   // At most ten rows: nine more sessions here.
   for (let id = 3; id <= 11; id++) conversation(id, `Small job ${id}`, [{ role: 'lead', vendor: 'claude', at: now, costUsd: id / 100 }]);
   await send(v, '/usage'); await until(() => v.current.view === 'usage' && agentRows().length === 10 && rows().some(row => /Small job 11/.test(row)), 'ten rows');
   assert.ok(!rows().some(row => /Small job 3 /.test(row) || /^@pair/.test(row)), 'the cheapest and the one with no cost are left out');
-  assert.ok(rows().includes('ELU spend today at least $13.03'), 'the spend line still counts every run here');
+  assert.ok(rows().includes('ELU spend today at least $33.03: this computer at least $13.03, sara-box $20.00'), 'the spend line still counts every run here');
   // At 80 columns each agent is still one line that fits the pane.
   v.output.columns = 80; v.output.rows = 24; v.output.emit('resize');
   await until(() => v.current.screen.width === 80 && list.width < 80, '80 columns');
   await until(() => agentRows().length === 10 && rows().every(row => row.length <= list.width - 2), 'every row fits');
+  // The spend line, wider than the pane now, goes on two lines: the total, then each computer's.
+  assert.deepEqual(rows().slice(rows().indexOf('ELU spend today at least $33.03'), rows().indexOf('ELU spend today at least $33.03') + 2), ['ELU spend today at least $33.03', '  this computer at least $13.03, sara-box $20.00']);
   // A computer of mine on a build that sends none: one line, and none of its rows.
   machines[0] = { ...machines[0], topAgents: null };
   await until(() => rows().includes('sara-box: update ELU to include it') && !rows().some(row => /Remote job/.test(row)), 'the update line');
+  assert.ok(rows().includes('ELU spend today at least $13.03'), 'only what this computer reported');
+  // A computer of mine on a build before 0.1.20, which counts a session's total again for each
+  // of its turns: its rows stay, a line says its costs may be too high, and so does its part of the spend line.
+  const sent = { today: { costUsd: 20, partial: false, rows: [remoteRow] }, week: { costUsd: 25, partial: false, rows: [remoteRow] } };
+  machines[0] = { ...machines[0], topAgents: { own: false, ...sent } };
+  await until(() => rows().includes('sara-box: older ELU, its costs may be too high. Update ELU there.') && rows().some(row => /Remote job/.test(row)), 'the older build line');
+  assert.ok(rows().includes('  this computer at least $13.03, sara-box $20.00 (older ELU)'));
+  assert.ok(rows().every(row => row.length <= list.width - 2), 'every line fits');
+  // Once it is updated it says each cost is a run's own, and neither is said.
+  machines[0] = { ...machines[0], topAgents: { own: true, ...sent } };
+  await until(() => !rows().some(row => /older ELU/.test(row)) && rows().includes('  this computer at least $13.03, sara-box $20.00'), 'the line gone');
 });

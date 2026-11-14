@@ -550,7 +550,7 @@ test('the board puts questions first, then live work, the queue, and recent resu
   ], queue: [{ id: 'request-a', goal: 'Next goal', state: 'queued', priority: 1, queuedAt: at(2) }, { id: 'request-b', goal: 'Old', state: 'done' }] }];
   const rows = boardRows(projects, now);
   assert.deepEqual(rows.map(row => [row.id || row.request.id, row.label]), [['3', 'WAITING YOU'], ['2', 'answering'], ['request-a', 'queued'], ['1', 'answered']]);
-  assert.equal(rows[1].now, 'Read src/disk.ts'); assert.equal(rows[1].time, '4m00'); assert.equal(rows[1].cost, '$0.25');
+  assert.equal(rows[1].now, 'Read src/disk.ts'); assert.equal(rows[1].time, '4m00'); assert.equal(String(rows[1].cost), '$0.25');
   assert.equal(rows[3].now, 'Done.');
   // A row of the Sessions list is exactly as wide as the list: its mark, its title and its age.
   for (const width of [28, 42]) assert.ok(rows.every(row => barCells(row, width, now).map(cell => cell.text).join('').length === width), `width ${width}`);
