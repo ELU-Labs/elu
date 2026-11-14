@@ -39,11 +39,13 @@ function environment(t, values) {
 const RELEASE = { grok: '1.0.77', agy: '1.5.4' };
 const LIVE = new WeakMap();
 // checked: the one-time check of each vendor that needs one has passed on this computer.
-function setup(t, { keep = ['grok'], fake: options = { mode: 'answer' }, checked = true } = {}) {
+// helper: the owner named the sandbox his project's checks run in (ELU_CODE_SANDBOX_HELPER),
+// which no vendor on PATH gives here; checks never run outside it.
+function setup(t, { keep = ['grok'], fake: options = { mode: 'answer' }, checked = true, helper = false } = {}) {
   LIVE.set(t, []); t.after(async () => { for (const conductor of LIVE.get(t)) await conductor.stop(); });
   const p = project(t), fake = fakeClis(p.parent, options), only = vendorPath(p.parent, fake.dir, keep);
   // The check keeps its throwaway folder under TMPDIR: a real folder here, so it runs wherever the suite does.
-  environment(t, { ...fake.env, PATH: only.PATH, HOME: p.parent, TMPDIR: fs.realpathSync(os.tmpdir()), GIT_AUTHOR_NAME: 'Test Owner', GIT_AUTHOR_EMAIL: 'owner@example.invalid', GIT_COMMITTER_NAME: 'Test Owner', GIT_COMMITTER_EMAIL: 'owner@example.invalid' });
+  environment(t, { ...fake.env, ...(helper ? { ELU_CODE_SANDBOX_HELPER: path.join(fake.dir, 'codex') } : {}), PATH: only.PATH, HOME: p.parent, TMPDIR: fs.realpathSync(os.tmpdir()), GIT_AUTHOR_NAME: 'Test Owner', GIT_AUTHOR_EMAIL: 'owner@example.invalid', GIT_COMMITTER_NAME: 'Test Owner', GIT_COMMITTER_EMAIL: 'owner@example.invalid' });
   // Grok Build is signed in.
   fs.mkdirSync(path.join(p.parent, '.grok')); fs.writeFileSync(path.join(p.parent, '.grok', 'auth.json'), '{}\n', { mode: 0o600 });
   if (checked) for (const vendor of keep.filter(name => CAPS[name].conformance)) atomic(path.join(personalDirectory(), 'conformance', `${vendor}.json`), { v: 1, bin: fs.realpathSync(path.join(only.dir, vendor)), version: RELEASE[vendor], steps: Object.fromEntries(ADAPTERS[vendor].conformance.map(step => [step.id, 'pass'])), relay: vendor === 'grok', at: new Date().toISOString() });
@@ -72,7 +74,7 @@ function answering(p, handling) {
 const BOTS = ['reviewer', 'lead', 'qa', 'pair'];
 
 test('on a computer with only Grok Build, an edit is reviewed by @reviewer on Grok Build and reaches ready', async t => {
-  const p = setup(t, { fake: { mode: 'normal', grok: 'edits' } }), controller = autoApprove(new ProjectController(projectFolder(p.root)));
+  const p = setup(t, { fake: { mode: 'normal', grok: 'edits' }, helper: true }), controller = autoApprove(new ProjectController(projectFolder(p.root)));
   const task = await controller.ask('Normalize coupon codes', null, { permissions: 'ask' }).finished;
   assert.equal(task.error, null, JSON.stringify(task.error)); assert.equal(task.state, 'ready');
   assert.equal(fs.readFileSync(path.join(task.worktree, 'src/coupon.mjs'), 'utf8'), 'export const normalize = (value) => value.toUpperCase();\n', 'the edit was made');
