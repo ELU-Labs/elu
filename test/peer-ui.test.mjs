@@ -3272,6 +3272,25 @@ test('a card of my other computer opens as mine: its whole Task, you and that co
   v.input.write('\x1b'); await until(() => !modal(v, title), 'Esc closes it');
 });
 
+test('a finished session of my other computer or of a teammate, in Done, is never in progress, with no ETA and no met count nobody marked', async t => {
+  const p = project(later(t)); environment(t, p.parent);
+  const HOME = '0123456789abcdef', peer = fakePeer({ mine: [{ key: SARA, mine: true, theirs: true }], machines: [{ key: SARA, listedAt: ago(0), older: false, projects: [{ id: HOME, name: 'home', repoId: null, home: true }], sessions: [] }], repoId: WEB });
+  // A scheduled run there that ended: its Task approved hours ago, overdue, nothing marked met.
+  const task = { id: 't-5e1f0a2c', revision: 1, title: 'Nightly dependency check', description: 'Look for outdated packages.', goal: 'Every package is current.', objectives: ['List outdated packages', 'Open one update', 'Say what was skipped'],
+    priority: 'high', severity: 'medium', state: 'approved', startedBy: 'schedule', subtasks: [], met: [], proposedAt: ago(400), approvedAt: ago(390), doneAt: null, criteria: [], estimateMinutes: 30 };
+  const people = [{ peer: SARA, name: 'sara', box: 'sara-box', online: true, heardAt: ago(0), mine: true, sessions: [teamSession({ id: '0123456789abcdee', title: 'Nightly checks', column: 'done', by: 'ana', own: true, at: ago(5), plan: task.id, task, ref: `${HOME}:6` })] }];
+  peer.teammateTasks = () => []; peer.boardKeptOff = () => false;
+  peer.teammateSessions = () => ({ repos: [{ repoId: WEB, name: 'acme/web', at: ago(0) }], people });
+  const v = await view(t, { repo: repository(p.root), peer }), panels = v.panels, title = 'Your session on sara-box';
+  await send(v, '/kanban'); await until(() => v.current.view === 'kanban' && panels.kanbanLists[3].items.length === 1, 'the card under Done');
+  panels.kanbanLists[3].focus(); panels.kanbanLists[3].select(0); v.input.write('\r');
+  await until(() => rowsOf(v, title).length, 'the card opens');
+  const rows = rowsOf(v, title).map(line => line.trimEnd());
+  assert.deepEqual(rows.slice(0, 3), ['Nightly dependency check', 'Done · priority high · severity medium', 'you · sara-box']);
+  assert.ok(rows.includes('Objectives'), rows.join('\n'));
+  assert.doesNotMatch(rows.join('\n'), /in progress|^ETA |overdue|of 3 met|Subtasks · none yet/m);
+});
+
 test('a teammate\'s session on my other computer opens with their name, not as mine: its first message, and its Go to session button opens it in Sessions', async t => {
   const p = project(later(t)); environment(t, p.parent);
   const HOME = '0123456789abcdef', listed = { id: '11111111-2222-4333-8444-555555555556', ref: `${HOME}:9`, project: HOME, title: 'Kim asks for a fix', state: 'running', at: ago(0), createdAt: ago(60), approvals: [], by: 'teammate', who: 'kim', repoId: WEB, question: null, error: null, plan: null };

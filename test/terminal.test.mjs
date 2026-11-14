@@ -18,8 +18,8 @@ import { formatResult } from '../lib/format.mjs';
 import { Conductor, conductorSettings, enqueue } from '../lib/conductor.mjs';
 import { liveTask } from './peer-helpers.mjs';
 import { standIn } from './login-item-helpers.mjs';
-import { readBoard, sessionClosed, closeSession } from '../lib/kanban.mjs';
-import { proposeTask, approveTask as approvePlan, reportProgress, finishTask, reopenTask } from '../lib/plan.mjs';
+import { readBoard, sessionClosed, closeSession, setDone } from '../lib/kanban.mjs';
+import { proposeTask, approveTask as approvePlan, reportProgress, finishTask, reopenTask, planFile } from '../lib/plan.mjs';
 import { clockTime } from '../lib/terminal-plan.mjs';
 import { columns } from '../lib/width.mjs';
 import { saveTask, readTask, taskDir, taskTitle, setTitle, lock } from '../lib/state.mjs';
@@ -6001,6 +6001,43 @@ test('Enter on my own Kanban card shows its whole Task with its success criteria
   await until(() => v.current.view === 'chat' && v.current.session === '4', 'Enter on the button opens its session');
   // The session's own Task block has the ETA and the success criteria too.
   await until(() => /ETA .* · in (44|45) min/.test(panels.chat.getText()) && /Success criteria/.test(panels.chat.getText()) && /A refund of 10\.005 reads 10\.01/.test(panels.chat.getText()), 'the Task block in the chat');
+});
+
+test('a finished session\'s card in Done says how it ended: never in progress, an ETA or overdue, and no met count for objectives nobody marked', { timeout: 30000 }, async t => {
+  const p = setup(t, 'answer'); registerProject(p.repo);
+  const task = title => ({ title, description: 'Look for outdated packages.', goal: 'Every package is current.', objectives: ['List outdated packages', 'Open one update', 'Say what was skipped'], priority: 'high', severity: 'medium', estimateMinutes: 30 });
+  // Approved six hours ago with half an hour of work: its ETA passed long ago.
+  const backdate = id => { const file = planFile(p.repo, id), value = JSON.parse(fs.readFileSync(file, 'utf8')); for (const row of value.tasks) row.proposedAt = row.approvedAt = new Date(Date.now() - 6 * 3600000).toISOString(); fs.writeFileSync(file, JSON.stringify(value)); };
+  // A scheduled run that answered (a conversation is Done once it answers), one the owner moved
+  // to Done after it stopped, and one published, with one objective marked met.
+  saveTask(p.repo, { id: '4', kind: 'conversation', goal: 'Check the dependencies', state: 'answered', worktree: p.root, base: null, branch: null, createdAt: new Date().toISOString(), runs: [], reviews: [], messages: [], sessions: {}, activeRole: 'lead' });
+  liveTask(p.root, { id: '5', goal: 'Tidy the logs', state: 'stopped' });
+  liveTask(p.root, { id: '6', goal: 'Ship the fix', state: 'unverified' }); saveTask(p.repo, { ...readTask(p.repo, '6'), pr: 'https://github.com/acme/web/pull/7' });
+  for (const [id, title] of [['4', 'Nightly dependency check'], ['5', 'Tidy the log files'], ['6', 'Ship the cart fix']]) { proposeTask(p.repo, id, task(title)); approvePlan(p.repo, id); backdate(id); }
+  reportProgress(p.repo, '6', { met: [2] });
+  setDone(p.repo, { task: { id: '5' } }, true);
+  const v = await view(t, { repo: p.repo }), panels = v.current.panels, done = () => panels.kanbanLists[3].items.map(item => item.getText());
+  await sized(v, 200, 40);
+  await send(v, '/kanban'); await until(() => v.current.view === 'kanban' && done().length === 3, 'the three cards under Done');
+  // Beside each title, how it ended, never where its Task stood while it worked.
+  assert.ok(done().some(text => /Nightly dependency check {2}answered · high/.test(text)), done().join('|'));
+  assert.ok(done().some(text => /Tidy the log files {2}stopped · high · medium/.test(text)), done().join('|'));
+  assert.ok(done().some(text => /Ship the cart fix {2}published · high · medium/.test(text)), done().join('|'));
+  const open = async (title, end, objectives) => {
+    pickRow(panels.kanbanLists[3], new RegExp(title));
+    await until(() => new RegExp(`Task · ${end} · high priority · medium severity`).test(panels.status.getText()), `${title}: its line under the board`);
+    assert.doesNotMatch(panels.status.getText(), /approved|no subtasks yet/);
+    v.input.write('\r'); await until(() => cardRows(v).length, `${title}: the card`);
+    const rows = cardRows(v);
+    assert.deepEqual(rows.slice(0, 2), [title, `Done · ${end} · priority high · severity medium`]);
+    assert.equal(rows.find(line => line.startsWith('Objectives')), objectives);
+    assert.doesNotMatch(rows.join('\n'), /in progress|^ETA |overdue|Subtasks · none yet/m);
+    assert.match(rows.at(-1), /^last activity /);
+    v.input.write('\x1b'); await until(() => !cardDialog(v), `${title}: Esc closes it`);
+  };
+  await open('Nightly dependency check', 'answered', 'Objectives');
+  await open('Tidy the log files', 'stopped', 'Objectives');
+  await open('Ship the cart fix', 'published', 'Objectives · 1 of 3 met');
 });
 
 test("a project's own instructions are asked about on screen before they are used: the text is shown, each answer is remembered for that text, and a change shows what changed", { timeout: 60000 }, async t => {
