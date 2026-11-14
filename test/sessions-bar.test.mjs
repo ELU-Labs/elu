@@ -172,7 +172,7 @@ const ownerQueue = [
   { id: 'request-2', goal: 'I approve', state: 'blocked', reason: REFUSED, continuationTaskId: '3', taskId: null, createdAt: at(646) },
   { id: 'request-3', goal: 'you have my approval', state: 'running', continuationTaskId: '3', taskId: '3', createdAt: at(1) },
 ];
-const ownerAsk = { id: 'peer-ask', kind: 'incoming', request: 'ask', peer: 'c'.repeat(64), name: 'aki', text: 'testing if u get my messages', at: at(648), root: '/p/home', project: 'home' };
+const ownerAsk = { id: 'peer-ask', kind: 'incoming', request: 'ask', peer: 'c'.repeat(64), name: 'rio', text: 'testing if u get my messages', at: at(648), root: '/p/home', project: 'home' };
 
 test('a blocked message is spent once its session moves on: a newer message to it, or a message the session took after it', () => {
   assert.deepEqual(supersededRequests(ownerQueue, [ownerTask]), ['request-1', 'request-2'], "the owner's two old messages");
@@ -183,7 +183,7 @@ test('a blocked message is spent once its session moves on: a newer message to i
   const idle = { ...ownerTask, state: 'answered', messages: [{ at: at(700), text: 'Email logs' }] };
   assert.deepEqual(supersededRequests(ownerQueue.slice(0, 2), [idle]), []);
   assert.deepEqual(supersededRequests([{ ...ownerQueue[0], blockedAt: at(0) }], [ownerTask]), [], 'it stopped after that message');
-  assert.deepEqual(supersededRequests([{ ...ownerQueue[0], continuationTaskId: null }, { ...ownerQueue[1], origin: { kind: 'handoff', name: 'aki' } }, ownerQueue[2]], [ownerTask]), []);
+  assert.deepEqual(supersededRequests([{ ...ownerQueue[0], continuationTaskId: null }, { ...ownerQueue[1], origin: { kind: 'handoff', name: 'rio' } }, ownerQueue[2]], [ownerTask]), []);
   // A bot's reply in the session is not a new message to it.
   assert.deepEqual(supersededRequests(ownerQueue.slice(0, 2), [{ ...idle, messages: [...idle.messages, { at: at(0), text: 'Looks fine.', bot: 'critic' }] }]), []);
 });
@@ -208,10 +208,10 @@ test("only the owner's own later turns spend his blocked message: a bot's schedu
   const later = { continuationTaskId: '3', taskId: '3', createdAt: at(1) };
   // A bot's scheduled turn, done or failed, and a teammate's follow-up in the same thread.
   assert.deepEqual(supersededRequests([...held, { ...later, id: 'request-4', goal: 'Check the build', state: 'done', bot: 'critic', scheduled: true }], [idle]), []);
-  assert.deepEqual(supersededRequests([...held, { ...later, id: 'request-5', goal: 'And the docs?', state: 'done', origin: { kind: 'handoff', name: 'aki', peer: 'c'.repeat(64) } }], [idle]), []);
+  assert.deepEqual(supersededRequests([...held, { ...later, id: 'request-5', goal: 'And the docs?', state: 'done', origin: { kind: 'handoff', name: 'rio', peer: 'c'.repeat(64) } }], [idle]), []);
   assert.deepEqual(supersededRequests([...held, { ...later, id: 'request-6', goal: 'Nightly', state: 'queued', scheduleId: 'schedule-0a1b2c3d' }], [idle]), []);
   // What those turns leave in the session: the bot's scheduled message and the teammate's.
-  const ran = [{ at: at(0), text: 'Check the build', to: '@critic', scheduled: true }, { at: at(0), text: 'And the docs?', from: '@aki', peer: 'c'.repeat(64), kind: 'handoff' }];
+  const ran = [{ at: at(0), text: 'Check the build', to: '@critic', scheduled: true }, { at: at(0), text: 'And the docs?', from: '@rio', peer: 'c'.repeat(64), kind: 'handoff' }];
   assert.deepEqual(supersededRequests(held, [{ ...idle, messages: [...idle.messages, ...ran] }]), []);
   // His own message to a bot in the session does spend them, as one to the lead does.
   assert.deepEqual(supersededRequests(held, [{ ...idle, messages: [...idle.messages, { at: at(0), text: 'Look again', to: '@critic' }] }]), ['request-1', 'request-2']);
@@ -243,6 +243,6 @@ test('a blocked or saved message to a session shows on that session\'s row; one 
   // An archived session does not show it: the message keeps a row of its own.
   assert.deepEqual(boardRows([{ ...home, closed: ['3'], queue: ownerQueue.slice(0, 1) }], now).map(row => [row.kind, row.kind === 'task' ? row.id : row.request.id]), [['request', 'request-1'], ['task', '4']]);
   // A teammate's message that waits for the owner keeps its own row under Needs you.
-  const theirs = { id: 'request-7', goal: 'Work on the handoff', state: 'waiting', reason: 'handoff from @aki', continuationTaskId: '3', origin: { kind: 'handoff', name: 'aki', peer: 'c'.repeat(64) }, context: 'And the docs?', createdAt: at(2) };
+  const theirs = { id: 'request-7', goal: 'Work on the handoff', state: 'waiting', reason: 'handoff from @rio', continuationTaskId: '3', origin: { kind: 'handoff', name: 'rio', peer: 'c'.repeat(64) }, context: 'And the docs?', createdAt: at(2) };
   assert.deepEqual(boardRows([{ ...home, queue: [theirs] }], now).filter(row => row.kind === 'request').map(row => [row.request.id, row.group]), [['request-7', 0]]);
 });

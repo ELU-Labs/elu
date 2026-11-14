@@ -3,7 +3,9 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { TOP_AGENTS, agentSpend, agentTable, byCost, cleanTopAgents, compact, costText, runUsage, shareText, spendText, tokensText, topAgentsWire } from '../lib/agent-spend.mjs';
+import { spawnSync } from 'node:child_process';
+import { fakeClis, temp } from './helpers.mjs';
+import { TOP_AGENTS, agentSpend, agentTable, byCost, cleanTopAgents, compact, costText, runSpends, runUsage, shareText, spendText, tokensText, topAgentsWire } from '../lib/agent-spend.mjs';
 import { todayCost } from '../lib/terminal.mjs';
 
 const FIXTURES = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures');
@@ -86,6 +88,34 @@ test('top agents are one row per agent in a session, named as the chat names the
   assert.equal(costText(none.rows[0]), 'not reported'); assert.equal(spendText(none), 'not reported'); assert.equal(todayCost([], new Date(NOW)), '$0.00');
   // Tasks of any shape a state file may hold do not break it.
   assert.deepEqual(agentSpend([{ root: '/r', tasks: [{ id: '1' }, { id: '2', runs: null }, null] }], { now: NOW }).rows, []);
+});
+
+// One Claude Code session that changes model: two turns on Opus, then /model sonnet and two on
+// Sonnet. Each resumed turn reports the session's totals so far, one line per model: Claude Code
+// (2.1.322) keeps a session's cost state with its modelUsage per model and restores it on
+// --resume, so the Opus line is still there beside Sonnet's. The stand-in reports the same way.
+test("a session that changes model counts each turn's own cost once: two Opus turns and two Sonnet turns add up to what they spent", t => {
+  const parent = temp(t), { env } = fakeClis(parent), bin = path.join(parent, 'bin'), config = path.join(bin, 'fake.json');
+  const base = JSON.parse(fs.readFileSync(config, 'utf8')), session = '5f0e7c1a-2b3d-4e5f-8a9b-0c1d2e3f4a5b';
+  const OPUS = 'claude-opus-5-5', SONNET = 'claude-sonnet-5-5';
+  const turns = [['opus', OPUS, [4, 1500, 52000, 9000], 0.42], ['opus', OPUS, [3, 1400, 61000, 4000], 0.42], ['sonnet', SONNET, [2, 900, 70000, 3000], 0.12], ['sonnet', SONNET, [2, 700, 74000, 1000], 0.12]];
+  const results = [];
+  const runs = turns.map(([alias, model, tokens, usd], index) => {
+    fs.writeFileSync(config, JSON.stringify({ ...base, models: { opus: OPUS, sonnet: SONNET }, spend: { model, tokens, usd } }));
+    const out = spawnSync(path.join(bin, 'claude'), ['-p', '--output-format', 'stream-json', '--verbose', '--model', alias, index ? '--resume' : '--session-id', session], { input: 'Fix the login form.', env: { ...process.env, ...env }, encoding: 'utf8' });
+    assert.equal(out.status, 0, out.stderr);
+    const logFile = path.join(parent, `lead-${index + 1}.log`); fs.writeFileSync(logFile, out.stdout);
+    const result = out.stdout.trim().split('\n').map(line => JSON.parse(line)).findLast(row => row.type === 'result'); results.push(result);
+    // As 0.1.18 recorded a run: what its result said the session had spent, and its model.
+    return run('lead', { session, logFile, code: 0, model, costUsd: result.total_cost_usd });
+  });
+  const spent = runSpends(task(1, 'Login fix solo', runs)).map(spend => Number(spend.costUsd.toFixed(2)));
+  assert.deepEqual(spent, [0.42, 0.42, 0.12, 0.12], 'each turn its own cost, the first Sonnet turn too');
+  assert.deepEqual(Object.keys(results[3].modelUsage).sort(), [OPUS, SONNET], 'the last turn reports both models');
+  assert.equal(Number(results[3].total_cost_usd.toFixed(2)), 1.08);
+  const today = agentSpend([{ root: '/work/login', tasks: [task(1, 'Login fix solo', runs)] }], { now: NOW });
+  assert.equal(today.rows.length, 1, 'one row for the session');
+  assert.equal(today.rows[0].model, 'opus 5.5 + sonnet 5.5'); assert.equal(Number(today.rows[0].costUsd.toFixed(2)), 1.08);
 });
 
 test('ties and unknown costs sort after known ones, and at most ten go over the wire', () => {

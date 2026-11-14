@@ -39,13 +39,13 @@ channels    team: pairwise A2A tasks + status notifications
 conductor   peer daemon <-> conductor through files only (requests, outbox, commands)
 ```
 
-There is no ELU server anywhere, and no on or off. The daemon runs while this machine is an active member of at least one team, or has left one without any teammate hearing it yet:
+There is no ELU server anywhere, and nothing to turn on. The daemon runs while this machine is an active member of at least one team, or has left one without any teammate hearing it yet:
 
 - Nothing starts on a machine that never made or joined a team, and it makes no peer connection.
 - `/invite`, `elu team create` and `elu invite` start it once the team exists; `/join` and `elu join` start it for the join, through a `join` command it reads when it starts. While the join looks for the inviter the app and the shell count the seconds; Esc or Ctrl-C takes the `join` back if no daemon has read it and sends `joinCancel`, which ends the search at once, with a short code or a long one. Quitting the app does the same before it closes. The `join` names the process that asked (`pid`), and the daemon ends a join whose asker is gone, so a join never goes through with nobody there. A cancel that arrives while the proof is with the inviter waits for the answer: admitted, the join stands on both computers; refused or unanswered, it ends as cancelled. No member is left at the inviter's that is on no team at the joiner's. A search that finds nobody in 60 seconds answers why and what to do; one on a machine whose DHT got no answer at all, or went offline, answers that as soon as the first lookup is over. The app starts it when it opens on a machine on a team, and again within a minute when it stops. It is a detached process, so it keeps running when the app closes.
 - `/leave` and `elu team leave` take this machine off a team. Leaving the last one once a teammate has the leave, or hearing that an admin removed this machine from it (`/remove`, `elu team remove`), stops the daemon at once. A leave no teammate has heard keeps it running until one has (see [Leaving and removing](#roster)), and the app starts it for that as it opens. Otherwise, with no team, no join and no command under way for 60 seconds (a join that failed, say), it stops by itself. `peer --daemon` started with no team, no unheard leave and no command waiting, by a login service say, exits before it connects.
 - A daemon of another version left running on a machine on no team (0.1.5 started one before a join, which may have failed) is stopped when the app opens, and by `elu peers` and the `elu` commands that need a team.
-- `elu peer uninstall` and `elu uninstall` stop it, but only until the app opens or an `elu` peer command runs while the machine is still on a team.
+- `elu peer off`, `elu peer uninstall` and `elu uninstall` stop it, but only until the app opens or an `elu` peer command runs while the machine is still on a team.
 - An `enabled` field in `settings.json`, written by 0.1.5 and earlier, is ignored.
 
 Defaults that touch third parties:

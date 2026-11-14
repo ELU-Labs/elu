@@ -245,7 +245,7 @@ test('a schedule gets Full access only when the owner picked it; an automatic re
 test("a bot's own scheduled turn runs with Full access in a Full access session; the model and the bot are told about /schedule", async t => {
   const f = setup(t, 'answer');
   saveBot({ name: 'nightly', vendor: 'claude', instructions: 'Tidy the notes.', schedule: 'every 1h' });
-  const chat = await f.controller.ask('Run the backlog check every 3 hours.', null, { bots: ['nightly'], permissions: 'full' }).finished;
+  const chat = await f.controller.ask('Check the build every 3 hours.', null, { bots: ['nightly'], permissions: 'full' }).finished;
   assert.equal(chat.permissions, 'full');
   assert.match(SCHEDULE_NOTE, /typing \/schedule, a time such as every 3h, and the message/); assert.match(SCHEDULE_NOTE, /you cannot create schedules or cron jobs yourself/);
   assert.ok(f.inputs()[0].input.includes(SCHEDULE_NOTE), "the model's answer turn is told");
@@ -831,7 +831,7 @@ test('a rule kept once answers the next session; defaults never ask; the never l
   assert.deepEqual(theirs.asked.map(row => [row.summary, row.rules]), [['Run: npm test outside the sandbox', 'defaults']]);
   assert.deepEqual(theirs.task.approvals.map(row => [row.decision, row.by ?? null]), [['allow', 'default'], ['deny', null]]);
   // One the owner's own other computer started (origin.mine, lib/peer/remote.mjs) uses his rules.
-  const mine = await settle(f.controller.ask('Run the tests.', null, { mine: { machine: 'c'.repeat(64), name: 'aki', remoteId: '0f0e0d0c-0b0a-4908-8706-050403020100' }, permissions: 'ask' }));
+  const mine = await settle(f.controller.ask('Run the tests.', null, { mine: { machine: 'c'.repeat(64), name: 'rio', remoteId: '0f0e0d0c-0b0a-4908-8706-050403020100' }, permissions: 'ask' }));
   assert.deepEqual(mine.asked, []); assert.equal(mine.task.origin.mine, true); assert.equal(mine.task.origin.peer, undefined);
   assert.deepEqual(mine.task.approvals.map(row => [row.decision, row.by, row.rule]), [['allow', 'default', 'git status'], ['allow', 'rule', 'npm test']]);
 });

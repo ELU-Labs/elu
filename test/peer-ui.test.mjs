@@ -113,6 +113,12 @@ function environment(t, parent) {
   Object.assign(process.env, values);
   owned(t).files.push(() => { for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } });
 }
+// The user name this computer gives, as USER says, for the test only.
+function userName(t, name) {
+  const previous = { USER: process.env.USER, LOGNAME: process.env.LOGNAME };
+  process.env.USER = name; delete process.env.LOGNAME;
+  t.after(() => { for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } });
+}
 async function view(t, { columns = 160, rows = 40, ...options } = {}) {
   const input = new PassThrough(), output = new PassThrough();
   input.isTTY = output.isTTY = true; input.setRawMode = () => {}; output.columns = columns; output.rows = rows;
@@ -1598,7 +1604,7 @@ test('Sessions names a message from my other computer by the name it shows under
 
 test('/model NAME and a message over a session on my other computer go there as typed: that computer reads the name, and the status names the model it took', async t => {
   const at = new Date().toISOString(), id = '55555555-5555-4555-8555-555555555555';
-  const remote = [{ id, machine: SARA, createdAt: at, lastAt: at, title: 'Nested routes e2e handoff', state: 'running', steps: [], entries: [{ role: 'You', at, text: 'Start the handoff' }], approvals: [] }];
+  const remote = [{ id, machine: SARA, createdAt: at, lastAt: at, title: 'Invoice page test handoff', state: 'running', steps: [], entries: [{ role: 'You', at, text: 'Start the handoff' }], approvals: [] }];
   const p = project(later(t)); environment(t, p.parent);
   const before = process.env.PATH; process.env.PATH = fakeClis(p.parent).env.PATH; owned(t).files.push(() => { process.env.PATH = before; });
   // What the other computer answers: the model it read at the start of the text, by the name it shows it by, and whether words came after it.
@@ -1610,8 +1616,8 @@ test('/model NAME and a message over a session on my other computer go there as 
   const answer = peer.awaitCommand; peer.awaitCommand = async (...args) => { const out = await answer(...args), command = peer.last; return command.type === 'remoteSend' && command.model ? { id, model: took(command.text)[1], sent: command.text.replace(took(command.text)[0], '').trim() !== '' } : out; };
   const v = await view(t, { repo: repository(p.root), dashboard: true, peer });
   const board = v.panels.board, sentThere = () => peer.sent().filter(row => row.type === 'remoteSend'), status = () => v.panels.status.getText().replace(/\s+/g, ' ');
-  const over = async () => { board.focus(); selectRow(board, /Nested routes e2e handoff/); await until(() => /@sara-box/.test(v.panels.ask._label.getText()), 'the box writes about the session there'); };
-  await until(() => board.items.map(plainItem).some(row => /Nested routes e2e handoff/.test(row)), 'the row of the session there');
+  const over = async () => { board.focus(); selectRow(board, /Invoice page test handoff/); await until(() => /@sara-box/.test(v.panels.ask._label.getText()), 'the box writes about the session there'); };
+  await until(() => board.items.map(plainItem).some(row => /Invoice page test handoff/.test(row)), 'the row of the session there');
   await over(); await send(v, '/model opus can you check which files that session is asking about and instruction to start the handoff');
   await until(() => sentThere().length === 1, 'sent there');
   assert.deepEqual(sentThere()[0], { type: 'remoteSend', id, text: 'opus can you check which files that session is asking about and instruction to start the handoff', model: true, typed: true });
@@ -2299,9 +2305,12 @@ test('a first /join asks to join and what teammates can do, then your name, then
   const peer = fakePeer({ teamless: true, running: false }); let me = null;
   peer.identity = ({ create, name } = {}) => { if (create) { peer.calls.push(['identity', name]); me = { name }; return me; } if (!me) throw new Error('Create your peer identity first with elu id --name NAME.'); return me; };
   const v = await view(t, { repo: repository(p.root), peer });
+  // This computer's user name was made from an email address whose plain part cannot be told: the field is left for the owner.
+  userName(t, 'sam_example_com');
   await send(v, '/join k7qm-x2pd-9fhw'); await answerJoin(v); await until(() => modal(v, 'Your name'), 'name prompt');
   const field = modal(v, 'Your name').children.find(child => child.type === 'textbox');
-  await until(() => field.__listener, 'name input'); field.setValue('ana'); field.submit();
+  await until(() => field.__listener, 'name input'); assert.equal(field.getValue(), '', 'no part of an email address is offered');
+  field.setValue('ana'); field.submit();
   await until(() => /Joined Docs with sara\./.test(v.panels.status.getText()), 'joined after the name');
   assert.deepEqual(peer.calls.find(row => row[0] === 'identity'), ['identity', 'ana']);
   assert.ok(peer.calls.findIndex(row => row[0] === 'identity') < peer.calls.findIndex(row => row[0] === 'joinTeam'));
@@ -2370,9 +2379,12 @@ test('a new person: /invite asks their name, makes the team, starts the daemon, 
   // On no team, opening the app starts nothing.
   await new Promise(resolve => setTimeout(resolve, 300));
   assert.equal(peer.calls.filter(row => row[0] === 'startPeer').length, 0, 'nothing started before the invite');
+  // This computer's user name was made from an email address (name_gmail_com): only its plain part is offered.
+  userName(t, 'ana_gmail_com');
   await send(v, '/invite'); await choose(v, 'Invite', /^Someone new/); await until(() => modal(v, 'Your name'), 'name prompt');
   const field = modal(v, 'Your name').children.find(child => child.type === 'textbox');
-  await until(() => field.__listener, 'name input'); field.setValue('ana'); field.submit();
+  await until(() => field.__listener, 'name input'); assert.equal(field.getValue(), 'ana', 'the plain part, never the address');
+  field.submit();
   await choose(v, 'What teammates can do here', /^Auto/); await closeDialog(v, 'Rules for teammates', '');
   await until(() => modal(v, 'Team invite'), 'invite');
   const order = ['identity', 'createTeam', 'startPeer', 'createInvite'].map(name => peer.calls.findIndex(row => row[0] === name));

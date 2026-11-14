@@ -93,10 +93,10 @@ async function run(home, command) {
 
 test('C runs /invite and nobody joins, A (on a team with B) invites, C joins: C has one #general with all three, and its own team is closed with nothing deleted', async t => {
   const bootstrap = await testnet(t), a = newHome(t), b = newHome(t), c = newHome(t);
-  const elu = founded(a, 'aki', 'ELU');
+  const elu = founded(a, 'rio', 'ELU');
   withHome(b, () => createIdentity({ name: 'sara' })); admitTo(a, elu, b);
   // C's first /invite makes its own team and a code. Nobody uses the code.
-  withHome(c, () => createIdentity({ name: 'aki' }));
+  withHome(c, () => createIdentity({ name: 'rio' }));
   const own = firstInvite(c), kept = withHome(c, () => fs.readFileSync(peerFile('teams', own.id, 'log.jsonl'), 'utf8'));
   for (const home of [a, c]) withHome(home, () => savePeerSettings({ bootstrap }));
   await daemon(t, a); await daemon(t, c);
@@ -122,12 +122,12 @@ test('C runs /invite and nobody joins, A (on a team with B) invites, C joins: C 
   assert.equal(fs.readFileSync(path.join(closedFolder(c, own.id), 'log.jsonl'), 'utf8'), kept);
   assert.ok(fs.existsSync(path.join(closedFolder(c, own.id), 'invites.json')));
   // A sees C on the team.
-  assert.deepEqual(withHome(a, () => team(elu)).members.map(member => member.name), ['aki', 'sara', 'aki']);
+  assert.deepEqual(withHome(a, () => team(elu)).members.map(member => member.name), ['rio', 'sara', 'rio']);
 });
 
 test('a join that leaves me on two teams that both have other people closes neither and says there are two; Chats names each #general by its team', async t => {
   const bootstrap = await testnet(t), a = newHome(t), c = newHome(t), d = newHome(t);
-  const elu = founded(a, 'aki', 'ELU'), side = founded(c, 'kim', 'side');
+  const elu = founded(a, 'rio', 'ELU'), side = founded(c, 'kim', 'side');
   withHome(d, () => createIdentity({ name: 'dan' })); admitTo(c, side, d);
   for (const home of [a, c]) withHome(home, () => savePeerSettings({ bootstrap }));
   await daemon(t, a); await daemon(t, c);
@@ -137,7 +137,7 @@ test('a join that leaves me on two teams that both have other people closes neit
   // The answer of a join holds nothing new unless a team was closed: the count is read from this machine's files.
   assert.equal(joined.team.teams, undefined);
   assert.equal(withHome(c, () => peer.teamCount()), 2);
-  assert.match(joined.message, /^Joined ELU with aki\. .* You are on 2 teams now, each with its own #general\.$/);
+  assert.match(joined.message, /^Joined ELU with rio\. .* You are on 2 teams now, each with its own #general\.$/);
   await wait(() => read(c, 'state.json')?.teams?.length === 2, 'both teams in the state of C');
   assert.deepEqual(generals(c).sort(), ['# general · ELU  2', '# general · side  2']);
   assert.ok(fs.existsSync(withHome(c, () => peerFile('teams', side))) && !fs.existsSync(closedFolder(c, side)));
@@ -145,7 +145,7 @@ test('a join that leaves me on two teams that both have other people closes neit
 
 test('only a team of mine that nobody else was ever on is closed, only beside a team somebody else is on, and its share and setting go with it', t => {
   const a = newHome(t), c = newHome(t), d = newHome(t);
-  const elu = founded(a, 'aki', 'ELU');
+  const elu = founded(a, 'rio', 'ELU');
   withHome(c, () => createIdentity({ name: 'kim' })); withHome(d, () => createIdentity({ name: 'dan' }));
   // My only team stays, however empty: it is where my code is.
   const own = firstInvite(c);
@@ -175,7 +175,7 @@ test('a team whose code somebody used is never closed, and a machine with no ide
   const a = newHome(t), c = newHome(t), d = newHome(t), empty = newHome(t);
   assert.deepEqual(withHome(empty, () => peer.closeSoloTeams({ once: true })), []);
   assert.equal(fs.existsSync(path.join(empty, 'elu-code')), false, 'nothing is written on a machine that never used teams');
-  const elu = founded(a, 'aki', 'ELU');
+  const elu = founded(a, 'rio', 'ELU');
   withHome(c, () => createIdentity({ name: 'kim' })); withHome(d, () => createIdentity({ name: 'kim' }));
   // Another computer of mine came on with my code: the team is ours, not mine alone.
   const own = firstInvite(c); withHome(c, () => redeemCode(own.code, withHome(d, () => loadIdentity()).key, 'kim'));
@@ -266,10 +266,10 @@ async function shownGenerals(v) {
 
 test('ELU opens on a computer an earlier version left on its own empty team and the team it joined: the empty one is closed once, one line says so, and Chats has one #general', { timeout: 60000 }, async t => {
   const a = newHome(t), b = newHome(t), c = newHome(t);
-  const elu = founded(a, 'aki', 'ELU');
+  const elu = founded(a, 'rio', 'ELU');
   withHome(b, () => createIdentity({ name: 'sara' })); admitTo(a, elu, b);
   // C ran /invite, nobody joined, and it then joined ELU with 0.1.19, which left it on both.
-  withHome(c, () => createIdentity({ name: 'aki' }));
+  withHome(c, () => createIdentity({ name: 'rio' }));
   const own = firstInvite(c); admitTo(a, elu, c);
   assert.deepEqual(generals(c).sort(), ['# general · ELU  3', '# general · workspace  1'], 'what 0.1.19 showed');
   const p = project(later(t)); useHome(t, c);
@@ -290,10 +290,10 @@ test('ELU opens on a computer an earlier version left on its own empty team and 
 
 test('an update notice that arrives as ELU opens is shown after the line that says a team was closed, not in its place', { timeout: 60000 }, async t => {
   const a = newHome(t), b = newHome(t), c = newHome(t);
-  const elu = founded(a, 'aki', 'ELU');
+  const elu = founded(a, 'rio', 'ELU');
   withHome(b, () => createIdentity({ name: 'sara' })); admitTo(a, elu, b);
   // C is on its own empty team and on ELU, as 0.1.19 left it, and a newer version is out.
-  withHome(c, () => createIdentity({ name: 'aki' }));
+  withHome(c, () => createIdentity({ name: 'rio' }));
   firstInvite(c); admitTo(a, elu, c);
   const p = project(later(t)); useHome(t, c);
   const notice = 'ELU 9.9.9 is out. /quit, then elu update.';
@@ -310,9 +310,9 @@ test('an update notice that arrives as ELU opens is shown after the line that sa
 
 test('/join says in one sentence that my own empty team was closed, and that there are two teams when a join leaves two', { timeout: 60000 }, async t => {
   const c = newHome(t), elu = 'e'.repeat(64), own = 'f'.repeat(64);
-  withHome(c, () => createIdentity({ name: 'aki' }));
+  withHome(c, () => createIdentity({ name: 'rio' }));
   const p = project(later(t)); useHome(t, c);
-  let answer = { id: elu, name: 'ELU', inviter: { name: 'aki', fingerprint: 'aaaaaaaa' }, closed: [{ id: own, name: 'workspace' }] };
+  let answer = { id: elu, name: 'ELU', inviter: { name: 'rio', fingerprint: 'aaaaaaaa' }, closed: [{ id: own, name: 'workspace' }] };
   let count = 1;
   const v = await view(t, { repo: repository(p.root), peer: calm({ joinTeam: async () => answer, teamCount: () => count }) });
   const join = async () => { await send(v, `/join ${CODE}`); await choose(v, 'Join a team', /^Join$/); await choose(v, 'What teammates can do here', /^Auto/); await closeDialog(v, 'Rules for teammates', ''); };
@@ -320,28 +320,28 @@ test('/join says in one sentence that my own empty team was closed, and that the
   // What is new comes first: the row is one row, cut at its width, and what teammates can do here was just answered.
   const line = () => v.status().replace(/\s+/g, ' ').replace(/^› /, '').trim(), does = 'Their messages start sessions here, as if you typed them.';
   await join();
-  await until(() => line().startsWith('Joined ELU with aki.'), () => `joined: ${JSON.stringify(line())}`);
-  assert.equal(line(), `Joined ELU with aki. Your team workspace had only you, so it was closed. ${does}`);
-  assert.ok('› Joined ELU with aki. Your team workspace had only you, so it was closed.'.length <= 78, 'the sentence is whole on a row of 80 columns');
+  await until(() => line().startsWith('Joined ELU with rio.'), () => `joined: ${JSON.stringify(line())}`);
+  assert.equal(line(), `Joined ELU with rio. Your team workspace had only you, so it was closed. ${does}`);
+  assert.ok('› Joined ELU with rio. Your team workspace had only you, so it was closed.'.length <= 78, 'the sentence is whole on a row of 80 columns');
   // Two teams that both have other people: nothing was closed, and the line says there are two.
-  answer = { id: elu, name: 'ELU', inviter: { name: 'aki', fingerprint: 'aaaaaaaa' } }; count = 2;
+  answer = { id: elu, name: 'ELU', inviter: { name: 'rio', fingerprint: 'aaaaaaaa' } }; count = 2;
   await join();
-  await until(() => line().startsWith('Joined ELU with aki.') && !/closed/.test(line()), 'joined again');
-  assert.equal(line(), `Joined ELU with aki. You are on 2 teams now, each with its own #general. ${does}`);
+  await until(() => line().startsWith('Joined ELU with rio.') && !/closed/.test(line()), 'joined again');
+  assert.equal(line(), `Joined ELU with rio. You are on 2 teams now, each with its own #general. ${does}`);
   // An ordinary join says neither.
   count = 1;
   await join();
-  await until(() => line().startsWith('Joined ELU with aki.') && !/2 teams/.test(line()), 'joined a third time');
-  assert.equal(line(), `Joined ELU with aki. ${does}`);
+  await until(() => line().startsWith('Joined ELU with rio.') && !/2 teams/.test(line()), 'joined a third time');
+  assert.equal(line(), `Joined ELU with rio. ${does}`);
 });
 
 // A join can say two things after who was joined: the project its team shares, and that my own
 // empty team was closed. At 80 columns the line takes the rows it needs and shows both whole.
 test('at 80 columns a join that closed my empty team and brought a shared project says both whole, on as many rows as that takes', { timeout: 60000 }, async t => {
   const c = newHome(t), elu = 'e'.repeat(64), own = 'f'.repeat(64);
-  withHome(c, () => createIdentity({ name: 'aki' }));
+  withHome(c, () => createIdentity({ name: 'rio' }));
   const p = project(later(t)); useHome(t, c);
-  const answer = { id: elu, name: 'ELU', inviter: { name: 'aki', fingerprint: 'aaaaaaaa' }, closed: [{ id: own, name: 'workspace' }] };
+  const answer = { id: elu, name: 'ELU', inviter: { name: 'rio', fingerprint: 'aaaaaaaa' }, closed: [{ id: own, name: 'workspace' }] };
   // The project the team shares reaches this computer a moment after the join.
   let shared = [];
   const v = await view(t, { columns: 80, rows: 24, repo: repository(p.root), peer: calm({ joinTeam: async () => answer, teamCount: () => 1, teammateProjects: () => shared }) });
@@ -349,9 +349,9 @@ test('at 80 columns a join that closed my empty team and brought a shared projec
   const whole = () => drawn().map((row, at) => at ? row.replace(/^ {2}/, '') : row.replace(/^› /, '')).join(' ');
   const closed = 'Your team workspace had only you, so it was closed.', does = 'Their messages start sessions here, as if you typed them.';
   await send(v, `/join ${CODE}`); await choose(v, 'Join a team', /^Join$/); await choose(v, 'What teammates can do here', /^Auto/); await closeDialog(v, 'Rules for teammates', '');
-  await until(() => whole() === `Joined ELU with aki. ${closed} ${does}`, () => `the join's line: ${JSON.stringify(drawn())}`);
-  shared = [{ id: 'd'.repeat(64), name: 'Checkout page', handle: 'checkout', repoId: 'd'.repeat(64), address: null, teams: [{ id: elu, name: 'ELU' }], sharers: [{ key: 'a'.repeat(64), name: 'aki', box: 'aki-box', online: true, mine: false, handle: 'checkout', title: 'Checkout page', older: false }] }];
-  await until(() => whole() === `Joined ELU with aki. Its project Checkout page is in Projects. ${closed} ${does}`, () => `both sentences: ${JSON.stringify(drawn())}`);
+  await until(() => whole() === `Joined ELU with rio. ${closed} ${does}`, () => `the join's line: ${JSON.stringify(drawn())}`);
+  shared = [{ id: 'd'.repeat(64), name: 'Checkout page', handle: 'checkout', repoId: 'd'.repeat(64), address: null, teams: [{ id: elu, name: 'ELU' }], sharers: [{ key: 'a'.repeat(64), name: 'rio', box: 'rio-box', online: true, mine: false, handle: 'checkout', title: 'Checkout page', older: false }] }];
+  await until(() => whole() === `Joined ELU with rio. Its project Checkout page is in Projects. ${closed} ${does}`, () => `both sentences: ${JSON.stringify(drawn())}`);
   assert.ok(drawn().length > 1, 'more than one row');
   assert.ok(drawn().every(row => row.length < status.width), 'every row fits its width: nothing is cut');
 });
@@ -383,13 +383,13 @@ test('/invite on a team makes its code for that team and never another team: wit
   await until(() => /Invite for docs ready/.test(one.status()), 'named in the line');
   await closeDialog(one, 'Team invite');
   // On a team somebody else made: no code, no new team, and who to ask.
-  const b = newHome(t), elu = founded(a, 'aki', 'ELU');
+  const b = newHome(t), elu = founded(a, 'rio', 'ELU');
   withHome(b, () => createIdentity({ name: 'sara' })); admitTo(a, elu, b);
   await one.close();
   calls.length = 0; process.env.XDG_CONFIG_HOME = b;
   const member = await view(t, { repo: repository(p.root), peer: facade() });
   await invite(member);
-  await until(() => /Only an admin of ELU can make an invite code\. Ask aki, who made the team\./.test(member.status()), 'who can');
+  await until(() => /Only an admin of ELU can make an invite code\. Ask rio, who made the team\./.test(member.status()), 'who can');
   assert.deepEqual(calls, []);
   assert.deepEqual(teamNames(b), ['ELU']);
 });

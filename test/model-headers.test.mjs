@@ -173,8 +173,8 @@ test('a Claude Code whose catalog cannot be read falls back to the table: on 2.1
 
 test('a header keeps one row on a narrow pane: the parentheses go before the name or the time is cut', () => {
   const lead = { role: '@lead', bot: 'lead', model: 'claude-fable-5-2', effort: 'medium' };
-  assert.equal(header(lead, 80, ' on @aki-devbox'), '@lead (fable 5.2 med) on @aki-devbox  4:37 PM');
-  assert.equal(header(lead, 36, ' on @aki-devbox'), '@lead on @aki-devbox  4:37 PM');
+  assert.equal(header(lead, 80, ' on @second-box'), '@lead (fable 5.2 med) on @second-box  4:37 PM');
+  assert.equal(header(lead, 36, ' on @second-box'), '@lead on @second-box  4:37 PM');
   assert.equal(header(lead, 30), '@lead (fable 5.2 med)  4:37 PM', 'exactly the width still fits');
   assert.equal(header(lead, 29), '@lead  4:37 PM');
   assert.equal(header({ role: 'You → @lead' }, 80), 'You → @lead  4:37 PM', 'the owner\'s own message is unchanged');
@@ -205,7 +205,7 @@ test('the agent of a solo session, a bot, and a bot that fell back each name the
   task = await f.controller.ask('What would you change?', first.id, { bot: 'lead' }).finished;
   const reply = task.messages.at(-1);
   assert.deepEqual([reply.bot, reply.model, reply.effort], ['lead', 'claude-opus-5-5', 'medium']);
-  assert.equal(header(conversationEntries(f.repo, task).at(-1), 80, ' on @aki-devbox'), '@lead (opus 5.5 med) on @aki-devbox  4:37 PM');
+  assert.equal(header(conversationEntries(f.repo, task).at(-1), 80, ' on @second-box'), '@lead (opus 5.5 med) on @second-box  4:37 PM');
 });
 
 // test/fakes/claude.mjs answers --model as Claude Code does, so no test or app run on it shows
@@ -256,13 +256,13 @@ test('a session saved before model and effort were kept shows its headers as bef
 test('a session on another computer names the model and effort of each entry with that computer; an older one there names none', () => {
   const glue = remoteGlue({ facade: { mineRows: () => [], remoteSessions: () => [] }, peerRead: () => null, peerCommand: async () => ({}), chatMessage: ({ title, narrow, text }, width) => `${narrow && title.length > width ? narrow : title}: ${text}`, ink: text => text, colour: false });
   const at = new Date().toISOString();
-  const row = { kind: 'remote', id: 'r1', machine: 'aki-devbox', key: 'remote:x', label: 'Session', remote: { id: 'r1', machine: 'd'.repeat(64), state: 'answered', title: 'Remote', createdAt: at, entries: [
+  const row = { kind: 'remote', id: 'r1', machine: 'second-box', key: 'remote:x', label: 'Session', remote: { id: 'r1', machine: 'd'.repeat(64), state: 'answered', title: 'Remote', createdAt: at, entries: [
     { role: 'You → @lead', at, text: 'Plan it' },
     { role: '@lead', bot: 'lead', at, text: 'Planned.', model: 'claude-fable-5-2', effort: 'medium' },
     { role: 'Opus 5.5', lead: true, at, text: 'Done.', model: 'claude-opus-5-5', effort: 'medium' },
     { role: '@reviewer', bot: 'reviewer', at, text: 'Looks right.' },
   ], steps: [], approvals: [] } };
   const said = glue.view(row, 80);
-  assert.match(said, /@lead \(fable 5\.2 med\) on @aki-devbox: Planned\.[\s\S]*Opus 5\.5 \(med\) on @aki-devbox: Done\.[\s\S]*@reviewer on @aki-devbox: Looks right\./);
-  assert.match(glue.view(row, 20), /@lead on @aki-devbox: Planned\./, 'a narrow pane drops the parentheses first');
+  assert.match(said, /@lead \(fable 5\.2 med\) on @second-box: Planned\.[\s\S]*Opus 5\.5 \(med\) on @second-box: Done\.[\s\S]*@reviewer on @second-box: Looks right\./);
+  assert.match(glue.view(row, 20), /@lead on @second-box: Planned\./, 'a narrow pane drops the parentheses first');
 });

@@ -13,7 +13,7 @@ import { newHome, peerHome, withHome, makeTeam, registeredProject, answeringClis
 import { CLI, keyLike } from './helpers.mjs';
 import { peerFile, peerRepo } from '../lib/peer/paths.mjs';
 import { defaultBox, savePeerSettings, savePeerPolicy } from '../lib/peer/settings.mjs';
-import { createIdentity, identity as loadIdentity } from '../lib/peer/identity.mjs';
+import { createIdentity, identity as loadIdentity, plainUserName } from '../lib/peer/identity.mjs';
 import { appendOp, createTeam, head, makeOp, merge, readLog, setChannel, team, teamPath, teams as everyTeam } from '../lib/peer/roster.mjs';
 import { createInvite } from '../lib/peer/invite.mjs';
 import { share as shareWith, setTeamProject } from '../lib/peer/shares.mjs';
@@ -1749,7 +1749,22 @@ test('elu team leave and elu team remove: plain refusals, and the op written her
   });
 });
 
-test('elu peer trust and untrust resolve a roster name, refuse unknown and ambiguous names, and show in elu peers; peer on, off and status are gone', async t => {
+// Some computers make the user name from the address they sign in with (name_gmail_com).
+// Teammates see the name ELU offers if it is taken as offered, so no part of an address is in it.
+test('elu id with no --name never takes an email address for the name: the plain part of name_gmail_com, or --name asked for', async t => {
+  // sam_example_com and box_two_dev may be sam@example.com and box@two.dev: nothing is offered for them.
+  const names = ['name_gmail_com', 'first_last_gmail_com', 'name_yahoo_co_uk', 'sam_example_com', 'box_two_dev', 'jane.doe@corp.example', 'jane_doe', 'sam_dev_box', 'kim'];
+  assert.deepEqual(names.map(plainUserName), ['name', 'first_last', 'name', '', '', 'jane.doe', 'jane_doe', 'sam_dev_box', 'kim']);
+  const previous = { USER: process.env.USER, LOGNAME: process.env.LOGNAME };
+  t.after(() => { for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } });
+  delete process.env.LOGNAME;
+  process.env.USER = 'name_gmail_com';
+  assert.equal((await withHome(newHome(t), () => peerCli(['id'], {}))).identity.name, 'name');
+  process.env.USER = 'sam_example_com';
+  await assert.rejects(withHome(newHome(t), () => peerCli(['id'], {})), /Choose a name with --name\./);
+});
+
+test('elu peer trust and untrust resolve a roster name, refuse unknown and ambiguous names, and show in elu peers; peer on and status are gone, and peer off with no daemon running says so', async t => {
   const crew = makeTeam(t), ana = crew.founder.identity, sara = crew.member.identity;
   await withHome(crew.founder.home, async () => {
     const peers = () => JSON.parse(fs.readFileSync(peerFile('peers.json'), 'utf8'));
@@ -1759,7 +1774,9 @@ test('elu peer trust and untrust resolve a roster name, refuse unknown and ambig
     const listed = await peerCli(['peers'], {}), lines = listed.lines;
     assert.match(lines.find(line => line.includes(' sara ')), /offline  trusted$/); assert.doesNotMatch(lines.find(line => line.includes(' ana ')), /trusted/);
     assert.match(listed.message, /^The peer daemon is not running\. It starts when you open ELU, invite or ask\. /);
-    for (const gone of [['peer'], ['peer', 'on'], ['peer', 'off'], ['peer', 'status']]) await assert.rejects(peerCli(gone, {}), new RegExp(`Unknown command: ${gone.join(' ')}\\. Use elu peer install\\|uninstall or elu peer trust\\|untrust @NAME\\.$`));
+    for (const gone of [['peer'], ['peer', 'on'], ['peer', 'status'], ['peer', 'off', 'now']]) await assert.rejects(peerCli(gone, {}), new RegExp(`Unknown command: ${gone.join(' ')}\\. Use elu peer off, elu peer install\\|uninstall or elu peer trust\\|untrust @NAME\\.$`));
+    // elu peer off, from the owner's own stop sequence, as in earlier versions: here nothing runs.
+    assert.deepEqual(await peerCli(['peer', 'off'], {}), { peerStopped: false, message: 'The peer daemon is not running.' });
     await assert.rejects(peerCli(['peer', 'trust', '@nobody'], {}), /No teammate is named @nobody\./);
     await assert.rejects(peerCli(['peer', 'trust'], {}), /Use elu peer trust @NAME\./);
     await assert.rejects(peerCli(['peer', 'untrust', '@sara', 'extra'], {}), /Use elu peer untrust @NAME\./);
@@ -2069,7 +2086,7 @@ test('an unheard leave goes with the invite proof, so the inviter lets the membe
   assert.deepEqual(exits, ['sara']);
 });
 
-test('elu team leave and remove start the daemon for them, and a member on no team after a leave stops it; elu peer uninstall stops it from any folder; elu peers stops an older version\'s daemon on no team', { timeout: 240000 }, async t => {
+test('elu team leave and remove start the daemon for them, and a member on no team after a leave stops it; elu peer off and elu peer uninstall stop it from any folder; elu peers stops an older version\'s daemon on no team', { timeout: 240000 }, async t => {
   const exits = [], homes = [];
   // Set before the homes are made, so it runs before they are removed: each daemon is stopped
   // and waited for. One still writing its files would leave its home not empty.
@@ -2088,6 +2105,13 @@ test('elu team leave and remove start the daemon for them, and a member on no te
   t.after(() => { if (previous === undefined) delete process.env.HOME; else process.env.HOME = previous; });
   const gone = pid => { try { process.kill(pid, 0); return false; } catch { return true; } };
   const stopped = async (where, label) => { const pid = state(where)?.pid; await until(() => !withHome(where, () => peer.peerStatus().running) && (!pid || gone(pid)), label, 30000); };
+  // elu peer off, the owner's own stop: the running daemon stops.
+  await withHome(home, async () => {
+    await peer.ensurePeer();
+    const off = await peerCli(['peer', 'off'], {});
+    assert.deepEqual(off, { peerStopped: true, message: 'The peer daemon stopped. It starts again when you open ELU while you are on a team.' });
+  });
+  await stopped(home, 'the daemon stopped by peer off');
   await withHome(home, async () => {
     // elu peer uninstall: no login item here, and the daemon stops.
     await peer.ensurePeer();
