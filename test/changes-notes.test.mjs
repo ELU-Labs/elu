@@ -168,7 +168,7 @@ test('Changes: the row of a session whose Task waits for approval names d, and d
   // view() selects the row and presses d, then Enter: the changes show, with the Task still waiting.
   const v = await view(t, s.repo, { columns: 80, rows: 24 }), keys = () => v.current.panels.keys.getText();
   assert.equal(currentTask(s.repo, '1').state, 'proposed', 'looking at the changes decided nothing');
-  assert.ok(v.lines().some(line => line.includes(NEW)), 'the changed line shows');
+  assert.ok(v.lines().some(line => line.includes(OLD)), 'the line it changed shows');
   // Esc goes back to the row, and its key bar names d beside y and n.
   v.input.write('\x1b'); await until(() => v.current.sessionView === 'chat' && v.current.screen.focused === v.current.panels.board, 'back on the row');
   await until(() => /^y approve {2}n reject {2}d changes {2}enter open {2}letter then enter {2}tab next$/.test(keys().trim()), 'the key bar names d');
