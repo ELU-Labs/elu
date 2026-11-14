@@ -3119,10 +3119,12 @@ test('a question to a session whose turn takes no message is answered in its cha
   // A question: within seconds its answer is in the chat, marked as written beside the turn, and the turn goes on.
   const asked = Date.now();
   await send(v, 'How far are you?');
-  // It shows under the working line and its steps, where he typed it, so a turn with many steps never pushes it out of sight.
-  await until(() => /Codex is working[\s\S]*type a message any time[\s\S]*┃ How far are you\?[\s\S]*· beside the turn[\s\S]*Two of three steps are done\.[\s\S]*Answered\s+beside\s+the\s+running\s+turn,\s+from\s+what\s+it\s+has\s+done\s+so\s+far\.\s+The\s+turn\s+goes\s+on\.\s*$/.test(chat()), 'the answer beside the turn, at the end of the chat');
+  // It shows under the working line and its steps, where he typed it, so a turn with many steps never pushes it out of sight;
+  // no hint line sits between them (the key bar names /stop).
+  await until(() => /Codex is working[\s\S]*┃ How far are you\?[\s\S]*· beside the turn[\s\S]*Two of three steps are done\.[\s\S]*Answered\s+beside\s+the\s+running\s+turn,\s+from\s+what\s+it\s+has\s+done\s+so\s+far\.\s+The\s+turn\s+goes\s+on\.\s*$/.test(chat()), 'the answer beside the turn, at the end of the chat');
   assert.ok(Date.now() - asked < 10000, 'within seconds');
   await until(() => /Answered\s+beside\s+the\s+running\s+turn/.test(status()), 'the status line says so too');
+  assert.doesNotMatch(chat(), /type a message any time|\/stop to stop/); assert.match(panels.keys.getText(), /\/stop stop/);
   assert.equal(task().state, 'running'); assert.deepEqual(pendingRequests(p.root).filter(row => row.state === 'queued'), [], 'nothing is left to run');
   assert.doesNotMatch(chat(), /\(waiting\)|current turn ends|Sent when this turn ends/);
   // An instruction: answered too, and it says that it asks for work and what the one key costs.
