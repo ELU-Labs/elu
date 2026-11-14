@@ -1185,6 +1185,28 @@ test('over a session on my other computer whose Task waits, a plainly typed yes 
   await until(() => pendingRequests(p.root).some(row => row.helps), 'the yes goes to my agent here');
   assert.equal(sent('remoteTask').length, 2); assert.equal(sent('remoteSend').length, 1);
 });
+// A session on my other computer beside the list is named over it as a session here is: its
+// project, its request, its state and its mode, cut to the room as a session here is.
+test('a session on my other computer beside the list has its title row: project, request, state and mode, at 140 and at 80 columns', async t => {
+  const at = new Date().toISOString(), id = '55555555-5555-4555-8555-555555555555';
+  const p = project(later(t)); environment(t, p.parent);
+  const remote = [{ id, machine: SARA, createdAt: at, lastAt: at, title: 'Round the invoice totals to cents before they are saved', project: 'billing', state: 'running', mode: 'auto', place: 'worktree', steps: [], entries: [], approvals: [] }];
+  const peer = fakePeer({ items: [], mine: [{ key: SARA, mine: true, theirs: true }], remote }), v = await view(t, { columns: 140, rows: 50, repo: repository(p.root), dashboard: true, peer });
+  const board = v.panels.board, header = () => v.panels.header.getText().trim().replace(/ {2}· {2}/g, ' · ');
+  const titled = async (want, what) => { try { await until(() => typeof want === 'string' ? header() === want : want.test(header()), what); } catch { assert.fail(`${what}: "${header()}"`); } };
+  await until(() => board.items.map(plainItem).some(row => /Round the invoice totals/.test(row)), 'its row');
+  board.focus(); selectRow(board, /Round the invoice totals/);
+  await until(() => /Runs on @sara-box/.test(v.panels.chat.getText()), 'its chat beside the list');
+  await titled('billing · Round the invoice totals to cents before they are saved · working · Auto', 'the title at 140 columns');
+  // At 80 columns the request is cut at a word to the room left; the state and the mode stay whole.
+  v.output.columns = 80; v.output.rows = 24; v.output.emit('resize');
+  await until(() => v.current.screen.width === 80, '80 columns'); await titled(/^Round the invoice[\w ]*… · working · Auto$/, 'the title at 80 columns');
+  // What that computer says next shows here: it waits for an approval in Full access, in my checkout there.
+  // The longer state and badge leave no room for the project, which goes first, as for a session here.
+  Object.assign(remote[0], { state: 'running', mode: 'full', place: 'here', approvals: [{ id: 'run-9-a', summary: 'Run: npm test', at }] });
+  v.output.columns = 140; v.output.rows = 50; v.output.emit('resize');
+  await titled('Round the invoice totals to cents before they are saved · needs approval · Full Here', 'the title as it waits');
+});
 test("over a session on my other computer that waits for my answer, a typed yes goes to that session and no session is made here; its row keeps the cursor when it goes on, and only @here asks my agent here", async t => {
   const T = Date.now(), at = new Date(T).toISOString(), stamp = minutes => new Date(T - minutes * 60000).toISOString(), id = '44444444-4444-4444-8444-444444444444';
   const waits = (n, minutes, title) => ({ id: `${String(n).repeat(8)}-${String(n).repeat(4)}-4${String(n).repeat(3)}-8${String(n).repeat(3)}-${String(n).repeat(12)}`, machine: SARA, createdAt: stamp(minutes), lastAt: stamp(minutes), title, state: 'needs_input', question: 'Which one?', choices: ['A', 'B'], steps: [], entries: [{ role: 'You', at: stamp(minutes), text: title }], approvals: [] });
