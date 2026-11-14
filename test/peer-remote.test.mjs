@@ -21,6 +21,7 @@ import { boardRows, remoteRow, rowActions, rowTitle } from '../lib/board.mjs';
 import { remoteSessions as remoteGlue } from '../lib/terminal-remote.mjs';
 import { sessionChanges } from '../lib/diff.mjs';
 import { sessionFiles } from '../lib/session-work.mjs';
+import { peerFile } from '../lib/peer/paths.mjs';
 import { teamPath } from '../lib/peer/roster.mjs';
 import { readTask, saveTask, taskPlace } from '../lib/state.mjs';
 import { spawnSync } from 'node:child_process';
@@ -823,6 +824,14 @@ test('a session on my other computer that moved to a newer main and made branche
   const later = await follow(Date.now() + 60000);
   assert.equal(later.summary, '3 files · +4 −0');
   assert.deepEqual(sessionChanges(later.patch).parts.map(part => [part.branch, part.commits, part.files]), [['fix/two', 2, 2], ['fix/one', 1, 1]]);
+  // A session that stopped is not read again while nothing about it moves. One whose changes an
+  // ELU from before this rule read last (it kept no rule number with what it read) is read once more.
+  const kept = withHome(devbox.home, () => { const file = peerFile('remote', 'host', `${item.id}.json`), row = JSON.parse(fs.readFileSync(file, 'utf8')); return { file, row }; });
+  assert.match(kept.row.diffMark, /^2:blocked:/);
+  withHome(devbox.home, () => fs.writeFileSync(path.join(worktree, 'late.md'), 'written after it stopped\n'));
+  assert.equal((await follow(Date.now() + 120000)).summary, '3 files · +4 −0');
+  withHome(devbox.home, () => { const row = JSON.parse(fs.readFileSync(kept.file, 'utf8')); fs.writeFileSync(kept.file, JSON.stringify({ ...row, diffMark: row.diffMark.replace(/^2:/, '') })); });
+  assert.equal((await follow(Date.now() + 180000)).summary, '4 files · +5 −0');
 });
 
 test('a new file of any size in a session on my other computer reaches the computer that follows it whole, and a binary one is only named', async t => {
