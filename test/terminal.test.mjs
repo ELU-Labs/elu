@@ -2315,6 +2315,47 @@ test('the 30-second check takes the login item away when the last schedule ended
   check(); assert.deepEqual(calls, ['uninstall'], 'its session was the last place a schedule was on');
 });
 
+test('ELU started over a service file from 0.1.19 writes it again with KillMode=process and has systemd read it again', { timeout: 30000 }, async t => {
+  const p = setup(t), item = standIn(t, 'linux');
+  saveSchedule({ root: p.root, goal: 'Check dependencies for updates', when: parseWhen('every 1h') });
+  item.install();
+  const [service] = item.files(), text = fs.readFileSync(service, 'utf8'); assert.match(text, /^Type=oneshot\nKillMode=process$/m);
+  // What 0.1.19 left: the same file without the line, loaded.
+  fs.writeFileSync(service, text.replace('KillMode=process\n', '')); item.run('systemctl', ['--user', 'daemon-reload']);
+  assert.doesNotMatch(item.units()['elu-code-scheduler.service'], /KillMode/);
+  const before = item.calls().length;
+  await view(t, { repo: p.repo, loginItem: { install: item.install, uninstall: item.uninstall } });
+  await until(() => item.calls().length >= before + 2, 'the start settles the login item');
+  assert.equal(fs.readFileSync(service, 'utf8'), text); assert.equal(item.units()['elu-code-scheduler.service'], text, 'systemd holds the new text');
+  assert.deepEqual(item.calls().slice(before).map(call => call.args), [['--user', 'daemon-reload'], ['--user', 'enable', '--now', 'elu-code-scheduler.timer']]);
+  assert.deepEqual(item.loaded(), ['elu-code-scheduler.timer']);
+});
+
+test('a login item that could not be loaded is asked for again by the 30-second check until it is', { timeout: 30000 }, async t => {
+  const p = setup(t), calls = []; let failures = 2;
+  const loginItem = { install: () => { calls.push('install'); if (failures-- > 0) throw new Error('Another ELU command holds this lock.'); return { installed: true }; }, uninstall: () => { calls.push('uninstall'); return { removed: true }; } };
+  let check = null; const every = globalThis.setInterval;
+  t.mock.method(globalThis, 'setInterval', (run, ms, ...rest) => { if (ms === 30000) check = run; return every(run, ms, ...rest); });
+  saveSchedule({ root: p.root, goal: 'Check dependencies for updates', when: parseWhen('every 1h') });
+  await view(t, { repo: p.repo, loginItem });
+  await until(() => calls.length === 1 && check, 'the start asks for the login item'); assert.deepEqual(calls, ['install']);
+  // The start's ask failed, and so does the next: each check asks again. Once it is there, nothing more is asked.
+  check(); assert.deepEqual(calls, ['install', 'install']);
+  check(); assert.deepEqual(calls, ['install', 'install', 'install']);
+  check(); check(); assert.deepEqual(calls, ['install', 'install', 'install'], 'loaded now, and nothing moved');
+});
+
+test('a schedule saved while its login item cannot be loaded says so where it can be read, at 80 columns too', { timeout: 30000 }, async t => {
+  const p = setup(t), why = 'systemctl could not load the scheduler: Failed to connect to bus: No medium found';
+  const loginItem = { install: () => { throw new Error(why); }, uninstall: () => ({ removed: false }) };
+  const v = await view(t, { repo: p.repo, loginItem }), status = () => v.current.panels.status.getText().replace(/\s+/g, ' ');
+  // The message line holds two rows. What keeps the schedule from running while ELU is closed is said right after when it runs.
+  await send(v, '/schedule in 5m check the build'); await until(() => /Scheduled once/.test(status()), 'saved');
+  assert.equal(v.current.screen.width, 80); assert.match(status(), /^› Scheduled once \w{3} \w{3} \d+ \d+:\d\d\. It runs only while ELU is open: systemctl could/);
+  await wide(v); await send(v, '/schedule in 6m check the tests'); await until(() => /Scheduled once/.test(status()) && listSchedules().length === 2, 'saved wide');
+  assert.match(status(), new RegExp(`^› Scheduled once \\w{3} \\w{3} \\d+ \\d+:\\d\\d\\. It runs only while ELU is open: ${why}$`), 'the whole reason, with nothing after it');
+});
+
 test("a schedule taken off a bot on its page takes the login item with it at once, and one given back there brings it back", { timeout: 30000 }, async t => {
   const p = setup(t), calls = [];
   const loginItem = { install: () => { calls.push('install'); return { installed: true }; }, uninstall: () => { calls.push('uninstall'); return { removed: true }; } };

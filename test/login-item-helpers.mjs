@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { installScheduler, uninstallScheduler, schedulerFiles } from '../lib/schedules.mjs';
@@ -25,8 +26,8 @@ export function standIn(t, platform = 'darwin', { config = null } = {}) {
     const result = spawnSync(name, args, { encoding: 'utf8', timeout: 15000, env: mine() });
     if (result.status !== 0 && !allowFailure) throw new Error(`${name} could not load the scheduler: ${(result.stderr || result.error?.message || '').trim()}`);
   };
-  // Started and not waited for, as the login item's own removal starts its bootout.
-  const detached = (name, args) => { spawn(name, args, { detached: true, stdio: 'ignore', env: mine() }).unref(); };
+  // In a process group of its own and waited for, as the login item's own removal runs its bootout.
+  const detached = (name, args) => { spawnSync(name, args, { detached: true, stdio: 'ignore', timeout: 15000, env: mine() }); };
   const options = { platform, home, env, run, detached };
   const read = (name, parse) => { try { return parse(fs.readFileSync(path.join(store, name), 'utf8')); } catch { return []; } };
   // One run of the login item, started the way launchd and systemd start it: in a process
@@ -36,16 +37,36 @@ export function standIn(t, platform = 'darwin', { config = null } = {}) {
   // ends it as launchd would. command: what the item's file names, or a script in its place.
   // Gives how it ended and what it printed. Only for a run that leaves no task schedule on:
   // nothing here keeps a Mac from starting its real caffeinate for one (lib/awake.mjs).
+  // When the run has ended, what it left running is dealt with as the system does. launchd
+  // ends the rest of the job's process group, unless the plist says AbandonProcessGroup.
+  // systemd ends every process the service started, whatever its group, unless the service
+  // file it last read says KillMode=process; those processes are found by a mark in their
+  // environment, which /proc shows on Linux only. left: the ones that still run.
+  const mark = crypto.randomUUID(), place = Object.fromEntries(['TZ', 'LANG', 'LC_ALL', 'COLUMNS'].filter(name => process.env[name]).map(name => [name, process.env[name]]));
+  // hold: while this file is there, the stand-ins a run calls wait before they act.
+  const hold = path.join(store, 'hold');
+  const jobEnv = () => ({ ...place, ...env, PATH: `${bin}${path.delimiter}${env.PATH}`, FAKE_LOGIN_ITEM_STORE: store, FAKE_LOGIN_ITEM_JOB: mark, FAKE_LOGIN_ITEM_HOLD: hold });
+  const left = () => (fs.existsSync('/proc') ? fs.readdirSync('/proc') : []).filter(name => /^\d+$/.test(name)).map(Number).filter(pid => { try { return fs.readFileSync(`/proc/${pid}/environ`, 'utf8').split('\0').includes(`FAKE_LOGIN_ITEM_JOB=${mark}`); } catch { return false; } });
+  const ended = group => {
+    if (platform === 'darwin') {
+      let plist = ''; try { plist = fs.readFileSync(schedulerFiles(options)[0], 'utf8'); } catch { /* Its file is gone. */ }
+      if (!/<key>AbandonProcessGroup<\/key>\s*<true\/>/.test(plist)) { try { process.kill(-group, 'SIGKILL'); } catch { /* Nothing is left of it. */ } }
+    } else if (!/^KillMode=process$/m.test(read('units.json', JSON.parse)[JOB.linux] ?? '')) {
+      for (const pid of left()) { try { process.kill(pid, 'SIGTERM'); } catch { /* It has ended. */ } }
+    }
+  };
   const job = command => new Promise((resolve, reject) => {
-    const place = Object.fromEntries(['TZ', 'LANG', 'LC_ALL', 'COLUMNS'].filter(name => process.env[name]).map(name => [name, process.env[name]]));
-    const child = spawn(command[0], command.slice(1), { detached: true, stdio: ['ignore', 'pipe', 'pipe'], env: { ...place, ...env, PATH: `${bin}${path.delimiter}${env.PATH}`, FAKE_LOGIN_ITEM_STORE: store } });
+    const child = spawn(command[0], command.slice(1), { detached: true, stdio: ['ignore', 'pipe', 'pipe'], env: jobEnv() });
     fs.writeFileSync(path.join(store, 'jobs.json'), JSON.stringify({ [JOB[platform]]: child.pid }));
     let stdout = '', stderr = ''; child.stdout.on('data', text => { stdout += text; }); child.stderr.on('data', text => { stderr += text; });
     child.once('error', reject);
+    child.once('exit', () => ended(child.pid));
     child.once('close', (status, signal) => { fs.rmSync(path.join(store, 'jobs.json'), { force: true }); resolve({ status, signal, stdout, stderr }); });
   });
   return {
-    home, env, run, detached, job, options,
+    home, env, run, detached, job, jobEnv, hold, left, options,
+    // The unit files as systemd last read them, by name.
+    units: () => { const held = read('units.json', JSON.parse); return Array.isArray(held) ? {} : held; },
     install: (more = {}) => installScheduler({ ...options, lasting: true, ...more }),
     uninstall: (more = {}) => uninstallScheduler({ ...options, ...more }),
     files: () => schedulerFiles(options).filter(target => fs.existsSync(target)),
