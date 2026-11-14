@@ -92,3 +92,18 @@ test('an approved Task names its session over the model\'s name, and never over 
   assert.equal(titleFromTask(repo, '4', 'Speed up the build'), true); assert.deepEqual(title('4'), ['Speed up the build', 'task']);
   assert.throws(() => titleFromTask(repo, '9', 'No such session'));
 });
+
+test("a session a schedule's run started keeps the schedule's wording: only the owner's name shows over it", t => {
+  const p = listedProject(t), repo = repository(p.root), title = id => { const task = readTask(repo, id); return [taskTitle(task), task.titleBy]; };
+  liveTask(p.root, { id: '2', goal: 'Review the unreviewed session findings\nand record a verdict', state: 'ready' }); saveTask(repo, { ...readTask(repo, '2'), scheduleId: 'schedule-0a1b2c3d' });
+  // Neither the model's name nor an approved Task's title shows on it, in the list or anywhere.
+  assert.equal(suggestTitle(repo, '2', 'Adjudicate unreviewed findings'), true); assert.equal(titleFromTask(repo, '2', 'Record verdicts'), true);
+  assert.deepEqual(title('2'), ['Review the unreviewed session findings', undefined]);
+  assert.equal(taskTitle(projectSnapshot(repo).tasks.find(task => task.id === '2')), 'Review the unreviewed session findings');
+  // The owner's name shows; taken away, the wording is back.
+  setTitle(repo, '2', 'Backlog review'); assert.deepEqual(title('2'), ['Backlog review', 'owner']);
+  setTitle(repo, '2', ''); assert.deepEqual(title('2'), ['Review the unreviewed session findings', undefined]);
+  // A session the owner started is named as before.
+  liveTask(p.root, { id: '3', goal: 'Review the unreviewed session findings', state: 'ready' }); assert.equal(suggestTitle(repo, '3', 'Adjudicate unreviewed findings'), true);
+  assert.deepEqual(title('3'), ['Adjudicate unreviewed findings', 'model']);
+});
