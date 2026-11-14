@@ -2247,6 +2247,31 @@ test('a thread whose answer or result continued the chat stays in Chats, marked 
   await until(() => peer.sent().some(row => row.type === 'discard' && row.id === 'answer:r1') && /Dismissed\./.test(status()), 'dismissed');
 });
 
+test('the Threads key bar offers c on an answer that waits, and not on a thread the session already continued with', { timeout: 30000 }, async t => {
+  const peer = fakePeer({ items: [
+    { id: 'answer:r1', kind: 'answer', continued: true, result: true, peer: SARA, name: 'sara', project: null, text: 'Coupon codes are uppercase now.', question: 'Make coupon codes uppercase.', at: ago(2), state: 'answered', threadId: 'th-2' },
+    { id: 'answer:r2', kind: 'answer', peer: SARA, name: 'sara', project: null, text: 'In src/cache.js.', question: 'Where is the cache?', at: ago(1), state: 'answered', threadId: 'th-3' },
+  ] });
+  const { v } = await teamView(t, { peer });
+  const [, threads] = v.panels.teamLists, keys = () => v.panels.keys.getText().trim(), status = () => v.panels.status.getText().trim();
+  await openRow(v, /@sara\s+direct/, '@sara');
+  await until(() => threads.items.some(item => /continued in your session/.test(plainItem(item))) && threads.items.some(item => /@sara answered · In src/.test(plainItem(item))), 'both threads');
+  // An answer that waits: c continues the chat with it, and the bar says so.
+  threads.focus(); selectRow(threads, /@sara answered · In src/);
+  await until(() => /^y accept\/send {2}n decline {2}c continue {2}enter read/.test(keys()), 'c on an answer that waits');
+  // The one the session already went on with: no c in the bar, and the rest stays.
+  selectRow(threads, /continued in your session/);
+  await until(() => /^y accept\/send {2}n decline {2}enter read/.test(keys()), 'no c on a continued thread');
+  assert.doesNotMatch(keys(), /continue/);
+  // The key still answers there, and says why it does nothing.
+  v.input.write('c'); await until(() => /Your session already continued with this result\./.test(status()), 'c on a continued thread');
+  assert.ok(!peer.sent().some(row => row.type === 'continue'));
+  // Back on the waiting answer the bar offers it again, and c continues with it.
+  selectRow(threads, /@sara answered · In src/);
+  await until(() => /^y accept\/send {2}n decline {2}c continue {2}enter read/.test(keys()), 'c again');
+  v.input.write('c'); await until(() => peer.sent().some(row => row.type === 'continue' && row.id === 'answer:r2'), 'c continues the waiting answer');
+});
+
 // --- Kanban: teammates' Tasks ---
 const teamTask = (extra = {}) => ({ repoId: 'e'.repeat(64), handle: 'web', id: 't-0a1b2c3d', revision: 2, title: 'Fix the login redirect', description: 'After sign-in the app returns to the home page.', goal: 'Sign-in returns to the page that asked for it.',
   objectives: ['The return address survives sign-in', 'A bad return address falls back to home'], priority: 'high', severity: 'critical', state: 'approved', startedBy: 'owner', who: 'Opus 5.5',
