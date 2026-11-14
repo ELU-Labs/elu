@@ -22,7 +22,7 @@ import { readBoard, sessionClosed, closeSession, setDone } from '../lib/kanban.m
 import { proposeTask, approveTask as approvePlan, reportProgress, finishTask, reopenTask, planFile } from '../lib/plan.mjs';
 import { clockTime } from '../lib/terminal-plan.mjs';
 import { columns } from '../lib/width.mjs';
-import { saveTask, readTask, taskDir, taskTitle, setTitle, lock } from '../lib/state.mjs';
+import { saveTask, readTask, taskDir, taskTitle, setTitle, lock, tasks } from '../lib/state.mjs';
 import { processIdentity, processRecord } from '../lib/process.mjs';
 import { activeLogin, listLogins } from '../lib/logins.mjs';
 import { detect } from '../lib/detect.mjs';
@@ -33,6 +33,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { approvalsDir, requestApproval, answerApproval } from '../lib/approvals.mjs';
 import { defaultMode } from '../lib/modes.mjs';
 import { listEntries, readStore } from '../lib/permission-rules.mjs';
+import { readProjectSettings } from '../lib/project-settings.mjs';
 import { shellSandboxLine } from '../lib/sandbox.mjs';
 import { listSchedules, saveSchedule, parseWhen } from '../lib/schedules.mjs';
 import { listBots, getBot, saveBot, removeBot, botVendors, botEfforts } from '../lib/bots.mjs';
@@ -4026,6 +4027,71 @@ test('c and /close archive a session: it leaves Sessions and the board, /archive
   const task = readTask(p.repo, '4'); saveTask(p.repo, { ...task, state: 'needs_input', runs: [...task.runs, { at: new Date(Date.now() + 1000).toISOString(), role: 'lead' }] });
   await until(() => rows(v).some(row => /Trim coupon codes/.test(row)), 'reopened by new activity');
   assert.ok(!rows(v).some(row => /Uppercase names/.test(row)), 'the other stays archived');
+});
+
+// The notes under a list dialog's rows, and its key line.
+const dialogNotes = (v, title) => modal(v, title)?.children.filter(child => child.type === 'text').map(child => child.getText().replace(/\n/g, ' ')).join(' ') ?? '';
+test('x cleans up archived sessions, one or all: Learn, then delete or Delete, Esc cancels, and work on no remote is kept or deleted when asked', async t => {
+  const p = setup(t, 'answer', { learned: { add: ['Use pnpm, not npm.'], remove: [] } }); registerProject(p.repo);
+  for (const [id, goal] of [['4', 'Trim coupon codes'], ['5', 'Uppercase names'], ['6', 'Round totals'], ['7', 'Keep me']]) liveTask(p.root, { id, goal, state: 'stopped' });
+  for (const id of ['4', '5', '6']) closeSession(p.repo, id);
+  const branches = () => git(p.root, ['branch', '--list', '--format=%(refname:short)']).split('\n').filter(Boolean).sort();
+  const v = await view(t, { repo: p.repo }), panels = v.current.panels;
+  v.output.columns = 140; v.output.rows = 50; v.output.emit('resize'); await send(v, '/sessions');
+  await send(v, '/archived'); await until(() => v.current.screen.width === 140 && rows(v).some(row => /ARCHIVED 3 /.test(row)), 'archived sessions listed');
+  // x on an archived row: one question, two answers, and how many go for good, said once.
+  await selectRow(v, /Trim coupon codes/); await until(() => /x clean up/.test(panels.keys.getText()), 'x clean up in the key bar');
+  v.input.write('x'); await until(() => modal(v, 'Clean up'), 'the clean-up question');
+  assert.deepEqual(dialogRows(v, 'Clean up').map(row => row.trim()), ['Learn, then delete', 'Delete']);
+  assert.match(dialogNotes(v, 'Clean up'), /Deletes "Trim coupon codes" for good\. Learn first saves what you taught in it to the project context\./);
+  // Esc cancels: nothing goes.
+  v.input.write('\x1b'); await until(() => !modal(v, 'Clean up'), 'closed');
+  assert.equal(fs.existsSync(taskDir(p.repo, '4')), true);
+  // Delete: its file not committed is named, and Delete it too takes it with the folder and the branch.
+  await selectRow(v, /Trim coupon codes/); v.input.write('x'); await until(() => modal(v, 'Clean up'), 'asked again');
+  dialogList(v, 'Clean up').select(1); v.input.write('\r');
+  await until(() => modal(v, 'Work not pushed'), 'the question about work on no remote');
+  assert.deepEqual(dialogRows(v, 'Work not pushed').map(row => row.trim()), ['Keep it', 'Delete it too']);
+  assert.match(dialogNotes(v, 'Work not pushed'), /It has 1 file not committed\./);
+  dialogList(v, 'Work not pushed').select(1); v.input.write('\r');
+  await until(() => !rows(v).some(row => /Trim coupon codes/.test(row)) && rows(v).some(row => /ARCHIVED 2 /.test(row)), 'the row is gone');
+  assert.match(panels.status.getText(), /Deleted "Trim coupon codes"\./);
+  assert.equal(fs.existsSync(taskDir(p.repo, '4')), false); assert.equal(fs.existsSync(path.join(p.repo.worktrees, '4')), false);
+  assert.ok(!branches().includes('feat/task-4'));
+  assert.deepEqual(readBoard(p.repo).archived.sort(), ['5', '6']);
+  // The Archived heading takes the cursor, and its x cleans up every archived session.
+  await selectRow(v, /ARCHIVED 2/); await until(() => /x clean up all/.test(panels.keys.getText()) && /▌ARCHIVED 2/.test(cursor(v)), 'x clean up all on the heading');
+  v.input.write('x'); await until(() => modal(v, 'Clean up'), 'the clean-up question for all');
+  assert.match(dialogNotes(v, 'Clean up'), /Deletes 2 archived sessions for good\. Learn first saves what you taught in them/);
+  v.input.write('\x1b'); await until(() => !modal(v, 'Clean up'), 'closed');
+  // /archived clean: Learn, then delete. Their work is kept on their branches when asked.
+  await send(v, '/archived clean'); await until(() => modal(v, 'Clean up'), 'asked from /archived clean');
+  v.input.write('\r'); await until(() => modal(v, 'Work not pushed'), 'their work on no remote');
+  assert.match(dialogNotes(v, 'Work not pushed'), /2 of them have 2 files not committed\./);
+  v.input.write('\r');
+  await until(() => modal(v, 'Saved to the project context'), 'what was saved', 15000);
+  assert.deepEqual(dialogRows(v, 'Saved to the project context').map(row => row.trim()), ['Use pnpm, not npm.']);
+  assert.match(dialogNotes(v, 'Saved to the project context'), /Deleted 2 sessions\. Kept the work of 2 on their branches\./);
+  assert.match(readProjectSettings(p.root).context, /Use pnpm, not npm\./);
+  assert.deepEqual(tasks(p.repo).map(task => task.id), ['7']);
+  assert.deepEqual(branches(), ['feat/task-5', 'feat/task-6', 'feat/task-7', 'main']);
+  v.input.write('\r'); await until(() => !modal(v, 'Saved to the project context') && !rows(v).some(row => /ARCHIVED|Uppercase names|Round totals/.test(row)), 'nothing archived is left');
+  assert.ok(rows(v).some(row => /Keep me/.test(row)));
+});
+
+test('Learn, then delete deletes nothing when the lessons run does not work, and one line says why', async t => {
+  const p = setup(t, 'invalid'); registerProject(p.repo);
+  liveTask(p.root, { id: '4', goal: 'Trim coupon codes', state: 'stopped' }); git(path.join(p.repo.worktrees, '4'), ['add', '.']); git(path.join(p.repo.worktrees, '4'), ['commit', '-qm', 'Trim']); git(p.root, ['merge', '-q', '--ff-only', 'feat/task-4']);
+  closeSession(p.repo, '4');
+  const v = await view(t, { repo: p.repo }), panels = v.current.panels;
+  await send(v, '/sessions'); await send(v, '/archived clean'); await until(() => modal(v, 'Clean up'), 'the clean-up question');
+  v.input.write('\r');
+  await until(() => /^› Reading "Trim coupon codes" for what you taught\. Esc stops\.$/.test(panels.status.getText().trim()), 'reading it');
+  await until(() => !/^› Reading/.test(panels.status.getText().trim()), 'the run ends', 20000);
+  assert.match(panels.status.getText().trim(), /^› Nothing was deleted: \S/);
+  assert.equal(panels.status.getText().trim().split('\n').length, 1);
+  assert.equal(fs.existsSync(taskDir(p.repo, '4')), true); assert.equal(fs.existsSync(path.join(p.repo.worktrees, '4')), true);
+  assert.deepEqual(readBoard(p.repo).archived, ['4']);
 });
 
 test('a running session is never closed, and closing records when', t => {
