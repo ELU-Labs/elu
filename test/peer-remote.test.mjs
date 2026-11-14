@@ -1604,7 +1604,7 @@ test("a schedule's run that waits for a free slot on my other computer shows her
   const saved = goal => withHome(devbox.home, () => pendingRequests(project.root).find(row => row.goal.startsWith(goal)));
   const list = async () => { withHome(devbox.home, () => relist()); withHome(laptop.home, () => remoteConnected(viewCtx, toViewer)); await withHome(laptop.home, () => listTick(viewCtx)); };
   // Two schedules came due there while another session had its one slot.
-  withHome(devbox.home, () => { enqueue(project.root, 'Check the nightly build', { priority: 1, scheduleId: 'schedule-1' }); enqueue(project.root, 'Weekly cleanup', { priority: 1, scheduleId: 'schedule-2' }); });
+  withHome(devbox.home, () => { enqueue(project.root, 'Check the nightly build', { priority: 1, scheduleId: 'schedule-0000000c' }); enqueue(project.root, 'Weekly cleanup', { priority: 1, scheduleId: 'schedule-0000000d' }); });
   assert.deepEqual(pass(), []);
   await list();
   const listed = withHome(laptop.home, () => remoteMachines())[0], item = listed.sessions.find(row => row.title === 'Check the nightly build');
@@ -1625,7 +1625,7 @@ test("a schedule's run that waits for a free slot on my other computer shows her
   // He types to it here: it goes with the schedule's message there, which it never replaces, and starts now.
   assert.equal(await withHome(laptop.home, () => glue.send(row('Check the nightly build'), 'Also check the docs build')), 'Added to its message. It starts now on @devbox.');
   assert.equal(saved('Check the nightly build').goal, 'Check the nightly build\n\nAlso check the docs build');
-  assert.equal(saved('Check the nightly build').scheduleId, 'schedule-1'); assert.equal(saved('Check the nightly build').typed, true);
+  assert.equal(saved('Check the nightly build').scheduleId, 'schedule-0000000c'); assert.equal(saved('Check the nightly build').typed, true);
   assert.deepEqual(pass(), ['Check the nightly build\n\nAlso check the docs build']);
   // The session it started is the one followed here: one row, by the same id.
   const followed = commands.find(command => command.type === 'remoteSend');

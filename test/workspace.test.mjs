@@ -110,12 +110,12 @@ test('a message is added to a request only while that request still waits to sta
 // a slot or a later time, as his key does (ownerTyped). A message added for him by ELU does not.
 test("a message the owner typed into a waiting run makes it his, so it starts now; the run keeps its own message first", t => {
   const f = fixture(t), later = new Date(Date.now() + 3600000).toISOString();
-  const run = saveRequest(f.root, 'Check the nightly build', null, { state: 'queued', scheduleId: 'schedule-1', attempts: 0, notBefore: later, waits: { on: 'slot', running: 1, limit: 1 }, reason: 'Waiting for a free slot: 1 of 1 session is running. /slots changes it.' });
+  const run = saveRequest(f.root, 'Check the nightly build', null, { state: 'queued', scheduleId: 'schedule-0000000e', attempts: 0, notBefore: later, waits: { on: 'slot', running: 1, limit: 1 }, reason: 'Waiting for a free slot: 1 of 1 session is running. /slots changes it.' });
   assert.equal(ownerTyped(run), false);
   const quiet = addToRequest(f.root, run.id, 'From a tool');
   assert.deepEqual([quiet.typed, quiet.notBefore, quiet.waits], [undefined, later, { on: 'slot', running: 1, limit: 1 }]);
   const joined = addToRequest(f.root, run.id, 'Also check the docs build', { typed: true });
-  assert.equal(joined.goal, 'Check the nightly build\n\nFrom a tool\n\nAlso check the docs build'); assert.equal(joined.scheduleId, 'schedule-1');
+  assert.equal(joined.goal, 'Check the nightly build\n\nFrom a tool\n\nAlso check the docs build'); assert.equal(joined.scheduleId, 'schedule-0000000e');
   const kept = pendingRequests(f.root)[0];
   assert.deepEqual([kept.typed, kept.notBefore, kept.waits, kept.reason], [true, null, undefined, 'Waiting to start.']);
   assert.equal(ownerTyped(kept), true);
