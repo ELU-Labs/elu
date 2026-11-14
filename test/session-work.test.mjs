@@ -220,6 +220,22 @@ test('a session in here mode, in the owner\'s own folder, counts what was commit
   assert.deepEqual(names(moved), ['side.txt', 'src/coupon.mjs']);
 });
 
+test('a session in your own folder that pulls newer work under its own commit is compared with main, by that name', t => {
+  const { root, repo, land } = scene(t);
+  saveTask(repo, { id: '2', goal: 'Work here', state: 'ready', worktree: root, branch: null, base: git(root, ['rev-parse', 'HEAD']), createdAt: new Date().toISOString(), runs: [], reviews: [], messages: [], sessions: {}, permissions: 'full', place: { kind: 'here' } });
+  commit(root, { 'src/coupon.mjs': 'export const normalize = (value) => value.trim();\n' }, 'Trim coupons');
+  // Other people land work. The session pulls it under its own commit, and another branch holds the same newer main.
+  land({ 'landed/a.txt': 'a\n'.repeat(30) }, 'Land a file');
+  git(root, ['pull', '-q', '--rebase', 'origin', 'main']); git(root, ['branch', 'feat/other', 'origin/main']);
+  write(root, { 'docs/here.md': 'edited here\n' });
+  const changes = taskPatch(repo, '2');
+  assert.deepEqual(names(changes), ['src/coupon.mjs', 'docs/here.md']);
+  assert.deepEqual(parts(changes), [['main', true, 2, 2, 1, BRANCHED]]);
+  // Pushed, main on the remote is the session's own commit too: the words stay.
+  git(root, ['push', '-q', 'origin', 'main']);
+  assert.deepEqual(parts(taskPatch(repo, '2')), [['main', true, 2, 2, 1, BRANCHED]]);
+});
+
 test('what the owner committed in his own folder in the very second the session started there is not the session\'s', t => {
   const { root, repo } = scene(t);
   // The folder's first commit, its push and this commit are all that second's work: Git's record of the folder keeps whole seconds.
