@@ -270,8 +270,10 @@ test('in Full access ~ is a mirror of the owner\'s home with the workspace\'s ow
   agy.settleHome({ mode: 'ask', cwd: ws, home: owner }); assert.equal(fs.existsSync(path.join(owner, '.made-in-run')), false, 'only a Full access run has a mirror to settle');
   agy.settleHome({ mode: 'full', cwd: ws, home: owner }); assert.equal(fs.readFileSync(path.join(owner, '.made-in-run'), 'utf8'), 'made\n'); assert.ok(fs.lstatSync(path.join(mirror, '.made-in-run')).isSymbolicLink());
   assert.equal(agy.fullHome({ cwd: ws, home: owner }), mirror);
-  // Read only and Ask for approval: the private HOME, holding ELU's .gemini and nothing else.
-  for (const mode of ['locked', 'ask']) { await go(mode); assert.equal(fake.last().home, base, mode); assert.deepEqual(fs.readdirSync(base), ['.gemini'], mode); assert.equal(agy.childEnv({ mode, cwd: ws, home: owner }).HOME, base, mode); }
+  // Read only and Ask for approval: the private HOME, holding ELU's .gemini and nothing else
+  // (on a Mac whose owner has a keychain, also the one link to it: shareKeychain).
+  const held = () => fs.readdirSync(base).filter(name => !(name === 'Library' && fs.readdirSync(path.join(base, 'Library')).join() === 'Keychains'));
+  for (const mode of ['locked', 'ask']) { await go(mode); assert.equal(fake.last().home, base, mode); assert.deepEqual(held(), ['.gemini'], mode); assert.equal(agy.childEnv({ mode, cwd: ws, home: owner }).HOME, base, mode); }
   assert.equal(agy.childEnv({ mode: 'auto', cwd: ws, home: owner }).HOME, base); assert.equal(agy.interactive({ session: crypto.randomUUID(), cwd: ws }).env.HOME, base);
   assert.deepEqual(his(), before, 'his own ~/.gemini and ~/.claude were never written');
 });
