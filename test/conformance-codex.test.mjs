@@ -15,6 +15,18 @@ const lead = () => ({ ...defaultConfig().roles.lead, vendor: 'codex', maxCostUsd
 const reviewer = () => readRole('codex');
 const setting = (args, key) => { const row = args.find(a => a.startsWith(`${key}=`)); return row?.slice(key.length + 1); };
 const profileOf = args => setting(args, 'permissions.elu_ask');
+// The profile's filesystem table, read strictly: every entry a quoted key and one access, and
+// no key twice. TOML refuses a table that names a key twice, and Codex then runs no command.
+const filesystemOf = profile => {
+  let rest = profile.match(/filesystem=\{(.*)\}\}$/)?.[1]; assert.ok(rest != null, profile);
+  const entries = new Map();
+  while (rest) {
+    const entry = rest.match(/^("(?:[^"\\]|\\.)*")="(deny|read|write)"(?:, (?=")|$)/); assert.ok(entry, `not a "path"="access" entry: ${rest}`);
+    const key = JSON.parse(entry[1]); assert.equal(entries.has(key), false, `${key} is named twice: ${profile}`);
+    entries.set(key, entry[2]); rest = rest.slice(entry[0].length);
+  }
+  return entries;
+};
 const assertIsolated = (args) => {
   for (const expected of ['--ignore-user-config', '--ignore-rules', '--json', 'mcp_servers={}', 'features.hooks=false', 'features.apps=false', 'features.multi_agent=false', 'features.browser_use=false', 'features.plugins=false', 'tools.experimental_request_user_input.enabled=false', 'tools.update_plan.enabled=false', 'skills.bundled.enabled=false']) assert.ok(args.includes(expected), expected);
   assert.equal(args.some((a) => /dangerously|bypass|--yolo|--approve-for-me/.test(a)), false, 'no bypass flag');
@@ -110,6 +122,7 @@ test('argv per mode: ask and auto run the elu_ask profile with a sandboxed shell
   assert.equal(setting(codex({ mode: 'full', role: lead(), cwd, schemaFile, place: { kind: 'here' } }), 'sandbox_mode'), '"danger-full-access"');
   assert.equal(profileOf(codex({ role: reviewer(), cwd, schemaFile })), undefined); assert.equal(codex({ role: reviewer(), cwd, schemaFile }).includes('allow_login_shell=false'), false, 'a reviewer runs no command');
   for (const args of [ask, auto]) assert.ok(profileOf(args).includes(`${JSON.stringify(shimsBase())}="read"`), 'the stand-in commands stay read-only wherever a named folder reaches');
+  for (const args of [ask, auto, answer]) filesystemOf(profileOf(args));
 });
 
 test('resume keeps the -c set and drops the flags exec resume lacks', (t) => {
@@ -122,6 +135,27 @@ test('resume keeps the -c set and drops the flags exec resume lacks', (t) => {
     const configs = args => args.filter((a, i) => args[i - 1] === '-c');
     assert.deepEqual(configs(resumed), configs(fresh), `${mode}: the same -c set`);
     assert.deepEqual(resumed.filter(a => a.startsWith('--')), fresh.filter(a => a.startsWith('--')).filter(a => a !== '--cd'), mode);
+  }
+});
+
+test('a path named twice gets one entry in the Codex profile: deny over read over write, and the hand-off folder stays writable unless it is denied', (t) => {
+  const cwd = temp(t), schemaFile = path.join(cwd, 'schema.json'), folder = temp(t), common = path.join(cwd, '.git');
+  const own = path.join(temp(t), 'elu-code-own-x', 'requests'); fs.mkdirSync(own, { recursive: true });
+  // The hand-off folder under each name the system temp folder has (a link on macOS).
+  const ownNames = [...new Set([own, path.join(path.resolve(os.tmpdir()), path.relative(fs.realpathSync(os.tmpdir()), own))])];
+  const denied = personalDirectory(), shims = shimsBase();
+  const answer = { ...lead(), access: 'read', writablePaths: [] };
+  for (const mode of ['ask', 'auto']) for (const role of [lead(), answer]) {
+    const at = `${mode} ${role.access}`;
+    const entries = filesystemOf(profileOf(codex({ mode, role, cwd, schemaFile, commonDir: common, handoff: own,
+      folders: [folder, folder, `${folder}/`, shims, denied, ...ownNames],
+      protectedPaths: ['package.json', './package.json', path.join(cwd, 'package.json'), folder, shims, denied, ...ownNames] })));
+    assert.equal(entries.get(folder), 'read', at); assert.equal(entries.get(path.join(cwd, 'package.json')), 'read', at); assert.equal(entries.get(shims), 'read', at);
+    assert.equal(entries.get(denied), 'deny', `${at}: nothing weakens a deny`);
+    for (const name of ownNames) assert.equal(entries.get(name), 'write', `${at}: the hand-off folder stays writable`);
+    // A hand-off folder that is denied stays denied.
+    const closed = filesystemOf(profileOf(codex({ mode, role, cwd, schemaFile, commonDir: common, handoff: denied, folders: [denied] })));
+    assert.equal(closed.get(denied), 'deny', at);
   }
 });
 
