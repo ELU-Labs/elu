@@ -64,11 +64,11 @@ Enabling it is your decision; the risk is your account, and ELU cannot reduce it
 
 The check proves, on this machine and for the exact binary and release found, that the
 enforcement designed from Google's documentation holds. ELU starts it by itself
-before your first message to Antigravity goes out, whether you wrote to a session on it or
-to a bot on it. The session says so first, then shows each step as it ends, and then your
-message goes on. The check takes about seven short turns on Antigravity and a few minutes.
-Only a message you just sent, or `c` in the Usage tab, starts it: a scheduled turn, a shadow
-turn or a review never does. It runs in a throwaway repository with a planted file outside it, a local web
+before the first turn on Antigravity goes out, whether you wrote to a session on it or
+to a bot on it, or the turn started without you: a scheduled turn, a shadow turn, a review,
+a standup or a Task's work. The session says so first, then shows each step as it ends, and
+then the turn goes on. The check takes about seven short turns on Antigravity and a few
+minutes. `c` in the Usage tab starts it too. It runs in a throwaway repository with a planted file outside it, a local web
 listener and a marker command:
 
 | Step | Proves |
@@ -82,12 +82,12 @@ listener and a marker command:
 | `relay` (optional) | over `agy acp`, a write outside the workspace arrives as a permission request, and a denial writes nothing |
 
 The result is saved under your ELU state. A different binary path or release has to
-pass again, on your next message to it; until it does, no run starts, and a turn you did
-not send yourself says
-`Antigravity CLI has not been checked on this machine yet. Your first message to it runs the check.`
+pass again, before the next turn on it; until it does, no run starts.
 If a required step is not proven, Read only, Ask and Auto are off for Antigravity here, and
 the session says which step and why. Full access is never turned off by the check: it runs
-Antigravity as it is, and says the result once. Your next message runs the check again only
+Antigravity as it is, and says the result once, also when you switch such a session to Full
+access. In a Full access session a bot that only answers, a shadow and a review run on it
+too. Your next message runs the check again only
 when that can change the result; a step that failed because Antigravity did what the step
 forbids stays failed until `c` in the Usage tab checks again. When `relay` fails,
 Ask and Auto still run: blocked actions are denied and reported instead of asked live, and
