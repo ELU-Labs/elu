@@ -258,32 +258,34 @@ test("a schedule's new run archives its earlier runs, each once, and leaves the 
   liveTask(p.root, { id: '5', goal: 'Check the nightly build', state: 'ready' }); saveTask(repo, { ...readTask(repo, '5'), scheduleId: row.id });
   run(repo, 6, mine); const typed = enqueue(p.root, 'And the docs build', { continuationTaskId: '6' });
   run(repo, 7, { ...mine, state: 'blocked', error: { message: 'Claude Code could not finish.' } });
+  // A run whose Task's work stopped before it was done: nothing of it waits to be pushed.
+  liveTask(p.root, { id: '8', goal: 'Check the nightly build', state: 'blocked' }); saveTask(repo, { ...readTask(repo, '8'), scheduleId: row.id, error: { message: 'Claude Code could not finish.' } });
   // Another schedule with the same words, and the owner's own session with them.
-  run(repo, 8, { scheduleId: twin.id }); run(repo, 9);
+  run(repo, 9, { scheduleId: twin.id }); run(repo, 10);
   assert.equal(runScheduleNow(row.id, new Date(), { start }), true, 'r on its row counts as a run');
   // Answered and failed runs are archived as c archives them; what asks him, works, waits for his yes, holds edits not pushed or has a message waiting stays.
-  assert.deepEqual(archivedNow(repo), ['1', '7']);
-  assert.deepEqual(readBoard(repo).archived.sort(), ['1', '7']);
+  assert.deepEqual(archivedNow(repo), ['1', '7', '8']);
+  assert.deepEqual(readBoard(repo).archived.sort(), ['1', '7', '8']);
   let saved = listSchedules().find(value => value.id === row.id);
-  assert.deepEqual([saved.archivedThrough, saved.keptRuns], ['7', ['2', '3', '4', '5', '6']]);
-  // The run it queued names the schedule; the conductor makes its session (10) with it.
+  assert.deepEqual([saved.archivedThrough, saved.keptRuns], ['8', ['2', '3', '4', '5', '6']]);
+  // The run it queued names the schedule; the conductor makes its session (11) with it.
   const queued = pendingRequests(p.root).find(value => value.scheduleId === row.id);
   assert.equal(queued.goal, 'Check the nightly build'); assert.equal('title' in queued, false, 'no name of the owner to take');
-  run(repo, 10, mine); updateRequest(p.root, queued.id, { state: 'done', taskId: '10' });
+  run(repo, 11, mine); updateRequest(p.root, queued.id, { state: 'done', taskId: '11' });
   // By the next run they no longer need him: answered, the Task rejected, the edits pushed, his message ran.
   saveTask(repo, { ...readTask(repo, '2'), state: 'answered' }); saveTask(repo, { ...readTask(repo, '3'), state: 'answered' }); rejectTask(repo, '4');
   saveTask(repo, { ...readTask(repo, '5'), pr: 'https://github.com/acme/shop/pull/5' }); updateRequest(p.root, typed.id, { state: 'done', taskId: '6' });
   // He brought run 1 back with u, and run 7 with a new message.
   reopenSession(repo, '1'); saveTask(repo, { ...readTask(repo, '7'), messages: [{ at: new Date(Date.now() + 1000).toISOString(), text: 'Why did it fail?' }] });
   assert.equal(runScheduleNow(row.id, new Date(), { start }), true);
-  assert.deepEqual(archivedNow(repo), ['2', '3', '4', '5', '6', '10'], 'each run is archived once: the ones he brought back stay');
+  assert.deepEqual(archivedNow(repo), ['2', '3', '4', '5', '6', '8', '11'], 'each run is archived once: the ones he brought back stay');
   saved = listSchedules().find(value => value.id === row.id);
-  assert.deepEqual([saved.archivedThrough, saved.keptRuns], ['10', undefined]);
+  assert.deepEqual([saved.archivedThrough, saved.keptRuns], ['11', undefined]);
   // A deleted schedule leaves its runs as they are; the other schedule archives only its own.
   for (const value of pendingRequests(p.root)) updateRequest(p.root, value.id, { state: 'done' });
   removeSchedule(row.id); assert.equal(runScheduleNow(twin.id, new Date(), { start }), true);
-  assert.deepEqual(archivedNow(repo), ['2', '3', '4', '5', '6', '8', '10']);
-  assert.equal(projectSnapshot(repo).closed.includes('9'), false, "the owner's own session with the same words stays");
+  assert.deepEqual(archivedNow(repo), ['2', '3', '4', '5', '6', '8', '9', '11']);
+  assert.equal(projectSnapshot(repo).closed.includes('10'), false, "the owner's own session with the same words stays");
 });
 
 test('of the runs an earlier version started, only the one the schedule kept the number of is archived; none is guessed from its words', t => {
