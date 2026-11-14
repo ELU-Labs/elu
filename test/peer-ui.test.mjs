@@ -1248,11 +1248,15 @@ test('the Team list says how a teammate is reached in the room its row has: thro
   assert.equal(row(blocked, 78), '○ @sara          offline · no computer on the team reaches you both');
   assert.equal(row(blocked, 60), '○ @sara offline · no computer on the team reaches you both');
   assert.equal(row(blocked, 50), '○ @sara offline · no computer reaches you both');
+  assert.equal(row(blocked, 42), '○ @sara offline · nobody reaches you both');
   assert.equal(row(blocked, 40), '○ @sara offline · no way through');
   assert.equal(row({ online: false }, 40), '○ @sara          offline', 'a teammate whose computer is off is only that');
   // What else the row carries keeps its place.
-  assert.match(row(through, 40, { trusted: [SARA] }), /^● @sara online · through/); assert.ok(row(through, 40, { trusted: [SARA] }).length <= 40, 'cut to the row, still online');
+  assert.equal(row(through, 40, { trusted: [SARA] }), "● @sara through li's computer · trusted", 'too narrow for both: the dot says online');
+  assert.equal(row({ ...through, via: "kim's computer" }, 38), "● @sara through kim's computer");
+  assert.match(row(through, 28), /^● @sara online · through/); assert.ok(row(through, 28).length <= 28, 'cut to the row, still online');
   assert.equal(row(blocked, 44, { trusted: [SARA] }), '○ @sara offline · no way through · trusted');
+  assert.equal(row(blocked, 51, { trusted: [SARA] }), '○ @sara offline · nobody reaches you both · trusted');
 });
 
 test('quitting ELU while /join is still looking ends that join first, as Esc does, and saves nothing', async t => {

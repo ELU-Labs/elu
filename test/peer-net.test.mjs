@@ -2578,6 +2578,8 @@ test('a join goes through a teammate of the inviter when the two cannot connect 
   const kept = await until(() => { const mine = withHome(ana.home, () => savedRoutes())[saraKey]?.mine ?? []; return mine.length ? mine : null; }, 'ana keeps a relay for sara');
   assert.deepEqual(kept.map(entry => entry.helper), [li.identity.key]);
   await until(() => withHome(sara, () => savedRoutes())[ana.identity.key]?.theirs.includes(kept[0].relay), 'sara was told the relay');
+  // The connection still runs on the relay the invite gave: each names the computer that runs it.
+  await until(() => memberOf(ana.home, crew.teamId, saraKey).via === 'li\'s computer' && memberOf(sara, crew.teamId, ana.identity.key).via === 'li\'s computer', 'both name the computer that carries them');
   await shutOut(t, bootstrap, kept[0].relay);
   await s.stop();
   await until(() => !online(ana.home, saraKey), 'sara offline at ana');
@@ -2762,7 +2764,10 @@ test('how a teammate is reached reads the same in the roster and in elu peers: d
   // A row with less room says why in fewer words, and never only that they are offline.
   assert.equal(reachText({ online: false, reach: 'blocked' }, { fit: 50 }), 'offline · no computer on the team reaches you both');
   assert.equal(reachText({ online: false, reach: 'blocked' }, { fit: 49 }), 'offline · no computer reaches you both');
-  assert.equal(reachText({ online: false, reach: 'blocked' }, { fit: 30 }), 'offline · no way through');
+  assert.equal(reachText({ online: false, reach: 'blocked' }, { fit: 36 }), 'offline · nobody reaches you both');
+  assert.equal(reachText({ online: true, path: 'relayed', via: 'kim\'s computer' }, { fit: 30 }), 'through kim\'s computer');
+  assert.equal(reachText({ online: true, path: 'relayed', via: 'kim\'s computer' }, { fit: 31 }), 'online · through kim\'s computer');
+  assert.equal(reachText({ online: false, reach: 'blocked' }, { fit: 31 }), 'offline · no way through');
   assert.equal(reachText({ online: false, reach: 'blocked' }, { fit: 5 }), 'offline · no way through');
   assert.equal(reachText({ online: false }, { fit: 5 }), 'offline');
   // Whole, for the window that shows one teammate.
