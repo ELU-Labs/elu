@@ -277,3 +277,21 @@ for (const [columns, rows] of [[140, 50], [80, 24]]) for (const [name, scene] of
   const screen = onScreen(v), end = rowsOf(said).at(-1).trim().split(/\s+/).at(-1); assert.ok(screen.box >= screen.under && screen.box - screen.under <= 1, 'the message box is under the pane, after the status row at most');
   assert.ok(screen.shown.at(-1).trim().endsWith(end), `the pane on the screen does not end with the end of the chat ("${end}"):\n${screen.rows.join('\n')}`);
 });
+
+// An entry from the other computer that says no time: an ELU there up to 0.1.19 sent a bot's
+// review with none, and the pane drew it above the first message. It goes after the entry it
+// came after, and a Task proposed before it is still drawn above it.
+test('an entry from the other computer that says no time is drawn after the entry it came after, never above the first message', () => {
+  const app = glue(), review = { role: '@reviewer · review 1', at: null, text: 'Looks right.', bot: 'reviewer' };
+  const said = entries => app.parts(partRow({ state: 'answered', entries }), 96).map(part => part.text).join('\n\n');
+  const you = [{ role: 'You', at: ago(10), text: 'Fix the report' }, { role: 'Claude', lead: true, at: ago(9), text: 'I looked at it.' }];
+  inOrder(said([...you, review, { role: 'You', at: ago(5), text: 'Go on' }]), ['Runs on @my-box', 'Fix the report', 'I looked at it.', 'Looks right.', 'Go on']);
+  // Sent first, it is still under the first message.
+  inOrder(said([review, ...you]), ['Runs on @my-box', 'Fix the report', 'Looks right.', 'I looked at it.']);
+  // Sent last, it is last, and a Task proposed before it stays above it.
+  const parts = app.parts(partRow({ state: 'answered', plan: approved(ago(9.5)), entries: [...you, review] }), 96);
+  assert.deepEqual(parts.map(part => part.key.split('\0')[0]), ['runs', 'entry', 'task', 'entry', 'entry']); assert.match(parts.at(-1).text, /Looks right\.$/);
+  const at = seconds => new Date(Date.UTC(2026, 10, 13, 9, 0, seconds)).toISOString();
+  assert.equal(taskPlace([{ at: at(0) }, { at: at(10) }, { at: at(20) }, { at: null }], { by: 'lead', proposedAt: at(15) }), 2);
+  assert.equal(taskPlace([{ at: at(0) }, { at: at(10) }, { at: null }, { at: at(20) }], { by: 'lead', proposedAt: at(15) }), 3);
+});
