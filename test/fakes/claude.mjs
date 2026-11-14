@@ -37,26 +37,71 @@ if(args[0]==='mcp'){
   if(!servers?.[name]){console.error(`No MCP server named "${name}" in ${scope} scope`);process.exit(1);}
   delete servers[name];save();console.log(`Removed MCP server ${name} from ${scope} config`);process.exit(0);
  }
- console.error('The fake knows mcp add-json and mcp remove only.');process.exit(1);
+ // claude mcp list: the user-scope servers of that .claude.json, then the folder's local ones, by name and target.
+ if(words[0]==='list'){
+  const rows=Object.entries({...data.mcpServers,...data.projects?.[process.cwd()]?.mcpServers});
+  if(!rows.length){console.log('No MCP servers configured. Use `claude mcp add` to add a server.');process.exit(0);}
+  console.log('Checking MCP server health...\n');for(const [name,entry] of rows)console.log(`${name}: ${entry.url??[entry.command,...(entry.args??[])].join(' ')}`);process.exit(0);
+ }
+ console.error('The fake knows mcp add-json, mcp remove and mcp list only.');process.exit(1);
 }
 // accounts (fake.json): the account a run is on is the one .claude.json names in its config
 // folder, CLAUDE_CONFIG_DIR, as the real CLI reads it (HOME without it); a call records it and
 // what it sees there of the owner's settings and memory. accounts.loginAs: the account
 // `auth login` signs in, into that folder; none ends it as cancelled. accounts.limited: accounts
 // whose runs end as the real CLI ends one at its session limit. accounts.usage: per account,
-// the fractions of the windows a run reports.
+// the fractions of the windows a run reports. accounts.keychain: `auth login` keeps the sign-in
+// where the real CLI keeps it on macOS, in the Keychain (the stand-in security first on PATH),
+// as a generic password for $USER named "Claude Code-credentials", then, when
+// CLAUDE_CONFIG_DIR is set, "-" and the first 8 hex digits of the SHA-256 of that value.
+// A run records userMcp: the user-scope servers it would read from its own .claude.json.
 const home=process.env.CLAUDE_CONFIG_DIR??process.env.HOME??'';const readIn=name=>{try{return fs.readFileSync(path.join(home,name),'utf8');}catch{return null;}};
 let account=null;try{account=JSON.parse(readIn('.claude.json')).oauthAccount?.emailAddress??null;}catch{}
-const seen=()=>{const list=dir=>{try{return fs.readdirSync(path.join(home,dir)).sort();}catch{return null;}};const mcpAt=args.indexOf('--mcp-config');let mcp=null;try{const value=mcpAt>=0?args[mcpAt+1]:null;mcp=Object.keys(JSON.parse(value.trim().startsWith('{')?value:fs.readFileSync(value,'utf8')).mcpServers??{}).sort();}catch{}const memory=args.flatMap((arg,at)=>arg==='--add-dir'&&/memory$/.test(args[at+1]??'')?[args[at+1]]:[]).flatMap(dir=>{try{return fs.readdirSync(dir).sort().map(name=>`${name}:${fs.readFileSync(path.join(dir,name),'utf8')}`);}catch{return [];}});return {settings:readIn('settings.json'),claudeMd:readIn('CLAUDE.md'),skills:list('skills'),projects:list('projects'),mcp,memory};};
+const seen=()=>{const list=dir=>{try{return fs.readdirSync(path.join(home,dir)).sort();}catch{return null;}};const mcpAt=args.indexOf('--mcp-config');let mcp=null;try{const value=mcpAt>=0?args[mcpAt+1]:null;mcp=Object.keys(JSON.parse(value.trim().startsWith('{')?value:fs.readFileSync(value,'utf8')).mcpServers??{}).sort();}catch{}let userMcp=null;try{userMcp=Object.keys(JSON.parse(readIn('.claude.json')).mcpServers??{}).sort();}catch{}const memory=args.flatMap((arg,at)=>arg==='--add-dir'&&/memory$/.test(args[at+1]??'')?[args[at+1]]:[]).flatMap(dir=>{try{return fs.readdirSync(dir).sort().map(name=>`${name}:${fs.readFileSync(path.join(dir,name),'utf8')}`);}catch{return [];}});return {settings:readIn('settings.json'),claudeMd:readIn('CLAUDE.md'),skills:list('skills'),projects:list('projects'),mcp,userMcp,memory};};
 if(cfg.calls)fs.appendFileSync(cfg.calls, JSON.stringify({vendor,args,...(cfg.note?{tmp:process.env.CLAUDE_CODE_TMPDIR??null}:{}),...(cfg.accounts&&args[0]!=='auth'&&!args.includes('--version')&&!args.includes('--help')?{account,config:process.env.CLAUDE_CONFIG_DIR??null,...seen()}:{})})+'\n');
 if(args.includes('--version')){console.log('2.1.319');process.exit(0);}
 // The --model entry of the real --help, which is where the aliases a bot's Model step offers come from.
 const MODEL_HELP="  --model <model>                       Model for the current session. Provide\n                                        an alias for the latest model (e.g.\n                                        'fable', 'opus', or 'sonnet') or a\n                                        model's full name.\n  -n, --name <name>                     Set a display name for this session";
 if(args.includes('--help')){console.log('--print --add-dir --restricted --safe-mode --setting-sources --settings --strict-mcp-config --mcp-config --no-chrome --permission-mode --permission-prompts --tools --allowedTools --disallowedTools --output-format --verbose --json-schema --max-budget-usd --session-id --input-format --ignore-user-config --ignore-rules --json --sandbox --cd --output-schema --config');console.log(MODEL_HELP);process.exit(0);}
 if(args[0]==='auth'&&args[1]==='login'){
+ // The sign-in as Claude Code 2.1.322 runs it (read in its code, and watched in a scratch home
+ // over SSH). It tries the browser, prints the link for when none opened, and waits for the
+ // code that page shows. On a terminal it sets the input raw, so nothing typed or pasted is
+ // shown, and reads a line at a time: the line is cut at # into code and state and sent as it
+ // came. Paste marks around it (ESC[200~ … ESC[201~, which a terminal adds while the app that
+ // has it asked for them) end up in the code, and the server refuses it. A line with no # is
+ // told so and it waits on; Ctrl-C ends it with 130 and no word.
+ // accounts.pasted: a file that gets the line as it arrived. accounts.terminal: piped input is
+ // read as the terminal's. accounts.listener false: the browser cannot hand the sign-in back
+ // (no local listener), so it asks for the code outright and Ctrl-D ends it.
+ const link='https://claude.example/oauth/authorize?code=true&client_id=00000000-0000-4000-8000-000000000000&response_type=code&redirect_uri=https%3A%2F%2Fclaude.example%2Foauth%2Fcode%2Fcallback&scope=user%3Aprofile+user%3Ainference+user%3Asessions%3Aclaude_code+user%3Amcp_servers&code_challenge=FAKEfakeFAKEfakeFAKEfakeFAKEfakeFAKEfake123&code_challenge_method=S256&state=FAKEstateFAKEstateFAKEstateFAKEstate12345';
+ const tty=process.stdin.isTTY&&process.stdout.isTTY,terminal=tty||cfg.accounts?.terminal===true,manual=terminal&&cfg.accounts?.listener===false;
+ process.stdout.write(manual?`The browser can't return the sign-in to Claude Code automatically. After you sign in, paste the code shown.\nSign in at: ${link}\nPaste code here > `:`Opening browser to sign in…\nIf the browser didn't open, visit: ${link}\nPaste code here if prompted > `);
+ if(terminal){
+  if(tty)process.stdin.setRawMode(true);
+  const end=(code,text='')=>{if(tty)process.stdin.setRawMode(false);process.stderr.write(text);process.exit(code);};
+  const code=await new Promise(resolve=>{let held='';process.stdin.on('data',chunk=>{
+   const text=chunk.toString('utf8');
+   if(text.includes('\x03'))end(130);
+   if(manual&&text.includes('\x04'))end(130,'\nLogin failed: Input ended before a code was pasted. Sign in again and paste the code shown.\n');
+   held+=text;
+   for(let at;(at=held.search(/[\r\n]/))>=0;){
+    const line=held.slice(0,at);held=held.slice(at+1);
+    if(cfg.accounts?.pasted)fs.writeFileSync(cfg.accounts.pasted,JSON.stringify(line));
+    const [code,state]=line.trim().split('#');
+    if(!code||!state){process.stderr.write('Invalid code. Please make sure the full code was copied.\n');continue;}
+    return resolve(code);
+   }
+  });});
+  // The server takes the code it issued and no other.
+  if(!/^[A-Za-z0-9_-]+$/.test(code))end(1,"Login failed: That code wasn't accepted. It may be incomplete, expired, already used, or from an earlier sign-in attempt. Sign in again to get a new code.\n");
+  if(tty)process.stdin.setRawMode(false);
+ }
  const as=cfg.accounts?.loginAs;if(!as){console.error('Login cancelled.');process.exit(1);}
  fs.mkdirSync(home,{recursive:true});fs.writeFileSync(path.join(home,'.claude.json'),JSON.stringify({oauthAccount:{accountUuid:'uuid-never-shown',emailAddress:as,organizationName:'Example',planDisplayName:cfg.accounts.plan??'Pro'}}),{mode:0o600});
- fs.writeFileSync(path.join(home,'.credentials.json'),JSON.stringify({claudeAiOauth:{accessToken:'access-never-shown',refreshToken:'refresh-never-shown'}}),{mode:0o600});
+ const signIn=JSON.stringify({claudeAiOauth:{accessToken:'access-never-shown',refreshToken:'refresh-never-shown'}});
+ if(cfg.accounts.keychain){const {createHash}=await import('node:crypto'),{spawnSync}=await import('node:child_process');const dir=process.env.CLAUDE_CONFIG_DIR;const service=`Claude Code-credentials${dir?`-${createHash('sha256').update(dir.normalize('NFC')).digest('hex').substring(0,8)}`:''}`;const saved=spawnSync('security',['add-generic-password','-U','-a',process.env.USER||'claude-code-user','-s',service,'-X',Buffer.from(signIn).toString('hex')],{stdio:'ignore'});if(saved.status!==0){console.error('Could not save the sign-in in the Keychain.');process.exit(1);}}
+ else fs.writeFileSync(path.join(home,'.credentials.json'),signIn,{mode:0o600});
  console.log('Login successful.');process.exit(0);
 }
 if(args[0]==='auth'){console.log(JSON.stringify({loggedIn:mode!=='signed-out'&&(!cfg.accounts||Boolean(account))}));process.exit(0);}
@@ -104,7 +149,7 @@ const tooLong=cfg.tooLong!==undefined&&input.includes('Review as @')&&(cfg.tooLo
 if(tooLong){console.log(JSON.stringify({type:'system',subtype:'init',session_id:session,model:reported,permissionMode:'default',mcp_servers:[]}));console.log(JSON.stringify({type:'result',subtype:'success',is_error:true,duration_ms:120,num_turns:1,result:'Prompt is too long',session_id:session,total_cost_usd:nothingSpent}));process.exit(1);}
 if(mode==='no-sandbox'){console.error('Error: sandbox required but unavailable: bubblewrap (bwrap) not installed, socat not installed');console.error('  sandbox.failIfUnavailable is set.');console.log(JSON.stringify({type:'result',subtype:'error_during_execution',is_error:true,session_id:session}));process.exit(1);}
 // An answer turn with permissions has Write in its tools, but a lead that is told ELU prepares the workspace does not edit there.
-const edit=(args[args.indexOf('--tools')+1]??'').split(',').includes('Write')&&!conversation;
+const edit=(args[args.indexOf('--tools')+1]??'').split(',').some(name=>name==='Write'||name==='default')&&!conversation;
 if(edit&&mode==='scaffold'){
  fs.mkdirSync('src',{recursive:true});fs.mkdirSync('test',{recursive:true});
  fs.writeFileSync('test/coupon.test.mjs',"import {test} from 'node:test';import assert from 'node:assert/strict';import {normalize} from '../src/coupon.mjs';test('normalizes coupons',()=>assert.equal(normalize('save'),'SAVE'));\n");

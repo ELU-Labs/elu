@@ -8,11 +8,57 @@
 // --sandbox, --dangerously-skip-permissions, --conversation under
 // <HOME>/.gemini/antigravity-cli/brain, soft-denies in -p (exit 0, a stderr notice naming
 // the tool), the /usage sign-in probe, and `acp` with session/request_permission.
+// auth: 'prompt' signs it out the way Antigravity CLI 1.5.8 is signed out (observed in a
+// scratch HOME): -p prints "Authentication required. Please visit the URL to log in:", the
+// link, "Waiting for authentication (timeout 60s)..." and "Or, paste the authorization code
+// here and press Enter:" on stderr, runs `open` (or xdg-open) from PATH with the link, and
+// waits authSeconds (60) for the code on its input, even after its input ends. The code
+// (agy.code) signs it in: a file standing in for the system keyring, outside every HOME
+// (agy.keyring, or agy-keyring beside fake.json), so every HOME is signed in after it, and the
+// command goes on. Otherwise it ends: "error: authentication failed or timed out", exit 1.
+// usageSeconds: `-p /usage` prints nothing for that long before its answer, as a program does
+// that waits on a keyring to be unlocked or on a network that does not answer.
+// storage: 'file' is agy where it finds no keyring (Linux with no Secret Service): its sign-in
+// is a token file under HOME (agy.tokenFile, else .gemini/antigravity-cli/antigravity-oauth-token),
+// so every HOME has its own unless they are linked. Signing in makes the file's folder and
+// writes the file in place, through a link that is there, or with tokenWrite: 'rename' as a
+// new file moved over whatever is there. A write that cannot be made ends the sign-in with
+// "failed to write token to file" (agy 1.5.8's own words for it).
 import fs from 'node:fs'; import path from 'node:path'; import crypto from 'node:crypto'; import readline from 'node:readline'; import { spawnSync } from 'node:child_process';
 const args = process.argv.slice(2);
 let cfg = null; try { cfg = JSON.parse(fs.readFileSync(path.join(path.dirname(process.argv[1]), 'fake.json'), 'utf8')); } catch { /* Not installed as a test CLI. */ }
 if (!cfg) { console.error('fake agy: not installed as a test CLI (no fake.json beside it)'); process.exit(2); }
 const agy = cfg.agy ?? {};
+const KEYRING = agy.keyring ?? path.join(path.dirname(process.argv[1]), 'agy-keyring');
+const tokenFile = () => path.join(process.env.HOME ?? '', ...(agy.tokenFile ?? '.gemini/antigravity-cli/antigravity-oauth-token').split('/'));
+const signedOut = () => agy.storage === 'file' ? !fs.existsSync(tokenFile()) : agy.signedIn === false && !fs.existsSync(KEYRING);
+// The sign-in agy runs when it is signed out (auth: 'prompt'): true once the code came.
+async function signIn() {
+  const url = `https://accounts.google.com/o/oauth2/auth?client_id=fake-client&state=${crypto.randomUUID().slice(0, 8)}`, seconds = agy.authSeconds ?? 60;
+  process.stderr.write(`Authentication required. Please visit the URL to log in:\n  ${url}\n\nWaiting for authentication (timeout ${seconds}s)...\nOr, paste the authorization code here and press Enter:\n`);
+  for (const opener of ['open', 'xdg-open']) {
+    const found = (process.env.PATH ?? '').split(path.delimiter).map(dir => path.join(dir, opener)).find(file => { try { fs.accessSync(file, fs.constants.X_OK); return true; } catch { return false; } });
+    if (found) { spawnSync(found, [url], { stdio: 'ignore' }); break; }
+  }
+  const code = agy.code ?? '4/0AeanS0b-fake-code';
+  const signed = await new Promise(resolve => {
+    let text = '';
+    const timer = setTimeout(() => resolve(false), seconds * 1000);
+    process.stdin.on('data', chunk => { text += chunk; if (text.split(/\r?\n/).some(line => line.trim() === code)) { clearTimeout(timer); resolve(true); } });
+    process.stdin.on('error', () => {});
+  });
+  if (!signed) { process.stderr.write('Error: authentication timed out.\nerror: authentication failed or timed out\n'); return false; }
+  if (agy.storage === 'file') {
+    const file = tokenFile();
+    try {
+      fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+      if (agy.tokenWrite === 'rename') { const fresh = `${file}.${process.pid}.tmp`; fs.writeFileSync(fresh, 'signed-in\n', { mode: 0o600 }); fs.renameSync(fresh, file); }
+      else fs.writeFileSync(file, 'signed-in\n', { mode: 0o600 });
+    } catch (error) { process.stderr.write(`Error: failed to write token to file: ${error.message}\n`); return false; }
+  } else fs.writeFileSync(KEYRING, 'signed-in\n', { mode: 0o600 });
+  process.stderr.write('Signed in.\n');
+  return true;
+}
 if (cfg.calls) fs.appendFileSync(cfg.calls, JSON.stringify({ vendor: 'agy', args, home: process.env.HOME ?? null, autoUpdate: process.env.AGY_CLI_DISABLE_AUTO_UPDATE ?? null }) + '\n');
 if (args.includes('--version')) { console.log('agy version 1.5.4'); process.exit(0); }
 if (args.includes('--help')) { console.log('Usage: agy [flags]\n  --output-format --json-schema --conversation --mode --sandbox --add-dir --print-timeout --dangerously-skip-permissions'); process.exit(0); }
@@ -90,8 +136,12 @@ async function turn(text, { cwd, skip, sandbox, ask, dir }) {
 }
 async function headless() {
   const prompt = flag('-p') ?? '';
-  if (agy.signedIn === false) { console.error('authentication required: run agy to sign in'); process.exit(1); }
-  if (prompt === '/usage') { console.log(JSON.stringify({ usage: { plan: 'fake' } })); process.exit(0); }
+  if (signedOut() && agy.auth === 'prompt' && !await signIn()) {
+    if (flag('--output-format') === 'json') console.log(JSON.stringify({ conversation_id: '', status: 'ERROR', response: '', error: 'authentication failed or timed out', finished_reason: 'error' }));
+    process.exit(1);
+  }
+  if (signedOut()) { console.error('authentication required: run agy to sign in'); process.exit(1); }
+  if (prompt === '/usage') { if (agy.usageSeconds) await new Promise(resolve => setTimeout(resolve, agy.usageSeconds * 1000)); console.log(flag('--output-format') === 'json' ? JSON.stringify({ usage: { plan: 'fake' } }) : 'Plan: fake\nUsage: 0%'); process.exit(0); }
   let input = ''; for await (const chunk of process.stdin) input += chunk;
   if (cfg.inputs) fs.appendFileSync(cfg.inputs, JSON.stringify({ vendor: 'agy', args, input }) + '\n');
   const text = `${prompt}\n${input}`, cwd = process.cwd(), conversation = flag('--conversation'), id = conversation ?? crypto.randomUUID(), dir = path.join(brain, id);
@@ -113,7 +163,7 @@ async function acp() {
     const reply = result => send({ jsonrpc: '2.0', id: row.id, result }), fail = (code, message) => send({ jsonrpc: '2.0', id: row.id, error: { code, message } }), p = row.params ?? {};
     switch (row.method) {
       case 'initialize': reply({ protocolVersion: 1, agentCapabilities: { loadSession: true }, authMethods: [] }); break;
-      case 'session/new': { if (agy.signedIn === false) return fail(-32000, 'authentication required'); const id = crypto.randomUUID(); fs.mkdirSync(path.join(brain, id), { recursive: true }); sessions.set(id, { cwd: p.cwd }); reply({ sessionId: id }); break; }
+      case 'session/new': { if (signedOut()) return fail(-32000, 'authentication required'); const id = crypto.randomUUID(); fs.mkdirSync(path.join(brain, id), { recursive: true }); sessions.set(id, { cwd: p.cwd }); reply({ sessionId: id }); break; }
       case 'session/resume': { if (typeof p.sessionId !== 'string' || !fs.existsSync(path.join(brain, p.sessionId))) return fail(-32602, 'conversation not found'); sessions.set(p.sessionId, { cwd: p.cwd }); reply({ sessionId: p.sessionId }); break; }
       case 'session/set_mode': { if (!sessions.has(p.sessionId)) return fail(-32602, 'unknown session'); if (!['accept-edits', 'auto'].includes(p.modeId)) return fail(-32602, 'unknown mode'); sessions.get(p.sessionId).mode = p.modeId; reply({}); break; }
       case 'session/prompt': {

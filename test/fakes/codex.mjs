@@ -8,6 +8,8 @@ const mode=cfg.mode??'normal';
 // accounts (fake.json): the account a run is on is the one auth.json names in CODEX_HOME (or
 // ~/.codex), as the real CLI keeps it; a call records it. accounts.loginAs: the account `codex
 // login` signs in there. accounts.limited: accounts whose turns fail at their usage limit.
+// accounts.lapsed: accounts whose sign-in lapsed (true: every account). `login status` still
+// says signed in, and a turn fails in the words codex-cli 0.167.0 keeps for it.
 // accounts.codexUsage: per account, the percent of the windows the app-server reports.
 const codexHome=process.env.CODEX_HOME??path.join(process.env.HOME??'','.codex');
 let account=null;try{account=JSON.parse(Buffer.from(JSON.parse(fs.readFileSync(path.join(codexHome,'auth.json'),'utf8')).tokens.id_token.split('.')[1],'base64url').toString('utf8')).email??null;}catch{}
@@ -19,6 +21,11 @@ if(args.includes('--help')){console.log('--print --add-dir --restricted --safe-m
 if(args[0]==='debug'&&args[1]==='models'){console.log(JSON.stringify({models:cfg.models??[{slug:'big-model',display_name:'Big Model',description:'Frontier model for the most demanding work.',visibility:'list',priority:2},{slug:'quick-model',display_name:'Quick Model',description:'Fast and affordable model for easier tasks.',visibility:'list',priority:1},{slug:'review-model',display_name:'Review Model',description:'Automatic approval review model.',visibility:'hide',priority:9}]}));process.exit(0);}
 // `login status` as the real CLI prints it: a ChatGPT sign-in, an API key (exit 0 too, with a masked key), or nothing.
 if(args[0]==='login'&&args[1]!=='status'){
+ // --device-auth prints the link and a one-time code first, as codex-cli 0.167.0 prints them (watched in a
+ // scratch home), then waits for the sign-in on that page; it reads nothing from its input.
+ if(args.includes('--device-auth'))console.log("\nWelcome to Codex [v\x1b[90m0.166.0-alpha.5.1\x1b[0m]\n\x1b[90mOpenAI's command-line coding agent\x1b[0m\n\nFollow these steps to sign in with ChatGPT using device code authorization:\n\n1. Open this link in your browser and sign in to your account\n   \x1b[94mhttps://auth.openai.com/codex/device\x1b[0m\n\n2. Enter this one-time code \x1b[90m(expires in 15 minutes)\x1b[0m\n   \x1b[94mFAKE-CODE\x1b[0m\n\n\x1b[90mContinue only if you started this login in Codex. If a website or another person gave you this code, cancel.\x1b[0m\n");
+ // accounts.loginSeconds: how long the sign-in waits for the owner, as the real one does.
+ if(cfg.accounts?.loginSeconds)Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,cfg.accounts.loginSeconds*1000);
  const as=cfg.accounts?.loginAs;if(!as){console.error('Login cancelled.');process.exit(1);}
  const payload=Buffer.from(JSON.stringify({email:as,'https://api.openai.com/auth':{chatgpt_plan_type:cfg.accounts.plan??'plus'}})).toString('base64url');
  fs.mkdirSync(codexHome,{recursive:true});fs.writeFileSync(path.join(codexHome,'auth.json'),JSON.stringify({auth_mode:'chatgpt',tokens:{id_token:`h.${payload}.s`,access_token:'access-never-shown',refresh_token:'refresh-never-shown'}}),{mode:0o600});
@@ -29,6 +36,8 @@ if(args[0]==='login'){
  if(mode==='api-key'){console.log('API key configured - sk-fake***-0000\nAuthentication is checked when you send a request.');process.exit(0);}
  console.log('Logged in using ChatGPT');process.exit(0);
 }
+// `mcp list`: the [mcp_servers.NAME] tables of config.toml in CODEX_HOME (or ~/.codex), as the real CLI reads it.
+if(args[0]==='mcp'&&args[1]==='list'){let text='';try{text=fs.readFileSync(path.join(codexHome,'config.toml'),'utf8');}catch{}const names=[...text.matchAll(/^\[mcp_servers\.([A-Za-z0-9_-]+)\]\s*$/gm)].map(match=>match[1]);console.log(names.length?names.join('\n'):'No MCP servers configured yet. Try `codex mcp add my-tool -- my-command`.');process.exit(0);}
 if(args[0]==='app-server'){
  const readline=await import('node:readline');
  for await(const line of readline.createInterface({input:process.stdin})){
@@ -65,6 +74,7 @@ const resumed=args[0]==='exec'&&args[1]==='resume'?args[2]:null;
 const session=resumed??'12345678-1234-4234-8234-123456789abc';
 if(mode==='review-block'||mode==='review-fix'&&!input.includes('Handled the edge case.'))result.comments=[{id:'R1',severity:'must_fix',body:'Handle the edge case.'}];
 console.log(JSON.stringify({type:'thread.started',thread_id:session}));
+if(cfg.accounts?.lapsed===true||cfg.accounts?.lapsed?.includes?.(account)){const message='Your access token could not be refreshed because your refresh token has expired. Please log out and sign in again.';console.log(JSON.stringify({type:'turn.started'}));console.log(JSON.stringify({type:'error',message}));console.log(JSON.stringify({type:'turn.failed',error:{message}}));process.exit(1);}
 if(cfg.accounts?.limited?.includes(account)){const message="You've hit your usage limit. Upgrade to Pro or try again later.";console.log(JSON.stringify({type:'turn.started'}));console.log(JSON.stringify({type:'error',message}));console.log(JSON.stringify({type:'turn.failed',error:{message:`${message} (usage_limit_reached)`}}));process.exit(1);}
 // tooLong (fake.json): a review this model will not take (as in the fake Claude Code), ended as
 // the real CLI ends a prompt longer than the model's context window.

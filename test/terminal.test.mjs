@@ -5,7 +5,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { PassThrough } from 'node:stream';
 import { EventEmitter } from 'node:events';
-import { project, fakeClis, cli, git, temp, approveProjectFiles, autoApprove, keyLike } from './helpers.mjs';
+import { project, fakeClis, fakeKeychain, claudeKeychainNames, cli, git, temp, approveProjectFiles, autoApprove, keyLike, CLI } from './helpers.mjs';
 import { repository } from '../lib/git.mjs';
 import { ProjectController, projectSnapshot, dashboardSnapshot, claimView, registerProject, registeredProjects, nameProject, savedProjectName, personalDirectory, setupCommitPlan, commitSetup, taskDetails } from '../lib/projects.mjs';
 import { LIMIT } from '../lib/project-settings.mjs';
@@ -18,6 +18,7 @@ import { vendorText } from '../lib/terminal-commands.mjs';
 import { formatResult } from '../lib/format.mjs';
 import { Conductor, enqueue } from '../lib/conductor.mjs';
 import { liveTask } from './peer-helpers.mjs';
+import { standIn } from './login-item-helpers.mjs';
 import { readBoard, sessionClosed, closeSession } from '../lib/kanban.mjs';
 import { proposeTask, approveTask as approvePlan, reportProgress, finishTask, reopenTask } from '../lib/plan.mjs';
 import { clockTime } from '../lib/terminal-plan.mjs';
@@ -25,8 +26,10 @@ import { saveTask, readTask, taskDir, taskTitle, setTitle, lock } from '../lib/s
 import { processIdentity } from '../lib/process.mjs';
 import { activeLogin, listLogins } from '../lib/logins.mjs';
 import { detect } from '../lib/detect.mjs';
+import { signInCommand } from '../lib/vendors.mjs';
+import { ADAPTERS } from '../lib/adapters/index.mjs';
 import { conformanceState } from '../lib/conformance.mjs';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { approvalsDir, requestApproval, answerApproval } from '../lib/approvals.mjs';
 import { defaultMode } from '../lib/modes.mjs';
 import { listEntries, readStore } from '../lib/permission-rules.mjs';
@@ -85,10 +88,11 @@ async function view(t, options = {}) {
   input.isTTY = output.isTTY = true; input.setRawMode = () => {}; output.columns = 80; output.rows = 24;
   let rendered, raw = ''; const events = [], started = Date.now();
   output.on('data', value => { raw += value.toString(); events.push([(Date.now() - started) / 1000, 'o', value.toString()]); });
-  // Each test runs its own conductor in this process, as the background one would.
-  const owned = resources(t);
-  if (!owned.conductor) { const conductor = new Conductor({ tickMs: 20 }).start(); owned.conductor = conductor; owned.views.push(() => conductor.stop()); }
-  const finished = launchTerminal({ usage: fakeUsage(t), ...options, input, output, refreshMs: 30, startConductor: () => false, onRender: value => { rendered = value; options.onRender?.(value); } });
+  // Each test runs its own conductor in this process, as the background one would. conductor:
+  // false opens ELU with none running, and startConductor is then what ELU calls to start one.
+  const owned = resources(t), { conductor: background = true, startConductor = () => false, ...given } = options;
+  if (background && !owned.conductor) { const conductor = new Conductor({ tickMs: 20 }).start(); owned.conductor = conductor; owned.views.push(() => conductor.stop()); }
+  const finished = launchTerminal({ usage: fakeUsage(t), ...given, input, output, refreshMs: 30, startConductor, onRender: value => { rendered = value; options.onRender?.(value); } });
   finished.catch(() => {});
   await until(() => rendered, 'first render');
   const state = { input, output, finished, get current() { return rendered; }, get raw() { return raw; }, get events() { return events; }, frame() { return rendered.screen.screenshot(0, output.columns, 0, output.rows); } };
@@ -1111,7 +1115,11 @@ test('a message with no @name goes to whoever the owner last wrote to in the ses
   panels.ask.setValue(''); assert.equal(roles().length, 5);
   // A message that waits behind a working bot is named for the bot it will go to.
   answers('slow');
+  const turns = () => fs.readFileSync(p.calls, 'utf8').trim().split('\n').filter(line => JSON.parse(line).args.includes('-p')).length, before = turns();
   await send(v, '@sec Still there?'); await until(() => /@sec is working/.test(chat()), 'the bot at work');
+  // Its turn has reached Claude Code: only from then on is there a turn to pick up after a stop.
+  // (Reading the vendor before a turn no longer holds the app, so this test runs on meanwhile.)
+  await until(() => turns() > before, 'the bot\'s turn started');
   await send(v, 'and the deploy key?');
   await until(() => /You → @sec \(waiting\) {2}\d{1,2}:\d\d [AP]M\n┃ and the deploy key\? *\nSent when this turn ends\./.test(chat()), 'the waiting message names the bot');
   assert.equal(pendingRequests(p.root).find(row => row.state === 'queued').bot, 'sec');
@@ -2181,6 +2189,8 @@ test('a task scheduled from + New task lists under Scheduled and pauses, runs no
   const p = setup(t), calls = [];
   const loginItem = { install: () => { calls.push('install'); return { installed: true }; }, uninstall: () => { calls.push('uninstall'); return { removed: true }; } };
   const v = await view(t, { repo: p.repo, loginItem }), panels = v.current.panels;
+  // Nothing is scheduled at the start, so a login item left from before is removed.
+  await until(() => calls.length === 1, 'the start settles the login item'); assert.deepEqual(calls.splice(0), ['uninstall']);
   await wide(v);
   await send(v, '/schedule'); await until(() => modal(v, 'When') && dialogRows(v, 'When').length === 8, 'the list of times');
   dialogList(v, 'When').select(6); v.input.write('\r');
@@ -2199,13 +2209,199 @@ test('a task scheduled from + New task lists under Scheduled and pauses, runs no
   await until(() => /r run now {2}p pause {2}x delete/.test(panels.keys.getText()) && v.current.session === null, 'schedule keys');
   await until(() => /◷ weekdays 9:00 · sample app\n┃ Check dependencies for updates\n┃ Next run in \d+[mhd]\.\n\nr run now · p pause · x delete · enter last run/.test(panels.chat.getText()), 'the schedule beside the list');
   v.input.write('p'); await until(() => rows(v).some(row => /◷ weekdays 9:00/.test(row) && /paused$/.test(row)) && /┃ Paused\./.test(panels.chat.getText()), 'paused');
+  assert.deepEqual(calls, ['install', 'uninstall'], 'pausing the last schedule removes the login item');
   v.input.write('p'); await until(() => /Resumed\. Next run/.test(panels.status.getText()), 'resumed');
+  assert.deepEqual(calls, ['install', 'uninstall', 'install'], 'resuming it asks for the login item again');
   v.input.write('r'); await until(() => pendingRequests(p.root).some(row => row.goal === 'Check dependencies for updates' && /^schedule-/.test(row.scheduleId)), 'run now queues it');
   v.input.write('x'); await dialog(v, 'Delete schedule', 'y');
   await until(() => !rows(v).some(row => /◷/.test(row)), 'deleted');
   // Its row is gone, so the cursor takes the nearest row: here the request that run now queued.
   await until(() => rows(v).indexOf(cursor(v)) > 1 && v.current.screen.focused === board, 'the cursor is on a row that is left');
-  assert.deepEqual(calls, ['install', 'uninstall'], 'the last schedule removes the login item');
+  assert.deepEqual(calls, ['install', 'uninstall', 'install', 'uninstall'], 'the last schedule removes the login item');
+});
+
+test('the login item is there exactly while a task schedule is on: pausing the last one unloads it on macOS, resuming loads it again', { timeout: 30000 }, async t => {
+  const p = setup(t), item = standIn(t, 'darwin'), plist = path.join(item.home, 'Library', 'LaunchAgents', 'dev.elu-code.scheduler.plist');
+  for (const when of ['every 1h', 'every 2h']) saveSchedule({ root: p.root, goal: 'Check dependencies for updates', when: parseWhen(when) });
+  const v = await view(t, { repo: p.repo, loginItem: { install: item.install, uninstall: item.uninstall } }), panels = v.current.panels;
+  const there = () => item.files().length === 1 && item.loaded().length === 1, gone = () => !item.files().length && !item.loaded().length;
+  const press = async (pattern, done, what) => { await selectRow(v, pattern); v.input.write('p'); await until(done, what); };
+  await until(there, 'two schedules are on at the start, so the login item is loaded'); assert.deepEqual(item.loaded(), [plist]);
+  await press(/◷ every 1h/, () => rows(v).some(row => /◷ every 1h/.test(row) && /paused$/.test(row)), 'one paused');
+  assert.ok(there(), 'the other schedule is still on, so the login item stays');
+  await press(/◷ every 2h/, () => rows(v).some(row => /◷ every 2h/.test(row) && /paused$/.test(row)), 'both paused');
+  assert.ok(gone(), 'no schedule is on: the file is deleted and launchctl has booted it out');
+  await press(/◷ every 2h/, () => /Resumed\. Next run/.test(panels.status.getText()), 'one resumed');
+  assert.ok(there(), 'a schedule is on again: the file is back and loaded');
+  // Deleting the one that is on leaves a paused one only, so the login item goes again.
+  await selectRow(v, /◷ every 2h/); v.input.write('x'); await dialog(v, 'Delete schedule', 'y');
+  await until(() => !rows(v).some(row => /◷ every 2h/.test(row)), 'deleted'); assert.ok(gone(), 'a paused schedule alone keeps no login item');
+  await press(/◷ every 1h/, () => /Resumed\. Next run/.test(panels.status.getText()), 'the last one resumed'); assert.ok(there());
+  assert.ok(item.calls().length && item.calls().every(call => call.name === 'launchctl'), 'only the stand-in launchctl was called');
+});
+
+test('/bots remove NAME and removing a bot take the login item with the last schedule, and /bots add NAME brings it back', { timeout: 30000 }, async t => {
+  const p = setup(t), calls = [];
+  const loginItem = { install: () => { calls.push('install'); return { installed: true }; }, uninstall: () => { calls.push('uninstall'); return { removed: true }; } };
+  saveBot({ name: 'nightly', instructions: 'Check the nightly build.', schedule: 'every 1h' });
+  // Two sessions with the bot, each already counted with its next run an hour away, so nothing runs during the test.
+  for (const [id, goal] of [['4', 'Trim coupon codes'], ['5', 'Uppercase names']]) {
+    const { repo } = liveTask(p.root, { id, goal, state: 'answered' });
+    saveTask(repo, { ...readTask(repo, id), bots: ['nightly'] });
+    fs.writeFileSync(path.join(taskDir(repo, id), 'bot-schedules.json'), JSON.stringify({ version: 1, bots: { nightly: { on: true, schedule: 'every 1h', nextRunAt: new Date(Date.now() + 3600000).toISOString(), lastRunAt: null, lastRequestId: null, runs: 0, note: null } } }));
+  }
+  const v = await view(t, { repo: p.repo, loginItem }), panels = v.current.panels, status = () => panels.status.getText().replace(/\s+/g, ' ');
+  await until(() => calls.includes('install'), 'a bot schedule is on at the start, so the login item is asked for'); assert.ok(!calls.includes('uninstall'));
+  await openTask(v, /Trim coupon codes/);
+  await send(v, '/bots remove nightly'); await until(() => /@nightly left this session\./.test(status()), 'left the first session');
+  assert.ok(!calls.includes('uninstall'), 'the other session still runs it, so the login item stays');
+  await openTask(v, /Uppercase names/); calls.length = 0;
+  await send(v, '/bots remove nightly'); await until(() => /@nightly left this session\./.test(status()), 'left the second session');
+  assert.deepEqual(calls, ['uninstall'], 'its last session removes the login item');
+  await send(v, '/bots add nightly'); await until(() => /@nightly is in this session\./.test(status()), 'back in the second session');
+  assert.equal(calls.at(-1), 'install', 'a bot that comes back with its schedule asks for the login item'); assert.ok(!calls.slice(1).includes('uninstall'));
+  // Removing the bot itself, in Bots, ends its schedule everywhere.
+  calls.length = 0; click(v, panels.tabs[4]); await until(() => v.current.view === 'bots' && panels.botsList.items.some(row => /^@nightly/.test(row.getText())), 'Bots');
+  panels.botsList.focus(); panels.botsList.select(panels.botsList.items.findIndex(row => /^@nightly/.test(row.getText())));
+  v.input.write('x'); await dialog(v, 'Remove @nightly', 'y'); await until(() => /Removed @nightly\./.test(status()), 'removed');
+  await until(() => calls.at(-1) === 'uninstall', 'the removed bot was the last schedule'); assert.ok(!calls.includes('install'));
+});
+
+test('/bots schedule off removes the login item when it turns off the last schedule, and /bots schedule on brings it back', { timeout: 30000 }, async t => {
+  const p = setup(t), calls = [];
+  const loginItem = { install: () => { calls.push('install'); return { installed: true }; }, uninstall: () => { calls.push('uninstall'); return { removed: true }; } };
+  saveBot({ name: 'nightly', instructions: 'Check the nightly build.', schedule: 'every 1h' });
+  // Two sessions with the bot, each already counted with its next run an hour away, so nothing runs during the test.
+  for (const [id, goal] of [['4', 'Trim coupon codes'], ['5', 'Uppercase names']]) {
+    const { repo } = liveTask(p.root, { id, goal, state: 'answered' });
+    saveTask(repo, { ...readTask(repo, id), bots: ['nightly'] });
+    fs.writeFileSync(path.join(taskDir(repo, id), 'bot-schedules.json'), JSON.stringify({ version: 1, bots: { nightly: { on: true, schedule: 'every 1h', nextRunAt: new Date(Date.now() + 3600000).toISOString(), lastRunAt: null, lastRequestId: null, runs: 0, note: null } } }));
+  }
+  const v = await view(t, { repo: p.repo, loginItem }), status = () => v.current.panels.status.getText().replace(/\s+/g, ' ');
+  await openTask(v, /Trim coupon codes/);
+  await send(v, '/bots schedule off nightly'); await until(() => /@nightly no longer runs by itself in this session\./.test(status()), 'off in the first session');
+  assert.ok(!calls.includes('uninstall'), 'the other session still runs it, so the login item stays');
+  await send(v, '/bots schedule on nightly'); await until(() => /@nightly runs here every 1h/.test(status()), 'on again');
+  await send(v, '/bots schedule off nightly'); await until(() => /@nightly no longer runs by itself in this session\./.test(status()), 'off again');
+  await openTask(v, /Uppercase names/);
+  calls.length = 0;
+  await send(v, '/bots schedule off nightly'); await until(() => calls.includes('uninstall'), 'the last schedule off removes the login item');
+  assert.deepEqual(calls, ['uninstall']);
+  await send(v, '/bots schedule on nightly'); await until(() => /@nightly runs here every 1h/.test(status()), 'on in the second session');
+  assert.equal(calls.at(-1), 'install', 'a schedule on again asks for the login item');
+});
+
+test('the 30-second check takes the login item away when the last schedule ended by itself: a one-time run whose time came, a session that is gone', { timeout: 30000 }, async t => {
+  const p = setup(t), calls = [];
+  const loginItem = { install: () => { calls.push('install'); return { installed: true }; }, uninstall: () => { calls.push('uninstall'); return { removed: true }; } };
+  // The check the app runs every 30 seconds, taken as the app sets it up: the test runs it without the wait.
+  let check = null; const every = globalThis.setInterval;
+  t.mock.method(globalThis, 'setInterval', (run, ms, ...rest) => { if (ms === 30000) check = run; return every(run, ms, ...rest); });
+  // A one-time schedule that is due: saved ten minutes ago for five minutes later.
+  const then = new Date(Date.now() - 10 * 60000), once = saveSchedule({ root: p.root, goal: 'Check dependencies for updates', when: parseWhen('in 5m', then) }, then);
+  await view(t, { repo: p.repo, loginItem });
+  await until(() => calls.length === 1 && check, 'the start settles the login item'); assert.deepEqual(calls.splice(0), ['install'], 'a one-time schedule is on until it runs');
+  // The check queues its run, which turns it off, and it was the last schedule.
+  check();
+  assert.ok(pendingRequests(p.root).some(row => row.scheduleId === once.id), 'the one-time run is queued'); assert.deepEqual(calls.splice(0), ['uninstall']);
+  check(); assert.deepEqual(calls, [], 'nothing moved, so nothing is asked for again');
+  // A session with a bot whose schedule is on, as another window leaves one: the check asks for the login item again.
+  saveBot({ name: 'nightly', instructions: 'Check the nightly build.', schedule: 'every 1h' });
+  const { repo } = liveTask(p.root, { id: '4', goal: 'Trim coupon codes', state: 'answered' });
+  saveTask(repo, { ...readTask(repo, '4'), bots: ['nightly'] });
+  fs.writeFileSync(path.join(taskDir(repo, '4'), 'bot-schedules.json'), JSON.stringify({ version: 1, bots: { nightly: { on: true, schedule: 'every 1h', nextRunAt: new Date(Date.now() + 3600000).toISOString(), lastRunAt: null, lastRequestId: null, runs: 0, note: null } } }));
+  check(); assert.ok(calls.length && calls.every(call => call === 'install'), 'a schedule is on again'); calls.length = 0;
+  // That session is deleted outside this window. No key here says so: the check finds it.
+  fs.rmSync(taskDir(repo, '4'), { recursive: true, force: true });
+  check(); assert.deepEqual(calls, ['uninstall'], 'its session was the last place a schedule was on');
+});
+
+test('ELU started over a service file from 0.1.19 writes it again with KillMode=process and has systemd read it again', { timeout: 30000 }, async t => {
+  const p = setup(t), item = standIn(t, 'linux');
+  saveSchedule({ root: p.root, goal: 'Check dependencies for updates', when: parseWhen('every 1h') });
+  item.install();
+  const [service] = item.files(), text = fs.readFileSync(service, 'utf8'); assert.match(text, /^Type=oneshot\nKillMode=process$/m);
+  // What 0.1.19 left: the same file without the line, loaded.
+  fs.writeFileSync(service, text.replace('KillMode=process\n', '')); item.run('systemctl', ['--user', 'daemon-reload']);
+  assert.doesNotMatch(item.units()['elu-code-scheduler.service'], /KillMode/);
+  const before = item.calls().length;
+  await view(t, { repo: p.repo, loginItem: { install: item.install, uninstall: item.uninstall } });
+  await until(() => item.calls().length >= before + 2, 'the start settles the login item');
+  assert.equal(fs.readFileSync(service, 'utf8'), text); assert.equal(item.units()['elu-code-scheduler.service'], text, 'systemd holds the new text');
+  assert.deepEqual(item.calls().slice(before).map(call => call.args), [['--user', 'daemon-reload'], ['--user', 'enable', '--now', 'elu-code-scheduler.timer']]);
+  assert.deepEqual(item.loaded(), ['elu-code-scheduler.timer']);
+});
+
+test('a login item that could not be loaded is asked for again by the 30-second check until it is', { timeout: 30000 }, async t => {
+  const p = setup(t), calls = []; let failures = 2;
+  const loginItem = { install: () => { calls.push('install'); if (failures-- > 0) throw new Error('Another ELU command holds this lock.'); return { installed: true }; }, uninstall: () => { calls.push('uninstall'); return { removed: true }; } };
+  let check = null; const every = globalThis.setInterval;
+  t.mock.method(globalThis, 'setInterval', (run, ms, ...rest) => { if (ms === 30000) check = run; return every(run, ms, ...rest); });
+  saveSchedule({ root: p.root, goal: 'Check dependencies for updates', when: parseWhen('every 1h') });
+  await view(t, { repo: p.repo, loginItem });
+  await until(() => calls.length === 1 && check, 'the start asks for the login item'); assert.deepEqual(calls, ['install']);
+  // The start's ask failed, and so does the next: each check asks again. Once it is there, nothing more is asked.
+  check(); assert.deepEqual(calls, ['install', 'install']);
+  check(); assert.deepEqual(calls, ['install', 'install', 'install']);
+  check(); check(); assert.deepEqual(calls, ['install', 'install', 'install'], 'loaded now, and nothing moved');
+});
+
+test('a schedule saved while its login item cannot be loaded says so where it can be read, at 80 columns too', { timeout: 30000 }, async t => {
+  const p = setup(t), why = 'systemctl could not load the scheduler: Failed to connect to bus: No medium found';
+  const loginItem = { install: () => { throw new Error(why); }, uninstall: () => ({ removed: false }) };
+  const v = await view(t, { repo: p.repo, loginItem }), status = () => v.current.panels.status.getText().replace(/\s+/g, ' ');
+  // The message line holds two rows. What keeps the schedule from running while ELU is closed is said right after when it runs.
+  await send(v, '/schedule in 5m check the build'); await until(() => /Scheduled once/.test(status()), 'saved');
+  assert.equal(v.current.screen.width, 80); assert.match(status(), /^› Scheduled once \w{3} \w{3} \d+ \d+:\d\d\. It runs only while ELU is open: systemctl could/);
+  await wide(v); await send(v, '/schedule in 6m check the tests'); await until(() => /Scheduled once/.test(status()) && listSchedules().length === 2, 'saved wide');
+  assert.match(status(), new RegExp(`^› Scheduled once \\w{3} \\w{3} \\d+ \\d+:\\d\\d\\. It runs only while ELU is open: ${why}$`), 'the whole reason, with nothing after it');
+});
+
+// A run that waits with no conductor running: its conductor was ended from outside, by a
+// restart of the computer or, on Linux, by 0.1.19's login item with each of its runs.
+test('opening ELU starts what was left queued with no conductor running, and leaves it after the owner stopped the conductor himself', { timeout: 30000 }, async t => {
+  const p = setup(t);
+  let starts = 0; const startConductor = () => { starts++; return true; }, open = () => view(t, { repo: p.repo, conductor: false, startConductor });
+  const close = async v => { key(v, 'q'); await v.finished; };
+  // Nothing is queued: opening starts nothing.
+  await close(await open()); assert.equal(starts, 0);
+  const left = enqueue(p.root, 'Check the build', { priority: 1 });
+  const v = await open(); await until(() => starts === 1, 'the conductor to be asked for');
+  assert.equal(pendingRequests(p.root).find(row => row.id === left.id).state, 'queued', 'the stand-in started none, so the run still waits');
+  await close(v); assert.equal(starts, 1, 'asked once');
+  // The owner's own stop, of a conductor that runs: this process holds its lock, for the command to find one.
+  const held = path.join(personalDirectory(), 'conductor.lock'); fs.writeFileSync(held, JSON.stringify({ pid: process.pid, identity: processIdentity(process.pid) }));
+  const stop = spawnSync(process.execPath, [CLI, 'conductor', 'stop'], { encoding: 'utf8', timeout: 30000 }); assert.match(stop.stdout, /It starts again when work is queued\./);
+  fs.rmSync(held);
+  await close(await open()); assert.equal(starts, 1, 'what is queued waits until work is queued');
+  // Work is queued, which starts a conductor, and the stop is over. This one starts no run and
+  // is ended from outside: what it left queued is started again as ELU opens.
+  const next = new Conductor({ tickMs: 3600000 }); next.dispatch = () => {}; next.start(); await next.stop();
+  await close(await open()); assert.equal(starts, 2);
+});
+
+test("a schedule taken off a bot on its page takes the login item with it at once, and one given back there brings it back", { timeout: 30000 }, async t => {
+  const p = setup(t), calls = [];
+  const loginItem = { install: () => { calls.push('install'); return { installed: true }; }, uninstall: () => { calls.push('uninstall'); return { removed: true }; } };
+  saveBot({ name: 'nightly', instructions: 'Check the nightly build.', schedule: 'every 1h' });
+  // One session with the bot, already counted with its next run an hour away, so nothing runs during the test.
+  const { repo } = liveTask(p.root, { id: '4', goal: 'Trim coupon codes', state: 'answered' });
+  saveTask(repo, { ...readTask(repo, '4'), bots: ['nightly'] });
+  fs.writeFileSync(path.join(taskDir(repo, '4'), 'bot-schedules.json'), JSON.stringify({ version: 1, bots: { nightly: { on: true, schedule: 'every 1h', nextRunAt: new Date(Date.now() + 3600000).toISOString(), lastRunAt: null, lastRequestId: null, runs: 0, note: null } } }));
+  const v = await view(t, { repo: p.repo, loginItem }), panels = v.current.panels, status = () => panels.status.getText().replace(/\s+/g, ' ');
+  await until(() => calls.includes('install'), 'the bot schedule is on at the start, so the login item is asked for'); calls.length = 0;
+  click(v, panels.tabs[4]); await until(() => v.current.view === 'bots' && panels.botsList.items.some(row => /^@nightly/.test(row.getText())), 'Bots');
+  panels.botsList.focus(); panels.botsList.select(panels.botsList.items.findIndex(row => /^@nightly/.test(row.getText())));
+  v.input.write('\r'); await until(() => modal(v, 'Bot @nightly'), 'the bot opens');
+  const pick = index => { dialogList(v, 'Bot @nightly').select(index); v.input.write('\r'); };
+  // Schedule, emptied: no bot runs by itself any more. Its page stays open and the login item is gone already.
+  pick(4); await dialog(v, 'Schedule', ''); await until(() => /@nightly does not run by itself\./.test(status()), 'the schedule is taken off');
+  assert.deepEqual(calls, ['uninstall']); assert.ok(modal(v, 'Bot @nightly'), 'the page is still open'); assert.equal(getBot('nightly').schedule, null);
+  // A schedule typed there again is on in the session the bot is in, so the login item is asked for again.
+  pick(4); await dialog(v, 'Schedule', 'every 2h'); await until(() => /@nightly runs by itself every 2h\./.test(status()), 'a schedule again');
+  assert.deepEqual(calls, ['uninstall', 'install']);
+  // Closing the page settles it once more and changes nothing.
+  v.input.write('\x1b'); await until(() => !modal(v, 'Bot @nightly') && calls.length === 3, 'closed'); assert.deepEqual(calls, ['uninstall', 'install', 'install']);
 });
 
 test('/schedule offers times in the command list, saves a time and message typed together, and lists the times when Enter is pressed on it alone', { timeout: 30000 }, async t => {
@@ -2539,11 +2735,23 @@ test('the New session form picks Permissions, Where and Folders, and the session
   const confirm = dialogText(v, 'Full access');
   assert.match(confirm.replace(/\s+/g, ' '), /Full access: the model changes any file, runs any command and uses the internet without asking\./);
   // Full access runs them too, and the question says so plainly.
-  assert.match(confirm.replace(/\s+/g, ' '), /That includes push, tags, merges, publishing and deploys\./); assert.doesNotMatch(confirm, /stay blocked|refused by name/); assert.match(confirm, /Use it\? y\/N/);
+  assert.match(confirm.replace(/\s+/g, ' '), /That includes push, tags, merges, publishing and deploys\. It reads your secret files and sign-ins, and gets your whole environment\./); assert.doesNotMatch(confirm, /stay blocked|refused by name/); assert.match(confirm, /Use it\? y\/N/);
   await dialog(v, 'Full access', 'n'); await until(() => !modal(v, 'Full access'), 'declined');
   assert.match(text(), /Permissions {2}Ask for approval/);
   pickRow(list, /Permissions/); v.input.write('\r'); await until(() => modal(v, 'Permissions'), 'picker again'); v.input.write('3'); await dialog(v, 'Full access', 'y');
   await until(() => /Full access for this session\./.test(status()) && /Permissions {2}Full access/.test(text()), 'full');
+  // Full access takes a folder the other modes keep closed. It leaves the form with Full
+  // access, and Ask for approval refuses it.
+  fs.mkdirSync(path.join(home, '.ssh'), { recursive: true });
+  await send(v, '/permissions folders add ~/.ssh'); await until(() => /The model reads ~\/\.ssh this session\./.test(status()) && /Folders {6}~\/\.ssh/.test(text()), 'Full access takes ~/.ssh');
+  pickRow(list, /Folders/); v.input.write('\r'); await until(() => modal(v, 'Folders'), 'the folders dialog');
+  assert.match(dialogText(v, 'Folders'), /Any folder the model may read this session\./); v.input.write('\x1b'); await until(() => !modal(v, 'Folders'), 'closed');
+  await send(v, '/permissions ask'); await until(() => /Ask for approval for this session\./.test(status()) && /Folders {6}none/.test(text()), 'the folder went with Full access');
+  await send(v, '/permissions folders add ~/.ssh'); await until(() => /That folder holds secrets or ELU state\./.test(status()), 'Ask for approval refuses it');
+  assert.match(text(), /Folders {6}none/);
+  pickRow(list, /Folders/); v.input.write('\r'); await until(() => modal(v, 'Folders'), 'the folders dialog');
+  assert.match(dialogText(v, 'Folders'), /A folder in your home the model may read this session\./); v.input.write('\x1b'); await until(() => !modal(v, 'Folders'), 'closed');
+  await send(v, '/permissions full'); await dialog(v, 'Full access', 'y'); await until(() => /Full access for this session\./.test(status()) && /Permissions {2}Full access/.test(text()), 'full again');
   pickRow(list, /Runs in/); v.input.write('\r'); await until(() => modal(v, 'Runs in'), 'where');
   const where = dialogText(v, 'Runs in');
   assert.match(where, /1 {2}New worktree {7}A copy of this repo on a new branch, feat\/task-N\./);
@@ -2603,6 +2811,21 @@ test('/permissions sets the mode in compose, in a session, and as the default', 
   assert.equal(readTask(p.repo, '3').permissions, 'ask');
   await send(v, '/permissions full'); await dialog(v, 'Full access', 'y'); await until(() => /Full access from your next message\./.test(status()), 'full');
   assert.equal(readTask(p.repo, '3').permissions, 'full');
+});
+
+// Where bwrap is installed and cannot start, the picker says so and links the fix. At 80
+// columns the link stays whole on a line of its own, so it can be copied or clicked.
+test('the Permissions picker says when the OS sandbox cannot start, with its link whole at 80 columns', { skip: process.platform !== 'linux', timeout: 30000 }, async t => {
+  const p = setup(t), tools = path.join(p.parent, 'sandbox-tools'); fs.mkdirSync(tools);
+  fs.writeFileSync(path.join(tools, 'bwrap'), '#!/bin/sh\necho "bwrap: setting up uid map: Permission denied" >&2\nexit 1\n', { mode: 0o755 }); fs.writeFileSync(path.join(tools, 'socat'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  environment(t, { PATH: `${tools}${path.delimiter}${process.env.PATH}` });
+  const v = await view(t, { repo: p.repo }), panels = v.current.panels;
+  await send(v, '/new'); await until(() => !panels.compose.hidden && v.current.session === 'new', 'form');
+  await send(v, '/permissions'); await until(() => modal(v, 'Permissions'), 'picker');
+  assert.match(dialogText(v, 'Permissions').replace(/\s+/g, ' '), /The OS sandbox cannot start here, so commands ask you \(Ask\) or are reviewed \(Approve for me\)\./);
+  await until(() => /│https:\/\/github\.com\/ELU-Labs\/elu\/blob\/main\/docs\/permissions\.md#linux +│/.test(plainFrame(v)), 'the link whole on one line');
+  assert.ok(plainFrame(v).split('\n').every(line => line.length <= 80));
+  v.input.write('\x1b'); await until(() => !modal(v, 'Permissions'), 'closed');
 });
 
 // A new session being written takes a new default, unless its mode was picked for it: a
@@ -2843,21 +3066,15 @@ test('f beside y and n allows what waits and gives the session Full access; wher
   await until(() => /Allowed\. Full access: this session no longer asks you\./.test(status()), 'said as it is');
   assert.equal(answer('run-3-a'), 'allow'); assert.equal(answer('run-3-b'), 'allow'); assert.equal(readTask(p.repo, '3').permissions, 'full');
   wants('run-3-c', '3', 'npm test'); await until(() => answer('run-3-c') === 'allow', 'what it asks next is allowed without a key');
-  // A bot's scheduled turn runs with Approve for me at most: its approvals keep y and n, and f does nothing.
+  // A bot's scheduled turn runs in its session's mode, so f gives it Full access as it does the model's turn.
   running('4', 'Sweep the logs', { activeRole: 'bot:scout', messages: [{ at: began, text: 'Sweep the logs', to: '@scout', scheduled: true }] });
   await openTask(v, /Sweep the l/); await until(() => v.current.session === '4', 'the other session is open');
   wants('run-4-a', '4', 'ls logs', 'bot:scout');
-  await until(() => /@scout wants to:\nRun: ls logs\nEsc, then y allow · n deny · esc later/.test(chat()), 'the chat keeps its line');
-  await until(() => /^\? Needs you · Esc, then y allow · n deny/.test(status()) && !/full access/.test(status().split('\n')[0]), 'the status row keeps its line');
-  v.input.write('\x1b'); await until(() => v.current.screen.focused === panels.board && /y allow {2}n deny {2}enter open/.test(keys()), 'the list keeps its keys');
-  v.input.write('f'); await new Promise(resolve => setTimeout(resolve, 300));
-  assert.equal(modal(v, 'Full access'), undefined); assert.equal(answer('run-4-a'), null); assert.equal(readTask(p.repo, '4').permissions, 'ask');
-  // Set to Full access by hand, the session's mode is saved, and the scheduled turn still asks.
-  v.input.write('\r'); await until(() => v.current.screen.focused === panels.ask && v.current.session === '4', 'back in its message box');
-  await send(v, '/permissions full'); await dialog(v, 'Full access', 'y');
-  await until(() => /Full access from the next message; this turn still asks\./.test(status().replace(/\n/g, ' ')), 'said as it is for a scheduled turn');
-  await new Promise(resolve => setTimeout(resolve, 300)); assert.equal(answer('run-4-a'), null); assert.equal(readTask(p.repo, '4').permissions, 'full');
-  v.input.write('\x1b'); await until(() => v.current.screen.focused === panels.board, 'the list'); v.input.write('n'); await until(() => answer('run-4-a') === 'deny', 'denied by hand');
+  await until(() => /@scout wants to:\nRun: ls logs\nEsc, then y allow · n deny · f full access/.test(chat()), 'the chat names f');
+  v.input.write('\x1b'); await until(() => v.current.screen.focused === panels.board && /y allow {2}n deny {2}f full access {2}enter open/.test(keys()), 'the list names f');
+  v.input.write('f'); await dialog(v, 'Full access', 'y');
+  await until(() => answer('run-4-a') === 'allow', 'allowed'); assert.equal(readTask(p.repo, '4').permissions, 'full');
+  wants('run-4-b', '4', 'npm test', 'bot:scout'); await until(() => answer('run-4-b') === 'allow', 'what it asks next is allowed without a key');
 });
 
 // Approvals you give once: a beside y and n shows the rule, asks where, keeps it and allows.
@@ -2928,7 +3145,7 @@ test('a beside y and n keeps the rule for this project and allows what it covers
   assert.equal(listEntries().every(row => row.on), true);
 });
 
-test('what Full access itself asks stays with the owner: a turn that started in it, a removal, an MCP tool', { timeout: 40000 }, async t => {
+test('a turn that started in Full access shows what its vendor asks; one switched to it is allowed everything, a removal and an MCP tool included', { timeout: 40000 }, async t => {
   const p = setup(t), v = await view(t, { repo: p.repo }), panels = v.current.panels, status = () => panels.status.getText().replace(/\s+/g, ' '), chat = () => panels.chat.getText();
   const answer = id => { const file = path.join(approvalsDir(), `${id}.answer.json`); return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')).decision : null; };
   const wants = (id, taskId, command, tool = 'Bash') => requestApproval({ id, root: p.root, taskId, role: 'lead', vendor: 'claude', tool, input: tool === 'Bash' ? { command } : {} });
@@ -2946,19 +3163,20 @@ test('what Full access itself asks stays with the owner: a turn that started in 
   await pause(); assert.equal(answer('run-3-a'), null); assert.equal(answer('run-3-b'), null);
   v.input.write('\x1b'); await until(() => v.current.screen.focused === panels.board, 'the list');
   v.input.write('n'); await until(() => answer('run-3-a') === 'deny', 'denied by hand'); v.input.write('y'); await until(() => answer('run-3-b') === 'allow', 'allowed by hand');
-  // A turn switched to Full access while it runs: the app allows what waits, except a removal and an MCP tool.
+  // A turn switched to Full access while it runs: the app allows everything that waits, a
+  // removal and an MCP tool included, and everything the turn asks next. Full access is everything.
   running('4', 'Tidy the build', 'ask');
   await openTask(v, /Tidy the bu/); await until(() => v.current.session === '4', 'the other session is open');
   wants('run-4-a', '4', 'ls build'); wants('run-4-b', '4', 'cd build && rm -rf old'); wants('run-4-c', '4', '', 'mcp__files__delete');
   await until(() => /Run: ls build\n/.test(chat()), 'they wait');
   await send(v, '/permissions full'); await dialog(v, 'Full access', 'y');
-  await until(() => /Allowed\. Full access\. This turn still asks before rm, rmdir and MCP tools\./.test(status()), 'said as it is');
-  assert.equal(answer('run-4-a'), 'allow'); await pause(); assert.equal(answer('run-4-b'), null); assert.equal(answer('run-4-c'), null);
+  await until(() => /Allowed\. Full access: this session no longer asks you\./.test(status()), 'said as it is');
+  assert.doesNotMatch(status(), /still asks/);
+  for (const id of ['run-4-a', 'run-4-b', 'run-4-c']) assert.equal(answer(id), 'allow', `${id}: nothing that waited is kept back`);
   wants('run-4-d', '4', 'npm test'); await until(() => answer('run-4-d') === 'allow', 'what it asks next is allowed');
   wants('run-4-e', '4', 'sudo rmdir /data/old'); wants('run-4-f', '4', `echo ${'x'.repeat(260)}`);
-  await pause(); assert.equal(answer('run-4-e'), null, 'a removal is the owner’s'); assert.equal(answer('run-4-f'), null, 'a command too long to read whole is the owner’s');
-  assert.match(chat(), /Run: cd build && rm -rf old\nEsc, then y allow · n deny · esc later/);
-  for (const id of ['run-4-b', 'run-4-c', 'run-4-e', 'run-4-f']) answerApproval(id, 'deny');
+  await until(() => answer('run-4-e') === 'allow' && answer('run-4-f') === 'allow', 'a removal and a long command are allowed with the rest');
+  assert.doesNotMatch(chat(), /Run: cd build && rm -rf old\nEsc, then y allow/);
 });
 
 test('/publish in a session whose turn runs says to wait for the reply, never the lock line', { timeout: 20000 }, async t => {
@@ -3196,12 +3414,12 @@ test('a new approval rings the terminal bell once', { timeout: 20000 }, async t 
 });
 
 test('a teammate message is approved as your own session, worked on in a mode picked now, or declined; y is preselected', { timeout: 40000 }, async t => {
-  const p = setup(t), home = path.join(p.parent, 'home'), evals = path.join(home, 'evals'); fs.mkdirSync(evals, { recursive: true });
+  const p = setup(t), home = path.join(p.parent, 'home'), evals = path.join(home, 'evals'), keys = path.join(home, '.ssh'); fs.mkdirSync(evals, { recursive: true }); fs.mkdirSync(keys); fs.writeFileSync(path.join(keys, 'config'), '');
   environment(t, { HOME: fs.realpathSync(home) });
   const token = letter => `ghp_${letter.repeat(24)}`;
   const items = [
     { id: 'in-1', kind: 'incoming', peer: KEYS.sara, name: 'sara', project: 'app', text: `Where are the fixtures? ${token('a')} opens them, under ${evals}`, at: ago(1), state: 'submitted', threadId: 'th-1', request: 'ask' },
-    { id: 'in-2', kind: 'incoming', peer: KEYS.li, name: 'li', project: 'app', text: `Run evals with ${token('b')} in ${evals}`, at: ago(2), state: 'submitted', threadId: 'th-2', request: 'handoff' },
+    { id: 'in-2', kind: 'incoming', peer: KEYS.li, name: 'li', project: 'app', text: `Run evals with ${token('b')} in ${evals}, keys in ${keys}/config`, at: ago(2), state: 'submitted', threadId: 'th-2', request: 'handoff' },
   ];
   const peer = fakePeer({ items, trusted: [KEYS.li] }), v = await view(t, { repo: p.repo, peer }), panels = v.current.panels, status = () => panels.status.getText();
   await wide(v);
@@ -3239,8 +3457,13 @@ test('a teammate message is approved as your own session, worked on in a mode pi
   assert.match(work, /Permissions {2}Ask for approval {6}1 to change/); assert.match(work, /Runs in {6}New worktree {10}2 to change/);
   assert.match(work, /Edits the session's files; asks you for the rest and the internet\./); assert.match(work, /A copy of this repo on a new branch\./); assert.match(work, /Other folders it may read\./); assert.doesNotMatch(work, /read-only/);
   assert.match(work, /Folders {6}~\/evals {2}from their message · 3 to change/);
+  // The message also names a file in ~/.ssh. Full access offers that folder too; a lower mode offers only what it may read.
+  v.input.write('1'); await until(() => modal(v, 'Permissions'), 'mode picker'); v.input.write('3'); await dialog(v, 'Full access', 'y');
+  await until(() => modal(v, 'Accept') && /Permissions {2}Full access/.test(dialogText(v, 'Accept')), 'Full access picked');
+  assert.match(dialogText(v, 'Accept'), /Folders {6}~\/evals ~\/\.ssh {2}from their message · 3 to change/);
   v.input.write('1'); await until(() => modal(v, 'Permissions'), 'mode picker'); v.input.write('2');
   await until(() => modal(v, 'Accept') && /Permissions {2}Approve for me/.test(dialogText(v, 'Accept')), 'mode picked');
+  assert.match(dialogText(v, 'Accept'), /Folders {6}~\/evals {2}from their message · 3 to change/, 'the secret folder left with Full access');
   v.input.write('\r');
   await until(() => peer.sent.some(c => c.type === 'work' && c.id === 'in-2'), 'w accepts the task');
   assert.deepEqual(peer.sent.find(c => c.type === 'work' && c.id === 'in-2'), { type: 'work', id: 'in-2', permissions: 'auto', place: { kind: 'worktree' }, folders: [fs.realpathSync(evals)], root: p.repo.root });
@@ -3294,11 +3517,11 @@ test('vendor rows say how to sign in, Google’s FAQ under agy, and that a vendo
     { vendor: 'codex', available: true, supported: true, signedIn: false, version: '0.166.0', support: 'lead and reviewer' },
     { vendor: 'claude', available: true, supported: true, signedIn: true, conformant: true, version: '2.1.319', support: 'lead and reviewer' },
   ] });
-  const lines = text.split('\n'), agy = lines.indexOf('  Antigravity: not signed in. Run: agy');
+  const lines = text.split('\n'), agy = lines.indexOf('  Antigravity: not signed in for ELU. Sign it in with s on its line in the Usage tab.');
   assert.ok(agy > 0, 'the agy sign-in line');
   assert.equal(lines[agy + 1], "  Google's FAQ: wrapping agy in third-party agents is not supported on consumer plans. antigravity.google/docs/faq");
   assert.ok(lines.includes('  Grok Build has not been checked on this machine yet. Your first message to it runs the check.'));
-  assert.ok(lines.includes('  Codex: sign in with ChatGPT. Run: codex login'));
+  assert.ok(lines.includes(`  Codex: sign in with ChatGPT. Run: ${signInCommand('codex')}`));
   assert.equal(lines.filter(line => /Google's FAQ/.test(line)).length, 1);
   assert.ok(!lines.some(line => /Claude Code: not signed in|Claude Code has not been checked/.test(line)));
   assert.equal(vendorText({ vendor: 'grok', support: 'lead', available: true, supported: true, signedIn: true, conformant: false }), 'lead · checked on your next message to it');
@@ -3322,7 +3545,7 @@ test('Usage shows each account with the usage its sessions reported, r checks ag
   await until(() => /Usage updated \d\d:\d\d/.test(status()), 'first check');
   assert.match(text(), /^Claude {6}owner@example.invalid · Max 20x · active\n {12}Usage shows after your next session on Claude Code\.\n {12}old@example.invalid · last seen Nov 9 · wk 100% then\n {12}enter use · a add account · x forget$/m);
   await until(() => /^Codex {7}owner@example.invalid · Team · active\n {12}5h  \[#-----\]   18%/m.test(text()), 'the Codex block');
-  assert.match(text(), /^Antigravity not signed in. Run: agy\nGrok Build {2}not installed\n\nTop agents today\nNo agent has run today\.\nELU spend today not reported$/m);
+  assert.match(text(), /^Antigravity not signed in for ELU · s signs in\nGrok Build {2}not installed\n\nTop agents today\nNo agent has run today\.\nELU spend today not reported$/m);
   assert.ok(panels.usageList.items.every(item => item.getText().length <= 76), 'every line fits the pane');
   // A session on Claude Code reports its windows. r checks again now and records them with the account.
   const saved = JSON.parse(fs.readFileSync(usageFile, 'utf8'));
@@ -3395,6 +3618,46 @@ test('Usage: a signs another account in with the vendor\'s own sign-in, Enter ma
   assert.doesNotMatch(v.raw, /never-shown/); assert.doesNotMatch(v.frame(), /never-shown/);
 });
 
+test('Usage on macOS: x forgets an added Claude Code account with its Keychain item, keeps every other, and names an item a locked Keychain kept', { timeout: 30000 }, async t => {
+  const p = setup(t), fakeFile = path.join(p.dir, 'fake.json');
+  environment(t, { USER: 'owner' });
+  const signInAs = loginAs => fs.writeFileSync(fakeFile, JSON.stringify({ ...JSON.parse(fs.readFileSync(fakeFile, 'utf8')), accounts: { loginAs, plan: 'Pro', keychain: true } }));
+  const fake = fakeUsage(t, { platform: 'darwin', signIn: async ({ bin, args, env }) => spawnSync(bin, args, { env, encoding: 'utf8' }).status });
+  fs.writeFileSync(path.join(fake.home, 'claude', '.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'owner@example.invalid', planDisplayName: 'Max 20x' } }));
+  const others = [{ account: 'owner', service: 'Claude Code-credentials' }, { account: 'owner', service: claudeKeychainNames(path.join(fake.home, 'claude')).credentials }, { account: 'owner', service: 'Another App' }];
+  const keychain = fakeKeychain(p.dir, others), services = () => keychain.items().map(item => item.service).sort();
+  const v = await view(t, { repo: p.repo, usage: fake }), panels = v.current.panels, status = () => panels.status.getText();
+  const rowOf = pattern => panels.usageList.items.findIndex(item => pattern.test(item.getText()));
+  await send(v, '/usage'); await until(() => v.current.view === 'usage' && !panels.usageBox.hidden, 'Usage tab');
+  await until(() => /Usage updated \d\d:\d\d/.test(status()), 'first check');
+  panels.usageList.focus(); await until(() => v.current.screen.focused === panels.usageList, 'list focused');
+  signInAs('second@example.com'); panels.usageList.select(0); v.input.write('a');
+  await until(() => /Added second@example\.com\./.test(status()), 'second added');
+  signInAs('third@example.com'); v.input.write('a');
+  await until(() => /Added third@example\.com\./.test(status()), 'third added');
+  const [, second, third] = listLogins('claude'), names = id => claudeKeychainNames(path.join(personalDirectory(), 'logins', 'claude', id, '.claude'));
+  assert.deepEqual(services(), [...others.map(item => item.service), names(second).credentials, names(third).credentials].sort());
+  // x, y: that account's item goes with ELU's folder; the owner's, the third account's and another app's stay.
+  await until(() => rowOf(/^ {12}second@example\.com · Pro/) >= 0, 'second row');
+  panels.usageList.select(rowOf(/^ {12}second@example\.com · Pro/)); v.input.write('x');
+  await dialog(v, 'Forget second@example.com', 'y');
+  await until(() => /Forgot second@example\.com\.$/.test(status()), 'forgotten');
+  assert.deepEqual(services(), [...others.map(item => item.service), names(third).credentials].sort());
+  assert.deepEqual(listLogins('claude'), ['default', third]);
+  // With the Keychain locked the account is still forgotten, and a dialog names the item to delete.
+  keychain.lock(true);
+  panels.usageList.focus(); await until(() => rowOf(/^ {12}third@example\.com · Pro/) >= 0, 'third row');
+  panels.usageList.select(rowOf(/^ {12}third@example\.com · Pro/)); v.input.write('x');
+  await dialog(v, 'Forget third@example.com', 'y');
+  await until(() => modal(v, 'Forgot third@example.com'), 'the Keychain dialog');
+  assert.equal(dialogText(v, 'Forgot third@example.com'), `The Keychain kept its sign-in. Delete "${names(third).credentials}" in Keychain Access.`);
+  assert.match(status(), /Forgot third@example\.com\.$/);
+  await dialog(v, 'Forgot third@example.com', '');
+  assert.deepEqual(listLogins('claude'), ['default']);
+  assert.ok(services().includes(names(third).credentials));
+  assert.doesNotMatch(v.raw, /never-shown/);
+});
+
 test('Usage: a leaves ELU\'s screen for a cleared one with one line of ELU\'s, draws nothing over the sign-in, and draws ELU again in full after it', { timeout: 30000 }, async t => {
   const p = setup(t), fakeFile = path.join(p.dir, 'fake.json');
   const signInAs = loginAs => fs.writeFileSync(fakeFile, JSON.stringify({ ...JSON.parse(fs.readFileSync(fakeFile, 'utf8')), accounts: { loginAs, plan: 'Pro' } }));
@@ -3432,8 +3695,77 @@ test('Usage: a leaves ELU\'s screen for a cleared one with one line of ELU\'s, d
   signInAs('third@example.com'); panels.usageList.select(0); v.input.write('a');
   await until(() => /Added third@example\.com\./.test(status()), 'added over SSH');
   assert.deepEqual(started[1].args, ['auth', 'login']);
-  assert.ok(v.raw.slice(0, started[1].before).endsWith('\x1b[H\x1b[2JSigning in a new Claude Code account. ELU comes back when it ends.\r\nThis computer has no browser: open the link Claude Code prints in a browser, then follow its steps.\r\n\r\n'));
+  // Paste marks are off while the sign-in has the terminal, so a pasted code arrives as typed, and on again after.
+  assert.ok(v.raw.slice(0, started[1].before).endsWith('\x1b[?2004l\x1b[H\x1b[2JSigning in a new Claude Code account. ELU comes back when it ends.\r\nNo browser here: open the link below on any computer, then paste its code here.\r\nNothing shows as you paste. Press Enter after the code.\r\n\r\n'), JSON.stringify(v.raw.slice(started[1].before - 300, started[1].before))); assert.ok(v.raw.slice(started[1].before).includes('\x1b[?1049h\x1b[?2004h'));
   assert.equal(started[1].during, started[1].before);
+});
+
+// The owner's computer with no browser: a on Claude Code, the link opened on another computer,
+// the code that page shows pasted at "Paste code here if prompted >". A terminal wraps a paste in
+// ESC[200~ … ESC[201~ while the app that has it asked for paste marks, and Claude Code 2.1.322
+// sends the line as it came: with ELU's marks left on, the code was refused and no account added.
+test('Usage: a code pasted on the sign-in screen reaches Claude Code as it was copied, and the account is added', { timeout: 30000 }, async t => {
+  const p = setup(t), fakeFile = path.join(p.dir, 'fake.json'), pasted = path.join(p.parent, 'pasted.json'), code = 'FAKEcode-abc123#FAKEstate-xyz789';
+  fs.writeFileSync(fakeFile, JSON.stringify({ ...JSON.parse(fs.readFileSync(fakeFile, 'utf8')), accounts: { loginAs: 'second@example.com', plan: 'Pro', pasted, terminal: true } }));
+  environment(t, { SSH_CONNECTION: '10.0.0.2 52000 10.0.0.3 22', SSH_TTY: '', SSH_CLIENT: '' });
+  const started = []; let v = null;
+  // The terminal: whether the app that has it asked for paste marks, by the last word ELU wrote about them.
+  const marks = () => v.raw.lastIndexOf('\x1b[?2004h') > v.raw.lastIndexOf('\x1b[?2004l');
+  const fake = fakeUsage(t, { platform: 'linux', spawn: (bin, args, options) => {
+    const row = { args, printed: '', marks: null }; started.push(row);
+    const child = spawn(bin, args, { env: options.env, stdio: ['pipe', 'pipe', 'pipe'] });
+    // The owner pastes the code once the sign-in asks for it, then presses Enter.
+    const read = chunk => {
+      row.printed += chunk; if (row.marks !== null || !/Paste code here if prompted > $/.test(row.printed)) return;
+      row.marks = marks(); child.stdin.write(`${row.marks ? `\x1b[200~${code}\x1b[201~` : code}\r`);
+    };
+    child.stdout.on('data', read); child.stderr.on('data', read);
+    return child;
+  } });
+  v = await view(t, { repo: p.repo, usage: fake });
+  const panels = v.current.panels, status = () => panels.status.getText(), text = () => panels.usageList.items.map(item => item.getText()).join('\n');
+  await send(v, '/usage'); await until(() => v.current.view === 'usage' && !panels.usageBox.hidden, 'Usage tab');
+  await until(() => /Usage updated \d\d:\d\d/.test(status()), 'first check');
+  assert.equal(marks(), true, 'ELU takes pastes in marks');
+  panels.usageList.focus(); await until(() => v.current.screen.focused === panels.usageList, 'list focused');
+  panels.usageList.select(0); v.input.write('a');
+  await until(() => /Added second@example\.com\.|No account was added/.test(status()), 'the sign-in ended');
+  assert.deepEqual([started[0].args, started[0].marks], [['auth', 'login'], false], 'no paste marks while the sign-in has the terminal');
+  assert.equal(JSON.parse(fs.readFileSync(pasted, 'utf8')), code);
+  assert.match(started[0].printed, /Paste code here if prompted > Login successful\.\n$/);
+  assert.match(status(), /Added second@example\.com\. Enter on it uses it\./);
+  await until(() => /second@example\.com · Pro/.test(text()), 'the account listed');
+  // Back in ELU, a paste into the message box comes in marks again.
+  assert.equal(marks(), true);
+});
+
+test('Usage: a on a computer with no browser signs a new Codex account in with its device code', { timeout: 30000 }, async t => {
+  const p = setup(t), fakeFile = path.join(p.dir, 'fake.json'), started = [];
+  const signInAs = loginAs => fs.writeFileSync(fakeFile, JSON.stringify({ ...JSON.parse(fs.readFileSync(fakeFile, 'utf8')), accounts: { loginAs, plan: 'plus' } }));
+  environment(t, { SSH_CONNECTION: '10.0.0.2 52000 10.0.0.3 22', SSH_TTY: '', SSH_CLIENT: '' });
+  const fake = fakeUsage(t, { platform: 'linux', signIn: async ({ vendor, bin, args, env, lines }) => { const run = spawnSync(bin, args, { env, encoding: 'utf8' }); started.push({ vendor, args, lines, out: run.stdout }); return run.status; } });
+  const v = await view(t, { repo: p.repo, usage: fake }), panels = v.current.panels, status = () => panels.status.getText();
+  const rowOf = pattern => panels.usageList.items.findIndex(item => pattern.test(item.getText()));
+  await send(v, '/usage'); await until(() => v.current.view === 'usage' && !panels.usageBox.hidden, 'Usage tab');
+  await until(() => /Usage updated \d\d:\d\d/.test(status()), 'first check');
+  panels.usageList.focus(); await until(() => v.current.screen.focused === panels.usageList, 'list focused');
+  // Over SSH: Codex's own device code sign-in, and ELU's line says where the link and code go.
+  signInAs('second@example.com'); panels.usageList.select(rowOf(/^Codex/)); v.input.write('a');
+  await until(() => /Added second@example\.com\./.test(status()), 'added with a device code');
+  assert.deepEqual([started[0].vendor, started[0].args], ['codex', ['login', '--device-auth']]);
+  assert.deepEqual(started[0].lines, ['Signing in a new Codex account. ELU comes back when it ends.', 'No browser here: open the link below on any computer and use the code under it.']);
+  assert.match(started[0].out, /Enter this one-time code/);
+  // Claude Code has no device code sign-in: its own, with where its link goes.
+  signInAs('third@example.com'); panels.usageList.select(0); v.input.write('a');
+  await until(() => /Added third@example\.com\./.test(status()), 'Claude Code added');
+  assert.deepEqual(started[1].args, ['auth', 'login']);
+  assert.deepEqual(started[1].lines.slice(1), ['No browser here: open the link below on any computer, then paste its code here.', 'Nothing shows as you paste. Press Enter after the code.']);
+  assert.ok([...started[0].lines, ...started[1].lines].every(line => line.length <= 80), 'every line fits 80 columns');
+  // With a browser here, Codex signs in through it.
+  process.env.SSH_CONNECTION = ''; fake.platform = 'darwin';
+  signInAs('fourth@example.com'); panels.usageList.select(rowOf(/^Codex/)); v.input.write('a');
+  await until(() => /Added fourth@example\.com\./.test(status()), 'added with a browser');
+  assert.deepEqual([started[2].args, started[2].lines.length], [['login'], 1]);
 });
 
 // Sessions in two panes: the list on the left, and what its cursor is on, on the right.
@@ -3463,7 +3795,7 @@ test('Usage: Antigravity and Grok Build show their sign-in before their one-time
   assert.equal(conformanceState('grok'), null);
   // c on the Grok line: the same check a first message runs, its steps under the vendor as it goes.
   panels.usageList.focus(); await until(() => v.current.screen.focused === panels.usageList, 'list focused');
-  panels.usageList.select(rowOf(/^Grok Build/)); await until(() => /c run check {2}d details {2}r refresh/.test(panels.keys.getText()), 'c in the key bar');
+  panels.usageList.select(rowOf(/^Grok Build/)); await until(() => /c run check {2}s sign in {2}d details {2}r refresh/.test(panels.keys.getText()), 'c in the key bar');
   const seen = new Set(), watch = setInterval(() => { for (const line of text().split('\n')) seen.add(line.trim()); }, 5); t.after(() => clearInterval(watch));
   v.input.write('c');
   await until(() => /^Grok Build {2}signed in · ready$/m.test(text()), 'Grok ready', 45000);
@@ -3479,7 +3811,247 @@ test('Usage: Antigravity and Grok Build show their sign-in before their one-time
   assert.match(text(), /^Grok Build {2}signed in · ready$/m);
   // Signed out, Antigravity says how to sign in, after r.
   fs.writeFileSync(path.join(p.dir, 'fake.json'), JSON.stringify({ ...JSON.parse(fs.readFileSync(path.join(p.dir, 'fake.json'), 'utf8')), agy: { signedIn: false } }));
-  v.input.write('r'); await until(() => /^Antigravity not signed in\. Run: agy$/m.test(text()), 'Antigravity signed out', 20000);
+  v.input.write('r'); await until(() => /^Antigravity not signed in for ELU · s signs in$/m.test(text()), 'Antigravity signed out', 20000);
+});
+
+// The owner's Mac on 0.1.19: the temp folder is under /var, a link; Antigravity CLI is signed
+// in in his terminal but not under ELU's HOME, so it asks for a sign-in and waits a minute for
+// a code; Grok Build is signed in. c on either refused "Refusing a symbolic link: /var", and c
+// on Antigravity held the app while agy opened a sign-in whose code had nowhere to go.
+test('Usage on a Mac: Antigravity says it is not signed in for ELU at once, c offers its sign-in on a clean screen, the code typed there signs it in, and the check runs to ready; Grok Build\'s check passes with the temp folder under a link', { timeout: 90000 }, async t => {
+  const p = setup(t), fake = fakeUsage(t), fakeFile = path.join(p.dir, 'fake.json');
+  fs.mkdirSync(path.join(p.parent, 'private', 'var', 'folders', 'xy', 'T'), { recursive: true }); fs.symlinkSync(path.join(p.parent, 'private', 'var'), path.join(p.parent, 'var'));
+  // As macOS has them: TMPDIR ends with a slash, /tmp is a link to /private/tmp, and the home folder is under no link.
+  fs.mkdirSync(path.join(p.parent, 'private', 'tmp')); fs.symlinkSync(path.join(p.parent, 'private', 'tmp'), path.join(p.parent, 'tmp'));
+  assert.equal(fs.realpathSync(fake.home), fake.home);
+  environment(t, { TMPDIR: `${path.join(p.parent, 'var', 'folders', 'xy', 'T')}${path.sep}`, SSH_CONNECTION: '', SSH_TTY: '', SSH_CLIENT: '' });
+  fs.writeFileSync(fakeFile, JSON.stringify({ ...JSON.parse(fs.readFileSync(fakeFile, 'utf8')), agy: { signedIn: false, auth: 'prompt' } }));
+  // A browser that opens records the link it was given.
+  const openers = path.join(p.parent, 'openers'), opened = path.join(p.parent, 'opened.log'); fs.mkdirSync(openers);
+  for (const name of ['open', 'xdg-open']) fs.writeFileSync(path.join(openers, name), `#!/bin/sh\necho "$@" >> ${JSON.stringify(opened)}\n`, { mode: 0o755 });
+  environment(t, { PATH: `${process.env.PATH}${path.delimiter}${openers}` });
+  // Grok Build signed out, its login on: the owner never ran grok, so there is no ~/.grok.
+  fs.writeFileSync(fakeFile, JSON.stringify({ ...JSON.parse(fs.readFileSync(fakeFile, 'utf8')), grok: { login: true, browser: true } }));
+  fake.vendors = () => detect(p.root, { ...process.env, HOME: fake.home });
+  // The sign-in as the terminal runs it, where the owner types the code once agy asks for it.
+  const started = []; let v = null;
+  fake.platform = 'darwin';
+  const listening = () => ['SIGINT', 'SIGQUIT'].map(signal => process.listenerCount(signal)); let idle = null;
+  fake.spawn = (bin, args, options) => {
+    const row = { args, stdio: options.stdio, home: options.env.HOME, path: options.env.PATH, before: v.raw.length, during: null, printed: '', signals: listening() }; started.push(row);
+    const child = spawn(bin, args, { env: options.env, stdio: ['pipe', 'pipe', 'pipe'] });
+    // agy asks for the code the browser shows; grok login waits until the owner confirms its code in the browser.
+    const read = chunk => {
+      row.printed += chunk; if (row.typed) return;
+      const code = /paste the authorization code here and press Enter:/.test(row.printed), approval = /Waiting for authorization\.\.\./.test(row.printed);
+      if (code || approval) { row.typed = true; row.during = v.raw.length; if (code) child.stdin.write('4/0AeanS0b-fake-code\n'); else fs.writeFileSync(path.join(p.dir, 'grok-approved'), ''); }
+    };
+    child.stdout.on('data', read); child.stderr.on('data', read);
+    return child;
+  };
+  v = await view(t, { repo: p.repo, usage: fake });
+  const panels = v.current.panels, text = () => panels.usageList.items.map(item => item.getText()).join('\n'), status = () => panels.status.getText();
+  const rowOf = pattern => panels.usageList.items.findIndex(item => pattern.test(item.getText()));
+  const opening = Date.now();
+  await send(v, '/usage'); await until(() => v.current.view === 'usage' && !panels.usageBox.hidden, 'Usage tab');
+  // Within seconds, not after 30 silent ones, and with no browser opened by the read.
+  await until(() => /^Antigravity not signed in for ELU · s signs in$/m.test(text()), 'Antigravity not signed in for ELU', 15000);
+  assert.ok(Date.now() - opening < 15000, `${Date.now() - opening} ms`);
+  assert.equal(fs.existsSync(opened), false, 'reading the sign-in opened no browser');
+  panels.usageList.focus(); await until(() => v.current.screen.focused === panels.usageList, 'list focused');
+  panels.usageList.select(rowOf(/^Antigravity/)); await until(() => /c run check {2}s sign in {2}d details {2}r refresh/.test(panels.keys.getText()), 's in the key bar');
+  // c: the check stops before its first step and offers the sign-in.
+  let most = 0, last = Date.now(); const ticker = setInterval(() => { most = Math.max(most, Date.now() - last); last = Date.now(); }, 10); t.after(() => clearInterval(ticker));
+  idle = listening(); v.input.write('c');
+  await until(() => modal(v, 'Sign in to Antigravity CLI'), 'the sign-in offered', 15000);
+  assert.ok(most < 3000, `the app was held ${most} ms`);
+  assert.match(dialogText(v, 'Sign in to Antigravity CLI'), /Antigravity CLI is not signed in for ELU, so its check cannot run\.\nSign in now\? Its own sign-in runs here on a clean screen, and the check goes on after it\./);
+  assert.match(text(), /^Antigravity not signed in for ELU · s signs in\n {12}Antigravity CLI is not signed in for ELU\. Sign it in with s on\n {12}its line in the Usage tab\.$/m);
+  await dialog(v, 'Sign in to Antigravity CLI', 'y');
+  // Back in ELU after the code: the check goes on by itself and ends ready.
+  await until(() => /^Antigravity signed in · ready$/m.test(text()), 'Antigravity ready', 60000);
+  clearInterval(ticker);
+  const [first] = started, before = v.raw.slice(0, first.before);
+  // agy's own sign-in: under the HOME every ELU run of agy shares, on the terminal, with the real PATH.
+  assert.deepEqual([first.args, first.stdio, first.home], [['-p', '/usage'], 'inherit', path.join(personalDirectory(), 'agy-home', 'signin')]);
+  assert.ok(!first.path.includes('no-browser'));
+  assert.ok(before.lastIndexOf('\x1b[?1049l') > before.lastIndexOf('\x1b[?1049h'), 'left the alternate screen');
+  assert.ok(before.endsWith('\x1b[H\x1b[2JSigning in to Antigravity CLI for ELU. ELU comes back when it ends.\r\nYour browser opens Google sign-in. Sign in there and copy the code it shows,\r\nthen paste it here and press Enter. It waits 60 seconds for the code.\r\nIf the 60 seconds pass, it stops. Press s again for a new link and a new code.\r\n\r\n'), JSON.stringify(before.slice(-400)));
+  assert.equal(first.during, first.before, 'nothing of ELU\'s drew over the sign-in');
+  // Ctrl-C on that screen ends the sign-in, not ELU: while it runs ELU listens for the signals
+  // the terminal sends both, and stops listening after.
+  assert.deepEqual(first.signals, idle.map(count => count + 1)); assert.deepEqual(listening(), idle);
+  assert.match(first.printed, /Authentication required\. Please visit the URL to log in:\n {2}https:\/\/accounts\.google\.com\/\S+\n\nWaiting for authentication \(timeout 60s\)\.\.\.\nOr, paste the authorization code here and press Enter:\nSigned in\./);
+  assert.deepEqual(fs.readFileSync(opened, 'utf8').trim().split('\n').map(line => line.split('?')[0]), ['https://accounts.google.com/o/oauth2/auth'], 'the sign-in opened the browser once');
+  assert.match(text(), /^Antigravity signed in · ready\n {12}One-time check of Antigravity CLI on this machine first: about\n {12}seven short turns on it, a few minutes\.\n {12}Antigravity CLI 1\.5\.4 passed its check on this machine\.$/m);
+  await until(() => /Antigravity CLI is ready\./.test(status()), 'status');
+  // Grok Build, signed out: c offers its sign-in, and n leaves it signed out, saying what s does.
+  panels.usageList.select(rowOf(/^Grok Build/)); await until(() => /c run check {2}s sign in/.test(panels.keys.getText()), 'Grok key bar');
+  v.input.write('c');
+  await until(() => modal(v, 'Sign in to Grok Build'), 'the Grok sign-in offered', 15000);
+  await dialog(v, 'Sign in to Grok Build', 'n');
+  await until(() => /Grok Build is not signed in for ELU\. s signs it in\./.test(status()), 'declined');
+  assert.match(text(), /^Grok Build {2}not signed in for ELU · s signs in\n {12}Grok Build is not signed in for ELU\. Sign it in with s on its\n {12}line in the Usage tab\.$/m);
+  assert.equal(started.length, 1, 'no sign-in ran');
+  // s: grok login under ELU's HOME and Grok home; its token lands in the owner's own file, and
+  // the line drops what the stopped check said.
+  v.input.write('s');
+  await until(() => /^Grok Build {2}signed in · needs a one-time check \(c runs it now\)$/m.test(text()), 'Grok signed in', 30000);
+  assert.deepEqual([started[1].args, started[1].home], [['login'], path.join(personalDirectory(), 'grok-home')]);
+  assert.match(started[1].printed, /Confirm this code in your browser:\n\n {2}FAKE-CODE\n[\s\S]*Waiting for authorization\.\.\.\nSigned in\.\n$/);
+  assert.equal(fs.statSync(path.join(fake.home, '.grok', 'auth.json')).isFile(), true);
+  assert.doesNotMatch(text(), /Grok Build is not signed in/);
+  assert.match(status(), /Grok Build is signed in for ELU\./);
+  // c, with the same temp folder under a link: the check runs to ready.
+  v.input.write('c');
+  await until(() => /^Grok Build {2}signed in · ready$/m.test(text()), 'Grok ready', 45000);
+  assert.doesNotMatch(text(), /symbolic link/);
+  // Signed in now, s still runs the sign-in again (a lapsed one): the key bar keeps it, without c.
+  await until(() => /^s sign in {2}d details {2}r refresh/.test(panels.keys.getText().trim()), 'key bar once ready');
+});
+
+// The owner's devbox over SSH, where no browser opens: s on Grok Build runs its device code
+// sign-in, and s on Antigravity CLI the sign-in that takes the code its page shows, pasted
+// here as a terminal pastes it. ELU's lines on both screens say what the link is for.
+test('Usage on a computer with no browser: s signs Grok Build in with its device code, and Antigravity CLI with the code pasted on its sign-in screen', { timeout: 90000 }, async t => {
+  const p = setup(t), fake = fakeUsage(t), fakeFile = path.join(p.dir, 'fake.json');
+  environment(t, { SSH_CONNECTION: '10.0.0.2 52000 10.0.0.3 22', SSH_TTY: '', SSH_CLIENT: '' });
+  // No browser: the openers agy tries do nothing.
+  const openers = path.join(p.parent, 'openers'); fs.mkdirSync(openers);
+  for (const name of ['open', 'xdg-open']) fs.writeFileSync(path.join(openers, name), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  environment(t, { PATH: `${openers}${path.delimiter}${process.env.PATH}` });
+  fs.writeFileSync(fakeFile, JSON.stringify({ ...JSON.parse(fs.readFileSync(fakeFile, 'utf8')), agy: { signedIn: false, auth: 'prompt' }, grok: { login: true } }));
+  fake.vendors = () => detect(p.root, { ...process.env, HOME: fake.home }); fake.platform = 'linux';
+  const started = []; let v = null;
+  // The terminal: a paste comes in marks while the app that has it asked for them.
+  const marks = () => v.raw.lastIndexOf('\x1b[?2004h') > v.raw.lastIndexOf('\x1b[?2004l'), code = '4/0AeanS0b-fake-code';
+  fake.spawn = (bin, args, options) => {
+    const row = { args, before: v.raw.length, printed: '', done: false, marks: null }; started.push(row);
+    const child = spawn(bin, args, { env: options.env, stdio: ['pipe', 'pipe', 'pipe'] });
+    // Grok Build: the owner confirms its code on the page. Antigravity CLI: he pastes the code the page shows.
+    const read = chunk => {
+      row.printed += chunk; if (row.done) return;
+      if (/Waiting for authorization\.\.\./.test(row.printed)) { row.done = true; fs.writeFileSync(path.join(p.dir, 'grok-approved'), ''); }
+      else if (/paste the authorization code here and press Enter:/.test(row.printed)) { row.done = true; row.marks = marks(); child.stdin.write(`${row.marks ? `\x1b[200~${code}\x1b[201~` : code}\n`); }
+    };
+    child.stdout.on('data', read); child.stderr.on('data', read);
+    return child;
+  };
+  v = await view(t, { repo: p.repo, usage: fake });
+  const panels = v.current.panels, text = () => panels.usageList.items.map(item => item.getText()).join('\n'), status = () => panels.status.getText();
+  const rowOf = pattern => panels.usageList.items.findIndex(item => pattern.test(item.getText()));
+  const screenBefore = row => v.raw.slice(Math.max(0, row.before - 400), row.before);
+  await send(v, '/usage'); await until(() => v.current.view === 'usage' && !panels.usageBox.hidden, 'Usage tab');
+  await until(() => /^Antigravity not signed in for ELU · s signs in$/m.test(text()), 'Antigravity not signed in for ELU', 15000);
+  assert.match(text(), /^Grok Build {2}not signed in for ELU · s signs in$/m);
+  panels.usageList.focus(); await until(() => v.current.screen.focused === panels.usageList, 'list focused');
+  // Grok Build: grok login --device-auth, which needs no browser here.
+  panels.usageList.select(rowOf(/^Grok Build/)); await until(() => /s sign in/.test(panels.keys.getText()), 's in the key bar');
+  v.input.write('s');
+  await until(() => /^Grok Build {2}signed in · needs a one-time check \(c runs it now\)$/m.test(text()), 'Grok Build signed in', 30000);
+  assert.deepEqual(started[0].args, ['login', '--device-auth']);
+  assert.ok(screenBefore(started[0]).endsWith('\x1b[?2004l\x1b[H\x1b[2JSigning in to Grok Build. ELU comes back when it ends.\r\nNo browser here: open the link below on any computer and use the code under it.\r\n\r\n'), JSON.stringify(screenBefore(started[0])));
+  assert.match(started[0].printed, /open this URL in your browser:\n\n {2}https:\/\/accounts\.x\.ai\/oauth2\/device\?user_code=FAKE-CODE\n[\s\S]*Confirm this code in your browser:\n\n {2}FAKE-CODE\n[\s\S]*Waiting for authorization\.\.\.\nSigned in\.\n$/);
+  assert.equal(fs.statSync(path.join(fake.home, '.grok', 'auth.json')).isFile(), true);
+  await until(() => /Grok Build is signed in for ELU\./.test(status()), 'status');
+  // Antigravity CLI: its sign-in prints the link and takes the code pasted under ELU's lines.
+  panels.usageList.select(rowOf(/^Antigravity/)); v.input.write('s');
+  await until(() => /^Antigravity signed in · needs a one-time check \(c runs it now\)$/m.test(text()), 'Antigravity signed in', 30000);
+  assert.deepEqual([started[1].args, started[1].marks], [['-p', '/usage'], false], 'no paste marks while the sign-in has the terminal');
+  assert.ok(screenBefore(started[1]).endsWith('\x1b[?2004l\x1b[H\x1b[2JSigning in to Antigravity CLI for ELU. ELU comes back when it ends.\r\nNo browser here: open the link below on any computer, then paste its code here.\r\nPress Enter after it. It waits 60 seconds for the code.\r\nIf the 60 seconds pass, it stops. Press s again for a new link and a new code.\r\n\r\n'), JSON.stringify(screenBefore(started[1])));
+  assert.match(started[1].printed, /Or, paste the authorization code here and press Enter:\nSigned in\./);
+  await until(() => /Antigravity CLI is signed in for ELU\./.test(status()), 'status');
+  assert.equal(marks(), true, 'ELU takes pastes in marks again');
+});
+
+// Antigravity CLI waits 60 seconds for the code and then ends by itself. An owner who took
+// longer at Google's page came back to "sign-in did not finish": nothing had said the time
+// was up, nor that s gives a new link and a new code. Here its minute is four seconds long.
+test('Usage: Antigravity\'s sign-in screen says what happens when its 60 seconds pass, a sign-in that ran out of them says so, and s starts one with a new link', { timeout: 90000 }, async t => {
+  const p = setup(t), fake = fakeUsage(t), fakeFile = path.join(p.dir, 'fake.json');
+  environment(t, { SSH_CONNECTION: '', SSH_TTY: '', SSH_CLIENT: '' });
+  fs.writeFileSync(fakeFile, JSON.stringify({ ...JSON.parse(fs.readFileSync(fakeFile, 'utf8')), agy: { signedIn: false, auth: 'prompt', authSeconds: 4 } }));
+  const openers = path.join(p.parent, 'openers'); fs.mkdirSync(openers);
+  for (const name of ['open', 'xdg-open']) fs.writeFileSync(path.join(openers, name), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  environment(t, { PATH: `${process.env.PATH}${path.delimiter}${openers}` });
+  fake.vendors = () => detect(p.root, { ...process.env, HOME: fake.home });
+  fake.platform = 'darwin'; fake.signInWait = 4;
+  // What the owner does on the sign-in screen: ends it with Ctrl-C, lets the time pass, or pastes the code.
+  const started = []; let v = null, owner = 'quits';
+  fake.spawn = (bin, args, options) => {
+    const row = { before: v.raw.length, printed: '', acted: false }; started.push(row);
+    const child = spawn(bin, args, { env: options.env, stdio: ['pipe', 'pipe', 'pipe'] });
+    const read = chunk => {
+      row.printed += chunk; if (row.acted || !/paste the authorization code here and press Enter:/.test(row.printed)) return;
+      row.acted = true; if (owner === 'quits') child.kill('SIGINT'); else if (owner === 'pastes') child.stdin.write('4/0AeanS0b-fake-code\n');
+    };
+    child.stdout.on('data', read); child.stderr.on('data', read);
+    return child;
+  };
+  v = await view(t, { repo: p.repo, usage: fake });
+  const panels = v.current.panels, text = () => panels.usageList.items.map(item => item.getText()).join('\n'), status = () => panels.status.getText();
+  await send(v, '/usage'); await until(() => v.current.view === 'usage' && !panels.usageBox.hidden, 'Usage tab');
+  await until(() => /^Antigravity not signed in for ELU · s signs in$/m.test(text()), 'Antigravity not signed in for ELU', 15000);
+  panels.usageList.focus(); await until(() => v.current.screen.focused === panels.usageList, 'list focused');
+  panels.usageList.select(panels.usageList.items.findIndex(item => /^Antigravity/.test(item.getText()))); await until(() => /s sign in/.test(panels.keys.getText()), 's in the key bar');
+  // Ended by the owner before the time was up: the sign-in did not finish, and nothing says the time ran out.
+  v.input.write('s');
+  await until(() => /Antigravity CLI's sign-in did not finish\. s tries again\./.test(status()), 'the sign-in the owner ended', 20000);
+  const screen = v.raw.slice(0, started[0].before);
+  assert.ok(screen.endsWith('\x1b[H\x1b[2JSigning in to Antigravity CLI for ELU. ELU comes back when it ends.\r\nYour browser opens Google sign-in. Sign in there and copy the code it shows,\r\nthen paste it here and press Enter. It waits 60 seconds for the code.\r\nIf the 60 seconds pass, it stops. Press s again for a new link and a new code.\r\n\r\n'), JSON.stringify(screen.slice(-400)));
+  for (const line of screen.slice(screen.lastIndexOf('\x1b[2J') + 4).split('\r\n')) assert.ok(line.length <= 80, `fits 80 columns: ${line}`);
+  // The time passes with no code: agy says so and ends, and ELU says what s does now.
+  owner = 'waits'; v.input.write('s');
+  await until(() => /Antigravity CLI got no code in 60 seconds\. s starts again with a new link\./.test(status()), 'the time ran out', 30000);
+  assert.match(started[1].printed, /Waiting for authentication \(timeout 4s\)\.\.\.\nOr, paste the authorization code here and press Enter:\nError: authentication timed out\./);
+  assert.ok(status().trim().length <= 78, 'the status fits 80 columns');
+  assert.match(text(), /^Antigravity not signed in for ELU · s signs in$/m);
+  // s again: a sign-in of its own with another link, and the code pasted in time signs it in.
+  owner = 'pastes'; v.input.write('s');
+  await until(() => /Antigravity CLI is signed in for ELU\./.test(status()), 'signed in', 30000);
+  const link = row => row.printed.match(/https:\/\/accounts\.google\.com\/\S+/)[0];
+  assert.equal(started.length, 3); assert.notEqual(link(started[2]), link(started[1]));
+  assert.match(text(), /^Antigravity signed in · needs a one-time check \(c runs it now\)$/m);
+});
+
+// Antigravity CLI passed its check on this machine, so reading the vendors asks it for its
+// sign-in, and it gives no answer for half a minute: a keyring that waits to be unlocked, a
+// network that does not answer. On 0.1.19 that reading ran inside the draw: the app drew
+// nothing and took no key until the read gave up.
+test('Usage with a vendor that says nothing for 30 seconds: the tab opens at once, keys work all the while, and the vendors show when the reading ends', { timeout: 120000 }, async t => {
+  const p = setup(t), fake = fakeUsage(t), fakeFile = path.join(p.dir, 'fake.json');
+  fs.writeFileSync(fakeFile, JSON.stringify({ ...JSON.parse(fs.readFileSync(fakeFile, 'utf8')), agy: { usageSeconds: 30 } }));
+  const record = path.join(personalDirectory(), 'conformance', 'agy.json'); fs.mkdirSync(path.dirname(record), { recursive: true });
+  fs.writeFileSync(record, JSON.stringify({ v: 1, bin: fs.realpathSync(path.join(p.dir, 'agy')), version: '1.5.4', steps: Object.fromEntries(ADAPTERS.agy.conformance.map(step => [step.id, 'pass'])), relay: false, at: new Date().toISOString() }), { mode: 0o600 });
+  // The real reading of the vendors, with the fake CLIs on PATH.
+  fake.vendors = () => detect(p.root, { ...process.env, HOME: fake.home });
+  const v = await view(t, { repo: p.repo, usage: fake }), panels = v.current.panels, text = () => panels.usageList.items.map(item => item.getText()).join('\n');
+  const calls = () => fs.readFileSync(p.calls, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+  // The longest the app went without running a timer: what the screen froze for.
+  let most = 0, last = Date.now(); const ticker = setInterval(() => { most = Math.max(most, Date.now() - last); last = Date.now(); }, 10); t.after(() => clearInterval(ticker));
+  const opened = Date.now();
+  await send(v, '/usage'); await until(() => v.current.view === 'usage' && !panels.usageBox.hidden, 'Usage tab');
+  await until(() => /^Reading what is installed and signed in here…$/m.test(text()), 'the tab says it is reading', 5000);
+  assert.ok(Date.now() - opened < 5000, `the tab took ${Date.now() - opened} ms to open`);
+  // The agents and today's spend are there already, under the line that says what is being read.
+  assert.match(text(), /^Reading what is installed and signed in here…\n\nTop agents today\nNo agent has run today\.\nELU spend today not reported$/);
+  // Keys work while it reads: t changes the period of the agents list, and back.
+  panels.usageList.focus(); await until(() => v.current.screen.focused === panels.usageList, 'list focused');
+  v.input.write('t'); await until(() => /^Top agents, last 7 days$/m.test(text()), 't shows 7 days', 2000);
+  await until(() => calls().some(call => call.vendor === 'agy' && call.args.includes('/usage')), 'Antigravity CLI asked for its sign-in', 20000);
+  // Ten seconds into its silence they still do, and so does another tab and the way back.
+  await new Promise(resolve => setTimeout(resolve, 10000));
+  assert.match(text(), /^Reading what is installed and signed in here…$/m);
+  v.input.write('t'); await until(() => /^Top agents today$/m.test(text()), 't shows today', 2000);
+  await send(v, '/projects'); await until(() => v.current.view === 'projects', 'Projects tab', 2000);
+  await send(v, '/usage'); await until(() => v.current.view === 'usage' && !panels.usageBox.hidden, 'Usage tab again', 2000);
+  assert.match(text(), /^Reading what is installed and signed in here…$/m);
+  assert.equal(calls().filter(call => call.vendor === 'agy' && call.args.includes('/usage')).length, 1, 'one reading, not one for each draw');
+  // When Antigravity CLI's half minute is up the vendors show: a read that got no answer is not a sign-out.
+  await until(() => /^Antigravity signed in · ready$/m.test(text()), 'the vendors show', 60000);
+  assert.ok(Date.now() - opened > 25000, `the reading took ${Date.now() - opened} ms`);
+  assert.doesNotMatch(text(), /Reading what is installed/);
+  assert.ok(most < 3000, `the app was held ${most} ms`);
 });
 
 test('Sessions shows the list on the left and the open session on the right, at 100 columns and at 80', { timeout: 30000 }, async t => {

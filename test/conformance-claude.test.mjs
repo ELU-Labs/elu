@@ -52,18 +52,18 @@ function modeFixture(t) {
 const valueOf = (args, flag) => args[args.indexOf(flag) + 1];
 const settingsOf = args => JSON.parse(valueOf(args, '--settings'));
 
-test('ask, auto and full launch through the approval relay, deny the never list and secrets, and run no agents', t => {
+test('ask, auto and full launch through the approval relay, ask and auto deny the never list and secrets, and none runs agents', t => {
   const f = modeFixture(t);
   const lockedArgs = claude({ role: f.role, cwd: f.cwd, protectedPaths: f.protectedPaths, commonDir: f.commonDir, session: SESSION });
   assert.deepEqual(claude({ mode: 'locked', role: f.role, cwd: f.cwd, protectedPaths: f.protectedPaths, commonDir: f.commonDir, session: SESSION }), lockedArgs, 'locked is the default and byte-identical');
   const expectedModes = { ask: 'default', auto: 'auto', full: 'bypassPermissions' };
   for (const mode of ['ask', 'auto', 'full']) {
-    const args = claude({ ...f.base, mode }), settings = settingsOf(args), tools = valueOf(args, '--tools').split(',');
+    const args = claude({ ...f.base, mode }), settings = settingsOf(args), tools = valueOf(args, '--tools').replace(/^default$/, 'Read,Grep,Glob,Edit,Write,Bash,WebFetch,WebSearch').split(',');
     assert.equal(args[0], '-p'); assert.equal(valueOf(args, '--permission-mode'), expectedModes[mode], mode);
     assert.equal(valueOf(args, '--permission-prompts'), 'host'); assert.equal(valueOf(args, '--permission-prompt-tool'), 'mcp__elu-code-approval__approve');
     assert.equal(args.includes('--restricted'), false); assert.equal(args.includes('--safe-mode'), false);
     assert.ok(args.includes('--strict-mcp-config')); assert.equal(valueOf(args, '--mcp-config'), f.mcp.file); assert.equal(valueOf(args, '--setting-sources'), '');
-    assert.ok(args.includes('--no-chrome')); assert.equal(valueOf(args, '--disallowedTools'), 'Agent,Task,NotebookEdit,PowerShell,Monitor');
+    assert.ok(args.includes('--no-chrome')); assert.equal(mode === 'full' ? args.includes('--disallowedTools') : valueOf(args, '--disallowedTools') === 'Agent,Task,NotebookEdit,PowerShell,Monitor', mode !== 'full');
     assert.equal(valueOf(args, '--session-id'), SESSION);
     // No spending limit unless the owner set one; a limit goes to the vendor as it is.
     assert.equal(f.role.maxCostUsd, null); assert.equal(args.includes('--max-budget-usd'), false, mode);
@@ -74,9 +74,13 @@ test('ask, auto and full launch through the approval relay, deny the never list 
     for (const rule of NEVER_RULES) assert.equal(settings.permissions.deny.includes(rule), mode !== 'full', `${mode} ${mode === 'full' ? 'runs' : 'denies'} ${rule}`);
     if (mode === 'full') assert.equal(args.some(arg => NEVER_RULES.some(rule => arg.includes(rule))), false, 'no never-list rule anywhere in the Full access argv');
     assert.ok(NEVER_RULES.includes('Bash(git push:*)') && NEVER_RULES.includes('Bash(terraform apply:*)') && NEVER_RULES.includes('Bash(claude mcp add:*)') && NEVER_RULES.includes('Bash(elu mcp add:*)') && NEVER_RULES.length === 22);
-    for (const name of ['.env*', '.npmrc', '.netrc', 'auth.json', 'credentials.json', 'id_rsa', '*.pem']) assert.ok(settings.permissions.deny.includes(`Read(**/${name})`), `${mode} denies ${name}`);
-    const home = fs.realpathSync(os.homedir());
-    assert.ok(settings.permissions.deny.includes(`Read(//${path.join(home, '.ssh').slice(1)}/**)`)); assert.ok(settings.permissions.deny.includes(`Read(//${path.join(home, '.claude.json').slice(1)})`));
+    // Full access is everything: no deny rule at all, home secrets included.
+    if (mode === 'full') assert.deepEqual(settings.permissions.deny, [], 'Full access denies nothing');
+    else {
+      for (const name of ['.env*', '.npmrc', '.netrc', 'auth.json', 'credentials.json', 'id_rsa', '*.pem']) assert.ok(settings.permissions.deny.includes(`Read(**/${name})`), `${mode} denies ${name}`);
+      const home = fs.realpathSync(os.homedir());
+      assert.ok(settings.permissions.deny.includes(`Read(//${path.join(home, '.ssh').slice(1)}/**)`)); assert.ok(settings.permissions.deny.includes(`Read(//${path.join(home, '.claude.json').slice(1)})`));
+    }
     assert.equal('blockReadsOutsideWorkingDirectories' in settings.permissions, false, 'file tools reach outside the workspace and ask');
     assert.equal(settings.disableAllHooks, true); assert.equal(settings.enableAllProjectMcpServers, false);
     assert.equal(args.some(a => /dangerously|--yolo/.test(a)), false);
@@ -102,7 +106,7 @@ test('ask and auto keep the sandbox and the protected paths; full drops the sand
   assert.deepEqual(settings.sandbox, { enabled: false }); assert.equal(settings.permissions.ask, undefined);
   assert.equal(full.some(a => a.startsWith('--allowedTools=')), false, 'full has no allow list');
   assert.equal(settings.permissions.deny.some(rule => rule.includes('package.json')), false, 'full lifts the protected paths');
-  assert.ok(!settings.permissions.deny.includes('Bash(git push:*)') && settings.permissions.deny.includes('Read(**/.env*)'), 'secrets stay denied; the never list does not');
+  assert.deepEqual(settings.permissions.deny, [], 'no never list and no secret rule: Full access is everything');
   assert.ok(full.includes('--permission-mode') && valueOf(full, '--permission-mode') === 'bypassPermissions');
   // An answer turn (a read role) keeps its folder write-denied in ask and auto, so an edit there asks like any outside edit.
   const answer = { ...f.role, access: 'read', commands: [], writablePaths: [] };
@@ -212,7 +216,7 @@ test('parse reports the profile Claude ran with and its denials, clipped and not
   assert.equal(plain.effectiveMode, null); assert.deepEqual(plain.denials, []);
 });
 
-test('the file tools read a tracked .npmrc in every mode, Full included, and are kept from an untracked one by path', t => {
+test('the file tools read a tracked .npmrc in every mode, and below Full access are kept from an untracked one by path', t => {
   const f = modeFixture(t), root = f.cwd, run = (...args) => gitIn(root, args);
   run('init', '--initial-branch=main'); run('config', 'user.name', 'Test Owner'); run('config', 'user.email', 'owner@example.invalid');
   fs.mkdirSync(path.join(root, 'backend/agents'), { recursive: true });
@@ -220,16 +224,18 @@ test('the file tools read a tracked .npmrc in every mode, Full included, and are
   fs.writeFileSync(path.join(root, '.npmrc'), '//registry.npmjs.org/:_authToken=x\n'); fs.writeFileSync(path.join(root, 'id_rsa'), 'key\n');
   const tracked = path.join(root, 'backend/agents/.npmrc'), loose = path.join(root, '.npmrc'), key = path.join(root, 'id_rsa');
   const rule = file => `Read(//${file.slice(1)})`;
-  for (const mode of ['locked', 'ask', 'auto', 'full']) {
+  assert.deepEqual(settingsOf(claude({ ...f.base, mode: 'full' })).permissions.deny, [], 'Full access closes nothing');
+  for (const mode of ['locked', 'ask', 'auto']) {
     const args = mode === 'locked' ? claude({ role: f.role, cwd: root, protectedPaths: f.protectedPaths, commonDir: f.commonDir, session: SESSION }) : claude({ ...f.base, mode });
     const { deny } = settingsOf(args).permissions;
     assert.ok(deny.includes(rule(loose)), `${mode}: the untracked .npmrc stays closed`);
     if (mode !== 'locked') assert.ok(deny.includes(rule(key)), `${mode}: an untracked key stays closed`);
     assert.equal(deny.some(entry => entry.includes('backend/agents') || /^Read\(\*\*\//.test(entry)), false, `${mode}: no rule closes the tracked ${path.relative(root, tracked)}, by path or by name`);
   }
-  // Outside a Git work tree every file of those names stays closed, Full included.
+  // Outside a Git work tree every file of those names stays closed below Full access.
   const plain = modeFixture(t);
-  for (const mode of ['ask', 'full']) assert.ok(settingsOf(claude({ ...plain.base, mode })).permissions.deny.includes('Read(**/.npmrc)'), mode);
+  assert.ok(settingsOf(claude({ ...plain.base, mode: 'ask' })).permissions.deny.includes('Read(**/.npmrc)'));
+  assert.deepEqual(settingsOf(claude({ ...plain.base, mode: 'full' })).permissions.deny, []);
 });
 
 test('a sandboxed command is kept from untracked secret files by path, never from tracked ones, which Git must read', t => {
@@ -300,6 +306,6 @@ test('a repository added inside another by hand, with no .gitmodules entry, keep
   assert.ok(reads.includes(`${dir}/**/.env*`) && reads.includes(`${dir}/**/.npmrc`), 'the sandbox hides the names inside it');
   for (const mode of ['locked', 'ask', 'auto', 'full']) {
     const args = mode === 'locked' ? claude({ role: f.role, cwd: root, protectedPaths: f.protectedPaths, commonDir: f.commonDir, session: SESSION }) : claude({ ...f.base, mode });
-    assert.ok(settingsOf(args).permissions.deny.includes(`Read(//${dir.slice(1)}/**/.env*)`), `${mode}: the file tools are denied them too`);
+    assert.equal(settingsOf(args).permissions.deny.includes(`Read(//${dir.slice(1)}/**/.env*)`), mode !== 'full', `${mode}: the file tools are denied them too, except in Full access`);
   }
 });

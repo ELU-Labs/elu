@@ -121,7 +121,10 @@ You can send a message at any time. One sent while the session is working waits 
 | `/quit` | Closes ELU. Sessions that are running or queued go on in the background; `elu conductor stop` stops them |
 
 A schedule also runs while ELU is closed, through a login item, once ELU is
-installed (not run through `npx`). On macOS, while an agent works or a schedule is on, ELU
+installed (not run through `npx`). The login item is there only while a schedule is on, a
+task's or a bot's: ELU removes it with the last one, also while ELU is closed, and puts it back with the next. On Linux it is
+a systemd user timer, which runs while you are logged in; `loginctl enable-linger` keeps it
+running after you log out. On macOS, while an agent works or a schedule is on, ELU
 stops the Mac from going to sleep on its own (`caffeinate -i`); the display can still
 sleep. Schedules show in the Sessions tab under Scheduled: `p` pauses one and `x` deletes
 it. A time is `in 30m`, `every 2h` (15 minutes to 7 days), `daily 9:00`, `weekdays 9am`,
@@ -142,6 +145,8 @@ and `/permissions default auto` sets what new sessions start with.
   On Grok Build, what its reviewer refuses then asks you.
 - **Full access** (`full`): any file, any command, the internet, with no sandbox. That
   includes push, tags, merges, publishing and deploys: the never list below does not apply.
+  Nothing of ELU's limits it: every tool the vendor has, your secret files and sign-ins,
+  your whole environment. [What stays, and why](docs/permissions.md#full-access).
 
 When the model asks, `y` allows and `n` denies; `f` allows and gives that session Full access.
 `a` allows and keeps a narrow rule, such as `npm test` or `git diff`, for this project or all
@@ -156,7 +161,7 @@ A new approval rings the terminal bell once.
 
 Bots that review, and a teammate's question, always run read only.
 `/permissions folders add <path>` lets the model read one more folder of your home this
-session.
+session; in Full access, any folder there is.
 
 On Claude Code, your own MCP servers (`claude mcp list`) are on for the model and for bots
 that work, and their tools run without asking in every mode. Neither the sandbox nor the
@@ -448,6 +453,8 @@ Run `npx -y @elu-labs/elu` from your home folder, not from inside a project you 
 trust: `npx` lets the folder it starts in decide what runs.
 
 The Usage tab lists the vendor command lines ELU found and whether each is signed in.
+Finding that out runs each of them, and one that is slow to answer can take half a minute:
+the tab says `Reading what is installed and signed in here…` meanwhile and every key works.
 It keeps several Claude Code or Codex accounts signed in at once, so when one runs out of its
 limit you switch instead of signing in again: `a` adds an account with the vendor's own
 sign-in, Enter on an account makes new turns use it, and `x` forgets one. Each account shows

@@ -28,10 +28,12 @@ test('a Codex session leaves the code-mode host at the release default; a review
   const features = args => args.filter(arg => arg.startsWith('features.')).sort();
   const off = ['apps', 'browser_use', 'browser_use_external', 'browser_use_full_cdp_access', 'code_mode', 'computer_use', 'goals', 'hooks', 'image_generation', 'in_app_browser', 'multi_agent', 'multi_agent_v2', 'plugin_discovery_prefetch', 'plugins', 'remote_plugin', 'shell_snapshot', 'skill_mcp_dependency_install', 'skill_search', 'sleep_tool', 'tool_suggest', 'view_image', 'workspace_dependencies'];
   const session = [...off.map(name => `features.${name}=false`), 'features.shell_tool=true', 'features.unified_exec=true'].sort();
-  for (const mode of ['ask', 'auto', 'full']) {
+  for (const mode of ['ask', 'auto']) {
     assert.deepEqual(features(codex({ mode, role: lead(), cwd, schemaFile })), session, mode);
     assert.deepEqual(features(codex({ mode, role: lead(), cwd, schemaFile, resume: '12345678-1234-4234-8234-123456789abc' })), session, `${mode}, resumed`);
   }
+  // Full access is everything: no feature is switched off, the code-mode host among them.
+  for (const resume of [null, '12345678-1234-4234-8234-123456789abc']) assert.deepEqual(features(codex({ mode: 'full', role: lead(), cwd, schemaFile, resume })), ['features.shell_tool=true', 'features.unified_exec=true'], `full${resume ? ', resumed' : ''}`);
   assert.deepEqual(features(codex({ role: reviewer(), cwd, schemaFile })), [...off, 'code_mode_host'].map(name => `features.${name}=false`).concat('features.shell_tool=false', 'features.unified_exec=false').sort());
 });
 
@@ -67,13 +69,19 @@ test('argv per mode: ask and auto run the elu_ask profile with a sandboxed shell
   const ask = codex({ mode: 'ask', role: lead(), cwd, schemaFile, folders: [folder], protectedPaths: ['package.json', '.github'], commonDir: common });
   const auto = codex({ mode: 'auto', role: lead(), cwd, schemaFile, folders: [folder], protectedPaths: ['package.json'], commonDir: common });
   const full = codex({ mode: 'full', role: lead(), cwd, schemaFile, folders: [folder], protectedPaths: ['package.json'], commonDir: common });
-  for (const args of [ask, auto, full]) {
+  for (const args of [ask, auto]) {
     assertIsolated(args);
     assert.deepEqual(args.slice(0, 2), ['exec', '--ignore-user-config']);
     for (const expected of ['--skip-git-repo-check', '--cd', cwd, '--output-schema', schemaFile, 'features.shell_tool=true', 'features.unified_exec=true', 'shell_environment_policy.inherit="core"', 'features.view_image=false']) assert.ok(args.includes(expected), expected);
     assert.equal(args.includes('--sandbox'), false, 'the sandbox comes from -c keys so resume gets the same');
     assert.ok(args.includes('allow_login_shell=false'), 'a login shell would rebuild PATH ahead of the stand-in commands');
   }
+  // Full access is everything: the same launch with nothing of the agent's switched off. Only
+  // ELU's own settings and the question nobody could answer stay.
+  assert.deepEqual(full.slice(0, 2), ['exec', '--ignore-user-config']); assert.equal(full.at(-1), '-'); assert.equal(full.includes('--sandbox'), false);
+  for (const expected of ['--ignore-rules', '--json', '--skip-git-repo-check', '--cd', cwd, '--output-schema', schemaFile, 'mcp_servers={}', 'tools.experimental_request_user_input.enabled=false', 'features.shell_tool=true', 'features.unified_exec=true']) assert.ok(full.includes(expected), expected);
+  for (const gone of ['allow_login_shell=false', 'shell_environment_policy.inherit="core"', 'tools.update_plan.enabled=false', 'skills.bundled.enabled=false', 'skills.include_instructions=false']) assert.equal(full.includes(gone), false, gone);
+  assert.equal(full.some(arg => /^features\..*=false$/.test(arg)), false, 'no feature is off in Full access');
   // ask: the profile, approvals never, no web search.
   assert.equal(setting(ask, 'default_permissions'), '"elu_ask"'); assert.equal(setting(ask, 'approval_policy'), '"never"'); assert.equal(setting(ask, 'web_search'), '"disabled"');
   assert.equal(setting(ask, 'sandbox_mode'), undefined, 'a profile is never combined with sandbox_mode');
@@ -127,7 +135,7 @@ test('profile paths that Codex would read as patterns are refused', (t) => {
   assert.doesNotThrow(() => codex({ mode: 'full', role: lead(), cwd, schemaFile, folders: [bad] }));
 });
 
-test('lead parse: declined items become denials, mcp_tool_call is refused, web search only in full', () => {
+test('lead parse: declined items become denials; mcp_tool_call and web search are read only in Full access', () => {
   const base = fixture('codex.jsonl');
   const declined = '{"type":"item.started","item":{"id":"item_1","type":"command_execution","command":"/bin/zsh -lc \'git push origin main\'","aggregated_output":"","exit_code":null,"status":"in_progress"}}\n{"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"/bin/zsh -lc \'git push\\u0007 origin main\'","aggregated_output":"","exit_code":null,"status":"declined"}}\n';
   const patch = '{"type":"item.completed","item":{"id":"item_2","type":"file_change","changes":[{"path":"/etc/hosts","kind":"update"}],"status":"declined"}}\n';
@@ -138,7 +146,8 @@ test('lead parse: declined items become denials, mcp_tool_call is refused, web s
     const parsed = parseCodex(declined + patch + ran + base, { mode });
     assert.equal(parsed.result.outcome, 'done'); assert.equal(parsed.costUsd, null);
     assert.deepEqual(parsed.denials, [{ tool: 'command_execution', summary: "Run: /bin/zsh -lc 'git push origin main'" }, { tool: 'file_change', summary: 'Edit: /etc/hosts' }], mode);
-    assert.throws(() => parseCodex(mcp + base, { mode }), /must not have/, mode);
+    // Below Full access a tool Codex was not given refuses the run. Full access has every tool, so it is read.
+    if (mode === 'full') assert.equal(parseCodex(mcp + base, { mode }).result.outcome, 'done'); else assert.throws(() => parseCodex(mcp + base, { mode }), /must not have/, mode);
   }
   assert.deepEqual(parseCodex(search + base, { mode: 'full' }).denials, []);
   // A step in which a stand-in command refused: kept with the command it named, whatever the step exited with.
@@ -153,11 +162,11 @@ test('lead parse: declined items become denials, mcp_tool_call is refused, web s
   assert.equal(parseCodex(long + base, { mode: 'ask' }).denials[0].summary.length, 200);
 });
 
-test('only a ChatGPT sign-in counts: an API key or no sign-in is reported as signed out', (t) => {
+test('only a ChatGPT sign-in counts: an API key or no sign-in is reported as signed out', async (t) => {
   const parent = temp(t);
   for (const [mode, expected] of [['normal', true], ['api-key', false], ['signed-out', false]]) {
     const f = fakeClis(parent, { mode });
-    assert.equal(signedIn({ bin: path.join(f.dir, 'codex'), cwd: parent, env: { ...process.env, PATH: f.env.PATH } }), expected, mode);
+    assert.equal(await signedIn({ bin: path.join(f.dir, 'codex'), cwd: parent, env: { ...process.env, PATH: f.env.PATH } }), expected, mode);
   }
   assert.equal(meta.signInHint, 'Codex: sign in with ChatGPT. Run: codex login');
 });

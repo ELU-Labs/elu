@@ -3,12 +3,12 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { project, fakeClis, config, approveProjectFiles } from './helpers.mjs';
+import { project, fakeClis, config, approveProjectFiles, CLI } from './helpers.mjs';
 import { repository } from '../lib/git.mjs';
 import { projectSnapshot, registerProject } from '../lib/projects.mjs';
 import { saveTask } from '../lib/state.mjs';
 import { pendingRequests, removeRequest, updateRequest, takeRequest } from '../lib/workspace.mjs';
-import { Conductor, enqueue, sendCommand, saveConductorSettings, conductorStatus, conductorNote, conductorRunning, conductorAlive, olderConductor, retryRequest, VERSION } from '../lib/conductor.mjs';
+import { Conductor, enqueue, sendCommand, saveConductorSettings, conductorStatus, conductorNote, conductorRunning, conductorAlive, olderConductor, retryRequest, startQueued, VERSION } from '../lib/conductor.mjs';
 // The conductor of 0.1.16 as published, which has no handover, on today's modules.
 import * as earlier from './fixtures/conductor-0.1.16/conductor.mjs';
 import { pendingRequests as earlierRequests, saveRequest as earlierSave } from './fixtures/conductor-0.1.16/workspace.mjs';
@@ -108,6 +108,21 @@ test('a bot with its own schedule is left out of the sessions a schedule starts,
   assert.equal(pendingRequests(p.root).filter(value => value.bot === 'nightly').length, 0, 'nothing queued for the bot in those sessions');
 });
 
+test("a bot's schedule runs in a session that edits the checkout in place while it has Full access", async t => {
+  const p = setup(t);
+  saveBot({ name: 'nightly', instructions: 'Check the nightly build.', schedule: 'every 1h' });
+  enqueue(p.root, 'Tidy the notes here', { permissions: 'full', place: 'here', bots: ['nightly'] });
+  conduct(t);
+  await until(() => projectSnapshot(p.repo).tasks.length === 1 && pendingRequests(p.root).every(value => value.state === 'done'), 'the session ran');
+  assert.equal(projectSnapshot(p.repo).tasks[0].place.kind, 'here');
+  assert.equal(runBotSchedules(new Date(), { start: () => true }), 1, 'its first run is queued');
+  const runs = () => pendingRequests(p.root).filter(value => value.bot === 'nightly' && value.scheduled);
+  await until(() => runs().length === 1 && runs()[0].state === 'done', 'the run ended');
+  const task = projectSnapshot(p.repo).tasks[0];
+  assert.doesNotMatch(runs()[0].reason ?? '', /in place/); assert.ok(task.messages.some(row => row.to === '@nightly' && row.scheduled), 'the schedule wrote to it');
+  assert.ok(task.runs.filter(row => row.role === 'bot:nightly').every(row => row.permissions === 'full') && task.runs.some(row => row.role === 'bot:nightly'), 'with Full access');
+});
+
 test('a queued message runs in the background and its request records the chat', async t => {
   const p = setup(t), conductor = conduct(t);
   const sent = enqueue(p.root, 'Can I add multiple agents?');
@@ -178,6 +193,39 @@ test('a waiting message survives a conductor that stops, and the next conductor 
   conduct(t);
   await until(() => texts(p.repo, id).length === 2, 'the message to be sent after the restart');
   assert.deepEqual(texts(p.repo, id), ['Start the work', 'Sent before the restart']);
+});
+
+// What ELU asks as it opens, and the login item on its first run after an update. start
+// stands in for the conductor they would start.
+test('work left queued by a conductor that was ended is started when asked, and not after the owner stopped the conductor himself, until work is queued', async t => {
+  const { p, conductor, id } = await working(t);
+  let starts = 0; const start = () => { starts++; return true; }, queued = () => pendingRequests(p.root).filter(row => row.state === 'queued').map(row => row.goal);
+  sayTo(p, id, 'Sent before it was ended');
+  assert.equal(startQueued({ start }), false, 'a conductor runs, and takes the queue itself'); assert.equal(starts, 0);
+  // Ended from outside, as a restart of the computer ends it: its run is stopped and the message still waits.
+  await conductor.stop();
+  assert.deepEqual(queued(), ['Sent before it was ended']);
+  assert.equal(startQueued({ start }), true); assert.equal(starts, 1);
+  // The conductor that starts sends it. The owner then stops that one himself, with the command, while another message waits.
+  const second = conduct(t);
+  await until(() => texts(p.repo, id).length === 2 && task(p.repo, id)?.activeRole === 'lead', 'the message to be sent');
+  sayTo(p, id, 'Sent before the stop');
+  const stop = spawnSync(process.execPath, [CLI, 'conductor', 'stop'], { encoding: 'utf8', timeout: 30000 });
+  assert.equal(stop.stdout, 'The conductor stops its runs, keeps their history, and exits. It starts again when work is queued.\n');
+  await until(() => second.closed && !conductorRunning(), 'the conductor to stop');
+  assert.deepEqual(queued(), ['Sent before the stop']);
+  assert.equal(startQueued({ start }), false, 'it stays stopped: nothing that only finds queued work starts it'); assert.equal(starts, 1);
+  // With nothing running the command stops nothing, and says so.
+  assert.equal(spawnSync(process.execPath, [CLI, 'conductor', 'stop'], { encoding: 'utf8', timeout: 30000 }).stdout, 'The conductor is not running.\n');
+  // Work is queued, and whatever queues it starts the conductor: the stop is over.
+  const third = conduct(t);
+  await until(() => texts(p.repo, id).length === 3 && task(p.repo, id)?.activeRole === 'lead', 'the waiting message to be sent');
+  sayTo(p, id, 'Sent before the restart');
+  await third.stop();
+  assert.equal(startQueued({ start }), true, 'ended from outside again, so what it left is started'); assert.equal(starts, 2);
+  // Nothing queued: nothing to start.
+  for (const row of pendingRequests(p.root).filter(value => value.state === 'queued')) removeRequest(p.root, row.id);
+  assert.equal(startQueued({ start }), false); assert.equal(starts, 2);
 });
 
 // An update replaces the files under a conductor. The stand-in reads the version on disk at once

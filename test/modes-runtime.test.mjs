@@ -211,10 +211,10 @@ test('a schedule gets Full access only when the owner picked it; an automatic re
   assert.throws(() => enqueue(p.root, 'q', { origin: origin('ask'), readOnly: true, context: 'ctx', permissions: 'auto' }), /Teammate questions stay read-only/);
 });
 
-// A bot's schedule has no mode of its own and the owner never picks Full access for it, so its
-// turn keeps Approve for me in a Full access session. The model and the bot are each told how
+// A bot's scheduled turn runs in its session's mode: the owner who picks Full access for the
+// session picks it for the schedules of its bots. The model and the bot are each told how
 // the owner repeats work: with /schedule, which they cannot run themselves.
-test("a bot's own scheduled turn keeps Approve for me in a Full access session; the model and the bot are told about /schedule", async t => {
+test("a bot's own scheduled turn runs with Full access in a Full access session; the model and the bot are told about /schedule", async t => {
   const f = setup(t, 'answer');
   saveBot({ name: 'nightly', vendor: 'claude', instructions: 'Tidy the notes.', schedule: 'every 1h' });
   const chat = await f.controller.ask('Run the backlog check every 3 hours.', null, { bots: ['nightly'], permissions: 'full' }).finished;
@@ -224,11 +224,16 @@ test("a bot's own scheduled turn keeps Approve for me in a Full access session; 
   const before = f.leads().length, asked = f.inputs().length;
   const run = await f.controller.ask('Do your scheduled work.', chat.id, { bot: 'nightly', scheduled: true }).finished;
   const turns = run.runs.filter(value => value.role === 'bot:nightly');
-  assert.ok(turns.length > 0, 'the bot ran'); assert.ok(turns.every(value => value.permissions === 'auto'), JSON.stringify(turns.map(value => value.permissions)));
+  assert.ok(turns.length > 0, 'the bot ran'); assert.ok(turns.every(value => value.permissions === 'full'), JSON.stringify(turns.map(value => value.permissions)));
   const modes = f.leads().slice(before).map(call => valueOf(call.args, '--permission-mode'));
-  assert.ok(modes.includes('auto') && !modes.includes('bypassPermissions'), modes.join());
+  assert.ok(modes.includes('bypassPermissions') && !modes.includes('auto'), modes.join());
   assert.ok(f.inputs().slice(asked).some(row => row.input.includes(SCHEDULE_NOTE)), "the bot's work turn is told");
   assert.equal(readTask(f.controller.repo, chat.id).permissions, 'full', 'the session keeps its own mode');
+  // In a session with Approve for me, its scheduled turn has Approve for me.
+  const other = await f.controller.ask('Keep the notes tidy.', null, { bots: ['nightly'], permissions: 'auto' }).finished;
+  const ran = await f.controller.ask('Do your scheduled work.', other.id, { bot: 'nightly', scheduled: true }).finished;
+  const own = ran.runs.filter(value => value.role === 'bot:nightly');
+  assert.ok(own.length > 0 && own.every(value => value.permissions === 'auto'), JSON.stringify(own.map(value => value.permissions)));
 });
 
 // A mode the owner picked for a new session is saved on its request, so every window and a
@@ -296,7 +301,7 @@ test('place here runs in the checkout itself with a dirty tree; checks keep the 
   assert.equal(fs.existsSync(path.join(f.controller.repo.worktrees, task.id)), false, 'no worktree');
   assert.ok(task.runs.filter(run => run.role === 'lead').every(run => run.permissions === 'full' && run.effectivePermissions === 'full'));
   const names = task.evidence.results.map(row => row.name);
-  assert.ok(names.includes('secret-paths') && names.includes('no-deleted-tests'));
+  assert.ok(!names.includes('secret-paths') && names.includes('no-deleted-tests'));
   for (const name of ['changed-lines', 'protected-paths', 'unchanged-scripts', 'no-dependency-changes']) assert.equal(names.includes(name), false, `${name} is skipped in full`);
   const sandboxed = f.calls().filter(call => call.vendor === 'codex' && call.args[0] === 'sandbox' && call.args.includes('--'));
   assert.ok(sandboxed.length >= 1, 'the checks ran in the sandbox');
@@ -306,7 +311,7 @@ test('place here runs in the checkout itself with a dirty tree; checks keep the 
   assert.equal(git(f.root, ['rev-parse', 'HEAD']), head);
 });
 
-test('full skips the cap and the protected paths but a secret path still blocks; auto allows a lockfile change', t => {
+test('full skips the cap, the protected paths and the secret paths; auto allows a lockfile change', t => {
   const dir = temp(t), root = path.join(dir, 'repo'); fs.mkdirSync(root);
   git(root, ['init', '--initial-branch=main']); git(root, ['config', 'user.name', 'T']); git(root, ['config', 'user.email', 't@example.invalid']);
   fs.mkdirSync(path.join(root, 'src')); fs.writeFileSync(path.join(root, 'src/a.mjs'), 'export const a = 1;\n');
@@ -325,7 +330,7 @@ test('full skips the cap and the protected paths but a secret path still blocks;
   assert.equal(auto['changed-lines'], 'failed'); assert.equal(auto['protected-paths'], 'passed', 'dependency files are not protected in auto'); assert.equal(auto['no-dependency-changes'], undefined); assert.equal(auto['unchanged-scripts'], 'passed');
   const full = status('full');
   assert.equal(full['changed-lines'], undefined); assert.equal(full['protected-paths'], undefined); assert.equal(full['unchanged-scripts'], undefined); assert.equal(full['no-dependency-changes'], undefined);
-  assert.equal(full['secret-paths'], 'failed'); assert.equal(full['no-deleted-tests'], 'passed'); assert.equal(full['declared-paths'], 'passed');
+  assert.equal(full['secret-paths'], undefined, 'Full access changes secret files too'); assert.equal(auto['secret-paths'], 'failed'); assert.equal(full['no-deleted-tests'], 'passed'); assert.equal(full['declared-paths'], 'passed');
   for (const file of ['package.json', 'package-lock.json', 'yarn.lock', 'pnpm-lock.yaml', 'Cargo.lock']) { assert.equal(protectedPath(file), true, file); assert.equal(protectedPath(file, { mode: 'ask' }), true); assert.equal(protectedPath(file, { mode: 'auto' }), false); assert.equal(protectedPath(file, { mode: 'full' }), false); }
   for (const file of ['.github/workflows/ci.yml', '.git/config', 'Makefile', 'tsconfig.json']) for (const mode of ['locked', 'ask', 'auto', 'full']) assert.equal(protectedPath(file, { mode }), true, `${file} in ${mode}`);
   const args = sandboxArgs({ cwd: root, scratch: path.join(dir, 'scratch'), program: 'node', helper: process.execPath, network: 'on' });
@@ -410,7 +415,43 @@ test('the role time limit waits while an approval is pending', async t => {
   assert.equal(pendingApprovals().length, 0);
 });
 
-test('a session reads the .npmrc its repository tracks in Full and in Ask; an untracked one stays closed', async t => {
+test('a Full access run has the owner\'s whole environment: his SSH agent and his GitHub sign-in reach its commands; Ask for approval keeps the allow-list', async t => {
+  const f = setup(t, 'answer'), fakeFile = path.join(f.fake.dir, 'fake.json'), fake = JSON.parse(fs.readFileSync(fakeFile, 'utf8')), seen = path.join(f.parent, 'seen.txt');
+  // The owner's shell: an SSH agent, a GitHub token, and a key that would move Claude Code to another account.
+  environment(t, { SSH_AUTH_SOCK: '/run/user/1/agent.sock', GH_TOKEN: 'gh-owner', ANTHROPIC_API_KEY: 'sk-another-account' });
+  fs.writeFileSync(fakeFile, JSON.stringify({ ...fake, commands: [`printf '%s|%s|%s' "$SSH_AUTH_SOCK" "$GH_TOKEN" "$ANTHROPIC_API_KEY" > "${seen}"`] }));
+  for (const [mode, expected] of [['full', '/run/user/1/agent.sock|gh-owner|'], ['ask', '||']]) {
+    fs.rmSync(seen, { force: true });
+    const task = await f.controller.ask('What is here?', null, { permissions: mode }).finished;
+    assert.ok(['answered', 'needs_input', 'ready'].includes(task.state), task.error?.message);
+    assert.equal(fs.readFileSync(seen, 'utf8'), expected, `${mode}: what a command of the run sees`);
+    // npm reads the owner's own settings in Full access, and none of them below it.
+    assert.equal(settingsOf(f.leads().at(-1).args).env.npm_config_userconfig, mode === 'full' ? undefined : '/dev/null', mode);
+  }
+});
+
+test('a folder only Full access takes leaves the session when it leaves Full access; the folders the other modes take stay', async t => {
+  const f = setup(t, 'answer'), ssh = path.join(f.parent, '.ssh'); fs.mkdirSync(ssh);
+  const task = await f.controller.ask('What is here?', null, { permissions: 'full' }).finished, id = task.id, folders = () => readTask(f.controller.repo, id).folders;
+  f.controller.addFolder(id, ssh); f.controller.addFolder(id, f.work);
+  assert.deepEqual(folders(), [fs.realpathSync(ssh), fs.realpathSync(f.work)], 'Full access takes both');
+  assert.equal(f.controller.setPermissions(id, 'ask').permissions, 'ask');
+  assert.deepEqual(folders(), [fs.realpathSync(f.work)], 'the secret folder went with Full access');
+  assert.throws(() => f.controller.addFolder(id, ssh), /That folder holds secrets or ELU state\./, 'Ask for approval refuses it');
+  // Back in Full access nothing comes back by itself, and the folder can be named again.
+  f.controller.setPermissions(id, 'full'); assert.deepEqual(folders(), [fs.realpathSync(f.work)]);
+  assert.deepEqual(f.controller.addFolder(id, ssh).folders, [fs.realpathSync(f.work), fs.realpathSync(ssh)]);
+  // The next turn names both to the model; one in Approve for me names only the folder that mode takes.
+  await f.controller.ask('And now?', id).finished;
+  assert.deepEqual(f.leads().at(-1).args.filter((arg, at, all) => all[at - 1] === '--add-dir').filter(dir => [fs.realpathSync(ssh), fs.realpathSync(f.work)].includes(dir)).sort(), [fs.realpathSync(ssh), fs.realpathSync(f.work)].sort());
+  f.controller.setPermissions(id, 'auto'); assert.deepEqual(folders(), [fs.realpathSync(f.work)]);
+  // A session whose only folder was a Full access one has none left.
+  const other = await f.controller.ask('Another one', null, { permissions: 'full', folders: [ssh] }).finished;
+  assert.deepEqual(readTask(f.controller.repo, other.id).folders, [fs.realpathSync(ssh)]);
+  f.controller.setPermissions(other.id, 'ask'); assert.equal(readTask(f.controller.repo, other.id).folders, undefined);
+});
+
+test('a session reads the .npmrc its repository tracks in Full and in Ask; an untracked .env stays closed in Ask, and Full access denies nothing', async t => {
   const f = setup(t, 'answer');
   fs.mkdirSync(path.join(f.root, 'backend/agents'), { recursive: true }); fs.writeFileSync(path.join(f.root, 'backend/agents/.npmrc'), 'registry=https://registry.npmjs.org/\n');
   git(f.root, ['add', 'backend/agents/.npmrc']); git(f.root, ['commit', '-m', 'Track npmrc']);
@@ -421,7 +462,9 @@ test('a session reads the .npmrc its repository tracks in Full and in Ask; an un
     const args = f.leads().at(-1).args, { deny } = settingsOf(args).permissions;
     assert.equal(valueOf(args, '--permission-mode'), mode === 'full' ? 'bypassPermissions' : 'default');
     assert.equal(deny.some(rule => rule.includes('backend') || rule.startsWith('Read(**/')), false, `${mode}: no rule closes the tracked .npmrc, by path or by name`);
-    assert.ok(deny.some(rule => rule === `Read(//${path.join(f.root, '.env').slice(1)})` || rule === `Read(//${path.join(fs.realpathSync(f.root), '.env').slice(1)})`), `${mode}: the untracked .env is not`);
+    // Full access denies nothing, an untracked .env included; Ask keeps it closed.
+    if (mode === 'full') assert.deepEqual(deny, [], 'full: nothing is denied');
+    else assert.ok(deny.some(rule => rule === `Read(//${path.join(f.root, '.env').slice(1)})` || rule === `Read(//${path.join(fs.realpathSync(f.root), '.env').slice(1)})`), `${mode}: the untracked .env is not`);
     if (mode === 'ask') assert.equal(settingsOf(args).sandbox.filesystem.denyRead.some(entry => entry.includes('backend') || entry.startsWith('**/')), false, 'nor does the sandbox hide it');
   }
 });
@@ -639,6 +682,26 @@ test('a rule kept once answers the next session; defaults never ask; the never l
   const mine = await settle(f.controller.ask('Run the tests.', null, { mine: { machine: 'c'.repeat(64), name: 'ali', remoteId: '0f0e0d0c-0b0a-4908-8706-050403020100' }, permissions: 'ask' }));
   assert.deepEqual(mine.asked, []); assert.equal(mine.task.origin.mine, true); assert.equal(mine.task.origin.peer, undefined);
   assert.deepEqual(mine.task.approvals.map(row => [row.decision, row.by, row.rule]), [['allow', 'default', 'git status'], ['allow', 'rule', 'npm test']]);
+});
+
+// Where user namespaces are turned off, bwrap can still make a network namespace when it runs as
+// root or is installed setuid, but Claude Code's sandbox always makes a user namespace, so it does
+// not start and Claude Code runs every command outside it. A default that holds only inside the
+// sandbox (git reads, the project's checks) must then wait for the owner, as with no sandbox at all.
+test('where bwrap cannot make a user namespace, a command counts as outside the sandbox: a default that needs the sandbox waits for the owner', { skip: process.platform !== 'linux', timeout: 60000 }, async t => {
+  const f = setup(t, 'relay'), root = f.controller.repo.project ?? f.controller.repo.root;
+  const tools = path.join(f.parent, 'no-user-namespaces'); fs.mkdirSync(tools);
+  fs.writeFileSync(path.join(tools, 'bwrap'), '#!/bin/sh\nfor arg in "$@"; do [ "$arg" = --unshare-user ] && { echo "bwrap: No permission to create new namespace" >&2; exit 1; }; done\nexit 0\n', { mode: 0o755 });
+  fs.writeFileSync(path.join(tools, 'socat'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  environment(t, { PATH: `${tools}${path.delimiter}${process.env.PATH}` });
+  fakeClis(f.parent, { mode: 'relay', intent: 'answer', asks: [{ tool_name: 'Bash', input: { command: 'git status' } }] });
+  const asked = [], run = f.controller.ask('Check the tree', null, { permissions: 'ask' }); let done = false; const finished = run.finished.finally(() => { done = true; });
+  while (!done) { for (const row of pendingApprovals({ root })) { asked.push(row); answerApproval(row.id, 'deny'); } await sleep(25); }
+  const task = await finished;
+  assert.equal(task.state, 'answered', JSON.stringify(task.error));
+  assert.deepEqual(asked.map(row => [row.summary, row.sandboxed === true]), [['Run: git status', false]], 'the owner was asked, and the turn was not taken as sandboxed');
+  assert.deepEqual(task.approvals.map(row => [row.summary, row.decision, row.by ?? null]), [['Run: git status', 'deny', null]]);
+  assert.equal(fs.existsSync(path.join(f.fake.dir, 'ran.jsonl')), false, 'nothing ran outside the sandbox without the owner');
 });
 
 // The owner's bug: a sandboxed command in Ask for approval connected to a host, Claude Code

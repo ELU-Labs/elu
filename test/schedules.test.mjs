@@ -3,13 +3,21 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { parseWhen, splitWhen, nextRun, saveSchedule, listSchedules, runDue, runScheduleNow, pauseSchedule, removeSchedule, installScheduler, uninstallScheduler } from '../lib/schedules.mjs';
+import { spawn, spawnSync } from 'node:child_process';
+import { parseWhen, splitWhen, nextRun, saveSchedule, listSchedules, runDue, runScheduleNow, pauseSchedule, removeSchedule, installScheduler, uninstallScheduler, schedulerFiles } from '../lib/schedules.mjs';
 import { atomic, personalDirectory } from '../lib/util.mjs';
 import { saveBot, removeBot } from '../lib/bots.mjs';
-import { enqueue } from '../lib/conductor.mjs';
+import { scheduleTick, setBotSchedule } from '../lib/bot-schedules.mjs';
+import { repository } from '../lib/git.mjs';
+import { registerProject, projectSnapshot } from '../lib/projects.mjs';
+import { readTask, saveTask, taskDir } from '../lib/state.mjs';
+import { enqueue, conductorStatus } from '../lib/conductor.mjs';
 import { pendingRequests, updateRequest } from '../lib/workspace.mjs';
-import { project } from './helpers.mjs';
+import { project, fakeClis, CLI } from './helpers.mjs';
+import { standIn } from './login-item-helpers.mjs';
+import { liveTask } from './peer-helpers.mjs';
 import { saveDefaultMode } from '../lib/modes.mjs';
+import { processIdentity } from '../lib/process.mjs';
 
 // Local times, so the tests hold in any time zone. 2026-11-09 is a Monday.
 const at = (day, hour, minute = 0) => new Date(2026, 10, day, hour, minute);
@@ -252,4 +260,332 @@ test('the login item checks every minute and keeps only lasting PATH entries', t
   // The real loader refuses inside the test runner, so no test can load a login item.
   assert.throws(() => installScheduler({ platform: 'darwin', home: path.join(dir, 'other'), env }), /Tests must not install login items/);
   assert.equal(fs.existsSync(path.join(dir, 'other')), false, 'refused before writing anything');
+});
+
+test('on macOS the login item is loaded and unloaded through launchctl, which a stand-in first on PATH answers', t => {
+  home(t); const item = standIn(t, 'darwin'), plist = path.join(item.home, 'Library', 'LaunchAgents', 'dev.elu-code.scheduler.plist');
+  const verbs = () => item.calls().map(call => `${call.name} ${call.args[0]}`);
+  // Nothing is loaded yet, so the real bootout fails here too; the install goes on to load it.
+  assert.deepEqual(item.install(), { installed: true, changed: true, files: [plist] });
+  assert.deepEqual(item.loaded(), [plist]); assert.deepEqual(verbs(), ['launchctl bootout', 'launchctl bootstrap']);
+  assert.deepEqual(item.calls()[1].args, ['bootstrap', `gui/${process.getuid()}`, plist]);
+  assert.equal(item.install().changed, false); assert.equal(item.calls().length, 2, 'the same files are not loaded again');
+  // Removed: unloaded first, then the file goes. A second removal finds nothing and calls nothing.
+  assert.deepEqual(item.uninstall(), { removed: true, files: [plist] });
+  assert.deepEqual(item.loaded(), []); assert.deepEqual(item.files(), []); assert.equal(verbs().at(-1), 'launchctl bootout');
+  assert.deepEqual(item.uninstall(), { removed: false }); assert.equal(item.calls().length, 3);
+  // Asked for again, it is loaded again. One whose text changed is unloaded and loaded once.
+  assert.equal(item.install().changed, true); assert.deepEqual(item.loaded(), [plist]);
+  assert.equal(item.install({ env: { ...item.env, LANG: 'en_US.UTF-8' } }).changed, true);
+  assert.deepEqual(item.loaded(), [plist]); assert.deepEqual(verbs().slice(-2), ['launchctl bootout', 'launchctl bootstrap']);
+  // A file that vanished while it was loaded: bootout is still asked for by install, so it loads.
+  fs.rmSync(plist); assert.deepEqual(item.uninstall(), { removed: false });
+  assert.equal(item.install().changed, true); assert.deepEqual(item.loaded(), [plist]);
+  assert.ok(item.calls().every(call => call.name === 'launchctl'), 'every call went to the stand-in');
+});
+
+test('on Linux the login item is enabled and disabled through systemctl --user, which a stand-in first on PATH answers', t => {
+  home(t); const item = standIn(t, 'linux'), units = path.join(item.home, '.config', 'systemd', 'user');
+  const files = [path.join(units, 'elu-code-scheduler.service'), path.join(units, 'elu-code-scheduler.timer')];
+  assert.deepEqual(item.install(), { installed: true, changed: true, files });
+  assert.deepEqual(item.loaded(), ['elu-code-scheduler.timer']);
+  assert.deepEqual(item.calls().map(call => call.args), [['--user', 'daemon-reload'], ['--user', 'enable', '--now', 'elu-code-scheduler.timer']]);
+  assert.deepEqual(item.uninstall(), { removed: true, files });
+  assert.deepEqual(item.loaded(), []); assert.deepEqual(item.files(), []);
+  assert.deepEqual(item.calls().at(-1).args, ['--user', 'disable', '--now', 'elu-code-scheduler.timer']);
+  assert.equal(item.install().changed, true); assert.deepEqual(item.loaded(), ['elu-code-scheduler.timer']);
+});
+
+const until = async (check, what, ms = 10000) => { for (const started = Date.now(); !check();) { if (Date.now() - started > ms) throw new Error(`Timed out waiting for ${what}`); await new Promise(resolve => setTimeout(resolve, 10)); } };
+// A one-time schedule that is due now: saved ten minutes ago for five minutes later.
+const dueOnce = (root, goal = 'Check the build') => { const then = new Date(Date.now() - 10 * 60000); return saveSchedule({ root, goal, when: parseWhen('in 5m', then) }, then); };
+
+test('elu schedule tick, run as the login item runs it while ELU is closed, queues the last one-time run and then removes the login item', { skip: !['darwin', 'linux'].includes(process.platform) && 'This system has no login item.' }, async t => {
+  home(t); const p = project(t), item = standIn(t, process.platform, { config: process.env.XDG_CONFIG_HOME });
+  // A conductor counts as running, since this process holds its lock: the tick starts none for the run it queues.
+  fs.mkdirSync(personalDirectory(), { recursive: true }); fs.writeFileSync(path.join(personalDirectory(), 'conductor.lock'), JSON.stringify({ pid: process.pid, identity: processIdentity(process.pid) }));
+  const row = dueOnce(p.root);
+  item.install(); assert.ok(item.files().length); assert.equal(item.loaded().length, 1);
+  const ran = await item.job([process.execPath, CLI, 'schedule', 'tick']);
+  // What it has to say is out before the removal, which ends the run on macOS. On Linux the service runs to its end.
+  assert.deepEqual([ran.stdout, ran.stderr], ['Queued 1 scheduled task.\n', '']);
+  assert.ok(ran.status === 0 || process.platform === 'darwin' && ran.signal === 'SIGTERM', `it ended with ${ran.status ?? ran.signal}`);
+  assert.equal(pendingRequests(p.root).filter(request => request.scheduleId === row.id).length, 1, 'the run was queued first');
+  assert.equal(listSchedules()[0].enabled, false, 'a one-time schedule is off once it ran');
+  await until(() => !item.loaded().length, 'the login item to be unloaded');
+  assert.deepEqual(item.files(), [], 'no schedule is on, so its files are gone');
+  // On macOS the bootout comes from outside the job, which it ends. On Linux the service itself disables its timer.
+  assert.deepEqual(item.calls().at(-1), process.platform === 'darwin' ? { name: 'launchctl', args: ['bootout', `gui/${process.getuid()}/dev.elu-code.scheduler`] } : { name: 'systemctl', args: ['--user', 'disable', '--now', 'elu-code-scheduler.timer'], fromJob: true });
+  // Run by hand with no login item left, it queues nothing, says nothing and ends well.
+  assert.deepEqual(await item.job([process.execPath, CLI, 'schedule', 'tick']), { status: 0, signal: null, stdout: '', stderr: '' });
+});
+
+// A script in place of the login item's command, so its run is on the system the test names
+// whatever system the test itself is on. tick: what elu schedule tick does, then what comes after.
+const lib = name => JSON.stringify(new URL(`../lib/${name}`, import.meta.url).href);
+const script = (item, name, lines) => { const file = path.join(item.home, name); fs.writeFileSync(file, `${lines.join('\n')}\n`); return [process.execPath, file]; };
+const tickScript = (item, platform, after) => script(item, 'tick.mjs', [
+  `import { scheduleTick } from ${lib('bot-schedules.mjs')};`,
+  `const { fired, last } = scheduleTick(new Date(), { start: () => false, item: { platform: '${platform}' } });`,
+  'process.stdout.write(`fired ${fired}\\n`);',
+  'last?.();',
+  after,
+]);
+
+test('on macOS the login item removes itself in the one order launchd lets it finish: its file first, then its bootout by label, asked for last from a process group of its own', async t => {
+  home(t); const p = project(t), item = standIn(t, 'darwin', { config: process.env.XDG_CONFIG_HOME }), plist = path.join(item.home, 'Library', 'LaunchAgents', 'dev.elu-code.scheduler.plist');
+  const byLabel = { name: 'launchctl', args: ['bootout', `gui/${process.getuid()}/dev.elu-code.scheduler`] };
+  // The stand-in ends a job that boots itself out, as launchd does. So the order the app uses,
+  // bootout and then the file, never reaches the file from inside the job: it would load again at the next login.
+  item.install();
+  let ran = await item.job(script(item, 'app-order.mjs', [`import { uninstallScheduler } from ${lib('schedules.mjs')};`, "uninstallScheduler({ platform: 'darwin' });", "process.stdout.write('after its bootout\\n');"]));
+  assert.deepEqual(ran, { status: null, signal: 'SIGTERM', stdout: '', stderr: '' }); assert.deepEqual(item.loaded(), []); assert.deepEqual(item.files(), [plist]);
+  assert.deepEqual(item.calls().at(-1), { name: 'launchctl', args: ['bootout', `gui/${process.getuid()}`, plist], fromJob: true }, 'a launchctl the job waits for is in its process group, and ends with it');
+  // The tick's own order. Its script has more to do after the removal, and is ended before it gets there.
+  item.uninstall(); dueOnce(p.root); item.install(); assert.deepEqual(item.loaded(), [plist]);
+  const tick = tickScript(item, 'darwin', "setTimeout(() => process.stdout.write('after its bootout\\n'), 20000);");
+  ran = await item.job(tick);
+  assert.deepEqual(ran, { status: null, signal: 'SIGTERM', stdout: 'fired 1\n', stderr: '' });
+  assert.deepEqual(item.files(), [], 'the file went before the bootout ended the job'); assert.deepEqual(item.loaded(), []);
+  assert.deepEqual(item.calls().at(-1), byLabel, 'by label, and from outside the job: its launchctl outlives it');
+  // The bootout was waited for with the lock held, and the tick ended there: nothing could load the login item again before it was out.
+  assert.equal(JSON.parse(fs.readFileSync(path.join(personalDirectory(), 'login-item.lock'), 'utf8')).identity === processIdentity(process.pid), false, 'the lock is still the ended tick\'s');
+  // A login item whose file went without it is still loaded. Its next run with nothing on ends it too.
+  item.install(); fs.rmSync(plist); assert.deepEqual(item.loaded(), [plist]);
+  ran = await item.job(tick);
+  assert.deepEqual(ran, { status: null, signal: 'SIGTERM', stdout: 'fired 0\n', stderr: '' }); assert.deepEqual(item.loaded(), []); assert.deepEqual(item.calls().at(-1), byLabel);
+});
+
+test('on Linux the login item disables its own timer from within its service, which runs on to its end', async t => {
+  home(t); const p = project(t), item = standIn(t, 'linux', { config: process.env.XDG_CONFIG_HOME });
+  dueOnce(p.root); item.install(); assert.equal(item.files().length, 2); assert.deepEqual(item.loaded(), ['elu-code-scheduler.timer']);
+  const before = item.calls().length, ran = await item.job(tickScript(item, 'linux', "process.stdout.write('ran to its end\\n');"));
+  assert.deepEqual(ran, { status: 0, signal: null, stdout: 'fired 1\nran to its end\n', stderr: '' });
+  assert.deepEqual(item.files(), []); assert.deepEqual(item.loaded(), []);
+  assert.deepEqual(item.calls().slice(before).map(call => call.args), [['--user', 'disable', '--now', 'elu-code-scheduler.timer']], 'the timer only: the service that runs is never stopped');
+});
+
+test("the tick leaves the login item while a schedule is on, a task's or a bot's, and has it removed once none is", async t => {
+  home(t); const p = project(t), repo = repository(p.root), item = standIn(t, 'darwin'), plist = path.join(item.home, 'Library', 'LaunchAgents', 'dev.elu-code.scheduler.plist');
+  registerProject(repo);
+  const tick = () => scheduleTick(new Date(), { start: () => true, item: item.options }), there = () => item.files().length === 1 && item.loaded().length === 1;
+  const gone = async () => { await until(() => !item.loaded().length, 'the bootout'); return !item.files().length; };
+  dueOnce(p.root); const hourly = saveSchedule({ root: p.root, goal: 'Lint', when: parseWhen('every 1h') });
+  item.install();
+  // The one-time run fires and is off; the hourly one is still on.
+  let ran = tick(); assert.equal(ran.fired, 1); assert.equal(ran.last, null); assert.ok(there());
+  // A paused schedule is not on. The removal is handed to the caller, to run after everything else.
+  pauseSchedule(hourly.id, true); ran = tick(); assert.equal(ran.fired, 0); assert.ok(there(), 'nothing is removed before the caller is done');
+  assert.deepEqual(ran.last(), { removed: true, files: [plist] }); assert.ok(await gone());
+  // A bot's schedule that is on in a session keeps the login item; turned off there, it goes.
+  saveBot({ name: 'nightly', instructions: 'Check the nightly build.', schedule: 'every 1h' });
+  liveTask(p.root, { id: '4', goal: 'Trim coupon codes', state: 'answered' }); saveTask(repo, { ...readTask(repo, '4'), bots: ['nightly'] });
+  fs.writeFileSync(path.join(taskDir(repo, '4'), 'bot-schedules.json'), JSON.stringify({ version: 1, bots: { nightly: { on: true, schedule: 'every 1h', nextRunAt: new Date(Date.now() + 3600000).toISOString(), lastRunAt: null, lastRequestId: null, runs: 0, note: null } } }));
+  item.install(); ran = tick(); assert.equal(ran.fired, 0); assert.equal(ran.last, null); assert.ok(there());
+  setBotSchedule(repo, '4', 'nightly', false); ran = tick(); assert.equal(typeof ran.last, 'function'); ran.last(); assert.ok(await gone());
+  // The real unloaders are refused inside the test runner, for the tick's own removal too.
+  assert.throws(() => scheduleTick(new Date(), { start: () => true, item: { platform: 'darwin', home: item.home } }).last(), /Tests must not install login items/);
+});
+
+// What 0.1.19 wrote as the service file: the same text without the KillMode line.
+const from019 = text => text.replace('KillMode=process\n', '');
+// A repeating schedule that is due now and stays on after it runs: saved two hours ago.
+const dueHourly = (root, goal = 'Check the build') => { const then = new Date(Date.now() - 2 * 3600000); return saveSchedule({ root, goal, when: parseWhen('every 1h') }, then); };
+
+test('on Linux the service file has systemd leave what a tick started, and one from 0.1.19 is written and read again when ELU asks for the login item', t => {
+  home(t); const item = standIn(t, 'linux'), [service, timer] = schedulerFiles(item.options);
+  item.install();
+  const text = fs.readFileSync(service, 'utf8'), timerText = fs.readFileSync(timer, 'utf8');
+  assert.match(text, /^\[Unit\]\nDescription=ELU schedules\n\n\[Service\]\nType=oneshot\nKillMode=process\nExecStart=\S+ \S+ schedule tick\nEnvironment=/);
+  assert.equal(item.units()['elu-code-scheduler.service'], text, 'systemd read it');
+  // 0.1.19's file is on disk and loaded. Asked for again, as at each start with a schedule on, it is replaced and read again.
+  fs.writeFileSync(service, from019(text)); item.run('systemctl', ['--user', 'daemon-reload']);
+  assert.doesNotMatch(item.units()['elu-code-scheduler.service'], /KillMode/);
+  const before = item.calls().length;
+  assert.deepEqual(item.install(), { installed: true, changed: true, files: [service, timer] });
+  assert.equal(fs.readFileSync(service, 'utf8'), text); assert.equal(fs.readFileSync(timer, 'utf8'), timerText);
+  assert.deepEqual(item.calls().slice(before).map(call => call.args), [['--user', 'daemon-reload'], ['--user', 'enable', '--now', 'elu-code-scheduler.timer']]);
+  assert.equal(item.units()['elu-code-scheduler.service'], text, 'systemd holds the new text'); assert.deepEqual(item.loaded(), ['elu-code-scheduler.timer']);
+  assert.equal(item.install().changed, false); assert.equal(item.calls().length, before + 2);
+  // The plist needs no such line: launchd ends only the rest of the job's process group.
+  const mac = standIn(t, 'darwin'); mac.install(); assert.doesNotMatch(fs.readFileSync(mac.files()[0], 'utf8'), /AbandonProcessGroup/);
+});
+
+test('on Linux a tick that finds a service file from 0.1.19 adds the line and has systemd read the file again before it starts anything', async t => {
+  home(t); const p = project(t), item = standIn(t, 'linux', { config: process.env.XDG_CONFIG_HOME }), [service, timer] = schedulerFiles(item.options);
+  dueHourly(p.root); item.install();
+  const text = fs.readFileSync(service, 'utf8'), timerText = fs.readFileSync(timer, 'utf8'), seen = path.join(item.home, 'seen.json'), held = path.join(path.dirname(item.home), 'store', 'units.json');
+  fs.writeFileSync(service, from019(text)); item.run('systemctl', ['--user', 'daemon-reload']);
+  const before = item.calls().length;
+  // The tick's start of the conductor notes what the file says and what systemd holds at that moment.
+  const tick = script(item, 'tick-order.mjs', [
+    "import fs from 'node:fs';",
+    `import { scheduleTick } from ${lib('bot-schedules.mjs')};`,
+    `const start = () => { fs.writeFileSync(${JSON.stringify(seen)}, JSON.stringify({ file: fs.readFileSync(${JSON.stringify(service)}, 'utf8'), held: JSON.parse(fs.readFileSync(${JSON.stringify(held)}, 'utf8'))['elu-code-scheduler.service'] })); return true; };`,
+    "const { fired, last } = scheduleTick(new Date(), { start, item: { platform: 'linux' } });",
+    'process.stdout.write(`fired ${fired}, to remove: ${Boolean(last)}\\n`);',
+  ]);
+  assert.deepEqual(await item.job(tick), { status: 0, signal: null, stdout: 'fired 1, to remove: false\n', stderr: '' });
+  assert.deepEqual(JSON.parse(fs.readFileSync(seen, 'utf8')), { file: text, held: text }, 'the line was there, and read, before the conductor was started');
+  assert.deepEqual(item.calls().slice(before), [{ name: 'systemctl', args: ['--user', 'daemon-reload'], fromJob: true }], 'one reload, from within the service; the timer is not touched');
+  assert.equal(fs.readFileSync(timer, 'utf8'), timerText); assert.deepEqual(item.loaded(), ['elu-code-scheduler.timer']);
+  // It is now the file ELU itself writes, so the next start changes nothing; and the next tick asks for nothing.
+  assert.equal(item.install().changed, false);
+  fs.rmSync(seen); await item.job(tick); assert.equal(item.calls().length, before + 1); assert.equal(fs.existsSync(seen), false, 'nothing was due, so nothing was started');
+});
+
+// The exact case: ELU is closed, the login item's run queues the last one-time schedule,
+// starts the conductor, removes the login item and ends. What the system then does with the
+// processes that run left is what the stand-in does (see job in login-item-helpers.mjs).
+for (const platform of ['linux', 'darwin']) {
+  const system = platform === 'linux' ? 'systemd, from a service file 0.1.19 wrote' : 'launchd';
+  // On a Mac the conductor would start the real caffeinate, and what a service leaves is found through /proc.
+  test(`a schedule that fires while ELU is closed: the run its tick starts finishes after the tick has ended (${system})`, { timeout: 120000, skip: process.platform !== 'linux' && 'The stand-in follows the processes a run leaves on Linux only.' }, async t => {
+    home(t); const p = project(t), repo = repository(p.root), item = standIn(t, platform, { config: process.env.XDG_CONFIG_HOME });
+    registerProject(repo); fakeClis(path.dirname(item.home), { mode: 'answer' });
+    const row = dueOnce(p.root); item.install();
+    if (platform === 'linux') {
+      const [service] = schedulerFiles(item.options);
+      fs.writeFileSync(service, from019(fs.readFileSync(service, 'utf8'))); item.run('systemctl', ['--user', 'daemon-reload']);
+      assert.doesNotMatch(item.units()['elu-code-scheduler.service'], /KillMode/, 'systemd holds the service as 0.1.19 wrote it');
+    }
+    const pause = ms => new Promise(resolve => setTimeout(resolve, ms)), settled = async ms => { for (const started = Date.now(); item.left().length && Date.now() - started < ms;) await pause(50); return !item.left().length; };
+    try {
+      const tick = script(item, 'tick-real.mjs', [`import { scheduleTick } from ${lib('bot-schedules.mjs')};`, `const { fired, last } = scheduleTick(new Date(), { item: { platform: '${platform}' } });`, 'process.stdout.write(`fired ${fired}\\n`);', 'last?.();']);
+      const ran = await item.job(tick);
+      assert.equal(ran.stdout, 'fired 1\n'); assert.equal(ran.stderr, '');
+      // On macOS its own bootout ended it; on Linux it disabled its timer and ran to its end.
+      assert.deepEqual([ran.status, ran.signal], platform === 'darwin' ? [null, 'SIGTERM'] : [0, null]);
+      await until(() => !item.loaded().length, 'the login item to be unloaded'); assert.deepEqual(item.files(), [], 'the last schedule ran, so the login item is gone: no later tick will start a conductor');
+      // The tick is over and the system has ended what it does not leave. The run goes on to its answer.
+      await until(() => projectSnapshot(repo).tasks[0]?.state === 'answered', 'the scheduled run to finish after its tick ended', 90000);
+      assert.equal(String(pendingRequests(p.root).find(request => request.scheduleId === row.id)?.taskId), String(projectSnapshot(repo).tasks[0].id), 'it is the run the schedule queued');
+      assert.ok(item.left().includes(conductorStatus().pid), 'the conductor that runs is the one the tick started');
+    } finally {
+      // That conductor is a real one. It is stopped before the test's folders go, whatever happened.
+      spawnSync(process.execPath, [CLI, 'conductor', 'stop'], { env: item.jobEnv(), timeout: 30000 });
+      if (!await settled(10000)) { for (const pid of item.left()) { try { process.kill(pid, 'SIGTERM'); } catch { /* It has ended. */ } } }
+      if (!await settled(10000)) { for (const pid of item.left()) { try { process.kill(pid, 'SIGKILL'); } catch { /* It has ended. */ } } }
+    }
+  });
+}
+
+// What 0.1.19 left on Linux: each run of its login item queued the due run and started the
+// conductor, which systemd ended with that run. So the run stayed queued, shown as "Waiting
+// to start", and every later run of its schedule was skipped for it, which started nothing.
+// left: such a run of an hourly schedule, queued a moment ago with no conductor to take it.
+const leftQueued = root => { const row = dueHourly(root); assert.equal(runDue(new Date(), { start: () => false }), 1); return pendingRequests(root).find(request => request.scheduleId === row.id); };
+// The version whose login item ran here last. 0.1.19 and earlier kept none; 0.0.1 is no version of ELU.
+const ranAs = version => atomic(path.join(personalDirectory(), 'scheduler.json'), { version });
+const holdsLock = () => { const file = path.join(personalDirectory(), 'conductor.lock'); fs.writeFileSync(file, JSON.stringify({ pid: process.pid, identity: processIdentity(process.pid) })); return () => fs.rmSync(file); };
+
+test("the login item's first run after an update starts what the earlier version left queued, its later runs leave the queue as it is, and after the owner's own elu conductor stop nothing is started", t => {
+  home(t); const p = project(t), item = standIn(t, 'linux', { config: process.env.XDG_CONFIG_HOME });
+  registerProject(repository(p.root));
+  const left = leftQueued(p.root), state = () => pendingRequests(p.root).find(request => request.id === left.id).state; item.install();
+  let starts = 0; const tick = () => scheduleTick(new Date(), { start: () => { starts++; return true; }, item: item.options }).fired;
+  // Nothing is due: the schedule ran a moment ago and its run still waits. The conductor is asked for all the same.
+  assert.equal(tick(), 0); assert.equal(starts, 1, 'the first run after the update asks for the conductor'); assert.equal(state(), 'queued');
+  assert.equal(tick(), 0); assert.equal(tick(), 0); assert.equal(starts, 1, 'a later run does not: the queue is left as it is');
+  // The next update: once again.
+  ranAs('0.0.1'); assert.equal(tick(), 0); assert.equal(tick(), 0); assert.equal(starts, 2);
+  // While a conductor runs, it takes the queue itself.
+  const release = holdsLock(); ranAs('0.0.1'); assert.equal(tick(), 0); assert.equal(starts, 2);
+  // The owner stops that conductor himself. What is queued then waits until work is queued, after an update too.
+  assert.equal(spawnSync(process.execPath, [CLI, 'conductor', 'stop'], { encoding: 'utf8', timeout: 30000 }).stdout, 'The conductor stops its runs, keeps their history, and exits. It starts again when work is queued.\n');
+  release(); ranAs('0.0.1'); assert.equal(tick(), 0); assert.equal(tick(), 0); assert.equal(starts, 2, 'his stop holds'); assert.equal(state(), 'queued');
+});
+
+test("a run the login item queues itself on its first run after an update asks for the conductor once", t => {
+  home(t); const p = project(t), item = standIn(t, 'linux', { config: process.env.XDG_CONFIG_HOME });
+  registerProject(repository(p.root)); dueHourly(p.root); item.install();
+  let starts = 0; const tick = () => scheduleTick(new Date(), { start: () => { starts++; return true; }, item: item.options }).fired;
+  assert.equal(tick(), 1); assert.equal(starts, 1, 'once, for the run it queued');
+  assert.equal(tick(), 0); assert.equal(starts, 1);
+});
+
+// The exact case on the owner's Linux computer after the update, with ELU closed: the service
+// file and the queued run are what 0.1.19 left, nothing is due, and the login item runs.
+test('a run 0.1.19 left queued on Linux starts with the first run of the login item after the update, and finishes after that run has ended', { timeout: 120000, skip: process.platform !== 'linux' && 'The stand-in follows the processes a run leaves on Linux only.' }, async t => {
+  home(t); const p = project(t), repo = repository(p.root), item = standIn(t, 'linux', { config: process.env.XDG_CONFIG_HOME });
+  registerProject(repo); fakeClis(path.dirname(item.home), { mode: 'answer' });
+  const left = leftQueued(p.root); item.install();
+  const [service] = schedulerFiles(item.options);
+  fs.writeFileSync(service, from019(fs.readFileSync(service, 'utf8'))); item.run('systemctl', ['--user', 'daemon-reload']);
+  assert.doesNotMatch(item.units()['elu-code-scheduler.service'], /KillMode/, 'systemd holds the service as 0.1.19 wrote it');
+  assert.equal(conductorStatus().running, false); assert.equal(projectSnapshot(repo).tasks.length, 0);
+  const pause = ms => new Promise(resolve => setTimeout(resolve, ms)), settled = async ms => { for (const started = Date.now(); item.left().length && Date.now() - started < ms;) await pause(50); return !item.left().length; };
+  try {
+    const tick = script(item, 'tick-left.mjs', [`import { scheduleTick } from ${lib('bot-schedules.mjs')};`, "const { fired, last } = scheduleTick(new Date(), { item: { platform: 'linux' } });", 'process.stdout.write(`fired ${fired}, to remove: ${Boolean(last)}\\n`);']);
+    assert.deepEqual(await item.job(tick), { status: 0, signal: null, stdout: 'fired 0, to remove: false\n', stderr: '' });
+    assert.match(item.units()['elu-code-scheduler.service'], /^KillMode=process$/m, 'the service was brought up to date before anything was started');
+    // The tick is over, and systemd has ended what it does not leave. The run that was left goes on to its answer.
+    await until(() => projectSnapshot(repo).tasks[0]?.state === 'answered', 'the run that was left to finish after the tick ended', 90000);
+    assert.equal(String(pendingRequests(p.root).find(request => request.id === left.id)?.taskId), String(projectSnapshot(repo).tasks[0].id), 'it is the run 0.1.19 queued');
+    assert.ok(item.left().includes(conductorStatus().pid), 'the conductor that runs is the one the tick started');
+  } finally {
+    // That conductor is a real one. It is stopped before the test's folders go, whatever happened.
+    spawnSync(process.execPath, [CLI, 'conductor', 'stop'], { env: item.jobEnv(), timeout: 30000 });
+    if (!await settled(10000)) { for (const pid of item.left()) { try { process.kill(pid, 'SIGTERM'); } catch { /* It has ended. */ } } }
+    if (!await settled(10000)) { for (const pid of item.left()) { try { process.kill(pid, 'SIGKILL'); } catch { /* It has ended. */ } } }
+  }
+});
+
+test('a schedule saved just as a tick is about to remove the login item keeps it', t => {
+  home(t); const p = project(t), item = standIn(t, 'linux');
+  dueOnce(p.root); item.install();
+  // The tick fires the last one-time run. Nothing is on, so it hands back the removal, to run last.
+  const ran = scheduleTick(new Date(), { start: () => true, item: item.options }); assert.equal(typeof ran.last, 'function');
+  // In that instant ELU, open, saves a schedule and asks for the login item, which is still there.
+  saveSchedule({ root: p.root, goal: 'Lint', when: parseWhen('every 1h') }); assert.equal(item.install().changed, false);
+  const before = item.calls().length;
+  assert.deepEqual(ran.last(), { removed: false }, 'asked again as it removes: a schedule is on');
+  assert.equal(item.files().length, 2); assert.deepEqual(item.loaded(), ['elu-code-scheduler.timer']); assert.equal(item.calls().length, before, 'systemd was asked for nothing');
+});
+
+test('an install that comes while the login item is being removed waits for the removal, then loads it again', async t => {
+  home(t); const p = project(t), item = standIn(t, 'linux', { config: process.env.XDG_CONFIG_HOME });
+  dueOnce(p.root); item.install();
+  // The tick's removal is held inside systemctl: it has looked, found no schedule on, and is at work.
+  fs.writeFileSync(item.hold, '');
+  const before = item.calls().length, running = item.job(tickScript(item, 'linux', ''));
+  await until(() => item.calls().length > before, 'the tick to ask systemd to disable its timer');
+  assert.deepEqual(item.calls().at(-1), { name: 'systemctl', args: ['--user', 'disable', '--now', 'elu-code-scheduler.timer'], fromJob: true });
+  // ELU, open, saves a schedule now and asks for the login item. Its files are still there, the same as it would write.
+  saveSchedule({ root: p.root, goal: 'Lint', when: parseWhen('every 1h') });
+  spawn('sh', ['-c', 'sleep 0.3; rm -f "$0"', item.hold], { stdio: 'ignore' }).unref();
+  assert.equal(item.install().changed, true, 'it did not take the files that were about to go for its own: it waited, then wrote and loaded them');
+  assert.deepEqual(await running, { status: 0, signal: null, stdout: 'fired 1\n', stderr: '' });
+  assert.equal(item.files().length, 2); assert.deepEqual(item.loaded(), ['elu-code-scheduler.timer']);
+  assert.deepEqual(item.calls().slice(before).map(call => call.args[1]), ['disable', 'daemon-reload', 'enable'], 'the removal first, whole, then the install');
+});
+
+test('on Linux a timer that is still loaded after its files went is stopped by its own next run with nothing on', async t => {
+  home(t); project(t); const item = standIn(t, 'linux', { config: process.env.XDG_CONFIG_HOME });
+  item.install();
+  const link = path.join(path.dirname(item.files()[1]), 'timers.target.wants', 'elu-code-scheduler.timer'), linked = () => { try { return fs.lstatSync(link).isSymbolicLink(); } catch { return false; } };
+  assert.ok(linked(), 'enabling it linked it');
+  // The files go without a disable. systemd still holds the timer, and goes on starting the service every minute.
+  for (const file of item.files()) fs.rmSync(file);
+  assert.deepEqual(item.loaded(), ['elu-code-scheduler.timer']); assert.ok(linked());
+  // ELU, open, finds nothing to remove and asks systemd for nothing: the timer's own run ends it.
+  const before = item.calls().length; assert.deepEqual(item.uninstall(), { removed: false }); assert.equal(item.calls().length, before);
+  const tick = tickScript(item, 'linux', '');
+  assert.deepEqual(await item.job(tick), { status: 0, signal: null, stdout: 'fired 0\n', stderr: '' });
+  assert.deepEqual(item.calls().slice(before), [{ name: 'systemctl', args: ['--user', 'stop', 'elu-code-scheduler.timer'], fromJob: true }], 'stopped: disable fails on a unit with no file');
+  assert.deepEqual(item.loaded(), []); assert.equal(linked(), false, 'the link that enabled it is gone too');
+  // Run by hand with nothing loaded, the stop fails and the run still ends well. Asked for again, the login item loads.
+  assert.deepEqual(await item.job(tick), { status: 0, signal: null, stdout: 'fired 0\n', stderr: '' });
+  assert.equal(item.install().changed, true); assert.deepEqual(item.loaded(), ['elu-code-scheduler.timer']); assert.ok(linked());
+});
+
+test('a login item that could not be loaded leaves no files that would read as loaded, so the next ask loads it', t => {
+  home(t);
+  for (const [platform, verb] of [['darwin', 'bootstrap'], ['linux', 'enable']]) {
+    const item = standIn(t, platform);
+    const failing = (name, args, more) => { if (args.includes(verb)) throw new Error(`${name} could not load the scheduler: it is busy`); return item.run(name, args, more); };
+    assert.throws(() => item.install({ run: failing }), /could not load the scheduler: it is busy/);
+    assert.deepEqual(item.files(), [], `${platform}: nothing is left of the try`); assert.deepEqual(item.loaded(), []);
+    assert.equal(item.install().changed, true, `${platform}: asked again, it is written and loaded`); assert.equal(item.loaded().length, 1);
+  }
 });

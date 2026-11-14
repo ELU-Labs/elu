@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -37,7 +38,10 @@ export const CLI = fileURLToPath(new URL('../bin/elu-code.mjs', import.meta.url)
 export const keyLike = (...parts) => parts.join('');
 export function temp(t) {
   const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'elu-code-test-')));
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true })); return dir;
+  // A turn that is stopped while its vendor is still being read ends at once, and the reading
+  // goes on to its end: a stand-in it starts can write its record of the call while this folder
+  // is being removed. The folder is then removed again.
+  t.after(() => { for (let again = 5; ; again--) { try { return fs.rmSync(dir, { recursive: true, force: true }); } catch (error) { if (error.code !== 'ENOTEMPTY' || !again) throw error; } } }); return dir;
 }
 // The read-only role a review runs with: what a config's reviewer entry held before bots
 // did the reviews, and what a bot's turn is given now (botRole in lib/bots.mjs).
@@ -102,4 +106,25 @@ export function fakeClis(parent, { mode = 'normal', sandboxBin = null, name = un
   }
   // CLAUDE_CONFIG_DIR keeps the lead from picking up the real MCP servers of whoever runs the tests.
   return { env: { PATH: `${dir}${path.delimiter}${process.env.PATH}`, XDG_CONFIG_HOME: path.join(parent, 'personal'), XDG_DATA_HOME: path.join(parent, 'data'), CLAUDE_CONFIG_DIR: path.join(parent, 'claude'), ...(sandboxBin ? { ELU_CODE_SANDBOX_HELPER: sandboxBin } : {}) }, calls, dir };
+}
+// A stand-in Keychain: test/fakes/security.mjs as `security` in dir, which must come first on
+// PATH (fakeClis' bin folder does), holding these items. Never the real one.
+export function fakeKeychain(dir, items = []) {
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'security'), `#!${process.execPath}\n${fs.readFileSync(path.join(FAKES, 'security.mjs'), 'utf8')}`, { mode: 0o755 });
+  const store = path.join(dir, 'keychain.json'), log = path.join(dir, 'keychain-calls.jsonl');
+  fs.writeFileSync(store, JSON.stringify({ items }));
+  const read = () => JSON.parse(fs.readFileSync(store, 'utf8'));
+  return {
+    items: () => read().items,
+    calls: () => fs.existsSync(log) ? fs.readFileSync(log, 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line).args) : [],
+    add: item => fs.writeFileSync(store, JSON.stringify({ ...read(), items: [...read().items, item] })),
+    lock: locked => fs.writeFileSync(store, JSON.stringify({ ...read(), locked })),
+  };
+}
+// The names Claude Code gives a sign-in kept in the macOS Keychain for a config folder, when
+// CLAUDE_CONFIG_DIR names it (Claude Code 2.1.323): the sign-in, and an API key it saved.
+export function claudeKeychainNames(dir) {
+  const hash = crypto.createHash('sha256').update(dir.normalize('NFC')).digest('hex').slice(0, 8);
+  return { credentials: `Claude Code-credentials-${hash}`, apiKey: `Claude Code-${hash}`, hash };
 }

@@ -7,16 +7,18 @@ session; a turn that is not your own session's runs read only.
 
 | | Read only | Ask for approval | Approve for me | Full access |
 | --- | --- | --- | --- | --- |
-| Who gets it | bots that review or answer, teammate questions, tasks saved without a mode | your session | your session; at most this for a schedule whose mode you did not pick and for a bot's scheduled turn | your session, and a schedule you pick it for |
+| Who gets it | bots that review or answer, teammate questions, tasks saved without a mode | your session | your session; at most this for a schedule whose mode you did not pick | your session with its bots' schedules, and a schedule you pick it for |
 | Reads | the workspace; answer turns may read your home | without asking: the workspace, folders and, for answer turns, your home (below) | same | anything |
 | Edits in the workspace | edit turns only | yes | yes | yes |
 | Edits outside it | no | asks | a reviewer model decides; on Antigravity refused, and on Claude Code an answer turn's edit asks | yes |
 | Shell inside the vendor sandbox | no | yes; Antigravity runs no sandbox, so every command asks | yes | yes, no sandbox |
 | Shell outside it, network, web tools | no | asks | a reviewer model decides | yes |
-| Secrets and ELU state | no | no | no | file tools denied; a shell can read |
+| Secrets and ELU state | no | no | no | yes: Full access denies nothing |
+| Tools | read and search | the vendor's file, shell and web tools | same | every tool the vendor has |
+| Your environment | a short list (`PATH`, `HOME`, language, temp folder) | same | same | all of it: your SSH agent, your GitHub and cloud sign-ins, your proxy |
 | Never list (push, tag, merge, deploy, publish) | blocked | blocked; every escape asks | stand-in commands and, except on Codex, deny rules; a command that gets past them gets through if the reviewer allows it | none: the model runs them without asking |
 | Runs in | worktree | worktree or a named branch | same | also here |
-| Checks | sandboxed, no network, structural limits | same | no network; dependency files may change | network on; only secret paths and deleted tests block |
+| Checks | sandboxed, no network, structural limits | same | no network; dependency files may change | network on; no structural limit blocks, what one finds is shown as a note |
 
 Secrets here are files Git does not track whose names look like secrets: `.env*`, `.npmrc`,
 `.netrc`, `.pypirc`, `auth.json`, `credentials`, `credentials.json`, `id_rsa`, `id_ed25519`,
@@ -24,6 +26,74 @@ Secrets here are files Git does not track whose names look like secrets: `.env*`
 repository tracks is read in every mode, as any other tracked file: it is in the repository
 already. A teammate's question is denied the names whatever Git says. Outside a Git work
 tree every file of those names is denied.
+
+## Full access
+
+Full access is everything. A turn that runs with it has no limit of ELU's:
+
+- **Files.** It reads and changes any file: secret files (`.env`, `.npmrc`, keys), the
+  secret folders in your home (`~/.ssh`, `~/.aws`, `~/.config`), ELU's own folder, and
+  your vendor sign-ins (`~/.claude`, `~/.codex`, `~/.grok`).
+- **Folders.** `/permissions folders add <path>` takes any folder there is: a secret
+  folder, ELU's folder, one outside your home, your home itself, and as many as you name.
+  A path with `*`, `?`, brackets or braces in it starts too.
+- **Commands.** Any command runs without asking and outside any sandbox, with push, tag,
+  merge, publish and deploy among them. There is no never list.
+- **Your environment.** Commands get the environment a command you type gets: your SSH
+  agent, your GitHub and cloud sign-ins, your proxy, your npm settings.
+- **Tools.** Every tool the vendor has. Claude Code: helpers, background commands,
+  notebooks and the rest of its default set. Codex: every feature its release ships
+  (helpers, the plan, images, skills, plugins). Grok Build: its memory, its subagents, its
+  server-side search, and as many turns as the work takes. Antigravity: its slash
+  commands, and no hook of ELU's between it and a tool call.
+- **Network.** The internet and anything on this computer, the local A2A endpoint
+  included when you have turned it on.
+- **Checks.** Your project's own tests and build still run after an edit. ELU's structural
+  checks (ignored output, files outside the declared paths, deleted tests) fail nothing:
+  what one finds is shown as a note.
+- **Approvals.** Once a session has Full access, ELU allows everything its running turn
+  asks, a removal and an MCP tool included.
+
+What stays, and why:
+
+- The names that choose a vendor's own account and endpoint (`ANTHROPIC_*`, `CLAUDE_*`,
+  `OPENAI_*`, `CODEX_*`, `XAI_*`, `GROK_*`, `GEMINI_*`, `GOOGLE_API_KEY`) do not come from
+  your shell: a key among them would move the turn to another account than the one you
+  signed in with.
+- The vendor starts with the settings ELU gives it, not with your vendor settings file or
+  your hooks: ELU reads the run's output, and a setting it did not make can change that
+  output. On Claude Code your own MCP servers are on, as in every mode (`/mcp`). Codex,
+  Grok Build and Antigravity get no MCP servers from ELU in any mode.
+- A turn has to answer in the form ELU reads, and a turn that prints nothing for 10
+  minutes, or runs 2 hours, is stopped ([How long a turn runs](#how-long-a-turn-runs)).
+  That is how a vendor that hangs is told from one that works.
+- Codex cannot ask you a question in the middle of a turn: nobody could answer it there.
+- Grok Build and Antigravity do not start in your home itself: each loads settings from
+  `~` that ELU cannot turn off (Grok Build the agents, plugins and permission rules of your
+  Claude Code folder, your own `~/.grok` agents and your `.agents` skills; Antigravity
+  `~/.gemini`). So `~` in their runs is a folder of links, one to each entry
+  at the top of your home, made again before every run. `~/.npmrc`, `~/.config`, `~/.aws`,
+  `~/.docker`, `~/.kube`, `~/.ssh`, `~/.gitconfig` and everything else there are your own
+  files, so npm, cloud CLIs, `gh`, Git and SSH are signed in as in your terminal.
+  - Not linked: `~/.claude`, `~/.claude.json`, `~/.codex`, `~/.cursor`, `~/.gemini`,
+    `~/.grok` and `~/.agents`. The vendor's own folder there is the one ELU wrote for the
+    run. Yours are never written through `~`; a command still reaches them by full path.
+  - A file or folder a command makes at the top of `~` is moved to your home when the run
+    ends. A file saved in place of yours replaces yours. Renaming an entry renames yours.
+  - Removing an entry at the top of `~` removes the link only: yours stays and is linked
+    again at the next run. A command that walks `~` without following links (`find ~`,
+    `du ~`) sees links: give it your home's full path.
+  - Claude Code and Codex run in your home.
+- What a vendor asks in every mode is still shown to you. Claude Code asks before `rm` or
+  `rmdir` on your home, the working folder or a top-level folder.
+- Who gets Full access: your own sessions, the schedules of their bots, and the schedules
+  you pick it for. A bot's scheduled turn runs in its session's mode, Full access included.
+  A request to the local A2A endpoint is your own and runs your default mode as it is. A
+  teammate's message that starts by itself runs with Approve for me at most, and a
+  teammate's question runs read only.
+
+Everything in the sections below about deny rules, the never list, the sandbox and
+approvals holds in the other modes.
 
 "Asks" is a live approval in your terminal where the vendor has a relay: Claude
 Code, and Antigravity and Grok Build once the `relay` step of their one-time check
@@ -51,10 +121,12 @@ The workspace is the place you picked: a worktree on a new task branch, a
 worktree with a named branch checked out, or, in Full access, the checkout
 itself with its current branch and a dirty tree allowed. Folders are extra
 directories in your home that the model may read this session, added with
-`/permissions folders add <path>`; they are never a secret folder or ELU's
-state. A folder that holds one of those is refused too, and a link counts as
+`/permissions folders add <path>`; below Full access they are never a secret
+folder or ELU's state. A folder that holds one of those is refused too, and a link counts as
 where it leads: with `~/.config` linked to `~/dotfiles/config`, `~/dotfiles` is
-refused. In Ask for approval and Approve for me a folder is read and never written:
+refused. Full access takes any folder ([Full access](#full-access)); a session that leaves
+Full access keeps only the folders the other modes take. A folder a trusted teammate's
+message names is offered the same way when you work on it with `w`. In Ask for approval and Approve for me a folder is read and never written:
 Claude Code denies writes there to its file tools and to sandboxed commands, Codex gives
 the folder read access only, and Antigravity denies writes there to its file tool. On
 Claude Code and Antigravity a folder that holds the workspace or lies inside it, such as
@@ -70,7 +142,7 @@ those turns; Codex reads anywhere in every turn; Grok Build allows `Read` and `G
 with no path. On Claude Code a command that stays in the sandbox also reads outside the
 workspace without asking. Antigravity keeps its file tool to the workspace and folders.
 The secret folders (`~/.ssh`, `~/.aws`, `~/.config`, `~/Library` and the rest) and ELU's
-state stay closed, as the table says. Your session's answer turns, and a working
+state stay closed below Full access, as the table says. Your session's answer turns, and a working
 bot's until the session's work is published, also get a list of up to 60 Git
 repositories found in your home, so the model can find the code you mean.
 
@@ -90,10 +162,12 @@ the session's mode when you write to it, and so do the helpers it hands work to.
 Code a working bot can start helpers when its instructions ask for them. They run on the
 bot's own model unless the bot was saved with another for them, as `@lead` was, with the
 tools and the denied commands of the bot's turn, and they start no helpers of their own.
+In Full access a helper has every tool and is told nothing it may not do.
 A bot that is allowed to merge pull requests starts helpers only when it was saved with a
-model for them. A turn its schedule started runs with Approve for me at most, because
-nobody may be watching: a bot's schedule has no mode of its own, so you never pick Full
-access for it.
+model for them. A turn its schedule started runs in the session's mode too, Full access
+included: pick Full access for the session, when you start it or with `/permissions full`,
+and its bots' schedules run with it, with nobody watching. In a session that edits your
+checkout in place, they run while the session has Full access.
 
 Full access has no never list. A turn that runs with it, your session's or a working
 bot's, runs what your own shell could: `git push` (tags too), `git tag`, `git merge`,
@@ -201,7 +275,7 @@ the end (Antigravity and Grok Build without the live relay) has the cap alone.
 The keys are `y` allow and `n` deny. Where the session can be given Full access
 there is a third, `f`: it asks what `/permissions full` asks, then allows the
 action and switches the session to Full access, so that session stops asking.
-It is not offered for a bot's scheduled turn or a turn that runs read only.
+It is not offered for a turn that runs read only.
 
 ### Network
 
@@ -366,11 +440,10 @@ Approve for me.
   limit, the folders and the bots. The turn in progress keeps the mode it
   started with, with one exception: after a switch to Full access, ELU
   allows that turn's approvals for you, the one that waits and the ones it asks
-  next. Three kinds stay yours to answer: a removal with `rm` or `rmdir`, an
-  MCP tool, and a command too long to show whole. The never list is not asked,
+  next, all of them: a removal with `rm` or `rmdir`, an MCP tool and a command too
+  long to show whole included. The never list is not asked,
   so it stays refused in that turn, which started without Full access; the next
-  turn runs it. A bot's scheduled turn is not answered this way: it runs
-  with Approve for me at most.
+  turn runs it.
 - A turn that starts in Full access is never answered for you. What it still
   asks, its vendor asks in every mode (Claude Code asks before `rm` or `rmdir`
   on your home, the working folder or a top-level folder), and you answer it.
@@ -394,7 +467,9 @@ Approve for me.
   never starts that bot's schedule. An unanswered approval times out and the
   task asks you.
 - A request sent to the local A2A endpoint, which is off by default, runs your
-  personal default, capped at `auto`.
+  personal default as it is, Full access included: only a program on this computer
+  that holds your own token reaches the endpoint. A session that
+  has Full access can itself reach the endpoint, as it can anything on this computer.
 - A teammate's message you answer runs read only and never gets a mode. One you
   choose to work on runs with the mode you pick then.
 - `elu run` runs read only unless you pass `--permissions auto|full`,
@@ -410,11 +485,16 @@ on PATH, and `bwrap` must be allowed to make user namespaces. Where the sandbox
 does not start, the system fences nothing, so Ask for approval asks you for every
 command and Approve for me sends every command to the reviewer.
 
-The Permissions picker says which case this machine is: "No OS sandbox here" when
-a tool is not installed, "The OS sandbox cannot start here" when both are installed
-and `bwrap` cannot start. ELU finds out by starting `bwrap` once, around a
-command that does nothing, when the picker first opens; start ELU again after
-a fix.
+The Permissions picker and `elu policy show` say which case this machine is: "No
+OS sandbox here" when a tool is not installed, "The OS sandbox cannot start here"
+when both are installed and `bwrap` cannot start. ELU finds out by starting `bwrap`
+around a command that does nothing, with the namespaces Claude Code's sandbox
+makes: its own user, network and process namespaces. A `bwrap` run as root, or
+installed setuid, can make the others where user namespaces are turned off; the
+sandbox still cannot start there, and ELU says so. Where it cannot start, ELU
+counts every command as outside the sandbox, so a default that holds only inside
+it (Git reads, the project's checks) asks you. The answer is kept for each `bwrap`
+program, so it is started once; start ELU again after a fix.
 
 Ubuntu 24.04 stops a program from making user namespaces unless an AppArmor
 profile lets it, and has no profile for `bwrap`. This one does, saved as

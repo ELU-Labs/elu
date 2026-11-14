@@ -17,6 +17,13 @@ ELU launches installed vendor CLIs. The executables and your local installation 
 trusted. Repository content, check scripts, prompts, and model responses are untrusted.
 Only the owner can approve a push, or give a session Full access, which pushes without asking.
 
+ELU refuses a symbolic link inside what it or a session writes: its state folder, a
+project's record, a task's workspace. A link above those is yours or the system's and is
+followed: the temp folder, the folder its state is kept in (`$XDG_CONFIG_HOME`, else
+`~/.config`), a project folder you type, a Git hooks folder outside the project and a
+vendor's home are each read as they are on disk first. On macOS `/var` and `/tmp` are such
+links. A session is closed out of ELU's state under both names of that folder.
+
 Prompts explain the task but are not security controls. This tool cannot prove a change is
 correct, and model review is not a substitute for a person reviewing a pull request.
 
@@ -564,12 +571,31 @@ the sessions a later turn resumes, skills, agents, commands, plugins and hooks (
 the same setup, and only the sign-in differs. The MCP servers and memory a run gets come from
 your own home on every account.
 
+Your own MCP servers are also there when you run the vendor by hand on an account's folder.
+Codex keeps them in `config.toml`, which every account links, even before you have one.
+Claude Code keeps them in `.claude.json`, which also names the account, so that file is
+never linked: ELU writes the `mcpServers` of your own `~/.claude.json` into each account's
+`.claude.json`, under Claude Code's own lock on that file, and nothing else of yours (no
+sign-in, account, setting or project). It does so when an account is added, before each run
+on it, after `/mcp add` and `/mcp remove`, and every few seconds while ELU is open, so a
+server you add or remove with `claude mcp` is in every account too. A server added on an
+account's own folder stays there; one of yours of the same name replaces it. Those entries
+can hold a server's key, as yours do, and the account's file is private to you (`0600`, in
+ELU's private folder). A server's own OAuth sign-in lives in the account's sign-in store,
+not in that file, so each account signs in to such a server once on its own.
+
 `logins.json` records which accounts were added and which one new runs use; it holds no
 email, token or path. Switching (Enter on an account) changes the account of the next run
 only: a run keeps the account it started on. When a run stops at an account's limit, the
 chat names that account and says to switch in Usage; ELU never switches by itself.
 Forgetting an account (`x`) deletes its folder after you confirm. It is not signed out, so
-nothing is revoked; on macOS its Keychain item stays until you delete it in Keychain Access.
+nothing is revoked. On macOS ELU also deletes the Keychain items Claude Code keeps for that
+folder, with macOS's `security delete-generic-password`, for your user and by exact name:
+the names Claude Code gives that folder's sign-in and an API key it saved there ("Claude
+Code-credentials-" or "Claude Code-" and the folder's eight hex digits, each also with
+Claude Code's OAuth suffixes). Your own sign-in, every other account's, and everything else
+in the Keychain stay. When the Keychain is locked or refuses, the account is still
+forgotten, and ELU names the item for you to delete in Keychain Access.
 Accounts belong to the machine they were added on and are never sent to a teammate or to
 another of your machines.
 
@@ -633,3 +659,10 @@ proof on a given machine, and the vendor's own issue
 [xai-org/grok-build-plugin-cc#34](https://github.com/xai-org/grok-build-plugin-cc/issues/34)
 says some switches are ignored. Grok's deny rules match command text: in Approve for me
 the never list is a tripwire, not a boundary, and Full access has none.
+
+In Full access both run under a HOME that is a folder of links to the entries at the top
+of your home, so a command reads and writes your own files and sign-ins as your terminal
+does. The folders of coding tools (`~/.claude`, `~/.claude.json`, `~/.codex`, `~/.cursor`,
+`~/.gemini`, `~/.grok`, `~/.agents`) are not linked, and the vendor's own folder there is
+still the one ELU wrote. The other modes never run there: the folder sits in ELU's own,
+which they deny. See [Full access](docs/permissions.md#full-access).
