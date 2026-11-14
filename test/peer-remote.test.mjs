@@ -817,7 +817,7 @@ test('a computer of mine lists every session here, whoever started it, a page at
   // Each session names the repository it works in: here the project's own, or none.
   assert.equal(row('Run the tests').repoId, shop.repoId); assert.equal(row('Tidy my notes').repoId, null);
   // standup: false only on a session a standup here would not ask (lib/standup.mjs).
-  assert.deepEqual(Object.keys(listed.sessions[0]).filter(name => name !== 'standup').sort(), ['approvals', 'at', 'by', 'createdAt', 'error', 'plan', 'project', 'question', 'ref', 'repoId', 'state', 'title', 'who'].sort());
+  assert.deepEqual(Object.keys(listed.sessions[0]).filter(name => name !== 'standup').sort(), ['approvals', 'at', 'by', 'createdAt', 'error', 'plan', 'project', 'question', 'ref', 'repoId', 'since', 'state', 'title', 'who'].sort());
   assert.ok(listed.sessions.every(item => item.standup === undefined || item.standup === false));
   void other;
   // A page at a time.
