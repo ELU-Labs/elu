@@ -185,7 +185,8 @@ Needs you. Allow lets the action run; deny tells the model not to retry it
 another way; no answer within 20 minutes counts as a denial. The turn's limits
 (below) wait while a request is open, and the conductor does not treat the wait
 as a stall. Every decision is kept with the task, and blocked actions are kept
-on the run.
+on the run. In Full access the relay allows every call at once: nobody is asked
+and nothing is refused, and the task keeps each as allowed by Full access.
 
 ### How long a turn runs
 
@@ -375,14 +376,16 @@ Approve for me.
   limit, the folders and the bots. The turn in progress keeps the mode it
   started with, with one exception: after a switch to Full access, ELU
   allows that turn's approvals for you, the one that waits and the ones it asks
-  next. Three kinds stay yours to answer: a removal with `rm` or `rmdir`, an
-  MCP tool, and a command too long to show whole. The never list is not asked,
+  next, all of them: a removal with `rm` or `rmdir`, an MCP tool and a command too
+  long to show whole included. The never list is not asked,
   so it stays refused in that turn, which started without Full access; the next
   turn runs it. A bot's scheduled turn is not answered this way: it runs
   with Approve for me at most.
-- A turn that starts in Full access is never answered for you. What it still
-  asks, its vendor asks in every mode (Claude Code asks before `rm` or `rmdir`
-  on your home, the working folder or a top-level folder), and you answer it.
+- A turn that starts in Full access asks you nothing. What its vendor asks in
+  every mode (Claude Code asks before `rm` or `rmdir` on your home, the working
+  folder or a top-level folder) is allowed at once. The same holds for a turn
+  whose session you set to Full access while it works, and with the app closed:
+  whichever way the vendor asks, ELU's answer does not wait for the app.
 - The automatic edit task of a conversation inherits the conversation's choices.
 - A schedule stores the mode of the form it was made in. One whose mode you did
   not pick yourself runs with your default at each run, and never above `auto`.

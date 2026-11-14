@@ -45,6 +45,15 @@ names neither gets no message while it works: there a message waits for the turn
 and Enter stops the turn first, as on the other vendors. Read from the 2.1.322 program; the
 messages above were driven with the stand-in CLI, not yet with the real service.
 
+A turn ends at its `result` line. When Claude Code is still there three seconds after it,
+waiting on a command the turn left in the background, ELU ends it with that command, and
+the chat names the command. A `result` line is not the end of the run while a message of
+yours on its input is still owed an answer: after a send now that cut the turn, the run
+goes on with your message, and with any you send meanwhile, and the three seconds count
+from the `result` line of the last of those turns. `/stop` stops such a run whole: a message
+it had taken stays in the chat, and one that still waited starts the next turn, in the
+same session.
+
 Read from the 2.1.323 program (a queued prompt is folded into a running turn at
 its next tool step; one that comes after the last step runs as one more turn of the same
 run, with a `result` line of its own, after the input closes) and from its change log
