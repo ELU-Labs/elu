@@ -3,9 +3,10 @@
 // noPunch, firewalled, abortFound, join, dropProveReply, github: {gapMs, everyMs} for GitHub pairing}. noPunch: no
 // direct connection to a teammate or to anyone found on a join's topic. firewalled: this node
 // is not reachable without a punch. abortFound: N direct tries of a join fail before one may
-// work. join: {connectMs, retryMs, carryMs} for a join's waits. A home on no team waits for its join, so by default it does not
+// work. join: {connectMs, retryMs, carryMs, wayMs, directMs} for a join's waits and for two teammates who cannot connect
+// directly. A home on no team waits for its join, so by default it does not
 // stop by itself within the test (idleMs an hour). It prints {"ready":true,"key":...} once listening and stops when stdin
-// closes or on SIGTERM.
+// closes or on SIGTERM. SIGUSR2 lifts noPunch while it runs: direct connections work from then on.
 import { PeerDaemon } from '../lib/peer/daemon.mjs';
 import { Conductor } from '../lib/conductor.mjs';
 
@@ -22,6 +23,7 @@ async function shutdown() {
   return stopping;
 }
 process.on('SIGTERM', shutdown);
+process.on('SIGUSR2', () => { delete testing.connect; delete testing.found; if (daemon.node?.swarm?.server) daemon.node.swarm.server.holepunch = () => true; });
 process.stdin.on('end', shutdown); process.stdin.resume();
 try { await daemon.start(); }
 catch (error) { process.stdout.write(`${JSON.stringify({ ready: false, error: error.message })}\n`); process.exit(1); }

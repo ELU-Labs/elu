@@ -46,7 +46,9 @@ import { RETRY_MS, checkInviterProof, inviteKeys, joinerProof, openInvites, pars
 import { base32, canonical } from '../lib/peer/canonical.mjs';
 import * as peer from '../lib/peer/index.mjs';
 import { bothMine, markMine, mineRows as readMine, noteTheirs } from '../lib/peer/mine.mjs';
-import { CARRY_MS, createCarrier, savedRoutes } from '../lib/peer/carry.mjs';
+import { CARRY_MS, carryMethods, createCarrier, savedRoutes } from '../lib/peer/carry.mjs';
+import { inboxRoot } from '../lib/peer/files.mjs';
+import { reachText } from '../lib/peer/reach-text.mjs';
 import { openRelays, relayKeys, sealRelays } from '../lib/peer/invite.mjs';
 import { joinWait, noRoute } from '../lib/peer/join-text.mjs';
 import { boardRows } from '../lib/board.mjs';
@@ -2464,6 +2466,139 @@ test('a join goes through a teammate of the inviter when the two cannot connect 
   await until(() => !online(ana.home, saraKey), 'sara offline at ana');
   s = await daemon(t, sara, { conductor: false, noPunch: true, join: quick });
   await until(() => relayed(sara, crew.teamId, ana.identity.key) && relayed(ana.home, crew.teamId, saraKey), 'back online through the relay');
+});
+
+// --- Two teammates who cannot connect directly, and a third computer on the team that reaches both. ---
+// Three computers on one team: ana made it, sara and li joined. ana and sara count each other as their own computers.
+function trio(t) {
+  const crew = makeTeam(t), ana = crew.founder, sara = crew.member, home = newHome(t), third = withHome(home, () => createIdentity({ name: 'li' }));
+  const log = withHome(ana.home, () => { redeemCode(createInvite(ana.identity, crew.teamId, { hours: 1 }), third.key, 'li'); return readLog(crew.teamId).ops; });
+  for (const at of [sara.home, home]) withHome(at, () => { const { rejected } = merge(crew.teamId, log); if (rejected.length) throw new Error(rejected[0].reason); });
+  for (const [here, there] of [[ana, sara], [sara, ana]]) withHome(here.home, () => { markMine(here.identity.key, there.identity.key); noteTheirs(there.identity.key, true); });
+  return { teamId: crew.teamId, ana, sara, li: { home, identity: third } };
+}
+const peersText = home => withHome(home, async () => (await peerCli(['peers'], {})).lines.join('\n'));
+const filesUnder = dir => fs.existsSync(dir) ? fs.readdirSync(dir, { recursive: true }).map(String) : [];
+
+test('two teammates who cannot connect directly reach each other through a third computer on the team: presence, a message, a session and a file pass; without it each says why; they go back to direct when it works', skipLan, async t => {
+  const bootstrap = await testnet(t, lan), { teamId, ana, sara, li } = trio(t), ways = { ...quick, wayMs: 1500, directMs: 3000 };
+  enable(ana.home, bootstrap, { box: 'vm' }); enable(sara.home, bootstrap, { box: 'laptop' }); enable(li.home, bootstrap, { box: 'studio' });
+  const side = answering(t, sara.home);
+  withHome(sara.home, () => savePeerPolicy(ana.identity.key, { autoAccept: true }));
+  // ana and sara are each on a network that connects to nobody directly; li is reachable by both.
+  let c = await daemon(t, li.home, { conductor: false, join: ways });
+  const a = await daemon(t, ana.home, { conductor: false, noPunch: true, join: ways }), b = await daemon(t, sara.home, { env: side.env, noPunch: true, join: ways });
+  const through = (home, key) => { const m = memberOf(home, teamId, key); return Boolean(m?.online) && m.path === 'relayed' && m.via === "li's computer"; };
+  await until(() => through(ana.home, sara.identity.key) && through(sara.home, ana.identity.key), 'ana and sara online to each other through li');
+  // Both reach li directly, and li only passes bytes along.
+  assert.equal(memberOf(ana.home, teamId, li.identity.key).path, 'direct'); assert.equal(memberOf(sara.home, teamId, li.identity.key).path, 'direct');
+  assert.match(daemonLog(ana.home) + daemonLog(sara.home), /is there but cannot be connected to directly: through li's computer/);
+  assert.match(daemonLog(li.home), /passing along [0-9a-f]{8} and [0-9a-f]{8}/);
+  // elu peers says how each one is reached.
+  assert.match(await peersText(ana.home), /● sara {2}member {2}online · through li's computer/); assert.match(await peersText(ana.home), /● li {2}member {2}direct/);
+  // Each side keeps the route, and knows which computer runs the relay the other one told it.
+  const route = await until(() => { const row = withHome(ana.home, () => savedRoutes())[sara.identity.key]; return row?.mine.length ? row : null; }, 'ana keeps the route');
+  assert.deepEqual(route.mine.map(entry => entry.helper), [li.identity.key]);
+  await until(() => withHome(sara.home, () => savedRoutes())[ana.identity.key]?.mine[0]?.relay === route.mine[0].relay, 'sara keeps the same relay: li made one for the pair');
+  // A computer that is not on the team gets nothing from the one that carries: no session on the relay.
+  await shutOut(t, bootstrap, route.mine[0].relay);
+
+  // A message and its answer.
+  const { askId } = await run(ana.home, { type: 'ask', to: 'sara', text: 'Through li?' });
+  await until(() => askRecord(ana.home, askId)?.state === 'answered', 'the answer came back through li');
+  // A session started on the other computer, watched from here as it runs.
+  const started = await run(ana.home, { type: 'remoteStart', to: sara.identity.key, text: 'Say which computer this is', permissions: 'ask' });
+  const viewed = () => withHome(ana.home, () => peer.remoteSessions().find(row => row.id === started.id));
+  await until(() => { const row = viewed(); return row && row.seq > 0 && !['starting'].includes(row.state) && row.entries?.length > 0; }, 'the session on sara\'s computer shows here as it runs');
+  // A file to that session.
+  const folder = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'elu-code-send-'))); t.after(() => fs.rmSync(folder, { recursive: true, force: true }));
+  const bytes = crypto.randomBytes(300000); fs.writeFileSync(path.join(folder, 'notes.bin'), bytes);
+  const files = withHome(ana.home, () => peer.stageFiles(peer.offerPaths([path.join(folder, 'notes.bin')])));
+  const sent = await run(ana.home, { type: 'remoteFiles', id: started.id, text: '', files }, 120000);
+  assert.equal(sent.files, 1); assert.equal(sent.bytes, bytes.length);
+  const landed = filesUnder(inboxRoot()).find(name => name.endsWith('notes.bin'));
+  assert.ok(landed, 'the file is in the session\'s inbox on the other computer'); assert.deepEqual(fs.readFileSync(path.join(inboxRoot(), landed)), bytes);
+  assert.ok(state(ana.home).counters.relayed >= 1);
+
+  // The computer that carried quits: each says the other is offline, and why.
+  await c.stop();
+  const blocked = (home, key) => { const m = memberOf(home, teamId, key); return m && !m.online && m.reach === 'blocked'; };
+  await until(() => blocked(ana.home, sara.identity.key) && blocked(sara.home, ana.identity.key), 'both say why the other is offline');
+  assert.match(await peersText(ana.home), /○ sara {2}member {2}offline · no computer on the team reaches you both/);
+  assert.match(await peersText(ana.home), /○ li {2}member {2}offline$/m, 'one that is simply not there is offline, with no reason');
+  // It returns: they are back in touch through it.
+  c = await daemon(t, li.home, { conductor: false, join: ways });
+  await until(() => through(ana.home, sara.identity.key) && through(sara.home, ana.identity.key), 'back online through li');
+
+  // The networks start letting them connect directly: they go back to direct.
+  a.child.kill('SIGUSR2'); b.child.kill('SIGUSR2');
+  const direct = (home, key) => { const m = memberOf(home, teamId, key); return Boolean(m?.online) && m.path === 'direct' && m.via === undefined; };
+  await until(() => direct(ana.home, sara.identity.key) && direct(sara.home, ana.identity.key), 'direct again');
+  assert.match(daemonLog(ana.home) + daemonLog(sara.home), /a direct connection to [0-9a-f]{8} works again: connecting afresh/);
+  assert.match(await peersText(ana.home), /● sara {2}member {2}direct/);
+});
+
+test('the computer that carries two teammates is picked again when it goes away, and one that does not reach both is not used', skipLan, async t => {
+  const bootstrap = await testnet(t, lan), { teamId, ana, sara, li } = trio(t), ways = { ...quick, wayMs: 1500, directMs: 600000 };
+  // A fourth computer on the team: omar.
+  const home = newHome(t), omar = withHome(home, () => createIdentity({ name: 'omar' }));
+  const log = withHome(ana.home, () => { redeemCode(createInvite(ana.identity, teamId, { hours: 1 }), omar.key, 'omar'); return readLog(teamId).ops; });
+  for (const at of [sara.home, li.home, home]) withHome(at, () => merge(teamId, log));
+  for (const at of [ana.home, sara.home, li.home, home]) enable(at, bootstrap);
+  const c = await daemon(t, li.home, { conductor: false, join: ways });
+  await daemon(t, ana.home, { conductor: false, noPunch: true, join: ways }); await daemon(t, sara.home, { conductor: false, noPunch: true, join: ways });
+  const via = (at, key) => { const m = memberOf(at, teamId, key); return m?.online && m.path === 'relayed' ? m.via : null; };
+  await until(() => via(ana.home, sara.identity.key) === "li's computer" && via(sara.home, ana.identity.key) === "li's computer", 'through li');
+  // omar comes online, reachable by both; li goes away: the two find omar.
+  await daemon(t, home, { conductor: false, join: ways });
+  await until(() => online(ana.home, omar.key) && online(sara.home, omar.key), 'omar online');
+  await c.stop();
+  await until(() => via(ana.home, sara.identity.key) === "omar's computer" && via(sara.home, ana.identity.key) === "omar's computer", 'through omar once li has gone');
+  const kept = withHome(ana.home, () => savedRoutes())[sara.identity.key];
+  assert.ok(kept.mine.some(entry => entry.helper === omar.key), 'the route names the computer that carries now');
+});
+
+test('a computer asked to carry for two teammates does it only while it reaches the other one, tells who runs a relay, and refuses a computer that is not on its team', async t => {
+  const me = 'c'.repeat(64), a = 'a'.repeat(64), b = 'b'.repeat(64), stranger = 'd'.repeat(64), relay = 'e'.repeat(64);
+  peerHome(t);
+  const granted = [], sessions = new Map(), connections = new Map();
+  const d = { me: { key: me, seed: Buffer.alloc(32, 1) }, node: { connections, route: () => {} }, ctx: { session: key => sessions.get(key) ?? null }, teammateKeys: () => [a, b], log: () => {},
+    carrier: { grants: new Map(), grant: async (by, x, y) => { granted.push([by, x, y]); return relay; } } };
+  const carry = carryMethods(d)['elu.carry'];
+  // Not on a team with this machine: refused, and nothing is made.
+  await assert.rejects(carry({ with: a }, { key: stranger }), /You are not on a team with this machine\./);
+  await assert.rejects(carry({ with: me }, { key: a }), /Name the other computer by its key\./);
+  assert.deepEqual(granted, []);
+  // b is not connected here: asked for two teammates (reach), it makes no relay.
+  assert.deepEqual(await carry({ with: b, reach: true }, { key: a }), { relay: null, online: false });
+  // b connected directly: it carries. Reached only through a relay itself, it does not.
+  sessions.set(b, { key: b }); connections.set(b, { via: null });
+  assert.deepEqual(await carry({ with: b, reach: true }, { key: a }), { relay, ms: CARRY_MS, online: true });
+  connections.set(b, { via: 'f'.repeat(64) });
+  assert.deepEqual(await carry({ with: b, reach: true }, { key: a }), { relay: null, online: false });
+  // For a join the other key is no teammate of this machine: it is carried without that check, as before.
+  assert.deepEqual(await carry({ with: stranger }, { key: a }), { relay, ms: CARRY_MS, online: false });
+  assert.deepEqual(granted, [[a, a, b], [a, a, stranger]]);
+  // A teammate says which relays its helpers run for the two of us, and which computer runs each.
+  const route = carryMethods(d)['elu.route'], from = { key: a, admitted: true };
+  route({ relays: [relay], by: [b] }, from);
+  assert.deepEqual(savedRoutes()[a], { mine: [], theirs: [relay], told: [{ helper: b, relay }] });
+  route({ relays: [relay], by: ['nonsense'] }, from);
+  assert.deepEqual(savedRoutes()[a], { mine: [], theirs: [relay], told: [] });
+  route({ relays: [relay] }, { key: stranger, admitted: true });
+  assert.equal(savedRoutes()[stranger], undefined, 'a route from someone who is no teammate is not kept');
+});
+
+test('how a teammate is reached reads the same in the roster and in elu peers: direct, through a computer, offline, or offline with why', () => {
+  assert.equal(reachText({ online: true, path: 'direct' }), 'direct');
+  assert.equal(reachText({ online: true, path: null }), 'online');
+  assert.equal(reachText({ online: true, path: 'relayed', via: "li's computer" }), "online · through li's computer");
+  assert.equal(reachText({ online: true, path: 'relayed' }), 'online · through another computer');
+  assert.equal(reachText({ online: false }), 'offline');
+  assert.equal(reachText({ online: false, reach: 'blocked' }), 'offline · no computer on the team reaches you both');
+  // Whole, for the window that shows one teammate.
+  assert.equal(reachText({ online: false, reach: 'blocked' }, { whole: true }), 'offline. Their computer is on, but your two networks do not connect directly, and no computer on the team reaches you both. Open ELU on another computer on the team.');
+  assert.equal(reachText({ online: true, path: 'relayed', via: 'your computer studio' }, { whole: true }), 'online, through your computer studio. Your two networks do not connect directly, so it passes the connection along. It cannot read it.');
 });
 
 test('a relay made for a pair lets in those two keys only and stops letting anyone in once its time is up; an invite relay record opens only with the code', async t => {
