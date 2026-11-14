@@ -260,8 +260,7 @@ test("a teammate's standup asks every session: each model update counts what it 
   const file = path.join(fake.dir, 'fake.json'); fs.writeFileSync(file, JSON.stringify({ ...JSON.parse(fs.readFileSync(file, 'utf8')), spend: { model: 'claude-opus-5-5', tokens: [10, 200, 3000, 400], usd: 0.15 } }));
   git(p.root, ['remote', 'add', 'origin', 'https://github.com/example/shop.git']);
   const controller = new ProjectController(projectFolder(p.root)); controller.draftConfig.checks = []; registerProject(controller.repo);
-  const first = readTask(controller.repo, (await controller.ask('Question 1').finished).id);
-  for (let n = 2; n <= 26; n++) saveTask(controller.repo, { ...first, id: String(n), goal: `Question ${n}`, title: `Question ${n}`, sessions: {} });
+  for (let n = 1; n <= 26; n++) await controller.ask(`Question ${n}: what does coupons do?`).finished;
   const repos = localRepos(), [row] = repos.values(), sara = member.identity.key, ctx = { me: founder.identity, repos: () => repos, kick: () => {}, event: () => {} };
   saveProofs(sara, [repoProof(sara, founder.identity.key, row.repoId, row.commit)]);
   const rows = sessionCards({ owner: 'ana', repos }), cards = rows.map(value => value.card);
@@ -275,7 +274,7 @@ test("a teammate's standup asks every session: each model update counts what it 
   assert.deepEqual([asked.state, asked.asked.length, asked.skipped.length], ['asked', 26, 0]);
   assert.deepEqual([readCaps().peers[sara].runs, readCaps().peers[sara].usd], [1, 0]);
   const answers = await answer(round);
-  assert.deepEqual([answers.length, answers.filter(value => value.failed).length], [26, 0]);
+  assert.equal(answers.length, 26); assert.deepEqual(answers.filter(value => value.failed).map(value => value.text), []);
   assert.equal(readCaps().peers[sara].runs, 1); near(readCaps().peers[sara].usd, 26 * 0.15);
   // A limit truly reached: no session is asked, and each line says which limit, plainly.
   savePeerSettings({ caps: { peerUsdPerDay: 3.95 } });
