@@ -147,6 +147,28 @@ test("a Codex thread that later runs resume counts what each run used once, on t
   assert.deepEqual(spend.runSpends({ ...task, runs: kept }).map(spent => spent.tokens.output), [10_000, 20_000, 30_000]);
 });
 
+// A run on the thread that failed, or was stopped by the quiet limit, reported no thread total:
+// its record holds only its own share, from Codex's record of the thread. That share is not a
+// thread total, so a later run with no such record of its own takes out the last total that
+// was reported and that share both, and is at least what is left (never the total again).
+test('a Codex run after one on its thread that kept only its own share counts no run twice, and is at least what is left', t => {
+  const log = logs(t);
+  const failed = (name, own) => ({ role: 'lead', vendor: 'codex', at: AT, session: THREAD, code: 1, costUsd: null, model: 'gpt-6.1-sol', ownCost: true, tokens: own, logFile: log(name, [{ type: 'thread.started', thread_id: THREAD }, { type: 'turn.failed', error: { message: 'stopped' } }]) });
+  const reported = (name, total, extra = {}) => ({ role: 'lead', vendor: 'codex', at: AT, session: THREAD, code: 0, costUsd: null, model: 'gpt-6.1-sol', logFile: log(name, codexRows(THREAD, total)), ...extra });
+  const read = runs => index => spend.logSpend(runs[index].logFile, runs[index].vendor);
+  const own = [counted([900_000, 10_000, 100_000, 50_000]), counted([1_800_000, 20_000, 200_000, 100_000]), counted([2_700_000, 30_000, 300_000, 150_000])];
+  // Run 1 reported its total; run 2 failed and kept its own share; run 3 reports the thread's total.
+  const runs = [reported('lead-1.log', [1_000_000, 100_000, 10_000, 50_000], { ownCost: true, tokens: own[0] }), failed('lead-2.log', own[1]), reported('lead-3.log', [6_000_000, 600_000, 60_000, 300_000])];
+  const third = spend.ownRunSpend(runs, 2, read(runs));
+  assert.deepEqual([third.tokens, third.incomplete], [own[2], true]);
+  // The first run on the thread failed: the next one is at least the total less that share.
+  const first = [failed('lead-4.log', own[0]), reported('lead-5.log', [3_000_000, 300_000, 30_000, 150_000])];
+  assert.deepEqual([spend.ownRunSpend(first, 1, read(first)).tokens, spend.ownRunSpend(first, 1, read(first)).incomplete], [own[1], true]);
+  // A share bigger than what is left says the counts do not fit: not known, never a guess.
+  const over = [failed('lead-6.log', counted([9_000_000, 0, 0, 0])), reported('lead-7.log', [3_000_000, 300_000, 30_000, 150_000])];
+  assert.equal(spend.ownRunSpend(over, 1, read(over)).tokens, null);
+});
+
 function environment(t, values) {
   const previous = Object.fromEntries(Object.keys(values).map(key => [key, process.env[key]])); Object.assign(process.env, values);
   t.after(() => { for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } });
@@ -216,8 +238,8 @@ test('a session on Codex whose thread goes on over several turns spends each tur
   // Codex reported one, two and three dollars' worth: what the thread had used so far. Each run keeps its own dollar's worth.
   const each = counted([0, 99_900, 10_000, 0]);
   assert.deepEqual(task.runs.map(run => [run.vendor, run.tokens]), Array(3).fill(['codex', each]));
-  // Beside it, the thread's total, which the next run on the thread counts from.
-  assert.deepEqual(task.runs.map(run => run.sessionTokens?.output ?? null), [null, 199_800, 299_700]);
+  // Beside it, the thread's total, which the next run on the thread counts from (the first run's too).
+  assert.deepEqual(task.runs.map(run => run.sessionTokens?.output ?? null), [99_900, 199_800, 299_700]);
   assert.ok(task.runs.every(run => run.ownCost === true));
   spend.runCosts(task).forEach((cost, at) => near(cost, 1, `run ${at + 1}`));
   near(f.controller.budget(id).spent, 3, 'spent');
