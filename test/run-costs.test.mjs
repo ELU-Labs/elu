@@ -118,21 +118,24 @@ test('a turn the owner stops is kept with what it had used; Usage shows it, and 
   await until(() => { const log = live()?.activeLog; return log && fs.existsSync(log) && fs.readFileSync(log, 'utf8').includes('"assistant"'); }, 'the turn to report its tokens');
   await f.controller.stop(run.id); await assert.rejects(run.finished);
   let task = readTask(f.repo, run.id);
-  // No run ended, so task.runs holds none; the stopped turn is kept apart with its log, its vendor session, the model it was asked for and its tokens so far.
+  // No run ended, so task.runs holds none; the stopped turn is kept apart with its log, its vendor session, when it started, the model it was asked for,
+  // the model its first line named and its tokens so far.
   assert.equal(task.runs.length, 0); assert.equal(task.stops?.length, 1);
   const [stop] = task.stops, named = valueOf(f.turns()[0].args, '--session-id');
-  assert.deepEqual({ ...stop, at: null, logFile: null }, { role: 'lead', vendor: 'claude', logFile: null, session: named, at: null, asked: 'opus', tokens: counted(EACH.tokens) });
-  assert.ok(fs.existsSync(stop.logFile) && Number.isFinite(Date.parse(stop.at)));
-  // Usage: its tokens, and no cost, which Claude Code says only when a turn ends. The line under the table says so.
+  assert.deepEqual({ ...stop, startedAt: null, at: null, logFile: null }, { role: 'lead', vendor: 'claude', logFile: null, session: named, startedAt: null, at: null, asked: 'opus', model: OPUS, tokens: counted(EACH.tokens) });
+  assert.ok(fs.existsSync(stop.logFile) && Date.parse(stop.startedAt) <= Date.parse(stop.at));
+  // Usage: its tokens under the model its first line named, and no cost, which Claude Code says only when a turn ends. The line under the table says so.
   const usage = () => spend.agentSpend([{ root: f.repo.root, tasks: [readTask(f.repo, run.id)] }], { now: Date.now() });
   let today = usage();
-  assert.deepEqual(today.rows.map(row => [row.agent, row.tokens, row.costUsd, row.started, row.unpriced]), [['Opus', counted(EACH.tokens), null, true, ['claude']]]);
+  assert.deepEqual(today.rows.map(row => [row.agent, row.tokens, row.costUsd, row.started, row.unpriced]), [['Opus 5.5', counted(EACH.tokens), null, true, ['claude']]]);
   assert.equal(spend.costText(today.rows[0]), 'not reported'); assert.equal(today.runs, 1); assert.deepEqual(today.unpriced, ['claude']);
   // It does not use up the session's budget: the next turn may spend all of it.
   f.controller.setBudget(run.id, 1); assert.equal(f.controller.budget(run.id).spent, 0);
-  // The next message starts a new Claude Code session (the stopped one never said its id), whose
+  // Where the stopped session cannot be picked up again (its record is taken away here, as when a
+  // vendor never said its id), the next message starts a new Claude Code session, whose
   // result holds its own 30 cents only. The stopped turn stays a spend of its own, so the
   // session's row has the tokens of both and a cost that is at least 30 cents.
+  { const { interrupted, ...kept } = readTask(f.repo, run.id); assert.equal(interrupted?.lead?.id, named, 'the stop kept the session to pick up'); saveTask(f.repo, kept); }
   f.set({ mode: 'answer' });
   const next = await f.controller.ask('continue', run.id).finished;
   assert.equal(next.state, 'answered', JSON.stringify(next.error)); assert.equal(valueOf(f.turns().at(-1).args, '--resume'), undefined); near(Number(valueOf(f.turns().at(-1).args, '--max-budget-usd')), 1, 'the turn after a stop');
@@ -158,8 +161,33 @@ test('a turn the owner stops is kept with what it had used; Usage shows it, and 
   assert.deepEqual(task.stops.map(stop => stop.counted === true), [false, true]);
   // Four turns were started; the row has the tokens of all four once, and 90 cents: at least that, as the first stopped turn's cost was never reported.
   assert.deepEqual(shown(), [[times(4), 0.9, true, ['claude']]]); assert.equal(usage().runs, 3); near(f.controller.budget(run.id).spent, 0.9, 'spent');
-  // The stopped turn never said which model it ran on: it reads as the one this session's runs reported for the name it was asked for, not as a second model.
+  // One model, one row.
   assert.deepEqual(usage().rows.map(row => [row.agent, row.model]), [['Opus 5.5', 'opus 5.5']]);
+  // A turn stopped before it said which model it ran on reads as the one this session's runs reported for the name it was asked for, not as a second model.
+  const unnamed = { ...task, stops: task.stops.map(({ model, ...kept }) => kept) };
+  assert.deepEqual(spend.agentSpend([{ root: f.repo.root, tasks: [unnamed] }], { now: Date.now() }).rows.map(row => [row.agent, row.model]), [['Opus 5.5', 'opus 5.5']]);
+  // Alone, with no run of the session to say it, it is named as it was asked for.
+  assert.deepEqual(spend.agentSpend([{ root: f.repo.root, tasks: [{ ...unnamed, runs: [], stops: unnamed.stops.slice(0, 1) }] }], { now: Date.now() }).rows.map(row => row.agent), ['Opus']);
+});
+
+test('a first turn the owner stops is picked up by the next message in its own Claude Code session, and what it spent is counted once, in that run', async t => {
+  const f = setup(t, 'slow');
+  const run = f.controller.ask('Where is coupon normalization?', null, { permissions: 'full' });
+  const live = () => { try { return readTask(f.repo, run.id); } catch { return null; } };
+  await until(() => { const log = live()?.activeLog; return log && fs.existsSync(log) && fs.readFileSync(log, 'utf8').includes('"assistant"'); }, 'the turn to report its tokens');
+  await f.controller.stop(run.id); await assert.rejects(run.finished);
+  const named = valueOf(f.turns()[0].args, '--session-id');
+  assert.deepEqual(readTask(f.repo, run.id).stops.map(stop => [stop.session, stop.counted]), [[named, undefined]]);
+  // The next message goes on in the stopped session. Claude Code's result holds what that session has spent so far, the stopped turn's 30 cents with this turn's own.
+  f.set({ mode: 'answer' }); f.controller.setBudget(run.id, 1);
+  const next = await f.controller.ask('continue', run.id).finished;
+  assert.equal(next.state, 'answered', JSON.stringify(next.error)); assert.equal(valueOf(f.turns().at(-1).args, '--resume'), named); near(Number(valueOf(f.turns().at(-1).args, '--max-budget-usd')), 1, 'the turn after a stop');
+  const task = readTask(f.repo, run.id);
+  assert.deepEqual(rounded(task.runs.map(run => run.costUsd)), [0.6]); assert.deepEqual(task.stops.map(stop => stop.counted === true), [true]);
+  // Usage: two turns were started; the row has the tokens of both once and 60 cents, all of it reported.
+  const today = spend.agentSpend([{ root: f.repo.root, tasks: [task] }], { now: Date.now() });
+  assert.deepEqual(today.rows.map(row => [row.agent, row.tokens, Number(row.costUsd.toFixed(2)), row.partial, row.unpriced]), [['Opus 5.5', counted(EACH.tokens.map(value => value * 2)), 0.6, false, []]]);
+  assert.equal(today.runs, 1); near(f.controller.budget(run.id).spent, 0.6, 'spent');
 });
 
 test("a stopped turn's spend is taken as counted only when the numbers of its session's next result say so", t => {
