@@ -98,3 +98,49 @@ test('the real grok inspect, with ELU\'s switches: a Claude agent file and a Cla
   assert.equal(step.required, false);
   await assert.rejects(step.run(harness, { bin: REAL, env: w.env }), error => error.loads.length === 2 && error.loads.every(row => row.runs === false) && /Claude agent reviewer/.test(error.message) && /Claude permissions/.test(error.message));
 });
+
+// Full access as ELU runs it: HOME is a mirror of the owner's home that leaves out the folders
+// of coding tools (lib/home-mirror.mjs), GROK_HOME is ELU's, and every switch is off. Under it
+// the real program lists nothing of his. With his home itself as HOME, and the same GROK_HOME
+// and switches, it marks his Claude and Cursor instructions, rules, skills and MCP servers as
+// switched off and still loads his Claude agent, a Claude plugin with its hook, the permission
+// rules of his Claude settings file, his ~/.grok agent and his ~/.agents skill: why Full access
+// does not run in his home.
+test('the real grok inspect, in Full access: under the mirror of the owner\'s home nothing of his coding tools is listed; in his home itself a Claude agent, a Claude plugin and Claude permission rules still load', { skip, timeout: 180000 }, async t => {
+  const w = world(t), repo = path.join(w.dir, 'repo'), real = file => fs.realpathSync(file); fs.mkdirSync(repo);
+  const put = (file, text) => { fs.mkdirSync(path.dirname(path.join(w.home, file)), { recursive: true }); fs.writeFileSync(path.join(w.home, file), text); return path.join(w.home, file); };
+  otherTools(w.home); put('.npmrc', '//registry.npmjs.org/:_authToken=owner-npm-token\n');
+  const agent = put('.claude/agents/reviewer.md', '---\nname: reviewer\ndescription: reviews a change\n---\nReview the change.\n');
+  const plugin = path.join(w.home, '.claude', 'plugins', 'cache', 'market', 'helper', '1.0.0');
+  const settings = put('.claude/settings.json', JSON.stringify({ enabledPlugins: { 'helper@market': true }, permissions: { deny: ['Bash(rm:*)'] } }));
+  put('.claude/plugins/installed_plugins.json', JSON.stringify({ version: 2, plugins: { 'helper@market': [{ scope: 'user', installPath: plugin, version: '1.0.0', installedAt: '2026-11-01T00:00:00.000Z', lastUpdated: '2026-11-01T00:00:00.000Z' }] } }));
+  put('.claude/plugins/known_marketplaces.json', JSON.stringify({ market: { source: { source: 'github', repo: 'example/market' }, installLocation: path.join(w.home, '.claude', 'plugins', 'marketplaces', 'market'), lastUpdated: '2026-11-01T00:00:00.000Z' } }));
+  put('.claude/plugins/cache/market/helper/1.0.0/.claude-plugin/plugin.json', JSON.stringify({ name: 'helper', version: '1.0.0', description: 'a plugin' }));
+  put('.claude/plugins/cache/market/helper/1.0.0/commands/hello.md', '---\ndescription: say hello\n---\nSay hello.\n');
+  put('.claude/plugins/cache/market/helper/1.0.0/hooks/hooks.json', JSON.stringify({ hooks: { PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: 'plugin-hook' }] }] } }));
+  put('.claude.json', '{"mcpServers":{"claude-notes":{"command":"notes-server"}}}\n');
+  put('.grok/agents/own.md', '---\nname: own\ndescription: his own agent\n---\nDo.\n'); put('.agents/skills/shared/SKILL.md', '---\nname: shared\ndescription: shared things\n---\nShared.\n');
+  const every = dir => fs.readdirSync(dir, { recursive: true }).sort().map(name => { const stat = fs.lstatSync(path.join(dir, name)); return `${name} ${stat.isFile() ? stat.mtimeMs : 'folder'}`; }), before = every(w.home);
+  const child = agentEnv(w.env, [], grok.childEnv({ mode: 'full', home: w.home }), { full: true });
+  // The mirror: his npm sign-in and nothing of a coding tool but the .grok ELU wrote.
+  assert.equal(child.HOME, grok.fullHome()); assert.deepEqual(fs.readdirSync(child.HOME).sort(), ['.grok', '.npmrc']);
+  assert.equal(fs.readFileSync(path.join(child.HOME, '.npmrc'), 'utf8'), '//registry.npmjs.org/:_authToken=owner-npm-token\n'); assert.equal(real(path.join(child.HOME, '.grok')), real(child.GROK_HOME));
+  const own = value => ['projectInstructions', 'skills', 'agents', 'mcpServers', 'hooks', 'plugins'].flatMap(section => (value[section] ?? []).filter(entry => !['builtin', 'bundled'].includes(entry.source?.type)).map(entry => `${section} ${entry.name ?? ''} ${entry.path ?? entry.source?.path ?? ''}`.trim()));
+  const off = value => assert.deepEqual(value.externalCompat.cells.filter(cell => cell.enabled !== false).map(cell => `${cell.vendor}.${cell.surface}`), [], 'every switch is off');
+  const under = inspect(repo, child);
+  off(under); assert.equal(under.configError, undefined);
+  assert.deepEqual(own(under), [], 'nothing of his is listed'); assert.deepEqual(under.permissions.sources, [], 'and no rules of his');
+  assert.deepEqual(grok.foreignTraces(under), []);
+  t.diagnostic(`under the mirror: ${under.externalCompat.cells.length} switches listed, all off; listed ${own(under).length}; permission sources ${under.permissions.sources.length}; loaded from another tool ${grok.foreignTraces(under).length}`);
+  // His home itself, with the same GROK_HOME and switches.
+  const inHis = inspect(repo, { ...child, HOME: w.home }), marked = [...inHis.projectInstructions, ...inHis.skills, ...inHis.mcpServers].filter(entry => entry.vendor);
+  off(inHis);
+  assert.ok(marked.length >= 7, `${marked.length} entries of another tool are listed`); assert.ok(marked.every(entry => entry.compatibilityStatus === 'disabled' && entry.disabled === true), JSON.stringify(marked.map(entry => [entry.vendor, entry.compatibilityStatus])));
+  const loads = grok.foreignTraces(inHis).map(row => [row.what, real(row.from), row.runs]);
+  assert.deepEqual(loads, [['Claude agent reviewer', real(agent), false], ['Claude plugin helper', real(plugin), true], ['Claude permissions', real(settings), false]]);
+  assert.ok(inHis.agents.some(entry => entry.name === 'own' && real(entry.source.path) === real(path.join(w.home, '.grok', 'agents', 'own.md'))), 'his own ~/.grok agent loads though GROK_HOME is elsewhere');
+  assert.ok(inHis.skills.some(entry => entry.name === 'shared' && !entry.vendor && entry.disabled !== true), 'and his ~/.agents skill');
+  t.diagnostic(`in his home itself: listed ${own(inHis).length}, marked switched off ${marked.length}; loaded from another tool: ${loads.map(row => `${row[0]}${row[2] ? ' (runs)' : ''}`).join(', ')}; permission sources ${JSON.stringify(inHis.permissions.sources.map(source => source.replace(w.home, '~')))}`);
+  // Neither reading wrote in his home, and the mirror took nothing of a coding tool.
+  assert.deepEqual(every(w.home), before); assert.deepEqual(fs.readdirSync(child.HOME).sort(), ['.grok', '.npmrc']);
+});

@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { project, fakeClis } from './helpers.mjs';
 import { ProjectController } from '../lib/projects.mjs';
 import { projectFolder } from '../lib/workspace.mjs';
@@ -9,6 +10,7 @@ import { answerLoads, checkResult, conformanceState, loadsList } from '../lib/co
 import { answerApproval, pendingApprovals } from '../lib/approvals.mjs';
 import { atomic, personalDirectory } from '../lib/util.mjs';
 import { ADAPTERS } from '../lib/adapters/index.mjs';
+import { TOOL_HOMES } from '../lib/home-mirror.mjs';
 
 // A computer where Grok Build is the only vendor installed, signed in, and never checked: the
 // owner's messages go through the runner as the app sends them. The stand-in grok answers
@@ -131,4 +133,48 @@ test('hooks of another tool that Grok Build would run: outside Full access the o
   const full = await f.send('Reply done with the summary "in full".', null, { permissions: 'full' });
   assert.equal(full.state, 'answered', why(full)); assert.equal(full.result.summary, 'in full'); assert.deepEqual(said(full), []); assert.deepEqual(pendingApprovals(), []);
   assert.equal(checks(f), 1, 'the check ran once');
+});
+
+// What Grok Build has no switch for: an agent file under ~/.claude/agents and the permission
+// rules of a Claude settings file load from its HOME with all eighteen switches off (watched
+// with the real 1.0.77, test/grok-real.test.mjs). The owner has both in his home. No mode runs
+// Grok Build there: the check and the modes with rules run in ELU's private home, and Full
+// access in the mirror of his home, which leaves ~/.claude out (lib/home-mirror.mjs).
+test('a Claude agent and Claude permission rules in the owner\'s home: the check names neither, and a Full access run under the mirror of his home loads neither', { timeout: 300000 }, async t => {
+  const f = onlyGrok(t), agent = path.join(f.parent, '.claude', 'agents', 'reviewer.md'), settings = path.join(f.parent, '.claude', 'settings.json');
+  fs.mkdirSync(path.dirname(agent), { recursive: true }); fs.writeFileSync(agent, '---\nname: reviewer\ndescription: reviews a change\n---\nReview the change.\n');
+  fs.writeFileSync(settings, '{"permissions":{"deny":["Bash(rm:*)"]}}\n');
+  fs.writeFileSync(path.join(f.parent, '.npmrc'), '//registry.npmjs.org/:_authToken=owner-npm-token\n', { mode: 0o600 });
+  const his = () => [agent, settings].map(file => `${fs.readFileSync(file, 'utf8')} ${fs.statSync(file).mtimeMs}`), before = his();
+  // The run's command says what ~ is and holds, keeps its environment, and asks this grok what it loads there.
+  const script = path.join(f.parent, 'see.sh'), out = path.join(f.parent, 'see.out'), kept = path.join(f.parent, 'see.env.json'), listed = path.join(f.parent, 'see.inspect.json');
+  fs.writeFileSync(script, `#!/bin/sh\n{ printf '%s\\n' "$HOME"; cat ~/.npmrc; ls -A ~; } > ${JSON.stringify(out)} 2>&1\n${JSON.stringify(process.execPath)} -e 'require("fs").writeFileSync(process.argv[1], JSON.stringify(process.env))' ${JSON.stringify(kept)}\n${JSON.stringify(f.bin)} --no-auto-update inspect --json > ${JSON.stringify(listed)}\n`, { mode: 0o700 });
+  const full = await f.send(`Run the command ${script} then reply done with the summary "ran it".`, null, { permissions: 'full' });
+  assert.equal(full.state, 'answered', why(full)); assert.equal(full.result.summary, 'ran it'); assert.equal(full.runs[0].permissions, 'full');
+  // The check passed every step, the one that reads what else Grok Build loads too, and named nothing.
+  assert.deepEqual(said(full), [FIRST, 'Grok Build 1.0.77 passed its check on this machine.']);
+  assert.deepEqual(notPassed(), []); assert.deepEqual(checkResult('grok', { bin: f.bin, version: '1.0.77' }).loads, []); assert.deepEqual(pendingApprovals(), []);
+  // The run's ~ was the mirror: his npm sign-in is there, and no folder of a coding tool but the .grok ELU wrote.
+  const [home, token, ...top] = fs.readFileSync(out, 'utf8').trim().split('\n'), mirror = ADAPTERS.grok.fullHome();
+  assert.equal(home, mirror); assert.equal(token, '//registry.npmjs.org/:_authToken=owner-npm-token');
+  assert.ok(top.includes('.npmrc'), top.join(' ')); assert.deepEqual(top.filter(name => TOOL_HOMES.includes(name)), ['.grok']);
+  assert.equal(fs.realpathSync(path.join(mirror, '.grok')), fs.realpathSync(path.join(f.privateHome, '.grok')));
+  // What the stand-in loads in the run's own environment: every switch off, no agent of his, no rules but ELU's config.
+  const run = JSON.parse(fs.readFileSync(kept, 'utf8')), under = JSON.parse(fs.readFileSync(listed, 'utf8'));
+  assert.equal(run.HOME, mirror); assert.equal(under.externalCompat.cells.length, 13); assert.deepEqual(under.externalCompat.cells.filter(cell => cell.enabled !== false || cell.source !== 'env'), []);
+  assert.deepEqual(under.agents.filter(entry => entry.source.type !== 'builtin'), []);
+  assert.deepEqual(under.permissions.sources, [`${path.join(run.GROK_HOME, 'config.toml')} (config)`]);
+  assert.deepEqual(ADAPTERS.grok.foreignTraces(under), []);
+  // The same stand-in with the same environment in his home itself loads both: the mirror is what keeps them out.
+  const inHis = JSON.parse(spawnSync(f.bin, ['--no-auto-update', 'inspect', '--json'], { cwd: f.root, env: { ...run, HOME: f.parent }, encoding: 'utf8' }).stdout);
+  assert.deepEqual(inHis.externalCompat.cells.filter(cell => cell.enabled !== false), [], 'with every switch off');
+  assert.deepEqual(ADAPTERS.grok.foreignTraces(inHis), [{ what: 'Claude agent reviewer', from: agent, runs: false }, { what: 'Claude permissions', from: settings, runs: false }]);
+  // Ask for approval and Approve for me run in the private home: nothing is named, nothing is asked.
+  for (const permissions of ['ask', 'auto']) {
+    const task = await f.send(`Reply done with the summary "in ${permissions}".`, null, { permissions });
+    assert.equal(task.state, 'answered', `${permissions}: ${why(task)}`); assert.deepEqual(said(task), [], permissions); assert.deepEqual(pendingApprovals(), []);
+  }
+  assert.deepEqual(fs.readdirSync(f.privateHome), ['.grok'], 'the private home holds nothing of his');
+  assert.equal(fs.existsSync(path.join(mirror, '.claude')), false); assert.deepEqual(his(), before, 'his Claude files were not written');
+  assert.deepEqual(checkResult('grok', { bin: f.bin, version: '1.0.77' }).loads, []);
 });
