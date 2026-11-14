@@ -184,7 +184,7 @@ test('the first line and each block say what is missing and why; a session whose
   const kept = task.standup.updates.find(row => row.session === 'Explain carts');
   assert.equal(kept.missing, 'it did not start in 0 minutes'); assert.equal(kept.record.state, 'finished');
   assert.equal(b.id, readTask(f.repo, b.id).id);
-  assert.equal(headLine([]), 'No session is open to ask: none of yours works, waits for you, or was active in the last 7 days, and no teammate\'s shared session is online.');
+  assert.equal(headLine([]), 'No session is open to ask: none of yours works, waits for you, or was active in the last 7 days, and no teammate with sessions on your Kanban is online.');
 });
 
 test('/stop takes back every question still out, here and on the other computer, so none runs later in a session', async t => {
