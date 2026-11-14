@@ -169,6 +169,9 @@ works. The app shows each change at once.
   started it, and whether it is archived. `elu sessions archive N|this`, `unarchive N`,
   `rename N|this "name"` and `new "message" [--mode ask|auto|full]` change them. `this` is the
   session the command runs in: it is archived when its turn ends, after its reply.
+  `elu sessions delete N|archived [--learn]` deletes an archived session for good, or every
+  archived one; `--learn` first saves what you taught in them to the project context. Work
+  on no remote stays in its folder and on its branch.
 - `elu schedules [--all]` lists the schedules, and `elu schedules add <when> <message>` (the
   words `/schedule` takes), `pause N`, `resume N`, `delete N` and `run N` change them.
 

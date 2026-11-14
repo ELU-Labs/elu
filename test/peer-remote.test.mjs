@@ -5,7 +5,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { makeTeam, newHome, withHome, registeredProject, liveTask } from './peer-helpers.mjs';
-import { fakeClis } from './helpers.mjs';
+import { fakeClis, git } from './helpers.mjs';
+import { EventEmitter } from 'node:events';
+import { readProjectSettings } from '../lib/project-settings.mjs';
 import { createIdentity } from '../lib/peer/identity.mjs';
 import { bothMine, dropStrangers, markMine, markedMine, mineRows, noteTheirs, unmarkMine } from '../lib/peer/mine.mjs';
 import { NOT_MINE, UPDATE, UPDATE_LIST, hostMethods, hostTick, listTick, relist, remoteCommand, remoteConnected, remoteMachines, remoteSessions, viewMethods, viewTick, watchId } from '../lib/peer/remote.mjs';
@@ -32,6 +34,7 @@ import { projectSnapshot, registerProject, registeredProjects, sessionModel } fr
 import { localRepos, saveLocalRepos } from '../lib/peer/cards.mjs';
 import { folderRemote } from '../lib/kanban-repos.mjs';
 import { closeSession } from '../lib/kanban.mjs';
+import { deleteSession } from '../lib/session-delete.mjs';
 import * as peerFacade from '../lib/peer/index.mjs';
 import { listEntries, usesSavedRules } from '../lib/permission-rules.mjs';
 import { getRecord, records, saveRecord } from '../lib/peer/taskstore.mjs';
@@ -53,7 +56,7 @@ function machines(t) {
   const team = makeTeam(t, { founderName: 'ana', memberName: 'box' });
   return { team, laptop: team.founder, devbox: team.member };
 }
-const METHODS = ['elu.remote.start', 'elu.remote.send', 'elu.remote.stop', 'elu.remote.answer', 'elu.remote.task', 'elu.remote.since', 'elu.remote.older', 'elu.remote.list', 'elu.remote.watch', 'elu.remote.rename', 'elu.remote.archive'];
+const METHODS = ['elu.remote.start', 'elu.remote.send', 'elu.remote.stop', 'elu.remote.answer', 'elu.remote.task', 'elu.remote.since', 'elu.remote.older', 'elu.remote.list', 'elu.remote.watch', 'elu.remote.rename', 'elu.remote.archive', 'elu.remote.delete'];
 const START = { id: crypto.randomUUID(), text: 'Make coupons upper case', permissions: 'ask', place: null, model: null, bots: ['reviewer'] };
 
 test('a machine is mine only when both machines mark each other, and either side ends it', t => {
@@ -723,10 +726,10 @@ test('Sessions lists a session on my other computer, says where, and offers its 
   assert.deepEqual(rowActions(running), [['enter', 'open'], ['s', 'stop'], ['d', 'changes'], ['e', 'rename']]);
   const done = { ...remoteRow({ ...view, state: 'answered' }, 'devbox', now), listed: true };
   assert.deepEqual(rowActions(done), [['enter', 'open'], ['d', 'changes'], ['e', 'rename'], ['c', 'archive']]);
-  // Archived there: listed last with /archived, and u brings it back.
+  // Archived there: listed last with /archived, u brings it back and x cleans it up there.
   const stored = { ...remoteRow({ ...view, state: 'answered', archived: true }, 'devbox', now), listed: true };
   assert.deepEqual([stored.group, stored.archived, rowBadge(stored, now).title], [5, true, 'on devbox · archived']);
-  assert.deepEqual(rowActions(stored), [['enter', 'open'], ['u', 'unarchive'], ['e', 'rename'], ['d', 'changes']]);
+  assert.deepEqual(rowActions(stored), [['enter', 'open'], ['u', 'unarchive'], ['e', 'rename'], ['x', 'clean up'], ['d', 'changes']]);
   // A run that waits to start there, or a session not sent there yet, has no session there to rename or archive.
   assert.deepEqual(rowActions({ ...remoteRow({ ...view, state: 'starting', queued: true }, 'devbox', now), listed: true, queued: true }).map(([key]) => key), ['enter', 's', 'd']);
   assert.deepEqual(rowActions(remoteRow({ ...view, state: 'starting', unsent: { at: view.createdAt } }, 'devbox', now)).map(([key]) => key), ['enter', 's', 'd']);
@@ -1484,6 +1487,107 @@ test('my computer on an ELU before 0.1.26 is named with the version it needs and
   withHome(devbox.home, () => assert.equal(readTask(repository(project.root), '1').title, undefined));
   await assert.rejects(withHome(laptop.home, () => remoteCommand(viewCtx, { type: 'remoteRename', to: 'e'.repeat(64), ref: item.ref, title: 'Mine now' })), /is not one of your computers\. Run \/mine @\S+ here and on it\./);
   void toHost;
+});
+
+// The owner archived sessions on his devbox and, on his laptop, cleans them up: they are deleted
+// there, by that computer's own code. What each would lose is asked first; Learn runs the lessons
+// run there and saves to that project's context; this computer's list drops them at once. A run
+// that is stopped, by a stop from here or by the connection closing, deletes nothing.
+test('archived sessions on my other computer are deleted there by its own code, after its lessons run there; a stopped run deletes nothing', async t => {
+  const { laptop, devbox, project, toViewer, host, viewCtx } = pair(t);
+  toViewer.remoteHello = { remote: 1, edit: 1, clean: 1 };
+  const parent = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'elu-code-clean-'))); t.after(() => fs.rmSync(parent, { recursive: true, force: true }));
+  // slow: the model takes a minute (quiet), so the run is still reading when it is stopped.
+  const vendors = (mode, slow = false) => {
+    const fake = fakeClis(path.join(parent, mode), { mode, learned: { add: ['Use pnpm, not npm.'], remove: [] } });
+    if (slow) { const file = path.join(fake.env.PATH.split(path.delimiter)[0], 'fake.json'); fs.writeFileSync(file, JSON.stringify({ ...JSON.parse(fs.readFileSync(file, 'utf8')), quiet: 'always' })); }
+    return fake;
+  };
+  const names = ['PATH', 'XDG_DATA_HOME', 'CLAUDE_CONFIG_DIR'], previous = Object.fromEntries(names.map(name => [name, process.env[name]]));
+  t.after(() => { for (const name of names) { if (previous[name] === undefined) delete process.env[name]; else process.env[name] = previous[name]; } });
+  const use = (mode, slow) => { fs.mkdirSync(path.join(parent, mode), { recursive: true }); const fake = vendors(mode, slow); for (const name of names) process.env[name] = fake.env[name]; };
+  use('answer');
+  const repo = withHome(devbox.home, () => {
+    chat(project.root, 1, { goal: 'Add a lint step', messages: [{ at: new Date().toISOString(), text: 'no, we use pnpm here' }] });
+    liveTask(project.root, { id: '2', goal: 'Round refunds', state: 'stopped' });
+    const folder = path.join(repository(project.root).worktrees, '2'); git(folder, ['add', '.']); git(folder, ['commit', '-qm', 'Round refunds']);
+    chat(project.root, 3, { goal: 'Still open' }); chat(project.root, 4, { goal: 'Tidy the logs' }); chat(project.root, 5, { goal: 'Rename the flags' });
+    const made = repository(project.root); for (const id of ['1', '2', '4', '5']) closeSession(made, id); relist(); return made;
+  });
+  await withHome(laptop.home, () => listTick(viewCtx));
+  const machine = () => withHome(laptop.home, () => remoteMachines()[0]), refOf = title => machine().sessions.find(row => row.title === title).ref;
+  assert.equal(machine().clean, true, 'its hello says it deletes its sessions');
+  const clean = extra => withHome(laptop.home, () => remoteCommand(viewCtx, { type: 'remoteClean', to: devbox.identity.key, ...extra }));
+  // One not archived there is refused there, in one line.
+  await assert.rejects(clean({ refs: [refOf('Still open')], check: true }), /"Still open" is not archived\. Archive it first\./);
+  // What each would lose that is on no remote, before anything goes.
+  assert.deepEqual((await clean({ refs: [refOf('Add a lint step'), refOf('Round refunds')], check: true })).sessions.map(row => [row.shown, row.commits, row.edits]), [['Add a lint step', 0, 0], ['Round refunds', 1, 0]]);
+  // Learn, then delete, keeping the work on no remote: the lessons run there, on its project's model, saved to its context.
+  const done = await clean({ refs: [refOf('Add a lint step'), refOf('Round refunds')], learn: true, keep: true });
+  assert.deepEqual(done.lines, ['Saved to project context: Use pnpm, not npm.']);
+  assert.deepEqual(done.deleted.map(row => [row.shown, row.kept?.branch ?? null]), [['Add a lint step', null], ['Round refunds', 'feat/task-2']]);
+  assert.deepEqual(done.failed, []);
+  withHome(devbox.home, () => {
+    assert.match(readProjectSettings(project.root).context, /Use pnpm, not npm\./);
+    assert.deepEqual(projectSnapshot(repo).tasks.map(task => task.id).sort(), ['3', '4', '5']);
+    assert.match(git(project.root, ['branch', '--list', 'feat/task-2']), /feat\/task-2/, 'the work kept on its branch there');
+  });
+  // This computer's list of it drops them at once.
+  assert.deepEqual(machine().sessions.map(row => row.title).sort(), ['Rename the flags', 'Still open', 'Tidy the logs']);
+  // A run that fails there deletes nothing, and says why in one line.
+  use('invalid');
+  await assert.rejects(clean({ refs: [refOf('Tidy the logs')], learn: true }), error => !error.message.includes('\n'));
+  assert.ok(withHome(devbox.home, () => projectSnapshot(repo).tasks.some(task => task.id === '4')));
+  // A run stopped from here, or by the connection that asked closing, deletes nothing either.
+  use('answer', true);
+  for (const how of ['stop', 'close']) {
+    const asker = Object.assign(new EventEmitter(), connection(laptop.identity.key)), ref = refOf('Tidy the logs');
+    const running = withHome(devbox.home, () => host['elu.remote.delete']({ refs: [ref], learn: true }, asker)); running.catch(() => {});
+    await pause(300);
+    assert.throws(() => withHome(devbox.home, () => host['elu.remote.delete']({ refs: [ref], learn: true }, asker)), /A clean-up from that computer is still reading its sessions\./);
+    if (how === 'stop') assert.deepEqual(withHome(devbox.home, () => host['elu.remote.delete']({ stop: true }, asker)), { stopping: true });
+    else asker.emit('close');
+    await assert.rejects(running, /Stopped before the lessons were saved\./);
+    assert.ok(withHome(devbox.home, () => projectSnapshot(repo).tasks.some(task => task.id === '4')), how);
+  }
+  // Delete alone: no run, and it is gone there.
+  use('answer');
+  assert.deepEqual((await clean({ refs: [refOf('Tidy the logs')] })).deleted.map(row => row.shown), ['Tidy the logs']);
+  assert.ok(!withHome(devbox.home, () => projectSnapshot(repo).tasks.some(task => task.id === '4')));
+});
+
+// A computer of mine on ELU 0.1.25 cannot delete its sessions from here: one line names it and
+// the version it needs, and nothing is sent. A teammate's computer refuses in one line.
+test('cleaning up on my computer on an ELU before 0.1.26 names the version it needs and sends nothing; a teammate is refused', async t => {
+  const { laptop, devbox, project, toViewer, host, viewCtx } = pair(t);
+  withHome(devbox.home, () => { chat(project.root, 1, { goal: 'Make coupons upper case' }); closeSession(repository(project.root), '1'); relist(); });
+  toViewer.remoteHello = { remote: 1, edit: 1 };
+  await withHome(laptop.home, () => listTick(viewCtx));
+  const [machine] = withHome(laptop.home, () => remoteMachines()), item = machine.sessions[0], name = `@${devbox.identity.key.slice(0, 4)}`;
+  assert.deepEqual([item.archived, machine.clean], [true, false]);
+  const sent = [], answer = toViewer.request;
+  toViewer.request = async (method, params) => { sent.push(method); return answer(method, params); };
+  for (const extra of [{ check: true }, { learn: true }, {}]) await assert.rejects(withHome(laptop.home, () => remoteCommand(viewCtx, { type: 'remoteClean', to: devbox.identity.key, refs: [item.ref], ...extra })), { message: `${name} needs ELU 0.1.26 to delete its sessions.` });
+  assert.deepEqual(sent, [], 'nothing was sent to it');
+  // A teammate's computer that is not mine is refused there in one line, and nothing goes.
+  assert.throws(() => withHome(devbox.home, () => host['elu.remote.delete']({ refs: [item.ref] }, connection('e'.repeat(64)))), { message: NOT_MINE });
+  assert.ok(withHome(devbox.home, () => projectSnapshot(repository(project.root)).tasks.some(task => task.id === '1')));
+});
+
+test('a session deleted here while my other computer follows it is said gone there, and no look at it fails', async t => {
+  const { laptop, devbox, project, toHost, hostCtx, viewCtx } = pair(t);
+  withHome(devbox.home, () => { chat(project.root, 1, { goal: 'Make coupons upper case', messages: [{ at: new Date().toISOString(), text: 'Make coupons upper case' }] }); relist(); });
+  await withHome(laptop.home, () => listTick(viewCtx));
+  const item = withHome(laptop.home, () => remoteMachines()[0].sessions[0]);
+  await withHome(laptop.home, () => remoteCommand(viewCtx, { type: 'remoteWatch', to: devbox.identity.key, ref: item.ref }));
+  withHome(devbox.home, () => hostTick(hostCtx));
+  // Deleted here, by x or elu sessions delete, not from that computer.
+  const logged = []; hostCtx.log = line => logged.push(line);
+  withHome(devbox.home, () => { const repo = repository(project.root); closeSession(repo, '1'); deleteSession(repo, '1'); hostTick(hostCtx, Date.now() + 1); hostTick(hostCtx, Date.now() + 2); });
+  assert.deepEqual(logged, [], 'no look at it fails');
+  const states = toHost.sent.filter(([method]) => method === 'elu.remote.events').flatMap(([, params]) => params.items.flatMap(row => row.events)).filter(event => event.type === 'state');
+  assert.deepEqual([states.at(-1).state, states.at(-1).error], ['gone', 'The session was deleted on that computer.']);
+  assert.equal(states.filter(event => event.state === 'gone').length, 1, 'said once');
 });
 
 test('a watch its computer let go is made again: a reply still reaches the session, and a listing it never sent catches the view up', async t => {

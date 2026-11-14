@@ -5,14 +5,16 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { project, fakeClis, autoApprove, approvingConductor, CLI } from './helpers.mjs';
+import { project, fakeClis, autoApprove, approvingConductor, CLI, git } from './helpers.mjs';
+import { liveTask } from './peer-helpers.mjs';
+import { readProjectSettings } from '../lib/project-settings.mjs';
 import { repository } from '../lib/git.mjs';
 import { ProjectController, projectSnapshot, registerProject } from '../lib/projects.mjs';
 import { readTask } from '../lib/state.mjs';
 import { pendingRequests } from '../lib/workspace.mjs';
 import { Conductor, conductorAlive, enqueue } from '../lib/conductor.mjs';
 import { listSchedules, parseWhen, runScheduleNow, saveSchedule } from '../lib/schedules.mjs';
-import { readBoard, sessionClosed } from '../lib/kanban.mjs';
+import { closeSession, readBoard, sessionClosed } from '../lib/kanban.mjs';
 import { SCHEDULE_NOTE } from '../lib/bots.mjs';
 import { allowedBy } from '../lib/permission-rules.mjs';
 import { ADAPTERS } from '../lib/adapters/index.mjs';
@@ -394,4 +396,33 @@ test('elu --help and elu sessions --help list the commands', () => {
   for (const line of ['sessions [--all] | sessions archive N|this | sessions unarchive N', 'sessions rename N|this NAME | sessions new MESSAGE [--mode ask|auto|full]', 'schedules [--all] | schedules add WHEN MESSAGE [--mode ask|auto|full]', 'schedules pause|resume|delete|run N']) assert.ok(help.includes(line), line);
   assert.equal(run(['sessions', '--help']).stdout, SESSIONS_HELP); assert.equal(run(['schedules', '-h']).stdout, SCHEDULES_HELP);
   assert.match(SESSIONS_HELP, /elu sessions archive N\|this/); assert.match(SESSIONS_HELP, /elu sessions new MESSAGE/);
+});
+
+// Deleted for good from the shell, as x deletes them in Sessions: only an archived session, its
+// work on no remote kept, and --learn saves what the owner taught in them first.
+test('elu sessions delete deletes an archived session for good, or every archived one after --learn saves what you taught; work on no remote stays; one not archived is refused', t => {
+  const f = setup(t, { learned: { add: ['Use pnpm, not npm.'], remove: [] } });
+  for (const [id, goal] of [['2', 'Tidy the logs'], ['3', 'Round refunds'], ['4', 'Still open']]) liveTask(f.root, { id, goal, state: 'stopped' });
+  // 2's work is merged here, so nothing of it is lost; 3 has a commit on no remote.
+  const folder = id => path.join(f.repo.worktrees, id);
+  git(folder('2'), ['add', '.']); git(folder('2'), ['commit', '-qm', 'Tidy the logs']); git(f.root, ['merge', '-q', '--ff-only', 'feat/task-2']);
+  git(folder('3'), ['add', '.']); git(folder('3'), ['commit', '-qm', 'Round refunds']);
+  closeSession(f.repo, '2'); closeSession(f.repo, '3');
+  const help = spawnSync(process.execPath, [CLI, '--help'], { encoding: 'utf8', env: { ...process.env, ELU_NO_UPDATE_CHECK: '1' } }).stdout;
+  assert.ok(help.includes('sessions delete N|archived [--learn]')); assert.match(SESSIONS_HELP, /elu sessions delete N\|archived \[--learn\]/);
+  // One not archived is refused, and nothing goes.
+  const refused = elu(f, ['sessions', 'delete', '4']);
+  assert.notEqual(refused.status, 0); assert.match(refused.stdout + refused.stderr, /Session 4 "Still open" is not archived\. elu sessions archive 4 first\./);
+  assert.ok(sessions(f).some(task => task.id === '4'));
+  // One, by its number: its record, its folder and its branch go.
+  const one = json(elu(f, ['sessions', 'delete', '2', '--json']));
+  assert.deepEqual(one.deleted, ['2']); assert.equal(one.message, 'Deleted session 2.');
+  assert.ok(!sessions(f).some(task => task.id === '2')); assert.equal(fs.existsSync(path.join(f.repo.worktrees, '2')), false);
+  // Every archived one, after --learn: what was saved is said once, and the work on no remote stays on its branch.
+  const all = elu(f, ['sessions', 'delete', 'archived', '--learn']);
+  assert.equal(all.status, 0, all.stderr);
+  assert.equal(all.stdout.trim(), 'Deleted session 3.\nKept 1 commit not pushed of session 3 on feat/task-3.\nSaved to project context: Use pnpm, not npm.');
+  assert.match(readProjectSettings(f.root).context, /Use pnpm, not npm\./);
+  assert.deepEqual(sessions(f).map(task => task.id), ['4']); assert.match(git(f.root, ['branch', '--list', 'feat/task-3']), /feat\/task-3/);
+  assert.equal(json(elu(f, ['sessions', 'delete', 'archived', '--json'])).message, 'No archived sessions.');
 });
