@@ -68,7 +68,8 @@ priority, a severity, the success criteria that show it is done, and the model's
 of the work.
 
 With Full access or Approve for me the mode approves the Task: the card says so, nothing
-waits for you, and the work goes on in the same message. With Ask for approval or Read
+waits for you, and the work goes on in the same message. A schedule's run in one of these
+modes works the same way, and so does a session a teammate's message starts as yours. With Ask for approval or Read
 only nothing is edited yet, and the Task waits for you:
 
 | Do | What happens |
@@ -360,9 +361,10 @@ What a teammate's message does on your machine is yours to choose, once per team
 asks, and so does your first `/invite` for a team. **Auto** (the default for a new team)
 starts a session in your project as if you had typed the message yourself: it runs in the
 project folder, reads your home folder (not the secret folders) and uses your MCP servers,
-in your default permission mode but never Full access, and its answer goes back without you
-reading it unless it looks like a secret. Any Task it proposes waits for your approval, and
-only an approved Task's edit runs in a new worktree. **Manual** keeps each message waiting
+in your default permission mode, Full access included, and its answer goes back without you
+reading it unless it looks like a secret. Its Task is approved as one you type would be: in
+Approve for me and Full access the mode approves it and the work goes on, and in Ask for
+approval it waits for you. Only an approved Task's edit runs in a new worktree. **Manual** keeps each message waiting
 until you press y, and its sender reads that it waits for you. Your y (or w) starts it at
 once, whatever runs, as anything you type does; one that Auto starts waits for a free slot. You can also write rules in plain English, such as "Only work on the elu
 repo. Don't write anything until I accept it.", and every session a teammate starts is told
