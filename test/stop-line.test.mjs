@@ -1,10 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { stopLine, errorText, logCause, logLimit, limitOf } from '../lib/stop-line.mjs';
-import { boardRows, rowTitle } from '../lib/board.mjs';
+import { boardRows, remoteRow, rowTitle } from '../lib/board.mjs';
+import { failureLine } from '../lib/peer/failure.mjs';
 import { STUCK_LINE } from '../lib/runner.mjs';
 import * as claude from '../lib/adapters/claude.mjs';
 import { signInCommand } from '../lib/vendors.mjs';
@@ -63,6 +65,54 @@ test('a turn that could not finish names the cause when it is known, then the on
   assert.equal(said({ error: { message: '@scout could not finish.', cause: 'rate-limit' } }).text, '@scout could not finish: the account hit its rate limit. Switch account in Usage, or type continue to try again.');
   // What Claude printed on stderr stays, with the action after it.
   assert.equal(said({ error: { message: 'The model could not finish. Error: sandbox required but unavailable', cause: 'unknown' } }).text, 'The model could not finish. Error: sandbox required but unavailable. Type continue to try again.');
+});
+
+// A run whose program never began: a wrapper of claude that could not start it printed why,
+// and the run ended with nothing in its log. What it printed stays, but none of its words is
+// the owner's action ("again" in them is no "try again"): the way on is to check the command,
+// on this computer, and from the other computer that sent the message. Its Sessions row says
+// as much where the whole action does not fit, here and there.
+test("a run whose program never began says what it printed, then to check its command; its words are never the owner's action, and its rows say it did not start", t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'stop-line-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const empty = path.join(dir, 'empty.log'); fs.writeFileSync(empty, '');
+  const message = 'The model could not finish. claude: the command could not start: it calls itself (a wrapper of claude found claude again)';
+  const failed = session({ title: 'Fix the footer links on the shop page', error: { message, cause: 'unknown', logFile: empty } });
+  const stop = stopLine(failed, { account: none });
+  assert.equal(stop.text, `${message}. Check that claude runs in your terminal, then type continue.`);
+  assert.equal(stop.action, 'Check that claude runs in your terminal, then type continue.');
+  // With no log to read, its words are still not the action: it is tried again.
+  assert.equal(stopLine(session({ error: { message, cause: 'unknown', logFile: null } }), { account: none }).text, `${message}. Type continue to try again.`);
+  // Its row here: the name, then the action where it fits; else that it did not start, never the name alone.
+  const now = Date.parse(at) + 60000, [row] = boardRows([{ name: 'shop', root: '/p/shop', activity: [], tasks: [failed], queue: [] }], now);
+  assert.equal(rowTitle(row, now), 'Fix the footer links on the shop page · check that claude runs in your terminal, then type continue');
+  assert.equal(rowTitle(row, now, 60), 'Fix the footer links on the shop page · claude did not start');
+  assert.equal(rowTitle(row, now, 24), 'claude did not start · Fix the footer links on the shop page');
+  // Narrower than those three words, as at 80 columns: what happened comes first, and whole.
+  assert.equal(rowTitle(row, now, 16), 'did not start · Fix the footer links on the shop page');
+  // The computer that sent it is told the same, with the way on from there.
+  const line = failureLine({ task: failed, at: '@devbox', mine: true });
+  assert.equal(line, `${message}. Check that claude runs in your terminal on @devbox, then send it again.`);
+  // And its row there says the same.
+  const there = { ...remoteRow({ id: crypto.randomUUID(), machine: 'd'.repeat(64), state: 'blocked', title: 'Fix the footer links on the shop page', error: line, createdAt: at, lastAt: at, entries: [], steps: [], approvals: [] }, 'devbox', now), grouped: true };
+  assert.equal(rowTitle(there, now), 'Fix the footer links on the shop page · check that claude runs in your terminal');
+  assert.equal(rowTitle(there, now, 30), 'claude did not start · Fix the footer links on the shop page');
+  assert.equal(rowTitle(there, now, 16), 'did not start · Fix the footer links on the shop page');
+});
+
+test("a run whose program's release could not be read never started: it says to check its command, here and on the computer that sent it, and its rows say it did not start", () => {
+  // As it is kept: the check refused it before any turn, so no run is recorded.
+  const message = 'Claude Code: This CLI is older than the oldest tested release, or its version could not be read.';
+  const failed = session({ kind: 'conversation', title: 'Fix the footer links on the shop page', runs: [], error: { message } });
+  const stop = stopLine(failed, { account: none });
+  assert.equal(stop.text, `${message} Check that claude runs in your terminal, then type continue.`);
+  const codex = stopLine(session({ runs: [], error: { message: 'Codex: This CLI is older than the oldest tested release, or its version could not be read.' } }), { account: none });
+  assert.equal(codex.action, 'Check that codex runs in your terminal, then type continue.');
+  const now = Date.parse(at) + 60000, [row] = boardRows([{ name: 'shop', root: '/p/shop', activity: [], tasks: [failed], queue: [] }], now);
+  assert.equal(rowTitle(row, now, 40), 'claude did not start · Fix the footer links on the shop page');
+  const line = failureLine({ task: failed, at: '@devbox', mine: true });
+  assert.match(line, /Check that claude runs in your terminal on @devbox, then send it again\.$/);
+  const there = { ...remoteRow({ id: crypto.randomUUID(), machine: 'd'.repeat(64), state: 'blocked', title: 'Fix the footer links on the shop page', error: line, createdAt: at, lastAt: at, entries: [], steps: [], approvals: [] }, 'devbox', now), grouped: true };
+  assert.equal(rowTitle(there, now, 30), 'claude did not start · Fix the footer links on the shop page');
 });
 
 test("an unknown cause is read from the run log's last result line: credits, rate limit, sign-in, network; a turn that went on to finish is no failure", t => {
