@@ -1382,6 +1382,17 @@ test('a view-only window says so on Kanban, offers no key that adds or changes a
   assert.deepEqual(cards().sort(), ['Add retries to the uploader', 'Rename the billing module']);
 });
 
+test('with TERM=dumb ELU says the terminal cannot draw it and what to do, and draws nothing', async t => {
+  environment(t, { TERM: 'dumb' });
+  const input = new PassThrough(), output = new PassThrough(); input.isTTY = output.isTTY = true; input.setRawMode = () => {}; output.columns = 80; output.rows = 24;
+  let raw = ''; output.on('data', value => { raw += value.toString(); });
+  const said = await launchTerminal({ input, output, peer: null }).then(() => null, error => error.message);
+  assert.equal(said, 'ELU cannot draw in this terminal: it is set to TERM=dumb.\nOpen ELU in a terminal window. If this is one, run:\n  TERM=xterm-256color elu');
+  // No row of it is cut by a terminal of 80 columns, and the command to copy has a row of its own.
+  assert.ok(said.split('\n').every(row => row.length < 80)); assert.equal(said.split('\n').at(-1).trim(), 'TERM=xterm-256color elu');
+  assert.equal(raw, '', 'nothing was drawn');
+});
+
 test('the status line shows a long message whole on as many rows as it needs, and the pane above gives them up, in every view at 80x24', { timeout: 60000 }, async t => {
   const p = setup(t), v = await view(t, { repo: p.repo, peer: null }), panels = v.current.panels, g = geometry(80, 24);
   const drawn = () => panels.status.getScreenLines().map(row => row.trimEnd()), whole = () => drawn().map((row, at) => at ? row.replace(/^ {2}/, '') : row.replace(/^› /, '')).join(' ');
