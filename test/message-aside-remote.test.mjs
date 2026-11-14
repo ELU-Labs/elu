@@ -83,8 +83,8 @@ test('a message from my other computer to a session whose turn takes none is ans
   assert.deepEqual(seen().entries.slice(-3).map(entry => [entry.role.replace(/^.* · /, '· '), entry.text, entry.update === true, entry.line === true]), [['You', 'How far are you?', false, false], ['· beside the turn', 'Two of three steps are done. It is running the tests now.', true, false], ['ELU', ASIDE_ANSWERED, false, true]]);
   assert.equal(seen().beside, 3, 'that computer says which rows are beside its running turn');
   assert.equal(seen().waiting?.length ?? 0, 0, 'nothing of it is left to run');
-  // Under the working line there, where he typed it, so a turn with many steps never pushes it out of sight.
-  assert.match(pane(), /Working on @box\n[\s\S]*You → @box: How far are you\?\n\n[^\n]+ on @box · beside the turn: Two of three steps are done\. It is running the tests now\.\n\nAnswered beside the running turn, from what it has done so far\. The turn goes on\.\n\n(?:Catching up with @box…\n\n)?Runs on @box/);
+  // Last, under the working line there, where he typed it, so a turn with many steps never pushes it out of sight.
+  assert.match(pane(), /Working on @box\n[\s\S]*You → @box: How far are you\?\n\n[^\n]+ on @box · beside the turn: Two of three steps are done\. It is running the tests now\.\n\nAnswered beside the running turn, from what it has done so far\. The turn goes on\.$/);
   assert.doesNotMatch(pane(), /\(waiting\)|current turn ends/);
   // An instruction: answered beside the turn too, it says that it asks for work, and it keeps its place there.
   assert.deepEqual(host['elu.remote.send']({ id: started.id, text: 'Rename the helper too' }, toHost), { id: started.id, working: true, takes: 'beside' });
@@ -96,7 +96,7 @@ test('a message from my other computer to a session whose turn takes none is ans
   const [item] = seen().waiting;
   assert.deepEqual([item.state, item.takes, item.aside.state, item.aside.text], ['turn', 'beside', 'answered', 'The turn is running the tests now. Your message starts when it ends.']);
   assert.equal(seen().held, 1, 'this computer knows one message can be sent now');
-  assert.match(pane(), /You → @box \(answered · starts when this turn ends\): Rename the helper too\n\n[^\n]+ on @box · beside the turn: The turn is running the tests now\. Your message starts when it ends\.\nAnswered beside the running turn, from what it has done so far\. The turn goes on\.\nIt asks for work, so it also starts the next turn when this one ends\.\nEnter in the empty box sends it now: that stops the turn on @box and the command that is running\n/);
+  assert.match(pane(), /You → @box \(answered · starts when this turn ends\): Rename the helper too\n\n[^\n]+ on @box · beside the turn: The turn is running the tests now\. Your message starts when it ends\.\nAnswered beside the running turn, from what it has done so far\. The turn goes on\.\nIt asks for work, so it also starts the next turn when this one ends\.\nEnter in the empty box sends it now: that stops the turn on @box and the command that is running$/);
   // Enter in the empty box here: the turn there stops, and the message starts the next one in the same thread.
   assert.deepEqual(host['elu.remote.stop']({ id: started.id, now: true }, toHost), { stopping: true });
   await until(() => turns().some(row => row.input.includes('Rename the helper too')), 'the next turn there started with it', 40000);

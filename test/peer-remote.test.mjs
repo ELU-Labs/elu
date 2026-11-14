@@ -1522,7 +1522,8 @@ test('a message that has not started on my other computer says here what it wait
   withHome(devbox.home, () => enqueue(project.root, 'Also the docs', { continuationTaskId: '1' }));
   push();
   assert.equal(seen(item.id).held, 1);
-  assert.match(shown(item.id), /Your message waits on @devbox while this turn works\. Enter in the empty message box sends it now\./);
+  // The newest message that waits for the turn says what happens to it, and names the key under it, last in the pane.
+  assert.match(shown(item.id), /Working on @devbox\n\nYou → @devbox \([^)\n]+\)\nAlso the docs\n[^\n]+\nEnter in the empty box sends it now: that stops the turn on @devbox and the command that is running$/);
   // What a computer sends is read field by field: a wait that is not one is dropped.
   withHome(laptop.home, () => viewer['elu.remote.events']({ items: [{ id: item.id, events: [{ seq: seen(item.id).seq + 1, type: 'state', state: 'answered', waits: { on: 'slot', running: 'many', limit: 1 }, held: 'x' }] }] }, connection(devbox.identity.key)));
   assert.equal(seen(item.id).waits, undefined); assert.equal(seen(item.id).held, undefined);
