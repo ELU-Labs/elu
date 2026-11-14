@@ -118,9 +118,9 @@ subscription; the role's `maxCostUsd` must be `null`.
 
 ## The private home
 
-In Full access a command the model runs still has this folder as `~`. ELU points Git and
-`gh` at your own settings and sign-in there (`GIT_CONFIG_GLOBAL`, `GH_CONFIG_DIR`, unless
-your shell sets them), and SSH finds your keys by itself. Seen with the stand-in only.
+In Full access `~` is a mirror of your home (`grok-home-full` in your personal directory),
+so a command finds your sign-ins where it looks for them: see [Full access](#full-access-your-home-as-)
+below. The other modes run in the private home described here.
 
 By default Grok reads your `~/.grok` tree (config, rules, hooks, skills, agents,
 `AGENTS.md`), `/etc/grok`, the workspace's `.grok`, every `AGENTS.md` and `CLAUDE.md` up
@@ -161,6 +161,35 @@ directory) and a `GROK_HOME` inside it holding only what ELU wrote:
 
 There is no `~/.claude` or `~/.cursor` under that home, so the `isolation` step shows what
 actually reaches a run on your machine, and the session names anything it finds.
+
+### Full access: your home as `~`
+
+Full access is everything, so a command must find `~/.npmrc`, `~/.config/gcloud`, `~/.aws`,
+`~/.docker`, `~/.kube` and the rest as your terminal does. Running Grok in your home with
+`GROK_HOME` set to ELU's folder does not work. Seen on the real Grok Build 1.0.77, signed
+out, with a stand-in home as `HOME`, `GROK_HOME` elsewhere and all ten switches off:
+`grok inspect --json` lists that home's `~/.claude/CLAUDE.md` and rules, the permission
+rules of `~/.claude/settings.local.json`, its Claude hooks, a Claude plugin, skills from
+`~/.claude`, `~/.cursor` and `~/.agents`, agents from `~/.claude/agents` and `~/.grok/agents`,
+and the MCP servers of `~/.claude.json` and `~/.cursor/mcp.json`.
+
+So a Full access run gets `HOME` set to `grok-home-full`, a folder of links:
+
+- every entry at the top of your home is a link to yours, made again before each run, so
+  what you added since is there and nothing of yours is copied;
+- `~/.claude`, `~/.claude.json`, `~/.codex`, `~/.cursor`, `~/.gemini`, `~/.agents` and your
+  own `~/.grok` are left out, and `~/.grok` there is ELU's `GROK_HOME`. The same
+  `grok inspect --json` under this folder lists nothing from your home;
+- a file or folder a command makes at the top of `~` is moved to your home when the run
+  ends (or before the next one, if ELU was stopped). A file saved in place of yours
+  replaces yours when it is newer; renaming an entry renames yours. What cannot go to your
+  home (a coding tool's folder a run made, an older file than yours) is kept beside the
+  mirror in `grok-home-full-aside`, never deleted;
+- removing an entry at the top of `~` removes the link only, and yours is linked again at
+  the next run. `find ~` and `du ~` see links: a command that walks your home needs its
+  full path.
+
+The other modes deny reading this folder, as the rest of ELU's own.
 
 ## Telemetry and uploads
 

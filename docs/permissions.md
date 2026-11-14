@@ -68,12 +68,21 @@ What stays, and why:
   minutes, or runs 2 hours, is stopped ([How long a turn runs](#how-long-a-turn-runs)).
   That is how a vendor that hangs is told from one that works.
 - Codex cannot ask you a question in the middle of a turn: nobody could answer it there.
-- Grok Build and Antigravity run with a home folder of their own, as in every mode, so
-  `~` in their commands is not your home: each reads its own settings from `~`, and ELU
-  has no other way to give it the settings the run needs. Git and `gh` are pointed at your
-  own settings and sign-in (`GIT_CONFIG_GLOBAL`, `GH_CONFIG_DIR`), and SSH finds your keys.
-  Another tool that keeps its sign-in under `~` (npm, a cloud CLI) needs its full path or
-  its own variable there. Claude Code and Codex run in your home.
+- Grok Build and Antigravity do not start in your home itself: each loads settings from
+  `~` that ELU cannot turn off (Grok Build your Claude Code, Cursor and `.agents` folders,
+  Antigravity `~/.gemini`). So `~` in their runs is a folder of links, one to each entry
+  at the top of your home, made again before every run. `~/.npmrc`, `~/.config`, `~/.aws`,
+  `~/.docker`, `~/.kube`, `~/.ssh`, `~/.gitconfig` and everything else there are your own
+  files, so npm, cloud CLIs, `gh`, Git and SSH are signed in as in your terminal.
+  - Not linked: `~/.claude`, `~/.claude.json`, `~/.codex`, `~/.cursor`, `~/.gemini`,
+    `~/.grok` and `~/.agents`. The vendor's own folder there is the one ELU wrote for the
+    run. Yours are never written through `~`; a command still reaches them by full path.
+  - A file or folder a command makes at the top of `~` is moved to your home when the run
+    ends. A file saved in place of yours replaces yours. Renaming an entry renames yours.
+  - Removing an entry at the top of `~` removes the link only: yours stays and is linked
+    again at the next run. A command that walks `~` without following links (`find ~`,
+    `du ~`) sees links: give it your home's full path.
+  - Claude Code and Codex run in your home.
 - What a vendor asks in every mode is still shown to you. Claude Code asks before `rm` or
   `rmdir` on your home, the working folder or a top-level folder.
 - Who gets Full access: your own sessions, the schedules of their bots, and the schedules

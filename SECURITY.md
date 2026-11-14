@@ -659,3 +659,10 @@ proof on a given machine, and the vendor's own issue
 [xai-org/grok-build-plugin-cc#34](https://github.com/xai-org/grok-build-plugin-cc/issues/34)
 says some switches are ignored. Grok's deny rules match command text: in Approve for me
 the never list is a tripwire, not a boundary, and Full access has none.
+
+In Full access both run under a HOME that is a folder of links to the entries at the top
+of your home, so a command reads and writes your own files and sign-ins as your terminal
+does. The folders of coding tools (`~/.claude`, `~/.claude.json`, `~/.codex`, `~/.cursor`,
+`~/.gemini`, `~/.grok`, `~/.agents`) are not linked, and the vendor's own folder there is
+still the one ELU wrote. The other modes never run there: the folder sits in ELU's own,
+which they deny. See [Full access](docs/permissions.md#full-access).
