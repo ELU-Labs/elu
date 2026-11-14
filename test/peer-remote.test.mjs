@@ -17,7 +17,7 @@ import { createInvite, redeemCode, takeMineOffer } from '../lib/peer/invite.mjs'
 import { pendingRequests, updateRequest } from '../lib/workspace.mjs';
 import { requestApproval, pendingApprovals } from '../lib/approvals.mjs';
 import { Conductor, enqueue, saveConductorSettings } from '../lib/conductor.mjs';
-import { boardRows, remoteRow, rowActions, rowTitle } from '../lib/board.mjs';
+import { boardRows, remoteRow, rowActions, rowBadge, rowTitle } from '../lib/board.mjs';
 import { remoteSessions as remoteGlue } from '../lib/terminal-remote.mjs';
 import { teamPath } from '../lib/peer/roster.mjs';
 import { readTask, saveTask, taskDir, taskPlace } from '../lib/state.mjs';
@@ -805,6 +805,8 @@ test('a message that has not started on my other computer says here what it wait
   withHome(devbox.home, () => conductor.dispatch()); push();
   assert.equal(seen(started.id).state, 'starting'); assert.deepEqual(seen(started.id).waits, { on: 'slot', running: 1, limit: 1 });
   assert.match(shown(started.id), /Starting on @devbox\n\nWaiting for a free slot: 1 of 1 session is running\. \/slots changes it\./);
+  // Its row in Sessions reads as a queued one, with no spinner: it is not at work.
+  assert.deepEqual(rowBadge(remoteRow(seen(started.id), 'devbox')), { icon: '·', tone: 'muted', title: 'on devbox · queued' });
   // The slot frees and its turn starts: nothing waits any more.
   withHome(devbox.home, () => { updateRequest(project.root, request.id, { state: 'running', taskId: '1', waits: undefined, reason: 'Running.' }); chat(project.root, 1, { goal: 'Make coupons upper case', state: 'running', messages: [{ at, text: 'Make coupons upper case' }, { at, from: 'Lead', text: 'Done: codes are upper case now.' }, { at, text: 'And the tests' }] }); });
   push();
