@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { spawnSync } from 'node:child_process';
 import { startAcp } from '../lib/acp-client.mjs';
 
 const SERVER = fileURLToPath(new URL('./fakes/acp-server.mjs', import.meta.url));
@@ -60,6 +61,18 @@ test('a server that writes nothing for the quiet limit is stopped unless the run
   assert.equal((await talking.client.request('echo')).notifications, 0, 'three seconds of replies, each within the quiet limit');
 });
 
+// The owner's case: a long test run inside a turn prints nothing until it ends.
+test('a tool call that runs silently past the quiet limit does not stop the server; the cap still does', async t => {
+  const [working, endless] = await Promise.all([start(t, { quietSeconds: 1, timeoutSeconds: 60 }), start(t, { quietSeconds: 1, timeoutSeconds: 3 })]);
+  endless.client.request('command', { ms: null }, { timeoutMs: 10000 }).catch(() => {});
+  const started = Date.now();
+  assert.deepEqual(await working.client.request('command', { ms: 2500 }, { timeoutMs: 10000 }), { ran: true }, 'two and a half seconds of silence with a 1 second quiet limit');
+  assert.ok(Date.now() - started >= 2500);
+  await sleep(1500);
+  const quiet = await working.client.exit; assert.equal(quiet.stoppedBy, 'quiet', 'once the call ended, silence counts again');
+  const capped = await endless.client.exit; assert.equal(capped.timedOut, true); assert.equal(capped.stoppedBy, 'cap', 'a call that never ends still stops at the cap');
+});
+
 test('the time limit kills the server unless the run is held; an abort kills it at once', async t => {
   const [limited, held, aborted] = await Promise.all([
     start(t, { timeoutSeconds: 1 }),
@@ -72,4 +85,34 @@ test('the time limit kills the server unless the run is held; an abort kills it 
   assert.equal((await aborted.client.exit).signal, 'SIGKILL');
   await assert.rejects(startAcp({ bin: process.execPath, args: [SERVER], cwd: limited.dir, env: process.env, logFile: path.join(limited.dir, 'run.log') }), /EEXIST/, 'a log is written once');
   await assert.rejects(startAcp({ bin: '', logFile: path.join(limited.dir, 'other.log') }), /needs a program/);
+});
+
+// A turn of an ACP vendor (Antigravity, Grok) ends everything it started, as any vendor's
+// does (endRun in lib/process.mjs): at a limit, at a stop, and when the turn is over.
+const alive = pid => { const r = spawnSync('ps', ['-o', 'stat=', '-p', String(pid)], { encoding: 'utf8' }); return r.status === 0 && Boolean(r.stdout.trim()) && !r.stdout.trim().startsWith('Z'); };
+const gone = async pid => { for (const until = Date.now() + 3000; alive(pid) && Date.now() < until;) await sleep(20); return !alive(pid); };
+test('a limit that stops the server ends the background commands it started in sessions of their own, and names them', async t => {
+  let ended = null;
+  const { client } = await start(t, { quietSeconds: 1, timeoutSeconds: 60, onEnded: rows => { ended = rows; } });
+  const { pid } = await client.request('background'); t.after(() => { try { process.kill(-pid, 'SIGKILL'); } catch {} });
+  assert.equal(alive(pid), true);
+  assert.equal((await client.exit).stoppedBy, 'quiet');
+  assert.equal(await gone(pid), true, 'nothing the turn started is left');
+  assert.deepEqual(ended?.map(row => row.pid), [pid]);
+});
+test('a stop ends the server\'s background commands and names them', async t => {
+  const controller = new AbortController(); let ended = null;
+  const { client } = await start(t, { signal: controller.signal, onEnded: rows => { ended = rows; } });
+  const { pid } = await client.request('background'); t.after(() => { try { process.kill(-pid, 'SIGKILL'); } catch {} });
+  controller.abort(); await client.exit;
+  assert.equal(await gone(pid), true);
+  assert.deepEqual(ended?.map(row => row.pid), [pid]);
+});
+test('closing the server once its turn is over ends what it left running, also what ignores being asked to end', async t => {
+  let ended = null;
+  const { client } = await start(t, { onEnded: rows => { ended = rows; } });
+  const { pid } = await client.request('background', { deaf: true }); t.after(() => { try { process.kill(-pid, 'SIGKILL'); } catch {} });
+  await client.close(); await sleep(100);
+  assert.equal(alive(pid), false, 'gone when the turn is closed');
+  assert.equal(ended, null, 'the turn was over: no stop is reported');
 });

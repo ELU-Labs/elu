@@ -84,8 +84,8 @@ What stays, and why:
     again at the next run. A command that walks `~` without following links (`find ~`,
     `du ~`) sees links: give it your home's full path.
   - Claude Code and Codex run in your home.
-- What a vendor asks in every mode is still shown to you. Claude Code asks before `rm` or
-  `rmdir` on your home, the working folder or a top-level folder.
+- What a vendor asks in every mode, ELU answers for you with yes, at once. Claude Code
+  asks before `rm` or `rmdir` on your home, the working folder or a top-level folder.
 - Who gets Full access: your own sessions, the schedules of their bots, and the schedules
   you pick it for. A bot's scheduled turn runs in its session's mode, Full access included.
   A request to the local A2A endpoint is your own and runs your default mode as it is. A
@@ -259,18 +259,23 @@ Needs you. Allow lets the action run; deny tells the model not to retry it
 another way; no answer within 20 minutes counts as a denial. The turn's limits
 (below) wait while a request is open, and the conductor does not treat the wait
 as a stall. Every decision is kept with the task, and blocked actions are kept
-on the run.
+on the run. In Full access the relay allows every call at once: nobody is asked
+and nothing is refused, and the task keeps each as allowed by Full access.
 
 ### How long a turn runs
 
 A turn that is still working is never cut by the clock. It is stopped only when the vendor
-has printed nothing for 10 minutes, or after 2 hours, a safety cap. Time a request waits for
-you counts toward neither, and the 10 minutes start again once it is answered. A stopped turn
+has printed nothing for 10 minutes, or after 2 hours, a safety cap. A command the model runs
+counts as working for as long as it runs, even when it prints nothing, such as a long test
+run: the 10 minutes count only while no command is running. Time a request waits for you
+counts toward neither, and the 10 minutes start again once it is answered. A stopped turn
 says so in the chat in one line, such as "Stopped after 10 minutes with no output. Your
 changes are kept. Reply to carry on." Its edits stay on disk, and your next message carries
 on. `roles.lead.timeoutSeconds` in `.elu-code/config.yaml` sets the 10 minutes; the 900 it
 says by default means the default, as 600 does. A vendor that prints its answer only at
-the end (Antigravity and Grok Build without the live relay) has the cap alone.
+the end (Antigravity and Grok Build without the live relay) has the cap alone. So does each
+of the project's checks: a check runs until it ends, up to the same 2 hours, however long it
+prints nothing.
 
 The keys are `y` allow and `n` deny. Where the session can be given Full access
 there is a third, `f`: it asks what `/permissions full` asks, then allows the
@@ -281,9 +286,14 @@ It is not offered for a turn that runs read only.
 
 In Ask for approval, a sandboxed command that connects to a host (`curl https://elu.dev`,
 `npm view`) asks you under Needs you as "Network access to elu.dev". Claude Code asks this
-on its own output, not through the relay, so ELU starts it with the prompt as a
-stream-json message (`--input-format stream-json`), keeps its input open and writes your
-answer back. Allow lets that host through for the rest of the session: Claude Code keeps it
+on its own output, not through the relay. ELU starts every turn of yours with the prompt as
+a stream-json message (`--input-format stream-json`) and keeps its input open, so a message
+you send while it works reaches it ([vendors/claude.md](vendors/claude.md)), and in Ask for
+approval it writes your answer back there. Whatever else Claude Code asks on its own output
+(a tool call, a form from an MCP server) is answered the same way, by the session's mode.
+In Full access it is allowed at once: nobody is asked and nothing is refused. In Approve
+for me and Ask for approval one of your rules or a default answers it, and otherwise you
+are asked under Needs you. In Read only it is refused. Allow lets that host through for the rest of the session: Claude Code keeps it
 for the run, and later turns of the session start with it in the sandbox's allowed hosts.
 Deny, or no answer, fails the connection. Before, the input was closed once the prompt was
 read, and Claude Code denied every host without asking and reported it as "user denied".
@@ -444,9 +454,11 @@ Approve for me.
   long to show whole included. The never list is not asked,
   so it stays refused in that turn, which started without Full access; the next
   turn runs it.
-- A turn that starts in Full access is never answered for you. What it still
-  asks, its vendor asks in every mode (Claude Code asks before `rm` or `rmdir`
-  on your home, the working folder or a top-level folder), and you answer it.
+- A turn that starts in Full access asks you nothing. What its vendor asks in
+  every mode (Claude Code asks before `rm` or `rmdir` on your home, the working
+  folder or a top-level folder) is allowed at once. The same holds for a turn
+  whose session you set to Full access while it works, and with the app closed:
+  whichever way the vendor asks, ELU's answer does not wait for the app.
 - The automatic edit task of a conversation inherits the conversation's choices.
 - A schedule stores the mode of the form it was made in. One whose mode you did
   not pick yourself runs with your default at each run, and never above `auto`.

@@ -19,6 +19,7 @@ import { defaultConfig } from '../lib/config.mjs';
 import { READ_ONLY_REPLY } from '../lib/runner.mjs';
 import { ruleFor, saveRule } from '../lib/permission-rules.mjs';
 import { turnClock } from '../lib/turn-limits.mjs';
+import { runSteps } from '../lib/run-activity.mjs';
 
 // Sessions with permissions, end to end against the fake CLIs.
 // The personal directory (XDG_CONFIG_HOME) and HOME both point into the test folder, so a
@@ -27,8 +28,10 @@ function environment(t, values) {
   const previous = Object.fromEntries(Object.keys(values).map(key => [key, process.env[key]])); Object.assign(process.env, values);
   t.after(() => { for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } });
 }
-function setup(t, mode = 'normal') {
-  const p = project(t), fake = fakeClis(p.parent, { mode });
+// commands: what the fake Claude Code runs in each turn that has the approval relay.
+// more: anything else fake.json holds for the mode (test/helpers.mjs fakeClis).
+function setup(t, mode = 'normal', { commands = undefined, ...more } = {}) {
+  const p = project(t), fake = fakeClis(p.parent, { mode, commands, ...more });
   environment(t, { ...fake.env, HOME: p.parent, GIT_AUTHOR_NAME: 'Test Owner', GIT_AUTHOR_EMAIL: 'owner@example.invalid', GIT_COMMITTER_NAME: 'Test Owner', GIT_COMMITTER_EMAIL: 'owner@example.invalid' });
   const work = path.join(p.parent, 'notes'); fs.mkdirSync(work);
   const controller = autoApprove(new ProjectController(projectFolder(p.root)));
@@ -498,12 +501,81 @@ test('a turn that prints nothing for the quiet limit stops with one line, keeps 
   assert.equal(fs.readFileSync(path.join(task.worktree, 'src/coupon.mjs'), 'utf8'), 'export const normalize = (value) => value.toUpperCase();\n', 'the edit stays on disk');
 });
 
+test('a turn that answered ends at its result: the command it left running in the background is stopped and named', async t => {
+  const f = setup(t, 'answer'), file = path.join(f.fake.dir, 'fake.json');
+  fs.writeFileSync(file, JSON.stringify({ ...JSON.parse(fs.readFileSync(file, 'utf8')), background: true }));
+  const started = Date.now(), task = await f.controller.ask('Is ship still running?', null, { permissions: 'full' }).finished;
+  assert.ok(Date.now() - started < 30000, 'the turn ended at its result, not when the command it left would');
+  assert.ok(['answered', 'needs_input'].includes(task.state), task.error?.message);
+  const lead = task.runs.findLast(run => run.role === 'lead');
+  assert.deepEqual([lead.code, lead.endedAfterResult, lead.leftRunning], [0, true, 'for i in $(seq 1 110); do sleep 60; done']);
+  const pid = Number(fs.readFileSync(path.join(f.fake.dir, 'background.pid'), 'utf8')), alive = () => { try { process.kill(pid, 0); return true; } catch { return false; } };
+  for (const until = Date.now() + 5000; alive() && Date.now() < until;) await new Promise(resolve => setTimeout(resolve, 100));
+  assert.equal(alive(), false, 'the command it left ended with the turn');
+});
+
 test('an approval waiting for the owner is not quiet: the turn waits past the quiet limit', async t => {
   const f = setup(t, 'relay'); quickClock(t); f.controller.draftConfig.checks = [];
   const { task, answered } = await relay(f, 'allow', { delay: 4000 });
   assert.ok(answered.length >= 1);
   assert.ok(task.runs.filter(run => run.role === 'lead').every(run => run.code === 0), 'the run was not stopped while it waited');
   assert.ok(['ready', 'unverified'].includes(task.state), task.error?.message);
+});
+
+// The owner's case: a long test run inside a turn prints nothing until it ends, and the
+// vendor prints nothing while it runs. The turn is working all the while.
+test('a command that runs silently inside a turn, longer than the quiet limit, does not stop it', async t => {
+  const f = setup(t, 'normal', { commands: ['sleep 4'] }); quickClock(t); f.controller.draftConfig.checks = [];
+  const started = Date.now(), task = await f.controller.ask('Normalize coupon codes', null, { permissions: 'full' }).finished;
+  assert.ok(['ready', 'unverified'].includes(task.state), task.error?.message);
+  assert.ok(Date.now() - started > 8000, 'the planning turn and the editing turn each ran the command for twice the quiet limit');
+  const leads = task.runs.filter(run => run.role === 'lead'); assert.ok(leads.length >= 2 && leads.every(run => run.code === 0));
+  assert.match(fs.readFileSync(leads.at(-1).logFile, 'utf8'), /"tool_result"/, 'the command reported its end');
+  assert.equal(fs.readFileSync(path.join(task.worktree, 'src/coupon.mjs'), 'utf8'), 'export const normalize = (value) => value.toUpperCase();\n');
+});
+
+// Claude Code itself prints through a silent command: a heartbeat every half minute
+// (tool_progress), and rows about the commands it has going. None of them ends the call, so
+// the quiet limit keeps waiting between two heartbeats, and the chat's step for the command
+// is timed from them (lib/run-activity.mjs). The stand-in's command goes 15 times faster than
+// the clock: three heartbeats, two seconds apart.
+test('a silent command whose heartbeats come further apart than the quiet limit is not stopped, and its step is timed from them', async t => {
+  const f = setup(t, 'live', { intent: 'answer', live: { speed: 15, seconds: 90, think: 100 } }); quickClock(t, 1);
+  const started = Date.now(), task = await f.controller.ask('Run the coupon tests', null, { permissions: 'full' }).finished;
+  assert.equal(task.state, 'answered', task.error?.message);
+  assert.ok(Date.now() - started > 6000, 'the command ran for six times the quiet limit');
+  const lead = task.runs.findLast(run => run.role === 'lead'); assert.equal(lead.code, 0);
+  assert.equal(fs.readFileSync(lead.logFile, 'utf8').match(/"type":"tool_progress"/g)?.length, 3, 'its heartbeats');
+  const call = runSteps(lead.logFile, { cwd: task.worktree }).find(step => step.kind === 'tool' && step.text === 'Run: npm test');
+  assert.deepEqual([call?.status, call?.seconds >= 90], ['ok', true], `the step counts what the heartbeats said: ${JSON.stringify(call)}`);
+});
+
+test('a command that never ends still stops the turn at the cap, in one line', async t => {
+  const f = setup(t, 'normal', { commands: ['sleep 60'] }); quickClock(t, 1, 3); f.controller.draftConfig.checks = [];
+  const started = Date.now(), run = f.controller.ask('Normalize coupon codes', null, { permissions: 'full' });
+  await assert.rejects(run.finished, /Stopped after 3 seconds, the most one turn may run\. /);
+  assert.ok(Date.now() - started < 30000, 'stopped by the cap, not by the command ending');
+  assert.doesNotMatch(readTask(f.controller.repo, run.id).error.message, /no output/);
+});
+
+// A check is a command too: one that prints nothing for long, such as a slow test suite, is
+// working. timeoutSeconds is the quiet limit of the model's turn; it no longer cuts a check.
+test('a check that prints nothing for longer than the quiet limit and timeoutSeconds passes', async t => {
+  const f = setup(t); quickClock(t, 1);
+  f.controller.draftConfig.roles.lead.timeoutSeconds = 1; f.controller.draftConfig.checks = [{ name: 'slow-tests', command: ['sh', '-c', 'sleep 3'] }];
+  const task = await f.controller.ask('Normalize coupon codes', null, { permissions: 'full' }).finished;
+  const check = task.evidence.results.find(row => row.name === 'slow-tests');
+  assert.deepEqual([check.status, check.details], ['passed', undefined], JSON.stringify(check));
+  assert.equal(task.state, 'ready', task.error?.message);
+});
+
+test('a check that never ends is stopped at the cap of a turn and says so', async t => {
+  const f = setup(t); quickClock(t, 1, 3);
+  f.controller.draftConfig.checks = [{ name: 'endless-tests', command: ['sh', '-c', 'sleep 60'] }];
+  const started = Date.now(), task = await f.controller.ask('Normalize coupon codes', null, { permissions: 'full' }).finished;
+  const check = task.evidence.results.find(row => row.name === 'endless-tests');
+  assert.deepEqual([check.status, check.details], ['failed', ['Stopped after 3 seconds, the most one check may run.']], JSON.stringify(check));
+  assert.ok(Date.now() - started < 40000, 'stopped by the cap, not by the command ending');
 });
 
 test('bypassPermissions never asks: a full session touches without an approval', async t => {
@@ -753,18 +825,65 @@ test('in Ask for approval a host a sandboxed command connects to is asked once, 
   const pushAgain = await settle(f.controller.ask('Push it again', push.task.id), () => 'deny');
   assert.deepEqual([push.asked.length, pushAgain.asked.length], [1, 1]); assert.deepEqual(settingsOf(f.leads().at(-1).args).sandbox.network.allowedDomains, []);
   assert.deepEqual(connections(), [{ host: 'github.com', allowed: true, asked: true, streaming: true }, { host: 'github.com', allowed: false, asked: true, streaming: true }]);
-  // Approve for me decides without the owner, and Full access has no sandbox: neither streams its input.
+  // Every turn of the owner's streams its input, so what he sends while it works reaches it
+  // (lib/runner.mjs listen). Approve for me and Full access still ask him nothing.
   connecting([]);
   await f.controller.ask('Look', null, { permissions: 'auto' }).finished;
-  assert.equal(valueOf(f.leads().at(-1).args, '--input-format'), undefined);
+  assert.equal(valueOf(f.leads().at(-1).args, '--input-format'), 'stream-json');
   await f.controller.ask('Look', null, { permissions: 'full' }).finished;
-  assert.equal(valueOf(f.leads().at(-1).args, '--input-format'), undefined);
+  assert.equal(valueOf(f.leads().at(-1).args, '--input-format'), 'stream-json');
+  assert.deepEqual(pendingApprovals({ root }), []);
 });
 
-// Before: the prompt went in as text, so the input was closed and the host was denied unasked.
-test('a run whose prompt goes in as text gets every host it asks about denied without anyone being asked', async t => {
-  const f = setup(t, 'answer'); fakeClis(f.parent, { mode: 'answer', network: ['elu.dev'] });
-  await f.controller.ask('Look', null, { permissions: 'auto' }).finished;
+// The owner's rule for Full access: nothing is refused there. Claude Code asks its host on its
+// own output for what its own rules would prompt for: a tool call, a host, a form from an MCP
+// server. ELU had refused each of them at once outside Ask for approval.
+test('what Claude Code asks on its own output is allowed at once in Full access, goes to the rules and the owner in Approve for me, and is refused in Read only', { timeout: 60000 }, async t => {
+  const f = setup(t, 'answer'), root = f.controller.repo.project ?? f.controller.repo.root;
+  const asks = [{ tool_name: 'Bash', input: { command: 'git push origin main' } }, { tool_name: 'SandboxNetworkAccess', input: { host: 'elu.dev' } }, { tool_name: 'mcp__deploy__ship', input: { target: 'production', force: true } }, { tool_name: 'Bash', input: { command: 'git status' } }];
+  fakeClis(f.parent, { mode: 'answer', hostAsks: asks });
+  const answers = () => { const file = path.join(f.fake.dir, 'host-asks.jsonl'); const rows = fs.existsSync(file) ? fs.readFileSync(file, 'utf8').trim().split('\n').map(JSON.parse) : []; fs.rmSync(file, { force: true }); return rows; };
+  const settle = async (run, answer) => {
+    const asked = []; let done = false; const finished = run.finished.finally(() => { done = true; });
+    while (!done) { for (const row of pendingApprovals({ root })) { asked.push(row); answerApproval(row.id, answer(row)); } await sleep(25); }
+    return { task: await finished, asked };
+  };
+  // Full access: every one is allowed as it was asked, the push and the host too, and nobody is asked.
+  const full = await settle(f.controller.ask('Ship it', null, { permissions: 'full' }), () => 'deny');
+  assert.equal(full.task.state, 'answered', JSON.stringify(full.task.error));
+  assert.deepEqual(full.asked, [], 'the owner is asked nothing');
+  const allowed = answers();
+  assert.deepEqual(allowed.map(row => [row.tool_name, row.allowed]), asks.map(ask => [ask.tool_name, true]));
+  assert.deepEqual(allowed.map(row => row.reply.response), asks.map(ask => ({ behavior: 'allow', updatedInput: ask.input })));
+  assert.deepEqual(full.task.approvals.map(row => [row.tool, row.decision, row.by]), asks.map(ask => [ask.tool_name, 'allow', 'full']));
+  assert.deepEqual(full.task.runs.at(-1).denials ?? [], []);
+  // A host Full access let through is not one the owner allowed: the session does not keep it for a stricter mode.
+  fakeClis(f.parent, { mode: 'answer' });
+  await settle(f.controller.ask('And now ask me', full.task.id, { permissions: 'ask' }), () => 'deny');
+  assert.deepEqual(settingsOf(f.leads().at(-1).args).sandbox.network.allowedDomains, []);
+  // Approve for me: a default answers what it covers, and the owner is asked the rest, as the approval relay asks him.
+  fakeClis(f.parent, { mode: 'answer', hostAsks: asks });
+  const auto = await settle(f.controller.ask('Ship it', null, { permissions: 'auto' }), row => row.tool === 'SandboxNetworkAccess' ? 'allow' : 'deny');
+  assert.equal(auto.task.state, 'answered', JSON.stringify(auto.task.error));
+  assert.deepEqual(auto.asked.map(row => [row.tool, row.summary]), [['Bash', 'Run: git push origin main'], ['SandboxNetworkAccess', 'Network access to elu.dev'], ['mcp__deploy__ship', 'Use mcp__deploy__ship']]);
+  assert.deepEqual(answers().map(row => [row.tool_name, row.allowed]), [['Bash', false], ['SandboxNetworkAccess', true], ['mcp__deploy__ship', false], ['Bash', true]]);
+  assert.deepEqual(auto.task.approvals.map(row => [row.tool, row.decision, row.by ?? null]), [['Bash', 'deny', null], ['SandboxNetworkAccess', 'allow', null], ['mcp__deploy__ship', 'deny', null], ['Bash', 'allow', 'default']]);
+  // Read only asks the owner nothing, so there each is refused, with the reason.
+  const locked = await settle(f.controller.ask('Ship it'), () => 'allow');
+  assert.equal(locked.task.permissions ?? 'locked', 'locked'); assert.deepEqual(locked.asked, []);
+  const refused = answers();
+  assert.deepEqual(refused.map(row => row.allowed), [false, false, false, false]);
+  assert.deepEqual(refused[0].reply.response, { behavior: 'deny', message: 'ELU asks nothing of the owner in Read only.' });
+  assert.deepEqual(pendingApprovals({ root }), []);
+});
+
+// A host Claude Code does not ask about is its own to refuse: the stand-in asks only in its
+// default permission mode, as the first builder read the real program. What it does ask is
+// answered by the session's mode (the test above).
+test('outside Ask for approval every host a turn connects to is denied without anyone being asked', async t => {
+  const f = setup(t, 'answer'), root = f.controller.repo.project ?? f.controller.repo.root; fakeClis(f.parent, { mode: 'answer', network: ['elu.dev'] });
+  const task = await f.controller.ask('Look', null, { permissions: 'auto' }).finished;
   const rows = fs.readFileSync(path.join(f.fake.dir, 'network.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
-  assert.deepEqual(rows, [{ host: 'elu.dev', allowed: false, asked: false, streaming: false }]);
+  assert.deepEqual(rows, [{ host: 'elu.dev', allowed: false, asked: false, streaming: true }]);
+  assert.deepEqual(pendingApprovals({ root }), []); assert.deepEqual(task.approvals ?? [], []);
 });

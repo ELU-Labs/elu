@@ -4,7 +4,7 @@ import { defaultConfig, parseConfig, validateConfig, validateResult } from '../l
 import { MODEL_NAME } from '../lib/vendors.mjs';
 import { parseYaml, stringifyYaml } from '../lib/yaml.mjs';
 import { readRole } from './helpers.mjs';
-import { checkSeconds, stoppedLine, turnClock, turnLimits } from '../lib/turn-limits.mjs';
+import { checkSeconds, checkStoppedLine, commandWatch, stoppedLine, turnClock, turnLimits } from '../lib/turn-limits.mjs';
 import { allowRuleProblem, allowRuleRisk, assertPolicy, commandRule, policyReport, protectedFiles, protectedPath } from '../lib/policy.mjs';
 
 test('configuration round trips, rejects unknown fields, and keeps fixed prohibitions', () => {
@@ -81,7 +81,39 @@ test('timeoutSeconds is how long a turn may print nothing: the 900 a config is w
   assert.deepEqual(turnLimits(lead(120)), { quietSeconds: 120, capSeconds: 7200 }, 'one the owner chose is kept');
   assert.deepEqual(turnLimits(lead(7200)), { quietSeconds: 7200, capSeconds: 7200 });
   assert.deepEqual(turnLimits(lead(900), { streams: false }), { quietSeconds: null, capSeconds: 7200 }, 'a vendor that prints only at the end has the cap alone');
-  assert.equal(checkSeconds(lead(900)), 900); assert.equal(checkSeconds(lead(600)), 900); assert.equal(checkSeconds(lead(120)), 120);
+  assert.equal(checkSeconds(), 7200, 'a check is a command: it has the cap of a turn and no time limit of the lead\'s'); assert.equal(checkStoppedLine(), 'Stopped after 2 hours, the most one check may run.');
   assert.equal(stoppedLine('quiet', turnLimits(lead(900))), 'Stopped after 10 minutes with no output. Your changes are kept. Reply to carry on.');
   assert.equal(stoppedLine('cap', turnLimits(lead(900)), { edits: false }), 'Stopped after 2 hours, the most one turn may run. Reply to carry on.');
+});
+
+// A command the model runs, such as a long test run, prints nothing until it ends; while it
+// runs the turn is working, so the quiet limit waits (lib/turn-limits.mjs commandWatch).
+test('a tool call is open from its start to its end in each vendor\'s stream; a to-do list or a message is not one', () => {
+  const claude = commandWatch('claude'), use = (id, name = 'Bash') => ({ type: 'tool_use', id, name, input: {} }), result = id => ({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: id, content: 'ok' }] } });
+  claude.see({ type: 'assistant', message: { content: [{ type: 'text', text: 'Running the tests.' }] } });
+  assert.equal(claude.running(), false, 'a message is not a call');
+  claude.see({ type: 'assistant', message: { content: [{ type: 'text', text: 'Running the tests.' }, use('toolu_1')] } });
+  assert.equal(claude.running(), true);
+  claude.see({ type: 'assistant', parent_tool_use_id: null, message: { content: [use('toolu_2', 'Task')] } }); claude.see(result('toolu_1'));
+  assert.equal(claude.running(), true, 'the subagent still works');
+  claude.see(result('toolu_2')); assert.equal(claude.running(), false);
+  claude.see({ type: 'assistant', message: { content: [use('toolu_3')] } }); claude.see({ type: 'result', subtype: 'success' });
+  assert.equal(claude.running(), false, 'the result line ends every call');
+  const codex = commandWatch('codex'), item = (type, id, kind, status) => ({ type, item: { id, type: kind, ...(status ? { status } : {}) } });
+  codex.see(item('item.started', 'item_0', 'todo_list'));
+  assert.equal(codex.running(), false, 'a to-do list stays open for most of a turn and is no command');
+  codex.see(item('item.started', 'item_1', 'command_execution', 'in_progress')); assert.equal(codex.running(), true);
+  codex.see(item('item.completed', 'item_1', 'command_execution', 'completed')); assert.equal(codex.running(), false);
+  codex.see(item('item.started', 'item_2', 'mcp_tool_call')); assert.equal(codex.running(), true);
+  codex.see({ type: 'turn.failed', error: { message: 'x' } }); assert.equal(codex.running(), false, 'the end of the turn ends its calls');
+  const acp = commandWatch('acp'), update = value => ({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: 's', update: value } });
+  acp.see(update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Running.' } })); assert.equal(acp.running(), false);
+  acp.see(update({ sessionUpdate: 'tool_call', toolCallId: 'c1', status: 'pending', kind: 'execute' })); assert.equal(acp.running(), true);
+  acp.see(update({ sessionUpdate: 'tool_call_update', toolCallId: 'c1', status: 'in_progress' })); assert.equal(acp.running(), true);
+  acp.see(update({ sessionUpdate: 'tool_call_update', toolCallId: 'c1', status: 'failed' })); assert.equal(acp.running(), false);
+  acp.see(update({ sessionUpdate: 'tool_call', toolCallId: 'c2', status: 'completed' })); assert.equal(acp.running(), false, 'a call shown when it was already done never opens');
+  acp.see(update({ sessionUpdate: 'tool_call', toolCallId: 'c3' })); assert.equal(acp.running(), true);
+  acp.see({ jsonrpc: '2.0', id: 4, result: { stopReason: 'end_turn' } }); assert.equal(acp.running(), false, 'the reply to the prompt ends the turn');
+  for (const row of [null, 'text', 7, [], { type: 'assistant', message: { content: 'plain' } }, { type: 'item.started' }, { method: 'session/update' }]) for (const watch of [claude, codex, acp]) assert.doesNotThrow(() => watch.see(row));
+  const other = commandWatch('agy'); other.see({ type: 'assistant', message: { content: [use('toolu_9')] } }); assert.equal(other.running(), false, 'a vendor it cannot read never reads as running');
 });

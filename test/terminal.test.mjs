@@ -7,7 +7,7 @@ import { PassThrough } from 'node:stream';
 import { EventEmitter } from 'node:events';
 import { project, fakeClis, fakeKeychain, claudeKeychainNames, cli, git, temp, approveProjectFiles, autoApprove, keyLike, CLI } from './helpers.mjs';
 import { repository } from '../lib/git.mjs';
-import { ProjectController, projectSnapshot, dashboardSnapshot, claimView, registerProject, registeredProjects, nameProject, savedProjectName, personalDirectory, setupCommitPlan, commitSetup, taskDetails } from '../lib/projects.mjs';
+import { ProjectController, projectSnapshot, dashboardSnapshot, claimView, takeOver, registerProject, registeredProjects, nameProject, savedProjectName, personalDirectory, setupCommitPlan, commitSetup, taskDetails } from '../lib/projects.mjs';
 import { LIMIT } from '../lib/project-settings.mjs';
 import { answerTrust, pendingTrust, trustedText, unusedTrust } from '../lib/project-trust.mjs';
 import { launchTerminal, geometry, plain, foldersNamed } from '../lib/terminal.mjs';
@@ -23,7 +23,7 @@ import { readBoard, sessionClosed, closeSession } from '../lib/kanban.mjs';
 import { proposeTask, approveTask as approvePlan, reportProgress, finishTask, reopenTask } from '../lib/plan.mjs';
 import { clockTime } from '../lib/terminal-plan.mjs';
 import { saveTask, readTask, taskDir, taskTitle, setTitle, lock } from '../lib/state.mjs';
-import { processIdentity } from '../lib/process.mjs';
+import { processIdentity, processRecord } from '../lib/process.mjs';
 import { activeLogin, listLogins } from '../lib/logins.mjs';
 import { detect } from '../lib/detect.mjs';
 import { signInCommand } from '../lib/vendors.mjs';
@@ -64,8 +64,8 @@ function environment(t, values) {
   Object.assign(process.env, values);
   resources(t).files.push(() => { for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } });
 }
-function setup(t, mode = 'normal') {
-  const p = project({ after: close => resources(t).files.push(close) }), fake = fakeClis(p.parent, { mode });
+function setup(t, mode = 'normal', options = {}) {
+  const p = project({ after: close => resources(t).files.push(close) }), fake = fakeClis(p.parent, { mode, ...options });
   environment(t, { ...fake.env, XDG_CONFIG_HOME: path.join(p.parent, 'personal'), NO_COLOR: '1' });
   assert.equal(cli(p.root, ['init', '--yes'], fake.env).status, 0);
   git(p.root, ['add', '.']); git(p.root, ['commit', '-m', 'Configure checks']);
@@ -1113,18 +1113,18 @@ test('a message with no @name goes to whoever the owner last wrote to in the ses
   // @model alone sends nothing and waits for the message.
   await send(v, '@model'); await until(() => /Write your message after @model\./.test(panels.status.getText()) && panels.ask.getValue() === '@model ', 'the box keeps @model');
   panels.ask.setValue(''); assert.equal(roles().length, 5);
-  // A message that waits behind a working bot is named for the bot it will go to.
-  answers('slow');
+  // A message sent while a bot works goes to its turn, named for that bot: the turn takes it at its next step.
+  fs.writeFileSync(fake, JSON.stringify({ ...JSON.parse(fs.readFileSync(fake, 'utf8')), mode: 'listen', steps: 150, stepMs: 200 }));
   const turns = () => fs.readFileSync(p.calls, 'utf8').trim().split('\n').filter(line => JSON.parse(line).args.includes('-p')).length, before = turns();
   await send(v, '@sec Still there?'); await until(() => /@sec is working/.test(chat()), 'the bot at work');
   // Its turn has reached Claude Code: only from then on is there a turn to pick up after a stop.
   // (Reading the vendor before a turn no longer holds the app, so this test runs on meanwhile.)
   await until(() => turns() > before, 'the bot\'s turn started');
   await send(v, 'and the deploy key?');
-  await until(() => /You → @sec \(waiting\) {2}\d{1,2}:\d\d [AP]M\n┃ and the deploy key\? *\nSent when this turn ends\./.test(chat()), 'the waiting message names the bot');
-  assert.equal(pendingRequests(p.root).find(row => row.state === 'queued').bot, 'sec');
+  await until(() => /You → @sec {2}\d{1,2}:\d\d [AP]M\n┃ and the deploy key\? *\nSent to the running turn\./.test(chat()), 'the message went to the bot\'s turn');
+  assert.deepEqual(pendingRequests(p.root).filter(row => row.state === 'queued'), []);
+  assert.deepEqual(tasks()[0].messages.filter(row => row.during).map(row => [row.to, row.text]), [['@sec', 'and the deploy key?']]);
   // A bot taken out of the session is no longer who a plain message goes to.
-  await box(); v.input.write('\x1b[A'); await until(() => panels.ask.getValue() === '@sec and the deploy key?', 'taken back, as it was addressed'); panels.ask.setValue('');
   await send(v, '/stop'); await until(() => tasks()[0].state !== 'running', 'stopped');
   await until(() => /Stopped before answering\. Write to @sec again and it picks up where it stopped\./.test(chat().replace(/\s*\n┃ /g, ' ')), 'the stop says what the next message does');
   await send(v, '/bots remove sec'); await until(() => !tasks()[0].bots.includes('sec'), 'removed');
@@ -1165,16 +1165,18 @@ test('a bot at work is named in the chat; one that is stopped or cannot answer s
   await until(() => /You → @sec {2}\d{1,2}:\d\d [AP]M\n┃ Is the token in config\.js a secret\?/.test(chat()) && /@sec {2}\d{1,2}:\d\d [AP]M\n┃ Could not answer\./.test(chat()), 'and so does the chat');
   assert.match(panels.chat.content, /\{203-fg\}\{bold\}@sec\{\/bold\}/, 'behind a red bar'); assert.equal(tasks()[0].state, 'answered');
   // While the bot works the chat names it, and a second message waits under the name it was written to.
-  answers('slow');
+  fs.writeFileSync(fake, JSON.stringify({ ...JSON.parse(fs.readFileSync(fake, 'utf8')), mode: 'listen', steps: 150, stepMs: 200 }));
   const started = () => fs.readFileSync(p.calls, 'utf8').split('\n').filter(line => line.includes('"-p"')).length, before = started();
   await send(v, '@sec Still there?'); await until(() => /@sec is working/.test(chat()) && /@sec working/.test(panels.header.getText()), 'the bot is shown at work');
   // The session reads as working before the vendor starts. The run has read its mode once its call is recorded; only then may the mode change.
   await until(() => started() > before, 'the slow run has started');
-  await send(v, '@sec And the deploy key?'); await until(() => /You → @sec \(waiting\) {2}\d{1,2}:\d\d [AP]M\n┃ And the deploy key\? *\nSent when this turn ends\.\n↑ in the message box takes it back/.test(chat()), 'waiting for the bot');
-  // /stop ends the bot's turn without touching the lead's answer; the waiting message is answered next.
+  // Written to the bot while it works, a message goes to its turn, which takes it at its next step.
+  await send(v, '@sec And the deploy key?'); await until(() => /You → @sec {2}\d{1,2}:\d\d [AP]M\n┃ And the deploy key\? *\nSent to the running turn\./.test(chat()), 'sent to the bot\'s turn');
+  // /stop ends the bot's turn without touching the lead's answer; the next message to it is answered.
   answers('answer');
   await send(v, '/stop'); await until(() => /@sec {2}\d{1,2}:\d\d [AP]M\n┃ Stopped before answering\./.test(chat()), 'stopped');
-  await until(() => /@sec answered/.test(status()) && tasks()[0].messages.at(-1).bot === 'sec' && !tasks()[0].messages.at(-1).failed, 'the waiting message was answered');
+  await send(v, '@sec And the deploy key?');
+  await until(() => /@sec answered/.test(status()) && tasks()[0].messages.at(-1).bot === 'sec' && !tasks()[0].messages.at(-1).failed, 'the next message was answered');
   assert.equal(tasks()[0].state, 'answered'); assert.doesNotMatch(chat(), /\(waiting\)/);
   // A new session whose first message goes to that bot has nowhere to stand: it is blocked.
   answers('invalid');
@@ -1194,22 +1196,370 @@ test('a bot at work is named in the chat; one that is stopped or cannot answer s
   assert.deepEqual(roles(tasks().find(row => row.goal === 'Is the cert pinned?')), ['lead']); assert.deepEqual(pendingRequests(p.root).filter(row => row.state !== 'done'), [], 'the saved request is gone');
 });
 
+// What the row under the session shows on the screen itself: its content may hold more than its
+// rows do. Drawn first: a draw that changed nothing leaves the screen's own copy of the row empty.
+const statusShown = v => {
+  v.current.screen.render();
+  const { status } = v.current.panels, rows = v.frame().replace(/\x1b\[[0-9;]*m/g, '').split('\n');
+  return rows.slice(status.atop, status.atop + status.height).map(row => row.slice(status.aleft, status.aleft + status.width)).join(' ').replace(/\s+/g, ' ').trim();
+};
+const shows = async (v, text, what, timeout) => {
+  try { await until(() => statusShown(v) === text, what, timeout); } catch (error) { throw new Error(`${error.message}: it shows ${JSON.stringify(statusShown(v))}`); }
+};
+// Another ELU window: a process of its own that claims the project, stays when asked to, and says what it got.
+const WINDOW = `import { claimView } from ${JSON.stringify(new URL('../lib/projects.mjs', import.meta.url).href)}; import { repository } from ${JSON.stringify(new URL('../lib/git.mjs', import.meta.url).href)}; const claim = claimView(repository(process.argv[1])); console.log(claim.readOnly ? 'view' : 'held'); if (process.argv[2] === 'stay') setInterval(() => {}, 1000); else claim.release();`;
+function otherWindow(t, root, env = {}) {
+  const child = spawn(process.execPath, ['--input-type=module', '-e', WINDOW, root, 'stay'], { env: { ...process.env, ...env }, stdio: ['ignore', 'pipe', 'inherit'] });
+  t.after(() => child.kill('SIGKILL'));
+  return { child, said: new Promise(resolve => child.stdout.once('data', chunk => resolve(String(chunk).trim()))), ended: new Promise(resolve => child.once('exit', resolve)) };
+}
+// A process that only stays, as a window of 0.1.19 for its lock: what that version wrote is the line ps printed for it.
+function staying(t) {
+  const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' }), ended = new Promise(resolve => child.once('exit', resolve));
+  t.after(() => child.kill('SIGKILL'));
+  return { child, ended };
+}
+const psLine = (pid, env = {}) => spawnSync('/bin/ps', ['-p', String(pid), '-o', 'lstart=', '-o', 'command='], { encoding: 'utf8', env: { ...process.env, ...env } }).stdout.trim();
+// The two locks of a project: the one in your folder, and the one in its repository.
+function viewLockFiles(repo) {
+  const claim = claimView(repo, { window: {} }), files = [path.join(personalDirectory(), fs.readdirSync(personalDirectory()).find(name => /^view-[0-9a-f]{64}\.lock$/.test(name))), path.join(repo.state, 'view.lock')];
+  for (const file of files) assert.ok(fs.existsSync(file), file);
+  claim.release(); return files;
+}
+// A ps that notes each time it is asked, and the terminal it names when given one.
+function notedPs(t, terminal = null) {
+  const bin = temp(t), log = path.join(bin, 'asked');
+  fs.writeFileSync(path.join(bin, 'ps'), `#!/bin/sh\necho "$*" >> ${JSON.stringify(log)}\n${terminal ? `case "$*" in *tty=*) echo ${terminal}; exit 0;; esac\n` : ''}exec /bin/ps "$@"\n`, { mode: 0o755 });
+  environment(t, { PATH: `${bin}${path.delimiter}${process.env.PATH}` });
+  return pid => { try { return fs.readFileSync(log, 'utf8').split('\n').filter(line => line.split(' ').includes(String(pid))).length; } catch { return 0; } };
+}
+
 test('a second project view is read-only and releases no writer lock', async t => {
   const p = setup(t), first = await view(t, { repo: p.repo });
   await first.current.controller.refreshUsage();
   const calls = fs.readFileSync(p.calls, 'utf8');
   const second = await view(t, { repo: p.repo });
   // The form shows beside the list from the start, and says it is read only. /new opens it again, the same.
-  await until(() => second.current.session === 'new' && /READ ONLY/.test(second.current.panels.header.getContent()), 'read-only header');
-  await send(second, '/new'); await until(() => second.current.panels.ask.__listener && /READ ONLY/.test(second.current.panels.header.getContent()), 'read-only form');
-  assert.match(second.current.panels.ask._label.getText(), /Read only/);
+  await until(() => second.current.session === 'new' && /View only/.test(second.current.panels.ask._label.getText()), 'view-only form');
+  await send(second, '/new'); await until(() => second.current.panels.ask.__listener && /View only/.test(second.current.panels.ask._label.getText()), 'view-only form again');
+  assert.doesNotMatch(second.current.panels.header.getContent(), /READ ONLY|View only/, 'the header names the session, not the window');
   assert.equal(fs.readFileSync(p.calls, 'utf8'), calls, 'a second view must not query a vendor');
-  assert.throws(() => second.current.controller.plan('Change text'), /read-only/);
+  assert.throws(() => second.current.controller.plan('Change text'), { message: /^View only: another ELU window has this project\. Close it, or \/takeover here\.$/ });
   const claim = claimView(p.repo); assert.equal(claim.readOnly, true);
   key(second, 'q'); await second.finished;
   assert.equal(claimView(p.repo).readOnly, true);
   key(first, 'q'); await first.finished;
   const next = claimView(p.repo); assert.equal(next.readOnly, false); next.release();
+});
+
+// The owner's case: a window opened while an older one had the project stayed view-only after
+// that one closed, and /stop was refused. It takes the project by itself, and /takeover moves it.
+test('a view-only window takes the project once the other window is gone, and /takeover moves it', async t => {
+  const p = setup(t), first = await view(t, { repo: p.repo }), second = await view(t, { repo: p.repo });
+  const label = v => v.current.panels.ask._label.getText(), status = v => v.current.panels.status.getText().replace(/\s+/g, ' ');
+  await until(() => label(second) === ' View only: another window has it · /takeover ' && statusShown(second) === '› View only: another ELU window has this project. Close it, or /takeover here.', 'view-only line');
+  assert.throws(() => second.current.controller.queue('Rename billing'), /View only/);
+  key(first, 'q'); await first.finished;
+  // The first write after the other window is gone goes through, without reopening.
+  assert.doesNotThrow(() => second.current.controller.queue('Rename billing'));
+  // Both windows of this test are one process, so the first reads as still open: the line of a window that closed is in the tests below.
+  assert.equal(second.current.controller.readOnly, false); assert.equal(statusShown(second), '› This window can make changes now.');
+  await until(() => !/View only/.test(label(second)), 'writable form');
+  // A third window asks the second to let go: it can make changes, and the second says it is view-only.
+  const third = await view(t, { repo: p.repo });
+  await until(() => /View only/.test(label(third)), 'third is view-only');
+  await send(third, '/takeover');
+  await until(() => third.current.controller.readOnly === false && second.current.controller.readOnly === true, 'taken over');
+  await until(() => statusShown(second) === '› View only: another ELU window took this project. /takeover takes it back.' && /View only/.test(label(second)) && statusShown(third) === '› This window can make changes now.' && !/View only/.test(label(third)), 'both say so');
+  assert.throws(() => second.current.controller.queue('Rename billing'), /View only/);
+  // Once the third window closes, the second takes the project back by itself on its timer.
+  key(third, 'q'); await third.finished;
+  await until(() => second.current.controller.readOnly === false && !/View only/.test(label(second)), 'the second has it again');
+  key(second, 'q'); await second.finished;
+});
+
+// A window from before the update never lets go when asked: /takeover says so, and the
+// project is taken once that window closes.
+test('/takeover says so when the other window does not let go', async t => {
+  const p = setup(t), older = claimView(p.repo); t.after(() => older.release());
+  const v = await view(t, { repo: p.repo });
+  await until(() => /View only/.test(v.current.panels.ask._label.getText()), 'view-only');
+  await send(v, '/takeover');
+  await shows(v, '› Asked the other ELU window to let go of this project.', 'asked');
+  await shows(v, '› The other ELU window did not let go. Close it to make changes here.', 'not let go', 20000);
+  assert.equal(v.current.controller.readOnly, true);
+  older.release(); await until(() => v.current.controller.readOnly === false, 'taken once the older window closed');
+  key(v, 'q'); await v.finished;
+});
+
+// The owner's devbox, over SSH: the connection froze, he opened ELU again in a new one, and
+// the window on the frozen connection still had the project, so the new window opened read
+// only. The old one quit a few seconds later, but the new window stayed read only for good,
+// and /stop on its running session said "This view is read-only. Use the first view to make
+// changes." when there was no first view any more.
+test('a window that opened read only beside another takes the project over once that one quits, and /stop stops its running session', { timeout: 40000 }, async t => {
+  const p = setup(t, 'slow'), tasks = () => projectSnapshot(p.repo).tasks;
+  const first = await view(t, { repo: p.repo });
+  await send(first, 'Keep working on the board'); await until(() => tasks()[0]?.activeRole === 'lead', 'the model working');
+  // Every line the status shows: the window may take the project over, and say so, at any moment after /stop.
+  const said = [], second = await view(t, { repo: p.repo, onRender: value => said.push(value.panels.status.getText()) }), panels = second.current.panels;
+  await until(() => /View only/.test(panels.ask._label.getText()), 'the second window opens view-only');
+  await openTask(second, /Keep working/);
+  // The first window quits, as the one on the frozen connection did.
+  key(first, 'q'); await first.finished;
+  const from = said.length, after = () => said.slice(from); await send(second, '/stop');
+  await until(() => after().some(text => /Stopping|That window is/.test(text)), 'what /stop says');
+  assert.ok(!after().some(text => /That window is/.test(text)), '/stop is not refused'); assert.ok(after().some(text => /Stopping\. Changes and chat history are kept\./.test(text)));
+  await until(() => tasks()[0].state === 'stopped', 'the session stopped');
+  // The window has the project now: it says so once, and nothing reads view-only.
+  await until(() => !/View only/.test(panels.ask._label.getText()), 'the window took the project over');
+  assert.ok(after().some(text => /This window can make changes now\./.test(text)), 'it says so'); assert.doesNotMatch(panels.header.getContent(), /READ ONLY|View only/);
+  assert.equal(claimView(p.repo).readOnly, true, 'this window holds the project');
+  await send(second, 'Now tidy the coupon module'); await until(() => tasks()[0].messages.some(row => row.text === 'Now tidy the coupon module'), 'a message from it is sent');
+});
+
+// While the other window is still open, it is the one that makes changes, and every line
+// that says so names it and what to do. Stopping changes nothing in the project, so /stop works here.
+test('beside a window that has the project, /stop still stops a session here, and the read-only line names that window and what to do', { timeout: 40000 }, async t => {
+  const p = setup(t, 'slow'), tasks = () => projectSnapshot(p.repo).tasks;
+  const first = await view(t, { repo: p.repo });
+  await send(first, 'Keep working on the board'); await until(() => tasks()[0]?.activeRole === 'lead', 'the model working');
+  const second = await view(t, { repo: p.repo }), panels = second.current.panels, status = () => panels.status.getText();
+  await openTask(second, /Keep working/);
+  await until(() => panels.ask._label.getText() === ' View only: another window has it · /takeover ', 'the box says another window has it, and what to type');
+  await wide(second);
+  // With room, the box names that window's terminal when it has one, and what to do.
+  await until(() => /^ View only: another ELU window has it(, in terminal \S+)? · close it, or \/takeover $/.test(panels.ask._label.getText()), 'the box names the window and what to do');
+  await send(second, 'Also cover refunds');
+  // The window that has it: its process, when it started, and its terminal when it has one.
+  const started = clockTime(new Date(processIdentity(process.pid).slice(0, 24)));
+  await until(() => /That window is/.test(status()), 'why it was not sent');
+  assert.match(status().replace(/\s+/g, ' '), new RegExp(`^› View only: another ELU window has this project\\. Close it, or /takeover here\\. That window is process ${process.pid}, started ${started}(, in terminal \\S+)?\\.$`));
+  assert.equal(panels.ask.getValue(), 'Also cover refunds', 'the message stays in the box');
+  assert.deepEqual(tasks()[0].messages.map(row => row.text), ['Keep working on the board'], 'nothing was sent');
+  await send(second, '/stop'); await until(() => /Stopping\. Changes and chat history are kept\./.test(status()), 'the stop is taken');
+  await until(() => tasks()[0].state === 'stopped', 'the session stopped');
+  assert.match(panels.ask._label.getText(), /View only/, 'the other window still has the project');
+});
+
+// A window that asks again for the project it has, as switching back to it does, is never
+// locked out by itself: what it holds is its own, and goes only with its last claim.
+test('a window that claims a project it already holds keeps it, and lets it go only with its last claim', t => {
+  const p = setup(t), mine = {};
+  const one = claimView(p.repo, { window: mine }), two = claimView(p.repo, { window: mine });
+  assert.equal(one.readOnly, false); assert.equal(two.readOnly, false, 'its own lock is not another window\'s');
+  assert.equal(claimView(p.repo).readOnly, true, 'another window is still view-only');
+  one.release(); one.release();
+  assert.equal(claimView(p.repo).readOnly, true, 'the window still holds it');
+  two.release();
+  const next = claimView(p.repo); assert.equal(next.readOnly, false); next.release();
+  // A view-only claim takes the project over once its holder lets it go.
+  const holder = claimView(p.repo), late = claimView(p.repo, { window: {} });
+  assert.equal(late.readOnly, true); assert.equal(late.retry(), false); assert.equal(late.holder.pid, process.pid);
+  holder.release(); assert.equal(late.retry(), true); assert.equal(late.readOnly, false);
+  assert.equal(claimView(p.repo).readOnly, true); late.release();
+  const last = claimView(p.repo); assert.equal(last.readOnly, false); last.release();
+});
+
+// What a window says when it gets the project tells which happened: the window that had it
+// let go when /takeover asked, and is still open, or it has closed.
+test('a claim that takes the project over knows whether the window that had it let go or closed', async t => {
+  const p = setup(t), mine = {}, holder = claimView(p.repo, { window: mine }), late = claimView(p.repo, { window: {} });
+  const file = path.join(personalDirectory(), fs.readdirSync(personalDirectory()).find(name => /^view-[0-9a-f]{64}\.lock$/.test(name)));
+  assert.equal(late.readOnly, true); assert.equal(holder.wanted(), false, 'nothing was asked yet');
+  takeOver(p.repo);
+  // The window that has it claims it again, as switching back to it does: what was asked still reaches it.
+  claimView(p.repo, { window: mine }).release();
+  assert.equal(late.wanted(), false, 'a view-only window is not the one asked');
+  assert.equal(holder.wanted(), true); assert.equal(holder.wanted(), false, 'it is told once');
+  holder.giveUp(); assert.equal(holder.readOnly, true);
+  assert.equal(late.retry(), true); assert.equal(late.holderOpen, true, 'that window let go, and is still open');
+  assert.equal(holder.retry(), false); assert.equal(holder.holder.pid, process.pid);
+  // A window that takes the project clears what was asked of the one before it.
+  takeOver(p.repo); late.release();
+  assert.equal(holder.retry(), true); assert.equal(holder.wanted(), false, 'nothing is asked of the window that just took it');
+  holder.release();
+  // Another process has the project, and ends: the window that takes it over knows it closed.
+  const other = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' }), ended = new Promise(resolve => other.once('exit', resolve));
+  t.after(() => other.kill('SIGKILL'));
+  await until(() => processIdentity(other.pid), 'the other process');
+  fs.writeFileSync(file, JSON.stringify({ pid: other.pid, identity: processIdentity(other.pid) }));
+  const next = claimView(p.repo, { window: {} });
+  assert.equal(next.readOnly, true); assert.equal(next.holder.pid, other.pid); assert.equal(next.retry(), false);
+  other.kill('SIGKILL'); await ended;
+  assert.equal(next.retry(), true); assert.equal(next.holderOpen, false, 'that window closed');
+  next.release();
+});
+
+// The owner's case as he saw it: one window open, and it said another window had the project.
+// One window alone is never view-only, whatever a window that ended left behind: its locks,
+// its number taken by another process since, a lock written in another time zone, and a lock
+// that names this very process, which never holds what it did not take.
+test('one window alone is never view-only, whatever a window that ended left behind', async t => {
+  const p = setup(t), locks = viewLockFiles(p.repo);
+  const was = staying(t); await until(() => psLine(was.child.pid), 'the window that ends');
+  const here = psLine(was.child.pid), elsewhere = psLine(was.child.pid, { TZ: process.env.TZ === 'Asia/Kolkata' ? 'America/Los_Angeles' : 'Asia/Kolkata' }), record = processRecord(was.child.pid);
+  assert.notEqual(here, elsewhere, 'the other time zone prints another line');
+  was.child.kill('SIGKILL'); await was.ended; await new Promise(resolve => setTimeout(resolve, 1100));
+  // What a window of 0.1.19 that started seven minutes earlier wrote, here and in the other time zone.
+  const earlier = text => `${text.slice(0, 14)}${String((Number(text.slice(14, 16)) + 53) % 60).padStart(2, '0')}${text.slice(16, 24)} node /usr/local/lib/node_modules/@elu-labs/elu/bin/elu-code.mjs`;
+  const now = staying(t); await until(() => psLine(now.child.pid), 'the process that has the number now');
+  const left = [
+    ['a window that ended', { pid: was.child.pid, identity: here }],
+    ['a window that ended, in another time zone', { pid: was.child.pid, identity: elsewhere }],
+    ['a window of this version that ended', record],
+    ['another process has its number now', { pid: now.child.pid, identity: earlier(here) }],
+    ['another process has its number now, and it was written in another time zone', { pid: now.child.pid, identity: earlier(elsewhere) }],
+    ['another process has the number of a window of this version', { ...record, pid: now.child.pid, identity: psLine(now.child.pid) }],
+    ['it names this very process', { pid: process.pid, identity: processIdentity(process.pid) }],
+    ['it names this very process, as this version writes it', processRecord()],
+  ];
+  for (const [what, value] of left) {
+    for (const file of locks) fs.writeFileSync(file, JSON.stringify(value));
+    const claim = claimView(p.repo, { window: {} });
+    assert.equal(claim.readOnly, false, what); assert.equal(claim.holder, null, what);
+    for (const file of locks) assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).born, processRecord().born, `${what}: the lock is this window's now`);
+    assert.equal(claim.retry(), true, what); claim.release();
+    for (const file of locks) assert.equal(fs.existsSync(file), false, what);
+  }
+  // The same in the app, with every kind left at once: it opens able to make changes, and says nothing of another window.
+  fs.writeFileSync(locks[0], JSON.stringify({ pid: now.child.pid, identity: earlier(elsewhere) })); fs.writeFileSync(locks[1], JSON.stringify({ pid: process.pid, identity: processIdentity(process.pid) }));
+  const said = [], v = await view(t, { repo: p.repo, onRender: value => said.push(`${value.panels.ask._label.getText()}\n${value.panels.status.getText()}`) });
+  await until(() => v.current.session === 'new' && v.current.panels.ask.__listener, 'the new session form');
+  assert.equal(v.current.controller.readOnly, false); assert.doesNotThrow(() => v.current.controller.queue('Rename billing'));
+  await send(v, '/takeover'); await shows(v, '› This window already makes the changes here.', 'it has the project');
+  assert.ok(said.length > 0 && !said.some(text => /View only|view only|READ ONLY/.test(text)), 'it never read view-only');
+  key(v, 'q'); await v.finished;
+});
+
+// Two windows whose processes run in different time zones, as one started from a terminal and
+// one from another login: each still sees that the other has the project. 0.1.19 compared the
+// line ps prints, which each time zone prints differently, so the second window took the
+// project from the first while both were open.
+test('a window in another time zone still has the project: the second is view-only beside it, and takes over once it closes', async t => {
+  const p = setup(t), zone = { TZ: process.env.TZ === 'Asia/Kolkata' ? 'America/Los_Angeles' : 'Asia/Kolkata' };
+  const first = otherWindow(t, p.root, zone); assert.equal(await first.said, 'held');
+  const late = claimView(p.repo, { window: {} });
+  assert.equal(late.readOnly, true, 'the window in the other time zone has the project'); assert.equal(late.holder.pid, first.child.pid);
+  assert.ok(Math.abs(Date.parse(late.holder.startedAt) - Date.now()) < 60000, `its start is read on this clock: ${late.holder.startedAt}`);
+  assert.equal(late.retry(), false); assert.equal(late.retry({ sure: false }), false);
+  first.child.kill('SIGKILL'); await first.ended;
+  assert.equal(late.retry({ sure: false }), true); assert.equal(late.holderOpen, false, 'that window closed');
+  // The other way round: this window has it, and one that opens in the other time zone is view-only and takes nothing.
+  const second = spawnSync(process.execPath, ['--input-type=module', '-e', WINDOW, p.root], { encoding: 'utf8', env: { ...process.env, ...zone } });
+  assert.equal(second.stdout.trim(), 'view', second.stderr); assert.equal(claimView(p.repo, { window: {} }).readOnly, true, 'this window still has it');
+  late.release();
+});
+
+// A view-only window looks once a second whether it can take its project. While the lock it
+// found is the same and its process is still there, it starts nothing to find out: 0.1.19's
+// way asked ps every second for as long as the window stayed open.
+test('a view-only window looks again without starting a process, and asks ps only when the answer could have changed', { timeout: 40000 }, async t => {
+  const p = setup(t), [file] = viewLockFiles(p.repo), asked = notedPs(t);
+  // A window of 0.1.19 has the project: only ps can tell whether its process is still that window.
+  const other = staying(t); await until(() => psLine(other.child.pid), 'the other window');
+  const record = JSON.stringify({ pid: other.child.pid, identity: psLine(other.child.pid) }); fs.writeFileSync(file, record);
+  const claim = claimView(p.repo, { window: {} }), start = Date.now();
+  assert.equal(claim.readOnly, true); assert.equal(claim.holder.pid, other.child.pid);
+  let before = asked(other.child.pid); assert.ok(before > 0, 'it asked ps who has the project');
+  for (let second = 1; second < 30; second++) assert.equal(claim.retry({ sure: false, now: start + second * 1000 }), false);
+  assert.equal(asked(other.child.pid), before, 'half a minute of looking started nothing');
+  // After half a minute it asks once: a process that ended without letting go may have left its number to another.
+  assert.equal(claim.retry({ sure: false, now: start + 31000 }), false); assert.ok(asked(other.child.pid) > before, 'asked again after half a minute'); before = asked(other.child.pid);
+  assert.equal(claim.retry({ sure: false, now: start + 32000 }), false); assert.equal(asked(other.child.pid), before);
+  // The lock is another one: asked at once.
+  fs.writeFileSync(file, `${record}\n`);
+  assert.equal(claim.retry({ sure: false, now: start + 33000 }), false); assert.ok(asked(other.child.pid) > before, 'asked when the lock changed'); before = asked(other.child.pid);
+  // Before a change to the project it always asks.
+  assert.equal(claim.retry(), false); assert.ok(asked(other.child.pid) > before, 'asked before a write'); claim.release();
+  // The app, open beside that window: three more seconds of its timer ask nothing, and it takes the project within seconds of that window closing.
+  const v = await view(t, { repo: p.repo });
+  await until(() => /View only/.test(v.current.panels.ask._label.getText()), 'view-only'); await new Promise(resolve => setTimeout(resolve, 1200));
+  before = asked(other.child.pid); await new Promise(resolve => setTimeout(resolve, 3300));
+  assert.equal(asked(other.child.pid), before, 'the open window started nothing to look again'); assert.equal(v.current.controller.readOnly, true);
+  other.child.kill('SIGKILL'); await other.ended;
+  await until(() => v.current.controller.readOnly === false && statusShown(v) === '› The other ELU window has closed. This window can make changes now.', 'it took the project', 4000);
+  key(v, 'q'); await v.finished;
+});
+
+// At 80 columns the row under the session is 48 wide and two lines tall. The line that
+// refused a change was cut there, after "That window is…". Every line a view-only window
+// says shows whole at 80 by 24, and the longer forms come with the room for them.
+test('every line of a view-only window shows whole at 80 columns, and names the other window with more room', { timeout: 40000 }, async t => {
+  const p = setup(t, 'answer'), [file] = viewLockFiles(p.repo); notedPs(t, 'pts/18'); registerProject(p.repo);
+  liveTask(p.root, { id: '4', goal: 'Round refund amounts', state: 'ready' });
+  proposeTask(p.repo, '4', { title: 'Round refunds to cents', description: 'One file changes.', goal: 'The amounts are right.', objectives: ['It works'], priority: 'high', severity: 'low', criteria: ['A refund of 10.005 reads 10.01'], estimateMinutes: 45 });
+  const other = staying(t); await until(() => psLine(other.child.pid), 'the other window');
+  fs.writeFileSync(file, JSON.stringify({ pid: other.child.pid, identity: psLine(other.child.pid) }));
+  const v = await view(t, { repo: p.repo }), panels = v.current.panels, label = () => panels.ask._label.getText();
+  const short = '› View only: the ELU window in pts/18 has it. Close it, or /takeover here.';
+  await until(() => statusShown(v) === '› View only: another ELU window has this project. Close it, or /takeover here.' && label() === ' View only: another window has it · /takeover ', 'what it says on opening');
+  assert.equal(panels.status.height, 2); assert.ok(label().length <= panels.ask.width - 4);
+  await send(v, 'Rename billing'); await shows(v, short, 'why it was not sent, whole');
+  assert.equal(panels.ask.getValue(), 'Rename billing', 'the message stays in the box');
+  // In a tab without the list the row is one line across the screen: still whole.
+  click(v, panels.tabs[2]); await until(() => v.current.view === 'kanban', 'Kanban');
+  await send(v, '/model default opus'); await shows(v, short, 'refused in Kanban, whole'); assert.equal(panels.status.height, 1);
+  click(v, panels.tabs[0]); await until(() => v.current.view === 'tasks', 'Sessions');
+  await send(v, 'Rename billing'); await shows(v, short, 'refused again');
+  // With room, the box names that window's terminal and the line its process and when it started.
+  await wide(v);
+  await until(() => label() === ' View only: another ELU window has it, in terminal pts/18 · close it, or /takeover ', 'the box names the terminal');
+  await until(() => new RegExp(`^› View only: another ELU window has this project\\. Close it, or /takeover here\\. That window is process ${other.child.pid}, started \\d{1,2}:\\d\\d [AP]M, in terminal pts/18\\.$`).test(statusShown(v)), 'the whole line with room');
+  await sized(v, 80, 24); await until(() => statusShown(v) === short && label() === ' View only: another window has it · /takeover ', 'short again at 80');
+  // Under a Task that waits for approval, which has the row's first line: still whole.
+  await openTask(v, /Round refund/); await send(v, 'Also cover refunds');
+  const waits = '? Needs you · Esc, then y approve · n reject...';
+  await shows(v, `${waits} ${short}`, 'whole under the Task that waits'); assert.equal(panels.status.height, 3);
+  await send(v, '/takeover'); await shows(v, `${waits} › Asked the other ELU window to let go of this project.`, 'asked');
+  other.child.kill('SIGKILL'); await other.ended;
+  await shows(v, `${waits} › The other ELU window has closed. This window can make changes now.`, 'it says it took the project', 4000);
+  assert.doesNotMatch(label(), /View only/);
+  key(v, 'q'); await v.finished;
+});
+
+// Two projects of one repository share its lock, so the second window is view-only beside the
+// first. /takeover asked in a file named after the asker's project, which the window that had
+// the repository never read.
+test('/takeover reaches a window that shows another project of the same repository', t => {
+  const p = setup(t), beside = path.join(p.parent, 'second tree');
+  git(p.root, ['worktree', 'add', '-q', beside, '-b', 'second']);
+  const one = claimView(p.repo, { window: {} }), two = claimView(repository(beside), { window: {} });
+  assert.equal(one.readOnly, false); assert.equal(two.readOnly, true, 'the repository is the first window\'s'); assert.equal(two.holder.pid, process.pid);
+  assert.equal(one.wanted(), false, 'nothing was asked yet');
+  two.ask();
+  assert.equal(two.wanted(), false, 'a view-only window is not the one asked'); assert.equal(one.wanted(), true, 'the first window is asked'); assert.equal(one.wanted(), false, 'once');
+  one.giveUp(); assert.equal(two.retry(), true); assert.equal(two.holderOpen, true, 'that window let go, and is still open');
+  assert.equal(one.retry(), false); one.ask(); assert.equal(two.wanted(), true, 'and it can ask for it back');
+  two.release(); assert.equal(one.retry(), true); assert.equal(one.wanted(), false, 'nothing is asked of the window that just took it'); one.release();
+});
+
+// Two windows on one computer need not run in one time zone: one in a terminal, one over a
+// connection or started by a program that sets its own. ps prints a process's start in the time
+// zone of whoever asks, so each window reads another line for the other than that one wrote.
+// They still know each other: what /takeover asks reaches the window that has the project, the
+// window that takes it knows the other let go and is still open, and the start it names for
+// that window is the one read here.
+test('windows in different time zones ask each other for the project, and each knows the other is open and when it started', { timeout: 30000 }, async t => {
+  const p = setup(t), zone = Intl.DateTimeFormat().resolvedOptions().timeZone === 'Asia/Kolkata' ? 'America/Los_Angeles' : 'Asia/Kolkata';
+  const projects = new URL('../lib/projects.mjs', import.meta.url).href, gitLib = new URL('../lib/git.mjs', import.meta.url).href;
+  // The other window: it has the project, lets go when asked, and says so.
+  const code = `import { claimView } from ${JSON.stringify(projects)}; import { repository } from ${JSON.stringify(gitLib)};
+    const claim = claimView(repository(${JSON.stringify(p.root)}), { window: {} }); console.log(claim.readOnly ? 'view-only' : 'has it');
+    setInterval(() => { if (claim.wanted()) { claim.giveUp(); console.log('let go'); } }, 50);`;
+  const other = spawn(process.execPath, ['--input-type=module', '-e', code], { env: { ...process.env, TZ: zone }, stdio: ['ignore', 'pipe', 'inherit'] });
+  t.after(() => other.kill('SIGKILL'));
+  let said = ''; other.stdout.on('data', chunk => { said += chunk; });
+  await until(() => /has it|view-only/.test(said), 'the other window'); assert.match(said, /has it/);
+  const mine = claimView(p.repo, { window: {} });
+  assert.equal(mine.readOnly, true, 'the window in another time zone has the project'); assert.equal(mine.holder.pid, other.pid); assert.equal(mine.retry(), false);
+  // Its lock holds its start as its own time zone prints it; the start named is the one this window reads.
+  const real = Date.parse(processIdentity(other.pid).slice(0, 24));
+  assert.ok(Math.abs(Date.parse(mine.holder.startedAt) - real) <= 2000, `${mine.holder.startedAt} is not ${new Date(real).toISOString()}`);
+  takeOver(p.repo);
+  await until(() => /let go/.test(said), 'what was asked reaches the window that has the project');
+  assert.equal(mine.retry(), true); assert.equal(mine.holderOpen, true, 'that window let go, and is still open');
+  mine.release();
 });
 
 test('Tasks reads every project without writing or starting a vendor', async t => {
@@ -1827,7 +2177,7 @@ test('the first screen creates a project in its folder, and the form picks one b
   assert.equal(fs.existsSync(fake.calls), false); assert.equal(v.current.snapshot.initialized, false);
   frames.push({ title: 'New project without Git or settings', text: v.frame() });
   const second = await view(t, { repo: projectFolder(root) });
-  await send(second, '/new'); await until(() => second.current.panels.ask.__listener && /READ ONLY/.test(second.current.panels.header.getContent()), 'read-only second view');
+  await send(second, '/new'); await until(() => second.current.panels.ask.__listener && /View only/.test(second.current.panels.ask._label.getText()), 'view-only second view');
   // Project in the form: a number picks a known project.
   const other = path.join(folder, 'other'); fs.mkdirSync(other); registerProject(projectFolder(other));
   panels.composeList.focus(); panels.composeList.select(0); v.input.write('\r');
@@ -1873,7 +2223,7 @@ test('a coding prompt in a fresh folder starts without setup dialogs, and /publi
   assert.equal(fs.existsSync(path.join(root, 'src')), false);
   assert.equal(fs.existsSync(path.join(v.current.snapshot.tasks[0].worktree, 'src/coupon.mjs')), true);
   const second = await view(t, { repo: projectFolder(root) });
-  await send(second, '/new'); await until(() => second.current.panels.ask.__listener && /READ ONLY/.test(second.current.panels.header.getContent()), 'read-only second view');
+  await send(second, '/new'); await until(() => second.current.panels.ask.__listener && /View only/.test(second.current.panels.ask._label.getText()), 'view-only second view');
   captureFrames('fresh-task-frames', [{ title: 'First task checked in a fresh project', text: v.frame() }]);
 });
 
@@ -1947,20 +2297,24 @@ test('moving to the list, and on to another row, keeps the lead working and keep
 });
 
 // The owner's case: the session is working and he sends another message. Nothing is refused
-// and nothing needs /stop: it waits in the chat and is the next turn by itself.
+// and nothing needs /stop. On a vendor that cannot take it during the turn (Codex here) it
+// waits in the chat and is the next turn by itself, and Enter sends it now.
 test('a message sent while the session works waits in its chat; Up takes it back and /stop sends it next', { timeout: 40000 }, async t => {
-  const p = setup(t, 'slow'), v = await view(t, { repo: p.repo }), panels = v.current.panels, chat = () => panels.chat.getText();
+  // resumeMs: the turn the waiting message starts goes on in the stopped thread, and is still
+  // working when the last /stop comes. One that had answered by then would keep its answer.
+  const p = setup(t, 'slow', { resumeMs: 30000 }), v = await view(t, { repo: p.repo }), panels = v.current.panels, chat = () => panels.chat.getText();
   const waiting = () => pendingRequests(p.root).filter(row => row.state === 'queued').map(row => row.goal), sent = () => projectSnapshot(p.repo).tasks[0]?.messages.map(row => row.text) ?? [];
+  await send(v, '/model default codex'); await until(() => /New sessions in .+ start with Codex/.test(panels.status.getText()), 'Codex for new sessions');
   await send(v, 'Keep working on the board');
-  await until(() => projectSnapshot(p.repo).tasks[0]?.activeRole === 'lead' && /Opus is working\n\n.+\n\ntype a message any time · \/stop to stop/.test(chat()), 'the hint under the working line');
+  await until(() => projectSnapshot(p.repo).tasks[0]?.activeRole === 'lead' && /Codex is working\n\n.+\n\ntype a message any time · \/stop to stop/.test(chat()), 'the hint under the working line');
   assert.doesNotMatch(chat(), /interrupt/);
   await send(v, 'Also cover refunds');
-  await until(() => /You \(waiting\)[^\n]*\n[^\n]*Also cover refunds *\nSent when this turn ends\.\n↑ in the message box takes it back/.test(chat()), 'the waiting message, with its key');
+  await until(() => /You \(waiting\)[^\n]*\n[^\n]*Also cover refunds *\nSent when this turn ends\.\nEnter sends it now · ↑ takes it back/.test(chat()), 'the waiting message, with its keys');
   assert.equal(panels.ask.getValue(), '', 'the box is cleared'); assert.deepEqual(waiting(), ['Also cover refunds']); assert.deepEqual(sent(), ['Keep working on the board'], 'the running turn goes on');
   assert.equal(projectSnapshot(p.repo).tasks[0].state, 'running');
   // A second one: the key is named on the newest.
   await send(v, 'And keep the old name');
-  await until(() => /Also cover refunds *\nSent when this turn ends\.\n\nYou \(waiting\)[^\n]*\n[^\n]*And keep the old name *\nSent when this turn ends\.\n↑ in the message box takes it back/.test(chat()), 'two waiting messages');
+  await until(() => /Also cover refunds *\nSent when this turn ends\.\n\nYou \(waiting\)[^\n]*\n[^\n]*And keep the old name *\nSent when this turn ends\.\nEnter sends it now · ↑ takes it back/.test(chat()), 'two waiting messages');
   // Up in the empty box takes the newest back into the box. Down drops it, and Up takes the one before it.
   const box = async () => { panels.ask.focus(); panels.ask.readInput(); await until(() => panels.ask.__listener, 'message box'); };
   await box(); v.input.write('\x1b[A');
@@ -1978,13 +2332,256 @@ test('a message sent while the session works waits in its chat; Up takes it back
   // Sent again. /stop stops the turn, and the waiting message is the next turn with no key pressed.
   await send(v, 'Also cover refunds and rounding'); await until(() => waiting().length === 1, 'waiting again');
   await send(v, '/stop');
-  await until(() => /Stopping\. Your waiting message is sent next · \/stop again cancels it\./.test(panels.status.getText()), 'what /stop says');
+  await until(() => /Stopping\. Your waiting message goes as soon as it stops · ↑ takes it back\./.test(panels.status.getText()), 'what /stop says');
   await until(() => sent().length === 2 && projectSnapshot(p.repo).tasks[0].activeRole === 'lead', 'the waiting message started the next turn');
   assert.deepEqual(sent(), ['Keep working on the board', 'Also cover refunds and rounding']); assert.deepEqual(waiting(), []);
   // With nothing waiting, /stop leaves the session idle.
   await send(v, '/stop'); await until(() => projectSnapshot(p.repo).tasks[0].state === 'stopped', 'stopped');
   await new Promise(resolve => setTimeout(resolve, 200));
   assert.equal(projectSnapshot(p.repo).tasks[0].state, 'stopped'); assert.equal(sent().length, 2);
+});
+
+// The owner's case: "why I'm not seeing anything of the model? I wanna see what is doing". While
+// a turn works, its thinking and each tool call show under the working line as they happen, a
+// command still running with ●. When it ends they fold into one line above the reply, which
+// Ctrl-O opens and folds for every turn, and a click opens or folds for that turn alone.
+test('a working turn shows its thinking and tool calls as they happen, then folds them above its reply', { timeout: 30000 }, async t => {
+  const gate = path.join(temp(t), 'gate'), p = setup(t, 'steps', { intent: 'answer', gate }), v = await view(t, { repo: p.repo }), panels = v.current.panels;
+  const flat = () => panels.chat.getText().replace(/\s+/g, ' '), lines = () => panels.chat.getText().split('\n');
+  await send(v, 'Why do lower case coupons fail?');
+  await until(() => /Opus is working ✻ The coupon code should compare in upper case\. I will read the module first\. ✓ Read: src\/coupon\.mjs ● Run: npm test type a message any time/.test(flat()), 'the thought, the file read and the command still running', 15000);
+  assert.equal(projectSnapshot(p.repo).tasks[0].state, 'running');
+  assert.doesNotMatch(flat(), /Opus is working model: started/, 'not the line that never changed');
+  const frames = [{ step: 'working', text: v.frame() }];
+  // The command ends, then the turn: the steps fold into one line above the reply.
+  fs.writeFileSync(gate, '');
+  await until(() => projectSnapshot(p.repo).tasks[0].state === 'answered' && lines().some(line => /^▸ 4 steps in \d+s · ctrl\+o shows them$/.test(line.trim())), 'the folded line', 15000);
+  assert.match(flat(), /┃ Why do lower case coupons fail\? ▸ 4 steps in \d+s · ctrl\+o shows them [^┃]+┃ Looked\./, 'above the reply');
+  assert.doesNotMatch(flat(), /✻ The coupon code|Run: npm test/, 'folded');
+  frames.push({ step: 'folded', text: v.frame() });
+  // Ctrl-O opens every turn's steps, in the message box too, and folds them again.
+  panels.ask.focus(); panels.ask.readInput(); await until(() => panels.ask.__listener, 'message box');
+  v.input.write('\x0f');
+  await until(() => /▾ 4 steps in \d+s · ctrl\+o hides them ✻ The coupon code should compare in upper case\. I will read the module first\. ✓ Read: src\/coupon\.mjs ✗ Run: npm test • The test fails on lower case codes\. Fixing normalize\. [^┃]+┃ Looked\./.test(flat()), 'open, the failed command marked');
+  assert.equal(panels.ask.getValue(), '', 'nothing typed');
+  frames.push({ step: 'open', text: v.frame() });
+  v.input.write('\x0f'); await until(() => /▸ 4 steps/.test(flat()) && !/✗ Run: npm test/.test(flat()), 'folded again');
+  // Out of the box, the chat's keys name it; a click on the line opens that turn alone.
+  v.input.write('\x1b'); await until(() => v.current.screen.focused !== panels.ask, 'out of the box');
+  panels.chat.focus(); v.current.screen.render(); await until(() => /ctrl\+o steps/.test(panels.keys.getText()), 'ctrl+o in the key bar');
+  const row = (panels.chat._clines ?? []).findIndex(line => /^▸ 4 steps/.test(String(line).replace(/\x1b\[[\d;]*m/g, '').trimStart()));
+  assert.ok(row >= 0, 'the line is drawn');
+  panels.chat.scrollTo(row); v.current.screen.render();
+  const at = () => panels.chat.itop + row - panels.chat.childBase;
+  click(v, panels.chat, 3, at());
+  await until(() => /▾ 4 steps in \d+s · ctrl\+o hides them ✻ The coupon code[^]*✗ Run: npm test/.test(flat()), 'the click opened that turn');
+  click(v, panels.chat, 3, at());
+  await until(() => /▸ 4 steps/.test(flat()) && !/✗ Run: npm test/.test(flat()), 'a second click folds it');
+  captureFrames('live-steps', frames);
+});
+
+// What real Claude Code sends in a long turn, which is all the owner had for ten minutes:
+// a thought with no text, counted in tokens; a command that prints nothing, with a heartbeat
+// every half minute; and a command it left running in the background. The stand-in writes
+// those rows in their real shapes, its silent command going 600 times faster than the clock.
+// A turn stopped with /stop is no run of the session, and its steps stay in the chat.
+test('a long turn shows its thought as a token count, how long its silent command has run and its background command; stopped, its steps stay', { timeout: 60000 }, async t => {
+  const gate = path.join(temp(t), 'gate'), p = setup(t, 'live', { intent: 'answer', gate, live: { speed: 600, seconds: 180, think: 200 } }), v = await view(t, { repo: p.repo }), panels = v.current.panels;
+  const flat = () => panels.chat.getText().replace(/\s+/g, ' ');
+  await send(v, 'Run the coupon tests');
+  await until(() => /Opus is working ✻ thought · 1\.2k tokens • Starting the watcher, then the tests\. ✓ Run: npm run watch ● Run: npm test · 3m \d+s ● 1 background command: npm run watch · 3m \d+s type a message any time/.test(flat()), 'the count, the command three minutes in, and the background command that started before it', 15000);
+  // The command prints nothing more, and its line still counts every second.
+  const ran = () => Number(/● Run: npm test · 3m (\d+)s/.exec(flat())?.[1]), first = ran();
+  await until(() => ran() > first, 'the line counts on between heartbeats', 5000);
+  const frames = [{ step: 'working', text: v.frame() }];
+  // Stopped: the turn's steps fold into its line, which says so, above the stop line.
+  await send(v, '/stop');
+  await until(() => projectSnapshot(p.repo).tasks[0].state === 'stopped' && /▸ 4 steps in \d+s · stopped · ctrl\+o shows them/.test(flat()), 'the stopped turn keeps its steps', 15000);
+  assert.equal(projectSnapshot(p.repo).tasks[0].runs.length, 0, 'a stopped turn is no run');
+  frames.push({ step: 'stopped', text: v.frame() });
+  panels.ask.focus(); panels.ask.readInput(); await until(() => panels.ask.__listener, 'message box');
+  v.input.write('\x0f');
+  await until(() => /▾ 4 steps in \d+s · stopped · ctrl\+o hides them ✻ thought · 1\.2k tokens • Starting the watcher, then the tests\. ✓ Run: npm run watch ■ Run: npm test · stopped after 3m \d+s/.test(flat()), 'open: the command it was cut in, and for how long it had run');
+  assert.doesNotMatch(flat(), /background command|● Run/, 'nothing of it still runs');
+  frames.push({ step: 'stopped, open', text: v.frame() });
+  // The chat goes on: the stopped turn stays where it happened, and the next one has its own.
+  fs.writeFileSync(gate, '');
+  await send(v, 'Carry on');
+  await until(() => projectSnapshot(p.repo).tasks[0].state === 'answered' && /┃ Looked\./.test(flat()), 'the next turn answered', 15000);
+  assert.match(flat(), /┃ Run the coupon tests ▾ 4 steps in \d+s · stopped · ctrl\+o hides them [^┃]*■ Run: npm test · stopped after 3m \d+s [^┃]*┃ Carry on ▾ 4 steps in \d+s · ctrl\+o hides them ✻ thought · 1\.2k tokens [^┃]*✓ Run: npm test · 3m \d+s [^┃]*┃ Looked\./, 'both turns, each in its place; the finished command keeps its total');
+  frames.push({ step: 'carried on', text: v.frame() });
+  captureFrames('live-steps-real', frames);
+});
+
+// Claude Code takes a message while its turn works: it goes to that turn at once, the chat
+// says so under it, and the one reply answers it too.
+test('a message sent while Claude Code works goes to its turn, and the chat says it was sent to it', { timeout: 40000 }, async t => {
+  const p = setup(t, 'listen'); fakeClis(p.parent, { mode: 'listen', steps: 40, stepMs: 200 });
+  const v = await view(t, { repo: p.repo }), panels = v.current.panels, chat = () => panels.chat.getText(), task = () => projectSnapshot(p.repo).tasks[0];
+  await send(v, 'Keep working on the board');
+  await until(() => task()?.activeInbox === true && /Opus is working/.test(chat()), 'the model works and takes messages');
+  await send(v, 'Also cover refunds');
+  await until(() => /You {2}\d{1,2}:\d\d [AP]M\n┃ Also cover refunds *\nSent to the running turn\./.test(chat()), 'sent to the running turn');
+  assert.doesNotMatch(chat(), /\(waiting\)/); assert.equal(task().state, 'running', 'the same turn goes on');
+  assert.deepEqual(pendingRequests(p.root).filter(row => row.state === 'queued'), []);
+  // The status line follows that turn to its end: it never stops at the bare word "running".
+  await new Promise(resolve => setTimeout(resolve, 300));
+  assert.equal(task().state, 'running'); assert.doesNotMatch(panels.status.getText(), /› running/);
+  await until(() => task().state === 'answered', 'the turn ends');
+  await until(() => /› Opus answered/.test(panels.status.getText()), 'the status line says it answered');
+  assert.deepEqual(task().messages.map(row => [row.text, row.during === true]), [['Keep working on the board', false], ['Also cover refunds', true]]);
+  await until(() => /Also took in what you sent while it worked: Also cover refunds/.test(chat().replace(/\s*\n┃ /g, ' ')), 'the reply answers it');
+  assert.equal(task().runs.length, 1, 'one turn');
+});
+
+// The owner's report: the model sat in one long command, his message read "Sent to the running
+// turn", and nothing read it until the command ended. It waits, and the chat says so; Enter
+// sends it now with Claude Code's own interrupt, and the same turn goes on with it.
+test('a message sent while Claude Code runs a long command waits for the command, and Enter sends it now: the same turn answers it', { timeout: 60000 }, async t => {
+  const p = setup(t, 'command'); fakeClis(p.parent, { mode: 'command', commandMs: 60000 });
+  const v = await view(t, { repo: p.repo }), panels = v.current.panels, chat = () => panels.chat.getText(), task = () => projectSnapshot(p.repo).tasks[0];
+  const controls = () => { const file = path.join(p.dir, 'controls.jsonl'); return fs.existsSync(file) ? fs.readFileSync(file, 'utf8').trim().split('\n').map(JSON.parse) : []; };
+  await send(v, 'Run the long check');
+  await until(() => task()?.activeInbox === true && /Opus is working/.test(chat()), 'the model works and takes messages');
+  await send(v, 'Also cover refunds');
+  await until(() => /You \(waiting\)[^\n]*\n[^\n]*Also cover refunds *\nWaiting for the current command to finish\.\nEnter sends it now · ↑ takes it back/.test(chat()), 'it waits for the command, and the keys are named');
+  await new Promise(resolve => setTimeout(resolve, 600));
+  assert.doesNotMatch(chat(), /Sent to the running turn\./, 'not said before the turn took it');
+  assert.deepEqual(pendingRequests(p.root).filter(row => row.state === 'queued').map(row => row.goal), ['Also cover refunds']); assert.deepEqual(controls(), []);
+  panels.ask.focus(); panels.ask.readInput(); await until(() => panels.ask.__listener, 'message box');
+  await until(() => /^enter send it now {2}↑ take it back/.test(panels.keys.getText().trim()), 'the key bar names it');
+  v.input.write('\r');
+  await until(() => /› Sending now\. The turn goes on with it\.$/m.test(panels.status.getText()), 'what Enter says');
+  await until(() => /You {2}\d{1,2}:\d\d [AP]M\n┃ Also cover refunds *\nSent to the running turn\./.test(chat()), 'the turn took it');
+  assert.doesNotMatch(chat(), /\(waiting\)/);
+  assert.deepEqual(controls().map(row => [row.subtype, row.send_now]), [['interrupt', true]]);
+  await until(() => task().state === 'answered', 'the turn answers');
+  assert.equal(task().runs.length, 1, 'the same run: nothing stopped');
+  assert.deepEqual(task().messages.map(row => [row.text, row.during === true]), [['Run the long check', false], ['Also cover refunds', true]]);
+  await until(() => /› Opus answered/.test(panels.status.getText()), 'the status line says it answered');
+});
+
+test('Up takes a message back from the running turn before it is read, and one the turn already took stays sent', { timeout: 60000 }, async t => {
+  const p = setup(t, 'command'); fakeClis(p.parent, { mode: 'command', commandMs: 60000 });
+  const v = await view(t, { repo: p.repo }), panels = v.current.panels, chat = () => panels.chat.getText(), task = () => projectSnapshot(p.repo).tasks[0];
+  const controls = () => { const file = path.join(p.dir, 'controls.jsonl'); return fs.existsSync(file) ? fs.readFileSync(file, 'utf8').trim().split('\n').map(JSON.parse) : []; };
+  const waiting = () => pendingRequests(p.root).filter(row => row.state === 'queued').map(row => row.goal);
+  await send(v, 'Run the long check');
+  await until(() => task()?.activeInbox === true && /Opus is working/.test(chat()), 'the model works and takes messages');
+  await send(v, 'Also cover refunds');
+  await until(() => /Also cover refunds *\nWaiting for the current command to finish\./.test(chat()) && pendingRequests(p.root).some(row => row.turn), 'it waits on the turn\'s input');
+  panels.ask.focus(); panels.ask.readInput(); await until(() => panels.ask.__listener, 'message box');
+  v.input.write('\x1b[A');
+  await until(() => panels.ask.getValue() === 'Also cover refunds' && waiting().length === 0, 'it is back in the box');
+  assert.match(panels.status.getText(), /Taken back\. Enter sends it again · ↓ drops it\./);
+  assert.deepEqual(controls().map(row => row.subtype), ['cancel_async_message'], 'taken back from Claude Code too');
+  await until(() => !/\(waiting\)/.test(chat()), 'nothing waits');
+  assert.equal(task().state, 'running', 'the turn goes on'); assert.deepEqual(task().messages.map(row => row.text), ['Run the long check']);
+  // Sent again and sent now: the turn takes it, and Up has nothing to take back.
+  v.input.write('\r');
+  await until(() => waiting().length === 1 && pendingRequests(p.root).some(row => row.turn), 'it waits again');
+  await until(() => panels.ask.getValue() === '', 'the box is empty');
+  panels.ask.focus(); panels.ask.readInput(); await until(() => panels.ask.__listener, 'message box'); v.input.write('\r');
+  await until(() => /Sent to the running turn\./.test(chat()), 'the turn took it');
+  assert.deepEqual(waiting(), []);
+  await until(() => task().state === 'answered', 'the turn answers');
+  assert.equal(task().runs.length, 1); assert.deepEqual(task().messages.map(row => row.text), ['Run the long check', 'Also cover refunds']);
+});
+
+// A vendor that cannot take a message during its turn: Enter in the empty box sends what
+// waits now. The turn stops as /stop stops it, and the message starts the next turn at once.
+test('Enter in an empty box sends a waiting message now: the turn stops and the message starts the next one', { timeout: 40000 }, async t => {
+  const p = setup(t, 'slow'), v = await view(t, { repo: p.repo }), panels = v.current.panels, chat = () => panels.chat.getText();
+  const waiting = () => pendingRequests(p.root).filter(row => row.state === 'queued').map(row => row.goal), task = () => projectSnapshot(p.repo).tasks[0], sent = () => task()?.messages.map(row => row.text) ?? [];
+  await send(v, '/model default codex'); await until(() => /start with Codex/.test(panels.status.getText()), 'Codex for new sessions');
+  await send(v, 'Keep working on the board');
+  await until(() => task()?.activeRole === 'lead' && /Codex is working/.test(chat()), 'Codex works');
+  await send(v, 'Also cover refunds'); await send(v, 'And keep the old name');
+  await until(() => waiting().length === 2 && /And keep the old name *\nSent when this turn ends\.\nEnter sends it now · ↑ takes it back/.test(chat()), 'both wait, and the keys are named');
+  const runs = task().runs.length;
+  panels.ask.focus(); panels.ask.readInput(); await until(() => panels.ask.__listener, 'message box');
+  await until(() => /^enter send it now {2}↑ take it back/.test(panels.keys.getText().trim()), 'the key bar names it');
+  v.input.write('\r');
+  await until(() => /Sending now\. This turn stops and your messages start the next one · ↑ takes one back\./.test(panels.status.getText()), 'what Enter says');
+  await until(() => sent().length === 2 && task().state === 'running' && waiting().length === 0, 'the waiting messages started the next turn');
+  assert.deepEqual(sent(), ['Keep working on the board', 'Also cover refunds\n\nAnd keep the old name']);
+  assert.ok(task().runs.length >= runs);
+  await until(() => !/\(waiting\)/.test(chat()), 'nothing waits');
+});
+
+// Antigravity as the session's model. Its Full access turn ran headless, which prints nothing
+// until its result: for as long as the turn took the chat said "Antigravity is working" and
+// no more. Over ACP its thought and each tool call show as they happen, and ELU answers every
+// permission request itself. Where ACP is not proven here, or cannot start, the turn still
+// runs headless: the chat then counts its time and says the program reports only when it ends.
+import { saveDefaultMode } from '../lib/modes.mjs';
+import { parseYaml, stringifyYaml } from '../lib/yaml.mjs';
+import { pendingApprovals } from '../lib/approvals.mjs';
+// relay: whether its one-time check proved ACP on this machine. The rest are the stand-in's switches.
+// The project holds two commands for a turn to run: one that leaves ran.txt, and a slow one that leaves late.txt.
+function antigravity(t, { relay, ...switches }) {
+  const p = setup(t, 'answer'), file = path.join(p.root, '.elu-code', 'config.yaml'), config = parseYaml(fs.readFileSync(file, 'utf8'));
+  Object.assign(config.roles.lead, { vendor: 'agy', maxCostUsd: null }); fs.writeFileSync(file, stringifyYaml(config));
+  fs.writeFileSync(path.join(p.root, 'marker.sh'), '#!/bin/sh\nprintf ran > ran.txt\n', { mode: 0o755 }); fs.writeFileSync(path.join(p.root, 'slow.sh'), '#!/bin/sh\nsleep 3\nprintf late > late.txt\n', { mode: 0o755 });
+  git(p.root, ['add', '.']); git(p.root, ['commit', '-m', 'Run sessions on Antigravity']); approveProjectFiles(p.root);
+  const fake = path.join(p.dir, 'fake.json'), set = value => fs.writeFileSync(fake, JSON.stringify({ ...JSON.parse(fs.readFileSync(fake, 'utf8')), agy: value }));
+  const proven = relay => { const record = path.join(personalDirectory(), 'conformance', 'agy.json'); fs.mkdirSync(path.dirname(record), { recursive: true }); fs.writeFileSync(record, JSON.stringify({ v: 1, bin: path.join(p.dir, 'agy'), version: '1.5.4', steps: Object.fromEntries(ADAPTERS.agy.conformance.map(step => [step.id, relay || step.id !== 'relay' ? 'pass' : 'fail'])), relay, at: new Date().toISOString() })); };
+  // The launches that are turns: not the release or sign-in probes.
+  const turns = () => fs.readFileSync(p.calls, 'utf8').trim().split('\n').map(line => JSON.parse(line)).filter(call => call.vendor === 'agy' && !call.args.includes('/usage') && !['--version', '--help'].includes(call.args[0])).map(call => call.args[0]);
+  set(switches); proven(relay); saveDefaultMode('full');
+  return { ...p, set, proven, turns };
+}
+test('an Antigravity turn in Full access shows its thought and each tool call as they happen and asks for nothing, then folds them above its reply; stopped, its steps stay', { timeout: 60000 }, async t => {
+  const p = antigravity(t, { relay: true, pace: 300 }), made = name => path.join(projectSnapshot(p.repo).tasks[0].worktree, name);
+  const v = await view(t, { repo: p.repo }), panels = v.current.panels, flat = () => panels.chat.getText().replace(/\s+/g, ' ');
+  // Whatever would reach the owner while the turns run: a request among the approvals, or its card in the chat.
+  const asked = [], watch = setInterval(() => { try { asked.push(...pendingApprovals().map(row => row.summary)); if (/Waiting for your approval/.test(flat())) asked.push('the chat asks'); } catch { /* Between two writes. */ } }, 20);
+  t.after(() => clearInterval(watch));
+  await send(v, 'Create the file notes.txt with the text "x". Run this command: ./marker.sh. Reply with the summary "Wrote the notes."');
+  await until(() => /Antigravity is working ✻ Reading the request\. • Working on it\. type a message any time/.test(flat()), 'its thought, before any tool call', 15000);
+  const frames = [{ step: 'thinking', text: v.frame() }];
+  await until(() => /• Working on it\. ● Write[^✓●✗]*notes\.txt type a message any time/.test(flat()), 'the write as it starts', 15000);
+  await until(() => /✓ Write[^✓●✗]*notes\.txt ● Run[^✓●✗]*marker\.sh type a message any time/.test(flat()), 'the write ended, the command as it starts', 15000);
+  frames.push({ step: 'the command runs', text: v.frame() });
+  await until(() => /✓ Write[^✓●✗]*notes\.txt ✓ Run[^✓●✗]*marker\.sh type a message any time/.test(flat()), 'both calls ended, the reply not there yet', 15000);
+  assert.equal(projectSnapshot(p.repo).tasks[0].state, 'running'); assert.equal(fs.readFileSync(made('ran.txt'), 'utf8'), 'ran'); assert.equal(fs.readFileSync(made('notes.txt'), 'utf8'), 'elu-code\n');
+  assert.doesNotMatch(flat(), /reports only when it ends/, 'a run that shows its steps is not one that prints at the end');
+  await until(() => projectSnapshot(p.repo).tasks[0].state === 'answered' && /▸ 5 steps in \d+s · ctrl\+o shows them [^┃]+┃ Wrote the notes\./.test(flat()), 'the steps fold above the reply', 15000);
+  frames.push({ step: 'folded', text: v.frame() });
+  assert.deepEqual(p.turns(), ['acp']); assert.equal(projectSnapshot(p.repo).tasks[0].permissions, 'full');
+  // Another session, stopped while its command runs: the command ends with the turn, and the steps it showed stay.
+  await send(v, '/new'); await until(() => v.current.session === 'new', 'the new session form');
+  await send(v, 'Run this command: ./slow.sh. Reply with the summary "late".');
+  await until(() => /● Run[^✓●✗]*slow\.sh type a message any time/.test(flat()), 'the slow command as it starts', 15000);
+  const stopping = v.current.session; await send(v, '/stop');
+  await until(() => readTask(p.repo, stopping).state === 'stopped' && /▸ 3 steps in \d+s · stopped · ctrl\+o shows them/.test(flat()), 'the stopped turn keeps its steps', 15000);
+  frames.push({ step: 'stopped', text: v.frame() });
+  await new Promise(resolve => setTimeout(resolve, 3500));
+  assert.equal(fs.existsSync(path.join(readTask(p.repo, stopping).worktree, 'late.txt')), false, 'the command it started ended with it');
+  assert.deepEqual(asked, [], 'nothing was asked of the owner'); assert.deepEqual(p.turns(), ['acp', 'acp']);
+  captureFrames('antigravity-live-steps', frames);
+});
+
+test('where ACP is not proven or cannot start, an Antigravity turn counts its time in the chat and says the program reports only when it ends', { timeout: 60000 }, async t => {
+  const p = antigravity(t, { relay: false, pace: 2500 });
+  const v = await view(t, { repo: p.repo }), panels = v.current.panels, flat = () => panels.chat.getText().replace(/\s+/g, ' ');
+  const worked = () => Number(/ is working (\d+)s so far\. Antigravity reports only when it ends\. type a message any time/.exec(flat())?.[1]);
+  // Not proven: the check's relay step did not pass here.
+  await send(v, 'Reply with the summary "Printed at the end."');
+  await until(() => Number.isFinite(worked()), 'the line that counts', 15000);
+  const first = worked(), frames = [{ step: 'headless, counting', text: v.frame() }];
+  await until(() => worked() > first, 'it counts on', 5000);
+  await until(() => projectSnapshot(p.repo).tasks[0].state === 'answered' && /┃ Printed at the end\./.test(flat()), 'the reply', 15000);
+  assert.doesNotMatch(flat(), /reports only when it ends|steps in \d+s/, 'the line goes with the run, and a headless run has no steps to fold');
+  assert.deepEqual(p.turns(), ['-p']); assert.equal(projectSnapshot(p.repo).tasks[0].activeSilent, undefined);
+  // Proven, but `agy acp` ends at once: the same turn runs headless, and the chat says so the same way.
+  p.proven(true); p.set({ pace: 2500, acpFails: true });
+  await send(v, 'Reply with a second answer.');
+  await until(() => p.turns().length === 3 && Number.isFinite(worked()), 'the line again, once ACP could not start', 20000);
+  frames.push({ step: 'ACP could not start', text: v.frame() });
+  await until(() => projectSnapshot(p.repo).tasks[0].state === 'answered' && projectSnapshot(p.repo).tasks[0].runs.length === 2 && !/reports only when it ends/.test(flat()), 'the second reply, and the line gone with its run', 15000);
+  assert.deepEqual(p.turns(), ['-p', 'acp', '-p']);
+  captureFrames('antigravity-prints-at-end', frames);
 });
 
 // Three lines that read wrong, or lost a message.
@@ -2124,34 +2721,52 @@ test('/stop in an idle session whose next turn the conductor is starting stops t
   assert.equal(tasks().length, 1); assert.ok(tasks()[0].messages.some(message => message.text === 'Now tidy the coupon module'), 'the message was sent');
 });
 
-test('a second /stop while the turn is still stopping cancels what waits, and the session is left idle', { timeout: 40000 }, async t => {
+// The owner's waiting messages are his words: /stop stops the turn so they go, and never drops them.
+test('a second /stop while the turn is still stopping keeps what waits, and it goes, in order, as soon as the turn stops', { timeout: 40000 }, async t => {
   const p = setup(t, 'slow'), v = await view(t, { repo: p.repo }), panels = v.current.panels;
   const waiting = () => pendingRequests(p.root).filter(row => row.state === 'queued').map(row => row.goal), sent = () => projectSnapshot(p.repo).tasks[0]?.messages.map(row => row.text) ?? [];
+  // On Codex, which takes no message while its turn works, so what is sent waits.
+  await send(v, '/model default codex'); await until(() => /start with Codex/.test(panels.status.getText()), 'Codex for new sessions');
   await send(v, 'Keep working on the board');
   await until(() => projectSnapshot(p.repo).tasks[0]?.activeRole === 'lead', 'the model working');
   await send(v, 'First waiting'); await send(v, 'Second waiting'); await until(() => waiting().length === 2, 'two waiting');
   // The conductor is held still, so the first stop is certainly not done when the second is typed.
   const conductor = resources(t).conductor; conductor.busy = true;
-  await send(v, '/stop'); await until(() => /Your waiting messages are sent next · \/stop again cancels them\./.test(panels.status.getText()), 'the first /stop');
-  assert.equal(waiting().length, 2);
-  await send(v, '/stop'); await until(() => /Waiting messages cancelled\./.test(panels.status.getText()), 'the second /stop');
-  assert.deepEqual(waiting(), []);
+  await send(v, '/stop'); await until(() => /Stopping\. Your 2 waiting messages go as soon as it stops, in order · ↑ takes one back\./.test(panels.status.getText().replace(/\s+/g, ' ')), 'the first /stop');
+  assert.deepEqual(waiting(), ['First waiting', 'Second waiting']);
+  await send(v, '/stop'); await until(() => /Still stopping\. Your 2 waiting messages go as soon as it stops, in order\./.test(panels.status.getText().replace(/\s+/g, ' ')), 'the second /stop');
+  assert.deepEqual(waiting(), ['First waiting', 'Second waiting'], 'nothing was cancelled');
   conductor.busy = false;
-  await until(() => projectSnapshot(p.repo).tasks[0].state === 'stopped', 'stopped');
-  await new Promise(resolve => setTimeout(resolve, 200));
-  assert.equal(projectSnapshot(p.repo).tasks[0].state, 'stopped'); assert.deepEqual(sent(), ['Keep working on the board'], 'nothing more was sent');
+  await until(() => sent().length === 2, 'the waiting messages started the next turn');
+  assert.match(sent()[1], /^First waiting\s+Second waiting$/, 'both, in the order sent'); assert.deepEqual(waiting(), []);
+});
+
+test('/stop with nothing running keeps a waiting message, and it is sent', { timeout: 40000 }, async t => {
+  const p = setup(t, 'slow'), v = await view(t, { repo: p.repo }), panels = v.current.panels, status = () => panels.status.getText().replace(/\s+/g, ' ');
+  const waiting = () => pendingRequests(p.root).filter(row => row.state === 'queued').map(row => row.goal), tasks = () => projectSnapshot(p.repo).tasks, sent = () => tasks()[0]?.messages.map(row => row.text) ?? [];
+  await send(v, 'Keep working on the board'); await until(() => tasks()[0]?.activeRole === 'lead', 'the model working');
+  await send(v, '/stop'); await until(() => tasks()[0].state === 'stopped', 'stopped');
+  // The conductor is held, so the next message waits with nothing running.
+  const conductor = resources(t).conductor; conductor.busy = true;
+  await send(v, 'Now tidy the coupon module'); await until(() => waiting().length === 1, 'it waits');
+  await send(v, '/stop'); await until(() => /Nothing is running in this chat\. Your waiting message goes next · ↑ takes it back\./.test(status()), 'what /stop says');
+  assert.deepEqual(waiting(), ['Now tidy the coupon module'], 'it was not cancelled');
+  conductor.busy = false;
+  await until(() => sent().includes('Now tidy the coupon module'), 'and it was sent');
 });
 
 // While an approval waits, a message does not answer it: it waits like any other, and the approval still takes y.
 test('a message sent while an approval waits does not answer the approval', { timeout: 30000 }, async t => {
   const p = setup(t, 'slow'), v = await view(t, { repo: p.repo }), panels = v.current.panels, chat = () => panels.chat.getText();
+  // On Codex, which takes no message while its turn works, so what is sent waits.
+  await send(v, '/model default codex'); await until(() => /start with Codex/.test(panels.status.getText()), 'Codex for new sessions');
   await send(v, 'Keep working on the board');
   await until(() => projectSnapshot(p.repo).tasks[0]?.activeRole === 'lead', 'the model working');
   const id = projectSnapshot(p.repo).tasks[0].id, answer = () => { try { return JSON.parse(fs.readFileSync(path.join(approvalsDir(), 'wait-1.answer.json'), 'utf8')).decision; } catch { return null; } };
   requestApproval({ id: 'wait-1', root: p.root, taskId: id, role: 'lead', vendor: 'claude', tool: 'Bash', input: { command: 'npm test' } });
-  await until(() => /Waiting for your approval\nOpus wants to:\nRun: npm test\n/.test(chat()), 'the approval in the chat');
+  await until(() => /Waiting for your approval\nCodex wants to:\nRun: npm test\n/.test(chat()), 'the approval in the chat');
   await send(v, 'Use the staging key');
-  await until(() => /You \(waiting\)[^\n]*\n[^\n]*Use the staging key *\nSent when this turn ends\.\n↑ in the message box takes it back\nThe approval above still needs your\s+answer\./.test(chat()), 'the waiting message under the approval');
+  await until(() => /You \(waiting\)[^\n]*\n[^\n]*Use the staging key *\nSent when this turn ends\.\nEnter sends it now · ↑ takes it back\nThe approval above still needs your\s+answer\./.test(chat()), 'the waiting message under the approval');
   assert.match(chat(), /Waiting for your approval/, 'the approval is still open');
   assert.deepEqual(pendingRequests(p.root).filter(row => row.state === 'queued').map(row => row.goal), ['Use the staging key']);
   // As the chat says: Esc, then y.
@@ -2168,7 +2783,7 @@ test('the list shows live agents and stops, retries, and starts work from its ro
   await send(v, '/tasks'); await until(() => v.current.view === 'tasks', 'Tasks');
   const board = panels.board, spinner = '[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]';
   // The row has the spinner and the session's title. Its latest step shows beside the list, in the session.
-  await until(() => new RegExp(`${spinner} Keep working`).test(cursor(v)) && /Opus is working\n\nmodel: .+\n\ntype a message any time · \/stop to stop/.test(panels.chat.getText()) && /^Keep working on the board {2}· {2}working {2}· {2}Ask/.test(panels.header.getText()), 'live row, with the work under way beside it');
+  await until(() => new RegExp(`${spinner} Keep working`).test(cursor(v)) && /Opus is working\n\n• Working on the requested change\.\n\ntype a message any time · \/stop to stop/.test(panels.chat.getText()) && /^Keep working on the board {2}· {2}working {2}· {2}Ask/.test(panels.header.getText()), 'live row, with the work under way beside it');
   assert.match(cursor(v), /0m\d\d$/, 'a running row counts its time');
   assert.match(rows(v)[0], /\+ New session/); assert.match(rows(v)[2], /RUNNING 1/);
   board.focus(); await until(() => /s stop/.test(panels.keys.getText()), 's stop in the key bar'); v.input.write('s');
@@ -3545,7 +4160,7 @@ test('Usage shows each account with the usage its sessions reported, r checks ag
   await until(() => /Usage updated \d\d:\d\d/.test(status()), 'first check');
   assert.match(text(), /^Claude {6}owner@example.invalid · Max 20x · active\n {12}Usage shows after your next session on Claude Code\.\n {12}old@example.invalid · last seen Nov 9 · wk 100% then\n {12}enter use · a add account · x forget$/m);
   await until(() => /^Codex {7}owner@example.invalid · Team · active\n {12}5h  \[#-----\]   18%/m.test(text()), 'the Codex block');
-  assert.match(text(), /^Antigravity not signed in for ELU · s signs in\nGrok Build {2}not installed\n\nTop agents today\nNo agent has run today\.\nELU spend today not reported$/m);
+  assert.match(text(), /^Antigravity not signed in for ELU · s signs in\nGrok Build {2}not installed\n\nTop agents today\nNo agent has run today\.\nELU spend today \$0\.00$/m);
   assert.ok(panels.usageList.items.every(item => item.getText().length <= 76), 'every line fits the pane');
   // A session on Claude Code reports its windows. r checks again now and records them with the account.
   const saved = JSON.parse(fs.readFileSync(usageFile, 'utf8'));

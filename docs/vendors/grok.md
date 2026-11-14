@@ -83,6 +83,16 @@ is off (marked `disabled`). Only an entry it marks as loaded counts, or a switch
 with nothing listed under it. Grok's own built-in skills and a project's `CLAUDE.md`, which
 Grok reads as it reads `AGENTS.md`, are Grok's and do not count.
 
+## Messages you send while a turn works
+
+A headless turn (`--prompt-file`) reads one prompt and an ACP turn answers one
+`session/prompt`; the program queues prompts sent during a turn of its own, but a client has
+no documented way to add to the one that runs. So a message you send while Grok Build works
+waits in the chat, "Sent when this turn ends.", and Enter in the empty message box sends it
+now: the turn stops as `/stop` stops it and what waits starts the next turn at once. The next
+turn goes on in the session that was stopped: the one the launch named with `-s`, or the
+ACP session from `session/new`, loaded with `session/load`.
+
 ## How each mode runs
 
 | Mode | Transport | Permissions |
@@ -109,12 +119,28 @@ no shell and no web tools, not because the sandbox blocks the network.
 Headless runs have no schema flag, so ELU puts the output schema in the prompt and
 validates the answer. Sessions resume with `-r`; a mode switch that changes the sandbox
 profile cannot resume (Grok keeps a session's sandbox), so that turn's retry starts a fresh
-session without the earlier context. A headless run prints its answer only at the end, so
-it has the two-hour cap of a turn and no quiet limit (see How long a turn runs in
+session without the earlier context. A headless run uses `--output-format streaming-json`:
+each thought, tool call and piece of text comes as it happens and shows in the chat, the
+answer is read from the text, and `end` closes the run with its usage. A program whose file
+does not hold `streaming-json` is started with `--output-format json`, which prints only at
+the end, and a launch that ends at once with nothing printed runs again that way (see
+[Claude Code](claude.md)). It keeps the two-hour
+cap of a turn and no quiet limit (see How long a turn runs in
 [permissions](../permissions.md)); `--max-turns` (40 for
 read-only turns, 120 for edit turns) bounds the model rounds, except in Full access, which
 has no turn cap of ELU's. Cost is not reported under a
 subscription; the role's `maxCostUsd` must be `null`.
+
+The model you chose with `/model` goes on the command line: `--model` headless, and
+`grok agent --model <id> stdio` over ACP. A session Grok loads keeps the model it had, so
+when you chose another since, ELU switches it before anything is asked, with
+`session/set_config_option` on the session's `model` option (value `{ "value": "<id>" }`,
+as Grok's docs give it). The run keeps the model the session then named.
+
+The tokens of a run come from its result headless, and over ACP from `_meta.usage` on the
+answer to the turn. There `inputTokens` is the whole prompt, so ELU takes the cache read
+and the cache write out of it, as Grok's headless output does. The Usage tab's top agents
+show them; a turn that carried none says `not reported`, never 0.
 
 ## The private home
 
@@ -228,6 +254,10 @@ Not enforced, or not proven:
   `[auto_mode] enabled`, is not settled by the docs.
 - The exact ACP permission request shape and `session/load` come from the ACP standard and
   Grok's docs; the `relay` step is the only proof.
+- The model and the tokens over ACP follow Grok's docs and were seen only against a stand-in
+  `grok`: the `--model` agent option, the `model` config option and its value shape, and
+  `_meta.usage`, whose name for the cache read the docs do not give (`cachedReadTokens`,
+  `cacheReadTokens` and `cacheReadInputTokens` are all read).
 - Whether Grok refreshes the token through the symbolic link or replaces it is not settled;
   the rule above keeps the newer token either way.
 - Workspace `AGENTS.md` and `CLAUDE.md` reach the prompt in every mode. A repository can

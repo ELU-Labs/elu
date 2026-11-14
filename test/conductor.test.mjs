@@ -2,10 +2,10 @@ import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
-import { project, fakeClis, config, approveProjectFiles, CLI } from './helpers.mjs';
+import { spawn, spawnSync } from 'node:child_process';
+import { project, fakeClis, config, approveProjectFiles, approvingConductor, CLI } from './helpers.mjs';
 import { repository } from '../lib/git.mjs';
-import { projectSnapshot, registerProject } from '../lib/projects.mjs';
+import { ProjectController, projectSnapshot, registerProject } from '../lib/projects.mjs';
 import { saveTask } from '../lib/state.mjs';
 import { pendingRequests, removeRequest, updateRequest, takeRequest } from '../lib/workspace.mjs';
 import { Conductor, enqueue, sendCommand, saveConductorSettings, conductorStatus, conductorNote, conductorRunning, conductorAlive, olderConductor, retryRequest, startQueued, VERSION } from '../lib/conductor.mjs';
@@ -35,13 +35,15 @@ async function stopAll(t) {
 }
 // Nothing may keep this file running once its tests are done.
 after(() => { setTimeout(() => giveUp('Something is still running 10 s after the last test.'), 10000).unref(); });
-function setup(t, mode = 'answer', { name = undefined } = {}) {
+// lead: the vendor new sessions start on (Claude Code when not given).
+function setup(t, mode = 'answer', { name = undefined, lead = null } = {}) {
   LIVE.set(t, []); t.after(() => stopAll(t));
   const p = project(t), fake = fakeClis(p.parent, { mode, name });
   const previous = { PATH: process.env.PATH, XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME };
   Object.assign(process.env, fake.env);
   t.after(() => { for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } });
   const repo = repository(p.root); registerProject(repo);
+  if (lead) new ProjectController(repo).setDefaultModel({ vendor: lead });
   return { ...p, ...fake, repo };
 }
 function conduct(t, options = {}) {
@@ -243,7 +245,8 @@ function oldConductor(t, { disk = '0.0.1', ...options } = {}) {
 const requestsOf = conductor => [...conductor.runs.values()].map(run => run.requestId);
 
 test('after an update the old conductor takes no new work: the new version runs it at once, the old run finishes, and the old conductor exits', async t => {
-  const p = setup(t, 'slow'), first = enqueue(p.root, 'Start the work');
+  // On Codex, whose turn takes no message while it works, so the follow-up waits for it.
+  const p = setup(t, 'slow', { lead: 'codex' }), first = enqueue(p.root, 'Start the work');
   let exits = 0; const old = oldConductor(t, { onExit: () => { exits++; } });
   await until(() => request(p.root, first.id)?.state === 'running', 'the first turn');
   const id = request(p.root, first.id).taskId;
@@ -418,7 +421,9 @@ function quickClock(t, quietSeconds, capSeconds) {
   const before = { ...turnClock }; Object.assign(turnClock, { quietSeconds, capSeconds }); t.after(() => Object.assign(turnClock, before));
 }
 
-test('a check that stops making progress is stopped and retried once; a quiet model turn is left to its own limits', async t => {
+// A check and a model's turn both have their own limits (lib/turn-limits.mjs): a check that
+// prints nothing, such as a slow test suite, is working, and so is a turn running one.
+test('a quiet check, like a quiet model turn, is left to its own limits; one quiet past the cap is stopped and retried once', async t => {
   const p = setup(t), conductor = new Conductor({ stallMs: 50 }), stops = [];
   const controller = { repo: p.repo, stop: async (id, message) => { stops.push([id, message]); } };
   const sent = enqueue(p.root, 'Run the checks'); updateRequest(p.root, sent.id, { state: 'running' });
@@ -429,10 +434,28 @@ test('a check that stops making progress is stopped and retried once; a quiet mo
     conductor.runs.set(id, { root: p.root, requestId: id === '1' ? sent.id : null, taskId: id, goal: 'Run the checks', origin: null, attempts: 0, controller, quietSince: Date.now(), mark: null });
   }
   conductor.watch(); await new Promise(resolve => setTimeout(resolve, 120)); conductor.watch();
-  assert.deepEqual(stops, [['1', 'No progress for 1 minutes. Retrying.']], 'only the check; the model turns are the runner\'s to stop');
+  assert.deepEqual(stops, [], 'past the stall time, none is stopped: each is its own limits\' to stop');
+  // Quiet for a minute past the cap, which neither the runner nor the checks let happen.
+  for (const run of conductor.runs.values()) run.quietSince -= (turnClock.capSeconds + 61) * 1000;
+  conductor.watch();
+  assert.deepEqual(stops, ['1', '2', '3'].map(id => [id, 'No progress for 121 minutes. Retrying.']));
   const checks = conductor.runs.get('1'); conductor.finish(checks, new Error('Stopped.'));
   const retried = request(p.root, sent.id);
   assert.deepEqual([retried.state, retried.attempts, retried.continuationTaskId, retried.reason], ['queued', 1, '1', 'It stopped making progress. Retrying.']);
+});
+
+// The owner's case, through the conductor: the project's test suite runs as a check and prints
+// nothing for longer than the stall time.
+test('a check that prints nothing for longer than the stall time runs to its end and passes', async t => {
+  const p = setup(t, 'normal');
+  config(p.root, value => { value.checks = [{ name: 'slow-tests', command: ['sh', '-c', 'sleep 2'] }]; return value; }); approveProjectFiles(p.root);
+  const sent = enqueue(p.root, 'Normalize coupon codes', { permissions: 'full' });
+  const conductor = approvingConductor(new Conductor({ tickMs: 20, stallMs: 300 })); LIVE.get(t).push(conductor); conductor.start();
+  await until(() => request(p.root, sent.id)?.state === 'done', 'the finished request', 30000);
+  const done = request(p.root, sent.id), finished = task(p.repo, done.taskId);
+  assert.equal(done.attempts ?? 0, 0, 'not stopped and retried');
+  assert.equal(finished.state, 'ready', JSON.stringify(finished.error));
+  assert.equal(finished.evidence.results.find(row => row.name === 'slow-tests').status, 'passed');
 });
 
 test('a Claude turn that prints nothing is stopped by its quiet limit in one line, and not retried', async t => {
@@ -515,6 +538,30 @@ test('runs left by a conductor that died are marked stopped and their process is
   assert.equal(task(p.repo, '1').state, 'stopped'); assert.match(task(p.repo, '1').error.message, /Retry to continue/);
   assert.equal(request(p.root, live.id).state, 'queued');
 });
+// The app in a terminal starts the conductor in its time zone. The peer daemon, a schedule or a
+// login item looks at it from another: each look here is a process of its own in that zone.
+const conductorLib = new URL('../lib/conductor.mjs', import.meta.url).href;
+const elsewhere = (TZ, code) => JSON.parse(spawnSync(process.execPath, ['--input-type=module', '-e', `import { Conductor, conductorAlive } from ${JSON.stringify(conductorLib)}; ${code}`], { encoding: 'utf8', env: { ...process.env, TZ } }).stdout);
+test('a conductor started in another time zone is the conductor: none starts beside it, its turn goes on, and what it leaves when it dies is recovered', async t => {
+  const p = setup(t, 'slow'), first = enqueue(p.root, 'Start the work');
+  const holder = spawn(process.execPath, ['--input-type=module', '-e', `import { Conductor } from ${JSON.stringify(conductorLib)}; new Conductor({ tickMs: 20 }).start();`], { env: { ...process.env, TZ: 'America/Los_Angeles' }, stdio: 'ignore' });
+  t.after(() => holder.kill('SIGKILL'));
+  await until(() => request(p.root, first.id)?.state === 'running', 'the first turn');
+  const id = request(p.root, first.id).taskId, file = path.join(p.repo.state, 'tasks', id, 'process.json'), model = () => { try { return JSON.parse(fs.readFileSync(file, 'utf8')).pid; } catch { return null; } };
+  await until(() => task(p.repo, id)?.activeRole === 'lead' && model(), 'the model working');
+  const agent = model(), runs = pid => { try { process.kill(pid, 0); return true; } catch { return false; } };
+  const look = `const alive = conductorAlive(); let second = 'started'; try { await new Conductor({ tickMs: 20 }).start().stop(); } catch (error) { second = error.message; } console.log(JSON.stringify({ alive, second }));`;
+  for (const TZ of ['UTC', 'Asia/Kolkata']) {
+    const seen = elsewhere(TZ, look);
+    assert.equal(seen.alive, true, `it runs, seen from ${TZ}`); assert.match(seen.second, /holds this lock/, `no second conductor from ${TZ}`);
+    assert.equal(task(p.repo, id).state, 'running', `the turn goes on, seen from ${TZ}`); assert.equal(request(p.root, first.id).state, 'running'); assert.equal(runs(agent), true, 'the model still works');
+  }
+  // It dies with its turn running. A conductor in another time zone marks the turn stopped and stops the model it left.
+  holder.kill('SIGKILL'); await new Promise(resolve => holder.once('exit', resolve));
+  assert.equal(elsewhere('UTC', `new Conductor().recover(); console.log(JSON.stringify({ alive: conductorAlive() }));`).alive, false);
+  assert.equal(task(p.repo, id).state, 'stopped'); assert.match(task(p.repo, id).error.message, /Retry to continue/);
+  await until(() => !runs(agent), 'the model it left to be stopped');
+});
 
 test("a request carries the owner's session choices; a teammate's question never does", t => {
   const p = setup(t), work = path.join(p.parent, 'work'); fs.mkdirSync(work);
@@ -551,7 +598,7 @@ test('the board puts questions first, then live work, the queue, and recent resu
   ], queue: [{ id: 'request-a', goal: 'Next goal', state: 'queued', priority: 1, queuedAt: at(2) }, { id: 'request-b', goal: 'Old', state: 'done' }] }];
   const rows = boardRows(projects, now);
   assert.deepEqual(rows.map(row => [row.id || row.request.id, row.label]), [['3', 'WAITING YOU'], ['2', 'answering'], ['request-a', 'queued'], ['1', 'answered']]);
-  assert.equal(rows[1].now, 'Read src/disk.ts'); assert.equal(rows[1].time, '4m00'); assert.equal(rows[1].cost, '$0.25');
+  assert.equal(rows[1].now, 'Read src/disk.ts'); assert.equal(rows[1].time, '4m00'); assert.equal(String(rows[1].cost), '$0.25');
   assert.equal(rows[3].now, 'Done.');
   // A row of the Sessions list is exactly as wide as the list: its mark, its title and its age.
   for (const width of [28, 42]) assert.ok(rows.every(row => barCells(row, width, now).map(cell => cell.text).join('').length === width), `width ${width}`);

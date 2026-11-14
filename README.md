@@ -97,7 +97,9 @@ first turn depends on the vendor and the mode:
 
 Type these in the message box. `/` alone lists every command, and `/help` explains the keys.
 
-You can send a message at any time. One sent while the session is working waits in the chat and is sent by itself when that turn ends; several go together, in order. `↑` in the empty message box takes the newest one back so you can change it.
+You can send a message at any time. On Claude Code, one sent while the session is working goes to that turn: the model reads it at its next step, the chat then says "Sent to the running turn." under it, and the reply answers it too. Until the model reads it, behind a long command for as long as the command runs, the chat says "Waiting for the current command to finish.", and Enter in the empty message box sends it now: the command moves to the background and the same turn goes on with your message. On Codex, Grok Build and Antigravity, which take no message while their turn works, it waits in the chat and is sent by itself when that turn ends; several go together, in order. There Enter in the empty message box sends it now by stopping the turn, its changes kept: your message starts the next turn, in the same vendor session where it can go on, and where it cannot, with what the stopped turn had said and done. `↑` in the empty message box takes the newest one back so you can change it. The same holds for a session on your other computer, and for a message to a bot while that bot works.
+
+While the model or a bot works, the chat shows what it does as it happens: each thought, each tool call (● running, ✓ done, ✗ failed), its plan, and what it writes on the way. A thought that comes without its text shows how many tokens it has taken so far, such as `✻ thinking · 1.2k tokens`. A call says how long it has run, second by second, such as `● Run: npm test · 2m 10s`, and keeps its total when it ends. Commands the turn left running in the background are one line, such as `● 1 background command: npm run watch · 4m 0s`. When the turn ends they fold into one line above its reply, such as `▸ 12 steps in 1m 12s`. A turn you stop with `/stop` keeps its steps, and its line says `stopped`. `ctrl+o` opens or folds the steps of every turn, in the message box too; a click on that line opens or folds that turn's. A session on your other computer shows the same. A program that prints only when it ends has no steps to show: the chat then counts the time under the working line, such as `1m 12s so far. Antigravity reports only when it ends.` Antigravity shows its steps in every permission mode where its one-time check proved `agy acp` on this machine, and runs that way otherwise ([docs/vendors/antigravity.md](docs/vendors/antigravity.md)).
 
 | Type | What it does |
 | --- | --- |
@@ -111,14 +113,21 @@ You can send a message at any time. One sent while the session is working waits 
 | `@model and what do you think?` | Writes to the session's model again |
 | `/changes` | Shows what this session changed; `/chat` goes back |
 | `/publish` | Shows the exact push and draft pull request, then asks you |
-| `/stop` | Stops the running response. A message you sent while it ran is sent next; `/stop` again cancels that message |
+| `/stop` | Stops the running response. Messages you sent while it ran then go at once, in order; `↑` takes one back first. Over a session on your other computer, it stops that session there |
+| Enter (empty box) | While a turn works and a message of yours waits, sends that message now. On Claude Code the command the turn waits on moves to the background and the same turn reads the message. On the other vendors the turn stops as `/stop` stops it and the message starts the next turn, in the same vendor session where it can go on |
 | `/schedule in 1h check the build` | Starts a session later or on a schedule: `/schedule [when] [message]`. `/schedule ` lists times such as `in 5m`, `in 1h` and `daily 9:00`. Each run is a new session with the model, mode and bots of the form (a bot with its own schedule is left out); it does not see the chat it was made in. A schedule gets Full access only when you pick it for that schedule, and the form asks you once before saving it |
 | `/budget 5` | Limits this session to 5 dollars; `/budget off` removes the limit |
 | `/standup` | Asks every open session of yours, here and on your other computers, and your teammates' shared ones, for an update, in a new Standup session. See [Standup](#standup) |
 | `@everyone did anyone touch auth?` | In a Standup session, asks the sessions of its last round again, with your question; `@everyone standup` asks for an update. Elsewhere it starts a Standup with the question |
 | `! git status` | Runs a shell command. In an open session the model gets the command and its output with your next message |
 | `/update` | Says how to update: `/quit`, then `elu update` |
+| `/takeover` | In a view-only window, moves the project to this window. The other window turns view only |
 | `/quit` | Closes ELU. Sessions that are running or queued go on in the background; `elu conductor stop` stops them |
+
+One ELU window at a time makes changes in a project. A second window on the same project
+opens view only: it shows everything and `/stop` works there, but it sends nothing. It takes
+the project by itself within seconds once the other window closes, and `/takeover` moves it
+at once.
 
 A schedule also runs while ELU is closed, through a login item, once ELU is
 installed (not run through `npx`). The login item is there only while a schedule is on, a
@@ -426,8 +435,11 @@ Claude Code reports during your sessions. For Codex plan usage, ELU starts Codex
 open a project that is set up or send a message, at most once a minute while a session is
 on screen, and from the Usage tab ([what is read and when](SECURITY.md#credentials)).
 Its top agents add up what each vendor reported for each run: the cost and tokens Claude Code
-reports (its cost is the API price, also on a subscription), and Codex's tokens. Codex
-reports no cost, so its cost shows as —.
+reports (its cost is the API price, also on a subscription), Codex's tokens, and the tokens
+Grok Build and Antigravity send with a turn (Antigravity over ACP only). Codex reports no
+cost, so its cost reads not reported. A run whose vendor sent no tokens says `not reported`,
+never 0. A turn you stop counts with the tokens it had used; Claude Code says a cost only
+when a turn ends.
 
 You need macOS or Linux, Node 22 or newer, Git, and Claude Code (`claude`) installed and
 signed in: new projects and the built-in bots run on it. To run sessions on Codex

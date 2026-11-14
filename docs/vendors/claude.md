@@ -17,6 +17,59 @@ as the sign-in takes; Ctrl-C ends it and ELU comes back. Tested releases:
 [../permissions.md](../permissions.md); this page is how `claude` is launched
 for each.
 
+## Messages you send while a turn works
+
+Every turn of yours in your own session, and every turn of a bot you wrote to, starts with
+`--input-format stream-json`, in every mode, Read only too: the prompt goes in as one user
+message and the input stays open until the turn writes its `result` line. A message you
+send while the turn works goes on that input at once, as one more user message with a uuid
+(`{"type":"user","message":{"role":"user","content":...},"parent_tool_use_id":null,"uuid":...,"origin":{"kind":"human"}}`),
+with a line that tells the model you wrote again during its turn and that its reply answers
+that too. Claude Code takes a user message that comes while it works in at the turn's next
+step, and the turn goes on with it; the one reply answers everything. For a message with a
+uuid it writes `command_lifecycle` lines (`queued`, `started`, `completed`, or `cancelled`).
+Until `started`, the message waits in the chat with "Waiting for the current command to
+finish." under it: behind one long command, the next step is when that command ends. Once
+`started` comes, the chat shows your message where you sent it, with "Sent to the running
+turn." under it, and the session's history keeps it once. Several go in the order you sent
+them. Only a message for the one working turns go: yours to the model while the model
+works, yours to a bot while that bot works. A message to someone else waits for the turn to
+end, and so does every message sent after it.
+
+Enter in the empty message box sends a waiting message now. ELU writes Claude Code's own
+control request for it (`{"subtype":"interrupt","send_now":true,"message_uuid":...}`).
+Claude Code answers `delivering` when the command the turn waits on can move to the
+background: the command keeps running there, the turn reads your message at once and goes
+on. It answers `stopped` when nothing can move: the turn is cut, its `result` line says
+`error_during_execution`, and your message starts the next turn of the same run, in the
+same session, with nothing started again. `↑` takes a waiting message back with
+`{"subtype":"cancel_async_message","message_uuid":...}`; one the turn already took stays
+sent, and the chat says so. All of this is used only when the run's first line names the
+capabilities `msg_lifecycle_v1` and `interrupt_send_now_v1`. A Claude Code release that
+names neither gets no message while it works: there a message waits for the turn to end,
+and Enter stops the turn first, as on the other vendors. Read from the 2.1.322 program; the
+messages above were driven with the stand-in CLI, not yet with the real service.
+
+A turn ends at its `result` line. When Claude Code is still there three seconds after it,
+waiting on a command the turn left in the background, ELU ends it with that command, and
+the chat names the command. A `result` line is not the end of the run while a message of
+yours on its input is still owed an answer: after a send now that cut the turn, the run
+goes on with your message, and with any you send meanwhile, and the three seconds count
+from the `result` line of the last of those turns. `/stop` stops such a run whole: a message
+it had taken stays in the chat, and one that still waited starts the next turn, in the
+same session.
+
+Read from the 2.1.323 program (a queued prompt is folded into a running turn at
+its next tool step; one that comes after the last step runs as one more turn of the same
+run, with a `result` line of its own, after the input closes) and from its change log
+("queued prompts sent as content blocks over --input-format stream-json ... merged into one
+turn"). When a message comes after the last step, ELU shows both replies, in order. A
+question of Claude Code's on that input (a tool call, a host, a form from an MCP server) is
+answered by the session's mode: allowed at once in Full access, answered by your rules and
+then by you in Ask for approval and Approve for me, refused in Read only
+([../permissions.md](../permissions.md)). A teammate's question never takes messages.
+Driven with the stand-in CLI; not yet seen with the real service.
+
 ## Read only
 
 The launch: `--restricted --permission-mode dontAsk --permission-prompts none`,
@@ -37,7 +90,7 @@ Code memory, when there is one.
 | `--permission-mode` | `default` | `auto` | `bypassPermissions` |
 | `--permission-prompts` / `--permission-prompt-tool` | `host` / `mcp__elu-code-approval__approve` | same | same |
 | `--restricted` / `--safe-mode` | no | no | no |
-| `--input-format` | `stream-json`: the prompt is one user message and the input stays open for the network questions | text | text |
+| `--input-format` | `stream-json`: the prompt is one user message and the input stays open for your messages and the network questions | `stream-json`, for your messages | `stream-json`, for your messages |
 | `--tools` | `Read,Grep,Glob,Edit,Write,Bash,WebFetch,WebSearch` | same | `default`: every tool Claude Code has |
 | `--allowedTools` | your MCP servers, `Read`, `Grep`, `Glob`, `Edit` and `Write` on the workspace | same | none |
 | `--disallowedTools` | `Agent,Task,NotebookEdit,PowerShell,Monitor`; a turn with helpers, below | same | not passed: no tool is refused |
@@ -52,6 +105,22 @@ Every profile keeps `--setting-sources ''`, `--strict-mcp-config` with a private
 config file and disabled hooks. `--max-budget-usd` is passed only when the session
 has a spending limit (`/budget`) or the run is a teammate's question. The approval relay is the
 one server ELU adds to that file; it is never in the allow list.
+
+A launch, Read only too, passes `--thinking-display summarized`, so the chat can show what
+the model thinks while it works. Claude Code 2.1.318 to 2.1.323 accept the flag but leave it out of
+`--help`, as they do `--permission-prompt-tool`, and `claude <any flag> --version` exits 0 for
+a made-up flag too (seen on 2.1.322). So the program cannot be asked whether it takes the flag:
+ELU reads the program's own file for the flag's text, once for each program, and starts a
+program that does not hold it without the flag. A launch that still ends at once with nothing
+printed runs again without the flag, and that program is not given it again; a later release
+is read anew. What was found is kept in `~/.config/elu-code/vendor-extras.json`.
+
+With the flag or without, the 2.1.322 runs read so far sent every thinking block with its text
+empty. The chat then shows the thought's token count, live, from the `system/thinking_tokens`
+rows. A `tool_progress` row comes every 30 seconds while a command prints nothing and says how
+long the call has run; the chat counts the seconds between two of them. `task_started`,
+`task_notification`, `task_updated` and `background_tasks_changed` rows name the commands a
+turn has running in the background, which the chat shows as one line.
 
 A folder you name with `/permissions folders add` is read and never written in Ask and
 Auto: `Edit` and `Write` deny rules cover it and the sandbox's `denyWrite` lists it, the
