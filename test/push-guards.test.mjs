@@ -87,6 +87,49 @@ test('guards kept by an earlier version, which stopped them after two minutes, a
   assert.equal(done.pushed, true); assert.equal(p.pushed(), true);
 });
 
+// Guards kept by 0.1.25 or earlier ran in a sandbox that closed the owner's home secrets under
+// HOME's name only. With no step of the owner's they are kept again before the push, which runs
+// them in this version's sandbox, closed under both of the home's names: when the session was
+// started by that version, and when that version also previewed the push this one approves.
+test('guards kept by 0.1.25 or earlier are kept again before the push, which runs them in the new sandbox', { timeout: 60000 }, async t => {
+  const fixture = () => {
+    const p = guarded(t, '#!/bin/sh\nexit 0\n'), record = path.join(p.parent, 'sandbox.jsonl'), helper = path.join(p.parent, 'sandbox-helper');
+    // The sandbox keeps what it was given, then runs the guard.
+    fs.writeFileSync(helper, `#!${process.execPath}\nimport fs from 'node:fs';import {spawnSync} from 'node:child_process';const args=process.argv.slice(2);if(args.includes('elu-code-sandbox-probe')){console.log(JSON.stringify({writeDenied:true,networkDenied:true}));process.exit(0);}fs.appendFileSync(${JSON.stringify(record)},JSON.stringify(args)+'\\n');const run=args.slice(args.indexOf('--')+1);process.exit(spawnSync(run[0],run.slice(1),{stdio:'inherit'}).status??1);\n`, { mode: 0o755 });
+    const settings = path.join(p.fake.dir, 'fake.json'); fs.writeFileSync(settings, JSON.stringify({ ...JSON.parse(fs.readFileSync(settings, 'utf8')), sandboxBin: helper }));
+    return { ...p, record };
+  };
+  // What 0.1.25 kept: HOME's name alone, and no version mark.
+  const olden = (repo) => {
+    const task = readTask(repo, '1'), file = path.join(task.hooksDirectory, 'pre-push');
+    const old = fs.readFileSync(file, 'utf8').split('\n').filter(line => !line.startsWith('// ')).join('\n').replace(/import\{homeNames\}from "[^"]+";/, '').replace(/homeNames\(\)\.flatMap\(home=>(\[[^\]]+\])\.map\(name=>path\.join\(home,name\)\)\)/, '$1.map(name=>path.join(os.homedir(),name))');
+    assert.match(old, /\]\.map\(name=>path\.join\(os\.homedir\(\),name\)\)/); assert.doesNotMatch(old, /homeNames/);
+    fs.writeFileSync(file, old, { mode: 0o700 }); task.hooksSnapshotDigest = hooksSnapshotDigest(task.hooksDirectory); saveTask(repo, task);
+    return task;
+  };
+  // The push runs with a home reached through a link, which has two names.
+  const pushing = async (p, steps) => {
+    const home = path.join(p.parent, 'home'), link = path.join(p.parent, 'home-link'), before = process.env.HOME;
+    fs.mkdirSync(home); fs.symlinkSync(home, link); process.env.HOME = link;
+    try { await steps(); } finally { process.env.HOME = before; }
+    assert.equal(p.pushed(), true);
+    const given = fs.readFileSync(p.record, 'utf8');
+    for (const name of ['.ssh', '.aws', '.config', '.claude', '.codex', '.netrc', '.npmrc']) for (const at of [home, link]) assert.ok(given.includes(JSON.stringify(`${JSON.stringify(path.join(at, name))}="deny"`).slice(1, -1)), `${at}/${name}`);
+  };
+  // Started by 0.1.25: previewed and pushed now.
+  const started = fixture();
+  await pushing(started, async () => {
+    const preview = await preparePublish(started.repo, olden(started.repo));
+    assert.equal((await publish(started.repo, readTask(started.repo, '1'), preview.confirmationId)).pushed, true);
+  });
+  // Previewed by 0.1.25, approved now.
+  const approved = fixture();
+  await pushing(approved, async () => {
+    const plan = await preparePublish(approved.repo, approved.task);
+    assert.equal((await publish(approved.repo, olden(approved.repo), plan.confirmationId)).pushed, true);
+  });
+});
+
 // A guard that fails as guards do, with a non-zero exit, says why in its own words: the app
 // shows its last lines, short, and that nothing was pushed, not only that git could not finish.
 test('a pre-push guard that fails says its own last lines, short, and that nothing was pushed', { timeout: 60000 }, async t => {
