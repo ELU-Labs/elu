@@ -34,15 +34,16 @@ test("a Codex run's own use is read from its thread's record: each of its turns 
     line(at + 2500, 'response_item', { type: 'message', content: [{ type: 'output_text', text: big }] }),
     record(at + 3000, 'turn-1', usage(2000, 200, 20, 50), usage(3000, 300, 30, 50)),
     // The second run: two turns (a message sent now started the second).
-    line(at + 10000, 'turn_context', { turn_id: 'turn-2', model: 'gpt-6.1-sol' }),
+    line(at + 10000, 'turn_context', { turn_id: 'turn-2', model: 'gpt-6.1-terra' }),
     record(at + 11000, 'turn-2', usage(4000, 400, 40), usage(4000, 400, 40)),
     record(at + 12000, 'turn-3', usage(5000, 500, 50), usage(5000, 500, 50)),
   ]);
   // Input as runUsage counts Codex's: without the cached part, the written part still in it.
-  assert.deepEqual(rolloutRun(file, { thread: THREAD, from: at + 500, to: at + 5000 }), { tokens: { input: 2700, output: 30, cacheRead: 300, cacheWrite: 50 } });
-  assert.deepEqual(rolloutRun(file, { thread: THREAD, from: at + 9000, to: at + 13000 }), { tokens: { input: 8100, output: 90, cacheRead: 900, cacheWrite: 0 } });
+  // The model: the one the run's last turn ran on, which plain `codex exec` names nowhere else.
+  assert.deepEqual(rolloutRun(file, { thread: THREAD, from: at + 500, to: at + 5000 }), { tokens: { input: 2700, output: 30, cacheRead: 300, cacheWrite: 50 }, model: 'gpt-6.1-sol' });
+  assert.deepEqual(rolloutRun(file, { thread: THREAD, from: at + 9000, to: at + 13000 }), { tokens: { input: 8100, output: 90, cacheRead: 900, cacheWrite: 0 }, model: 'gpt-6.1-terra' });
   // A run that made no request: none recorded, not zero.
-  assert.deepEqual(rolloutRun(file, { thread: THREAD, from: at + 20000, to: at + 30000 }), { tokens: null });
+  assert.deepEqual(rolloutRun(file, { thread: THREAD, from: at + 20000, to: at + 30000 }), { tokens: null, model: null });
   // Found under the day the thread began, by its id, in the home the run was started with.
   assert.equal(rolloutFile(THREAD, { home }), file);
   assert.deepEqual(codexRunRecord({ thread: THREAD, env: { CODEX_HOME: home }, from: at + 9000, to: at + 13000 }).tokens.output, 90);

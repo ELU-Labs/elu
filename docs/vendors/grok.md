@@ -171,7 +171,11 @@ as Grok's docs give it). The run keeps the model the session then named.
 The tokens of a run come from its result headless, and over ACP from `_meta.usage` on the
 answer to the turn. There `inputTokens` is the whole prompt, so ELU takes the cache read
 and the cache write out of it, as Grok's headless output does. The Usage tab's top agents
-show them; a turn that carried none says `not reported`, never 0.
+show them, priced at the model's API list price where Grok reported no cost; a turn that
+carried none shows a dash, never 0, and so does the cost of one whose count Grok says may be
+incomplete (`usage_is_incomplete`, `cost_is_partial`, `usageIsIncomplete`). Grok's spend
+covers every turn the run made and none of an earlier run of its session, so a resumed
+session's run counts its own.
 
 A turn that works on an approved Task shows its subtasks as it goes. Over ACP, ELU reads
 the `plan` updates Grok sends for its own to-do list. Headless in Full access, the turn is

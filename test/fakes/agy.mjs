@@ -17,7 +17,10 @@
 // with no mode set reviews: it asks before each command and each write that no rule allows.
 // An ACP session names its model as the protocol does, a `model` config option changed with
 // session/set_config_option, keeps it with the conversation, and ends each turn with the
-// protocol's `usage`. Headless, --model names the model and the output repeats it.
+// protocol's `usage`. Headless, --model names the model and the output repeats it, and the
+// output ends with the run's turns and tokens as Antigravity CLI prints them (num_turns, usage:
+// input_tokens, output_tokens, thinking_tokens, cache_read_tokens, total_tokens); agy.headlessUsage
+// gives other counts, agy.noUsage none. A run that could not sign in prints them all 0, with no turn.
 // auth: 'prompt' signs it out the way Antigravity CLI 1.5.8 is signed out (observed in a
 // scratch HOME): -p prints "Authentication required. Please visit the URL to log in:", the
 // link, "Waiting for authentication (timeout 60s)..." and "Or, paste the authorization code
@@ -172,7 +175,7 @@ async function turn(text, { cwd, skip, sandbox, ask, dir, review = false, show =
 async function headless() {
   const prompt = flag('-p') ?? '';
   if (signedOut() && agy.auth === 'prompt' && !await signIn()) {
-    if (flag('--output-format') === 'json') console.log(JSON.stringify({ conversation_id: '', status: 'ERROR', response: '', error: 'authentication failed or timed out', finished_reason: 'error' }));
+    if (flag('--output-format') === 'json') console.log(JSON.stringify({ conversation_id: '', status: 'ERROR', response: '', error: 'authentication failed or timed out', duration_seconds: 0, num_turns: 0, usage: { input_tokens: 0, output_tokens: 0, thinking_tokens: 0, cache_read_tokens: 0, total_tokens: 0 }, finished_reason: 'error' }));
     process.exit(1);
   }
   if (signedOut()) { console.error('authentication required: run agy to sign in'); process.exit(1); }
@@ -193,7 +196,8 @@ async function headless() {
   if (schema?.properties?.intent) { result.intent = 'answer'; if (schema.properties.repository) result.repository = ''; }
   if (cfg.name !== undefined && schema?.properties?.name) result.name = cfg.name;
   planned(result, text, name => Boolean(schema?.properties?.[name]));
-  console.log(JSON.stringify({ conversationId: id, model: flag('--model') ?? MODELS[0], structured_output: result, stats: { turns: 1 } }, null, 2));
+  const usage = agy.noUsage ? {} : { usage: agy.headlessUsage ?? { input_tokens: 1200, output_tokens: 80, thinking_tokens: 40, cache_read_tokens: 200, total_tokens: 1520 } };
+  console.log(JSON.stringify({ conversationId: id, model: flag('--model') ?? MODELS[0], structured_output: result, stats: { turns: 1 }, num_turns: 1, ...usage }, null, 2));
 }
 async function acp() {
   if (agy.acpFails) { console.error('agy: unknown command "acp"'); process.exit(1); }

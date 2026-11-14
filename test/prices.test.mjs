@@ -29,6 +29,28 @@ test('a model is found by the names its vendor gives it, and a model with no pub
   for (const id of ['grok-4.6-fast', 'gemini-3.5-flash-high', 'gpt-6.1', 'gpt-6.1-sol-pro', 'claude-haiku-5-5', 'opus', 'big-model', '', null, undefined, 42]) assert.equal(priceOf(id), null, String(id));
 });
 
+// Checked 2026-11-14 on https://docs.x.ai/docs/models and https://aistudio.google.com/docs/pricing.
+test('the models their makers list that the table lacked are priced, at their makers\' figures', () => {
+  assert.deepEqual(priceOf('grok-4.20-multi-agent-0309'), { input: 1.25, cached: 0.2, output: 2.5 });
+  assert.deepEqual(priceOf('gemini-3.1-pro-preview-customtools'), { input: 2, cached: 0.2, output: 12 });
+  assert.deepEqual(priceOf('gemini-4-hydrogen'), { input: 1.5, cached: 0.075, output: 7.5 });
+  // Gemini 4 Carbon and Argon cost more from December 1.
+  for (const id of ['gemini-4-carbon', 'gemini-4-argon']) {
+    assert.deepEqual(priceOf(id, Date.UTC(2026, 10, 30, 23)), { input: 2, cached: 0.1, output: 10 }, id);
+    assert.deepEqual(priceOf(id, Date.UTC(2026, 11, 1, 1)), { input: 4, cached: 0.2, output: 20 }, id);
+  }
+});
+
+test('an effort a vendor puts in a model name is read past, however many and wherever it is before -preview', () => {
+  for (const [id, model] of [['gemini-3-flash-high', 'gemini-3-flash'], ['gemini-3-flash-low', 'gemini-3-flash'], ['gemini-3.8-flash-high', 'gemini-3.8-flash'], ['gemini-3.6-flash-low', 'gemini-3.6-flash'],
+    ['gemini-3.1-flash-lite-high', 'gemini-3.1-flash-lite'], ['Gemini 3 Flash (High)', 'gemini-3-flash'], ['gemini-3-flash-preview-high', 'gemini-3-flash'], ['gemini-3-flash-high-preview', 'gemini-3-flash'],
+    ['gemini-3.1-pro-high-thinking', 'gemini-3.1-pro'], ['gemini-4-carbon-high', 'gemini-4-carbon'], ['gpt-6.1-sol-xhigh', 'gpt-6.1-sol'], ['gpt-5.6-luna-low', 'gpt-5.6-luna'], ['grok-4.20-multi-agent-0309-high', 'grok-4.20-multi-agent-0309']]) {
+    assert.deepEqual(priceOf(id), priceOf(model), id); assert.ok(priceOf(model), model);
+  }
+  // A name that is another model, not an effort, is not read past: Gemini 3.5 Flash and Grok 4.6 Fast are on neither maker's page.
+  for (const id of ['gemini-3.5-flash-high', 'gemini-3.5-flash', 'grok-4.6-fast', 'grok-4.6-fast-high']) assert.equal(priceOf(id), null, id);
+});
+
 test("a price that changes on a date is the one of the run's day", () => {
   assert.deepEqual(priceOf('gemini-3.6-flash', Date.UTC(2026, 11, 31, 12)), { input: 0.75, cached: 0.075, output: 3.75 });
   assert.deepEqual(priceOf('gemini-3.6-flash', Date.UTC(2027, 0, 1, 12)), { input: 1.5, cached: 0.15, output: 7.5 });

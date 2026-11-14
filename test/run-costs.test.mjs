@@ -237,6 +237,38 @@ test('a session on Codex whose thread goes on over several turns spends each tur
   near(JSON.parse(fs.readFileSync(peerFile('outbox', 'request-2.json'), 'utf8')).costUsd, 3.3, 'reply');
 });
 
+// A Codex run started with no model runs on Codex's own default, which plain `codex exec`
+// names nowhere in what it prints: only Codex's record of the thread names it (turn_context).
+test("a Codex run on Codex's own default model is named by Codex's record of its thread, and priced", async t => {
+  const f = setup(t, 'answer');
+  f.set({ codexTurn: { requests: [{ input_tokens: 10_000, cached_input_tokens: 10_000, output_tokens: 99_900 }], model: 'gpt-6.1-sol' } });
+  environment(t, { CODEX_HOME: path.join(f.parent, 'codex-home') });
+  f.controller.setDefaultModel({ vendor: 'codex' });
+  const first = await f.controller.ask('Where is coupon normalization?', null, { permissions: 'full' }).finished;
+  assert.equal(first.state, 'answered', JSON.stringify(first.error));
+  const [exec] = fs.readFileSync(path.join(f.parent, 'calls.jsonl'), 'utf8').trim().split('\n').map(JSON.parse).filter(call => call.vendor === 'codex' && call.args[0] === 'exec');
+  assert.ok(!exec.args.includes('--model'), "started on Codex's own default");
+  const task = readTask(f.repo, first.id);
+  assert.equal(task.runs[0].model, 'gpt-6.1-sol');
+  near(spend.runCosts(task)[0], 1, 'its list price');
+  const [row] = spend.agentSpend([{ root: f.repo.root, tasks: [task] }], { now: Date.now() }).rows;
+  assert.deepEqual([row.model, spend.costText(row)], ['gpt-6.1-sol', '$1.00']);
+});
+
+// A headless Antigravity run ends with the tokens of its turns (agy -p --output-format json).
+test('a headless Antigravity run keeps the tokens its result reports, priced at the model it was started with', async t => {
+  const f = setup(t, 'answer');
+  // 1M input, 100k output and 100k thinking, 200k read from the cache: every count apart in the total.
+  f.set({ agy: { headlessUsage: { input_tokens: 1_000_000, output_tokens: 100_000, thinking_tokens: 100_000, cache_read_tokens: 200_000, total_tokens: 1_400_000 } } });
+  f.controller.setDefaultModel({ vendor: 'agy', model: 'gemini-3-flash' });
+  const first = await f.controller.ask('Where is coupon normalization?', null, { permissions: 'full' }).finished;
+  assert.equal(first.state, 'answered', JSON.stringify(first.error));
+  const task = readTask(f.repo, first.id);
+  assert.deepEqual(task.runs.map(run => [run.vendor, run.tokens]), [['agy', counted([1_000_000, 200_000, 200_000, 0])]]);
+  // gemini-3-flash, per million: $0.50 input, $0.05 cached, $3 output (thinking is output).
+  near(spend.runCosts(task)[0], 0.5 + 0.01 + 0.6, 'its list price');
+});
+
 test('a turn the owner stops is kept with what it had used; Usage shows it, and counts it once when its session goes on', async t => {
   const f = setup(t, 'slow');
   const run = f.controller.ask('Where is coupon normalization?', null, { permissions: 'full' });

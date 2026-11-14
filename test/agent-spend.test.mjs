@@ -39,7 +39,7 @@ test('a run records the tokens and model its vendor reported, and none where it 
   // A streaming-json run: its end event, not the per-response usage lines before it.
   const streamed = [{ type: 'text', data: '{}' }, { type: 'usage', usage: { input_tokens: 99, output_tokens: 99 } }, { type: 'end', stopReason: 'end_turn', usage: { input_tokens: 10, cache_read_input_tokens: 2, cache_creation_input_tokens: 0, output_tokens: 5 }, modelUsage: { 'grok-4.6': { inputTokens: 10, outputTokens: 5, cacheReadInputTokens: 2 } } }].map(row => JSON.stringify(row)).join('\n');
   assert.deepEqual(runUsage('grok', streamed), { tokens: { input: 10, output: 5, cacheRead: 2, cacheWrite: 0 }, model: 'grok-4.6' });
-  // Antigravity reports none; nor does a log of noise, a negative count, or a result without usage.
+  // Claude Code's result is not Antigravity's; nor does a log of noise, a negative count, or a result without usage report any.
   assert.deepEqual(runUsage('agy', claude), { tokens: null, model: null });
   assert.deepEqual(runUsage('claude', 'not json\n{"type":"result"}'), { tokens: null, model: null });
   assert.deepEqual(runUsage('codex', JSON.stringify({ type: 'turn.completed', usage: { input_tokens: -5 } })), { tokens: null, model: null });
@@ -168,6 +168,34 @@ test('an ACP run records the tokens its vendor sent with the turn, however it na
   assert.deepEqual(runUsage('agy', log(meter, answer({ stopReason: 'end_turn' }))), { tokens: null, model: null });
   assert.deepEqual(runUsage('grok', log(answer({ stopReason: 'end_turn', _meta: { usage: { usageIsIncomplete: true } } }))), { tokens: null, model: null });
   assert.match(agentTable([{ agent: 'Gemini 3 Flash', title: 'Docs', model: 'gemini-3-flash', tokens: runUsage('agy', log(answer({ stopReason: 'end_turn' }))).tokens, costUsd: null }], { width: 80 }).rows[0], /^Docs +Gemini 3 Flash +— +— +— +— +—$/);
+});
+
+// Antigravity CLI headless (-p --output-format json) ends with the run's turns and tokens:
+// usage { input_tokens, output_tokens, thinking_tokens, cache_read_tokens, total_tokens }
+// (seen on agy 1.5.8, and in its changelog: "The JSON usage object emitted by json and
+// stream-json now reports token accounting including cache_read_tokens"). Which counts hold
+// the others is read from the total: thinking is output, and the cache read is apart from the
+// input. A total that fits more than one reading, or none, says nothing for sure: no tokens.
+test('a headless Antigravity run records the tokens its result reports, read by its total, and none where the total does not say', () => {
+  const result = (usage, extra = {}) => JSON.stringify({ conversation_id: '2f6c1d1e-2b1a-4c55-9a77-0d1f9b0c1e2a', status: 'SUCCESS', response: '{}', error: '', duration_seconds: 12, num_turns: 3, usage, finished_reason: 'stop', ...extra });
+  const use = (input, output, thinking, cache, total) => ({ input_tokens: input, output_tokens: output, thinking_tokens: thinking, cache_read_tokens: cache, total_tokens: total });
+  // Every count apart: the total is all four.
+  assert.deepEqual(runUsage('agy', result(use(1200, 80, 40, 200, 1520))), { tokens: { input: 1200, output: 120, cacheRead: 200, cacheWrite: 0 }, model: null });
+  // Thinking within output; the cache read within input; both.
+  assert.deepEqual(runUsage('agy', result(use(1200, 80, 40, 200, 1480))).tokens, { input: 1200, output: 80, cacheRead: 200, cacheWrite: 0 });
+  assert.deepEqual(runUsage('agy', result(use(1200, 80, 40, 200, 1320))).tokens, { input: 1000, output: 120, cacheRead: 200, cacheWrite: 0 });
+  assert.deepEqual(runUsage('agy', result(use(1200, 80, 40, 200, 1280))).tokens, { input: 1000, output: 80, cacheRead: 200, cacheWrite: 0 });
+  // Printed over several lines, as JSON may be.
+  assert.deepEqual(runUsage('agy', JSON.stringify(JSON.parse(result(use(10, 5, 0, 0, 15))), null, 2)).tokens, { input: 10, output: 5, cacheRead: 0, cacheWrite: 0 });
+  // A total that two readings fit (thinking and the cache read the same size), one none fits, or no total: none.
+  assert.equal(runUsage('agy', result(use(1200, 80, 200, 200, 1480))).tokens, null);
+  assert.equal(runUsage('agy', result(use(1200, 80, 40, 200, 9999))).tokens, null);
+  assert.equal(runUsage('agy', result({ input_tokens: 1200, output_tokens: 80 })).tokens, null);
+  // A run that made no turn (it could not sign in) spent nothing; one with turns that reports all 0 reported nothing.
+  assert.deepEqual(runUsage('agy', result(use(0, 0, 0, 0, 0), { status: 'ERROR', num_turns: 0, error: 'authentication failed or timed out', finished_reason: 'error' })).tokens, { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
+  assert.equal(runUsage('agy', result(use(0, 0, 0, 0, 0))).tokens, null);
+  // No usage at all (an older agy): none.
+  assert.equal(runUsage('agy', JSON.stringify({ conversationId: 'c', structured_output: {} })).tokens, null);
 });
 
 test('tokens read compact, costs and shares say only what is known, and a model reads by its name', () => {
