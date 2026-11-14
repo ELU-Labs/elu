@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { spawnSync } from 'node:child_process';
 import { temp, project, fakeClis, autoApprove, readRole } from './helpers.mjs';
 import * as claude from '../lib/adapters/claude.mjs';
 import * as codex from '../lib/adapters/codex.mjs';
@@ -13,7 +14,7 @@ import * as grok from '../lib/adapters/grok.mjs';
 import { ProjectController, registerProject } from '../lib/projects.mjs';
 import { createFolder, createFolderPlan, projectFolder, pendingRequests, updateRequest } from '../lib/workspace.mjs';
 import { readTask } from '../lib/state.mjs';
-import { assertGitSafe, git, repository } from '../lib/git.mjs';
+import { assertGitSafe, git, repository, snapshotHooks } from '../lib/git.mjs';
 import { claudeAccount, codexAccount } from '../lib/usage.mjs';
 import { installScheduler, listSchedules, parseWhen, runDue, saveSchedule, schedulerFiles } from '../lib/schedules.mjs';
 import { readablePictures } from '../lib/pictures.mjs';
@@ -238,6 +239,26 @@ test("a home under /var, which is a link: below Full access every vendor closes 
     // Full access is everything: neither name is in a rule.
     for (const dir of [named, real]) { assert.equal(grokRules('full').some(arg => arg.includes(dir)), false); assert.equal(JSON.stringify(agy.settingsFor('full', { cwd, commonDir })).includes(dir), false); }
   }
+});
+
+// A pre-push guard below Full access runs in a sandbox closed to the owner's home secrets. A
+// sandbox that follows links compares the name on disk, so it names both. Before, it named
+// only HOME's. The sandbox helper here keeps what it was given and runs the guard.
+test("a home under /var, which is a link: a pre-push guard's sandbox closes the owner's home secrets under both of the home's names", t => {
+  const m = mac(t), scratch = path.join(m.temp, 'tmp.guardhome'), onDisk = path.join(m.tempOnDisk, 'tmp.guardhome'), record = path.join(m.tempOnDisk, 'sandbox.jsonl'), helper = path.join(m.tempOnDisk, 'sandbox-helper');
+  fs.mkdirSync(scratch);
+  fs.writeFileSync(helper, `#!${process.execPath}\nimport fs from 'node:fs';import {spawnSync} from 'node:child_process';const args=process.argv.slice(2);if(args.includes('elu-code-sandbox-probe')){console.log(JSON.stringify({writeDenied:true,networkDenied:true}));process.exit(0);}fs.appendFileSync(${JSON.stringify(record)},JSON.stringify(args)+'\\n');const run=args.slice(args.indexOf('--')+1);process.exit(spawnSync(run[0],run.slice(1),{stdio:'inherit'}).status??1);\n`, { mode: 0o755 });
+  const fake = fakeClis(scratch);
+  environment(t, { ...fake.env, HOME: scratch, TMPDIR: `${m.temp}/`, ELU_CODE_SANDBOX_HELPER: helper });
+  const p = project(t), repo = repository(p.root);
+  fs.mkdirSync(path.join(p.root, '.githooks')); fs.writeFileSync(path.join(p.root, '.githooks/pre-push'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  git(p.root, ['config', 'core.hooksPath', '.githooks']); git(p.root, ['add', '.']); git(p.root, ['commit', '-m', 'Add a guard']);
+  const task = { id: '1', worktree: p.root, hookDigest: assertGitSafe(repo).hookDigest };
+  task.hooksDirectory = snapshotHooks(repo, task);
+  const ran = spawnSync(path.join(task.hooksDirectory, 'pre-push'), [], { cwd: p.root, input: '', encoding: 'utf8' });
+  assert.equal(ran.status, 0, ran.stderr);
+  const given = fs.readFileSync(record, 'utf8');
+  for (const name of ['.ssh', '.aws', '.config', '.claude', '.codex', '.netrc', '.npmrc']) for (const home of [scratch, onDisk]) assert.ok(given.includes(JSON.stringify(`${JSON.stringify(path.join(home, name))}="deny"`).slice(1, -1)), `${home}/${name}`);
 });
 
 // Grok Build and Antigravity in Full access run under a mirror of the owner's home, a folder of
