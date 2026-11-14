@@ -1557,6 +1557,54 @@ test('archived sessions on my other computer are deleted there by its own code, 
   assert.ok(!withHome(devbox.home, () => projectSnapshot(repo).tasks.some(task => task.id === '4')));
 });
 
+// The lessons run there takes as long as the model does. What was checked before it is checked
+// again after it, there: a session that came back meanwhile stays, and work on no remote that
+// appeared meanwhile, which nobody was asked about, is kept.
+test('a clean-up from my other computer leaves a session that came back while the lessons ran there, and keeps work on no remote that appeared meanwhile', async t => {
+  const { laptop, devbox, project, toViewer, host, viewCtx } = pair(t);
+  toViewer.remoteHello = { remote: 1, edit: 1, clean: 1 };
+  const parent = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'elu-code-clean-'))), hold = path.join(parent, 'hold'); t.after(() => fs.rmSync(parent, { recursive: true, force: true }));
+  const fake = fakeClis(parent, { mode: 'answer', learned: { add: ['Use pnpm, not npm.'], remove: [] }, hold });
+  const names = ['PATH', 'XDG_DATA_HOME', 'CLAUDE_CONFIG_DIR'], previous = Object.fromEntries(names.map(name => [name, process.env[name]]));
+  t.after(() => { for (const name of names) { if (previous[name] === undefined) delete process.env[name]; else process.env[name] = previous[name]; } });
+  for (const name of names) process.env[name] = fake.env[name];
+  // Both hold nothing on no remote: their work is committed and on another branch there too.
+  const repo = withHome(devbox.home, () => {
+    const made = repository(project.root);
+    for (const [id, goal] of [['1', 'Trim coupon codes'], ['2', 'Round totals']]) {
+      liveTask(project.root, { id, goal, state: 'stopped' }); const folder = path.join(made.worktrees, id);
+      git(folder, ['add', '.']); git(folder, ['commit', '-qm', goal]); git(project.root, ['branch', `kept-${id}`, `feat/task-${id}`]);
+      closeSession(made, id);
+    }
+    relist(); return made;
+  });
+  await withHome(laptop.home, () => listTick(viewCtx));
+  const refOf = title => withHome(laptop.home, () => remoteMachines()[0]).sessions.find(row => row.title === title).ref;
+  const refs = [refOf('Trim coupon codes'), refOf('Round totals')];
+  fs.writeFileSync(hold, '');
+  const running = withHome(devbox.home, () => host['elu.remote.delete']({ refs, learn: true }, connection(laptop.identity.key))); running.catch(() => {});
+  const started = Date.now();
+  while (!(fs.existsSync(path.join(parent, 'inputs.jsonl')) && fs.readFileSync(path.join(parent, 'inputs.jsonl'), 'utf8').includes('about to delete'))) { assert.ok(Date.now() - started < 30000, 'the lessons run started'); await pause(25); }
+  // Meanwhile 1 comes back with a message, and its turn commits on its branch; 2 stays archived,
+  // and a file is added in its folder by hand.
+  const folder1 = path.join(repo.worktrees, '1'), folder2 = path.join(repo.worktrees, '2');
+  withHome(devbox.home, () => {
+    const one = readTask(repo, '1'); saveTask(repo, { ...one, state: 'ready', runs: [...one.runs, { at: new Date(Date.now() + 1000).toISOString(), role: 'lead' }] });
+    fs.writeFileSync(path.join(folder1, 'later.txt'), 'later\n'); git(folder1, ['add', '.']); git(folder1, ['commit', '-qm', 'Later']);
+    fs.writeFileSync(path.join(folder2, 'notes.txt'), 'by hand\n');
+  });
+  fs.rmSync(hold, { force: true });
+  const done = await running;
+  assert.deepEqual(done.lines, ['Saved to project context: Use pnpm, not npm.']);
+  assert.deepEqual(done.deleted.map(row => [row.shown, row.kept?.branch ?? null]), [['Round totals', 'feat/task-2']]);
+  assert.deepEqual(done.failed, ['"Trim coupon codes": It is no longer archived.']);
+  withHome(devbox.home, () => {
+    assert.equal(fs.existsSync(taskDir(repo, '1')), true); assert.equal(fs.readFileSync(path.join(folder1, 'later.txt'), 'utf8'), 'later\n');
+    assert.equal(fs.existsSync(taskDir(repo, '2')), false); assert.equal(fs.readFileSync(path.join(folder2, 'notes.txt'), 'utf8'), 'by hand\n');
+    assert.match(git(project.root, ['branch', '--list', 'feat/task-*']), /feat\/task-1[\s\S]*feat\/task-2/);
+  });
+});
+
 // A computer of mine on ELU 0.1.25 cannot delete its sessions from here: one line names it and
 // the version it needs, and nothing is sent. A teammate's computer refuses in one line.
 test('cleaning up on my computer on an ELU before 0.1.26 names the version it needs and sends nothing; a teammate is refused', async t => {

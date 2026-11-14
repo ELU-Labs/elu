@@ -4140,6 +4140,42 @@ test('Learn, then delete deletes nothing when the lessons run does not work, and
   assert.deepEqual(readBoard(p.repo).archived, ['4']);
 });
 
+// The lessons run takes as long as the model does. What was checked before it is checked again
+// after it: a session that came back from the archive while it ran is not deleted, and work
+// on no remote that appeared meanwhile, which the owner was never asked about, is kept.
+test('Learn, then delete leaves a session that came back while the lessons ran, and keeps work on no remote that appeared meanwhile', async t => {
+  const hold = path.join(os.tmpdir(), `elu-hold-${process.pid}-${Date.now()}`); t.after(() => fs.rmSync(hold, { force: true }));
+  const p = setup(t, 'answer', { learned: { add: ['Use pnpm, not npm.'], remove: [] }, hold }); registerProject(p.repo);
+  const branches = () => git(p.root, ['branch', '--list', '--format=%(refname:short)']).split('\n').filter(Boolean).sort();
+  // Both hold nothing on no remote: their work is committed and on another branch here too.
+  for (const [id, goal] of [['4', 'Trim coupon codes'], ['5', 'Round totals']]) {
+    liveTask(p.root, { id, goal, state: 'stopped' }); const folder = path.join(p.repo.worktrees, id);
+    git(folder, ['add', '.']); git(folder, ['commit', '-qm', goal]); git(p.root, ['branch', `kept-${id}`, `feat/task-${id}`]);
+    closeSession(p.repo, id);
+  }
+  const v = await view(t, { repo: p.repo }), panels = v.current.panels;
+  v.output.columns = 140; v.output.rows = 50; v.output.emit('resize');
+  await send(v, '/sessions'); await send(v, '/archived clean'); await until(() => modal(v, 'Clean up'), 'the clean-up question');
+  fs.writeFileSync(hold, '');
+  v.input.write('\r');
+  await until(() => /Reading 2 sessions for what you taught\. Esc stops\./.test(panels.status.getText()), 'reading them');
+  await until(() => { try { return fs.readFileSync(path.join(p.parent, 'inputs.jsonl'), 'utf8').includes('about to delete'); } catch { return false; } }, 'the lessons run started');
+  // Meanwhile 4 comes back with a message, and its turn commits on its branch; 5 stays
+  // archived, and a file is added in its folder by hand.
+  const four = readTask(p.repo, '4'); saveTask(p.repo, { ...four, state: 'ready', runs: [...four.runs, { at: new Date(Date.now() + 1000).toISOString(), role: 'lead' }] });
+  const folder4 = path.join(p.repo.worktrees, '4'); fs.writeFileSync(path.join(folder4, 'later.txt'), 'later\n'); git(folder4, ['add', '.']); git(folder4, ['commit', '-qm', 'Later']);
+  fs.writeFileSync(path.join(p.repo.worktrees, '5', 'notes.txt'), 'by hand\n');
+  fs.rmSync(hold, { force: true });
+  await until(() => modal(v, 'Saved to the project context'), 'what was saved', 20000);
+  const notes = dialogNotes(v, 'Saved to the project context');
+  assert.match(notes, /Deleted "Round totals"\. Kept its work on feat\/task-5\./);
+  assert.match(notes, /Not deleted: "Trim coupon codes": It is no longer archived\./);
+  // 4 is whole, with its new commit; 5's records went and its new file stayed in its folder.
+  assert.equal(fs.existsSync(taskDir(p.repo, '4')), true); assert.equal(fs.readFileSync(path.join(folder4, 'later.txt'), 'utf8'), 'later\n');
+  assert.equal(fs.existsSync(taskDir(p.repo, '5')), false); assert.equal(fs.readFileSync(path.join(p.repo.worktrees, '5', 'notes.txt'), 'utf8'), 'by hand\n');
+  assert.ok(branches().includes('feat/task-4') && branches().includes('feat/task-5'), branches().join(' '));
+});
+
 test('a running session is never closed, and closing records when', t => {
   const p = setup(t);
   liveTask(p.root, { id: '6', goal: 'Long job', state: 'ready' });

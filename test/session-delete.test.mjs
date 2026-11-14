@@ -91,7 +91,7 @@ test('a session with work on no remote says how much, keeps it on request, and l
   assert.deepEqual(branches(f.root).sort(), ['feat/task-2', 'main']);
 });
 
-test('the owner\'s own checkout and a branch he named are never deleted with a session, and a running session is refused', t => {
+test('the owner\'s own checkout and a branch he named are never deleted with a session, and a running session or one not archived is refused', t => {
   const f = setup(t);
   git(f.root, ['branch', 'mine']);
   const base = git(f.root, ['rev-parse', 'HEAD']), place = path.join(f.repo.worktrees, '3');
@@ -101,6 +101,9 @@ test('the owner\'s own checkout and a branch he named are never deleted with a s
   saveTask(f.repo, { id: '3', goal: 'On his branch', state: 'stopped', place: { kind: 'branch', branch: 'mine' }, worktree: place, branch: 'mine', base, createdAt: new Date().toISOString(), runs: [], reviews: [], messages: [], sessions: {} });
   fs.writeFileSync(path.join(f.root, 'notes.txt'), 'his own edit\n');
   assert.deepEqual(unpushedWork(f.repo, readTask(f.repo, '2')), { commits: 0, edits: 0 });
+  // Only an archived session is deleted.
+  assert.throws(() => f.controller.deleteSession('2'), /It is no longer archived\./);
+  archive(f, '2'); archive(f, '3');
   f.controller.deleteSession('2'); f.controller.deleteSession('3');
   assert.equal(fs.readFileSync(path.join(f.root, 'notes.txt'), 'utf8'), 'his own edit\n');
   assert.ok(branches(f.root).includes('mine')); assert.equal(fs.existsSync(place), false);

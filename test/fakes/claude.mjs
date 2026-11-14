@@ -125,8 +125,8 @@ else for await (const chunk of process.stdin) input+=chunk;
 // as the real CLI refuses piped input over 10MB: one line on stderr, nothing on stdout, exit 1.
 if(typeof cfg.stdinLimit==='number'&&input.length>cfg.stdinLimit){console.error('Error: piped stdin input exceeds 10MB. Pass large content as a file path in your prompt instead.');process.exit(1);}
 if(cfg.inputs)fs.appendFileSync(cfg.inputs, JSON.stringify({vendor,args,input})+'\n');
-// accounts.hold (fake.json): while that file is there, a run waits before it answers.
-if(cfg.accounts?.hold)while(fs.existsSync(cfg.accounts.hold))await new Promise(resolve=>setTimeout(resolve,20));
+// hold, or accounts.hold (fake.json): while that file is there, a run waits before it answers.
+{const hold=cfg.hold??cfg.accounts?.hold;if(hold)while(fs.existsSync(hold))await new Promise(resolve=>setTimeout(resolve,20));}
 const result={outcome:'done',summary:'Updated coupon normalization.',question:null,choices:[],comments:[],responses:[]};
 const schemaArg=args.indexOf('--json-schema');
 const schema=schemaArg>=0?JSON.parse(args[schemaArg+1]):null;
