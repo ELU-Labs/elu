@@ -2070,8 +2070,18 @@ test('an unheard leave goes with the invite proof, so the inviter lets the membe
 });
 
 test('elu team leave and remove start the daemon for them, and a member on no team after a leave stops it; elu peer uninstall stops it from any folder; elu peers stops an older version\'s daemon on no team', { timeout: 240000 }, async t => {
-  const exits = [], crew = makeTeam(t), home = crew.member.home, founderHome = crew.founder.home;
-  t.after(async () => { for (const kill of exits) await kill(); for (const h of [home, founderHome]) withHome(h, () => { if (peer.peerStatus().running) peer.stopPeer(); }); });
+  const exits = [], homes = [];
+  // Set before the homes are made, so it runs before they are removed: each daemon is stopped
+  // and waited for. One still writing its files would leave its home not empty.
+  t.after(async () => {
+    for (const kill of exits) await kill();
+    for (const h of homes) {
+      const pid = state(h)?.pid, ended = () => { try { process.kill(pid, 0); return false; } catch { return true; } };
+      withHome(h, () => { if (peer.peerStatus().running) peer.stopPeer(); });
+      await until(() => !withHome(h, () => peer.peerStatus().running) && (!pid || ended()), 'the daemon stopped before its home is removed', 30000).catch(() => {});
+    }
+  });
+  const crew = makeTeam(t), home = crew.member.home, founderHome = crew.founder.home; homes.push(home, founderHome);
   const bootstrap = await testnet(t); enable(home, bootstrap); enable(founderHome, bootstrap);
   // The login item lives under HOME on macOS: a scratch one, so nothing of this machine's is touched.
   const previous = process.env.HOME; process.env.HOME = path.dirname(home);
@@ -2539,6 +2549,7 @@ test('a result of any length reaches the teammate whole: over 16000 characters a
   tell(long);
   await until(() => askRecord(ana.home, askId)?.result?.text === long, 'the long result at ana');
   assert.deepEqual(lines(sara.home, 'out'), [long]); assert.deepEqual(lines(ana.home, 'in'), [long]);
+  await until(() => continued().length === 1, 'the chat continued with the long result');
   assert.deepEqual(continued(), [long]);
 
   // Sara checks what goes to Ana first, and writes a much longer result in its place: over
@@ -2551,6 +2562,8 @@ test('a result of any length reaches the teammate whole: over 16000 characters a
   await run(sara.home, { type: 'approve', id: held.id, text: huge });
   await until(() => askRecord(ana.home, askId)?.result?.text === huge, 'the result over 1 MiB at ana', 120000);
   assert.deepEqual(lines(sara.home, 'out'), [long, huge]); assert.deepEqual(lines(ana.home, 'in'), [long, huge]);
+  // The chat is continued right after the result is kept: a moment later under load.
+  await until(() => continued().length === 2, 'the chat continued with the second result');
   assert.deepEqual(continued(), [long, huge]);
   // The thread reads whole on both sides, and its chain holds after the long lines.
   for (const home of [ana.home, sara.home]) {

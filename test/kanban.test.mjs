@@ -143,7 +143,7 @@ test('teammates\' Tasks are cards on the same columns, with their name, counted 
   // None, or nothing usable, changes nothing.
   assert.deepEqual(names(boardColumns(readBoard(repo), { tasks: [], queue: [] }, now, [{ name: 'x' }, null])), { todo: ['My own card'], progress: [], needs: [], done: [] });
   // The name stays beside the title however narrow the column, and a long name is cut.
-  assert.deepEqual(fitTeammateCard('Fix the real ELU issues in the web app', 'sara on devbox · 1/2 · high', 30), { title: 'Fix the real…', detail: 'sara on devbox' });
+  assert.deepEqual(fitTeammateCard('Fix the real tax errors in the web app', 'sara on devbox · 1/2 · high', 30), { title: 'Fix the real…', detail: 'sara on devbox' });
   assert.deepEqual(fitTeammateCard('Short', 'sara · 1/2 · high', 30), { title: 'Short', detail: 'sara · 1/2 · high' });
   assert.equal(teammateLabel({ name: 'a'.repeat(40), box: 'b'.repeat(40) }).length, 24 + 4 + 24);
   assert.deepEqual(fitTeammateCard('Title', teammateLabel({ name: 'a'.repeat(40), box: 'b'.repeat(40) }), 20), { title: 'Title', detail: `${'a'.repeat(9)}…` });

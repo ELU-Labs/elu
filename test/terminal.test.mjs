@@ -1788,6 +1788,8 @@ test('the status line shows a long message whole on as many rows as it needs, an
   for (const [name, pane] of Object.entries(above)) {
     // A new view starts with no message: the pane above has all its rows.
     await send(v, `/${name === 'tasks' ? 'sessions' : name}`); await until(() => v.current.view === name && drawn().length === 1 && pane().atop + pane().height === g.statusTop, `${name}, with its rows`);
+    // Usage reads the vendors when it opens and says when it has: the long line comes after that one.
+    if (name === 'usage') await until(() => /^Usage updated /.test(panels.status.getText().replace(/^› /, '')), 'Usage has read the vendors');
     await send(v, '/bots frob x'); await until(() => /^› /.test(drawn()[0] ?? '') && drawn().length > 1, `a long line in ${name}`);
     const rows = drawn();
     assert.equal(whole(), LONG, `${name}: nothing is cut`);
@@ -1817,7 +1819,9 @@ test('at 80x24 what a key on a bot\'s page just did shows under the page, not be
   const p = setup(t); noBots(); readModels();
   saveBot({ name: 'nightly', vendor: 'claude', schedule: 'every 1h', instructions: 'Tidy the notes.' });
   const v = await view(t, { repo: p.repo }), panels = v.current.panels, page = () => modal(v, 'Bot @nightly');
-  const drawn = () => panels.status.getScreenLines().map(row => row.trimEnd()), screenRow = y => v.frame().split('\n')[y];
+  // screenRow: a row as a render leaves it. A draw that changed nothing sets each panel's text again
+  // without rendering, which blanks the panel in the screen's own copy until the next render.
+  const drawn = () => panels.status.getScreenLines().map(row => row.trimEnd()), screenRow = y => { v.current.screen.render(); return v.frame().split('\n')[y]; };
   await send(v, '/bots'); await until(() => v.current.view === 'bots' && panels.botsList.items.length === 1, 'one bot');
   panels.botsList.focus(); v.input.write('\r'); await until(() => page(), 'its page');
   dialogList(v, 'Bot @nightly').select(4); v.input.write('\r'); await dialog(v, 'Schedule', '');
@@ -2484,7 +2488,7 @@ test('on a row that waits on an approval y, n, f and a act with Enter, and a mes
   await send(v, 'Check the build'); await until(() => projectSnapshot(p.repo).tasks[0]?.activeRole === 'lead', 'the model is working');
   const id = projectSnapshot(p.repo).tasks[0].id, mode = readTask(p.repo, id).permissions, waiting = () => pendingRequests(p.root).filter(row => row.continuationTaskId === id && row.state === 'queued').map(row => row.goal);
   const wants = (name, command) => requestApproval({ id: name, root: p.root, taskId: id, role: 'lead', vendor: 'claude', tool: 'Bash', input: { command, dangerouslyDisableSandbox: true }, cwd: p.root, access: 'read', rules: 'saved' });
-  const onRow = async () => { await selectRow(v, /Check the build/); await until(() => /y allow {2}n deny {2}f full access {2}a always {2}enter open {2}letter then enter {2}tab next/.test(keys()), 'the keys of the row that waits'); };
+  const onRow = async () => { await selectRow(v, /Check the build/); await until(() => /y allow {2}n deny {2}f full access {2}a always {2}d changes {2}enter open {2}letter then enter {2}tab next/.test(keys()), 'the keys of the row that waits, d among them'); };
   const lone = async (key, does) => { await onRow(); v.type(key); await until(() => ask.getValue() === key && new RegExp(`enter ${does} · keep typing to write a message`).test(keys()), `the line under the box names ${key}`); await pause(150); };
   const asks = async (name, command) => { wants(name, command); await onRow(); await until(() => panels.chat.getText().includes(`Run: ${command} outside the sandbox\nEsc, then y allow · n deny · f full access · a always, then Enter`), `the chat asks for ${command}`); };
   await asks('run-a', 'npm test');
@@ -4287,7 +4291,7 @@ test('approvals wait under Needs you first; y allows, n denies, Enter shows one,
   requestApproval({ id: 'run-2-c', root: p.root, taskId: '2', role: 'lead', vendor: 'claude', tool: 'Edit', input: { file_path: '/elsewhere/notes.md' } });
   await until(() => /Waiting for your approval\nOpus wants to:\nEdit: \/elsewhere\/notes\.md\nEsc, then y allow · n deny · f full access, then Enter/.test(chat()), 'approval in the chat');
   // As the chat says: Esc leaves the box for the list, on the session's own row, and y answers there.
-  v.input.write('\x1b'); await until(() => v.current.screen.focused === board && /\? Install the deps/.test(cursor(v)) && /y allow {2}n deny {2}f full access {2}enter open/.test(panels.keys.getText()), 'Esc, on the session’s row');
+  v.input.write('\x1b'); await until(() => v.current.screen.focused === board && /\? Install the deps/.test(cursor(v)) && /y allow {2}n deny {2}f full access {2}d changes {2}enter open/.test(panels.keys.getText()), 'Esc, on the session’s row');
   v.input.write('y'); await until(() => answer('run-2-c') === 'allow' && /Allowed\./.test(status()), 'allowed from the session’s row');
   await until(() => !/Waiting for your approval/.test(chat()), 'the chat no longer waits');
   // With the chat itself focused, y and n answer too. n does not start a new session.
@@ -4362,7 +4366,7 @@ test('f beside y and n allows what waits and gives the session Full access; wher
   await until(() => /^\? Needs you · Esc, then y allow · n deny · f full access, then Enter · Run: grep/.test(status()), 'at 140 columns the whole row'); assert.ok(fits());
   v.output.columns = 80; v.output.emit('resize'); await until(() => v.current.screen.width === 80 && status().split('\n')[0] === '? Esc, y allow · n deny · f full access, Enter', 'back to 80 columns');
   // From the session's row in the list f asks once, as /permissions full does. No leaves everything as it was.
-  v.input.write('\x1b'); await until(() => v.current.screen.focused === panels.board && /y allow {2}n deny {2}f full access {2}enter open/.test(keys()), 'the list names f');
+  v.input.write('\x1b'); await until(() => v.current.screen.focused === panels.board && /y allow {2}n deny {2}f full access {2}d changes {2}enter open/.test(keys()), 'the list names f');
   v.input.write('f'); await dialog(v, 'Full access', 'n'); await until(() => !modal(v, 'Full access'), 'declined');
   assert.equal(answer('run-3-a'), null); assert.equal(readTask(p.repo, '3').permissions, 'ask');
   // With the chat itself focused f answers too, after the same question.
@@ -4376,7 +4380,7 @@ test('f beside y and n allows what waits and gives the session Full access; wher
   await openTask(v, /Sweep the l/); await until(() => v.current.session === '4', 'the other session is open');
   wants('run-4-a', '4', 'ls logs', 'bot:scout');
   await until(() => /@scout wants to:\nRun: ls logs\nEsc, then y allow · n deny · f full access/.test(chat()), 'the chat names f');
-  v.input.write('\x1b'); await until(() => v.current.screen.focused === panels.board && /y allow {2}n deny {2}f full access {2}enter open/.test(keys()), 'the list names f');
+  v.input.write('\x1b'); await until(() => v.current.screen.focused === panels.board && /y allow {2}n deny {2}f full access {2}d changes {2}enter open/.test(keys()), 'the list names f');
   v.input.write('f'); await dialog(v, 'Full access', 'y');
   await until(() => answer('run-4-a') === 'allow', 'allowed'); assert.equal(readTask(p.repo, '4').permissions, 'full');
   wants('run-4-b', '4', 'npm test', 'bot:scout'); await until(() => answer('run-4-b') === 'allow', 'what it asks next is allowed without a key');
@@ -4397,7 +4401,7 @@ test('a beside y and n keeps the rule for this project and allows what it covers
   await openTask(v, /Run the tes/); await until(() => v.current.session === '3', 'his session is open');
   wants('run-3-a', '3', 'npm test'); wants('run-3-b', '3', 'npm test -- --watch'); wants('run-3-c', '3', 'curl -s https://example.test/');
   await until(() => /Run: npm test outside the sandbox\nEsc, then y allow · n deny · f full access · a always, then Enter/.test(chat()), 'the chat names a');
-  v.input.write('\x1b'); await until(() => v.current.screen.focused === panels.board && /y allow {2}n deny {2}f full access {2}a always {2}enter open/.test(keys()), 'the list names a');
+  v.input.write('\x1b'); await until(() => v.current.screen.focused === panels.board && /y allow {2}n deny {2}f full access {2}a always {2}d changes {2}enter open/.test(keys()), 'the list names a');
   // a shows the rule in plain words and asks where; Esc keeps nothing.
   click(v, panels.chat, 4, 1); await until(() => v.current.screen.focused === panels.chat, 'the chat is focused');
   v.input.write('a'); await until(() => modal(v, 'Always allow'), 'where');
@@ -5857,7 +5861,7 @@ async function homeLayout(t, mode = 'normal') {
   const repo = projectFolder(fs.realpathSync(home)); registerProject(repo);
   return { ...p, home: repo.root, web, homeRepo: repo };
 }
-const TEAMMATE = { kind: 'handoff', peer: 'b'.repeat(64), name: 'ali', threadId: 'thread-1', own: true };
+const TEAMMATE = { kind: 'handoff', peer: 'b'.repeat(64), name: 'aki', threadId: 'thread-1', own: true };
 const lastClaude = p => fs.readFileSync(p.calls, 'utf8').trim().split('\n').map(line => JSON.parse(line)).filter(row => row.vendor === 'claude' && row.args.includes('-p')).at(-1).args;
 
 // "I approve" in a teammate-started session whose Task stopped, with the app opened at start.
@@ -5892,7 +5896,7 @@ test('the app opened in the repository: the same "I approve" runs the same way',
 test('the app: a teammate-started session that works in the home folder asks once before the owner\'s message goes; y keeps it and the message runs, n sends nothing', { timeout: 60000 }, async t => {
   const p = await homeLayout(t, 'answer');
   const controller = new ProjectController(p.homeRepo);
-  const first = await controller.ask('Work on the handoff from @ali shown in the peer data block.', null, { origin: { ...TEAMMATE, a2aTaskId: 'task-1', hop: 1 }, context: 'Where are the tests?', permissions: 'ask', home: true }).finished;
+  const first = await controller.ask('Work on the handoff from @aki shown in the peer data block.', null, { origin: { ...TEAMMATE, a2aTaskId: 'task-1', hop: 1 }, context: 'Where are the tests?', permissions: 'ask', home: true }).finished;
   await controller.close();
   const { homeAllowed: _allowed, ...rest } = readTask(p.homeRepo, first.id); saveTask(p.homeRepo, rest);
   const v = await view(t, { repo: p.homeRepo });
@@ -5917,7 +5921,7 @@ test('the app: a teammate-started session that works in the home folder asks onc
 // record, as one from before 0.1.9 is. Returns its id.
 async function homeTeammateSession(p) {
   const controller = new ProjectController(p.homeRepo);
-  const first = await controller.ask('Work on the handoff from @ali shown in the peer data block.', null, { origin: { ...TEAMMATE, a2aTaskId: 'task-1', hop: 1 }, context: 'Where are the tests?', permissions: 'ask', home: true }).finished;
+  const first = await controller.ask('Work on the handoff from @aki shown in the peer data block.', null, { origin: { ...TEAMMATE, a2aTaskId: 'task-1', hop: 1 }, context: 'Where are the tests?', permissions: 'ask', home: true }).finished;
   await controller.close();
   const { homeAllowed: _allowed, ...rest } = readTask(p.homeRepo, first.id); saveTask(p.homeRepo, rest);
   return first.id;
@@ -5926,25 +5930,25 @@ test('the app: a teammate\'s message held for a session in the home folder waits
   const p = await homeLayout(t, 'answer'), id = await homeTeammateSession(p);
   const v = await view(t, { repo: p.homeRepo }), status = () => v.current.panels.status.getText();
   await wide(v);
-  const row = enqueue(p.home, 'Work on the handoff from @ali shown in the peer data block.', { continuationTaskId: id, origin: { ...TEAMMATE, a2aTaskId: 'task-2', hop: 1 }, context: 'And the docs?', permissions: 'ask' });
+  const row = enqueue(p.home, 'Work on the handoff from @aki shown in the peer data block.', { continuationTaskId: id, origin: { ...TEAMMATE, a2aTaskId: 'task-2', hop: 1 }, context: 'And the docs?', permissions: 'ask' });
   const held = () => pendingRequests(p.home).find(value => value.id === row.id);
   await until(() => held()?.state === 'waiting', 'the conductor holds the message', 20000);
   assert.equal(held().reason, HOME_QUESTION);
   // Its row is under Needs you and says what it waits for.
-  await until(() => /NEEDS YOU/.test(rows(v).join('\n')) && rows(v).some(text => /@ali task/.test(text)), 'the row under Needs you').catch(error => { throw new Error(`${error.message}: ${rows(v).join(' | ')}`); });
-  await selectRow(v, /@ali task/);
+  await until(() => /NEEDS YOU/.test(rows(v).join('\n')) && rows(v).some(text => /@aki task/.test(text)), 'the row under Needs you').catch(error => { throw new Error(`${error.message}: ${rows(v).join(' | ')}`); });
+  await selectRow(v, /@aki task/);
   await until(() => /This session's project is your home folder\. Let it run here\?/.test(v.current.panels.chat.getText().replace(/\n┃ /g, ' ').replace(/\s+/g, ' ')), 'the question beside the list');
   // n: nothing changes, and it waits.
   v.input.write('y'); await dialog(v, 'Home folder', 'n');
   await until(() => /It waits for you\./.test(status()), 'n leaves it');
   assert.equal(held().state, 'waiting'); assert.equal(readTask(p.homeRepo, id).homeAllowed, undefined);
   // y: kept on the session, and the message runs.
-  await selectRow(v, /@ali task/);
+  await selectRow(v, /@aki task/);
   v.input.write('y');
   await until(() => modal(v, 'Home folder'), 'the question again');
   assert.match(dialogText(v, 'Home folder'), /This session's project is your home folder\. Let it run here\?\n\ny yes · n no/);
   await dialog(v, 'Home folder', 'y');
-  await until(() => /Approved @ali\. It runs in your home folder\./.test(status()), 'the approve line');
+  await until(() => /Approved @aki\. It runs in your home folder\./.test(status()), 'the approve line');
   assert.equal(readTask(p.homeRepo, id).homeAllowed, true);
   await until(() => held()?.state === 'done', 'the message ran', 30000);
   const value = readTask(p.homeRepo, id);
@@ -6147,41 +6151,41 @@ test('a pasted server config whose key does not read, or whose URL holds the key
 const REFUSED = "A teammate's message never runs in your home folder. Open ELU in the project folder, then approve again.";
 function ownerState(p) {
   const began = ago(11 * 3600), latest = ago(60);
-  liveTask(p.root, { id: '3', goal: 'ELU Issues', state: 'ready' });
-  saveTask(p.repo, { ...readTask(p.repo, '3'), state: 'running', activeRole: 'lead', activeSince: latest, owner: { pid: process.pid, identity: processIdentity(process.pid) }, messages: [{ at: began, text: 'ELU Issues' }, { at: latest, text: 'you have my approval' }] });
+  liveTask(p.root, { id: '3', goal: 'Email logs', state: 'ready' });
+  saveTask(p.repo, { ...readTask(p.repo, '3'), state: 'running', activeRole: 'lead', activeSince: latest, owner: { pid: process.pid, identity: processIdentity(process.pid) }, messages: [{ at: began, text: 'Email logs' }, { at: latest, text: 'you have my approval' }] });
   const blocked = createdAt => saveRequest(p.root, 'I approve', null, { state: 'blocked', reason: REFUSED, priority: 0, continuationTaskId: '3', taskId: null, attempts: 0, notBefore: null, queuedAt: createdAt, createdAt });
   const old = [blocked(ago(10 * 3600 + 170)), blocked(ago(10 * 3600))];
   const newest = saveRequest(p.root, 'you have my approval', null, { state: 'running', priority: 0, continuationTaskId: '3', taskId: '3', attempts: 0, notBefore: null, queuedAt: latest, createdAt: latest });
   return { old, newest };
 }
-const ownerAsk = () => ({ id: 'in-ali', kind: 'incoming', peer: KEYS.li, name: 'ali', project: null, text: 'testing if u get my messages', at: ago(10 * 3600 + 100), state: 'submitted', threadId: 'th-ali', request: 'ask' });
+const ownerAsk = () => ({ id: 'in-aki', kind: 'incoming', peer: KEYS.li, name: 'aki', project: null, text: 'testing if u get my messages', at: ago(10 * 3600 + 100), state: 'submitted', threadId: 'th-aki', request: 'ask' });
 
 test("the owner's list: his one running session is one row, its spent messages leave the queue, and n in the pane beside the list declines the teammate's question", { timeout: 40000 }, async t => {
   const p = setup(t), { newest } = ownerState(p);
   const peer = fakePeer({ items: [ownerAsk()] }), v = await view(t, { repo: p.repo, peer }), panels = v.current.panels, status = () => panels.status.getText();
   await wide(v);
-  await until(() => rows(v).some(row => /@ali question/.test(row)) && rows(v).some(row => /ELU Issues/.test(row)), 'his rows');
+  await until(() => rows(v).some(row => /@aki question/.test(row)) && rows(v).some(row => /Email logs/.test(row)), 'his rows');
   // The first load takes the two old messages out of the queue for good; nothing else is touched.
   await until(() => pendingRequests(p.root).map(row => row.id).join() === newest.id, 'the spent messages leave the queue');
   const list = rows(v).join('\n');
   assert.match(list, /NEEDS YOU 1 /); assert.match(list, /RUNNING 1 /); assert.doesNotMatch(list, /I approve|NEEDS YOU [2-9]/);
-  assert.equal(rows(v).filter(row => /ELU Issues/.test(row)).length, 1, 'one session, one row');
+  assert.equal(rows(v).filter(row => /Email logs/.test(row)).length, 1, 'one session, one row');
   // The question beside the list names its keys, and they work there: n declines it and starts nothing.
-  await selectRow(v, /@ali question/);
+  await selectRow(v, /@aki question/);
   await until(() => /y accept · n decline · enter read/.test(panels.chat.getText()), 'its keys beside the list');
   panels.chat.focus();
   await until(() => /y accept {2}n decline {2}c decline {2}letter then enter {2}↑↓ scroll {2}esc sessions/.test(panels.keys.getText()), 'the same keys while the pane has the focus');
   // Ctrl-Y and Ctrl-N there answer nothing.
   v.input.write('\x19'); v.input.write('\x0e'); await pause(300);
   assert.deepEqual(peer.sent.filter(c => ['approve', 'discard', 'work'].includes(c.type)), [], 'Ctrl-Y and Ctrl-N answer nothing');
-  assert.ok(rows(v).some(row => /@ali question/.test(row)), 'the question still waits');
+  assert.ok(rows(v).some(row => /@aki question/.test(row)), 'the question still waits');
   v.input.write('n');
-  await until(() => peer.sent.some(c => c.type === 'discard' && c.id === 'in-ali') && /Declined @ali's message\./.test(status()), 'n declines it from the pane');
+  await until(() => peer.sent.some(c => c.type === 'discard' && c.id === 'in-aki') && /Declined @aki's message\./.test(status()), 'n declines it from the pane');
   assert.equal(panels.ask.getValue(), ''); assert.deepEqual(pendingRequests(p.root).map(row => row.goal), ['you have my approval'], 'no session was started');
   assert.deepEqual(projectSnapshot(p.repo).tasks.map(task => task.id), ['3']);
   // y works there too.
   v.input.write('y');
-  await until(() => peer.sent.some(c => c.type === 'approve' && c.id === 'in-ali'), 'y accepts it from the pane');
+  await until(() => peer.sent.some(c => c.type === 'approve' && c.id === 'in-aki'), 'y accepts it from the pane');
 });
 
 test('c takes away whatever the list shows: a blocked message is removed, a teammate\'s message is declined, and a session with a message that did not run is archived with it', { timeout: 40000 }, async t => {
@@ -6282,7 +6286,7 @@ test('y or n alone in an open session answers what it waits on; with nothing wai
 test("Ctrl-C beside the list declines nothing: the teammate's question is never answered by it", { timeout: 30000 }, async t => {
   const p = setup(t), peer = fakePeer({ items: [ownerAsk()] }), v = await view(t, { repo: p.repo, peer }), panels = v.current.panels;
   await wide(v);
-  await selectRow(v, /@ali question/);
+  await selectRow(v, /@aki question/);
   await until(() => /y accept · n decline · enter read · c decline/.test(panels.chat.getText()), 'its keys beside the list');
   panels.chat.focus();
   await until(() => /y accept {2}n decline {2}c decline/.test(panels.keys.getText()), 'the pane has the focus');
@@ -6319,12 +6323,12 @@ test('a lone y answers only the row it was typed on: when that row leaves the li
 
 test('while the session works, its message that did not run says why, without keys that would act on the turn', { timeout: 30000 }, async t => {
   const p = setup(t), began = ago(600), now = new Date().toISOString();
-  liveTask(p.root, { id: '3', goal: 'ELU Issues', state: 'ready' });
-  saveTask(p.repo, { ...readTask(p.repo, '3'), state: 'running', activeRole: 'lead', activeSince: now, owner: { pid: process.pid, identity: processIdentity(process.pid) }, messages: [{ at: began, text: 'ELU Issues' }] });
+  liveTask(p.root, { id: '3', goal: 'Email logs', state: 'ready' });
+  saveTask(p.repo, { ...readTask(p.repo, '3'), state: 'running', activeRole: 'lead', activeSince: now, owner: { pid: process.pid, identity: processIdentity(process.pid) }, messages: [{ at: began, text: 'Email logs' }] });
   saveRequest(p.root, 'Add the migration step', null, { state: 'blocked', reason: 'The model was not available.', blockedAt: now, priority: 0, continuationTaskId: '3', taskId: null, attempts: 0, notBefore: null, queuedAt: ago(60), createdAt: ago(60) });
   const v = await view(t, { repo: p.repo }), panels = v.current.panels, chat = () => panels.chat.getText().replace(/\n┃ /g, ' ').replace(/\s+/g, ' ');
   await wide(v);
-  await selectRow(v, /ELU Issues/);
+  await selectRow(v, /Email logs/);
   await until(() => /You \(blocked\)[^]*Add the migration step[^]*The model was not available\./.test(chat()), 'its chat says why');
   assert.doesNotMatch(chat(), /r sends it again/);
   assert.equal(pendingRequests(p.root).length, 1, 'the message still waits');
@@ -6339,11 +6343,11 @@ test("a lone y or n taken as a key leaves nothing behind: not in the message box
   const peer = fakePeer({ items, results }), v = await view(t, { repo: p.repo, peer }), panels = v.current.panels;
   await wide(v);
   // Where n declines, the key bar does not also name it as new session.
-  await selectRow(v, /@ali question/);
+  await selectRow(v, /@aki question/);
   await until(() => panels.keys.getText().trim() === 'y accept  n decline  enter read  c decline  letter then enter  tab next', 'the question row keys').catch(error => { throw new Error(`${error.message}: ${panels.keys.getText()}`); });
   await send(v, 'n');
-  await until(() => peer.sent.some(c => c.type === 'discard' && c.id === 'in-ali') && /Declined @ali's message\./.test(status()), 'a lone n declines');
-  await until(() => !rows(v).some(row => /@ali question/.test(row)) && /Release notes/.test(cursor(v)), 'the question has left the list, and the cursor is on the session');
+  await until(() => peer.sent.some(c => c.type === 'discard' && c.id === 'in-aki') && /Declined @aki's message\./.test(status()), 'a lone n declines');
+  await until(() => !rows(v).some(row => /@aki question/.test(row)) && /Release notes/.test(cursor(v)), 'the question has left the list, and the cursor is on the session');
   assert.equal(panels.ask.getValue(), '');
   await selectRow(v, /\+ New session/);
   assert.equal(panels.ask.getValue(), '', 'the new session has no draft');
@@ -6366,32 +6370,32 @@ test('in the list a lone y or n answers what the selected session waits on and i
   const p = setup(t), began = ago(600), now = new Date().toISOString(), status = () => v.current.panels.status.getText();
   const answer = id => { const file = path.join(approvalsDir(), `${id}.answer.json`); return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')).decision : null; };
   const sent = text => pendingRequests(p.root).some(row => row.goal === text) || readTask(p.repo, '3').messages.some(row => row.text === text);
-  liveTask(p.root, { id: '3', goal: 'ELU Issues', state: 'ready' });
-  saveTask(p.repo, { ...readTask(p.repo, '3'), permissions: 'ask', state: 'running', activeRole: 'lead', activeSince: now, owner: { pid: process.pid, identity: processIdentity(process.pid) }, messages: [{ at: began, text: 'ELU Issues' }] });
+  liveTask(p.root, { id: '3', goal: 'Email logs', state: 'ready' });
+  saveTask(p.repo, { ...readTask(p.repo, '3'), permissions: 'ask', state: 'running', activeRole: 'lead', activeSince: now, owner: { pid: process.pid, identity: processIdentity(process.pid) }, messages: [{ at: began, text: 'Email logs' }] });
   const v = await view(t, { repo: p.repo }), panels = v.current.panels;
   await wide(v);
   // The cursor rests on the working session, which waits on nothing: y is refused, and nothing is sent.
-  await selectRow(v, /ELU Issues/);
+  await selectRow(v, /Email logs/);
   await send(v, 'y');
   await until(() => /› y and n answer the selected item\. Choose one in the list first\./.test(status()), 'refused').catch(error => { throw new Error(`${error.message}: ${status()} | ${JSON.stringify(pendingRequests(p.root).map(row => row.goal))}`); });
   await pause(300);
   assert.ok(!sent('y'), 'nothing was sent to the session');
   assert.equal(panels.ask.getValue(), '');
   // n is that row's key for a new session, as its key bar says: the form opens, and nothing is sent to the session.
-  await selectRow(v, /ELU Issues/);
+  await selectRow(v, /Email logs/);
   await send(v, 'n');
   await until(() => v.current.session === 'new', 'n opens the new session form'); await pause(300);
   assert.ok(!sent('n'), 'n was not sent to the session'); assert.equal(panels.ask.getValue(), '');
   // Once it waits on an approval, y on its row allows it.
   requestApproval({ id: 'run-3-a', root: p.root, taskId: '3', role: 'lead', vendor: 'claude', tool: 'Bash', input: { command: 'grep -rn issue src' } });
-  await until(() => rows(v).some(row => /\? ELU Issues/.test(row)), 'the row waits');
-  await selectRow(v, /ELU Issues/);
+  await until(() => rows(v).some(row => /\? Email logs/.test(row)), 'the row waits');
+  await selectRow(v, /Email logs/);
   await send(v, 'y');
   await until(() => answer('run-3-a') === 'allow' && /› Allowed\./.test(status()), 'a lone y allows it');
   assert.ok(!sent('y'), 'nothing was sent to the session');
   // Opened with Enter, the session's chat takes a lone n as the owner's reply.
-  await until(() => !rows(v).some(row => /\? ELU Issues/.test(row)), 'the row waits no more');
-  await openTask(v, /ELU Issues/);
+  await until(() => !rows(v).some(row => /\? Email logs/.test(row)), 'the row waits no more');
+  await openTask(v, /Email logs/);
   await send(v, 'n');
   await until(() => sent('n'), 'n goes to the session as a reply');
   assert.doesNotMatch(status(), /y and n answer/);
