@@ -468,7 +468,9 @@ working after 10 minutes. Answers show in the Standup as they come, each titled 
 session, agent and computer: "Email logs · Opus 5.5 on @devbox", "Sales Export · Opus 5.5
 here", "Billing · @billing on @kim". Then come the sessions not asked, those that declined,
 and those still working, then one line: "Standup done · 9 sessions on 4 computers · 2 not
-asked". `/stop` stops waiting. Nothing runs on a timer: only `/standup` and `@everyone` ask.
+asked". A question no session has started on after 30 minutes is taken back, and its
+session is listed; an answer that is being written is waited for, however long it takes.
+`/stop` stops waiting. Nothing runs on a timer: only `/standup` and `@everyone` ask.
 
 On a teammate's computer their own setting decides, as for any message from you: Auto asks
 their sessions at once; Manual shows them "@sam asks every session for a standup update"
