@@ -4883,16 +4883,16 @@ test('vendor rows say how to sign in, Google’s FAQ under agy, and that a vendo
     { vendor: 'codex', available: true, supported: true, signedIn: false, version: '0.166.0', support: 'lead and reviewer' },
     { vendor: 'claude', available: true, supported: true, signedIn: true, conformant: true, version: '2.1.319', support: 'lead and reviewer' },
   ] });
-  const lines = text.split('\n'), agy = lines.indexOf('  Antigravity: not signed in for ELU. Sign it in with s on its line in the Usage tab.');
+  const lines = text.split('\n'), agy = lines.indexOf('  Antigravity CLI (the agy command): not signed in for ELU. Sign it in with s on its line in the Usage tab.');
   assert.ok(agy > 0, 'the agy sign-in line');
   assert.equal(lines[agy + 1], "  Google's FAQ: wrapping agy in third-party agents is not supported on consumer plans. antigravity.google/docs/faq");
-  assert.ok(lines.includes('  Grok Build has not been checked on this machine yet. Your first message to it runs the check.'));
+  assert.ok(lines.includes('  Grok Build (the grok command) has not been checked on this machine yet. Your first message to it outside Full access runs the check; Full access needs none.'));
   assert.ok(lines.includes(`  Codex: sign in with ChatGPT. Run: ${signInCommand('codex')}`));
   assert.equal(lines.filter(line => /Google's FAQ/.test(line)).length, 1);
   assert.ok(!lines.some(line => /Claude Code: not signed in|Claude Code has not been checked/.test(line)));
-  assert.equal(vendorText({ vendor: 'grok', support: 'lead', available: true, supported: true, signedIn: true, conformant: false }), 'lead · checked on your next message to it');
+  assert.equal(vendorText({ vendor: 'grok', support: 'lead', available: true, supported: true, signedIn: true, conformant: false }), 'lead · Full access only until checked');
   // Never run yet, so neither its release nor its sign-in is known: the same words, not "not supported".
-  assert.equal(vendorText({ vendor: 'grok', support: 'sessions', available: true, supported: false, signedIn: null, version: null, conformant: false }), 'sessions · checked on your next message to it');
+  assert.equal(vendorText({ vendor: 'grok', support: 'sessions', available: true, supported: false, signedIn: null, version: null, conformant: false }), 'sessions · Full access only until checked');
   assert.equal(vendorText({ vendor: 'agy', support: 'lead', available: true, supported: true, signedIn: false }), 'lead · not signed in');
 });
 
@@ -4911,7 +4911,7 @@ test('Usage shows each account with the usage its sessions reported, r checks ag
   await until(() => /Usage updated \d\d:\d\d/.test(status()), 'first check');
   assert.match(text(), /^Claude {6}owner@example.invalid · Max 20x · active\n {12}Usage shows after your next session on Claude Code\.\n {12}old@example.invalid · last seen Nov 9 · wk 100% then\n {12}enter use · a add account · x forget$/m);
   await until(() => /^Codex {7}owner@example.invalid · Team · active\n {12}5h  \[#-----\]   18%/m.test(text()), 'the Codex block');
-  assert.match(text(), /^Antigravity not signed in for ELU · s signs in\nGrok Build {2}not installed\n\nTop agents today\nNo agent has run today\.\nELU spend today \$0\.00$/m);
+  assert.match(text(), /^Antigravity \(agy\) not signed in for ELU · s signs in\nGrok Build {2}not installed\n\nTop agents today\nNo agent has run today\.\nELU spend today \$0\.00$/m);
   assert.ok(panels.usageList.items.every(item => item.getText().length <= 76), 'every line fits the pane');
   // A session on Claude Code reports its windows. r checks again now and records them with the account.
   const saved = JSON.parse(fs.readFileSync(usageFile, 'utf8'));
@@ -5154,9 +5154,9 @@ test('Usage: Antigravity and Grok Build show their sign-in before their one-time
   const calls = () => fs.readFileSync(p.calls, 'utf8').trim().split('\n').map(line => JSON.parse(line));
   await send(v, '/usage'); await until(() => v.current.view === 'usage' && !panels.usageBox.hidden, 'Usage tab');
   // Opening the tab reads both at once: no message to either, and no check yet.
-  await until(() => /^Antigravity signed in · needs a one-time check \(c runs it now\)$/m.test(text()), 'Antigravity signed in', 20000);
-  assert.match(text(), /^Grok Build {2}signed in · needs a one-time check \(c runs it now\)$/m);
-  assert.doesNotMatch(text(), /checked on your next message/);
+  await until(() => /^Antigravity \(agy\) signed in · Full access only \(c checks it\)$/m.test(text()), 'Antigravity signed in', 20000);
+  assert.match(text(), /^Grok Build {2}\(grok\) signed in · Full access only \(c checks it\)$/m);
+  assert.doesNotMatch(text(), /Full access only until checked/);
   assert.deepEqual(calls().filter(call => ['agy', 'grok'].includes(call.vendor)).map(call => [call.vendor, call.args]), [['agy', ['--version']], ['agy', ['--help']], ['agy', ['-p', '/usage', '--output-format', 'json']]], 'Grok was not run; Antigravity was asked only for its release, help and sign-in');
   assert.equal(conformanceState('grok'), null);
   // c on the Grok line: the same check a first message runs, its steps under the vendor as it goes.
@@ -5166,18 +5166,18 @@ test('Usage: Antigravity and Grok Build show their sign-in before their one-time
   v.input.write('c');
   await until(() => /^Grok Build {2}signed in · ready$/m.test(text()), 'Grok ready', 45000);
   clearInterval(watch);
-  assert.ok(seen.has('Grok Build  signed in · checking…'), [...seen].join('\n'));
-  assert.ok([...seen].some(line => /^Checking Grok Build, \d of 8 done/.test(line)), 'a step line showed while it ran');
-  assert.match(text(), /^Grok Build {2}signed in · ready\n {12}One-time check of Grok Build on this machine first: about seven\n {12}short turns on it, a few minutes\.\n {12}Grok Build 1\.0\.77 passed its check on this machine\.$/m);
+  assert.ok(seen.has('Grok Build  (grok) signed in · checking…'), [...seen].join('\n'));
+  assert.ok([...seen].some(line => /^Grok Build: \d of 8 steps, \d+s so far\./.test(line)), 'the counting line showed while it ran');
+  assert.match(text(), /^Grok Build {2}signed in · ready\n {12}Checking Grok Build \(the grok command\): 8 steps, once on this\n {12}machine for release 1\.0\.77\.\n {12}Grok Build 1\.0\.77 passed its check on this machine\.$/m);
   await until(() => /Grok Build is ready\./.test(status()), 'status');
   assert.deepEqual(Object.values(conformanceState('grok').steps).filter(step => step !== 'pass'), [], 'the check record is the session\'s');
-  assert.match(text(), /^Antigravity signed in · needs a one-time check \(c runs it now\)$/m, 'Antigravity is untouched');
+  assert.match(text(), /^Antigravity \(agy\) signed in · Full access only \(c checks it\)$/m, 'Antigravity is untouched');
   // r reads every vendor again; the finished check's lines go.
-  v.input.write('r'); await until(() => !/One-time check of Grok Build/.test(text()) && /Usage updated/.test(status()), 'r');
+  v.input.write('r'); await until(() => !/Checking Grok Build/.test(text()) && /Usage updated/.test(status()), 'r');
   assert.match(text(), /^Grok Build {2}signed in · ready$/m);
   // Signed out, Antigravity says how to sign in, after r.
   fs.writeFileSync(path.join(p.dir, 'fake.json'), JSON.stringify({ ...JSON.parse(fs.readFileSync(path.join(p.dir, 'fake.json'), 'utf8')), agy: { signedIn: false } }));
-  v.input.write('r'); await until(() => /^Antigravity not signed in for ELU · s signs in$/m.test(text()), 'Antigravity signed out', 20000);
+  v.input.write('r'); await until(() => /^Antigravity \(agy\) not signed in for ELU · s signs in$/m.test(text()), 'Antigravity signed out', 20000);
 });
 
 // The owner's Mac on 0.1.19: the temp folder is under /var, a link; Antigravity CLI is signed
@@ -5221,7 +5221,7 @@ test('Usage on a Mac: Antigravity says it is not signed in for ELU at once, c of
   const opening = Date.now();
   await send(v, '/usage'); await until(() => v.current.view === 'usage' && !panels.usageBox.hidden, 'Usage tab');
   // Within seconds, not after 30 silent ones, and with no browser opened by the read.
-  await until(() => /^Antigravity not signed in for ELU · s signs in$/m.test(text()), 'Antigravity not signed in for ELU', 15000);
+  await until(() => /^Antigravity \(agy\) not signed in for ELU · s signs in$/m.test(text()), 'Antigravity not signed in for ELU', 15000);
   assert.ok(Date.now() - opening < 15000, `${Date.now() - opening} ms`);
   assert.equal(fs.existsSync(opened), false, 'reading the sign-in opened no browser');
   panels.usageList.focus(); await until(() => v.current.screen.focused === panels.usageList, 'list focused');
@@ -5231,8 +5231,8 @@ test('Usage on a Mac: Antigravity says it is not signed in for ELU at once, c of
   idle = listening(); v.input.write('c');
   await until(() => modal(v, 'Sign in to Antigravity CLI'), 'the sign-in offered', 15000);
   assert.ok(most < 3000, `the app was held ${most} ms`);
-  assert.match(dialogText(v, 'Sign in to Antigravity CLI'), /Antigravity CLI is not signed in for ELU, so its check cannot run\.\nSign in now\? Its own sign-in runs here on a clean screen, and the check goes on after it\./);
-  assert.match(text(), /^Antigravity not signed in for ELU · s signs in\n {12}Antigravity CLI is not signed in for ELU\. Sign it in with s on\n {12}its line in the Usage tab\.$/m);
+  assert.match(dialogText(v, 'Sign in to Antigravity CLI'), /Antigravity CLI \(the agy command\) is not signed in for ELU, so its check cannot run\.\nSign in now\? Its own sign-in runs here on a clean screen, and the check goes on after it\./);
+  assert.match(text(), /^Antigravity \(agy\) not signed in for ELU · s signs in\n {12}Antigravity CLI \(the agy command\) is not signed in for ELU\. Sign\n {12}it in with s on its line in the Usage tab\.$/m);
   await dialog(v, 'Sign in to Antigravity CLI', 'y');
   // Back in ELU after the code: the check goes on by itself and ends ready.
   await until(() => /^Antigravity signed in · ready$/m.test(text()), 'Antigravity ready', 60000);
@@ -5249,20 +5249,20 @@ test('Usage on a Mac: Antigravity says it is not signed in for ELU at once, c of
   assert.deepEqual(first.signals, idle.map(count => count + 1)); assert.deepEqual(listening(), idle);
   assert.match(first.printed, /Authentication required\. Please visit the URL to log in:\n {2}https:\/\/accounts\.google\.com\/\S+\n\nWaiting for authentication \(timeout 60s\)\.\.\.\nOr, paste the authorization code here and press Enter:\nSigned in\./);
   assert.deepEqual(fs.readFileSync(opened, 'utf8').trim().split('\n').map(line => line.split('?')[0]), ['https://accounts.google.com/o/oauth2/auth'], 'the sign-in opened the browser once');
-  assert.match(text(), /^Antigravity signed in · ready\n {12}One-time check of Antigravity CLI on this machine first: about\n {12}seven short turns on it, a few minutes\.\n {12}Antigravity CLI 1\.5\.4 passed its check on this machine\.$/m);
+  assert.match(text(), /^Antigravity signed in · ready\n {12}Checking Antigravity CLI \(the agy command\): 8 steps, once on\n {12}this machine for release 1\.5\.4\.\n {12}Antigravity CLI 1\.5\.4 passed its check on this machine\.$/m);
   await until(() => /Antigravity CLI is ready\./.test(status()), 'status');
   // Grok Build, signed out: c offers its sign-in, and n leaves it signed out, saying what s does.
   panels.usageList.select(rowOf(/^Grok Build/)); await until(() => /c run check {2}s sign in/.test(panels.keys.getText()), 'Grok key bar');
   v.input.write('c');
   await until(() => modal(v, 'Sign in to Grok Build'), 'the Grok sign-in offered', 15000);
   await dialog(v, 'Sign in to Grok Build', 'n');
-  await until(() => /Grok Build is not signed in for ELU\. s signs it in\./.test(status()), 'declined');
-  assert.match(text(), /^Grok Build {2}not signed in for ELU · s signs in\n {12}Grok Build is not signed in for ELU\. Sign it in with s on its\n {12}line in the Usage tab\.$/m);
+  await until(() => /Grok Build \(the grok command\) is not signed in for ELU\. s signs it in\./.test(status()), 'declined');
+  assert.match(text(), /^Grok Build {2}\(grok\) not signed in for ELU · s signs in\n {12}Grok Build \(the grok command\) is not signed in for ELU\. Sign it\n {12}in with s on its line in the Usage tab\.$/m);
   assert.equal(started.length, 1, 'no sign-in ran');
   // s: grok login under ELU's HOME and Grok home; its token lands in the owner's own file, and
   // the line drops what the stopped check said.
   v.input.write('s');
-  await until(() => /^Grok Build {2}signed in · needs a one-time check \(c runs it now\)$/m.test(text()), 'Grok signed in', 30000);
+  await until(() => /^Grok Build {2}\(grok\) signed in · Full access only \(c checks it\)$/m.test(text()), 'Grok signed in', 30000);
   assert.deepEqual([started[1].args, started[1].home], [['login'], path.join(personalDirectory(), 'grok-home')]);
   assert.match(started[1].printed, /Confirm this code in your browser:\n\n {2}FAKE-CODE\n[\s\S]*Waiting for authorization\.\.\.\nSigned in\.\n$/);
   assert.equal(fs.statSync(path.join(fake.home, '.grok', 'auth.json')).isFile(), true);
@@ -5308,13 +5308,13 @@ test('Usage on a computer with no browser: s signs Grok Build in with its device
   const rowOf = pattern => panels.usageList.items.findIndex(item => pattern.test(item.getText()));
   const screenBefore = row => v.raw.slice(Math.max(0, row.before - 400), row.before);
   await send(v, '/usage'); await until(() => v.current.view === 'usage' && !panels.usageBox.hidden, 'Usage tab');
-  await until(() => /^Antigravity not signed in for ELU · s signs in$/m.test(text()), 'Antigravity not signed in for ELU', 15000);
-  assert.match(text(), /^Grok Build {2}not signed in for ELU · s signs in$/m);
+  await until(() => /^Antigravity \(agy\) not signed in for ELU · s signs in$/m.test(text()), 'Antigravity not signed in for ELU', 15000);
+  assert.match(text(), /^Grok Build {2}\(grok\) not signed in for ELU · s signs in$/m);
   panels.usageList.focus(); await until(() => v.current.screen.focused === panels.usageList, 'list focused');
   // Grok Build: grok login --device-auth, which needs no browser here.
   panels.usageList.select(rowOf(/^Grok Build/)); await until(() => /s sign in/.test(panels.keys.getText()), 's in the key bar');
   v.input.write('s');
-  await until(() => /^Grok Build {2}signed in · needs a one-time check \(c runs it now\)$/m.test(text()), 'Grok Build signed in', 30000);
+  await until(() => /^Grok Build {2}\(grok\) signed in · Full access only \(c checks it\)$/m.test(text()), 'Grok Build signed in', 30000);
   assert.deepEqual(started[0].args, ['login', '--device-auth']);
   assert.ok(screenBefore(started[0]).endsWith('\x1b[?2004l\x1b[H\x1b[2JSigning in to Grok Build. ELU comes back when it ends.\r\nNo browser here: open the link below on any computer and use the code under it.\r\n\r\n'), JSON.stringify(screenBefore(started[0])));
   assert.match(started[0].printed, /open this URL in your browser:\n\n {2}https:\/\/accounts\.x\.ai\/oauth2\/device\?user_code=FAKE-CODE\n[\s\S]*Confirm this code in your browser:\n\n {2}FAKE-CODE\n[\s\S]*Waiting for authorization\.\.\.\nSigned in\.\n$/);
@@ -5322,7 +5322,7 @@ test('Usage on a computer with no browser: s signs Grok Build in with its device
   await until(() => /Grok Build is signed in for ELU\./.test(status()), 'status');
   // Antigravity CLI: its sign-in prints the link and takes the code pasted under ELU's lines.
   panels.usageList.select(rowOf(/^Antigravity/)); v.input.write('s');
-  await until(() => /^Antigravity signed in · needs a one-time check \(c runs it now\)$/m.test(text()), 'Antigravity signed in', 30000);
+  await until(() => /^Antigravity \(agy\) signed in · Full access only \(c checks it\)$/m.test(text()), 'Antigravity signed in', 30000);
   assert.deepEqual([started[1].args, started[1].marks], [['-p', '/usage'], false], 'no paste marks while the sign-in has the terminal');
   assert.ok(screenBefore(started[1]).endsWith('\x1b[?2004l\x1b[H\x1b[2JSigning in to Antigravity CLI for ELU. ELU comes back when it ends.\r\nNo browser here: open the link below on any computer, then paste its code here.\r\nPress Enter after it. It waits 60 seconds for the code.\r\nIf the 60 seconds pass, it stops. Press s again for a new link and a new code.\r\n\r\n'), JSON.stringify(screenBefore(started[1])));
   assert.match(started[1].printed, /Or, paste the authorization code here and press Enter:\nSigned in\./);
@@ -5357,7 +5357,7 @@ test('Usage: Antigravity\'s sign-in screen says what happens when its 60 seconds
   v = await view(t, { repo: p.repo, usage: fake });
   const panels = v.current.panels, text = () => panels.usageList.items.map(item => item.getText()).join('\n'), status = () => panels.status.getText();
   await send(v, '/usage'); await until(() => v.current.view === 'usage' && !panels.usageBox.hidden, 'Usage tab');
-  await until(() => /^Antigravity not signed in for ELU · s signs in$/m.test(text()), 'Antigravity not signed in for ELU', 15000);
+  await until(() => /^Antigravity \(agy\) not signed in for ELU · s signs in$/m.test(text()), 'Antigravity not signed in for ELU', 15000);
   panels.usageList.focus(); await until(() => v.current.screen.focused === panels.usageList, 'list focused');
   panels.usageList.select(panels.usageList.items.findIndex(item => /^Antigravity/.test(item.getText()))); await until(() => /s sign in/.test(panels.keys.getText()), 's in the key bar');
   // Ended by the owner before the time was up: the sign-in did not finish, and nothing says the time ran out.
@@ -5371,13 +5371,13 @@ test('Usage: Antigravity\'s sign-in screen says what happens when its 60 seconds
   await until(() => /Antigravity CLI got no code in 60 seconds\. s starts again with a new link\./.test(status()), 'the time ran out', 30000);
   assert.match(started[1].printed, /Waiting for authentication \(timeout 4s\)\.\.\.\nOr, paste the authorization code here and press Enter:\nError: authentication timed out\./);
   assert.ok(status().trim().length <= 78, 'the status fits 80 columns');
-  assert.match(text(), /^Antigravity not signed in for ELU · s signs in$/m);
+  assert.match(text(), /^Antigravity \(agy\) not signed in for ELU · s signs in$/m);
   // s again: a sign-in of its own with another link, and the code pasted in time signs it in.
   owner = 'pastes'; v.input.write('s');
   await until(() => /Antigravity CLI is signed in for ELU\./.test(status()), 'signed in', 30000);
   const link = row => row.printed.match(/https:\/\/accounts\.google\.com\/\S+/)[0];
   assert.equal(started.length, 3); assert.notEqual(link(started[2]), link(started[1]));
-  assert.match(text(), /^Antigravity signed in · needs a one-time check \(c runs it now\)$/m);
+  assert.match(text(), /^Antigravity \(agy\) signed in · Full access only \(c checks it\)$/m);
 });
 
 // Antigravity CLI passed its check on this machine, so reading the vendors asks it for its

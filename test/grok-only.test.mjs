@@ -157,7 +157,7 @@ test("a teammate's message on a fresh computer starts the one-time check of Grok
   assert.equal(task.runs.at(-1).vendor, 'grok');
   // The chat there shows the check, and that it passed.
   const lines = task.messages.filter(item => item.from === 'ELU').map(item => item.text);
-  assert.deepEqual(lines, ['One-time check of Grok Build on this machine first: about seven short turns on it, a few minutes.', 'Grok Build 1.0.77 passed its check on this machine.']);
+  assert.deepEqual(lines, ['Checking Grok Build (the grok command) first: 8 steps, once on this machine for release 1.0.77. Full access needs no check: /permissions full runs your message now.', 'Grok Build 1.0.77 passed its check on this machine.']);
   assert.equal(conformanceState('grok').version, '1.0.77');
 });
 

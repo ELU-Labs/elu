@@ -2,7 +2,8 @@
 
 Grok Build (`grok`) is xAI's coding CLI for SuperGrok and X Premium+ subscribers. ELU
 runs sessions on it. Its enforcement follows the vendor's documentation; a one-time check on
-your machine proves it before the first run.
+your machine proves it before the first run in Read only, Ask for approval or Approve for
+me. Full access needs no check.
 
 ## Install and sign in
 
@@ -21,16 +22,30 @@ browser: an SSH session, or Linux with no display), under the HOME and Grok home
 comes back when it ends. `grok` 1.0.77 prints a link and a code to confirm on that page, on any
 computer, and waits for it; with no browser ELU's second line says so. If `grok` is signed
 out, the session says
-`Grok Build: not signed in. Sign it in with s on its line in the Usage tab.`
+`Grok Build (the grok command): not signed in. Sign it in with s on its line in the Usage tab.`
 
 ## The one-time check
 
-ELU starts the check by itself before the first turn on Grok goes out, whether you wrote
-to a session on it or to a bot on it, or the turn started without you: a teammate's message
-that starts a session of yours (`/access` Auto, or your `y` or `w` on it), a scheduled turn, a
-shadow turn, a review, a standup or a Task's work. The session says so first, then shows
-each step as it ends, and then the turn goes on. The check takes about seven short turns on
-Grok and a few minutes. `c` in the Usage tab starts it too.
+The check proves what Read only, Ask for approval and Approve for me stand on. ELU starts
+it by itself before the first turn on Grok in one of those modes goes out, whether you
+wrote to a session on it or to a bot on it, or the turn started without you: a teammate's
+message that starts a session of yours (`/access` Auto, or your `y` or `w` on it), a scheduled
+turn, a shadow turn, a review, a standup or a Task's work. The session says so first:
+`Checking Grok Build (the grok command) first: 8 steps, once on this machine for release
+1.0.77. Full access needs no check: /permissions full runs your message now.` Under the
+working line it then counts, `Grok Build: 3 of 8 steps, 1m 5s so far.`, and
+then the turn goes on. Each step is a short turn on Grok, so how long the check takes is
+how fast Grok answers. `c` in the Usage tab starts it too.
+
+Full access needs no check and never waits for one. A message in a Full access session
+runs at once on the `grok` that is installed: on a computer where it was never checked,
+after `grok` was updated, after a check that did not pass, and while another session is
+running the check. Nothing is said about a check there. ELU still reads what the turn
+needs to start, the release and the sign-in, and a signed-out `grok` says so with the key
+that signs it in. Set a session to Full access while its message waits for a check and the
+message runs at once: a check that this session started ends there and records nothing,
+so none of it runs beside your message. ELU never starts a check behind a Full access
+turn.
 
 Grok Build reviews, and can be a bot's vendor, once the check passed: a review runs on its
 Read only launch, which the check proves writes nothing, runs no command and reaches no
@@ -40,7 +55,7 @@ project, hides what Git does not track, and holds the run under a dollar cap.
 
 The Usage tab shows whether Grok is signed in before the check has run: it looks for
 `~/.grok/auth.json`, never opens it, and runs nothing. Its line then says
-`signed in · needs a one-time check (c runs it now)`, or `not signed in for ELU · s signs in`.
+`(grok) signed in · Full access only (c checks it)`, or `(grok) not signed in for ELU · s signs in`.
 `c` on that line runs the same check there, with each step under the line as it ends, and the
 line then says `ready`, or `Full access only (c checks again)` with the step that was not
 proven and why. Signed out, `c` asks first whether to sign in. The check's folders are made
@@ -62,19 +77,20 @@ planted file outside it, a local web listener and a marker command:
 | `isolation` | what `grok inspect --json` lists as loaded from another tool (Cursor, Claude Code, Codex), by name |
 
 The first six are required. The result is stored per binary and version; a new release
-proves itself again, before the next turn on it. Until the check has run, no Grok run
-starts.
+proves itself again, before the next turn on it outside Full access, and the session says
+that the release changed. Until the check has run, Grok runs in Full access only.
 
 What a result turns off:
 
 - **A required step is not proven.** Read only, Ask and Auto are off, and the session says
   which step and why, for example
-  `Grok Build did not pass its check on this machine, so it runs in Full access only here. Not proven: a read-only turn runs no command (locked run ran a shell command).`
-  Full access is never turned off by the check: it runs Grok as it is, and says the result
-  once, also when you switch such a session to Full access. In a Full access session a bot
-  that only answers, a shadow and a review run on it too. Your next message runs the check again only when that can change the result (you
-  signed in, say). A step that failed because Grok did what the step forbids stays failed
-  until `c` in the Usage tab checks again.
+  `Grok Build (the grok command) did not pass its check on this machine, so it runs in Full access only here. Not proven: a read-only turn runs no command (locked run ran a shell command).`
+  Full access is never turned off by the check: it runs Grok as it is. A session that the
+  failed check stopped says the result once when you switch it to Full access. In a Full
+  access session a bot that only answers, a shadow and a review run on it too. Your next
+  message outside Full access runs the check again only when that can change the result
+  (you signed in, say). A step that failed because Grok did what the step forbids stays
+  failed until `c` in the Usage tab checks again.
 - **`relay` fails.** Ask and Auto still work, but a blocked action is reported instead of
   asked: `Grok Build can't ask live here. Blocked actions are reported.`
 - **`isolation` finds something.** Nothing is turned off by that alone. Text the model reads

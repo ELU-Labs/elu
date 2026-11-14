@@ -79,11 +79,11 @@ test('Antigravity CLI signed out asks for a sign-in and waits a minute for a cod
   assert.ok(read.took < 15000, `the read took ${read.took} ms`);
   assert.equal(savedSignIn('agy').signedIn, false); assert.equal(savedSignIn('agy').reason, null);
   const tab = usageTab({ vendors: withCheck([{ vendor: 'claude', available: false }, { vendor: 'codex', available: false }, row, { vendor: 'grok', available: false }], { env: m.env }), env: m.env });
-  assert.deepEqual(usageBlocks([tab[2]]).map(line => line.text), ['Antigravity not signed in for ELU · s signs in']);
+  assert.deepEqual(usageBlocks([tab[2]]).map(line => line.text), ['Antigravity (agy) not signed in for ELU · s signs in']);
   // c, or a first message to it: the check stops before it starts, at once, and says what to press.
   const check = await held(() => checkOnFirstUse(row, { cwd: m.home, environment: m.env }).then(() => null, error => error));
   assert.ok(check.value, 'the check refused');
-  assert.equal(check.value.message, 'Antigravity CLI is not signed in for ELU. Sign it in with s on its line in the Usage tab.');
+  assert.equal(check.value.message, 'Antigravity CLI (the agy command) is not signed in for ELU. Sign it in with s on its line in the Usage tab.');
   assert.deepEqual([check.value.details.cause, check.value.details.signedIn], ['signin', false]);
   assert.ok(check.took < 15000, `the check took ${check.took} ms`); assert.ok(check.most < 3000, `the app was held ${check.most} ms`);
   assert.equal(conformanceState('agy'), null, 'no step ran');
@@ -118,7 +118,7 @@ test('a sign-in read that gets no answer says so after its time, one that is sto
   await new Promise(resolve => setTimeout(resolve, 3500));
   assert.equal(fs.existsSync(marker), false, 'every run was stopped');
   // What the check says then: the reason, and the key that reads it again.
-  assert.equal(notSignedInText('agy', { signedIn: null, reason: 'gave no answer within 30 seconds' }), 'Antigravity CLI did not say whether it is signed in (it gave no answer within 30 seconds). r in the Usage tab reads it again.');
+  assert.equal(notSignedInText('agy', { signedIn: null, reason: 'gave no answer within 30 seconds' }), 'Antigravity CLI (the agy command) did not say whether it is signed in (it gave no answer within 30 seconds). r in the Usage tab reads it again.');
 });
 
 test('each private HOME of Antigravity CLI finds the owner\'s login keychain on macOS, and nothing else of his home', t => {

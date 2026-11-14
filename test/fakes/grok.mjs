@@ -19,6 +19,12 @@
 // with a Task until the prompt carries one the owner approved; a working turn changes
 // src/coupon.mjs where the launch lets it write, and reports its subtasks. Without it every
 // conversation turn is an answer, as before.
+// grok.version (fake.json): the release it says it is, 1.0.77 when not set.
+// grok.checkSeconds: a slow one-time check. Each model turn of ELU's check (a turn whose
+// folder is under the check's scratch folder, elu-code-check-grok-*) answers only after this
+// many seconds; seven such turns make a check. grok.checkGate names a file that ends the wait
+// as soon as it exists, for a test that is done with the check. Every other turn is as fast
+// as before, and so are --version, --help and inspect.
 import fs from 'node:fs'; import path from 'node:path'; import crypto from 'node:crypto'; import { spawnSync } from 'node:child_process';
 const vendor = path.basename(process.argv[1]); const args = process.argv.slice(2);
 let cfg = {}; try { cfg = JSON.parse(fs.readFileSync(path.join(path.dirname(process.argv[1]), 'fake.json'), 'utf8')); } catch {}
@@ -34,7 +40,13 @@ const save = record => { fs.mkdirSync(sessions, { recursive: true }); fs.writeFi
 const load = id => { try { return JSON.parse(fs.readFileSync(path.join(sessions, `${id}.json`), 'utf8')); } catch { return null; } };
 const list = dir => { try { return fs.readdirSync(dir); } catch { return []; } };
 
-if (args.includes('--version')) { console.log('1.0.77'); process.exit(0); }
+const RELEASE = cfg.grok?.version ?? '1.0.77';
+const slowCheck = async folder => {
+  if (!cfg.grok?.checkSeconds || !String(folder ?? '').includes('elu-code-check-grok-')) return;
+  const until = Date.now() + cfg.grok.checkSeconds * 1000;
+  while (Date.now() < until && !(cfg.grok.checkGate && fs.existsSync(cfg.grok.checkGate))) await new Promise(resolve => setTimeout(resolve, 50));
+};
+if (args.includes('--version')) { console.log(RELEASE); process.exit(0); }
 if (args.includes('--help')) { console.log('--output-format --permission-mode --sandbox --max-turns --cwd --no-auto-update --tools --disallowed-tools --allow --deny --prompt-file --prompt-json --no-alt-screen --no-memory --no-subagents --disable-web-search --session-id --resume --model'); process.exit(0); }
 // login: grok.login on, the device code sign-in as grok 1.0.77 runs it (watched in a scratch
 // home, with --device-auth and without): a link with the code in it, the code to confirm on
@@ -188,7 +200,7 @@ if (args.includes('inspect')) {
   const config = path.join(home, 'config.toml'), hasConfig = fs.existsSync(config), cwd = process.cwd();
   const claudeRules = ['settings.local.json', 'settings.json'].map(name => path.join(userHome, '.claude', name)).find(file => json(file)?.permissions);
   const report = {
-    grokVersion: '1.0.77', channel: 'unknown', updateChannel: null, cwd, projectRoot: `${cwd}/`, projectTrusted: true, projectInstructions,
+    grokVersion: RELEASE, channel: 'unknown', updateChannel: null, cwd, projectRoot: `${cwd}/`, projectTrusted: true, projectInstructions,
     permissions: { sources: [...(claudeRules ? [`${claudeRules} (settings)`] : []), ...(hasConfig ? [`${config} (config)`] : [])], loaded: hasConfig ? 22 : 0, skipped: [], mcpServerAllowlist: [], mcpLockdownSources: [], mcpManagedServersOnly: 'off', marketplaceAllowlist: [], marketplaceLockdownSources: [], managedMarketplaces: [], managedSettingsPath: '/etc/claude-code/managed-settings.json', managedSettingsExists: false, managedSettingsActive: false, claudeBypassLockAdvisory: false },
     loginPolicy: { disableApiKeyAuth: null, forceLoginTeamUuid: null, apiKeyAuthDisabled: false },
     hooks, skills, agents, plugins: [], marketplaces: [], mcpServers, lspServers: [], configSources: { layers: hasConfig ? [{ role: 'user', path: config }] : [] }, experiments: [],
@@ -233,6 +245,7 @@ if (args.includes('agent') && args.includes('stdio')) {
         const record = live.get(row.params?.sessionId); if (!record) return error(-32000, 'Unknown session.');
         const text = (row.params?.prompt ?? []).filter(part => part?.type === 'text').map(part => part.text).join('\n');
         if (cfg.inputs) fs.appendFileSync(cfg.inputs, JSON.stringify({ vendor, args, input: text }) + '\n');
+        await slowCheck(record.cwd);
         const ask = async (action, call) => {
           const answer = await request('session/request_permission', { sessionId: record.id, toolCall: { toolCallId: call?.toolCallId ?? `call_${nextId}`, title: action.title, kind: action.kind, status: 'pending', rawInput: action.rawInput }, options: [{ optionId: 'allow', name: 'Allow', kind: 'allow_once' }, { optionId: 'allow_always', name: 'Always allow', kind: 'allow_always' }, { optionId: 'reject', name: 'Reject', kind: 'reject_once' }] });
           return answer?.outcome?.outcome === 'selected' && String(answer.outcome.optionId).startsWith('allow');
@@ -286,6 +299,7 @@ else {
   record = { id: session, cwd, sandbox, turns: [] };
 }
 const streaming = value('--output-format') === 'streaming-json', line = row => console.log(JSON.stringify(row));
+await slowCheck(cwd);
 if (streaming) line({ type: 'thought', data: 'Reading the request.' });
 const report = streaming ? (call, status) => line(status === 'in_progress' ? { type: 'tool_call', ...call, status, content: [], locations: [] } : { type: 'tool_call_update', toolCallId: call.toolCallId, status, content: [], rawOutput: {}, locations: [] }) : undefined;
 const todoFile = cfg.live && bypass ? listFile(prompt) : null;

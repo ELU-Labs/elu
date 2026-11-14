@@ -53,6 +53,10 @@ Full access is everything. A turn that runs with it has no limit of ELU's:
   what one finds is shown as a note.
 - **Approvals.** Once a session has Full access, ELU allows everything its running turn
   asks, a removal and an MCP tool included.
+- **No wait.** A message runs at once. The one-time check of Antigravity and Grok Build
+  proves the other three modes and nothing Full access needs, so a Full access turn never
+  runs it and never waits for one, its own or another session's
+  ([Grok Build](vendors/grok.md#the-one-time-check)).
 
 What stays, and why:
 

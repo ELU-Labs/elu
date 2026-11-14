@@ -146,15 +146,15 @@ test('until its one-time check passed here compile refuses and says what starts 
   const dir = home(t), marker = path.join(dir, 'ran'), bins = path.join(dir, 'bin'), bin = path.join(bins, 'agy'); fs.mkdirSync(bins);
   fs.writeFileSync(bin, `#!${process.execPath}\nimport fs from 'node:fs';fs.writeFileSync(${JSON.stringify(marker)},'ran');process.exit(0);\n`, { mode: 0o755 });
   assert.deepEqual(agy.meta.supportedVersions, [], 'no release is pinned in the adapter');
-  assert.throws(() => agy.compile({ role: reader, cwd: dir, schemaFile: schemaAt(dir) }), /^EluCodeError: Antigravity CLI has not been checked on this machine yet\. Your first message to it runs the check\.$/);
+  assert.throws(() => agy.compile({ role: reader, cwd: dir, schemaFile: schemaAt(dir) }), /^EluCodeError: Antigravity CLI \(the agy command\) has not been checked on this machine yet\. Your first message to it outside Full access runs the check; Full access needs none\.$/);
   assert.deepEqual(agy.parse(JSON.stringify({ structured_output: result })).result, result);
   const row = (await detect(dir, { PATH: bins })).find(value => value.vendor === 'agy');
   assert.equal(row.available, true); assert.equal(row.supported, false); assert.equal(row.signedIn, null); assert.equal(row.conformant, false);
   // The row says what Antigravity does here and what will start its check, not that it is unsupported.
-  assert.equal(row.support, 'sessions and reviews'); assert.equal(row.reason, 'Antigravity CLI has not been checked on this machine yet. Your first message to it runs the check.');
+  assert.equal(row.support, 'sessions and reviews'); assert.equal(row.reason, 'Antigravity CLI (the agy command) has not been checked on this machine yet. Your first message to it outside Full access runs the check; Full access needs none.');
   assert.equal(fs.existsSync(marker), false, 'never run, not even for --version');
-  assert.throws(() => requireConformance('agy', { bin, version: '1.5.4' }), /Antigravity CLI has not been checked on this machine yet/);
-  assert.deepEqual(agy.meta.signInHint.split('\n'), ['Antigravity: not signed in for ELU. Sign it in with s on its line in the Usage tab.', "Google's FAQ: wrapping agy in third-party agents is not supported on consumer plans. antigravity.google/docs/faq"]);
+  assert.throws(() => requireConformance('agy', { bin, version: '1.5.4' }), /Antigravity CLI \(the agy command\) has not been checked on this machine yet/);
+  assert.deepEqual(agy.meta.signInHint.split('\n'), ['Antigravity CLI (the agy command): not signed in for ELU. Sign it in with s on its line in the Usage tab.', "Google's FAQ: wrapping agy in third-party agents is not supported on consumer plans. antigravity.google/docs/faq"]);
   assert.equal(agy.meta.installHint, 'Install agy from antigravity.google/docs');
 });
 
@@ -422,7 +422,7 @@ test('the conformance steps pass against the fake and record relay; a vendor tha
   assert.deepEqual(broken.steps, { signin: 'pass', 'locked-no-write': 'fail', 'locked-no-shell': 'fail', 'locked-no-network': 'fail', json: 'pass', resume: 'pass', relay: 'fail', 'live-read-only': 'fail' }); assert.equal(broken.relay, false);
   assert.ok(log.some(line => /^locked-no-write: fail: locked run: wrote /.test(line))); assert.ok(log.some(line => line === 'locked-no-shell: fail: locked run ran a command')); assert.ok(log.some(line => line === 'locked-no-network: fail: locked run reached the network'));
   // It wrote in a read-only turn: Read only and the two asking modes stay off, with no promise that checking again changes it; Full access runs it.
-  assert.throws(() => requireConformance('agy', { bin: fake.bin, version: '1.5.4' }), /^EluCodeError: Antigravity CLI did not pass its check on this machine, so it runs in Full access only here\. Not proven: a read-only turn writes no file \(locked run: wrote [^)]+\), and 2 more\. Switch this session to Full access to use it; c on its line in the Usage tab runs the check again\.$/);
+  assert.throws(() => requireConformance('agy', { bin: fake.bin, version: '1.5.4' }), /^EluCodeError: Antigravity CLI \(the agy command\) did not pass its check on this machine, so it runs in Full access only here\. Not proven: a read-only turn writes no file \(locked run: wrote [^)]+\), and 2 more\. Switch this session to Full access to use it; c on its line in the Usage tab runs the check again\.$/);
   for (const mode of ['ask', 'auto']) assert.throws(() => requireConformance('agy', { bin: fake.bin, version: '1.5.4', mode }), /so it runs in Full access only here/, mode);
   assert.equal(requireConformance('agy', { bin: fake.bin, version: '1.5.4', mode: 'full' }), true);
   fake.set({ noPermissionRequest: true });
@@ -447,5 +447,5 @@ test('the conformance steps pass against the fake and record relay; a vendor tha
   fake.set({ signedIn: false });
   const out = await runConformance('agy', { bin: fake.bin, version: '1.5.4', scratch: scratch('s4'), env: process.env, log: line => log.push(line) });
   assert.equal(out.steps.signin, 'fail'); assert.ok(log.some(line => line === 'signin: fail: not signed in for ELU; sign it in with s on its line in the Usage tab'));
-  assert.throws(() => requireConformance('agy', { bin: fake.bin, version: '1.5.4' }), /^EluCodeError: Antigravity CLI did not pass its check on this machine, so it runs in Full access only here\. Not proven: it is signed in \(not signed in for ELU; sign it in with s on its line in the Usage tab\), and \d more\. Your next message to it runs the check again\.$/);
+  assert.throws(() => requireConformance('agy', { bin: fake.bin, version: '1.5.4' }), /^EluCodeError: Antigravity CLI \(the agy command\) did not pass its check on this machine, so it runs in Full access only here\. Not proven: it is signed in \(not signed in for ELU; sign it in with s on its line in the Usage tab\), and \d more\. Your next message to it outside Full access runs the check again\.$/);
 });
