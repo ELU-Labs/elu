@@ -2793,6 +2793,12 @@ test('the Changes of a session here and of the same session followed from anothe
   v.output.columns = 140; v.output.rows = 50; v.output.emit('resize');
   await until(() => v.current.screen.width === 140 && /^▌src\/report\.mjs · line 1$/.test(cursorLine(v)), 'and at 140 again');
   v.input.write('pp'); await until(() => /^▌src\/coupon\.mjs · line 1$/.test(cursorLine(v)), 'p back to the first');
+  // A view that shows its first row keeps showing it when the summary above the cursor wraps to more rows.
+  v.output.columns = 80; v.output.rows = 24; v.output.emit('resize');
+  await until(() => v.current.screen.width === 80 && /^▌.*coupon\.mjs · line 1/.test(cursorLine(v)), 'at 80 columns, at the first change');
+  assert.equal(changeLines(v)[0], ' 3 files changed · +10 −1');
+  v.output.columns = 140; v.output.rows = 50; v.output.emit('resize');
+  await until(() => v.current.screen.width === 140 && /^▌src\/coupon\.mjs · line 1$/.test(cursorLine(v)), 'and wide again');
   // d in its chat opens them too, and Esc goes back to the chat.
   v.input.write('\x1b'); await until(() => v.current.sessionView === 'chat' && focused() === board, 'Esc');
   chat.focus(); await until(() => /d changes/.test(keys()), 'the chat names d');
