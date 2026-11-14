@@ -69,8 +69,9 @@ What stays, and why:
   That is how a vendor that hangs is told from one that works.
 - Codex cannot ask you a question in the middle of a turn: nobody could answer it there.
 - Grok Build and Antigravity do not start in your home itself: each loads settings from
-  `~` that ELU cannot turn off (Grok Build your Claude Code, Cursor and `.agents` folders,
-  Antigravity `~/.gemini`). So `~` in their runs is a folder of links, one to each entry
+  `~` that ELU cannot turn off (Grok Build the agents, plugins and permission rules of your
+  Claude Code folder, your own `~/.grok` agents and your `.agents` skills; Antigravity
+  `~/.gemini`). So `~` in their runs is a folder of links, one to each entry
   at the top of your home, made again before every run. `~/.npmrc`, `~/.config`, `~/.aws`,
   `~/.docker`, `~/.kube`, `~/.ssh`, `~/.gitconfig` and everything else there are your own
   files, so npm, cloud CLIs, `gh`, Git and SSH are signed in as in your terminal.

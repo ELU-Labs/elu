@@ -139,10 +139,10 @@ So every run gets a private `HOME` under ELU's state (`grok-home` in your person
 directory) and a `GROK_HOME` inside it holding only what ELU wrote:
 
 - `config.toml`: Claude, Cursor and Codex compatibility off, telemetry, trace upload, Mixpanel,
-  feedback, managed config, campaigns, remote fetch and server-side search off, workspace
-  snapshots and codebase uploads off, auto-update off, session relay off, `.envrc` off,
-  and, in every profile but Full, server-side search off, subagents off and the never list
-  as deny rules. Full access is everything: its run also drops `--no-memory`,
+  feedback, managed config, campaigns and remote fetch off, workspace snapshots and codebase
+  uploads off, auto-update off, session relay off, `.envrc` off, and, in every profile but
+  Full, server-side search off, subagents off and the never list as deny rules. Full access
+  is everything: its config has none of those three, and its run also drops `--no-memory`,
   `--no-subagents`, `--max-turns`, `GROK_MEMORY=0`, `GROK_SUBAGENTS=0` and
   `GROK_BACKEND_SEARCH=0`. It is
   rewritten before every run, for that run's profile. Runs share it: a run that reads one
@@ -167,11 +167,12 @@ actually reaches a run on your machine, and the session names anything it finds.
 Full access is everything, so a command must find `~/.npmrc`, `~/.config/gcloud`, `~/.aws`,
 `~/.docker`, `~/.kube` and the rest as your terminal does. Running Grok in your home with
 `GROK_HOME` set to ELU's folder does not work. Seen on the real Grok Build 1.0.77, signed
-out, with a stand-in home as `HOME`, `GROK_HOME` elsewhere and all ten switches off:
-`grok inspect --json` lists that home's `~/.claude/CLAUDE.md` and rules, the permission
-rules of `~/.claude/settings.local.json`, its Claude hooks, a Claude plugin, skills from
-`~/.claude`, `~/.cursor` and `~/.agents`, agents from `~/.claude/agents` and `~/.grok/agents`,
-and the MCP servers of `~/.claude.json` and `~/.cursor/mcp.json`.
+out, with a stand-in home as `HOME`, `GROK_HOME` elsewhere and all eighteen switches off:
+`grok inspect --json` marks that home's Claude Code and Cursor instructions, rules, skills
+and MCP servers `disabled`, and still loads the agents of `~/.claude/agents` and
+`~/.grok/agents`, a Claude Code plugin with its hook, the skills of `~/.agents`, and the
+permission rules of a Claude Code settings file (`~/.claude/settings.local.json`, or
+`settings.json` when there is no local one).
 
 So a Full access run gets `HOME` set to `grok-home-full`, a folder of links:
 
