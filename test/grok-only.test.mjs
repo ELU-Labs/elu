@@ -220,12 +220,13 @@ test("a teammate's question on a computer without Claude Code is not run: both s
   for (const vendor of ['codex', 'agy', 'grok']) assert.equal(CAPS[vendor].peer, false, vendor);
 });
 
-// A test of the project's own that passes only where its check is fenced in: it cannot write
-// beside the project. Or, with fenced false, only where it is not.
+// A build step of the project's own that passes only where its check is fenced in: it cannot
+// write beside the project. Or, with fenced false, only where it is not.
 function sandboxTest(p, fenced) {
-  const file = path.join(p.parent, 'written-by-the-check.txt');
-  fs.writeFileSync(path.join(p.root, 'test/fence.test.mjs'), `import {test} from 'node:test'; import assert from 'node:assert/strict'; import fs from 'node:fs';\ntest('fence', () => { let wrote = true; try { fs.writeFileSync(${JSON.stringify(file)}, 'yes'); } catch { wrote = false; } assert.equal(wrote, ${!fenced}); });\n`);
-  git(p.root, ['add', '.']); git(p.root, ['commit', '-m', 'Add a fence test']);
+  const file = path.join(p.parent, 'written-by-the-check.txt'), manifest = path.join(p.root, 'package.json');
+  fs.writeFileSync(path.join(p.root, 'fence.mjs'), `import fs from 'node:fs';\nlet wrote = true; try { fs.writeFileSync(${JSON.stringify(file)}, 'yes'); } catch { wrote = false; }\nif (wrote !== ${!fenced}) { console.error('wrote beside the project: ' + wrote); process.exit(1); }\n`);
+  const value = JSON.parse(fs.readFileSync(manifest, 'utf8')); value.scripts.build = `${value.scripts.build} && node fence.mjs`; fs.writeFileSync(manifest, JSON.stringify(value));
+  git(p.root, ['add', '.']); git(p.root, ['commit', '-m', 'Add a fence step']);
   return file;
 }
 

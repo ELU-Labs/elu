@@ -18,7 +18,7 @@ session; a turn that is not your own session's runs read only.
 | Your environment | a short list (`PATH`, `HOME`, language, temp folder) | same | same | all of it: your SSH agent, your GitHub and cloud sign-ins, your proxy |
 | Never list (push, tag, merge, deploy, publish) | blocked | blocked; every escape asks | stand-in commands and, except on Codex, deny rules; a command that gets past them gets through if the reviewer allows it | none: the model runs them without asking |
 | Runs in | worktree | worktree or a named branch | same | also here |
-| Checks | sandboxed, no network, structural limits | same | no network; dependency files may change | network on; no structural limit blocks, what one finds is shown as a note |
+| Checks | sandboxed, no network, structural limits | same | no network; dependency files may change | no sandbox, as in your terminal; no structural limit blocks, what one finds is shown as a note |
 
 Secrets here are files Git does not track whose names look like secrets: `.env*`, `.npmrc`,
 `.netrc`, `.pypirc`, `auth.json`, `credentials`, `credentials.json`, `id_rsa`, `id_ed25519`,
@@ -600,9 +600,10 @@ profile lets it, and has no profile for `bwrap`. This one does, saved as
 and loaded once with `sudo apparmor_parser -r /etc/apparmor.d/bwrap`. Nothing is
 installed or changed for you.
 
-The check sandbox (`codex sandbox`), which runs every project's checks whatever the
-vendor, is bubblewrap on Linux too. The Linux tests run with `bubblewrap` installed
-and an AppArmor profile like this one loaded.
+The check sandbox, which runs every project's checks outside Full access whatever the
+vendor, is bubblewrap on Linux too: through `codex sandbox` where Codex is installed,
+and started by ELU itself where it is not. The Linux tests run with `bubblewrap`
+installed and an AppArmor profile like this one loaded.
 
 ## Claude Code
 

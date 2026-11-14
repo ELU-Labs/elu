@@ -49,7 +49,7 @@ for (const [kind, sandbox] of Object.entries(SYSTEM)) {
     fs.mkdirSync(path.join(root, '.ssh')); fs.writeFileSync(path.join(root, '.ssh/sentinel'), 'synthetic sentinel, not a credential\n');
     git(cwd, ['init', '--initial-branch=main']);
     const outside = path.join(root, 'outside'); fs.writeFileSync(outside, 'untouched\n');
-    const server = net.createServer(socket => socket.end('forbidden'));
+    const server = net.createServer(socket => { socket.on('error', () => {}); socket.end('forbidden'); });
     await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
     t.after(() => new Promise(resolve => server.close(resolve)));
     const shared = ['/tmp', '/private/tmp', '/var/tmp', '/private/var/tmp'].filter(dir => fs.existsSync(dir)).map(dir => path.join(dir, `elu-code-probe-${process.pid}`));
@@ -97,7 +97,7 @@ for (const [kind, sandbox] of Object.entries(SYSTEM)) {
   test(`${kind}: it passes the proof every task starts with, and lets the network through when it is on`, { skip }, async t => {
     const result = await probeSandbox({}, sandbox); assert.equal(result.working, true); assert.equal(result.networkDenied, true);
     const root = temp(t), cwd = path.join(root, 'worktree'); fs.mkdirSync(cwd);
-    const server = net.createServer(socket => socket.end('ok')); await new Promise(resolve => server.listen(0, '127.0.0.1', resolve)); t.after(() => new Promise(resolve => server.close(resolve)));
+    const server = net.createServer(socket => { socket.on('error', () => {}); socket.end('ok'); }); await new Promise(resolve => server.listen(0, '127.0.0.1', resolve)); t.after(() => new Promise(resolve => server.close(resolve)));
     const on = await sandboxRun({ sandbox, cwd, network: 'on', program: process.execPath, args: ['-e', `const s=require('net').connect(${server.address().port},'127.0.0.1');s.on('error',()=>process.exit(7));s.on('connect',()=>process.exit(0))`], logFile: path.join(root, 'on.log'), timeoutSeconds: 20 });
     assert.equal(on.code, 0, fs.readFileSync(on.stderrFile, 'utf8'));
   });

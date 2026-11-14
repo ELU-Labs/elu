@@ -584,12 +584,13 @@ and the chat says `Not reviewed: no model on this computer can review.` A teamma
 question (the read-only kind) is answered by Claude Code only; without it, both sides read
 why, and the owner can set `/access` to Auto so teammates' messages start sessions instead.
 
-Codex must be installed even if your sessions run on Claude Code, but it does not need to
-be signed in. ELU runs your project's checks and its pre-push hooks inside Codex's
-sandbox (`codex sandbox`); without it the checks fail and `/publish` refuses. Install it
-with `npm install --global @openai/codex`. To use a copy that is not on your PATH, set
-`ELU_CODE_SANDBOX_HELPER` to its absolute path. On Linux that sandbox is bubblewrap:
-install `bubblewrap` and, on Ubuntu 24.04, load the AppArmor profile in
+ELU runs your project's checks and its pre-push hooks in a sandbox: Codex's (`codex
+sandbox`, signed in or not) where Codex is installed, otherwise the computer's own,
+bubblewrap on Linux and sandbox-exec on macOS, with the same limits. In Full access they
+run as in your terminal, with no sandbox. Where a session needs one and the computer has
+none, ELU says so before the work starts, with the step that fixes it. To use a copy of
+Codex that is not on your PATH, set `ELU_CODE_SANDBOX_HELPER` to its absolute path. On
+Ubuntu 24.04 bubblewrap starts only with the AppArmor profile in
 [docs/permissions.md](docs/permissions.md#linux). The Linux tests run with both.
 
 GitHub CLI (`gh`) is needed for draft pull requests, and for `@elu` to review and merge a
