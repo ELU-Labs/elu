@@ -53,6 +53,10 @@ Full access is everything. A turn that runs with it has no limit of ELU's:
   what one finds is shown as a note.
 - **Approvals.** Once a session has Full access, ELU allows everything its running turn
   asks, a removal and an MCP tool included.
+- **Publishing.** `/publish` pushes to the pull request that is open for the branch,
+  such as one the model opened itself, whether or not it is a draft, and leaves its text
+  as it is. Below Full access `/publish` pushes only to a branch with no pull request, or
+  with one draft it can keep as a draft.
 
 What stays, and why:
 

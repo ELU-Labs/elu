@@ -230,6 +230,16 @@ publish and deploy when the task calls for it.
 Details:
 [docs/permissions.md](docs/permissions.md), [SECURITY.md](SECURITY.md).
 
+When the model commits its own work in the session's workspace, that commit is the
+session's work. The checks and the review run on it, `/changes` shows it against the
+session's base, and the session ends as any other does. With all of its work committed it
+is listed as `committed`, here and on your other computers, and its chat says where the
+work is: the branch, the commit, and whether it is pushed. `/publish` then pushes what is
+there, on the branch it is on; when that branch is on GitHub already with a pull request
+for the same commit, it names the pull request and pushes nothing. A commit made in the
+session's workspace while nothing ran, such as one you made by hand, is named in the chat
+and the session goes on from it: your next message, the checks and `/publish` all do.
+
 ## Bots
 
 A bot is a model with a name and instructions. You write it once and use it in any session.
