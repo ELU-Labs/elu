@@ -3291,6 +3291,28 @@ test('/slots says there is no limit until it sets one; past the limit a session 
   }
 });
 
+// A schedule's run that waits for a free slot is opened from Queued and typed into: what he
+// types always starts. It goes after the run's own message, which it never takes the place
+// of, and the run starts now, past the limit.
+test("typed into a schedule's run that waits for a free slot, the message goes with the schedule's own and the run starts now", { timeout: 60000 }, async t => {
+  const p = setup(t, 'slow'), v = await view(t, { repo: p.repo }), panels = v.current.panels, status = () => panels.status.getText().replace(/\s+/g, ' '), chat = () => panels.chat.getText().replace(/\s+/g, ' ');
+  const saved = goal => pendingRequests(p.root).find(row => row.goal.startsWith(goal));
+  await send(v, '/slots 1'); await until(() => /At most 1 session runs at once\./.test(status()), 'one at once');
+  await send(v, 'Check the coupon module'); await until(() => saved('Check the coupon module')?.state === 'running', 'the first session works');
+  enqueue(p.root, 'Nightly check', { priority: 1, scheduleId: 'schedule-0000000b', permissions: 'ask' });
+  await until(() => saved('Nightly check')?.waits, 'the scheduled run waits for a slot');
+  // Its chat says whose message it is: the schedule's, not his.
+  await selectRow(v, /Nightly check/); v.input.write('\r'); await until(() => v.current.screen.focused === panels.ask, 'the waiting row opened');
+  await until(() => /Schedule \(queued\)/.test(chat()), 'the schedule wrote it'); assert.doesNotMatch(chat(), /You \(queued\)/);
+  await send(v, 'Also check the docs build');
+  await until(() => /Added to this scheduled run\. It starts now\./.test(status()), 'said where it went');
+  assert.equal(saved('Nightly check').goal, 'Nightly check\n\nAlso check the docs build');
+  assert.equal(saved('Also check the docs build'), undefined, 'it never took the place of the schedule\'s message');
+  assert.equal(saved('Nightly check').scheduleId, 'schedule-0000000b'); assert.equal(saved('Nightly check').typed, true);
+  await until(() => saved('Nightly check')?.state === 'running', 'it starts now, past the one slot');
+  assert.equal(saved('Check the coupon module').state, 'running');
+});
+
 // The first message of a session waits a moment for the conductor. A second one sent in that
 // moment goes with it, in the order sent. Saved over the first, it took its place.
 test('a message sent before the conductor has picked up the first one goes with it and never replaces it', { timeout: 30000 }, async t => {
