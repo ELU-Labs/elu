@@ -7,13 +7,15 @@ import blessed from 'blessed';
 import { project, fakeClis, cli, git } from './helpers.mjs';
 import { liveTask } from './peer-helpers.mjs';
 import { repository } from '../lib/git.mjs';
-import { registerProject } from '../lib/projects.mjs';
+import { nameProject, registerProject } from '../lib/projects.mjs';
+import { projectFolder } from '../lib/workspace.mjs';
+import { saveInstructions } from '../lib/project-settings.mjs';
 import { launchTerminal } from '../lib/terminal.mjs';
 import { saveTask } from '../lib/state.mjs';
 import { addCard } from '../lib/kanban.mjs';
 import { columns, units, unitWidth, head, tail, cut, padEnd, padStart, unitBefore, unitAfter } from '../lib/width.mjs';
 import { cellText } from '../lib/terminal-cells.mjs';
-import { chatBlock, chatBar, teamPanes, membersLine, fitWords, ink, keyHints, keepRows, remote, visible, wrapText, roomTarget } from '../lib/terminal-visuals.mjs';
+import { chatBlock, chatBar, teamPanes, membersLine, fitWords, ink, keyHints, keepRows, peerName, remote, visible, wrapText, roomTarget } from '../lib/terminal-visuals.mjs';
 import { boardRows, barCells, barColumns, rowTitle } from '../lib/board.mjs';
 import { fitCard, fitTeammateCard } from '../lib/kanban.mjs';
 import { agentTable } from '../lib/agent-spend.mjs';
@@ -316,7 +318,9 @@ test('in the message box the cursor steps over a whole character, Backspace and 
 // "🚀 Launch notes: the uploader", and a Kanban card written in CJK.
 const until = async (check, message, timeout = 15000) => { const started = Date.now(); while (!check()) { if (Date.now() - started > timeout) throw new Error(`Timed out waiting for ${typeof message === 'function' ? message() : message}`); await new Promise(resolve => setTimeout(resolve, 10)); } };
 const ANSWER = 'Done ✅ shipped 🚀 the uploader notes.\n修复完成 ✅ 所有测试通过 🚀', NAME = '修复上传器的发布说明', LINE = '🚀 Launch notes: the uploader';
-async function app(t, [width, height]) {
+// name: what the project is called. peer: the team this computer is on, as lib/peer/index.mjs
+// answers the app. more(repo, at): sessions beside the two every test has.
+async function app(t, [width, height], { name = null, peer = undefined, more = null } = {}) {
   const closers = []; t.after(async () => { let failure = null; for (const close of closers.reverse()) { try { await close(); } catch (error) { failure ??= error; } } if (failure) throw failure; });
   const p = project({ after: close => closers.push(close) }), fake = fakeClis(p.parent, { mode: 'answer' }), home = path.join(p.parent, 'home');
   for (const name of ['claude', 'codex']) fs.mkdirSync(path.join(home, name), { recursive: true });
@@ -329,11 +333,13 @@ async function app(t, [width, height]) {
   saveTask(repo, { id: '1', kind: 'conversation', goal: NAME, state: 'answered', worktree: p.root, branch: null, base: null, createdAt: at, runs: [], reviews: [], responses: [], sessions: {}, result: { outcome: 'done', intent: 'answer', summary: ANSWER, question: null, choices: [], comments: [], responses: [] }, messages: [{ at, text: NAME }] });
   liveTask(p.root, { id: '2', goal: 'Write the launch notes', state: 'ready', files: { 'NOTES.md': `# Notes\n${LINE}\n${NAME} ✅ done\n` } });
   addCard(repo, `${NAME} 🚀 并且更新文档`);
+  if (name) nameProject(projectFolder(p.root), name);
+  more?.(repo, at);
   const input = new PassThrough(), output = new PassThrough(); input.isTTY = output.isTTY = true; input.setRawMode = () => {}; output.columns = width; output.rows = height;
   const models = (columns, rows) => ({ today: terminalModel(columns, rows), old: terminalModel(columns, rows, OLD) });
   let terms = models(width, height), rendered;
   output.on('data', value => { for (const term of Object.values(terms)) term.write(value.toString()); });
-  const finished = launchTerminal({ repo, usage: { home, env: { HOME: home, CLAUDE_CONFIG_DIR: path.join(home, 'claude'), CODEX_HOME: path.join(home, 'codex') }, vendors: () => [] }, input, output, refreshMs: 30, startConductor: () => false, onRender: value => { rendered = value; } });
+  const finished = launchTerminal({ repo, peer, usage: { home, env: { HOME: home, CLAUDE_CONFIG_DIR: path.join(home, 'claude'), CODEX_HOME: path.join(home, 'codex') }, vendors: () => [] }, input, output, refreshMs: 30, startConductor: () => false, onRender: value => { rendered = value; } });
   finished.catch(() => {});
   await until(() => rendered, 'first render');
   // A draw that throws leaves the screen half drawn: every one is watched.
@@ -438,4 +444,126 @@ test('the app at every width from 80 to 200: the open session, its list and its 
     assert.ok(rows.some(row => row.includes('┃ Done ✅ shipped 🚀 the uploader notes.')), `the answer at ${width}`);
     assert.ok(rows.some(row => row.includes('│ 你好🚀 ✅中文 ') && row.endsWith('│')), `the message box at ${width}`);
   }
+});
+
+// Rows that other work of this release added, drawn by the app itself: a project a teammate
+// shares that is not on this computer (its row in Projects and its team board), a project's
+// settings with the rows that name its default model, and a Sessions row that is typed on.
+// Each holds a name in CJK or with an emoji, at every width from 80 to 200.
+const OWN = '🚀 店铺', TITLED = '🚀 Ship the uploader ✅ 发布', SHARED_WITH = [{ id: 'team-1', name: TEAM.name }];
+const sharer = (key, name, box, online) => ({ key, name, box, online, mine: false, handle: 'shop', title: 'Shop', older: false });
+const SHOP = { id: '9'.repeat(64), name: '🚀 Launch 店铺', handle: 'shop', repoId: '9'.repeat(64), address: 'https://github.com/acme/shop.git', teams: SHARED_WITH, sharers: [sharer(LIN, '小林', '开发机', true)] };
+const DOCS = { id: '8'.repeat(64), name: SAMPLES['all wide characters'], handle: 'docs', repoId: '8'.repeat(64), address: null, teams: SHARED_WITH, sharers: [sharer(SAM, 'sam👍🏽', '文档机 🖥', false)] };
+// This computer on a team, as lib/peer/index.mjs answers the app: who is on it, what they share, and each shared project's team board.
+function teamOf(shared) {
+  const just = minutes => new Date(Date.now() - minutes * 60000).toISOString(), member = (key, name, extra) => ({ key, fingerprint: key.slice(0, 8), name, role: 'member', online: true, path: 'direct', lastSeen: just(0), ...extra });
+  const board = row => {
+    const who = row.sharers[0], from = { peer: who.key, name: who.name, box: who.box, online: who.online, heardAt: just(0) };
+    const task = { repoId: row.repoId, handle: row.handle, id: 't-0a1b2c3d', revision: 1, title: '修复登录重定向 ✅ 并且更新文档', description: '', goal: '登录后回到原来的页面 🚀', objectives: [], priority: 'high', severity: 'high', state: 'approved', startedBy: 'owner', who: 'Opus 5.5', subtasks: [], met: [], approvedAt: just(30), doneAt: null, updatedAt: just(2) };
+    return { row, plans: [{ ...from, tasks: [task] }], sessions: [{ ...from, sessions: [{ repoId: row.repoId, id: '0123456789abcdef', title: '修复购物车合计 🚀 Fix the cart total', column: 'needs', by: who.name, at: just(1) }] }] };
+  };
+  return {
+    onTeam: () => true,
+    peerStatus: () => ({ running: true, stale: false, pid: 1, key: ME, name: 'ana', fingerprint: 'aaaaaaaa', error: null, counters: { direct: 1, relayed: 0, failed: 0 }, teams: [{ id: 'team-1', name: TEAM.name, role: 'admin', channels: [], members: [member(ME, 'ana', { role: 'admin', path: null }), member(LIN, '小林', { box: '开发机' }), member(SAM, 'sam👍🏽', { box: '文档机 🖥', online: false, path: null })] }] }),
+    peerItems: () => [], teamAgents: () => [], tickerEvents: () => [], mineRows: () => [], remoteSessions: () => [], remoteMachines: () => [], projectRepoId: () => null,
+    teamAccess: () => ({ handling: 'auto', rules: '', root: null, at: just(60) }),
+    teammateProjects: () => shared,
+    teammateProjectBoard: id => { const row = shared.find(value => value.id === id); return row ? board(row) : null; },
+  };
+}
+const ends = row => row.endsWith('│') || row.endsWith('┐') || row.endsWith('┘');
+// The screen column a text starts in, on a row of today's terminal, and that row cell by cell.
+const columnOf = (row, text) => { const at = row.indexOf(text); return at < 0 ? -1 : columns(row.slice(0, at)); };
+const cellsOf = row => units(row).flatMap(unit => unitWidth(unit) === 2 ? [unit, ''] : unitWidth(unit) ? [unit] : []);
+// The longest of the forms that fits the room, else the last: how the app picks a line for a row.
+const longest = (room, ...forms) => forms.find(form => columns(form) <= room) ?? forms.at(-1);
+
+test('the app at every width from 80 to 200: Projects lists a project named with an emoji, one a teammate shares named with an emoji and one named in CJK, and that one\'s team board says whose it is in a line that fits', { timeout: 600000 }, async t => {
+  const v = await app(t, [80, 30], { name: OWN, peer: teamOf([SHOP, DOCS]) }), panels = () => v.current.panels;
+  const who = peerName('sam👍🏽', SAM), machine = `@${remote('文档机 🖥', 32).replace(/[\s@]+/g, '')}`, short = cut(DOCS.name, 30, '...');
+  assert.equal(columns(DOCS.name), 48); assert.equal(columns(short), 29); assert.ok(columns(who) > who.length - 3 && columns(machine) > machine.length);
+  for (let width = 80; width <= 200; width++) {
+    await v.sized(width, 30);
+    // Projects: this computer's project, then the two a teammate shares. Each column starts under the one above.
+    await v.send('/projects');
+    await until(() => v.current.view === 'projects' && panels().projectsList.items.length === 3, 'the three projects');
+    let rows = await v.screen(`Projects at ${width}`);
+    const list = panels().projectsList, room = Math.max(20, list.width - 2), left = tail => Math.max(4, room - 26 - tail.length - 2);
+    const mine = `● ${padEnd(OWN, 24)}`, shop = `  ${padEnd(SHOP.name, 24)}${padEnd(cut('shared by @小林   on @开发机', left('online'), '...'), left('online') + 2)}online`;
+    const docs = `  ${padEnd(cut(DOCS.name, 22, '...'), 24)}${padEnd(cut(`shared by ${who}   on ${machine}`, left('offline'), '...'), left('offline') + 2)}offline`;
+    assert.equal(columns(docs), room, `a shared project's row is as wide as the list at ${width}`);
+    const found = [mine, shop, docs].map(text => rows.find(row => row.includes(text)));
+    assert.ok(found.every(row => row && ends(row)), `the three rows at ${width}, each ending at the border:\n${rows.join('\n')}`);
+    assert.deepEqual([columnOf(found[0], OWN), columnOf(found[1], SHOP.name), columnOf(found[2], DOCS.name.slice(0, 4))], [3, 3, 3], `the names start in one column at ${width}`);
+    assert.deepEqual([columnOf(found[1], 'shared by'), columnOf(found[2], 'shared by')], [27, 27], `who shares it starts in one column at ${width}`);
+    assert.equal(columnOf(found[1], 'online') + 'online'.length, columnOf(found[2], 'offline') + 'offline'.length, `online and offline end in one column at ${width}`);
+    // Enter on the one named in CJK: its team board, under its name and who shares it.
+    list.focus(); list.select(2); v.input.write('\r');
+    await until(() => v.current.view === 'kanban' && v.text(panels().ask._label).includes('Message') && /The box below writes to/.test(v.text(panels().status)), 'its team board');
+    rows = await v.screen(`the team board at ${width}`);
+    const title = `${DOCS.name}  ·  shared by ${who}  ·  on ${machine}`;
+    assert.ok(rows[1].includes(cut(title, panels().header.width, '...')) && columns(rows[1]) === width, `the title at ${width}: ${rows[1]}`);
+    if (columns(title) <= panels().header.width) assert.ok(rows[1].includes(title), `a title that fits is whole at ${width}`);
+    // The line under the board, the box's label and the status line are each the longest form that fits, whole.
+    const whose = `${who}'s project, on ${machine}`, note = longest(width - 4, `${short} is ${whose}, not on this computer. A message here starts a session there.`, `${short} is ${whose}, not on this computer.`, `${short} is ${whose}.`, 'Not on this computer.');
+    assert.ok(rows.includes(`│ ${padEnd(note, panels().kanbanTeam.width - 3)}│`), `the line under the board at ${width} is ${note}:\n${rows.join('\n')}`);
+    const label = longest(panels().ask.width - 4, ` Message ${who} about ${short} · starts a session on their computer, under the access they chose `, ` Message ${who} about ${short} · starts a session there `, ` Message ${who} about ${short} `, ` Message ${who} `);
+    assert.equal(v.text(panels().ask._label), label, `the box's label at ${width}`);
+    assert.ok(rows.some(row => row.includes(`─${label}─`) && row.endsWith('┐')), `the label is inside the box's border at ${width}:\n${rows.slice(-8).join('\n')}`);
+    const said = longest(panels().status.width - 3, `${DOCS.name}, shared by ${who} on ${machine}. The box below writes to ${who}.`, `The box below writes to ${who}.`);
+    assert.ok(rows.some(row => row.trimEnd() === `› ${said}` || row.trimEnd() === ` › ${said}`), `the status line at ${width} is ${said}:\n${rows.slice(-8).join('\n')}`);
+    // Its cards: a teammate's Task and a session of theirs, titled in CJK with an emoji.
+    assert.ok(rows.some(row => row.split('修复').length === 3 && cellsOf(row).filter(cell => cell === '│').length === 8), `the two cards, each inside its column, at ${width}:\n${rows.join('\n')}`);
+    if (width >= 160) assert.ok(rows.some(row => row.includes('修复登录重定向') && row.includes('修复购物车合计')), `the cards say more of their titles at ${width}:\n${rows.join('\n')}`);
+  }
+});
+
+test('the app at every width from 80 to 200: the settings of a project named with an emoji keep every row inside the dialog, the two that name its default model among them', { timeout: 600000 }, async t => {
+  const TEXT = `${SAMPLES['all wide characters']} 🚀 and more words than the row has room for`;
+  const v = await app(t, [80, 30], { name: OWN, more: repo => saveInstructions(repo.root, `${TEXT}\nA second line.\n`) }), panels = () => v.current.panels, PAGE = `Project ${OWN}`;
+  const dialog = () => v.current.screen.children.find(child => !child.destroyed && child.options?.label?.trim() === PAGE);
+  await v.send('/projects');
+  await until(() => v.current.view === 'projects' && panels().projectsList.items.length === 1, 'the project');
+  panels().projectsList.focus(); v.input.write('\r'); await until(dialog, 'its settings');
+  for (let width = 80; width <= 200; width++) {
+    await v.sized(width, 30);
+    const rows = await v.screen(`the settings at ${width}`), box = dialog(), top = rows[box.atop], inside = rows.slice(box.atop + 1, box.atop + box.height - 1);
+    assert.equal(box.width, Math.min(88, width - 4));
+    assert.equal(columnOf(top, `┌─ ${PAGE} ─`), box.aleft, `the dialog's title at ${width}: ${top}`);
+    for (const row of inside) assert.deepEqual([cellsOf(row).length, cellsOf(row)[box.aleft], cellsOf(row)[box.aleft + box.width - 1]], [width, '│', '│'], `a row of the dialog has its two borders in their columns at ${width}: ${row}`);
+    assert.equal(cellsOf(top)[box.aleft + box.width - 1], '┐', `the dialog's corner at ${width}: ${top}`);
+    const text = label => inside.find(row => row.includes(label));
+    assert.ok(text(`Instructions  ${cut(TEXT, 48, '...')}`), `the instructions row, cut between two characters at ${width}:\n${inside.join('\n')}`);
+    assert.ok(text('Default model Opus · not chosen, so the first installed here') && text('This computer not chosen · Opus, the first installed here'), `the rows that name the model at ${width}:\n${inside.join('\n')}`);
+    assert.deepEqual(['● Active project', 'Instructions', 'Context', 'Default model', 'This computer', 'Archive'].map(label => columnOf(text(label), label)), Array(6).fill(box.aleft + 1), `every row starts in the dialog's first column at ${width}`);
+  }
+});
+
+test('the app at every width from 80 to 200: typing on the Sessions row of a session titled with an emoji writes in the message box, and the row, the title and the box keep their columns', { timeout: 600000 }, async t => {
+  const v = await app(t, [80, 30], { more: (repo, at) => saveTask(repo, { id: '3', kind: 'conversation', goal: TITLED, state: 'answered', worktree: repo.root, branch: null, base: null, createdAt: at, runs: [], reviews: [], responses: [], sessions: {}, result: { outcome: 'done', intent: 'answer', summary: ANSWER, question: null, choices: [], comments: [], responses: [] }, messages: [{ at, text: TITLED }] }) });
+  const panels = () => v.current.panels, board = panels().board, ask = panels().ask, typed = 'c你好🚀 ✅中文👍🏽';
+  if (v.current.view !== 'tasks') await v.send('/tasks');
+  await until(() => v.current.view === 'tasks' && v.listed().some(row => row.includes('🚀 Ship')), 'the row titled with an emoji');
+  board.focus(); board.select(v.listed().findIndex(row => row.includes('🚀 Ship')));
+  await until(() => v.current.screen.focused === board && (v.listed()[board.selected] ?? '').includes('🚀 Ship') && v.text(panels().header).includes('🚀 Ship'), 'that row under the cursor');
+  // One letter typed on the row is its key once Enter follows; the line under the box says which.
+  v.input.write('c'); await until(() => ask.value === 'c' && v.current.screen.focused === ask, 'the letter in the message box');
+  let rows = await v.screen('a letter typed on the row');
+  assert.match(v.text(panels().keys), /enter archives this session · keep typing to write a message/);
+  // More typed after it is a message, with an emoji, CJK and a thumb with a skin tone.
+  for (const piece of units(typed.slice(1))) v.input.write(piece);
+  await until(() => ask.value === typed, () => `the typed text, got ${JSON.stringify(ask.value)}`);
+  for (let width = 80; width <= 200; width++) {
+    await v.sized(width, 30);
+    rows = await v.screen(`a Sessions row typed on at ${width}`);
+    const wide = panels().boardBox.width, row = rows.find(value => value.includes('✓ 🚀 Ship'));
+    assert.ok(row, `the row at ${width}:\n${rows.join('\n')}`);
+    // The list's right border is in its column on that row, and the pane beside it ends at the screen's edge.
+    assert.deepEqual([cellsOf(row).length, cellsOf(row)[wide - 1]], [width, '│'], `the list's border on the row at ${width}: ${row}`);
+    assert.ok(row.includes(TITLED) || row.includes('…'), `the row's title is whole or cut with its mark at ${width}: ${row}`);
+    assert.ok(rows[1].includes('🚀 Ship') && rows[1].includes('answered'), `the title beside the list at ${width}: ${rows[1]}`);
+    assert.ok(rows.slice(2, 18).every(ends), `every row ends at its border at ${width}:\n${rows.join('\n')}`);
+    assert.ok(rows.some(value => value.includes(`│ ${typed} `) && value.endsWith('│')), `the message box at ${width}:\n${rows.slice(-8).join('\n')}`);
+  }
+  ask.setValue('');
 });
