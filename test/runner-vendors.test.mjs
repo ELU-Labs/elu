@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { project, fakeClis, cli, git } from './helpers.mjs';
-import { ProjectController } from '../lib/projects.mjs';
+import { ProjectController, conversationEntries } from '../lib/projects.mjs';
 import { projectFolder } from '../lib/workspace.mjs';
 import { taskDir, readTask, taskTitle, setTitle } from '../lib/state.mjs';
 import { answerApproval, pendingApprovals } from '../lib/approvals.mjs';
@@ -482,6 +482,26 @@ test('a Grok Build turn over ACP starts on the model the session chose, switches
   assert.deepEqual(f.calls().at(-1).args.slice(-4), ['agent', '--model', 'grok-4.6', 'stdio']);
   assert.equal(second.runs[1].model, 'grok-4.6'); assert.match(fs.readFileSync(second.runs[1].logFile, 'utf8'), /"config_option_update".*"currentValue":"grok-4\.6"\}?/, 'the vendor switched the session');
   assert.deepEqual(second.runs[1].tokens, { input: 10, output: 5, cacheRead: 30, cacheWrite: 0 });
+});
+
+// The chat keeps every reply of a session on Antigravity or Grok Build, as it does on Claude
+// Code and Codex: each run's own log is read for what it said, headless and over ACP. Before,
+// only the newest reply was shown, so the one before it left the chat when the next turn ended.
+for (const [vendor, name, version] of [['agy', 'Antigravity', '1.5.4'], ['grok', 'Grok Build', '1.0.77']]) test(`a session on ${name} keeps each reply in its chat when the next turn ends, headless and over ACP`, async t => {
+  const f = setup(t, vendor);
+  if (vendor === 'grok') { fs.mkdirSync(path.join(f.parent, '.grok')); fs.writeFileSync(path.join(f.parent, '.grok', 'auth.json'), '{}\n', { mode: 0o600 }); }
+  const said = task => conversationEntries(f.controller.repo, task).filter(entry => entry.lead).map(entry => entry.text), overAcp = () => vendor === 'agy' ? f.calls().at(-1).args[0] === 'acp' : f.calls().at(-1).args.includes('stdio');
+  // The older reply is in a headless log, then in an ACP log; the newer one came over ACP.
+  for (const [relay, word] of [[false, 'headless first'], [true, 'ACP first']]) {
+    proven(vendor, f.bin, version, { relay });
+    const first = await f.controller.ask('Say hello.', null, { permissions: 'ask' }).finished;
+    assert.equal(first.state, 'answered', JSON.stringify(first.error)); assert.equal(overAcp(), relay, word);
+    const hello = first.result.summary; assert.ok(hello); assert.deepEqual(said(first), [hello]);
+    proven(vendor, f.bin, version, { relay: true });
+    const second = await f.controller.ask('Reply done with the summary "second".', first.id).finished;
+    assert.equal(second.state, 'answered', JSON.stringify(second.error)); assert.equal(overAcp(), true, word);
+    assert.deepEqual(said(second), [hello, 'second'], `${word}: the first reply stays above the second`);
+  }
 });
 
 // The option each launch above carries is one a release may not take. `claude <any flag>
