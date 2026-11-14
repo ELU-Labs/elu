@@ -1167,7 +1167,7 @@ async function homeSession(t, p) {
   p.extra({});
   assert.equal(first.state, 'needs_input'); assert.notEqual(first.kind, 'conversation');
   assert.ok(first.worktree.startsWith(`${web}.elu-code${path.sep}`), first.worktree);
-  saveTask(repo, { ...readTask(repo, first.id), origin: { kind: 'handoff', peer: SARA, name: 'aki', threadId: 'thread-1', own: true } });
+  saveTask(repo, { ...readTask(repo, first.id), origin: { kind: 'handoff', peer: SARA, name: 'rio', threadId: 'thread-1', own: true } });
   return { home, web, repo, id: first.id, worktree: first.worktree, controller: new ProjectController(repo) };
 }
 test('a session whose project is the home folder but that works in a repository runs the owner\'s reply, and the reply continues its Task\'s work with edit access', async t => {
