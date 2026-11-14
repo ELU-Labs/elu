@@ -21,8 +21,15 @@ variable: if `grok` is signed out, the session says `Grok Build: not signed in. 
 ELU starts the check by itself before your first message to Grok goes out, whether
 you wrote to a session on it or to a bot on it. The session says so first, then shows each
 step as it ends, and then your message goes on. The check takes about seven short turns on
-Grok and a few minutes. Only a message you just sent, or `c` in the Usage tab, starts it: a
-scheduled turn, a shadow turn or a review never does.
+Grok and a few minutes. A message you just sent starts it, and so does `c` in the Usage tab,
+and a teammate's message that starts a session of your own (`/access` Auto, or your `y` on
+it): a scheduled turn, a shadow turn or a review never does.
+
+Grok Build reviews, and can be a bot's vendor, once the check passed: a review runs on its
+Read only launch, which the check proves writes nothing, runs no command and reaches no
+network on this machine. It does not answer a teammate's question (the read-only kind
+teammates ask of a shared project): only Claude Code's launch keeps every read inside the
+project, hides what Git does not track, and holds the run under a dollar cap.
 
 The Usage tab shows whether Grok is signed in before the check has run: it looks for
 `~/.grok/auth.json`, never opens it, and runs nothing. Its line then says
@@ -51,7 +58,7 @@ run starts, and a turn you did not send yourself says
 If a required step fails, Grok stays off here, the session says which step was not proven,
 and your next message to it runs the check again. If `relay` fails, Ask and
 Auto still work, but a blocked action is reported instead of asked:
-`Grok can't ask live here. Blocked actions are reported.`
+`Grok Build can't ask live here. Blocked actions are reported.`
 
 ## How each mode runs
 
