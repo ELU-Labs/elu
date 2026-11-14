@@ -674,14 +674,19 @@ test('the bots\' replies the lead reads are every reply, each whole', () => {
   assert.deepEqual(botReplies(many).map(row => row.text), many.map(row => row.text));
 });
 
-test('a teammate\'s session reads its messages as before; the owner\'s reads the bots\' replies whole', async t => {
+test('a teammate\'s question reads its messages as before; the owner\'s session, and one a teammate\'s message started as his own, read the bots\' replies whole', async t => {
   const f = setup(t);
   const task = await f.controller.ask('Where is coupon normalization?').finished;
   const long = 'y'.repeat(60000), messages = [{ at: new Date(Date.now() + 1000).toISOString(), text: long, from: '@critic', bot: 'critic' }, { at: new Date(Date.now() + 2000).toISOString(), text: 'note', from: '@critic', bot: 'critic', quiet: true }];
-  const theirs = { ...task, origin: { kind: 'handoff', peer: 'b'.repeat(64), name: 'sara' }, messages: [...task.messages, ...messages] };
-  assert.deepEqual(ownerMessages(f.repo, theirs), theirs.messages, 'a teammate\'s session is unchanged');
+  for (const kind of ['ask', 'review']) {
+    const theirs = { ...task, origin: { kind, peer: 'b'.repeat(64), name: 'sara' }, messages: [...task.messages, ...messages] };
+    assert.deepEqual(ownerMessages(f.repo, theirs), theirs.messages, `a teammate's ${kind} is unchanged`);
+  }
   const mine = ownerMessages(f.repo, { ...task, messages: [...task.messages, ...messages] });
   assert.equal(mine.some(row => row.quiet), false); assert.equal(mine.at(-1).text, long);
+  // A session a teammate's message started runs as one he typed: it reads them as his own does.
+  const started = { ...task, origin: { kind: 'handoff', peer: 'b'.repeat(64), name: 'sara' }, messages: [...task.messages, ...messages] };
+  assert.deepEqual(ownerMessages(f.repo, started), mine, 'a session started as his own reads as his own');
 });
 
 test('a bot asked about an editing session reads its edits, and reviews them before they are published', async t => {
