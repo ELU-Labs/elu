@@ -192,4 +192,7 @@ test('what the chat says under a waiting message never is a bare "waiting": each
   assert.equal(all[3], 'read when the running command ends | The running turn reads it when the command it is running ends. | Enter sends it now · ↑ takes it back');
   assert.equal(all[4], 'read when the running command ends | The running turn reads it when the command it is running ends. | Enter sends it now: that stops the command that is running · ↑ takes it back');
   assert.equal(said({ state: 'queued' }, { working: true, readOnly: true }), 'starts when this turn ends | It starts when the running turn ends. | Enter in the empty box sends it now: that stops the turn and the command that is running');
+  // Where the pane is too narrow for the title and its time on one row, the title says the same in fewer words, never only that it waits.
+  const short = [waitingWords({ state: 'queued' }, { working: true }), waitingWords({ state: 'queued', aside: { state: 'answered', text: 'a' } }, { working: true, deaf: true }), waitingWords({ state: 'queued', turn: {} }, { working: true, goes: true }), waitingWords({ state: 'queued' }, { working: true, soon: true })].map(words => words.short);
+  assert.deepEqual(short, ['starts next turn', 'answered · next turn', 'read after the command', 'read or answered soon']);
 });

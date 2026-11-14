@@ -263,7 +263,7 @@ test("over a session of mine there, what I type goes to that session, as if type
   // While it works there, the line says at once what its running turn does with the message, as that computer tells it.
   const busy = takes => glue({ answer: () => ({ id: ID, working: true, ...(takes ? { takes } : {}) }) }).glue.send(replied, 'and the tests');
   assert.equal(await busy('turn'), 'Sent to Codex on @aki-devbox. Its running turn reads it at its next step.');
-  assert.equal(await busy('beside'), 'Sent to Codex on @aki-devbox. Its running turn takes no message while it works, so it is answered beside it now.');
+  assert.equal(await busy('beside'), 'Sent to Codex on @aki-devbox. It is being answered now, beside its running turn.');
   assert.equal(await busy('soon'), 'Sent to Codex on @aki-devbox. Its running turn reads it at its next step, or it is answered beside the turn.');
   // A computer on an older ELU says only that it works: what it can and cannot do is said.
   assert.equal(await busy(), 'Sent to Codex on @aki-devbox. @aki-devbox runs an older ELU: this starts when its turn ends. Nothing reads or answers it before.');

@@ -2872,7 +2872,7 @@ test('a message sent while the session works waits in its chat; Up takes it back
   await send(v, 'Also cover refunds');
   await until(() => /You \(being answered now\)[^\n]*\n[^\n]*Also cover refunds *\nBeing\s+answered\s+now,\s+beside\s+the\s+running\s+turn\.\nEnter\s+in\s+the\s+empty\s+box\s+sends\s+it\s+now:[^·]*·\s+↑\s+takes\s+it\s+back/.test(chat()), 'the message, what happens to it, and its keys');
   assert.doesNotMatch(chat(), /\(waiting\)|Sent when this turn ends/, 'it never says only that it waits');
-  assert.match(panels.status.getText(), /Sent\.\s+The\s+running\s+turn\s+takes\s+no\s+message\s+while\s+it\s+works,\s+so\s+it\s+is\s+answered\s+beside\s+it\s+now\./, 'the status line says the same');
+  assert.match(panels.status.getText(), /Sent\.\s+It\s+is\s+being\s+answered\s+now,\s+beside\s+the\s+running\s+turn\./, 'the status line says the same');
   assert.equal(panels.ask.getValue(), '', 'the box is cleared'); assert.deepEqual(waiting(), ['Also cover refunds']); assert.deepEqual(sent(), ['Keep working on the board'], 'the running turn goes on');
   assert.equal(projectSnapshot(p.repo).tasks[0].state, 'running');
   // A second one: the key is named on the newest.
@@ -3008,7 +3008,7 @@ test('a message sent while Claude Code runs a long command waits for the command
   await send(v, 'Run the long check');
   await until(() => task()?.activeInbox === true && /Opus is working/.test(chat()), 'the model works and takes messages');
   await send(v, 'Also cover refunds');
-  await until(() => /You \(read when the running command ends\)[^\n]*\n[^\n]*Also cover refunds *\nThe\s+running\s+turn\s+reads\s+it\s+when\s+the\s+command\s+it\s+is\s+running\s+ends\.\nEnter sends it now · ↑ takes it back/.test(chat()), 'it waits for the command, and the keys are named');
+  await until(() => /You \(read after the command\) {2}[^\n]*\n[^\n]*Also cover refunds *\nThe\s+running\s+turn\s+reads\s+it\s+when\s+the\s+command\s+it\s+is\s+running\s+ends\.\nEnter sends it now · ↑ takes it back/.test(chat()), 'it waits for the command, and the keys are named');
   await new Promise(resolve => setTimeout(resolve, 600));
   assert.doesNotMatch(chat(), /Sent to the running turn\./, 'not said before the turn took it');
   assert.deepEqual(pendingRequests(p.root).filter(row => row.state === 'queued').map(row => row.goal), ['Also cover refunds']); assert.deepEqual(controls(), []);
@@ -3098,7 +3098,8 @@ test('a question to a session whose turn takes no message is answered in its cha
   assert.doesNotMatch(chat(), /\(waiting\)|current turn ends|Sent when this turn ends/);
   // An instruction: answered too, and it says that it asks for work and what the one key costs.
   await send(v, 'Rename the helper too');
-  await until(() => /You \(answered[\s\S]{0,80}┃ Rename the helper too[\s\S]*· beside the turn[\s\S]*The\s+turn\s+is\s+running\s+the\s+tests\s+now\.[\s\S]*Answered\s+beside\s+the\s+running\s+turn,[\s\S]*It\s+asks\s+for\s+work,\s+so\s+it\s+also\s+starts\s+the\s+next\s+turn\s+when\s+this\s+one\s+ends\.\s+Enter\s+in\s+the\s+empty\s+box\s+sends\s+it\s+now:\s+that\s+stops\s+the\s+turn\s+and\s+the\s+command\s+that\s+is\s+running\s+·\s+↑\s+takes\s+it\s+back/.test(chat()), 'the instruction, its answer, and the key');
+  // At 80 columns the row's title says it in fewer words, on one row with its time.
+  await until(() => /You \(answered · next turn\) {2}[^\n]*\n┃ Rename the helper too[\s\S]*· beside the turn[\s\S]*The\s+turn\s+is\s+running\s+the\s+tests\s+now\.[\s\S]*Answered\s+beside\s+the\s+running\s+turn,[\s\S]*It\s+asks\s+for\s+work,\s+so\s+it\s+also\s+starts\s+the\s+next\s+turn\s+when\s+this\s+one\s+ends\.\s+Enter\s+in\s+the\s+empty\s+box\s+sends\s+it\s+now:\s+that\s+stops\s+the\s+turn\s+and\s+the\s+command\s+that\s+is\s+running\s+·\s+↑\s+takes\s+it\s+back/.test(chat()), 'the instruction, its answer, and the key');
   assert.deepEqual(pendingRequests(p.root).filter(row => row.state === 'queued').map(row => row.goal), ['Rename the helper too'], 'it keeps its place');
   assert.deepEqual(sent(), ['Keep working on the board'], 'the running turn goes on');
   // Enter in the empty box: the turn stops and the message starts the next one.
@@ -3200,7 +3201,7 @@ test('checks read as running, a waiting turn of a schedule names the schedule, a
   await send(v, 'Keep working on the board'); await until(() => /Opus is working/.test(chat()) && v.current.session && v.current.session !== 'new', 'the model at work');
   const id = v.current.session, mine = () => pendingRequests(p.root).filter(row => row.continuationTaskId === id && row.state === 'queued' && !row.scheduled).map(row => row.goal);
   saveRequest(p.root, 'Check the nightly build', null, { state: 'queued', priority: 1, continuationTaskId: id, taskId: null, attempts: 0, notBefore: null, queuedAt: new Date().toISOString(), reason: 'Waiting to start.', bot: 'sec', scheduled: true });
-  await until(() => /Schedule → @sec \(starts when this turn ends\) {2}\d{1,2}:\d\d [AP]M\n┃ Check the nightly build/.test(chat()), 'the waiting turn of the schedule'); assert.doesNotMatch(chat(), /You → @sec \(/);
+  await until(() => /Schedule → @sec \(starts next turn\) {2}\d{1,2}:\d\d [AP]M\n┃ Check the nightly build/.test(chat()), 'the waiting turn of the schedule'); assert.doesNotMatch(chat(), /You → @sec \(/);
   // A waiting message opened from the list with Enter, and another one sent there: it waits beside the first. It does not take its place.
   await send(v, 'First waiting'); await until(() => mine().length === 1, 'one waits');
   await selectRow(v, /First waiting/); v.input.write('\r'); await until(() => v.current.screen.focused === panels.ask, 'the waiting row opened');
