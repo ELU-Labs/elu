@@ -17,6 +17,13 @@ ELU launches installed vendor CLIs. The executables and your local installation 
 trusted. Repository content, check scripts, prompts, and model responses are untrusted.
 Only the owner can approve a push, or give a session Full access, which pushes without asking.
 
+ELU refuses a symbolic link inside what it or a session writes: its state folder, a
+project's record, a task's workspace. A link above those is yours or the system's and is
+followed: the temp folder, the folder its state is kept in (`$XDG_CONFIG_HOME`, else
+`~/.config`), a project folder you type, a Git hooks folder outside the project and a
+vendor's home are each read as they are on disk first. On macOS `/var` and `/tmp` are such
+links. A session is closed out of ELU's state under both names of that folder.
+
 Prompts explain the task but are not security controls. This tool cannot prove a change is
 correct, and model review is not a substitute for a person reviewing a pull request.
 
@@ -232,7 +239,8 @@ and teammates' Tasks are not shown in it or given to its models. `/share on` put
 each teammate, and each other computer of yours, who has a clone of that same repository.
 No share is needed. A card holds only the session's title (its name, or the first line of
 what was asked, up to 80 characters), its column (In progress, Needs you or Done), who
-started it, the time it last moved, and the id of its Task when it has one. Never the chat,
+started it, the time it last moved, and the id of its Task when it has one. Its Task goes
+with it, whether or not you share the project: the fields listed under **Tasks** above. Never the chat,
 a file, a diff or a path: a path in the title reads [path], and a title with a secret in it
 goes as "Session". A session a teammate's message started shows what they asked and their
 name only to teammates on a team that message came through; anyone else sees "Session". To know who has which repository, each machine sends each teammate
@@ -243,10 +251,22 @@ repository, and is kept only from someone who proved it. For a public repository
 get the history, so any teammate can. `/share off` in a project keeps its sessions and its
 repositories to itself, and shows no teammate's session in it.
 
+**A project you share is the exception.** Sharing a project with a team is your say that its
+members may see it, so the cards of the sessions in that project's own repository also go to
+the members of that team who have no clone, and they keep them without a proof. They see them
+on the project's team board, which the project's row in their Projects tab opens. `/share off`
+and unsharing stop it.
+
 Every teammate on any of your teams is also told, whatever the status of your shares, this
 machine's name (the peer setting `box`, by default the first part of its host name), the
 bots you share and what each is for, the names of the projects shared with their team, and
 the repository ids (a hash of the `origin` remote) and first commit ids of those projects.
+The members of a team a project is shared with are also told that project's name and its git
+address, so it shows in their Projects tab and they can clone it: the `origin` remote when it
+is an https, http, ssh or git address, without any password or token that is written in it
+(an https address goes with no user at all). A remote that is a folder of this machine is
+never sent, and neither is the project's path. Neither is told of a project turned off with
+`/share off`. A teammate who clones it uses their own git sign-in: ELU sends none.
 Nothing else about your work is told: not a Task you have not approved or a rejected one,
 the rest of your request, the chat, file contents or absolute paths. A teammate's question
 and its answer are another matter, covered above.
@@ -564,12 +584,31 @@ the sessions a later turn resumes, skills, agents, commands, plugins and hooks (
 the same setup, and only the sign-in differs. The MCP servers and memory a run gets come from
 your own home on every account.
 
+Your own MCP servers are also there when you run the vendor by hand on an account's folder.
+Codex keeps them in `config.toml`, which every account links, even before you have one.
+Claude Code keeps them in `.claude.json`, which also names the account, so that file is
+never linked: ELU writes the `mcpServers` of your own `~/.claude.json` into each account's
+`.claude.json`, under Claude Code's own lock on that file, and nothing else of yours (no
+sign-in, account, setting or project). It does so when an account is added, before each run
+on it, after `/mcp add` and `/mcp remove`, and every few seconds while ELU is open, so a
+server you add or remove with `claude mcp` is in every account too. A server added on an
+account's own folder stays there; one of yours of the same name replaces it. Those entries
+can hold a server's key, as yours do, and the account's file is private to you (`0600`, in
+ELU's private folder). A server's own OAuth sign-in lives in the account's sign-in store,
+not in that file, so each account signs in to such a server once on its own.
+
 `logins.json` records which accounts were added and which one new runs use; it holds no
 email, token or path. Switching (Enter on an account) changes the account of the next run
 only: a run keeps the account it started on. When a run stops at an account's limit, the
 chat names that account and says to switch in Usage; ELU never switches by itself.
 Forgetting an account (`x`) deletes its folder after you confirm. It is not signed out, so
-nothing is revoked; on macOS its Keychain item stays until you delete it in Keychain Access.
+nothing is revoked. On macOS ELU also deletes the Keychain items Claude Code keeps for that
+folder, with macOS's `security delete-generic-password`, for your user and by exact name:
+the names Claude Code gives that folder's sign-in and an API key it saved there ("Claude
+Code-credentials-" or "Claude Code-" and the folder's eight hex digits, each also with
+Claude Code's OAuth suffixes). Your own sign-in, every other account's, and everything else
+in the Keychain stay. When the Keychain is locked or refuses, the account is still
+forgotten, and ELU names the item for you to delete in Keychain Access.
 Accounts belong to the machine they were added on and are never sent to a teammate or to
 another of your machines.
 
@@ -633,3 +672,10 @@ proof on a given machine, and the vendor's own issue
 [xai-org/grok-build-plugin-cc#34](https://github.com/xai-org/grok-build-plugin-cc/issues/34)
 says some switches are ignored. Grok's deny rules match command text: in Approve for me
 the never list is a tripwire, not a boundary, and Full access has none.
+
+In Full access both run under a HOME that is a folder of links to the entries at the top
+of your home, so a command reads and writes your own files and sign-ins as your terminal
+does. The folders of coding tools (`~/.claude`, `~/.claude.json`, `~/.codex`, `~/.cursor`,
+`~/.gemini`, `~/.grok`, `~/.agents`) are not linked, and the vendor's own folder there is
+still the one ELU wrote. The other modes never run there: the folder sits in ELU's own,
+which they deny. See [Full access](docs/permissions.md#full-access).

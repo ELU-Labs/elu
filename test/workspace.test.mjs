@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -44,6 +45,24 @@ test('initial history respects ignores, requires an unchanged preview, and commi
   assert.equal(fs.readFileSync(path.join(f.root, '.env'), 'utf8'), 'SYNTHETIC_PRIVATE_VALUE');
 });
 
+// The owner's message of any length is queued whole: ELU sets no limit of its own on it.
+test('a request of any length is queued whole', t => {
+  const f = fixture(t), long = 'Fix the coupon codes. '.repeat(5000);
+  assert.ok(long.length > 16000);
+  assert.equal(saveRequest(f.root, long, null, { state: 'queued' }).goal, long);
+  assert.throws(() => saveRequest(f.root, '  ', null, { state: 'queued' }), /Enter a request\./);
+});
+
+test('initial history takes a file over 4 MiB like any other', t => {
+  const f = fixture(t), big = Buffer.alloc(5 * 1024 * 1024, 'a');
+  fs.writeFileSync(path.join(f.root, 'data.bin'), big); fs.writeFileSync(path.join(f.root, 'source.mjs'), 'export const count = 1;\n');
+  const plan = historyPlan(projectFolder(f.root));
+  assert.deepEqual(plan.files.map(file => file.path), ['data.bin', 'source.mjs']);
+  assert.equal(plan.files[0].hash, crypto.createHash('sha256').update(big).digest('hex'));
+  createHistory(plan);
+  assert.deepEqual(git(f.root, ['ls-tree', '-r', '--name-only', 'HEAD']).split('\n'), ['data.bin', 'source.mjs']);
+});
+
 test('initial history refuses an unignored credential-shaped file or an outside symlink', t => {
   const f = fixture(t); fs.writeFileSync(path.join(f.root, '.env'), 'SYNTHETIC_PRIVATE_VALUE');
   assert.throws(() => historyPlan(projectFolder(f.root)), /Keep .env out of history/);
@@ -79,11 +98,12 @@ test('saved requests are personal, survive a new controller, and stay out of pro
 test('a message is added to a request only while that request still waits to start', t => {
   const f = fixture(t), first = saveRequest(f.root, 'First', null, { state: 'queued' });
   assert.equal(addToRequest(f.root, first.id, 'Second').goal, 'First\n\nSecond'); assert.deepEqual(pendingRequests(f.root).map(row => [row.id, row.goal, row.state]), [[first.id, 'First\n\nSecond', 'queued']]);
-  // Over one message's length it is not added, and nothing changes.
-  assert.equal(addToRequest(f.root, first.id, 'x'.repeat(16000)), null);
-  // Once the conductor has taken the request it is not added either.
+  // However long the two are together: ELU sets no length of its own for a message.
+  const long = 'x'.repeat(40000);
+  assert.equal(addToRequest(f.root, first.id, long).goal, `First\n\nSecond\n\n${long}`);
+  // Once the conductor has taken the request it is not added.
   for (const state of ['starting', 'running', 'blocked']) { updateRequest(f.root, first.id, { state }); assert.equal(addToRequest(f.root, first.id, 'Third'), null, state); }
-  assert.equal(addToRequest(f.root, 'request-none', 'Third'), null); assert.equal(pendingRequests(f.root)[0].goal, 'First\n\nSecond');
+  assert.equal(addToRequest(f.root, 'request-none', 'Third'), null); assert.equal(pendingRequests(f.root)[0].goal, `First\n\nSecond\n\n${long}`);
 });
 
 test('the dashboard can read a new project before history or settings exist', t => {
@@ -95,13 +115,13 @@ test('the dashboard can read a new project before history or settings exist', t 
   assert.equal(fs.existsSync(f.fake.calls), false);
 });
 
-test('missing settings can be restored without losing task history or instruction ownership', t => {
+test('missing settings can be restored without losing task history or instruction ownership', async t => {
   const f = fixture(t), repo = createHistory(historyPlan(projectFolder(f.root)));
-  applyInit(repo, initPlan(repo));
+  applyInit(repo, await initPlan(repo));
   const instructions = fs.readFileSync(path.join(f.root, 'AGENTS.md'), 'utf8');
   fs.unlinkSync(path.join(f.root, '.elu-code/config.yaml'));
   fs.writeFileSync(path.join(repo.state, 'owner-note.txt'), 'keep history');
-  const plan = initPlan(repo); assert.equal(plan.initialized, false); assert.equal(plan.config.checks.length, 0); applyInit(repo, plan);
+  const plan = await initPlan(repo); assert.equal(plan.initialized, false); assert.equal(plan.config.checks.length, 0); applyInit(repo, plan);
   assert.equal(fs.readFileSync(path.join(f.root, 'AGENTS.md'), 'utf8'), instructions);
   assert.equal(fs.readFileSync(path.join(repo.state, 'owner-note.txt'), 'utf8'), 'keep history');
   assert.ok(fs.existsSync(path.join(f.root, '.elu-code/config.yaml')));

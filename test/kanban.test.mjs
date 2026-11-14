@@ -13,7 +13,7 @@ const task = (id, goal, state, extra = {}) => ({ id, goal, state, createdAt: new
 test('cards wait in To do, follow their session once started, and go to Done by hand', t => {
   const p = project(t), repo = projectFolder(p.root);
   const first = addCard(repo, 'Add rate limiting to login'), second = addCard(repo, 'Write coupon docs');
-  assert.throws(() => addCard(repo, '   '), /1 to 16000/);
+  assert.throws(() => addCard(repo, '   '), /Write the task first/);
   editCard(repo, second.id, 'Write coupon API docs');
   let columns = boardColumns(readBoard(repo), { tasks: [], queue: [] });
   assert.deepEqual(names(columns), { todo: ['Add rate limiting to login', 'Write coupon API docs'], progress: [], needs: [], done: [] });
@@ -143,7 +143,7 @@ test('teammates\' Tasks are cards on the same columns, with their name, counted 
   // None, or nothing usable, changes nothing.
   assert.deepEqual(names(boardColumns(readBoard(repo), { tasks: [], queue: [] }, now, [{ name: 'x' }, null])), { todo: ['My own card'], progress: [], needs: [], done: [] });
   // The name stays beside the title however narrow the column, and a long name is cut.
-  assert.deepEqual(fitTeammateCard('Fix the real ELU issues in the web app', 'sara on devbox · 1/2 · high', 30), { title: 'Fix the real…', detail: 'sara on devbox' });
+  assert.deepEqual(fitTeammateCard('Fix the real tax errors in the web app', 'sara on devbox · 1/2 · high', 30), { title: 'Fix the real…', detail: 'sara on devbox' });
   assert.deepEqual(fitTeammateCard('Short', 'sara · 1/2 · high', 30), { title: 'Short', detail: 'sara · 1/2 · high' });
   assert.equal(teammateLabel({ name: 'a'.repeat(40), box: 'b'.repeat(40) }).length, 24 + 4 + 24);
   assert.deepEqual(fitTeammateCard('Title', teammateLabel({ name: 'a'.repeat(40), box: 'b'.repeat(40) }), 20), { title: 'Title', detail: `${'a'.repeat(9)}…` });

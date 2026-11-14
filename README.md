@@ -50,8 +50,8 @@ as `.env`, stops it until `.gitignore` keeps that file out.
 
 | Tab | What it shows |
 | --- | --- |
-| Sessions | Every session across your projects. The selected one is open beside the list. |
-| Projects | Your projects. `n` makes one, `o` makes another the active one. |
+| Sessions | Every session across your projects. The selected one is open beside the list. Typing on a row writes a message to it; a row's key is its letter, then Enter. |
+| Projects | Your projects. `n` makes one, `o` makes another the active one. A project a teammate shares that is not on this computer is listed too, as `ELU   shared by @aki   on @aki-mac`: Enter opens its team board, and `c` clones it here. |
 | Kanban | The open project's tasks and sessions: To do, In progress, Needs you, Done. On a team, everyone with a clone of the same repository shares one board: every session a teammate, or another computer of yours, runs in it shows in the same columns with who started it and on which machine, to read only. A project whose folder holds several repositories has a board for each. `/share off` keeps a project off it both ways. |
 | Chats | Your team's channels, your teammates and your bots. |
 | Bots | Your bots. `n` makes one, Enter opens one. |
@@ -69,12 +69,13 @@ of the work. Nothing is edited yet.
 
 | Do | What happens |
 | --- | --- |
-| Esc, then `y` | Approves the Task. The work starts by itself. |
-| Esc, then `n` | Rejects it. Nothing is changed. |
+| Esc, `y`, then Enter | Approves the Task. The work starts by itself. |
+| Esc, `n`, then Enter | Rejects it. Nothing is changed. |
 | Type a message | Changes the Task. The card shows the new revision. |
 
-Typing `yes` and Enter approves too. A question gets a plain answer and no Task. A follow-up
-inside an approved Task's goal starts at once; a new piece of work gets a Task of its own.
+Typing `yes` or `I approve` and Enter approves too. A question gets a plain answer and no
+Task. A follow-up inside an approved Task's goal starts at once; a new piece of work gets a
+Task of its own.
 An approved Task gives its session its name, unless you named the session yourself.
 
 On the Kanban tab a session with a Task shows as that Task: its title, how far it is, its
@@ -84,7 +85,8 @@ and the ETA. Its Go to session button opens its session; Enter presses it. A tea
 and one of your other computer's, open the same way.
 
 After you approve, the model splits the work into subtasks and changes them as it likes.
-The card lists them as a checklist and marks the objectives the model reports met. Its ETA
+The card lists them as a checklist that follows the model's own to-do list while the turn
+runs, and marks the objectives the model reports met. Its ETA
 is approval plus the estimate, and follows the minutes left the model reports as it works. The
 Task is done when every objective is reported met and the turn, with its checks and
 review, has ended. A new message opens it again.
@@ -97,37 +99,62 @@ first turn depends on the vendor and the mode:
 
 Type these in the message box. `/` alone lists every command, and `/help` explains the keys.
 
-You can send a message at any time. One sent while the session is working waits in the chat and is sent by itself when that turn ends; several go together, in order. `↑` in the empty message box takes the newest one back so you can change it.
+You can send a message at any time. On Claude Code, one sent while the session is working goes to that turn: the model reads it at its next step, the chat then says "Sent to the running turn." under it, and the reply answers it too. Until the model reads it, behind a long command for as long as the command runs, the chat says "Waiting for the current command to finish.", and Enter in the empty message box sends it now: the command moves to the background and the same turn goes on with your message. On Codex, Grok Build and Antigravity, which take no message while their turn works, it waits in the chat and is sent by itself when that turn ends; several go together, in order. There Enter in the empty message box sends it now by stopping the turn, its changes kept: your message starts the next turn, in the same vendor session where it can go on, and where it cannot, with what the stopped turn had said and done. `↑` in the empty message box takes the newest one back so you can change it. The same holds for a session on your other computer, and for a message to a bot while that bot works.
+
+While the model or a bot works, the chat shows what it does as it happens: each thought, each tool call (● running, ✓ done, ✗ failed), its plan, and what it writes on the way. A thought that comes without its text shows how many tokens it has taken so far, such as `✻ thinking · 1.2k tokens`. A call says how long it has run, second by second, such as `● Run: npm test · 2m 10s`, and keeps its total when it ends. Commands the turn left running in the background are one line, such as `● 1 background command: npm run watch · 4m 0s`. When the turn ends they fold into one line above its reply, such as `▸ 12 steps in 1m 12s`. A turn you stop with `/stop` keeps its steps, and its line says `stopped`. `ctrl+o` opens or folds the steps of every turn, in the message box too; a click on that line opens or folds that turn's. A session on your other computer shows the same. A program that prints only when it ends has no steps to show: the chat then counts the time under the working line, such as `1m 12s so far. Antigravity reports only when it ends.` Antigravity shows its steps in every permission mode where its one-time check proved `agy acp` on this machine, and runs that way otherwise ([docs/vendors/antigravity.md](docs/vendors/antigravity.md)).
 
 | Type | What it does |
 | --- | --- |
 | `/new` | Starts a new session |
-| `/model sonnet` | Chooses the model of this session; `/model` alone lists them |
+| `/model sonnet` | Chooses the model of this session; `/model` alone lists them. The name can be the one the app shows, and a message after it is sent on that model: `/model opus 5.5 fix the build`. Over a session on your other computer it changes that session's model there |
 | `/permissions auto` | Sets what the model may do: `ask`, `auto` or `full` |
 | `/place branch try-coupons` | Sets where a new session runs: `worktree`, `branch NAME` or `here` |
 | `/bots add qa` | Keeps a bot in this session; `/bots remove qa` takes it out |
 | `/agent add fable` | Adds another model to this session as an agent; write `@fable` and what to do. Words after the model say what it is for, and `--name NAME` names it: `/agent add sonnet you review my SQL --name sql` |
 | `@pair is there a simpler way?` | Asks a bot. Your next messages in that session go to it too |
 | `@model and what do you think?` | Writes to the session's model again |
-| `/changes` | Shows what this session changed; `/chat` goes back |
+| `/changes` | Shows what this session changed; `/chat` goes back. There, `+` on a line (or a click on its `+`) notes what should change, and `s` sends the notes to the model together |
 | `/publish` | Shows the exact push and draft pull request, then asks you |
-| `/stop` | Stops the running response. A message you sent while it ran is sent next; `/stop` again cancels that message |
+| `/stop` | Stops the running response. Messages you sent while it ran then go at once, in order; `↑` takes one back first. Over a session on your other computer, it stops that session there |
+| Enter (empty box) | While a turn works and a message of yours waits, sends that message now. On Claude Code the command the turn waits on moves to the background and the same turn reads the message. On the other vendors the turn stops as `/stop` stops it and the message starts the next turn, in the same vendor session where it can go on |
 | `/schedule in 1h check the build` | Starts a session later or on a schedule: `/schedule [when] [message]`. `/schedule ` lists times such as `in 5m`, `in 1h` and `daily 9:00`. Each run is a new session with the model, mode and bots of the form (a bot with its own schedule is left out); it does not see the chat it was made in. A schedule gets Full access only when you pick it for that schedule, and the form asks you once before saving it |
 | `/budget 5` | Limits this session to 5 dollars; `/budget off` removes the limit |
 | `/standup` | Asks every open session of yours, here and on your other computers, and your teammates' shared ones, for an update, in a new Standup session. See [Standup](#standup) |
 | `@everyone did anyone touch auth?` | In a Standup session, asks the sessions of its last round again, with your question; `@everyone standup` asks for an update. Elsewhere it starts a Standup with the question |
 | `! git status` | Runs a shell command. In an open session the model gets the command and its output with your next message |
 | `/update` | Says how to update: `/quit`, then `elu update` |
+| `/takeover` | In a view-only window, moves the project to this window. The other window turns view only |
 | `/quit` | Closes ELU. Sessions that are running or queued go on in the background; `elu conductor stop` stops them |
 
+One ELU window at a time makes changes in a project. A second window on the same project
+opens view only: it shows everything and `/stop` works there, but it sends nothing. It takes
+the project by itself within seconds once the other window closes, and `/takeover` moves it
+at once.
+
 A schedule also runs while ELU is closed, through a login item, once ELU is
-installed (not run through `npx`). On macOS, while an agent works or a schedule is on, ELU
+installed (not run through `npx`). The login item is there only while a schedule is on, a
+task's or a bot's: ELU removes it with the last one, also while ELU is closed, and puts it back with the next. On Linux it is
+a systemd user timer, which runs while you are logged in; `loginctl enable-linger` keeps it
+running after you log out. On macOS, while an agent works or a schedule is on, ELU
 stops the Mac from going to sleep on its own (`caffeinate -i`); the display can still
 sleep. Schedules show in the Sessions tab under Scheduled: `p` pauses one and `x` deletes
-it. A time is `in 30m`, `every 2h` (15 minutes to 7 days), `daily 9:00`, `weekdays 9am`,
+it, each followed by Enter. A time is `in 30m`, `every 2h` (15 minutes to 7 days),
+`daily 9:00`, `weekdays 9am`,
 `mon,thu 14:30`, `tomorrow 15:00` or `2026-12-01 9:00`, in this computer's local time.
 The model cannot make a schedule itself: asked to repeat work, it gives you the
 `/schedule` line to type.
+
+## Keys
+
+The last row of the screen names the keys for whatever has the focus.
+
+| Key | What it does |
+| --- | --- |
+| Tab | Moves between the tabs, the list, the message box and the chat |
+| Enter | Sends the message, or opens the selected row |
+| Esc | Leaves the message box for the list, and the list for the message box; closes a dialog |
+| ↑ ↓ | Move in a list; scroll the chat when it has the focus |
+| PgUp PgDn | Move a page: in a session's chat or its changes and in the threads of a chat in Chats, from the message box too; in the Sessions list; in the text of a dialog, such as a teammate's thread or `/help` |
 
 ## Permissions
 
@@ -142,8 +169,12 @@ and `/permissions default auto` sets what new sessions start with.
   On Grok Build, what its reviewer refuses then asks you.
 - **Full access** (`full`): any file, any command, the internet, with no sandbox. That
   includes push, tags, merges, publishing and deploys: the never list below does not apply.
+  Nothing of ELU's limits it: every tool the vendor has, your secret files and sign-ins,
+  your whole environment. [What stays, and why](docs/permissions.md#full-access).
 
 When the model asks, `y` allows and `n` denies; `f` allows and gives that session Full access.
+On the session's row or in its chat each is the letter, then Enter, so a message that starts
+with one of them is only a message.
 `a` allows and keeps a narrow rule, such as `npm test` or `git diff`, for this project or all
 of them, so it is not asked again. Reads in the project, git reads and the project's own test,
 lint and build scripts run without asking from the start. `/permissions rules` or
@@ -156,7 +187,7 @@ A new approval rings the terminal bell once.
 
 Bots that review, and a teammate's question, always run read only.
 `/permissions folders add <path>` lets the model read one more folder of your home this
-session.
+session; in Full access, any folder there is.
 
 On Claude Code, your own MCP servers (`claude mcp list`) are on for the model and for bots
 that work, and their tools run without asking in every mode. Neither the sandbox nor the
@@ -262,6 +293,17 @@ elu id --name kim
 elu join CODE            # joins their team; your messages start sessions here
 ```
 
+A join finds the person who invited you only while their ELU is open and online. While it
+looks, it counts the seconds and says so; Esc (Ctrl-C in the shell) cancels it. If nobody
+answers within a minute it says why and what to do, and if your own computer is not
+connected it says that at once.
+
+Some networks will not connect two computers directly: a phone hotspot is one. A join that
+found their computer says so, keeps trying for three minutes, and goes through another
+computer that both can reach when one is on: another computer or teammate of yours, or a
+teammate of theirs, with ELU open. That computer passes along bytes it cannot read. If
+there is no way through, the join says why and what works.
+
 There is nothing to turn on. Once your computer is on a team, a background process (the
 peer daemon) keeps it reachable by your teammates, also while ELU is closed. Until you
 invite someone or join a team, nothing starts and nothing connects. There is no off switch
@@ -276,6 +318,14 @@ no rules when there are none.
 `elu peers` shows who is online. In the app, write to a teammate in the Chats tab, or
 type `@kim where are the tax rates?` in any session. A message always reaches them, and
 they can reply in the same thread.
+
+Two more choices are yours for each teammate, in Chats with their row selected or their
+messages open. `h` holds your replies and results to them: each one waits in their thread
+until you press `y` to send it, `e` to edit its text first, or `n` to drop it. One that may
+hold a secret always waits, and is sent only after you take the secret out. `o` turns on
+auto-continue: their answer, or the result of work they approved, continues the session you
+asked from. Its thread stays in Chats for a week, marked "continued in your session"; `n`
+dismisses it sooner. The line over their thread says which of the two are on.
 
 What a teammate's message does on your machine is yours to choose, once per team: `/join`
 asks, and so does your first `/invite` for a team. **Auto** (the default for a new team)
@@ -296,9 +346,20 @@ and see its live work. Inviting a teammate shares one too: `elu invite` shares t
 run it in when it is an ELU project (`--project PATH` names another), and `/invite`
 the open project. Joining shares no project of yours, but the Kanban board needs no share:
 every session you run in a repository a teammate also has is on their Kanban, with its title,
-its column, who started it and which machine, and theirs are on yours. Nothing else about it
+its column, who started it, which machine and its approved Task, and theirs are on yours, so
+their agents also know what yours is working on. Nothing else about it
 is sent: no chat, file or path. `/share off` in a project keeps it off both ways. The wire
 format is in [docs/peer-network.md](docs/peer-network.md).
+
+Teammates on a team a project is shared with see it in their Projects tab, also with no copy
+of it: its name, who shares it and on which machine. What they are told is the project's
+name, its handle and its git address (the `origin` remote, never with a password or a token
+in it), and the title, column and starter of each session in it. Enter on the row opens the
+project's team board, where the message box writes to whoever shares it: the message starts a
+session on their computer, under what they chose for the team. `c` clones the project from its
+git address into a folder you name; from then on it is a project of yours and the one row for
+it. A project with no git address says so: copy its folder to your computer and run ELU in
+it. `/share off`, unsharing the project, or leaving the team takes the row away.
 
 Teammates on a team a project is shared with also see the work in it: for each live
 editing task, the first line of its request and the paths of the files it changed, and the
@@ -322,7 +383,10 @@ needs no code: run `/mine @devbox` on the laptop and `/mine @laptop` on the devb
 new session box starts the session on the devbox, with the mode, model and bots you picked.
 It shows in Sessions marked "on devbox", live, and its approvals wait on both machines. It is
 your own session there, so your rules apply, and `a` on its approval, from either machine,
-keeps the rule on the devbox, where it runs.
+keeps the rule on the devbox, where it runs. When the devbox's home folder is one of its projects,
+the box first asks which folder the session works in there: its projects, the home folder, and
+each Git repository in the home folder, the cursor on where it would run. Enter starts it there;
+Esc sends nothing and keeps your message.
 Sessions also lists every other session on the devbox in the same repository under "On devbox": they are part of your project, in Sessions and on its Kanban ("you · devbox"), whichever of your computers started them.
 Projects lists a devbox project as "<project> on devbox" only for its sessions this project cannot show, and says how many.
 With a devbox session under the cursor, what you type goes to your agent here, on the laptop:
@@ -336,7 +400,8 @@ or something only you can do. Its approvals wait on its own row in Sessions, and
 session's pane says so. Both agents show in the same pane, the devbox's as "Opus 5.5 on
 @devbox" and yours as "Opus 5.5 here", and the helper is also a session of its own in
 Sessions. Start a message with `@devbox` to write to the devbox session itself, and answer its
-question there the same way: `@devbox 1`. `y`, `n` and `a` still answer its approvals. A
+question there the same way: `@devbox 1`. `y`, `n` and `a`, each followed by Enter, still
+answer its approvals. A
 teammate's session on the devbox, such as a handoff you accepted there, has no agent here:
 what you type goes to it. A message to a devbox session that names files or folders on the laptop asks
 "Send 14 files (2.1 MB) from this computer with this message?": y sends them along, n sends
@@ -357,6 +422,11 @@ again. `/mine auto off` (or `ELU_NO_GITHUB_PAIRING=1`) turns this off.
 
 In a channel, `/invite @kim` adds a teammate you already have. `/invite` alone makes a
 code for someone new; the first time, it also makes your team, named after the open project.
+Once you are on a team, the code is for that team and no other team is made: with several
+it asks which, and only an admin of a team can make one. If you join someone else's team
+while your own still has nobody else on it, yours is closed and the line that says you
+joined says so: Chats then has one #general, with everyone in it. Nothing of yours is
+deleted. Two teams that both have other people each keep their own #general, named by team.
 
 ## Standup
 
@@ -368,8 +438,7 @@ holds for your teammates' sessions, as their computers apply it; a teammate's co
 older build does not say which of its sessions in Done answered, so those are listed, not asked. That is every such session of yours in every project on
 this computer, those on your other computers that are online (`/mine`), and your teammates'
 sessions on the shared Kanban whose computers are online. A project kept off the Kanban
-(`/share off`) is never asked. At most 20 of yours and 20 of your teammates' are asked,
-newest first; the rest are listed.
+(`/share off`) is never asked. Every one of them is asked, newest first.
 
 Before asking, the chat says how many sessions it asks and on which computers. Each session
 answers in one turn of its own agent (its model, or the worker bot that works in it), on its
@@ -379,7 +448,7 @@ history, so its next turn goes on from its work; another vendor keeps the standu
 history. Its chat shows "@sam asks: standup", the update, and
 "Sent to @sam". A session that is working answers when its turn ends, or is listed as still
 working after 10 minutes. Answers show in the Standup as they come, each titled with its
-session, agent and computer: "ELU Issues · Opus 5.5 on @devbox", "Self Healing · Opus 5.5
+session, agent and computer: "Email logs · Opus 5.5 on @devbox", "Sales Export · Opus 5.5
 here", "Billing · @billing on @kim". Then come the sessions not asked, those that declined,
 and those still working, then one line: "Standup done · 9 sessions on 4 computers · 2 not
 asked". `/stop` stops waiting. Nothing runs on a timer: only `/standup` and `@everyone` ask.
@@ -395,7 +464,7 @@ your daily allowance there, as any message of yours that runs on their computer,
 round can use up the day's requests. A computer that still runs an older build of ELU
 for its sessions is listed, not asked.
 
-When the round ends, the Standup's own model reads every update and sums it up: what is
+When the round ends, the Standup's own model reads every update, whole, and sums it up: what is
 done, what is in progress, what is blocked or waits for someone, and who. That turn starts
 with nobody watching, so it only answers and keeps the Kanban: it reads, with no edits, no
 shell, no web, no Task and none of your MCP servers; Full access runs as Approve for me, and
@@ -421,12 +490,26 @@ Claude Code reports during your sessions. For Codex plan usage, ELU starts Codex
 open a project that is set up or send a message, at most once a minute while a session is
 on screen, and from the Usage tab ([what is read and when](SECURITY.md#credentials)).
 Its top agents add up what each vendor reported for each run: the cost and tokens Claude Code
-reports (its cost is the API price, also on a subscription), and Codex's tokens. Codex
-reports no cost, so its cost shows as —.
+reports (its cost is the API price, also on a subscription), Codex's tokens, and the tokens
+Grok Build and Antigravity send with a turn (Antigravity over ACP only). Codex reports no
+cost, so its cost reads not reported. A run whose vendor sent no tokens says `not reported`,
+never 0. A turn you stop counts with the tokens it had used; Claude Code says a cost only
+when a turn ends.
 
 You need macOS or Linux, Node 22 or newer, Git, and Claude Code (`claude`) installed and
 signed in: new projects and the built-in bots run on it. To run sessions on Codex
 (`codex`), sign in to it and choose it with `/model`.
+
+New sessions start on the default model. A project's default is set with `/model default
+<name>`, or in its settings: Projects, Enter, Default model. This computer's default, which
+every project that has not chosen uses, is set with `/model computer <name>` or the This
+computer row there. `none` in place of the name clears either. With nothing chosen, the
+default is the first vendor installed on this computer, in this order: Claude Code, Codex,
+Antigravity CLI, Grok Build. So a computer that has only Grok Build runs every new session on
+it, also one that a teammate's message, your other computer or a schedule starts. A default
+whose vendor is not installed here is not used, and ELU says so wherever it shows the
+default. A bot that names no model, and whose vendor is not installed here, runs on this
+computer's default; a bot that names its model keeps it.
 
 Codex must be installed even if your sessions run on Claude Code, but it does not need to
 be signed in. ELU runs your project's checks and its pre-push hooks inside Codex's
@@ -448,6 +531,8 @@ Run `npx -y @elu-labs/elu` from your home folder, not from inside a project you 
 trust: `npx` lets the folder it starts in decide what runs.
 
 The Usage tab lists the vendor command lines ELU found and whether each is signed in.
+Finding that out runs each of them, and one that is slow to answer can take half a minute:
+the tab says `Reading what is installed and signed in here…` meanwhile and every key works.
 It keeps several Claude Code or Codex accounts signed in at once, so when one runs out of its
 limit you switch instead of signing in again: `a` adds an account with the vendor's own
 sign-in, Enter on an account makes new turns use it, and `x` forgets one. Each account shows
@@ -480,7 +565,7 @@ that check off. Both ask the npm registry for the latest version number and send
 else.
 
 To remove ELU, first delete your schedules in the app (Sessions tab, under Scheduled:
-`x` on each one), so they no longer keep the Mac awake, and quit it with `/quit`.
+`x`, then Enter, on each one), so they no longer keep the Mac awake, and quit it with `/quit`.
 
 Then remove the login item that runs schedules, and bots with a schedule such as `@elu`,
 while ELU is closed, if there is one. On macOS, run

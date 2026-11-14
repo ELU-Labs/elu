@@ -30,7 +30,7 @@ test('a simple question responds immediately without Git, checks, settings, or a
   const calls = fs.readFileSync(f.fake.calls, 'utf8').trim().split('\n').map(JSON.parse);
   assert.equal(calls.filter(call => call.args[0] === 'sandbox').length, 0);
   const lead = calls.find(call => call.args.includes('-p')); assert.ok(lead);
-  assert.doesNotMatch(lead.args[lead.args.indexOf('--tools') + 1], /Write|Edit|Bash/);
+  assert.doesNotMatch(lead.args[lead.args.indexOf('--tools') + 1], /(?:^|,)(?:Write|Edit|Bash)(?:,|$)/);
   const again = await f.controller.ask('Can I give one a security role?', task.id).finished;
   assert.equal(again.state, 'answered'); assert.equal(again.sessions.lead.id, task.sessions.lead.id);
 });
@@ -70,6 +70,33 @@ test('automatic editing copies local source edits while keeping the owner checko
   await assert.rejects(controller.pushPlan(task.id), /pre-existing local edits/);
 });
 
+// The owner's request reaches the agent whole, however long: ELU sets no limit of its own.
+test('a request over 16000 characters reaches the agent whole', async t => {
+  const p = project(t), fake = fakeClis(p.parent); environment(t, fake.env);
+  const controller = autoApprove(new ProjectController(projectFolder(p.root)));
+  const goal = `Normalize coupon codes. ${'Keep every word of this long request. '.repeat(1000)}`.trim();
+  assert.ok(goal.length > 16000);
+  const task = await controller.ask(goal).finished;
+  assert.equal(task.state, 'ready', JSON.stringify(task.error));
+  const inputs = fs.readFileSync(path.join(p.parent, 'inputs.jsonl'), 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line).input ?? '');
+  assert.ok(inputs.some(input => input.includes(goal)), 'the whole request is in the prompt');
+});
+
+// Every local edit is copied, however large and however many: ELU sets no limit of its own.
+test('automatic editing copies a local file over 4 MiB and more than 5000 local files', async t => {
+  const p = project(t), fake = fakeClis(p.parent); environment(t, fake.env);
+  const big = 'a line of a local file larger than four mebibytes\n'.repeat(100000);
+  fs.writeFileSync(path.join(p.root, 'big.txt'), big); assert.ok(big.length > 4 * 1024 * 1024);
+  fs.mkdirSync(path.join(p.root, 'many'));
+  for (let n = 0; n < 5001; n++) fs.writeFileSync(path.join(p.root, 'many', `${n}.txt`), `${n}\n`);
+  const controller = autoApprove(new ProjectController(projectFolder(p.root)));
+  const task = await controller.ask('Normalize coupon codes').finished;
+  assert.equal(task.state, 'ready', JSON.stringify(task.error));
+  assert.equal(fs.readFileSync(path.join(task.worktree, 'big.txt'), 'utf8'), big);
+  assert.equal(fs.readdirSync(path.join(task.worktree, 'many')).length, 5001);
+  assert.equal(task.localChanges.length, 5002);
+});
+
 test('a question after an edit preserves the implementation and its verification', async t => {
   const p = project(t), fake = fakeClis(p.parent, { mode: 'dialogue' }); environment(t, fake.env);
   const controller = autoApprove(new ProjectController(projectFolder(p.root)));
@@ -82,7 +109,8 @@ test('a question after an edit preserves the implementation and its verification
   assert.deepEqual(answer.evidence, task.evidence); assert.deepEqual(answer.reviews, task.reviews);
   assert.deepEqual(answer.result, task.result); assert.equal(answer.runs.length, task.runs.length + 1);
   const last = fs.readFileSync(fake.calls, 'utf8').trim().split('\n').map(JSON.parse).filter(call => call.args.includes('-p')).at(-1);
-  assert.doesNotMatch(last.args[last.args.indexOf('--tools') + 1], /Write|Edit|Bash/);
+  // No tool that changes a file or runs a command. The model's own to-do list (TodoWrite) is neither.
+  assert.doesNotMatch(last.args[last.args.indexOf('--tools') + 1], /(?:^|,)(?:Write|Edit|Bash)(?:,|$)/);
   fs.writeFileSync(path.join(task.worktree, 'src/coupon.mjs'), 'export const normalize = value => value.trim().toUpperCase();\n');
   await controller.verify(task.id);
   assert.equal(controller.snapshot().tasks[0].state, 'unverified', 'passing checks cannot make an old review current');

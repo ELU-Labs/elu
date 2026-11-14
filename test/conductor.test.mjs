@@ -2,13 +2,13 @@ import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
-import { project, fakeClis, config, approveProjectFiles } from './helpers.mjs';
+import { spawn, spawnSync } from 'node:child_process';
+import { project, fakeClis, config, approveProjectFiles, approvingConductor, CLI } from './helpers.mjs';
 import { repository } from '../lib/git.mjs';
-import { projectSnapshot, registerProject } from '../lib/projects.mjs';
+import { ProjectController, projectSnapshot, registerProject } from '../lib/projects.mjs';
 import { saveTask } from '../lib/state.mjs';
-import { pendingRequests, removeRequest, updateRequest, takeRequest } from '../lib/workspace.mjs';
-import { Conductor, enqueue, sendCommand, saveConductorSettings, conductorStatus, conductorNote, conductorRunning, conductorAlive, olderConductor, retryRequest, VERSION } from '../lib/conductor.mjs';
+import { addToRequest, pendingRequests, removeRequest, updateRequest, takeRequest } from '../lib/workspace.mjs';
+import { Conductor, enqueue, sendCommand, saveConductorSettings, conductorStatus, conductorNote, conductorRunning, conductorAlive, olderConductor, retryRequest, startQueued, VERSION } from '../lib/conductor.mjs';
 // The conductor of 0.1.16 as published, which has no handover, on today's modules.
 import * as earlier from './fixtures/conductor-0.1.16/conductor.mjs';
 import { pendingRequests as earlierRequests, saveRequest as earlierSave } from './fixtures/conductor-0.1.16/workspace.mjs';
@@ -35,13 +35,15 @@ async function stopAll(t) {
 }
 // Nothing may keep this file running once its tests are done.
 after(() => { setTimeout(() => giveUp('Something is still running 10 s after the last test.'), 10000).unref(); });
-function setup(t, mode = 'answer', { name = undefined } = {}) {
+// lead: the vendor new sessions start on (Claude Code when not given).
+function setup(t, mode = 'answer', { name = undefined, lead = null } = {}) {
   LIVE.set(t, []); t.after(() => stopAll(t));
   const p = project(t), fake = fakeClis(p.parent, { mode, name });
   const previous = { PATH: process.env.PATH, XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME };
   Object.assign(process.env, fake.env);
   t.after(() => { for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } });
   const repo = repository(p.root); registerProject(repo);
+  if (lead) new ProjectController(repo).setDefaultModel({ vendor: lead });
   return { ...p, ...fake, repo };
 }
 function conduct(t, options = {}) {
@@ -106,6 +108,21 @@ test('a bot with its own schedule is left out of the sessions a schedule starts,
   assert.deepEqual(projectSnapshot(p.repo).tasks.map(task => task.bots), [['reviewer'], ['reviewer']]);
   assert.equal(runBotSchedules(new Date(), { start: () => true }), 0);
   assert.equal(pendingRequests(p.root).filter(value => value.bot === 'nightly').length, 0, 'nothing queued for the bot in those sessions');
+});
+
+test("a bot's schedule runs in a session that edits the checkout in place while it has Full access", async t => {
+  const p = setup(t);
+  saveBot({ name: 'nightly', instructions: 'Check the nightly build.', schedule: 'every 1h' });
+  enqueue(p.root, 'Tidy the notes here', { permissions: 'full', place: 'here', bots: ['nightly'] });
+  conduct(t);
+  await until(() => projectSnapshot(p.repo).tasks.length === 1 && pendingRequests(p.root).every(value => value.state === 'done'), 'the session ran');
+  assert.equal(projectSnapshot(p.repo).tasks[0].place.kind, 'here');
+  assert.equal(runBotSchedules(new Date(), { start: () => true }), 1, 'its first run is queued');
+  const runs = () => pendingRequests(p.root).filter(value => value.bot === 'nightly' && value.scheduled);
+  await until(() => runs().length === 1 && runs()[0].state === 'done', 'the run ended');
+  const task = projectSnapshot(p.repo).tasks[0];
+  assert.doesNotMatch(runs()[0].reason ?? '', /in place/); assert.ok(task.messages.some(row => row.to === '@nightly' && row.scheduled), 'the schedule wrote to it');
+  assert.ok(task.runs.filter(row => row.role === 'bot:nightly').every(row => row.permissions === 'full') && task.runs.some(row => row.role === 'bot:nightly'), 'with Full access');
 });
 
 test('a queued message runs in the background and its request records the chat', async t => {
@@ -180,6 +197,39 @@ test('a waiting message survives a conductor that stops, and the next conductor 
   assert.deepEqual(texts(p.repo, id), ['Start the work', 'Sent before the restart']);
 });
 
+// What ELU asks as it opens, and the login item on its first run after an update. start
+// stands in for the conductor they would start.
+test('work left queued by a conductor that was ended is started when asked, and not after the owner stopped the conductor himself, until work is queued', async t => {
+  const { p, conductor, id } = await working(t);
+  let starts = 0; const start = () => { starts++; return true; }, queued = () => pendingRequests(p.root).filter(row => row.state === 'queued').map(row => row.goal);
+  sayTo(p, id, 'Sent before it was ended');
+  assert.equal(startQueued({ start }), false, 'a conductor runs, and takes the queue itself'); assert.equal(starts, 0);
+  // Ended from outside, as a restart of the computer ends it: its run is stopped and the message still waits.
+  await conductor.stop();
+  assert.deepEqual(queued(), ['Sent before it was ended']);
+  assert.equal(startQueued({ start }), true); assert.equal(starts, 1);
+  // The conductor that starts sends it. The owner then stops that one himself, with the command, while another message waits.
+  const second = conduct(t);
+  await until(() => texts(p.repo, id).length === 2 && task(p.repo, id)?.activeRole === 'lead', 'the message to be sent');
+  sayTo(p, id, 'Sent before the stop');
+  const stop = spawnSync(process.execPath, [CLI, 'conductor', 'stop'], { encoding: 'utf8', timeout: 30000 });
+  assert.equal(stop.stdout, 'The conductor stops its runs, keeps their history, and exits. It starts again when work is queued.\n');
+  await until(() => second.closed && !conductorRunning(), 'the conductor to stop');
+  assert.deepEqual(queued(), ['Sent before the stop']);
+  assert.equal(startQueued({ start }), false, 'it stays stopped: nothing that only finds queued work starts it'); assert.equal(starts, 1);
+  // With nothing running the command stops nothing, and says so.
+  assert.equal(spawnSync(process.execPath, [CLI, 'conductor', 'stop'], { encoding: 'utf8', timeout: 30000 }).stdout, 'The conductor is not running.\n');
+  // Work is queued, and whatever queues it starts the conductor: the stop is over.
+  const third = conduct(t);
+  await until(() => texts(p.repo, id).length === 3 && task(p.repo, id)?.activeRole === 'lead', 'the waiting message to be sent');
+  sayTo(p, id, 'Sent before the restart');
+  await third.stop();
+  assert.equal(startQueued({ start }), true, 'ended from outside again, so what it left is started'); assert.equal(starts, 2);
+  // Nothing queued: nothing to start.
+  for (const row of pendingRequests(p.root).filter(value => value.state === 'queued')) removeRequest(p.root, row.id);
+  assert.equal(startQueued({ start }), false); assert.equal(starts, 2);
+});
+
 // An update replaces the files under a conductor. The stand-in reads the version on disk at once
 // instead of after 5 s, and next starts the new version's conductor in this process.
 function updated(conductor, disk) { conductor.disk = disk; conductor.versionAt = 0; }
@@ -195,7 +245,8 @@ function oldConductor(t, { disk = '0.0.1', ...options } = {}) {
 const requestsOf = conductor => [...conductor.runs.values()].map(run => run.requestId);
 
 test('after an update the old conductor takes no new work: the new version runs it at once, the old run finishes, and the old conductor exits', async t => {
-  const p = setup(t, 'slow'), first = enqueue(p.root, 'Start the work');
+  // On Codex, whose turn takes no message while it works, so the follow-up waits for it.
+  const p = setup(t, 'slow', { lead: 'codex' }), first = enqueue(p.root, 'Start the work');
   let exits = 0; const old = oldConductor(t, { onExit: () => { exits++; } });
   await until(() => request(p.root, first.id)?.state === 'running', 'the first turn');
   const id = request(p.root, first.id).taskId;
@@ -296,6 +347,33 @@ test('beside a 0.1.16 conductor, queued requests wait where it never reads, and 
   assert.equal(fs.readdirSync(path.join(personalDirectory(), 'requests')).filter(name => name.endsWith('.beside.json')).length, 0);
 });
 
+// 0.1.16 took a request of at most 16000 characters and refused a longer one. A request of any
+// length queued by this version waits where that conductor never reads, so it is never
+// refused or started by it, and the new version runs it with every character.
+test('beside a 0.1.16 conductor, a request over 16000 characters is never read by it and runs whole on the new version', async t => {
+  const p = setup(t), old = conductor016(t);
+  await until(() => olderConductor()?.version === null, 'the 0.1.16 conductor to write its status');
+  const long = `Where is coupon normalization?\n${'Every line of this request matters. '.repeat(1000)}THE END`;
+  assert.ok(long.length > 16000 * 2);
+  assert.throws(() => earlierSave(p.root, long, undefined, { state: 'queued' }), { message: 'Enter a request of 1 to 16000 characters.' }, 'what 0.1.16 itself said to one this long');
+  const sent = enqueue(p.root, long);
+  assert.equal(request(p.root, sent.id).state, 'queued'); assert.ok(request(p.root, sent.id).goal === long);
+  // A second message typed before it starts goes with it, however long the two are together.
+  assert.ok(addToRequest(p.root, sent.id, 'And the refunds too.').goal === `${long}\n\nAnd the refunds too.`);
+  assert.equal(earlierRequests(p.root).length, 0, 'the 0.1.16 conductor cannot read it');
+  await pause(200);
+  assert.equal(old.claims, 0);
+  // The new version starts beside the old one and runs it: the model is sent every character.
+  const fresh = conduct(t);
+  assert.equal(fresh.beside, true);
+  await until(() => request(p.root, sent.id)?.state === 'done', 'the new version to run it', 60000);
+  assert.equal(old.claims, 0, 'the old conductor never started it');
+  const id = request(p.root, sent.id).taskId, input = fs.readFileSync(path.join(p.parent, 'inputs.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line)).find(row => row.vendor === 'claude' && row.args.includes('-p')).input;
+  assert.ok(task(p.repo, id).goal === `${long}\n\nAnd the refunds too.`);
+  assert.ok(input.includes(JSON.stringify(`${long}\n\nAnd the refunds too.`)), 'the whole request is in what the model read');
+  assert.equal(task(p.repo, id).state, 'answered');
+});
+
 test('after the first update from 0.1.16, new work and a schedule run on the new version at once, the old turn finishes, and its follow-up then runs once', async t => {
   const p = setup(t, 'chatty'), first = enqueue(p.root, 'Start the work'), old = conductor016(t);
   await until(() => request(p.root, first.id)?.state === 'running', 'the first turn');
@@ -370,7 +448,9 @@ function quickClock(t, quietSeconds, capSeconds) {
   const before = { ...turnClock }; Object.assign(turnClock, { quietSeconds, capSeconds }); t.after(() => Object.assign(turnClock, before));
 }
 
-test('a check that stops making progress is stopped and retried once; a quiet model turn is left to its own limits', async t => {
+// A check and a model's turn both have their own limits (lib/turn-limits.mjs): a check that
+// prints nothing, such as a slow test suite, is working, and so is a turn running one.
+test('a quiet check, like a quiet model turn, is left to its own limits; one quiet past the cap is stopped and retried once', async t => {
   const p = setup(t), conductor = new Conductor({ stallMs: 50 }), stops = [];
   const controller = { repo: p.repo, stop: async (id, message) => { stops.push([id, message]); } };
   const sent = enqueue(p.root, 'Run the checks'); updateRequest(p.root, sent.id, { state: 'running' });
@@ -381,10 +461,28 @@ test('a check that stops making progress is stopped and retried once; a quiet mo
     conductor.runs.set(id, { root: p.root, requestId: id === '1' ? sent.id : null, taskId: id, goal: 'Run the checks', origin: null, attempts: 0, controller, quietSince: Date.now(), mark: null });
   }
   conductor.watch(); await new Promise(resolve => setTimeout(resolve, 120)); conductor.watch();
-  assert.deepEqual(stops, [['1', 'No progress for 1 minutes. Retrying.']], 'only the check; the model turns are the runner\'s to stop');
+  assert.deepEqual(stops, [], 'past the stall time, none is stopped: each is its own limits\' to stop');
+  // Quiet for a minute past the cap, which neither the runner nor the checks let happen.
+  for (const run of conductor.runs.values()) run.quietSince -= (turnClock.capSeconds + 61) * 1000;
+  conductor.watch();
+  assert.deepEqual(stops, ['1', '2', '3'].map(id => [id, 'No progress for 121 minutes. Retrying.']));
   const checks = conductor.runs.get('1'); conductor.finish(checks, new Error('Stopped.'));
   const retried = request(p.root, sent.id);
   assert.deepEqual([retried.state, retried.attempts, retried.continuationTaskId, retried.reason], ['queued', 1, '1', 'It stopped making progress. Retrying.']);
+});
+
+// The owner's case, through the conductor: the project's test suite runs as a check and prints
+// nothing for longer than the stall time.
+test('a check that prints nothing for longer than the stall time runs to its end and passes', async t => {
+  const p = setup(t, 'normal');
+  config(p.root, value => { value.checks = [{ name: 'slow-tests', command: ['sh', '-c', 'sleep 2'] }]; return value; }); approveProjectFiles(p.root);
+  const sent = enqueue(p.root, 'Normalize coupon codes', { permissions: 'full' });
+  const conductor = approvingConductor(new Conductor({ tickMs: 20, stallMs: 300 })); LIVE.get(t).push(conductor); conductor.start();
+  await until(() => request(p.root, sent.id)?.state === 'done', 'the finished request', 30000);
+  const done = request(p.root, sent.id), finished = task(p.repo, done.taskId);
+  assert.equal(done.attempts ?? 0, 0, 'not stopped and retried');
+  assert.equal(finished.state, 'ready', JSON.stringify(finished.error));
+  assert.equal(finished.evidence.results.find(row => row.name === 'slow-tests').status, 'passed');
 });
 
 test('a Claude turn that prints nothing is stopped by its quiet limit in one line, and not retried', async t => {
@@ -467,6 +565,30 @@ test('runs left by a conductor that died are marked stopped and their process is
   assert.equal(task(p.repo, '1').state, 'stopped'); assert.match(task(p.repo, '1').error.message, /Retry to continue/);
   assert.equal(request(p.root, live.id).state, 'queued');
 });
+// The app in a terminal starts the conductor in its time zone. The peer daemon, a schedule or a
+// login item looks at it from another: each look here is a process of its own in that zone.
+const conductorLib = new URL('../lib/conductor.mjs', import.meta.url).href;
+const elsewhere = (TZ, code) => JSON.parse(spawnSync(process.execPath, ['--input-type=module', '-e', `import { Conductor, conductorAlive } from ${JSON.stringify(conductorLib)}; ${code}`], { encoding: 'utf8', env: { ...process.env, TZ } }).stdout);
+test('a conductor started in another time zone is the conductor: none starts beside it, its turn goes on, and what it leaves when it dies is recovered', async t => {
+  const p = setup(t, 'slow'), first = enqueue(p.root, 'Start the work');
+  const holder = spawn(process.execPath, ['--input-type=module', '-e', `import { Conductor } from ${JSON.stringify(conductorLib)}; new Conductor({ tickMs: 20 }).start();`], { env: { ...process.env, TZ: 'America/Los_Angeles' }, stdio: 'ignore' });
+  t.after(() => holder.kill('SIGKILL'));
+  await until(() => request(p.root, first.id)?.state === 'running', 'the first turn');
+  const id = request(p.root, first.id).taskId, file = path.join(p.repo.state, 'tasks', id, 'process.json'), model = () => { try { return JSON.parse(fs.readFileSync(file, 'utf8')).pid; } catch { return null; } };
+  await until(() => task(p.repo, id)?.activeRole === 'lead' && model(), 'the model working');
+  const agent = model(), runs = pid => { try { process.kill(pid, 0); return true; } catch { return false; } };
+  const look = `const alive = conductorAlive(); let second = 'started'; try { await new Conductor({ tickMs: 20 }).start().stop(); } catch (error) { second = error.message; } console.log(JSON.stringify({ alive, second }));`;
+  for (const TZ of ['UTC', 'Asia/Kolkata']) {
+    const seen = elsewhere(TZ, look);
+    assert.equal(seen.alive, true, `it runs, seen from ${TZ}`); assert.match(seen.second, /holds this lock/, `no second conductor from ${TZ}`);
+    assert.equal(task(p.repo, id).state, 'running', `the turn goes on, seen from ${TZ}`); assert.equal(request(p.root, first.id).state, 'running'); assert.equal(runs(agent), true, 'the model still works');
+  }
+  // It dies with its turn running. A conductor in another time zone marks the turn stopped and stops the model it left.
+  holder.kill('SIGKILL'); await new Promise(resolve => holder.once('exit', resolve));
+  assert.equal(elsewhere('UTC', `new Conductor().recover(); console.log(JSON.stringify({ alive: conductorAlive() }));`).alive, false);
+  assert.equal(task(p.repo, id).state, 'stopped'); assert.match(task(p.repo, id).error.message, /Retry to continue/);
+  await until(() => !runs(agent), 'the model it left to be stopped');
+});
 
 test("a request carries the owner's session choices; a teammate's question never does", t => {
   const p = setup(t), work = path.join(p.parent, 'work'); fs.mkdirSync(work);
@@ -503,7 +625,7 @@ test('the board puts questions first, then live work, the queue, and recent resu
   ], queue: [{ id: 'request-a', goal: 'Next goal', state: 'queued', priority: 1, queuedAt: at(2) }, { id: 'request-b', goal: 'Old', state: 'done' }] }];
   const rows = boardRows(projects, now);
   assert.deepEqual(rows.map(row => [row.id || row.request.id, row.label]), [['3', 'WAITING YOU'], ['2', 'answering'], ['request-a', 'queued'], ['1', 'answered']]);
-  assert.equal(rows[1].now, 'Read src/disk.ts'); assert.equal(rows[1].time, '4m00'); assert.equal(rows[1].cost, '$0.25');
+  assert.equal(rows[1].now, 'Read src/disk.ts'); assert.equal(rows[1].time, '4m00'); assert.equal(String(rows[1].cost), '$0.25');
   assert.equal(rows[3].now, 'Done.');
   // A row of the Sessions list is exactly as wide as the list: its mark, its title and its age.
   for (const width of [28, 42]) assert.ok(rows.every(row => barCells(row, width, now).map(cell => cell.text).join('').length === width), `width ${width}`);

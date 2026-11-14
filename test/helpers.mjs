@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -37,7 +38,10 @@ export const CLI = fileURLToPath(new URL('../bin/elu-code.mjs', import.meta.url)
 export const keyLike = (...parts) => parts.join('');
 export function temp(t) {
   const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'elu-code-test-')));
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true })); return dir;
+  // A turn that is stopped while its vendor is still being read ends at once, and the reading
+  // goes on to its end: a stand-in it starts can write its record of the call while this folder
+  // is being removed. The folder is then removed again.
+  t.after(() => { for (let again = 5; ; again--) { try { return fs.rmSync(dir, { recursive: true, force: true }); } catch (error) { if (error.code !== 'ENOTEMPTY' || !again) throw error; } } }); return dir;
 }
 // The read-only role a review runs with: what a config's reviewer entry held before bots
 // did the reviews, and what a bot's turn is given now (botRole in lib/bots.mjs).
@@ -48,6 +52,26 @@ export function command(bin, args, cwd, env = {}) {
 export function git(root, args) {
   const r = command('git', ['-C', root, ...args], root);
   if (r.status !== 0) throw new Error(r.stderr); return r.stdout.trim();
+}
+// A PATH on which only the stand-in vendors named in keep are installed (fakeDir: fakeClis().dir).
+// A system folder that holds a real vendor command line (a developer's own computer has them)
+// is stood in for by a folder of links to everything else in it.
+export function vendorPath(parent, fakeDir, keep) {
+  const vendors = ['claude', 'codex', 'agy', 'grok'], tag = keep.join('-') || 'none', dir = path.join(parent, `only-${tag}`);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir); fs.copyFileSync(path.join(fakeDir, 'fake.json'), path.join(dir, 'fake.json'));
+    for (const vendor of keep) fs.copyFileSync(path.join(fakeDir, vendor), path.join(dir, vendor));
+  }
+  const rest = [...new Set(process.env.PATH.split(path.delimiter).filter(Boolean))].filter(folder => folder !== fakeDir && !path.basename(folder).startsWith('only-') && !path.basename(folder).startsWith('system-')).map((folder, index) => {
+    if (!vendors.some(name => fs.existsSync(path.join(folder, name)))) return folder;
+    const links = path.join(parent, `system-${index}`);
+    if (!fs.existsSync(links)) {
+      fs.mkdirSync(links);
+      for (const name of fs.readdirSync(folder)) if (!vendors.includes(name)) { try { fs.symlinkSync(path.join(folder, name), path.join(links, name)); } catch { /* Left out. */ } }
+    }
+    return links;
+  });
+  return { dir, PATH: [dir, ...rest].join(path.delimiter) };
 }
 export function project(t) {
   const parent = temp(t); const root = path.join(parent, 'sample app'); fs.mkdirSync(root);
@@ -92,14 +116,56 @@ export const FAKES = fileURLToPath(new URL('./fakes/', import.meta.url));
 // badReply: 'once' or 'lost', a first reply of the fake Claude Code that cannot be read (see the fake).
 // install: what an editing turn of the fake Claude Code leaves beside its edit (see the fake).
 // insert: lines an editing turn of the fake Claude Code also puts in a file (see the fake).
-// tooLong: the reviews the fake Claude Code and Codex refuse as too long for the model (see the fakes).
-export function fakeClis(parent, { mode = 'normal', sandboxBin = null, name = undefined, commands = undefined, replay = undefined, note = undefined, permissionMode = undefined, badReply = undefined, asks = undefined, intent = undefined, network = undefined, models = undefined, noCredits = undefined, fence = undefined, byMode = undefined, wait = undefined, blocked = undefined, install = undefined, insert = undefined, tooLong = undefined, learned = undefined, accounts = undefined } = {}) {
+// tooLong: the reviews the fake Claude Code and Codex refuse as too long for the model (see the fakes);
+// tooLongOn: the texts that mark a turn they refuse that way, when not only reviews.
+// live: how the fake Claude Code's long turn (mode live) goes. refuses: what a fake vendor's
+// release does not take, and ends a run over at once (see the fakes).
+// steps, stepMs, commandMs, afterMs, capabilities, hostAsks: how the fake Claude Code's turn that
+// takes messages while it works goes, and what it asks on its own output (see the fake).
+// resumeMs: how long the fake Codex's resumed thread works in mode slow (see the fake).
+export function fakeClis(parent, { mode = 'normal', sandboxBin = null, name = undefined, commands = undefined, replay = undefined, note = undefined, permissionMode = undefined, badReply = undefined, asks = undefined, intent = undefined, network = undefined, models = undefined, noCredits = undefined, fence = undefined, byMode = undefined, wait = undefined, blocked = undefined, install = undefined, insert = undefined, tooLong = undefined, tooLongOn = undefined, stdinLimit = undefined, learned = undefined, accounts = undefined, gate = undefined, live = undefined, refuses = undefined, steps = undefined, stepMs = undefined, capabilities = undefined, commandMs = undefined, afterMs = undefined, hostAsks = undefined, resumeMs = undefined } = {}) {
   const dir = path.join(parent, 'bin'); fs.mkdirSync(dir, { recursive: true });
   const calls = path.join(parent, 'calls.jsonl');
-  fs.writeFileSync(path.join(dir, 'fake.json'), JSON.stringify({ mode, calls, inputs: path.join(parent, 'inputs.jsonl'), repository: path.join(parent, 'repository.txt'), sandboxBin, name, commands, replay, note, permissionMode, badReply, asks, intent, network, models, noCredits, fence, byMode, wait, blocked, install, insert, tooLong, learned, accounts }));
+  fs.writeFileSync(path.join(dir, 'fake.json'), JSON.stringify({ mode, calls, inputs: path.join(parent, 'inputs.jsonl'), repository: path.join(parent, 'repository.txt'), sandboxBin, name, commands, replay, note, permissionMode, badReply, asks, intent, network, models, noCredits, fence, byMode, wait, blocked, install, insert, tooLong, tooLongOn, stdinLimit, learned, accounts, gate, live, refuses, steps, stepMs, capabilities, commandMs, afterMs, hostAsks, resumeMs }));
   for (const vendor of ['claude', 'codex', 'agy', 'grok']) {
     fs.writeFileSync(path.join(dir, vendor), `#!${process.execPath}\n${fs.readFileSync(path.join(FAKES, `${vendor}.mjs`), 'utf8')}`, { mode: 0o755 });
   }
   // CLAUDE_CONFIG_DIR keeps the lead from picking up the real MCP servers of whoever runs the tests.
   return { env: { PATH: `${dir}${path.delimiter}${process.env.PATH}`, XDG_CONFIG_HOME: path.join(parent, 'personal'), XDG_DATA_HOME: path.join(parent, 'data'), CLAUDE_CONFIG_DIR: path.join(parent, 'claude'), ...(sandboxBin ? { ELU_CODE_SANDBOX_HELPER: sandboxBin } : {}) }, calls, dir };
+}
+// A stand-in Keychain: test/fakes/security.mjs as `security` in dir, which must come first on
+// PATH (fakeClis' bin folder does), holding these items. Never the real one.
+export function fakeKeychain(dir, items = []) {
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'security'), `#!${process.execPath}\n${fs.readFileSync(path.join(FAKES, 'security.mjs'), 'utf8')}`, { mode: 0o755 });
+  const store = path.join(dir, 'keychain.json'), log = path.join(dir, 'keychain-calls.jsonl');
+  fs.writeFileSync(store, JSON.stringify({ items }));
+  const read = () => JSON.parse(fs.readFileSync(store, 'utf8'));
+  return {
+    items: () => read().items,
+    calls: () => fs.existsSync(log) ? fs.readFileSync(log, 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line).args) : [],
+    add: item => fs.writeFileSync(store, JSON.stringify({ ...read(), items: [...read().items, item] })),
+    lock: locked => fs.writeFileSync(store, JSON.stringify({ ...read(), locked })),
+  };
+}
+// The names Claude Code gives a sign-in kept in the macOS Keychain for a config folder, when
+// CLAUDE_CONFIG_DIR names it (Claude Code 2.1.323): the sign-in, and an API key it saved.
+export function claudeKeychainNames(dir) {
+  const hash = crypto.createHash('sha256').update(dir.normalize('NFC')).digest('hex').slice(0, 8);
+  return { credentials: `Claude Code-credentials-${hash}`, apiKey: `Claude Code-${hash}`, hash };
+}
+
+// In Sessions, and in a session's chat, a letter types and a key is its letter, then Enter.
+// A test presses such a key with input.write('c'): one a-z or + written while the list or
+// the chat has the focus is followed by Enter, as a person presses it. current() is the last
+// render. Returns the plain write, which sends text as it is.
+export function keyThenEnter(input, current) {
+  const write = input.write.bind(input);
+  input.write = (data, ...rest) => {
+    const shown = current(), key = typeof data === 'string' && /^[a-z+]$/.test(data) && Boolean(shown) && [shown.panels.board, shown.panels.chat].includes(shown.screen.focused);
+    const result = write(data, ...rest);
+    if (key) setTimeout(() => write('\r'), 5);
+    return result;
+  };
+  return write;
 }

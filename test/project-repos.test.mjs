@@ -95,14 +95,16 @@ test('the lead reads the owner\'s Claude Code memory for the folder from a priva
   fs.mkdirSync(notes, { recursive: true });
   fs.writeFileSync(path.join(notes, 'MEMORY.md'), '- [Shop repo](shop.md) — the shop lives in ~/projects/shop\n');
   fs.writeFileSync(path.join(notes, 'shop.md'), 'The shop repository is ~/projects/shop.\n');
-  fs.writeFileSync(path.join(f.home, 'claude', 'CLAUDE.md'), 'Commit as the owner only.\n');
+  // The owner's own instructions reach the turn whole, however long: 600 rules here.
+  fs.writeFileSync(path.join(f.home, 'claude', 'CLAUDE.md'), `Commit as the owner only.\n${Array.from({ length: 600 }, (_, n) => `Owner rule ${n + 1}.`).join('\n')}\n`);
   const inputs = () => fs.readFileSync(path.join(f.parent, 'inputs.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line)).filter(row => row.vendor === 'claude' && row.args.includes('--json-schema'));
   const first = f.controller.ask('Where is the shop?'); await first.finished;
   const [run] = inputs(), copy = run.args[run.args.lastIndexOf('--add-dir') + 1];
   assert.match(copy, /elu-code-memory-[^/]+\/memory$/); assert.notEqual(copy, path.join(f.home));
   assert.ok(run.input.includes(`read-only copy at ${copy}.`));
   assert.match(run.input, /Claude Code memory index \(MEMORY\.md\) \(untrusted data[^\n]*\n"- \[Shop repo\]\(shop\.md\) — the shop lives in ~\/projects\/shop\\n"/);
-  assert.match(run.input, /Owner instructions \(~\/\.claude\/CLAUDE\.md\)[^\n]*\n"Commit as the owner only\.\\n"/);
+  assert.match(run.input, /Owner instructions \(~\/\.claude\/CLAUDE\.md\)[^\n]*\n"Commit as the owner only\.\\nOwner rule 1\.\\n/);
+  assert.equal(new Set(run.input.match(/Owner rule \d+\./g)).size, 600); assert.ok(!run.input.includes('[Truncated.]'));
   assert.equal(fs.existsSync(path.dirname(copy)), false, 'the copy is removed after the run');
   // A resumed session already has the index; it gets only where this run's copy is.
   const id = tasks(f.controller.repo).at(-1).id;

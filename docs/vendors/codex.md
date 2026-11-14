@@ -7,13 +7,13 @@ Labels: **[run]** checked by running the tested release of `codex` against a loc
 ## Install and sign in
 
 - `npm i -g @openai/codex` (a user prefix, no sudo).
-- `codex login` and choose ChatGPT. ELU reads `codex login status` and accepts only `Logged in using ChatGPT` [run]. An API key sign-in exits 0 too, so it is reported as signed out and the status line says `Codex: sign in with ChatGPT. Run: codex login`. No key variable is read or passed.
-- More ChatGPT accounts: `a` in the Usage tab runs `codex login` with `CODEX_HOME` set to a folder of the account's own, which links to your `~/.codex` for everything but `auth.json` ([../../SECURITY.md](../../SECURITY.md#several-accounts)). Each account's usage is read with its own `app-server`. A sign-in kept in the OS keyring instead of `auth.json` names no account ELU can read, so it is not added [unverified]. The sign-in runs on a cleared screen under one line of ELU's, and ELU is drawn again when it ends. On a computer with no browser (an SSH session, or Linux with no display) that line says to open the link Codex prints; the command stays `codex login`, since no device sign-in is documented here for the tested release.
+- `codex login` and choose ChatGPT. ELU reads `codex login status` and accepts only `Logged in using ChatGPT` [run]. An API key sign-in exits 0 too, so it is reported as signed out and the status line says `Codex: sign in with ChatGPT. Run: codex login`, or `Run: codex login --device-auth` on a computer with no browser (an SSH session, or Linux with no display). No key variable is read or passed.
+- More ChatGPT accounts: `a` in the Usage tab runs `codex login` with `CODEX_HOME` set to a folder of the account's own, which links to your `~/.codex` for everything but `auth.json` ([../../SECURITY.md](../../SECURITY.md#several-accounts)). Each account's usage is read with its own `app-server`. A sign-in kept in the OS keyring instead of `auth.json` names no account ELU can read, so it is not added [unverified]. The sign-in runs on a cleared screen under one line of ELU's, and ELU is drawn again when it ends. On a computer with no browser (an SSH session, or Linux with no display) the sign-in is `codex login --device-auth`, Codex's device code sign-in, and ELU's second line says to open the link on any computer and use the code under it [run] (`codex login --help` and the sign-in up to its code, 0.167.0).
 - If another `codex` shim comes first on your PATH (the cmux shim does on some machines), put the real binary first. ELU launches with `features.hooks=false`; whether that neutralizes a shim's hooks is [unverified].
 
 ## What each mode launches
 
-Every mode keeps the same isolation: `--ignore-user-config --ignore-rules --json`, `-c mcp_servers={}`, hooks, apps, plugins, browser, multi-agent, image and skill features off, user input and plan tools off, and a refusal to launch when a project or managed `config.toml` could add MCP servers. The output schema goes through `--output-schema`; the prompt arrives on stdin. A session's model also gets `--skip-git-repo-check`: a project folder need not be a Git repository, and without the flag Codex refuses to start there [run].
+Every mode but Full access keeps the same isolation: `--ignore-user-config --ignore-rules --json`, `-c mcp_servers={}`, hooks, apps, plugins, browser, multi-agent, image and skill features off, user input and plan tools off, and a refusal to launch when a project or managed `config.toml` could add MCP servers. Full access keeps `--ignore-user-config --ignore-rules --json`, `-c mcp_servers={}`, the user input tool off (nobody could answer it in a run without a terminal) and that refusal, and switches nothing else off: every feature stays as the release ships it, a login shell is allowed, and commands get the whole environment of the run. Its stream may then carry any kind of item (`collab_tool_call`, `mcp_tool_call`, `web_search`, ones a later release adds), and ELU reads them all; below Full access a kind the session was not given refuses the run. Not seen with the real service: these are the release's own defaults. The output schema goes through `--output-schema`; the prompt arrives on stdin. A session's model also gets `--skip-git-repo-check`: a project folder need not be a Git repository, and without the flag Codex refuses to start there [run].
 
 | | Read only (reviewer) | Ask for approval | Approve for me | Full access |
 |---|---|---|---|---|
@@ -23,6 +23,7 @@ Every mode keeps the same isolation: `--ignore-user-config --ignore-rules --json
 | Network | blocked | blocked, loopback included [run] | blocked unless the reviewer allows an escalation | open [run] |
 | Web search | off | off | off | `web_search="live"` [run: the tool is offered; a real search is unverified] |
 | Named folders | n/a | read-only | read-only | n/a |
+| Features and tools | all off | shell on, the rest off | same | the release's defaults |
 | Where | task worktree | worktree or branch | worktree or branch | also your checkout |
 
 The `elu_ask` profile is one `-c permissions.elu_ask=…` value with `default_permissions="elu_ask"` [run]:
@@ -37,11 +38,26 @@ A profile value containing `*`, `?`, `[`, `]`, `{` or `}` is refused before laun
 
 Resume: `codex exec resume <thread_id> -` with the same `-c` set. `exec resume` has no `--sandbox` or `--cd`, so the sandbox and profile come from `-c` keys and the process runs in the workspace [run: the profile, Approve for me and Full access all applied on a resumed thread].
 
+## Messages you send while a turn works
+
+`codex exec` reads its prompt to the end of its input before it starts, and has no way to
+take more while it works. So a message you send to a Codex turn waits in the chat, "Sent
+when this turn ends.", and Enter in the empty message box sends it now: the turn stops as
+`/stop` stops it, its edits and the chat kept, and what waits starts the next turn at once,
+in the order sent, as one message. Outside Read only the next turn goes on in the thread
+that was stopped (`codex exec resume <thread id>`, the id read from the stopped run's
+`thread.started` line), so Codex keeps what it was doing. A Read only turn starts a new
+thread each time, as before, so there the next turn is given what the stopped one wrote and
+did, read from its log: each message, each command with its exit code and what it printed
+(one still running is marked as stopped), and the files it changed.
+
 ## What the owner sees
 
+- Subtasks: a turn that works on an approved Task is launched with `-c tools.update_plan.enabled=true` and told to keep the Task's subtasks in its plan. Each `todo_list` item in the stream ticks them while the turn runs; the first step not done shows as the one in hand. Every other turn keeps the plan tool off.
 - Approve for me: an action the reviewer declines comes back as `status: "declined"` and is listed on the run as a denial (`Run: <command>` or `Edit: <paths>`) [run]. The model is told not to retry it and to return `needs_input`.
 - Ask for approval: Codex has no live approval relay. A sandbox block produces no stream item and no denial record [run]; the model reports what it could not do.
 - No dollar figure: Codex reports no cost in its stream. `maxCostUsd` must be `null`; the time limit bounds the run.
+- What the model thinks: every launch passes `-c model_reasoning_summary="auto"`. Every model in the bundled catalog of 0.167.0-alpha.4.1 defaults to `none`, and then the stream has no reasoning item. The chat shows each reasoning summary as it arrives, with each command, edit and message, and how long a command has run. A program whose file does not hold the key is started without it, and a launch that ends at once with nothing printed runs again without it (see [Claude Code](claude.md)). Not seen with the real service yet.
 
 ## Code mode, seen with the real service
 

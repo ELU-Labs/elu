@@ -7,6 +7,7 @@ import { stopLine, logCause, logLimit, limitOf } from '../lib/stop-line.mjs';
 import { boardRows, rowTitle } from '../lib/board.mjs';
 import { STUCK_LINE } from '../lib/runner.mjs';
 import * as claude from '../lib/adapters/claude.mjs';
+import { signInCommand } from '../lib/vendors.mjs';
 
 // A session as it is kept: an edit session (no kind) unless said otherwise, whose last turn ran on Claude.
 const at = '2026-11-12T10:00:00.000Z';
@@ -40,7 +41,7 @@ test('a turn that could not finish names the cause when it is known, then the on
   assert.equal(failed('model-unavailable'), 'The model could not finish: that model is not available. Choose another with /model, then type continue.');
   assert.equal(failed('unknown'), 'The model could not finish. Type continue to try again.');
   // Codex signs in with its own command.
-  assert.equal(said({ runs: [{ role: 'lead', vendor: 'codex', at }], error: { message: 'The model could not finish.', cause: 'unknown' } }, { logCause: () => 'auth' }).text, 'The model could not finish: Codex is signed out. Sign in again with codex login, then type continue.');
+  assert.equal(said({ runs: [{ role: 'lead', vendor: 'codex', at }], error: { message: 'The model could not finish.', cause: 'unknown' } }, { logCause: () => 'auth' }).text, 'The model could not finish: Codex is signed out. Sign in again with ' + signInCommand('codex') + ', then type continue.');
   // A bot's turn says who.
   assert.equal(said({ error: { message: '@scout could not finish.', cause: 'rate-limit' } }).text, '@scout could not finish: the account hit its rate limit. Switch account in Usage, or type continue to try again.');
   // What Claude printed on stderr stays, with the action after it.
@@ -63,6 +64,31 @@ test("an unknown cause is read from the run log's last result line: credits, rat
   for (const [file, cause, text] of cases) {
     assert.equal(logCause(file), cause, file);
     assert.equal(stopLine(session({ error: { message: 'The model could not finish.', cause: 'unknown', logFile: file } }), { account: none }).text, text, file);
+  }
+});
+
+// A Codex session whose sign-in lapsed while it ran. The words are the ones codex-cli 0.167.0
+// keeps for it (read in its program file; none was watched, which takes a real account), in the
+// rows codex exec --json ends a failed turn with.
+test('a Codex turn that failed because its sign-in lapsed reads as signed out, and the line names the sign-in for this computer', t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'stop-line-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const lapsed = ['Your access token could not be refreshed because you have since logged out or signed in to another account. Please sign in again.',
+    'Your access token could not be refreshed because your refresh token has expired. Please log out and sign in again.',
+    'Your access token could not be refreshed because your refresh token was revoked. Please log out and sign in again.',
+    'Your access token could not be refreshed. Please log out and sign in again.',
+    'Your authentication session could not be refreshed automatically. Please log out and sign in again.'];
+  const kept = Object.fromEntries(['SSH_CONNECTION', 'SSH_TTY', 'SSH_CLIENT'].map(name => [name, process.env[name]]));
+  t.after(() => { for (const [name, value] of Object.entries(kept)) { if (value === undefined) delete process.env[name]; else process.env[name] = value; } });
+  for (const [at, message] of lapsed.entries()) {
+    const file = path.join(dir, `lapsed-${at}.log`);
+    fs.writeFileSync(file, [{ type: 'thread.started', thread_id: 'thread-1' }, { type: 'turn.started' }, { type: 'error', message }, { type: 'turn.failed', error: { message } }].map(row => JSON.stringify(row)).join('\n') + '\n');
+    assert.equal(logCause(file), 'auth', message);
+    const stop = () => stopLine(session({ runs: [{ role: 'lead', vendor: 'codex', at: '2026-11-12T10:00:00.000Z', logFile: file }], error: { message: 'The model could not finish.', cause: 'unknown', logFile: file } }), { account: none }).text;
+    // Over SSH no browser opens here: the device code sign-in.
+    process.env.SSH_CONNECTION = '10.0.0.2 52000 10.0.0.3 22';
+    assert.equal(stop(), 'The model could not finish: Codex is signed out. Sign in again with codex login --device-auth, then type continue.');
+    for (const name of Object.keys(kept)) delete process.env[name];
+    assert.equal(stop(), `The model could not finish: Codex is signed out. Sign in again with ${signInCommand('codex')}, then type continue.`);
   }
 });
 
@@ -174,6 +200,10 @@ test("a Claude run refused with an API error keeps Claude's words and gets the a
   const signedOut = kept(t, [init('claude-opus-5-5'), SIGNED_OUT]);
   assert.equal(signedOut.cause, 'unknown');
   assert.equal(stopLine(session({ error: signedOut })).text, 'The model could not run: Claude Code is signed out. Sign in again with claude, then type continue.');
+  // A --model Claude has no model for, as test/fakes/claude.mjs ends that run: said with the name that was asked for, and the owner chooses another.
+  const none = kept(t, [init('claude-opus-9-9'), refused({ api_error_status: 404, api_error: 'not_found_error', result: "There's an issue with the selected model (claude-opus-9-9). It may not exist or you may not have access to it. Run --model to pick a different model." })]);
+  assert.equal(none.cause, 'model-unavailable');
+  assert.equal(stopLine(session({ error: none })).text, 'The model could not run: Claude says there is no model claude-opus-9-9 for this account. Choose another with /model, then type continue.');
   // Any other refusal keeps Claude's words, then to try again.
   const other = kept(t, [init('claude-opus-5-5'), refused({ api_error_status: 500, api_error: 'api_error', result: 'Internal server error' })]);
   assert.equal(stopLine(session({ error: other })).text, 'The model could not run: Claude says: Internal server error. Type continue to try again.');
@@ -181,12 +211,12 @@ test("a Claude run refused with an API error keeps Claude's words and gets the a
 
 test("a bot's or a reviewer's failed run names that run's vendor, not the lead's", () => {
   const runs = [{ role: 'lead', vendor: 'claude', at, logFile: '/runs/lead.log' }, { role: 'bot:checker', vendor: 'agy', at, logFile: '/runs/checker.log' }, { role: 'lead', vendor: 'claude', at, logFile: '/runs/lead-2.log' }];
-  assert.equal(said({ runs, error: { message: 'Antigravity could not finish.', cause: 'auth', logFile: '/runs/checker.log' } }).text, 'Antigravity could not finish: Antigravity CLI is signed out. Sign in again with agy, then type continue.');
+  assert.equal(said({ runs, error: { message: 'Antigravity could not finish.', cause: 'auth', logFile: '/runs/checker.log' } }).text, 'Antigravity could not finish: Antigravity CLI is signed out. Sign it in with s on its line in the Usage tab, then type continue.');
   // A Codex bot whose log reads as signed out.
   const codex = [...runs, { role: 'bot:critic', vendor: 'codex', at, logFile: '/runs/critic.log' }];
-  assert.equal(said({ runs: codex, error: { message: '@critic could not finish.', cause: 'unknown', logFile: '/runs/critic.log' } }, { logCause: () => 'auth' }).text, '@critic could not finish: Codex is signed out. Sign in again with codex login, then type continue.');
+  assert.equal(said({ runs: codex, error: { message: '@critic could not finish.', cause: 'unknown', logFile: '/runs/critic.log' } }, { logCause: () => 'auth' }).text, '@critic could not finish: Codex is signed out. Sign in again with ' + signInCommand('codex') + ', then type continue.');
   // An error that names no log is the last run's.
-  assert.equal(said({ runs: codex, error: { message: '@critic could not finish.', cause: 'auth' } }).text, '@critic could not finish: Codex is signed out. Sign in again with codex login, then type continue.');
+  assert.equal(said({ runs: codex, error: { message: '@critic could not finish.', cause: 'auth' } }).text, '@critic could not finish: Codex is signed out. Sign in again with ' + signInCommand('codex') + ', then type continue.');
 });
 
 test("a turn stopped by the session's own /budget says so, not that the account is out of credits", t => {

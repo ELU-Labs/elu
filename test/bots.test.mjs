@@ -6,7 +6,7 @@ import { temp, project, fakeClis, autoApprove } from './helpers.mjs';
 import { BOTS_MAX, BOT_COLORS, CHAT_BOTS_MAX, EFFORTS, botColor, botColorProblem, pickBotColor, botReviews, botWorks, botShadows, botsFile, botVendors, botEfforts, listBots, getBot, needBot, saveBot, removeBot, botRuns, sharedBots, chatBots, botRole, botKey, botOfKey, chatBotsNote, botNameProblem, BOT_FINDINGS } from '../lib/bots.mjs';
 import { ProjectController, conversationEntries, registerProject, activity } from '../lib/projects.mjs';
 import { projectFolder, pendingRequests } from '../lib/workspace.mjs';
-import { runConversation, botReplies, ownerMessages, BOT_REPLIES_MAX, BOT_REPLY_CHARS, BOT_REPLIES_CHARS } from '../lib/runner.mjs';
+import { runConversation, botReplies, ownerMessages } from '../lib/runner.mjs';
 import { readTask, saveTask, taskDir, tasks } from '../lib/state.mjs';
 import { assertReady } from '../lib/publish.mjs';
 import { assertPolicy } from '../lib/policy.mjs';
@@ -15,10 +15,11 @@ import { Conductor, enqueue, peerOrigin } from '../lib/conductor.mjs';
 import { peerFile } from '../lib/peer/paths.mjs';
 import * as claude from '../lib/adapters/claude.mjs';
 import * as codex from '../lib/adapters/codex.mjs';
-import { botModels, codexModels, claudeModels, matchModels } from '../lib/bot-models.mjs';
+import { botModels, readBotModels, codexModels, claudeModels, matchModels } from '../lib/bot-models.mjs';
 import { botModelProblem, botRoomProblem } from '../lib/bots.mjs';
 import { stopLine } from '../lib/stop-line.mjs';
 import { openTask, sessionTasks } from '../lib/plan.mjs';
+import { signInCommand } from '../lib/vendors.mjs';
 
 // Bots: named agents the owner defines once (lib/bots.mjs) and uses in any chat. In a chat a
 // bot answers a message written to it, reviews the lead's edits, and, when shared, answers
@@ -78,7 +79,7 @@ test('a bot is saved with its defaults, and each field is checked with a line th
   assert.equal(saveBot({ ...bot, effort: ' HIGH ' }).effort, 'high'); assert.equal(saveBot({ ...bot, effort: '' }).effort, null);
   assert.throws(() => saveBot({ ...bot, instructions: '  \n' }), { message: 'Write what the bot does in its instructions.' });
   assert.equal(saveBot({ ...bot, instructions: 'line of a skill\n'.repeat(6000) }).instructions.length, 95999, 'a long skill file fits');
-  assert.throws(() => saveBot({ ...bot, instructions: 'x'.repeat(200001) }), { message: 'The instructions are 200,001 characters. Keep them under 200,000.' });
+  assert.equal(saveBot({ ...bot, instructions: 'x'.repeat(500000) }).instructions.length, 500000, 'instructions of any length are kept whole');
   assert.equal(saveBot({ ...bot, about: `  Reads \n the   diff ${'x'.repeat(200)}` }).about, `Reads the diff ${'x'.repeat(105)}`);
   for (const value of [null, 'scout', []]) assert.throws(() => saveBot(value), { message: 'A bot needs a name and instructions.' });
   assert.equal(saveBot({ ...bot, shared: 'yes' }).shared, false); assert.equal(saveBot({ ...bot, shared: true }).shared, true);
@@ -425,7 +426,7 @@ test('a running bot is the session\'s active role, and stopping it leaves a note
   assert.deepEqual(task.messages.slice(-2).map(({ at, ...row }) => row), [{ text: 'Take your time.', to: '@scout' }, { text: 'Stopped before answering. Write to @scout again and it picks up where it stopped.', from: '@scout', bot: 'scout', failed: true }]);
   // The stopped turn named its vendor session at launch, so the owner's next message to the bot resumes it.
   const stopped = f.calls('claude').at(-1), named = stopped.args[stopped.args.indexOf('--session-id') + 1];
-  assert.match(named, /^[a-f0-9-]{36}$/); assert.deepEqual(task.interrupted, { 'bot:scout': { vendor: 'claude', id: named } });
+  assert.match(named, /^[a-f0-9-]{36}$/); assert.deepEqual(task.interrupted, { 'bot:scout': { vendor: 'claude', id: named, log: live.activeLog } });
   f.mode('answer');
   const next = await f.controller.ask('continue', first.id, { bot: 'scout' }).finished, resumed = f.calls('claude').at(-1);
   assert.equal(resumed.args[resumed.args.indexOf('--resume') + 1], named, 'the same vendor session'); assert.equal(resumed.args.includes('--session-id'), false);
@@ -447,7 +448,9 @@ test('a stopped bot whose vendor names no session at launch says its next turn s
   await new Promise(resolve => setTimeout(resolve, 150));
   await f.controller.stop(first.id); await assert.rejects(run.finished);
   let task = readTask(f.repo, first.id);
-  assert.equal(task.messages.at(-1).text, 'Stopped before answering. The next message to @critic starts from the chat.'); assert.equal(task.interrupted, undefined);
+  assert.equal(task.messages.at(-1).text, 'Stopped before answering. The next message to @critic starts from the chat.');
+  // No vendor session to go on in: the stopped run's log is kept, for what it said and did.
+  assert.deepEqual(Object.keys(task.interrupted), ['bot:critic']); assert.equal(task.interrupted['bot:critic'].id, undefined); assert.match(path.basename(task.interrupted['bot:critic'].log), /^bot-critic-.+\.log$/);
   // A session id that the vendor no longer knows: the turn is not lost, it starts from the chat.
   task.interrupted = { 'bot:scout': { vendor: 'claude', id: '99999999-9999-4999-8999-999999999999' } }; saveTask(f.repo, task);
   patch('claude', "if(args.includes('--resume')&&args[args.indexOf('--resume')+1].startsWith('9999')){if(cfg.calls)fs.appendFileSync(cfg.calls,JSON.stringify({vendor,args})+'\\n');console.error('No conversation found with session ID');process.exit(1);}");
@@ -463,8 +466,13 @@ test('a stopped bot whose vendor names no session at launch says its next turn s
   assert.equal(during.state, 'running'); assert.deepEqual(during.messages.slice(-2).map(({ at, ...row }) => row), [{ text: 'continue', to: '@scout' }, { text: line, from: '@scout', bot: 'scout', quiet: true }]);
   fs.writeFileSync(gate, '');
   const next = await asked.finished;
-  const made = f.calls('claude').slice(before).map(row => row.args.includes('--resume') ? 'resume' : 'new');
-  assert.deepEqual(made, ['resume', 'new'], 'resumed first, then started from the chat');
+  // The resume ends at once with nothing printed, which is also how a program ends a launch
+  // whose option it does not take. So it is tried once more without the option that shows a
+  // run's work (lib/vendor-extras.mjs), and only then does the turn start from the chat. That
+  // second launch got no further, so the program is still given the option.
+  const tried = f.calls('claude').slice(before), made = tried.map(row => row.args.includes('--resume') ? 'resume' : 'new');
+  assert.deepEqual(made, ['resume', 'resume', 'new'], 'resumed first, then started from the chat');
+  assert.deepEqual(tried.map(row => row.args.includes('--thinking-display')), [true, false, true], 'the second resume is the launch without the option, and the fresh turn has it again');
   assert.equal(next.interrupted, undefined); assert.equal(next.messages.at(-1).bot, 'scout'); assert.notEqual(next.messages.at(-1).failed, true);
   // The line stays above the answer. The turn that started afresh read the chat as it stood
   // before that line, so the owner's message was the last thing in it.
@@ -575,6 +583,20 @@ test('the lead reads a bot\'s reply to the owner, under its name and time, in it
   assert.deepEqual(chat.at(-1).from, 'owner → @critic');
 });
 
+// ELU sets no limit of its own on what a bot reads of the chat: every entry, each whole.
+test('a bot reads the whole chat: a long message whole and more than 80 entries', async t => {
+  const f = setup(t);
+  const long = `Where is coupon normalization? ${'Read every word of this. '.repeat(3000)}`.trim();
+  const first = await f.controller.ask(long).finished;
+  const saved = readTask(f.repo, first.id), start = Date.parse(saved.createdAt) + 1000;
+  saved.messages.push(...Array.from({ length: 100 }, (_, index) => ({ at: new Date(start + index * 1000).toISOString(), text: `note ${index}` })));
+  saveTask(f.repo, saved);
+  await f.controller.ask('Is that right?', first.id, { bot: 'critic' }).finished;
+  const chat = contextOf(f.inputs('codex').at(-1).input).chat;
+  assert.equal(chat[0].text, long, 'the first message, whole');
+  assert.deepEqual(chat.filter(row => /^note \d+$/.test(row.text)).map(row => row.text), Array.from({ length: 100 }, (_, index) => `note ${index}`));
+});
+
 test('a bot sees the lead\'s last reply, and the lead the bot\'s, in a conversation', async t => {
   const f = setup(t);
   const first = await f.controller.ask('Where is coupon normalization?').finished;
@@ -597,7 +619,7 @@ test('a teammate\'s answer to the owner\'s ask, continued in his session, reads 
   const task = await f.controller.ask('Where is coupon normalization?', null, { bots: ['critic'] }).finished;
   const saved = readTask(f.repo, task.id), start = Date.now() - 30000;
   const at = index => new Date(start + index * 1000).toISOString();
-  saved.messages.push(...Array.from({ length: BOT_REPLIES_MAX + 3 }, (_, index) => ({ at: at(index), text: `finding ${index}`, from: '@critic', bot: 'critic' })), { at: at(20), text: '@critic ran on another model instead', from: '@critic', bot: 'critic', quiet: true }, { at: at(21), text: 'Could not answer. The model stopped.', from: '@critic', bot: 'critic', failed: true });
+  saved.messages.push(...Array.from({ length: 11 }, (_, index) => ({ at: at(index), text: `finding ${index}`, from: '@critic', bot: 'critic' })), { at: at(20), text: '@critic ran on another model instead', from: '@critic', bot: 'critic', quiet: true }, { at: at(21), text: 'Could not answer. The model stopped.', from: '@critic', bot: 'critic', failed: true });
   saveTask(f.repo, saved);
   // lib/peer/asks.mjs continueAnswer queues this turn: read-only, origin kind answer, in the owner's chat.
   const origin = { kind: 'answer', peer: 'b'.repeat(64), name: 'sara', a2aTaskId: 'task-9', threadId: 'thread-9', hop: 0 };
@@ -605,8 +627,8 @@ test('a teammate\'s answer to the owner\'s ask, continued in his session, reads 
   await runConversation(f.repo, readTask(f.repo, task.id), 'Continue with the answer from @sara shown in the peer data block.', { origin, readOnly: true, context: 'Use the v2 endpoint.' });
   const read = f.inputs('claude').slice(before).at(-1).input, messages = contextOf(read).messages;
   const bots = messages.filter(row => row.bot);
-  assert.deepEqual(bots.map(row => row.text), Array.from({ length: BOT_REPLIES_MAX }, (_, index) => `finding ${index + 3}`), 'the newest replies, at most BOT_REPLIES_MAX');
-  assert.ok(messages.some(row => row.from === 'ELU' && row.text === '3 earlier replies of the session\'s bots are left out here for length.'));
+  assert.deepEqual(bots.map(row => row.text), Array.from({ length: 11 }, (_, index) => `finding ${index}`), 'every reply, none left out');
+  assert.equal(messages.some(row => row.from === 'ELU'), false);
   assert.equal(messages.some(row => /another model|Could not answer/.test(row.text)), false, 'notes and failures are left out');
   assert.equal(messages.at(-1).text, 'Continue with the answer from @sara shown in the peer data block.');
   assert.ok(read.includes(BOT_FINDINGS));
@@ -632,9 +654,8 @@ test('a bot reads the lead\'s newest reply when that run\'s log is not one this 
   assert.deepEqual(conversationEntries(f.repo, first).filter(entry => entry.lead).map(entry => entry.text), [claudeSaid[0].text]);
 });
 
-test('the bots\' replies the lead reads are bounded: the newest first, each cut with a note, the total capped', () => {
+test('the bots\' replies the lead reads are every reply, each whole', () => {
   const at = index => new Date(Date.UTC(2026, 0, 1, 0, index)).toISOString();
-  assert.equal(BOT_REPLIES_MAX, 8); assert.equal(BOT_REPLY_CHARS, 6000); assert.equal(BOT_REPLIES_CHARS, 24000);
   // Notes about a bot's turn and its failures are not what it said; the owner's rows are not the bots'.
   const rows = [
     { at: at(0), text: 'Hello', to: '@critic' },
@@ -644,29 +665,21 @@ test('the bots\' replies the lead reads are bounded: the newest first, each cut 
     { at: at(4), text: 'Short.', from: '@critic', bot: 'critic' },
   ];
   assert.deepEqual(botReplies(rows), [{ at: at(3), from: '@scout', bot: 'scout', text: 'Shadow point.', shadow: true }, { at: at(4), from: '@critic', bot: 'critic', text: 'Short.' }]);
-  // A long reply is cut, and says so.
-  const [long] = botReplies([{ at: at(0), text: 'x'.repeat(10000), from: '@critic', bot: 'critic' }]);
-  assert.equal(long.text.startsWith('x'.repeat(BOT_REPLY_CHARS) + '\n'), true); assert.equal(long.text.includes('x'.repeat(BOT_REPLY_CHARS + 1)), false);
-  assert.match(long.text, /\[ELU cut this reply here: it is 10000 characters long, and this is its start\.\]$/);
-  // Twelve replies of 5,000 characters: the newest four fit the total; the rest are counted.
-  const many = Array.from({ length: 12 }, (_, index) => ({ at: at(index), text: `${index}`.padEnd(5000, '.'), from: '@critic', bot: 'critic' }));
-  const kept = botReplies(many);
-  assert.deepEqual(kept.slice(1).map(row => row.text[0] === '1' ? row.text.slice(0, 2) : row.text[0]), ['8', '9', '10', '11']);
-  assert.deepEqual(kept[0], { at: at(7), from: 'ELU', text: '8 earlier replies of the session\'s bots are left out here for length.' });
-  assert.ok(kept.slice(1).reduce((total, row) => total + row.text.length, 0) <= BOT_REPLIES_CHARS);
-  // Twenty short replies: the newest eight.
-  const short = botReplies(Array.from({ length: 20 }, (_, index) => ({ at: at(index), text: `r${index}`, from: '@critic', bot: 'critic' })));
-  assert.deepEqual(short.map(row => row.text), ['12 earlier replies of the session\'s bots are left out here for length.', ...Array.from({ length: 8 }, (_, index) => `r${index + 12}`)]);
+  // ELU sets no limit of its own: a long reply is whole, and twenty replies of 50,000 characters are all there.
+  const [long] = botReplies([{ at: at(0), text: 'x'.repeat(100000), from: '@critic', bot: 'critic' }]);
+  assert.equal(long.text, 'x'.repeat(100000));
+  const many = Array.from({ length: 20 }, (_, index) => ({ at: at(index), text: `${index}`.padEnd(50000, '.'), from: '@critic', bot: 'critic' }));
+  assert.deepEqual(botReplies(many).map(row => row.text), many.map(row => row.text));
 });
 
-test('a teammate\'s session reads its messages as before; the owner\'s reads the bots\' replies bounded', async t => {
+test('a teammate\'s session reads its messages as before; the owner\'s reads the bots\' replies whole', async t => {
   const f = setup(t);
   const task = await f.controller.ask('Where is coupon normalization?').finished;
-  const long = 'y'.repeat(BOT_REPLY_CHARS + 500), messages = [{ at: new Date(Date.now() + 1000).toISOString(), text: long, from: '@critic', bot: 'critic' }, { at: new Date(Date.now() + 2000).toISOString(), text: 'note', from: '@critic', bot: 'critic', quiet: true }];
+  const long = 'y'.repeat(60000), messages = [{ at: new Date(Date.now() + 1000).toISOString(), text: long, from: '@critic', bot: 'critic' }, { at: new Date(Date.now() + 2000).toISOString(), text: 'note', from: '@critic', bot: 'critic', quiet: true }];
   const theirs = { ...task, origin: { kind: 'handoff', peer: 'b'.repeat(64), name: 'sara' }, messages: [...task.messages, ...messages] };
   assert.deepEqual(ownerMessages(f.repo, theirs), theirs.messages, 'a teammate\'s session is unchanged');
   const mine = ownerMessages(f.repo, { ...task, messages: [...task.messages, ...messages] });
-  assert.equal(mine.some(row => row.quiet), false); assert.equal(mine.at(-1).text.length < long.length + 200 && mine.at(-1).text.startsWith('y'.repeat(BOT_REPLY_CHARS)) && mine.at(-1).text.length > BOT_REPLY_CHARS, true);
+  assert.equal(mine.some(row => row.quiet), false); assert.equal(mine.at(-1).text, long);
 });
 
 test('a bot asked about an editing session reads its edits, and reviews them before they are published', async t => {
@@ -838,37 +851,59 @@ const prints = text => `fs.writeSync(1, ${JSON.stringify(text)});`;
 // A stand-in is a node script, slow to start on a busy machine. A read that must succeed gets a long limit.
 const PATIENT = { timeoutMs: 60000 };
 
-test('codex lists its models as JSON: the listed ones are offered by the name --model takes, and the vendor is asked once', t => {
+test('codex lists its models as JSON: the listed ones are offered by the name --model takes, and the vendor is asked once', async t => {
   assert.deepEqual(codexModels(JSON.stringify(CATALOG)), [{ name: 'big-model', note: 'Frontier model for the most demanding work.' }, { name: 'quick-model', note: 'Fast and affordable model for easier tasks.' }]);
   for (const text of ['', 'not json', '[]', '{"models":"none"}', '{}']) assert.deepEqual(codexModels(text), [], text);
   assert.equal(codexModels(JSON.stringify({ models: Array.from({ length: 60 }, (_, index) => ({ slug: `m-${index}`, description: 'x'.repeat(300), visibility: 'list' })) })).length, 40, 'a runaway catalog is cut');
   assert.equal(codexModels(JSON.stringify({ models: [{ slug: 'm', description: 'x'.repeat(300), visibility: 'list' }] }))[0].note.length, 120);
-  const cli = standIn(t, 'codex', prints(JSON.stringify(CATALOG))), first = botModels('codex', { env: cli.env, ...PATIENT });
+  const cli = standIn(t, 'codex', prints(JSON.stringify(CATALOG)));
+  // Before it is read the Model step has no names for it, and starts no program to get them.
+  assert.deepEqual(botModels('codex', { env: cli.env }), []); assert.deepEqual(cli.calls(), []);
+  const first = await readBotModels('codex', { env: cli.env, ...PATIENT });
   assert.deepEqual(first.map(row => row.name), ['big-model', 'quick-model']);
-  assert.equal(botModels('codex', { env: cli.env }), first, 'the second read is the first one, kept');
+  assert.equal(await readBotModels('codex', { env: cli.env }), first, 'the second read is the first one, kept');
+  assert.equal(botModels('codex', { env: cli.env }), first, 'and it is what the Model step shows from then on');
   assert.deepEqual(cli.calls(), ['debug models --bundled'], 'asked once, for the catalog inside the binary');
 });
 
-test('claude names its aliases in --help: they are read from the --model entry, and the built-in names stand in when it cannot be read', t => {
+test('claude names its aliases in --help: they are read from the --model entry, and the built-in names stand in when it cannot be read', async t => {
   assert.deepEqual(claudeModels(MODEL_HELP), ALIASES);
   assert.deepEqual(claudeModels(MODEL_HELP.replace("'fable', 'opus', or 'sonnet'", "'fable' or 'newer'")).map(row => row.name), ['fable', 'newer'], 'a new alias in --help is offered');
   for (const text of ['', '--print --add-dir --model', "  --fallback-model <model>  One of 'a' or 'b'.\n"]) assert.deepEqual(claudeModels(text), [], text);
   const cli = standIn(t, 'claude', prints(MODEL_HELP));
-  assert.deepEqual(botModels('claude', { env: cli.env, ...PATIENT }), ALIASES); assert.deepEqual(botModels('claude', { env: cli.env }), ALIASES); assert.deepEqual(cli.calls(), ['--help']);
+  assert.deepEqual(await readBotModels('claude', { env: cli.env, ...PATIENT }), ALIASES); assert.deepEqual(await readBotModels('claude', { env: cli.env }), ALIASES); assert.deepEqual(cli.calls(), ['--help']);
   // A --help with no --model entry, a failing one, and no claude at all.
-  for (const script of [prints('--print --add-dir --session-id\n'), `${prints(MODEL_HELP)} process.exit(1);`, null]) assert.deepEqual(botModels('claude', { env: standIn(t, 'claude', script).env }), ALIASES);
+  for (const script of [prints('--print --add-dir --session-id\n'), `${prints(MODEL_HELP)} process.exit(1);`, null]) assert.deepEqual(await readBotModels('claude', { env: standIn(t, 'claude', script).env }), ALIASES);
 });
 
-test('a command line that is missing, fails or is slow never holds up the Model step, and a vendor with no way to list is never run', t => {
+test('a command line that is missing, fails or is slow never holds up the Model step, and a vendor with no way to list is never run', async t => {
   // Codex model names carry versions, so nothing stands in for them.
-  for (const script of [null, 'process.exit(1);', prints('not json')]) assert.deepEqual(botModels('codex', { env: standIn(t, 'codex', script).env }), []);
+  for (const script of [null, 'process.exit(1);', prints('not json')]) assert.deepEqual(await readBotModels('codex', { env: standIn(t, 'codex', script).env }), []);
   const slow = standIn(t, 'codex', `await new Promise(resolve => setTimeout(resolve, 20000)); ${prints(JSON.stringify(CATALOG))}`), started = Date.now();
-  assert.deepEqual(botModels('codex', { env: slow.env, timeoutMs: 300 }), []); assert.ok(Date.now() - started < 10000, 'stopped at the time limit');
+  assert.deepEqual(await readBotModels('codex', { env: slow.env, timeoutMs: 300 }), []); assert.ok(Date.now() - started < 10000, 'stopped at the time limit');
   // That answer is kept too: a command line that would now list its models is not asked again.
-  slow.write(prints(JSON.stringify(CATALOG))); assert.deepEqual(botModels('codex', { env: slow.env, ...PATIENT }), []); assert.ok(slow.calls().length <= 1);
+  slow.write(prints(JSON.stringify(CATALOG))); assert.deepEqual(await readBotModels('codex', { env: slow.env, ...PATIENT }), []); assert.ok(slow.calls().length <= 1);
   const slowClaude = standIn(t, 'claude', 'await new Promise(resolve => setTimeout(resolve, 20000));');
-  assert.deepEqual(botModels('claude', { env: slowClaude.env, timeoutMs: 300 }), ALIASES);
-  for (const vendor of ['agy', 'grok', 'constructor', '']) { const cli = standIn(t, vendor || 'none', prints(JSON.stringify(CATALOG))); assert.deepEqual(botModels(vendor, { env: cli.env }), []); assert.deepEqual(cli.calls(), [], vendor); }
+  assert.deepEqual(await readBotModels('claude', { env: slowClaude.env, timeoutMs: 300 }), ALIASES);
+  for (const vendor of ['agy', 'grok', 'constructor', '']) { const cli = standIn(t, vendor || 'none', prints(JSON.stringify(CATALOG))); assert.deepEqual(await readBotModels(vendor, { env: cli.env }), []); assert.deepEqual(botModels(vendor, { env: cli.env }), []); assert.deepEqual(cli.calls(), [], vendor); }
+});
+
+// The read runs beside the app. The old one ran the vendor's program with the app held until
+// it ended: a codex that took four seconds to print its models froze the screen for its time limit.
+test('a vendor that takes its time to print its models does not hold the app, and two reads share one program', async t => {
+  const slow = standIn(t, 'codex', `await new Promise(resolve => setTimeout(resolve, 4000)); ${prints(JSON.stringify(CATALOG))}`);
+  // The longest the event loop went without running a timer: what the screen would freeze for.
+  let most = 0, last = Date.now(); const timer = setInterval(() => { const now = Date.now(); most = Math.max(most, now - last); last = now; }, 20);
+  t.after(() => clearInterval(timer));
+  const reads = [readBotModels('codex', { env: slow.env, ...PATIENT }), readBotModels('codex', { env: slow.env, ...PATIENT })];
+  // While it prints, the Model step shows what is known: no names yet for codex.
+  assert.deepEqual(botModels('codex', { env: slow.env }), []);
+  const [first, second] = await Promise.all(reads);
+  clearInterval(timer); most = Math.max(most, Date.now() - last);
+  assert.deepEqual(first.map(row => row.name), ['big-model', 'quick-model']); assert.equal(second, first);
+  assert.deepEqual(slow.calls(), ['debug models --bundled'], 'one program served both reads');
+  assert.ok(most < 3000, `the app was held ${most} ms`);
+  assert.equal(botModels('codex', { env: slow.env }), first, 'kept for the Model step');
 });
 
 test('typing narrows the models: names that start with the text, then names that hold it', () => {
@@ -940,7 +975,7 @@ test('a reviewing bot whose run fails after the edit keeps the edits, names its 
   const task = readTask(f.repo, run.id);
   assert.equal(task.state, 'unverified'); assert.match(task.error.message, /^@critic could not finish\./);
   assert.ok(openTask(sessionTasks(f.repo, task.id)), 'a turn that failed leaves its Task open');
-  assert.equal(stopLine(task).text, '@critic could not finish: Codex is signed out. Sign in again with codex login, then type continue.');
+  assert.equal(stopLine(task).text, '@critic could not finish: Codex is signed out. Sign in again with ' + signInCommand('codex') + ', then type continue.');
   // Signed in again, the owner's continue works on the Task: the lead works and @critic reviews.
   fs.rmSync(codexBin); fs.renameSync(kept, codexBin);
   const before = f.inputs('claude').length;
@@ -984,4 +1019,24 @@ test('a reviewing bot and a shadow bot with no usage credits for their model run
   const said = chat.messages.filter(row => row.bot === 'echo');
   assert.deepEqual(said.map(row => [row.shadow, row.quiet ?? false]), [[true, true], [true, false]], JSON.stringify(said));
   assert.equal(said[0].text, '@echo could not run: Claude says this account is out of usage credits for Fable 5.2. @echo ran on Opus 5.5 instead.');
+});
+
+// Before a turn the vendor is read (its release, its sign-in), which a slow program holds for
+// seconds. The reading no longer holds the app, so the owner's stop arrives while it runs.
+test('a bot stopped while its vendor is still being read stops at once, and its turn never starts', { timeout: 30000 }, async t => {
+  const f = setup(t);
+  const first = await f.controller.ask('Where is coupon normalization?').finished;
+  // Codex takes five seconds to answer anything here, its release first.
+  const file = path.join(f.fake.dir, 'codex'), text = fs.readFileSync(file, 'utf8'), at = "const mode=cfg.mode??'normal';"; assert.equal(text.includes(at), true);
+  fs.writeFileSync(file, text.replace(at, at + 'await new Promise(resolve=>setTimeout(resolve,5000));'));
+  const run = f.controller.ask('Take your time.', first.id, { bot: 'critic' });
+  await until(() => readTask(f.repo, first.id).activeRole === 'bot:critic', 'the bot named as at work');
+  await new Promise(resolve => setTimeout(resolve, 300));
+  const stopped = Date.now();
+  await f.controller.stop(first.id); await assert.rejects(run.finished);
+  assert.ok(Date.now() - stopped < 2000, `the stop took ${Date.now() - stopped} ms`);
+  const task = readTask(f.repo, first.id);
+  assert.equal(task.messages.at(-1).text, 'Stopped before answering. The next message to @critic starts from the chat.'); assert.notEqual(task.state, 'running');
+  await new Promise(resolve => setTimeout(resolve, 6000));
+  assert.equal(f.calls('codex').length, 0, 'no turn of the bot started');
 });

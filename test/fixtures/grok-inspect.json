@@ -1,0 +1,943 @@
+{
+ "_": "What `grok inspect --json` of Grok Build 1.0.77 printed, signed out, with made-up paths and names. empty: an empty home with the switches ELU 0.1.19 set. listedOff: another tool's files in its home, every switch off. loaded: the same with switches on. unresolved: the form its docs give for switches not decided yet, which was not watched.",
+ "empty": {
+  "grokVersion": "1.0.77",
+  "channel": "unknown",
+  "updateChannel": null,
+  "cwd": "/private/tmp/check/repo",
+  "projectRoot": "/private/tmp/check/repo/",
+  "projectTrusted": true,
+  "projectInstructions": [],
+  "permissions": {
+   "sources": [
+    "/Users/sam/.config/elu-code/grok-home/.grok/config.toml (config)"
+   ],
+   "loaded": 22,
+   "skipped": [],
+   "mcpServerAllowlist": [],
+   "mcpLockdownSources": [],
+   "mcpManagedServersOnly": "off",
+   "marketplaceAllowlist": [],
+   "marketplaceLockdownSources": [],
+   "managedMarketplaces": [],
+   "managedSettingsPath": "/etc/claude-code/managed-settings.json",
+   "managedSettingsExists": false,
+   "managedSettingsActive": false,
+   "claudeBypassLockAdvisory": false
+  },
+  "loginPolicy": {
+   "disableApiKeyAuth": null,
+   "forceLoginTeamUuid": null,
+   "apiKeyAuthDisabled": false
+  },
+  "hooks": [],
+  "skills": [],
+  "agents": [
+   {
+    "name": "general-purpose",
+    "description": "General purpose agent for multi-step tasks.",
+    "source": {
+     "type": "builtin"
+    }
+   },
+   {
+    "name": "explore",
+    "description": "Fast, read-only agent specialized for codebase exploration.",
+    "source": {
+     "type": "builtin"
+    }
+   },
+   {
+    "name": "plan",
+    "description": "Software architect for planning implementation strategies.",
+    "source": {
+     "type": "builtin"
+    }
+   }
+  ],
+  "plugins": [],
+  "marketplaces": [],
+  "mcpServers": [],
+  "lspServers": [],
+  "configSources": {
+   "layers": [
+    {
+     "role": "user",
+     "path": "/Users/sam/.config/elu-code/grok-home/.grok/config.toml"
+    }
+   ]
+  },
+  "experiments": [],
+  "externalCompat": {
+   "remoteSettingsLoaded": false,
+   "cells": [
+    {
+     "vendor": "cursor",
+     "surface": "skills",
+     "enabled": false,
+     "source": "env"
+    },
+    {
+     "vendor": "cursor",
+     "surface": "rules",
+     "enabled": false,
+     "source": "env"
+    },
+    {
+     "vendor": "cursor",
+     "surface": "agents",
+     "enabled": false,
+     "source": "env"
+    },
+    {
+     "vendor": "cursor",
+     "surface": "mcps",
+     "enabled": false,
+     "source": "env"
+    },
+    {
+     "vendor": "cursor",
+     "surface": "hooks",
+     "enabled": false,
+     "source": "env"
+    },
+    {
+     "vendor": "cursor",
+     "surface": "sessions",
+     "enabled": true,
+     "source": "default"
+    },
+    {
+     "vendor": "claude",
+     "surface": "skills",
+     "enabled": false,
+     "source": "env"
+    },
+    {
+     "vendor": "claude",
+     "surface": "rules",
+     "enabled": false,
+     "source": "env"
+    },
+    {
+     "vendor": "claude",
+     "surface": "agents",
+     "enabled": false,
+     "source": "env"
+    },
+    {
+     "vendor": "claude",
+     "surface": "mcps",
+     "enabled": false,
+     "source": "env"
+    },
+    {
+     "vendor": "claude",
+     "surface": "hooks",
+     "enabled": false,
+     "source": "env"
+    },
+    {
+     "vendor": "claude",
+     "surface": "sessions",
+     "enabled": true,
+     "source": "default"
+    },
+    {
+     "vendor": "codex",
+     "surface": "sessions",
+     "enabled": true,
+     "source": "default"
+    }
+   ]
+  }
+ },
+ "listedOff": {
+  "grokVersion": "1.0.77",
+  "channel": "unknown",
+  "updateChannel": null,
+  "cwd": "/private/tmp/check/repo",
+  "projectRoot": "/private/tmp/check/repo/",
+  "projectTrusted": true,
+  "projectInstructions": [
+   {
+    "path": "/Users/sam/.config/elu-code/grok-home/.cursor/AGENTS.md",
+    "scope": "global",
+    "fileType": "agents_md",
+    "sizeBytes": 19,
+    "approxTokens": 4,
+    "vendor": "cursor",
+    "disabled": true,
+    "compatibilityStatus": "disabled"
+   },
+   {
+    "path": "/Users/sam/.config/elu-code/grok-home/.cursor/rules/style.md",
+    "scope": "global",
+    "fileType": "rules",
+    "sizeBytes": 21,
+    "approxTokens": 5,
+    "vendor": "cursor",
+    "disabled": true,
+    "compatibilityStatus": "disabled"
+   },
+   {
+    "path": "/private/tmp/check/repo/CLAUDE.md",
+    "scope": "project",
+    "fileType": "agents_md",
+    "sizeBytes": 20,
+    "approxTokens": 5
+   },
+   {
+    "path": "/private/tmp/check/repo/AGENTS.md",
+    "scope": "project",
+    "fileType": "agents_md",
+    "sizeBytes": 20,
+    "approxTokens": 5
+   },
+   {
+    "path": "/Users/sam/.config/elu-code/grok-home/.claude/CLAUDE.md",
+    "scope": "global",
+    "fileType": "agents_md",
+    "sizeBytes": 27,
+    "approxTokens": 6,
+    "vendor": "claude",
+    "disabled": true,
+    "compatibilityStatus": "disabled"
+   }
+  ],
+  "permissions": {
+   "sources": [
+    "/Users/sam/.config/elu-code/grok-home/.grok/config.toml (config)"
+   ],
+   "loaded": 22,
+   "skipped": [],
+   "mcpServerAllowlist": [],
+   "mcpLockdownSources": [],
+   "mcpManagedServersOnly": "off",
+   "marketplaceAllowlist": [],
+   "marketplaceLockdownSources": [],
+   "managedMarketplaces": [],
+   "managedSettingsPath": "/etc/claude-code/managed-settings.json",
+   "managedSettingsExists": false,
+   "managedSettingsActive": false,
+   "claudeBypassLockAdvisory": false
+  },
+  "loginPolicy": {
+   "disableApiKeyAuth": null,
+   "forceLoginTeamUuid": null,
+   "apiKeyAuthDisabled": false
+  },
+  "hooks": [
+   {
+    "event": "pre_tool_use",
+    "hookType": "command",
+    "target": "own-check arg",
+    "source": {
+     "type": "user",
+     "path": "/Users/sam/.config/elu-code/grok-home/.grok/hooks"
+    },
+    "matcher": "Bash"
+   },
+   {
+    "event": "pre_tool_use",
+    "hookType": "command",
+    "target": "lint-all arg",
+    "source": {
+     "type": "user",
+     "path": "/Users/sam/.config/elu-code/grok-home/.cursor"
+    },
+    "matcher": "Bash",
+    "vendor": "cursor",
+    "disabled": true,
+    "compatibilityStatus": "disabled"
+   }
+  ],
+  "skills": [
+   {
+    "name": "resume-cursor",
+    "description": "Continue a recent Cursor session here.",
+    "source": {
+     "type": "builtin"
+    },
+    "userInvocable": true
+   },
+   {
+    "name": "tidy",
+    "description": "a cursor skill",
+    "source": {
+     "type": "user",
+     "path": "/Users/sam/.config/elu-code/grok-home/.cursor/skills/tidy/SKILL.md"
+    },
+    "userInvocable": true,
+    "vendor": "cursor",
+    "disabled": true,
+    "compatibilityStatus": "disabled"
+   }
+  ],
+  "agents": [
+   {
+    "name": "general-purpose",
+    "description": "General purpose agent for multi-step tasks.",
+    "source": {
+     "type": "builtin"
+    }
+   },
+   {
+    "name": "explore",
+    "description": "Fast, read-only agent specialized for codebase exploration.",
+    "source": {
+     "type": "builtin"
+    }
+   },
+   {
+    "name": "plan",
+    "description": "Software architect for planning implementation strategies.",
+    "source": {
+     "type": "builtin"
+    }
+   }
+  ],
+  "plugins": [],
+  "marketplaces": [],
+  "mcpServers": [
+   {
+    "name": "notes",
+    "transport": "stdio",
+    "target": "notes-server",
+    "source": {
+     "type": "mcpJson",
+     "path": "/Users/sam/.config/elu-code/grok-home/.cursor/mcp.json"
+    },
+    "disabled": true,
+    "compatibilityStatus": "disabled",
+    "vendor": "cursor"
+   },
+   {
+    "name": "tracker",
+    "transport": "stdio",
+    "target": "tracker",
+    "source": {
+     "type": "mcpJson",
+     "path": "/private/tmp/check/repo/.mcp.json"
+    }
+   }
+  ],
+  "lspServers": [],
+  "configSources": {
+   "layers": [
+    {
+     "role": "user",
+     "path": "/Users/sam/.config/elu-code/grok-home/.grok/config.toml"
+    }
+   ]
+  },
+  "experiments": [],
+  "externalCompat": {
+   "remoteSettingsLoaded": false,
+   "cells": [
+    {
+     "vendor": "cursor",
+     "surface": "skills",
+     "enabled": false,
+     "source": "env"
+    },
+    {
+     "vendor": "cursor",
+     "surface": "rules",
+     "enabled": false,
+     "source": "env"
+    },
+    {
+     "vendor": "cursor",
+     "surface": "agents",
+     "enabled": false,
+     "source": "env"
+    },
+    {
+     "vendor": "cursor",
+     "surface": "mcps",
+     "enabled": false,
+     "source": "env"
+    },
+    {
+     "vendor": "cursor",
+     "surface": "hooks",
+     "enabled": false,
+     "source": "env"
+    },
+    {
+     "vendor": "cursor",
+     "surface": "sessions",
+     "enabled": false,
+     "source": "env"
+    },
+    {
+     "vendor": "claude",
+     "surface": "skills",
+     "enabled": false,
+     "source": "env"
+    },
+    {
+     "vendor": "claude",
+     "surface": "rules",
+     "enabled": false,
+     "source": "env"
+    },
+    {
+     "vendor": "claude",
+     "surface": "agents",
+     "enabled": false,
+     "source": "env"
+    },
+    {
+     "vendor": "claude",
+     "surface": "mcps",
+     "enabled": false,
+     "source": "env"
+    },
+    {
+     "vendor": "claude",
+     "surface": "hooks",
+     "enabled": false,
+     "source": "env"
+    },
+    {
+     "vendor": "claude",
+     "surface": "sessions",
+     "enabled": false,
+     "source": "env"
+    },
+    {
+     "vendor": "codex",
+     "surface": "sessions",
+     "enabled": false,
+     "source": "env"
+    }
+   ]
+  }
+ },
+ "loaded": {
+  "grokVersion": "1.0.77",
+  "channel": "unknown",
+  "updateChannel": null,
+  "cwd": "/private/tmp/check/repo",
+  "projectRoot": "/private/tmp/check/repo/",
+  "projectTrusted": true,
+  "projectInstructions": [
+   {
+    "path": "/Users/sam/.config/elu-code/grok-home/.cursor/AGENTS.md",
+    "scope": "global",
+    "fileType": "agents_md",
+    "sizeBytes": 19,
+    "approxTokens": 4,
+    "vendor": "cursor",
+    "compatibilityStatus": "enabled"
+   },
+   {
+    "path": "/Users/sam/.config/elu-code/grok-home/.cursor/rules/style.md",
+    "scope": "global",
+    "fileType": "rules",
+    "sizeBytes": 21,
+    "approxTokens": 5,
+    "vendor": "cursor",
+    "compatibilityStatus": "enabled"
+   },
+   {
+    "path": "/private/tmp/check/repo/CLAUDE.md",
+    "scope": "project",
+    "fileType": "agents_md",
+    "sizeBytes": 20,
+    "approxTokens": 5
+   },
+   {
+    "path": "/private/tmp/check/repo/AGENTS.md",
+    "scope": "project",
+    "fileType": "agents_md",
+    "sizeBytes": 20,
+    "approxTokens": 5
+   },
+   {
+    "path": "/Users/sam/.config/elu-code/grok-home/.claude/CLAUDE.md",
+    "scope": "global",
+    "fileType": "agents_md",
+    "sizeBytes": 27,
+    "approxTokens": 6,
+    "vendor": "claude",
+    "compatibilityStatus": "enabled"
+   }
+  ],
+  "permissions": {
+   "sources": [
+    "/Users/sam/.config/elu-code/grok-home/.grok/config.toml (config)"
+   ],
+   "loaded": 22,
+   "skipped": [],
+   "mcpServerAllowlist": [],
+   "mcpLockdownSources": [],
+   "mcpManagedServersOnly": "off",
+   "marketplaceAllowlist": [],
+   "marketplaceLockdownSources": [],
+   "managedMarketplaces": [],
+   "managedSettingsPath": "/etc/claude-code/managed-settings.json",
+   "managedSettingsExists": false,
+   "managedSettingsActive": false,
+   "claudeBypassLockAdvisory": false
+  },
+  "loginPolicy": {
+   "disableApiKeyAuth": null,
+   "forceLoginTeamUuid": null,
+   "apiKeyAuthDisabled": false
+  },
+  "hooks": [
+   {
+    "event": "pre_tool_use",
+    "hookType": "command",
+    "target": "own-check arg",
+    "source": {
+     "type": "user",
+     "path": "/Users/sam/.config/elu-code/grok-home/.grok/hooks"
+    },
+    "matcher": "Bash"
+   },
+   {
+    "event": "pre_tool_use",
+    "hookType": "command",
+    "target": "lint-all arg",
+    "source": {
+     "type": "user",
+     "path": "/Users/sam/.config/elu-code/grok-home/.cursor"
+    },
+    "matcher": "Bash",
+    "vendor": "cursor",
+    "compatibilityStatus": "enabled"
+   }
+  ],
+  "skills": [
+   {
+    "name": "resume-cursor",
+    "description": "Continue a recent Cursor session here.",
+    "source": {
+     "type": "builtin"
+    },
+    "userInvocable": true
+   },
+   {
+    "name": "tidy",
+    "description": "a cursor skill",
+    "source": {
+     "type": "user",
+     "path": "/Users/sam/.config/elu-code/grok-home/.cursor/skills/tidy/SKILL.md"
+    },
+    "userInvocable": true,
+    "vendor": "cursor",
+    "compatibilityStatus": "enabled"
+   }
+  ],
+  "agents": [
+   {
+    "name": "general-purpose",
+    "description": "General purpose agent for multi-step tasks.",
+    "source": {
+     "type": "builtin"
+    }
+   },
+   {
+    "name": "explore",
+    "description": "Fast, read-only agent specialized for codebase exploration.",
+    "source": {
+     "type": "builtin"
+    }
+   },
+   {
+    "name": "plan",
+    "description": "Software architect for planning implementation strategies.",
+    "source": {
+     "type": "builtin"
+    }
+   },
+   {
+    "name": "helper",
+    "description": "a claude agent",
+    "source": {
+     "type": "user",
+     "path": "/Users/sam/.config/elu-code/grok-home/.claude/agents/helper.md"
+    }
+   }
+  ],
+  "plugins": [],
+  "marketplaces": [],
+  "mcpServers": [
+   {
+    "name": "notes",
+    "transport": "stdio",
+    "target": "notes-server",
+    "source": {
+     "type": "mcpJson",
+     "path": "/Users/sam/.config/elu-code/grok-home/.cursor/mcp.json"
+    },
+    "compatibilityStatus": "enabled",
+    "vendor": "cursor"
+   },
+   {
+    "name": "tracker",
+    "transport": "stdio",
+    "target": "tracker",
+    "source": {
+     "type": "mcpJson",
+     "path": "/private/tmp/check/repo/.mcp.json"
+    }
+   }
+  ],
+  "lspServers": [],
+  "configSources": {
+   "layers": [
+    {
+     "role": "user",
+     "path": "/Users/sam/.config/elu-code/grok-home/.grok/config.toml"
+    }
+   ]
+  },
+  "experiments": [],
+  "externalCompat": {
+   "remoteSettingsLoaded": false,
+   "cells": [
+    {
+     "vendor": "cursor",
+     "surface": "skills",
+     "enabled": true,
+     "source": "default"
+    },
+    {
+     "vendor": "cursor",
+     "surface": "rules",
+     "enabled": true,
+     "source": "default"
+    },
+    {
+     "vendor": "cursor",
+     "surface": "agents",
+     "enabled": true,
+     "source": "default"
+    },
+    {
+     "vendor": "cursor",
+     "surface": "mcps",
+     "enabled": true,
+     "source": "default"
+    },
+    {
+     "vendor": "cursor",
+     "surface": "hooks",
+     "enabled": true,
+     "source": "default"
+    },
+    {
+     "vendor": "cursor",
+     "surface": "sessions",
+     "enabled": true,
+     "source": "default"
+    },
+    {
+     "vendor": "claude",
+     "surface": "skills",
+     "enabled": false,
+     "source": "env"
+    },
+    {
+     "vendor": "claude",
+     "surface": "rules",
+     "enabled": false,
+     "source": "env"
+    },
+    {
+     "vendor": "claude",
+     "surface": "agents",
+     "enabled": true,
+     "source": "default"
+    },
+    {
+     "vendor": "claude",
+     "surface": "mcps",
+     "enabled": false,
+     "source": "env"
+    },
+    {
+     "vendor": "claude",
+     "surface": "hooks",
+     "enabled": true,
+     "source": "default"
+    },
+    {
+     "vendor": "claude",
+     "surface": "sessions",
+     "enabled": true,
+     "source": "default"
+    },
+    {
+     "vendor": "codex",
+     "surface": "sessions",
+     "enabled": true,
+     "source": "default"
+    }
+   ]
+  }
+ },
+ "unresolved": {
+  "grokVersion": "1.0.77",
+  "channel": "unknown",
+  "updateChannel": null,
+  "cwd": "/private/tmp/check/repo",
+  "projectRoot": "/private/tmp/check/repo/",
+  "projectTrusted": true,
+  "projectInstructions": [
+   {
+    "path": "/Users/sam/.config/elu-code/grok-home/.cursor/AGENTS.md",
+    "scope": "global",
+    "fileType": "agents_md",
+    "sizeBytes": 19,
+    "approxTokens": 4,
+    "vendor": "cursor",
+    "compatibilityStatus": "unresolved"
+   },
+   {
+    "path": "/Users/sam/.config/elu-code/grok-home/.cursor/rules/style.md",
+    "scope": "global",
+    "fileType": "rules",
+    "sizeBytes": 21,
+    "approxTokens": 5,
+    "vendor": "cursor",
+    "compatibilityStatus": "unresolved"
+   },
+   {
+    "path": "/private/tmp/check/repo/CLAUDE.md",
+    "scope": "project",
+    "fileType": "agents_md",
+    "sizeBytes": 20,
+    "approxTokens": 5
+   },
+   {
+    "path": "/private/tmp/check/repo/AGENTS.md",
+    "scope": "project",
+    "fileType": "agents_md",
+    "sizeBytes": 20,
+    "approxTokens": 5
+   },
+   {
+    "path": "/Users/sam/.config/elu-code/grok-home/.claude/CLAUDE.md",
+    "scope": "global",
+    "fileType": "agents_md",
+    "sizeBytes": 27,
+    "approxTokens": 6,
+    "vendor": "claude",
+    "compatibilityStatus": "unresolved"
+   }
+  ],
+  "permissions": {
+   "sources": [
+    "/Users/sam/.config/elu-code/grok-home/.grok/config.toml (config)"
+   ],
+   "loaded": 22,
+   "skipped": [],
+   "mcpServerAllowlist": [],
+   "mcpLockdownSources": [],
+   "mcpManagedServersOnly": "off",
+   "marketplaceAllowlist": [],
+   "marketplaceLockdownSources": [],
+   "managedMarketplaces": [],
+   "managedSettingsPath": "/etc/claude-code/managed-settings.json",
+   "managedSettingsExists": false,
+   "managedSettingsActive": false,
+   "claudeBypassLockAdvisory": false
+  },
+  "loginPolicy": {
+   "disableApiKeyAuth": null,
+   "forceLoginTeamUuid": null,
+   "apiKeyAuthDisabled": false
+  },
+  "hooks": [
+   {
+    "event": "pre_tool_use",
+    "hookType": "command",
+    "target": "own-check arg",
+    "source": {
+     "type": "user",
+     "path": "/Users/sam/.config/elu-code/grok-home/.grok/hooks"
+    },
+    "matcher": "Bash"
+   },
+   {
+    "event": "pre_tool_use",
+    "hookType": "command",
+    "target": "lint-all arg",
+    "source": {
+     "type": "user",
+     "path": "/Users/sam/.config/elu-code/grok-home/.cursor"
+    },
+    "matcher": "Bash",
+    "vendor": "cursor",
+    "compatibilityStatus": "unresolved"
+   }
+  ],
+  "skills": [
+   {
+    "name": "resume-cursor",
+    "description": "Continue a recent Cursor session here.",
+    "source": {
+     "type": "builtin"
+    },
+    "userInvocable": true
+   },
+   {
+    "name": "tidy",
+    "description": "a cursor skill",
+    "source": {
+     "type": "user",
+     "path": "/Users/sam/.config/elu-code/grok-home/.cursor/skills/tidy/SKILL.md"
+    },
+    "userInvocable": true,
+    "vendor": "cursor",
+    "compatibilityStatus": "unresolved"
+   }
+  ],
+  "agents": [
+   {
+    "name": "general-purpose",
+    "description": "General purpose agent for multi-step tasks.",
+    "source": {
+     "type": "builtin"
+    }
+   },
+   {
+    "name": "explore",
+    "description": "Fast, read-only agent specialized for codebase exploration.",
+    "source": {
+     "type": "builtin"
+    }
+   },
+   {
+    "name": "plan",
+    "description": "Software architect for planning implementation strategies.",
+    "source": {
+     "type": "builtin"
+    }
+   }
+  ],
+  "plugins": [],
+  "marketplaces": [],
+  "mcpServers": [
+   {
+    "name": "notes",
+    "transport": "stdio",
+    "target": "notes-server",
+    "source": {
+     "type": "mcpJson",
+     "path": "/Users/sam/.config/elu-code/grok-home/.cursor/mcp.json"
+    },
+    "compatibilityStatus": "unresolved",
+    "vendor": "cursor"
+   },
+   {
+    "name": "tracker",
+    "transport": "stdio",
+    "target": "tracker",
+    "source": {
+     "type": "mcpJson",
+     "path": "/private/tmp/check/repo/.mcp.json"
+    }
+   }
+  ],
+  "lspServers": [],
+  "configSources": {
+   "layers": [
+    {
+     "role": "user",
+     "path": "/Users/sam/.config/elu-code/grok-home/.grok/config.toml"
+    }
+   ]
+  },
+  "experiments": [],
+  "externalCompat": {
+   "remoteSettingsLoaded": false,
+   "cells": [
+    {
+     "vendor": "cursor",
+     "surface": "skills",
+     "enabled": null,
+     "source": "unresolved"
+    },
+    {
+     "vendor": "cursor",
+     "surface": "rules",
+     "enabled": null,
+     "source": "unresolved"
+    },
+    {
+     "vendor": "cursor",
+     "surface": "agents",
+     "enabled": null,
+     "source": "unresolved"
+    },
+    {
+     "vendor": "cursor",
+     "surface": "mcps",
+     "enabled": null,
+     "source": "unresolved"
+    },
+    {
+     "vendor": "cursor",
+     "surface": "hooks",
+     "enabled": null,
+     "source": "unresolved"
+    },
+    {
+     "vendor": "cursor",
+     "surface": "sessions",
+     "enabled": null,
+     "source": "unresolved"
+    },
+    {
+     "vendor": "claude",
+     "surface": "skills",
+     "enabled": null,
+     "source": "unresolved"
+    },
+    {
+     "vendor": "claude",
+     "surface": "rules",
+     "enabled": null,
+     "source": "unresolved"
+    },
+    {
+     "vendor": "claude",
+     "surface": "agents",
+     "enabled": null,
+     "source": "unresolved"
+    },
+    {
+     "vendor": "claude",
+     "surface": "mcps",
+     "enabled": null,
+     "source": "unresolved"
+    },
+    {
+     "vendor": "claude",
+     "surface": "hooks",
+     "enabled": null,
+     "source": "unresolved"
+    },
+    {
+     "vendor": "claude",
+     "surface": "sessions",
+     "enabled": null,
+     "source": "unresolved"
+    },
+    {
+     "vendor": "codex",
+     "surface": "sessions",
+     "enabled": null,
+     "source": "unresolved"
+    }
+   ]
+  }
+ }
+}

@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { project, fakeClis, autoApprove, temp } from './helpers.mjs';
 import { claudeId, entryTag, modelTag, shortEffort, shortModel } from '../lib/models.mjs';
 import { claudeOwnEffort, runEffort } from '../lib/bot-models.mjs';
@@ -12,6 +13,7 @@ import { ProjectController, conversationEntries } from '../lib/projects.mjs';
 import { projectFolder } from '../lib/workspace.mjs';
 import { readTask, saveTask } from '../lib/state.mjs';
 import { remoteSessions as remoteGlue } from '../lib/terminal-remote.mjs';
+import { vendorError } from '../lib/adapters/claude.mjs';
 
 // Each chat entry a model wrote names that model and its effort in parentheses after the
 // name in its header: "@lead (fable 5.2 med)". The model is the one that really ran.
@@ -44,16 +46,16 @@ test('model names and efforts read short: Claude ids by family and version, othe
   assert.equal(modelTag({}, '@reviewer'), null);
 });
 
-test('an effort comes from the run, else the vendor\'s own default where it is known, never made up', () => {
-  assert.equal(runEffort('claude', { effort: 'xhigh', model: 'claude-opus-5-5', release: '2.1.322' }), 'xhigh', 'the bot\'s own setting first');
-  assert.equal(runEffort('claude', { model: 'claude-opus-5-5', release: '2.1.322' }), 'medium');
-  assert.equal(runEffort('claude', { model: 'us.anthropic.claude-fable-5-2-v1:0', release: '2.1.322' }), 'medium');
-  assert.equal(runEffort('claude', { model: 'claude-fable-5-1[1m]', release: '2.1.319' }), 'high');
+test('an effort comes from the run, else the vendor\'s own default where it is known, never made up', async () => {
+  assert.equal(await runEffort('claude', { effort: 'xhigh', model: 'claude-opus-5-5', release: '2.1.322' }), 'xhigh', 'the bot\'s own setting first');
+  assert.equal(await runEffort('claude', { model: 'claude-opus-5-5', release: '2.1.322' }), 'medium');
+  assert.equal(await runEffort('claude', { model: 'us.anthropic.claude-fable-5-2-v1:0', release: '2.1.322' }), 'medium');
+  assert.equal(await runEffort('claude', { model: 'claude-fable-5-1[1m]', release: '2.1.319' }), 'high');
   assert.equal(claudeOwnEffort('claude-opus-5-5', '2.1.400'), null, 'a release whose catalog was not read');
   assert.equal(claudeOwnEffort('claude-opus-4-6', '2.1.322'), null, 'a model the catalog gives no effort');
   assert.equal(claudeOwnEffort('opus', '2.1.322'), null, 'an alias is not a model id');
-  assert.equal(runEffort('agy', { model: 'gemini-3-pro' }), null); assert.equal(runEffort('grok', {}), null);
-  assert.equal(runEffort('codex', { model: null }), null);
+  assert.equal(await runEffort('agy', { model: 'gemini-3-pro' }), null); assert.equal(await runEffort('grok', {}), null);
+  assert.equal(await runEffort('codex', { model: null }), null);
 });
 
 // A model catalog as Claude Code bundles it (2.1.323, trimmed): rows with nested objects and
@@ -134,22 +136,22 @@ test('the installed program is read once and kept by its path, size and time, in
   assert.equal(fs.existsSync(p.mark), false);
 });
 
-test('a run\'s Claude effort comes from its own program\'s catalog for any release; the table only when none is read', t => {
+test('a run\'s Claude effort comes from its own program\'s catalog for any release; the table only when none is read', async t => {
   forgetCatalogs(); t.after(forgetCatalogs);
   const env = { XDG_CONFIG_HOME: path.join(temp(t), 'personal') }, previous = process.env.XDG_CONFIG_HOME;
   process.env.XDG_CONFIG_HOME = env.XDG_CONFIG_HOME; t.after(() => { if (previous === undefined) delete process.env.XDG_CONFIG_HOME; else process.env.XDG_CONFIG_HOME = previous; });
   const read = program(t, native(CATALOG)).file, none = program(t, 'echo no catalog').file, broken = program(t, '{id:"claude-opus-5-5",default_effort:"medium"').file;
-  assert.equal(runEffort('claude', { model: 'claude-opus-5-5', release: '2.1.400', bin: read }), 'medium', 'a release the table does not know');
-  assert.equal(runEffort('claude', { model: 'us.anthropic.claude-fable-5-2-v1:0', release: '2.1.319', bin: read }), 'medium', 'the catalog, where the table has no Fable 5.2 for 2.1.319');
-  assert.equal(runEffort('claude', { model: 'claude-opus-4-8', release: '2.1.322', bin: read }), null, 'a catalog that gives no effort for a model is not overruled by the table');
-  assert.equal(runEffort('claude', { model: 'claude-3-5-sonnet', bin: read }), null);
-  assert.equal(runEffort('claude', { effort: 'low', model: 'claude-opus-5-5', bin: read }), 'low', 'the bot\'s own setting first');
-  assert.equal(runEffort('claude', { model: 'opus', bin: read }), null, 'an alias is not a model id');
+  assert.equal(await runEffort('claude', { model: 'claude-opus-5-5', release: '2.1.400', bin: read }), 'medium', 'a release the table does not know');
+  assert.equal(await runEffort('claude', { model: 'us.anthropic.claude-fable-5-2-v1:0', release: '2.1.319', bin: read }), 'medium', 'the catalog, where the table has no Fable 5.2 for 2.1.319');
+  assert.equal(await runEffort('claude', { model: 'claude-opus-4-8', release: '2.1.322', bin: read }), null, 'a catalog that gives no effort for a model is not overruled by the table');
+  assert.equal(await runEffort('claude', { model: 'claude-3-5-sonnet', bin: read }), null);
+  assert.equal(await runEffort('claude', { effort: 'low', model: 'claude-opus-5-5', bin: read }), 'low', 'the bot\'s own setting first');
+  assert.equal(await runEffort('claude', { model: 'opus', bin: read }), null, 'an alias is not a model id');
   for (const bin of [none, broken, path.join(path.dirname(none), 'missing'), null]) {
-    assert.equal(runEffort('claude', { model: 'claude-opus-5-5', release: '2.1.319', bin }), 'medium', `table: ${bin}`);
-    assert.equal(runEffort('claude', { model: 'claude-fable-5-2', release: '2.1.319', bin }), null, 'Fable 5.2 is not in 2.1.319');
-    assert.equal(runEffort('claude', { model: 'claude-fable-5-2', release: '2.1.322', bin }), 'medium');
-    assert.equal(runEffort('claude', { model: 'claude-opus-5-5', release: '2.1.400', bin }), null, 'neither knows: no effort');
+    assert.equal(await runEffort('claude', { model: 'claude-opus-5-5', release: '2.1.319', bin }), 'medium', `table: ${bin}`);
+    assert.equal(await runEffort('claude', { model: 'claude-fable-5-2', release: '2.1.319', bin }), null, 'Fable 5.2 is not in 2.1.319');
+    assert.equal(await runEffort('claude', { model: 'claude-fable-5-2', release: '2.1.322', bin }), 'medium');
+    assert.equal(await runEffort('claude', { model: 'claude-opus-5-5', release: '2.1.400', bin }), null, 'neither knows: no effort');
   }
   assert.deepEqual(fs.readdirSync(env.XDG_CONFIG_HOME), ['elu-code']);
   assert.deepEqual(fs.readdirSync(path.join(env.XDG_CONFIG_HOME, 'elu-code')), ['claude-catalog.json'], 'the cache is ELU\'s own file');
@@ -171,8 +173,8 @@ test('a Claude Code whose catalog cannot be read falls back to the table: on 2.1
 
 test('a header keeps one row on a narrow pane: the parentheses go before the name or the time is cut', () => {
   const lead = { role: '@lead', bot: 'lead', model: 'claude-fable-5-2', effort: 'medium' };
-  assert.equal(header(lead, 80, ' on @ali-devbox'), '@lead (fable 5.2 med) on @ali-devbox  4:37 PM');
-  assert.equal(header(lead, 36, ' on @ali-devbox'), '@lead on @ali-devbox  4:37 PM');
+  assert.equal(header(lead, 80, ' on @aki-devbox'), '@lead (fable 5.2 med) on @aki-devbox  4:37 PM');
+  assert.equal(header(lead, 36, ' on @aki-devbox'), '@lead on @aki-devbox  4:37 PM');
   assert.equal(header(lead, 30), '@lead (fable 5.2 med)  4:37 PM', 'exactly the width still fits');
   assert.equal(header(lead, 29), '@lead  4:37 PM');
   assert.equal(header({ role: 'You → @lead' }, 80), 'You → @lead  4:37 PM', 'the owner\'s own message is unchanged');
@@ -203,7 +205,28 @@ test('the agent of a solo session, a bot, and a bot that fell back each name the
   task = await f.controller.ask('What would you change?', first.id, { bot: 'lead' }).finished;
   const reply = task.messages.at(-1);
   assert.deepEqual([reply.bot, reply.model, reply.effort], ['lead', 'claude-opus-5-5', 'medium']);
-  assert.equal(header(conversationEntries(f.repo, task).at(-1), 80, ' on @ali-devbox'), '@lead (opus 5.5 med) on @ali-devbox  4:37 PM');
+  assert.equal(header(conversationEntries(f.repo, task).at(-1), 80, ' on @aki-devbox'), '@lead (opus 5.5 med) on @aki-devbox  4:37 PM');
+});
+
+// test/fakes/claude.mjs answers --model as Claude Code does, so no test or app run on it shows
+// one model under another's name: a full id of its catalog runs that model, an alias runs what
+// it stands for, and any other name is refused with the API's 404, never run as something else.
+test('the stand-in Claude Code runs a model of its catalog by its id and refuses a name it has no model for', t => {
+  const f = setup(t, { models: { opus: 'claude-opus-5-5' } }), bin = path.join(f.parent, 'bin', 'claude');
+  const run = model => {
+    const out = spawnSync(bin, ['-p', '--output-format', 'stream-json', '--verbose', ...(model ? ['--model', model] : [])], { input: 'Where is the cart total?', encoding: 'utf8' });
+    const rows = out.stdout.trim().split('\n').map(line => JSON.parse(line));
+    return { code: out.status, text: out.stdout, model: rows.find(row => row.subtype === 'init')?.model, result: rows.find(row => row.type === 'result') };
+  };
+  for (const [asked, ran] of [['claude-opus-5-5', 'claude-opus-5-5'], ['claude-fable-5-2', 'claude-fable-5-2'], ['claude-sonnet-5-5[1m]', 'claude-sonnet-5-5'], ['opus', 'claude-opus-5-5'], ['sonnet', 'claude-fable-5-1'], [null, 'claude-fable-5-1']]) {
+    const ok = run(asked); assert.deepEqual([ok.code, ok.model, ok.result.is_error], [0, ran, false], String(asked));
+  }
+  for (const asked of ['claude-opus-9-9', 'claude-sonnet-5', 'opus-5.5', 'nosuch']) {
+    const refused = run(asked);
+    assert.deepEqual([refused.code, refused.model, refused.result.is_error, refused.result.api_error_status], [1, asked, true, 404], asked);
+    assert.equal(refused.result.result, `There's an issue with the selected model (${asked}). It may not exist or you may not have access to it. Run --model to pick a different model.`);
+    assert.equal(vendorError(refused.text, { model: asked }).text, `Claude says there is no model ${asked} for this account.`);
+  }
 });
 
 test('a model whose effort is not known shows only the model; a Codex bot\'s effort comes from its model list', async t => {
@@ -233,13 +256,13 @@ test('a session saved before model and effort were kept shows its headers as bef
 test('a session on another computer names the model and effort of each entry with that computer; an older one there names none', () => {
   const glue = remoteGlue({ facade: { mineRows: () => [], remoteSessions: () => [] }, peerRead: () => null, peerCommand: async () => ({}), chatMessage: ({ title, narrow, text }, width) => `${narrow && title.length > width ? narrow : title}: ${text}`, ink: text => text, colour: false });
   const at = new Date().toISOString();
-  const row = { kind: 'remote', id: 'r1', machine: 'ali-devbox', key: 'remote:x', label: 'Session', remote: { id: 'r1', machine: 'd'.repeat(64), state: 'answered', title: 'Remote', createdAt: at, entries: [
+  const row = { kind: 'remote', id: 'r1', machine: 'aki-devbox', key: 'remote:x', label: 'Session', remote: { id: 'r1', machine: 'd'.repeat(64), state: 'answered', title: 'Remote', createdAt: at, entries: [
     { role: 'You → @lead', at, text: 'Plan it' },
     { role: '@lead', bot: 'lead', at, text: 'Planned.', model: 'claude-fable-5-2', effort: 'medium' },
     { role: 'Opus 5.5', lead: true, at, text: 'Done.', model: 'claude-opus-5-5', effort: 'medium' },
     { role: '@reviewer', bot: 'reviewer', at, text: 'Looks right.' },
   ], steps: [], approvals: [] } };
   const said = glue.view(row, 80);
-  assert.match(said, /@lead \(fable 5\.2 med\) on @ali-devbox: Planned\.[\s\S]*Opus 5\.5 \(med\) on @ali-devbox: Done\.[\s\S]*@reviewer on @ali-devbox: Looks right\./);
-  assert.match(glue.view(row, 20), /@lead on @ali-devbox: Planned\./, 'a narrow pane drops the parentheses first');
+  assert.match(said, /@lead \(fable 5\.2 med\) on @aki-devbox: Planned\.[\s\S]*Opus 5\.5 \(med\) on @aki-devbox: Done\.[\s\S]*@reviewer on @aki-devbox: Looks right\./);
+  assert.match(glue.view(row, 20), /@lead on @aki-devbox: Planned\./, 'a narrow pane drops the parentheses first');
 });

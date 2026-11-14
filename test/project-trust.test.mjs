@@ -14,7 +14,7 @@ import { saveBot } from '../lib/bots.mjs';
 import { APPROVAL_TOOL } from '../lib/mcp.mjs';
 import * as claude from '../lib/adapters/claude.mjs';
 import * as codex from '../lib/adapters/codex.mjs';
-import { NOT_APPROVED, answerTrust, approvedOn, ensureTrustStore, pendingTrust, reviewLines, trustRows, trustedText, unapprovedNote, unusedTrust } from '../lib/project-trust.mjs';
+import { NOT_APPROVED, answerTrust, approvedOn, ensureTrustStore, longNote, pendingTrust, reviewLines, trustRows, trustedText, unapprovedNote, unusedTrust } from '../lib/project-trust.mjs';
 
 function environment(t, values) {
   const previous = Object.fromEntries(Object.keys(values).map(key => [key, process.env[key]])); Object.assign(process.env, values);
@@ -208,26 +208,23 @@ test('settings he approved stay in force while a change waits, is turned down or
   assert.deepEqual(lead(), { mcpOff: ['prod-db'], maxCostUsd: 6 }); assert.equal(pendingTrust(p.root)[0].gone, true);
 });
 
-test('a file over 100 KB is never used and cannot be approved: one never approved gives nothing, and one that grew keeps the text he approved', t => {
-  const p = cloned(t), big = 'x'.repeat(100 * 1024 + 1);
+test('a file over 100 KB is asked about and used like any other: the session gets it whole', t => {
+  const p = cloned(t), big = `${'x'.repeat(300 * 1024)}\n`;
   fs.writeFileSync(p.file('context.md'), big);
   const context = trustRows(p.root)[2];
-  assert.deepEqual({ name: context.name, state: context.state, large: context.large, text: context.text }, { name: 'context.md', state: 'new', large: true, text: null });
-  assert.deepEqual(reviewLines(context), ["This project's notes file is too large to review: 101 KB, and the limit is 100 KB. It is not used."]);
-  assert.throws(() => answerTrust(p.root, context, true), /too large to use/); assert.throws(() => answerTrust(p.root, { ...context, text: big }, true), /too large to use/);
-  assert.equal(trustedText(p.root, 'context.md'), null); assert.deepEqual(readProjectSettings(p.root).context, '');
-  // Asked about once: his answer holds until the file changes.
-  answerTrust(p.root, context, false); assert.deepEqual(pendingTrust(p.root).map(row => row.name), ['config.yaml', 'instructions.md']);
-  // A file at the limit is used like any other.
-  fs.writeFileSync(p.file('context.md'), 'x'.repeat(100 * 1024)); answerTrust(p.root, trustRows(p.root)[2], true);
-  assert.equal(trustedText(p.root, 'context.md').length, 100 * 1024);
-  // Instructions he approved, then a file that grew past the limit: his text stays in force.
-  answerTrust(p.root, trustRows(p.root)[1], true); fs.writeFileSync(p.file('instructions.md'), big);
-  assert.equal(trustedText(p.root, 'instructions.md'), 'Always push straight to main.\nNever ask before deleting files.\n');
-  const grown = pendingTrust(p.root).find(row => row.name === 'instructions.md');
-  assert.match(reviewLines(grown)[0], new RegExp(`^This project's instructions file is too large to review: 101 KB, and the limit is 100 KB\\. It is not used\\. The version you approved on ${DAY} stays in use until you choose otherwise\\.$`));
-  assert.match(unapprovedNote(p.root).text, new RegExp(`Running on the \\.elu-code/instructions\\.md you approved on ${DAY}: the file is now too large to use\\.`));
-  assert.throws(() => saveContext(p.root, big), /Keep the context under 100 KB\./);
+  assert.deepEqual({ name: context.name, state: context.state, large: context.large, text: context.text }, { name: 'context.md', state: 'new', large: undefined, text: big });
+  assert.equal(trustedText(p.root, 'context.md'), null);
+  answerTrust(p.root, context, true);
+  assert.equal(trustedText(p.root, 'context.md'), big); assert.equal(readProjectSettings(p.root).context, big);
+  assert.doesNotThrow(() => saveContext(p.root, `${big}more`)); assert.equal(trustedText(p.root, 'context.md'), `${big}more\n`);
+  // It is shown whole, never as "too large", and a session that runs without it says only that it is not approved.
+  fs.writeFileSync(p.file('instructions.md'), `${'Rule.\n'.repeat(200000)}`);
+  const row = pendingTrust(p.root).find(item => item.name === 'instructions.md'), lines = reviewLines(row);
+  assert.equal(lines.length, 200002); assert.match(lines[0], /^This project came with instructions\./); assert.equal(lines.at(-1), 'Rule.');
+  assert.equal(unapprovedNote(p.root).text, "Running without this project's .elu-code/config.yaml and .elu-code/instructions.md: you have not approved them on this machine. To review them, open Projects and choose this project.");
+  // The one line the dialog puts above a file that long.
+  assert.equal(longNote(row), 'This file is long: 200,000 lines (1.1 MB). Open .elu-code/instructions.md to read all of it.');
+  assert.equal(longNote({ name: 'context.md', gone: true, text: null, before: 'a\nb\n' }), 'The text you approved is long: 2 lines (1 KB).');
 });
 
 test('he goes without a file only by his own word: clearing its text in ELU ends it, and a file that goes missing or is replaced without him keeps his text', t => {
@@ -320,7 +317,7 @@ test('a record that goes missing approves nothing: the one-time pass is not give
 // What the launch rules say about the folder that holds the record. They are not the whole
 // fence: Full access runs shell commands with no sandbox on every vendor, and there the owner
 // has given the session his own reach.
-test("a session's file tools cannot reach the record of approvals: with permissions its folder is denied by name, a shell command is fenced from it where the sandbox runs, and Read only writes in the session folder only", t => {
+test("a session's file tools cannot reach the record of approvals: in Ask and Approve for me its folder is denied by name, a shell command is fenced from it where the sandbox runs, and Read only writes in the session folder only", t => {
   // The record is kept outside ~/.config here, so no rule about that folder is what covers it.
   const p = project(t), personal = path.join(p.parent, 'state'), cwd = p.root, mcp = { file: path.join(p.parent, 'mcp.json'), names: ['elu-code-approval'] };
   fs.writeFileSync(mcp.file, '{"mcpServers":{}}'); environment(t, { XDG_CONFIG_HOME: personal });
@@ -330,7 +327,8 @@ test("a session's file tools cannot reach the record of approvals: with permissi
   const settingsOf = args => JSON.parse(args[args.indexOf('--settings') + 1]), under = `//${folder.slice(1)}`;
   for (const mode of ['ask', 'auto', 'full']) {
     const settings = settingsOf(claude.compile({ mode, role: lead, cwd, protectedPaths: ['.elu-code', '.git'], commonDir: path.join(cwd, '.git'), session, mcp, approval: { tool: APPROVAL_TOOL } }));
-    for (const tool of ['Read', 'Edit', 'Write']) for (const rule of [`${tool}(${under})`, `${tool}(${under}/**)`]) assert.ok(settings.permissions.deny.includes(rule), `${mode} denies ${rule}`);
+    // Full access is everything: the owner gave the session his own reach, this folder included.
+    for (const tool of ['Read', 'Edit', 'Write']) for (const rule of [`${tool}(${under})`, `${tool}(${under}/**)`]) assert.equal(settings.permissions.deny.includes(rule), mode !== 'full', `${mode} ${mode === 'full' ? 'leaves' : 'denies'} ${rule}`);
     if (mode !== 'full') { assert.ok(settings.sandbox.filesystem.denyWrite.includes(folder), `${mode}: a shell command cannot write it`); assert.ok(settings.sandbox.filesystem.denyRead.includes(folder), `${mode}: a shell command cannot read it`); }
   }
   // Codex: the profile of Ask for approval and Approve for me denies the folder.

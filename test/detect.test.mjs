@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { detect, unsupportedVendors, vendorProblem } from '../lib/detect.mjs';
+import { hasBrowser } from '../lib/vendors.mjs';
 import { defaultConfig, validateConfig } from '../lib/config.mjs';
 import { assertPolicy } from '../lib/policy.mjs';
 import { project, fakeClis, cli, git, readRole } from './helpers.mjs';
@@ -35,11 +36,11 @@ function assertNotYet(vendors) {
     assert.equal(row.reason, `${name} has not been checked on this machine yet. Your first message to it runs the check.`, vendor);
   }
 }
-test('unsupported discovery checks both Cursor aliases without executing a binary', (t) => {
+test('unsupported discovery checks both Cursor aliases without executing a binary', async (t) => {
   const p = project(t); const f = fakeClis(p.parent); const marker = path.join(p.parent, 'unexpected-execution');
   for (const name of ['opencode', 'agent', 'cursor-agent', 'agy', 'grok']) plant(f.dir, name, marker);
   const env = { PATH: f.dir };
-  assertUnavailable(detect(p.root, env)); assertNotYet(detect(p.root, env));
+  assertUnavailable(await detect(p.root, env)); assertNotYet(await detect(p.root, env));
   assert.equal(unsupportedVendors(env).find((row) => row.vendor === 'cursor').bin, path.join(f.dir, 'agent'));
   fs.unlinkSync(path.join(f.dir, 'agent'));
   assertUnavailable(unsupportedVendors(env));
@@ -72,16 +73,16 @@ test('a candidate version pin cannot enable an unsupported vendor', () => {
   }
   assert.ok(unsupportedVendors({ PATH: '' }).every((row) => !row.available && !row.supported && row.version === null));
 });
-test('a shell wrapper standing in for an absent Claude reads as not installed', t => {
+test('a shell wrapper standing in for an absent Claude reads as not installed', async t => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'elu-code-detect-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   fs.writeFileSync(path.join(dir, 'claude'), '#!/bin/sh\necho "claude: command not found" >&2\nexit 127\n', { mode: 0o755 });
-  const [claude] = detect(dir, { PATH: dir, HOME: dir }, { only: 'claude' });
+  const [claude] = await detect(dir, { PATH: dir, HOME: dir }, { only: 'claude' });
   assert.equal(claude.available, true); assert.equal(claude.supported, false); assert.equal(claude.signedIn, false);
   assert.equal(claude.reason, 'not installed (only a wrapper was found)');
   assert.equal(vendorProblem('claude', [claude]), 'Claude Code: not installed (only a wrapper was found)');
 });
 
-test('an untested Claude whose piped --help is cut short is still read in full', t => {
+test('an untested Claude whose piped --help is cut short is still read in full', async t => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'elu-code-detect-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const flags = '--print --add-dir --restricted --safe-mode --setting-sources --settings --strict-mcp-config --mcp-config --no-chrome --permission-mode --permission-prompts --tools --allowedTools --disallowedTools --output-format --json-schema --max-budget-usd --session-id --input-format --ignore-user-config --ignore-rules';
   // Like Claude Code 2.1.321: a pipe gets only the first 8190 bytes, so --verbose at the end is lost.
@@ -92,7 +93,7 @@ if (args[0] === 'auth') { console.log(JSON.stringify({ loggedIn: true })); proce
 const help = ${JSON.stringify(flags)} + ' '.repeat(20000) + ' --verbose\\n';
 fs.writeSync(1, fs.fstatSync(1).isFIFO() ? help.slice(0, 8190) : help); process.exit(0);
 `, { mode: 0o755 });
-  const [claude] = detect(dir, { PATH: dir, HOME: dir }, { only: 'claude' });
+  const [claude] = await detect(dir, { PATH: dir, HOME: dir }, { only: 'claude' });
   assert.equal(claude.supported, true, claude.reason); assert.equal(claude.versionStatus, 'untested version');
   assert.equal(vendorProblem('claude', [claude]), null);
 });
@@ -102,9 +103,11 @@ test('the lead error names what is wrong', () => {
   assert.equal(vendorProblem('claude', [{ vendor: 'claude', available: true, supported: true, signedIn: false }]), 'Claude Code is signed out. Run claude to sign in, then send again.');
   // The command is the one that signs in, which is not always the vendor's name.
   const signedOut = vendor => vendorProblem(vendor, [{ vendor, available: true, supported: true, signedIn: false }]);
-  assert.equal(signedOut('codex'), 'Codex is signed out. Run codex login to sign in, then send again.');
-  assert.equal(signedOut('grok'), 'Grok Build is signed out. Run grok login to sign in, then send again.');
-  assert.equal(signedOut('agy'), 'Antigravity CLI is signed out. Run agy to sign in, then send again.');
+  // Where no browser can open (an SSH session, Linux with no display), the device code sign-in.
+  assert.equal(signedOut('codex'), `Codex is signed out. Run ${hasBrowser() ? 'codex login' : 'codex login --device-auth'} to sign in, then send again.`);
+  // Antigravity and Grok Build sign in from ELU itself: agy's sign-in for ELU is not the one in the owner's terminal.
+  assert.equal(signedOut('grok'), 'Grok Build is signed out. Sign it in with s on its line in the Usage tab, then send again.');
+  assert.equal(signedOut('agy'), 'Antigravity CLI is signed out. Sign it in with s on its line in the Usage tab, then send again.');
   assert.equal(vendorProblem('claude', [{ vendor: 'claude', available: true, supported: false, signedIn: true, release: '2.1.321', reason: 'This untested version is missing required flags: --verbose.' }]), 'Claude Code 2.1.321: This untested version is missing required flags: --verbose.');
 });
 
@@ -130,4 +133,20 @@ test('addUserBin appends ~/.local/bin once, only when it exists', async (t) => {
   const first = { PATH: [folder, '/a'].join(path.delimiter) }; assert.equal(addUserBin(first, home), false); assert.equal(first.PATH, [folder, '/a'].join(path.delimiter));
   const empty = {}; assert.equal(addUserBin(empty, home), true); assert.equal(empty.PATH, folder);
   assert.equal(addUserBin({ PATH: '/a' }, ''), false, 'no home, no change');
+});
+
+// A vendor whose program is slow to answer: two seconds for its release, two for its sign-in.
+// Reading the vendors used to hold the app for each of them (0.1.19 ran them with spawnSync).
+test('reading the vendors never holds the app: timers run while a slow program answers, and the rows are the same', { timeout: 60000 }, async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'elu-code-detect-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(dir, 'claude'), '#!/bin/sh\nsleep 2\nif [ "$1" = "--version" ]; then echo "2.1.319 (Claude Code)"; exit 0; fi\nif [ "$1" = "auth" ]; then echo \'{"loggedIn":true}\'; exit 0; fi\nexit 1\n', { mode: 0o755 });
+  // The longest the event loop went without running a timer.
+  let last = Date.now(), most = 0; const timer = setInterval(() => { const now = Date.now(); most = Math.max(most, now - last); last = now; }, 10);
+  const started = Date.now(); let rows; try { rows = await detect(dir, { PATH: `${dir}${path.delimiter}/usr/bin${path.delimiter}/bin`, HOME: dir }, { only: 'claude' }); } finally { clearInterval(timer); }
+  most = Math.max(most, Date.now() - last);
+  assert.ok(Date.now() - started >= 3900, `the reading took ${Date.now() - started} ms`);
+  assert.ok(most < 1000, `the app was held ${most} ms`);
+  const [claude] = rows;
+  assert.deepEqual([claude.vendor, claude.bin, claude.available, claude.signedIn, claude.version, claude.release, claude.supported, claude.versionStatus, claude.support, claude.conformant],
+    ['claude', fs.realpathSync(path.join(dir, 'claude')), true, true, '2.1.319 (Claude Code)', '2.1.319', true, 'tested version', 'sessions and reviews', null]);
 });
