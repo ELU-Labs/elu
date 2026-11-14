@@ -26,7 +26,7 @@ import { applyTask, createAsk, getAsk } from '../lib/peer/asks.mjs';
 import { hostMethods } from '../lib/peer/remote.mjs';
 import { peerItems } from '../lib/peer/index.mjs';
 import { boardRows, remoteRow, rowBadge, rowTitle } from '../lib/board.mjs';
-import { teamPanes, visible } from '../lib/terminal-visuals.mjs';
+import { clockTime, teamPanes, visible } from '../lib/terminal-visuals.mjs';
 import { remoteSessions as remoteGlue } from '../lib/terminal-remote.mjs';
 
 // A message from another computer started a session here, and the session failed. The
@@ -107,10 +107,11 @@ test('each way a session a teammate\'s message started can fail is told in plain
   assert.equal(ended(p, kai, { error: 'Grok Build is signed out. Run grok login to sign in, then send again.', session: {} }), 'Grok Build is signed out. Sign Grok Build in on @kai, then send it again.');
   assert.equal(ended(p, kai, { error: 'Claude could not finish.', session: { ...claude, error: { cause: 'auth' } } }), 'Claude could not finish: Claude Code is signed out. Sign Claude Code in on @kai, then send it again.');
   assert.equal(ended(p, kai, { error: 'Grok Build is not installed or not on your PATH.', session: {} }), 'Grok Build is not installed or not on its PATH. Install Grok Build on @kai, then send it again.');
-  assert.equal(uncheckedText('grok'), 'Grok Build has not been checked on this machine yet. Your first message to it runs the check.');
-  assert.equal(ended(p, kai, { error: uncheckedText('grok'), session: {} }), 'Grok Build has not been checked on @kai yet. Type a message to Grok Build in ELU on @kai to run its check, then send it again.');
-  assert.equal(ended(p, kai, { error: 'Grok Build did not pass its check on this machine (not proven: it asks before it writes). Your next message to it runs the check again.', session: {} }),
-    'Grok Build did not pass its check on @kai (not proven: it asks before it writes). Type a message to Grok Build in ELU on @kai to run its check, then send it again.');
+  assert.equal(uncheckedText('grok'), 'Grok Build (the grok command) has not been checked on this machine yet. Your first message to it outside Full access runs the check; Full access needs none.');
+  // The check is run there with c in the Usage tab, in any mode: a message runs it only below Full access.
+  assert.equal(ended(p, kai, { error: uncheckedText('grok'), session: {} }), 'Grok Build (the grok command) has not been checked on @kai yet. Run the check of Grok Build with c on its line in the Usage tab of ELU on @kai, then send it again.');
+  assert.equal(ended(p, kai, { error: 'Grok Build (the grok command) did not pass its check on this machine (not proven: it asks before it writes). Your next message to it outside Full access runs the check again.', session: {} }),
+    'Grok Build (the grok command) did not pass its check on @kai (not proven: it asks before it writes). Run the check of Grok Build with c on its line in the Usage tab of ELU on @kai, then send it again.');
   // The run was stopped there, or ended with nothing to send.
   assert.equal(ended(p, kai, { error: 'Stopped by the owner.', outcome: 'stopped', session: { state: 'stopped' } }), 'It was stopped on @kai before it finished. Send it again.');
   assert.equal(ended(p, kai, { outcome: 'done', text: '  ' }), 'The session on @kai ended without an answer. Send it again.');
@@ -134,8 +135,8 @@ test('each way a session a teammate\'s message started can fail is told in plain
 test('a teammate gets the reason with paths cut, a trusted one and my own computer with paths kept, and a possible secret stays here', t => {
   const p = setup(t), kai = answering(p), place = '/srv/kai/private/notes.txt';
   const error = `Refusing a symbolic link at ${place}`;
-  // A message that has a project to run in says nothing more while it waits for the owner.
-  assert.equal(said(kai.send().task), null);
+  // A message that has a project to run in waits for the owner's y, and says so to its sender with what the owner can do: delivered is not started.
+  assert.equal(said(kai.send().task), 'It waits for its owner on @kai, who approves each message from a teammate. On @kai: y on the message starts it, and /access set to Auto starts the next ones without asking.');
   assert.equal(ended(p, kai, { error, session: {} }), 'Refusing a symbolic link at [path] on @kai. Send it again.');
   assert.equal(ended(p, kai, { error: 'Could not read the settings: API_KEY=sk-ant-abcdefghijklmnopqrstuvwxyz0123456789', session: {} }), 'The run failed on @kai. Its reason stays there: it may hold a secret.');
   savePeerPolicy(ANA, { trusted: true });
@@ -200,7 +201,7 @@ test('the sender keeps the reason, and Chats shows it whole: failed, why, and th
     applyTask(ctx, kai, a2aTask({ id: 'task-waits', contextId: waiting.threadId, statusMessage: waits }), waiting.id);
     const row = peerItems().find(item => item.id === `asked:${waiting.id}`);
     assert.equal(row.state, 'submitted'); assert.equal(row.note, waits);
-    assert.equal(rowsOf([row], 200)[1], `   ↳ submitted · ${waits}`);
+    assert.equal(rowsOf([row], 200)[1], `   ↳ delivered at ${clockTime(row.deliveredAt)} · ${waits}`);
     // Once it runs, the note is gone.
     applyTask(ctx, kai, a2aTask({ id: 'task-waits', contextId: waiting.threadId, state: TaskState.WORKING }));
     assert.equal(peerItems().find(item => item.id === `asked:${waiting.id}`).note, undefined);

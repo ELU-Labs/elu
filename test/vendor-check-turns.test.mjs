@@ -12,11 +12,12 @@ import { saveBot } from '../lib/bots.mjs';
 import { conformanceState } from '../lib/conformance.mjs';
 
 // Turns the owner did not type, on a vendor that is installed, signed in and was never
-// checked on this machine: a schedule's, a shadow's and a Task's work. Each starts the
-// one-time check the way a typed message does and then runs. And a Full access session,
-// where nothing is refused: a bot that only answers and a shadow run on a vendor whose
-// check did not pass, and the chat says once what was not proven. A session's model runs on
-// Grok Build here, and a bot on Antigravity CLI: bots do not run on Grok Build.
+// checked on this machine: a schedule's, a shadow's and a Task's work. Below Full access
+// each starts the one-time check the way a typed message does and then runs. And a Full
+// access session, where nothing is refused and no check is waited for: a bot that only
+// answers and a shadow run on a vendor that was never checked, and nothing is said about a
+// check. A session's model runs on Grok Build here, and a bot on Antigravity CLI: bots do
+// not run on Grok Build.
 function environment(t, values) {
   const previous = Object.fromEntries(Object.keys(values).map(key => [key, process.env[key]])); Object.assign(process.env, values);
   t.after(() => { for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } });
@@ -36,23 +37,23 @@ function machine(t, { lead = 'grok', mode = 'answer', agy = undefined } = {}) {
   return { ...p, fake, controller, calls, send, checks: () => calls().filter(call => call.vendor === 'grok' && call.args.includes('inspect')).length };
 }
 // The chat's lines from ELU about Antigravity CLI: the check's first line, then its result.
-const AGY_FIRST = 'One-time check of Antigravity CLI on this machine first: about seven short turns on it, a few minutes.';
+const FULL_NOW = 'Full access needs no check: /permissions full runs your message now.';
+const AGY_FIRST = `Checking Antigravity CLI (the agy command) first: 8 steps, once on this machine for release 1.5.4. ${FULL_NOW}`;
 const AGY_PASSED = /^Antigravity CLI 1\.5\.4 passed its check on this machine\.( It can't ask live here: blocked actions are reported\.)?$/;
 const AGY_NOT_PROVEN = 'Not proven: a read-only turn writes no file \\(locked run: wrote [^)]+\\), and 2 more\\.';
-const AGY_IN_FULL = new RegExp(`^Antigravity CLI did not pass its check on this machine\\. ${AGY_NOT_PROVEN} Full access runs it anyway; Read only, Ask for approval and Approve for me stay off\\.$`);
-const AGY_REFUSAL = new RegExp(`^@critic can't start\\. Antigravity CLI did not pass its check on this machine, so it runs in Full access only here\\. ${AGY_NOT_PROVEN} Switch this session to Full access to use it; c on its line in the Usage tab runs the check again\\.$`);
+const AGY_REFUSAL = new RegExp(`^(@critic can't start\\. )?Antigravity CLI \\(the agy command\\) did not pass its check on this machine, so it runs in Full access only here\\. ${AGY_NOT_PROVEN} Switch this session to Full access to use it; c on its line in the Usage tab runs the check again\\.$`);
 const UNCHECKED_AGY = /Antigravity CLI has not been checked on this machine yet/;
 function saidAgy(task, result) {
   const lines = said(task); assert.equal(lines.length, 2, JSON.stringify(lines)); assert.equal(lines[0], AGY_FIRST); assert.match(lines[1], result);
 }
 const said = task => (task.messages ?? []).filter(row => row.from === 'ELU').map(row => row.text);
 const why = task => task.error?.message ?? JSON.stringify(task.error);
-const FIRST = 'One-time check of Grok Build on this machine first: about seven short turns on it, a few minutes.';
+const FIRST = `Checking Grok Build (the grok command) first: 8 steps, once on this machine for release 1.0.77. ${FULL_NOW}`;
 const PASSED = 'Grok Build 1.0.77 passed its check on this machine.';
 const UNCHECKED = /Grok Build has not been checked on this machine yet/;
 const NOT_PROVEN = 'Not proven: a read-only turn writes no file (locked run wrote a file: created.txt), and 2 more.';
-const IN_FULL = `Grok Build did not pass its check on this machine. ${NOT_PROVEN} Full access runs it anyway; Read only, Ask for approval and Approve for me stay off.`;
-const REFUSAL = `Grok Build did not pass its check on this machine, so it runs in Full access only here. ${NOT_PROVEN} Switch this session to Full access to use it; c on its line in the Usage tab runs the check again.`;
+const IN_FULL = `Grok Build (the grok command) did not pass its check on this machine. ${NOT_PROVEN} Full access runs it anyway; Read only, Ask for approval and Approve for me stay off.`;
+const REFUSAL = `Grok Build (the grok command) did not pass its check on this machine, so it runs in Full access only here. ${NOT_PROVEN} Switch this session to Full access to use it; c on its line in the Usage tab runs the check again.`;
 
 test('a /schedule job\'s turn on a Grok Build that was never checked runs the one-time check first and then answers', { timeout: 300000 }, async t => {
   const f = machine(t);
@@ -103,13 +104,14 @@ test('the work of a Task the owner approved, on a Grok Build that was never chec
   assert.deepEqual(said(done).slice(0, 2), [FIRST, PASSED]); assert.equal(f.checks(), 1);
 });
 
-test('in a Full access session a bot that only answers and a shadow run on an Antigravity CLI whose check did not pass, and the chat says once what was not proven', { timeout: 300000 }, async t => {
-  // This agy writes in a read-only turn: three required steps are not proven, and no second check can prove them.
+test('in a Full access session a bot that only answers and a shadow run on an Antigravity CLI that was never checked, with no check and nothing said about one; below Full access the check comes first', { timeout: 300000 }, async t => {
+  // This agy writes in a read-only turn: three required steps of its check cannot be proven.
   const f = machine(t, { lead: 'claude', agy: { ignoreDenies: true } });
   saveBot({ name: 'critic', vendor: 'agy', instructions: 'Say what is wrong.' });
   saveBot({ name: 'echo', vendor: 'agy', shadow: true, instructions: 'Say what you would do differently.' });
   const full = await f.send('Reply done with the summary "in full".', null, { permissions: 'full', bots: ['echo'] });
-  assert.equal(full.state, 'answered', why(full)); saidAgy(full, AGY_IN_FULL);
+  // Before: the shadow's turn ran all of Antigravity CLI's check first, in the Full access session.
+  assert.equal(full.state, 'answered', why(full)); assert.deepEqual(said(full), []); assert.equal(conformanceState('agy'), null);
   // Before: "Not shadowing here. Antigravity CLI did not pass its check on this machine, so it runs in Full access only here. ... Switch this session to Full access to use it; ..."
   const shadow = full.messages.filter(row => row.bot === 'echo' && row.shadow);
   assert.ok(shadow.some(row => !row.quiet), JSON.stringify(shadow.map(row => row.text)));
@@ -118,10 +120,15 @@ test('in a Full access session a bot that only answers and a shadow run on an An
   assert.equal(answer.state, 'answered', why(answer));
   const turns = answer.runs.filter(row => row.role === 'bot:critic');
   assert.ok(turns.length && turns.every(row => row.vendor === 'agy' && row.permissions === 'full'), JSON.stringify(answer.runs.map(row => [row.role, row.vendor, row.permissions])));
-  saidAgy(answer, AGY_IN_FULL);
-  // Below Full access the same bot is still refused, with what to do.
+  assert.deepEqual(said(answer), []); assert.equal(conformanceState('agy'), null, 'no check ran');
+  // Below Full access the same bot's first turn checks Antigravity CLI, and is refused with what to do.
   const lower = await f.send('Reply done with the summary "below".', null, { permissions: 'auto' });
   await assert.rejects(f.send('Reply done.', lower.id, { bot: 'critic' }), error => AGY_REFUSAL.test(error.message) || assert.fail(error.message));
+  assert.notEqual(conformanceState('agy'), null);
+  await assert.rejects(f.send('Reply done.', lower.id, { bot: 'critic' }), error => AGY_REFUSAL.test(error.message) || assert.fail(error.message));
+  // The Full access session still runs it, and still says nothing about the check that failed.
+  const after = await f.send('Reply done with the summary "from the bot again".', full.id, { bot: 'critic' });
+  assert.equal(after.state, 'answered', why(after)); assert.deepEqual(said(after), []);
 });
 
 test('a session a failed check stopped says the check\'s result once when it is switched to Full access, and then runs', { timeout: 300000 }, async t => {

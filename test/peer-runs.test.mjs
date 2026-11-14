@@ -11,6 +11,7 @@ import { ProjectController, conversationEntries, projectSnapshot, registerProjec
 import { readTask, saveTask, requestGoal, sessionGoal, taskTitle, taskPlace } from '../lib/state.mjs';
 import { pendingRequests, projectFolder, removeRequest, saveRequest, updateRequest } from '../lib/workspace.mjs';
 import { Conductor, PLAN_WAITS, enqueue, retryRequest, conductorSettings } from '../lib/conductor.mjs';
+import { waitingText } from '../lib/waiting.mjs';
 import { validateResult, validateConversation, conversationSchema, resultSchema } from '../lib/config.mjs';
 import { protectedPath, protectedFiles } from '../lib/policy.mjs';
 import * as claude from '../lib/adapters/claude.mjs';
@@ -239,7 +240,7 @@ test('recover writes an interrupted entry for a peer run left by a dead conducto
 
 test('peer runs use at most the peer slots, while owner work still starts', async t => {
   const p = setup(t, 'answer'); p.extra({ slow: 700 });
-  assert.equal(conductorSettings().maxAgents, 4);
+  assert.equal(conductorSettings().maxAgents, null, 'the owner set no limit of his own: the teammate slots hold all the same');
   const first = ask(p.root), second = ask(p.root), mine = enqueue(p.root, 'Owner question');
   const conductor = conduct(t); let most = 0, both = false;
   const peers = () => [...conductor.runs.values()].filter(run => run.origin?.kind === 'ask').length;
@@ -250,6 +251,10 @@ test('peer runs use at most the peer slots, while owner work still starts', asyn
   await new Promise(resolve => setTimeout(resolve, 300));
   assert.equal(request(p.root, blocked.id).state, 'queued', 'no peer slots means no peer runs');
   assert.equal(request(p.root, own.id).state, 'queued', 'a session a teammate\'s message started takes a peer slot too');
+  // Each says what it waits for, in its request and where its reason shows.
+  assert.deepEqual(request(p.root, blocked.id).waits, { on: 'teammates', running: 0, limit: 0 });
+  assert.equal(waitingText(request(p.root, own.id)), "Waiting: no slot is set for teammates' work on this computer.");
+  assert.equal(request(p.root, own.id).reason, "Waiting: no slot is set for teammates' work on this computer.");
 });
 
 test('a run whose cost is unknown is charged all its message reserved', t => {

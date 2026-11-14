@@ -42,18 +42,18 @@ async function question() {
   throw new Error('the owner was not asked');
 }
 const checks = f => f.calls().filter(call => call.args.includes('inspect')).length;
-const FIRST = 'One-time check of Grok Build on this machine first: about seven short turns on it, a few minutes.';
+const FIRST = 'Checking Grok Build (the grok command) first: 8 steps, once on this machine for release 1.0.77. Full access needs no check: /permissions full runs your message now.';
 const notPassed = () => Object.entries(conformanceState('grok')?.steps ?? { none: 'no record' }).filter(([, status]) => status !== 'pass').map(([id]) => id);
 
-test('a computer with only Grok Build: the first message runs its check, the check passes on what grok inspect prints on every computer, and the turn runs in Ask for approval, Approve for me and Full access', { timeout: 300000 }, async t => {
+test('a computer with only Grok Build: the first message below Full access runs its check, the check passes on what grok inspect prints on every computer, and the turn runs in Ask for approval, Approve for me and Full access', { timeout: 300000 }, async t => {
   const f = onlyGrok(t);
   const first = await f.send('Reply done with the summary "grok answered".', null, { permissions: 'ask' });
   // Before: "Grok Build did not pass its check on this machine, so it stays off here. Not proven:
   // no other tool's settings reach its turn (Claude or Cursor configuration reached the run:
-  // cursor, cursor, cursor). Your next message to it runs the check again."
+  // cursor, cursor, cursor). Your next message to it outside Full access runs the check again."
   assert.equal(first.state, 'answered', why(first)); assert.equal(first.result.summary, 'grok answered');
   assert.deepEqual(notPassed(), [], 'every step passed, the one that reads what else it loads too');
-  assert.deepEqual(said(first), ['One-time check of Grok Build on this machine first: about seven short turns on it, a few minutes.', 'Grok Build 1.0.77 passed its check on this machine.']);
+  assert.deepEqual(said(first), [FIRST, 'Grok Build 1.0.77 passed its check on this machine.']);
   // The stand-in listed every switch, as the real one does, and all of them off.
   const inspect = f.calls().filter(call => call.args.includes('inspect'));
   assert.equal(inspect.length, 1);
@@ -75,22 +75,27 @@ test('a record ELU 0.1.19 left, with that step failed on the list of switches, i
   assert.equal(said(task).at(-1), 'Grok Build 1.0.77 passed its check on this machine.');
 });
 
-test('a check that did not pass leaves Grok Build to Full access: a Full access message runs with the result said once, and Ask for approval and Approve for me say what still works', { timeout: 300000 }, async t => {
+test('a check that did not pass leaves Grok Build to Full access: a Full access message runs and says nothing about a check, and Ask for approval and Approve for me say what still works', { timeout: 300000 }, async t => {
   // This grok writes in a read-only turn: three required steps are not proven, and no second check can prove them.
   const f = onlyGrok(t, { mode: 'leaky' });
   const notProven = 'Not proven: a read-only turn writes no file (locked run wrote a file: created.txt), and 2 more.';
+  // Full access needs no check: the message runs on a Grok Build that was never checked, and starts none.
   const full = await f.send('Reply done with the summary "in full".', null, { permissions: 'full' });
   assert.equal(full.state, 'answered', why(full)); assert.equal(full.result.summary, 'in full'); assert.equal(full.runs[0].permissions, 'full');
-  assert.deepEqual(said(full), [FIRST, `Grok Build did not pass its check on this machine. ${notProven} Full access runs it anyway; Read only, Ask for approval and Approve for me stay off.`]);
-  assert.equal(checks(f), 1);
-  // The next Full access message says nothing more and checks nothing again.
-  const next = await f.send('Reply done with the summary "again".', full.id);
-  assert.equal(next.state, 'answered', why(next)); assert.equal(next.runs.length, 2); assert.equal(said(next).length, 2); assert.equal(checks(f), 1);
-  // Any other mode is refused with what still works and what to do, and starts no check that cannot change the result.
-  const refusal = `Grok Build did not pass its check on this machine, so it runs in Full access only here. ${notProven} Switch this session to Full access to use it; c on its line in the Usage tab runs the check again.`;
-  for (const permissions of ['ask', 'auto']) await assert.rejects(f.send('Reply done.', null, { permissions }), error => error.message === refusal, permissions);
+  assert.deepEqual(said(full), []); assert.equal(checks(f), 0); assert.equal(conformanceState('grok'), null);
+  // Any other mode checks it first, and is refused with what still works and what to do.
+  const refusal = `Grok Build (the grok command) did not pass its check on this machine, so it runs in Full access only here. ${notProven} Switch this session to Full access to use it; c on its line in the Usage tab runs the check again.`;
+  await assert.rejects(f.send('Reply done.', null, { permissions: 'ask' }), error => error.message === refusal || assert.fail(error.message));
   assert.equal(checks(f), 1);
   assert.deepEqual(checkResult('grok', { bin: f.bin, version: '1.0.77' }).failed.map(step => step.id), ['locked-no-write', 'locked-no-shell', 'locked-no-network']);
+  // And starts no check that cannot change the result.
+  for (const permissions of ['ask', 'auto']) await assert.rejects(f.send('Reply done.', null, { permissions }), error => error.message === refusal, permissions);
+  assert.equal(checks(f), 1);
+  // Full access runs it as before, in the session it began in and in a new one, and says nothing about the check that failed.
+  const next = await f.send('Reply done with the summary "again".', full.id);
+  assert.equal(next.state, 'answered', why(next)); assert.equal(next.runs.length, 2); assert.deepEqual(said(next), []);
+  const other = await f.send('Reply done with the summary "in another".', null, { permissions: 'full' });
+  assert.equal(other.state, 'answered', why(other)); assert.deepEqual(said(other), []); assert.equal(checks(f), 1);
 });
 
 test('a rule of another tool that Grok Build loads is named once after the check, and stops no mode', { timeout: 300000 }, async t => {
@@ -140,7 +145,7 @@ test('hooks of another tool that Grok Build would run: outside Full access the o
 // with the real 1.0.77, test/grok-real.test.mjs). The owner has both in his home. No mode runs
 // Grok Build there: the check and the modes with rules run in ELU's private home, and Full
 // access in the mirror of his home, which leaves ~/.claude out (lib/home-mirror.mjs).
-test('a Claude agent and Claude permission rules in the owner\'s home: the check names neither, and a Full access run under the mirror of his home loads neither', { timeout: 300000 }, async t => {
+test('a Claude agent and Claude permission rules in the owner\'s home: a Full access run under the mirror of his home loads neither, and the check names neither', { timeout: 300000 }, async t => {
   const f = onlyGrok(t), agent = path.join(f.parent, '.claude', 'agents', 'reviewer.md'), settings = path.join(f.parent, '.claude', 'settings.json');
   fs.mkdirSync(path.dirname(agent), { recursive: true }); fs.writeFileSync(agent, '---\nname: reviewer\ndescription: reviews a change\n---\nReview the change.\n');
   fs.writeFileSync(settings, '{"permissions":{"deny":["Bash(rm:*)"]}}\n');
@@ -151,9 +156,8 @@ test('a Claude agent and Claude permission rules in the owner\'s home: the check
   fs.writeFileSync(script, `#!/bin/sh\n{ printf '%s\\n' "$HOME"; cat ~/.npmrc; ls -A ~; } > ${JSON.stringify(out)} 2>&1\n${JSON.stringify(process.execPath)} -e 'require("fs").writeFileSync(process.argv[1], JSON.stringify(process.env))' ${JSON.stringify(kept)}\n${JSON.stringify(f.bin)} --no-auto-update inspect --json > ${JSON.stringify(listed)}\n`, { mode: 0o700 });
   const full = await f.send(`Run the command ${script} then reply done with the summary "ran it".`, null, { permissions: 'full' });
   assert.equal(full.state, 'answered', why(full)); assert.equal(full.result.summary, 'ran it'); assert.equal(full.runs[0].permissions, 'full');
-  // The check passed every step, the one that reads what else Grok Build loads too, and named nothing.
-  assert.deepEqual(said(full), [FIRST, 'Grok Build 1.0.77 passed its check on this machine.']);
-  assert.deepEqual(notPassed(), []); assert.deepEqual(checkResult('grok', { bin: f.bin, version: '1.0.77' }).loads, []); assert.deepEqual(pendingApprovals(), []);
+  // Full access ran it with no check first, and said nothing about one.
+  assert.deepEqual(said(full), []); assert.equal(conformanceState('grok'), null); assert.deepEqual(pendingApprovals(), []);
   // The run's ~ was the mirror: his npm sign-in is there, and no folder of a coding tool but the .grok ELU wrote.
   const [home, token, ...top] = fs.readFileSync(out, 'utf8').trim().split('\n'), mirror = ADAPTERS.grok.fullHome();
   assert.equal(home, mirror); assert.equal(token, '//registry.npmjs.org/:_authToken=owner-npm-token');
@@ -169,11 +173,13 @@ test('a Claude agent and Claude permission rules in the owner\'s home: the check
   const inHis = JSON.parse(spawnSync(f.bin, ['--no-auto-update', 'inspect', '--json'], { cwd: f.root, env: { ...run, HOME: f.parent }, encoding: 'utf8' }).stdout);
   assert.deepEqual(inHis.externalCompat.cells.filter(cell => cell.enabled !== false), [], 'with every switch off');
   assert.deepEqual(ADAPTERS.grok.foreignTraces(inHis), [{ what: 'Claude agent reviewer', from: agent, runs: false }, { what: 'Claude permissions', from: settings, runs: false }]);
-  // Ask for approval and Approve for me run in the private home: nothing is named, nothing is asked.
+  // Ask for approval and Approve for me run in the private home, after the check: it passes
+  // every step, the one that reads what else Grok Build loads too. Nothing is named, nothing is asked.
   for (const permissions of ['ask', 'auto']) {
     const task = await f.send(`Reply done with the summary "in ${permissions}".`, null, { permissions });
-    assert.equal(task.state, 'answered', `${permissions}: ${why(task)}`); assert.deepEqual(said(task), [], permissions); assert.deepEqual(pendingApprovals(), []);
+    assert.equal(task.state, 'answered', `${permissions}: ${why(task)}`); assert.deepEqual(said(task), permissions === 'ask' ? [FIRST, 'Grok Build 1.0.77 passed its check on this machine.'] : [], permissions); assert.deepEqual(pendingApprovals(), []);
   }
+  assert.deepEqual(notPassed(), []);
   assert.deepEqual(fs.readdirSync(f.privateHome), ['.grok'], 'the private home holds nothing of his');
   assert.equal(fs.existsSync(path.join(mirror, '.claude')), false); assert.deepEqual(his(), before, 'his Claude files were not written');
   assert.deepEqual(checkResult('grok', { bin: f.bin, version: '1.0.77' }).loads, []);

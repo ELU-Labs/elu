@@ -1,8 +1,9 @@
 # Antigravity CLI
 
 `agy` is Google's terminal coding agent for Google One AI Pro and Ultra subscribers (Plus
-and Free with a quota). In ELU it can run sessions and reviews, in every permission mode. `agy`
-runs only after it passes the one-time check below on this machine.
+and Free with a quota). In ELU it can run sessions and reviews, in every permission mode. In
+Read only, Ask for approval and Approve for me `agy` runs only after it passes the one-time
+check below on this machine. Full access needs no check.
 
 ## Install
 
@@ -64,11 +65,23 @@ Enabling it is your decision; the risk is your account, and ELU cannot reduce it
 
 The check proves, on this machine and for the exact binary and release found, that the
 enforcement designed from Google's documentation holds. ELU starts it by itself
-before the first turn on Antigravity goes out, whether you wrote to a session on it or
-to a bot on it, or the turn started without you: a scheduled turn, a shadow turn, a review,
-a standup or a Task's work. The session says so first, then shows each step as it ends, and
-then the turn goes on. The check takes about seven short turns on Antigravity and a few
-minutes. `c` in the Usage tab starts it too. It runs in a throwaway repository with a planted file outside it, a local web
+before the first turn on Antigravity in Read only, Ask for approval or Approve for me goes
+out, whether you wrote to a session on it or to a bot on it, or the turn started without
+you: a scheduled turn, a shadow turn, a review, a standup or a Task's work. The session
+says so first: `Checking Antigravity CLI (the agy command) first: 8 steps, once on this
+machine for release 1.5.4. Full access needs no check: /permissions full runs your message
+now.` Under the working line it then counts the steps done and the time so far, and then
+the turn goes on. Each step is a short turn on Antigravity, so how long the check takes is
+how fast Antigravity answers. `c` in the Usage tab starts it too.
+
+Full access needs no check and never waits for one: a message in a Full access session
+runs at once on the `agy` that is installed, checked or not, and nothing is said about a
+check. Until a check has passed for this release it runs headless, the way that needs no
+proof (see [What each mode enforces](#what-each-mode-enforces)). Set a session to Full access while its message
+waits for a check and the message runs at once; a check that this session started ends
+there and records nothing. ELU never starts a check behind a Full access turn.
+
+The check runs in a throwaway repository with a planted file outside it, a local web
 listener and a marker command:
 
 | Step | Proves |
@@ -83,12 +96,13 @@ listener and a marker command:
 | `live-read-only` (optional) | over `agy acp`, a read-only run told to create files, run the marker command and fetch the local URL does none of them |
 
 The result is saved under your ELU state. A different binary path or release has to
-pass again, before the next turn on it; until it does, no run starts.
+pass again, before the next turn on it outside Full access, and the session says that the
+release changed; until it does, Antigravity runs in Full access only.
 If a required step is not proven, Read only, Ask and Auto are off for Antigravity here, and
 the session says which step and why. Full access is never turned off by the check: it runs
-Antigravity as it is, and says the result once, also when you switch such a session to Full
-access. In a Full access session a bot that only answers, a shadow and a review run on it
-too. Your next message runs the check again only
+Antigravity as it is. A session that the failed check stopped says the result once when
+you switch it to Full access. In a Full access session a bot that only answers, a shadow
+and a review run on it too. Your next message outside Full access runs the check again only
 when that can change the result; a step that failed because Antigravity did what the step
 forbids stays failed until `c` in the Usage tab checks again. When `relay` fails,
 Ask and Auto still run: blocked actions are denied and reported instead of asked live, and
@@ -100,7 +114,7 @@ The Usage tab shows whether Antigravity is signed in before the check has run. I
 then the sign-in read above, under ELU's private HOME: no model turn, no quota spent, no
 browser. It does this when the tab opens and it has not read this `agy` yet, when the tab's
 usage check is due, and on `r`. The line then says
-`signed in · needs a one-time check (c runs it now)`, or `not signed in for ELU · s signs in`.
+`(agy) signed in · Full access only (c checks it)`, or `(agy) not signed in for ELU · s signs in`.
 `c` on that line runs the same check there, with each step under the line as it ends, and the
 line then says `ready`, or `Full access only (c checks again)` with the step that was not
 proven and why. Signed out, `c` asks first whether to sign in, then runs the check after the
@@ -212,6 +226,8 @@ shows the same line.
 What decides between the two is the one-time check's record for this `agy` binary and
 release, nothing else. Ask for approval, Approve for me and Full access run over ACP when
 its `relay` step passed. Read only runs over ACP when `live-read-only` passed as well. A
+Full access turn on an `agy` with no such record, one that was never checked or was updated
+since, runs headless and waits for no check. A
 check that ran before ELU 0.1.20 has no `live-read-only` result, so Read only stays headless
 on that machine until the check runs again, which a new `agy` release brings.
 
@@ -224,9 +240,10 @@ approval and Approve for me do not fall back this way: their headless run cannot
 `/stop` ends an ACP turn and the commands it started, as it does a headless one. The steps
 it showed stay in the chat, and its line says `stopped`.
 
-The turn limits hold in both. Over ACP a turn that prints nothing for the quiet limit (10
-minutes, or the role's `timeoutSeconds`) is stopped, as with every vendor that prints as it
-works. A headless run prints only at the end, so it has no quiet limit, only the two-hour cap.
+Over ACP a turn that prints nothing for the quiet limit (10 minutes, or the role's
+`timeoutSeconds`) is stopped, as with every vendor that prints as it works. A headless run
+prints only at the end, so it has no limit of ELU's: it runs until it ends. `agy` ends a
+headless run by a timer of its own, which ELU sets to 23 days (`--print-timeout 2000000s`).
 
 ## The model and the tokens
 
@@ -274,7 +291,8 @@ one-time check is the proof, per machine. In particular, until a check says othe
 - on Linux with no keyring, where `agy` keeps its token file and whether it writes it in
   place (ELU handles both ways of writing it, and links both places it is reported at);
 - that `-p` reads the task from standard input, that `--print-timeout` takes seconds
-  (`900s`), and that the output names the conversation id (the `json` and `resume` steps);
+  (`2000000s`, 23 days: ELU has no time limit for a turn, and whether `agy` takes a value
+  that long was not seen with the real one), and that the output names the conversation id (the `json` and `resume` steps);
 - secret reads: `agy` has no read deny, so a read of a secret folder is stopped only by
   workspace-only access (Read only, Ask, Approve for me); Full access can read anything;
 - `agy acp` in Full access and Read only was seen only in tests against a stand-in `agy`,
