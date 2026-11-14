@@ -204,18 +204,20 @@ if(mode==='no-sandbox'){console.error('Error: sandbox required but unavailable: 
 // --resume goes on with), and its result carries usage (the turn's own tokens) and, in
 // modelUsage and total_cost_usd, what the whole session has used so far: a resumed turn goes on
 // from its session's totals (kept beside fake.json for each session, a turn that is stopped
-// included), a new session starts from nothing. An assistant row with the turn's tokens comes
-// before any answer.
+// included), a new session starts from nothing. As the real CLI, modelUsage has one line per
+// model the session used: a turn on another model (after /model) adds its own line and keeps
+// the others as they were. An assistant row with the turn's tokens comes before any answer.
 if(cfg.spend){
  const kept=path.join(path.dirname(process.argv[1]),'spent.json'),own=cfg.spend,[input,output,read,write]=own.tokens;
  const id=flag=>args.includes(flag)?args[args.indexOf(flag)+1]:null,mine=id('--resume')??id('--session-id')??session;
  let all={};try{all=JSON.parse(fs.readFileSync(kept,'utf8'));}catch{}
- const before=id('--resume')&&all[mine]?all[mine]:{tokens:[0,0,0,0],usd:0};
- const total={tokens:before.tokens.map((value,at)=>value+own.tokens[at]),usd:before.usd+own.usd};fs.writeFileSync(kept,JSON.stringify({...all,[mine]:total}));
+ const before=id('--resume')&&all[mine]?all[mine]:{},was=before[own.model]??{tokens:[0,0,0,0],usd:0};
+ const models={...before,[own.model]:{tokens:was.tokens.map((value,at)=>value+own.tokens[at]),usd:was.usd+own.usd}};fs.writeFileSync(kept,JSON.stringify({...all,[mine]:models}));
+ const total=Object.values(models).reduce((sum,line)=>sum+line.usd,0);
  const usage={input_tokens:input,output_tokens:output,cache_read_input_tokens:read,cache_creation_input_tokens:write},print=console.log;
  console.log=text=>{let row=null;try{row=JSON.parse(text);}catch{}
   if(row?.session_id===session)row.session_id=mine;
-  print(row?.type==='result'&&!row.is_error?JSON.stringify({...row,total_cost_usd:total.usd,usage,modelUsage:{[own.model]:{inputTokens:total.tokens[0],outputTokens:total.tokens[1],cacheReadInputTokens:total.tokens[2],cacheCreationInputTokens:total.tokens[3],costUSD:total.usd}}}):row?JSON.stringify(row):text);};
+  print(row?.type==='result'&&!row.is_error?JSON.stringify({...row,total_cost_usd:total,usage,modelUsage:Object.fromEntries(Object.entries(models).map(([model,line])=>[model,{inputTokens:line.tokens[0],outputTokens:line.tokens[1],cacheReadInputTokens:line.tokens[2],cacheCreationInputTokens:line.tokens[3],costUSD:line.usd}]))}):row?JSON.stringify(row):text);};
  print(JSON.stringify({type:'assistant',session_id:mine,message:{id:'msg_spend',model:own.model,usage}}));
 }
 // An answer turn with permissions has Write in its tools, but a lead that is told ELU prepares the workspace does not edit there.
