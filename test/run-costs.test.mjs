@@ -293,6 +293,24 @@ test('a headless Antigravity run keeps the tokens its result reports, priced at 
   near(spend.runCosts(task)[0], 0.5 + 0.01 + 0.6, 'its list price');
 });
 
+// Grok Build says when its count may miss some of a run's calls (usage_is_incomplete). The run
+// keeps that mark with its tokens, so once its log is gone it is still not priced as a whole count.
+test('a Grok Build run whose count Grok says may be incomplete keeps that mark, and reads the same once its log is gone', async t => {
+  const f = setup(t, 'answer');
+  fs.mkdirSync(path.join(f.parent, '.grok')); fs.writeFileSync(path.join(f.parent, '.grok', 'auth.json'), '{}\n', { mode: 0o600 });
+  // 100k in, 40k read from the cache, 10k out: $0.28 at grok-4.6's list price, were the count whole.
+  f.set({ grokSpend: { usage: { input_tokens: 100_000, cache_read_input_tokens: 40_000, cache_creation_input_tokens: 0, output_tokens: 10_000, reasoning_tokens: 0, total_tokens: 150_000 }, modelUsage: { 'grok-4.6': { inputTokens: 100_000, outputTokens: 10_000, cacheReadInputTokens: 40_000, modelCalls: 3 } }, extra: { usage_is_incomplete: true } } });
+  f.controller.setDefaultModel({ vendor: 'grok', model: 'grok-4.6' });
+  const first = await f.controller.ask('Where is coupon normalization?', null, { permissions: 'full' }).finished;
+  assert.equal(first.state, 'answered', JSON.stringify(first.error));
+  const task = readTask(f.repo, first.id);
+  assert.deepEqual(task.runs.map(run => [run.vendor, run.tokens, run.incomplete]), [['grok', counted([100_000, 10_000, 40_000, 0]), true]]);
+  const read = () => { const [spent] = spend.runSpends(readTask(f.repo, first.id)); return [spent.costUsd, spent.incomplete ?? false]; };
+  assert.deepEqual(read(), [null, true], 'not priced as a whole count');
+  fs.rmSync(task.runs[0].logFile);
+  assert.deepEqual(read(), [null, true], 'its log gone, the same');
+});
+
 test('a turn the owner stops is kept with what it had used; Usage shows it, and counts it once when its session goes on', async t => {
   const f = setup(t, 'slow');
   const run = f.controller.ask('Where is coupon normalization?', null, { permissions: 'full' });

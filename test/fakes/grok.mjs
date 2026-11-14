@@ -20,6 +20,9 @@
 // src/coupon.mjs where the launch lets it write, and reports its subtasks. Without it every
 // conversation turn is an answer, as before.
 // grok.version (fake.json): the release it says it is, 1.0.77 when not set.
+// grokSpend (fake.json): what a headless turn reports it used, in place of its fixed figures:
+// usage and modelUsage, and extra, more fields of its result (usage_is_incomplete,
+// cost_is_partial, total_cost_usd).
 // grok.checkSeconds: a slow one-time check. Each model turn of ELU's check (a turn whose
 // folder is under the check's scratch folder, elu-code-check-grok-*) answers only after this
 // many seconds; seven such turns make a check. grok.checkGate names a file that ends the wait
@@ -307,14 +310,15 @@ if (todoFile) { writeList(todoFile, ['done', 'doing']); await liveGate(); }
 const result = await act(prompt, record, { bypass, canWrite, canShell, canFetch, cwd, ask: null, report });
 if (todoFile) writeList(todoFile, ['done', 'done']);
 record.turns.push(prompt); save(record);
-const usage = { input_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 5, reasoning_tokens: 0, total_tokens: 15 }, modelUsage = { 'grok-4.6': { inputTokens: 10, outputTokens: 5, cacheReadInputTokens: 0, modelCalls: 1 } };
+const spent = cfg.grokSpend ?? {}, extra = spent.extra ?? {};
+const usage = spent.usage ?? { input_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 5, reasoning_tokens: 0, total_tokens: 15 }, modelUsage = spent.modelUsage ?? { 'grok-4.6': { inputTokens: 10, outputTokens: 5, cacheReadInputTokens: 0, modelCalls: 1 } };
 // The answer as text chunks, a response boundary, then end with what the json object carries but the text.
 if (streaming) {
   const text = mode === 'max-turns' ? 'Still working on it.' : `Done reading. ${resultText(result)}`;
   for (let at = 0; at < text.length; at += 40) line({ type: 'text', data: text.slice(at, at + 40) });
   line({ type: 'usage', messageId: 'resp_1', stopReason: 'end_turn', usage, signature: 'sig' });
-  line({ type: 'end', stopReason: mode === 'max-turns' ? 'max_turn_requests' : 'end_turn', sessionId: session, requestId: 'req-1', cwd, num_turns: mode === 'max-turns' ? 3 : 1, ...(mode === 'max-turns' ? {} : { usage, modelUsage }) });
+  line({ type: 'end', stopReason: mode === 'max-turns' ? 'max_turn_requests' : 'end_turn', sessionId: session, requestId: 'req-1', cwd, num_turns: mode === 'max-turns' ? 3 : 1, ...(mode === 'max-turns' ? {} : { usage, modelUsage, ...extra }) });
   process.exit(0);
 }
 if (mode === 'max-turns') { console.log(JSON.stringify({ text: 'Still working on it.', stopReason: 'max_turn_requests', sessionId: session, requestId: 'req-1', num_turns: 3 })); process.exit(0); }
-console.log(JSON.stringify({ text: resultText(result), stopReason: 'end_turn', sessionId: session, requestId: 'req-1', num_turns: 1, usage, modelUsage }));
+console.log(JSON.stringify({ text: resultText(result), stopReason: 'end_turn', sessionId: session, requestId: 'req-1', num_turns: 1, usage, modelUsage, ...extra }));
