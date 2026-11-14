@@ -12,114 +12,77 @@ import { ADAPTERS } from '../lib/adapters/index.mjs';
 import { stopLine } from '../lib/stop-line.mjs';
 import { REFUSED, SHIM_VENDORS, shimEnvFile, shimPath, shimsBase } from '../lib/never-shims.mjs';
 
-// A terminal app may wrap a vendor's command: each of its panes gets a folder on PATH, ahead
-// of the vendor's own, that holds a small script named as the command (claude, codex). The
-// script hands to the app's wrapper, which looks along PATH for the real program, skips its
-// own files, and starts the first other one it finds. A file it finds that reads like a script
-// handing on to the command by name is taken for another tool's stand-in: the wrapper runs it,
-// counts the visit in the environment, and gives up when it comes back to the same file or
-// has been through sixteen. In a pane of the app it also folds its own hooks into the
-// --settings of a Claude Code session. This is a stand-in written for these tests that
-// follows that logic; no vendor and no ELU file is named in it.
-const PANE = '3AC8A3CD-0000-4000-8000-2B2F901826E6';
-const wrapperText = prog => `#!/usr/bin/env bash
+// A terminal app may wrap a vendor's command. Each of its panes puts a folder on PATH, ahead
+// of the vendor's own, with a small script named as the command (claude, codex). That script
+// runs the app's own script for the command, which looks along PATH for the real program:
+// the first other file of that name that is not the app's. A file that reads like another
+// tool's script handing on to the command by name is run all the same, but the visit is
+// counted in the environment, and the app gives up when it is back at a file it has run or
+// has made sixteen visits. In a pane it also folds its hooks into the --settings of a Claude
+// Code session. This stand-in is written for these tests and names no real app.
+const PANE = '11111111-2222-4333-8444-555555555555';
+const FOLD = 'const fs=require("fs");let all={hooks:{Stop:[{matcher:"",hooks:[{type:"command",command:"true"}]}]}};for(const given of process.argv.slice(1)){const own=given.trim().startsWith("{")?JSON.parse(given):JSON.parse(fs.readFileSync(given,"utf8"));all={...all,...own,hooks:{...all.hooks,...(own.hooks||{})}};}process.stdout.write(JSON.stringify(all));';
+const appScript = prog => `#!/usr/bin/env bash
 prog=${prog}
-shim=\${TERMAPP_${prog.toUpperCase()}_WRAPPER_SHIM:-}; root=\${TERMAPP_${prog.toUpperCase()}_WRAPPER_SHIM_ROOT:-}
-guard_name=termapp_${prog}_wrapper_reexec_guard; targets_name=termapp_${prog}_wrapper_reexec_targets
-is_self_or_shim() {
-  local c=$1
-  [[ -n $c ]] || return 1
-  [[ -e $c && $c -ef $0 ]] && return 0
-  [[ -n $shim && -e $c && -e $shim && $c -ef $shim ]] && return 0
-  [[ -n $root && $c == "\${root%/}/$prog" ]] && return 0
-  case $c in */termapp-cli-shims/*/$prog|*/termapp-cli-shims/$prog|*/Resources/bin/$prog) return 0;; esac
-  return 1
-}
-limit=16; hops=0; history=
-guard=\${!guard_name:-}
-case $guard in ''|*[!0-9]*) unset $guard_name $targets_name;; *) hops=$guard; history=\${!targets_name:-};; esac
-fail_guard() {
-  printf '%s\\n' "termapp: stopped a possible infinite $prog shim loop." "termapp's per-pane $prog shim re-entered before the real binary started." "This is usually caused by a conflicting $prog shim from another tool on PATH." >&2
-  exit 126
-}
-seen() { local s; while IFS= read -r s; do [[ $s == "$1" ]] && return 0; done <<< "$history"; return 1; }
-looks_like_reexec_shim() {
-  local t=$1 text
-  is_self_or_shim "$t" && return 0
-  [[ -f $t && -r $t ]] || return 1
-  [[ $(od -An -N2 -tx1 "$t" 2>/dev/null | tr -d '[:space:]') == 2321 ]] || return 1
-  text=$(sed -n '1,160p' "$t" 2>/dev/null || true)
-  case $text in *"exec $prog"*|*"exec \\"$prog\\""*|*"exec env $prog"*|*"env $prog"*|*"command $prog"*) return 0;; esac
-  case $text in *"=$prog"*|*"=\\"$prog\\""*|*":-$prog}"*) case $text in *'exec "$'*|*'exec \${'*) return 0;; esac;; esac
-  return 1
-}
-exec_resolved() {
-  local t=$1; shift
-  if ! looks_like_reexec_shim "$t"; then unset $guard_name $targets_name; exec "$t" "$@"; fi
-  seen "$t" && fail_guard
-  (( hops >= limit )) && fail_guard
-  hops=$((hops + 1)); export $guard_name=$hops
-  history=\${history:+$history$'\\n'}$t; export $targets_name="$history"
-  exec "$t" "$@"
-}
-find_real() {
-  local self_dir d c
-  self_dir=$(cd "$(dirname "$0")" && pwd)
-  local IFS=:
-  for d in $PATH; do
-    [[ $d == "$self_dir" ]] && continue
-    c=$d/$prog
-    is_self_or_shim "$c" && continue
-    [[ -x $c ]] && printf '%s' "$c" && return 0
+here=$(cd "$(dirname "$0")" && pwd)
+count_var=TERMAPP_${prog.toUpperCase()}_VISITS; seen_var=TERMAPP_${prog.toUpperCase()}_VISITED
+count=\${!count_var:-0}; seen=\${!seen_var:-}
+case $count in *[!0-9]*) count=0; seen=;; esac
+# One of the app's own files: this script, or a pane's script for the command.
+mine() { [[ $1 -ef $0 ]] || [[ $1 == */termapp-panes/*/$prog ]]; }
+next_one() {
+  local dir IFS=:
+  for dir in $PATH; do
+    [[ $dir == "$here" ]] && continue
+    mine "$dir/$prog" && continue
+    [[ -f $dir/$prog && -x $dir/$prog ]] && { printf '%s' "$dir/$prog"; return 0; }
   done
   return 1
 }
-real=$(find_real) || { echo "Error: $prog not found in PATH" >&2; exit 127; }
-echo "$prog hops=$hops real=$real pane=\${TERMAPP_SURFACE_ID:+yes}" >> "$(dirname "$0")/wrapper.log"
-if [[ -z \${TERMAPP_SURFACE_ID:-} || $prog != claude || $hops -gt 0 ]]; then exec_resolved "$real" "$@"; fi
-case \${1:-} in --help|-h|--version|-v|auth|mcp|config|doctor|install|update|agents|plugin) exec_resolved "$real" "$@";; esac
-unset CLAUDECODE CLAUDE_CODE_ENTRYPOINT CLAUDE_CODE_SESSION_ID
-base='{"hooks":{"Stop":[{"matcher":"","hooks":[{"type":"command","command":"true","timeout":10}]}]}}'
-rest=(); own=(); take=0; session=0
-for a in "$@"; do
-  if [[ $take == 1 ]]; then own+=("$a"); take=0; continue; fi
-  case $a in --settings) take=1;; --settings=*) own+=("\${a#--settings=}");; --session-id|--session-id=*|--resume|--resume=*|-r|--continue|-c) session=1; rest+=("$a");; *) rest+=("$a");; esac
-done
-if (( \${#own[@]} > 0 )); then
-  merged=$(BASE="$base" OWN="$(printf '%s\\0' "\${own[@]}" | base64 | tr -d '\\n')" "$TERMAPP_NODE" -e '
-const fs=require("fs");const isObj=x=>x&&typeof x==="object"&&!Array.isArray(x);
-const merge=(a,b)=>Array.isArray(a)&&Array.isArray(b)?a.concat(b):isObj(a)&&isObj(b)?Object.fromEntries([...new Set([...Object.keys(a),...Object.keys(b)])].map(k=>[k,k in a&&k in b?merge(a[k],b[k]):k in b?b[k]:a[k]])):isObj(a)||Array.isArray(a)?a:b;
-const load=v=>{const t=String(v).trim();return t[0]==="{"?JSON.parse(t):JSON.parse(fs.readFileSync(t,"utf8"));};
-let acc=JSON.parse(process.env.BASE);for(const it of Buffer.from(process.env.OWN,"base64").toString("utf8").split("\\0").slice(0,-1).reverse())acc=merge(acc,load(it));
-process.stdout.write(JSON.stringify(acc));') && { base=$merged; set -- "\${rest[@]}"; }
+# Whether a file reads like another tool's script that hands on to the command by name.
+hands_on() {
+  [[ $(head -c 2 "$1" 2>/dev/null) == '#!' ]] || return 1
+  head -n 200 "$1" | grep -q -e "exec $prog" && return 0
+  head -n 200 "$1" | grep -q -e "=$prog\\$" && head -n 200 "$1" | grep -q -e 'exec "\\$'
+}
+go() {
+  local target=$1; shift
+  if hands_on "$target"; then
+    if [[ $'\\n'$seen$'\\n' == *$'\\n'"$target"$'\\n'* ]] || (( count >= 16 )); then
+      echo "termapp: gave up: the $prog command keeps coming back to this script." >&2
+      echo "Another tool's script for $prog on PATH hands it back." >&2
+      exit 126
+    fi
+    export $count_var=$((count + 1)) $seen_var="\${seen:+$seen$'\\n'}$target"
+  else
+    unset $count_var $seen_var
+  fi
+  exec "$target" "$@"
+}
+target=$(next_one) || { echo "termapp: no $prog on PATH" >&2; exit 127; }
+echo "$prog visits=$count real=$target pane=\${TERMAPP_PANE:+yes}" >> "$here/visits.log"
+if [[ $prog == claude && -n \${TERMAPP_PANE:-} && $count == 0 ]]; then
+  case \${1:-} in -v|--version|-h|--help|auth|mcp|config|doctor|update|install) ;; *)
+    own=(); rest=(); want=0
+    for arg in "$@"; do
+      if [[ $want == 1 ]]; then own+=("$arg"); want=0; elif [[ $arg == --settings ]]; then want=1; else rest+=("$arg"); fi
+    done
+    folded=$("$TERMAPP_NODE" -e '${FOLD}' "\${own[@]}") && set -- --settings "$folded" "\${rest[@]}"
+  ;; esac
 fi
-if [[ $session == 1 ]]; then exec_resolved "$real" --settings "$base" "$@"; fi
-exec_resolved "$real" --session-id 00000000-0000-4000-8000-000000000001 --settings "$base" "$@"
-`;
-const paneText = (prog, wrapper, folder) => `#!/usr/bin/env bash
-wrapper=${JSON.stringify(wrapper)}
-export TERMAPP_${prog.toUpperCase()}_WRAPPER_SHIM=${JSON.stringify(path.join(folder, prog))}
-export TERMAPP_${prog.toUpperCase()}_WRAPPER_SHIM_ROOT=${JSON.stringify(folder)}
-if [[ -x $wrapper ]]; then exec "$wrapper" "$@"; fi
-kept=; old=$IFS; IFS=:
-for entry in \${PATH:-}; do
-  case $entry in "$TERMAPP_${prog.toUpperCase()}_WRAPPER_SHIM_ROOT"|*/termapp-cli-shims/*|*/termapp-cli-shims) continue;; esac
-  kept=\${kept:+$kept:}$entry
-done
-IFS=$old; export PATH=$kept
-exec ${prog} "$@"
+go "$target" "$@"
 `;
 // The app, with a pane's scripts for these commands. The pane's folder is named through a
 // link, as the temporary folder is on macOS; ELU starts a program by its path on disk.
 function terminalApp(parent, vendors) {
-  const bin = path.join(parent, 'TermApp', 'Resources', 'bin'), real = path.join(parent, 'tmp-real'), link = path.join(parent, 'tmp-link');
+  const bin = path.join(parent, 'TermApp', 'bin'), real = path.join(parent, 'tmp-real'), link = path.join(parent, 'tmp-link');
   fs.mkdirSync(bin, { recursive: true }); fs.mkdirSync(real); fs.symlinkSync(real, link);
-  const pane = path.join(link, 'termapp-cli-shims', PANE); fs.mkdirSync(pane, { recursive: true });
+  const pane = path.join(link, 'termapp-panes', PANE); fs.mkdirSync(pane, { recursive: true });
   for (const prog of vendors) {
-    fs.writeFileSync(path.join(bin, `termapp-${prog}-wrapper`), wrapperText(prog), { mode: 0o755 });
-    fs.writeFileSync(path.join(pane, prog), paneText(prog, path.join(bin, `termapp-${prog}-wrapper`), pane), { mode: 0o700 });
+    fs.writeFileSync(path.join(bin, `termapp-${prog}`), appScript(prog), { mode: 0o755 });
+    fs.writeFileSync(path.join(pane, prog), `#!/usr/bin/env bash\nexec ${JSON.stringify(path.join(bin, `termapp-${prog}`))} "$@"\n`, { mode: 0o700 });
   }
-  const log = path.join(bin, 'wrapper.log');
+  const log = path.join(bin, 'visits.log');
   return { bin, pane, onDisk: fs.realpathSync(pane), visits: () => fs.existsSync(log) ? fs.readFileSync(log, 'utf8').trim().split('\n').filter(Boolean) : [], forget: () => fs.rmSync(log, { force: true }) };
 }
 function environment(t, values) {
@@ -131,8 +94,7 @@ function environment(t, values) {
 // as its panes have them.
 function setup(t, vendor, { mode = 'answer', commands = undefined, wrapped = SHIM_VENDORS } = {}) {
   const p = project(t), fake = fakeClis(p.parent, { mode, commands }), app = terminalApp(p.parent, wrapped);
-  environment(t, { ...fake.env, PATH: [app.pane, fake.env.PATH, app.bin].join(path.delimiter), HOME: p.parent, TERMAPP_NODE: process.execPath, TERMAPP_SURFACE_ID: PANE,
-    ...Object.fromEntries(wrapped.flatMap(prog => [[`TERMAPP_${prog.toUpperCase()}_WRAPPER_SHIM`, path.join(app.pane, prog)], [`TERMAPP_${prog.toUpperCase()}_WRAPPER_SHIM_ROOT`, app.pane]])),
+  environment(t, { ...fake.env, PATH: [app.pane, fake.env.PATH, app.bin].join(path.delimiter), HOME: p.parent, TERMAPP_NODE: process.execPath, TERMAPP_PANE: PANE,
     GIT_AUTHOR_NAME: 'Test Owner', GIT_AUTHOR_EMAIL: 'owner@example.invalid', GIT_COMMITTER_NAME: 'Test Owner', GIT_COMMITTER_EMAIL: 'owner@example.invalid' });
   const controller = new ProjectController(projectFolder(p.root)); Object.assign(controller.draftConfig.roles.lead, { vendor, maxCostUsd: null });
   const calls = () => fs.existsSync(fake.calls) ? fs.readFileSync(fake.calls, 'utf8').trim().split('\n').map(JSON.parse).filter(call => call.vendor === vendor) : [];
@@ -154,7 +116,7 @@ test('ELU starts the wrapped command it finds first on PATH, by its path on disk
     const typed = spawnSync(vendor, ['--version'], { encoding: 'utf8' });
     assert.equal(typed.status, 0, typed.stderr); assert.match(typed.stdout, /\d+\.\d+\.\d+/);
   }
-  assert.deepEqual(f.app.visits().map(row => row.split(' ').slice(0, 3).join(' ')), SHIM_VENDORS.map(vendor => `${vendor} hops=0 real=${path.join(f.fake.dir, vendor)}`));
+  assert.deepEqual(f.app.visits().map(row => row.split(' ').slice(0, 3).join(' ')), SHIM_VENDORS.map(vendor => `${vendor} visits=0 real=${path.join(f.fake.dir, vendor)}`));
 });
 
 // The owner's scene: ELU opened in a pane of such an app, a turn on Claude Code in the mode a
@@ -170,7 +132,7 @@ for (const mode of ['ask', 'auto', 'full']) {
       // The wrapper went straight to the real program each time: it never met a file of ELU's.
       const visits = f.app.visits().filter(row => row.startsWith(`${vendor} `));
       assert.ok(visits.length > 0, 'the turn went through the wrapper');
-      for (const row of visits) assert.match(row, new RegExp(`^${vendor} hops=0 real=${f.real.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} `), row);
+      for (const row of visits) assert.match(row, new RegExp(`^${vendor} visits=0 real=${f.real.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} `), row);
     });
   }
 }
@@ -269,7 +231,7 @@ test('a command that starts itself again by name is handed its own call again, a
 
 // A vendor's program that never began: it could not be started, or a script in front of it
 // ended first. The chat says so in plain words and what to do; what the script printed follows.
-const GIVES_UP = 'termapp: stopped a possible infinite %s shim loop.';
+const GIVES_UP = 'termapp: gave up: the %s command keeps coming back to this script.';
 // turn: what only the launch of a turn has among its arguments.
 const givesUp = (f, vendor, turn) => fs.writeFileSync(path.join(f.app.pane, vendor), `#!/bin/sh\ncase " $* " in ${turn}) ;; *) exec ${JSON.stringify(f.real)} "$@";; esac\necho "${GIVES_UP.replace('%s', vendor)}" >&2\necho "second line" >&2\nexit 126\n`, { mode: 0o700 });
 test('a turn whose vendor program did not start says so in plain words, then what its command printed, then what to do', async t => {
@@ -277,7 +239,7 @@ test('a turn whose vendor program did not start says so in plain words, then wha
   // Another tool's script in front of the real program that answers for it until a turn starts, then gives up.
   givesUp(f, 'claude', "' -p '*");
   const { id, finished } = f.controller.ask('Where is coupon normalization?', null, { permissions: 'ask' });
-  const said = 'The model could not run: Claude Code did not start. The claude command said: termapp: stopped a possible infinite claude shim loop.';
+  const said = 'The model could not run: Claude Code did not start. The claude command said: termapp: gave up: the claude command keeps coming back to this script.';
   await assert.rejects(finished, { message: said });
   const task = readTask(f.controller.repo, id);
   assert.equal(task.state, 'blocked'); assert.equal(task.error.message, said); assert.equal(task.error.cause, 'not-started');
@@ -302,7 +264,7 @@ test('a Grok Build program that gives up as its live turn starts is named the sa
   givesUp(f, 'grok', "*' agent stdio '");
   atomic(path.join(personalDirectory(), 'conformance', 'grok.json'), { v: 1, bin: findBin('grok'), version: '1.0.77', steps: Object.fromEntries(ADAPTERS.grok.conformance.map(step => [step.id, 'pass'])), relay: true, at: new Date().toISOString() });
   const { id, finished } = f.controller.ask('Where is coupon normalization?', null, { permissions: 'ask' });
-  const said = 'The model could not run: Grok Build did not start. The grok command said: termapp: stopped a possible infinite grok shim loop.';
+  const said = 'The model could not run: Grok Build did not start. The grok command said: termapp: gave up: the grok command keeps coming back to this script.';
   await assert.rejects(finished, { message: said });
   assert.equal(stopLine(readTask(f.controller.repo, id)).text, `${said} Check that grok runs in your terminal, then type continue.`);
 });
