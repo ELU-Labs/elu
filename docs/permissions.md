@@ -277,9 +277,9 @@ the end (Antigravity and Grok Build without the live relay) has the cap alone. S
 of the project's checks: a check runs until it ends, up to the same 2 hours, however long it
 prints nothing.
 
-The keys are `y` allow and `n` deny. Where the session can be given Full access
-there is a third, `f`: it asks what `/permissions full` asks, then allows the
-action and switches the session to Full access, so that session stops asking.
+The keys are `y` allow and `n` deny, each followed by Enter. Where the session can
+be given Full access there is a third, `f`: it asks what `/permissions full` asks,
+then allows the action and switches the session to Full access, so that session stops asking.
 It is not offered for a turn that runs read only.
 
 ### Network
@@ -387,8 +387,9 @@ does not ask during a turn, so rules change nothing there.
 A message that asks for a change to code or files, or for work that needs planning, comes
 back as a Task before anything is edited: a title, a description, the goal, the objectives
 that say when it is done, a priority, a severity, the success criteria and the model's
-estimate of the work in minutes. You approve it with `y`, reject it
-with `n`, or change it with a message. This holds in every mode, Full access included, for
+estimate of the work in minutes. You approve it with `y` then Enter, reject it
+with `n` then Enter, or change it with a message. This holds in every mode, Full access
+included, for
 the session's model and for a bot that works, such as `@lead`.
 
 ELU enforces this much, on every vendor:
@@ -406,7 +407,8 @@ ELU enforces this much, on every vendor:
   minutes up to a week, else it is not set. Control characters are refused, and markup is
   shown as typed.
 - After approval the model reports its subtasks, the objectives it says are met, and the
-  minutes it thinks are left, which move the ETA. A
+  minutes it thinks are left, which move the ETA. While the turn runs, the subtasks follow
+  the model's own to-do list; each vendor's page says how it is read. A
   report cannot change the goal or an objective: those change only through a revised Task
   that you approve again. Done on the card is the model's report. The checks and the
   review are what verify the edit.

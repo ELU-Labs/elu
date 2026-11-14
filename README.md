@@ -50,8 +50,8 @@ as `.env`, stops it until `.gitignore` keeps that file out.
 
 | Tab | What it shows |
 | --- | --- |
-| Sessions | Every session across your projects. The selected one is open beside the list. |
-| Projects | Your projects. `n` makes one, `o` makes another the active one. |
+| Sessions | Every session across your projects. The selected one is open beside the list. Typing on a row writes a message to it; a row's key is its letter, then Enter. |
+| Projects | Your projects. `n` makes one, `o` makes another the active one. A project a teammate shares that is not on this computer is listed too, as `ELU   shared by @ali   on @ali-mac`: Enter opens its team board, and `c` clones it here. |
 | Kanban | The open project's tasks and sessions: To do, In progress, Needs you, Done. On a team, everyone with a clone of the same repository shares one board: every session a teammate, or another computer of yours, runs in it shows in the same columns with who started it and on which machine, to read only. A project whose folder holds several repositories has a board for each. `/share off` keeps a project off it both ways. |
 | Chats | Your team's channels, your teammates and your bots. |
 | Bots | Your bots. `n` makes one, Enter opens one. |
@@ -69,8 +69,8 @@ of the work. Nothing is edited yet.
 
 | Do | What happens |
 | --- | --- |
-| Esc, then `y` | Approves the Task. The work starts by itself. |
-| Esc, then `n` | Rejects it. Nothing is changed. |
+| Esc, `y`, then Enter | Approves the Task. The work starts by itself. |
+| Esc, `n`, then Enter | Rejects it. Nothing is changed. |
 | Type a message | Changes the Task. The card shows the new revision. |
 
 Typing `yes` or `I approve` and Enter approves too. A question gets a plain answer and no
@@ -85,7 +85,8 @@ and the ETA. Its Go to session button opens its session; Enter presses it. A tea
 and one of your other computer's, open the same way.
 
 After you approve, the model splits the work into subtasks and changes them as it likes.
-The card lists them as a checklist and marks the objectives the model reports met. Its ETA
+The card lists them as a checklist that follows the model's own to-do list while the turn
+runs, and marks the objectives the model reports met. Its ETA
 is approval plus the estimate, and follows the minutes left the model reports as it works. The
 Task is done when every objective is reported met and the turn, with its checks and
 review, has ended. A new message opens it again.
@@ -105,14 +106,14 @@ While the model or a bot works, the chat shows what it does as it happens: each 
 | Type | What it does |
 | --- | --- |
 | `/new` | Starts a new session |
-| `/model sonnet` | Chooses the model of this session; `/model` alone lists them |
+| `/model sonnet` | Chooses the model of this session; `/model` alone lists them. The name can be the one the app shows, and a message after it is sent on that model: `/model opus 5.5 fix the build`. Over a session on your other computer it changes that session's model there |
 | `/permissions auto` | Sets what the model may do: `ask`, `auto` or `full` |
 | `/place branch try-coupons` | Sets where a new session runs: `worktree`, `branch NAME` or `here` |
 | `/bots add qa` | Keeps a bot in this session; `/bots remove qa` takes it out |
 | `/agent add fable` | Adds another model to this session as an agent; write `@fable` and what to do. Words after the model say what it is for, and `--name NAME` names it: `/agent add sonnet you review my SQL --name sql` |
 | `@pair is there a simpler way?` | Asks a bot. Your next messages in that session go to it too |
 | `@model and what do you think?` | Writes to the session's model again |
-| `/changes` | Shows what this session changed; `/chat` goes back |
+| `/changes` | Shows what this session changed; `/chat` goes back. There, `+` on a line (or a click on its `+`) notes what should change, and `s` sends the notes to the model together |
 | `/publish` | Shows the exact push and draft pull request, then asks you |
 | `/stop` | Stops the running response. Messages you sent while it ran then go at once, in order; `↑` takes one back first. Over a session on your other computer, it stops that session there |
 | Enter (empty box) | While a turn works and a message of yours waits, sends that message now. On Claude Code the command the turn waits on moves to the background and the same turn reads the message. On the other vendors the turn stops as `/stop` stops it and the message starts the next turn, in the same vendor session where it can go on |
@@ -137,10 +138,23 @@ a systemd user timer, which runs while you are logged in; `loginctl enable-linge
 running after you log out. On macOS, while an agent works or a schedule is on, ELU
 stops the Mac from going to sleep on its own (`caffeinate -i`); the display can still
 sleep. Schedules show in the Sessions tab under Scheduled: `p` pauses one and `x` deletes
-it. A time is `in 30m`, `every 2h` (15 minutes to 7 days), `daily 9:00`, `weekdays 9am`,
+it, each followed by Enter. A time is `in 30m`, `every 2h` (15 minutes to 7 days),
+`daily 9:00`, `weekdays 9am`,
 `mon,thu 14:30`, `tomorrow 15:00` or `2026-12-01 9:00`, in this computer's local time.
 The model cannot make a schedule itself: asked to repeat work, it gives you the
 `/schedule` line to type.
+
+## Keys
+
+The last row of the screen names the keys for whatever has the focus.
+
+| Key | What it does |
+| --- | --- |
+| Tab | Moves between the tabs, the list, the message box and the chat |
+| Enter | Sends the message, or opens the selected row |
+| Esc | Leaves the message box for the list, and the list for the message box; closes a dialog |
+| ↑ ↓ | Move in a list; scroll the chat when it has the focus |
+| PgUp PgDn | Move a page: in a session's chat or its changes and in the threads of a chat in Chats, from the message box too; in the Sessions list; in the text of a dialog, such as a teammate's thread or `/help` |
 
 ## Permissions
 
@@ -159,6 +173,8 @@ and `/permissions default auto` sets what new sessions start with.
   your whole environment. [What stays, and why](docs/permissions.md#full-access).
 
 When the model asks, `y` allows and `n` denies; `f` allows and gives that session Full access.
+On the session's row or in its chat each is the letter, then Enter, so a message that starts
+with one of them is only a message.
 `a` allows and keeps a narrow rule, such as `npm test` or `git diff`, for this project or all
 of them, so it is not asked again. Reads in the project, git reads and the project's own test,
 lint and build scripts run without asking from the start. `/permissions rules` or
@@ -335,6 +351,16 @@ their agents also know what yours is working on. Nothing else about it
 is sent: no chat, file or path. `/share off` in a project keeps it off both ways. The wire
 format is in [docs/peer-network.md](docs/peer-network.md).
 
+Teammates on a team a project is shared with see it in their Projects tab, also with no copy
+of it: its name, who shares it and on which machine. What they are told is the project's
+name, its handle and its git address (the `origin` remote, never with a password or a token
+in it), and the title, column and starter of each session in it. Enter on the row opens the
+project's team board, where the message box writes to whoever shares it: the message starts a
+session on their computer, under what they chose for the team. `c` clones the project from its
+git address into a folder you name; from then on it is a project of yours and the one row for
+it. A project with no git address says so: copy its folder to your computer and run ELU in
+it. `/share off`, unsharing the project, or leaving the team takes the row away.
+
 Teammates on a team a project is shared with also see the work in it: for each live
 editing task, the first line of its request and the paths of the files it changed, and the
 approved Tasks its sessions work on. `elu share --no-status`, in the project, turns that
@@ -374,7 +400,8 @@ or something only you can do. Its approvals wait on its own row in Sessions, and
 session's pane says so. Both agents show in the same pane, the devbox's as "Opus 5.5 on
 @devbox" and yours as "Opus 5.5 here", and the helper is also a session of its own in
 Sessions. Start a message with `@devbox` to write to the devbox session itself, and answer its
-question there the same way: `@devbox 1`. `y`, `n` and `a` still answer its approvals. A
+question there the same way: `@devbox 1`. `y`, `n` and `a`, each followed by Enter, still
+answer its approvals. A
 teammate's session on the devbox, such as a handoff you accepted there, has no agent here:
 what you type goes to it. A message to a devbox session that names files or folders on the laptop asks
 "Send 14 files (2.1 MB) from this computer with this message?": y sends them along, n sends
@@ -473,6 +500,17 @@ You need macOS or Linux, Node 22 or newer, Git, and Claude Code (`claude`) insta
 signed in: new projects and the built-in bots run on it. To run sessions on Codex
 (`codex`), sign in to it and choose it with `/model`.
 
+New sessions start on the default model. A project's default is set with `/model default
+<name>`, or in its settings: Projects, Enter, Default model. This computer's default, which
+every project that has not chosen uses, is set with `/model computer <name>` or the This
+computer row there. `none` in place of the name clears either. With nothing chosen, the
+default is the first vendor installed on this computer, in this order: Claude Code, Codex,
+Antigravity CLI, Grok Build. So a computer that has only Grok Build runs every new session on
+it, also one that a teammate's message, your other computer or a schedule starts. A default
+whose vendor is not installed here is not used, and ELU says so wherever it shows the
+default. A bot that names no model, and whose vendor is not installed here, runs on this
+computer's default; a bot that names its model keeps it.
+
 Codex must be installed even if your sessions run on Claude Code, but it does not need to
 be signed in. ELU runs your project's checks and its pre-push hooks inside Codex's
 sandbox (`codex sandbox`); without it the checks fail and `/publish` refuses. Install it
@@ -527,7 +565,7 @@ that check off. Both ask the npm registry for the latest version number and send
 else.
 
 To remove ELU, first delete your schedules in the app (Sessions tab, under Scheduled:
-`x` on each one), so they no longer keep the Mac awake, and quit it with `/quit`.
+`x`, then Enter, on each one), so they no longer keep the Mac awake, and quit it with `/quit`.
 
 Then remove the login item that runs schedules, and bots with a schedule such as `@elu`,
 while ELU is closed, if there is one. On macOS, run

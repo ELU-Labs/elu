@@ -135,6 +135,8 @@ if(cfg.name!==undefined&&schema?.properties?.name)result.name=cfg.name;
 if(cfg.learned!==undefined&&schema?.properties?.learned)result.learned=cfg.learned;
 // intent (fake.json): answer makes every conversation turn an answer, so a relay test needs no Task.
 if(conversation&&cfg.intent==='answer'){result.intent='answer';result.summary='Looked.';}
+// answer (fake.json): what an answering turn says.
+if(conversation&&result.intent==='answer'&&typeof cfg.answer==='string')result.summary=cfg.answer;
 // A request for an edit plans first (lib/plan.mjs): it comes back with a Task unless the prompt
 // carries one the owner approved. fake.json may give its own Task, or none with mode no-task;
 // mode bad-task returns one that does not read. A turn that reports progress ticks every subtask.
@@ -150,7 +152,14 @@ const badReply=cfg.badReply==='once'&&!resumed||cfg.badReply==='lost'&&!input.in
 // models (fake.json): the full id a run reports in system/init for the --model it was started
 // with. noCredits: a --model this account has no usage credits for; that run ends as the real
 // CLI's does then, with the API error on its result line.
-const nothingSpent=0;const modelArg=args.includes('--model')?args[args.indexOf('--model')+1]:null;const reported=cfg.models?.[modelArg]??'claude-fable-5-1';
+// A --model that is a full id of the catalog reports that id. An alias (opus) reports what
+// models gives it, else claude-fable-5-1, as a run with no --model does. Any other name is no
+// model: the real CLI starts, reports the name it was given, and ends with the API's 404 on
+// its result line; it never runs another model in its place.
+const nothingSpent=0;const modelArg=args.includes('--model')?args[args.indexOf('--model')+1]:null;
+const ALIASES=['fable','opus','sonnet','haiku','default','best','opusplan'];const plainModel=String(modelArg??'').replace(/\[[^\]]*\]$/,'');const listed=(CATALOG?.models??[]).find(row=>row.id===plainModel.replace(/-\d{8}$/,''))?.id??null;
+const reported=cfg.models?.[modelArg]??listed??'claude-fable-5-1';
+if(modelArg!==null&&cfg.models?.[modelArg]===undefined&&!listed&&!ALIASES.includes(plainModel)){console.log(JSON.stringify({type:'system',subtype:'init',session_id:session,model:modelArg,permissionMode:'default',mcp_servers:[]}));console.log(JSON.stringify({type:'result',subtype:'success',is_error:true,api_error_status:404,api_error:'not_found_error',duration_ms:150,num_turns:1,result:`There's an issue with the selected model (${modelArg}). It may not exist or you may not have access to it. Run --model to pick a different model.`,session_id:session,total_cost_usd:nothingSpent}));process.exit(1);}
 if(cfg.noCredits&&modelArg===cfg.noCredits){console.log(JSON.stringify({type:'system',subtype:'init',session_id:session,model:reported,permissionMode:'default',mcp_servers:[]}));console.log(JSON.stringify({type:'result',subtype:'success',is_error:true,api_error_status:429,api_error:'model_requires_usage_credits',duration_ms:180,num_turns:1,result:"You're out of usage credits. Switch to another model, or manage usage credits at https://claude.ai/settings/usage?from=cc_cli_limit_message, to continue.",session_id:session,total_cost_usd:nothingSpent}));process.exit(1);}
 // tooLong (fake.json): a review this model will not take, ended as the real CLI ends a prompt
 // longer than its model takes: a number, one over that many characters; 'files', one that
@@ -296,6 +305,30 @@ if(edit&&input.includes('Trim spaces'))fs.writeFileSync('src/coupon.mjs','export
 // a test's quiet limit, then finishes. stall: an edit turn makes its edit, prints one line and
 // then prints nothing for a minute, as a turn that stopped working does.
 if(mode==='chatty')for(let n=0;n<(cfg.ticks??15);n++){console.log(JSON.stringify({type:'assistant',message:{content:[{type:'text',text:`Still working (${n}).`}]}}));await new Promise(resolve=>setTimeout(resolve,200));}
+// live (fake.json): a file; a working turn keeps a to-do list as the real one does, and goes on once that file exists.
+// Claude Code 2.1.322 has no to-do tool in a run unless --tools names one; named, it has the Task tools. A step is made
+// with TaskCreate, whose result gives its number, and changed with TaskUpdate by that number. The list is kept with the
+// session under the config folder: a new session starts with none, and a later turn of a session finishes the steps an
+// earlier one left open and makes none again. liveAsks: the turn that makes the list stops on a question with its
+// second step still in hand. liveTool 'todowrite': an older Claude Code, which sends the whole list in one TodoWrite call.
+const todoTools=(args[args.indexOf('--tools')+1]??'').split(',').filter(name=>['TaskCreate','TaskUpdate','TaskList','TaskGet','TodoWrite'].includes(name));
+const liveGate=async()=>{const until=Date.now()+30000;while(!fs.existsSync(cfg.live)&&Date.now()<until)await new Promise(resolve=>setTimeout(resolve,50));};
+if(cfg.live&&todoTools.includes('TaskCreate')&&cfg.liveTool!=='todowrite'){
+ const listDir=path.join(process.env.CLAUDE_CONFIG_DIR??path.join(process.env.HOME??'','.claude'),'tasks',session);if(!resumed)fs.rmSync(listDir,{recursive:true,force:true});fs.mkdirSync(listDir,{recursive:true});
+ const kept=()=>fs.readdirSync(listDir).filter(name=>/^\d+\.json$/.test(name)).map(name=>JSON.parse(fs.readFileSync(path.join(listDir,name),'utf8'))).sort((a,b)=>a.id-b.id);
+ let calls=0;const say=row=>console.log(JSON.stringify({...row,parent_tool_use_id:null,session_id:session}));
+ const call=(name,input,content,tool_use_result)=>{const id=`toolu_fake_${process.pid}_${++calls}`;say({type:'assistant',message:{role:'assistant',content:[{type:'tool_use',id,name,input}]}});say({type:'user',message:{role:'user',content:[{tool_use_id:id,type:'tool_result',content}]},tool_use_result});};
+ const create=(subject,description)=>{const id=String(Math.max(0,...kept().map(task=>Number(task.id)))+1);fs.writeFileSync(path.join(listDir,`${id}.json`),JSON.stringify({id,subject,description,status:'pending',blocks:[],blockedBy:[]}));call('TaskCreate',{subject,description,activeForm:`Doing: ${subject}`},`Task #${id} created successfully: ${subject}`,{task:{id,subject,description}});return id;};
+ const update=(taskId,status)=>{const file=path.join(listDir,`${taskId}.json`),task=JSON.parse(fs.readFileSync(file,'utf8'));fs.writeFileSync(file,JSON.stringify({...task,status}));call('TaskUpdate',{taskId,status},`Updated task #${taskId} status`,{success:true,taskId,updatedFields:['status'],statusChange:{from:task.status,to:status}});};
+ const open=kept().filter(task=>task.status!=='completed');
+ if(open.length){for(const task of open)update(task.id,'completed');await liveGate();}
+ else{
+  const first=create('Change normalize','Return the code in upper case.'),second=create('Run the coupon test','Run the test file.');update(first,'in_progress');update(first,'completed');update(second,'in_progress');await liveGate();
+  if(cfg.liveAsks){Object.assign(result,{outcome:'needs_input',question:'Run the long test too?',choices:['Yes','No']});if(result.subtasks){result.subtasks=[{text:'Change normalize',state:'done'},{text:'Run the coupon test',state:'doing'}];result.objectivesMet=[1];}}
+  else update(second,'completed');
+ }
+}
+else if(cfg.live&&todoTools.includes('TodoWrite')&&cfg.liveTool==='todowrite'){console.log(JSON.stringify({type:'assistant',parent_tool_use_id:null,message:{content:[{type:'tool_use',id:'toolu_fake_todo',name:'TodoWrite',input:{todos:[{content:'Change normalize',status:'completed',activeForm:'Changing normalize'},{content:'Run the coupon test',status:'in_progress',activeForm:'Running the coupon test'}]}}]}}));await liveGate();}
 if(mode==='stall'&&edit){console.log(JSON.stringify({type:'assistant',message:{content:[{type:'text',text:'Edited the file. Thinking.'}]}}));await new Promise(resolve=>setTimeout(resolve,60000));}
 if(mode==='question'&&!args.includes('--resume')&&!input.includes('Uppercase')){result.outcome='needs_input';result.question='Which format?';result.choices=['Uppercase','Lowercase'];}
 if((mode==='review-fix'||mode==='review-block')&&input.includes('Address the review')){result.responses=[{id:'R1',action:mode==='review-fix'?'fixed':'disputed',reason:mode==='review-fix'?'Handled the edge case.':'The finding still needs owner input.'}];}

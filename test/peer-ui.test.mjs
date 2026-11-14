@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import { PassThrough } from 'node:stream';
-import { project, temp, fakeClis } from './helpers.mjs';
+import { project, temp, fakeClis, keyThenEnter } from './helpers.mjs';
 import { liveTask } from './peer-helpers.mjs';
 import { repository } from '../lib/git.mjs';
 import { claimView, registerProject } from '../lib/projects.mjs';
@@ -16,6 +16,7 @@ import { helperLink } from '../lib/remote-helper.mjs';
 import { clockTime } from '../lib/terminal-plan.mjs';
 import { botTarget, chatBar, dmTarget, fitWords, ink, membersLine, peerName, roomTarget, teamPanes, threadTarget, visible } from '../lib/terminal-visuals.mjs';
 import { joinWait, noRoute } from '../lib/peer/join-text.mjs';
+import { columns } from '../lib/width.mjs';
 
 const ME = 'a'.repeat(64), SARA = 'b'.repeat(64), LI = 'c'.repeat(64);
 const LONG = 'Could you check whether the retry budget in the uploader resets after a successful flush or only after restart because we keep seeing duplicate batches';
@@ -120,6 +121,8 @@ async function view(t, { columns = 160, rows = 40, ...options } = {}) {
   const finished = launchTerminal({ ...options, input, output, refreshMs: 30, startConductor: () => false, onRender: value => { rendered = value; renders++; } });
   finished.catch(() => {});
   await until(() => rendered, 'first render');
+  // A row's key is its letter, then Enter (keyThenEnter). type() writes text as it is.
+  const write = keyThenEnter(input, () => rendered);
   // A failed test can leave a dialog open, and the app ignores q while one is: every pass
   // closes what is open (closing one can open the next) and presses q again. A view that
   // still will not close is interrupted the way a hangup would, and if even that fails the
@@ -132,12 +135,12 @@ async function view(t, { columns = 160, rows = 40, ...options } = {}) {
       rendered.panels.ask.cancel();
       for (const child of [...rendered.screen.children]) { child.dismiss?.(); child.children?.find(item => item.type === 'textbox')?.emit('cancel'); }
       if (waited > 3000) process.emit('SIGHUP');
-      else { rendered.panels.chat.focus(); rendered.screen.emit('keypress', 'q', { name: 'q' }); }
+      else { rendered.panels.tabs[0].focus(); rendered.screen.emit('keypress', 'q', { name: 'q' }); }
       await new Promise(resolve => setTimeout(resolve, 20));
     }
     input.destroy(); output.destroy();
   });
-  return { input, output, finished, get current() { return rendered; }, get panels() { return rendered.panels; }, get renders() { return renders; }, get writes() { return writes; },
+  return { type(text) { for (const ch of text) write(ch); }, input, output, finished, get current() { return rendered; }, get panels() { return rendered.panels; }, get renders() { return renders; }, get writes() { return writes; },
     lines() { return rendered.screen.lines.map(row => row.map(cell => cell[1]).join('')); }, text() { return this.lines().join('\n'); } };
 }
 async function send(v, text) {
@@ -263,6 +266,25 @@ test('Chats shows channels and direct messages beside the open one at 160x40', a
   assert.match(asked, /…$/); const words = asked.slice(0, -1).trim().split(' '); assert.ok(LONG.includes(words.at(-1)), 'cut at a word boundary');
 });
 
+test('a thread whose row is as wide as its pane keeps its last word, in colour as the app runs', async t => {
+  const parent = temp(later(t)); environment(t, parent); delete process.env.NO_COLOR;
+  const peer = fakePeer({ items: [] }), v = await view(t, { peer });
+  await send(v, '/chats'); await until(() => v.current.view === 'chats', 'Chats');
+  await openRow(v, /@sara/, '@sara');
+  // A list row stops one column short of its pane. This one is as wide as a row may be, 中
+  // counted as the two columns it takes. blessed wrapped it again at its last space, and a
+  // list shows one row of each.
+  const list = v.panels.teamLists[1], room = list.width - 2, lead = '← @sara asks you · ', words = 'alpha beta gamma delta epsilon zeta eta theta iota kappa lambda'.split(' ');
+  let question = '中 '; for (let at = 0; columns(question) < room - lead.length - 12; at++) question += `${words[at % words.length]} `;
+  question += `${'m'.repeat(room - lead.length - columns(question) - 3)} et`;
+  peer.peerItems = () => [{ id: 'incoming-9', kind: 'incoming', peer: SARA, name: 'sara', project: 'web', text: question, at: ago(1), state: 'submitted', threadId: 'th-9' }];
+  const row = () => list.items.find(item => /asks you/.test(plainItem(item)));
+  await until(() => row(), 'the thread'); v.current.screen.render();
+  assert.equal(plainItem(row()).replace(/\x03/g, '').trimEnd(), `${lead}${question}`); assert.equal(columns(plainItem(row()).replace(/\x03/g, '').trimEnd()), room, 'one short of the pane, as every list row is');
+  assert.equal(row()._clines.length, 1, 'one row, not two');
+  assert.ok(v.lines()[row().atop].replace(/\x03/g, '').includes(`${lead}${question}`), 'the whole row is drawn, "et" with it');
+});
+
 test('Chats stacks the bar over threads at 80x24 without breaking borders', async t => {
   const { v } = await teamView(t, { columns: 80, rows: 24 });
   await until(() => v.panels.teamLists[1].items.length > 1 && v.panels.teamBoxes[1]._label.getText().trim() === '@sara', 'stacked panes');
@@ -310,6 +332,96 @@ for (const [columns, rows] of [[160, 40], [140, 50], [80, 24]]) test(`Up and Dow
   await until(() => /^● @sara/.test(at()), 'a wheel step down from + Add channel lands on @sara');
   wheelAt(v, bar, -1); await until(() => at() === '+ Add channel', 'a wheel step up from @sara lands on + Add channel');
   assert.ok(stops.includes(at()) && v.current.screen.focused === bar);
+});
+
+// Chats was opened by typing /chats. The first Up from the message box brought /chats back into it and the first Down
+// emptied it again: the cursor never left the box, and the key bar said nothing about either key.
+for (const [columns, rows] of [[140, 50], [80, 24]]) test(`the key bar says where the cursor is after every Up and Down from the message box in Chats at ${columns}x${rows}`, { timeout: 30000 }, async t => {
+  const peer = fakePeer({ items: [] }); peer.channels = [{ id: 'd'.repeat(16), name: 'design', members: [ME, SARA] }];
+  const { v } = await teamView(t, { columns, rows, peer });
+  const [bar] = v.panels.teamLists, ask = v.panels.ask, keys = () => v.panels.keys.getText().trim(), at = () => plainItem(bar.items[bar.selected]).trim(), focused = () => v.current.screen.focused;
+  const box = 'enter send  @name one teammate  / commands  ! run a shell command';
+  await until(() => bar.items.length > 5 && focused() === ask && ask.getValue() === '' && keys() === box, 'the cursor is in the empty message box');
+  // Up: /chats is in the box again and the cursor is still there. The bar names the key that takes it out.
+  v.input.write('\x1b[A'); await until(() => ask.getValue() === '/chats' && focused() === ask, 'Up brings /chats back');
+  await until(() => keys() === 'enter send  ↓ clear  @name one teammate  / commands  ! run a shell command', 'the bar says what Down does with it');
+  // Down: the box is empty again, and the bar is the empty box's.
+  v.input.write('\x1b[B'); await until(() => ask.getValue() === '' && focused() === ask && keys() === box, 'Down clears the box');
+  // Down again leaves the box for the Team bar, and the bar is that row's.
+  v.input.write('\x1b[B'); await until(() => focused() === bar && keys() === 'enter write  n new channel  tab threads', 'Down from the empty box reaches the Team bar');
+  assert.equal(at(), '# general  3');
+  // Every row of the bar, down and back up: the bar names that row's keys after each key. A teammate's live session has its teammate's keys.
+  const hints = line => /^\+ Add channel/.test(line) ? 'enter new channel  ↑↓ choose' : /^\+ Add teammate/.test(line) ? 'enter invite a teammate  ↑↓ choose' : /^# design/.test(line) ? 'enter write  n new channel  m members  x leave  tab threads'
+    : /^[●○⚠·] @/.test(line) ? 'enter write  t trust  n new channel  tab threads' : 'enter write  n new channel  tab threads';
+  const stops = bar.items.map(item => plainItem(item).trim()).filter(line => !['Channels', '', 'Direct messages'].includes(line));
+  assert.ok(stops.some(line => /^# design/.test(line)) && stops.some(line => /^● @sara/.test(line)) && /^\+ Add teammate/.test(stops.at(-1)));
+  for (const [key, order] of [['\x1b[B', stops.slice(1)], ['\x1b[A', stops.slice(0, -1).reverse()]]) for (const line of order) { v.input.write(key); await until(() => focused() === bar && at() === line && keys() === hints(line), `the keys of ${line}, now ${keys()}`); }
+  // Up from the first channel is the Chats tab; Down comes back to the bar, and Esc goes to the message box.
+  v.input.write('\x1b[A'); await until(() => focused() === v.panels.tabs.find(tab => tab.viewName === 'chats') && keys() === '←→ switch  enter open  ↓ chats', 'the tab and its keys');
+  v.input.write('\x1b[B'); await until(() => focused() === bar && keys() === hints(stops[0]), 'back on the bar');
+  v.input.write('\x1b'); await until(() => focused() === ask && keys() === box, 'Esc returns to the message box and its keys');
+  // With more sent, the bar says which way is older and which is newer, and stops saying so once the text is changed.
+  await send(v, 'one'); await send(v, 'two');
+  await until(() => focused() === ask && ask.getValue() === '' && keys() === box, 'both are sent and the box is empty');
+  v.input.write('\x1b[A'); await until(() => ask.getValue() === 'two' && keys().startsWith('enter send  ↑ older  ↓ clear  @name one teammate'), 'the newest: older is up, clear is down');
+  v.input.write('\x1b[A'); await until(() => ask.getValue() === 'one' && keys().startsWith('enter send  ↑ older  ↓ newer  @name one teammate'), 'between two');
+  v.input.write('\x1b[A'); await until(() => ask.getValue() === '/chats' && keys().startsWith('enter send  ↓ newer  @name one teammate'), 'the oldest has none over it');
+  v.input.write('\x1b[B'); await until(() => ask.getValue() === 'one' && keys().startsWith('enter send  ↑ older  ↓ newer'), 'and down is newer');
+  v.input.write('x'); await until(() => ask.getValue() === 'onex' && keys() === box, 'changed text is the owner\'s own: the arrows no longer walk');
+  assert.equal(focused(), ask);
+});
+
+// A click on a heading or on the blank row puts the cursor on the row next to it, the way the click went from
+// the cursor; a heading with no row over it gives the row under it.
+for (const [columns, rows] of [[140, 50], [80, 24]]) test(`a click on a heading of the Team bar lands on the row next to it at ${columns}x${rows}`, { timeout: 30000 }, async t => {
+  const { v } = await teamView(t, { columns, rows, peer: fakePeer({ items: [] }) });
+  const [bar] = v.panels.teamLists, at = () => plainItem(bar.items[bar.selected]).trim(), open = () => v.panels.teamBoxes[1]._label.getText().trim(), keys = () => v.panels.keys.getText().trim();
+  await until(() => bar.items.length > 5 && open() === '#general', 'the bar opens on #general');
+  const all = bar.items.map(item => plainItem(item).trim()), place = pattern => all.findIndex(line => pattern.test(line));
+  assert.deepEqual(all.slice(0, 6).map(line => line.replace(/^(● @sara).*/, '$1')), ['Channels', '# general  3', '+ Add channel', '', 'Direct messages', '● @sara']);
+  // The cursor starts on one row and the mouse presses another, where that row is drawn now (a short bar scrolls).
+  const click = async (from, to) => {
+    bar.focus(); bar.select(to); bar.select(from); await until(() => bar.selected === from, `the cursor on row ${from}`);
+    const y = bar.atop + to - bar.childBase; assert.ok(to >= bar.childBase && y < bar.atop + bar.height, `row ${to} shows`);
+    await until(() => bar.items[to].lpos?.yi === y && bar.items[from].lpos?.yi === bar.atop + from - bar.childBase, `row ${to} is drawn where the mouse presses`);
+    v.input.write(`\x1b[<0;${bar.aleft + 4};${y + 1}M`); v.input.write(`\x1b[<0;${bar.aleft + 4};${y + 1}m`);
+    await until(() => bar.selected !== from || to === from, `a click on row ${to} from row ${from} moves the cursor`); return at();
+  };
+  const general = place(/^# general/), add = place(/^\+ Add channel/), blank = all.indexOf(''), direct = all.indexOf('Direct messages'), sara = place(/^● @sara/), li = place(/^○ @li/);
+  // Going down: the heading gives the first direct chat under it, and the threads beside the bar are that person's.
+  assert.match(await click(general, direct), /^● @sara/); await until(() => open() === '@sara' && keys() === 'enter write  t trust  n new channel  tab threads', '@sara opens, with a person\'s keys');
+  assert.equal(v.current.screen.focused, bar);
+  assert.match(await click(add, blank), /^● @sara/);
+  // Going up: the row over the blank row.
+  assert.equal(await click(sara, direct), '+ Add channel'); await until(() => keys() === 'enter new channel  ↑↓ choose', 'the add row\'s keys');
+  assert.equal(await click(li, blank), '+ Add channel');
+  // The first heading has no row over it: the first channel, from wherever the cursor was.
+  assert.equal(await click(add, 0), '# general  3'); await until(() => open() === '#general' && keys() === 'enter write  n new channel  tab threads', '#general opens');
+  // A bar too short to show both rows at once cannot have this click.
+  if (bar.height > sara) assert.equal(await click(sara, 0), '# general  3');
+  // A row that can be chosen takes the click itself.
+  assert.match(await click(sara, li), /^○ @li/); await until(() => open() === '@li', '@li opens with a click');
+  assert.ok(!['Channels', '', 'Direct messages'].includes(at()));
+});
+
+// In a bar too short to show every row, the cursor came up to the first row under a heading with that heading
+// scrolled out of view over it: the first channel showed with no Channels over it until Up left the bar.
+test('a heading of the Team bar stays in view over its first row when the bar is short, at 80x24', { timeout: 30000 }, async t => {
+  const { v } = await teamView(t, { columns: 80, rows: 24, peer: fakePeer({ items: [] }) });
+  const [bar] = v.panels.teamLists, at = () => plainItem(bar.items[bar.selected]).trim(), shown = () => v.lines().slice(bar.atop, bar.atop + bar.height).map(line => line.slice(bar.aleft, bar.aleft + 20).trim());
+  await until(() => bar.items.length > 5, 'the bar');
+  const all = bar.items.map(item => plainItem(item).trim());
+  assert.ok(bar.height < all.length && bar.height > 2, 'the bar is shorter than its rows');
+  bar.focus(); bar.select(all.length - 1); await until(() => bar.childBase > 0 && shown().at(-1) === all.at(-1), 'the bar is scrolled to its last row');
+  const up = async to => { for (let from = at(); !to.test(at()); from = at()) { v.input.write('\x1b[A'); await until(() => at() !== from, `Up from ${from}`); } };
+  // Up to the first direct chat: Direct messages is drawn over it, at the top of the bar.
+  await up(/^● @sara/); await until(() => shown()[0] === 'Direct messages' && /^● @sara/.test(shown()[1]), `Direct messages over @sara, now ${shown().join(' | ')}`);
+  // Up to the first channel: Channels is drawn over it, with the focus still on the bar.
+  await up(/^# general/); await until(() => shown()[0] === 'Channels' && /^# general/.test(shown()[1]), `Channels over #general, now ${shown().join(' | ')}`);
+  assert.equal(v.current.screen.focused, bar); assert.equal(bar.childBase, 0);
+  // Down again keeps one row a key, and the cursor in view.
+  v.input.write('\x1b[B'); await until(() => at() === '+ Add channel' && shown().includes('+ Add channel'), 'Down from the first channel');
+  v.input.write('\x1b[B'); await until(() => /^● @sara/.test(at()) && shown().some(line => /^● @sara/.test(line)), 'Down to the first direct chat');
 });
 
 test('a message that starts with ! in Chats runs in a shell and is never asked to the team', async t => {
@@ -1033,11 +1145,11 @@ test('a session on my other computer that waits for y or n shows n once in the k
   await until(() => /New session on @sara-box/.test(ask._label.getText()), 'the label names the computer');
   ask.clearValue(); ask.cancel();
   board.focus(); selectRow(board, /wants to run ls/);
-  await until(() => /y allow {2}n deny {2}enter open {2}tab next/.test(keys()), 'approval keys');
+  await until(() => /y allow {2}n deny {2}enter open {2}letter then enter {2}tab next/.test(keys()), 'approval keys');
   assert.doesNotMatch(keys(), /new session/);
   // A Task waiting in a session started from here waits under Needs you, marked with the computer.
   selectRow(board, /on sara-box · Uppercase plan/);
-  await until(() => /y approve {2}n reject {2}enter open {2}tab next/.test(keys()), 'Task keys');
+  await until(() => /y approve {2}n reject {2}enter open {2}letter then enter {2}tab next/.test(keys()), 'Task keys');
   assert.doesNotMatch(keys(), /new session/);
 });
 
@@ -1363,6 +1475,73 @@ test('Sessions names a message from my other computer by the name it shows under
   await until(() => /No computer on your team is called @nobody\./.test(status()), '/mine names no teammate');
 });
 
+test('/model NAME and a message over a session on my other computer go there as typed: that computer reads the name, and the status names the model it took', async t => {
+  const at = new Date().toISOString(), id = '55555555-5555-4555-8555-555555555555';
+  const remote = [{ id, machine: SARA, createdAt: at, lastAt: at, title: 'Native replay e2e handoff', state: 'running', steps: [], entries: [{ role: 'You', at, text: 'Start the handoff' }], approvals: [] }];
+  const p = project(later(t)); environment(t, p.parent);
+  const before = process.env.PATH; process.env.PATH = fakeClis(p.parent).env.PATH; owned(t).files.push(() => { process.env.PATH = before; });
+  // What the other computer answers: the model it read at the start of the text, by the name it shows it by, and whether words came after it.
+  const THERE = [[/^opus 5\.5\b/i, 'Opus 5.5'], [/^opus\b/, 'Opus 5.5'], [/^sonnet 5\b/, 'Sonnet 5'], [/^devbox-model\b/, 'devbox-model']];
+  const took = text => THERE.find(([name]) => name.test(text));
+  let older = false;
+  const peer = fakePeer({ items: [], mine: [{ key: SARA, mine: true, theirs: true }], remote, refuse: command => command.type !== 'remoteSend' || !command.model ? null
+    : older ? 'Update ELU on @sara-box to change its model from here.' : took(command.text) ? null : `@sara-box: No model named ${command.text.split(' ')[0]}. /model lists them; /model add adds one by name.` });
+  const answer = peer.awaitCommand; peer.awaitCommand = async (...args) => { const out = await answer(...args), command = peer.last; return command.type === 'remoteSend' && command.model ? { id, model: took(command.text)[1], sent: command.text.replace(took(command.text)[0], '').trim() !== '' } : out; };
+  const v = await view(t, { repo: repository(p.root), dashboard: true, peer });
+  const board = v.panels.board, sentThere = () => peer.sent().filter(row => row.type === 'remoteSend'), status = () => v.panels.status.getText().replace(/\s+/g, ' ');
+  const over = async () => { board.focus(); selectRow(board, /Native replay e2e handoff/); await until(() => /@sara-box/.test(v.panels.ask._label.getText()), 'the box writes about the session there'); };
+  await until(() => board.items.map(plainItem).some(row => /Native replay e2e handoff/.test(row)), 'the row of the session there');
+  await over(); await send(v, '/model opus can you help this remote agent with the files it needs and instruction to start the handoff');
+  await until(() => sentThere().length === 1, 'sent there');
+  assert.deepEqual(sentThere()[0], { type: 'remoteSend', id, text: 'opus can you help this remote agent with the files it needs and instruction to start the handoff', model: true });
+  await until(() => /Sent to the session on @sara-box, now on Opus 5\.5\./.test(status()), 'the status says where it went and names the model as that computer does');
+  // The name alone. No Opus ever ran on this computer, so it has no model it shows as Opus 5.5: the two words still go as typed, and no id is made up here.
+  await over(); await send(v, '/model opus 5.5');
+  await until(() => sentThere().length === 2, 'the model alone');
+  assert.deepEqual(sentThere()[1], { type: 'remoteSend', id, text: 'opus 5.5', model: true });
+  await until(() => /The session on @sara-box uses Opus 5\.5 from your next message\./.test(status()), 'the status names the model');
+  await over(); await send(v, '/model sonnet 5');
+  await until(() => sentThere().length === 3 && /The session on @sara-box uses Sonnet 5 from your next message\./.test(status()), 'a name and version');
+  assert.deepEqual(sentThere()[2], { type: 'remoteSend', id, text: 'sonnet 5', model: true });
+  // A model only that computer has: this one's /model would say there is none, and it is not asked.
+  await over(); await send(v, '/model devbox-model  and the tests');
+  await until(() => sentThere().length === 4 && /Sent to the session on @sara-box, now on devbox-model\./.test(status()), 'a model of that computer alone');
+  assert.deepEqual(sentThere()[3], { type: 'remoteSend', id, text: 'devbox-model  and the tests', model: true });
+  // A name that computer does not know: its own line, and the text stays to be corrected.
+  await over(); await send(v, '/model nosuch and the tests');
+  await until(() => /@sara-box: No model named nosuch\. \/model lists them; \/model add adds one by name\./.test(status()), 'that computer says it has no such model');
+  assert.equal(v.panels.ask.getValue(), '/model nosuch and the tests'); v.panels.ask.setValue('');
+  // That computer runs an older ELU, which would send the whole text as a message and keep the old model: one plain line, nothing sent, and the text stays.
+  older = true;
+  await over(); await send(v, '/model opus 5.5 and the tests');
+  await until(() => /Update ELU on @sara-box to change its model from here\./.test(status()), 'the status says to update it');
+  assert.equal(v.panels.ask.getValue(), '/model opus 5.5 and the tests');
+});
+
+test('status typed on the row of a running session on my other computer is a message and stops nothing there; s then Enter stops it', async t => {
+  const at = new Date().toISOString(), id = '66666666-6666-4666-8666-666666666666';
+  const remote = [{ id, machine: SARA, createdAt: at, lastAt: at, title: 'Run the nightly checks', state: 'running', steps: [], entries: [{ role: 'You', at, text: 'Run the nightly checks' }], approvals: [] }];
+  const p = project(later(t)); environment(t, p.parent);
+  const peer = fakePeer({ items: [], mine: [{ key: SARA, mine: true, theirs: true }], remote }), v = await view(t, { repo: repository(p.root), dashboard: true, peer });
+  const board = v.panels.board, ask = v.panels.ask, keys = () => v.panels.keys.getText(), stops = () => peer.sent().filter(row => row.type === 'remoteStop');
+  const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
+  const onRow = async () => { board.focus(); selectRow(board, /Run the nightly/); await until(() => v.current.screen.focused === board && /enter open {2}s stop {2}n new session {2}letter then enter/.test(keys()) && /Message your agent here/.test(ask._label.getText()), 'its row, with s stop'); };
+  await until(() => board.items.map(plainItem).some(row => /ON SARA-BOX/.test(row)) && board.items.map(plainItem).some(row => /Run the nightly checks/.test(row)), 'the row of the session there, under its computer');
+  // The owner's word, a key at a time. s is this row's key for stop, and it stops nothing there.
+  await onRow(); v.type('status');
+  await until(() => ask.getValue() === 'status' && v.current.screen.focused === ask, 'status is in the box');
+  await wait(300); assert.deepEqual(stops(), [], 'nothing was stopped there');
+  // Enter sends it as a message, to my agent here. The session there still runs.
+  v.type('\r'); await until(() => pendingRequests(p.root).some(row => row.helps && row.goal === 'status'), 'sent as a message');
+  await wait(200); assert.deepEqual(stops(), [], 'still running there'); assert.equal(ask.getValue(), '');
+  // s alone: the line under the box says what Enter does. Enter stops it there.
+  await onRow(); v.type('s');
+  await until(() => ask.getValue() === 's' && /enter stops this session · keep typing to write a message/.test(keys()), 'the line under the box names s');
+  await wait(200); assert.deepEqual(stops(), []);
+  v.type('\r'); await until(() => stops().length === 1, 's then Enter stops it there');
+  assert.equal(stops()[0].id, id); assert.equal(ask.getValue(), '');
+});
+
 test('Sessions lists every session of my other computer in this repository under its name, and Projects opens its other projects', async t => {
   const now = Date.now(), at = minutes => new Date(now - minutes * 60000).toISOString(), SHOP = 'e'.repeat(64);
   const p1 = '1'.repeat(16), p2 = '2'.repeat(16);
@@ -1406,6 +1585,138 @@ test("Projects says how many sessions of my other computer's project are not in 
     assert.ok(row().trimEnd().length <= list.width - 2, `it fits at ${columns}: ${row()}`);
     assert.match(row(), columns === 160 ? /online\s+2 sessions not in this project {2}\d+m ago/ : /online\s+2 not in this project/);
   }
+});
+
+// --- Projects: what a teammate shares that this computer does not have ---
+// As lib/peer/shared.mjs lists one (teammateProjects) and its team board (teammateProjectBoard).
+const SHARED = '9'.repeat(64);
+const sharedRow = (extra = {}, sharer = {}) => ({ id: SHARED, name: 'Shop', handle: 'shop', repoId: SHARED, address: 'https://github.com/acme/shop.git', teams: [{ id: 'team-1', name: 'Core' }],
+  sharers: [{ key: SARA, name: 'sara', box: 'sara-box', online: true, mine: false, handle: 'shop', title: 'Shop', older: false, ...sharer }], ...extra });
+function sharing(peer, rows, board = {}) {
+  peer.shared = rows; peer.teammateProjects = () => peer.shared;
+  peer.teammateProjectBoard = id => { const row = peer.shared.find(value => value.id === id); return row ? { row, plans: board.plans ?? [], sessions: board.sessions ?? [] } : null; };
+  return peer;
+}
+
+test('Projects lists a project a teammate shares that is not on this computer: Enter opens its team board, the box there writes to whoever shares it, and c brings it here as the one row', async t => {
+  const { git } = await import('./helpers.mjs'), fs = await import('node:fs');
+  const p = project(later(t)), source = project(later(t)); environment(t, p.parent);
+  const task = { repoId: SHARED, handle: 'shop', id: 't-0a1b2c3d', revision: 1, title: 'Fix the login redirect', description: '', goal: 'Sign-in returns to the page that asked for it.', objectives: [], priority: 'high', severity: 'high', state: 'approved', startedBy: 'owner', who: 'Opus 5.5', subtasks: [], met: [], approvedAt: ago(30), doneAt: null, updatedAt: ago(2) };
+  const peer = sharing(fakePeer({ items: [] }), [sharedRow()], {
+    plans: [{ peer: SARA, name: 'sara', box: 'sara-box', online: true, heardAt: ago(0), tasks: [task] }],
+    sessions: [{ peer: SARA, name: 'sara', box: 'sara-box', online: true, heardAt: ago(0), sessions: [{ repoId: SHARED, id: '0123456789abcdef', title: 'Fix the cart total', column: 'needs', by: 'sara', at: ago(1) }] }] });
+  // The clone, as git makes it. From then on the project is here, so nothing lists it as shared.
+  peer.cloneProject = async (address, folder) => { peer.calls.push(['cloneProject', address, folder]); git(source.root, ['clone', '--quiet', source.root, folder]); peer.shared = []; return { root: folder }; };
+  const v = await view(t, { repo: repository(p.root), dashboard: true, peer }), panels = v.panels, list = panels.projectsList;
+  const rows = () => list.items.map(plainItem).map(row => row.trimEnd()), status = () => panels.status.getText(), keys = () => panels.keys.getText(), label = () => panels.ask._label.getText();
+  const column = index => panels.kanbanLists[index].items.map(item => plainItem(item).trimEnd());
+  await send(v, '/projects'); await until(() => v.current.view === 'projects' && rows().some(row => /Shop/.test(row)), 'the shared project');
+  assert.equal(rows().length, 2, 'this computer\'s project, then the shared one');
+  assert.match(rows()[1], /^ {2}Shop\s+shared by @sara {3}on @sara-box\s+online$/);
+  list.focus(); selectRow(list, /shared by @sara/);
+  await until(() => /enter team board/.test(keys()), 'its keys'); assert.match(keys(), /c bring here/); assert.doesNotMatch(keys(), /archive|make active/);
+  // o and x are for a project of this computer.
+  v.input.write('x'); await until(() => /Shop is not on this computer\. Enter opens its team board; c brings it here\./.test(status()), 'x does nothing to it');
+  // Enter: its team board, read-only, under its name and who shares it.
+  v.input.write('\r'); await until(() => v.current.view === 'kanban' && column(1).length === 1 && column(2).length === 1, 'the team board');
+  assert.match(panels.header.getText(), /Shop {2}· {2}shared by @sara {2}· {2}on @sara-box/);
+  assert.match(column(1)[0], /^Fix the login.*sara on sara-box$/); assert.match(column(2)[0], /^Fix the cart total\s+@sara · sara-box$/);
+  assert.equal(panels.newCard.hidden, true, 'no task is added to a project that is not here'); assert.equal(panels.back.hidden, false); assert.equal(panels.back.content, ' ‹ Projects ');
+  assert.equal(panels.kanbanTeam.getText(), "Shop is @sara's project, on @sara-box, not on this computer. A message here starts a session there. c in Projects brings it here.");
+  assert.match(label(), /^ Message @sara about Shop · starts a session on their computer, under the access they chose $/);
+  // n goes to the box; what is typed there is sent to the sharer about that project, and no card or session is made here.
+  v.input.write('n'); await until(() => v.current.screen.focused === panels.ask, 'the message box');
+  assert.match(keys(), /enter send to @sara/);
+  await send(v, 'Can you rebase the cart branch?');
+  await until(() => peer.sent().some(row => row.type === 'ask'), 'the message');
+  assert.deepEqual(peer.sent().filter(row => row.type === 'ask'), [{ type: 'ask', to: SARA, project: 'shop', text: 'Can you rebase the cart branch?' }]);
+  await until(() => /Sent to @sara\. It starts a session on their computer, under the access they chose\. The reply shows in Chats\./.test(status()), 'what happened to it');
+  assert.deepEqual(readBoard(repository(p.root)).cards, []); assert.deepEqual(pendingRequests(p.root), []);
+  assert.equal(v.current.view, 'kanban', 'the board stays open');
+  // Back to Projects, and c: where to put it, then the clone, registered under its name and made active.
+  panels.back.focus(); v.input.write('\r'); await until(() => v.current.view === 'projects', 'Projects again');
+  list.focus(); selectRow(list, /shared by @sara/); v.input.write('c');
+  await until(() => modal(v, 'Bring Shop here'), 'where to put it');
+  assert.match(v.text(), /https:\/\/github\.com\/acme\/shop\.git/); assert.equal(modal(v, 'Bring Shop here').children.find(child => child.type === 'textbox').getValue(), '~/shop');
+  const here = path.join(p.parent, 'shop here'); await closeDialog(v, 'Bring Shop here', here);
+  await until(() => /Shop is here now, in \S.*shop here\. It is the active project\./.test(status()), 'brought here');
+  assert.deepEqual(peer.calls.filter(row => row[0] === 'cloneProject').map(row => row.slice(1)), [['https://github.com/acme/shop.git', here]]);
+  assert.ok(fs.existsSync(path.join(here, '.git')));
+  await until(() => rows().length === 2 && rows().some(row => /^● Shop\s/.test(row)), 'one row for it: the project here');
+  assert.ok(!rows().some(row => /shared by/.test(row)), 'never a second row for the same project');
+});
+
+test('a shared project with no git address says how to get it here, the board of one that is no longer shared closes, and its row fits at 80 columns', async t => {
+  const p = project(later(t)); environment(t, p.parent);
+  const peer = sharing(fakePeer({ items: [] }), [sharedRow({ address: null, name: 'A much longer project name than fits' }, { name: 'a-teammate-with-a-long-name', box: 'their-very-long-machine-name' }), sharedRow({ id: '8'.repeat(64), repoId: '8'.repeat(64), name: 'Old one', handle: 'old', address: null }, { older: true, online: false })]);
+  // The status line is one row here: each line is the longest form of it that fits.
+  const v = await view(t, { repo: repository(p.root), dashboard: true, peer, columns: 80, rows: 24 }), panels = v.panels, list = panels.projectsList, status = () => panels.status.getText().trimEnd();
+  const rows = () => list.items.map(plainItem).map(row => row.trimEnd());
+  await send(v, '/projects'); await until(() => v.current.view === 'projects' && rows().length === 3, 'both shared projects');
+  for (const row of rows()) assert.ok(row.length <= list.width - 2, `it fits at 80: ${row}`);
+  assert.match(rows()[1], /^ {2}A much longer proje\.\.\.\s+shared by @a-teammate-with-a-long-name/); assert.match(rows()[2], /Old one\s+shared by @sara {3}on @sara-box\s+offline$/);
+  // c with no address: nothing to clone, and what to do instead.
+  list.focus(); selectRow(list, /A much longer/); v.input.write('c');
+  await until(() => /› No git address\. Copy its folder here, open a terminal in it and run ELU\.$/.test(status()), 'no address');
+  // A teammate on an older ELU sends no address: the line says which side needs the update.
+  selectRow(list, /Old one/); v.input.write('c');
+  await until(() => /› No git address: @sara needs ELU 0\.1\.20\. Copy its folder here and run ELU\.$/.test(status()), 'an older teammate');
+  // Its board at 80 columns: the box's title is the longest form that fits.
+  v.input.write('\r'); await until(() => v.current.view === 'kanban' && /Message @sara/.test(panels.ask._label.getText()), 'the team board');
+  assert.match(status(), /› Old one, shared by @sara on @sara-box\. The box below writes to @sara\.$/);
+  await send(v, 'Is the old one still used?');
+  await until(() => /› Sent to @sara\. It starts a session there\. The reply shows in Chats\.$/.test(status()), 'sent, in a line that fits');
+  assert.deepEqual(peer.sent().filter(row => row.type === 'ask'), [{ type: 'ask', to: SARA, project: 'old', text: 'Is the old one still used?' }]);
+  assert.ok(panels.ask._label.getText().length <= panels.ask.width - 2, panels.ask._label.getText());
+  assert.match(panels.ask._label.getText(), /^ Message @sara about Old one · starts a session there $/);
+  // No longer shared (unshared, or the team left): Kanban is this computer's again, and Projects lists it no more.
+  peer.shared = [];
+  await until(() => /That project is no longer shared with this computer\./.test(status()), 'it says so', 15000);
+  assert.equal(panels.newCard.hidden, false); assert.doesNotMatch(panels.ask._label.getText(), /Message @sara/);
+  await send(v, '/projects'); await until(() => v.current.view === 'projects' && rows().length === 1, 'only this computer\'s project');
+});
+
+test('leaving the team while the board of a project it shares is open closes that board, and the line still says the leave', async t => {
+  const p = project(later(t)); environment(t, p.parent);
+  // The only team: leaving it takes this machine off every team.
+  const peer = sharing(fakePeer({ items: [] }), [sharedRow()]); peer.lastTeam = true;
+  const v = await view(t, { repo: repository(p.root), dashboard: true, peer }), panels = v.panels, list = panels.projectsList, status = () => panels.status.getText().trimEnd();
+  await send(v, '/projects'); await until(() => v.current.view === 'projects' && list.items.length === 2, 'the shared project');
+  list.focus(); selectRow(list, /Shop/); v.input.write('\r');
+  await until(() => v.current.view === 'kanban' && /Message @sara/.test(panels.ask._label.getText()), 'its team board');
+  await send(v, '/leave'); await closeDialog(v, 'Leave Core', 'y');
+  await until(() => panels.newCard.hidden === false && !/Message @sara/.test(panels.ask._label.getText()), 'Kanban is this computer\'s again');
+  assert.match(status(), /› You left Core\. You are on no team now, so the peer daemon stops\./);
+  // It stays the line: the board closing does not replace it.
+  await new Promise(resolve => setTimeout(resolve, 3500)); assert.match(status(), /› You left Core\./);
+});
+
+test('a project my other computer shares opens as that computer lists it, and is one row beside its sessions there', async t => {
+  const now = Date.now(), at = minutes => new Date(now - minutes * 60000).toISOString(), p1 = '1'.repeat(16);
+  const session = { id: '11111111-1111-4111-8111-111111111111', ref: `${p1}:1`, project: p1, title: 'Typed there by hand', state: 'answered', at: at(5), createdAt: at(6), approvals: [], by: 'you', who: null };
+  const machines = [{ key: SARA, listedAt: at(0), older: false, projects: [{ id: p1, name: 'Shop', repoId: SHARED, home: false }], sessions: [] }];
+  const p = project(later(t)); environment(t, p.parent);
+  const peer = sharing(fakePeer({ items: [], mine: [{ key: SARA, mine: true, theirs: true }], machines }), [sharedRow({}, { mine: true })]);
+  const v = await view(t, { repo: repository(p.root), dashboard: true, peer }), list = v.panels.projectsList, rows = () => list.items.map(plainItem).map(row => row.trimEnd());
+  await send(v, '/projects'); await until(() => v.current.view === 'projects' && rows().some(row => /Shop\s+shared by you {3}on @sara-box/.test(row)), 'the project of my other computer');
+  // Enter: its sessions there, as for any project of that computer.
+  list.focus(); selectRow(list, /shared by you/); await until(() => /enter open/.test(v.panels.keys.getText()), 'its keys');
+  v.input.write('\r'); await until(() => v.current.view === 'tasks' && /Sessions of Shop on @sara-box: none yet\./.test(v.panels.status.getText()), 'the view of its sessions there');
+  // Once that computer has a session in it, Projects lists the project as that computer's: one row, not two.
+  machines[0].sessions = [session];
+  await send(v, '/projects'); await until(() => v.current.view === 'projects' && rows().some(row => /Shop on sara-box/.test(row)), 'its row as my other computer\'s');
+  assert.ok(!rows().some(row => /shared by/.test(row)), `one row for it: ${rows().join(' | ')}`);
+});
+
+test('/join names the project the team shares once it is in Projects', async t => {
+  const p = project(later(t)); environment(t, p.parent);
+  const peer = sharing(fakePeer({ joined: { id: 'team-2', name: 'ELU', inviter: { name: 'sara', fingerprint: 'bbbbbbbb' } } }), []), v = await view(t, { repo: repository(p.root), peer }), status = () => v.panels.status.getText();
+  await send(v, '/join k7qm-x2pd-9fhw'); await answerJoin(v);
+  await until(() => /Joined ELU with sara\. Their messages start sessions here, as if you typed them\./.test(status()), 'joined');
+  // What the inviter shares arrives a moment later; a project of another team is not named.
+  peer.shared = [sharedRow({ id: '7'.repeat(64), name: 'Other' }), sharedRow({ name: 'ELU', teams: [{ id: 'team-2', name: 'ELU' }] })];
+  await until(() => /Joined ELU with sara\. Its project ELU is in Projects\. Their messages start sessions here, as if you typed them\./.test(status()), 'the line names it');
+  await send(v, '/projects'); await until(() => v.current.view === 'projects' && v.panels.projectsList.items.some(item => /ELU\s+shared by @sara {3}on @sara-box/.test(plainItem(item))), 'and it is there');
 });
 
 // The wheel at a pane, as SGR reports in one read: up or down, a step each.
@@ -1496,6 +1807,156 @@ test('a session on my other computer keeps the lines the owner reads while its o
   wheelAt(v, chat, 1, 2000); await until(() => chat.getScrollPerc(true) === 100, 'the end');
   await more([...session.entries, entry(247)].slice(-KEPT));
   assert.equal(chat.getScrollPerc(true), 100, 'it follows the newest line');
+});
+
+// PgUp and PgDn as a terminal sends them, and a click at a place in a widget.
+const PGUP = '\x1b[5~', PGDN = '\x1b[6~';
+const clickAt = (v, widget, dx = 4, dy = 2) => v.input.write(`\x1b[<0;${widget.aleft + dx + 1};${widget.atop + dy + 1}M\x1b[<0;${widget.aleft + dx + 1};${widget.atop + dy + 1}m`);
+const resizeTo = async (v, columns, rows) => { v.output.columns = columns; v.output.rows = rows; v.output.emit('resize'); await until(() => v.current.screen.width === columns && v.current.screen.height === rows, `${columns}x${rows}`); };
+
+test('PgUp and PgDn page a session on my other computer, from the message box and in its chat, at 80x24 and at 140x50, and the key bar names them there', { timeout: 60000 }, async t => {
+  const at = new Date().toISOString(), said = n => Array.from({ length: n }, (_, index) => ({ role: index % 2 ? 'Claude' : 'You', at, text: `Line ${index + 1} of the long chat`, ...(index % 2 ? { lead: true } : {}) }));
+  const remote = [{ id: '33333333-3333-4333-8333-333333333333', machine: SARA, createdAt: at, lastAt: at, title: 'Read the long chat', state: 'answered', steps: [], approvals: [], entries: said(120) },
+    { id: '44444444-4444-4444-8444-444444444444', machine: SARA, createdAt: at, lastAt: at, title: 'A short one', state: 'answered', steps: [], approvals: [], entries: said(1) }];
+  const p = project(later(t)); environment(t, p.parent);
+  const peer = fakePeer({ items: [], mine: [{ key: SARA, mine: true, theirs: true }], remote }), v = await view(t, { repo: repository(p.root), dashboard: true, peer });
+  const board = v.panels.board, chat = v.panels.chat, ask = v.panels.ask, keys = () => v.panels.keys.getText().trim(), page = () => chat.height - chat.iheight - 1;
+  const box = async () => { ask.focus(); ask.readInput(); await until(() => ask.__listener && /Message your agent here/.test(ask._label.getText()), 'the message box over the session there'); };
+  await until(() => board.items.some(item => /Read the long chat/.test(plainItem(item))), 'the remote rows');
+  // A chat that fits its pane: the bar is as it was.
+  board.focus(); selectRow(board, /A short one/); await until(() => /Line 1 of the long chat/.test(chat.getContent()) && !/Line 2 of/.test(chat.getContent()), 'the short chat');
+  await box(); await until(() => /^enter send to your agent here {2}@sara-box writes there {2}esc sessions$/.test(keys()), 'the keys over a short chat');
+  board.focus(); selectRow(board, /Read the long chat/); await until(() => /Line 120 of the long chat/.test(chat.getContent()), 'the long chat');
+  for (const [columns, rows] of [[80, 24], [140, 50]]) {
+    await resizeTo(v, columns, rows); await box();
+    // To the end first: a size change keeps the place the chat was at.
+    for (let presses = 0; chat.getScrollPerc(true) !== 100 && presses < 200; presses++) { v.input.write(PGDN); await pause(30); }
+    await until(() => chat.getScrollPerc(true) === 100, `the chat there at its end, ${columns}x${rows}`);
+    const end = chat.childBase; assert.ok(end > 2 * page(), 'more than two pages');
+    // More chat than the pane shows: the bar names the keys, before Esc.
+    await until(() => (columns < 100 ? /^enter send to your agent here {2}@sara-box writes there {2}pgup pgdn page$/ : /^enter send to your agent here {2}@sara-box writes there {2}pgup pgdn page {2}esc sessions$/).test(keys()), `the keys over a long chat, ${columns}x${rows}`);
+    // From the message box: the chat moves a page, the text and the focus stay.
+    ask.setValue('half a thought'); v.input.write(PGUP);
+    await until(() => chat.childBase === end - page(), `a page up from the box, ${columns}x${rows}`); await pause(200);
+    assert.equal(chat.childBase, end - page(), 'the draws keep the page'); assert.equal(ask.getValue(), 'half a thought'); assert.equal(v.current.screen.focused, ask);
+    v.input.write(PGUP); await until(() => chat.childBase === end - 2 * page(), `another page up, ${columns}x${rows}`);
+    v.input.write(PGDN); await until(() => chat.childBase === end - page(), `a page down from the box, ${columns}x${rows}`);
+    // Written to that computer by its @name, the bar still names them.
+    ask.setValue('@sara-box and then'); v.input.write(' ');
+    await until(() => /^enter send to @sara-box {2}pgup pgdn page {2}esc sessions$/.test(keys()), `the keys when it is sent there, ${columns}x${rows}`);
+    assert.equal(chat.childBase, end - page(), 'typing keeps the page');
+    ask.clearValue(); ask.cancel();
+    // A click on its chat gives it the keys: the same page each way.
+    clickAt(v, chat); await until(() => v.current.screen.focused === chat, `the chat there has the focus, ${columns}x${rows}`);
+    await until(() => /↑↓ scroll {2}esc sessions\b.* {2}pgup pgdn page$/.test(keys()), `the keys in the chat there, ${columns}x${rows}`);
+    assert.equal(chat.childBase, end - page(), 'the click keeps the page');
+    v.input.write(PGUP); await until(() => chat.childBase === end - 2 * page(), `a page up in the chat there, ${columns}x${rows}`);
+    v.input.write(PGDN); v.input.write(PGDN); await until(() => chat.childBase === end && chat.getScrollPerc(true) === 100, `two pages down reach the end, ${columns}x${rows}`);
+  }
+});
+
+test("PgUp and PgDn page a teammate's message beside the Sessions list, from the message box and in the card, where it is taller than its pane", { timeout: 60000 }, async t => {
+  // A row's card holds the first 400 characters of the message: taller than the pane at 80x24, and all of it shows at 140x50.
+  const words = Array.from({ length: 80 }, (_, index) => `word${index + 1}`).join(' ');
+  const peer = fakePeer({ items: [{ id: 'incoming-9', kind: 'incoming', peer: SARA, name: 'sara', project: 'web', text: words, at: ago(1), state: 'submitted', threadId: 'th-long' }] });
+  const p = project(later(t)); environment(t, p.parent);
+  const v = await view(t, { repo: repository(p.root), dashboard: true, peer, columns: 80, rows: 24 });
+  const board = v.panels.board, chat = v.panels.chat, ask = v.panels.ask, keys = () => v.panels.keys.getText().trim(), page = () => chat.height - chat.iheight - 1;
+  await until(() => board.items.some(item => /@sara question/.test(plainItem(item))), 'the row of the question');
+  board.focus(); selectRow(board, /@sara question/);
+  await until(() => /word1 /.test(chat.getText()) && /y accept · n decline/.test(chat.getText()) && chat.getScrollPerc(true) === 100, 'the card, at its end');
+  const end = chat.childBase; assert.ok(end > 0 && end < page(), 'taller than its pane, by less than a page');
+  // From the message box, which starts a new session here: the card moves, the text stays.
+  ask.focus(); ask.readInput(); await until(() => ask.__listener && /^enter new session {2}pgup pgdn page/.test(keys()), 'the keys from the box');
+  ask.setValue('half a thought'); v.input.write(PGUP);
+  await until(() => chat.childBase === 0, 'a page up from the box shows its top'); await pause(200);
+  assert.equal(chat.childBase, 0, 'the draws keep the place'); assert.equal(ask.getValue(), 'half a thought'); assert.equal(v.current.screen.focused, ask);
+  v.input.write(PGDN); await until(() => chat.childBase === end, 'a page down from the box shows its end');
+  ask.clearValue(); ask.cancel();
+  // A click on the card gives it the keys.
+  clickAt(v, chat); await until(() => v.current.screen.focused === chat, 'the card has the focus');
+  await until(() => /^y accept {2}n decline {2}c decline\b.*↑↓ scroll {2}esc sessions\b/.test(keys()), 'the keys in the card');
+  v.input.write(PGUP); await until(() => chat.childBase === 0, 'a page up in the card');
+  v.input.write(PGDN); await until(() => chat.childBase === end, 'a page down in the card');
+  // Where all of it shows, there is nothing to page and the bar does not offer it.
+  await resizeTo(v, 140, 50);
+  ask.focus(); ask.readInput(); await until(() => ask.__listener && /^enter new session/.test(keys()), 'the message box at 140x50');
+  await until(() => chat._clines.length <= chat.height - chat.iheight, 'all of the card shows');
+  assert.doesNotMatch(keys(), /pgup/);
+  v.input.write(PGUP); await pause(150); assert.equal(chat.childBase, 0);
+});
+
+test("PgUp and PgDn page a teammate's thread in its dialog a page at a time, as they page a chat, opened from Sessions and from Chats, at 80x24 and at 140x50", { timeout: 60000 }, async t => {
+  const talk = Array.from({ length: 70 }, (_, index) => ({ from: index % 2 ? 'me' : 'peer', peer: SARA, name: 'sara', kind: index % 2 ? 'answer' : 'ask', text: `Thread line ${index + 1}`, at: ago(100 - index) }));
+  const peer = fakePeer({ items: [{ id: 'incoming-9', kind: 'incoming', peer: SARA, name: 'sara', project: 'web', text: 'Thread line 1', at: ago(1), state: 'submitted', threadId: 'th-long' }] });
+  peer.threadMessages = id => id === 'th-long' ? talk : [];
+  const p = project(later(t)); environment(t, p.parent);
+  const v = await view(t, { repo: repository(p.root), dashboard: true, peer, columns: 80, rows: 24 });
+  const board = v.panels.board, [, threads] = v.panels.teamLists, title = 'Thread with @sara';
+  const body = () => modal(v, title).children.find(child => child.options?.scrollable), field = () => modal(v, title).children.find(child => child.type === 'textbox');
+  // In the open dialog: a page is its text's height less one line, so the last line of a page is the first of the next.
+  const pages = async where => {
+    await until(() => modal(v, title) && /Thread line 1\b/.test(body().getText()) && field().__listener, `the thread, ${where}`);
+    const text = body(), page = text.height - text.iheight - 1;
+    assert.equal(text.childBase, 0, 'it opens at its first message'); assert.ok(text.getScrollHeight() > 3 * text.height, 'more than three pages');
+    assert.match(field()._label.getText(), /Enter submits \/ Esc cancels \/ PgUp PgDn page/);
+    v.input.write(PGDN); await until(() => text.childBase === page, `a page down, ${where}`);
+    v.input.write(PGDN); await until(() => text.childBase === 2 * page, `another page down, ${where}`);
+    v.input.write(PGUP); await until(() => text.childBase === page, `a page up, ${where}`);
+    v.input.write(PGUP); await until(() => text.childBase === 0, `back at its first message, ${where}`);
+    // The letter Enter would send is still the field's text, and nothing was decided.
+    assert.equal(field().value, 'y'); assert.ok(modal(v, title), 'the dialog stays open');
+    await closeDialog(v, title);
+    assert.deepEqual(peer.sent(), [], 'nothing was sent');
+  };
+  for (const [columns, rows] of [[80, 24], [140, 50]]) {
+    await resizeTo(v, columns, rows);
+    // From Sessions: Enter on its row.
+    await send(v, '/sessions'); await until(() => v.current.view === 'tasks' && board.items.some(item => /@sara question/.test(plainItem(item))), 'Sessions');
+    board.focus(); selectRow(board, /@sara question/); await until(() => /enter read/.test(v.panels.keys.getText()), 'its row'); v.input.write('\r');
+    await pages(`from Sessions, ${columns}x${rows}`);
+    // From Chats: Enter on its thread.
+    await send(v, '/chats'); await until(() => v.current.view === 'chats' && threads.items.some(item => /asks you/.test(plainItem(item))), 'Chats');
+    threads.focus(); selectRow(threads, /asks you/); v.input.write('\r');
+    await pages(`from Chats, ${columns}x${rows}`);
+  }
+});
+
+test("in Chats PgUp and PgDn move a page in the open one's threads, in the threads and from the message box, at 80x24 and at 140x50", { timeout: 60000 }, async t => {
+  const items = Array.from({ length: 120 }, (_, index) => ({ id: `answer-${index + 1}`, kind: 'answer', peer: SARA, name: 'sara', project: 'web', text: `Answer number ${index + 1}`, at: ago(index + 1), state: 'completed', threadId: `th-${index + 1}` }));
+  const { v, peer } = await teamView(t, { peer: fakePeer({ items }), columns: 80, rows: 24 }), [, threads] = v.panels.teamLists, ask = v.panels.ask;
+  await openRow(v, /sara/, '@sara');
+  for (const [columns, rows] of [[80, 24], [140, 50]]) {
+    await resizeTo(v, columns, rows);
+    await until(() => threads.items.length > 3 * threads.height, `more than three pages of threads, ${columns}x${rows}`);
+    const page = () => threads.height - threads.iheight - 1, last = threads.items.length - 1;
+    threads.select(0);
+    // From the message box: the threads move a page, the text and the focus stay.
+    ask.focus(); ask.readInput(); await until(() => ask.__listener, 'the message box');
+    // More threads than their pane shows: the bar names the keys after Enter, as over a session's chat.
+    await until(() => /^enter send {2}pgup pgdn page {2}@name one \w+ {2}\/ commands/.test(v.panels.keys.getText().trim()), `the keys over the message box, ${columns}x${rows}`);
+    ask.setValue('half a thought'); v.input.write(PGDN);
+    await until(() => threads.selected === page(), `a page down from the box, ${columns}x${rows}`); await pause(200);
+    assert.equal(threads.selected, page(), 'the draws keep the place'); assert.equal(ask.getValue(), 'half a thought'); assert.equal(v.current.screen.focused, ask);
+    v.input.write(PGDN); await until(() => threads.selected === 2 * page(), `another page down, ${columns}x${rows}`);
+    assert.equal(threads.childBase, page(), 'the list moves with its cursor: the last row of one page is the first of the next');
+    v.input.write(PGUP); await until(() => threads.selected === page(), `a page up from the box, ${columns}x${rows}`);
+    ask.clearValue(); ask.cancel();
+    // In the threads themselves, to both ends.
+    threads.focus(); await until(() => v.current.screen.focused === threads, 'the threads');
+    await until(() => /^y accept\/send {2}n decline {2}c continue {2}enter read {2}pgup pgdn page$/.test(v.panels.keys.getText().trim()), `the keys in the threads, ${columns}x${rows}`);
+    v.input.write(PGUP); await until(() => threads.selected === 0, `a page up in the threads, ${columns}x${rows}`);
+    v.input.write(PGUP); await pause(100); assert.equal(threads.selected, 0, 'it stops at the first row');
+    v.input.write(PGDN); await until(() => threads.selected === page(), `a page down in the threads, ${columns}x${rows}`);
+    threads.select(last - 1); v.input.write(PGDN); await until(() => threads.selected === last, `it stops at the last row, ${columns}x${rows}`);
+    assert.equal(v.panels.teamBoxes[1]._label.getText().trim(), '@sara', 'the same chat is open');
+  }
+  // A chat whose threads all show has nothing to page: both bars are as they were.
+  await openRow(v, /# general/, '#general');
+  await until(() => threads.items.length <= threads.height - threads.iheight, 'all the threads of #general show');
+  ask.focus(); ask.readInput(); await until(() => ask.__listener && /^enter send {2}@name one \w+ {2}\/ commands/.test(v.panels.keys.getText().trim()), 'the keys over the message box of a short chat');
+  ask.cancel(); threads.focus(); await until(() => /enter read$/.test(v.panels.keys.getText().trim()), 'the keys in the threads of a short chat');
+  assert.deepEqual(peer.sent(), [], 'nothing was sent');
 });
 
 test('a thread shows under its channel, #general or its teammate, and a row counts what waits for me', () => {

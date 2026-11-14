@@ -53,6 +53,7 @@ did, read from its log: each message, each command with its exit code and what i
 
 ## What the owner sees
 
+- Subtasks: a turn that works on an approved Task is launched with `-c tools.update_plan.enabled=true` and told to keep the Task's subtasks in its plan. Each `todo_list` item in the stream ticks them while the turn runs; the first step not done shows as the one in hand. Every other turn keeps the plan tool off.
 - Approve for me: an action the reviewer declines comes back as `status: "declined"` and is listed on the run as a denial (`Run: <command>` or `Edit: <paths>`) [run]. The model is told not to retry it and to return `needs_input`.
 - Ask for approval: Codex has no live approval relay. A sandbox block produces no stream item and no denial record [run]; the model reports what it could not do.
 - No dollar figure: Codex reports no cost in its stream. `maxCostUsd` must be `null`; the time limit bounds the run.

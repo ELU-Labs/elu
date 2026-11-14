@@ -621,7 +621,7 @@ function fakeSocket() {
   const wire = { out: '' }, socket = Object.assign(new EventEmitter(), { destroyed: false, write: chunk => { wire.out += chunk; return true; }, destroy() { this.destroyed = true; this.emit('close'); } });
   return { socket, wire, frames: () => wire.out.split('\n').filter(Boolean).map(line => JSON.parse(line)), say: value => socket.emit('data', Buffer.from(`${JSON.stringify(value)}\n`)) };
 }
-const NOBODY = { name: '', teams: [], handles: [], plans: true, remote: 1, cards: 1, files: 1, standup: 1, folders: 1, carry: 1 };
+const NOBODY = { name: '', teams: [], handles: [], plans: true, remote: 1, cards: 1, files: 1, standup: 1, folders: 1, carry: 1, model: 1 };
 
 test('a hello names only the teams its receiver is on, and a stranger or a removed teammate gets no team and no name', async t => {
   const crew = makeTeam(t), ana = crew.founder.identity, sara = crew.member, bob = withHome(newHome(t), () => createIdentity({ name: 'bob' }));
@@ -1249,14 +1249,14 @@ test('a teammate is told this machine\'s box name and shared bots when they conn
     socket.emit('data', Buffer.from(`${JSON.stringify({ jsonrpc: '2.0', method: 'elu.hello', params: { binding: BINDING, a2aVersion: '1.0', name: 'sara', teams: [{ id: crew.teamId, ...head(crew.teamId), ops: [] }], handles: [] } })}\n`));
     assert.equal(daemon.sessions.get(sara.key)?.admitted, true);
     // On connect, with the rows, as a notification an older build reads the rows of.
-    assert.deepEqual(told(), [{ jsonrpc: '2.0', method: 'elu.status', params: { rows: [], box: 'ana-mbp', bots: [reviewer], boards: [], repos: [] } }]);
+    assert.deepEqual(told(), [{ jsonrpc: '2.0', method: 'elu.status', params: { rows: [], box: 'ana-mbp', bots: [reviewer], boards: [], repos: [], projects: [] } }]);
     // The first tick settles the rows; after that a tick with nothing changed says nothing.
     daemon.tick(); const settled = told().length; daemon.tick(); daemon.tick();
     assert.equal(told().length, settled); assert.equal(daemon.error, null);
     const next = change => { const count = told().length; change(); daemon.tick(); assert.equal(told().length, count + 1, 'told once'); daemon.tick(); assert.equal(told().length, count + 1, 'and not again'); return told().at(-1).params; };
-    assert.deepEqual(next(() => saveBot({ name: 'docs', about: docs.about, instructions: 'Read docs/.', shared: true })), { rows: [], box: 'ana-mbp', bots: [reviewer, docs], boards: [], repos: [] });
-    assert.deepEqual(next(() => saveBot({ name: 'reviewer', instructions: 'Review the diff.' })), { rows: [], box: 'ana-mbp', bots: [docs], boards: [], repos: [] }, 'a bot taken back is no longer told');
-    assert.deepEqual(next(() => savePeerSettings({ box: 'ana-studio' })), { rows: [], box: 'ana-studio', bots: [docs], boards: [], repos: [] });
+    assert.deepEqual(next(() => saveBot({ name: 'docs', about: docs.about, instructions: 'Read docs/.', shared: true })), { rows: [], box: 'ana-mbp', bots: [reviewer, docs], boards: [], repos: [], projects: [] });
+    assert.deepEqual(next(() => saveBot({ name: 'reviewer', instructions: 'Review the diff.' })), { rows: [], box: 'ana-mbp', bots: [docs], boards: [], repos: [], projects: [] }, 'a bot taken back is no longer told');
+    assert.deepEqual(next(() => savePeerSettings({ box: 'ana-studio' })), { rows: [], box: 'ana-studio', bots: [docs], boards: [], repos: [], projects: [] });
     assert.deepEqual(next(() => saveBot({ name: 'docs', about: 'Answers from docs/ and the README.', instructions: 'Read docs/.', shared: true })).bots, [{ name: 'docs', about: 'Answers from docs/ and the README.' }]);
     // A bot that is not shared changes nothing teammates are told.
     const quiet = told().length; saveBot({ name: 'private', instructions: 'Only for me.' }); daemon.tick();

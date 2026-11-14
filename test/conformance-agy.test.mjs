@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { liveTodos } from '../lib/plan.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -277,6 +278,17 @@ test('in Full access ~ is a mirror of the owner\'s home with the workspace\'s ow
   for (const mode of ['locked', 'ask']) { await go(mode); assert.equal(fake.last().home, base, mode); assert.deepEqual(held(), ['.gemini'], mode); assert.equal(agy.childEnv({ mode, cwd: ws, home: owner }).HOME, base, mode); }
   assert.equal(agy.childEnv({ mode: 'auto', cwd: ws, home: owner }).HOME, base); assert.equal(agy.interactive({ session: crypto.randomUUID(), cwd: ws }).env.HOME, base);
   assert.deepEqual(his(), before, 'his own ~/.gemini and ~/.claude were never written');
+});
+
+test('over ACP each plan update is handed on as it comes, and reads as subtasks while the turn still runs', async t => {
+  const dir = home(t), ws = repo(dir), fake = install(dir), schemaFile = schemaAt(dir), gate = path.join(dir, 'go-on'), settings = path.join(dir, 'bin', 'fake.json');
+  fs.writeFileSync(settings, JSON.stringify({ ...JSON.parse(fs.readFileSync(settings, 'utf8')), live: gate }));
+  const read = liveTodos(), seen = [];
+  // The stand-in waits for the gate after its plan: the list is read before the turn ends.
+  const onRow = row => { const steps = read(row); if (steps) { seen.push({ steps, running: !fs.existsSync(gate) }); fs.writeFileSync(gate, ''); } };
+  const done = await agy.run({ bin: fake.bin, logFile: path.join(dir, 'plan.log'), timeoutSeconds: 60, relay: true, approvals: null, cwd: ws, protectedPaths: ['.git'], commonDir: path.join(ws, '.git'), schemaFile, session: crypto.randomUUID(), role: lead, mode: 'ask', prompt: 'Keep the Task\'s subtasks in your own to-do list as you work. Reply with the summary "planned".', onRow });
+  assert.equal(done.result.outcome, 'done');
+  assert.deepEqual(seen, [{ steps: [{ id: 's1', text: 'Change normalize', state: 'done' }, { id: 's2', text: 'Run the coupon test', state: 'doing' }], running: true }]);
 });
 
 test('over ACP a permission request reaches the approvals and the answer decides: allow writes, deny and timeout do not and are recorded', async t => {

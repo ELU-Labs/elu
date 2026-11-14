@@ -142,6 +142,12 @@ answer to the turn. There `inputTokens` is the whole prompt, so ELU takes the ca
 and the cache write out of it, as Grok's headless output does. The Usage tab's top agents
 show them; a turn that carried none says `not reported`, never 0.
 
+A turn that works on an approved Task shows its subtasks as it goes. Over ACP, ELU reads
+the `plan` updates Grok sends for its own to-do list. Headless in Full access, the turn is
+told to keep the list in a JSON file in a private temporary folder of that run; ELU reads
+it twice a second and removes it with the run. Headless in Ask or Auto, the subtasks show
+when the turn ends.
+
 ## The private home
 
 In Full access `~` is a mirror of your home (`grok-home-full` in your personal directory),
@@ -263,4 +269,7 @@ Not enforced, or not proven:
 - Workspace `AGENTS.md` and `CLAUDE.md` reach the prompt in every mode. A repository can
   steer the model's instructions, not its permissions.
 - A full shell in Full access pushes, tags, merges, deploys and publishes, as you chose.
+- Subtasks while a turn runs were seen only in tests against a stand-in `grok`: that the
+  real one sends `plan` updates over ACP, and that its model keeps the list file, is not
+  verified.
   ELU keeps its own publish gate for `/publish`, and claims no more.

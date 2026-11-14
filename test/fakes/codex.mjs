@@ -107,5 +107,8 @@ if(mode==='steps'){
  item('item.completed',{id:'item_12',type:'agent_message',text:'The test fails on lower case codes. Fixing normalize.'});
  item('item.completed',{id:'item_13',type:'file_change',changes:[{path:path.join(process.cwd(),'src','coupon.mjs'),kind:'update'}],status:'completed'});
 }
+// live (fake.json): a file; a turn launched with the plan tool on prints its to-do list, first
+// step done, as the real one prints a todo_list item, and goes on once that file exists.
+if(cfg.live&&args.includes('tools.update_plan.enabled=true')){console.log(JSON.stringify({type:'item.started',item:{id:'item_todo',type:'todo_list',items:[{text:'Change normalize',completed:true},{text:'Run the coupon test',completed:false}]}}));const until=Date.now()+30000;while(!fs.existsSync(cfg.live)&&Date.now()<until)await new Promise(resolve=>setTimeout(resolve,50));}
 console.log(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:JSON.stringify(result)}}));
 console.log(JSON.stringify({type:'turn.completed',usage:{input_tokens:0,output_tokens:0}}));

@@ -250,6 +250,12 @@ where the total counts them apart), or `_meta.quota.token_count`. The Usage tab'
 show them. Where `agy` sent none, and for every headless run, the row says `not reported`,
 never 0. Antigravity reports no cost.
 
+A turn that works on an approved Task shows its subtasks as it goes. Over ACP, ELU reads
+the `plan` updates `agy` sends for its own to-do list. Headless in Full access, the turn is
+told to keep the list in a JSON file in a private temporary folder of that run; ELU reads
+it twice a second and removes it with the run. Headless in Ask or Approve for me, the
+subtasks show when the turn ends.
+
 ## What is not enforced, or not verified
 
 Everything above comes from Google's documentation and the Antigravity changelog; the
@@ -284,7 +290,9 @@ one-time check is the proof, per machine. In particular, until a check says othe
 - whether a command can write in a folder given with `--add-dir`: the `write_file` deny
   covers the file tool;
 - on Linux, `--sandbox` needs unprivileged user namespaces; without them Read only and
-  Approve for me report instead of sandboxing.
+  Approve for me report instead of sandboxing;
+- subtasks while a turn runs: that the real `agy` sends `plan` updates over ACP, and that
+  its model keeps the list file in Full access. Both were seen only against a stand-in.
 
 ## Telemetry
 
