@@ -4,7 +4,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { PassThrough } from 'node:stream';
 import { project, fakeClis, keyLike, git } from './helpers.mjs';
-import { makeTeam, answeringClis } from './peer-helpers.mjs';
+import { makeTeam, answeringClis, withHome } from './peer-helpers.mjs';
+import { markMine, noteTheirs } from '../lib/peer/mine.mjs';
 import { ProjectController, registerProject } from '../lib/projects.mjs';
 import { projectFolder, pendingRequests, updateRequest } from '../lib/workspace.mjs';
 import { readTask, saveTask, taskTitle } from '../lib/state.mjs';
@@ -17,7 +18,7 @@ import { localRepos, repoProof, saveProofs, sessionCards } from '../lib/peer/car
 import { savePeerPolicy } from '../lib/peer/settings.mjs';
 import { declineStandup, teamStandupAsk, teamStandupCommand, teamStandupRead, waitingStandups } from '../lib/peer/standup.mjs';
 import { remoteCommand } from '../lib/peer/remote.mjs';
-import { STANDUP_QUESTION, UPDATES_MAX, boundedUpdates, checkStandupFor, everyoneMessage, newRound, standupAgent, standupLeftOut, standupReply, teammateAnswer } from '../lib/standup.mjs';
+import { STANDUP_QUESTION, UPDATES_MAX, boundedUpdates, checkStandupFor, cutAnswer, everyoneMessage, newRound, standupAgent, standupLeftOut, standupReply, teammateAnswer } from '../lib/standup.mjs';
 import { endLine, runStandupRound, standupPlan } from '../lib/standup-round.mjs';
 import { kanbanTool, standupSession } from '../lib/standup-kanban.mjs';
 import { serve, TOOL_NAME } from '../lib/approval-server.mjs';
@@ -99,11 +100,22 @@ test('what leaves for a teammate: paths cut, and an update that may hold a secre
   assert.equal(cut.held, false); assert.equal(cut.text, 'Working on [path] and src/billing.mjs, tests next.');
   const held = teammateAnswer(`Set the token to ${keyLike('ghp_', 'A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8')}`, { root: '/tmp' });
   assert.deepEqual(held, { text: null, held: true });
+  // A random temporary folder in a path is not a secret: the update goes, with the path cut.
+  const temp = teammateAnswer('Fixed the round in /tmp/su2-9SAVeT/x-link/tmp/elu-Qw8RtZ/project/notes/round.mjs, tests next.', { root: '/srv/shop' });
+  assert.deepEqual(temp, { text: 'Fixed the round in [path], tests next.', held: false });
+  // Nor is a path with spaces in a folder and file name: all of it is cut, written plain or in quotes.
+  const spaced = '/Library/Application Support/CleanShot/media/media_8Qw4Rt2LmZ/CleanShot 2026-11-12 at 10.14.07@2x.png';
+  assert.deepEqual(teammateAnswer(`Screenshot saved in ~${spaced}, tests next.`, { root: '/srv/shop' }), { text: 'Screenshot saved in [path], tests next.', held: false });
+  assert.deepEqual(teammateAnswer(`Screenshot saved in '/Users/sam${spaced}', tests next.`, { root: '/srv/shop' }), { text: "Screenshot saved in '[path]', tests next.", held: false });
+  // A base64 key split by its own "/" under a folder named like secrets is held.
+  assert.deepEqual(teammateAnswer(`The deploy key is config/secrets/${keyLike('wJalrXUtnFEMI/K7MDENG/', 'bPxRfiCYEXAMPLEKEY')}.`, { root: '/srv/shop' }), { text: null, held: true });
 });
 
-test("the Standup's model reads a bounded set of updates, newest first", () => {
+test("the Standup's model reads every update whole, newest first; only a model that says they are too long for it is given fewer", () => {
   const updates = Array.from({ length: 45 }, (_, n) => ({ id: `u${n + 1}`, at: new Date(Date.UTC(2026, 10, 1, 0, n)).toISOString(), text: 'x'.repeat(n === 44 ? 5000 : 100) }));
-  const kept = boundedUpdates(updates);
+  const whole = boundedUpdates(updates);
+  assert.equal(whole.length, 45); assert.equal(whole[0].id, 'u45'); assert.equal(whole[0].text.length, 5000);
+  const kept = boundedUpdates(updates, { fitted: true });
   assert.equal(kept.length, UPDATES_MAX + 1); assert.equal(kept[0].id, 'u45');
   assert.match(kept[0].text, /cut this update here/); assert.ok(kept[0].text.length < 3200);
   assert.match(kept.at(-1).note, /15 older updates are left out/);
@@ -152,8 +164,8 @@ test("a teammate's standup is told the owner's rules, gets the question as a tea
   const controller = new ProjectController(projectFolder(p.root)); controller.draftConfig.checks = []; registerProject(controller.repo);
   const task = await controller.ask('Where is billing?').finished;
   const team = 'b'.repeat(64), peer = 'c'.repeat(64); saveTeamAccess(team, { handling: 'manual', rules: 'Never share invoice totals.' });
-  // A fixed path: a random temporary folder name can read as a secret to the check and be held.
-  fake.summary('Fixing billing from /srv/notes/billing.txt next.');
+  // The project's own random temporary folder: a path like it is cut, not held as a secret.
+  fake.summary(`Fixing billing from ${path.join(p.parent, 'notes', 'billing.txt')} next.`);
   const round = newRound();
   await controller.ask(STANDUP_QUESTION, task.id, { standupFor: { round, by: '@kim', question: 'Is billing done?', peer, teams: [team] } }).finished;
   const turn = inputs(fake).at(-1).input;
@@ -194,7 +206,7 @@ test('a round asks open sessions, lists a working one after the wait, leaves arc
   assert.equal(readTask(f.repo, a.id).state, 'answered');
 });
 
-test('at most 20 of your sessions are asked, newest first; the rest, offline and older computers are listed, and an older one is never sent the question', async t => {
+test("every one of your sessions and your teammates' is asked, newest first; offline and older computers are listed, and an older one is never sent the question", async t => {
   const f = setup(t);
   const first = await f.controller.ask('Explain coupons').finished, model = readTask(f.repo, first.id);
   for (let n = 2; n <= 22; n++) saveTask(f.repo, { ...model, id: String(n), goal: `Session ${n}`, title: `Session ${n}`, createdAt: new Date(Date.now() - n * 60000).toISOString(), runs: model.runs.map(run => ({ ...run, at: new Date(Date.now() - n * 60000).toISOString() })), messages: [] });
@@ -202,9 +214,12 @@ test('at most 20 of your sessions are asked, newest first; the rest, offline and
     { key: 'd'.repeat(64), name: '@devbox', online: true, standup: false, sessions: [{ here: false, where: '@devbox', key: 'd'.repeat(64), ref: '0123456789abcdef:1', title: 'Flaky test', at: Date.now(), state: 'answered', waits: null, last: '' }] },
     { key: 'e'.repeat(64), name: '@mini', online: false, standup: true, sessions: [{ here: false, where: '@mini', key: 'e'.repeat(64), ref: '0123456789abcdef:2', title: 'Docs', at: Date.now(), state: 'answered', waits: null, last: '' }] },
   ];
-  const plan = await standupPlan({ root: f.root, id: '999' }, { sources: { computers, teammates: () => [] } });
-  assert.equal(plan.asked.length, 20); assert.equal(plan.asked[0].title, 'Explain coupons');
-  assert.deepEqual(plan.notAsked.map(row => row.why).sort(), ['@devbox runs an older ELU', '@mini is offline', 'more than 20 of your sessions', 'more than 20 of your sessions'].sort());
+  const kim = 'f'.repeat(64), now = new Date().toISOString();
+  const people = () => [{ peer: kim, name: 'kim', online: true, sessions: Array.from({ length: 25 }, (_, n) => ({ id: n.toString(16).padStart(16, '0'), title: `Kim ${n}`, column: 'progress', by: 'kim', at: now, standup: true })) }];
+  const plan = await standupPlan({ root: f.root, id: '999' }, { sources: { computers, teammates: people } });
+  assert.equal(plan.asked.filter(row => !row.team).length, 22); assert.equal(plan.asked[0].title, 'Explain coupons');
+  assert.equal(plan.asked.filter(row => row.team).length, 25);
+  assert.deepEqual(plan.notAsked.map(row => row.why).sort(), ['@devbox runs an older ELU', '@mini is offline'].sort());
   // A round never sends a computer whose hello lacks standup: 1 the question.
   const sent = [];
   const peer = { peerStatus: () => ({ running: true }), sendPeerCommand: body => { sent.push(body); return { id: 'x' }; }, awaitCommand: async () => ({}) };
@@ -347,4 +362,17 @@ test('another computer of mine whose hello lacks standup: 1 is never sent the qu
   assert.deepEqual(await remoteCommand(ctx, { type: 'remoteStandup', to: key, round: newRound(), refs: [] }), { older: true });
   assert.deepEqual(await remoteCommand({ session: () => null }, { type: 'remoteStandupRead', to: key, round: newRound() }), { offline: true });
   assert.deepEqual(requests, []);
+});
+
+test('another computer of mine is sent every session of the round to ask', async t => {
+  const { founder, member } = makeTeam(t), key = member.identity.key, sent = [];
+  const ctx = { me: founder.identity, session: () => ({ remoteHello: { remote: 1, standup: 1 }, request: async (method, params) => { sent.push([method, params]); return { asked: [], skipped: [] }; } }) };
+  const refs = Array.from({ length: 25 }, (_, n) => `0123456789abcdef:${n + 1}`);
+  await withHome(founder.home, async () => { markMine(founder.identity.key, key); noteTheirs(key, true); await remoteCommand(ctx, { type: 'remoteStandup', to: key, round: newRound(), refs }); });
+  assert.deepEqual(sent.map(([method, params]) => [method, params.refs.length]), [['elu.remote.standup', 25]]);
+});
+
+test('a standup update is kept whole, however long: no 12 lines, no 2400 characters', () => {
+  const long = Array.from({ length: 40 }, (_, n) => `Line ${n + 1}: ${'x'.repeat(200)}`).join('\n');
+  assert.equal(cutAnswer(`  ${long}\n`), long); assert.doesNotMatch(cutAnswer(long), /Cut here/);
 });

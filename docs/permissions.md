@@ -397,8 +397,8 @@ ELU enforces this much, on every vendor:
   session's workspace and is followed by the checks and the review. A reply that asks for
   an edit with no Task is asked for its Task once more. If none comes, the reply is kept
   as a plain answer with a line that says no Task was read, and nothing starts.
-- Only you approve, in your own session: with the key, or by typing `yes`. A teammate's
-  message, a schedule and a bot's own turn cannot approve a Task.
+- Only you approve, in your own session: with the key, or by typing `yes` or `I approve`. A
+  teammate's message, a schedule and a bot's own turn cannot approve a Task.
 - A Task is read as untrusted text. The title is one line of up to 80 characters; the
   description up to 2000; the goal up to 500; one to eight objectives of up to 300 each;
   the priority is urgent, high, medium or low; the severity is critical, high, medium or
@@ -434,10 +434,10 @@ Some turns wait for nobody:
 - `elu run "<goal>"` on the command line makes no Task.
 
 A teammate's message that starts a session by itself (Auto) or that you approve with y is
-not among them: that session runs in your default mode, and its Task waits for your
-approval as one you asked for would. One started by Auto has nobody watching it, so, like a
-schedule whose mode you did not pick, it never runs with Full access: from Full it runs with
-Approve for me.
+not among them: that session runs in your default mode, Full access included, as if you
+had typed the message yourself, and its Task waits for your approval as one you asked for
+would. A later message in its thread runs in the session's mode at the time, Full access
+included.
 
 ## Lifecycle
 

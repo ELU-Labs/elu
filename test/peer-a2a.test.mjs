@@ -6,7 +6,7 @@ import http from 'node:http';
 import { temp } from './helpers.mjs';
 import {
   A2A_VERSION, BINDING, PEER_EXT, TaskState, Role, ErrorCode, CORE_METHODS, a2aError, textPart, dataPart, message, task, artifact,
-  withState, peerExt, validateMessage, validateTask, isTerminal, createRpcHandler,
+  withState, peerExt, validateMessage, validateTask, isTerminal, createRpcHandler, TEXT_MAX,
 } from '../lib/peer/a2a.mjs';
 import { startLocalA2A, buildAgentCard, localToken } from '../lib/peer/a2a-http.mjs';
 import { refuse } from '../lib/util.mjs';
@@ -114,8 +114,9 @@ test('validators refuse hostile or unknown shapes', () => {
     [{ ...base, taskId: { id: 1 } }, /short id/],
     [{ ...base, parts: [] }, /at least one part/],
     [{ ...base, parts: Array.from({ length: 9 }, () => ({ text: 'x' })) }, /at most 8/],
-    [{ ...base, parts: [{ text: 'x'.repeat(16001) }] }, /at most 16000|longer than 16000/],
-    [{ ...base, parts: [{ text: 'x'.repeat(9000) }, { text: 'y'.repeat(9000) }] }, /longer than 16000/],
+    // A message's text is bounded only by the line on the link that carries it.
+    [{ ...base, parts: [{ text: 'x'.repeat(TEXT_MAX + 1) }] }, /at most 1048576|longer than 1048576/],
+    [{ ...base, parts: [{ text: 'x'.repeat(TEXT_MAX / 2 + 1) }, { text: 'y'.repeat(TEXT_MAX / 2) }] }, /longer than 1048576/],
     [{ ...base, parts: [{ text: 'x', url: 'https://example.com' }] }, /exactly one/],
     [{ ...base, parts: [{ file: { uri: 'x' } }] }, /exactly one/],
     [{ ...base, metadata: { [PEER_EXT]: EXT } }, /without listing the peer extension/],
@@ -128,7 +129,8 @@ test('validators refuse hostile or unknown shapes', () => {
     [[base], /must be an object/],
   ];
   for (const [value, pattern] of bad) assert.throws(() => validateMessage(value), pattern, JSON.stringify(value).slice(0, 120));
-  assert.equal(validateMessage({ ...base, parts: [{ text: 'x'.repeat(20000) }] }, { max: 160000 }).parts[0].text.length, 20000);
+  assert.equal(validateMessage({ ...base, parts: [{ text: 'x'.repeat(20000) }] }).parts[0].text.length, 20000, 'what ELU 0.1.19 refused over 16000 characters');
+  assert.equal(validateMessage({ ...base, parts: [{ text: 'x'.repeat(900000) }] }).parts[0].text.length, 900000);
   assert.throws(() => validateTask({ id: 't-1', status: { state: 'TASK_STATE_DONE' } }), /Task state/);
   assert.throws(() => validateTask({ id: 't-1', status: { state: 'TASK_STATE_COMPLETED', timestamp: 'yesterday' } }), /ISO 8601/);
   assert.throws(() => validateTask({ id: 't/1', status: { state: 'TASK_STATE_COMPLETED' } }), /short id/);
@@ -208,8 +210,9 @@ test('the RPC handler validates requests and maps errors without leaking interna
   assert.equal((await handle(rpcCall('SendMessage', { ...fixture('spec-6.1-send-message.json'), configuration: { taskPushNotificationConfig: { url: 'https://x' } } }))).error.code, -32003);
 
   const long = 'x'.repeat(20000);
+  // A question over what ELU 0.1.19 took (16000 characters) is taken like a review.
   const ask = message({ text: long, ext: EXT });
-  assert.match((await handle(rpcCall('SendMessage', { message: ask }))).error.message, /at most 16000/);
+  assert.ok((await handle(rpcCall('SendMessage', { message: ask }))).result.task);
   const review = message({ text: long, ext: { ...EXT, kind: 'review' } });
   assert.ok((await handle(rpcCall('SendMessage', { message: review }))).result.task);
 

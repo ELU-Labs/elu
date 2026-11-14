@@ -95,10 +95,10 @@ test('the prompt carries the learned section whole, and says those lines are the
   saveLearned(root, { add: ['Use pnpm, not npm.'], remove: [] });
   const parts = projectPromptParts(root);
   assert.equal(parts.length, 2); assert.match(parts[0], /Use pnpm, not npm\./); assert.equal(parts[1], LEARNED_USE);
-  // A long context is clipped as before, but never its learned section.
+  // A long context reaches the turn whole, its learned section with it.
   saveContext(root, `${Array.from({ length: 250 }, (_, index) => `note ${index}`).join('\n')}\n\n${LEARNED_HEADING}\n\n- 2026-11-12: Use pnpm, not npm.\n`);
   const [context] = projectPromptParts(root);
-  assert.match(context, /note 199\\n\[Truncated\.\]\\n\\n## Learned from you\\n\\n- 2026-11-12: Use pnpm, not npm\.\\n/); assert.doesNotMatch(context, /note 200/);
+  assert.match(context, /note 199\\nnote 200\\n/); assert.match(context, /note 249\\n\\n## Learned from you\\n\\n- 2026-11-12: Use pnpm, not npm\.\\n/); assert.doesNotMatch(context, /Truncated/);
   // No section, or an empty one: no note.
   saveContext(root, `Notes.\n\n${LEARNED_HEADING}\n`); assert.equal(projectPromptParts(root).length, 1);
 });

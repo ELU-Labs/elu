@@ -85,7 +85,7 @@ if(mode==='slow'&&!resumed){console.log(JSON.stringify({type:'turn.started'}));c
 if(cfg.accounts?.limited?.includes(account)){const message="You've hit your usage limit. Upgrade to Pro or try again later.";console.log(JSON.stringify({type:'turn.started'}));console.log(JSON.stringify({type:'error',message}));console.log(JSON.stringify({type:'turn.failed',error:{message:`${message} (usage_limit_reached)`}}));process.exit(1);}
 // tooLong (fake.json): a review this model will not take (as in the fake Claude Code), ended as
 // the real CLI ends a prompt longer than the model's context window.
-const tooLong=cfg.tooLong!==undefined&&input.includes('Review as @')&&(cfg.tooLong==='all'||cfg.tooLong==='files'&&/"content":"|"excerpts":\[/.test(input)||typeof cfg.tooLong==='number'&&input.length>cfg.tooLong);
+const tooLong=cfg.tooLong!==undefined&&(cfg.tooLongOn??['Review as @']).some(text=>input.includes(text))&&(cfg.tooLong==='all'||cfg.tooLong==='files'&&/"content":"|"excerpts":\[/.test(input)||typeof cfg.tooLong==='number'&&input.length>cfg.tooLong);
 if(tooLong){const message="Codex ran out of room in the model's context window. Start a new conversation or clear earlier history before retrying.";console.log(JSON.stringify({type:'turn.started'}));console.log(JSON.stringify({type:'error',message}));console.log(JSON.stringify({type:'turn.failed',error:{message}}));process.exit(1);}
 // commands (fake.json): what the model runs this turn. Each runs in a plain shell with the
 // environment this process was started with, as a session's command does, and is shown as it ran:

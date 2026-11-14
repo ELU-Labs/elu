@@ -64,6 +64,13 @@ test('a process that wrote the row ending its turn and stays for a child it left
   const quick = await runProcess({ bin: process.execPath, args: ['-e', 'console.log(JSON.stringify({type:"result"}))'], cwd, env: agentEnv(), logFile: path.join(cwd, 'quick.log'), timeoutSeconds: 60, finished: claude.finalEvent });
   assert.deepEqual([quick.code, quick.endedAfterResult], [0, undefined]);
 });
+test('a run is never stopped for the size of its output: 20 MiB goes to the log and it ends on its own', { timeout: 120000 }, async (t) => {
+  const cwd = temp(t), logFile = path.join(cwd, 'big.log');
+  const big = 'const row="x".repeat(1024*1024-1)+"\\n";let n=0;const more=()=>{while(n<20){n++;if(!process.stdout.write(row)){process.stdout.once("drain",more);return;}}setTimeout(()=>{console.log("done");},1500);};more()';
+  const r = await runProcess({ bin: process.execPath, args: ['-e', big], cwd, env: agentEnv(), logFile, timeoutSeconds: 100 });
+  assert.equal(r.code, 0); assert.equal(r.timedOut, false); assert.equal(r.outputLimit, false);
+  assert.ok(fs.statSync(logFile).size > 20 * 1024 * 1024); assert.match(fs.readFileSync(logFile, 'utf8').slice(-10), /done/);
+});
 test('recovery stops only the exact recorded process, never a reused PID', async (t) => {
   const child = spawn(process.execPath, ['-e', 'setInterval(()=>{},1000)'], { detached: true, stdio: 'ignore' });
   t.after(() => { try { process.kill(-child.pid, 'SIGKILL'); } catch {} });

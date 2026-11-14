@@ -185,7 +185,10 @@ test("the owner's list: one session is one row, and the teammate's question is t
   assert.deepEqual(rowActions(rows[0]), [['y', 'accept'], ['n', 'decline'], ['enter', 'read'], ['c', 'decline']]);
   // A reply or an ask of his that waits to go: c discards it, as n does.
   const reply = boardRows([home], now, { items: [{ ...ownerAsk, id: 'peer-reply', kind: 'held', request: undefined }] }).find(row => row.kind === 'peer');
-  assert.deepEqual(rowActions(reply), [['y', 'send'], ['n', 'discard'], ['enter', 'read'], ['c', 'discard']]);
+  assert.deepEqual(rowActions(reply), [['y', 'send'], ['n', 'discard'], ['e', 'edit'], ['enter', 'read'], ['c', 'discard']]);
+  // e edits what waits to go to a teammate; a draft of his own ask is sent or dropped.
+  const draft = boardRows([home], now, { items: [{ ...ownerAsk, id: 'peer-draft', kind: 'draft', request: undefined }] }).find(row => row.kind === 'peer');
+  assert.deepEqual(rowActions(draft), [['y', 'send'], ['n', 'discard'], ['enter', 'read'], ['c', 'discard']]);
 });
 
 test("only the owner's own later turns spend his blocked message: a bot's scheduled turn or a teammate's message in the session does not", () => {

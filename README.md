@@ -73,8 +73,9 @@ of the work. Nothing is edited yet.
 | Esc, then `n` | Rejects it. Nothing is changed. |
 | Type a message | Changes the Task. The card shows the new revision. |
 
-Typing `yes` and Enter approves too. A question gets a plain answer and no Task. A follow-up
-inside an approved Task's goal starts at once; a new piece of work gets a Task of its own.
+Typing `yes` or `I approve` and Enter approves too. A question gets a plain answer and no
+Task. A follow-up inside an approved Task's goal starts at once; a new piece of work gets a
+Task of its own.
 An approved Task gives its session its name, unless you named the session yourself.
 
 On the Kanban tab a session with a Task shows as that Task: its title, how far it is, its
@@ -276,6 +277,17 @@ elu id --name kim
 elu join CODE            # joins their team; your messages start sessions here
 ```
 
+A join finds the person who invited you only while their ELU is open and online. While it
+looks, it counts the seconds and says so; Esc (Ctrl-C in the shell) cancels it. If nobody
+answers within a minute it says why and what to do, and if your own computer is not
+connected it says that at once.
+
+Some networks will not connect two computers directly: a phone hotspot is one. A join that
+found their computer says so, keeps trying for three minutes, and goes through another
+computer that both can reach when one is on: another computer or teammate of yours, or a
+teammate of theirs, with ELU open. That computer passes along bytes it cannot read. If
+there is no way through, the join says why and what works.
+
 There is nothing to turn on. Once your computer is on a team, a background process (the
 peer daemon) keeps it reachable by your teammates, also while ELU is closed. Until you
 invite someone or join a team, nothing starts and nothing connects. There is no off switch
@@ -290,6 +302,14 @@ no rules when there are none.
 `elu peers` shows who is online. In the app, write to a teammate in the Chats tab, or
 type `@kim where are the tax rates?` in any session. A message always reaches them, and
 they can reply in the same thread.
+
+Two more choices are yours for each teammate, in Chats with their row selected or their
+messages open. `h` holds your replies and results to them: each one waits in their thread
+until you press `y` to send it, `e` to edit its text first, or `n` to drop it. One that may
+hold a secret always waits, and is sent only after you take the secret out. `o` turns on
+auto-continue: their answer, or the result of work they approved, continues the session you
+asked from. Its thread stays in Chats for a week, marked "continued in your session"; `n`
+dismisses it sooner. The line over their thread says which of the two are on.
 
 What a teammate's message does on your machine is yours to choose, once per team: `/join`
 asks, and so does your first `/invite` for a team. **Auto** (the default for a new team)
@@ -310,7 +330,8 @@ and see its live work. Inviting a teammate shares one too: `elu invite` shares t
 run it in when it is an ELU project (`--project PATH` names another), and `/invite`
 the open project. Joining shares no project of yours, but the Kanban board needs no share:
 every session you run in a repository a teammate also has is on their Kanban, with its title,
-its column, who started it and which machine, and theirs are on yours. Nothing else about it
+its column, who started it, which machine and its approved Task, and theirs are on yours, so
+their agents also know what yours is working on. Nothing else about it
 is sent: no chat, file or path. `/share off` in a project keeps it off both ways. The wire
 format is in [docs/peer-network.md](docs/peer-network.md).
 
@@ -336,7 +357,10 @@ needs no code: run `/mine @devbox` on the laptop and `/mine @laptop` on the devb
 new session box starts the session on the devbox, with the mode, model and bots you picked.
 It shows in Sessions marked "on devbox", live, and its approvals wait on both machines. It is
 your own session there, so your rules apply, and `a` on its approval, from either machine,
-keeps the rule on the devbox, where it runs.
+keeps the rule on the devbox, where it runs. When the devbox's home folder is one of its projects,
+the box first asks which folder the session works in there: its projects, the home folder, and
+each Git repository in the home folder, the cursor on where it would run. Enter starts it there;
+Esc sends nothing and keeps your message.
 Sessions also lists every other session on the devbox in the same repository under "On devbox": they are part of your project, in Sessions and on its Kanban ("you · devbox"), whichever of your computers started them.
 Projects lists a devbox project as "<project> on devbox" only for its sessions this project cannot show, and says how many.
 With a devbox session under the cursor, what you type goes to your agent here, on the laptop:
@@ -371,6 +395,11 @@ again. `/mine auto off` (or `ELU_NO_GITHUB_PAIRING=1`) turns this off.
 
 In a channel, `/invite @kim` adds a teammate you already have. `/invite` alone makes a
 code for someone new; the first time, it also makes your team, named after the open project.
+Once you are on a team, the code is for that team and no other team is made: with several
+it asks which, and only an admin of a team can make one. If you join someone else's team
+while your own still has nobody else on it, yours is closed and the line that says you
+joined says so: Chats then has one #general, with everyone in it. Nothing of yours is
+deleted. Two teams that both have other people each keep their own #general, named by team.
 
 ## Standup
 
@@ -382,8 +411,7 @@ holds for your teammates' sessions, as their computers apply it; a teammate's co
 older build does not say which of its sessions in Done answered, so those are listed, not asked. That is every such session of yours in every project on
 this computer, those on your other computers that are online (`/mine`), and your teammates'
 sessions on the shared Kanban whose computers are online. A project kept off the Kanban
-(`/share off`) is never asked. At most 20 of yours and 20 of your teammates' are asked,
-newest first; the rest are listed.
+(`/share off`) is never asked. Every one of them is asked, newest first.
 
 Before asking, the chat says how many sessions it asks and on which computers. Each session
 answers in one turn of its own agent (its model, or the worker bot that works in it), on its
@@ -409,7 +437,7 @@ your daily allowance there, as any message of yours that runs on their computer,
 round can use up the day's requests. A computer that still runs an older build of ELU
 for its sessions is listed, not asked.
 
-When the round ends, the Standup's own model reads every update and sums it up: what is
+When the round ends, the Standup's own model reads every update, whole, and sums it up: what is
 done, what is in progress, what is blocked or waits for someone, and who. That turn starts
 with nobody watching, so it only answers and keeps the Kanban: it reads, with no edits, no
 shell, no web, no Task and none of your MCP servers; Full access runs as Approve for me, and

@@ -7,7 +7,7 @@ import { project, fakeClis, config, approveProjectFiles, approvingConductor, CLI
 import { repository } from '../lib/git.mjs';
 import { ProjectController, projectSnapshot, registerProject } from '../lib/projects.mjs';
 import { saveTask } from '../lib/state.mjs';
-import { pendingRequests, removeRequest, updateRequest, takeRequest } from '../lib/workspace.mjs';
+import { addToRequest, pendingRequests, removeRequest, updateRequest, takeRequest } from '../lib/workspace.mjs';
 import { Conductor, enqueue, sendCommand, saveConductorSettings, conductorStatus, conductorNote, conductorRunning, conductorAlive, olderConductor, retryRequest, startQueued, VERSION } from '../lib/conductor.mjs';
 // The conductor of 0.1.16 as published, which has no handover, on today's modules.
 import * as earlier from './fixtures/conductor-0.1.16/conductor.mjs';
@@ -345,6 +345,33 @@ test('beside a 0.1.16 conductor, queued requests wait where it never reads, and 
   updateRequest(p.root, sent.id, { reason: 'Waiting to start.' });
   assert.deepEqual(earlierRequests(p.root).map(row => row.id).sort(), [sent.id, own.id].sort());
   assert.equal(fs.readdirSync(path.join(personalDirectory(), 'requests')).filter(name => name.endsWith('.beside.json')).length, 0);
+});
+
+// 0.1.16 took a request of at most 16000 characters and refused a longer one. A request of any
+// length queued by this version waits where that conductor never reads, so it is never
+// refused or started by it, and the new version runs it with every character.
+test('beside a 0.1.16 conductor, a request over 16000 characters is never read by it and runs whole on the new version', async t => {
+  const p = setup(t), old = conductor016(t);
+  await until(() => olderConductor()?.version === null, 'the 0.1.16 conductor to write its status');
+  const long = `Where is coupon normalization?\n${'Every line of this request matters. '.repeat(1000)}THE END`;
+  assert.ok(long.length > 16000 * 2);
+  assert.throws(() => earlierSave(p.root, long, undefined, { state: 'queued' }), { message: 'Enter a request of 1 to 16000 characters.' }, 'what 0.1.16 itself said to one this long');
+  const sent = enqueue(p.root, long);
+  assert.equal(request(p.root, sent.id).state, 'queued'); assert.ok(request(p.root, sent.id).goal === long);
+  // A second message typed before it starts goes with it, however long the two are together.
+  assert.ok(addToRequest(p.root, sent.id, 'And the refunds too.').goal === `${long}\n\nAnd the refunds too.`);
+  assert.equal(earlierRequests(p.root).length, 0, 'the 0.1.16 conductor cannot read it');
+  await pause(200);
+  assert.equal(old.claims, 0);
+  // The new version starts beside the old one and runs it: the model is sent every character.
+  const fresh = conduct(t);
+  assert.equal(fresh.beside, true);
+  await until(() => request(p.root, sent.id)?.state === 'done', 'the new version to run it', 60000);
+  assert.equal(old.claims, 0, 'the old conductor never started it');
+  const id = request(p.root, sent.id).taskId, input = fs.readFileSync(path.join(p.parent, 'inputs.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line)).find(row => row.vendor === 'claude' && row.args.includes('-p')).input;
+  assert.ok(task(p.repo, id).goal === `${long}\n\nAnd the refunds too.`);
+  assert.ok(input.includes(JSON.stringify(`${long}\n\nAnd the refunds too.`)), 'the whole request is in what the model read');
+  assert.equal(task(p.repo, id).state, 'answered');
 });
 
 test('after the first update from 0.1.16, new work and a schedule run on the new version at once, the old turn finishes, and its follow-up then runs once', async t => {

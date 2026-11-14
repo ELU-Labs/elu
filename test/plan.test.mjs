@@ -6,7 +6,7 @@ import { temp, project, fakeClis, git } from './helpers.mjs';
 import { ProjectController } from '../lib/projects.mjs';
 import { projectFolder } from '../lib/workspace.mjs';
 import { readTask, setTitle, taskDir } from '../lib/state.mjs';
-import { TASK_LIMITS, approveTask, checkProposal, currentTask, planFile, planSchema, readPlanReply, rejectTask, reportProgress, sessionTasks, sharedTask, taskEta } from '../lib/plan.mjs';
+import { TASK_LIMITS, approveTask, checkProposal, currentTask, planFile, planSchema, readPlanReply, rejectTask, reportProgress, saysYes, sessionTasks, sharedTask, taskEta } from '../lib/plan.mjs';
 import { conversationSchema } from '../lib/config.mjs';
 import { boardRows, rowBadge } from '../lib/board.mjs';
 import { clockTime, etaText, taskCard as drawCard, taskState } from '../lib/terminal-plan.mjs';
@@ -94,6 +94,19 @@ test('a typed message revises the waiting Task, and a typed yes approves it', as
   const more = await f.controller.ask('Trim spaces too', asked.id).finished;
   assert.equal(sessionTasks(f.repo, asked.id).length, 1); assert.equal(turns(more), 5);
   assert.match(fs.readFileSync(path.join(more.worktree, 'src/coupon.mjs'), 'utf8'), /trim\(\)\.toUpperCase/);
+});
+
+test('typing I approve approves the waiting Task as y does, and a message that only starts like one does not', async t => {
+  const f = fixture(t);
+  const asked = await f.controller.ask('Uppercase coupon codes').finished;
+  assert.equal(currentTask(f.repo, asked.id).state, 'proposed');
+  const done = await f.controller.ask('I approve', asked.id).finished;
+  assert.notEqual(done.kind, 'conversation'); assert.equal(currentTask(f.repo, asked.id).state, 'done');
+  assert.match(fs.readFileSync(path.join(done.worktree, 'src/coupon.mjs'), 'utf8'), /toUpperCase/);
+  // The owner's short words of approval, however he ends them.
+  for (const text of ['y', 'yes', 'Yes.', 'yes please', 'Yes, go ahead', 'ok', 'okay!', 'approve', 'Approved', 'I approve', 'i approve.', 'I approve it', 'I approve this', 'I approve the Task', 'approve it', 'go', 'go ahead', 'do it', 'LGTM']) assert.equal(saysYes(text), true, text);
+  // Anything longer is a message for the model, which may be a change to the Task.
+  for (const text of ['I approve of the idea, but make it urgent', 'approve nothing yet', 'yes but only src', 'I do not approve', 'not approved', 'no', 'Go on with the tests first', '']) assert.equal(saysYes(text), false, text);
 });
 
 test('a reply that asks for an edit with no Task is asked once more, then kept as a plain answer', async t => {

@@ -239,7 +239,8 @@ and teammates' Tasks are not shown in it or given to its models. `/share on` put
 each teammate, and each other computer of yours, who has a clone of that same repository.
 No share is needed. A card holds only the session's title (its name, or the first line of
 what was asked, up to 80 characters), its column (In progress, Needs you or Done), who
-started it, the time it last moved, and the id of its Task when it has one. Never the chat,
+started it, the time it last moved, and the id of its Task when it has one. Its Task goes
+with it, whether or not you share the project: the fields listed under **Tasks** above. Never the chat,
 a file, a diff or a path: a path in the title reads [path], and a title with a secret in it
 goes as "Session". A session a teammate's message started shows what they asked and their
 name only to teammates on a team that message came through; anyone else sees "Session". To know who has which repository, each machine sends each teammate

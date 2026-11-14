@@ -960,6 +960,72 @@ test('secret scanning leaves ordinary text alone', () => {
   for (const text of fine) assert.deepEqual(scanSecrets(text), [], text);
   assert.deepEqual(scanSecrets(''), []); assert.deepEqual(scanSecrets(null), []);
 });
+test('a file path with random-named temp folders is not read as a secret, but a key-long random name in one is', () => {
+  const temps = [
+    '/var/folders/7k/xq2m3h1d5gs0qfz8r9t2wvbr0000gn/T/x',
+    '/private/var/folders/zz/zyxvpxvq6csfxvn_n0000000000000/T/elu-Ab3xYz/r/x',
+    '/tmp/su2-9SAVeT/x-link/tmp/elu-Qw8RtZ/project/notes/round.mjs',
+    '/tmp/usage-signin-FnsHbp/x-link/tmp/elu-Qw8RtZ/a/src/billing.mjs',
+    '~/Library/Caches/elu-Zx8Qp3Lm9kRt/T/su2-9SAVeT/round.mjs',
+  ];
+  for (const temp of temps) {
+    assert.deepEqual(scanSecrets(`Fixing billing from ${temp} next.`), [], temp);
+    assert.equal(prepareOutgoing(`Fixing billing from ${temp} next.`).ok, true, temp);
+  }
+  const key = 'vAmVbhHlMdBWbegcq1jSMy0NM7XTN0nj5m_5p41Ww08';
+  assert.deepEqual(scanSecrets(`Read /run/secrets/${key} now.`), [{ kind: 'high-entropy', index: 'Read /run/secrets/'.length }]);
+  assert.deepEqual(scanSecrets(`Key /${key.slice(0, 20)}/${key.slice(20)}.`), [{ kind: 'high-entropy', index: 4 }]);
+});
+test('a relative path with a random-looking name is not read as a secret, but a real secret in one is', () => {
+  const relative = [
+    'Support/CleanShot/media/media_8Qw4Rt2LmZ/CleanShot',
+    '~/Library/Application Support/CleanShot/media/media_8Qw4Rt2LmZ/CleanShot 2026-11-12 at 10.14.07@2x.png',
+    'private/var/folders/7k/xq2m3h1d5gs0qfz8r9t2wvbr0000gn/T/elu-Ab3xYz/r/x',
+    './tmp/su2-9SAVeT/x-link/tmp/elu-Qw8RtZ/project/notes/round.mjs',
+    '../build/cache-Zx8Qp3Lm9kRt/T/su2-9SAVeT/elu-Qw8RtZ/round.mjs',
+    'Downloads/Zx8Qp3Lm9kRt2wVb7Nc4Hs6Jd1F/report-Qw8RtZ/notes',
+  ];
+  for (const file of relative) {
+    assert.deepEqual(scanSecrets(`Fixing billing from ${file} next.`), [], file);
+    assert.equal(prepareOutgoing(`Fixing billing from ${file} next.`).ok, true, file);
+  }
+  // A real secret inside such a path is still caught: a key-long random name, a token after = or :,
+  // a named KEY=value, and a base64 key that holds a "/" (no plain word in it, so judged whole).
+  const key = 'vAmVbhHlMdBWbegcq1jSMy0NM7XTN0nj5m_5p41Ww08', folder = 'Support/CleanShot/media/media_8Qw4Rt2LmZ';
+  const caught = [
+    ['high-entropy', `Read ${folder}/`, key], ['high-entropy', `Open ${folder}/upload?sig=`, key], ['high-entropy', `Open ${folder}/CleanShot:`, key],
+    ['assignment', `In ${folder}/.env there is `, `API_KEY=${key.slice(0, 16)}`], ['high-entropy', 'Key ', `${key.slice(0, 20)}/${key.slice(20)}`],
+    ['high-entropy', 'Key ', `${'wJalrXUtnFEMI/K7MDENG/'}${'bPxRfiCYEXAMPLEKEY'}`],
+  ];
+  for (const [kind, before, secret] of caught) assert.deepEqual(scanSecrets(`${before}${secret} now.`), [{ kind, index: before.length }], `${before}${secret}`);
+  // A URL is judged whole, as before: a key split over its path is still caught.
+  const hook = `https://hooks.example.com/services/T0A1B2C3D/B4E5F6G7H/${key.slice(0, 24)}`;
+  assert.deepEqual(scanSecrets(`Post to ${hook} now.`).map(x => x.kind), ['high-entropy']);
+});
+test('a base64 key split by its own "/" under a folder named like secrets is caught, and names made of words are not', () => {
+  const key = keyLike('wJalrXUtnFEMI/K7MDENG/', 'bPxRfiCYEXAMPLEKEY');
+  for (const folder of ['config/secrets/', '/run/secrets/', '~/.config/app/secrets/', 'secrets/', '.keys/', 'deploy/api-keys/', '/etc/app/tokens/', 'ops/credentials/', '~/vault/'])
+    assert.deepEqual(scanSecrets(`Read ${folder}${key} now.`), [{ kind: 'high-entropy', index: `Read ${folder}`.length }], folder);
+  // A plain folder between the two does not hide it, and the update is held.
+  assert.deepEqual(scanSecrets(`Read config/secrets/prod/${key} now.`), [{ kind: 'high-entropy', index: 'Read config/secrets/prod/'.length }]);
+  assert.equal(prepareOutgoing(`The key is in config/secrets/${key}.`).ok, false);
+  const named = [
+    'config/secrets/us-east-1/db-main-01/README-prod', 'infra/keys/eu-west-1/app-7f3a9c/id_ed25519-2024', 'lib/tokens/parser/lexer/index-v2/readme',
+    '/etc/app/secrets/prod/us-east-1/db-main-01/password.txt', '~/.config/app/credentials/google-oauth2-client/web-2024-11/x86_64',
+  ];
+  for (const file of named) assert.deepEqual(scanSecrets(`See ${file} now.`), [], file);
+  // No folder named like secrets: a macOS temporary folder is still a path, not a key.
+  assert.deepEqual(scanSecrets('See /var/folders/7k/xq2m3h1d5gs0qfz8r9t2wvbr0000gn/T/elu-Ab3xYz/r/x now.'), []);
+  assert.deepEqual(scanSecrets('See private/var/folders/7k/xq2m3h1d5gs0qfz8r9t2wvbr0000gn/T/elu-Ab3xYz/r/x now.'), []);
+});
+test('a base64 key that holds a "/" is caught even when a piece of it reads as a plain word or as the start of a path', () => {
+  // One plain word among the pieces can be chance; a relative path has two or more.
+  const keys = [keyLike('wJalrXUtnFEMI/', 'Kabc/bPxRfiCYEXAMPLEKEYzz9'), keyLike('Zx8Qp3Lm9kRt2wVb7Nc4/', 'Hsd/Jd1Fg5YwJalrXUtn'), keyLike('tmp/', 'Zx8Qp3Lm9kRt2wVb7Nc4Hs6Jd1Fg5Y+wJalr')];
+  for (const key of keys) assert.deepEqual(scanSecrets(`Key ${key} now.`), [{ kind: 'high-entropy', index: 4 }], key);
+  // A key that starts with "/" or holds "+/" is not a path: its first name is no folder such as /tmp or /Users.
+  const slashed = [keyLike('/LdprlBuXLwOK/', 'fYFEKPjdGxsDFCLtSqn4mzSMNc'), keyLike('YhT8N9OMmxppoZWMocf2+/', 'dCy/7ZsIzReudniwD0'), keyLike('qKVd9oqm3iKT/5Cymr+/', 'BhIA/hc+BYzCGU7qjhkV')];
+  for (const key of slashed) assert.deepEqual(scanSecrets(`Key ${key} now.`), [{ kind: 'high-entropy', index: 4 }], key);
+});
 test('paths are redacted outside the project and the home folder becomes ~', () => {
   const home = os.homedir(), root = path.join(home, 'work', 'sample app');
   const text = `Edit ${root}/src/coupon.mjs, not ${home}/.ssh/id_ed25519 or /etc/passwd or ${root}-old/x.js. See https://github.com/elu/app/blob/main/a.js, src/a/b.js, ~/notes/x and /ask @sara.`;
@@ -967,6 +1033,41 @@ test('paths are redacted outside the project and the home folder becomes ~', () 
   assert.equal(redactPaths('Read ~/.ssh/id_ed25519.'), 'Read [path].');
   assert.equal(redactPaths(`${home}/other/file.txt and /usr/local/bin/node`), '[path] and [path]');
   assert.equal(redactPaths('nul\u0000byte'), 'nulbyte');
+});
+test('a path with spaces in a folder or file name is cut whole, and a sentence after a path is kept', () => {
+  const root = '/srv/shop', rest = 'Library/Application Support/CleanShot/media/media_8Qw4Rt2LmZ/CleanShot 2026-11-12 at 10.14.07@2x.png';
+  const whole = [
+    // In quotes, as a terminal writes a dropped file.
+    [`Screenshot in '/Users/sam/${rest}' done.`, "Screenshot in '[path]' done."], [`Open "/Users/sam/${rest}".`, 'Open "[path]".'],
+    [`See \`~/${rest}\` and src/a.js.`, 'See `[path]` and src/a.js.'], ["In '~/My Files/tax return 2025.pdf'.", "In '[path]'."],
+    // With escaped spaces.
+    [`Open /Users/sam/${rest.replaceAll(' ', '\\ ')} now.`, 'Open [path] now.'], ['Read ~/My\\ Files/notes.txt.', 'Read [path].'],
+    // Without quotes: names after a space start with a capital letter or a digit, up to a known file ending or the last folder.
+    [`Screenshot saved in ~/${rest}, tests next.`, 'Screenshot saved in [path], tests next.'], [`Done: fix in /Users/sam/${rest}.`, 'Done: fix in [path].'],
+    ['The shots are in ~/Library/Application Support/CleanShot/media.', 'The shots are in [path].'], ['Look in /Users/sam/Library/Application Support/ first.', 'Look in [path] first.'],
+    ['See ~/Desktop/Screenshot 2026-11-12 at 10.14.07 AM.png next.', 'See [path] next.'], ['See ~/Desktop/Screen Recording 2026-11-12 at 10.14.07 AM.MOV next.', 'See [path] next.'],
+    ['Open /Applications/Visual Studio Code.app first.', 'Open [path] first.'], ['Kept in ~/Google Drive/My Drive/Q3 Plan/Budget 2026.xlsx.', 'Kept in [path].'],
+    ['In /Users/sam/Library/Mobile Documents/com~apple~CloudDocs/Notes/Plan.md now.', 'In [path] now.'], ['Got ~/Downloads/report (1).pdf and ~/Downloads/Shot 2 (12).PNG.', 'Got [path] and [path].'],
+    ['The shots (in ~/Library/Application Support/CleanShot/media) are new.', 'The shots (in [path]) are new.'],
+  ];
+  for (const [text, cut] of whole) {
+    assert.equal(redactPaths(text, { root }), cut, text);
+    assert.deepEqual(prepareOutgoing(text, { root }), { ok: true, text: cut, problems: [], pathsCut: true }, text);
+  }
+  const kept = [
+    ['Working on /srv/notes/billing and src/billing.mjs, tests next.', 'Working on [path] and src/billing.mjs, tests next.'],
+    ['Read ~/.ssh/config and wrote notes.md.', 'Read [path] and wrote notes.md.'], ['Run /usr/local/bin/node scripts/build.mjs twice.', 'Run [path] scripts/build.mjs twice.'],
+    ['Saved it in ~/Downloads as Report.pdf.', 'Saved it in [path] as Report.pdf.'], ['Edit /etc/app/hosts and then README.md.', 'Edit [path] and then README.md.'],
+    ['I read /var/log/syslog. Tests/a.mjs is next.', 'I read [path]. Tests/a.mjs is next.'], ['Fixed /srv/app/Makefile Then updated README.md.', 'Fixed [path] Then updated README.md.'],
+    ['Moved /tmp/out/2024 and 3 files to src/a.js.', 'Moved [path] and 3 files to src/a.js.'], ["It's in /tmp/a/b and that's fine.", "It's in [path] and that's fine."],
+  ];
+  for (const [text, cut] of kept) assert.equal(redactPaths(text, { root }), cut, text);
+  // A path inside the project is kept, spaces and quotes included; a quoted ~/ path never is.
+  const home = os.homedir(), project = path.join(home, 'work', 'sample app');
+  assert.equal(redactPaths(`Edit '${project}/src/My File.js' and '~/Other Notes/x.txt'.`, { root: project }), "Edit '~/work/sample app/src/My File.js' and '[path]'.");
+  // The secret check still reads the text as written.
+  const key = 'vAmVbhHlMdBWbegcq1jSMy0NM7XTN0nj5m_5p41Ww08';
+  assert.equal(prepareOutgoing(`Open '/Users/sam/My Keys/${key}' now.`, { root }).ok, false);
 });
 test('outgoing text is blocked on any secret and redacted either way', () => {
   const root = path.join(os.homedir(), 'proj');

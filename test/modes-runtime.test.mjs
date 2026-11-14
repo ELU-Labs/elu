@@ -305,7 +305,7 @@ test('place here runs in the checkout itself with a dirty tree; checks keep the 
   assert.ok(task.runs.filter(run => run.role === 'lead').every(run => run.permissions === 'full' && run.effectivePermissions === 'full'));
   const names = task.evidence.results.map(row => row.name);
   assert.ok(!names.includes('secret-paths') && names.includes('no-deleted-tests'));
-  for (const name of ['changed-lines', 'protected-paths', 'unchanged-scripts', 'no-dependency-changes']) assert.equal(names.includes(name), false, `${name} is skipped in full`);
+  for (const name of ['changed-lines', 'no-binary-changes', 'protected-paths', 'unchanged-scripts', 'no-dependency-changes']) assert.equal(names.includes(name), false, `${name} is skipped in full`);
   const sandboxed = f.calls().filter(call => call.vendor === 'codex' && call.args[0] === 'sandbox' && call.args.includes('--'));
   assert.ok(sandboxed.length >= 1, 'the checks ran in the sandbox');
   assert.ok(sandboxed.every(call => call.args.some(arg => arg.includes('network={enabled=true}'))), 'full keeps the network on for checks');
@@ -314,7 +314,7 @@ test('place here runs in the checkout itself with a dirty tree; checks keep the 
   assert.equal(git(f.root, ['rev-parse', 'HEAD']), head);
 });
 
-test('full skips the cap, the protected paths and the secret paths; auto allows a lockfile change', t => {
+test('no mode caps the changed lines, full skips the protected paths and the secret paths; auto allows a lockfile change', t => {
   const dir = temp(t), root = path.join(dir, 'repo'); fs.mkdirSync(root);
   git(root, ['init', '--initial-branch=main']); git(root, ['config', 'user.name', 'T']); git(root, ['config', 'user.email', 't@example.invalid']);
   fs.mkdirSync(path.join(root, 'src')); fs.writeFileSync(path.join(root, 'src/a.mjs'), 'export const a = 1;\n');
@@ -328,11 +328,11 @@ test('full skips the cap, the protected paths and the secret paths; auto allows 
   const task = { worktree: root, base, place: { kind: 'worktree' } };
   const status = (mode) => Object.fromEntries(structuralChecks(task, config, { mode }).results.map(row => [row.name, row.status]));
   const locked = status('locked');
-  assert.equal(locked['changed-lines'], 'failed'); assert.equal(locked['protected-paths'], 'failed'); assert.equal(locked['no-dependency-changes'], 'failed'); assert.equal(locked['secret-paths'], 'failed');
+  assert.equal(locked['changed-lines'], undefined, 'no check counts the changed lines'); assert.equal(locked['no-binary-changes'], 'passed'); assert.equal(locked['protected-paths'], 'failed'); assert.equal(locked['no-dependency-changes'], 'failed'); assert.equal(locked['secret-paths'], 'failed');
   const auto = status('auto');
-  assert.equal(auto['changed-lines'], 'failed'); assert.equal(auto['protected-paths'], 'passed', 'dependency files are not protected in auto'); assert.equal(auto['no-dependency-changes'], undefined); assert.equal(auto['unchanged-scripts'], 'passed');
+  assert.equal(auto['changed-lines'], undefined); assert.equal(auto['protected-paths'], 'passed', 'dependency files are not protected in auto'); assert.equal(auto['no-dependency-changes'], undefined); assert.equal(auto['unchanged-scripts'], 'passed');
   const full = status('full');
-  assert.equal(full['changed-lines'], undefined); assert.equal(full['protected-paths'], undefined); assert.equal(full['unchanged-scripts'], undefined); assert.equal(full['no-dependency-changes'], undefined);
+  assert.equal(full['changed-lines'], undefined); assert.equal(full['no-binary-changes'], undefined); assert.equal(full['protected-paths'], undefined); assert.equal(full['unchanged-scripts'], undefined); assert.equal(full['no-dependency-changes'], undefined);
   assert.equal(full['secret-paths'], undefined, 'Full access changes secret files too'); assert.equal(auto['secret-paths'], 'failed'); assert.equal(full['no-deleted-tests'], 'passed'); assert.equal(full['declared-paths'], 'passed');
   for (const file of ['package.json', 'package-lock.json', 'yarn.lock', 'pnpm-lock.yaml', 'Cargo.lock']) { assert.equal(protectedPath(file), true, file); assert.equal(protectedPath(file, { mode: 'ask' }), true); assert.equal(protectedPath(file, { mode: 'auto' }), false); assert.equal(protectedPath(file, { mode: 'full' }), false); }
   for (const file of ['.github/workflows/ci.yml', '.git/config', 'Makefile', 'tsconfig.json']) for (const mode of ['locked', 'ask', 'auto', 'full']) assert.equal(protectedPath(file, { mode }), true, `${file} in ${mode}`);

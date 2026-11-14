@@ -14,6 +14,7 @@ import { checkRunPictures, pictureKind, picturesRoot } from '../lib/pictures.mjs
 import * as claude from '../lib/adapters/claude.mjs';
 import { peerFile } from '../lib/peer/paths.mjs';
 import { savePeerPolicy, savePeerSettings } from '../lib/peer/settings.mjs';
+import { noteTheirs } from '../lib/peer/mine.mjs';
 import { identity as loadIdentity } from '../lib/peer/identity.mjs';
 import { share } from '../lib/peer/shares.mjs';
 import { PEER_EXT, createRpcHandler, filePart, message, task as a2aTask, textPart } from '../lib/peer/a2a.mjs';
@@ -175,7 +176,10 @@ test('the receiving side takes pieces only from a teammate, checks every picture
     const small = picture(path.join(temp(t), 's.png'), 900);
     assert.throws(() => piece(crypto.randomUUID(), small, 0, { session: { key: crypto.randomBytes(32).toString('hex'), admitted: true } }), /not on a team with this machine/);
     assert.throws(() => piece(crypto.randomUUID(), small, 0, { session: { key: ana.key, admitted: false } }), /not on a team/);
-    savePeerPolicy(ana.key, { muted: true }); assert.throws(() => piece(crypto.randomUUID(), small, 0), /not taking requests from you/); savePeerPolicy(ana.key, { muted: false });
+    savePeerPolicy(ana.key, { muted: true }); assert.throws(() => piece(crypto.randomUUID(), small, 0), /This teammate is not taking requests from you\./);
+    // To another computer of its owner's this machine is a computer, never a teammate.
+    noteTheirs(ana.key, true); assert.throws(() => piece(crypto.randomUUID(), small, 0), /This computer is not taking requests from you\./); noteTheirs(ana.key, false);
+    savePeerPolicy(ana.key, { muted: false });
     // Not a picture, too large, out of order, not the size or the bytes it said, or not a piece at all.
     assert.throws(() => piece(crypto.randomUUID(), Buffer.from('#!/bin/sh\necho no\n'), 0), /Only PNG, JPEG, GIF and WebP pictures can be sent\./);
     assert.throws(() => piece(crypto.randomUUID(), small, 0, { params: { size: PICTURE_MAX + 1 } }), /A picture can be up to 8 MB\./);
