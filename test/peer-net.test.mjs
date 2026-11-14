@@ -2468,6 +2468,33 @@ test('an answer shows on a message only once its line is in the thread: while th
   });
 });
 
+test('a teammate\'s message shows here only once its line is in the thread: while the thread is busy nothing is kept or queued and the teammate is told to try again, and sending it again writes it once', async t => {
+  const crew = makeTeam(t), ana = crew.founder.identity;
+  await withHome(crew.member.home, async () => {
+    const { root } = registeredProject(t); share(root, { handle: 'app' }); savePeerPolicy(ana.key, { autoAccept: true });
+    const ctx = { me: loadIdentity(), kick: () => {}, event: () => {}, push: () => {}, session: () => null, dial: () => {} };
+    const handle = createRpcHandler(intakeMethods(ctx));
+    const send = (messageId, text) => handle({ jsonrpc: '2.0', id: 1, method: 'SendMessage', params: { message: message({ text, contextId: 'thread-asked', messageId, ext: { kind: 'ask', project: null, hop: 1, from: { key: ana.key, name: 'ana' } } }) } }, { key: ana.key });
+    const lines = () => thread('thread-asked').filter(line => line.dir === 'in').map(line => line.text);
+    const kept = () => fs.existsSync(peerFile('tasks')) ? fs.readdirSync(peerFile('tasks')).length : 0;
+    const first = crypto.randomUUID(), second = crypto.randomUUID();
+    const release = lock(peerRepo(), 'thread-thread-asked'); let reply = await send(first, 'Where are coupon codes normalized?');
+    assert.equal(reply.error?.code, -32000, JSON.stringify(reply));
+    assert.equal(kept(), 0, 'no message here while its line is not in the thread'); assert.deepEqual(pendingRequests(root), [], 'and nothing is queued for it'); assert.deepEqual(lines(), []);
+    release();
+    reply = await send(first, 'Where are coupon codes normalized?');
+    assert.equal(reply.result?.task.status.state, TaskState.SUBMITTED, JSON.stringify(reply));
+    assert.equal(kept(), 1); assert.equal(pendingRequests(root).length, 1); assert.deepEqual(lines(), ['Where are coupon codes normalized?']);
+    // Sent again it is the same message: one record, one run, one line.
+    assert.equal((await send(first, 'Where are coupon codes normalized?')).result?.task.id, reply.result.task.id);
+    assert.equal(kept(), 1); assert.equal(pendingRequests(root).length, 1); assert.deepEqual(lines(), ['Where are coupon codes normalized?']);
+    // A line that was written before the message could be saved is not written again.
+    audit('thread-asked', { dir: 'in', peer: ana.key, kind: 'ask', text: 'And the tests?', id: second });
+    assert.equal((await send(second, 'And the tests?')).result?.task.status.state, TaskState.SUBMITTED);
+    assert.equal(kept(), 2); assert.deepEqual(lines(), ['Where are coupon codes normalized?', 'And the tests?']); assert.ok(verifyThread(thread('thread-asked')));
+  });
+});
+
 test('a result of any length reaches the teammate whole: over 16000 characters as it is, and over 1 MiB in pieces; both threads keep every character and the chat continues with all of it', async t => {
   const { ana, sara, side } = await pair(t);
   const mine = withHome(ana.home, () => registeredProject(t));
