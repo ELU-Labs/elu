@@ -6181,6 +6181,35 @@ test('a finished session\'s card in Done says how it ended: never in progress, a
   await open('Ship the cart fix', 'published', 'Objectives · 1 of 3 met');
 });
 
+test('the Task block in the chat of a session in Done says how it ended, as its card does: never in progress, an ETA or overdue', { timeout: 30000 }, async t => {
+  const p = setup(t, 'answer'); registerProject(p.repo);
+  const task = title => ({ title, description: 'Look for outdated packages.', goal: 'Every package is current.', objectives: ['List outdated packages', 'Open one update', 'Say what was skipped'], priority: 'high', severity: 'medium', estimateMinutes: 30 });
+  // Approved six hours ago with half an hour of work: its ETA passed long ago.
+  const backdate = id => { const file = planFile(p.repo, id), value = JSON.parse(fs.readFileSync(file, 'utf8')); for (const row of value.tasks) row.proposedAt = row.approvedAt = new Date(Date.now() - 6 * 3600000).toISOString(); fs.writeFileSync(file, JSON.stringify(value)); };
+  // A scheduled run that answered, one the owner moved to Done after it stopped, one published,
+  // and one that stopped and waits under Needs you, which has not ended.
+  saveTask(p.repo, { id: '4', kind: 'conversation', goal: 'Check the dependencies', state: 'answered', worktree: p.root, base: null, branch: null, createdAt: new Date().toISOString(), runs: [], reviews: [], messages: [], sessions: {}, activeRole: 'lead' });
+  liveTask(p.root, { id: '5', goal: 'Tidy the logs', state: 'stopped' });
+  liveTask(p.root, { id: '6', goal: 'Ship the fix', state: 'unverified' }); saveTask(p.repo, { ...readTask(p.repo, '6'), pr: 'https://github.com/acme/web/pull/7' });
+  liveTask(p.root, { id: '7', goal: 'Sort the imports', state: 'stopped' });
+  for (const [id, title] of [['4', 'Nightly dependency check'], ['5', 'Tidy the log files'], ['6', 'Ship the cart fix'], ['7', 'Sort the import lines']]) { proposeTask(p.repo, id, task(title)); approvePlan(p.repo, id); backdate(id); }
+  reportProgress(p.repo, '6', { met: [2] });
+  setDone(p.repo, { task: { id: '5' } }, true);
+  const v = await view(t, { repo: p.repo }), panels = v.current.panels, chat = () => panels.chat.getText(), done = () => panels.kanbanLists[3].items.map(item => item.getText());
+  await sized(v, 200, 40);
+  // Each opens from its card under Done, with its Go to session button.
+  for (const [id, title, end] of [['4', 'Nightly dependency check', 'answered'], ['5', 'Tidy the log files', 'stopped'], ['6', 'Ship the cart fix', 'published']]) {
+    await send(v, '/kanban'); await until(() => v.current.view === 'kanban' && done().length === 3, 'the three cards under Done');
+    pickRow(panels.kanbanLists[3], new RegExp(title)); v.input.write('\r'); await until(() => cardButton(v), `${title}: the card`);
+    v.input.write('\r'); await until(() => v.current.view === 'chat' && v.current.session === id, `${title}: its session`);
+    await until(() => new RegExp(`Task · ${end}\\n${title}\\nhigh priority · medium severity\\nGoal: Every package is current\\.\\n`).test(chat()), `${title}: its Task block says how it ended`);
+    assert.doesNotMatch(chat(), /ETA |overdue|approved · |no subtasks yet/);
+  }
+  // Under Needs you it has not ended: its Task block says where the work stands, and that it is overdue.
+  await openTask(v, /Sort the import lines/);
+  await until(() => /Task · approved · no subtasks yet\nSort the import lines\nhigh priority · medium severity\nETA .* · overdue by 5 h 30 min\n/.test(chat()), 'the Task block of the one under Needs you');
+});
+
 test("a project's own instructions are asked about on screen before they are used: the text is shown, each answer is remembered for that text, and a change shows what changed", { timeout: 60000 }, async t => {
   const p = setup(t, 'answer'), file = path.join(p.root, '.elu-code/instructions.md');
   // The file came with the folder: the owner never saved it on this machine.

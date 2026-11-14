@@ -443,6 +443,18 @@ test('a Task comes with its success criteria and an estimate; the ETA counts fro
   assert.equal(etaText({ ...open, etaAt: new Date(now).toISOString(), etaMinutes: 150 }, now), `${clockTime(now + 150 * 60000, now)} · in 2 h 30 min`);
 });
 
+test('the card of an open Task whose session ended says how it ended, with no ETA; one that waits, or is done, reads as before', () => {
+  const now = Date.parse('2026-11-14T18:00:00.000Z'), at = new Date(now - 6 * 3600000).toISOString();
+  const plan = { id: 't-1', session: '4', revision: 1, title: 'Nightly dependency check', description: 'Look for outdated packages.', goal: 'Every package is current.', objectives: ['List outdated packages', 'Open one update'], priority: 'high', severity: 'medium',
+    state: 'approved', startedBy: 'schedule', by: 'lead', proposedAt: at, approvedAt: at, rejectedAt: null, doneAt: null, subtasks: [], met: [], criteria: [], estimateMinutes: 30 };
+  assert.match(taskCard(plan, { width: 80, colour: false, now }), /^Task · approved · no subtasks yet\nNightly dependency check\nhigh priority · medium severity · started by schedule\nETA .* · overdue by 5 h 30 min\n/);
+  const card = taskCard(plan, { width: 80, colour: false, now, ended: 'answered' });
+  assert.match(card, /^Task · answered\nNightly dependency check\nhigh priority · medium severity · started by schedule\nGoal: Every package is current\.\nObjectives\n {2}· 1\. List outdated packages\n/);
+  assert.doesNotMatch(card, /ETA|overdue|approved|no subtasks yet/);
+  assert.match(taskCard({ ...plan, state: 'proposed' }, { width: 80, colour: false, now, ended: 'answered' }), /^Task · waits for your approval\n.*\n.*\nETA /);
+  assert.match(taskCard({ ...plan, state: 'done', met: [1, 2], doneAt: at }, { width: 80, colour: false, now, ended: 'answered' }), /^Task · done · 2 of 2 objectives reported met\n.*\n.*\nETA done /);
+});
+
 test('a Task saved before success criteria and estimates loads unchanged and reads as not set', async t => {
   const f = fixture(t);
   const asked = await f.controller.ask('Uppercase coupon codes').finished, file = planFile(f.repo, asked.id);

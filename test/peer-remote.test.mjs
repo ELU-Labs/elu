@@ -43,6 +43,7 @@ import { textMethods } from '../lib/peer/texts.mjs';
 import { FRAME_MAX } from '../lib/peer/transport.mjs';
 import { PIECE } from '../lib/peer/pictures.mjs';
 import { savePeerPolicy } from '../lib/peer/settings.mjs';
+import { planFile, proposeTask } from '../lib/plan.mjs';
 
 // A connection as the daemon hands it to a method: admitted, on a build that has remote
 // sessions unless said otherwise, recording what is sent to it.
@@ -1779,6 +1780,37 @@ test('what he types here for a session on his other computer starts there whatev
   withHome(devbox.home, () => enqueue(project.root, 'Answer the question from @kim shown in the peer data block.', { priority: 1, readOnly: true, origin: { kind: 'ask', peer: 'e'.repeat(64), name: 'kim', a2aTaskId: 'task-1', threadId: 'thread-1', hop: 1 }, context: 'Where are coupon codes normalized?' }));
   assert.ok(!pass().includes('Answer the question from @kim shown in the peer data block.'));
   assert.deepEqual(saved('Answer the question from @kim shown in the peer data block.').waits, { on: 'slot', running: 1, limit: 1 });
+});
+
+test('the Task block of a session in Done on my other computer says how it ended there, with no ETA, until a message starts its next turn', async t => {
+  const { laptop, devbox, project, toHost, hostCtx, viewCtx, viewer } = pair(t), at = new Date(Date.now() - 6 * 3600000).toISOString();
+  const glue = remoteGlue({ facade: { mineRows: () => [], remoteSessions: () => [] }, peerRead: () => null, peerCommand: async () => ({}), chatMessage: ({ title, text }) => `${title}\n${text}`, ink: text => text, colour: false });
+  // A schedule's run there answered six hours ago. Its Task, half an hour of work, is not done:
+  // a conversation that answered is in Done on that computer's board.
+  withHome(devbox.home, () => {
+    const repo = chat(project.root, 1, { goal: 'Check the dependencies', state: 'answered', messages: [{ at, text: 'Check the dependencies' }, { at, from: 'Lead', text: 'Two packages are behind.' }] });
+    proposeTask(repo, '1', { title: 'Nightly dependency check', description: 'Look for outdated packages.', goal: 'Every package is current.', objectives: ['List outdated packages', 'Open one update'], priority: 'high', severity: 'medium', estimateMinutes: 30 }, { startedBy: 'schedule' });
+    const file = planFile(repo, '1'), value = JSON.parse(fs.readFileSync(file, 'utf8')); for (const row of value.tasks) row.proposedAt = row.approvedAt = at; fs.writeFileSync(file, JSON.stringify(value));
+    relist();
+  });
+  await withHome(laptop.home, () => listTick(viewCtx));
+  const item = withHome(laptop.home, () => remoteMachines())[0].sessions.find(row => row.title === 'Nightly dependency check');
+  await withHome(laptop.home, () => remoteCommand(viewCtx, { type: 'remoteWatch', to: devbox.identity.key, ref: item.ref }));
+  let ticks = 0;
+  const push = () => { withHome(devbox.home, () => hostTick(hostCtx, Date.now() + ++ticks)); withHome(laptop.home, () => viewer['elu.remote.events'](toHost.sent.filter(([method]) => method === 'elu.remote.events').at(-1)[1], connection(devbox.identity.key))); };
+  const seen = id => withHome(laptop.home, () => remoteSessions().find(row => row.id === id)), shown = id => glue.view(remoteRow(seen(id), 'devbox'), 200).replace(/\{\/?bold\}/g, '');
+  push(); await withHome(laptop.home, () => viewTick(viewCtx));
+  assert.equal(seen(item.id).ended, 'answered');
+  assert.match(shown(item.id), /Task · answered\nNightly dependency check\nhigh priority · medium severity · started by schedule\nGoal: Every package is current\.\n/);
+  assert.doesNotMatch(shown(item.id), /ETA |overdue|approved · |no subtasks yet/);
+  // A message to it waits there to start its next turn: its Task reads as work again.
+  withHome(devbox.home, () => enqueue(project.root, 'Open the update', { continuationTaskId: '1' }));
+  push();
+  assert.equal(seen(item.id).ended, undefined);
+  assert.match(shown(item.id), /Task · approved · no subtasks yet\nNightly dependency check\n.*\nETA .* · overdue by 5 h 30 min\n/);
+  // What a computer sends is read field by field: how it ended is a short text, or nothing.
+  withHome(laptop.home, () => viewer['elu.remote.events']({ items: [{ id: item.id, events: [{ seq: seen(item.id).seq + 1, type: 'state', state: 'answered', ended: { word: 'answered' } }] }] }, connection(devbox.identity.key)));
+  assert.equal(seen(item.id).ended, undefined);
 });
 
 test('a message that has not started on my other computer says here what it waits for, in the sentence its own chat shows', async t => {
