@@ -478,12 +478,12 @@ them files itself; in Ask for approval you allow each send.
 A project's instructions and context are the same on all your computers, for every model and
 bot there, like its tasks. A project of the same repository on both is linked by itself. Any
 other, such as `ELU` in the devbox's home folder and `~/projects/ELU` on the laptop, you link
-once in its settings: Projects, Enter, Linked; when the devbox has one of the same name, that
-row offers it, and Enter links it. From then on an edit on either, and every line a session
+once in its settings: Projects, Enter, Linked, Enter; when the devbox has one of the same
+name, the cursor is on it. From then on an edit on either, and every line a session
 learned from you, is on the other within seconds, and on one that was off when it comes back.
 When both changed the same text while apart, the newer edit is used, and the line that says so
 names where the other was kept (`.elu-code/history/` in the project). A computer on an older
-ELU shares none, and the row says to update it.
+ELU shares none, and Enter on the row says to update it.
 `/mine` lists your computers and `/mine remove @devbox` ends it.
 
 Signed in to GitHub with `gh` as the same account on both, your laptop and devbox need none

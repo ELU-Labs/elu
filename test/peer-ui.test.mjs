@@ -3856,7 +3856,7 @@ test('at 80x24 the line that says a session’s changes are not here yet is whol
   assert.ok(rows.every(row => !row.includes('▌') && row.length <= changes.width - 2));
 });
 
-test("a project's settings link it to the project of the same name on my other computer with one Enter, another or none can be chosen, an older computer there is named, and a text both changed is said once", { timeout: 30000 }, async t => {
+test("a project's Linked row shows its value alone; Enter offers the project of the same name on my other computer first, another or none can be chosen, an older computer there is named when Enter is pressed, and a text both changed is said once", { timeout: 30000 }, async t => {
   const p = project(later(t)); environment(t, p.parent);
   const repo = repository(p.root), there = [{ id: '1'.repeat(16), name: 'sample app', home: true }, { id: '2'.repeat(16), name: 'shop', home: false }], said = [];
   const peer = fakePeer({ items: [], mine: [{ key: SARA, mine: true, theirs: true }] });
@@ -3870,9 +3870,14 @@ test("a project's settings link it to the project of the same name on my other c
   list.focus(); selectRow(list, /sample app/); v.input.write('\r');
   await until(() => modal(v, title) && row(), 'its settings');
   rowsOf(v, title).forEach((text, n) => assert.match(text, [/^● Active project/, /^Instructions/, /^Context/, /^Linked/, /^Default model/, /^This computer/, /^Archive/][n]));
-  assert.equal(row(), 'Linked        not linked · Enter links sample app on sara-box');
-  // One Enter links it.
+  // The value alone: what Enter offers is in the choice it opens, with the project of the same name under the cursor.
+  assert.equal(row(), 'Linked        not linked');
   await choose(v, title, /^Linked/);
+  await until(() => rowsOf(v, 'Link sample app').length, 'the offer');
+  assert.deepEqual(rowsOf(v, 'Link sample app').map(text => text.trim()), ['sample app on sara-box', 'shop on sara-box', 'Not linked']);
+  assert.equal(modal(v, 'Link sample app').children.find(child => child.type === 'list').selected, 0);
+  assert.deepEqual(peer.calls.filter(call => call[0] === 'linkProject'), []);
+  v.input.write('\r');
   await until(() => /Linked to sample app on sara-box\./.test(status()), 'linked');
   assert.deepEqual(peer.calls.filter(call => call[0] === 'linkProject'), [['linkProject', repo.root, SARA, there[0].id]]);
   await until(() => row() === 'Linked        sample app on sara-box', 'the row says which');
@@ -3882,13 +3887,13 @@ test("a project's settings link it to the project of the same name on my other c
   assert.deepEqual(rowsOf(v, 'Link sample app').map(text => text.trim()), ['sample app on sara-box', 'shop on sara-box', 'Not linked']);
   assert.equal(modal(v, 'Link sample app').children.find(child => child.type === 'list').selected, 0);
   await choose(v, 'Link sample app', /^Not linked/);
-  await until(() => /Not linked to sara-box\./.test(status()) && row() === 'Linked        not linked · Enter links sample app on sara-box', 'unlinked');
+  await until(() => /Not linked to sara-box\./.test(status()) && row() === 'Linked        not linked', 'unlinked');
   assert.deepEqual(peer.calls.filter(call => call[0] === 'linkProject').at(-1), ['linkProject', repo.root, SARA, null]);
-  // ELU there is older: the row and Enter say so, naming it.
+  // ELU there is older: the row says not linked, and Enter says what to do, naming it.
   links = [{ key: SARA, older: true, linked: null, same: null, projects: [] }];
   v.input.write('\x1b'); await until(() => !modal(v, title), 'closed');
   list.focus(); selectRow(list, /sample app/); v.input.write('\r');
-  await until(() => row() === 'Linked        update ELU on sara-box', 'the older computer is named');
+  await until(() => row() === 'Linked        not linked', 'the row with an older computer there');
   await choose(v, title, /^Linked/);
   await until(() => /Update ELU on sara-box to share instructions and context with it\./.test(status()), 'what to do');
   v.input.write('\x1b'); await until(() => !modal(v, title), 'closed again');
