@@ -143,6 +143,18 @@ test('a session that made several branches in turn lists each with its own files
   assert.deepEqual(there.changes.parts.map(part => part.pull), changes.parts.map(part => part.pull));
   // GitHub was asked about the two branches the remote has, once each, and about nothing else.
   assert.deepEqual(gh.calls().map(args => args.join(' ')).sort(), ['fix/one', 'fix/two'].map(name => `pr list --head ${name} --state all --limit 20 --json number,url,state`));
+  // With more files than a screen holds, the branches are listed under the summary before the first file, each thing in its column.
+  write(folder, Object.fromEntries(Array.from({ length: 9 }, (_, at) => [`extra/file-${at}.txt`, 'x\n'])));
+  const long = changeRows(taskPatch(repo, '1'), 110, false, { open: new Set() }).map(row => visible(row.text).trimEnd());
+  assert.deepEqual(long.slice(0, 6), [`3 branches · 16 files changed · +16 −3 · each compared with ${BRANCHED}`, '  fix/three  checked out  12 files  +12 −1', '  fix/two    PR #13        2 files   +2 −1', '  fix/one    PR #12        2 files   +2 −1', '', 'fix/three · checked out · 12 files · +12 −1']);
+  // A narrow pane, as beside the sessions of a terminal 80 columns across: a branch's name stays whole. The list leaves out how many
+  // files, and a name or an address that does not fit beside the rest has a row to itself.
+  const narrow = width => changeRows(taskPatch(repo, '1'), width, false, { open: new Set() }).map(row => visible(row.text).trimEnd());
+  assert.deepEqual(narrow(40).slice(0, 7), ['3 branches · 16 files changed · +16 −3', 'each compared with main as it was when', 'this session branched', '  fix/three  checked out  +12 −1', '  fix/two    PR #13        +2 −1', '  fix/one    PR #12        +2 −1', '']);
+  assert.deepEqual(narrow(40).filter(text => /^fix\/|^ {2}(?:checked|PR|https)/.test(text)), ['fix/three', '  checked out · 12 files · +12 −1', 'fix/two · PR #13 · 2 files · +2 −1', 'fix/one · PR #12 · 2 files · +2 −1']);
+  assert.deepEqual(narrow(46).filter(text => /^fix\/|^ {2}(?:checked|PR|https)/.test(text)), ['fix/three · checked out · 12 files · +12 −1', 'fix/two · PR #13 · 2 files · +2 −1', '  https://code.example.invalid/shop/pull/13', 'fix/one · PR #12 · 2 files · +2 −1', '  https://code.example.invalid/shop/pull/12']);
+  for (const width of [24, 30, 40, 46, 76, 94, 138]) for (const row of changeRows(taskPatch(repo, '1'), width, false)) assert.ok(visible(row.text).length <= width, `${width}: ${visible(row.text)}`);
+  fs.rmSync(path.join(folder, 'extra'), { recursive: true });
   // A branch that was pushed and then deleted here is still the session's: the remote has it.
   git(folder, ['branch', '-q', '-D', 'fix/one']);
   assert.deepEqual(parts(taskPatch(repo, '1')).map(part => part[0]), ['fix/three', 'fix/two', 'fix/one']);

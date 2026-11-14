@@ -528,7 +528,9 @@ test('changeRows marks the words that changed inside a changed line, and only th
   for (const colour of [true, false]) for (const width of [24, 30, 54, 76, 100, 136, 300, 500]) {
     const rows = changed(changes, width, colour), added = rows.filter(row => row.kind === 'add'), removed = rows.filter(row => row.kind === 'del');
     // The marks go on over the rows the line takes, and hold the added words and nothing else.
-    assert.equal(added.flatMap(marked).join(''), ', buyers or notes', `${width}`);
+    // A mark that goes on in the next row leaves out the space its row ends with.
+    assert.equal(added.flatMap(marked).join(' ').replace(/ +/g, ' ').replace(/^, /, ','), ',buyers or notes', `${width}`);
+    for (const text of added.flatMap(marked)) assert.equal(text, text.trim(), `${width}`);
     // The removed line lost nothing that the added one does not have: it has no marks.
     assert.deepEqual(removed.flatMap(marked), [], `${width}`);
     // The marks change no character and no width.
