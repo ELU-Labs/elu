@@ -85,7 +85,8 @@ test('a session reads as its title, never its number, and any other row as what 
   // shorter form for a narrow list; its session's turn is said on its row, where the row has room for both.
   const held = boardRows([{ ...shop, tasks: [], queue: [{ id: 'request-f', goal: 'Rename the order model', state: 'queued', queuedAt: at(1), waits: { on: 'slot', running: 4, limit: 4 } }, { id: 'request-g', goal: 'Go on', state: 'queued', continuationTaskId: '7', queuedAt: at(0), waits: { on: 'turn' } }] }], now);
   const of = id => held.find(row => row.request.id === id);
-  assert.deepEqual([rowTitle(of('request-f'), now), rowTitle(of('request-g'), now), rowTitle(of('request-g'), now, 12)], ['Rename the order model', 'after this turn · Go on', 'Go on']);
+  assert.deepEqual([rowTitle(of('request-f'), now), rowTitle(of('request-g'), now), rowTitle(of('request-g'), now, 23), rowTitle(of('request-g'), now, 22)], ['Rename the order model', 'after this turn · Go on', 'after this turn · Go on', 'Go on']);
+  assert.equal(line({ ...of('request-g'), request: { ...of('request-g').request, goal: 'Is the yearly plan covered?' } }, 38), '· after this turn · Is the yearly… now');
   assert.deepEqual(boardSections(held).find(line => line.header === 'Queued').said, ['4 of 4 running', '4 of 4']);
   assert.equal(boardSections(later).find(line => line.header === 'Queued').said, undefined);
   // The icon in front says the state, in the colour the row had before.

@@ -2611,7 +2611,7 @@ test('/slots says and sets how many sessions run at once, and a session past it 
   await send(v, '/new'); await until(() => v.current.session === 'new', 'the new session form');
   await send(v, 'Fix the cart total'); await until(() => saved('Fix the cart total')?.waits, 'the second is told what it waits for');
   // Its row is under Queued, whose heading says the slots are taken, and its chat says the sentence.
-  await until(() => rows(v).some(row => /QUEUED 1 · 1 of 1/.test(row)), 'the Queued heading');
+  await until(() => rows(v).some(row => /^ QUEUED 1 · 1 of 1 running$/.test(row)), 'the Queued heading');
   await selectRow(v, /Fix the cart total/);
   await until(() => /Waiting for a free slot: 1 of 1 session is running\. \/slots changes it\. \/stop cancels it\./.test(chat()), 'the sentence in its chat');
   assert.doesNotMatch(chat(), /Waiting to start/);
