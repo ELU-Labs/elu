@@ -73,8 +73,9 @@ of the work. Nothing is edited yet.
 | Esc, then `n` | Rejects it. Nothing is changed. |
 | Type a message | Changes the Task. The card shows the new revision. |
 
-Typing `yes` and Enter approves too. A question gets a plain answer and no Task. A follow-up
-inside an approved Task's goal starts at once; a new piece of work gets a Task of its own.
+Typing `yes` or `I approve` and Enter approves too. A question gets a plain answer and no
+Task. A follow-up inside an approved Task's goal starts at once; a new piece of work gets a
+Task of its own.
 An approved Task gives its session its name, unless you named the session yourself.
 
 On the Kanban tab a session with a Task shows as that Task: its title, how far it is, its
@@ -293,7 +294,8 @@ messages open. `h` holds your replies and results to them: each one waits in the
 until you press `y` to send it, `e` to edit its text first, or `n` to drop it. One that may
 hold a secret always waits, and is sent only after you take the secret out. `o` turns on
 auto-continue: their answer, or the result of work they approved, continues the session you
-asked from. The line over their thread says which of the two are on.
+asked from. Its thread stays in Chats for a week, marked "continued in your session"; `n`
+dismisses it sooner. The line over their thread says which of the two are on.
 
 What a teammate's message does on your machine is yours to choose, once per team: `/join`
 asks, and so does your first `/invite` for a team. **Auto** (the default for a new team)

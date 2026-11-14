@@ -313,8 +313,8 @@ ELU enforces this much, on every vendor:
   session's workspace and is followed by the checks and the review. A reply that asks for
   an edit with no Task is asked for its Task once more. If none comes, the reply is kept
   as a plain answer with a line that says no Task was read, and nothing starts.
-- Only you approve, in your own session: with the key, or by typing `yes`. A teammate's
-  message, a schedule and a bot's own turn cannot approve a Task.
+- Only you approve, in your own session: with the key, or by typing `yes` or `I approve`. A
+  teammate's message, a schedule and a bot's own turn cannot approve a Task.
 - A Task is read as untrusted text. The title is one line of up to 80 characters; the
   description up to 2000; the goal up to 500; one to eight objectives of up to 300 each;
   the priority is urgent, high, medium or low; the severity is critical, high, medium or

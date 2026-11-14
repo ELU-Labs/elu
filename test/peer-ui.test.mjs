@@ -216,9 +216,11 @@ test('board rows put peer work that needs the owner first and keep lines within 
     { id: 'expired-1', kind: 'expired', peer: LI, name: 'li', text: 'Old ask', at: at(8) },
     { id: 'rejected-1', kind: 'rejected', peer: LI, name: 'li', text: 'Over the cap', at: at(9) },
     { id: 'ancient', kind: 'answer', peer: LI, name: 'li', text: 'Too old', at: at(3000) },
+    { id: 'went-on', kind: 'answer', continued: true, peer: SARA, name: 'sara', text: 'Already in the session.', at: at(2) },
     { kind: 'held', text: 'no id' },
   ];
   const rows = boardRows(projects, now, { items, online: new Set([SARA]) });
+  assert.ok(!rows.some(row => row.item?.id === 'went-on'), 'an answer the chat went on with is in Chats only, not a row in Sessions');
   // Like questions, the longest-waiting peer row comes first.
   assert.deepEqual(rows.filter(row => row.group === 0).map(row => row.label), ['SEND @li?', 'REPLY @sara', 'TASK @li', 'ASK @sara']);
   const [draft, held, handoff, ask] = rows;
@@ -380,6 +382,41 @@ test('a thread dialog acts on the letter it names, only while its field is empty
   await until(() => peer.sent().some(row => row.type === 'discard' && row.id === 'held-1'), 'reply discarded from the dialog');
   await open(threads, /answered/, 'Thread with @sara', 'c continues'); v.input.write('c');
   await until(() => peer.sent().some(row => row.type === 'continue' && row.id === 'answer-1'), 'continued from the dialog');
+});
+
+test('a thread names its project: the one a teammate\'s message runs in here, the one I asked from, or the share I named; one with no project has no such line', { timeout: 30000 }, async t => {
+  const p = project(later(t)); environment(t, p.parent); registerProject(repository(p.root));
+  const name = path.basename(p.root);
+  const peer = fakePeer({ items: [
+    // Sara's message names no project; its session runs in this one.
+    { id: 'incoming:task-in', kind: 'incoming', peer: SARA, name: 'sara', project: null, root: p.root, text: 'How do we rotate keys?', at: ago(1), state: 'submitted', threadId: 'th-in' },
+    // A result of mine that waits to go, from the work in this project.
+    { id: 'held:result-1', kind: 'held', result: true, peer: SARA, name: 'sara', project: null, root: p.root, text: 'Keys rotate nightly now.', question: 'Rotate the keys nightly.', at: ago(2), state: 'held', threadId: 'th-held' },
+    // A question I asked from this project, naming none of hers, and her answer.
+    { id: 'answer:1', kind: 'answer', peer: SARA, name: 'sara', project: null, root: p.root, text: 'Use v2.', question: 'Which endpoint?', at: ago(4), state: 'answered', threadId: 'th-out' },
+    // One I sent to a share of Li's by its name.
+    { id: 'asked:2', kind: 'asked', peer: LI, name: 'li', project: 'api', root: p.root, text: 'Where are the fixtures?', at: ago(5), state: 'submitted', threadId: 'th-api' },
+    // One that came with no project and waits for one.
+    { id: 'incoming:task-none', kind: 'incoming', peer: LI, name: 'li', project: null, root: null, text: 'Anyone there?', at: ago(6), state: 'submitted', threadId: 'th-none' },
+  ] });
+  const v = await view(t, { peer });
+  await send(v, '/chats'); await until(() => v.current.view === 'chats', 'Chats');
+  const [, threads] = v.panels.teamLists;
+  const shown = async (who, pattern) => {
+    await openRow(v, who === 'sara' ? /@sara\s+direct/ : /@li\s+offline/, `@${who}`);
+    await until(() => threads.items.some(item => pattern.test(plainItem(item))), `row ${pattern}`);
+    threads.focus(); selectRow(threads, pattern); v.input.write('\r');
+    await until(() => modal(v, `Thread with @${who}`), `the thread with @${who}`);
+    const said = modal(v, `Thread with @${who}`).children.find(child => child.options?.scrollable).getContent(); await closeDialog(v, `Thread with @${who}`);
+    return said;
+  };
+  for (const [who, pattern] of [['sara', /asks you/], ['sara', /result ready/], ['sara', /answered/]]) {
+    const said = await shown(who, pattern);
+    assert.ok(said.startsWith(`Project: ${name}\n`), `${pattern}: ${said.slice(0, 80)}`); assert.doesNotMatch(said, /not named/);
+  }
+  assert.ok((await shown('li', /you asked/)).startsWith('Project: api\n'));
+  const none = await shown('li', /asks you/);
+  assert.doesNotMatch(none, /Project:|not named/); assert.match(none, /^Anyone there\?/);
 });
 
 test('Shift letters and typed text never fail silently, and nothing opens an external editor', async t => {
@@ -612,6 +649,49 @@ test('e on a held reply or a held result opens its whole text in the message box
   threads.focus(); selectRow(threads, /result ready/); v.input.write('n');
   await until(() => peer.sent().some(row => row.type === 'discard' && row.id === 'held:result-r1'), 'the result dropped');
   await until(() => /Dropped the result\. Nothing was sent to @sara\./.test(status()), 'what n did');
+});
+
+test('the status of a held edit tells to take the possible secret out only while the box holds one: it clears as the key is deleted, before Enter', { timeout: 30000 }, async t => {
+  const SECRET = `AKIA${'A1B2'.repeat(4)}`, WHOLE = `Coupon codes are uppercase now. The key is ${SECRET}`;
+  const refusal = 'This result contains a possible secret. Remove it before sending.';
+  const peer = fakePeer({ items: [
+    { id: 'held:result-r1', kind: 'held', result: true, blocked: true, problems: ['aws-access-key'], peer: SARA, name: 'sara', project: null, text: WHOLE, question: 'Make coupon codes uppercase.', at: ago(2), state: 'held', threadId: 'th-2' },
+    { id: 'held:task-1', kind: 'held', peer: SARA, name: 'sara', project: 'web', text: 'The deploy script lives in bin/deploy.', question: 'Where is the deploy script?', at: ago(3), state: 'awaiting-owner', threadId: 'th-1', blocked: false },
+  ], refuse: command => command.type === 'approve' && String(command.text ?? '').includes(SECRET) ? refusal : null });
+  peer.heldText = id => ({ 'held:result-r1': WHOLE, 'held:task-1': 'The deploy script lives in bin/deploy.' })[id] ?? null;
+  const { v } = await teamView(t, { peer });
+  const [, threads] = v.panels.teamLists, ask = v.panels.ask, status = () => v.panels.status.getText().trim();
+  const TAKE = '› Take out the possible secret. Enter sends it to @sara, Esc leaves it held.', READY = '› Enter sends it to @sara. Esc leaves it held.';
+  await openRow(v, /@sara\s+direct/, '@sara');
+  await until(() => threads.items.some(item => /result ready/.test(plainItem(item))), 'the held result');
+  threads.focus(); selectRow(threads, /result ready/); v.input.write('e');
+  await until(() => v.current.screen.focused === ask && ask.getValue() === WHOLE && status() === TAKE, 'the edit, with the key still in it');
+  // Enter with the key still in it: the daemon refuses, and the status says why.
+  await until(() => ask.__listener, 'the box reads'); v.input.write('\r');
+  await until(() => status() === `› ${refusal}`, 'the refusal');
+  assert.equal(ask.getValue(), WHOLE);
+  // He deletes the key, a character at a time. The line stays while the text still holds
+  // it, and is gone with the keystroke after which it no longer does, before any Enter.
+  await until(() => ask.__listener && v.current.screen.focused === ask, 'the box reads again');
+  v.input.write('\x7f');
+  await until(() => ask.getValue() === WHOLE.slice(0, -1), 'one character deleted');
+  await until(() => status() === READY, 'the status once the key is gone');
+  assert.equal(peer.sent().filter(row => row.type === 'approve').length, 1, 'nothing was sent again');
+  // Typed back, the box holds it again and the status says so again.
+  v.input.write(SECRET.at(-1));
+  await until(() => ask.getValue() === WHOLE && status() === TAKE, 'the key typed back');
+  for (let left = SECRET.length; left > 0; left--) v.input.write('\x7f');
+  await until(() => ask.getValue() === WHOLE.slice(0, -SECRET.length) && status() === READY, 'the whole key deleted');
+  v.input.write('in your vault.'); await until(() => ask.getValue().endsWith('in your vault.'), 'typed');
+  assert.equal(status(), READY);
+  v.input.write('\r');
+  await until(() => /Sending the edited result to @sara\./.test(status()) && ask.getValue() === '', 'the edited result went');
+  assert.equal(peer.sent().filter(row => row.type === 'approve').at(-1).text, 'Coupon codes are uppercase now. The key is in your vault.');
+  // An edit that never held one keeps its own line, and says so once a key is typed into it.
+  threads.focus(); selectRow(threads, /reply ready/); v.input.write('e');
+  await until(() => ask.getValue() === 'The deploy script lives in bin/deploy.' && status() === '› Change the text below, then Enter sends it to @sara. Esc leaves it held.', 'the reply in the box');
+  v.input.write(' x'); await until(() => ask.getValue().endsWith(' x'), 'typed into the reply');
+  assert.equal(status(), '› Change the text below, then Enter sends it to @sara. Esc leaves it held.');
 });
 
 test('e on a reply or a result that waits in Sessions opens its text to edit in Chats, and a draft of yours has no e', { timeout: 20000 }, async t => {
@@ -2125,6 +2205,46 @@ test('my question shows the answer, rejection or wait under it', () => {
   assert.match(text, /→ you asked @sara · Where is the cache\?\n {3}↳ @sara answered · In src\/cache\.js\./);
   assert.match(text, /→ you asked @li · Which port\?\n {3}↳ working/);
   assert.match(text, /→ you asked your team · Who owns CI\?\n {3}↳ rejected · The owner declined this request\./);
+  // One the chat went on with stays, and says so: an answer, and a result.
+  const went = teamPanes({ status: { key: ME, teams: [] }, agents: [], items: [
+    { id: 'answer:4', kind: 'answer', continued: true, peer: SARA, name: 'sara', question: 'Where is the cache?', text: 'In src/cache.js.', at },
+    { id: 'answer:5', kind: 'answer', continued: true, result: true, peer: SARA, name: 'sara', question: 'Make coupon codes uppercase.', text: 'Coupon codes are uppercase now.', at: ago(2) },
+  ] }, [60, 60, 120], false)[2].map(row => visible(row.line)).join('\n');
+  assert.match(went, /→ you asked @sara · Where is the cache\?\n {3}↳ @sara answered · continued in your session · In src\/cache\.js\./);
+  assert.match(went, /→ you asked @sara · Make coupon codes uppercase\.\n {3}↳ result from @sara · continued in your session · Coupon codes are uppercase now\./);
+});
+
+test('a thread whose answer or result continued the chat stays in Chats, marked as continued: Enter reads it, c says it already went on, n dismisses it', { timeout: 30000 }, async t => {
+  const peer = fakePeer({ items: [
+    { id: 'answer:r1', kind: 'answer', continued: true, result: true, peer: SARA, name: 'sara', project: null, text: 'Coupon codes are uppercase now.', question: 'Make coupon codes uppercase.', at: ago(2), state: 'answered', threadId: 'th-2' },
+  ] });
+  peer.threadMessages = id => id === 'th-2' ? [
+    { from: 'me', peer: SARA, name: 'sara', kind: 'ask', text: 'Make coupon codes uppercase.', at: ago(9) },
+    { from: 'peer', peer: SARA, name: 'sara', kind: 'answer', text: 'The plan waits for my approval.', at: ago(8) },
+    { from: 'peer', peer: SARA, name: 'sara', kind: 'result', text: 'Coupon codes are uppercase now.', at: ago(2) },
+  ] : [];
+  const { v } = await teamView(t, { peer });
+  const [, threads] = v.panels.teamLists, status = () => v.panels.status.getText().trim(), rows = () => threads.items.map(plainItem).map(row => row.trim());
+  await openRow(v, /@sara\s+direct/, '@sara');
+  // Her thread is there, not "Nothing in @sara yet.", and its row says the chat went on with it.
+  await until(() => rows().length === 2, 'the thread');
+  assert.deepEqual(rows(), ['→ you asked @sara · Make coupon codes uppercase.', '↳ result from @sara · continued in your session · Coupon codes are uppercase now.']);
+  assert.doesNotMatch(v.text(), /Nothing in @sara yet/);
+  // Enter reads the whole thread; it offers no c, since the chat already went on with it.
+  threads.focus(); selectRow(threads, /continued in your session/); v.input.write('\r');
+  await until(() => modal(v, 'Thread with @sara'), 'the thread screen');
+  const said = modal(v, 'Thread with @sara').children.find(child => child.options?.scrollable).getContent();
+  assert.match(said, /you · question · \d\d:\d\d\nMake coupon codes uppercase\.[^]*↳ @sara · answer · \d\d:\d\d\nThe plan waits for my approval\.[^]*@sara · result · \d\d:\d\d\nCoupon codes are uppercase now\.\n\nYour session already continued with this result\.$/);
+  assert.doesNotMatch(said, /c continues/);
+  v.input.write('c'); await new Promise(resolve => setTimeout(resolve, 100));
+  await closeDialog(v, 'Thread with @sara');
+  // c on its row sends nothing to the daemon and says why.
+  threads.focus(); selectRow(threads, /continued in your session/); v.input.write('c');
+  await until(() => /Your session already continued with this result\./.test(status()), 'c on a continued thread');
+  assert.ok(!peer.sent().some(row => row.type === 'continue'), 'nothing was continued twice');
+  // n dismisses it, as any thread that waits for nothing.
+  v.input.write('n');
+  await until(() => peer.sent().some(row => row.type === 'discard' && row.id === 'answer:r1') && /Dismissed\./.test(status()), 'dismissed');
 });
 
 // --- Kanban: teammates' Tasks ---
