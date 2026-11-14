@@ -401,7 +401,7 @@ test('the card and the list row say what waits, and markup in a Task shows as ty
   const asked = await f.controller.ask('Uppercase coupon codes').finished, plan = currentTask(f.repo, asked.id);
   const card = taskCard(plan, { width: 60, colour: false });
   assert.match(card, /^Task · waits for your approval\nUppercase coupons\nmedium priority · low severity\nETA not set\n/);
-  assert.match(card, /Goal: Coupon codes compare equal whatever their case\.\nObjectives\n  1\. normalize returns the code in upper case\n  2\. The coupon test passes\nSuccess criteria · not set\nEsc, then y approve · n reject, then Enter · or type what to change$/);
+  assert.match(card, /Goal: Coupon codes compare equal whatever their case\.\nObjectives\n  1\. normalize returns the code in upper case\n  2\. The coupon test passes\nSuccess criteria · not set\ny approve · n reject, then Enter · or type what to change$/);
   assert.match(taskCard(plan, { width: 60, colour: false, approval: true }), /y and n answer the approval below first/);
   assert.match(taskCard({ ...plan, revision: 3 }, { width: 60, colour: false }), /^Task · waits for your approval · revision 3\n/);
   const working = { ...plan, state: 'approved', subtasks: [{ id: 's1', text: 'Change normalize', state: 'done' }, { id: 's2', text: 'Run the test', state: 'doing' }, { id: 's3', text: 'Tidy', state: 'todo' }], met: [1] };

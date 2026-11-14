@@ -73,8 +73,8 @@ only nothing is edited yet, and the Task waits for you:
 
 | Do | What happens |
 | --- | --- |
-| Esc, `y`, then Enter | Approves the Task. The work starts by itself. |
-| Esc, `n`, then Enter | Rejects it. Nothing is changed. |
+| `y`, then Enter | Approves the Task. The work starts by itself. |
+| `n`, then Enter | Rejects it. Nothing is changed. |
 | Type a message | Changes the Task. The card shows the new revision. |
 
 An approval you type counts too, in your own words: `yes`, `I approve`, `go ahead`,
