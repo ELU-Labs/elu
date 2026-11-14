@@ -28,7 +28,7 @@ import { readTask, saveTask, setTitle, taskDir, taskPlace } from '../lib/state.m
 import { saveSchedule, runScheduleNow, parseWhen } from '../lib/schedules.mjs';
 import { spawnSync } from 'node:child_process';
 import { projectFolder } from '../lib/workspace.mjs';
-import { registerProject, registeredProjects, sessionModel } from '../lib/projects.mjs';
+import { projectSnapshot, registerProject, registeredProjects, sessionModel } from '../lib/projects.mjs';
 import { localRepos, saveLocalRepos } from '../lib/peer/cards.mjs';
 import { folderRemote } from '../lib/kanban-repos.mjs';
 import { closeSession } from '../lib/kanban.mjs';
@@ -53,7 +53,7 @@ function machines(t) {
   const team = makeTeam(t, { founderName: 'ana', memberName: 'box' });
   return { team, laptop: team.founder, devbox: team.member };
 }
-const METHODS = ['elu.remote.start', 'elu.remote.send', 'elu.remote.stop', 'elu.remote.answer', 'elu.remote.task', 'elu.remote.since', 'elu.remote.older', 'elu.remote.list', 'elu.remote.watch'];
+const METHODS = ['elu.remote.start', 'elu.remote.send', 'elu.remote.stop', 'elu.remote.answer', 'elu.remote.task', 'elu.remote.since', 'elu.remote.older', 'elu.remote.list', 'elu.remote.watch', 'elu.remote.rename', 'elu.remote.archive'];
 const START = { id: crypto.randomUUID(), text: 'Make coupons upper case', permissions: 'ask', place: null, model: null, bots: ['reviewer'] };
 
 test('a machine is mine only when both machines mark each other, and either side ends it', t => {
@@ -719,7 +719,17 @@ test('Sessions lists a session on my other computer, says where, and offers its 
   const now = Date.parse('2026-11-11T10:00:00Z'), view = { id: START.id, machine: 'a'.repeat(64), createdAt: '2026-11-11T09:59:00Z', lastAt: '2026-11-11T09:59:30Z', state: 'running', title: 'Make coupons upper case', approvals: [], steps: [{ text: 'Reading src/coupon.mjs' }] };
   const running = remoteRow(view, 'devbox', now);
   assert.equal(running.group, 1); assert.equal(rowTitle(running, now), 'on devbox · Make coupons upper case');
-  assert.deepEqual(rowActions(running), [['enter', 'open'], ['s', 'stop'], ['d', 'changes']]);
+  // e renames it there and c archives it there, as on a session here; one that works is renamed, not archived.
+  assert.deepEqual(rowActions(running), [['enter', 'open'], ['s', 'stop'], ['d', 'changes'], ['e', 'rename']]);
+  const done = { ...remoteRow({ ...view, state: 'answered' }, 'devbox', now), listed: true };
+  assert.deepEqual(rowActions(done), [['enter', 'open'], ['d', 'changes'], ['e', 'rename'], ['c', 'archive']]);
+  // Archived there: listed last with /archived, and u brings it back.
+  const stored = { ...remoteRow({ ...view, state: 'answered', archived: true }, 'devbox', now), listed: true };
+  assert.deepEqual([stored.group, stored.archived, rowBadge(stored, now).title], [5, true, 'on devbox · archived']);
+  assert.deepEqual(rowActions(stored), [['enter', 'open'], ['u', 'unarchive'], ['e', 'rename'], ['d', 'changes']]);
+  // A run that waits to start there, or a session not sent there yet, has no session there to rename or archive.
+  assert.deepEqual(rowActions({ ...remoteRow({ ...view, state: 'starting', queued: true }, 'devbox', now), listed: true, queued: true }).map(([key]) => key), ['enter', 's', 'd']);
+  assert.deepEqual(rowActions(remoteRow({ ...view, state: 'starting', unsent: { at: view.createdAt } }, 'devbox', now)).map(([key]) => key), ['enter', 's', 'd']);
   const asking = remoteRow({ ...view, approvals: [{ id: 'approval-1', role: 'bot:reviewer', summary: 'Run ls', at: '2026-11-11T09:59:40Z' }] }, 'devbox', now);
   assert.equal(asking.group, 0); assert.equal(rowTitle(asking, now), 'on devbox · @reviewer wants to run ls');
   assert.deepEqual(rowActions(asking).slice(0, 2), [['y', 'allow'], ['n', 'deny']]);
@@ -1374,6 +1384,108 @@ test('a model with a message goes only to a computer whose ELU takes one: an old
   assert.deepEqual(await withHome(laptop.home, () => remoteCommand(viewCtx, { type: 'remoteSend', id: item.id, text: 'sonnet', model })), { id: item.id, model: 'Sonnet 5.5', sent: false });
 });
 
+// The owner, on his laptop, in a session that lives on his devbox, typed /rename and was told
+// to open a session. A session on my other computer is renamed, archived and brought back
+// there, by that computer's own code, and this computer shows it at once.
+test('a session on my other computer is renamed, archived and brought back there by its own code, and this computer shows it at once', async t => {
+  const { laptop, devbox, project, toViewer, toHost, host, hostCtx, viewCtx, viewer } = pair(t);
+  toViewer.remoteHello = { remote: 1, edit: 1 };
+  const repo = withHome(devbox.home, () => { const made = chat(project.root, 1, { goal: 'Make coupons upper case', messages: [{ at: new Date().toISOString(), text: 'Make coupons upper case' }] }); relist(); return made; });
+  await withHome(laptop.home, () => listTick(viewCtx));
+  const [machine] = withHome(laptop.home, () => remoteMachines()), item = machine.sessions[0];
+  assert.equal(machine.edit, true, 'its hello says it renames and archives its sessions');
+  const listedHere = () => withHome(laptop.home, () => remoteMachines()[0].sessions.find(row => row.ref === item.ref));
+  const command = (extra, row = item) => withHome(laptop.home, () => remoteCommand(viewCtx, { id: row.id, to: devbox.identity.key, ref: row.ref, ...extra }));
+  // Followed here: its chat beside the list is named by that computer's events.
+  await withHome(laptop.home, () => remoteCommand(viewCtx, { type: 'remoteWatch', to: devbox.identity.key, ref: item.ref }));
+  // Renamed there, as /rename there names it: the owner's name.
+  assert.deepEqual(await command({ type: 'remoteRename', title: 'Coupon casing' }), { title: 'Coupon casing', titleBy: 'owner', shown: 'Coupon casing' });
+  withHome(devbox.home, () => assert.deepEqual([readTask(repo, '1').title, readTask(repo, '1').titleBy], ['Coupon casing', 'owner']));
+  // This computer shows it at once, in its list and in the chat it follows, before the next listing or event.
+  assert.deepEqual([listedHere().title, listedHere().named], ['Coupon casing', true]);
+  assert.equal(withHome(laptop.home, () => remoteSessions().find(row => row.id === item.id)).title, 'Coupon casing');
+  // That computer's next events and listing say the same.
+  withHome(devbox.home, () => hostTick(hostCtx));
+  const pushed = toHost.sent.filter(([method]) => method === 'elu.remote.events').at(-1)[1];
+  assert.equal(pushed.items[0].events.find(event => event.type === 'state').title, 'Coupon casing');
+  withHome(laptop.home, () => viewer['elu.remote.events'](pushed, toViewer));
+  await withHome(laptop.home, () => listTick(viewCtx, Date.now() + 5000));
+  assert.deepEqual([listedHere().title, listedHere().named], ['Coupon casing', true]);
+  // A name that is not one line of up to 60 characters is refused there, in the line it has there.
+  await assert.rejects(command({ type: 'remoteRename', title: 'x'.repeat(61) }), /A session name is one line of up to 60 characters\. This one is 61\./);
+  // An empty name takes the owner's name away again: it is named after its first message.
+  assert.deepEqual(await command({ type: 'remoteRename', title: '' }), { title: null, titleBy: null, shown: 'Make coupons upper case' });
+  assert.deepEqual([listedHere().title, listedHere().named], ['Make coupons upper case', undefined]);
+  // Archived there, as c archives it there: its message of mine that did not run goes with it.
+  withHome(devbox.home, () => { const request = enqueue(project.root, 'And the docs', { continuationTaskId: '1', priority: 0 }); updateRequest(project.root, request.id, { state: 'blocked', reason: 'Stopped.' }); });
+  const before = withHome(devbox.home, () => host['elu.remote.list']({ archived: true }, toHost)).cursor;
+  await pause(5);
+  assert.deepEqual(await command({ type: 'remoteArchive', archived: true }), { archived: true, shown: 'Make coupons upper case' });
+  withHome(devbox.home, () => { assert.deepEqual(projectSnapshot(repo).closed, ['1']); assert.deepEqual(pendingRequests(project.root), []); });
+  assert.equal(listedHere().archived, true, 'archived here at once');
+  // It is listed to this computer, which asks for archived sessions, as archived.
+  const since = withHome(devbox.home, () => host['elu.remote.list']({ since: before, archived: true }, toHost));
+  assert.deepEqual([since.sessions.map(row => [row.ref, row.archived]), since.gone], [[[item.ref, true]], []]);
+  await withHome(laptop.home, () => listTick(viewCtx, Date.now() + 10000));
+  assert.equal(listedHere().archived, true);
+  // An ELU before 0.1.26 asks for none: an archived session leaves its list, as before.
+  const older = withHome(devbox.home, () => host['elu.remote.list']({ since: before }, toHost));
+  assert.deepEqual([older.sessions.map(row => row.ref), older.gone], [[], [item.ref]]);
+  assert.ok(!withHome(devbox.home, () => host['elu.remote.list']({}, toHost)).sessions.some(row => row.ref === item.ref));
+  // Brought back there, as u brings it back there; here at once.
+  await pause(5);
+  assert.deepEqual(await command({ type: 'remoteArchive', archived: false }), { archived: false, shown: 'Make coupons upper case' });
+  withHome(devbox.home, () => assert.deepEqual(projectSnapshot(repo).closed, []));
+  assert.equal(listedHere().archived, undefined, 'back in the list here at once');
+  assert.deepEqual(withHome(devbox.home, () => host['elu.remote.list']({ since: before }, toHost)).sessions.map(row => row.ref), [item.ref], 'and in the list of an ELU before 0.1.26 again');
+  // A session that works there is renamed all the same; archived, it is refused as here.
+  withHome(devbox.home, () => { chat(project.root, 2, { goal: 'Run the tests', state: 'running' }); relist(); });
+  await withHome(laptop.home, () => listTick(viewCtx, Date.now() + 15000));
+  const running = withHome(laptop.home, () => remoteMachines()[0].sessions.find(row => row.title === 'Run the tests'));
+  await assert.rejects(command({ type: 'remoteArchive', archived: true }, running), /"Run the tests" is running\. Stop it first with \/stop\./);
+  assert.equal((await command({ type: 'remoteRename', title: 'Nightly tests' }, running)).title, 'Nightly tests');
+  withHome(devbox.home, () => assert.deepEqual([projectSnapshot(repo).closed, readTask(repo, '2').title], [[], 'Nightly tests']));
+});
+
+// A session started from here is renamed by the id both machines give it, once it has started there.
+test('a session I started on my other computer is renamed there once it has started, and one not started yet says so', async t => {
+  const { laptop, devbox, project, toViewer, viewCtx } = pair(t);
+  toViewer.remoteHello = { remote: 1, edit: 1 };
+  const started = await withHome(laptop.home, () => remoteCommand(viewCtx, { type: 'remoteStart', to: devbox.identity.key, text: 'Make coupons upper case', permissions: 'ask' }));
+  await assert.rejects(withHome(laptop.home, () => remoteCommand(viewCtx, { type: 'remoteRename', id: started.id, title: 'Coupons' })), /This session has not started yet\. Try again once it has\./);
+  withHome(devbox.home, () => { liveTask(project.root, { id: '1', goal: 'Make coupons upper case' }); const [request] = pendingRequests(project.root); updateRequest(project.root, request.id, { state: 'running', taskId: '1' }); });
+  assert.equal((await withHome(laptop.home, () => remoteCommand(viewCtx, { type: 'remoteRename', id: started.id, title: 'Coupons' }))).title, 'Coupons');
+  assert.equal(withHome(devbox.home, () => readTask(repository(project.root), '1')).title, 'Coupons');
+  assert.equal(withHome(laptop.home, () => remoteSessions().find(row => row.id === started.id)).title, 'Coupons', 'its view here is named at once');
+});
+
+// A computer of mine on ELU 0.1.25 cannot rename or archive its sessions from here: one line
+// names it and the version it needs, and nothing is sent. A teammate's computer refuses.
+test('my computer on an ELU before 0.1.26 is named with the version it needs and sent nothing; a teammate is refused', async t => {
+  const { laptop, devbox, project, toViewer, toHost, host, viewCtx } = pair(t);
+  withHome(devbox.home, () => { chat(project.root, 1, { goal: 'Make coupons upper case' }); relist(); });
+  await withHome(laptop.home, () => listTick(viewCtx));
+  const item = withHome(laptop.home, () => remoteMachines()[0].sessions[0]), name = `@${devbox.identity.key.slice(0, 4)}`;
+  assert.equal(withHome(laptop.home, () => remoteMachines()[0].edit), false, 'its hello does not say it can');
+  const sent = [], answer = toViewer.request;
+  toViewer.request = async (method, params) => { sent.push(method); return answer(method, params); };
+  const command = extra => withHome(laptop.home, () => remoteCommand(viewCtx, { id: item.id, to: devbox.identity.key, ref: item.ref, ...extra }));
+  await assert.rejects(command({ type: 'remoteRename', title: 'Coupons' }), { message: `${name} needs ELU 0.1.26 to rename its sessions.` });
+  await assert.rejects(command({ type: 'remoteArchive', archived: true }), { message: `${name} needs ELU 0.1.26 to archive its sessions.` });
+  await assert.rejects(command({ type: 'remoteArchive', archived: false }), { message: `${name} needs ELU 0.1.26 to unarchive its sessions.` });
+  assert.deepEqual(sent, [], 'nothing was sent to it');
+  // One whose hello says it can, but that has no such method, answers Method not found: the same line.
+  toViewer.remoteHello = { remote: 1, edit: 1 };
+  toViewer.request = async () => { const error = new Error('Method not found'); error.details = { rpc: { code: -32601 } }; throw error; };
+  await assert.rejects(command({ type: 'remoteRename', title: 'Coupons' }), { message: `${name} needs ELU 0.1.26 to rename its sessions.` });
+  // A teammate's computer that is not mine is refused there in one line, and here before anything is sent.
+  const kim = connection('e'.repeat(64));
+  for (const method of ['elu.remote.rename', 'elu.remote.archive']) assert.throws(() => withHome(devbox.home, () => host[method]({ ref: item.ref, title: 'Mine now', archived: true }, kim)), { message: NOT_MINE }, method);
+  withHome(devbox.home, () => assert.equal(readTask(repository(project.root), '1').title, undefined));
+  await assert.rejects(withHome(laptop.home, () => remoteCommand(viewCtx, { type: 'remoteRename', to: 'e'.repeat(64), ref: item.ref, title: 'Mine now' })), /is not one of your computers\. Run \/mine @\S+ here and on it\./);
+  void toHost;
+});
+
 test('a watch its computer let go is made again: a reply still reaches the session, and a listing it never sent catches the view up', async t => {
   const { laptop, devbox, project, hostCtx, viewCtx } = pair(t);
   withHome(devbox.home, () => { chat(project.root, 1, { goal: 'Make coupons upper case', messages: [{ at: new Date().toISOString(), text: 'Make coupons upper case' }] }); relist(); });
@@ -1955,7 +2067,7 @@ test("Sessions groups my computer's sessions of this repository under its name, 
   const said = glue.view({ ...old, remote: { ...old.remote, entries: [{ role: 'You', at: ago(3), text: 'Check the build' }, { role: 'Opus 5.5', lead: true, at: ago(2), text: 'It builds.' }, { role: '@reviewer', bot: 'reviewer', at: ago(1), text: 'Looks right.' }, { role: 'Shell', shell: true, at: ago(0), text: '$ ls' }] } }, 80);
   assert.match(said, /You → @devbox: Check the build[\s\S]*Opus 5\.5 on @devbox: It builds\.[\s\S]*@reviewer on @devbox: Looks right\.[\s\S]*Shell on @devbox: \$ ls/);
   await pause(0); assert.deepEqual(commands.at(-1), { type: 'remoteWatch', to: D, ref: `${p.shop}:1`, cursor: true });
-  assert.deepEqual(rowActions(listedRow), [['enter', 'open'], ['d', 'changes']], 'it stays as long as it is there: nothing to remove');
+  assert.deepEqual(rowActions(listedRow), [['enter', 'open'], ['d', 'changes'], ['e', 'rename'], ['c', 'archive']], 'it stays as long as it is there: nothing to remove; e renames and c archives it there');
   // Another project open here, of no repository: only what was started from here.
   assert.deepEqual(glue.sections(now, '/work/elsewhere').filter(line => line.row).map(line => rowTitle(line.row, now)), ['Started from the laptop']);
   // Projects: its other projects, as "<project> on <name>".

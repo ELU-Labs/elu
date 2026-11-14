@@ -1157,7 +1157,7 @@ test('a session on my other computer that waits for y or n shows n once in the k
   assert.doesNotMatch(keys(), /new session/);
   // A Task waiting in a session started from here waits under Needs you, marked with the computer.
   selectRow(board, /on sara-box · Uppercase plan/);
-  await until(() => /y approve {2}n reject {2}enter open {2}d changes {2}letter then enter {2}tab next/.test(keys()), 'Task keys');
+  await until(() => /y approve {2}n reject {2}enter open {2}d changes {2}e rename {2}letter then enter {2}tab next/.test(keys()), 'Task keys');
   assert.doesNotMatch(keys(), /new session/);
 });
 
@@ -1353,6 +1353,109 @@ test('/stop over a session on my other computer stops it there, in a window that
   assert.doesNotMatch(status(), /view.only|read.only/i);
   assert.match(status(), /Stopping it on @sara-box\. Changes and chat history are kept there\./);
   assert.deepEqual(peer.sent().filter(row => row.type === 'remoteStop'), [{ type: 'remoteStop', id }], 'the stop went there, once');
+});
+
+// The owner, on his laptop, in a session that lives on his devbox ("Message Opus 5.5 on
+// @ali-devbox"), typed /rename and was told "Open a session to rename it. In Sessions, e
+// renames the selected one." Over a session on my other computer, /rename, /archive,
+// /archived, and e, c and u on its row work as they do on a session here; the work is done
+// there (the daemon's remoteRename and remoteArchive), and its row here shows it at once.
+const P1 = '1'.repeat(16), SHOP_REPO = 'e'.repeat(64), THERE_ID = '11111111-1111-4111-8111-111111111111';
+function editableThere({ edit = true, state = 'answered', title = 'Make coupons upper case' } = {}) {
+  const listed = { id: THERE_ID, ref: `${P1}:1`, project: P1, title, state, at: ago(2), createdAt: ago(3), approvals: [], by: 'you', who: null };
+  const machines = [{ key: SARA, listedAt: ago(0), older: false, ...(edit === null ? {} : { edit }), projects: [{ id: P1, name: 'shop', repoId: SHOP_REPO, home: false }], sessions: [listed] }];
+  // What the daemon does once that computer did it: its list here shows the change at once.
+  const change = patch => { machines[0].sessions = machines[0].sessions.map(row => Object.fromEntries(Object.entries({ ...row, ...patch }).filter(([, value]) => value !== undefined))); };
+  const answer = command => {
+    if (command.type === 'remoteRename') { const name = command.title.trim(); change({ title: name || title, named: name ? true : undefined }); return { title: name || null, titleBy: name ? 'owner' : null, shown: name || title }; }
+    if (command.type === 'remoteArchive') { change({ archived: command.archived ? true : undefined }); return { archived: command.archived, shown: machines[0].sessions[0].title }; }
+    return null;
+  };
+  return { listed, machines, answer };
+}
+test('/rename and /archive over a session on my other computer rename and archive it there, never "Open a session"; /rename alone opens the same field', async t => {
+  const { listed, machines, answer } = editableThere(), p = project(later(t)); environment(t, p.parent);
+  const peer = fakePeer({ items: [], mine: [{ key: SARA, mine: true, theirs: true }], machines, repoId: SHOP_REPO, answer }), v = await view(t, { repo: repository(p.root), dashboard: true, peer });
+  const board = v.panels.board, ask = v.panels.ask, status = () => v.panels.status.getText().replace(/\s+/g, ' '), rows = () => board.items.map(plainItem).map(row => row.trim());
+  const sent = type => peer.sent().filter(row => row.type === type).map(({ type: _type, ...rest }) => rest), field = () => modal(v, 'Rename session')?.children.find(child => child.type === 'textbox');
+  const over = async pattern => { board.focus(); selectRow(board, pattern); await until(() => /Message the session on @sara-box/.test(ask._label.getText()), 'the session there beside the list'); };
+  await until(() => rows().some(row => /Make coupons upper case/.test(row)), 'the row of the session there');
+  // In that session, as the owner was: /rename NAME goes there.
+  await over(/Make coupons upper case/); await send(v, '/rename Coupon casing');
+  await until(() => /Renamed to Coupon casing\./.test(status()), 'renamed there');
+  assert.doesNotMatch(status(), /Open a session/);
+  assert.deepEqual(sent('remoteRename'), [{ id: THERE_ID, to: SARA, ref: listed.ref, title: 'Coupon casing' }]);
+  await until(() => rows().some(row => /Coupon casing/.test(row)), 'its row shows the new name at once');
+  // /rename alone opens the field it opens here, with the name it was given, checked as here.
+  await over(/Coupon casing/); await send(v, '/rename');
+  await until(() => field()?.__listener, 'the rename field');
+  assert.equal(field().getValue(), 'Coupon casing');
+  assert.match(modal(v, 'Rename session').children.find(child => child.options?.scrollable).getText().replace(/\s+/g, ' '), /One line of up to 60 characters\. It shows in the list and the title\. Leave it empty to go back to the name ELU gave it\./);
+  await closeDialog(v, 'Rename session', 'Coupons shout');
+  await until(() => /Renamed to Coupons shout\./.test(status()), 'renamed from the field');
+  assert.equal(sent('remoteRename').at(-1).title, 'Coupons shout');
+  // A name that is too long is refused before it goes, in the line it has here; what was typed stays.
+  await over(/Coupons shout/); await send(v, `/rename ${'x'.repeat(61)}`);
+  await until(() => /A session name is one line of up to 60 characters\. This one is 61\./.test(status()), 'refused here');
+  assert.equal(sent('remoteRename').length, 2); assert.equal(ask.getValue(), `/rename ${'x'.repeat(61)}`); ask.setValue('');
+  // An empty name in the field gives it back the name ELU gave it.
+  await over(/Coupons shout/); await send(v, '/rename'); await until(() => field()?.__listener, 'the field again');
+  await closeDialog(v, 'Rename session', '');
+  await until(() => /The session is named after your first message again\./.test(status()), 'the name is taken away');
+  // /archive archives it there: it leaves the list, and the line at the bottom counts it.
+  await over(/Make coupons upper case/); await send(v, '/archive');
+  await until(() => /Archived "Make coupons upper case"\. \/archived lists it; a new message brings it back\./.test(status()), 'archived there');
+  assert.deepEqual(sent('remoteArchive'), [{ id: THERE_ID, to: SARA, ref: listed.ref, archived: true }]);
+  await until(() => !rows().some(row => /Make coupons upper case/.test(row)) && rows().some(row => /^1 archived · \/archived$/.test(row)), 'gone from the list, and counted');
+  // /archived lists it under its computer; u brings it back there.
+  await send(v, '/archived');
+  const stored = () => rows()[rows().findIndex(row => /ARCHIVED ON SARA-BOX/.test(row)) + 1] ?? '';
+  await until(() => /▫ Make coupons upper case/.test(stored()), 'listed under its computer with the archived ones');
+  board.focus(); selectRow(board, /▫ Make coupons upper case/);
+  await until(() => /enter open {2}u unarchive {2}e rename/.test(v.panels.keys.getText()), 'its keys');
+  v.input.write('u');
+  await until(() => /"Make coupons upper case" is back in the list\./.test(status()), 'brought back there');
+  assert.deepEqual(sent('remoteArchive').at(-1), { id: THERE_ID, to: SARA, ref: listed.ref, archived: false });
+  await until(() => !rows().some(row => /ARCHIVED ON SARA-BOX/.test(row)) && rows().some(row => /Make coupons upper case/.test(row)), 'back in the list');
+  // e and c on its row do the same.
+  board.focus(); selectRow(board, /Make coupons upper case/); await until(() => /e rename/.test(v.panels.keys.getText()), 'e on its row');
+  v.input.write('e'); await until(() => field()?.__listener, 'the field from e');
+  await closeDialog(v, 'Rename session', 'Coupons by e');
+  await until(() => /Renamed to Coupons by e\./.test(status()) && rows().some(row => /Coupons by e/.test(row)), 'renamed by e');
+  board.focus(); selectRow(board, /Coupons by e/); v.input.write('c');
+  await until(() => /Archived "Coupons by e"\./.test(status()), 'archived by c');
+  assert.equal(sent('remoteArchive').length, 3);
+});
+
+test('over a session on my other computer: one on an ELU before 0.1.26 is named with the version it needs, one at work is not archived, and nothing goes', async t => {
+  // Its list says its ELU cannot: the line comes at once, before any field opens.
+  for (const edit of [false, null]) {
+    const { machines, answer } = editableThere({ edit }), p = project(later(t)); environment(t, p.parent);
+    const refuse = command => ['remoteRename', 'remoteArchive'].includes(command.type) ? `@sara-box needs ELU 0.1.26 to ${command.type === 'remoteRename' ? 'rename' : 'archive'} its sessions.` : null;
+    const peer = fakePeer({ items: [], mine: [{ key: SARA, mine: true, theirs: true }], machines, repoId: SHOP_REPO, answer, refuse }), v = await view(t, { repo: repository(p.root), dashboard: true, peer });
+    const board = v.panels.board, status = () => v.panels.status.getText().replace(/\s+/g, ' ');
+    await until(() => board.items.map(plainItem).some(row => /Make coupons upper case/.test(row)), 'the row there');
+    board.focus(); selectRow(board, /Make coupons upper case/); await until(() => /@sara-box/.test(v.panels.ask._label.getText()), 'over it');
+    if (edit === false) {
+      await send(v, '/rename');
+      await until(() => /@sara-box needs ELU 0\.1\.26 to rename its sessions\./.test(status()), 'the version it needs');
+      assert.equal(modal(v, 'Rename session'), undefined, 'no field opened');
+      assert.deepEqual(peer.sent().filter(row => row.type === 'remoteRename'), [], 'nothing went');
+    }
+    // A computer whose list says nothing of it is asked, and the daemon's line is said as it is.
+    await send(v, '/rename Coupons'); await until(() => /@sara-box needs ELU 0\.1\.26 to rename its sessions\./.test(status()), 'the version it needs, from the daemon');
+    await send(v, '/archive'); await until(() => /@sara-box needs ELU 0\.1\.26 to archive its sessions\./.test(status()), 'and to archive');
+    assert.doesNotMatch(status(), /Open a session/);
+  }
+  // At work there: archived it is refused as here, with nothing sent; renamed it goes.
+  const { machines, answer } = editableThere({ state: 'running' }), p = project(later(t)); environment(t, p.parent);
+  const peer = fakePeer({ items: [], mine: [{ key: SARA, mine: true, theirs: true }], machines, repoId: SHOP_REPO, answer }), v = await view(t, { repo: repository(p.root), dashboard: true, peer });
+  const board = v.panels.board, status = () => v.panels.status.getText().replace(/\s+/g, ' ');
+  await until(() => board.items.map(plainItem).some(row => /Make coupons upper case/.test(row)), 'the row there');
+  board.focus(); selectRow(board, /Make coupons upper case/); await until(() => /@sara-box/.test(v.panels.ask._label.getText()), 'over it');
+  await send(v, '/archive'); await until(() => /"Make coupons upper case" is running\. Stop it first with \/stop\./.test(status()), 'refused as here');
+  assert.deepEqual(peer.sent().filter(row => row.type === 'remoteArchive'), []);
+  await send(v, '/rename Nightly'); await until(() => /Renamed to Nightly\./.test(status()), 'renamed while it works');
 });
 
 test("over a session on my other computer, its @name that is also a name on my team keeps the box on that computer, never a teammate ask", async t => {
@@ -1684,7 +1787,7 @@ test('status typed on the row of a running session on my other computer is a mes
   const peer = fakePeer({ items: [], mine: [{ key: SARA, mine: true, theirs: true }], remote }), v = await view(t, { repo: repository(p.root), dashboard: true, peer });
   const board = v.panels.board, ask = v.panels.ask, keys = () => v.panels.keys.getText(), stops = () => peer.sent().filter(row => row.type === 'remoteStop');
   const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
-  const onRow = async () => { board.focus(); selectRow(board, /Run the nightly/); await until(() => v.current.screen.focused === board && /enter open {2}s stop {2}d changes {2}n new session {2}letter then enter/.test(keys()) && /Message the session on @sara-box/.test(ask._label.getText()), 'its row, with s stop'); };
+  const onRow = async () => { board.focus(); selectRow(board, /Run the nightly/); await until(() => v.current.screen.focused === board && /enter open {2}s stop {2}d changes {2}e rename {2}n new session {2}letter then enter/.test(keys()) && /Message the session on @sara-box/.test(ask._label.getText()), 'its row, with s stop'); };
   await until(() => board.items.map(plainItem).some(row => /ON SARA-BOX/.test(row)) && board.items.map(plainItem).some(row => /Run the nightly checks/.test(row)), 'the row of the session there, under its computer');
   // The owner's word, a key at a time. s is this row's key for stop, and it stops nothing there.
   await onRow(); v.type('status');
