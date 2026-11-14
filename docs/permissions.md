@@ -422,6 +422,13 @@ machines, with `a` beside `y` and `n` where that machine offers it, and `a` from
 keeps the rule on the machine where the session runs. That machine makes the rule from its own
 copy of the request.
 
+ELU's own commands, `elu sessions` and `elu schedules` ([README](../README.md#elu-from-a-session)),
+run without asking in Approve for me, as one command alone, and are asked for in Ask for
+approval like any other command. They read and write ELU's own files, which the sandbox
+denies, so Claude Code runs them outside it (`excludedCommands`). Only a turn of your own
+session has them on its PATH, with the session it runs in; a teammate's question or review
+never does, and a command run from one is refused.
+
 Every vendor that asks goes through the relay: Claude Code through its permission prompt
 tool, Antigravity and Grok Build over ACP. The relay checks the never list, then your
 rules, then the defaults, before it writes a request: no rule or default answers a

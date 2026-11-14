@@ -155,8 +155,27 @@ sleep. Schedules show in the Sessions tab under Scheduled: `p` pauses one and `x
 it, each followed by Enter. A time is `in 30m`, `every 2h` (15 minutes to 7 days),
 `daily 9:00`, `weekdays 9am`,
 `mon,thu 14:30`, `tomorrow 15:00` or `2026-12-01 9:00`, in this computer's local time.
-The model cannot make a schedule itself: asked to repeat work, it gives you the
-`/schedule` line to type.
+Asked to repeat work, the model makes the schedule with `elu schedules add` where it has
+[ELU's own commands](#elu-from-a-session), and otherwise gives you the `/schedule` line to type.
+
+### ELU from a session
+
+`elu sessions` and `elu schedules` change ELU from your shell and from inside a session, so a
+message or a schedule such as "archive this chat and start a new session that says hello" just
+works. The app shows each change at once.
+
+- `elu sessions [--all]` lists this project's sessions: number, name, state, the schedule that
+  started it, and whether it is archived. `elu sessions archive N|this`, `unarchive N`,
+  `rename N|this "name"` and `new "message" [--mode ask|auto|full]` change them. `this` is the
+  session the command runs in: it is archived when its turn ends, after its reply.
+- `elu schedules [--all]` lists the schedules, and `elu schedules add <when> <message>` (the
+  words `/schedule` takes), `pause N`, `resume N`, `delete N` and `run N` change them.
+
+A session started from a session gets that session's mode, or a lower one with `--mode`. In
+Ask for approval the model asks you before it runs one; Approve for me and Full access run
+them. A teammate's question or review is never told about them and cannot run them. Codex
+below Full access runs every command in a sandbox that keeps ELU's own files from it, so there
+the model is not told about them.
 
 ## Keys
 
