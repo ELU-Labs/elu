@@ -2687,6 +2687,26 @@ test('a session is renamed while its turn waits on an approval: the name shows a
   assert.equal(readTask(p.repo, id).title, undefined); await until(() => rows(v).some(row => /Work on our receipt email/.test(row)), 'the request again');
 });
 
+// A message of mine that has not started yet is open, so /rename and /archive never say to
+// open a session: they say it has not started.
+test('/rename and /archive on a message that has not started yet say so, never "Open a session"', { timeout: 15000 }, async t => {
+  const p = setup(t, 'answer'), v = await view(t, { repo: p.repo }), panels = v.current.panels;
+  // Every line the status shows, so a wrong one shown for a moment is caught too.
+  const said = [], setContent = panels.status.setContent.bind(panels.status); panels.status.setContent = text => { said.push(String(text).replace(/\s+/g, ' ')); return setContent(text); };
+  t.after(() => { panels.status.setContent = setContent; });
+  v.current.controller.queue('Check the coupon totals', undefined, { state: 'blocked', reason: 'Project checks are still needed.' });
+  await selectRow(v, /✗ Check the coupon/); v.input.write('\r');
+  await until(() => v.current.panels.ask.getValue().includes('Check the coupon totals'), 'the request is open');
+  v.current.panels.ask.clearValue();
+  for (const command of ['/rename', '/rename Coupons', '/archive']) {
+    const from = said.length; await send(v, command);
+    await until(() => said.slice(from).some(text => /This session has not started yet\. Try again once it has\./.test(text)), `${command} says it has not started`);
+    await new Promise(resolve => setTimeout(resolve, 200));
+    assert.deepEqual(said.filter(text => /Open a session/.test(text)), []); assert.equal(modal(v, 'Rename session'), undefined);
+    panels.ask.clearValue();
+  }
+});
+
 test('a session name is saved while another command holds the session, and an older saved name still shows', t => {
   const p = setup(t); liveTask(p.root, { id: '2', goal: 'Install the deps', state: 'ready' });
   const release = lock(p.repo, 'task-2');
