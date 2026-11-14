@@ -33,7 +33,7 @@ Full access is everything. A turn that runs with it has no limit of ELU's:
 
 - **Files.** It reads and changes any file: secret files (`.env`, `.npmrc`, keys), the
   secret folders in your home (`~/.ssh`, `~/.aws`, `~/.config`), ELU's own folder, and
-  your vendor sign-ins (`~/.claude`, `~/.codex`, `~/.grok`).
+  your vendor sign-ins (`~/.claude`, `~/.codex`, `~/.gemini`, `~/.grok`).
 - **Folders.** `/permissions folders add <path>` takes any folder there is: a secret
   folder, ELU's folder, one outside your home, your home itself, and as many as you name.
   A path with `*`, `?`, brackets or braces in it starts too.
@@ -131,7 +131,8 @@ bot's when you write to it. Claude Code is given the home folder with `--add-dir
 those turns; Codex reads anywhere in every turn; Grok Build allows `Read` and `Grep`
 with no path. On Claude Code a command that stays in the sandbox also reads outside the
 workspace without asking. Antigravity keeps its file tool to the workspace and folders.
-The secret folders (`~/.ssh`, `~/.aws`, `~/.config`, `~/Library` and the rest) and ELU's
+The secret folders (`~/.ssh`, `~/.aws`, `~/.config`, `~/Library` and the rest), each
+vendor's own folder (`~/.claude`, `~/.codex`, `~/.gemini`, `~/.grok`) and ELU's
 state stay closed below Full access, as the table says. Your session's answer turns, and a working
 bot's until the session's work is published, also get a list of up to 60 Git
 repositories found in your home, so the model can find the code you mean.

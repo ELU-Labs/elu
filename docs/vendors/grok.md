@@ -93,6 +93,7 @@ Grok reads as it reads `AGENTS.md`, are Grok's and do not count.
 | Full | headless `--permission-mode bypassPermissions`, `--sandbox off` | anything, the never list included |
 
 Every profile but Full denies reads of secret folders (`~/.ssh`, `~/.aws`, `~/.claude`, `~/.codex`,
+`~/.gemini`, `~/.grok`,
 `.env*`, `auth.json`, key files, ELU's own state) by rule. Every profile but Full
 denies the never list on command text (`git push`, `git tag`, `git merge`, `gh pr merge`,
 `gh release`, package publishes, deploys, `kubectl apply`, `terraform apply`). Those rules
