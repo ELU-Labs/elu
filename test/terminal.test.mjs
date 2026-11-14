@@ -1965,6 +1965,23 @@ test('Tab cycles the areas and the command menu keeps focus in the message box',
   assert.equal(calls.some(call => call.args.includes('-p') || call.args[0] === 'exec'), false, 'navigation must not start a model');
 });
 
+// Up from a row past + New session reaches the tabs. What is typed there next is not lost: it
+// starts a message in the box, as on a row. q still quits from a tab and ? opens the help.
+test('a character typed on a tab after Up past + New session starts a message, so nothing typed is lost', async t => {
+  const p = setup(t, 'answer'); liveTask(p.root, { id: '4', goal: 'Trim coupon codes', state: 'answered' });
+  const v = await view(t, { repo: p.repo }), panels = v.current.panels;
+  await selectRow(v, /Trim coupon codes/);
+  v.input.write('\x1b[A'); await until(() => /\+ New session/.test(cursor(v)) && v.current.screen.focused === panels.board, 'Up reaches + New session');
+  v.input.write('\x1b[A'); await until(() => v.current.screen.focused === panels.tabs[0], 'Up past it reaches the tabs');
+  v.type('fix the coupon test');
+  await until(() => panels.ask.getValue() === 'fix the coupon test', 'every character is in the box');
+  assert.equal(v.current.screen.focused, panels.ask); assert.equal(v.current.view, 'tasks'); assert.equal(v.current.session, 'new');
+  // The same from a tab of another view: its box gets it.
+  panels.ask.clearValue(); await send(v, '/bots'); await until(() => v.current.view === 'bots', 'Bots');
+  panels.tabs[4].focus(); await until(() => v.current.screen.focused === panels.tabs[4], 'the Bots tab');
+  v.type('hello'); await until(() => panels.ask.getValue() === 'hello' && v.current.screen.focused === panels.ask, 'typed on the Bots tab');
+});
+
 // On the New session form's rows a letter is not a message, so / starts a command in the box
 // there, and the rest of what is typed follows it: /permissions full then sets the form.
 test('/ typed on the New session form starts a command in the box: /permissions full gives the form Full access', async t => {
