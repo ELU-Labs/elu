@@ -7,7 +7,9 @@ import { project, fakeClis } from './helpers.mjs';
 import { ProjectController } from '../lib/projects.mjs';
 import { projectFolder } from '../lib/workspace.mjs';
 import { atomic, findBin, personalDirectory } from '../lib/util.mjs';
+import { readTask } from '../lib/state.mjs';
 import { ADAPTERS } from '../lib/adapters/index.mjs';
+import { stopLine } from '../lib/stop-line.mjs';
 import { REFUSED, SHIM_VENDORS, shimEnvFile, shimPath, shimsBase } from '../lib/never-shims.mjs';
 
 // A terminal app may wrap a vendor's command: each of its panes gets a folder on PATH, ahead
@@ -263,4 +265,51 @@ test('a command that starts itself again by name is handed its own call again, a
   const script = path.join(f.parent, 'hook.sh'); fs.writeFileSync(script, '#!/bin/sh\ngit push origin\n', { mode: 0o755 });
   const nested = spawnSync('/bin/sh', ['-c', `git status && ${JSON.stringify(script)}`], { env: { PATH: [...f.all, ...f.rest].join(path.delimiter) }, encoding: 'utf8' });
   assert.equal(nested.status, REFUSED); assert.equal(nested.stderr.trim(), 'git push is not allowed outside Full access.');
+});
+
+// A vendor's program that never began: it could not be started, or a script in front of it
+// ended first. The chat says so in plain words and what to do; what the script printed follows.
+const GIVES_UP = 'termapp: stopped a possible infinite %s shim loop.';
+// turn: what only the launch of a turn has among its arguments.
+const givesUp = (f, vendor, turn) => fs.writeFileSync(path.join(f.app.pane, vendor), `#!/bin/sh\ncase " $* " in ${turn}) ;; *) exec ${JSON.stringify(f.real)} "$@";; esac\necho "${GIVES_UP.replace('%s', vendor)}" >&2\necho "second line" >&2\nexit 126\n`, { mode: 0o700 });
+test('a turn whose vendor program did not start says so in plain words, then what its command printed, then what to do', async t => {
+  const f = setup(t, 'claude');
+  // Another tool's script in front of the real program that answers for it until a turn starts, then gives up.
+  givesUp(f, 'claude', "' -p '*");
+  const { id, finished } = f.controller.ask('Where is coupon normalization?', null, { permissions: 'ask' });
+  const said = 'The model could not run: Claude Code did not start. The claude command said: termapp: stopped a possible infinite claude shim loop.';
+  await assert.rejects(finished, { message: said });
+  const task = readTask(f.controller.repo, id);
+  assert.equal(task.state, 'blocked'); assert.equal(task.error.message, said); assert.equal(task.error.cause, 'not-started');
+  assert.equal(task.runs.length, 1, 'a program that did not start is not started a second time');
+  const line = stopLine(task);
+  assert.equal(line.text, `${said} Check that claude runs in your terminal, then type continue.`);
+  assert.equal(line.action, 'Check that claude runs in your terminal, then type continue.'); assert.equal(line.short, 'check that claude runs in your terminal, then type continue');
+});
+test('a Codex program that cannot be run when its turn starts is named, with what the shell said of it', async t => {
+  const f = setup(t, 'codex', { wrapped: ['claude'] }), real = path.join(f.fake.dir, 'codex');
+  // It answers for its version and its flags, then cannot be run: the file it hands to is gone.
+  fs.renameSync(real, `${real}-real`);
+  fs.writeFileSync(real, `#!/bin/sh\ncase " $* " in *' --help '*) ;; ' exec '*) exec ${JSON.stringify(path.join(f.parent, 'gone', 'codex'))} "$@";; esac\nexec "$0-real" "$@"\n`, { mode: 0o755 });
+  const { id, finished } = f.controller.ask('Where is coupon normalization?', null, { permissions: 'full' });
+  await assert.rejects(finished, { message: /^The model could not run: Codex did not start\. The codex command said: .*gone\/codex/ });
+  const task = readTask(f.controller.repo, id);
+  assert.equal(task.error.cause, 'not-started');
+  assert.match(stopLine(task).text, /^The model could not run: Codex did not start\. The codex command said: .*gone\/codex.* Check that codex runs in your terminal, then type continue\.$/);
+});
+test('a Grok Build program that gives up as its live turn starts is named the same way', async t => {
+  const f = setup(t, 'grok'); PREPARE.grok(f);
+  givesUp(f, 'grok', "*' agent stdio '");
+  atomic(path.join(personalDirectory(), 'conformance', 'grok.json'), { v: 1, bin: findBin('grok'), version: '1.0.77', steps: Object.fromEntries(ADAPTERS.grok.conformance.map(step => [step.id, 'pass'])), relay: true, at: new Date().toISOString() });
+  const { id, finished } = f.controller.ask('Where is coupon normalization?', null, { permissions: 'ask' });
+  const said = 'The model could not run: Grok Build did not start. The grok command said: termapp: stopped a possible infinite grok shim loop.';
+  await assert.rejects(finished, { message: said });
+  assert.equal(stopLine(readTask(f.controller.repo, id)).text, `${said} Check that grok runs in your terminal, then type continue.`);
+});
+// A vendor that started and then failed keeps the words it had: this is not that.
+test('a vendor that started and then ended with an error is still said as could not finish', async t => {
+  const f = setup(t, 'claude');
+  fs.writeFileSync(path.join(f.app.pane, 'claude'), `#!/bin/sh\ncase " $* " in ' -p '*) ;; *) exec ${JSON.stringify(f.real)} "$@";; esac\necho "Error: sandbox required but unavailable" >&2\nexit 1\n`, { mode: 0o700 });
+  const { finished } = f.controller.ask('Where is coupon normalization?', null, { permissions: 'ask' });
+  await assert.rejects(finished, { message: 'The model could not finish. Error: sandbox required but unavailable' });
 });

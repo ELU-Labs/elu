@@ -466,7 +466,9 @@ line runs the check there and then. Vendor notes: [docs/vendors](docs/vendors).
 
 ELU starts the vendor command it finds first on your PATH, so one that another tool
 wraps, such as a terminal app with its own `claude` or `codex` script ahead of the real
-one, runs through that script in every mode.
+one, runs through that script in every mode. When a vendor's program does not start, the
+chat says so, with what its command printed: check that the command runs in your terminal,
+then type continue.
 
 Google's FAQ says that using another app to reach Antigravity breaks its terms and can get
 your account suspended or terminated. ELU wraps `agy`, so read
