@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { project, git, command } from './helpers.mjs';
+import { project, git, command, temp } from './helpers.mjs';
 import { repository } from '../lib/git.mjs';
 import { saveTask, readTask } from '../lib/state.mjs';
 import { taskPatch, taskDetails, sessionWire } from '../lib/projects.mjs';
@@ -99,18 +99,21 @@ test('a session that fetches, moves to a newer main and commits there shows only
   assert.doesNotMatch(JSON.stringify(names(moved)), /landed/);
 });
 
-// A stand-in for GitHub's program, as it answers `gh pr list --head NAME --json number,url,state`
-// when signed in: the pull requests of that branch. Any other call fails, as it does signed out.
+// GitHub's program as the repository's stand-in plays it (test/fakes/gh.mjs), first on PATH:
+// signed in, it lists the pull requests of a branch; signed out, it says so and fails.
 function standInGh(t, pulls) {
-  const bin = fs.mkdtempSync(path.join(fs.realpathSync(process.env.TMPDIR ?? '/tmp'), 'gh-')), before = process.env.PATH;
-  fs.writeFileSync(path.join(bin, 'gh'), `#!${process.execPath}\nconst args = process.argv.slice(2), pulls = ${JSON.stringify(pulls)}, at = args.indexOf('--head');\nif (args[0] !== 'pr' || args[1] !== 'list' || at < 0) { console.error('To get started with GitHub CLI, please run:  gh auth login'); process.exit(4); }\nconsole.log(JSON.stringify(pulls[args[at + 1]] ?? []));\n`, { mode: 0o755 });
-  process.env.PATH = `${bin}${path.delimiter}${before}`;
-  t.after(() => { process.env.PATH = before; fs.rmSync(bin, { recursive: true, force: true }); });
+  const dir = temp(t), bin = path.join(dir, 'bin'), store = path.join(dir, 'store'), before = { PATH: process.env.PATH, FAKE_GH_STORE: process.env.FAKE_GH_STORE, FAKE_GH_ACCOUNT: process.env.FAKE_GH_ACCOUNT };
+  fs.mkdirSync(bin); fs.mkdirSync(store);
+  fs.writeFileSync(path.join(bin, 'gh'), `#!${process.execPath}\n${fs.readFileSync(new URL('./fakes/gh.mjs', import.meta.url), 'utf8')}`, { mode: 0o755 });
+  fs.writeFileSync(path.join(store, 'pulls.json'), JSON.stringify(pulls));
+  Object.assign(process.env, { PATH: `${bin}${path.delimiter}${before.PATH}`, FAKE_GH_STORE: store, FAKE_GH_ACCOUNT: 'ana' });
+  t.after(() => { for (const [name, value] of Object.entries(before)) { if (value === undefined) delete process.env[name]; else process.env[name] = value; } });
+  return { calls: () => { try { return fs.readFileSync(path.join(store, 'calls.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line).args); } catch { return []; } }, signOut: () => { delete process.env.FAKE_GH_ACCOUNT; } };
 }
 
 test('a session that made several branches in turn lists each with its own files and counts, the one checked out first, and its pull request', async t => {
   const { repo, base, folder, land } = scene(t);
-  standInGh(t, { 'fix/one': [{ number: 12, state: 'MERGED', url: 'https://code.example.invalid/shop/pull/12' }], 'fix/two': [{ number: 9, state: 'CLOSED', url: 'https://code.example.invalid/shop/pull/9' }, { number: 13, state: 'OPEN', url: 'https://code.example.invalid/shop/pull/13' }] });
+  const gh = standInGh(t, { 'fix/one': [{ number: 12, state: 'MERGED', url: 'https://code.example.invalid/shop/pull/12' }], 'fix/two': [{ number: 9, state: 'CLOSED', url: 'https://code.example.invalid/shop/pull/9' }, { number: 13, state: 'OPEN', url: 'https://code.example.invalid/shop/pull/13' }] });
   for (const [branch, file] of [['fix/one', 'one'], ['fix/two', 'two'], ['fix/three', 'three']]) {
     land({ [`landed/${file}.txt`]: `landed before ${file}\n`.repeat(20) }, `Land before ${file}`);
     git(folder, ['fetch', '-q', 'origin']); git(folder, ['checkout', '-q', '-b', branch, 'origin/main']);
@@ -138,6 +141,8 @@ test('a session that made several branches in turn lists each with its own files
   const there = sent(repo);
   assert.deepEqual([there.names, there.counts, there.parts], [names(changes), counts(changes), parts(changes)]);
   assert.deepEqual(there.changes.parts.map(part => part.pull), changes.parts.map(part => part.pull));
+  // GitHub was asked about the two branches the remote has, once each, and about nothing else.
+  assert.deepEqual(gh.calls().map(args => args.join(' ')).sort(), ['fix/one', 'fix/two'].map(name => `pr list --head ${name} --state all --limit 20 --json number,url,state`));
   // A branch that was pushed and then deleted here is still the session's: the remote has it.
   git(folder, ['branch', '-q', '-D', 'fix/one']);
   assert.deepEqual(parts(taskPatch(repo, '1')).map(part => part[0]), ['fix/three', 'fix/two', 'fix/one']);
@@ -147,6 +152,22 @@ test('a session that made several branches in turn lists each with its own files
   const own = taskPatch(repo, '1');
   assert.deepEqual([own.parts[0].branch, own.parts[0].pull, own.parts[0].compared], ['feat/task-1', { number: 7, url: 'https://code.example.invalid/shop/pull/7' }, STARTED]);
   assert.deepEqual(own.parts.map(part => part.branch), ['feat/task-1', 'fix/three', 'fix/two', 'fix/one']);
+});
+
+test('signed out of GitHub, a branch the session pushed shows no pull request, and nothing waits for it or fails', async t => {
+  const { repo, folder, land } = scene(t), gh = standInGh(t, { 'fix/one': [{ number: 12, state: 'OPEN', url: 'https://code.example.invalid/shop/pull/12' }] });
+  gh.signOut();
+  land({ 'landed/a.txt': 'a\n' }, 'Land a file');
+  git(folder, ['fetch', '-q', 'origin']); git(folder, ['checkout', '-q', '-b', 'fix/one', 'origin/main']);
+  commit(folder, { 'src/one.mjs': 'export const one = 1;\n' }, 'Add one'); git(folder, ['push', '-q', 'origin', 'fix/one']);
+  assert.deepEqual(taskPatch(repo, '1').parts.map(part => [part.branch, part.files, part.pull]), [['fix/one', 1, null]]);
+  for (let tries = 0; tries < 200 && !gh.calls().length; tries++) await new Promise(done => setTimeout(done, 50));
+  await new Promise(done => setTimeout(done, 500));
+  const changes = taskPatch(repo, '1');
+  assert.deepEqual(changes.parts.map(part => [part.branch, part.files, part.pull]), [['fix/one', 1, null]]);
+  assert.deepEqual(changeRows(changes, 100, false).map(row => visible(row.text)).filter(text => /PR #|pull/.test(text)), []);
+  // It is asked once, and not again with every look.
+  assert.equal(gh.calls().length, 1);
 });
 
 test('a session in here mode, in the owner\'s own folder, counts what was committed and edited there since it started, and says so', t => {
