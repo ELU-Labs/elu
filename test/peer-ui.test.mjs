@@ -1598,7 +1598,7 @@ test('status typed on the row of a running session on my other computer is a mes
   const peer = fakePeer({ items: [], mine: [{ key: SARA, mine: true, theirs: true }], remote }), v = await view(t, { repo: repository(p.root), dashboard: true, peer });
   const board = v.panels.board, ask = v.panels.ask, keys = () => v.panels.keys.getText(), stops = () => peer.sent().filter(row => row.type === 'remoteStop');
   const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
-  const onRow = async () => { board.focus(); selectRow(board, /Run the nightly/); await until(() => v.current.screen.focused === board && /enter open {2}s stop {2}n new session {2}letter then enter/.test(keys()) && /Message the session on @sara-box/.test(ask._label.getText()), 'its row, with s stop'); };
+  const onRow = async () => { board.focus(); selectRow(board, /Run the nightly/); await until(() => v.current.screen.focused === board && /enter open {2}s stop {2}d changes {2}n new session {2}letter then enter/.test(keys()) && /Message the session on @sara-box/.test(ask._label.getText()), 'its row, with s stop'); };
   await until(() => board.items.map(plainItem).some(row => /ON SARA-BOX/.test(row)) && board.items.map(plainItem).some(row => /Run the nightly checks/.test(row)), 'the row of the session there, under its computer');
   // The owner's word, a key at a time. s is this row's key for stop, and it stops nothing there.
   await onRow(); v.type('status');
@@ -2093,7 +2093,7 @@ test('a session on my other computer shows every line of its changes, and its ea
   ask.focus();
   // Every line of its changes: ELU 0.1.19 showed the first 120 and three dots in the chat. The
   // chat names them in one line now, and its Changes tab holds every one (read at the end).
-  assert.match(chat.getContent(), /Changes · 1 file · \+300 −0 · d opens them/); assert.doesNotMatch(chat.getContent(), /changed line \d/);
+  assert.match(chat.getContent().replace(/\x1b\[[\d;]*m/g, ''), /Changes · 1 file · \+300 −0 · d opens them/); assert.doesNotMatch(chat.getContent(), /changed line \d/);
   // The line over its oldest entry here counts the ones before it, and says how to get them.
   assert.match(chat.getContent(), /220 earlier messages are on @sara-box\. Page up to load them\./);
   await pause(300);
