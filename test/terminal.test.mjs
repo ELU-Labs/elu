@@ -3195,6 +3195,27 @@ test('checks read as running, a waiting turn of a schedule names the schedule, a
   assert.deepEqual(mine(), ['First waiting', 'Second waiting']);
 });
 
+// How many sessions run at once is the one number /slots sets, for one project as for
+// several, and a session that waits for a slot says so.
+test('/slots says and sets how many sessions run at once, and a session past it waits under Queued and says what for', { timeout: 30000 }, async t => {
+  const p = setup(t, 'slow'), v = await view(t, { repo: p.repo }), panels = v.current.panels, status = () => panels.status.getText(), chat = () => panels.chat.getText().replace(/\s+/g, ' ');
+  const saved = goal => pendingRequests(p.root).find(row => row.goal === goal);
+  await send(v, '/slots'); await until(() => /8 sessions run at once\. Use \/slots <1-16> to change it\./.test(status()), 'the number until it is set');
+  await send(v, '/slots 1'); await until(() => /1 session runs at once\. Running work is not interrupted\./.test(status()), 'one at once');
+  await send(v, 'Check the coupon module'); await until(() => /Opus is working/.test(chat()), 'the first session works');
+  await send(v, '/new'); await until(() => v.current.session === 'new', 'the new session form');
+  await send(v, 'Fix the cart total'); await until(() => saved('Fix the cart total')?.waits, 'the second is told what it waits for');
+  // Its row is under Queued, whose heading says the slots are taken, and its chat says the sentence.
+  await until(() => rows(v).some(row => /^ QUEUED 1 · 1 of 1 running$/.test(row)), 'the Queued heading');
+  await selectRow(v, /Fix the cart total/);
+  await until(() => /Waiting for a free slot: 1 of 1 session is running\. \/slots changes it\. \/stop cancels it\./.test(chat()), 'the sentence in its chat');
+  assert.doesNotMatch(chat(), /Waiting to start/);
+  // /slots 2 starts it, in the same project.
+  await send(v, '/slots 2'); await until(() => /2 sessions run at once\. Running work is not interrupted\./.test(status()), 'two at once');
+  await until(() => saved('Fix the cart total')?.state === 'running', 'the second session of the project runs');
+  await until(() => rows(v).some(row => /RUNNING 2/.test(row)) && !rows(v).some(row => /QUEUED/.test(row)), 'both under Running');
+});
+
 // The first message of a session waits a moment for the conductor. A second one sent in that
 // moment goes with it, in the order sent. Saved over the first, it took its place.
 test('a message sent before the conductor has picked up the first one goes with it and never replaces it', { timeout: 30000 }, async t => {
