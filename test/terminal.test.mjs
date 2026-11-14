@@ -3196,26 +3196,37 @@ test('checks read as running, a waiting turn of a schedule names the schedule, a
 });
 
 // Nothing limits how many sessions run at once until /slots sets a limit, for one project as
-// for several. A session that waits for a slot says so, and /slots off removes the limit.
-test('/slots says there is no limit until it sets one, a session past the limit waits under Queued and says what for, and /slots off starts it', { timeout: 60000 }, async t => {
-  const p = setup(t, 'slow'), v = await view(t, { repo: p.repo }), panels = v.current.panels, status = () => panels.status.getText(), chat = () => panels.chat.getText().replace(/\s+/g, ' ');
+// for several. A limit holds back only what starts by itself: what the owner types starts past
+// it, a scheduled run that waits for a slot says so, and /slots off removes the limit.
+test('/slots says there is no limit until it sets one; past the limit a session the owner starts runs and a scheduled run waits under Queued and says what for, and /slots off starts it', { timeout: 60000 }, async t => {
+  const p = setup(t, 'slow'), v = await view(t, { repo: p.repo }), panels = v.current.panels, status = () => panels.status.getText().replace(/\s+/g, ' '), chat = () => panels.chat.getText().replace(/\s+/g, ' ');
   const saved = goal => pendingRequests(p.root).find(row => row.goal === goal);
-  await send(v, '/slots'); await until(() => /No limit on sessions at once\. \/slots 6 sets one\./.test(status()), 'no limit until one is set');
-  await send(v, '/slots 1'); await until(() => /At most 1 session runs at once\. Running work is not interrupted\./.test(status()), 'one at once');
-  await send(v, '/slots'); await until(() => /At most 1 session runs at once\. \/slots off removes the limit\./.test(status()), 'the limit that is set');
+  // Each answer of /slots ends with what a limit holds back.
+  const RULE = ' What you type always starts; this number limits what starts by itself\\.', UNSET = ' What you type always starts; a limit holds back what starts by itself\\.';
+  await send(v, '/slots'); await until(() => new RegExp(`No limit on sessions at once\\. /slots 6 sets one\\.${UNSET}`).test(status()), 'no limit until one is set');
+  await send(v, '/slots 1'); await until(() => new RegExp(`At most 1 session runs at once\\. Running work is not interrupted\\.${RULE}`).test(status()), 'one at once');
+  await send(v, '/slots'); await until(() => new RegExp(`At most 1 session runs at once\\. /slots off removes the limit\\.${RULE}`).test(status()), 'the limit that is set');
   await send(v, 'Check the coupon module'); await until(() => /Opus is working/.test(chat()), 'the first session works');
+  // A second session he starts himself runs too, past the one: nothing he types waits for a slot.
   await send(v, '/new'); await until(() => v.current.session === 'new', 'the new session form');
-  await send(v, 'Fix the cart total'); await until(() => saved('Fix the cart total')?.waits, 'the second is told what it waits for');
-  // Its row is under Queued, whose heading says the slots are taken, and its chat says the sentence.
-  await until(() => rows(v).some(row => /^ QUEUED 1 · 1 of 1 running$/.test(row)), 'the Queued heading');
-  await selectRow(v, /Fix the cart total/);
-  await until(() => /Waiting for a free slot: 1 of 1 session is running\. \/slots changes it\. \/stop cancels it\./.test(chat()), 'the sentence in its chat');
+  await send(v, 'Fix the cart total'); await until(() => saved('Fix the cart total')?.state === 'running', 'his second session runs past the one');
+  assert.equal(saved('Fix the cart total').typed, true); assert.equal(saved('Fix the cart total').waits, undefined);
+  await until(() => rows(v).some(row => /RUNNING 2/.test(row)) && !rows(v).some(row => /QUEUED/.test(row)), 'both under Running');
+  // A scheduled run that comes due starts by itself: it waits for a slot. Its row is under Queued,
+  // whose heading says how many start at once (in a list this narrow; wider, also that 2 run), and
+  // its chat says the sentence with both numbers.
+  enqueue(p.root, 'Nightly check', { priority: 1, scheduleId: 'schedule-0000000a', permissions: 'ask' });
+  await until(() => saved('Nightly check')?.waits, 'the scheduled run is told what it waits for');
+  assert.deepEqual(saved('Nightly check').waits, { on: 'slot', running: 2, limit: 1 });
+  await until(() => rows(v).some(row => /^ QUEUED 1 · (2 running, )?1 at once( ─+)?$/.test(row)), 'the Queued heading');
+  await selectRow(v, /Nightly check/);
+  await until(() => /Waiting for a free slot: 2 sessions are running, and 1 runs at once\. \/slots changes it\. \/stop cancels it\./.test(chat()), 'the sentence in its chat');
   assert.doesNotMatch(chat(), /Waiting to start/);
   // /slots off removes the limit, and it starts, in the same project.
-  await send(v, '/slots off'); await until(() => /No limit on sessions at once\. \/slots 6 sets one\./.test(status()), 'the limit removed');
+  await send(v, '/slots off'); await until(() => new RegExp(`No limit on sessions at once\\. /slots 6 sets one\\.${UNSET}`).test(status()), 'the limit removed');
   assert.equal(conductorSettings().maxAgents, null);
-  await until(() => saved('Fix the cart total')?.state === 'running', 'the second session of the project runs');
-  await until(() => rows(v).some(row => /RUNNING 2/.test(row)) && !rows(v).some(row => /QUEUED/.test(row)), 'both under Running');
+  await until(() => saved('Nightly check')?.state === 'running', 'the scheduled run of the project runs');
+  await until(() => rows(v).some(row => /RUNNING 3/.test(row)) && !rows(v).some(row => /QUEUED/.test(row)), 'all under Running');
   // Any whole number from 1 is a limit, and none, unlimited and 0 remove it as off does.
   await send(v, '/slots 40'); await until(() => /At most 40 sessions run at once\. Running work is not interrupted\./.test(status()), 'forty at once');
   assert.equal(conductorSettings().maxAgents, 40);
