@@ -70,8 +70,8 @@ test('a bot is saved with its defaults, and each field is checked with a line th
   const bot = { name: 'helper', instructions: 'Help.' };
   for (const name of ['Scout', '9lives', 'a b', '', 'x'.repeat(31), 'under_score']) assert.throws(() => saveBot({ ...bot, name }), { message: 'Name a bot with 1 to 30 lowercase letters, digits or -, starting with a letter.' }, name);
   for (const name of ['team', 'general', 'everyone', 'you', 'model']) assert.throws(() => saveBot({ ...bot, name }), { message: `${name} is taken. Choose another name.` });
-  assert.throws(() => saveBot({ ...bot, vendor: 'grok' }), { message: 'A bot runs on one of: claude, codex, agy.' });
-  assert.deepEqual(botVendors(), ['claude', 'codex', 'agy']);
+  assert.throws(() => saveBot({ ...bot, vendor: 'gemini' }), { message: 'A bot runs on one of: claude, codex, agy, grok.' });
+  assert.deepEqual(botVendors(), ['claude', 'codex', 'agy', 'grok']);
   for (const model of ['bad model', '-flag', 'x'.repeat(81)]) assert.throws(() => saveBot({ ...bot, model }), { message: 'A model name has no spaces: up to 80 letters, digits, dots, colons, slashes or dashes.' }, model);
   assert.equal(saveBot({ ...bot, model: '' }).model, null); assert.equal(saveBot({ ...bot, model: ' opus[1m] ' }).model, 'opus[1m]');
   assert.throws(() => saveBot({ ...bot, effort: 'ultra' }), { message: 'Effort on claude is one of: low, medium, high, xhigh, max.' });

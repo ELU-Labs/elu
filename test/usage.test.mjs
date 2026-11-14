@@ -226,15 +226,15 @@ test('the Usage tab reads Antigravity and Grok Build sign-in before their one-ti
   // Before any read: Grok's token file is looked for at once, Antigravity is not read yet.
   let { agy, grok } = tab();
   assert.deepEqual([agy.unchecked, agy.check, agy.signInRead, grok.check, grok.signInRead], [true, 'needed', null, 'needed', false]);
-  assert.deepEqual(text(agy), ['Antigravity sign-in not read yet · needs a one-time check (c runs it now)']);
-  assert.deepEqual(text(grok), ['Grok Build  not signed in for ELU · s signs in']);
+  assert.deepEqual(text(agy), ['Antigravity (agy) sign-in not read yet · Full access only (c checks it)']);
+  assert.deepEqual(text(grok), ['Grok Build  (grok) not signed in for ELU · s signs in']);
   // On a computer with no browser, the sign-in that needs none: Codex has a device code one, and
   // Antigravity and Grok Build are signed in from ELU either way.
   assert.deepEqual(usageTab({ vendors: [{ vendor: 'codex', available: true, signedIn: false }, ...withCheck(rows, { env })], env, now, browser: false }).map(row => row.signInHint), ['Run: claude', 'Run: codex login --device-auth', 's signs in', 's signs in']);
   assert.deepEqual(usageTab({ vendors: [{ vendor: 'codex', available: true, signedIn: false }], env, now, browser: true })[1].signInHint, 'Run: codex login');
   assert.equal(signInsUnread(rows), true);
   fs.mkdirSync(path.join(env.HOME, '.grok')); fs.writeFileSync(path.join(env.HOME, '.grok', 'auth.json'), '{"token":"never-read"}\n', { mode: 0o600 });
-  assert.deepEqual(text(tab().grok), ['Grok Build  signed in · needs a one-time check (c runs it now)']);
+  assert.deepEqual(text(tab().grok), ['Grok Build  (grok) signed in · Full access only (c checks it)']);
   // Antigravity: its release and help, as the check asks first, then agy -p /usage under the
   // private sign-in HOME. Only the exit code is read; nothing reaches a model turn.
   await readSignInsBeforeCheck(rows, { env: { ...process.env, ...env } });
@@ -242,23 +242,23 @@ test('the Usage tab reads Antigravity and Grok Build sign-in before their one-ti
   assert.equal(calls().at(-1).home, path.join(personalDirectory(), 'agy-home', 'signin')); assert.equal(calls().at(-1).autoUpdate, 'true');
   assert.equal(fs.existsSync(path.join(folder, 'inputs.jsonl')), false, 'no prompt was sent');
   ({ agy, grok } = tab());
-  assert.deepEqual(text(agy), ['Antigravity signed in · needs a one-time check (c runs it now)']);
+  assert.deepEqual(text(agy), ['Antigravity (agy) signed in · Full access only (c checks it)']);
   assert.equal(signInsUnread(rows), false);
-  assert.deepEqual(usageDetailLines(agy), ['Signed in.', '', 'Antigravity CLI has not been checked on this machine yet. Your first message to it runs the check.', 'c runs it now.']);
+  assert.deepEqual(usageDetailLines(agy), ['Signed in.', '', 'Antigravity CLI (the agy command) has not been checked on this machine yet. Your first message to it outside Full access runs the check; Full access needs none.', 'c runs it now.']);
   // A read is kept for its program: the tab does not ask again until r (all), or for another program.
   await readSignInsBeforeCheck(rows, { env: { ...process.env, ...env } }); assert.equal(calls().length, 3);
   assert.equal(signInsUnread([{ ...rows[0], bin: path.join(folder, 'elsewhere', 'agy') }]), true);
   fs.writeFileSync(config, JSON.stringify({ ...JSON.parse(fs.readFileSync(config, 'utf8')), agy: { signedIn: false } }));
   await readSignInsBeforeCheck(rows, { env: { ...process.env, ...env }, all: true }); assert.equal(calls().length, 6);
   ({ agy } = tab());
-  assert.deepEqual(text(agy), ['Antigravity not signed in for ELU · s signs in']);
-  assert.deepEqual(usageDetailLines(agy), ['Not signed in for ELU. s signs it in.', '', 'Antigravity CLI has not been checked on this machine yet. Your first message to it runs the check.', 'c runs it now.']);
+  assert.deepEqual(text(agy), ['Antigravity (agy) not signed in for ELU · s signs in']);
+  assert.deepEqual(usageDetailLines(agy), ['Not signed in for ELU. s signs it in.', '', 'Antigravity CLI (the agy command) has not been checked on this machine yet. Your first message to it outside Full access runs the check; Full access needs none.', 'c runs it now.']);
   // A release that cannot run here is not asked for its sign-in.
   fs.writeFileSync(path.join(fake.dir, 'agy'), `#!${process.execPath}\nif (process.argv.includes('--version')) console.log('agy version 1.5.4'); else if (process.argv.includes('--help')) console.log('--output-format'); else { require('node:fs').writeFileSync(${JSON.stringify(path.join(folder, 'asked'))}, 'x'); process.exit(0); }\n`, { mode: 0o755 });
   await readSignInsBeforeCheck(rows, { env: { ...process.env, ...env }, all: true });
   assert.equal(fs.existsSync(path.join(folder, 'asked')), false);
   ({ agy } = tab());
-  assert.deepEqual(text(agy), ['Antigravity this release cannot run here', '            Antigravity CLI 1.5.4: This untested version is missing required', '            flags: --json-schema, --conversation, --mode, --sandbox,', '            --add-dir, --print-timeout, --dangerously-skip-permissions.']);
+  assert.deepEqual(text(agy), ['Antigravity (agy) this release cannot run here', '            Antigravity CLI 1.5.4: This untested version is missing required', '            flags: --json-schema, --conversation, --mode, --sandbox,', '            --add-dir, --print-timeout, --dangerously-skip-permissions.']);
   assert.ok(text(agy).every(line => line.length <= 76));
   // Saved: the program, the answer and when; never more.
   const saved = JSON.parse(fs.readFileSync(path.join(personalDirectory(), 'usage.json'), 'utf8')).signIns;
@@ -268,8 +268,8 @@ test('the Usage tab reads Antigravity and Grok Build sign-in before their one-ti
   assert.deepEqual(text(usageTab({ vendors: ran(true), env, now })[3]), ['Grok Build  signed in · ready']);
   atomic(path.join(personalDirectory(), 'conformance', 'grok.json'), { v: 1, bin: rows[1].bin, version: '1.0.77', steps: { signin: 'pass', 'locked-no-write': 'pass', 'locked-no-shell': 'fail', 'locked-no-network': 'fail', json: 'pass', resume: 'pass', relay: 'fail', isolation: 'pass' }, why: { 'locked-no-shell': 'locked run ran a shell command' }, stable: ['locked-no-shell'], loads: [], relay: false, at: new Date().toISOString() });
   const failed = usageTab({ vendors: ran(false), env, now })[3];
-  assert.deepEqual(text(failed), ['Grok Build  signed in · Full access only (c checks again)', '            Not proven: a read-only turn runs no command (locked run ran a', '            shell command), and 1 more.']);
-  assert.deepEqual(usageDetailLines(failed), ['Signed in.', '', 'Grok Build did not pass its check on this machine, so it runs in Full access only here. Not proven: a read-only turn runs no command (locked run ran a shell command), and 1 more.', 'c runs the check again.']);
+  assert.deepEqual(text(failed), ['Grok Build  (grok) signed in · Full access only (c checks again)', '            Not proven: a read-only turn runs no command (locked run ran a', '            shell command), and 1 more.']);
+  assert.deepEqual(usageDetailLines(failed), ['Signed in.', '', 'Grok Build (the grok command) did not pass its check on this machine, so it runs in Full access only here. Not proven: a read-only turn runs no command (locked run ran a shell command), and 1 more.', 'c runs the check again.']);
   // What its check found that it also loads here shows under a vendor that is ready; something that runs says what the owner answered.
   const loaded = answer => { atomic(path.join(personalDirectory(), 'conformance', 'grok.json'), { v: 1, bin: rows[1].bin, version: '1.0.77', steps: { signin: 'pass', 'locked-no-write': 'pass', 'locked-no-shell': 'pass', 'locked-no-network': 'pass', json: 'pass', resume: 'pass', relay: 'pass', isolation: 'fail' }, why: { isolation: 'it also loads Cursor rule /x/rules/style.md, Cursor hook /x/.cursor' }, stable: [], loads: [{ what: 'Cursor rule', from: '/x/rules/style.md', runs: false }, { what: 'Cursor hook', from: '/x/.cursor', runs: true }], ...(answer ? { answer: { decision: answer, for: ['Cursor hook /x/.cursor'] } } : {}), relay: true, at: new Date().toISOString() }); return usageTab({ vendors: ran(true), env, now })[3]; };
   assert.deepEqual(text(loaded(null)), ['Grok Build  signed in · ready', '            It also loads on this machine: Cursor rule /x/rules/style.md.', '            It would also run on this machine: Cursor hook /x/.cursor.', '            Outside Full access your next message to it asks you once.']);
@@ -278,7 +278,7 @@ test('the Usage tab reads Antigravity and Grok Build sign-in before their one-ti
   const denied = loaded('deny');
   assert.equal(denied.asks, true); assert.deepEqual(text(denied).slice(2), ['            It would also run on this machine: Cursor hook /x/.cursor.', '            You said no, so it runs in Full access only. c asks again.']);
   // A check c started shows its lines under the vendor as it goes, then why it stopped.
-  const checks = new Map([['grok', { running: true, lines: ['One-time check of Grok Build on this machine first: about seven short turns on it, a few minutes.'], current: 'Checking Grok Build, 2 of 8 done: a read-only turn writes no file.', error: null }]]);
-  assert.deepEqual(usageBlocks([usageTab({ vendors: withCheck([waiting('grok')], { env }), env, now })[3]], { checks }).map(line => line.text), ['Grok Build  signed in · checking…', '            One-time check of Grok Build on this machine first: about seven', '            short turns on it, a few minutes.', '            Checking Grok Build, 2 of 8 done: a read-only turn writes no', '            file.']);
+  const checks = new Map([['grok', { running: true, lines: ['Checking Grok Build (the grok command): 8 steps, once on this machine for release 1.0.77.'], current: 'Grok Build: 2 of 8 steps, 14s so far. Proven: a read-only turn writes no file.', error: null }]]);
+  assert.deepEqual(usageBlocks([usageTab({ vendors: withCheck([waiting('grok')], { env }), env, now })[3]], { checks }).map(line => line.text), ['Grok Build  (grok) signed in · checking…', '            Checking Grok Build (the grok command): 8 steps, once on this', '            machine for release 1.0.77.', '            Grok Build: 2 of 8 steps, 14s so far. Proven: a read-only turn', '            writes no file.']);
   assert.ok(!calls().some(call => call.vendor === 'grok'), 'grok was never run');
 });
