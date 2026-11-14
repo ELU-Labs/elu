@@ -80,7 +80,7 @@ test('a helper on a model that is not Claude Code is told it cannot send, and sa
   const read = f.inputs('codex').at(-1).input;
   assert.ok(read.includes(helperInstructions(HELPS, { canSend: false, vendor: 'codex' })));
   assert.match(read, /You cannot send anything to that session from here: only Claude Code has the send_to_session tool/);
-  assert.match(read, /He sends it by typing @ali-devbox first in the message box, or with \/send PATH\./);
+  assert.match(read, /He sends it by typing it in the message box over that session, or with \/send PATH\./);
   assert.doesNotMatch(read, /You reach that session only with the send_to_session tool/);
   assert.equal(contextOf(read).helps.canSend, false);
 });
@@ -211,36 +211,88 @@ test('no turn by itself after the owner stopped the helper or it stopped to ask 
 // ---- The message box and the pane ----
 
 const STATUS = { key: 'k'.repeat(64), name: 'ali', box: 'laptop', teams: [{ members: [{ key: 'k'.repeat(64), name: 'ali' }, { key: D, name: 'devbox', box: 'ali-devbox', online: true }] }] };
-function glue() {
+// answer(command): what the daemon answers a command; {} unless a test says.
+function glue({ answer = () => ({}) } = {}) {
   const commands = [], facade = { mineRows: () => [{ key: D, mine: true, theirs: true }], remoteSessions: () => [] };
-  return { commands, glue: remoteGlue({ facade, peerRead: () => STATUS, peerCommand: async command => { commands.push(command); return {}; }, chatMessage: ({ title, text }) => `${title}: ${text}`, ink: text => text, colour: false }) };
+  return { commands, glue: remoteGlue({ facade, peerRead: () => STATUS, peerCommand: async command => { commands.push(command); return answer(command); }, chatMessage: ({ title, text }) => `${title}: ${text}`, ink: text => text, colour: false }) };
 }
 
-test('over a session there, a message goes to your agent here; @ that computer, by the name its row shows or the one it was paired under, goes there without it', async () => {
-  const { glue: app, commands } = glue(), row = remoteRow({ id: ID, machine: D, createdAt: ago(5), lastAt: ago(1), state: 'answered', title: HELPS.title, entries: [], approvals: [] }, 'ali-devbox');
-  assert.deepEqual(app.route(row, 'can you help this remote agent with the files it needs'), { to: 'here', text: 'can you help this remote agent with the files it needs' });
+test("over a session of mine there, what I type goes to that session, as if typed there: a plain yes answers its question, and only @here asks my agent here", async () => {
+  const waiting = { id: ID, machine: D, createdAt: ago(5), lastAt: ago(1), state: 'needs_input', title: HELPS.title, question: 'May the next turn create the missing folder and go on?', choices: [], entries: [], approvals: [] };
+  const { glue: app, commands } = glue(), row = remoteRow(waiting, 'ali-devbox');
+  // The owner's scene: the session there waits for his answer, and he types yes. It goes there.
+  assert.deepEqual(app.route(row, 'yes'), { to: 'there', text: 'yes' });
+  assert.deepEqual(app.route(row, '1'), { to: 'there', text: '1' });
+  assert.deepEqual(app.route(row, 'yes, it is a simple task: clear the queue'), { to: 'there', text: 'yes, it is a simple task: clear the queue' });
+  // That computer's @name first means the session there, as before, and so does @model: neither is sent.
   assert.deepEqual(app.route(row, '@ali-devbox 1'), { to: 'there', text: '1' });
   assert.deepEqual(app.route(row, '  @DevBox  use the ones in ~/e2e'), { to: 'there', text: 'use the ones in ~/e2e' });
-  assert.deepEqual(app.route(row, '@ali hello'), { to: 'here', text: '@ali hello' }, "this computer's own owner name is not that computer");
-  assert.deepEqual(app.route(row, '@reviewer look'), { to: 'here', text: '@reviewer look' });
   assert.deepEqual(app.route(row, '@ali-devbox'), { to: 'there', text: '' });
-  // The box says both, the longest that fits; once it names that computer, it says that.
-  assert.equal(app.label(row), ' Message your agent here · @ali-devbox writes to the session there ');
-  assert.equal(app.label(row, 60), ' Message your agent here · @ali-devbox writes there ');
-  assert.equal(app.label(row, 30), ' Message your agent here ');
-  assert.equal(app.label(row, Infinity, '@devbox use them'), ' Message the session on @ali-devbox ');
-  // Sending there is as before: the text alone, with the @name taken off by the caller.
-  assert.equal(await app.send(row, app.route(row, '@ali-devbox 1').text), 'Sent to the session on @ali-devbox.');
-  assert.deepEqual(commands.at(-1), { type: 'remoteSend', id: ID, text: '1' });
+  assert.deepEqual(app.route(row, '@model go on'), { to: 'there', text: 'go on' });
+  // Any other @word goes there as typed: on that computer it may name one of its bots.
+  assert.deepEqual(app.route(row, '@reviewer look'), { to: 'there', text: '@reviewer look' });
+  assert.deepEqual(app.route(row, '@ali hello'), { to: 'there', text: '@ali hello' }, "this computer's own owner name is not that computer");
+  // My agent here is asked for by name, and only so.
+  assert.deepEqual(app.route(row, '@here find the files it needs'), { to: 'here', text: 'find the files it needs' });
+  assert.deepEqual(app.route(row, '  @HERE  and the logs'), { to: 'here', text: 'and the logs' });
+  assert.deepEqual(app.route(row, '@here'), { to: 'here', text: '' });
+  assert.deepEqual(app.route(row, '@hereby yes'), { to: 'there', text: '@hereby yes' });
+  // The box says who gets the message and on which computer: the session's model once it has replied.
+  assert.equal(app.label(row), ' Message the session on @ali-devbox ');
+  const replied = remoteRow({ ...waiting, entries: [{ role: 'You', at: ago(4), text: 'Clear the queue' }, { role: 'Codex', lead: true, at: ago(3), text: 'I stopped.' }, { role: '@reviewer', bot: 'reviewer', at: ago(2), text: 'Fine.' }] }, 'ali-devbox');
+  assert.equal(app.label(replied), ' Message Codex on @ali-devbox ');
+  assert.equal(app.label(replied, Infinity, 'yes'), ' Message Codex on @ali-devbox ');
+  assert.equal(app.label(replied, 24), ' Message @ali-devbox ');
+  assert.equal(app.label(replied, Infinity, '@here find them'), ' Message your agent here · it helps the session on @ali-devbox ');
+  assert.equal(app.label(replied, 40, '@here find them'), ' Message your agent here ');
+  // The key bar says where Enter sends, and the one name that asks my agent here.
+  assert.deepEqual(app.keys(replied, 'yes'), [['enter', 'send to @ali-devbox'], ['@here', 'asks your agent here'], ['esc', 'sessions']]);
+  assert.deepEqual(app.keys(replied, '@here find them'), [['enter', 'send to your agent here'], ['esc', 'sessions']]);
+  // Typing @ offers that name alone: every other word goes to the session there.
+  assert.deepEqual(app.mentions(replied, '@').map(item => [item.word, item.value]), [['@here', '@here']]);
+  assert.match(app.mentions(replied, '@he')[0].description, /your agent on this computer · it helps the session on @ali-devbox/);
+  assert.deepEqual(app.mentions(replied, '@re'), []); assert.deepEqual(app.mentions(replied, 'yes @'), []);
+  // Sending: the text alone, and the line says it went there, to whom.
+  assert.equal(await app.send(row, app.route(row, 'yes').text), 'Sent to the session on @ali-devbox.');
+  assert.deepEqual(commands.at(-1), { type: 'remoteSend', id: ID, text: 'yes' });
+  assert.equal(await app.send(replied, 'yes'), 'Sent to Codex on @ali-devbox.');
+  // While it works there, the line says at once that the message waits for its turn to end.
+  const busy = glue({ answer: () => ({ id: ID, working: true }) });
+  assert.equal(await busy.glue.send(replied, 'and the tests'), 'Sent to Codex on @ali-devbox. It reads it when its current turn ends.');
   // A teammate's session on that computer has no agent here: every message goes to it, as before.
   const theirs = { ...row, by: 'teammate', who: 'sara' };
   assert.deepEqual(app.route(theirs, 'how is it going?'), { to: 'there', text: 'how is it going?' });
   assert.deepEqual(app.route(theirs, '@ali-devbox 1'), { to: 'there', text: '1' });
+  assert.deepEqual(app.route(theirs, '@here look'), { to: 'there', text: '@here look' });
+  assert.deepEqual(app.route(theirs, '@model go on'), { to: 'there', text: '@model go on' });
   assert.equal(app.label(theirs), ' Message this session on @ali-devbox ');
-  const said = app.view(remoteRow({ id: ID, machine: D, createdAt: ago(5), lastAt: ago(1), state: 'needs_input', title: HELPS.title, question: 'Which one?', choices: ['A', 'B'], entries: [], approvals: [] }, 'ali-devbox'), 100);
-  assert.match(said, /Answer it there: @ali-devbox 1/);
-  const told = app.view({ ...remoteRow({ id: ID, machine: D, createdAt: ago(5), lastAt: ago(1), state: 'needs_input', title: HELPS.title, question: 'Which one?', choices: ['A', 'B'], entries: [], approvals: [] }, 'ali-devbox'), by: 'teammate', who: 'sara' }, 100);
-  assert.match(told, /Started by @sara\. Type below to continue it there\./); assert.doesNotMatch(told, /Answer it there|your agent here/);
+  assert.deepEqual(app.keys(theirs, 'yes'), [['enter', 'send to @ali-devbox'], ['esc', 'sessions']]);
+  assert.deepEqual(app.mentions(theirs, '@'), []);
+  // The pane says how to answer: below, in the box.
+  const said = app.view(remoteRow({ ...waiting, question: 'Which one?', choices: ['A', 'B'] }, 'ali-devbox'), 100);
+  assert.match(said, /2\. B\nType its number or your answer below\./); assert.doesNotMatch(said, /Answer it there/);
+  const plain = app.view(row, 100);
+  assert.match(plain, /go on\?\nType your answer below\./);
+  assert.match(plain, /Runs on @ali-devbox\. Type below to write to it there\. Start with @here to ask your agent here\./);
+  const told = app.view({ ...remoteRow({ ...waiting, question: 'Which one?', choices: ['A', 'B'] }, 'ali-devbox'), by: 'teammate', who: 'sara' }, 100);
+  assert.match(told, /Started by @sara\. Type below to continue it there\./); assert.doesNotMatch(told, /Type its number|your agent/);
+});
+
+test('a message to a session there that has not run yet shows in its pane as waiting, with why and what to do', () => {
+  const { glue: app } = glue(), T = Date.now(), at = seconds => new Date(T - 60000 + seconds * 1000).toISOString();
+  const base = { id: ID, machine: D, createdAt: at(0), lastAt: at(30), state: 'running', title: HELPS.title, approvals: [], steps: [], entries: [{ role: 'You', at: at(0), text: 'Start the handoff' }, { role: 'Opus 5.5', lead: true, at: at(10), text: 'On it.' }] };
+  const shown = waiting => app.view(remoteRow({ ...base, waiting }, 'ali-devbox', T), 120);
+  assert.match(shown([{ at: at(20), text: 'yes', state: 'turn' }]), /Opus 5\.5 on @ali-devbox: On it\.\n\nYou → @ali-devbox \(waiting\): yes\nIt reads this when its current turn ends\./);
+  assert.match(shown([{ at: at(20), text: 'yes', state: 'starting' }]), /You → @ali-devbox \(waiting\): yes\nStarting on @ali-devbox\./);
+  assert.match(shown([{ at: at(20), text: 'yes', state: 'queued' }]), /You → @ali-devbox \(waiting\): yes\nWaiting to start\./);
+  assert.match(shown([{ at: at(20), text: 'yes', state: 'queued', reason: 'Waiting for a free slot in this project.' }]), /\(waiting\): yes\nWaiting for a free slot in this project\./);
+  assert.match(shown([{ at: at(20), text: 'yes', state: 'stuck' }]), /\(waiting\): yes\nELU has not started this on @ali-devbox yet and keeps trying\. If it stays, open ELU there\./);
+  assert.match(shown([{ at: at(20), text: 'yes', state: 'blocked', reason: 'The repository this session edits has moved or is gone.' }]), /You → @ali-devbox \(blocked\): yes\nThe repository this session edits has moved or is gone\. Send it again once that is fixed\./);
+  assert.match(shown([{ at: at(20), text: 'yes', state: 'blocked' }]), /\(blocked\): yes\nIt did not start on @ali-devbox\. Send it again once that is fixed\./);
+  // Two that wait keep the order they were sent in, each a part of its own; none shows once they ran.
+  const parts = app.parts(remoteRow({ ...base, waiting: [{ at: at(20), text: 'yes', state: 'turn' }, { at: at(25), text: 'and the tests', state: 'turn' }] }, 'ali-devbox', T), 120);
+  assert.deepEqual(parts.filter(part => part.key.startsWith('waiting')).map(part => part.text.split('\n')[0]), ['You → @ali-devbox (waiting): yes', 'You → @ali-devbox (waiting): and the tests']);
+  assert.doesNotMatch(shown([]), /waiting|blocked/); assert.doesNotMatch(app.view(remoteRow(base, 'ali-devbox', T), 120), /\(waiting\)/);
 });
 
 test('the pane of a session there shows both agents in time order, each titled where it runs, and how to answer the question there', () => {
@@ -253,13 +305,13 @@ test('the pane of a session there shows both agents in time order, each titled w
   const order = ['You → @ali-devbox: Start the handoff', 'Opus 5.5 on @ali-devbox: I need the batch results.', 'You: Help it with the files it needs', 'Opus 5.5 here: I sent the batch results.', 'Opus 5.5 here → @ali-devbox: Here are the files.', 'Opus 5.5 on @ali-devbox: Which ones?', 'Automatic turn 1 of 4: @ali-devbox answered. Opus 5.5 here goes on by itself.', 'Opus 5.5 here: It asks which; I asked you.', 'Waiting for you: Which batch results should I use?'];
   let from = 0;
   for (const line of order) { const found = said.indexOf(line, from); assert.ok(found >= from, `${line}\n---\n${said}`); from = found + line.length; }
-  assert.match(said, /2\. Run them again\nAnswer it there: @ali-devbox 1/);
-  assert.match(said, /Type below to write to your agent here; start with @ali-devbox to write to the session there\./);
+  assert.match(said, /2\. Run them again\nType its number or your answer below\./);
+  assert.match(said, /Type below to write to it there\. Start with @here to ask your agent here\./);
   // Its agent here at work, and one that stopped going on by itself, are said under the chat.
   assert.match(app.view(remoteRow(view, 'ali-devbox', T), 100, { ...helper, working: true }), /Opus 5\.5 is working here/);
   // Its send waits for the owner's approval here: the pane says so, and where to answer it.
   const asking = app.view(remoteRow(view, 'ali-devbox', T), 160, { ...helper, working: true, title: 'Help: Native replay e2e handoff', approvals: [{ id: 'a', summary: 'Send to "Native replay e2e handoff" on @ali-devbox: ~/e2e' }] });
   assert.match(asking, /Waiting for your approval here\nOpus 5\.5 here wants to:\nSend to "Native replay e2e handoff" on @ali-devbox: ~\/e2e\nAnswer it on the row of "Help: Native replay e2e handoff" in Sessions, under Needs you\./);
   assert.doesNotMatch(asking, /is working here/);
-  assert.match(app.view(remoteRow(view, 'ali-devbox', T), 100, { ...helper, stopped: at(60) }), /The two agents stopped after 4 turns by themselves\. Write to your agent here to go on\./);
+  assert.match(app.view(remoteRow(view, 'ali-devbox', T), 100, { ...helper, stopped: at(60) }), /The two agents stopped after 4 turns by themselves\. Write @here and your message to go on\./);
 });

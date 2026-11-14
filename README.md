@@ -349,18 +349,25 @@ each Git repository in the home folder, the cursor on where it would run. Enter 
 Esc sends nothing and keeps your message.
 Sessions also lists every other session on the devbox in the same repository under "On devbox": they are part of your project, in Sessions and on its Kanban ("you · devbox"), whichever of your computers started them.
 Projects lists a devbox project as "<project> on devbox" only for its sessions this project cannot show, and says how many.
-With a devbox session under the cursor, what you type goes to your agent here, on the laptop:
-the first message starts a session in the project open on the laptop, named "Help: " and the
-devbox session's title, and the next ones continue it. It is told which session it helps, what
-that session waits on and what it said last, and it reaches only that session, by sending it
-files with a message or a message alone (Claude Code; another model says what you should
+With a devbox session under the cursor, what you type goes to that session, as if you had
+typed it on the devbox: `yes`, the number of a choice or your own words answer the question
+it waits on, and any other message continues it. The message box names its model and the
+computer ("Message Opus 5.5 on @devbox"), and its reply shows in the same pane. This works
+with ELU closed on the devbox, or open there in a view-only window: the devbox runs the
+session in the background. A message that has not run there yet shows in the pane as waiting,
+with why: its turn has not ended, no slot is free, or it could not start. `y`, `n` and `a`
+still answer its approvals.
+Start a message with `@here` to ask an agent on the laptop for help with that session instead:
+the first such message starts a session in the project open on the laptop, named "Help: " and
+the devbox session's title, and the next ones continue it. It is told which session it helps,
+what that session waits on and what it said last, and it reaches only that session, by sending
+it files with a message or a message alone (Claude Code; another model says what you should
 send). When the devbox session answers, your agent here goes on by itself, up to 4 times for
 each message of yours, unless you stopped it, and asks you when it needs a decision, a secret,
 or something only you can do. Its approvals wait on its own row in Sessions, and the devbox
 session's pane says so. Both agents show in the same pane, the devbox's as "Opus 5.5 on
 @devbox" and yours as "Opus 5.5 here", and the helper is also a session of its own in
-Sessions. Start a message with `@devbox` to write to the devbox session itself, and answer its
-question there the same way: `@devbox 1`. `y`, `n` and `a` still answer its approvals. A
+Sessions. A
 teammate's session on the devbox, such as a handoff you accepted there, has no agent here:
 what you type goes to it. A message to a devbox session that names files or folders on the laptop asks
 "Send 14 files (2.1 MB) from this computer with this message?": y sends them along, n sends
