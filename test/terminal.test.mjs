@@ -14,7 +14,7 @@ import { launchTerminal, geometry, plain, foldersNamed } from '../lib/terminal.m
 import { WHEEL_FRAME_MS } from '../lib/wheel.mjs';
 import { projectFolder, saveRequest, pendingRequests, updateRequest } from '../lib/workspace.mjs';
 import { displayText } from '../lib/terminal-visuals.mjs';
-import { vendorText, typedCommand } from '../lib/terminal-commands.mjs';
+import { vendorText, typedCommand, needsArgument } from '../lib/terminal-commands.mjs';
 import { formatResult } from '../lib/format.mjs';
 import { Conductor, enqueue } from '../lib/conductor.mjs';
 import { liveTask } from './peer-helpers.mjs';
@@ -626,12 +626,13 @@ test('/model NAME with no session open opens the new session form on that model,
   // The default is as it was: only that session is on it.
   assert.equal(v.current.controller.startModel().model, 'opus');
   // This computer's default by the name the model is shown by, which is two words.
-  await send(v, '/model computer opus 5.5'); await until(() => /This computer's default is Opus 5\.5 \(claude · opus\)\./.test(status()), 'the shown name is taken');
-  assert.deepEqual(computerDefault(), { vendor: 'claude', model: 'opus' });
-  await send(v, '/model computer opus 5.5 now'); await until(() => /Use \/model computer <name>, or none\./.test(status()), 'a default takes no message'); panels.ask.setValue('');
+  await send(v, '/model computer sonnet 5.5'); await until(() => /This computer's default is Sonnet 5\.5 \(claude · sonnet\)\./.test(status()), 'the shown name is taken');
+  assert.deepEqual(computerDefault(), { vendor: 'claude', model: 'sonnet' });
+  await send(v, '/model computer sonnet 5.5 now'); await until(() => /Use \/model computer <name>, or none\./.test(status()), 'a default takes no message'); panels.ask.setValue('');
   await send(v, '/model computer none'); await until(() => computerDefault() === null, 'no choice again');
-  // The key bar's usage of /model names it.
+  // The key bar's usage of /model names it, and /model alone still runs: every word of it is optional.
   assert.equal(typedCommand('/model ').usage, '/model [name [message]|default <name>|computer <name>|add]');
+  assert.equal(needsArgument(typedCommand('/model ')), false);
 });
 
 test("a computer with only Grok Build: the project's settings show its default model and this computer's, Enter picks one, /model computer sets it, and a saved default that is not installed is said", { timeout: 60000 }, async t => {
