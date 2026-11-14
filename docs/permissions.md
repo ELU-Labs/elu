@@ -18,7 +18,7 @@ session; a turn that is not your own session's runs read only.
 | Your environment | a short list (`PATH`, `HOME`, language, temp folder) | same | same | all of it: your SSH agent, your GitHub and cloud sign-ins, your proxy |
 | Never list (push, tag, merge, deploy, publish) | blocked | blocked; every escape asks | stand-in commands and, except on Codex, deny rules; a command that gets past them gets through if the reviewer allows it | none: the model runs them without asking |
 | Runs in | worktree | worktree or a named branch | same | also here |
-| Checks | sandboxed, no network, structural limits | same | no network; dependency files may change | network on; no structural limit blocks, what one finds is shown as a note |
+| Checks | sandboxed, no network, structural limits | same | no network; dependency files may change | no sandbox, as in your terminal; no structural limit blocks, what one finds is shown as a note |
 
 Secrets here are files Git does not track whose names look like secrets: `.env*`, `.npmrc`,
 `.netrc`, `.pypirc`, `auth.json`, `credentials`, `credentials.json`, `id_rsa`, `id_ed25519`,
@@ -94,11 +94,11 @@ What stays, and why:
   - Claude Code and Codex run in your home.
 - What a vendor asks in every mode, ELU answers for you with yes, at once. Claude Code
   asks before `rm` or `rmdir` on your home, the working folder or a top-level folder.
-- Who gets Full access: your own sessions, the schedules of their bots, and the schedules
-  you pick it for. A bot's scheduled turn runs in its session's mode, Full access included.
-  A request to the local A2A endpoint is your own and runs your default mode as it is. A
-  teammate's message that starts by itself runs with Approve for me at most, and a
-  teammate's question runs read only.
+- Who gets Full access: your own sessions, the schedules of their bots, the schedules you
+  pick it for, and a session a teammate's message starts as your own: in your default mode
+  with team access Auto or your y, in the mode you pick with w. A bot's scheduled turn runs
+  in its session's mode, Full access included. A request to the local A2A endpoint is your
+  own and runs your default mode as it is. A teammate's question runs read only.
 
 Everything in the sections below about deny rules, the never list, the sandbox and
 approvals holds in the other modes.
@@ -310,6 +310,15 @@ relay) has no clock at all: silence says nothing about it, so it runs until it e
 `/stop` it. So does each of the project's checks: a check runs until it ends, however long
 that takes.
 
+A push with `/publish` has no time limit either, in every mode, and nor do the project's
+pre-push guards it runs. A guard, or the push itself, that prints nothing for 10 minutes is
+stopped and says so: "Stopped the pre-push guard after 10 minutes with no output. Nothing was
+pushed."
+A guard that fails says so with the last lines it printed: "The pre-push guard failed, so
+nothing was pushed. It said: …"
+ELU 0.1.24 and earlier stopped a guard, and the push, after 2 minutes; a session from then
+keeps its guards again, without that limit, at its next `/publish`.
+
 ELU 0.1.19 and earlier also stopped a turn after 2 hours, working or not. A session stopped
 that way says "Stopped by a time limit an earlier version had. Reply to carry on." In Approve
 for me and Full access ELU carries it on by itself the next time the app opens, once, and
@@ -434,9 +443,10 @@ Who approves the Task depends on the session's mode:
 | Approve for me, Full access | The mode approves it. It is written and shown like any other, marked `approved by Approve for me` or `approved by Full access`, nobody waits, and the work goes on in the same message. |
 
 In Approve for me and Full access the agent is never told that you must approve first, and
-you never type an approval. Work that changes no repository file, such as running a
-command or reading logs, is done in the turn that writes the Task. Work that changes the
-repository goes on in the editing turn right after it. A Task that waited from before
+you never type an approval. That holds whoever started the turn: you, a schedule, a bot's
+own schedule, or a teammate's message you work on as your own. Work that changes no
+repository file, such as running a command or reading logs, is done in the turn that
+writes the Task. Work that changes the repository goes on in the editing turn right after it. A Task that waited from before
 starts when you give its session one of these modes, or with your next message there.
 
 ELU enforces this much, on every vendor:
@@ -457,8 +467,8 @@ ELU enforces this much, on every vendor:
   approval in other words goes to the session there, as any message typed over it does.
   After `@here` either one is a message for your agent here. A teammate's message, a
   schedule and a bot's own turn cannot approve a Task.
-- A mode approves a Task only in your own session. A session a teammate's message started
-  keeps your approval in every mode (see below).
+- A mode approves a Task in your own session, and in one a teammate's message started that
+  you work on as your own (see below). A teammate's question makes no Task.
 - A Task is read as untrusted text. The title is one line of up to 80 characters; the
   description up to 2000; the goal up to 500; one to eight objectives of up to 300 each;
   the priority is urgent, high, medium or low; the severity is critical, high, medium or
@@ -487,18 +497,21 @@ there is the mode:
 
 Some turns wait for nobody in any mode:
 
-- A session a schedule starts, and a bot's own scheduled turn, have nobody to approve.
-  The Task is recorded as started by schedule and the work goes on.
+- A session a schedule starts, and a bot's own scheduled turn, have nobody to approve. In
+  Approve for me and Full access the turn is the one you get when you type the message: the
+  mode approves the Task, and the work is done in the same run, a job that changes no file
+  too. In Read only and Ask for approval the agent plans first, the Task is recorded as
+  started by schedule, and an edit goes on.
 - A teammate's handoff you chose to work on with `w` records its Task as started by a
-  handoff and goes on.
+  handoff and goes on. In Approve for me and Full access the mode approves it, as above.
 - A teammate's question and any read-only turn change nothing and make no Task.
 - `elu run "<goal>"` on the command line makes no Task.
 
-A teammate's message that starts a session by itself (Auto) or that you approve with y is
-not among them: that session runs in your default mode, Full access included, as if you
-had typed the message yourself, and its Task waits for your approval as one you asked for
-in Ask for approval would, whatever the mode. A later message in its thread runs in the
-session's mode at the time, Full access included.
+A teammate's message that starts a session by itself (Auto) or that you approve with y
+runs as if you had typed it yourself, in your default mode, Full access included. In
+Approve for me and Full access the mode approves its Task and the work starts at once; in
+Ask for approval the Task waits for your y. A later message in its thread, and a message
+you type there yourself, runs in the session's mode at the time, the same way.
 
 ### When something fails, and when the work is done
 
@@ -600,9 +613,10 @@ profile lets it, and has no profile for `bwrap`. This one does, saved as
 and loaded once with `sudo apparmor_parser -r /etc/apparmor.d/bwrap`. Nothing is
 installed or changed for you.
 
-The check sandbox (`codex sandbox`), which runs every project's checks whatever the
-vendor, is bubblewrap on Linux too. The Linux tests run with `bubblewrap` installed
-and an AppArmor profile like this one loaded.
+The check sandbox, which runs every project's checks outside Full access whatever the
+vendor, is bubblewrap on Linux too: through `codex sandbox` where Codex is installed,
+and started by ELU itself where it is not. The Linux tests run with `bubblewrap`
+installed and an AppArmor profile like this one loaded.
 
 ## Claude Code
 

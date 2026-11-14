@@ -51,7 +51,7 @@ as `.env`, stops it until `.gitignore` keeps that file out.
 | Tab | What it shows |
 | --- | --- |
 | Sessions | Every session across your projects. The selected one is open beside the list. Typing on a row writes a message to it; a row's key is its letter, then Enter. |
-| Projects | Your projects. `n` makes one, `o` makes another the active one. A project a teammate shares that is not on this computer is listed too, as `ELU   shared by @aki   on @aki-mac`: Enter opens its team board, and `c` clones it here. |
+| Projects | Your projects. `n` makes one, `o` makes another the active one. A project a teammate shares that is not on this computer is listed too, as `ELU   shared by @rio   on @rio-mac`: Enter opens its team board, and `c` clones it here. |
 | Kanban | The open project's tasks and sessions: To do, In progress, Needs you, Done. On a team, everyone with a clone of the same repository shares one board: every session a teammate, or another computer of yours, runs in it shows in the same columns with who started it and on which machine, to read only. A project whose folder holds several repositories has a board for each. `/share off` keeps a project off it both ways. |
 | Chats | Your team's channels, your teammates and your bots. |
 | Bots | Your bots. `n` makes one, Enter opens one. |
@@ -68,13 +68,14 @@ priority, a severity, the success criteria that show it is done, and the model's
 of the work.
 
 With Full access or Approve for me the mode approves the Task: the card says so, nothing
-waits for you, and the work goes on in the same message. With Ask for approval or Read
+waits for you, and the work goes on in the same message. A schedule's run in one of these
+modes works the same way, and so does a session a teammate's message starts as yours. With Ask for approval or Read
 only nothing is edited yet, and the Task waits for you:
 
 | Do | What happens |
 | --- | --- |
-| Esc, `y`, then Enter | Approves the Task. The work starts by itself. |
-| Esc, `n`, then Enter | Rejects it. Nothing is changed. |
+| `y`, then Enter | Approves the Task. The work starts by itself. |
+| `n`, then Enter | Rejects it. Nothing is changed. |
 | Type a message | Changes the Task. The card shows the new revision. |
 
 An approval you type counts too, in your own words: `yes`, `I approve`, `go ahead`,
@@ -360,9 +361,10 @@ What a teammate's message does on your machine is yours to choose, once per team
 asks, and so does your first `/invite` for a team. **Auto** (the default for a new team)
 starts a session in your project as if you had typed the message yourself: it runs in the
 project folder, reads your home folder (not the secret folders) and uses your MCP servers,
-in your default permission mode but never Full access, and its answer goes back without you
-reading it unless it looks like a secret. Any Task it proposes waits for your approval, and
-only an approved Task's edit runs in a new worktree. **Manual** keeps each message waiting
+in your default permission mode, Full access included, and its answer goes back without you
+reading it unless it looks like a secret. Its Task is approved as one you type would be: in
+Approve for me and Full access the mode approves it and the work goes on, and in Ask for
+approval it waits for you. Only an approved Task's edit runs in a new worktree. **Manual** keeps each message waiting
 until you press y, and its sender reads that it waits for you. Your y (or w) starts it at
 once, whatever runs, as anything you type does; one that Auto starts waits for a free slot. You can also write rules in plain English, such as "Only work on the elu
 repo. Don't write anything until I accept it.", and every session a teammate starts is told
@@ -526,10 +528,12 @@ once a round, to approve or decline, and a decline is named in your Standup. Eac
 sessions answers at most once a round, is told their rules for teammates, and what comes back
 is checked as any answer to a teammate is: paths are cut, and an update that may hold a
 secret is not sent. You get the update text, the card's title, the agent's name and the
-computer, nothing else. Each answer turn counts as one of your requests there and spends from
-your daily allowance there, as any message of yours that runs on their computer, so a full
-round can use up the day's requests. A computer that still runs an older build of ELU
-for its sessions is listed, not asked.
+computer, nothing else. A round counts as one of your requests there. What a session has on
+record costs nothing; each model update spends from your daily allowance there what it cost,
+so with the limits as they come a round asks every session. When a limit there is reached, each
+session it stops says which, such as "Not asked: you have used the $5.00 a day this teammate's
+computer allows you." A computer that still runs an older build of ELU for its sessions is
+listed, not asked.
 
 While the model updates are still being written, the Standup's own model writes a first
 summary from the records alone, and says so. When the round ends, it reads every update,
@@ -584,12 +588,13 @@ and the chat says `Not reviewed: no model on this computer can review.` A teamma
 question (the read-only kind) is answered by Claude Code only; without it, both sides read
 why, and the owner can set `/access` to Auto so teammates' messages start sessions instead.
 
-Codex must be installed even if your sessions run on Claude Code, but it does not need to
-be signed in. ELU runs your project's checks and its pre-push hooks inside Codex's
-sandbox (`codex sandbox`); without it the checks fail and `/publish` refuses. Install it
-with `npm install --global @openai/codex`. To use a copy that is not on your PATH, set
-`ELU_CODE_SANDBOX_HELPER` to its absolute path. On Linux that sandbox is bubblewrap:
-install `bubblewrap` and, on Ubuntu 24.04, load the AppArmor profile in
+ELU runs your project's checks and its pre-push hooks in a sandbox: Codex's (`codex
+sandbox`, signed in or not) where Codex is installed, otherwise the computer's own,
+bubblewrap on Linux and sandbox-exec on macOS, with the same limits. In Full access they
+run as in your terminal, with no sandbox. Where a session needs one and the computer has
+none, ELU says so before the work starts, with the step that fixes it. To use a copy of
+Codex that is not on your PATH, set `ELU_CODE_SANDBOX_HELPER` to its absolute path. On
+Ubuntu 24.04 bubblewrap starts only with the AppArmor profile in
 [docs/permissions.md](docs/permissions.md#linux). The Linux tests run with both.
 
 GitHub CLI (`gh`) is needed for draft pull requests, and for `@elu` to review and merge a

@@ -145,18 +145,19 @@ that team, and changed with `/access` or `elu access`:
   if you had typed it into ELU, in the project you joined or invited from. Its first
   turn runs in that project folder itself, not in a worktree. Like your own turns it reads
   your home folder (not the secret folders) and uses your MCP servers and Claude Code
-  memory. It runs in your default permission mode, except that a session nobody started by
-  hand never gets Full access: from Full it runs with Approve for me, as a schedule does.
+  memory. It runs in your default permission mode, Full access included.
   Its answer goes back to the teammate without you reading it, unless it looks like a
-  secret or you hold that teammate's replies. Any Task it proposes waits for your approval,
-  as your own do; only an approved Task's edit runs in a new worktree, and the teammate is
-  told that the plan waits for you and that no further reply comes in the thread.
+  secret or you hold that teammate's replies. Its Task is approved as one you type would
+  be: in Approve for me and Full access the mode approves it and the work goes on at once;
+  in Ask for approval it waits for you, and the teammate is told that the plan waits for
+  you and that its result comes to the thread once the work is done. Only an approved
+  Task's edit runs in a new worktree.
 - Auto applies only when every team the project belongs to here (the teams it is shared
   with that you and the sender are both on, and the teams whose setting names it) is set
   to Auto for that project. Otherwise the message waits. A team ask (`#general` or a
   channel) always waits, so one message never starts a session on every member's machine.
   A later message in the same thread continues its session in the mode the session has
-  now; if that is Full access, it waits for you.
+  now, Full access included.
 - **Manual**: each message waits until you approve it (y), then starts that same session,
   in your default mode, Full access included, since you started it. w picks the mode, place
   and folders first; n declines.
@@ -180,16 +181,17 @@ model is told to follow them, to refuse what they forbid and say so, and to only
 when they say to change nothing until you accept. They are a guard in what the model is
 told, not a limit ELU enforces: a model can get them wrong. A session gets the rules
 of every team its project belongs to here, so the sender cannot pick a team with laxer
-ones. Once you approve a Task, that approval counts as your acceptance of the work inside
-its goal. What is enforced is the permission mode, the Task approval before an edit, and
+ones. Once you approve a Task, or the session's Approve for me or Full access approves it
+for you, that approval counts as your acceptance of the work inside its goal. What is enforced is the permission mode, the Task approval before an edit, and
 the per-teammate and per-team message and spending caps. The never list (push, merge, tag,
 deploy, publish, and adding or removing an MCP server) holds for every session a teammate starts as it does in that mode for
 your own (`docs/permissions.md`): in Ask for approval and Approve for me it is backed by
-the sandbox and deny rules; Full access, which only a session you approve can have, has
-none, so a teammate's message can then push, merge, tag, deploy and publish, and reach any
-file you can. Each turn a teammate's message starts
-may spend at most the per-request cap (`caps.runUsd`), which intake reserved for it; a
-cost a vendor does not report counts as that whole amount. These sessions share the peer
+the sandbox and deny rules; Full access has none, so a teammate's message can then push,
+merge, tag, deploy and publish, and reach any file you can. A session started as your own
+has no spending cap of ELU's on its turns, as one you typed; what it cost is charged to that
+teammate's daily allowance, and a cost a vendor does not report counts as the per-request
+amount (`caps.runUsd`) intake reserved for it. A teammate's question may spend at most that
+amount in each turn. These sessions share the peer
 slots with teammates' questions, so they never fill every slot of yours. One you accept
 yourself with y or w starts at once.
 
@@ -615,11 +617,14 @@ another of your machines.
 
 ## Checks and evidence
 
-Check scripts and pre-push guards run inside Codex's OS sandbox (`codex sandbox`, or the
-copy `ELU_CODE_SANDBOX_HELPER` names), with an empty Codex home of their own, so Codex must
-be installed whatever vendor your sessions use, but need not be signed in. A check that
-cannot start in the sandbox fails; it never retries without isolation. Runtime directories
-needed by installed check programs are readable, not writable.
+Outside Full access, check scripts and pre-push guards run inside an OS sandbox: Codex's
+(`codex sandbox`, or the copy `ELU_CODE_SANDBOX_HELPER` names), with an empty Codex home of
+their own and no sign-in needed, or, where Codex is not installed, the system's own with the
+same limits: bubblewrap on Linux, sandbox-exec on macOS. Where the computer has none, an
+edit is refused before it starts. A check that cannot start in the sandbox fails; it never
+retries without isolation. Runtime directories needed by installed check programs are
+readable, not writable. In Full access checks and guards run as in your terminal, with no
+sandbox: Full access is everything.
 
 Checks have a fresh private temporary directory inside the task worktree. Shared system
 temporary directories are denied. Ignored output is included in the evidence digest and

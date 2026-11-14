@@ -7,12 +7,12 @@ import { repository, findRepository } from '../lib/git.mjs';
 import { initPlan, applyInit, uninstallPlan, applyUninstall } from '../lib/init.mjs';
 import { runPlan, runTask } from '../lib/runner.mjs';
 import { readTask, saveTask, taskDir, tasks, lock } from '../lib/state.mjs';
-import { runChecks, pinnedConfig } from '../lib/checks.mjs';
+import { runChecks } from '../lib/checks.mjs';
 import { policyReport, assertPolicy } from '../lib/policy.mjs';
 import { unsupportedVendors } from '../lib/detect.mjs';
 import { ADAPTERS } from '../lib/adapters/index.mjs';
 import { preparePublish, publish, prBody } from '../lib/publish.mjs';
-import { refuse, quote, readJson } from '../lib/util.mjs';
+import { refuse, quote, readJson, noSymlinks } from '../lib/util.mjs';
 import { recoverProcess, addUserBin } from '../lib/process.mjs';
 import {formatResult}from'../lib/format.mjs';
 import {botKey}from'../lib/bots.mjs';
@@ -23,7 +23,7 @@ addUserBin();
 sweepServers();
 // Peer commands load lib/peer/ only when used; it never imports the optional packages at load time.
 const PEER_COMMANDS = new Set(['id', 'team', 'invite', 'join', 'access', 'share', 'unshare', 'peers', 'peer', 'ask', 'relay', 'mine']);
-const HELP = `ELU — terminal coding workspace\n\nRun elu anywhere to open the terminal app.\nThe first start asks for a project name; later starts open your last project.\nSessions lists every session; type a message to start one.\nKanban shows the open project's tasks. Chats holds your channels and direct messages. Type / for commands and help.\nEditing workspaces are prepared automatically. Pushes require separate approval.\n\nCommands:\n  update\n  conductor [stop]\n  schedule [list]\n  dashboard\n  init [--yes] [--dry-run]\n  run <goal> [--yes] [--dry-run] [--permissions auto|full] [--place here|branch:NAME] [--folder PATH]...\n  run <id> --publish [--approve-push <confirmationId>]\n  status [id] [--recover]\n  open <id> [--bot NAME] [--exec]\n  check <id>\n  policy show\n  permissions [list|remove N|on N]\n  allow-home <session>\n  uninstall [--yes] [--dry-run]\n\nMCP servers (Claude Code's own; a key is asked for, never an argument):\n  mcp [list]\n  mcp add NAME URL [--header NAME] | mcp add NAME [--env NAME] -- COMMAND [ARGS]...\n  mcp remove NAME [--yes]\n\nPeer network:\n  id [--name N] [--export] [--import CODE]\n  team create NAME | team | team leave [TEAM] | team remove NAME [--team ID]\n  invite [--team ID] [--hours N] [--project PATH] [--auto|--manual] [--rules TEXT] [--mine]\n  join CODE [--project PATH] [--auto|--manual] [--rules TEXT] [--mine]\n  access [--team ID] [--auto|--manual] [--rules TEXT] [--project PATH]\n  mine [@NAME | remove @NAME | auto on|off]\n  share [PATH] [--as HANDLE] [--no-status] | unshare HANDLE\n  peers\n  peer install|uninstall | peer trust|untrust @NAME\n  ask [@NAME] [--project H] TEXT\n  relay [--team ID]\n\nEvery command accepts --json. --dry-run prints the proposed task setup;\nit does not execute the task or verify the resulting implementation.\n`;
+const HELP = `ELU — terminal coding workspace\n\nRun elu anywhere to open the terminal app.\nThe first start asks for a project name; later starts open your last project.\nSessions lists every session; type a message to start one.\nKanban shows the open project's tasks. Chats holds your channels and direct messages. Type / for commands and help.\nEditing workspaces are prepared automatically. Pushes require separate approval.\n\nCommands:\n  update\n  conductor [stop]\n  schedule [list]\n  dashboard\n  init [--yes] [--dry-run]\n  run <goal> [--yes] [--dry-run] [--permissions auto|full] [--place here|branch:NAME] [--folder PATH]...\n  run <id> --publish [--approve-push <confirmationId>]\n  status [id] [--recover]\n  open <id> [--bot NAME] [--exec]\n  check <id>\n  policy show\n  permissions [list|remove N|on N]\n  allow-home <session>\n  uninstall [--yes] [--dry-run]\n\nMCP servers (Claude Code's own; a key is asked for, never an argument):\n  mcp [list]\n  mcp add NAME URL [--header NAME] | mcp add NAME [--env NAME] -- COMMAND [ARGS]...\n  mcp remove NAME [--yes]\n\nPeer network:\n  id [--name N] [--export] [--import CODE]\n  team create NAME | team | team leave [TEAM] | team remove NAME [--team ID]\n  invite [--team ID] [--hours N] [--project PATH] [--auto|--manual] [--rules TEXT] [--mine]\n  join CODE [--project PATH] [--auto|--manual] [--rules TEXT] [--mine]\n  access [--team ID] [--auto|--manual] [--rules TEXT] [--project PATH]\n  mine [@NAME | remove @NAME | auto on|off]\n  share [PATH] [--as HANDLE] [--no-status] | unshare HANDLE\n  peers\n  peer off | peer install|uninstall | peer trust|untrust @NAME\n  ask [@NAME] [--project H] TEXT\n  relay [--team ID]\n\nEvery command accepts --json. --dry-run prints the proposed task setup;\nit does not execute the task or verify the resulting implementation.\n`;
 function argumentsOf(argv) {
   const flags = {}; const words = [];
   const boolean = new Set(['json', 'yes', 'dry-run', 'publish', 'recover', 'exec', 'help', 'version', 'daemon', 'export', 'no-status', 'auto', 'manual', 'mine']);
@@ -160,13 +160,23 @@ export async function main(argv = process.argv.slice(2)) {
     return await confirm(plan, flags) ? applyInit(repo, plan) : { ...plan, needsConfirmation: !flags['dry-run'] };
   }
   if (command === 'policy' && words[1] === 'show') {
-    const { head } = await import('../lib/git.mjs');
-    const { config } = pinnedConfig(repo, head(repo.root));
+    // The policy as it stands in this folder: .elu-code/config.yaml as it is now, committed or
+    // not, once approved on this machine; with no file, the one new sessions get. A file that
+    // is not what the last commit holds is said, since elu run takes only a committed one.
+    const { baseFile } = await import('../lib/git.mjs'), { parseConfig, defaultConfig } = await import('../lib/config.mjs'), { NOT_APPROVED, trustedText } = await import('../lib/project-trust.mjs');
+    const file = path.join(repo.root, '.elu-code', 'config.yaml'); noSymlinks(file);
+    const text = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : null, approved = trustedText(repo.root, 'config.yaml');
+    if (text !== null && approved !== text) refuse(NOT_APPROVED);
+    const committed = baseFile(repo.root, 'HEAD', '.elu-code/config.yaml', { optional: true });
+    const config = text !== null ? parseConfig(text) : approved !== null ? parseConfig(approved) : defaultConfig();
+    const note = text === null ? `No .elu-code/config.yaml here, so this is ${approved !== null ? 'the one you approved last' : 'the default policy'}. elu init writes one.`
+      : committed === null ? 'This is .elu-code/config.yaml as it is now. It is not committed yet: elu run needs it committed.'
+        : committed !== text ? 'This is .elu-code/config.yaml as it is now. It differs from the last commit: elu run needs it committed.' : null;
     // Only the lead entry runs. Bots do the reviews, read-only, whatever an older config lists.
     const role = config.roles.lead; let refusal = null; try { assertPolicy(role); } catch (e) { refusal = e.message; }
     // The table names the OS sandbox among what enforces a rule; where it cannot start, say so.
-    const { shellSandboxLine } = await import('../lib/sandbox.mjs'), lines = shellSandboxLine();
-    return { ...(lines.length ? { lines } : {}), roles: [{ name: 'lead', ...policyReport(role), refusal }], unsupportedVendors: unsupportedVendors().map(({ bin, ...value }) => value) };
+    const { shellSandboxLine } = await import('../lib/sandbox.mjs'), lines = [...(note ? [note] : []), ...shellSandboxLine()];
+    return { ...(lines.length ? { lines } : {}), committed: text !== null && committed === text, roles: [{ name: 'lead', ...policyReport(role), refusal }], unsupportedVendors: unsupportedVendors().map(({ bin, ...value }) => value) };
   }
   if (command === 'run') {
     if (flags.publish) {

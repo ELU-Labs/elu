@@ -7,7 +7,7 @@ import { ProjectController, conversationEntries, projectSnapshot, registerProjec
 import { projectFolder, pendingRequests, takeRequest } from '../lib/workspace.mjs';
 import { readTask } from '../lib/state.mjs';
 import { Conductor, enqueue, sendCommand } from '../lib/conductor.mjs';
-import { ASIDE_ANSWERED, ASIDE_RUNNING, ASIDE_WORK, readAsides, waitingWords } from '../lib/message-aside.mjs';
+import { ASIDE_ANSWERED, ASIDE_RUNNING, ASIDE_WORK, readAsides, runsCommand, sentWords, waitingWords } from '../lib/message-aside.mjs';
 
 // The owner's report: he wrote to a session in the middle of a long turn on a vendor that
 // takes no message while it works, and the chat said only that his message waits for the turn
@@ -86,6 +86,23 @@ test('a question sent to a turn that takes no message is answered beside it with
   await until(() => f.inputs().some(row => row.input.includes('Thanks')), 'the next turn');
   const next = f.inputs().find(row => row.input.includes('Thanks')).input;
   assert.ok(next.includes('How far are you?') && next.includes('Two of three steps are done. It is running the tests now.') && next.includes(ASIDE_ANSWERED));
+});
+
+// Team access Auto starts a session as if the owner had typed the teammate's message. His
+// message to it in the middle of a turn that takes none is answered beside it, as in his own.
+test('a session a teammate\'s message started as the owner\'s own answers his question beside its turn, as one he typed does', { timeout: 90000 }, async t => {
+  const f = setup(t, { mode: 'slow', extra: { byInput: SIDE } });
+  const origin = { kind: 'handoff', peer: 'b'.repeat(64), name: 'sara', a2aTaskId: 'task-1', threadId: 'thread-1', hop: 1, own: true };
+  enqueue(f.root, 'Work on the handoff from @sara shown in the peer data block.', { origin, context: 'Tidy the coupon module', permissions: 'full', place: { kind: 'worktree' }, folders: [] });
+  await until(() => sessionOf(f)?.state === 'running' && sessionOf(f).activeDeaf === true, 'the turn works and takes no message');
+  const sent = enqueue(f.root, 'How far are you?', { continuationTaskId: '1', priority: 0 }), asked = Date.now();
+  await until(() => request(f, sent.id)?.state === 'done' || request(f, sent.id)?.aside?.state === 'failed', 'the answer beside the turn');
+  assert.equal(request(f, sent.id).aside.error, undefined, 'not refused');
+  assert.ok(Date.now() - asked < 10000, 'within seconds, not when the turn ends');
+  assert.deepEqual([request(f, sent.id).reason, request(f, sent.id).aside.kind, request(f, sent.id).aside.text], [ASIDE_ANSWERED, 'question', 'Two of three steps are done. It is running the tests now.']);
+  assert.equal(only(f).state, 'running', 'the turn goes on');
+  sendCommand({ type: 'stop', root: f.root, taskId: '1' });
+  await until(() => only(f).state !== 'running', 'stopped');
 });
 
 test('an instruction sent to such a turn is answered beside it and says it asks for work: it keeps its place for the next turn, and stopping the turn starts it at once', { timeout: 90000 }, async t => {
@@ -209,6 +226,29 @@ test('a message sent while the session runs its checks, when no turn could take 
   assert.match(f.inputs().findLast(row => row.input.includes(BESIDE)).input, /ELU is running the project's checks on what this session changed\./);
   sendCommand({ type: 'stop', root: f.root, taskId: id });
   await until(() => !['running', 'preparing'].includes(projectSnapshot(f.repo).tasks.find(task => task.id === id).state), 'stopped', 30000);
+});
+
+// A turn that holds his message reads it when the command it runs ends, or at its next step
+// when it runs none. The row under the message and the status line say the same, as it is now.
+test('a message the running turn holds is read when its command ends, or at its next step when no command runs; the status line says the same', () => {
+  const said = (row, options) => { const words = waitingWords(row, options); return [words.tag, ...words.lines, words.keys].filter(Boolean).join(' | '); };
+  const run = (text, status = 'running', extra = {}) => ({ kind: 'tool', text, status, ...extra });
+  // Whether a command runs now: the turn's own newest call is a command that has not ended.
+  assert.equal(runsCommand([run('Read: src/coupon.mjs', 'ok'), run('Run: npm test')]), true);
+  assert.equal(runsCommand([run('Run: npm test', 'ok'), { kind: 'text', text: 'The tests pass.' }]), false, 'the command ended');
+  assert.equal(runsCommand([run('Run: npm test', 'ok'), run('Read: src/coupon.mjs')]), false, 'a read is a step, not a command');
+  assert.equal(runsCommand([run('Run: npm test'), run('Read: lib/a.mjs', 'running', { sub: true })]), true, 'a helper agent\'s step is not the turn\'s');
+  assert.equal(runsCommand([]), false); assert.equal(runsCommand(null), false);
+  // No command runs: the turn reads it at its next step, and the row says so.
+  assert.equal(said({ state: 'queued', turn: { run: 'r', uuid: 'u' } }, { working: true, goes: true, command: false }), "read at the turn's next step | The running turn reads it at its next step. | Enter sends it now · ↑ takes it back");
+  assert.equal(waitingWords({ state: 'queued', turn: {} }, { working: true, goes: true, command: false }).short, 'read at next step');
+  assert.equal(said({ state: 'queued', turn: {} }, { working: true, goes: true, command: false, there: '@devbox', enter: false }), "read at the turn's next step | The running turn on @devbox reads it at its next step. | ↑ takes it back");
+  // A command runs: when it ends.
+  assert.equal(said({ state: 'queued', turn: {} }, { working: true, goes: true, command: true }), 'read when the running command ends | The running turn reads it when the command it is running ends. | Enter sends it now · ↑ takes it back');
+  // The status line once it is sent: the same.
+  assert.equal(sentWords({ goes: true }), 'The running turn reads it at its next step.');
+  assert.equal(sentWords({ goes: true, command: true }), 'The running turn reads it when the command it is running ends.');
+  assert.equal(sentWords({ goes: true, command: true, there: '@devbox' }), 'Its running turn reads it when the command it is running ends.');
 });
 
 test('what the chat says under a waiting message never is a bare "waiting": each state says what happens and when', () => {

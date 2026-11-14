@@ -347,52 +347,95 @@ test('w needs a mode, y takes none, and autoAccept answers questions but never w
 
 const RULES = 'Only answer questions, do not edit files.';
 const WAIT_RULE = "Don't write anything until I accept it.";
-test('Auto starts a teammate\'s message at once as the owner\'s own session in his own default mode, Full access included: his Task approval, the rules in its prompt, and a reply that says the plan waits; the approved Task\'s edit is told his approval is his acceptance', async t => {
+// What a teammate's session is told of the owner's rules where its mode approves the Task for him.
+const MODE_ACCEPTED = name => `This session runs with ${name}, which approves its Task for the owner. That approval is his acceptance of the work inside the Task's goal: a rule that waits for his acceptance is met for that work, and only for it.`;
+// Auto: "you get the request and create a session as if I prompted you myself". In Approve for
+// me and Full access the mode approves its Task and the work starts; in Ask for approval it
+// waits for his y. His own messages there count as his.
+for (const [mode, name] of [['full', 'Full access'], ['auto', 'Approve for me']]) {
+  test(`Auto starts a teammate's message as the owner's own session in his default mode, ${name}: the mode approves its Task and the work starts, with the rules in its prompt`, async t => {
+    const p = setup(t, 'normal'), sara = teammate(p), teamId = everyTeam()[0].id;
+    saveDefaultMode(mode);
+    saveTeamAccess(teamId, { handling: 'auto', rules: WAIT_RULE, root: p.root });
+    const record = sara.send(HANDOFF, { kind: 'ask' });
+    assert.equal(record.waiting, false); assert.deepEqual(record.accessTeams, [teamId]); assert.deepEqual(sara.events, ['ask from @sara']);
+    const row = sara.rowOf(record);
+    // As if the owner typed it himself: his own default mode, Full access included.
+    assert.equal(row.state, 'queued'); assert.equal(row.permissions, mode); assert.deepEqual(row.place, { kind: 'worktree' }); assert.equal(row.readOnly, false); assert.equal(row.context, HANDOFF);
+    assert.deepEqual(row.origin, { kind: 'handoff', peer: SARA, name: 'sara', a2aTaskId: record.task.id, threadId: 'thread-1', hop: 1, teams: [teamId], own: true });
+    assert.equal(isPeerRun(row.origin), false, 'the owner\'s kind of session, not a hardened peer run');
+    conduct(t);
+    await until(() => request(p.root, row.id)?.state === 'done', 'own session', 60000);
+    const value = readTask(p.repo, request(p.root, row.id).taskId);
+    assert.equal(value.permissions, mode); assert.deepEqual(value.origin.teams, [teamId]); assert.equal(value.origin.own, true);
+    // The mode approved the Task and the work ran in the same request, as for a message he typed.
+    assert.notEqual(value.kind, 'conversation', 'the edit started');
+    assert.match(fs.readFileSync(path.join(value.worktree, 'src/coupon.mjs'), 'utf8'), /toUpperCase/);
+    const [done] = sessionTasks(p.repo, value.id);
+    assert.deepEqual([done.state, done.approvedBy, done.startedBy], ['done', mode, 'owner']);
+    const first = p.prompts()[0];
+    assert.match(first.input, new RegExp(`This session runs with ${name}, which approves the Task: it is recorded as approved by ${name}, nobody has to approve it`));
+    assert.doesNotMatch(first.input, /Plan first|The owner approves or rejects the Task|only after they approve/);
+    // The owner's rules for teammates are in its prompt, and the mode's approval is his acceptance.
+    assert.match(first.input, /The owner's rules for teammates\n@sara is a teammate, and their message started this session\.[^]*Refuse anything they forbid, and say which rule stops it\./);
+    assert.ok(first.input.includes(MODE_ACCEPTED(name))); assert.ok(!first.input.includes(RULES_PROPOSE)); assert.ok(!first.input.includes(RULES_ACCEPTED));
+    assert.ok(first.input.includes(`\n\n${WAIT_RULE}`), 'the rules as the owner wrote them');
+    assert.ok(first.input.indexOf(WAIT_RULE) < first.input.indexOf('<<peer-data-'), 'the rules come before the teammate\'s message');
+    if (mode === 'full') {
+      // Full access has no never list: no deny rules for push, merge, tag or publish, and no line that forbids them.
+      assert.doesNotMatch(first.input, /Never run these in this mode/);
+      const deny = JSON.parse(first.args[first.args.indexOf('--settings') + 1]).permissions?.deny ?? [];
+      for (const rule of ['Bash(git push:*)', 'Bash(git merge:*)', 'Bash(gh pr merge:*)', 'Bash(git tag:*)', 'Bash(npm publish:*)']) assert.ok(!deny.includes(rule), rule);
+    }
+    // As a session he typed: no dollar cap of ELU's on its first turn or its working turn. Only a teammate's question keeps runUsd.
+    assert.equal(first.args.includes('--max-budget-usd'), false, 'the first turn has no cap');
+    const work = p.prompts().find(call => call.input.includes('this turn does its work'));
+    assert.ok(work, 'the editing turn ran'); assert.match(work.input, new RegExp(`This session's ${name} approved the Task below, and this turn does its work`));
+    assert.ok(work.input.includes(MODE_ACCEPTED(name))); assert.ok(!work.input.includes(RULES_PROPOSE)); assert.ok(!work.input.includes(RULES_ACCEPTED)); assert.ok(work.input.includes(WAIT_RULE));
+    assert.equal(work.args.includes('--max-budget-usd'), false);
+    // The reply goes back into the sender's thread with the result, and says no plan waits.
+    processOutbox(sara.ctx);
+    assert.equal(getRecord(record.task.id).task.status.state, TaskState.COMPLETED);
+    assert.ok(!getRecord(record.task.id).reply.text.endsWith(PLAN_WAITS), getRecord(record.task.id).reply.text);
+  });
+}
+
+test('Auto in Ask for approval: the Task a teammate\'s message led to waits for the owner; his own message there counts as his, so his yes approves it and his Full access approves the next', async t => {
   const p = setup(t, 'normal'), sara = teammate(p), teamId = everyTeam()[0].id;
-  saveDefaultMode('full');
   saveTeamAccess(teamId, { handling: 'auto', rules: WAIT_RULE, root: p.root });
   const record = sara.send(HANDOFF, { kind: 'ask' });
-  assert.equal(record.waiting, false); assert.deepEqual(record.accessTeams, [teamId]); assert.deepEqual(sara.events, ['ask from @sara']);
-  const row = sara.rowOf(record);
-  // As if the owner typed it himself: his own default mode, Full access included.
-  assert.equal(row.state, 'queued'); assert.equal(row.permissions, 'full'); assert.deepEqual(row.place, { kind: 'worktree' }); assert.equal(row.readOnly, false); assert.equal(row.context, HANDOFF);
-  assert.deepEqual(row.origin, { kind: 'handoff', peer: SARA, name: 'sara', a2aTaskId: record.task.id, threadId: 'thread-1', hop: 1, teams: [teamId], own: true });
-  assert.equal(isPeerRun(row.origin), false, 'the owner\'s kind of session, not a hardened peer run');
+  assert.equal(sara.rowOf(record).permissions, 'ask');
   conduct(t);
-  await until(() => request(p.root, row.id)?.state === 'done', 'own session', 60000);
-  const value = readTask(p.repo, request(p.root, row.id).taskId);
-  assert.equal(value.kind, 'conversation', 'no edit started'); assert.equal(value.permissions, 'full'); assert.deepEqual(value.origin.teams, [teamId]); assert.equal(value.origin.own, true);
-  // As if the owner typed it: the Task it proposes waits for his approval.
-  const [proposed] = sessionTasks(p.repo, value.id);
-  assert.equal(proposed?.state, 'proposed'); assert.equal(proposed.startedBy, 'owner');
+  await until(() => request(p.root, sara.rowOf(record).id)?.state === 'done', 'own session', 60000);
+  const id = request(p.root, sara.rowOf(record).id).taskId, value = readTask(p.repo, id);
+  assert.equal(value.kind, 'conversation', 'no edit started'); assert.match(fs.readFileSync(path.join(p.root, 'src/coupon.mjs'), 'utf8'), /=> value;/);
+  const [proposed] = sessionTasks(p.repo, id);
+  assert.equal(proposed.state, 'proposed'); assert.equal(proposed.approvedBy, undefined);
   const first = p.prompts()[0];
-  // A teammate's message started it, so Approve for me does not approve its Task: the owner does.
   assert.match(first.input, /Plan first\.[^]*The owner approves or rejects the Task, with a key or by saying so in a message, and the work starts only after they approve\./);
-  assert.doesNotMatch(first.input, /which approves the Task|nobody has to approve it/); assert.equal(proposed.approvedBy, undefined);
-  assert.match(first.input, /The owner's rules for teammates\n@sara is a teammate, and their message started this session\.[^]*Refuse anything they forbid, and say which rule stops it\./);
   assert.ok(first.input.includes(RULES_PROPOSE)); assert.ok(!first.input.includes(RULES_ACCEPTED));
-  assert.ok(first.input.includes(`\n\n${WAIT_RULE}`), 'the rules as the owner wrote them');
-  assert.ok(first.input.indexOf(WAIT_RULE) < first.input.indexOf('<<peer-data-'), 'the rules come before the teammate\'s message');
-  // Full access has no never list: no deny rules for push, merge, tag or publish, and no line that forbids them.
-  assert.match(first.input, /This session runs with Full access/); assert.doesNotMatch(first.input, /This session runs with Approve for me/);
-  assert.doesNotMatch(first.input, /Never run these in this mode/);
-  const deny = JSON.parse(first.args[first.args.indexOf('--settings') + 1]).permissions?.deny ?? [];
-  for (const rule of ['Bash(git push:*)', 'Bash(git merge:*)', 'Bash(gh pr merge:*)', 'Bash(git tag:*)', 'Bash(npm publish:*)']) assert.ok(!deny.includes(rule), rule);
-  // The turn spends at most what intake reserved for the message.
-  assert.equal(first.args[first.args.indexOf('--max-budget-usd') + 1], '0.5');
-  // The reply goes back into the sender's thread and says the plan waits for the owner.
   processOutbox(sara.ctx);
-  assert.equal(getRecord(record.task.id).task.status.state, TaskState.COMPLETED);
   assert.ok(getRecord(record.task.id).reply.text.endsWith(PLAN_WAITS));
-  assert.deepEqual(thread('thread-1').map(line => [line.dir, line.kind]), [['in', 'ask'], ['local', 'held'], ['out', 'answer']]);
-  // The owner approves the Task: its editing turn is told that approval is his acceptance, and has no teammate cap.
-  approveTask(p.repo, value.id);
-  const approved = enqueue(p.root, `Approved the Task: ${proposed.title}`, { continuationTaskId: value.id, approved: true });
-  await until(() => request(p.root, approved.id)?.state === 'done', 'approved Task', 60000);
-  const work = p.prompts().find(row => row.input.includes('this turn does its work'));
-  assert.ok(work, 'the editing turn ran');
-  assert.ok(work.input.includes(RULES_ACCEPTED)); assert.ok(!work.input.includes(RULES_PROPOSE)); assert.ok(work.input.includes(WAIT_RULE));
-  assert.equal(work.args.includes('--max-budget-usd'), false);
+  // The owner types yes in that session: it is his, so it approves the Task, and the edit is told his approval is his acceptance.
+  const yes = enqueue(p.root, 'yes', { continuationTaskId: id, priority: 0 });
+  await until(() => request(p.root, yes.id)?.state === 'done', 'his yes', 60000);
+  assert.equal(sessionTasks(p.repo, id)[0].state, 'done'); assert.equal(sessionTasks(p.repo, id)[0].approvedBy, undefined);
+  const work = p.prompts().find(call => call.input.includes('this turn does its work'));
+  assert.ok(work.input.includes(RULES_ACCEPTED)); assert.ok(!work.input.includes(RULES_PROPOSE)); assert.match(work.input, /The owner approved the Task below, and this turn does its work/);
+  // In another thread her message leads to a Task that waits too. The owner gives that session
+  // Full access and writes there himself: his message is his, so Full access approves the Task and the work goes on.
+  const other = sara.send('Make coupon codes uppercase in the checkout too.', { kind: 'ask', threadId: 'thread-2' });
+  await until(() => request(p.root, sara.rowOf(other).id)?.state === 'done', 'second session', 60000);
+  const second = request(p.root, sara.rowOf(other).id).taskId, waiting = sessionTasks(p.repo, second).at(-1);
+  assert.notEqual(second, id); assert.equal(waiting.state, 'proposed');
+  setPermissions(p.repo, second, 'full');
+  const own = enqueue(p.root, 'Please make the checkout codes uppercase too.', { continuationTaskId: second, priority: 0 });
+  await until(() => request(p.root, own.id)?.state === 'done', 'his message in Full access', 60000);
+  const approved = sessionTasks(p.repo, second).at(-1);
+  assert.deepEqual([approved.id, approved.state, approved.approvedBy], [waiting.id, 'done', 'full']);
+  assert.notEqual(readTask(p.repo, second).kind, 'conversation', 'the edit started');
+  const told = p.prompts().findLast(call => call.input.includes('Please make the checkout codes uppercase too.') && call.input.includes('Task waiting'));
+  assert.match(told.input, /The Task below was written before this session had Full access and still waits\. It needs no approval now\./);
 });
 
 test('once the owner approves the Task a teammate\'s message led to and its work is done, the result goes back to that teammate\'s thread', async t => {
@@ -1167,7 +1210,7 @@ async function homeSession(t, p) {
   p.extra({});
   assert.equal(first.state, 'needs_input'); assert.notEqual(first.kind, 'conversation');
   assert.ok(first.worktree.startsWith(`${web}.elu-code${path.sep}`), first.worktree);
-  saveTask(repo, { ...readTask(repo, first.id), origin: { kind: 'handoff', peer: SARA, name: 'aki', threadId: 'thread-1', own: true } });
+  saveTask(repo, { ...readTask(repo, first.id), origin: { kind: 'handoff', peer: SARA, name: 'rio', threadId: 'thread-1', own: true } });
   return { home, web, repo, id: first.id, worktree: first.worktree, controller: new ProjectController(repo) };
 }
 test('a session whose project is the home folder but that works in a repository runs the owner\'s reply, and the reply continues its Task\'s work with edit access', async t => {

@@ -113,6 +113,12 @@ function environment(t, parent) {
   Object.assign(process.env, values);
   owned(t).files.push(() => { for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } });
 }
+// The user name this computer gives, as USER says, for the test only.
+function userName(t, name) {
+  const previous = { USER: process.env.USER, LOGNAME: process.env.LOGNAME };
+  process.env.USER = name; delete process.env.LOGNAME;
+  t.after(() => { for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } });
+}
 async function view(t, { columns = 160, rows = 40, ...options } = {}) {
   const input = new PassThrough(), output = new PassThrough();
   input.isTTY = output.isTTY = true; input.setRawMode = () => {}; output.columns = columns; output.rows = rows;
@@ -1185,6 +1191,60 @@ test('over a session on my other computer whose Task waits, a plainly typed yes 
   await until(() => pendingRequests(p.root).some(row => row.helps), 'the yes goes to my agent here');
   assert.equal(sent('remoteTask').length, 2); assert.equal(sent('remoteSend').length, 1);
 });
+// A run on my other computer that waits to start there says in its title row what it waits
+// for, in the words its chat says it, never only "starting": it is not at work.
+test('a run that waits to start on my other computer says in its title row what it waits for, at 140 and at 80 columns', async t => {
+  const at = new Date().toISOString(), id = '66666666-6666-4666-8666-666666666666';
+  const p = project(later(t)); environment(t, p.parent);
+  const remote = [{ id, machine: SARA, createdAt: at, lastAt: at, title: 'Check the nightly build', text: 'Check the nightly build', project: 'billing', state: 'starting', queued: true, waits: { on: 'slot', running: 1, limit: 1 }, mode: 'auto', place: 'worktree', steps: [], entries: [], approvals: [] }];
+  const peer = fakePeer({ items: [], mine: [{ key: SARA, mine: true, theirs: true }], remote }), v = await view(t, { columns: 140, rows: 50, repo: repository(p.root), dashboard: true, peer });
+  const board = v.panels.board, header = () => v.panels.header.getText().trim().replace(/ {2}· {2}/g, ' · ');
+  const titled = async (want, what) => { try { await until(() => typeof want === 'string' ? header() === want : want.test(header()), what); } catch { assert.fail(`${what}: "${header()}"`); } };
+  const redraw = (columns, rows) => { v.output.columns = columns; v.output.rows = rows; v.output.emit('resize'); };
+  await until(() => board.items.map(plainItem).some(row => /Check the nightly build/.test(row)), 'its row');
+  board.focus(); selectRow(board, /Check the nightly build/);
+  // Its chat says the wait in a sentence; the title row says it in a few words, never "starting".
+  await until(() => /Waiting for a free slot: 1 of 1 session is running\. \/slots on @sara-box changes it\./.test(v.panels.chat.getText()), 'its chat says what it waits for');
+  await titled('billing · Check the nightly build · waiting for a free slot · Auto', 'the title at 140 columns');
+  redraw(80, 24); await until(() => v.current.screen.width === 80, '80 columns');
+  // The request is cut to the room left, at a word; the wait and the mode stay whole.
+  await titled(/^Check the[\w ]*… · waiting for a free slot · Auto$/, 'the title at 80 columns');
+  // Each other wait in its own words.
+  Object.assign(remote[0], { waits: { on: 'teammates', running: 1, limit: 1 } }); redraw(140, 50);
+  await titled('billing · Check the nightly build · waiting for a teammate slot · Auto', 'a teammate slot');
+  Object.assign(remote[0], { waits: { on: 'turn' } }); redraw(140, 50);
+  await titled('billing · Check the nightly build · waiting for the current turn · Auto', 'the current turn of its session');
+  Object.assign(remote[0], { waits: { on: 'time', until: new Date(Date.now() + 300000).toISOString(), why: 'The model was busy.' } }); redraw(140, 50);
+  await titled('billing · Check the nightly build · waiting to try again · Auto', 'a time');
+  // One kept here until that computer connects says so, as its row does.
+  Object.assign(remote[0], { waits: undefined, queued: undefined, unsent: true }); redraw(140, 50);
+  await titled('billing · Check the nightly build · not sent yet · Auto', 'not sent yet');
+  // Once it starts there it is at work.
+  Object.assign(remote[0], { unsent: undefined, state: 'running' }); redraw(140, 50);
+  await titled('billing · Check the nightly build · working · Auto', 'at work');
+});
+// A session on my other computer beside the list is named over it as a session here is: its
+// project, its request, its state and its mode, cut to the room as a session here is.
+test('a session on my other computer beside the list has its title row: project, request, state and mode, at 140 and at 80 columns', async t => {
+  const at = new Date().toISOString(), id = '55555555-5555-4555-8555-555555555555';
+  const p = project(later(t)); environment(t, p.parent);
+  const remote = [{ id, machine: SARA, createdAt: at, lastAt: at, title: 'Round the invoice totals to cents before they are saved', project: 'billing', state: 'running', mode: 'auto', place: 'worktree', steps: [], entries: [], approvals: [] }];
+  const peer = fakePeer({ items: [], mine: [{ key: SARA, mine: true, theirs: true }], remote }), v = await view(t, { columns: 140, rows: 50, repo: repository(p.root), dashboard: true, peer });
+  const board = v.panels.board, header = () => v.panels.header.getText().trim().replace(/ {2}· {2}/g, ' · ');
+  const titled = async (want, what) => { try { await until(() => typeof want === 'string' ? header() === want : want.test(header()), what); } catch { assert.fail(`${what}: "${header()}"`); } };
+  await until(() => board.items.map(plainItem).some(row => /Round the invoice totals/.test(row)), 'its row');
+  board.focus(); selectRow(board, /Round the invoice totals/);
+  await until(() => /Runs on @sara-box/.test(v.panels.chat.getText()), 'its chat beside the list');
+  await titled('billing · Round the invoice totals to cents before they are saved · working · Auto', 'the title at 140 columns');
+  // At 80 columns the request is cut at a word to the room left; the state and the mode stay whole.
+  v.output.columns = 80; v.output.rows = 24; v.output.emit('resize');
+  await until(() => v.current.screen.width === 80, '80 columns'); await titled(/^Round the invoice[\w ]*… · working · Auto$/, 'the title at 80 columns');
+  // What that computer says next shows here: it waits for an approval in Full access, in my checkout there.
+  // The longer state and badge leave no room for the project, which goes first, as for a session here.
+  Object.assign(remote[0], { state: 'running', mode: 'full', place: 'here', approvals: [{ id: 'run-9-a', summary: 'Run: npm test', at }] });
+  v.output.columns = 140; v.output.rows = 50; v.output.emit('resize');
+  await titled('Round the invoice totals to cents before they are saved · needs approval · Full Here', 'the title as it waits');
+});
 test("over a session on my other computer that waits for my answer, a typed yes goes to that session and no session is made here; its row keeps the cursor when it goes on, and only @here asks my agent here", async t => {
   const T = Date.now(), at = new Date(T).toISOString(), stamp = minutes => new Date(T - minutes * 60000).toISOString(), id = '44444444-4444-4444-8444-444444444444';
   const waits = (n, minutes, title) => ({ id: `${String(n).repeat(8)}-${String(n).repeat(4)}-4${String(n).repeat(3)}-8${String(n).repeat(3)}-${String(n).repeat(12)}`, machine: SARA, createdAt: stamp(minutes), lastAt: stamp(minutes), title, state: 'needs_input', question: 'Which one?', choices: ['A', 'B'], steps: [], entries: [{ role: 'You', at: stamp(minutes), text: title }], approvals: [] });
@@ -1576,7 +1636,7 @@ test('Sessions names a message from my other computer by the name it shows under
 
 test('/model NAME and a message over a session on my other computer go there as typed: that computer reads the name, and the status names the model it took', async t => {
   const at = new Date().toISOString(), id = '55555555-5555-4555-8555-555555555555';
-  const remote = [{ id, machine: SARA, createdAt: at, lastAt: at, title: 'Nested routes e2e handoff', state: 'running', steps: [], entries: [{ role: 'You', at, text: 'Start the handoff' }], approvals: [] }];
+  const remote = [{ id, machine: SARA, createdAt: at, lastAt: at, title: 'Invoice page test handoff', state: 'running', steps: [], entries: [{ role: 'You', at, text: 'Start the handoff' }], approvals: [] }];
   const p = project(later(t)); environment(t, p.parent);
   const before = process.env.PATH; process.env.PATH = fakeClis(p.parent).env.PATH; owned(t).files.push(() => { process.env.PATH = before; });
   // What the other computer answers: the model it read at the start of the text, by the name it shows it by, and whether words came after it.
@@ -1588,8 +1648,8 @@ test('/model NAME and a message over a session on my other computer go there as 
   const answer = peer.awaitCommand; peer.awaitCommand = async (...args) => { const out = await answer(...args), command = peer.last; return command.type === 'remoteSend' && command.model ? { id, model: took(command.text)[1], sent: command.text.replace(took(command.text)[0], '').trim() !== '' } : out; };
   const v = await view(t, { repo: repository(p.root), dashboard: true, peer });
   const board = v.panels.board, sentThere = () => peer.sent().filter(row => row.type === 'remoteSend'), status = () => v.panels.status.getText().replace(/\s+/g, ' ');
-  const over = async () => { board.focus(); selectRow(board, /Nested routes e2e handoff/); await until(() => /@sara-box/.test(v.panels.ask._label.getText()), 'the box writes about the session there'); };
-  await until(() => board.items.map(plainItem).some(row => /Nested routes e2e handoff/.test(row)), 'the row of the session there');
+  const over = async () => { board.focus(); selectRow(board, /Invoice page test handoff/); await until(() => /@sara-box/.test(v.panels.ask._label.getText()), 'the box writes about the session there'); };
+  await until(() => board.items.map(plainItem).some(row => /Invoice page test handoff/.test(row)), 'the row of the session there');
   await over(); await send(v, '/model opus can you check which files that session is asking about and instruction to start the handoff');
   await until(() => sentThere().length === 1, 'sent there');
   assert.deepEqual(sentThere()[0], { type: 'remoteSend', id, text: 'opus can you check which files that session is asking about and instruction to start the handoff', model: true, typed: true });
@@ -2277,9 +2337,12 @@ test('a first /join asks to join and what teammates can do, then your name, then
   const peer = fakePeer({ teamless: true, running: false }); let me = null;
   peer.identity = ({ create, name } = {}) => { if (create) { peer.calls.push(['identity', name]); me = { name }; return me; } if (!me) throw new Error('Create your peer identity first with elu id --name NAME.'); return me; };
   const v = await view(t, { repo: repository(p.root), peer });
+  // This computer's user name was made from an email address whose plain part cannot be told: the field is left for the owner.
+  userName(t, 'sam_example_com');
   await send(v, '/join k7qm-x2pd-9fhw'); await answerJoin(v); await until(() => modal(v, 'Your name'), 'name prompt');
   const field = modal(v, 'Your name').children.find(child => child.type === 'textbox');
-  await until(() => field.__listener, 'name input'); field.setValue('ana'); field.submit();
+  await until(() => field.__listener, 'name input'); assert.equal(field.getValue(), '', 'no part of an email address is offered');
+  field.setValue('ana'); field.submit();
   await until(() => /Joined Docs with sara\./.test(v.panels.status.getText()), 'joined after the name');
   assert.deepEqual(peer.calls.find(row => row[0] === 'identity'), ['identity', 'ana']);
   assert.ok(peer.calls.findIndex(row => row[0] === 'identity') < peer.calls.findIndex(row => row[0] === 'joinTeam'));
@@ -2348,9 +2411,12 @@ test('a new person: /invite asks their name, makes the team, starts the daemon, 
   // On no team, opening the app starts nothing.
   await new Promise(resolve => setTimeout(resolve, 300));
   assert.equal(peer.calls.filter(row => row[0] === 'startPeer').length, 0, 'nothing started before the invite');
+  // This computer's user name was made from an email address (name_gmail_com): only its plain part is offered.
+  userName(t, 'ana_gmail_com');
   await send(v, '/invite'); await choose(v, 'Invite', /^Someone new/); await until(() => modal(v, 'Your name'), 'name prompt');
   const field = modal(v, 'Your name').children.find(child => child.type === 'textbox');
-  await until(() => field.__listener, 'name input'); field.setValue('ana'); field.submit();
+  await until(() => field.__listener, 'name input'); assert.equal(field.getValue(), 'ana', 'the plain part, never the address');
+  field.submit();
   await choose(v, 'What teammates can do here', /^Auto/); await closeDialog(v, 'Rules for teammates', '');
   await until(() => modal(v, 'Team invite'), 'invite');
   const order = ['identity', 'createTeam', 'startPeer', 'createInvite'].map(name => peer.calls.findIndex(row => row[0] === name));
@@ -2497,6 +2563,23 @@ test('the Team list says how a teammate is reached in the room its row has: thro
   assert.match(row(through, 28), /^● @sara online · through/); assert.ok(row(through, 28).length <= 28, 'cut to the row, still online');
   assert.equal(row(blocked, 44, { trusted: [SARA] }), '○ @sara offline · no way through · trusted');
   assert.equal(row(blocked, 51, { trusted: [SARA] }), '○ @sara offline · nobody reaches you both · trusted');
+});
+
+// The owner's report: at 140 columns a long teammate name cut how they are reached to
+// "online ·…". The name gives way first: the reason keeps the room a name of 12 columns
+// leaves, in the longest words that fit there, and the name is cut to what is left.
+test('a long teammate name gives way to how they are reached: the name is cut, the computer it goes through is named whole', () => {
+  const team = (name, member) => ({ key: ME, teams: [{ id: 'team-1', name: 'Core', members: [{ key: ME, name: 'ana' }, { key: SARA, name, ...member }], channels: [] }] });
+  const row = (name, member, width, extra = {}) => visible(chatBar({ status: team(name, member), items: [], ...extra }, width, false).find(item => item.value?.type === 'member').line);
+  const through = { online: true, path: 'relayed', via: "li's computer" }, blocked = { online: false, reach: 'blocked' };
+  // The list beside the chat at 140 columns is 40 wide.
+  assert.equal(row('alexandra-whitfield', through, 40), "● @alexandra-whit… through li's computer");
+  assert.equal(row('alexandra-whitfield', through, 60), "● @alexandra-whitfield online · through li's computer", 'with room, whole');
+  assert.equal(row('alexandra-whitfield', blocked, 40), '○ @alexandra-w… offline · no way through');
+  assert.equal(row('alexandra-whitfield', through, 44, { trusted: [SARA] }), "● @alexandr… through li's computer · trusted", 'with less room the name gives more');
+  for (const width of [28, 34, 40, 44]) assert.ok(row('alexandra-whitfield', through, width).length <= width, `fits ${width}`);
+  // A short name is never cut for it.
+  assert.equal(row('sara', through, 40), "● @sara online · through li's computer");
 });
 
 test('quitting ELU while /join is still looking ends that join first, as Esc does, and saves nothing', async t => {

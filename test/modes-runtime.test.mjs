@@ -245,7 +245,7 @@ test('a schedule gets Full access only when the owner picked it; an automatic re
 test("a bot's own scheduled turn runs with Full access in a Full access session; the model and the bot are told about /schedule", async t => {
   const f = setup(t, 'answer');
   saveBot({ name: 'nightly', vendor: 'claude', instructions: 'Tidy the notes.', schedule: 'every 1h' });
-  const chat = await f.controller.ask('Run the backlog check every 3 hours.', null, { bots: ['nightly'], permissions: 'full' }).finished;
+  const chat = await f.controller.ask('Check the build every 3 hours.', null, { bots: ['nightly'], permissions: 'full' }).finished;
   assert.equal(chat.permissions, 'full');
   assert.match(SCHEDULE_NOTE, /typing \/schedule, a time such as every 3h, and the message/); assert.match(SCHEDULE_NOTE, /you cannot create schedules or cron jobs yourself/);
   assert.ok(f.inputs()[0].input.includes(SCHEDULE_NOTE), "the model's answer turn is told");
@@ -316,7 +316,7 @@ test('place branch runs in a worktree with that branch checked out, as it is', a
   await assert.rejects(f.controller.ask('Normalize coupon codes', null, { permissions: 'auto', place: 'branch:feat/missing' }).finished, /Branch not found: feat\/missing/);
 });
 
-test('place here runs in the checkout itself with a dirty tree; checks keep the network on in full', async t => {
+test('place here runs in the checkout itself with a dirty tree; in full the checks run with no sandbox', async t => {
   const f = setup(t);
   fs.writeFileSync(path.join(f.root, 'src/owner.mjs'), 'export const owner = true;\n');
   const head = git(f.root, ['rev-parse', 'HEAD']);
@@ -331,9 +331,9 @@ test('place here runs in the checkout itself with a dirty tree; checks keep the 
   const names = task.evidence.results.map(row => row.name);
   assert.ok(!names.includes('secret-paths') && names.includes('no-deleted-tests'));
   for (const name of ['changed-lines', 'no-binary-changes', 'protected-paths', 'unchanged-scripts', 'no-dependency-changes']) assert.equal(names.includes(name), false, `${name} is skipped in full`);
-  const sandboxed = f.calls().filter(call => call.vendor === 'codex' && call.args[0] === 'sandbox' && call.args.includes('--'));
-  assert.ok(sandboxed.length >= 1, 'the checks ran in the sandbox');
-  assert.ok(sandboxed.every(call => call.args.some(arg => arg.includes('network={enabled=true}'))), 'full keeps the network on for checks');
+  // Full access is everything: the checks ran, and passed, as in the owner's terminal, with the network and no sandbox.
+  assert.ok(task.evidence.results.some(row => row.logFile && row.status === 'passed'), JSON.stringify(task.evidence.results));
+  assert.deepEqual(f.calls().filter(call => call.vendor === 'codex' && call.args[0] === 'sandbox'), [], 'no check ran in a sandbox');
   // A `here` task on the default branch has no branch of its own to publish; nothing is committed first.
   await assert.rejects(f.controller.pushPlan(task.id), /default branch/);
   assert.equal(git(f.root, ['rev-parse', 'HEAD']), head);
@@ -535,6 +535,11 @@ test('a quiet turn in Full access or Approve for me is carried on by ELU once, w
     assert.deepEqual(entries.map(entry => entry.role === 'ELU' ? 'line' : entry.lead ? 'reply' : 'you'), ['you', 'line', 'reply']);
     assert.deepEqual(placed.before.get(line), [task.runs[0]]); assert.deepEqual(placed.owned.get(entries.at(-1)), [task.runs[1]]);
   }
+  // A session a teammate's message started as the owner's own (team access Auto) is carried on as his own is.
+  const before = f.leads().length, origin = { kind: 'handoff', peer: 'b'.repeat(64), name: 'sara', a2aTaskId: 'task-1', threadId: 'thread-1', hop: 1, own: true };
+  const theirs = await f.controller.ask('Work on the handoff from @sara shown in the peer data block.', null, { origin, context: 'Where is coupon normalization?', permissions: 'full' }).finished;
+  assert.equal(theirs.state, 'answered', theirs.error?.message); assert.deepEqual(eluLines(theirs), ['No output for 2 seconds. ELU told it to carry on.']);
+  assert.equal(f.leads().length - before, 2, 'the turn that went quiet, and the one started in its place');
 });
 
 test('a turn that goes quiet again after ELU carried it on stops with one line, keeps its edits, and a frozen 900 reads as the default', async t => {
@@ -831,7 +836,7 @@ test('a rule kept once answers the next session; defaults never ask; the never l
   assert.deepEqual(theirs.asked.map(row => [row.summary, row.rules]), [['Run: npm test outside the sandbox', 'defaults']]);
   assert.deepEqual(theirs.task.approvals.map(row => [row.decision, row.by ?? null]), [['allow', 'default'], ['deny', null]]);
   // One the owner's own other computer started (origin.mine, lib/peer/remote.mjs) uses his rules.
-  const mine = await settle(f.controller.ask('Run the tests.', null, { mine: { machine: 'c'.repeat(64), name: 'aki', remoteId: '0f0e0d0c-0b0a-4908-8706-050403020100' }, permissions: 'ask' }));
+  const mine = await settle(f.controller.ask('Run the tests.', null, { mine: { machine: 'c'.repeat(64), name: 'rio', remoteId: '0f0e0d0c-0b0a-4908-8706-050403020100' }, permissions: 'ask' }));
   assert.deepEqual(mine.asked, []); assert.equal(mine.task.origin.mine, true); assert.equal(mine.task.origin.peer, undefined);
   assert.deepEqual(mine.task.approvals.map(row => [row.decision, row.by, row.rule]), [['allow', 'default', 'git status'], ['allow', 'rule', 'npm test']]);
 });

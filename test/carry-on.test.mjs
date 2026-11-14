@@ -96,24 +96,39 @@ test('carried on once: a second window, or the app opened again before the turn 
   await until(() => readTask(p.repo, id).state === 'answered', 'the carried on turn');
 });
 
-test('in Ask for approval and Read only a session stopped at the cap waits for a reply; so do one the owner archived, a teammate\'s, one stopped for any other reason, and one whose reply already waits for its turn', async t => {
+test('in Ask for approval and Read only a session stopped at the cap waits for a reply; so do one the owner archived, one stopped for any other reason, and one whose reply already waits for its turn', async t => {
   const p = setup(t), conductor = conduct(t);
-  const ask = await capStopped(t, p, 'ask'), quiet = await capStopped(t, p, 'full'), theirs = await capStopped(t, p, 'full'), locked = await capStopped(t, p, 'full'), archived = await capStopped(t, p, 'auto'), replied = await capStopped(t, p, 'full');
+  const ask = await capStopped(t, p, 'ask'), quiet = await capStopped(t, p, 'full'), locked = await capStopped(t, p, 'full'), archived = await capStopped(t, p, 'auto'), replied = await capStopped(t, p, 'full');
   await conductor.stop(); LIVE.get(t).length = 0;
   const change = (id, fields) => { const task = readTask(p.repo, id); Object.assign(task, fields); saveTask(p.repo, task); };
   // Stopped by the quiet limit, which this version still has: the owner's reply carries it on.
   change(quiet, { error: { message: 'Stopped after 10 minutes with no output. Reply to carry on.', cause: 'quiet', timedOut: true, stoppedBy: 'quiet' } });
-  change(theirs, { origin: { kind: 'handoff', peer: 'b'.repeat(64), name: 'sara', threadId: 'thread-1', own: true } });
   { const task = readTask(p.repo, locked); delete task.permissions; saveTask(p.repo, task); }
   await new Promise(resolve => setTimeout(resolve, 5)); closeSession(p.repo, archived);
   // The owner replied before the app was closed, and the reply has not had its turn: that reply carries it on.
   enqueue(p.root, 'Go on', { continuationTaskId: replied });
   const sent = [];
   assert.equal(carryOnCapped({ enqueue: (...args) => { sent.push(args); } }), 0); assert.deepEqual(sent, []);
-  for (const id of [ask, theirs, locked, archived, replied]) assert.equal(stopLine(readTask(p.repo, id)).text, 'Stopped by a time limit an earlier version had. Reply to carry on.', id);
+  for (const id of [ask, locked, archived, replied]) assert.equal(stopLine(readTask(p.repo, id)).text, 'Stopped by a time limit an earlier version had. Reply to carry on.', id);
   assert.equal(stopLine(readTask(p.repo, quiet)).text, 'Stopped after 10 minutes with no output. Reply to carry on.');
   assert.equal(readTask(p.repo, replied).error.carried, undefined, 'left for the app\'s next open, should that reply be taken back');
   // The owner gives the first one Full access: the app's next open carries it on.
   change(ask, { permissions: 'full' });
   assert.equal(carryOnCapped({ enqueue: (...args) => { sent.push(args); } }), 1); assert.deepEqual(sent.map(args => args[2].continuationTaskId), [ask]);
+});
+
+// Team access Auto starts a session as if the owner had typed the teammate's message: one an
+// earlier version stopped at the cap in Full access is carried on as his own are, once.
+test('a session a teammate\'s message started as the owner\'s own, stopped at the cap in Full access, is carried on as his own', async t => {
+  const p = setup(t), first = conduct(t), id = await capStopped(t, p, 'full');
+  await first.stop(); LIVE.get(t).length = 0;
+  { const task = readTask(p.repo, id); task.origin = { kind: 'handoff', peer: 'b'.repeat(64), name: 'sara', a2aTaskId: 'task-1', threadId: 'thread-1', hop: 1, own: true }; saveTask(p.repo, task); }
+  const sent = [], queue = (...args) => { sent.push(args); return enqueue(...args); };
+  assert.equal(carryOnCapped({ enqueue: queue }), 1); assert.equal(carryOnCapped({ enqueue: queue }), 0, 'once');
+  assert.deepEqual(sent, [[p.root, CAP_CARRY_TEXT, { continuationTaskId: id, priority: 0 }]]);
+  const before = p.calls().length; conduct(t);
+  await until(() => readTask(p.repo, id).state === 'answered', 'the carried on turn');
+  const task = readTask(p.repo, id);
+  assert.equal(task.error, null); assert.equal(stopLine(task), null); assert.equal(p.calls().length - before, 1, 'one turn carried it on');
+  assert.match(p.inputs().at(-1).input, /Carry on where you stopped\. \(ELU sent this, not the owner/);
 });

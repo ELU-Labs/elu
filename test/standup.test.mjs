@@ -70,7 +70,7 @@ test('@everyone and a standup question are read as the round asks them', () => {
   assert.throws(() => checkStandupFor({ round, by: '@kim', peer: 'not-a-key' }), /by key/);
 });
 
-test('who is asked: open sessions with an agent; archived, Done, quiet, a Standup and a teammate session are not', () => {
+test('who is asked: open sessions with an agent, one a teammate\'s message started as the owner\'s own too; archived, Done, quiet, a Standup and a teammate\'s question are not', () => {
   const now = Date.parse('2026-11-12T12:00:00Z'), day = 86400000, at = ms => new Date(ms).toISOString();
   const board = { cards: [], done: ['2', '3'], archived: ['2'], closed: { 2: at(now - 2 * day), 3: at(now - 2 * day) } };
   const task = (id, fields = {}) => ({ id, createdAt: at(now - 30 * day), state: 'answered', runs: [{ role: 'lead', at: at(now - day) }], messages: [], ...fields });
@@ -82,6 +82,9 @@ test('who is asked: open sessions with an agent; archived, Done, quiet, a Standu
   assert.equal(standupLeftOut(board, task('6', { state: 'needs_input', runs: [{ role: 'lead', at: at(now - 9 * day) }] }), { now, waits: { question: 'asks you' } }), null, 'waiting for him');
   assert.equal(standupLeftOut(board, task('7', { standup: { rounds: [] } }), { now }), 'standup');
   assert.equal(standupLeftOut(board, task('8', { origin: { peer: 'a'.repeat(64), kind: 'ask', name: 'kim' } }), { now }), 'teammate');
+  // Team access Auto, or his y: as if he typed it. And one he took on in a mode he picked (w).
+  assert.equal(standupLeftOut(board, task('11', { origin: { peer: 'a'.repeat(64), kind: 'handoff', name: 'kim', own: true } }), { now }), null, 'his own kind of session');
+  assert.equal(standupLeftOut(board, task('12', { origin: { peer: 'a'.repeat(64), kind: 'handoff', name: 'kim' } }), { now }), null, 'taken on in a mode he picked');
   assert.equal(standupLeftOut(board, task('9', { runs: [] }), { now }), 'no agent');
   // A standup answered last week is not activity: the session stays quiet.
   assert.equal(standupLeftOut(board, task('10', { runs: [{ role: 'lead', at: at(now - 9 * day) }, { role: 'lead', at: at(now - day), standup: 'standup-0000000000000000' }] }), { now }), 'quiet');
@@ -108,6 +111,14 @@ test('what leaves for a teammate: paths cut, and an update that may hold a secre
   assert.deepEqual(teammateAnswer(`Screenshot saved in '/Users/sam${spaced}', tests next.`, { root: '/srv/shop' }), { text: "Screenshot saved in '[path]', tests next.", held: false });
   // A base64 key split by its own "/" under a folder named like secrets is held.
   assert.deepEqual(teammateAnswer(`The deploy key is config/secrets/${keyLike('wJalrXUtnFEMI/K7MDENG/', 'bPxRfiCYEXAMPLEKEY')}.`, { root: '/srv/shop' }), { text: null, held: true });
+});
+
+test('a relative path to a place outside the project leaves for a teammate as [path]; one in the project goes as written', t => {
+  const { root } = project(t);
+  const said = 'Done: rounding fix in src/coupon.mjs and ./test/coupon.test.mjs. Screenshot: Support/CleanShot/media/media_8Qw4Rt2LmZ/CleanShot 2026-11-12 at 10.14.07@2x.png. Notes in ../notes/round.md and tmp/elu-Qw8RtZ/notes/round.mjs. See github.com/example/shop/blob/main/README.md and/or the feat/task-1 branch. Next: rerun the coupon test.';
+  assert.deepEqual(teammateAnswer(said, { root }), { held: false, text: 'Done: rounding fix in src/coupon.mjs and ./test/coupon.test.mjs. Screenshot: [path]. Notes in [path] and [path]. See github.com/example/shop/blob/main/README.md and/or the feat/task-1 branch. Next: rerun the coupon test.' });
+  // In quotes too.
+  assert.equal(teammateAnswer("Saved 'Support/CleanShot/media/Shot 2.png' and \"src/coupon.mjs\".", { root }).text, "Saved '[path]' and \"src/coupon.mjs\".");
 });
 
 test("the Standup's model reads every update whole, newest first; only a model that says they are too long for it is given fewer", () => {
@@ -155,6 +166,25 @@ test('the answer turn is read-only: the session keeps its state, Task, vendor se
   assert.match(turn.input, /This turn only answers\. Change nothing/);
   assert.ok(!turn.args.includes('--mcp-config') || !turn.args.join(' ').includes('kanban'), 'no Kanban tools in an answer turn');
   // Its own next turn does not see the standup as part of its work.
+  await f.controller.ask('And the tests?', task.id).finished;
+  assert.doesNotMatch(inputs(f.fake).at(-1).input, /You ask: standup|Sent to your Standup/);
+});
+
+// Team access Auto starts a session as if the owner had typed the teammate's message: it is
+// his own, so it answers a standup as his own sessions do, and its work never reads the standup.
+test('a session a teammate\'s message started as the owner\'s own answers a standup as his own do, and its next turn does not see it', async t => {
+  const f = setup(t);
+  const origin = { kind: 'handoff', peer: 'b'.repeat(64), name: 'sara', a2aTaskId: 'task-1', threadId: 'thread-1', hop: 1, own: true };
+  const task = await f.controller.ask('Work on the handoff from @sara shown in the peer data block.', null, { origin, context: 'How are coupons normalized?', permissions: 'ask' }).finished;
+  assert.equal(readTask(f.repo, task.id).origin.own, true);
+  assert.equal(standupLeftOut(readBoard(f.repo), readTask(f.repo, task.id)), null, 'a round asks it');
+  const round = newRound();
+  await f.controller.ask(STANDUP_QUESTION, task.id, { standupFor: { round, by: 'You' } }).finished;
+  const rows = readTask(f.repo, task.id).messages.filter(row => row.standup === round);
+  assert.deepEqual(rows.map(row => row.line ? row.text : 'update'), ['You ask: standup', 'update', 'Sent to your Standup']);
+  assert.equal(rows[1].answer, true);
+  assert.match(inputs(f.fake).at(-1).input, /This turn only answers\. Change nothing/);
+  // His next message there: the standup is not part of its work.
   await f.controller.ask('And the tests?', task.id).finished;
   assert.doesNotMatch(inputs(f.fake).at(-1).input, /You ask: standup|Sent to your Standup/);
 });
