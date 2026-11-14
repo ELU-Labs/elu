@@ -374,6 +374,54 @@ test('what a turn does on my other computer shows here step by step, then folds 
   assert.match(glue.view(remoteRow(old, 'devbox'), 80), /Working on @devbox\n\nmodel: Read src\/coupon\.mjs/);
 });
 
+// A turn there whose program prints only when it ends (Antigravity where ACP is not proven,
+// or could not start) has no step to send. Its run goes with the program's name, and the view
+// here counts its time and says so, as the chat there does; the line goes when the run ends.
+test('a turn on my other computer that prints only when it ends shows here how long it has worked and that the program reports at the end', async t => {
+  const { team, laptop, devbox } = machines(t);
+  const project = withHome(devbox.home, () => { const project = registeredProject(t); saveTeamAccess(team.teamId, { root: project.root }); markMine(devbox.identity.key, laptop.identity.key); noteTheirs(laptop.identity.key, true); return project; });
+  withHome(laptop.home, () => { markMine(laptop.identity.key, devbox.identity.key); noteTheirs(devbox.identity.key, true); });
+  const toHost = connection(laptop.identity.key), toViewer = connection(devbox.identity.key);
+  const hostCtx = context(devbox.identity, { [laptop.identity.key]: toHost }), viewCtx = context(laptop.identity, { [devbox.identity.key]: toViewer });
+  const host = hostMethods(hostCtx), viewer = viewMethods(viewCtx);
+  toViewer.request = (method, params) => withHome(devbox.home, () => host[method](params, toHost));
+  const started = await withHome(laptop.home, () => remoteCommand(viewCtx, { type: 'remoteStart', to: devbox.identity.key, text: 'Why do coupons fail?', permissions: 'full' }));
+  const viewed = () => withHome(laptop.home, () => remoteSessions().find(row => row.id === started.id));
+  let given = 0;
+  const tick = async () => {
+    withHome(devbox.home, () => hostTick(hostCtx));
+    const pushes = toHost.sent.filter(([method]) => method === 'elu.remote.events');
+    for (const [, params] of pushes.slice(given)) withHome(laptop.home, () => viewer['elu.remote.events'](params, toViewer));
+    given = pushes.length;
+    if (viewed().behind) await withHome(laptop.home, () => viewTick(viewCtx));
+  };
+  await tick();
+  // The session there is a minute into a headless turn: its log is empty, and the session says its run prints at the end.
+  const { repo } = withHome(devbox.home, () => liveTask(project.root, { id: '1', goal: 'Why do coupons fail?', state: 'running' }));
+  const log = path.join(taskDir(repo, '1'), 'lead-1.log'), startedAt = new Date(Date.now() - 65000).toISOString();
+  fs.writeFileSync(log, '');
+  withHome(devbox.home, () => { saveTask(repo, { ...readTask(repo, '1'), activeLog: log, activeSince: startedAt, activeSilent: { log, name: 'Antigravity' } }); const [request] = pendingRequests(project.root); updateRequest(project.root, request.id, { state: 'running', taskId: '1' }); });
+  await tick();
+  const glue = remoteGlue({ facade: { mineRows: () => [], remoteSessions: () => [] }, peerRead: () => null, peerCommand: async () => ({}), chatMessage: ({ title, text }) => `${title}\n${text}`, ink: text => text, colour: false, stepsShown: () => false });
+  const drawn = () => glue.view(remoteRow(viewed(), 'devbox'), 80);
+  assert.match(drawn(), /Working on @devbox\n\n1m \d+s so far\. Antigravity reports only when it ends\./, 'the time it has worked, and why no step shows');
+  const sent = () => toHost.sent.filter(([method]) => method === 'elu.remote.events').flatMap(([, params]) => params.items.flatMap(item => item.events)).filter(event => event.type === 'run');
+  assert.deepEqual(sent().map(event => [event.silent, event.count, event.at]), [['Antigravity', 0, null]], 'the run goes once, with its program\'s name');
+  assert.ok(!JSON.stringify(sent()).includes(path.dirname(log)), 'no path of that computer goes');
+  // A run of another turn there that shows its steps is not marked: an older log named by the flag does not count.
+  withHome(devbox.home, () => saveTask(repo, { ...readTask(repo, '1'), activeSilent: { log: path.join(taskDir(repo, '1'), 'lead-0.log'), name: 'Antigravity' } }));
+  await tick();
+  assert.doesNotMatch(drawn(), /reports only when it ends/, 'the flag names another run');
+  withHome(devbox.home, () => saveTask(repo, { ...readTask(repo, '1'), activeSilent: { log, name: 'Antigravity' } }));
+  await tick();
+  assert.match(drawn(), /Antigravity reports only when it ends\./);
+  // The run ends there: the line goes with it.
+  withHome(devbox.home, () => { const { activeSilent: _silent, ...task } = readTask(repo, '1'); saveTask(repo, { ...task, state: 'answered', activeRole: null, activeLog: null, runs: [{ role: 'lead', vendor: 'agy', logFile: log, code: 0, startedAt, at: new Date().toISOString() }] }); });
+  await tick();
+  assert.doesNotMatch(drawn(), /reports only when it ends|Working on @devbox/);
+  assert.equal(viewed().runs.at(-1).silent, undefined); assert.ok(viewed().runs.at(-1).at, 'the run ended here too');
+});
+
 // The owner watches his devbox sessions from his Mac, and saw "is working" for ten minutes with
 // nothing else. What real Claude Code 2.1.322 sends in a long turn (rows in their real
 // shapes, made-up content) shows here as it does there: a thought counted in tokens, how long

@@ -2,12 +2,22 @@
 // copies it to a bin folder (adding the node shebang) next to fake.json, which holds the
 // test's mode, the files it records to, and an `agy` object: signedIn (default true),
 // ignoreDenies (a broken vendor that writes anyway), noPermissionRequest (an ACP server
-// that never asks). Run from test/fakes/ directly, with no fake.json beside it, it exits 2:
+// that never asks), asksDenied (an ACP server that asks about what its rules deny, where it
+// should refuse by itself), acpEditsFreely (an ACP server that edits the workspace without
+// reading its rules), acpFails (`agy acp` ends at once, as a release without it would),
+// acpNoModels (an ACP session that names no model and takes none), noUsage (an ACP turn
+// that ends without its tokens), pace (milliseconds a headless run waits before it prints,
+// and an ACP run before each of its steps). Run from test/fakes/ directly, with no fake.json beside it, it exits 2:
 // no path may reach the source file as a program. It honors what the adapter relies on:
 // the private HOME's settings.json and hooks.json (the hook command really runs),
 // --sandbox, --dangerously-skip-permissions, --conversation under
 // <HOME>/.gemini/antigravity-cli/brain, soft-denies in -p (exit 0, a stderr notice naming
-// the tool), the /usage sign-in probe, and `acp` with session/request_permission.
+// the tool), the /usage sign-in probe, and `acp`: every tool call goes out as a session
+// update, when it starts and when it ends, and session/request_permission asks. A session
+// with no mode set reviews: it asks before each command and each write that no rule allows.
+// An ACP session names its model as the protocol does, a `model` config option changed with
+// session/set_config_option, keeps it with the conversation, and ends each turn with the
+// protocol's `usage`. Headless, --model names the model and the output repeats it.
 import fs from 'node:fs'; import path from 'node:path'; import crypto from 'node:crypto'; import readline from 'node:readline'; import { spawnSync } from 'node:child_process';
 const args = process.argv.slice(2);
 let cfg = null; try { cfg = JSON.parse(fs.readFileSync(path.join(path.dirname(process.argv[1]), 'fake.json'), 'utf8')); } catch { /* Not installed as a test CLI. */ }
@@ -25,6 +35,8 @@ const flag = name => { const at = args.indexOf(name); return at >= 0 ? args[at +
 const notice = (tool, rule) => process.stderr.write(`agy: soft-denied ${tool} (${rule})\n`);
 const ACTION = { write_to_file: 'write_file', run_command: 'command', read_url: 'read_url', search_web: null };
 const KIND = { write_to_file: 'edit', run_command: 'execute', read_url: 'fetch', search_web: 'search' };
+const pause = () => new Promise(resolve => setTimeout(resolve, Number.isFinite(agy.pace) ? agy.pace : 0));
+const MODELS = ['gemini-3-pro', 'gemini-3-flash'];
 
 // The hooks.json PreToolUse entries whose matcher names the tool run, with the call on stdin.
 function hookDecision(tool, input, cwd) {
@@ -40,11 +52,13 @@ function hookDecision(tool, input, cwd) {
 }
 const ruleMatches = (rules, action, target) => (rules ?? []).some(rule => { const m = /^([a-z_]+)\((.*)\)$/.exec(rule); return m && m[1] === action && (m[2] === '*' || target === m[2] || (m[2].endsWith('/') && target.startsWith(m[2]))); });
 // Hook deny, settings deny and the sandbox refuse; a hook ask, a settings ask or an outside
-// write asks, which headless mode cannot do; otherwise the tool runs.
-function permit(tool, input, { cwd, skip, sandbox }) {
+// write asks, which headless mode cannot do; otherwise the tool runs. review: an ACP session
+// no mode was set for, which asks before each command and each write.
+function permit(tool, input, { cwd, skip, sandbox, review = false, free = false }) {
   if (skip) return { verdict: 'allow' };
   const action = ACTION[tool], target = tool === 'write_to_file' ? input.TargetFile : tool === 'run_command' ? input.CommandLine.split(/\s+/)[0] : input.Url ?? '';
   const outside = tool === 'write_to_file' && !target.startsWith(`${cwd}${path.sep}`);
+  if (free && tool === 'write_to_file' && !outside) return { verdict: 'allow' };
   const hook = hookDecision(tool, input, cwd);
   if (hook === 'deny') return { verdict: 'deny', rule: 'hook' };
   if (action && ruleMatches(settings.permissions?.deny, action, target)) return { verdict: 'deny', rule: `permissions.deny: ${action}` };
@@ -52,12 +66,14 @@ function permit(tool, input, { cwd, skip, sandbox }) {
   if (hook === 'ask') return { verdict: 'ask', rule: 'hook' };
   if (action && ruleMatches(settings.permissions?.ask, action, target)) return { verdict: 'ask', rule: `permissions.ask: ${action}` };
   if (outside && settings.allowNonWorkspaceAccess !== true) return { verdict: 'ask', rule: 'outside the workspace' };
+  if (review && ['write_to_file', 'run_command'].includes(tool)) return { verdict: 'ask', rule: 'review' };
   return { verdict: 'allow' };
 }
-// The "model": it attempts exactly what the prompt names.
+// The "model": it attempts exactly what the prompt names, a file once however often the
+// prompt names it (the runner's prompt carries the owner's message more than once).
 function plan(text, cwd) {
   const attempts = [], clean = value => value.replace(/[.,;]+$/, '');
-  for (const m of text.matchAll(/\b[Cc]reate (?:a |the )?file (?:named )?(\S+)/g)) attempts.push({ tool: 'write_to_file', input: { TargetFile: path.resolve(cwd, clean(m[1])), CodeContent: 'elu-code\n' } });
+  for (const m of text.matchAll(/\b[Cc]reate (?:a |the )?file (?:named )?(\S+)/g)) { const file = path.resolve(cwd, clean(m[1])); if (!attempts.some(attempt => attempt.input.TargetFile === file)) attempts.push({ tool: 'write_to_file', input: { TargetFile: file, CodeContent: 'elu-code\n' } }); }
   const run = /\b[Rr]un (?:this |the )?command(?: and report its output)?:?\s+(\S+)/.exec(text); if (run) attempts.push({ tool: 'run_command', input: { CommandLine: clean(run[1]), Cwd: cwd } });
   const url = /\b[Ff]etch (https?:\/\/\S+)/.exec(text); if (url) attempts.push({ tool: 'read_url', input: { Url: clean(url[1]) } });
   const search = /\b[Ss]earch the web for ([^.\n]+)/.exec(text); if (search) attempts.push({ tool: 'search_web', input: { query: search[1] } });
@@ -69,18 +85,21 @@ async function perform({ tool, input }) {
   if (tool === 'read_url') { try { const r = await fetch(input.Url); return `Fetched ${input.Url}: ${r.status}.`; } catch (error) { return `Fetch failed: ${error.message}`; } }
   return `Searched the web for ${input.query}.`;
 }
-// One turn: ask is the ACP permission request (null in headless mode), dir the conversation's folder.
-async function turn(text, { cwd, skip, sandbox, ask, dir }) {
+// One turn: ask is the ACP permission request (null in headless mode), dir the conversation's
+// folder. show: what an ACP session sends about each tool call, start(attempt) → its id and end(id, ok).
+async function turn(text, { cwd, skip, sandbox, ask, dir, review = false, show = null }) {
   const done = [], denied = [];
   for (const attempt of plan(text, cwd)) {
-    let { verdict, rule } = permit(attempt.tool, attempt.input, { cwd, skip, sandbox });
+    const call = show ? await show.start(attempt) : null;
+    let { verdict, rule } = permit(attempt.tool, attempt.input, { cwd, skip, sandbox, review, free: Boolean(ask) && agy.acpEditsFreely === true });
+    if (verdict === 'deny' && ask && agy.asksDenied) verdict = 'ask';
     if (verdict === 'ask') {
       if (ask && agy.noPermissionRequest) verdict = 'allow';
-      else if (ask) { verdict = (await ask(attempt)) === 'allow' ? 'allow' : 'deny'; rule = 'permission request rejected'; }
+      else if (ask) { verdict = (await ask(attempt, call)) === 'allow' ? 'allow' : 'deny'; rule = 'permission request rejected'; }
       else { verdict = 'deny'; rule = `${rule}; headless`; }
     }
-    if (verdict === 'deny' && !agy.ignoreDenies) { notice(attempt.tool, rule); denied.push(`${attempt.tool} denied (${rule})`); continue; }
-    done.push(await perform(attempt));
+    if (verdict === 'deny' && !agy.ignoreDenies) { notice(attempt.tool, rule); denied.push(`${attempt.tool} denied (${rule})`); show?.end(call, false); continue; }
+    done.push(await perform(attempt)); show?.end(call, true);
   }
   const nonce = /\b[Rr]emember (?:this )?nonce:? ([0-9a-f-]{36})/.exec(text); if (nonce) fs.writeFileSync(path.join(dir, 'nonce'), nonce[1]);
   // The quotes may be JSON-escaped: the runner carries the goal in a data block.
@@ -100,45 +119,64 @@ async function headless() {
   const schema = flag('--json-schema') ? readJson(flag('--json-schema')) : null;
   // slow: prints nothing for half a minute first, as a headless run does while it works.
   if (cfg.mode === 'slow') await new Promise(resolve => setTimeout(resolve, 30000));
+  await pause();
   const result = await turn(text, { cwd, skip: args.includes('--dangerously-skip-permissions'), sandbox: args.includes('--sandbox'), ask: null, dir });
   if (schema?.properties?.intent) { result.intent = 'answer'; if (schema.properties.repository) result.repository = ''; }
   if (cfg.name !== undefined && schema?.properties?.name) result.name = cfg.name;
-  console.log(JSON.stringify({ conversationId: id, model: 'gemini-3-pro', structured_output: result, stats: { turns: 1 } }, null, 2));
+  console.log(JSON.stringify({ conversationId: id, model: flag('--model') ?? MODELS[0], structured_output: result, stats: { turns: 1 } }, null, 2));
 }
 async function acp() {
+  if (agy.acpFails) { console.error('agy: unknown command "acp"'); process.exit(1); }
   const send = value => process.stdout.write(`${JSON.stringify(value)}\n`);
   const waiting = new Map(), sessions = new Map(); let nextId = 100;
   const request = (method, params) => new Promise(resolve => { const id = nextId++; waiting.set(id, resolve); send({ jsonrpc: '2.0', id, method, params }); });
+  // The conversation's model: the first one listed until it is changed, kept beside its turns.
+  const modelOf = id => { try { return fs.readFileSync(path.join(brain, id, 'model'), 'utf8'); } catch { return MODELS[0]; } };
+  const opened = id => ({ sessionId: id, ...(agy.acpNoModels ? {} : { configOptions: [{ id: 'model', name: 'Model', category: 'model', type: 'select', currentValue: modelOf(id), options: MODELS.map(value => ({ value, name: value })) }] }) });
   async function handle(row) {
     const reply = result => send({ jsonrpc: '2.0', id: row.id, result }), fail = (code, message) => send({ jsonrpc: '2.0', id: row.id, error: { code, message } }), p = row.params ?? {};
     switch (row.method) {
       case 'initialize': reply({ protocolVersion: 1, agentCapabilities: { loadSession: true }, authMethods: [] }); break;
-      case 'session/new': { if (agy.signedIn === false) return fail(-32000, 'authentication required'); const id = crypto.randomUUID(); fs.mkdirSync(path.join(brain, id), { recursive: true }); sessions.set(id, { cwd: p.cwd }); reply({ sessionId: id }); break; }
-      case 'session/resume': { if (typeof p.sessionId !== 'string' || !fs.existsSync(path.join(brain, p.sessionId))) return fail(-32602, 'conversation not found'); sessions.set(p.sessionId, { cwd: p.cwd }); reply({ sessionId: p.sessionId }); break; }
+      case 'session/new': { if (agy.signedIn === false) return fail(-32000, 'authentication required'); const id = crypto.randomUUID(); fs.mkdirSync(path.join(brain, id), { recursive: true }); sessions.set(id, { cwd: p.cwd }); reply(opened(id)); break; }
+      case 'session/resume': { if (typeof p.sessionId !== 'string' || !fs.existsSync(path.join(brain, p.sessionId))) return fail(-32602, 'conversation not found'); sessions.set(p.sessionId, { cwd: p.cwd }); reply(opened(p.sessionId)); break; }
+      case 'session/set_config_option': {
+        if (agy.acpNoModels) return fail(-32601, 'Method not found'); if (!sessions.has(p.sessionId)) return fail(-32602, 'unknown session');
+        if (p.configId !== 'model' || !MODELS.includes(p.value)) return fail(-32602, `unknown model: ${JSON.stringify(p.value)}`);
+        fs.writeFileSync(path.join(brain, p.sessionId, 'model'), p.value);
+        const { configOptions } = opened(p.sessionId); send({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: p.sessionId, update: { sessionUpdate: 'config_option_update', configOptions } } }); reply({ configOptions }); break;
+      }
       case 'session/set_mode': { if (!sessions.has(p.sessionId)) return fail(-32602, 'unknown session'); if (!['accept-edits', 'auto'].includes(p.modeId)) return fail(-32602, 'unknown mode'); sessions.get(p.sessionId).mode = p.modeId; reply({}); break; }
       case 'session/prompt': {
         const session = sessions.get(p.sessionId); if (!session) return fail(-32602, 'unknown session');
         const text = (p.prompt ?? []).filter(block => block?.type === 'text').map(block => block.text).join('\n');
         const change = value => send({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: p.sessionId, update: value } });
         const update = chunk => change({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: chunk } });
-        // Its thought and each tool call it asks about go out as session updates, as ACP sends them.
+        // Its thought and each tool call go out as session updates, as ACP sends them: a call
+        // when it starts, and again when it ended or was refused.
+        await pause();
         change({ sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: 'Reading the request.' } });
         update('Working on it.\n');
-        const ask = async attempt => {
-          const title = attempt.tool === 'write_to_file' ? `Write ${attempt.input.TargetFile}` : attempt.tool === 'run_command' ? `Run ${attempt.input.CommandLine}` : `${attempt.tool} ${attempt.input.Url ?? attempt.input.query ?? ''}`.trim();
-          const toolCallId = `call-${nextId}`;
-          change({ sessionUpdate: 'tool_call', toolCallId, title, kind: KIND[attempt.tool], status: 'pending', rawInput: attempt.input });
-          const answer = await request('session/request_permission', { sessionId: p.sessionId, toolCall: { toolCallId, title, kind: KIND[attempt.tool], rawInput: attempt.input }, options: [{ optionId: 'allow-once', name: 'Allow', kind: 'allow_once' }, { optionId: 'reject-once', name: 'Reject', kind: 'reject_once' }] });
-          const allowed = answer?.outcome?.outcome === 'selected' && answer.outcome.optionId === 'allow-once';
-          change({ sessionUpdate: 'tool_call_update', toolCallId, status: allowed ? 'completed' : 'failed' });
-          return allowed ? 'allow' : 'deny';
+        const titleOf = attempt => attempt.tool === 'write_to_file' ? `Write ${attempt.input.TargetFile}` : attempt.tool === 'run_command' ? `Run ${attempt.input.CommandLine}` : `${attempt.tool} ${attempt.input.Url ?? attempt.input.query ?? ''}`.trim();
+        const show = {
+          async start(attempt) { await pause(); const toolCallId = `call-${nextId++}`; change({ sessionUpdate: 'tool_call', toolCallId, title: titleOf(attempt), kind: KIND[attempt.tool], status: 'pending', rawInput: attempt.input }); await pause(); return toolCallId; },
+          end(toolCallId, ok) { change({ sessionUpdate: 'tool_call_update', toolCallId, status: ok ? 'completed' : 'failed' }); },
         };
-        const result = await turn(text, { cwd: session.cwd, skip: false, sandbox: false, ask, dir: path.join(brain, p.sessionId) });
+        // "Always allow" is offered first, as a vendor may: the client picks the answer by its kind.
+        const ask = async (attempt, toolCallId) => {
+          const answer = await request('session/request_permission', { sessionId: p.sessionId, toolCall: { toolCallId, title: titleOf(attempt), kind: KIND[attempt.tool], rawInput: attempt.input }, options: [{ optionId: 'allow-always', name: 'Always allow', kind: 'allow_always' }, { optionId: 'allow-once', name: 'Allow', kind: 'allow_once' }, { optionId: 'reject-once', name: 'Reject', kind: 'reject_once' }] });
+          const chosen = answer?.outcome?.outcome === 'selected' ? answer.outcome.optionId : null;
+          if (chosen === 'allow-always') session.always = true;
+          return ['allow-once', 'allow-always'].includes(chosen) ? 'allow' : 'deny';
+        };
+        const result = await turn(text, { cwd: session.cwd, skip: false, sandbox: false, ask, dir: path.join(brain, p.sessionId), review: session.mode === undefined, show });
+        if (session.always) fs.writeFileSync(path.join(brain, p.sessionId, 'always'), '');
+        await pause();
         // The runner's conversation schema rides in the prompt: an answer turn.
         if (/"intent"\s*:\s*\{/.test(text)) { result.intent = 'answer'; if (/"repository"\s*:\s*\{/.test(text)) result.repository = ''; }
         if (cfg.name !== undefined && /"name"\s*:\s*\{"type"/.test(text)) result.name = cfg.name;
         update(`Here is the result:\n${JSON.stringify(result, null, 2)}\n`);
-        reply({ stopReason: 'end_turn' }); break;
+        // The turn's tokens, as the protocol names them: input apart from the cache, thought apart from output.
+        reply({ stopReason: 'end_turn', ...(agy.noUsage ? {} : { usage: { totalTokens: 1530, inputTokens: 1200, outputTokens: 80, thoughtTokens: 40, cachedReadTokens: 200, cachedWriteTokens: 10 } }) }); break;
       }
       case 'session/cancel': break;
       default: fail(-32601, 'Method not found');
