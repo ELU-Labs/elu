@@ -5,7 +5,7 @@ import path from 'node:path';
 import { PassThrough } from 'node:stream';
 import { project } from './helpers.mjs';
 import { liveTask } from './peer-helpers.mjs';
-import { repository } from '../lib/git.mjs';
+import { git, repository } from '../lib/git.mjs';
 import { launchTerminal } from '../lib/terminal.mjs';
 import { remoteSessions as remoteGlue } from '../lib/terminal-remote.mjs';
 import { remoteRow } from '../lib/board.mjs';
@@ -344,4 +344,26 @@ for (const [columns, rows] of [[140, 50], [80, 24]]) test(`the app at ${columns}
   ask.focus();
   await until(() => /(?:^| {2})\/stop stop(?: {2}|$)/.test(keys.getText().trim()), `/stop in the key bar: ${keys.getText().trim()}`);
   assert.ok(keys.getText().trim().length <= columns - 2, 'the key bar fits');
+});
+
+// The Changes tab of a session here counts its changes without the owner having opened them,
+// as one on another computer does. Git is asked when the session shows and when its state
+// changes, not at each draw; with no changes the tab has no count.
+test('the Changes tab of a session here counts its changes without being opened, and again when its state changes', { timeout: 60000 }, async t => {
+  const p = start(t), repo = localSession(p, { state: 'answered', replies: [[9, 'It is fixed.']] }), worktree = readTask(repo, '4').worktree;
+  const v = await view(p, { columns: 140, rows: 50, repo: p.repo, dashboard: true, peer: fakePeer() });
+  await onRow(v, /Fix the report/);
+  const { sessionTabs, changes } = v.panels, tab = () => sessionTabs.getText().trim();
+  await until(() => tab() === 'Chat   Changes 1', `the tab counts its one changed file: "${tab()}"`);
+  assert.equal(changes.hidden, true, 'its Changes were never opened');
+  // A file changes while nothing about the session does: the tab is not read again on each draw.
+  fs.writeFileSync(path.join(worktree, 'src', 'extra.mjs'), 'export const extra = 1;\n');
+  await pause(1200); assert.equal(tab(), 'Chat   Changes 1');
+  // Its state changes: read again.
+  saveTask(repo, { ...readTask(repo, '4'), state: 'ready' });
+  await until(() => tab() === 'Chat   Changes 2', `counted again when its state changed: "${tab()}"`);
+  // No changes left: no count.
+  fs.rmSync(path.join(worktree, 'src', 'extra.mjs')); git(worktree, ['checkout', '--', '.']);
+  saveTask(repo, { ...readTask(repo, '4'), state: 'answered' });
+  await until(() => tab() === 'Chat   Changes', `no count with no changes: "${tab()}"`);
 });
