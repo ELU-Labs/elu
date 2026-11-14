@@ -1043,7 +1043,7 @@ test('a session started there by hand is watched from here: live, continued, sto
 test("a yes typed on my other computer answers the session that waits here, and until it runs that computer is told why it waits: queued, nothing running it, starting, blocked, its turn", async t => {
   const { laptop, devbox, project, toHost, hostCtx, viewCtx, viewer } = pair(t), at = new Date().toISOString();
   let kicks = 0; hostCtx.kick = () => { kicks++; };
-  withHome(devbox.home, () => { chat(project.root, 1, { goal: 'Session backlog 3h', state: 'needs_input', runs: [{ role: 'lead', vendor: 'claude', at, logFile: path.join(project.root, 'elsewhere', 'run.log') }], messages: [{ at, text: 'Get the issues, close the ones that are not real' }], result: { outcome: 'needs_input', question: 'May the next turn close the ones that are not real and go on?', choices: [] } }); relist(); });
+  withHome(devbox.home, () => { chat(project.root, 1, { goal: 'Invoice totals fix', state: 'needs_input', runs: [{ role: 'lead', vendor: 'claude', at, logFile: path.join(project.root, 'elsewhere', 'run.log') }], messages: [{ at, text: 'Fix the totals, update the tests that are broken' }], result: { outcome: 'needs_input', question: 'May the next turn update the tests that are broken and go on?', choices: [] } }); relist(); });
   await withHome(laptop.home, () => listTick(viewCtx));
   const item = withHome(laptop.home, () => remoteMachines())[0].sessions[0];
   await withHome(laptop.home, () => remoteCommand(viewCtx, { type: 'remoteWatch', to: devbox.identity.key, ref: item.ref }));
@@ -1093,19 +1093,19 @@ test("a yes typed on my other computer answers the session that waits here, and 
   look(58000);
   assert.deepEqual(seen().waiting.map(row => [row.at, row.text]), [[again.createdAt, 'yes']]);
   // It runs: nothing waits.
-  withHome(devbox.home, () => { chat(project.root, 1, { goal: 'Session backlog 3h', state: 'running', messages: [{ at, text: 'Get the issues, close the ones that are not real' }, { at: again.createdAt, text: 'yes' }] }); updateRequest(project.root, again.id, { state: 'running', taskId: '1', reason: 'Working.' }); });
+  withHome(devbox.home, () => { chat(project.root, 1, { goal: 'Invoice totals fix', state: 'running', messages: [{ at, text: 'Fix the totals, update the tests that are broken' }, { at: again.createdAt, text: 'yes' }] }); updateRequest(project.root, again.id, { state: 'running', taskId: '1', reason: 'Working.' }); });
   look(59000);
   assert.deepEqual(seen().waiting, []); assert.equal(seen().state, 'running');
   assert.ok(seen().entries.some(entry => entry.text === 'yes'), 'his answer is in its chat, as typed there');
   // A message sent while it works is read when its turn ends: the laptop is told at once, and the pane says it.
-  assert.deepEqual(await send('now start on the real ones'), { id: item.id, working: true });
-  const next = queue().find(row => row.goal === 'now start on the real ones');
+  assert.deepEqual(await send('now go on to the next ones'), { id: item.id, working: true });
+  const next = queue().find(row => row.goal === 'now go on to the next ones');
   look(60000);
-  assert.deepEqual(seen().waiting, [{ at: next.createdAt, text: 'now start on the real ones', state: 'turn' }]);
+  assert.deepEqual(seen().waiting, [{ at: next.createdAt, text: 'now go on to the next ones', state: 'turn' }]);
   // A message to one of its bots waits under the bot's name, as typed.
   withHome(devbox.home, () => updateRequest(project.root, next.id, { bot: 'reviewer' }));
   look(61000);
-  assert.deepEqual(seen().waiting.map(row => row.text), ['@reviewer now start on the real ones']);
+  assert.deepEqual(seen().waiting.map(row => row.text), ['@reviewer now go on to the next ones']);
   // The turn ends and the conductor runs it: nothing waits again.
   withHome(devbox.home, () => updateRequest(project.root, next.id, { state: 'running', taskId: '1', reason: 'Working.' }));
   look(62000);
