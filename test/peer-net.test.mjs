@@ -566,6 +566,34 @@ test('elu access shows and changes what teammates can do here; --auto with --man
   });
 });
 
+// The owner ran elu access --auto in his project's folder and its sessions still had no project
+// to start in. A change made in an ELU project's own folder is for that project, as /access saves
+// the open one; --project still names another.
+test('elu access --auto, --manual or --rules run in a project folder sets that project; showing it, or a folder that is no project, keeps the one set', async t => {
+  const crew = makeTeam(t), sara = crew.member;
+  await withHome(sara.home, async () => {
+    const first = registeredProject(t), second = registeredProject(t), was = process.cwd();
+    t.after(() => process.chdir(was));
+    // Outside any project it has none, and says what to run where.
+    process.chdir(first.parent);
+    const none = await peerCli(['access'], { auto: true });
+    assert.deepEqual([none.access.handling, none.access.root], ['auto', null]);
+    assert.ok(none.lines.includes('  Project: none yet; run elu access --auto in the project'), none.lines.join('\n'));
+    process.chdir(first.root);
+    const auto = await peerCli(['access'], { auto: true });
+    assert.deepEqual([auto.access.handling, auto.access.root], ['auto', first.root]);
+    assert.ok(auto.lines.includes(`  Project: ${first.root}`), auto.lines.join('\n'));
+    process.chdir(second.root);
+    assert.equal((await peerCli(['access'], { rules: 'Only answer questions.' })).access.root, second.root);
+    assert.equal((await peerCli(['access'], { manual: true, project: first.root })).access.root, first.root, '--project names another');
+    assert.equal((await peerCli(['access'], {})).access.root, first.root, 'showing it changes nothing');
+    process.chdir(path.join(second.root, 'src'));
+    assert.equal((await peerCli(['access'], { auto: true })).access.root, first.root, 'a folder inside a project is not that project');
+    process.chdir(second.parent);
+    assert.equal((await peerCli(['access'], { manual: true })).access.root, first.root, 'nor is a folder that is no project');
+  });
+});
+
 test('a sender whose teammate runs an ELU that refuses messages without a shared project is told to have them update', t => {
   const crew = makeTeam(t), ana = crew.founder;
   withHome(ana.home, () => {
