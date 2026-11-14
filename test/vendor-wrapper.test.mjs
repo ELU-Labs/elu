@@ -10,7 +10,7 @@ import { atomic, findBin, personalDirectory } from '../lib/util.mjs';
 import { readTask } from '../lib/state.mjs';
 import { ADAPTERS } from '../lib/adapters/index.mjs';
 import { stopLine } from '../lib/stop-line.mjs';
-import { REFUSED, SHIM_VENDORS, shimEnvFile, shimPath, shimsBase } from '../lib/never-shims.mjs';
+import { REFUSED, SHIM_VENDORS, shimEnvFile, shimFolder, shimPath, shimsBase } from '../lib/never-shims.mjs';
 
 // A terminal app may wrap a vendor's command. Each of its panes puts a folder on PATH, ahead
 // of the vendor's own, with a small script named as the command (claude, codex). That script
@@ -193,6 +193,18 @@ test('the stand-in named as a vendor\'s program is kept off the PATH that progra
   const printer = path.join(f.parent, 'printer'); fs.mkdirSync(printer); fs.writeFileSync(path.join(printer, 'claude'), '#!/bin/sh\nprintf \'%s\' "$PATH"\n', { mode: 0o755 });
   const handed = spawnSync('claude', [], { env: { ...process.env, PATH: [...others, printer].join(path.delimiter) }, encoding: 'utf8' });
   assert.equal(handed.status, 0, handed.stderr); assert.deepEqual(handed.stdout.split(path.delimiter), [has(others, 'git')[0], printer]);
+});
+
+// An update on a computer that ran the version before: its stand-in for the claude command is
+// still in the folder with the others, where the wrapper would find it first.
+test('a claude stand-in that an earlier version left beside the others is removed before the next turn, which runs', async t => {
+  const f = setup(t, 'claude'), left = path.join(shimFolder('git'), 'claude');
+  shimPath(process.env.PATH);
+  fs.writeFileSync(left, '#!/bin/sh\nexec claude "$@"\n', { mode: 0o755 });
+  const task = await f.controller.ask('Where is coupon normalization?', null, { permissions: 'ask' }).finished;
+  assert.equal(task.state, 'answered', JSON.stringify(task.error));
+  assert.equal(fs.existsSync(left), false);
+  assert.ok(fs.existsSync(path.join(shimFolder('claude'), 'claude')), 'the stand-in for claude is in its own folder');
 });
 
 // A script for a command that is not a vendor's, written the same way. ELU's stand-in for the
