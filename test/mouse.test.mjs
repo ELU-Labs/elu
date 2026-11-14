@@ -388,8 +388,9 @@ test('a highlight in a session copies after the app has redrawn while idle: on r
   const drawn = () => { screen().render(); return screen().lines.map(line => line.map(cell => cell[1]).join('')); };
   let at = null;
   await until(() => { const rows = drawn(), y = rows.findIndex(row => row.includes('┃ grok login')); at = y < 0 ? null : { x: rows[y].indexOf('grok login'), y }; return at; }, 'the message is in the chat');
-  // With nothing new to show, the timer sets the chat again and draws no frame: its cells are blank until one is drawn.
-  const idle = () => until(() => !held(at.y).includes('grok'), 'an idle refresh without a frame');
+  // With nothing new to show, the timer draws no frame. ELU 0.1.19 also set the chat again on
+  // every tick, which left its cells blank until a frame was drawn; now they stay as drawn.
+  const idle = async () => { await new Promise(resolve => setTimeout(resolve, 300)); assert.ok(held(at.y).includes('grok'), 'an idle refresh leaves the cells as they were drawn'); };
   v.press(at.x, at.y); v.drag(at.x + 5, at.y); v.drag(at.x + 9, at.y);
   await idle();
   v.release(at.x + 9, at.y);

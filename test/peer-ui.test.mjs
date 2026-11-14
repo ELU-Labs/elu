@@ -911,6 +911,50 @@ test('a session on my other computer keeps the lines the owner reads while its o
   assert.equal(chat.getScrollPerc(true), 100, 'it follows the newest line');
 });
 
+test('a session on my other computer shows every line of its changes, and its earlier messages load as the owner pages up to the oldest one here', { timeout: 30000 }, async t => {
+  const began = Date.now() - 400 * 60000, at = n => new Date(began + n * 60000).toISOString(), entry = n => ({ n, role: n % 2 ? 'Claude' : 'You', at: at(n), text: `Line ${n} of the long chat`, ...(n % 2 ? { lead: true } : {}) });
+  const range = (from, to) => Array.from({ length: to - from + 1 }, (_, index) => entry(from + index));
+  const patch = Array.from({ length: 300 }, (_, index) => `+ changed line ${index + 1}`).join('\n');
+  const session = { id: '66666666-6666-4666-8666-666666666666', machine: SARA, createdAt: at(0), lastAt: at(300), title: 'Read the long chat', state: 'answered', approvals: [], entries: range(221, 300), steps: [], diff: { summary: '1 file changed', patch }, plan: null };
+  const p = project(later(t)); environment(t, p.parent);
+  const peer = fakePeer({ items: [], mine: [{ key: SARA, mine: true, theirs: true }], remote: [session] }), v = await view(t, { repo: repository(p.root), dashboard: true, peer });
+  const board = v.panels.board, chat = v.panels.chat, ask = v.panels.ask;
+  const bare = line => (line ?? '').replace(/\x1b\[[\d;]*m/g, '').replace(/^\s*┃/, '').trim();
+  const asked = () => peer.sent().filter(command => command.type === 'remoteOlder');
+  await until(() => board.items.some(item => /Read the long chat/.test(plainItem(item))), 'the remote row');
+  board.focus(); selectRow(board, /Read the long chat/);
+  await until(() => /Runs on @sara-box/.test(chat.getContent()) && chat.getScrollPerc(true) === 100, 'its chat, at the end');
+  ask.focus();
+  // Every line of its changes: ELU 0.1.19 showed the first 120 and three dots.
+  assert.match(chat.getContent(), /\+ changed line 300\b/); assert.match(chat.getContent(), /\+ changed line 121\b/);
+  // The line over its oldest entry here counts the ones before it, and says how to get them.
+  assert.match(chat.getContent(), /220 earlier messages are on @sara-box\. Page up to load them\./);
+  await pause(300);
+  assert.deepEqual(asked(), [], 'nothing is asked for while he reads the end');
+  // Paged up to the top: they are asked for once, and the line says they are loading.
+  wheelAt(v, chat, -1, 3000); await until(() => chat.childBase === 0, 'the top');
+  await until(() => asked().length === 1, 'the earlier messages asked for');
+  assert.equal(asked()[0].id, session.id);
+  await until(() => /Loading earlier messages from @sara-box… 220 more are there\./.test(chat.getContent()), 'the line says they are loading');
+  await pause(400);
+  assert.equal(asked().length, 1, 'asked once while they load');
+  // They arrive above the oldest one he had: he stays on that one, and they are a page up.
+  Object.assign(session, { entries: range(141, 300) });
+  await until(() => chat.getContent().includes('Line 141 of the long chat'), 'the earlier messages');
+  await until(() => /140 earlier messages are on @sara-box\. Page up to load them\./.test(chat.getContent()), 'the count of what is left');
+  await pause(200);
+  const lines = chat._clines.map(bare), top = chat.childBase;
+  assert.ok(top > 0, 'not thrown to the top');
+  assert.ok(lines.indexOf('Line 221 of the long chat') - top >= 0 && lines.indexOf('Line 221 of the long chat') - top <= 2, 'the oldest entry he had is at the top of the pane');
+  assert.equal(asked().length, 1, 'the next page is not asked for until he pages up to it');
+  // Paging up again reaches the top again and asks for the next page, down to the first entry.
+  wheelAt(v, chat, -1, 3000); await until(() => asked().length === 2, 'the next page asked for');
+  Object.assign(session, { entries: range(1, 300) });
+  await until(() => chat.getContent().includes('Line 1 of the long chat') && !/earlier message/.test(chat.getContent()), 'the first entry, and no line over it');
+  wheelAt(v, chat, -1, 3000); await until(() => chat.childBase === 0, 'the top'); await pause(400);
+  assert.equal(asked().length, 2, 'nothing more to ask for at the first entry');
+});
+
 test('a thread shows under its channel, #general or its teammate, and a row counts what waits for me', () => {
   const core = { id: 'team-1', name: 'Core', members: [{ key: ME, name: 'ana' }, { key: SARA, name: 'sara', online: true }, { key: LI, name: 'li' }], channels: [{ id: 'c1', name: 'design', members: [ME, SARA] }] };
   const status = { key: ME, teams: [core] }, general = roomTarget('team-1', null), design = roomTarget('team-1', 'c1');
