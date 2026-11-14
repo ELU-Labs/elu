@@ -46,16 +46,16 @@ test('model names and efforts read short: Claude ids by family and version, othe
   assert.equal(modelTag({}, '@reviewer'), null);
 });
 
-test('an effort comes from the run, else the vendor\'s own default where it is known, never made up', () => {
-  assert.equal(runEffort('claude', { effort: 'xhigh', model: 'claude-opus-5-5', release: '2.1.322' }), 'xhigh', 'the bot\'s own setting first');
-  assert.equal(runEffort('claude', { model: 'claude-opus-5-5', release: '2.1.322' }), 'medium');
-  assert.equal(runEffort('claude', { model: 'us.anthropic.claude-fable-5-2-v1:0', release: '2.1.322' }), 'medium');
-  assert.equal(runEffort('claude', { model: 'claude-fable-5-1[1m]', release: '2.1.319' }), 'high');
+test('an effort comes from the run, else the vendor\'s own default where it is known, never made up', async () => {
+  assert.equal(await runEffort('claude', { effort: 'xhigh', model: 'claude-opus-5-5', release: '2.1.322' }), 'xhigh', 'the bot\'s own setting first');
+  assert.equal(await runEffort('claude', { model: 'claude-opus-5-5', release: '2.1.322' }), 'medium');
+  assert.equal(await runEffort('claude', { model: 'us.anthropic.claude-fable-5-2-v1:0', release: '2.1.322' }), 'medium');
+  assert.equal(await runEffort('claude', { model: 'claude-fable-5-1[1m]', release: '2.1.319' }), 'high');
   assert.equal(claudeOwnEffort('claude-opus-5-5', '2.1.400'), null, 'a release whose catalog was not read');
   assert.equal(claudeOwnEffort('claude-opus-4-6', '2.1.322'), null, 'a model the catalog gives no effort');
   assert.equal(claudeOwnEffort('opus', '2.1.322'), null, 'an alias is not a model id');
-  assert.equal(runEffort('agy', { model: 'gemini-3-pro' }), null); assert.equal(runEffort('grok', {}), null);
-  assert.equal(runEffort('codex', { model: null }), null);
+  assert.equal(await runEffort('agy', { model: 'gemini-3-pro' }), null); assert.equal(await runEffort('grok', {}), null);
+  assert.equal(await runEffort('codex', { model: null }), null);
 });
 
 // A model catalog as Claude Code bundles it (2.1.323, trimmed): rows with nested objects and
@@ -136,22 +136,22 @@ test('the installed program is read once and kept by its path, size and time, in
   assert.equal(fs.existsSync(p.mark), false);
 });
 
-test('a run\'s Claude effort comes from its own program\'s catalog for any release; the table only when none is read', t => {
+test('a run\'s Claude effort comes from its own program\'s catalog for any release; the table only when none is read', async t => {
   forgetCatalogs(); t.after(forgetCatalogs);
   const env = { XDG_CONFIG_HOME: path.join(temp(t), 'personal') }, previous = process.env.XDG_CONFIG_HOME;
   process.env.XDG_CONFIG_HOME = env.XDG_CONFIG_HOME; t.after(() => { if (previous === undefined) delete process.env.XDG_CONFIG_HOME; else process.env.XDG_CONFIG_HOME = previous; });
   const read = program(t, native(CATALOG)).file, none = program(t, 'echo no catalog').file, broken = program(t, '{id:"claude-opus-5-5",default_effort:"medium"').file;
-  assert.equal(runEffort('claude', { model: 'claude-opus-5-5', release: '2.1.400', bin: read }), 'medium', 'a release the table does not know');
-  assert.equal(runEffort('claude', { model: 'us.anthropic.claude-fable-5-2-v1:0', release: '2.1.319', bin: read }), 'medium', 'the catalog, where the table has no Fable 5.2 for 2.1.319');
-  assert.equal(runEffort('claude', { model: 'claude-opus-4-8', release: '2.1.322', bin: read }), null, 'a catalog that gives no effort for a model is not overruled by the table');
-  assert.equal(runEffort('claude', { model: 'claude-3-5-sonnet', bin: read }), null);
-  assert.equal(runEffort('claude', { effort: 'low', model: 'claude-opus-5-5', bin: read }), 'low', 'the bot\'s own setting first');
-  assert.equal(runEffort('claude', { model: 'opus', bin: read }), null, 'an alias is not a model id');
+  assert.equal(await runEffort('claude', { model: 'claude-opus-5-5', release: '2.1.400', bin: read }), 'medium', 'a release the table does not know');
+  assert.equal(await runEffort('claude', { model: 'us.anthropic.claude-fable-5-2-v1:0', release: '2.1.319', bin: read }), 'medium', 'the catalog, where the table has no Fable 5.2 for 2.1.319');
+  assert.equal(await runEffort('claude', { model: 'claude-opus-4-8', release: '2.1.322', bin: read }), null, 'a catalog that gives no effort for a model is not overruled by the table');
+  assert.equal(await runEffort('claude', { model: 'claude-3-5-sonnet', bin: read }), null);
+  assert.equal(await runEffort('claude', { effort: 'low', model: 'claude-opus-5-5', bin: read }), 'low', 'the bot\'s own setting first');
+  assert.equal(await runEffort('claude', { model: 'opus', bin: read }), null, 'an alias is not a model id');
   for (const bin of [none, broken, path.join(path.dirname(none), 'missing'), null]) {
-    assert.equal(runEffort('claude', { model: 'claude-opus-5-5', release: '2.1.319', bin }), 'medium', `table: ${bin}`);
-    assert.equal(runEffort('claude', { model: 'claude-fable-5-2', release: '2.1.319', bin }), null, 'Fable 5.2 is not in 2.1.319');
-    assert.equal(runEffort('claude', { model: 'claude-fable-5-2', release: '2.1.322', bin }), 'medium');
-    assert.equal(runEffort('claude', { model: 'claude-opus-5-5', release: '2.1.400', bin }), null, 'neither knows: no effort');
+    assert.equal(await runEffort('claude', { model: 'claude-opus-5-5', release: '2.1.319', bin }), 'medium', `table: ${bin}`);
+    assert.equal(await runEffort('claude', { model: 'claude-fable-5-2', release: '2.1.319', bin }), null, 'Fable 5.2 is not in 2.1.319');
+    assert.equal(await runEffort('claude', { model: 'claude-fable-5-2', release: '2.1.322', bin }), 'medium');
+    assert.equal(await runEffort('claude', { model: 'claude-opus-5-5', release: '2.1.400', bin }), null, 'neither knows: no effort');
   }
   assert.deepEqual(fs.readdirSync(env.XDG_CONFIG_HOME), ['elu-code']);
   assert.deepEqual(fs.readdirSync(path.join(env.XDG_CONFIG_HOME, 'elu-code')), ['claude-catalog.json'], 'the cache is ELU\'s own file');

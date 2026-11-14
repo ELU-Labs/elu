@@ -25,11 +25,11 @@ out, the session says
 
 ## The one-time check
 
-ELU starts the check by itself before your first message to Grok goes out, whether
-you wrote to a session on it or to a bot on it. The session says so first, then shows each
-step as it ends, and then your message goes on. The check takes about seven short turns on
-Grok and a few minutes. Only a message you just sent, or `c` in the Usage tab, starts it: a
-scheduled turn, a shadow turn or a review never does.
+ELU starts the check by itself before the first turn on Grok goes out, whether you wrote
+to a session on it or to a bot on it, or the turn started without you: a scheduled turn, a
+shadow turn, a review, a standup or a Task's work. The session says so first, then shows
+each step as it ends, and then the turn goes on. The check takes about seven short turns on
+Grok and a few minutes. `c` in the Usage tab starts it too.
 
 The Usage tab shows whether Grok is signed in before the check has run: it looks for
 `~/.grok/auth.json`, never opens it, and runs nothing. Its line then says
@@ -55,9 +55,8 @@ planted file outside it, a local web listener and a marker command:
 | `isolation` | what `grok inspect --json` lists as loaded from another tool (Cursor, Claude Code, Codex), by name |
 
 The first six are required. The result is stored per binary and version; a new release
-proves itself again, on your next message to it. Until the check has run, no Grok run
-starts, and a turn you did not send yourself says
-`Grok Build has not been checked on this machine yet. Your first message to it runs the check.`
+proves itself again, before the next turn on it. Until the check has run, no Grok run
+starts.
 
 What a result turns off:
 
@@ -65,7 +64,8 @@ What a result turns off:
   which step and why, for example
   `Grok Build did not pass its check on this machine, so it runs in Full access only here. Not proven: a read-only turn runs no command (locked run ran a shell command).`
   Full access is never turned off by the check: it runs Grok as it is, and says the result
-  once. Your next message runs the check again only when that can change the result (you
+  once, also when you switch such a session to Full access. In a Full access session a bot
+  that only answers, a shadow and a review run on it too. Your next message runs the check again only when that can change the result (you
   signed in, say). A step that failed because Grok did what the step forbids stays failed
   until `c` in the Usage tab checks again.
 - **`relay` fails.** Ask and Auto still work, but a blocked action is reported instead of
@@ -103,6 +103,7 @@ ACP session from `session/new`, loaded with `session/load`.
 | Full | headless `--permission-mode bypassPermissions`, `--sandbox off` | anything, the never list included |
 
 Every profile but Full denies reads of secret folders (`~/.ssh`, `~/.aws`, `~/.claude`, `~/.codex`,
+`~/.gemini`, `~/.grok`,
 `.env*`, `auth.json`, key files, ELU's own state) by rule. Every profile but Full
 denies the never list on command text (`git push`, `git tag`, `git merge`, `gh pr merge`,
 `gh release`, package publishes, deploys, `kubectl apply`, `terraform apply`). Those rules

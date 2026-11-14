@@ -210,7 +210,8 @@ test('with no team setting, a session from my other computer runs in the only pr
     assert.equal(pendingRequests(home).at(-1).goal, "can't it wait?"); assert.deepEqual(sessionModel(repo, readTask(repo, task.id)), { vendor: 'claude', model: 'opus' });
     // A name that is no model here is refused in the words /model says it, and nothing changes or goes.
     const before = pendingRequests(home).length;
-    assert.throws(() => methods['elu.remote.send']({ id: started.id, text: 'nosuch and the tests', model: true }, from), { message: 'No model named nosuch. /model lists them; /model add adds one by name.' });
+    // Each vendor's own list is read before the name is given up, so this one answers a moment later.
+    await assert.rejects(async () => methods['elu.remote.send']({ id: started.id, text: 'nosuch and the tests', model: true }, from), { message: 'No model named nosuch. /model lists them; /model add adds one by name.' });
     assert.deepEqual(sessionModel(repo, readTask(repo, task.id)), { vendor: 'claude', model: 'opus' }); assert.equal(pendingRequests(home).length, before);
     for (const model of [true, undefined]) assert.throws(() => methods['elu.remote.send']({ id: started.id, text: ' ', model }, from), /Write the message in 1 to/);
   } finally {

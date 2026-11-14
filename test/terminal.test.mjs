@@ -36,7 +36,7 @@ import { listEntries, readStore } from '../lib/permission-rules.mjs';
 import { shellSandboxLine } from '../lib/sandbox.mjs';
 import { listSchedules, saveSchedule, parseWhen } from '../lib/schedules.mjs';
 import { listBots, getBot, saveBot, removeBot, botVendors, botEfforts } from '../lib/bots.mjs';
-import { botModels } from '../lib/bot-models.mjs';
+import { readBotModels } from '../lib/bot-models.mjs';
 import { computerDefault, saveComputerDefault } from '../lib/models.mjs';
 import { vendorPath } from './helpers.mjs';
 import { HOME_QUESTION } from '../lib/util.mjs';
@@ -754,7 +754,7 @@ test('x archives a project after a confirm: it leaves the list, the open one clo
 });
 
 test('Bots with none saved says how to make one; n or + New bot makes one through its dialogs, and a refused name or save keeps nothing', async t => {
-  const p = setup(t); noBots(); readModels();
+  const p = setup(t); noBots(); await readModels();
   const v = await view(t, { repo: p.repo }), panels = v.current.panels;
   const items = () => panels.botsList.items.map(item => item.getText()), status = () => panels.status.getText(), names = () => listBots().map(bot => bot.name);
   click(v, panels.tabs[4]); await until(() => v.current.view === 'bots' && !panels.botsBox.hidden && items().length, 'the mouse opens Bots');
@@ -855,7 +855,7 @@ test('Bots with none saved says how to make one; n or + New bot makes one throug
 });
 
 test('Enter on a bot opens it: each row edits one field and saves it, a refused line is asked again, and x or Remove deletes after a confirm', async t => {
-  const p = setup(t); noBots(); readModels();
+  const p = setup(t); noBots(); await readModels();
   // The bot was saved with the four things no row shows: it works, its helpers run on sonnet, it may merge pull requests, and it was set to speak after each turn.
   const AS_SAVED = { works: true, subagents: 'sonnet', merge: true, shadow: true };
   const created = saveBot({ name: 'sec', vendor: 'claude', model: 'opus', effort: 'high', color: 'violet', ...AS_SAVED, instructions: 'Review the change for leaked secrets.\nName the file and line.' }).createdAt;
@@ -969,7 +969,7 @@ const plainFrame = v => v.frame().replace(/\x1b\[[\d;]*m/g, '');
 const modelHolds = (v, value) => until(() => modelField(v)?.__listener && modelField(v).getValue() === value, `the model field holds "${value}"`);
 // The fake vendors are node scripts, slow to start on a busy machine. Their models are read
 // here with a long limit and kept, so the app's own short limit never decides a test.
-const readModels = () => { for (const vendor of ['claude', 'codex']) botModels(vendor, { timeoutMs: 60000 }); };
+const readModels = () => Promise.all(['claude', 'codex'].map(vendor => readBotModels(vendor, { timeoutMs: 60000 })));
 // The tests of the Bots tab here start with none saved: the bots the app comes with are
 // removed first, as their owner can do.
 const noBots = () => { for (const bot of listBots()) removeBot(bot.name); };
@@ -984,7 +984,7 @@ test('the Model step lists the models the vendor names and narrows them as you t
   const HINT = 'A model claude knows by name. Empty uses Claude Code\'s own.', ALL = ['> fable   the latest Fable model', '  opus    the latest Opus model', '  sonnet  the latest Sonnet model'];
   const calls = () => fs.readFileSync(p.calls, 'utf8').trim().split('\n').map(JSON.parse);
   assert.ok(!calls().some(row => ['--help', 'debug models --bundled'].includes(row.args.join(' '))), 'starting the app asks no vendor for its models');
-  readModels(); await send(v, '/bots'); await until(() => v.current.view === 'bots', 'Bots');
+  await readModels(); await send(v, '/bots'); await until(() => v.current.view === 'bots', 'Bots');
   panels.botsList.focus(); v.input.write('n'); await dialog(v, 'New bot', 'sec'); await until(() => modal(v, 'Runs on'), 'vendor list'); v.input.write('\r');
   // Nothing typed: every option, with the mark on the first.
   await modelHolds(v, ''); assert.deepEqual(modelLines(v), [HINT, '', ...ALL]);
@@ -1039,7 +1039,7 @@ test('a long list of models is clipped to the dialog with a count of the rest, a
     panels.botsList.focus(); v.input.write('n'); await dialog(v, 'New bot', name);
     await until(() => modal(v, 'Runs on'), 'vendor list'); dialogList(v, 'Runs on').select(botVendors().indexOf(vendor)); v.input.write('\r'); await modelHolds(v, '');
   };
-  readModels(); await send(v, '/bots'); await until(() => v.current.view === 'bots', 'Bots'); await start('docs', 'codex');
+  await readModels(); await send(v, '/bots'); await until(() => v.current.view === 'bots', 'Bots'); await start('docs', 'codex');
   // Twelve rows fit under the hint at 24 lines. The rest are counted.
   assert.deepEqual(modelLines(v), [HINT, '', option(1, '>'), ...range(2, 12).map(index => option(index)), '  +8 more']);
   // The rows follow the mark: Up from the first option reaches the last.
@@ -1065,7 +1065,7 @@ test('a model name that cannot be saved is refused at the Model step, so a long 
   const p = setup(t); noBots();
   const v = await view(t, { repo: p.repo }), panels = v.current.panels;
   const REFUSAL = /A model name has no spaces: up to 80 letters, digits, dots, colons,\nslashes or dashes\./;
-  readModels(); await send(v, '/bots'); await until(() => v.current.view === 'bots', 'Bots');
+  await readModels(); await send(v, '/bots'); await until(() => v.current.view === 'bots', 'Bots');
   panels.botsList.focus(); v.input.write('n'); await dialog(v, 'New bot', 'reviewer'); await until(() => modal(v, 'Runs on'), 'vendor list'); v.input.write('\r');
   // A name with a space is said so as it is typed.
   await modelHolds(v, ''); v.input.write('opus 5.5'); await modelHolds(v, 'opus 5.5');
@@ -2037,6 +2037,31 @@ test('slash commands filter as typed and Tab completes without calling a model',
   const calls = fs.readFileSync(p.calls, 'utf8').trim().split('\n').map(JSON.parse);
   assert.equal(calls.some(call => call.args.includes('-p') || call.args[0] === 'exec'), false);
   captureFrames('command-frames', frames);
+});
+
+// A vendor's command line can take seconds to print its models (a cold start, a slow disk).
+// The app used to run it with the screen held until it ended. Now the names known show at
+// once, keys are taken while it prints, and its own names join the list once it has.
+test('/model never holds the screen while a vendor prints its models', { timeout: 30000 }, async t => {
+  const p = setup(t), file = path.join(p.dir, 'codex'), marker = "if(args[0]==='debug'&&args[1]==='models'){";
+  const script = fs.readFileSync(file, 'utf8'); assert.ok(script.includes(marker));
+  // This codex takes three seconds to print its models: longer than the app waits for them.
+  fs.writeFileSync(file, script.replace(marker, `${marker}await new Promise(resolve=>setTimeout(resolve,3000));`), { mode: 0o755 });
+  const v = await view(t, { repo: p.repo }), ask = v.current.panels.ask, palette = v.current.panels.palette;
+  const rows = () => palette.hidden ? [] : palette.items.map(item => item.getText().split(/\s+/)[0]);
+  const asked = () => fs.readFileSync(p.calls, 'utf8').trim().split('\n').map(JSON.parse).filter(row => row.args.join(' ') === 'debug models --bundled').length;
+  await until(() => ask.__listener, 'default input');
+  // The longest the event loop went without running a timer: what the screen froze for.
+  let most = 0, last = Date.now(); const timer = setInterval(() => { const now = Date.now(); most = Math.max(most, now - last); last = now; }, 20);
+  t.after(() => clearInterval(timer));
+  v.input.write('/model '); await until(() => rows().join() === 'fable,opus,sonnet,codex,agy,grok,default,add', 'the names known, at once');
+  await until(() => asked() === 1, 'codex is asked for its models');
+  // Keys are taken while codex is still printing.
+  v.input.write('so'); await until(() => rows().join() === 'sonnet', 'typing narrows the list meanwhile');
+  // The read ends by itself at its time limit, with one program started however many keys were typed.
+  assert.deepEqual(await readBotModels('codex'), []);
+  clearInterval(timer); most = Math.max(most, Date.now() - last);
+  assert.equal(asked(), 1); assert.ok(most < 1500, `the screen was held ${most} ms`);
 });
 
 test('/agent add offers the models, puts one in the session as an agent, and /agent remove takes it out', { timeout: 15000 }, async t => {

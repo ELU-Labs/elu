@@ -15,7 +15,7 @@ import { Conductor, enqueue, peerOrigin } from '../lib/conductor.mjs';
 import { peerFile } from '../lib/peer/paths.mjs';
 import * as claude from '../lib/adapters/claude.mjs';
 import * as codex from '../lib/adapters/codex.mjs';
-import { botModels, codexModels, claudeModels, matchModels } from '../lib/bot-models.mjs';
+import { botModels, readBotModels, codexModels, claudeModels, matchModels } from '../lib/bot-models.mjs';
 import { botModelProblem, botRoomProblem } from '../lib/bots.mjs';
 import { stopLine } from '../lib/stop-line.mjs';
 import { openTask, sessionTasks } from '../lib/plan.mjs';
@@ -851,37 +851,59 @@ const prints = text => `fs.writeSync(1, ${JSON.stringify(text)});`;
 // A stand-in is a node script, slow to start on a busy machine. A read that must succeed gets a long limit.
 const PATIENT = { timeoutMs: 60000 };
 
-test('codex lists its models as JSON: the listed ones are offered by the name --model takes, and the vendor is asked once', t => {
+test('codex lists its models as JSON: the listed ones are offered by the name --model takes, and the vendor is asked once', async t => {
   assert.deepEqual(codexModels(JSON.stringify(CATALOG)), [{ name: 'big-model', note: 'Frontier model for the most demanding work.' }, { name: 'quick-model', note: 'Fast and affordable model for easier tasks.' }]);
   for (const text of ['', 'not json', '[]', '{"models":"none"}', '{}']) assert.deepEqual(codexModels(text), [], text);
   assert.equal(codexModels(JSON.stringify({ models: Array.from({ length: 60 }, (_, index) => ({ slug: `m-${index}`, description: 'x'.repeat(300), visibility: 'list' })) })).length, 40, 'a runaway catalog is cut');
   assert.equal(codexModels(JSON.stringify({ models: [{ slug: 'm', description: 'x'.repeat(300), visibility: 'list' }] }))[0].note.length, 120);
-  const cli = standIn(t, 'codex', prints(JSON.stringify(CATALOG))), first = botModels('codex', { env: cli.env, ...PATIENT });
+  const cli = standIn(t, 'codex', prints(JSON.stringify(CATALOG)));
+  // Before it is read the Model step has no names for it, and starts no program to get them.
+  assert.deepEqual(botModels('codex', { env: cli.env }), []); assert.deepEqual(cli.calls(), []);
+  const first = await readBotModels('codex', { env: cli.env, ...PATIENT });
   assert.deepEqual(first.map(row => row.name), ['big-model', 'quick-model']);
-  assert.equal(botModels('codex', { env: cli.env }), first, 'the second read is the first one, kept');
+  assert.equal(await readBotModels('codex', { env: cli.env }), first, 'the second read is the first one, kept');
+  assert.equal(botModels('codex', { env: cli.env }), first, 'and it is what the Model step shows from then on');
   assert.deepEqual(cli.calls(), ['debug models --bundled'], 'asked once, for the catalog inside the binary');
 });
 
-test('claude names its aliases in --help: they are read from the --model entry, and the built-in names stand in when it cannot be read', t => {
+test('claude names its aliases in --help: they are read from the --model entry, and the built-in names stand in when it cannot be read', async t => {
   assert.deepEqual(claudeModels(MODEL_HELP), ALIASES);
   assert.deepEqual(claudeModels(MODEL_HELP.replace("'fable', 'opus', or 'sonnet'", "'fable' or 'newer'")).map(row => row.name), ['fable', 'newer'], 'a new alias in --help is offered');
   for (const text of ['', '--print --add-dir --model', "  --fallback-model <model>  One of 'a' or 'b'.\n"]) assert.deepEqual(claudeModels(text), [], text);
   const cli = standIn(t, 'claude', prints(MODEL_HELP));
-  assert.deepEqual(botModels('claude', { env: cli.env, ...PATIENT }), ALIASES); assert.deepEqual(botModels('claude', { env: cli.env }), ALIASES); assert.deepEqual(cli.calls(), ['--help']);
+  assert.deepEqual(await readBotModels('claude', { env: cli.env, ...PATIENT }), ALIASES); assert.deepEqual(await readBotModels('claude', { env: cli.env }), ALIASES); assert.deepEqual(cli.calls(), ['--help']);
   // A --help with no --model entry, a failing one, and no claude at all.
-  for (const script of [prints('--print --add-dir --session-id\n'), `${prints(MODEL_HELP)} process.exit(1);`, null]) assert.deepEqual(botModels('claude', { env: standIn(t, 'claude', script).env }), ALIASES);
+  for (const script of [prints('--print --add-dir --session-id\n'), `${prints(MODEL_HELP)} process.exit(1);`, null]) assert.deepEqual(await readBotModels('claude', { env: standIn(t, 'claude', script).env }), ALIASES);
 });
 
-test('a command line that is missing, fails or is slow never holds up the Model step, and a vendor with no way to list is never run', t => {
+test('a command line that is missing, fails or is slow never holds up the Model step, and a vendor with no way to list is never run', async t => {
   // Codex model names carry versions, so nothing stands in for them.
-  for (const script of [null, 'process.exit(1);', prints('not json')]) assert.deepEqual(botModels('codex', { env: standIn(t, 'codex', script).env }), []);
+  for (const script of [null, 'process.exit(1);', prints('not json')]) assert.deepEqual(await readBotModels('codex', { env: standIn(t, 'codex', script).env }), []);
   const slow = standIn(t, 'codex', `await new Promise(resolve => setTimeout(resolve, 20000)); ${prints(JSON.stringify(CATALOG))}`), started = Date.now();
-  assert.deepEqual(botModels('codex', { env: slow.env, timeoutMs: 300 }), []); assert.ok(Date.now() - started < 10000, 'stopped at the time limit');
+  assert.deepEqual(await readBotModels('codex', { env: slow.env, timeoutMs: 300 }), []); assert.ok(Date.now() - started < 10000, 'stopped at the time limit');
   // That answer is kept too: a command line that would now list its models is not asked again.
-  slow.write(prints(JSON.stringify(CATALOG))); assert.deepEqual(botModels('codex', { env: slow.env, ...PATIENT }), []); assert.ok(slow.calls().length <= 1);
+  slow.write(prints(JSON.stringify(CATALOG))); assert.deepEqual(await readBotModels('codex', { env: slow.env, ...PATIENT }), []); assert.ok(slow.calls().length <= 1);
   const slowClaude = standIn(t, 'claude', 'await new Promise(resolve => setTimeout(resolve, 20000));');
-  assert.deepEqual(botModels('claude', { env: slowClaude.env, timeoutMs: 300 }), ALIASES);
-  for (const vendor of ['agy', 'grok', 'constructor', '']) { const cli = standIn(t, vendor || 'none', prints(JSON.stringify(CATALOG))); assert.deepEqual(botModels(vendor, { env: cli.env }), []); assert.deepEqual(cli.calls(), [], vendor); }
+  assert.deepEqual(await readBotModels('claude', { env: slowClaude.env, timeoutMs: 300 }), ALIASES);
+  for (const vendor of ['agy', 'grok', 'constructor', '']) { const cli = standIn(t, vendor || 'none', prints(JSON.stringify(CATALOG))); assert.deepEqual(await readBotModels(vendor, { env: cli.env }), []); assert.deepEqual(botModels(vendor, { env: cli.env }), []); assert.deepEqual(cli.calls(), [], vendor); }
+});
+
+// The read runs beside the app. The old one ran the vendor's program with the app held until
+// it ended: a codex that took four seconds to print its models froze the screen for its time limit.
+test('a vendor that takes its time to print its models does not hold the app, and two reads share one program', async t => {
+  const slow = standIn(t, 'codex', `await new Promise(resolve => setTimeout(resolve, 4000)); ${prints(JSON.stringify(CATALOG))}`);
+  // The longest the event loop went without running a timer: what the screen would freeze for.
+  let most = 0, last = Date.now(); const timer = setInterval(() => { const now = Date.now(); most = Math.max(most, now - last); last = now; }, 20);
+  t.after(() => clearInterval(timer));
+  const reads = [readBotModels('codex', { env: slow.env, ...PATIENT }), readBotModels('codex', { env: slow.env, ...PATIENT })];
+  // While it prints, the Model step shows what is known: no names yet for codex.
+  assert.deepEqual(botModels('codex', { env: slow.env }), []);
+  const [first, second] = await Promise.all(reads);
+  clearInterval(timer); most = Math.max(most, Date.now() - last);
+  assert.deepEqual(first.map(row => row.name), ['big-model', 'quick-model']); assert.equal(second, first);
+  assert.deepEqual(slow.calls(), ['debug models --bundled'], 'one program served both reads');
+  assert.ok(most < 3000, `the app was held ${most} ms`);
+  assert.equal(botModels('codex', { env: slow.env }), first, 'kept for the Model step');
 });
 
 test('typing narrows the models: names that start with the text, then names that hold it', () => {

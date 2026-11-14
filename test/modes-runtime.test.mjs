@@ -206,7 +206,9 @@ test('a schedule gets Full access only when the owner picked it; an automatic re
   assert.equal(saveSchedule({ root: p.root, goal: 'Nightly check', when: parseWhen('daily 9:00', new Date(2026, 10, 9, 8)), permissions: 'full', picked: true }, new Date(2026, 10, 9, 8)).permissions, 'full');
   const row = saveSchedule({ root: p.root, goal: 'Nightly tidy', when: parseWhen('daily 9:00', new Date(2026, 10, 9, 8)), permissions: 'auto' }, new Date(2026, 10, 9, 8));
   assert.equal(row.permissions, 'auto');
-  // An owner's request from another machine (A2A) is capped at auto whatever the default says.
+  // capMode lowers a mode to a cap and never raises one. A schedule the owner did not pick a
+  // mode for is queued with it. A local A2A request is not: it runs in the owner's default
+  // mode as it is (lib/peer/daemon.mjs).
   saveDefaultMode('full');
   assert.equal(capMode(defaultMode(), 'auto'), 'auto'); assert.equal(capMode('ask', 'auto'), 'ask');
   const request = enqueue(p.root, 'Normalize coupons', { permissions: capMode(defaultMode(), 'auto') });

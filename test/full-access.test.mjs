@@ -10,6 +10,7 @@ import * as grok from '../lib/adapters/grok.mjs';
 import { defaultConfig } from '../lib/config.mjs';
 import { APPROVAL_TOOL } from '../lib/mcp.mjs';
 import { HOME_SECRETS } from '../lib/vendors.mjs';
+import { checkFolders } from '../lib/modes.mjs';
 import { atomic, personalDirectory } from '../lib/util.mjs';
 import { temp } from './helpers.mjs';
 
@@ -69,4 +70,36 @@ test('Codex, Antigravity CLI and Grok Build in Full access deny nothing; the low
   assert.equal(grokFull.includes('--deny'), false, 'no --deny in Full access');
   assert.equal(grokFull.some(arg => closes(arg)), false);
   for (const mode of ['ask', 'auto']) assert.ok(grok.compile({ role: grokRole, mode, cwd: w.cwd, session: SESSION, runDir: w.runDir }).includes(`Read(${path.join(home(), '.claude')}/**)`), mode);
+});
+
+// Antigravity CLI keeps its settings and sign-in under ~/.gemini, Grok Build under ~/.grok.
+// Below Full access they are closed like ~/.claude and ~/.codex, to every vendor; Full access
+// closes nothing.
+test("Antigravity CLI's and Grok Build's own home folders are closed below Full access and open in it", t => {
+  const w = world(t), lead = { ...w.role, writablePaths: ['.'] }, theirs = ['.gemini', '.grok'].map(name => path.join(home(), name));
+  for (const name of ['.gemini', '.grok']) assert.ok(HOME_SECRETS.includes(name), name);
+  const launch = mode => claude({ role: w.role, mode, cwd: w.cwd, protectedPaths: ['.git'], commonDir: w.commonDir, session: SESSION, ...(mode === 'locked' ? {} : { mcp: w.mcp, approval: { tool: APPROVAL_TOOL } }) });
+  const settingsOf = args => JSON.parse(args[args.indexOf('--settings') + 1]);
+  atomic(path.join(personalDirectory(), 'conformance', 'grok.json'), { v: 1, bin: path.join(w.dir, 'grok'), version: '1.0.77', steps: Object.fromEntries(grok.conformance.map(step => [step.id, 'pass'])), relay: true, at: new Date().toISOString() });
+  const grokRole = { vendor: 'grok', access: 'edit', writablePaths: ['.'], commands: [], network: 'off', maxCostUsd: null, timeoutSeconds: 120 };
+  for (const folder of theirs) {
+    for (const mode of ['locked', 'ask', 'auto']) {
+      const settings = settingsOf(launch(mode));
+      assert.ok(settings.permissions.deny.includes(`Read(//${folder.slice(1)})`) && settings.permissions.deny.includes(`Read(//${folder.slice(1)}/**)`), `Claude Code ${mode} ${folder}`);
+      assert.ok(settings.sandbox.filesystem.denyRead.includes(folder), `Claude Code's sandbox ${mode} ${folder}`);
+      assert.ok(grok.compile({ role: mode === 'locked' ? { ...grokRole, access: 'read', writablePaths: [] } : grokRole, mode, cwd: w.cwd, session: SESSION, runDir: w.runDir }).includes(`Read(${folder}/**)`), `Grok Build ${mode} ${folder}`);
+    }
+    for (const mode of ['ask', 'auto']) {
+      assert.ok(codex({ role: lead, mode, cwd: w.cwd, schemaFile: w.schemaFile, commonDir: w.commonDir }).some(arg => arg.includes(`${JSON.stringify(folder)}="deny"`)), `Codex ${mode} ${folder}`);
+      assert.ok(agySettings(mode, { cwd: w.cwd, commonDir: w.commonDir }).permissions.deny.some(rule => rule.startsWith(`write_file(${path.join(os.homedir(), path.basename(folder))}`)), `Antigravity CLI ${mode} ${folder}`);
+    }
+    // Full access: the folder is in no launch, as a rule or as a sandbox entry.
+    const full = [launch('full'), codex({ role: lead, mode: 'full', cwd: w.cwd, schemaFile: w.schemaFile, commonDir: w.commonDir }), grok.compile({ role: grokRole, mode: 'full', cwd: w.cwd, session: SESSION, runDir: w.runDir }), [JSON.stringify(agySettings('full', { cwd: w.cwd, commonDir: w.commonDir }))]];
+    for (const argv of full) assert.equal(argv.some(arg => arg.includes(folder.slice(1))), false, `Full access ${folder}`);
+  }
+  // /permissions folders: refused below Full access, taken in it.
+  const base = fs.realpathSync(temp(t)), mine = path.join(base, 'home'), named = ['.gemini', '.grok'].map(name => path.join(mine, name));
+  for (const folder of named) fs.mkdirSync(folder, { recursive: true });
+  for (const mode of [undefined, 'ask', 'auto']) for (const folder of named) assert.throws(() => checkFolders([folder], { home: mine, mode }), /holds secrets or ELU state/, `${mode} ${folder}`);
+  assert.deepEqual(checkFolders(named, { home: mine, mode: 'full' }), named);
 });
