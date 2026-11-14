@@ -263,10 +263,10 @@ test('elu sessions delete deletes an archived session for good, or every archive
   const one = json(elu(f, ['sessions', 'delete', '2', '--json']));
   assert.deepEqual(one.deleted, ['2']); assert.equal(one.message, 'Deleted session 2.');
   assert.ok(!sessions(f).some(task => task.id === '2')); assert.equal(fs.existsSync(path.join(f.repo.worktrees, '2')), false);
-  // Every archived one, after --learn: what was saved is said, and the work on no remote stays on its branch.
-  const all = json(elu(f, ['sessions', 'delete', 'archived', '--learn', '--json']));
-  assert.deepEqual([all.deleted, all.lines], [['3'], ['Saved to project context: Use pnpm, not npm.']]);
-  assert.equal(all.message, 'Deleted session 3.\nKept 1 commit not pushed of session 3 on feat/task-3.\nSaved to project context: Use pnpm, not npm.');
+  // Every archived one, after --learn: what was saved is said once, and the work on no remote stays on its branch.
+  const all = elu(f, ['sessions', 'delete', 'archived', '--learn']);
+  assert.equal(all.status, 0, all.stderr);
+  assert.equal(all.stdout.trim(), 'Deleted session 3.\nKept 1 commit not pushed of session 3 on feat/task-3.\nSaved to project context: Use pnpm, not npm.');
   assert.match(readProjectSettings(f.root).context, /Use pnpm, not npm\./);
   assert.deepEqual(sessions(f).map(task => task.id), ['4']); assert.match(git(f.root, ['branch', '--list', 'feat/task-3']), /feat\/task-3/);
   assert.equal(json(elu(f, ['sessions', 'delete', 'archived', '--json'])).message, 'No archived sessions.');
