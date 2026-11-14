@@ -24,7 +24,8 @@ import { sessionChanges } from '../lib/diff.mjs';
 import { sessionFiles } from '../lib/session-work.mjs';
 import { peerFile } from '../lib/peer/paths.mjs';
 import { teamPath } from '../lib/peer/roster.mjs';
-import { readTask, saveTask, taskDir, taskPlace } from '../lib/state.mjs';
+import { readTask, saveTask, setTitle, taskDir, taskPlace } from '../lib/state.mjs';
+import { saveSchedule, runScheduleNow, parseWhen } from '../lib/schedules.mjs';
 import { spawnSync } from 'node:child_process';
 import { projectFolder } from '../lib/workspace.mjs';
 import { registerProject, registeredProjects, sessionModel } from '../lib/projects.mjs';
@@ -841,6 +842,39 @@ test('a computer of mine lists every session here, whoever started it, a page at
   assert.deepEqual(since.gone, [row('Notes for the week').ref]);
   // A cursor from before this daemon started lists everything again.
   assert.equal(withHome(devbox.home, () => host['elu.remote.list']({ since: 1 }, toHost)).full, true);
+});
+
+// A schedule's run names its schedule from its start, so my other computer shows it as a
+// schedule's at once, with the schedule's wording; the earlier runs it archived leave the list
+// there as they leave Sessions here, and a run that waits to start takes the name the owner
+// gave the last one.
+test("a schedule's run shows on my other computer as a schedule's from its start, with its wording, and the runs it archived leave the list", async t => {
+  const { devbox, project, toHost, host } = pair(t), list = since => withHome(devbox.home, () => { relist(); return host['elu.remote.list'](since ? { since } : {}, toHost); });
+  const shown = listed => Object.fromEntries(listed.sessions.map(value => [value.ref.split(':').at(-1), [value.title, value.by, value.state]]));
+  const row = withHome(devbox.home, () => {
+    const row = saveSchedule({ root: project.root, goal: 'Check the nightly build\nand say what failed', when: parseWhen('every 3h') });
+    chat(project.root, 1, { goal: row.goal, minutes: 30, scheduleId: row.id });
+    // Run 2 has just started: the schedule has not kept its number yet.
+    chat(project.root, 2, { goal: row.goal, minutes: 1, scheduleId: row.id, state: 'running' });
+    return row;
+  });
+  const first = list();
+  assert.deepEqual(shown(first), { 1: ['Check the nightly build', 'schedule', 'answered'], 2: ['Check the nightly build', 'schedule', 'running'] });
+  const ref = id => first.sessions.find(value => value.ref.endsWith(`:${id}`)).ref;
+  // Run 2 answered. The next run archives both: they leave the list here, and the run that waits to start shows as the schedule's.
+  await pause(5);
+  withHome(devbox.home, () => { chat(project.root, 2, { goal: row.goal, minutes: 1, scheduleId: row.id }); runScheduleNow(row.id, new Date(), { start: () => true }); });
+  const second = list(first.cursor);
+  assert.deepEqual(second.gone.sort(), [ref(1), ref(2)].sort());
+  assert.deepEqual(second.sessions.map(value => [value.title, value.by, value.state]), [['Check the nightly build', 'schedule', 'starting']]);
+  // He renamed run 3 himself: run 4 waits to start under his name.
+  await pause(5);
+  withHome(devbox.home, () => {
+    const request = pendingRequests(project.root).find(value => value.scheduleId === row.id); updateRequest(project.root, request.id, { state: 'done', taskId: '3' });
+    chat(project.root, 3, { goal: row.goal, minutes: 1, scheduleId: row.id }); setTitle(repository(project.root), '3', 'Nightly review');
+    runScheduleNow(row.id, new Date(), { start: () => true });
+  });
+  assert.deepEqual(list().sessions.map(value => [value.title, value.by, value.state]), [['Nightly review', 'schedule', 'starting']]);
 });
 
 // A message longer than one line on the link (1 MiB) goes ahead of its request in elu.text.put
