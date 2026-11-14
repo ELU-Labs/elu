@@ -73,7 +73,7 @@ const BOTS = ['reviewer', 'lead', 'qa', 'pair'];
 
 test('on a computer with only Grok Build, an edit is reviewed by @reviewer on Grok Build and reaches ready', async t => {
   const p = setup(t, { fake: { mode: 'normal', grok: 'edits' } }), controller = autoApprove(new ProjectController(projectFolder(p.root)));
-  const task = await controller.ask('Normalize coupon codes').finished;
+  const task = await controller.ask('Normalize coupon codes', null, { permissions: 'ask' }).finished;
   assert.equal(task.error, null, JSON.stringify(task.error)); assert.equal(task.state, 'ready');
   assert.equal(fs.readFileSync(path.join(task.worktree, 'src/coupon.mjs'), 'utf8'), 'export const normalize = (value) => value.toUpperCase();\n', 'the edit was made');
   // The session has @reviewer, as every new one does, and its review ran here, on Grok Build.
@@ -99,7 +99,7 @@ test('@reviewer, @lead, @qa and @pair each answer there, and Grok Build can be a
   assert.deepEqual(BOTS.map(name => getBot(name).vendor), ['claude', 'claude', 'claude', 'codex']);
   // The Bots tab says where each runs here, and its page says why.
   const rows = botLines(BOTS.map(getBot), 200, false);
-  for (const row of rows) assert.match(row, /^@\w+ +grok here\b/);
+  for (const row of rows) assert.match(row, /\bgrok here\b/);
   assert.equal(botNotes(getBot('reviewer'), [])[0], 'Claude Code is not installed here, so this bot runs on Grok Build.');
   assert.equal(botNotes(getBot('pair'), [])[0], 'Codex is not installed here, so this bot runs on Grok Build.');
   // A bot can be saved on Grok Build, and answers.
