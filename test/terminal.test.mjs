@@ -1643,7 +1643,7 @@ test('every line of a view-only window shows whole at 80 columns, and names the 
   await sized(v, 80, 24); await until(() => statusShown(v) === short + back && label() === ' View only: another window has it · /takeover ', 'short again at 80');
   // Under a Task that waits for approval, which has the row's first line: still whole.
   await openTask(v, /Round refund/); await send(v, 'Also cover refunds');
-  const waits = '? Needs you · Esc, then y approve · n reject...';
+  const waits = '? Esc, then y approve · n reject, then Enter';
   await shows(v, `${waits} ${short}${back}`, 'whole under the Task that waits');
   await send(v, '/takeover'); await shows(v, `${waits} › Asked the other ELU window to let go of this project.`, 'asked');
   other.child.kill('SIGKILL'); await other.ended;
@@ -2054,7 +2054,7 @@ test('/model never holds the screen while a vendor prints its models', { timeout
   // The longest the event loop went without running a timer: what the screen froze for.
   let most = 0, last = Date.now(); const timer = setInterval(() => { const now = Date.now(); most = Math.max(most, now - last); last = now; }, 20);
   t.after(() => clearInterval(timer));
-  v.input.write('/model '); await until(() => rows().join() === 'fable,opus,sonnet,codex,agy,grok,default,add', 'the names known, at once');
+  v.input.write('/model '); await until(() => rows().join() === 'fable,opus,sonnet,codex,agy,grok,default,computer,add', 'the names known, at once');
   await until(() => asked() === 1, 'codex is asked for its models');
   // Keys are taken while codex is still printing.
   v.input.write('so'); await until(() => rows().join() === 'sonnet', 'typing narrows the list meanwhile');
@@ -5312,7 +5312,7 @@ test('Usage with a vendor that says nothing for 30 seconds: the tab opens at onc
   await until(() => /^Reading what is installed and signed in here…$/m.test(text()), 'the tab says it is reading', 5000);
   assert.ok(Date.now() - opened < 5000, `the tab took ${Date.now() - opened} ms to open`);
   // The agents and today's spend are there already, under the line that says what is being read.
-  assert.match(text(), /^Reading what is installed and signed in here…\n\nTop agents today\nNo agent has run today\.\nELU spend today not reported$/);
+  assert.match(text(), /^Reading what is installed and signed in here…\n\nTop agents today\nNo agent has run today\.\nELU spend today \$0\.00$/);
   // Keys work while it reads: t changes the period of the agents list, and back.
   panels.usageList.focus(); await until(() => v.current.screen.focused === panels.usageList, 'list focused');
   v.input.write('t'); await until(() => /^Top agents, last 7 days$/m.test(text()), 't shows 7 days', 2000);
@@ -5347,7 +5347,7 @@ test('Sessions shows the list on the left and the open session on the right, at 
     assert.equal(panels.boardBox.atop, panels.chat.atop); assert.equal(panels.boardBox.atop + panels.boardBox.height, panels.keys.atop);
     assert.equal(panels.chat.atop + panels.chat.height, panels.status.atop); assert.equal(panels.status.atop + 1, panels.ask.atop); assert.equal(panels.ask.atop + panels.ask.height, panels.keys.atop);
     // The key bar is one column wider than its hints, so a line of hints that fills it keeps its last word.
-    assert.deepEqual([panels.ask.height, panels.keys.atop, panels.keys.aleft, panels.keys.width], [6, height - 1, 1, width - 1], 'a four-line message box, and the key bar across the bottom');
+    assert.deepEqual([panels.ask.height, panels.keys.atop, panels.keys.aleft, panels.keys.width], [6, height - 1, 1, width - 2], 'a four-line message box, and the key bar across the bottom');
     // No button stands in for the list: ‹ Sessions and the + New session button are gone.
     assert.equal(panels.back.hidden, true); assert.equal(panels.newTask, undefined); assert.equal(panels.boardBox.hidden, false); assert.equal(panels.compose.hidden, true); assert.equal(panels.chat.hidden, false);
     // The list: + New session first, then each group with its count. One line per row: mark, title, age. No row has a session number.
