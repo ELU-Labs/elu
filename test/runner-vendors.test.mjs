@@ -405,9 +405,14 @@ test('an Antigravity turn over ACP that the owner stops after he allowed its com
   assert.deepEqual((task.approvals ?? []).map(row => [row.role, row.decision]), [['lead', 'allow']], 'what he decided stays with the session');
   const opened = fs.readFileSync(stop.logFile, 'utf8').split('\n').map(line => { try { return JSON.parse(line); } catch { return null; } }).find(row => typeof row?.result?.sessionId === 'string')?.result.sessionId;
   assert.ok(opened, 'the log names the conversation'); assert.deepEqual(task.interrupted?.lead, { vendor: 'agy', id: opened, log: stop.logFile });
-  const next = await f.controller.ask('Reply with the summary "again".', turn.id).finished;
-  assert.equal(next.state, 'answered', JSON.stringify(next.error)); assert.equal(next.result.summary, 'again');
+  // The stand-in reads the session's first message again with every turn, and asks for its command once more.
+  fs.writeFileSync(slow, '#!/bin/sh\nexit 0\n', { mode: 0o700 });
+  const again = f.controller.ask('Go on.', turn.id);
+  await answer('allow', { vendor: 'agy' });
+  const next = await again.finished;
+  assert.equal(next.state, 'answered', JSON.stringify(next.error));
   assert.equal(next.runs.length, 1); assert.equal(next.runs[0].session, opened, 'the same conversation'); assert.deepEqual(f.calls().at(-1).args, ['acp']);
+  assert.deepEqual((next.approvals ?? []).map(row => [row.role, row.decision]), [['lead', 'allow'], ['lead', 'allow']], 'the decision of the stopped turn, then that of the one that went on');
 });
 
 test('an Antigravity turn in Read only runs over ACP and writes nothing inside or outside the project, also where the vendor asks instead of refusing; the owner is asked nothing', async t => {
