@@ -9,7 +9,7 @@ import { projectFolder } from '../lib/workspace.mjs';
 import { readTask, saveTask, taskDir } from '../lib/state.mjs';
 import { stopLine } from '../lib/stop-line.mjs';
 import { boardRows, remoteRow, rowActions, rowBadge, rowTitle } from '../lib/board.mjs';
-import { committedLine, finished, movedLine, restingMove, settleFinished, settleHead } from '../lib/task-head.mjs';
+import { committedLine, finished, movedLine, publishWords, restingMove, settleFinished, settleHead } from '../lib/task-head.mjs';
 import { currentTask, reopenTask } from '../lib/plan.mjs';
 import { findBin } from '../lib/util.mjs';
 import { hostMethods, hostTick, listTick, relist, remoteCommand, remoteMachines, remoteSessions, viewMethods, viewTick } from '../lib/peer/remote.mjs';
@@ -81,6 +81,18 @@ test('the same holds below Full access when the commit was let through, and a me
   assert.equal(again.error ?? null, null, again.error?.message); assert.ok(f.turns() > turns, 'continue ran a turn');
   assert.equal(stopLine(again), null); assert.ok(['ready', 'unverified', 'answered'].includes(again.state), again.state);
   assert.equal(readTask(f.repo, task.id).commit, git(task.worktree, ['rev-parse', 'HEAD']));
+});
+
+// What a session that is ready says of publishing it, in the status line and under its chat:
+// pushed, by the agent or by /publish, with the pull request ELU knows; else what /publish does.
+test('a ready session says pushed once its work is pushed, with its pull request when there is one, else what /publish does', () => {
+  const PR_URL = 'https://github.com/example/sample/pull/7';
+  assert.equal(publishWords({ state: 'ready', commit: 'abc', committed: { branch: 'feat/task-1', clean: true, pushed: false } }), '/publish to review push');
+  assert.equal(publishWords({ state: 'ready', commit: 'abc' }), '/publish to review push');
+  assert.equal(publishWords({ state: 'ready', commit: 'abc', committed: { branch: 'feat/task-1', clean: true, pushed: true } }), 'pushed · /publish opens a draft pull request');
+  assert.equal(publishWords({ state: 'ready', commit: 'abc', committed: { branch: 'feat/task-1', clean: true, pushed: true }, pr: PR_URL }), `pushed · ${PR_URL}`);
+  assert.equal(publishWords({ state: 'ready', commit: 'abc', pushedCommit: 'abc', pr: PR_URL }), `pushed · ${PR_URL}`, 'pushed by /publish');
+  assert.equal(publishWords({ state: 'ready', commit: 'def', pushedCommit: 'abc', pr: PR_URL }), '/publish to review push', 'a commit on top is not pushed yet');
 });
 
 test('the session says where its committed work is: the branch, the commit, and whether it is pushed or something is left uncommitted', async t => {

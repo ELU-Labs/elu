@@ -3060,6 +3060,22 @@ test('a message sent while Claude Code works goes to its turn, and the chat says
 // The owner's report: the model sat in one long command, his message read "Sent to the running
 // turn", and nothing read it until the command ended. It waits, and the chat says so; Enter
 // sends it now with Claude Code's own interrupt, and the same turn goes on with it.
+// The owner's report: after the agent pushed its work, the status line still said "/publish to
+// review push". It says pushed, and the pull request when ELU knows one (lib/task-head.mjs publishWords).
+test('after the agent pushed its work, the status line and the chat say pushed, never /publish to review push', { timeout: 60000 }, async t => {
+  const p = setup(t, 'normal', { commit: 'push' });
+  const bare = path.join(p.parent, 'origin.git'); git(p.parent, ['init', '-q', '--bare', '--initial-branch=main', bare]); git(p.root, ['remote', 'add', 'origin', bare]);
+  const v = await view(t, { repo: p.repo }), panels = v.current.panels, chat = () => panels.chat.getText().replace(/\s+/g, ' '), status = () => panels.status.getText().replace(/\s+/g, ' ');
+  await send(v, '/permissions full'); await dialog(v, 'Full access', 'y');
+  await send(v, 'Make coupon codes uppercase.');
+  try { await until(() => /ready \| pushed · \/publish opens a draft pull request/.test(status()), 'the status line says pushed', 40000); } catch { assert.fail(`the status line says pushed: "${status()}" under "${chat().slice(-240)}"`); }
+  const task = projectSnapshot(p.repo).tasks[0];
+  assert.deepEqual([task.state, task.committed?.pushed], ['ready', true]);
+  assert.match(chat(), /Committed on feat\/task-1 at [0-9a-f]{7} and pushed\./);
+  assert.match(chat(), /Checks complete\. \/changes to inspect · pushed · \/publish opens a draft pull request/);
+  assert.doesNotMatch(chat() + status(), /review push/);
+});
+
 // The owner's report: sent while the turn ran no command, the status line said "The running
 // turn reads it at its next step." while the row under his message said it waits for the
 // command. Both say the same, and what is true then: at its next step.
