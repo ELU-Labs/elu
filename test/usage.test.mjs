@@ -278,7 +278,7 @@ test('the Usage tab reads Antigravity and Grok Build sign-in before their one-ti
   const denied = loaded('deny');
   assert.equal(denied.asks, true); assert.deepEqual(text(denied).slice(2), ['            It would also run on this machine: Cursor hook /x/.cursor.', '            You said no, so it runs in Full access only. c asks again.']);
   // A check c started shows its lines under the vendor as it goes, then why it stopped.
-  const checks = new Map([['grok', { running: true, lines: ['Checking Grok Build (the grok command): 8 steps, once on this machine for release 1.0.77.'], current: 'Checking Grok Build: 2 of 8 steps done, 14s so far. Proven: a read-only turn writes no file.', error: null }]]);
-  assert.deepEqual(usageBlocks([usageTab({ vendors: withCheck([waiting('grok')], { env }), env, now })[3]], { checks }).map(line => line.text), ['Grok Build  (grok) signed in · checking…', '            Checking Grok Build (the grok command): 8 steps, once on this', '            machine for release 1.0.77.', '            Checking Grok Build: 2 of 8 steps done, 14s so far. Proven: a', '            read-only turn writes no file.']);
+  const checks = new Map([['grok', { running: true, lines: ['Checking Grok Build (the grok command): 8 steps, once on this machine for release 1.0.77.'], current: 'Grok Build: 2 of 8 steps, 14s so far. Proven: a read-only turn writes no file.', error: null }]]);
+  assert.deepEqual(usageBlocks([usageTab({ vendors: withCheck([waiting('grok')], { env }), env, now })[3]], { checks }).map(line => line.text), ['Grok Build  (grok) signed in · checking…', '            Checking Grok Build (the grok command): 8 steps, once on this', '            machine for release 1.0.77.', '            Grok Build: 2 of 8 steps, 14s so far. Proven: a read-only turn', '            writes no file.']);
   assert.ok(!calls().some(call => call.vendor === 'grok'), 'grok was never run');
 });

@@ -7,7 +7,7 @@ import { ProjectController } from '../lib/projects.mjs';
 import { projectFolder } from '../lib/workspace.mjs';
 import { readTask } from '../lib/state.mjs';
 import { conformanceState, failedText, uncheckedText } from '../lib/conformance.mjs';
-import { checkOnFirstUse, notSignedInText } from '../lib/vendor-check.mjs';
+import { checkOnFirstUse, countLine, notSignedInText, waitLine } from '../lib/vendor-check.mjs';
 import { detect, vendorProblem } from '../lib/detect.mjs';
 import { atomic, personalDirectory } from '../lib/util.mjs';
 import { ADAPTERS } from '../lib/adapters/index.mjs';
@@ -61,7 +61,7 @@ const session = (f, at = -1) => f.controller.snapshot().tasks.at(at).id;
 const FULL_NOW = 'Full access needs no check: /permissions full runs your message now.';
 const FIRST = `Checking Grok Build (the grok command) first: 8 steps, once on this machine for release 1.0.77. ${FULL_NOW}`;
 const PASSED = 'Grok Build 1.0.77 passed its check on this machine.';
-const COUNTING = /^Checking Grok Build: (\d) of 8 steps done, (\d+m )?\d+s so far\.( (Proven|Not proven|Skipped): [^.]+\.)?$/;
+const COUNTING = /^Grok Build: (\d) of 8 steps, (\d+m )?\d+s so far\.( (Proven|Not proven|Skipped): [^.]+\.)?$/;
 
 test('Full access, first use on this computer: a message to a Grok Build that was never checked starts at once, runs no check and says nothing about one', { timeout: 300000 }, async t => {
   const f = machine(t);
@@ -90,7 +90,7 @@ test('outside Full access the first message still waits for the check, and says 
   // Under the working line: the steps done of the real number, and the time so far, counted on while a step runs.
   const counted = () => notes(f).map(row => row.note).filter(note => COUNTING.test(note));
   await until(() => counted().length >= 3, 'the counting line, said again while the first step runs', 30000);
-  assert.match(counted()[0], /^Checking Grok Build: 0 of 8 steps done, 0s so far\.$/);
+  assert.match(counted()[0], /^Grok Build: 0 of 8 steps, 0s so far\.$/);
   const seconds = counted().map(note => Number(/(\d+)s so far/.exec(note)[1]));
   assert.ok(seconds.at(-1) >= 5, `the time is counted on: ${counted().join(' | ')}`);
   assert.equal(ended, false, 'the message waits for the check');
@@ -100,7 +100,7 @@ test('outside Full access the first message still waits for the check, and says 
   const task = await ask.finished;
   assert.equal(task.state, 'answered', why(task)); assert.equal(task.result.summary, 'after the check'); assert.equal(task.runs[0].permissions, 'ask');
   assert.deepEqual(said(task), [FIRST, PASSED]);
-  assert.match(counted().at(-1), /^Checking Grok Build: 8 of 8 steps done, /);
+  assert.match(counted().at(-1), /^Grok Build: 8 of 8 steps, /);
   for (const note of notes(f).map(row => row.note)) assert.doesNotMatch(note, /a few minutes|seven short turns|One-time check/);
 });
 
@@ -157,7 +157,7 @@ test('a check that another session is running: a Full access message does not wa
   const c = f.send('Reply done with the summary "from the third".', null, { permissions: 'ask' }), cId = await until(() => f.controller.snapshot().tasks.find(task => ![aId, second.id].includes(task.id))?.id, 'the third session'); let cEnded = false; c.finished.then(() => { cEnded = true; }, () => { cEnded = true; });
   await until(() => said(readTask(repo, cId)).length, 'what the third session says');
   assert.deepEqual(said(readTask(repo, cId)), [`Grok Build (the grok command) is being checked by another session on this machine. This one goes on when that ends. ${FULL_NOW}`]);
-  await until(() => notes(f).some(row => row.taskId === cId && /^Waiting for the check of Grok Build, \d+s so far\.$/.test(row.note)), 'the time it has waited');
+  await until(() => notes(f).some(row => row.taskId === cId && /^Grok Build: waiting \d+s so far for the other session's check\.$/.test(row.note)), 'the time it has waited');
   await sleep(1500); assert.equal(cEnded, false, 'it waits');
   // Set to Full access, as its line says: its message runs now, and starts no check.
   const switched = Date.now(), before = checkTurns(f.calls()).length;
@@ -244,6 +244,14 @@ test('a line about a vendor\'s check or its sign-in names the command with it, f
   const other = (await detect(f.root, process.env, { only: 'grok' }))[0], kept = [];
   assert.equal(await checkOnFirstUse(other, { cwd: f.root, mode: 'locked', fullNote: false, say: (text, { keep = false } = {}) => { if (keep) kept.push(text); } }), true);
   assert.equal(kept[0], 'Grok Build (the grok command) is now release 1.0.79 (1.0.77 was checked), so its check runs again first: 8 steps, once for this release.');
+  // The lines that count show whole where it matters on an 80-column screen, which shows 40
+  // characters of them: the vendor, the steps and the time so far come first, for either
+  // vendor and a check that has run for most of an hour.
+  const hour = Date.now() - 3599000;
+  assert.equal(countLine('grok', 3, 8, Date.now() - 20000, ' Proven: a read-only turn runs no command.'), 'Grok Build: 3 of 8 steps, 20s so far. Proven: a read-only turn runs no command.');
+  assert.equal(countLine('agy', 7, 8, hour), 'Antigravity CLI: 7 of 8 steps, 59m 59s so far.');
+  assert.equal(waitLine('agy', hour), "Antigravity CLI: waiting 59m 59s so far for the other session's check.");
+  for (const line of [countLine('grok', 7, 8, hour), countLine('agy', 7, 8, hour), waitLine('grok', hour), waitLine('agy', hour)]) assert.ok(line.indexOf(' so far') <= 40, line);
   // A turn in Full access is never checked here, whatever the record says.
   f.set({ version: '1.0.80' });
   assert.equal(await checkOnFirstUse((await detect(f.root, process.env, { only: 'grok', full: 'grok' }))[0], { cwd: f.root, mode: 'full', say: () => assert.fail('nothing is said') }), false);

@@ -32,7 +32,7 @@ wrote to a session on it or to a bot on it, or the turn started without you: a s
 turn, a shadow turn, a review, a standup or a Task's work. The session says so first:
 `Checking Grok Build (the grok command) first: 8 steps, once on this machine for release
 1.0.77. Full access needs no check: /permissions full runs your message now.` Under the
-working line it then counts, `Checking Grok Build: 3 of 8 steps done, 1m 5s so far.`, and
+working line it then counts, `Grok Build: 3 of 8 steps, 1m 5s so far.`, and
 then the turn goes on. Each step is a short turn on Grok, so how long the check takes is
 how fast Grok answers. `c` in the Usage tab starts it too.
 

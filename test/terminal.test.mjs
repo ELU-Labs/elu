@@ -5083,7 +5083,7 @@ test('Usage: Antigravity and Grok Build show their sign-in before their one-time
   await until(() => /^Grok Build {2}signed in · ready$/m.test(text()), 'Grok ready', 45000);
   clearInterval(watch);
   assert.ok(seen.has('Grok Build  (grok) signed in · checking…'), [...seen].join('\n'));
-  assert.ok([...seen].some(line => /^Checking Grok Build: \d of 8 steps done, \d+s so far\./.test(line)), 'the counting line showed while it ran');
+  assert.ok([...seen].some(line => /^Grok Build: \d of 8 steps, \d+s so far\./.test(line)), 'the counting line showed while it ran');
   assert.match(text(), /^Grok Build {2}signed in · ready\n {12}Checking Grok Build \(the grok command\): 8 steps, once on this\n {12}machine for release 1\.0\.77\.\n {12}Grok Build 1\.0\.77 passed its check on this machine\.$/m);
   await until(() => /Grok Build is ready\./.test(status()), 'status');
   assert.deepEqual(Object.values(conformanceState('grok').steps).filter(step => step !== 'pass'), [], 'the check record is the session\'s');
