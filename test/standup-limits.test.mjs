@@ -140,6 +140,25 @@ test('a summary reply that asks to edit is taken as an answer: the Standup ends,
   assert.equal(readTask(f.repo, standup.id).codingGoal, undefined);
 });
 
+// A Standup in a mode that approves Tasks by itself: its summary's edit is never a Task that
+// mode approves, which left the Standup preparing, and running in Sessions, until his next message.
+for (const [permissions, label] of [['full', 'Full access'], ['auto', 'Approve for me']]) {
+  test(`a Standup in ${label} whose summary reply asks to edit ends answered, with no Task its mode approves, never left preparing`, async t => {
+    const f = setup(t);
+    await f.controller.ask('Explain coupons').finished;
+    const file = path.join(f.fake.dir, 'fake.json'); fs.writeFileSync(file, JSON.stringify({ ...JSON.parse(fs.readFileSync(file, 'utf8')), mode: 'normal' }));
+    let over = false; const loop = answering(f.controller, () => over);
+    const standup = await Promise.race([f.controller.ask('/standup', null, { standup: true, permissions }).finished, sleep(20000).then(() => null)]);
+    over = true; await loop;
+    assert.ok(standup, 'the Standup turn finishes');
+    const saved = readTask(f.repo, standup.id);
+    assert.equal(saved.permissions, permissions);
+    assert.equal(saved.state, 'answered');
+    assert.equal(saved.codingGoal, undefined);
+    assert.equal(saved.result?.intent, 'answer');
+  });
+}
+
 test("a Claude Code session answers in a fork of its vendor session; its next turn resumes its own", async t => {
   const f = setup(t);
   // The fake Claude Code lists --fork-session in its help, as the real one does.
