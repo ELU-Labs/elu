@@ -275,6 +275,40 @@ test('Chats stacks the bar over threads at 80x24 without breaking borders', asyn
   list.select(0); v.input.write('\x1b[A'); await until(() => v.current.screen.focused === roster, 'Up from the first thread returns');
 });
 
+// The arrows stopped at the Direct messages heading and the cursor went back to #general, so a direct chat opened with a click only.
+for (const [columns, rows] of [[160, 40], [140, 50], [80, 24]]) test(`Up and Down in the Team bar reach every channel and every direct chat and skip the headings at ${columns}x${rows}`, { timeout: 30000 }, async t => {
+  const { v } = await teamView(t, { columns, rows, peer: fakePeer({ items: [] }) });
+  const [bar, threads] = v.panels.teamLists, at = () => plainItem(bar.items[bar.selected]).trim(), open = () => v.panels.teamBoxes[1]._label.getText().trim();
+  await until(() => bar.items.length > 5 && open() === '#general', 'the bar opens on #general');
+  const all = bar.items.map(item => plainItem(item).trim()), stops = all.filter(line => !['Channels', '', 'Direct messages'].includes(line));
+  assert.deepEqual(all.slice(0, 5), ['Channels', '# general  3', '+ Add channel', '', 'Direct messages']); assert.match(stops[2], /^● @sara/);
+  // One key, one row: the next row that can be chosen, or the bar is left.
+  const press = async key => { const from = at(); v.input.write(key); await until(() => v.current.screen.focused !== bar || at() !== from && stops.includes(at()), `a move from ${from}`); return at(); };
+  bar.focus(); assert.equal(at(), '# general  3');
+  const down = [at()]; for (let step = 1; step < stops.length; step++) down.push(await press('\x1b[B'));
+  assert.deepEqual(down, stops, 'Down stops on every channel, person, bot and add row, and on no heading');
+  // The threads beside the bar follow the cursor to a direct chat, and Enter there writes to that person.
+  bar.select(all.findIndex(line => /^\+ Add channel/.test(line)));
+  assert.match(await press('\x1b[B'), /^● @sara/); await until(() => open() === '@sara', '@sara opens from the keyboard');
+  v.input.write('\r'); await until(() => v.current.screen.focused === v.panels.ask && /Message @sara/.test(v.panels.ask._label.getText()), 'Enter on @sara writes to them');
+  bar.focus(); bar.select(all.findIndex(line => /^○ @li/.test(line))); await until(() => open() === '@li', '@li opens');
+  // Up goes back the same way, over the headings, to the first channel; one more Up leaves the bar for the tabs.
+  bar.select(bar.items.length - 1);
+  const up = [at()]; for (let step = 1; step < stops.length; step++) up.push(await press('\x1b[A'));
+  assert.deepEqual(up, [...stops].reverse(), 'Up stops on the same rows');
+  await until(() => open() === '#general', '#general is open again');
+  v.input.write('\x1b[A'); await until(() => v.current.screen.focused === v.panels.tabs.find(tab => tab.viewName === 'chats'), 'Up from the first channel reaches the Chats tab');
+  assert.equal(at(), '# general  3', 'the cursor stays on the first channel');
+  // Down from the last row leaves for the threads under the bar, or the message box beside it.
+  bar.focus(); bar.select(bar.items.length - 1); v.input.write('\x1b[B');
+  await until(() => v.current.screen.focused === (columns < 100 ? threads : v.panels.ask), 'Down from the last row leaves the bar');
+  // The wheel passes the headings too, both ways.
+  bar.focus(); bar.select(all.findIndex(line => /^\+ Add channel/.test(line))); wheelAt(v, bar, 1);
+  await until(() => /^● @sara/.test(at()), 'a wheel step down from + Add channel lands on @sara');
+  wheelAt(v, bar, -1); await until(() => at() === '+ Add channel', 'a wheel step up from @sara lands on + Add channel');
+  assert.ok(stops.includes(at()) && v.current.screen.focused === bar);
+});
+
 test('a message that starts with ! in Chats runs in a shell and is never asked to the team', async t => {
   const { v, peer } = await teamView(t);
   await send(v, '!echo not-for-the-team');
@@ -334,14 +368,14 @@ test('a thread dialog acts on the letter it names, only while its field is empty
   await until(() => peer.sent().some(row => row.type === 'work' && row.id === 'incoming:task-ask' && row.permissions === 'ask'), 'ask accepted from the dialog');
   await until(() => !modal(v, 'Thread with @sara') && /Accepted @sara/.test(v.panels.status.getText()), 'dialog closed');
   // Once something is typed, letters are text.
-  await open(threads, /reply ready/, 'Thread with @sara', 'y sends. n discards.');
+  await open(threads, /reply ready/, 'Thread with @sara', 'y sends. e edits it first. n discards.');
   // The thread reads like a chat: Sara's question, then my model's reply waiting to go.
   assert.match(v.text(), /@sara · question · \d\d:\d\d[^]*How do we rotate keys\?[^]*↳ your model · answer · not sent yet · \d\d:\d\d[^]*Rotate with bin\/rotate\./);
   v.input.write('x'); v.input.write('y'); await new Promise(resolve => setTimeout(resolve, 100));
   assert.ok(modal(v, 'Thread with @sara'), 'typed letters keep the dialog open');
   await closeDialog(v, 'Thread with @sara');
   assert.ok(!peer.sent().some(row => row.type === 'approve'), 'nothing approved');
-  await open(threads, /reply ready/, 'Thread with @sara', 'y sends. n discards.'); v.input.write('n');
+  await open(threads, /reply ready/, 'Thread with @sara', 'y sends. e edits it first. n discards.'); v.input.write('n');
   await until(() => peer.sent().some(row => row.type === 'discard' && row.id === 'held-1'), 'reply discarded from the dialog');
   await open(threads, /answered/, 'Thread with @sara', 'c continues'); v.input.write('c');
   await until(() => peer.sent().some(row => row.type === 'continue' && row.id === 'answer-1'), 'continued from the dialog');
@@ -461,10 +495,206 @@ test('the open channel names who is in it over its threads, and an empty one say
   await until(() => inside(v) === 'In #design · you, @sara · m changes who is in it', 'who is in #design');
   assert.deepEqual(threadLines(v), ['Nothing in #design yet. Type below to write to it. m changes who is in it.']);
   await until(() => /enter read {2}m members {2}x leave$/.test(keys()), 'm and x for a created channel');
-  // A person has no such line, and their threads start at the top again.
+  // A person's line says what is on for them, and their threads start under it too.
   await openRow(v, /@sara\s+direct/, '@sara');
-  await until(() => inside(v) === null && threads.atop === box.atop + 1, 'no line for a person');
-  assert.deepEqual(threadLines(v), ['Nothing in @sara yet. Type below to write to it.']);
+  await until(() => inside(v) === 'Hold replies: off · Auto-continue: off · h and o change them' && threads.atop === box.atop + 2, 'the line for a person');
+  assert.deepEqual(threadLines(v), ['Nothing in @sara yet. Type below to write to it.']); assertPanes(v, 160);
+  // A bot of mine has no line, and its threads start at the top again.
+  await openRow(v, /◆ @reviewer\s*$/, '@reviewer');
+  await until(() => inside(v) === null && threads.atop === box.atop + 1, 'no line for a bot');
+});
+
+// The daemon keeps what h and o set for a teammate (peerSetting, lib/peer/daemon.mjs); this
+// stand-in keeps it the same way, and answers peerPolicy from it as lib/peer/settings.mjs does.
+function withPolicy(peer, policy = {}) {
+  const sendCommand = peer.sendPeerCommand;
+  peer.peerPolicy = key => ({ autoAccept: false, holdReplies: false, autoAsk: false, autoContinue: false, muted: false, trusted: false, ...policy[key] });
+  peer.sendPeerCommand = command => { if (command.type === 'peerSetting') policy[command.key] = { ...policy[command.key], [command.name]: command.on }; return sendCommand(command); };
+  return peer;
+}
+const dialogBody = (v, title) => modal(v, title).children.find(child => child.options?.scrollable).getText();
+
+test('h and o on a teammate turn hold replies and auto-continue on and off: the line over their threads says what is on, and their screen and the help name the keys', { timeout: 30000 }, async t => {
+  const peer = withPolicy(fakePeer()), { v } = await teamView(t, { peer });
+  const [bar, threads] = v.panels.teamLists, keys = () => v.panels.keys.getText().trim(), status = () => v.panels.status.getText();
+  const settings = () => peer.sent().filter(row => row.type === 'peerSetting').map(row => [row.key === SARA ? 'sara' : row.key, row.name, row.on]);
+  await openRow(v, /@sara\s+direct/, '@sara');
+  await until(() => inside(v) === 'Hold replies: off · Auto-continue: off · h and o change them', 'the line over her threads');
+  bar.focus(); await until(() => /^enter write {2}t trust {2}h hold replies {2}o auto-continue {2}tab threads/.test(keys()), 'the keys on her row');
+  // h holds my replies and results to her; the line and the status say so.
+  v.input.write('h');
+  await until(() => inside(v) === 'Hold replies: on · Auto-continue: off · h and o change them', 'hold replies on');
+  await until(() => /Holding replies to @sara: y sends each one, e edits it, n drops it\./.test(status()), 'what h did');
+  assert.deepEqual(settings(), [['sara', 'holdReplies', true]]);
+  // From her threads the same keys act on her.
+  threads.focus(); v.input.write('o');
+  await until(() => inside(v) === 'Hold replies: on · Auto-continue: on · h and o change them' && /Auto-continue on for @sara: their answer or result continues your chat\./.test(status()), 'auto-continue on');
+  v.input.write('h');
+  await until(() => inside(v) === 'Hold replies: off · Auto-continue: on · h and o change them' && /Replies to @sara go when ready\. One with a possible secret still waits\./.test(status()), 'hold replies off');
+  // Her screen says both, and h and o there change them.
+  bar.focus(); selectRow(bar, /@sara\s+direct/); v.input.write('t'); await until(() => modal(v, 'Teammate @sara'), 'her screen');
+  assert.match(dialogBody(v, 'Teammate @sara'), /Hold replies: off · your replies and results go to them when ready\.\nAuto-continue: on · their answer or result continues the chat you asked from\.\n\nt trusts them · h holds replies · o turns auto-continue off/);
+  v.input.write('o');
+  await until(() => !modal(v, 'Teammate @sara') && /Auto-continue off for @sara: their answers wait here; c continues one\./.test(status()), 'o on her screen');
+  await until(() => inside(v) === 'Hold replies: off · Auto-continue: off · h and o change them', 'both off again');
+  assert.deepEqual(settings(), [['sara', 'holdReplies', true], ['sara', 'autoContinue', true], ['sara', 'holdReplies', false], ['sara', 'autoContinue', false]]);
+  // On a channel there is no teammate to set it for.
+  await openRow(v, /# general/, '#general'); bar.focus(); v.input.write('h');
+  await until(() => /Choose a teammate first\./.test(status()), 'h on a channel');
+  assert.equal(settings().length, 4);
+  // The help says where the two are.
+  await send(v, '/help'); await until(() => modal(v, 'Commands'), 'help');
+  assert.match(dialogBody(v, 'Commands').replace(/\s+/g, ' '), /On a teammate, h holds your replies and results to them until you send each one: y sends it, e edits it first, n drops it\. o lets their answer or result continue the chat you asked from\./);
+  await closeDialog(v, 'Commands');
+  // At 80 columns the line still says what is on.
+  v.output.columns = 80; v.output.rows = 24; v.output.emit('resize');
+  await openRow(v, /@sara/, '@sara');
+  await until(() => v.current.screen.width === 80 && /^Hold replies: off · Auto-continue: off/.test(inside(v) ?? ''), 'the line at 80 columns');
+  assertPanes(v, 80);
+  // What h and o say is whole on the status line there: nothing is cut.
+  const said = () => status().trim();
+  bar.focus(); selectRow(bar, /@sara/); v.input.write('h');
+  await until(() => said() === '› Holding replies to @sara: y sends each one, e edits it, n drops it.', 'h at 80 columns');
+  v.input.write('o'); await until(() => said() === '› Auto-continue on for @sara: their answer or result continues your chat.', 'o at 80 columns');
+  v.input.write('h'); await until(() => said() === '› Replies to @sara go when ready. One with a possible secret still waits.', 'h again at 80 columns');
+  v.input.write('o'); await until(() => said() === '› Auto-continue off for @sara: their answers wait here; c continues one.', 'o again at 80 columns');
+});
+
+test('e on a held reply or a held result opens its whole text in the message box: Enter sends the edited text, a refused edit stays in the box, Esc leaves it held, and n drops a result as a result', { timeout: 30000 }, async t => {
+  const SECRET = `AKIA${'A1B2'.repeat(4)}`, WHOLE = `Done. Call it with ${SECRET} as the key. ${'The next part of what was done. '.repeat(20)}The end.`;
+  const peer = fakePeer({ items: [
+    { id: 'held:task-1', kind: 'held', peer: SARA, name: 'sara', project: 'web', text: 'The deploy script lives in bin/deploy.', question: 'Where is the deploy script?', at: ago(3), state: 'awaiting-owner', threadId: 'th-1', blocked: false },
+    { id: 'held:result-r1', kind: 'held', result: true, blocked: true, problems: ['aws-access-key'], peer: SARA, name: 'sara', project: null, text: WHOLE.slice(0, 400), question: 'Make coupon codes uppercase.', at: ago(2), state: 'held', threadId: 'th-2' },
+    { id: 'answer-1', kind: 'answer', peer: SARA, name: 'sara', project: 'web', text: 'Use the v2 endpoint.', at: ago(10), state: 'completed', threadId: 'th-5' },
+  ], refuse: command => command.type === 'approve' && String(command.text ?? '').includes(SECRET) ? 'This result contains a possible secret. Remove it before sending.' : null });
+  peer.heldText = id => ({ 'held:result-r1': WHOLE, 'held:task-1': 'The deploy script lives in bin/deploy.' })[id] ?? null;
+  const { v } = await teamView(t, { peer });
+  const [, threads] = v.panels.teamLists, ask = v.panels.ask, keys = () => v.panels.keys.getText().trim(), status = () => v.panels.status.getText(), label = () => ask._label.getText().trim();
+  const approved = () => peer.sent().filter(row => row.type === 'approve').map(row => [row.id, row.text]);
+  await openRow(v, /@sara\s+direct/, '@sara');
+  await until(() => threads.items.some(item => /result ready/.test(plainItem(item))) && threads.items.some(item => /reply ready/.test(plainItem(item))), 'the held rows');
+  // e is offered on a row that waits to be sent, and nowhere else.
+  threads.focus(); selectRow(threads, /answered/); await until(() => /^y accept\/send {2}n decline/.test(keys()), 'no e on an answer');
+  v.input.write('e'); await until(() => /e edits a reply or a result that waits for you\. Choose one in Threads\./.test(status()), 'e on an answer');
+  selectRow(threads, /result ready/); await until(() => /^y accept\/send {2}e edit {2}n decline/.test(keys()), 'e on a held result');
+  // e: the whole text is in the message box, which says what Enter and Esc do.
+  v.input.write('e');
+  await until(() => v.current.screen.focused === ask && ask.getValue() === WHOLE, 'the whole result in the box');
+  await until(() => label() === 'Edit the result for @sara · Enter sends it · Esc leaves it held' && keys() === 'enter send the edited result  esc leave it held', 'the box says it is an edit');
+  assert.match(status(), /Take out the possible secret\. Enter sends it to @sara, Esc leaves it held\./);
+  assert.ok(v.panels.palette.hidden, 'no command list over an edit');
+  // Enter with the secret still in it: refused, and the text stays in the box as an edit.
+  await until(() => ask.__listener, 'the box reads'); ask.submit();
+  await until(() => /This result contains a possible secret\. Remove it before sending\./.test(status()), 'the refusal');
+  assert.equal(ask.getValue(), WHOLE); assert.equal(label(), 'Edit the result for @sara · Enter sends it · Esc leaves it held');
+  assert.deepEqual(approved(), [['held:result-r1', WHOLE]]);
+  // The secret taken out: Enter sends the edited text, and the box writes to her again.
+  await until(() => ask.__listener, 'the box reads again'); ask.setValue('Done. Use the key from your own vault.'); ask.submit();
+  await until(() => /Sending the edited result to @sara\./.test(status()) && ask.getValue() === '' && label() === 'Message @sara', 'the edited result went');
+  assert.deepEqual(approved().at(-1), ['held:result-r1', 'Done. Use the key from your own vault.']);
+  // A held reply the same way; Esc leaves it held and sends nothing.
+  threads.focus(); selectRow(threads, /reply ready/); v.input.write('e');
+  await until(() => ask.getValue() === 'The deploy script lives in bin/deploy.' && label() === 'Edit the reply to @sara · Enter sends it · Esc leaves it held', 'the reply in the box');
+  assert.match(status(), /Change the text below, then Enter sends it to @sara\. Esc leaves it held\./);
+  v.input.write('\x1b');
+  await until(() => ask.getValue() === '' && label() === 'Message @sara' && /The reply is still held\. y sends it as it is, e edits it, n drops it\./.test(status()), 'Esc leaves it held');
+  assert.equal(approved().length, 2); assert.ok(!peer.sent().some(row => row.type === 'discard'), 'nothing was dropped');
+  // Its thread names e too, and e there opens the same edit. Text that starts like a command is still the reply.
+  threads.focus(); selectRow(threads, /reply ready/); v.input.write('\r');
+  await until(() => modal(v, 'Thread with @sara') && v.text().includes('y sends. e edits it first. n discards.'), 'the thread');
+  v.input.write('e');
+  await until(() => !modal(v, 'Thread with @sara') && ask.getValue() === 'The deploy script lives in bin/deploy.' && /^Edit the reply to @sara/.test(label()), 'e in the thread');
+  await until(() => ask.__listener, 'the box reads'); ask.setValue('/usr/local/bin/deploy is the script.'); ask.submit();
+  await until(() => /Sending the edited reply to @sara\./.test(status()), 'the edited reply went');
+  assert.deepEqual(approved().at(-1), ['held:task-1', '/usr/local/bin/deploy is the script.']);
+  // n on a held result says result, not reply.
+  threads.focus(); selectRow(threads, /result ready/); v.input.write('n');
+  await until(() => peer.sent().some(row => row.type === 'discard' && row.id === 'held:result-r1'), 'the result dropped');
+  await until(() => /Dropped the result\. Nothing was sent to @sara\./.test(status()), 'what n did');
+});
+
+test('e on a reply or a result that waits in Sessions opens its text to edit in Chats, and a draft of yours has no e', { timeout: 20000 }, async t => {
+  const p = project(later(t)); environment(t, p.parent); registerProject(repository(p.root));
+  const SECRET = `AKIA${'A1B2'.repeat(4)}`, WHOLE = `Lowercase input is covered by a test now. The key is ${SECRET}`;
+  const peer = fakePeer({ items: [
+    { id: 'held:result-r1', kind: 'held', result: true, blocked: true, problems: ['aws-access-key'], peer: SARA, name: 'sara', project: null, text: WHOLE, question: 'Add a test.', at: ago(1), state: 'held', threadId: 'th-2' },
+    { id: 'draft-1', kind: 'draft', peer: LI, name: 'li', text: 'Which schema?', at: ago(3) },
+  ] });
+  peer.heldText = id => id === 'held:result-r1' ? WHOLE : null;
+  const v = await view(t, { dashboard: true, peer });
+  const board = v.panels.board, ask = v.panels.ask, keys = () => v.panels.keys.getText().trim(), status = () => v.panels.status.getText();
+  await until(() => board.items.some(item => /result for @sara/.test(plainItem(item))), 'the held result in Sessions');
+  // A draft of yours is sent or dropped; only what waits to go to a teammate is edited.
+  board.focus(); selectRow(board, /ask @li\?/); await until(() => /^y send {2}n discard {2}enter read/.test(keys()), 'a draft has no e');
+  selectRow(board, /result for @sara/); await until(() => /^y send {2}n discard {2}e edit {2}enter read/.test(keys()), 'e on the row');
+  await until(() => v.panels.chat.getText().includes('y send · n discard · e edit · enter read · c discard'), 'e beside the list');
+  // e: Chats, on that teammate, with the whole text in the message box.
+  v.input.write('e');
+  await until(() => v.current.view === 'chats' && v.current.screen.focused === ask && ask.getValue() === WHOLE, 'the result in the box of Chats');
+  await until(() => ask._label.getText().trim() === 'Edit the result for @sara · Enter sends it · Esc leaves it held' && keys() === 'enter send the edited result  esc leave it held', 'the box says it is an edit');
+  assert.match(status(), /Take out the possible secret\. Enter sends it to @sara, Esc leaves it held\./);
+  // Esc leaves it held, with the cursor on it in her threads: y, e and n act on it from there.
+  const [, threads] = v.panels.teamLists;
+  v.input.write('\x1b');
+  await until(() => /The result is still held\. y sends it as it is, e edits it, n drops it\./.test(status()) && ask.getValue() === '', 'Esc leaves it held');
+  await until(() => v.current.screen.focused === threads && /result ready/.test(plainItem(threads.items[threads.selected])) && /^y accept\/send {2}e edit {2}n decline/.test(keys()), 'the cursor is on the held result');
+  v.input.write('e');
+  await until(() => v.current.screen.focused === ask && ask.getValue() === WHOLE, 'e edits it again');
+  await until(() => ask.__listener, 'the box reads'); ask.setValue('Lowercase input is covered by a test now.'); ask.submit();
+  await until(() => /Sending the edited result to @sara\./.test(status()), 'the edited result went');
+  assert.deepEqual(peer.sent().filter(row => row.type === 'approve').map(row => [row.id, row.text]), [['held:result-r1', 'Lowercase input is covered by a test now.']]);
+});
+
+test('@name in an open session asks that teammate from the session, and /ask says so and leaves the question ready to send', { timeout: 30000 }, async t => {
+  const p = project(later(t)); environment(t, p.parent);
+  const repo = repository(p.root), at = new Date().toISOString();
+  saveTask(repo, { id: '1', kind: 'conversation', goal: 'Find the tax rates', state: 'answered', worktree: repo.root, base: null, branch: null, createdAt: at, runs: [], reviews: [], responses: [], messages: [{ at, text: 'Find the tax rates' }], sessions: {}, result: null });
+  const peer = fakePeer({ items: [] }), v = await view(t, { repo, dashboard: true, peer });
+  const board = v.panels.board, ask = v.panels.ask, status = () => v.panels.status.getText(), keys = () => v.panels.keys.getText().trim(), label = () => ask._label.getText().trim();
+  await until(() => board.items.map(plainItem).some(row => /Find the tax rates/.test(row)), 'the session row');
+  board.focus(); selectRow(board, /Find the tax rates/); v.input.write('\r');
+  await until(() => v.current.session === '1', 'the session is open');
+  // The key bar says @name reaches a teammate too, not only a bot.
+  ask.focus(); await until(() => /@name ask a bot or a teammate/.test(keys()), 'the key bar names teammates');
+  // /ask is not a command. With a teammate of that name the box keeps the part that asks them.
+  await send(v, '/ask @sara where are the tax rates?');
+  await until(() => /Unknown command: \/ask\. Ask by name: Enter sends this to @sara\./.test(status()), 'what to do instead');
+  assert.equal(ask.getValue(), '@sara where are the tax rates?'); assert.deepEqual(peer.sent(), [], 'nothing was sent yet');
+  await until(() => label() === 'Ask @sara · teammate', 'the box says who gets it');
+  // Enter sends it to her from this session: her answer can continue it.
+  await until(() => ask.__listener, 'the box reads'); ask.submit();
+  await until(() => peer.sent().some(row => row.type === 'ask'), 'the ask');
+  assert.deepEqual(peer.sent().at(-1), { type: 'ask', to: 'sara', project: null, text: 'where are the tax rates?', root: repo.root, taskId: '1' });
+  await until(() => /Sent to @sara\. Their reply shows in this thread\./.test(status()) && ask.getValue() === '', 'sent');
+  assert.equal(pendingRequests(p.root).length, 0, 'the session model got nothing');
+  // @name typed straight away does the same, also in another case.
+  await send(v, '@Sara and the VAT ones?');
+  await until(() => peer.sent().filter(row => row.type === 'ask').length === 2, 'the second ask');
+  assert.deepEqual(peer.sent().at(-1), { type: 'ask', to: 'sara', project: null, text: 'and the VAT ones?', root: repo.root, taskId: '1' });
+  // With no teammate of that name the text stays as typed, and nothing goes to the model.
+  await send(v, '/ask @nobody hello');
+  await until(() => /Unknown command: \/ask\. Write @name and your question to ask a teammate\./.test(status()), 'no such teammate');
+  assert.equal(ask.getValue(), '/ask @nobody hello'); assert.equal(pendingRequests(p.root).length, 0); assert.equal(peer.sent().length, 2);
+});
+
+test('at 80 columns the key bar of an open session on a team shows whole hints, none cut in the middle', { timeout: 20000 }, async t => {
+  const p = project(later(t)); environment(t, p.parent);
+  // In colour, as a terminal shows it: a coloured line as wide as its box loses its last word there.
+  delete process.env.NO_COLOR;
+  const repo = repository(p.root), at = new Date().toISOString();
+  saveTask(repo, { id: '1', kind: 'conversation', goal: 'Find the tax rates', state: 'answered', worktree: repo.root, base: null, branch: null, createdAt: at, runs: [], reviews: [], responses: [], messages: [{ at, text: 'Find the tax rates' }], sessions: {}, result: null });
+  const peer = fakePeer({ items: [] }), v = await view(t, { repo, dashboard: true, peer, columns: 80, rows: 24 });
+  const board = v.panels.board, ask = v.panels.ask, keys = () => v.panels.keys.getText().trim();
+  // The last line as a render leaves it.
+  const shown = () => { v.current.screen.render(); return v.lines().at(-1).trim(); };
+  await until(() => board.items.map(plainItem).some(row => /Find the tax/.test(row)), 'the session row');
+  board.focus(); selectRow(board, /Find the tax/); v.input.write('\r');
+  await until(() => v.current.session === '1', 'the session is open');
+  ask.focus(); await until(() => /@name ask a bot or a teammate/.test(keys()), 'the key bar names teammates');
+  // The hints may take 78 columns here, and enter, @name, / and /model together are 78:
+  // the screen shows all of what the bar holds.
+  await until(() => shown() === keys(), 'the screen shows the whole bar');
+  assert.equal(shown(), 'enter send  @name ask a bot or a teammate  / commands  /model choose the model');
 });
 
 test('m and x on a created channel also work from its threads, and nothing is cut at 80 columns', { timeout: 20000 }, async t => {

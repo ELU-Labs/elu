@@ -1577,6 +1577,16 @@ test('elu peer trust and untrust resolve a roster name, refuse unknown and ambig
     assert.deepEqual(await daemon.command({ type: 'untrust', key: sara.key }), { key: sara.key, trusted: false });
     await assert.rejects(daemon.command({ type: 'trust', key: 'd'.repeat(64) }), /Choose a teammate to trust\./);
     await assert.rejects(daemon.command({ type: 'trust', key: 'nope' }), /Choose a teammate to trust\./);
+    // h and o in Chats: hold replies and auto-continue for a teammate, kept beside trust.
+    assert.deepEqual(await daemon.command({ type: 'peerSetting', key: sara.key, name: 'holdReplies', on: true }), { key: sara.key, holdReplies: true });
+    assert.deepEqual(await daemon.command({ type: 'peerSetting', key: sara.key, name: 'autoContinue', on: true }), { key: sara.key, autoContinue: true });
+    assert.deepEqual([peers()[sara.key].holdReplies, peers()[sara.key].autoContinue, peers()[sara.key].trusted], [true, true, false]);
+    assert.deepEqual(await daemon.command({ type: 'peerSetting', key: sara.key, name: 'holdReplies', on: false }), { key: sara.key, holdReplies: false });
+    assert.deepEqual([peers()[sara.key].holdReplies, peers()[sara.key].autoContinue], [false, true]);
+    await assert.rejects(daemon.command({ type: 'peerSetting', key: 'd'.repeat(64), name: 'holdReplies', on: true }), /Choose a teammate first\./);
+    await assert.rejects(daemon.command({ type: 'peerSetting', key: sara.key, name: 'trusted', on: true }), /Choose hold replies or auto-continue, on or off\./);
+    await assert.rejects(daemon.command({ type: 'peerSetting', key: sara.key, name: 'autoContinue', on: 'yes' }), /Choose hold replies or auto-continue, on or off\./);
+    assert.equal(peers()[sara.key].trusted, false);
   });
 });
 
