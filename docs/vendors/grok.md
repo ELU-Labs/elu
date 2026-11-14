@@ -22,8 +22,8 @@ ELU starts the check by itself before your first message to Grok goes out, wheth
 you wrote to a session on it or to a bot on it. The session says so first, then shows each
 step as it ends, and then your message goes on. The check takes about seven short turns on
 Grok and a few minutes. A message you just sent starts it, and so does `c` in the Usage tab,
-and a teammate's message that starts a session of your own (`/access` Auto, or your `y` on
-it): a scheduled turn, a shadow turn or a review never does.
+and a teammate's message that starts a session of yours (`/access` Auto, or your `y` or `w`
+on it): a scheduled turn, a shadow turn or a review never does.
 
 Grok Build reviews, and can be a bot's vendor, once the check passed: a review runs on its
 Read only launch, which the check proves writes nothing, runs no command and reaches no

@@ -161,14 +161,14 @@ test("a teammate's message on a fresh computer starts the one-time check of Grok
   assert.equal(conformanceState('grok').version, '1.0.77');
 });
 
-test("a message that waits for the owner's y says so to its sender, with what the owner can do; his y starts the check too", async t => {
+test("a message that waits for the owner's y says so to its sender, with what the owner can do; his w starts the check too", async t => {
   const p = setup(t, { checked: false }), kai = answering(p, 'manual');
   const sent = kai.send('Where is coupon normalization?');
   assert.equal(sent.status.state, TaskState.SUBMITTED);
   assert.equal(said(sent), 'It waits for its owner on @kai, who approves each message from a teammate. On @kai: y on the message starts it, and /access set to Auto starts the next ones without asking.');
   assert.equal(pendingRequests(p.root).length, 0, 'nothing starts until he says so');
-  // His y: the session starts, and its sender is no longer told that it waits.
-  const accepted = acceptIncoming(kai.ctx, sent.id, { how: 'own' });
+  // His w, with the mode he picks (y starts it as Auto does): the session starts, and its sender is no longer told that it waits.
+  const accepted = acceptIncoming(kai.ctx, sent.id, { how: 'work', permissions: 'ask' });
   assert.equal(said(accepted), null); assert.deepEqual(kai.pushed.at(-1), { key: ANA, task: accepted });
   const row = pendingRequests(p.root).find(item => item.origin?.a2aTaskId === sent.id);
   conduct(t);
