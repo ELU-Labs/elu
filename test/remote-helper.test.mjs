@@ -260,9 +260,13 @@ test("over a session of mine there, what I type goes to that session, as if type
   assert.equal(await app.send(row, app.route(row, 'yes').text), 'Sent to the session on @aki-devbox.');
   assert.deepEqual(commands.at(-1), { type: 'remoteSend', id: ID, text: 'yes' });
   assert.equal(await app.send(replied, 'yes'), 'Sent to Codex on @aki-devbox.');
-  // While it works there, the line says at once that the message waits for its turn to end.
-  const busy = glue({ answer: () => ({ id: ID, working: true }) });
-  assert.equal(await busy.glue.send(replied, 'and the tests'), 'Sent to Codex on @aki-devbox. It reads it when its current turn ends.');
+  // While it works there, the line says at once what its running turn does with the message, as that computer tells it.
+  const busy = takes => glue({ answer: () => ({ id: ID, working: true, ...(takes ? { takes } : {}) }) }).glue.send(replied, 'and the tests');
+  assert.equal(await busy('turn'), 'Sent to Codex on @aki-devbox. Its running turn reads it at its next step.');
+  assert.equal(await busy('beside'), 'Sent to Codex on @aki-devbox. Its running turn takes no message while it works, so it is answered beside it now.');
+  assert.equal(await busy('soon'), 'Sent to Codex on @aki-devbox. Its running turn reads it at its next step, or it is answered beside the turn.');
+  // A computer on an older ELU says only that it works: what it can and cannot do is said.
+  assert.equal(await busy(), 'Sent to Codex on @aki-devbox. @aki-devbox runs an older ELU: this starts when its turn ends. Nothing reads or answers it before.');
   // A teammate's session on that computer has no agent here: every message goes to it, as before.
   const theirs = { ...row, by: 'teammate', who: 'sara' };
   assert.deepEqual(app.route(theirs, 'how is it going?'), { to: 'there', text: 'how is it going?' });
@@ -282,24 +286,47 @@ test("over a session of mine there, what I type goes to that session, as if type
   assert.match(told, /Started by @sara\. Type below to continue it there\./); assert.doesNotMatch(told, /Type its number|your agent/);
 });
 
-test('a message to a session there that has not run yet shows in its pane as waiting, with why and what to do', () => {
+test('a message to a session there that has not run yet says in its pane what happens to it and when, never only that it waits', () => {
   const { glue: app } = glue(), T = Date.now(), at = seconds => new Date(T - 60000 + seconds * 1000).toISOString();
   const base = { id: ID, machine: D, createdAt: at(0), lastAt: at(30), state: 'running', title: HELPS.title, approvals: [], steps: [], entries: [{ role: 'You', at: at(0), text: 'Start the handoff' }, { role: 'Opus 5.5', lead: true, at: at(10), text: 'On it.' }] };
-  const shown = waiting => app.view(remoteRow({ ...base, waiting }, 'aki-devbox', T), 120);
-  assert.match(shown([{ at: at(20), text: 'yes', state: 'turn' }]), /Opus 5\.5 on @aki-devbox: On it\.\n\nYou → @aki-devbox \(waiting\): yes\nIt reads this when its current turn ends\./);
-  assert.match(shown([{ at: at(20), text: 'yes', state: 'starting' }]), /You → @aki-devbox \(waiting\): yes\nStarting on @aki-devbox\./);
-  assert.match(shown([{ at: at(20), text: 'yes', state: 'queued' }]), /You → @aki-devbox \(waiting\): yes\nWaiting to start\./);
-  assert.match(shown([{ at: at(20), text: 'yes', state: 'queued', reason: 'Waiting for a free slot in this project.' }]), /\(waiting\): yes\nWaiting for a free slot in this project\./);
-  assert.match(shown([{ at: at(20), text: 'yes', state: 'stuck' }]), /\(waiting\): yes\nELU has not started this on @aki-devbox yet and keeps trying\. If it stays, open ELU there\./);
+  const shown = (waiting, more = {}) => app.view(remoteRow({ ...base, ...more, waiting }, 'aki-devbox', T), 120);
+  // Sent while it works, to a computer that says what its running turn does with a message.
+  assert.match(shown([{ at: at(20), text: 'yes', state: 'turn', takes: 'step' }], { held: 1 }), /Opus 5\.5 on @aki-devbox: On it\.\n\nYou → @aki-devbox \(going to the running turn\): yes\nGoing to the running turn on @aki-devbox, which reads it at its next step\.\nEnter in the empty box sends it now/);
+  assert.match(shown([{ at: at(20), text: 'yes', state: 'turn', takes: 'command', stops: true }], { held: 1 }), /\(read when the running command ends\): yes\nThe running turn on @aki-devbox reads it when the command it is running ends\.\nEnter in the empty box sends it now: that stops the command that is running\n/);
+  assert.match(shown([{ at: at(20), text: 'yes', state: 'turn', takes: 'fixed' }]), /\(read at the turn's next step\): yes\nThe running turn on @aki-devbox has it and reads it at its next step\.\n/);
+  // A turn there that takes no message: the message is answered beside it, on that computer.
+  const stop = 'Enter in the empty box sends it now: that stops the turn on @aki-devbox and the command that is running';
+  assert.match(shown([{ at: at(20), text: 'yes', state: 'turn', takes: 'beside' }], { held: 1 }), new RegExp(`\\(answered in a moment\\): yes\\nThe running turn on @aki-devbox takes no message while it works, so this is answered beside it in a moment\\.\\n${stop}\\n`));
+  assert.match(shown([{ at: at(20), text: 'yes', state: 'turn', takes: 'beside', aside: { state: 'running' } }], { held: 1 }), new RegExp(`\\(being answered now\\): yes\\nBeing answered now, beside the running turn\\.\\n${stop}\\n`));
+  // It asks for work: its answer shows under it, it says so, and it keeps its place for the next turn.
+  const work = shown([{ at: at(20), text: 'rename the helper', state: 'turn', takes: 'beside', aside: { state: 'answered', who: 'GPT-5.6', text: 'The turn is running the tests.', at: at(22) } }], { held: 1 });
+  assert.match(work, new RegExp(`You → @aki-devbox \\(answered · starts when this turn ends\\): rename the helper\\n\\nGPT-5\\.6 on @aki-devbox · beside the turn: The turn is running the tests\\.\\nAnswered beside the running turn, from what it has done so far\\. The turn goes on\\.\\nIt asks for work, so it also starts the next turn when this one ends\\.\\n${stop}\\n`));
+  assert.match(shown([{ at: at(20), text: 'yes', state: 'turn', takes: 'beside', aside: { state: 'failed', error: 'Codex is signed out.' } }]), /\(starts when this turn ends\): yes\nCould not be answered beside the turn: Codex is signed out\.\nIt starts when the running turn on @aki-devbox ends\.\n/);
+  assert.match(shown([{ at: at(20), text: 'yes', state: 'turn', takes: 'end' }]), /\(starts when this turn ends\): yes\nIt starts when the running turn on @aki-devbox ends\.\n/);
+  assert.match(shown([{ at: at(20), text: 'yes', state: 'turn', takes: 'soon' }]), /\(read or answered in a moment\): yes\nThe running turn on @aki-devbox reads it at its next step, or it is answered beside the turn\.\n/);
+  // One answered beside the turn that only asked is a message of the chat: his words, the answer, and the line that says where it came from.
+  const asked = app.view(remoteRow({ ...base, entries: [...base.entries, { role: 'You', at: at(20), text: 'How far are you?' }, { role: 'GPT-5.6 · beside the turn', at: at(22), text: 'Two of three steps are done.', update: true }, { role: 'ELU', at: at(22), text: 'Answered beside the running turn, from what it has done so far. The turn goes on.', line: true }] }, 'aki-devbox', T), 120);
+  assert.match(asked, /You → @aki-devbox: How far are you\?\n\nGPT-5\.6 · beside the turn on @aki-devbox: Two of three steps are done\.\n\nAnswered beside the running turn, from what it has done so far\. The turn goes on\.\n/);
+  // A computer on an older ELU says only that the session works: what it can and cannot do is said, with the key where it takes it.
+  assert.match(shown([{ at: at(20), text: 'yes', state: 'turn' }], { held: 1 }), new RegExp(`You → @aki-devbox \\(starts when its turn ends\\): yes\\n@aki-devbox runs an older ELU: this starts when its turn ends\\. Nothing reads or answers it before\\.\\n${stop}\\n`));
+  assert.match(shown([{ at: at(20), text: 'yes', state: 'turn' }]), /\(starts when its turn ends\): yes\n@aki-devbox runs an older ELU: [^\n]+\nIt cannot be sent now from here either\. Updating ELU on @aki-devbox answers a message at once\.\n/);
+  // Before it runs at all.
+  assert.match(shown([{ at: at(20), text: 'yes', state: 'starting' }]), /You → @aki-devbox \(starting\): yes\nStarting on @aki-devbox\./);
+  assert.match(shown([{ at: at(20), text: 'yes', state: 'queued' }]), /You → @aki-devbox \(starts next\): yes\nStarts next on @aki-devbox\./);
+  assert.match(shown([{ at: at(20), text: 'yes', state: 'queued', reason: 'Waiting for a free slot in this project.' }]), /\(starts next\): yes\nWaiting for a free slot in this project\./);
+  assert.match(shown([{ at: at(20), text: 'yes', state: 'stuck' }]), /\(not started yet\): yes\nELU has not started this on @aki-devbox yet and keeps trying\. If it stays, open ELU there\./);
   assert.match(shown([{ at: at(20), text: 'yes', state: 'blocked', reason: 'The repository this session edits has moved or is gone.' }]), /You → @aki-devbox \(blocked\): yes\nThe repository this session edits has moved or is gone\. Send it again once that is fixed\./);
   assert.match(shown([{ at: at(20), text: 'yes', state: 'blocked' }]), /\(blocked\): yes\nIt did not start on @aki-devbox\. Send it again once that is fixed\./);
   // Typed while the session waits on an approval: the message does not answer it, and says so.
-  const asks = app.view(remoteRow({ ...base, approvals: [{ id: 'approval-1', role: 'lead', summary: 'Run: npm test', at: at(15) }], waiting: [{ at: at(20), text: 'yes', state: 'turn' }] }, 'aki-devbox', T), 120);
-  assert.match(asks, /\(waiting\): yes\nIt reads this when its current turn ends\. The approval below still needs your answer\.\n\nWaiting for your approval on @aki-devbox/);
-  // Two that wait keep the order they were sent in, each a part of its own; none shows once they ran.
-  const parts = app.parts(remoteRow({ ...base, waiting: [{ at: at(20), text: 'yes', state: 'turn' }, { at: at(25), text: 'and the tests', state: 'turn' }] }, 'aki-devbox', T), 120);
-  assert.deepEqual(parts.filter(part => part.key.startsWith('waiting')).map(part => part.text.split('\n')[0]), ['You → @aki-devbox (waiting): yes', 'You → @aki-devbox (waiting): and the tests']);
-  assert.doesNotMatch(shown([]), /waiting|blocked/); assert.doesNotMatch(app.view(remoteRow(base, 'aki-devbox', T), 120), /\(waiting\)/);
+  const asks = app.view(remoteRow({ ...base, approvals: [{ id: 'approval-1', role: 'lead', summary: 'Run: npm test', at: at(15) }], waiting: [{ at: at(20), text: 'yes', state: 'turn', takes: 'end' }] }, 'aki-devbox', T), 120);
+  assert.match(asks, /\(starts when this turn ends\): yes\nIt starts when the running turn on @aki-devbox ends\. The approval below still needs your answer\.\n/);
+  // Two that have not run keep the order they were sent in, each a part of its own, and the key is named once; none shows once they ran.
+  const parts = app.parts(remoteRow({ ...base, held: 2, waiting: [{ at: at(20), text: 'yes', state: 'turn', takes: 'end' }, { at: at(25), text: 'and the tests', state: 'turn', takes: 'end' }] }, 'aki-devbox', T), 120).filter(part => part.key.startsWith('waiting'));
+  assert.deepEqual(parts.map(part => part.text.split('\n')[0]), ['You → @aki-devbox (starts when this turn ends): yes', 'You → @aki-devbox (starts when this turn ends): and the tests']);
+  assert.deepEqual(parts.map(part => /Enter in the empty box/.test(part.text)), [false, true]);
+  assert.doesNotMatch(shown([]), /starts when|blocked/);
+  // No row says only that it waits, and none says the old line.
+  for (const item of [{ state: 'turn' }, { state: 'turn', takes: 'end' }, { state: 'turn', takes: 'beside' }, { state: 'turn', takes: 'step' }, { state: 'queued' }, { state: 'starting' }]) assert.doesNotMatch(shown([{ at: at(20), text: 'yes', ...item }]), /\(waiting\)|current turn ends|Your message waits/);
 });
 
 test('the pane of a session there shows both agents in time order, each titled where it runs, and how to answer the question there', () => {
