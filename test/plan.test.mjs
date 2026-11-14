@@ -599,7 +599,8 @@ for (const [mode, name] of [['full', 'Full access'], ['auto', 'Approve for me']]
     assert.match(told, new RegExp(`This session runs with ${name}, which approves the Task: it is recorded as approved by ${name}, nobody has to approve it, and the work goes on at once\\.`));
     assert.match(told, /Work that changes no repository file, such as running commands, reading logs or operating a tool, do now, in this turn/);
     assert.doesNotMatch(told, /Plan first|change nothing in this turn|only after they approve/);
-    assert.match(taskCard(task, { width: 70, colour: false }), new RegExp(`approved by ${name}\n`));
+    // Its card says both: a schedule started it, and the mode approved it.
+    assert.match(taskCard(task, { width: 100, colour: false }), new RegExp(` severity · started by schedule · approved by ${name}\n`));
   });
 }
 
