@@ -87,6 +87,8 @@ test("a run whose program never began says what it printed, then to check its co
   assert.equal(rowTitle(row, now), 'Fix the footer links on the shop page · check that claude runs in your terminal, then type continue');
   assert.equal(rowTitle(row, now, 60), 'Fix the footer links on the shop page · claude did not start');
   assert.equal(rowTitle(row, now, 24), 'claude did not start · Fix the footer links on the shop page');
+  // Narrower than those three words, as at 80 columns: what happened comes first, and whole.
+  assert.equal(rowTitle(row, now, 16), 'did not start · Fix the footer links on the shop page');
   // The computer that sent it is told the same, with the way on from there.
   const line = failureLine({ task: failed, at: '@devbox', mine: true });
   assert.equal(line, `${message}. Check that claude runs in your terminal on @devbox, then send it again.`);
@@ -94,6 +96,7 @@ test("a run whose program never began says what it printed, then to check its co
   const there = { ...remoteRow({ id: crypto.randomUUID(), machine: 'd'.repeat(64), state: 'blocked', title: 'Fix the footer links on the shop page', error: line, createdAt: at, lastAt: at, entries: [], steps: [], approvals: [] }, 'devbox', now), grouped: true };
   assert.equal(rowTitle(there, now), 'Fix the footer links on the shop page · check that claude runs in your terminal');
   assert.equal(rowTitle(there, now, 30), 'claude did not start · Fix the footer links on the shop page');
+  assert.equal(rowTitle(there, now, 16), 'did not start · Fix the footer links on the shop page');
 });
 
 test("a run whose program's release could not be read never started: it says to check its command, here and on the computer that sent it, and its rows say it did not start", () => {
