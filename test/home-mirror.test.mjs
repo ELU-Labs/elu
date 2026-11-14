@@ -104,13 +104,46 @@ test('a file saved by rename in place of a link replaces the owner\'s when it is
   assert.equal(fs.readFileSync(path.join(`${w.mirror}-aside`, aside.find(name => name.endsWith('.docker')), 'config.json'), 'utf8'), '{"from":"run"}\n');
 });
 
-test('removing or renaming a link at the top of ~ changes nothing of the owner\'s, and the next run links his entry again', t => {
+test('removing a link at the top of ~ changes nothing of the owner\'s and the next run links his entry again; renaming one renames his entry', t => {
   const w = world(t); w.sync(); const before = snapshot(w.home);
-  fs.unlinkSync(path.join(w.mirror, '.ssh')); fs.renameSync(path.join(w.mirror, '.npmrc'), path.join(w.mirror, '.npmrc.old')); fs.renameSync(path.join(w.mirror, 'Documents'), path.join(w.mirror, 'Papers'));
+  // rm ~/.ssh takes the link away, not his folder.
+  fs.unlinkSync(path.join(w.mirror, '.ssh')); w.sync();
+  assert.deepEqual(snapshot(w.home), before); assert.equal(real(path.join(w.mirror, '.ssh')), real(path.join(w.home, '.ssh')));
+  // mv ~/.npmrc ~/.npmrc.old and mv ~/Documents ~/Papers: his file and his folder have the new names.
+  fs.renameSync(path.join(w.mirror, '.npmrc'), path.join(w.mirror, '.npmrc.old')); fs.renameSync(path.join(w.mirror, 'Documents'), path.join(w.mirror, 'Papers'));
+  w.sync();
+  assert.equal(fs.readFileSync(path.join(w.home, '.npmrc.old'), 'utf8'), '//registry.npmjs.org/:_authToken=owner-npm-token\n'); assert.equal(fs.readFileSync(path.join(w.home, 'Papers', 'notes.txt'), 'utf8'), 'notes\n');
+  for (const name of ['.npmrc', 'Documents']) { assert.equal(fs.existsSync(path.join(w.home, name)), false, name); assert.equal(isLink(path.join(w.mirror, name)), false, name); }
+  for (const name of ['.npmrc.old', 'Papers']) { assert.equal(fs.readlinkSync(path.join(w.mirror, name)), `${w.home}${path.sep}.${path.sep}${name}`, name); assert.equal(real(path.join(w.mirror, name)), real(path.join(w.home, name)), name); }
+  assert.equal(fs.existsSync(`${w.mirror}-aside`), false);
+});
+
+test('a file kept under another name before a new one is written keeps both: mv ~/.gitconfig ~/.gitconfig.bak, then a new ~/.gitconfig', t => {
+  const w = world(t); w.sync();
+  fs.renameSync(path.join(w.mirror, '.gitconfig'), path.join(w.mirror, '.gitconfig.bak')); fs.writeFileSync(path.join(w.mirror, '.gitconfig'), '[user]\n\tname = From Run\n');
+  w.sync();
+  assert.equal(fs.readFileSync(path.join(w.home, '.gitconfig.bak'), 'utf8'), '[user]\n\tname = Owner\n'); assert.equal(fs.readFileSync(path.join(w.home, '.gitconfig'), 'utf8'), '[user]\n\tname = From Run\n');
+  for (const name of ['.gitconfig', '.gitconfig.bak']) { assert.ok(isLink(path.join(w.mirror, name)), name); assert.equal(real(path.join(w.mirror, name)), real(path.join(w.home, name)), name); }
+  assert.equal(fs.existsSync(`${w.mirror}-aside`), false);
+});
+
+test('a save by rename whose new file was already moved to the owner\'s home still replaces his file; a copied link and a rename onto his folder change nothing of his', t => {
+  const w = world(t); w.sync();
+  // One run ends while another's tool has written ~/.npmrc.tmp and not yet renamed it into place.
+  fs.writeFileSync(path.join(w.mirror, '.npmrc.tmp'), '//registry.npmjs.org/:_authToken=new-token\n', { mode: 0o600 }); w.sync();
+  assert.ok(isLink(path.join(w.mirror, '.npmrc.tmp'))); fs.renameSync(path.join(w.mirror, '.npmrc.tmp'), path.join(w.mirror, '.npmrc'));
+  w.sync();
+  assert.equal(fs.readFileSync(path.join(w.home, '.npmrc'), 'utf8'), '//registry.npmjs.org/:_authToken=new-token\n'); assert.equal(fs.existsSync(path.join(w.home, '.npmrc.tmp')), false);
+  assert.equal(fs.readlinkSync(path.join(w.mirror, '.npmrc')), `${w.home}${path.sep}.${path.sep}.npmrc`); assert.equal(isLink(path.join(w.mirror, '.npmrc.tmp')), false);
+  // cp -P ~/.gitconfig ~/.gitconfig.copy copies the link: his file keeps its name and no copy is made.
+  const before = snapshot(w.home);
+  fs.symlinkSync(fs.readlinkSync(path.join(w.mirror, '.gitconfig')), path.join(w.mirror, '.gitconfig.copy'));
+  // A link renamed onto the name of a folder of his, and one renamed to a coding tool's name.
+  fs.unlinkSync(path.join(w.mirror, '.kube')); fs.renameSync(path.join(w.mirror, '.aws'), path.join(w.mirror, '.kube')); fs.renameSync(path.join(w.mirror, 'dotfiles'), path.join(w.mirror, '.cursor'));
   w.sync();
   assert.deepEqual(snapshot(w.home), before);
-  for (const name of ['.ssh', '.npmrc', 'Documents']) assert.equal(real(path.join(w.mirror, name)), real(path.join(w.home, name)), name);
-  for (const name of ['.npmrc.old', 'Papers']) assert.equal(fs.existsSync(path.join(w.mirror, name)) || isLink(path.join(w.mirror, name)), false, name);
+  for (const name of ['.gitconfig', '.aws', '.kube', 'dotfiles']) assert.equal(real(path.join(w.mirror, name)), real(path.join(w.home, name)), name);
+  for (const name of ['.gitconfig.copy', '.cursor']) assert.equal(isLink(path.join(w.mirror, name)) || fs.existsSync(path.join(w.mirror, name)), false, name);
 });
 
 test('a coding tool\'s folder a run made under the mirror is set aside: the vendor never loads it, and the owner\'s own vendor folders are never written', t => {
