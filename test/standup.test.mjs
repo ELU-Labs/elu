@@ -110,6 +110,14 @@ test('what leaves for a teammate: paths cut, and an update that may hold a secre
   assert.deepEqual(teammateAnswer(`The deploy key is config/secrets/${keyLike('wJalrXUtnFEMI/K7MDENG/', 'bPxRfiCYEXAMPLEKEY')}.`, { root: '/srv/shop' }), { text: null, held: true });
 });
 
+test('a relative path to a place outside the project leaves for a teammate as [path]; one in the project goes as written', t => {
+  const { root } = project(t);
+  const said = 'Done: rounding fix in src/coupon.mjs and ./test/coupon.test.mjs. Screenshot: Support/CleanShot/media/media_8Qw4Rt2LmZ/CleanShot 2026-11-12 at 10.14.07@2x.png. Notes in ../notes/round.md and tmp/elu-Qw8RtZ/notes/round.mjs. See github.com/example/shop/blob/main/README.md and/or the feat/task-1 branch. Next: rerun the coupon test.';
+  assert.deepEqual(teammateAnswer(said, { root }), { held: false, text: 'Done: rounding fix in src/coupon.mjs and ./test/coupon.test.mjs. Screenshot: [path]. Notes in [path] and [path]. See github.com/example/shop/blob/main/README.md and/or the feat/task-1 branch. Next: rerun the coupon test.' });
+  // In quotes too.
+  assert.equal(teammateAnswer("Saved 'Support/CleanShot/media/Shot 2.png' and \"src/coupon.mjs\".", { root }).text, "Saved '[path]' and \"src/coupon.mjs\".");
+});
+
 test("the Standup's model reads every update whole, newest first; only a model that says they are too long for it is given fewer", () => {
   const updates = Array.from({ length: 45 }, (_, n) => ({ id: `u${n + 1}`, at: new Date(Date.UTC(2026, 10, 1, 0, n)).toISOString(), text: 'x'.repeat(n === 44 ? 5000 : 100) }));
   const whole = boundedUpdates(updates);
