@@ -457,22 +457,46 @@ this computer, those on your other computers that are online (`/mine`), and your
 sessions on the shared Kanban whose computers are online. A project kept off the Kanban
 (`/share off`) is never asked. Every one of them is asked, newest first.
 
-Before asking, the chat says how many sessions it asks and on which computers. Each session
-answers in one turn of its own agent (its model, or the worker bot that works in it), on its
-own model and limits, in at most 8 lines, and that turn changes nothing: no edit, no Task,
-and the session stays where it was, in Sessions and on the Kanban: answering is not activity. A Claude Code session answers in a copy of its own
-history, so its next turn goes on from its work; another vendor keeps the standup in that
-history. Its chat shows "@sam asks: standup", the update, and
-"Sent to @sam". A session that is working answers when its turn ends, or is listed as still
-working after 10 minutes. Answers show in the Standup as they come, each titled with its
-session, agent and computer: "Email logs · Opus 5.5 on @devbox", "Sales Export · Opus 5.5
-here", "Billing · @billing on @kim". Then come the sessions not asked, those that declined,
-and those still working, then one line: "Standup done · 9 sessions on 4 computers · 2 not
-asked". `/stop` stops waiting. Nothing runs on a timer: only `/standup` and `@everyone` ask.
+The Standup answers within seconds. It first shows one block for every session it asks,
+filled from what ELU already has on record for it, with no model run: whether it is working
+and for how long, waiting for you and for what, blocked and why, or finished; its Task and how
+many subtasks are done; the last thing it said, the last command it ran and the last file it
+changed in the turn it is in; its pull request or branch; and when it last wrote anything. A
+session on another computer of yours shows what this computer last listed for it, then that
+computer's own record as soon as it sends it; a computer whose ELU is too old to send one is
+named as such. A session that waits for you comes first, with its question, then the ones
+that work, then the newest. Each block is titled with its session, agent and computer: "Email
+logs · Opus 5.5 on @devbox", "Sales Export · Opus 5.5 here", "Billing · @billing on @kim". A
+Standup, a session no agent has run in, and a session that only helps one on another
+computer ("Help: …") are never asked.
+
+Each session is then asked for its model's update (working on, done, next, blocked,
+overlap), which is added to its block when it arrives. It is written in one run of the
+session's own agent (its model, or the worker bot that works in it), on its own model and
+limits, in at most 8 lines, and that run changes nothing: no edit, no Task, and the session
+stays where it was, in Sessions and on the Kanban: answering is not activity. A Claude Code
+session answers in a copy of its own history, so its next turn goes on from its work; another
+vendor keeps the standup in that history. Its chat shows "@sam asks: standup", the update,
+and "Sent to @sam". A session in the middle of a turn never makes the Standup wait: its
+update is written by a separate short read-only run beside that turn, which reads the
+session's chat and the turn's live activity, never resumes or interrupts the turn, takes no
+slot (`/slots`) and counts against no project limit. The turn goes on, and the session's chat
+shows the ask and the update once the turn ends, once. Up to 8 answer runs go at a time on a
+computer.
+
+The first line of the Standup always says what is in and what is not: "7 sessions on 2
+computers (5 on @devbox, 2 here). 7 answered from records at once. Model updates: 3 written,
+4 being written." A model update that does not come is named with why, in its block and in
+that line: "Missing: Email logs on @devbox (@devbox is offline)". The line under the chat
+says how many model updates are still being written. Then come the sessions not asked, and
+one line: "Standup done · 9 sessions on 4 computers · 8 model updates · 1 missing · 2 not
+asked". `/stop` stops waiting and takes back every question not answered yet, on your other
+computers and your teammates' too, so none runs later in a session. Nothing runs on a timer:
+only `/standup` and `@everyone` ask.
 
 On a teammate's computer their own setting decides, as for any message from you: Auto asks
 their sessions at once; Manual shows them "@sam asks every session for a standup update"
-once a round, to approve or decline, and a decline is listed in your Standup. Each of their
+once a round, to approve or decline, and a decline is named in your Standup. Each of their
 sessions answers at most once a round, is told their rules for teammates, and what comes back
 is checked as any answer to a teammate is: paths are cut, and an update that may hold a
 secret is not sent. You get the update text, the card's title, the agent's name and the
@@ -481,8 +505,11 @@ your daily allowance there, as any message of yours that runs on their computer,
 round can use up the day's requests. A computer that still runs an older build of ELU
 for its sessions is listed, not asked.
 
-When the round ends, the Standup's own model reads every update, whole, and sums it up: what is
-done, what is in progress, what is blocked or waits for someone, and who. That turn starts
+While the model updates are still being written, the Standup's own model writes a first
+summary from the records alone, and says so. When the round ends, it reads every update,
+whole, with each session's record, and sums it up: what waits for you, what is done, what is
+in progress, what is blocked, and who. It never says it has every update while one is
+missing; the message box says "it has every update" or "it has 5 of 7 model updates". That turn starts
 with nobody watching, so it only answers and keeps the Kanban: it reads, with no edits, no
 shell, no web, no Task and none of your MCP servers; Full access runs as Approve for me, and
 another vendor runs it Read only. It runs once a round and is never
