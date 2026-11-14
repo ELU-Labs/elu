@@ -13,9 +13,9 @@ import { launchTerminal, geometry, plain, foldersNamed } from '../lib/terminal.m
 import { WHEEL_FRAME_MS } from '../lib/wheel.mjs';
 import { projectFolder, saveRequest, pendingRequests, updateRequest } from '../lib/workspace.mjs';
 import { displayText } from '../lib/terminal-visuals.mjs';
-import { vendorText } from '../lib/terminal-commands.mjs';
+import { vendorText, typedCommand, needsArgument } from '../lib/terminal-commands.mjs';
 import { formatResult } from '../lib/format.mjs';
-import { Conductor, enqueue } from '../lib/conductor.mjs';
+import { Conductor, conductorSettings, enqueue } from '../lib/conductor.mjs';
 import { liveTask } from './peer-helpers.mjs';
 import { standIn } from './login-item-helpers.mjs';
 import { readBoard, sessionClosed, closeSession } from '../lib/kanban.mjs';
@@ -643,44 +643,71 @@ test('a click outside a dialog with typed text keeps the dialog, its text and th
   assert.equal(registeredProjects().length, 1, 'no project was made');
 });
 
+test('/model NAME with no session open opens the new session form on that model, and /model computer takes the name a model is shown by', { timeout: 40000 }, async t => {
+  const p = setup(t, 'answer'), fake = path.join(p.dir, 'fake.json'); registerProject(p.repo);
+  fs.writeFileSync(fake, JSON.stringify({ ...JSON.parse(fs.readFileSync(fake, 'utf8')), models: { opus: 'claude-opus-5-5', sonnet: 'claude-sonnet-5-5' } }));
+  const v = await view(t, { repo: p.repo }), panels = v.current.panels, status = () => panels.status.getText().replace(/\s+/g, ' '), label = () => panels.ask._label.getText();
+  const tasks = () => v.current.controller.snapshot().tasks;
+  const models = () => fs.readFileSync(p.calls, 'utf8').trim().split('\n').map(line => JSON.parse(line)).filter(call => call.vendor === 'claude' && call.args.includes('-p')).map(call => call.args[call.args.indexOf('--model') + 1]);
+  // No session is open, and the new session form is not either: the Projects tab.
+  await send(v, '/projects'); await until(() => v.current.view === 'projects', 'the Projects tab');
+  await send(v, '/model sonnet'); await until(() => /Sonnet for this session\./.test(status()), 'the model is taken, not refused');
+  await until(() => v.current.session === 'new' && /New session → Sonnet · sample app/.test(label()), 'the new session form is open on it');
+  await send(v, 'Where is the cart total?'); await until(() => tasks()[0]?.state === 'answered', 'the model answered');
+  assert.equal(models().at(-1), 'sonnet', 'the first message went to the model named');
+  // The default is as it was: only that session is on it.
+  assert.equal(v.current.controller.startModel().model, 'opus');
+  // This computer's default by a name of two words, as /model and /model default take one: the model and its version.
+  await until(() => /^ Message Sonnet 5\.5 · /.test(label()), 'the box names the model as Sonnet 5.5');
+  await send(v, '/model computer sonnet 5.5'); await until(() => /This computer's default is Sonnet 5\.5 \(claude · claude-sonnet-5-5\)\./.test(status()), 'a name of two words is taken');
+  assert.deepEqual(computerDefault(), { vendor: 'claude', model: 'claude-sonnet-5-5' });
+  await send(v, '/model computer sonnet 5.5 now'); await until(() => /Use \/model computer <name>, or none\./.test(status()), 'a default takes no message'); panels.ask.setValue('');
+  await send(v, '/model computer none'); await until(() => computerDefault() === null, 'no choice again');
+  // The key bar's usage of /model names it, and /model alone still runs: every word of it is optional.
+  assert.equal(typedCommand('/model ').usage, '/model [name [message]|default <name>|computer <name>|add]');
+  assert.equal(needsArgument(typedCommand('/model ')), false);
+});
+
 test("a computer with only Grok Build: the project's settings show its default model and this computer's, Enter picks one, /model computer sets it, and a saved default that is not installed is said", { timeout: 60000 }, async t => {
   const p = setup(t, 'answer'); registerProject(p.repo);
   environment(t, { PATH: vendorPath(p.parent, p.dir, ['grok']).PATH });
   const v = await view(t, { repo: p.repo }), panels = v.current.panels, PAGE = 'Project sample app', status = () => panels.status.getText().replace(/\s+/g, ' ');
   const page = async () => { await send(v, '/projects'); await until(() => v.current.view === 'projects' && panels.projectsList.items.length === 1, 'the project row'); panels.projectsList.focus(); v.input.write('\r'); await until(() => modal(v, PAGE), 'the settings'); };
+  // The program is named in full wherever the app names it: the box a new session starts from.
+  assert.match(panels.ask._label.getText(), /New session → Grok Build · sample app/);
   await page();
   // Nothing is chosen: Grok Build is the first vendor installed, so new sessions start on it.
-  assert.deepEqual(dialogRows(v, PAGE).slice(3, 5), ['Default model Grok · not chosen, so the first installed here', 'This computer not chosen · Grok, the first installed here']);
+  assert.deepEqual(dialogRows(v, PAGE).slice(3, 5), ['Default model Grok Build · not chosen, so the first installed here', 'This computer not chosen · Grok Build, the first installed here']);
   // Enter on This computer opens the picker; none is offered beside the models.
   for (let at = 0; at < 3; at += 1) v.input.write('\x1b[B');
   await until(() => dialogList(v, PAGE).selected === 4, 'on This computer'); v.input.write('\r'); await until(() => modal(v, 'Model'), 'the picker');
-  assert.match(dialogText(v, 'Model').replace(/\s+/g, ' '), /No default for this computer: Grok \(grok\) is the first installed here\./);
+  assert.match(dialogText(v, 'Model').replace(/\s+/g, ' '), /No default for this computer: Grok Build \(grok\) is the first installed here\./);
   assert.match(dialogText(v, 'Model'), /none +no choice: the first one installed here/);
   await dialog(v, 'Model', 'grok');
-  await until(() => modal(v, PAGE) && dialogRows(v, PAGE)[4] === 'This computer Grok · used by every project that has not chosen', 'saved, and back in the settings');
-  assert.equal(dialogRows(v, PAGE)[3], "Default model Grok · this computer's default");
-  assert.match(status(), /This computer's default is Grok \(grok\)\./);
+  await until(() => modal(v, PAGE) && dialogRows(v, PAGE)[4] === 'This computer Grok Build · used by every project that has not chosen', 'saved, and back in the settings');
+  assert.equal(dialogRows(v, PAGE)[3], "Default model Grok Build · this computer's default");
+  assert.match(status(), /This computer's default is Grok Build \(grok\)\./);
   assert.deepEqual(computerDefault(), { vendor: 'grok', model: null });
   // Enter on Default model is the picker of /model default: the project's own choice wins.
   v.input.write('\x1b[A'); await until(() => dialogList(v, PAGE).selected === 3, 'on Default model'); v.input.write('\r'); await until(() => modal(v, 'Model'), 'the picker');
-  assert.match(dialogText(v, 'Model').replace(/\s+/g, ' '), /sample app uses this computer's default, Grok \(grok\)\./);
+  assert.match(dialogText(v, 'Model').replace(/\s+/g, ' '), /sample app uses this computer's default, Grok Build \(grok\)\./);
   assert.match(dialogText(v, 'Model'), /none +no choice: this computer's default/);
   await dialog(v, 'Model', 'grok');
-  await until(() => modal(v, PAGE) && dialogRows(v, PAGE)[3] === 'Default model Grok', 'the project has its own');
+  await until(() => modal(v, PAGE) && dialogRows(v, PAGE)[3] === 'Default model Grok Build', 'the project has its own');
   assert.equal(v.current.controller.startModel().from, 'project');
   v.input.write('\x1b'); await until(() => !modal(v, PAGE), 'closed');
   // none goes back to no choice, by command too.
-  await send(v, '/model default none'); await until(() => /sample app uses this computer's default, Grok \(grok\)\./.test(status()), "back on this computer's");
-  await send(v, '/model computer none'); await until(() => /No default for this computer: Grok \(grok\) is the first installed here\./.test(status()), 'no choice on this computer');
+  await send(v, '/model default none'); await until(() => /sample app uses this computer's default, Grok Build \(grok\)\./.test(status()), "back on this computer's");
+  await send(v, '/model computer none'); await until(() => /No default for this computer: Grok Build \(grok\) is the first installed here\./.test(status()), 'no choice on this computer');
   assert.equal(computerDefault(), null);
-  await send(v, '/model computer grok'); await until(() => /This computer's default is Grok \(grok\)\.$/.test(status().trim()), 'set by command');
+  await send(v, '/model computer grok'); await until(() => /This computer's default is Grok Build \(grok\)\.$/.test(status().trim()), 'set by command');
   // A saved default whose vendor is not installed here is said wherever the default is shown.
   saveComputerDefault({ vendor: 'claude', model: 'opus' });
   await send(v, '/model'); await until(() => /Opus is this computer's default, but Claude Code is not installed here\./.test(status()), 'said by /model');
   await page();
-  assert.deepEqual(dialogRows(v, PAGE).slice(3, 5), ['Default model Grok · not chosen, so the first installed here', 'This computer Grok · Opus is chosen, but Claude Code is not installed']);
+  assert.deepEqual(dialogRows(v, PAGE).slice(3, 5), ['Default model Grok Build · not chosen, so the first installed here', 'This computer Grok Build · Opus is chosen, but Claude Code is not installed']);
   v.input.write('\x1b'); await until(() => !modal(v, PAGE), 'closed');
-  await send(v, '/new'); await until(() => /Your message goes to Grok\. Opus is this computer's default, but Claude Code is not installed here\. Bots review/.test(panels.composeHint.getText().replace(/\s+/g, ' ')), 'said on the new session form');
+  await send(v, '/new'); await until(() => /Your message goes to Grok Build\. Opus is this computer's default, but Claude Code is not installed here\. Bots review/.test(panels.composeHint.getText().replace(/\s+/g, ' ')), 'said on the new session form');
 });
 
 test('the default model of a project that is not the active one is set from its settings too', { timeout: 60000 }, async t => {
@@ -3168,6 +3195,44 @@ test('checks read as running, a waiting turn of a schedule names the schedule, a
   assert.deepEqual(mine(), ['First waiting', 'Second waiting']);
 });
 
+// Nothing limits how many sessions run at once until /slots sets a limit, for one project as
+// for several. A session that waits for a slot says so, and /slots off removes the limit.
+test('/slots says there is no limit until it sets one, a session past the limit waits under Queued and says what for, and /slots off starts it', { timeout: 60000 }, async t => {
+  const p = setup(t, 'slow'), v = await view(t, { repo: p.repo }), panels = v.current.panels, status = () => panels.status.getText(), chat = () => panels.chat.getText().replace(/\s+/g, ' ');
+  const saved = goal => pendingRequests(p.root).find(row => row.goal === goal);
+  await send(v, '/slots'); await until(() => /No limit on sessions at once\. \/slots 6 sets one\./.test(status()), 'no limit until one is set');
+  await send(v, '/slots 1'); await until(() => /At most 1 session runs at once\. Running work is not interrupted\./.test(status()), 'one at once');
+  await send(v, '/slots'); await until(() => /At most 1 session runs at once\. \/slots off removes the limit\./.test(status()), 'the limit that is set');
+  await send(v, 'Check the coupon module'); await until(() => /Opus is working/.test(chat()), 'the first session works');
+  await send(v, '/new'); await until(() => v.current.session === 'new', 'the new session form');
+  await send(v, 'Fix the cart total'); await until(() => saved('Fix the cart total')?.waits, 'the second is told what it waits for');
+  // Its row is under Queued, whose heading says the slots are taken, and its chat says the sentence.
+  await until(() => rows(v).some(row => /^ QUEUED 1 · 1 of 1 running$/.test(row)), 'the Queued heading');
+  await selectRow(v, /Fix the cart total/);
+  await until(() => /Waiting for a free slot: 1 of 1 session is running\. \/slots changes it\. \/stop cancels it\./.test(chat()), 'the sentence in its chat');
+  assert.doesNotMatch(chat(), /Waiting to start/);
+  // /slots off removes the limit, and it starts, in the same project.
+  await send(v, '/slots off'); await until(() => /No limit on sessions at once\. \/slots 6 sets one\./.test(status()), 'the limit removed');
+  assert.equal(conductorSettings().maxAgents, null);
+  await until(() => saved('Fix the cart total')?.state === 'running', 'the second session of the project runs');
+  await until(() => rows(v).some(row => /RUNNING 2/.test(row)) && !rows(v).some(row => /QUEUED/.test(row)), 'both under Running');
+  // Any whole number from 1 is a limit, and none, unlimited and 0 remove it as off does.
+  await send(v, '/slots 40'); await until(() => /At most 40 sessions run at once\. Running work is not interrupted\./.test(status()), 'forty at once');
+  assert.equal(conductorSettings().maxAgents, 40);
+  for (const word of ['none', 'unlimited', '0', 'OFF']) {
+    await send(v, '/slots 2'); await until(() => /At most 2 sessions run at once\. Running work is not interrupted\./.test(status()), 'two at once');
+    await send(v, `/slots ${word}`); await until(() => /No limit on sessions at once\. \/slots 6 sets one\./.test(status()), `/slots ${word}`);
+    assert.equal(conductorSettings().maxAgents, null, word);
+  }
+  // What it does not understand changes nothing and says the two forms.
+  await send(v, '/slots 3'); await until(() => /At most 3 sessions run at once\. Running work is not interrupted\./.test(status()), 'three at once');
+  for (const words of ['many', '2 3', '-1', '1.5', 'off now']) {
+    await send(v, '/slots'); await until(() => /At most 3 sessions run at once\. \/slots off removes the limit\./.test(status()), 'the limit as it is');
+    await send(v, `/slots ${words}`); await until(() => /Use \/slots 6 to set a limit, or \/slots off for no limit\./.test(status()), `/slots ${words}`);
+    assert.equal(conductorSettings().maxAgents, 3, words);
+  }
+});
+
 // The first message of a session waits a moment for the conductor. A second one sent in that
 // moment goes with it, in the order sent. Saved over the first, it took its place.
 test('a message sent before the conductor has picked up the first one goes with it and never replaces it', { timeout: 30000 }, async t => {
@@ -4835,16 +4900,16 @@ test('vendor rows say how to sign in, Google’s FAQ under agy, and that a vendo
     { vendor: 'codex', available: true, supported: true, signedIn: false, version: '0.166.0', support: 'lead and reviewer' },
     { vendor: 'claude', available: true, supported: true, signedIn: true, conformant: true, version: '2.1.319', support: 'lead and reviewer' },
   ] });
-  const lines = text.split('\n'), agy = lines.indexOf('  Antigravity: not signed in for ELU. Sign it in with s on its line in the Usage tab.');
+  const lines = text.split('\n'), agy = lines.indexOf('  Antigravity CLI (the agy command): not signed in for ELU. Sign it in with s on its line in the Usage tab.');
   assert.ok(agy > 0, 'the agy sign-in line');
   assert.equal(lines[agy + 1], "  Google's FAQ: wrapping agy in third-party agents is not supported on consumer plans. antigravity.google/docs/faq");
-  assert.ok(lines.includes('  Grok Build has not been checked on this machine yet. Your first message to it runs the check.'));
+  assert.ok(lines.includes('  Grok Build (the grok command) has not been checked on this machine yet. Your first message to it outside Full access runs the check; Full access needs none.'));
   assert.ok(lines.includes(`  Codex: sign in with ChatGPT. Run: ${signInCommand('codex')}`));
   assert.equal(lines.filter(line => /Google's FAQ/.test(line)).length, 1);
   assert.ok(!lines.some(line => /Claude Code: not signed in|Claude Code has not been checked/.test(line)));
-  assert.equal(vendorText({ vendor: 'grok', support: 'lead', available: true, supported: true, signedIn: true, conformant: false }), 'lead · checked on your next message to it');
+  assert.equal(vendorText({ vendor: 'grok', support: 'lead', available: true, supported: true, signedIn: true, conformant: false }), 'lead · Full access only until checked');
   // Never run yet, so neither its release nor its sign-in is known: the same words, not "not supported".
-  assert.equal(vendorText({ vendor: 'grok', support: 'sessions', available: true, supported: false, signedIn: null, version: null, conformant: false }), 'sessions · checked on your next message to it');
+  assert.equal(vendorText({ vendor: 'grok', support: 'sessions', available: true, supported: false, signedIn: null, version: null, conformant: false }), 'sessions · Full access only until checked');
   assert.equal(vendorText({ vendor: 'agy', support: 'lead', available: true, supported: true, signedIn: false }), 'lead · not signed in');
 });
 
@@ -4863,7 +4928,7 @@ test('Usage shows each account with the usage its sessions reported, r checks ag
   await until(() => /Usage updated \d\d:\d\d/.test(status()), 'first check');
   assert.match(text(), /^Claude {6}owner@example.invalid · Max 20x · active\n {12}Usage shows after your next session on Claude Code\.\n {12}old@example.invalid · last seen Nov 9 · wk 100% then\n {12}enter use · a add account · x forget$/m);
   await until(() => /^Codex {7}owner@example.invalid · Team · active\n {12}5h  \[#-----\]   18%/m.test(text()), 'the Codex block');
-  assert.match(text(), /^Antigravity not signed in for ELU · s signs in\nGrok Build {2}not installed\n\nTop agents today\nNo agent has run today\.\nELU spend today \$0\.00$/m);
+  assert.match(text(), /^Antigravity \(agy\) not signed in for ELU · s signs in\nGrok Build {2}not installed\n\nTop agents today\nNo agent has run today\.\nELU spend today \$0\.00$/m);
   assert.ok(panels.usageList.items.every(item => item.getText().length <= 76), 'every line fits the pane');
   // A session on Claude Code reports its windows. r checks again now and records them with the account.
   const saved = JSON.parse(fs.readFileSync(usageFile, 'utf8'));
@@ -5106,9 +5171,9 @@ test('Usage: Antigravity and Grok Build show their sign-in before their one-time
   const calls = () => fs.readFileSync(p.calls, 'utf8').trim().split('\n').map(line => JSON.parse(line));
   await send(v, '/usage'); await until(() => v.current.view === 'usage' && !panels.usageBox.hidden, 'Usage tab');
   // Opening the tab reads both at once: no message to either, and no check yet.
-  await until(() => /^Antigravity signed in · needs a one-time check \(c runs it now\)$/m.test(text()), 'Antigravity signed in', 20000);
-  assert.match(text(), /^Grok Build {2}signed in · needs a one-time check \(c runs it now\)$/m);
-  assert.doesNotMatch(text(), /checked on your next message/);
+  await until(() => /^Antigravity \(agy\) signed in · Full access only \(c checks it\)$/m.test(text()), 'Antigravity signed in', 20000);
+  assert.match(text(), /^Grok Build {2}\(grok\) signed in · Full access only \(c checks it\)$/m);
+  assert.doesNotMatch(text(), /Full access only until checked/);
   assert.deepEqual(calls().filter(call => ['agy', 'grok'].includes(call.vendor)).map(call => [call.vendor, call.args]), [['agy', ['--version']], ['agy', ['--help']], ['agy', ['-p', '/usage', '--output-format', 'json']]], 'Grok was not run; Antigravity was asked only for its release, help and sign-in');
   assert.equal(conformanceState('grok'), null);
   // c on the Grok line: the same check a first message runs, its steps under the vendor as it goes.
@@ -5118,18 +5183,18 @@ test('Usage: Antigravity and Grok Build show their sign-in before their one-time
   v.input.write('c');
   await until(() => /^Grok Build {2}signed in · ready$/m.test(text()), 'Grok ready', 45000);
   clearInterval(watch);
-  assert.ok(seen.has('Grok Build  signed in · checking…'), [...seen].join('\n'));
-  assert.ok([...seen].some(line => /^Checking Grok Build, \d of 8 done/.test(line)), 'a step line showed while it ran');
-  assert.match(text(), /^Grok Build {2}signed in · ready\n {12}One-time check of Grok Build on this machine first: about seven\n {12}short turns on it, a few minutes\.\n {12}Grok Build 1\.0\.77 passed its check on this machine\.$/m);
+  assert.ok(seen.has('Grok Build  (grok) signed in · checking…'), [...seen].join('\n'));
+  assert.ok([...seen].some(line => /^Grok Build: \d of 8 steps, \d+s so far\./.test(line)), 'the counting line showed while it ran');
+  assert.match(text(), /^Grok Build {2}signed in · ready\n {12}Checking Grok Build \(the grok command\): 8 steps, once on this\n {12}machine for release 1\.0\.77\.\n {12}Grok Build 1\.0\.77 passed its check on this machine\.$/m);
   await until(() => /Grok Build is ready\./.test(status()), 'status');
   assert.deepEqual(Object.values(conformanceState('grok').steps).filter(step => step !== 'pass'), [], 'the check record is the session\'s');
-  assert.match(text(), /^Antigravity signed in · needs a one-time check \(c runs it now\)$/m, 'Antigravity is untouched');
+  assert.match(text(), /^Antigravity \(agy\) signed in · Full access only \(c checks it\)$/m, 'Antigravity is untouched');
   // r reads every vendor again; the finished check's lines go.
-  v.input.write('r'); await until(() => !/One-time check of Grok Build/.test(text()) && /Usage updated/.test(status()), 'r');
+  v.input.write('r'); await until(() => !/Checking Grok Build/.test(text()) && /Usage updated/.test(status()), 'r');
   assert.match(text(), /^Grok Build {2}signed in · ready$/m);
   // Signed out, Antigravity says how to sign in, after r.
   fs.writeFileSync(path.join(p.dir, 'fake.json'), JSON.stringify({ ...JSON.parse(fs.readFileSync(path.join(p.dir, 'fake.json'), 'utf8')), agy: { signedIn: false } }));
-  v.input.write('r'); await until(() => /^Antigravity not signed in for ELU · s signs in$/m.test(text()), 'Antigravity signed out', 20000);
+  v.input.write('r'); await until(() => /^Antigravity \(agy\) not signed in for ELU · s signs in$/m.test(text()), 'Antigravity signed out', 20000);
 });
 
 // The owner's Mac on 0.1.19: the temp folder is under /var, a link; Antigravity CLI is signed
@@ -5173,7 +5238,7 @@ test('Usage on a Mac: Antigravity says it is not signed in for ELU at once, c of
   const opening = Date.now();
   await send(v, '/usage'); await until(() => v.current.view === 'usage' && !panels.usageBox.hidden, 'Usage tab');
   // Within seconds, not after 30 silent ones, and with no browser opened by the read.
-  await until(() => /^Antigravity not signed in for ELU · s signs in$/m.test(text()), 'Antigravity not signed in for ELU', 15000);
+  await until(() => /^Antigravity \(agy\) not signed in for ELU · s signs in$/m.test(text()), 'Antigravity not signed in for ELU', 15000);
   assert.ok(Date.now() - opening < 15000, `${Date.now() - opening} ms`);
   assert.equal(fs.existsSync(opened), false, 'reading the sign-in opened no browser');
   panels.usageList.focus(); await until(() => v.current.screen.focused === panels.usageList, 'list focused');
@@ -5183,8 +5248,8 @@ test('Usage on a Mac: Antigravity says it is not signed in for ELU at once, c of
   idle = listening(); v.input.write('c');
   await until(() => modal(v, 'Sign in to Antigravity CLI'), 'the sign-in offered', 15000);
   assert.ok(most < 3000, `the app was held ${most} ms`);
-  assert.match(dialogText(v, 'Sign in to Antigravity CLI'), /Antigravity CLI is not signed in for ELU, so its check cannot run\.\nSign in now\? Its own sign-in runs here on a clean screen, and the check goes on after it\./);
-  assert.match(text(), /^Antigravity not signed in for ELU · s signs in\n {12}Antigravity CLI is not signed in for ELU\. Sign it in with s on\n {12}its line in the Usage tab\.$/m);
+  assert.match(dialogText(v, 'Sign in to Antigravity CLI'), /Antigravity CLI \(the agy command\) is not signed in for ELU, so its check cannot run\.\nSign in now\? Its own sign-in runs here on a clean screen, and the check goes on after it\./);
+  assert.match(text(), /^Antigravity \(agy\) not signed in for ELU · s signs in\n {12}Antigravity CLI \(the agy command\) is not signed in for ELU\. Sign\n {12}it in with s on its line in the Usage tab\.$/m);
   await dialog(v, 'Sign in to Antigravity CLI', 'y');
   // Back in ELU after the code: the check goes on by itself and ends ready.
   await until(() => /^Antigravity signed in · ready$/m.test(text()), 'Antigravity ready', 60000);
@@ -5201,20 +5266,20 @@ test('Usage on a Mac: Antigravity says it is not signed in for ELU at once, c of
   assert.deepEqual(first.signals, idle.map(count => count + 1)); assert.deepEqual(listening(), idle);
   assert.match(first.printed, /Authentication required\. Please visit the URL to log in:\n {2}https:\/\/accounts\.google\.com\/\S+\n\nWaiting for authentication \(timeout 60s\)\.\.\.\nOr, paste the authorization code here and press Enter:\nSigned in\./);
   assert.deepEqual(fs.readFileSync(opened, 'utf8').trim().split('\n').map(line => line.split('?')[0]), ['https://accounts.google.com/o/oauth2/auth'], 'the sign-in opened the browser once');
-  assert.match(text(), /^Antigravity signed in · ready\n {12}One-time check of Antigravity CLI on this machine first: about\n {12}seven short turns on it, a few minutes\.\n {12}Antigravity CLI 1\.5\.4 passed its check on this machine\.$/m);
+  assert.match(text(), /^Antigravity signed in · ready\n {12}Checking Antigravity CLI \(the agy command\): 8 steps, once on\n {12}this machine for release 1\.5\.4\.\n {12}Antigravity CLI 1\.5\.4 passed its check on this machine\.$/m);
   await until(() => /Antigravity CLI is ready\./.test(status()), 'status');
   // Grok Build, signed out: c offers its sign-in, and n leaves it signed out, saying what s does.
   panels.usageList.select(rowOf(/^Grok Build/)); await until(() => /c run check {2}s sign in/.test(panels.keys.getText()), 'Grok key bar');
   v.input.write('c');
   await until(() => modal(v, 'Sign in to Grok Build'), 'the Grok sign-in offered', 15000);
   await dialog(v, 'Sign in to Grok Build', 'n');
-  await until(() => /Grok Build is not signed in for ELU\. s signs it in\./.test(status()), 'declined');
-  assert.match(text(), /^Grok Build {2}not signed in for ELU · s signs in\n {12}Grok Build is not signed in for ELU\. Sign it in with s on its\n {12}line in the Usage tab\.$/m);
+  await until(() => /Grok Build \(the grok command\) is not signed in for ELU\. s signs it in\./.test(status()), 'declined');
+  assert.match(text(), /^Grok Build {2}\(grok\) not signed in for ELU · s signs in\n {12}Grok Build \(the grok command\) is not signed in for ELU\. Sign it\n {12}in with s on its line in the Usage tab\.$/m);
   assert.equal(started.length, 1, 'no sign-in ran');
   // s: grok login under ELU's HOME and Grok home; its token lands in the owner's own file, and
   // the line drops what the stopped check said.
   v.input.write('s');
-  await until(() => /^Grok Build {2}signed in · needs a one-time check \(c runs it now\)$/m.test(text()), 'Grok signed in', 30000);
+  await until(() => /^Grok Build {2}\(grok\) signed in · Full access only \(c checks it\)$/m.test(text()), 'Grok signed in', 30000);
   assert.deepEqual([started[1].args, started[1].home], [['login'], path.join(personalDirectory(), 'grok-home')]);
   assert.match(started[1].printed, /Confirm this code in your browser:\n\n {2}FAKE-CODE\n[\s\S]*Waiting for authorization\.\.\.\nSigned in\.\n$/);
   assert.equal(fs.statSync(path.join(fake.home, '.grok', 'auth.json')).isFile(), true);
@@ -5260,13 +5325,13 @@ test('Usage on a computer with no browser: s signs Grok Build in with its device
   const rowOf = pattern => panels.usageList.items.findIndex(item => pattern.test(item.getText()));
   const screenBefore = row => v.raw.slice(Math.max(0, row.before - 400), row.before);
   await send(v, '/usage'); await until(() => v.current.view === 'usage' && !panels.usageBox.hidden, 'Usage tab');
-  await until(() => /^Antigravity not signed in for ELU · s signs in$/m.test(text()), 'Antigravity not signed in for ELU', 15000);
-  assert.match(text(), /^Grok Build {2}not signed in for ELU · s signs in$/m);
+  await until(() => /^Antigravity \(agy\) not signed in for ELU · s signs in$/m.test(text()), 'Antigravity not signed in for ELU', 15000);
+  assert.match(text(), /^Grok Build {2}\(grok\) not signed in for ELU · s signs in$/m);
   panels.usageList.focus(); await until(() => v.current.screen.focused === panels.usageList, 'list focused');
   // Grok Build: grok login --device-auth, which needs no browser here.
   panels.usageList.select(rowOf(/^Grok Build/)); await until(() => /s sign in/.test(panels.keys.getText()), 's in the key bar');
   v.input.write('s');
-  await until(() => /^Grok Build {2}signed in · needs a one-time check \(c runs it now\)$/m.test(text()), 'Grok Build signed in', 30000);
+  await until(() => /^Grok Build {2}\(grok\) signed in · Full access only \(c checks it\)$/m.test(text()), 'Grok Build signed in', 30000);
   assert.deepEqual(started[0].args, ['login', '--device-auth']);
   assert.ok(screenBefore(started[0]).endsWith('\x1b[?2004l\x1b[H\x1b[2JSigning in to Grok Build. ELU comes back when it ends.\r\nNo browser here: open the link below on any computer and use the code under it.\r\n\r\n'), JSON.stringify(screenBefore(started[0])));
   assert.match(started[0].printed, /open this URL in your browser:\n\n {2}https:\/\/accounts\.x\.ai\/oauth2\/device\?user_code=FAKE-CODE\n[\s\S]*Confirm this code in your browser:\n\n {2}FAKE-CODE\n[\s\S]*Waiting for authorization\.\.\.\nSigned in\.\n$/);
@@ -5274,7 +5339,7 @@ test('Usage on a computer with no browser: s signs Grok Build in with its device
   await until(() => /Grok Build is signed in for ELU\./.test(status()), 'status');
   // Antigravity CLI: its sign-in prints the link and takes the code pasted under ELU's lines.
   panels.usageList.select(rowOf(/^Antigravity/)); v.input.write('s');
-  await until(() => /^Antigravity signed in · needs a one-time check \(c runs it now\)$/m.test(text()), 'Antigravity signed in', 30000);
+  await until(() => /^Antigravity \(agy\) signed in · Full access only \(c checks it\)$/m.test(text()), 'Antigravity signed in', 30000);
   assert.deepEqual([started[1].args, started[1].marks], [['-p', '/usage'], false], 'no paste marks while the sign-in has the terminal');
   assert.ok(screenBefore(started[1]).endsWith('\x1b[?2004l\x1b[H\x1b[2JSigning in to Antigravity CLI for ELU. ELU comes back when it ends.\r\nNo browser here: open the link below on any computer, then paste its code here.\r\nPress Enter after it. It waits 60 seconds for the code.\r\nIf the 60 seconds pass, it stops. Press s again for a new link and a new code.\r\n\r\n'), JSON.stringify(screenBefore(started[1])));
   assert.match(started[1].printed, /Or, paste the authorization code here and press Enter:\nSigned in\./);
@@ -5309,7 +5374,7 @@ test('Usage: Antigravity\'s sign-in screen says what happens when its 60 seconds
   v = await view(t, { repo: p.repo, usage: fake });
   const panels = v.current.panels, text = () => panels.usageList.items.map(item => item.getText()).join('\n'), status = () => panels.status.getText();
   await send(v, '/usage'); await until(() => v.current.view === 'usage' && !panels.usageBox.hidden, 'Usage tab');
-  await until(() => /^Antigravity not signed in for ELU · s signs in$/m.test(text()), 'Antigravity not signed in for ELU', 15000);
+  await until(() => /^Antigravity \(agy\) not signed in for ELU · s signs in$/m.test(text()), 'Antigravity not signed in for ELU', 15000);
   panels.usageList.focus(); await until(() => v.current.screen.focused === panels.usageList, 'list focused');
   panels.usageList.select(panels.usageList.items.findIndex(item => /^Antigravity/.test(item.getText()))); await until(() => /s sign in/.test(panels.keys.getText()), 's in the key bar');
   // Ended by the owner before the time was up: the sign-in did not finish, and nothing says the time ran out.
@@ -5323,13 +5388,13 @@ test('Usage: Antigravity\'s sign-in screen says what happens when its 60 seconds
   await until(() => /Antigravity CLI got no code in 60 seconds\. s starts again with a new link\./.test(status()), 'the time ran out', 30000);
   assert.match(started[1].printed, /Waiting for authentication \(timeout 4s\)\.\.\.\nOr, paste the authorization code here and press Enter:\nError: authentication timed out\./);
   assert.ok(status().trim().length <= 78, 'the status fits 80 columns');
-  assert.match(text(), /^Antigravity not signed in for ELU · s signs in$/m);
+  assert.match(text(), /^Antigravity \(agy\) not signed in for ELU · s signs in$/m);
   // s again: a sign-in of its own with another link, and the code pasted in time signs it in.
   owner = 'pastes'; v.input.write('s');
   await until(() => /Antigravity CLI is signed in for ELU\./.test(status()), 'signed in', 30000);
   const link = row => row.printed.match(/https:\/\/accounts\.google\.com\/\S+/)[0];
   assert.equal(started.length, 3); assert.notEqual(link(started[2]), link(started[1]));
-  assert.match(text(), /^Antigravity signed in · needs a one-time check \(c runs it now\)$/m);
+  assert.match(text(), /^Antigravity \(agy\) signed in · Full access only \(c checks it\)$/m);
 });
 
 // Antigravity CLI passed its check on this machine, so reading the vendors asks it for its

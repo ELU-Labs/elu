@@ -4,7 +4,8 @@ import { defaultConfig, parseConfig, validateConfig, validateResult } from '../l
 import { MODEL_NAME } from '../lib/vendors.mjs';
 import { parseYaml, stringifyYaml } from '../lib/yaml.mjs';
 import { readRole } from './helpers.mjs';
-import { checkSeconds, checkStoppedLine, commandWatch, stoppedLine, turnClock, turnLimits } from '../lib/turn-limits.mjs';
+import * as limits from '../lib/turn-limits.mjs';
+import { carriedOnLine, commandWatch, stoppedLine, turnClock, turnLimits } from '../lib/turn-limits.mjs';
 import { allowRuleProblem, allowRuleRisk, assertPolicy, commandRule, policyReport, protectedFiles, protectedPath } from '../lib/policy.mjs';
 
 test('configuration round trips, rejects unknown fields, and keeps fixed prohibitions', () => {
@@ -71,19 +72,22 @@ test('YAML rejects aliases, duplicate keys, executable tags, and malformed inden
   assert.equal({}.polluted, undefined);
 });
 
-test('timeoutSeconds is how long a turn may print nothing: the 900 a config is written with and 600 are the default, the cap is two hours', () => {
+test('timeoutSeconds is how long a turn may print nothing: the 900 a config is written with and 600 are the default, and no turn or check has a time limit', () => {
   const lead = timeoutSeconds => ({ ...defaultConfig().roles.lead, timeoutSeconds });
   assert.equal(defaultConfig().roles.lead.timeoutSeconds, 900, 'a shared config keeps the 15 minutes an older ELU reads it as');
   for (const seconds of [1, 600, 900, 3600, 7200]) assert.doesNotThrow(() => validateConfig({ ...defaultConfig(), roles: { lead: lead(seconds) } }), String(seconds));
   assert.throws(() => validateConfig({ ...defaultConfig(), roles: { lead: lead(7201) } }), /from 1 to 7200/);
-  assert.deepEqual(turnLimits(lead(900)), { quietSeconds: turnClock.quietSeconds, capSeconds: turnClock.capSeconds }, 'a policy frozen with the old default gets the default');
-  assert.deepEqual(turnLimits(lead(600)), { quietSeconds: 600, capSeconds: 7200 });
-  assert.deepEqual(turnLimits(lead(120)), { quietSeconds: 120, capSeconds: 7200 }, 'one the owner chose is kept');
-  assert.deepEqual(turnLimits(lead(7200)), { quietSeconds: 7200, capSeconds: 7200 });
-  assert.deepEqual(turnLimits(lead(900), { streams: false }), { quietSeconds: null, capSeconds: 7200 }, 'a vendor that prints only at the end has the cap alone');
-  assert.equal(checkSeconds(), 7200, 'a check is a command: it has the cap of a turn and no time limit of the lead\'s'); assert.equal(checkStoppedLine(), 'Stopped after 2 hours, the most one check may run.');
-  assert.equal(stoppedLine('quiet', turnLimits(lead(900))), 'Stopped after 10 minutes with no output. Your changes are kept. Reply to carry on.');
-  assert.equal(stoppedLine('cap', turnLimits(lead(900)), { edits: false }), 'Stopped after 2 hours, the most one turn may run. Reply to carry on.');
+  assert.deepEqual(turnClock, { quietSeconds: 600 }, 'the quiet limit is the only clock');
+  assert.deepEqual(turnLimits(lead(900)), { quietSeconds: 600 }, 'a policy frozen with the old default gets the default');
+  assert.deepEqual(turnLimits(lead(600)), { quietSeconds: 600 });
+  assert.deepEqual(turnLimits(lead(120)), { quietSeconds: 120 }, 'one the owner chose is kept');
+  assert.deepEqual(turnLimits(lead(7200)), { quietSeconds: 7200 });
+  assert.deepEqual(turnLimits(lead(900), { streams: false }), { quietSeconds: null }, 'a vendor that prints only at the end has no clock of ELU\'s');
+  // 0.1.19 and earlier stopped a turn at two hours and a check at the same: neither is there to stop anything.
+  for (const name of ['checkSeconds', 'checkStoppedLine']) assert.equal(limits[name], undefined, name);
+  assert.equal(stoppedLine(turnLimits(lead(900))), 'Stopped after 10 minutes with no output. Your changes are kept. Reply to carry on.');
+  assert.equal(stoppedLine(turnLimits(lead(120)), { edits: false }), 'Stopped after 2 minutes with no output. Reply to carry on.');
+  assert.equal(carriedOnLine(turnLimits(lead(900))), 'No output for 10 minutes. ELU told it to carry on.');
 });
 
 // A command the model runs, such as a long test run, prints nothing until it ends; while it

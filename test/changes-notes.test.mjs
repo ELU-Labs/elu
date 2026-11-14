@@ -134,7 +134,7 @@ test('Changes: the line under the mouse shows a +, and one click on that + opens
   assert.deepEqual(marked(), [], 'no + before the mouse or the cursor is on a line');
   // The mouse over the text of a line: its + shows at the start of the row. The cursor stays where it was.
   v.move(added.mark + 20, added.y); await until(() => marked().length, 'a + beside the line under the mouse');
-  assert.deepEqual(marked(), [at(NEW)]); assert.ok(v.lines()[0].startsWith('▌'), 'the cursor has not moved');
+  assert.deepEqual(marked(), [at(NEW)]); assert.ok(v.lines()[at('▾ lib/price.mjs')].startsWith('▌'), 'the cursor has not moved: it is on the file, where the view put it');
   // It follows the mouse to the next line, and a row that is no line shows none.
   v.move(removed.mark + 3, removed.y); await until(() => marked()[0] === at(OLD), 'the + on the line the mouse moved to');
   assert.deepEqual(marked(), [at(OLD)]);

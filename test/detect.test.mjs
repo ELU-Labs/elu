@@ -27,13 +27,13 @@ function assertUnavailable(vendors) {
 // Registry vendors with no tested release: found on PATH, never run, never signed in, never conformant.
 // Their row says what they do here and what will start their one-time check.
 function assertNotYet(vendors) {
-  for (const [vendor, name, support] of [['agy', 'Antigravity CLI', 'sessions and reviews'], ['grok', 'Grok Build', 'sessions']]) {
+  for (const [vendor, name, support] of [['agy', 'Antigravity CLI (the agy command)', 'sessions and reviews'], ['grok', 'Grok Build (the grok command)', 'sessions and reviews']]) {
     const row = vendors.find((value) => value.vendor === vendor);
     assert.ok(row, vendor);
     assert.equal(row.available, true, vendor); assert.equal(row.supported, false, vendor);
     assert.equal(row.version, null, vendor); assert.equal(row.signedIn, null, vendor);
     assert.equal(row.support, support, vendor); assert.equal(row.conformant, false, vendor);
-    assert.equal(row.reason, `${name} has not been checked on this machine yet. Your first message to it runs the check.`, vendor);
+    assert.equal(row.reason, `${name} has not been checked on this machine yet. Your first message to it outside Full access runs the check; Full access needs none.`, vendor);
   }
 }
 test('unsupported discovery checks both Cursor aliases without executing a binary', async (t) => {
@@ -106,8 +106,8 @@ test('the lead error names what is wrong', () => {
   // Where no browser can open (an SSH session, Linux with no display), the device code sign-in.
   assert.equal(signedOut('codex'), `Codex is signed out. Run ${hasBrowser() ? 'codex login' : 'codex login --device-auth'} to sign in, then send again.`);
   // Antigravity and Grok Build sign in from ELU itself: agy's sign-in for ELU is not the one in the owner's terminal.
-  assert.equal(signedOut('grok'), 'Grok Build is signed out. Sign it in with s on its line in the Usage tab, then send again.');
-  assert.equal(signedOut('agy'), 'Antigravity CLI is signed out. Sign it in with s on its line in the Usage tab, then send again.');
+  assert.equal(signedOut('grok'), 'Grok Build (the grok command) is signed out. Sign it in with s on its line in the Usage tab, then send again.');
+  assert.equal(signedOut('agy'), 'Antigravity CLI (the agy command) is signed out. Sign it in with s on its line in the Usage tab, then send again.');
   assert.equal(vendorProblem('claude', [{ vendor: 'claude', available: true, supported: false, signedIn: true, release: '2.1.321', reason: 'This untested version is missing required flags: --verbose.' }]), 'Claude Code 2.1.321: This untested version is missing required flags: --verbose.');
 });
 
