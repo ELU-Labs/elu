@@ -340,19 +340,21 @@ for (const [columns, rows] of [[140, 50], [80, 24]]) test(`the key bar says wher
   const peer = fakePeer({ items: [] }); peer.channels = [{ id: 'd'.repeat(16), name: 'design', members: [ME, SARA] }];
   const { v } = await teamView(t, { columns, rows, peer });
   const [bar] = v.panels.teamLists, ask = v.panels.ask, keys = () => v.panels.keys.getText().trim(), at = () => plainItem(bar.items[bar.selected]).trim(), focused = () => v.current.screen.focused;
-  const box = 'enter send  @name one teammate  / commands  ! run a shell command';
+  const box = 'enter send  @name one member  / commands  ! run a shell command';
   await until(() => bar.items.length > 5 && focused() === ask && ask.getValue() === '' && keys() === box, 'the cursor is in the empty message box');
   // Up: /chats is in the box again and the cursor is still there. The bar names the key that takes it out.
   v.input.write('\x1b[A'); await until(() => ask.getValue() === '/chats' && focused() === ask, 'Up brings /chats back');
-  await until(() => keys() === 'enter send  ↓ clear  @name one teammate  / commands  ! run a shell command', 'the bar says what Down does with it');
+  await until(() => keys() === 'enter send  ↓ clear  @name one member  / commands  ! run a shell command', 'the bar says what Down does with it');
   // Down: the box is empty again, and the bar is the empty box's.
   v.input.write('\x1b[B'); await until(() => ask.getValue() === '' && focused() === ask && keys() === box, 'Down clears the box');
   // Down again leaves the box for the Team bar, and the bar is that row's.
   v.input.write('\x1b[B'); await until(() => focused() === bar && keys() === 'enter write  n new channel  tab threads', 'Down from the empty box reaches the Team bar');
   assert.equal(at(), '# general  3');
   // Every row of the bar, down and back up: the bar names that row's keys after each key. A teammate's live session has its teammate's keys.
+  // A teammate's keys: the bar holds as many as fit, and n new channel is the one that goes at 80 columns.
+  const person = `enter write  t trust  h hold replies  o auto-continue  tab threads${columns >= 83 ? '  n new channel' : ''}`;
   const hints = line => /^\+ Add channel/.test(line) ? 'enter new channel  ↑↓ choose' : /^\+ Add teammate/.test(line) ? 'enter invite a teammate  ↑↓ choose' : /^# design/.test(line) ? 'enter write  n new channel  m members  x leave  tab threads'
-    : /^[●○⚠·] @/.test(line) ? 'enter write  t trust  n new channel  tab threads' : 'enter write  n new channel  tab threads';
+    : /^[●○⚠·] @/.test(line) ? person : 'enter write  n new channel  tab threads';
   const stops = bar.items.map(item => plainItem(item).trim()).filter(line => !['Channels', '', 'Direct messages'].includes(line));
   assert.ok(stops.some(line => /^# design/.test(line)) && stops.some(line => /^● @sara/.test(line)) && /^\+ Add teammate/.test(stops.at(-1)));
   for (const [key, order] of [['\x1b[B', stops.slice(1)], ['\x1b[A', stops.slice(0, -1).reverse()]]) for (const line of order) { v.input.write(key); await until(() => focused() === bar && at() === line && keys() === hints(line), `the keys of ${line}, now ${keys()}`); }
@@ -363,9 +365,9 @@ for (const [columns, rows] of [[140, 50], [80, 24]]) test(`the key bar says wher
   // With more sent, the bar says which way is older and which is newer, and stops saying so once the text is changed.
   await send(v, 'one'); await send(v, 'two');
   await until(() => focused() === ask && ask.getValue() === '' && keys() === box, 'both are sent and the box is empty');
-  v.input.write('\x1b[A'); await until(() => ask.getValue() === 'two' && keys().startsWith('enter send  ↑ older  ↓ clear  @name one teammate'), 'the newest: older is up, clear is down');
-  v.input.write('\x1b[A'); await until(() => ask.getValue() === 'one' && keys().startsWith('enter send  ↑ older  ↓ newer  @name one teammate'), 'between two');
-  v.input.write('\x1b[A'); await until(() => ask.getValue() === '/chats' && keys().startsWith('enter send  ↓ newer  @name one teammate'), 'the oldest has none over it');
+  v.input.write('\x1b[A'); await until(() => ask.getValue() === 'two' && keys().startsWith('enter send  ↑ older  ↓ clear  @name one member'), 'the newest: older is up, clear is down');
+  v.input.write('\x1b[A'); await until(() => ask.getValue() === 'one' && keys().startsWith('enter send  ↑ older  ↓ newer  @name one member'), 'between two');
+  v.input.write('\x1b[A'); await until(() => ask.getValue() === '/chats' && keys().startsWith('enter send  ↓ newer  @name one member'), 'the oldest has none over it');
   v.input.write('\x1b[B'); await until(() => ask.getValue() === 'one' && keys().startsWith('enter send  ↑ older  ↓ newer'), 'and down is newer');
   v.input.write('x'); await until(() => ask.getValue() === 'onex' && keys() === box, 'changed text is the owner\'s own: the arrows no longer walk');
   assert.equal(focused(), ask);
@@ -389,7 +391,7 @@ for (const [columns, rows] of [[140, 50], [80, 24]]) test(`a click on a heading 
   };
   const general = place(/^# general/), add = place(/^\+ Add channel/), blank = all.indexOf(''), direct = all.indexOf('Direct messages'), sara = place(/^● @sara/), li = place(/^○ @li/);
   // Going down: the heading gives the first direct chat under it, and the threads beside the bar are that person's.
-  assert.match(await click(general, direct), /^● @sara/); await until(() => open() === '@sara' && keys() === 'enter write  t trust  n new channel  tab threads', '@sara opens, with a person\'s keys');
+  assert.match(await click(general, direct), /^● @sara/); await until(() => open() === '@sara' && keys() === `enter write  t trust  h hold replies  o auto-continue  tab threads${columns >= 83 ? '  n new channel' : ''}`, '@sara opens, with a person\'s keys');
   assert.equal(v.current.screen.focused, bar);
   assert.match(await click(add, blank), /^● @sara/);
   // Going up: the row over the blank row.

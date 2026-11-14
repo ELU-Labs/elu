@@ -95,7 +95,7 @@ test('Grok Build in Full access starts in a path with glob characters, with its 
   assert.throws(() => grok.compile({ ...base, mode: 'full' }), /has not been checked on this machine yet/, 'the one-time check still comes first');
   grokChecked(path.join(w.dir, 'grok'));
   const full = grok.compile({ ...base, mode: 'full', folders: [odd] });
-  assert.deepEqual(full, ['--no-auto-update', '--no-alt-screen', '--cwd', w.cwd, '--output-format', 'json', '--prompt-file', path.join(runDir, 'prompt.txt'), '--permission-mode', 'bypassPermissions', '--sandbox', 'off', '-s', SESSION]);
+  assert.deepEqual(full, ['--no-auto-update', '--no-alt-screen', '--cwd', w.cwd, '--output-format', 'streaming-json', '--prompt-file', path.join(runDir, 'prompt.txt'), '--permission-mode', 'bypassPermissions', '--sandbox', 'off', '-s', SESSION]);
   for (const flag of ['--no-memory', '--no-subagents', '--max-turns', '--deny', '--disallowed-tools']) assert.equal(full.includes(flag), false, `${flag} is not in a Full access launch`);
   for (const mode of ['ask', 'auto']) assert.throws(() => grok.compile({ ...base, mode }), /cannot be expressed safely/, mode);
   const plain = { ...base, cwd: path.join(w.dir, 'plain'), runDir: path.join(w.dir, 'run') }; fs.mkdirSync(path.join(plain.cwd, '.git'), { recursive: true });
@@ -123,7 +123,7 @@ test('Antigravity CLI in Full access keeps its slash commands and has no hook of
 test('Codex in Full access keeps every feature of its release and every kind of item is read; lower modes keep the list', t => {
   const w = world(t), lead = plainLead('codex'), base = { role: lead, cwd: w.cwd, commonDir: path.join(w.cwd, '.git'), schemaFile: w.schemaFile };
   const full = codex.compile({ ...base, mode: 'full' }), sets = args => args.filter((arg, at) => args[at - 1] === '-c');
-  assert.deepEqual(sets(full), ['sandbox_mode="danger-full-access"', 'approval_policy="never"', 'web_search="live"', 'mcp_servers={}', 'tools.experimental_request_user_input.enabled=false', 'features.shell_tool=true', 'features.unified_exec=true']);
+  assert.deepEqual(sets(full), ['sandbox_mode="danger-full-access"', 'approval_policy="never"', 'web_search="live"', 'mcp_servers={}', 'tools.experimental_request_user_input.enabled=false', 'features.shell_tool=true', 'features.unified_exec=true', 'model_reasoning_summary="auto"']);
   assert.equal(sets(full).some(set => /=false$/.test(set) && !set.startsWith('tools.experimental_request_user_input')), false, 'nothing else is switched off');
   for (const mode of ['ask', 'auto']) { const lower = sets(codex.compile({ ...base, mode })); for (const set of ['features.multi_agent=false', 'features.plugins=false', 'tools.update_plan.enabled=false', 'allow_login_shell=false', 'shell_environment_policy.inherit="core"', 'skills.bundled.enabled=false']) assert.ok(lower.includes(set), `${mode} ${set}`); }
   // A helper, an MCP tool and a kind this release does not have yet: Full access reads them all.

@@ -14,8 +14,8 @@ import { picturesRoot } from '../lib/pictures.mjs';
 
 // The locked profile is the Read only launch. fixtures/argv-locked.json was computed from the
 // adapters before permission modes existed, with every machine path replaced by a token;
-// compile({ mode: 'locked' }) must still produce it, argument for argument, with five changes
-// since: every run asks for the model's thinking in words, for the steps the chat shows while
+// compile({ mode: 'locked' }) must still produce it, argument for argument, with six changes
+// since: what a model writes has no length limit of ELU's in the reply's schema; every run asks for the model's thinking in words, for the steps the chat shows while
 // it works (Claude Code's --thinking-display summarized, Codex's model_reasoning_summary);
 // every run, the owner's too, is denied ELU's own state folder; the file tools of
 // every run are denied ELU's records in the repository's Git folder; a sandboxed

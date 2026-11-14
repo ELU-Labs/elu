@@ -30,7 +30,7 @@ test('a simple question responds immediately without Git, checks, settings, or a
   const calls = fs.readFileSync(f.fake.calls, 'utf8').trim().split('\n').map(JSON.parse);
   assert.equal(calls.filter(call => call.args[0] === 'sandbox').length, 0);
   const lead = calls.find(call => call.args.includes('-p')); assert.ok(lead);
-  assert.doesNotMatch(lead.args[lead.args.indexOf('--tools') + 1], /Write|Edit|Bash/);
+  assert.doesNotMatch(lead.args[lead.args.indexOf('--tools') + 1], /(?:^|,)(?:Write|Edit|Bash)(?:,|$)/);
   const again = await f.controller.ask('Can I give one a security role?', task.id).finished;
   assert.equal(again.state, 'answered'); assert.equal(again.sessions.lead.id, task.sessions.lead.id);
 });
@@ -109,7 +109,8 @@ test('a question after an edit preserves the implementation and its verification
   assert.deepEqual(answer.evidence, task.evidence); assert.deepEqual(answer.reviews, task.reviews);
   assert.deepEqual(answer.result, task.result); assert.equal(answer.runs.length, task.runs.length + 1);
   const last = fs.readFileSync(fake.calls, 'utf8').trim().split('\n').map(JSON.parse).filter(call => call.args.includes('-p')).at(-1);
-  assert.doesNotMatch(last.args[last.args.indexOf('--tools') + 1], /Write|Edit|Bash/);
+  // No tool that changes a file or runs a command. The model's own to-do list (TodoWrite) is neither.
+  assert.doesNotMatch(last.args[last.args.indexOf('--tools') + 1], /(?:^|,)(?:Write|Edit|Bash)(?:,|$)/);
   fs.writeFileSync(path.join(task.worktree, 'src/coupon.mjs'), 'export const normalize = value => value.trim().toUpperCase();\n');
   await controller.verify(task.id);
   assert.equal(controller.snapshot().tasks[0].state, 'unverified', 'passing checks cannot make an old review current');

@@ -219,6 +219,7 @@ async function acp() {
       case 'session/prompt': {
         const session = sessions.get(p.sessionId); if (!session) return fail(-32602, 'unknown session');
         const text = (p.prompt ?? []).filter(block => block?.type === 'text').map(block => block.text).join('\n');
+        if (cfg.inputs) fs.appendFileSync(cfg.inputs, JSON.stringify({ vendor: 'agy', args, input: text }) + '\n');
         const change = value => send({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: p.sessionId, update: value } });
         const update = chunk => change({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: chunk } });
         // Its thought and each tool call go out as session updates, as ACP sends them: a call

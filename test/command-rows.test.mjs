@@ -20,7 +20,7 @@ const LINES = [
 ];
 
 test('the stop line of a signed-out Codex names its sign-in command', () => {
-  assert.equal(signedOut, 'The model could not finish: Codex is signed out. Sign in again with codex login, then type continue.');
+  assert.equal(signedOut, 'The model could not finish: Codex is signed out. Sign in again with codex login --device-auth, then type continue.');
 });
 
 test('a command in a line is on one row at every width that can hold it, and the words around it are as they were', () => {

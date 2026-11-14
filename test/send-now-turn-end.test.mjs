@@ -60,10 +60,11 @@ test('after a send now cuts the turn, its result is not the end of the run: the 
   enqueue(f.root, 'Tidy the coupon module', { priority: 0 });
   await until(() => sessionOf(f)?.state === 'running' && sessionOf(f).activeSendNow === true, 'the turn works');
   const first = await typed(f, 'Also keep the old name');
-  assert.equal(workspace.sendTypedNow(f.root, '1'), 1);
+  // cutAt: when the turn was told to stop for the message. Both turns the run goes on with come after it.
+  const cutAt = Date.now(); assert.equal(workspace.sendTypedNow(f.root, '1'), 1);
   // The turn is cut, and the run takes the message as its next turn.
   await until(() => (only(f).messages ?? []).some(row => row.during), 'the run took the message');
-  const cutAt = Date.now(), log = only(f).activeLog;
+  const log = only(f).activeLog;
   assert.deepEqual(results(log), [['error_during_execution', true]], 'the cut turn ended as an error, and nothing has answered yet');
   // A second message while that turn works: it waits on the same input.
   const second = await typed(f, 'And say which file changed');

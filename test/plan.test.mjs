@@ -115,7 +115,9 @@ for (const [mode, label] of [['ask', 'Ask for approval'], ['auto', 'Approve for 
   assert.deepEqual((await shows(f, asked.id, 'done,doing')).subtasks.map(step => step.text), ['Change normalize', 'Run the coupon test']);
   const work = inputs(f).find(row => row.input.includes('this turn does its work'));
   assert.equal(work.args[work.args.indexOf('--permission-mode') + 1], { ask: 'default', auto: 'auto', full: 'bypassPermissions' }[mode]);
-  assert.match(work.args[work.args.indexOf('--tools') + 1], /,TaskCreate,TaskUpdate,TaskList,TaskGet,TodoWrite$/);
+  // Full access names every tool Claude Code has, the to-do tools among them; the other modes add them to their list.
+  const tools = work.args[work.args.indexOf('--tools') + 1];
+  if (mode === 'full') assert.equal(tools, 'default'); else assert.match(tools, /,TaskCreate,TaskUpdate,TaskList,TaskGet,TodoWrite$/);
   fs.writeFileSync(gate, ''); await finished;
 });
 
@@ -143,14 +145,16 @@ test('claude: a later turn of the same session ticks a step an earlier turn made
 });
 
 // Antigravity and Grok Build through the same Task flow. In Ask for approval, once the relay check passed on this
-// machine, the turn runs over ACP and sends its list as plan updates. In Full access it runs headless and prints
+// machine, the turn runs over ACP and sends its list as plan updates. In Full access a headless run prints
 // its answer only when it ends: there it keeps the list in a file of the run, which is read while it works.
-const proven = (vendor, bin, version) => atomic(path.join(personalDirectory(), 'conformance', `${vendor}.json`), { v: 1, bin, version, steps: Object.fromEntries(ADAPTERS[vendor].conformance.map(step => [step.id, 'pass'])), relay: true, at: new Date().toISOString() });
+// Grok Build runs headless in Full access; Antigravity does where the relay check has not passed on this
+// machine (relay false below), and over ACP where it has.
+const proven = (vendor, bin, version, relay = true) => atomic(path.join(personalDirectory(), 'conformance', `${vendor}.json`), { v: 1, bin, version, steps: Object.fromEntries(ADAPTERS[vendor].conformance.map(step => [step.id, 'pass'])), relay, at: new Date().toISOString() });
 for (const [vendor, label, version] of [['agy', 'Antigravity', '1.5.4'], ['grok', 'Grok Build', '1.0.77']]) for (const [mode, how] of [['ask', 'from its plan updates over ACP in Ask for approval'], ['full', 'from the list it keeps in a file, headless in Full access']]) test(`${label}: a working turn ticks the Task's subtasks ${how}, while it runs`, async t => {
   const f = fixture(t, 'normal', vendor, { home: true }), gate = path.join(f.parent, 'go-on'), settings = path.join(f.fake.dir, 'fake.json');
   fs.writeFileSync(settings, JSON.stringify({ ...JSON.parse(fs.readFileSync(settings, 'utf8')), plan: true, live: gate }));
   if (vendor === 'grok') { fs.mkdirSync(path.join(f.parent, '.grok')); fs.writeFileSync(path.join(f.parent, '.grok', 'auth.json'), '{}\n', { mode: 0o600 }); }
-  proven(vendor, path.join(f.fake.dir, vendor), version);
+  proven(vendor, path.join(f.fake.dir, vendor), version, !(vendor === 'agy' && mode === 'full'));
   const calls = () => fs.readFileSync(f.fake.calls, 'utf8').trim().split('\n').map(JSON.parse).filter(call => call.vendor === vendor);
   // The first turn plans: the Task waits for the owner, and no list is asked for yet.
   const asked = await f.controller.ask('Uppercase coupon codes', null, { permissions: mode }).finished;
