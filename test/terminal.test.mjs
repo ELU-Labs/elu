@@ -5106,6 +5106,29 @@ test('Usage shows each account with the usage its sessions reported, r checks ag
   assert.deepEqual(accounts.map(row => [row.vendor, row.account]).sort(), [['claude', 'old@example.invalid'], ['claude', 'owner@example.invalid'], ['codex', 'owner@example.invalid']]);
 });
 
+test('Usage at 80x24 and at 140x50: Down from the last account goes into Top agents, with the table in view, and Up goes back', { timeout: 30000 }, async t => {
+  const p = setup(t), now = new Date().toISOString();
+  saveTask(p.repo, { id: '1', kind: 'conversation', goal: 'Uppercase coupons', state: 'answered', worktree: p.root, base: null, branch: null, createdAt: now, runs: [{ role: 'lead', vendor: 'claude', at: now, costUsd: 1.5, model: 'claude-opus-5-5', logFile: path.join(p.parent, 'run.log') }], reviews: [], responses: [], messages: [], sessions: {}, result: null });
+  const v = await view(t, { repo: p.repo, usage: fakeUsage(t) }), panels = v.current.panels, list = panels.usageList;
+  const rowOf = pattern => list.items.findIndex(item => pattern.test(item.getText()));
+  // A row is on screen when it is among the list's rows in view.
+  const shown = index => index >= list.childBase && index < list.childBase + list.height - list.iheight;
+  await send(v, '/usage'); await until(() => v.current.view === 'usage' && rowOf(/Uppercase coup/) >= 0 && rowOf(/^Grok Build/) >= 0, 'the accounts and the agent');
+  list.focus(); await until(() => v.current.screen.focused === list, 'list focused');
+  for (const [columns, rows] of [[80, 24], [140, 50]]) {
+    v.output.columns = columns; v.output.rows = rows; v.output.emit('resize'); await until(() => v.current.screen.width === columns && v.current.screen.height === rows, `${columns}x${rows}`);
+    list.select(rowOf(/^Grok Build/)); v.current.screen.render();
+    v.input.write('\x1b[B');
+    await until(() => list.selected === rowOf(/Uppercase coup/), `Down from Grok Build to the agent at ${columns}x${rows}`);
+    assert.equal(v.current.screen.focused, list);
+    assert.ok([rowOf(/^Top agents today$/), rowOf(/^Agent /), list.selected].every(shown), `the heading, the table's header and the agent are in view at ${columns}x${rows}`);
+    await until(() => /enter open/.test(panels.keys.getText()), 'the keys of an agent');
+    v.input.write('\x1b[A');
+    await until(() => list.selected === rowOf(/^Grok Build/), `Up from the agent to Grok Build at ${columns}x${rows}`);
+    assert.ok(shown(list.selected));
+  }
+});
+
 test('Usage: a signs another account in with the vendor\'s own sign-in, Enter makes new turns use it, and x forgets only ELU\'s copy after y/N', { timeout: 30000 }, async t => {
   const p = setup(t), asked = [], fakeFile = path.join(p.dir, 'fake.json');
   const signInAs = loginAs => fs.writeFileSync(fakeFile, JSON.stringify({ ...JSON.parse(fs.readFileSync(fakeFile, 'utf8')), accounts: { loginAs, plan: 'Pro' } }));
