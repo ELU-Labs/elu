@@ -118,6 +118,8 @@ test('not asked at all: a helper copy of a session on another computer, a Standu
 test('a round shows one block for every session at once, the one that waits for you first, and adds each model update to its block; a session in a turn answers beside it and its turn goes on', async t => {
   const f = setup(t);
   const a = await f.controller.ask('Explain coupons').finished, b = await f.controller.ask('Explain carts').finished, c = await f.controller.ask('Explain taxes').finished;
+  // The session that works was moved to a model of its own.
+  f.controller.setModel(b.id, { vendor: 'claude', model: 'sonnet' });
   midTurn(f.repo, b.id); planned(f.repo, b.id);
   saveTask(f.repo, { ...readTask(f.repo, c.id), state: 'needs_input', reply: { outcome: 'needs_input', summary: 'Two ways to go.', question: 'Which tax table?' } });
   const working = readTask(f.repo, b.id), standup = createConversation(f.repo, f.controller.draftConfig, '/standup');
@@ -153,6 +155,7 @@ test('a round shows one block for every session at once, the one that waits for 
   const turn = inputs(f.fake).find(row => /in the middle of a turn right now/.test(row.input));
   assert.ok(turn, 'the run beside the turn is told so'); assert.match(turn.input, /Run: npm test/); assert.match(turn.input, /This turn only answers\. Change nothing/);
   assert.ok(!turn.args.includes('--resume'), 'it never resumes the vendor session the turn works in');
+  assert.equal(turn.args[turn.args.indexOf('--model') + 1], 'sonnet', "it is written by the session's own model");
   // When its turn ends, its chat takes the answer, once.
   saveTask(f.repo, { ...still, state: 'answered', activeRole: null, activeLog: null });
   assert.equal(foldStandup(f.repo, b.id), 1); assert.equal(foldStandup(f.repo, b.id), 0);
