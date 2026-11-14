@@ -94,11 +94,11 @@ test('another computer of mine is offered as your computer, never as a teammate'
 test('a computer of mine that has not marked this one back says it waits, in place of whether it is online', () => {
   const row = { name: 'devbox', online: true, path: 'direct', mine: true, waiting: true };
   const waits = { ...ctx, bots: () => [], teammates: () => [row, { name: 'sara', online: true, path: 'relayed' }], invitees: () => ({ channel: 'ops', people: [row] }) };
-  assert.deepEqual(sessionMentions('@', waits).map(row => `${row.value} ${row.description}`), ['@devbox your computer · waiting for it to confirm', '@sara teammate · online']);
-  assert.deepEqual(mentionMatches('@', waits).map(row => `${row.value} ${row.description}`), ['@devbox your computer · waiting for it to confirm', '@sara online · relayed']);
-  assert.deepEqual(argumentMatches('/invite ', waits).map(row => `${row.word} ${row.description}`), ['@devbox add to #ops · your computer · waiting for it to confirm']);
+  assert.deepEqual(sessionMentions('@', waits).map(row => `${row.value} ${row.description}`), ['@devbox your computer · waiting for it to agree', '@sara teammate · online']);
+  assert.deepEqual(mentionMatches('@', waits).map(row => `${row.value} ${row.description}`), ['@devbox your computer · waiting for it to agree', '@sara online · relayed']);
+  assert.deepEqual(argumentMatches('/invite ', waits).map(row => `${row.word} ${row.description}`), ['@devbox add to #ops · your computer · waiting for it to agree']);
   // The words themselves: none for a teammate, and the piece between them is the caller's.
-  assert.deepEqual([yourComputer(null), yourComputer({}), yourComputer({ waiting: true }), yourComputer({ waiting: true }, ', ')], ['', 'your computer', 'your computer · waiting for it to confirm', 'your computer, waiting for it to confirm']);
+  assert.deepEqual([yourComputer(null), yourComputer({}), yourComputer({ waiting: true }), yourComputer({ waiting: true }, ', ')], ['', 'your computer', 'your computer · waiting for it to agree', 'your computer, waiting for it to agree']);
 });
 
 test('@ offers teammates by name, and stops after a space', () => {

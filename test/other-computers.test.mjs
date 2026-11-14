@@ -161,7 +161,7 @@ test('a message to a computer of mine that is not connected says so, then follow
   const waiting = threadRows(m, [{ ...m.item(ask.id), at: new Date(Date.now() - 61000).toISOString() }]);
   assert.deepEqual(waiting, ['→ you asked @laptop · Can you see this one?', '   ↳ not connected to @laptop yet (1m) · it goes as soon as it connects']);
   assert.equal(boardRows([], sentAt + 61000, { items: [m.item(ask.id)], online: new Set([m.devbox.identity.key]) }).find(row => row.kind === 'peer').now, '@ana offline · will retry');
-  for (const text of [line(sentAt).text, line(sentAt + 61000).text, ...waiting]) assert.doesNotMatch(text, /waiting for it to confirm|\bpending\b/);
+  for (const text of [line(sentAt).text, line(sentAt + 61000).text, ...waiting]) assert.doesNotMatch(text, /to (?:confirm|agree)|\bpending\b/);
   // A minute later the laptop connects: the message goes by itself, and the line says when it got there.
   m.online.set(to, m.wire);
   await withHome(m.studio.home, () => reconnect(m.sender, to));
@@ -170,7 +170,7 @@ test('a message to a computer of mine that is not connected says so, then follow
   if (delivered.state === 'submitted') {
     assert.equal(line(Date.now(), true).text, `Delivered to @laptop at ${clockTime(delivered.deliveredAt)}.`);
     // While that computer has not marked this one back, a delivered message says what ends the wait: never that it waits with no reason.
-    assert.equal(sentState(m.item(ask.id), { who: '@laptop', online: true, mine: true, unconfirmed: 'studio' }).text, `Delivered to @laptop at ${clockTime(delivered.deliveredAt)}. Waiting for it to confirm: on @laptop, type /mine @studio.`);
+    assert.equal(sentState(m.item(ask.id), { who: '@laptop', online: true, mine: true, unconfirmed: 'studio' }).text, `Delivered to @laptop at ${clockTime(delivered.deliveredAt)}. Waiting for @laptop to agree: run /mine @studio there.`);
     assert.deepEqual(threadRows(m, [m.item(ask.id)], { connected: true }), ['→ you asked @laptop · Can you see this one?', `   ↳ delivered at ${clockTime(delivered.deliveredAt)}`]);
   }
   // It starts a session there, as the laptop is set to (Auto): the line names the session as the laptop's Sessions list does.
@@ -224,14 +224,14 @@ test('a message from another computer of mine whose session cannot start comes b
   assert.ok(there.lines.includes(`failed  @laptop  Can you see this one? · ${why} Check that claude runs in your terminal on @laptop, then send it again.`), there.lines.join('\n'));
 });
 
-test('a computer of mine that has not confirmed while it is offline says offline, the reason, wherever the app says it waits', () => {
+test('a computer of mine that has not agreed while it is offline says offline, the reason, wherever the app says it waits', () => {
   const D = 'd'.repeat(64), ME = 'k'.repeat(64);
   const frame = online => ({ status: { key: ME, teams: [{ id: 'team-1', name: 'Core', members: [{ key: ME, name: 'ana' }, { key: D, name: 'devbox', online, path: 'direct', mine: true, waiting: true }] }] }, items: [] });
   const bar = (online, width) => visuals.visible(visuals.chatBar(frame(online), width, false).find(row => row.value?.type === 'member').line).replace(/\s+/g, ' ').trim();
   assert.deepEqual([bar(false, 78), bar(false, 40), bar(true, 78)], ['○ @devbox offline · waiting for @devbox to agree', '○ @devbox offline · not agreed yet', '● @devbox waiting for @devbox to agree']);
-  assert.deepEqual([yourComputer({ waiting: true, online: false }), yourComputer({ waiting: true, online: true }), yourComputer({ waiting: true }), yourComputer({ online: false })], ['your computer · offline, not confirmed yet', 'your computer · waiting for it to confirm', 'your computer · waiting for it to confirm', 'your computer']);
+  assert.deepEqual([yourComputer({ waiting: true, online: false }), yourComputer({ waiting: true, online: true }), yourComputer({ waiting: true }), yourComputer({ online: false })], ['your computer · offline, not agreed yet', 'your computer · waiting for it to agree', 'your computer · waiting for it to agree', 'your computer']);
   const glue = online => remoteGlue({ facade: { mineRows: () => [{ key: D, mine: true, theirs: false }], remoteSessions: () => [] }, peerRead: () => ({ key: ME, name: 'ana', box: 'laptop', teams: [{ members: [{ key: ME, name: 'ana' }, { key: D, name: 'ana', box: 'devbox', online }] }] }), peerCommand: async () => ({}), chatMessage: ({ text }) => text, ink: text => text, colour: false });
-  assert.deepEqual([glue(false).words(D), glue(true).words(D)], ['your computer · offline, not confirmed yet', 'your computer · waiting for it to confirm']);
+  assert.deepEqual([glue(false).words(D), glue(true).words(D)], ['your computer · offline, not agreed yet', 'your computer · waiting for it to agree']);
 });
 
 test('a computer that says it is mine is named, in the line and in its row, only by a name /mine finds it by', () => {
@@ -261,6 +261,8 @@ test('the line for a message I sent says where it is in every state, and never t
   const delivered = { ...base, state: 'submitted', deliveredAt: at };
   assert.deepEqual(line(delivered), { text: `Delivered to @devbox at ${clockTime(at)}.`, short: `delivered at ${clockTime(at)}` });
   assert.equal(line({ ...delivered, note: 'It waits for a project there.' }).text, `Delivered to @devbox at ${clockTime(at)}. It waits for a project there.`);
+  // To a computer of mine that has not marked this one back: whose agreement it waits for, and what to run there, in the words its row and its screen use.
+  assert.equal(line(delivered, { mine: true, online: true, unconfirmed: 'studio' }).text, `Delivered to @devbox at ${clockTime(at)}. Waiting for @devbox to agree: run /mine @studio there.`);
   assert.deepEqual(line({ ...base, state: 'working', startedAs: 'Check the totals' }), { text: 'Started on @devbox as session "Check the totals".', short: 'started there as session "Check the totals"' });
   assert.equal(line({ ...base, state: 'working' }).text, '@devbox is working on it.');
   assert.equal(line({ ...base, state: 'held' }).text, '@devbox has a reply that waits there to be sent.');
@@ -269,7 +271,7 @@ test('the line for a message I sent says where it is in every state, and never t
   assert.equal(line({ ...base, kind: 'rejected', state: 'failed', question: base.text, text: 'Claude Code is signed out. Sign in on @devbox, then send it again.' }).text, 'Failed on @devbox: Claude Code is signed out. Sign in on @devbox, then send it again.');
   assert.equal(line({ ...base, kind: 'rejected', state: 'rejected', question: base.text, text: 'Not now.' }).text, '@devbox declined it: Not now.');
   assert.equal(line({ ...base, kind: 'expired', state: 'expired' }).text, 'Your message to @devbox was not delivered in a week and is no longer sent.');
-  for (const item of [{ ...base, state: 'pending' }, delivered, { ...base, state: 'working' }, { ...base, state: 'held' }]) for (const where of [{}, { online: true }, { mine: true }, { mine: true, online: true }]) assert.doesNotMatch(line(item, where).text, /waiting for it to confirm/i);
+  for (const item of [{ ...base, state: 'pending' }, delivered, { ...base, state: 'working' }, { ...base, state: 'held' }]) for (const where of [{}, { online: true }, { mine: true }, { mine: true, online: true }]) assert.doesNotMatch(line(item, where).text, /to (?:confirm|agree)/i);
   assert.equal(line(null), null);
 });
 

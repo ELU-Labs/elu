@@ -1508,7 +1508,7 @@ async function assertLabel(v, ask, forms) {
 }
 const ASK_MINE = [' Ask @sara-box · your computer · Enter sends it there, the reply shows here ', ' Ask @sara-box · your computer ', ' Ask @sara-box '];
 // A narrow box keeps that it waits before whose it is.
-const ASK_WAITING = [' Ask @sara-box · your computer · waiting for it to confirm · Enter sends it there, the reply shows here ', ' Ask @sara-box · your computer · waiting for it to confirm ', ' Ask @sara-box · waiting for it to confirm ', ' Ask @sara-box '];
+const ASK_WAITING = [' Ask @sara-box · your computer · waiting for it to agree · Enter sends it there, the reply shows here ', ' Ask @sara-box · your computer · waiting for it to agree ', ' Ask @sara-box · waiting for it to agree ', ' Ask @sara-box '];
 
 test("in a session open on this computer, my other computer reads as your computer in the @ list, the box and the sent line, under the name Sessions calls it, never as a teammate", async t => {
   const { v, peer, board, ask, label, status, rows, type } = await ownSession(t, { mine: true, theirs: true });
@@ -1548,19 +1548,19 @@ for (const [columns, rows] of [[140, 50], [80, 24]]) test(`at ${columns}x${rows}
 for (const [columns, rows] of [[160, 40], [140, 50], [80, 24]]) test(`at ${columns}x${rows} a computer of mine that has not marked this one back says it waits, in the @ list, the box, the sent line and /peers`, async t => {
   const { v, peer, ask, label, status, rows: listed, type } = await ownSession(t, { mine: true, theirs: false }, { columns, rows });
   type('@sa');
-  await until(() => listed().some(row => /^@sara-box your computer · waiting for it to confirm$/.test(row)), 'the @ list says it waits');
+  await until(() => listed().some(row => /^@sara-box your computer · waiting for it to agree$/.test(row)), 'the @ list says it waits');
   assert.ok(!listed().some(row => /teammate|@sara-box your computer · online/.test(row)), 'neither a teammate nor fully mine');
   type('@sara-box what runs there?');
   await until(() => /^ Ask @sara-box/.test(label()), 'the label');
   const shown = await assertLabel(v, ask, ASK_WAITING);
-  assert.match(shown, /waiting for it to confirm/, 'that it waits stays at this size');
+  assert.match(shown, /waiting for it to agree/, 'that it waits stays at this size');
   if (columns === 80) assert.equal(shown, ASK_WAITING[2], 'beside the list on a small screen, that it waits stays and whose it is gives way');
   ask.submit();
   await until(() => peer.sent().some(row => row.type === 'ask' && row.to === SARA), 'asked');
   // Beside the list on a small screen a long line is cut at a word after two rows: its first sentence shows whole.
   await until(() => /Sent to @sara-box, your computer\. Its reply shows in this thread\./.test(status()), 'the line after sending');
   await send(v, '/peers');
-  await until(() => (columns === 80 ? /^› 0 of 1 teammates online · 1 of 1 of your computers online: @sara-box \(direct\)/ : /^› 0 of 1 teammates online · 1 of 1 of your computers online: @sara-box \(direct\) · waiting for @sara-box to confirm$/).test(status().trim()), '/peers says which one waits');
+  await until(() => (columns === 80 ? /^› 0 of 1 teammates online · 1 of 1 of your computers online: @sara-box \(direct\)/ : /^› 0 of 1 teammates online · 1 of 1 of your computers online: @sara-box \(direct\) · waiting for @sara-box to agree$/).test(status().trim()), '/peers says which one waits');
   await send(v, '/mine');
   await until(() => /^› @sara-box: waiting for it to mark this machine too/.test(status().trim()), '/mine, as before');
 });
@@ -1657,7 +1657,7 @@ test('in Chats a computer of mine that has not marked this one back says it wait
   assert.equal(drawn(member(false), 40), '● @sara-box yours · direct');
   assert.equal(drawn(member(false, false), 40), '○ @sara-box yours · offline');
   await openRow(v, /@sara-box/, '@sara-box');
-  await until(() => label() === ' Message @sara-box · your computer · waiting for it to confirm ', 'the box of its direct chat');
+  await until(() => label() === ' Message @sara-box · your computer · waiting for it to agree ', 'the box of its direct chat');
   const title = 'Your computer @sara-box · waiting for it to agree';
   bar.focus(); v.input.write('t'); await until(() => modal(v, title), 'its screen');
   assert.match(body(title), /^Waiting for @sara-box to agree: run \/mine @ana there\.\n\nKey: /, 'and what ends the wait');
@@ -1676,7 +1676,7 @@ test('in Chats a computer of mine that has not marked this one back says it wait
   await send(v, 'what runs there?');
   await until(() => /Sent to @sara-box, your computer\. Its reply shows in this thread\./.test(status()), 'the line after sending');
   ask.focus(); ask.readInput(); await until(() => ask.__listener, 'message box'); ask.clearValue(); v.input.write('@sa');
-  await until(() => rows().some(row => /^@sara-box your computer · waiting for it to confirm$/.test(row)), 'the @ list of Chats');
+  await until(() => rows().some(row => /^@sara-box your computer · waiting for it to agree$/.test(row)), 'the @ list of Chats');
 });
 
 test('in Chats a teammate’s computer that marked this one as its own says so once, in its row and on its screen, and /mine there agrees with one command', { timeout: 30000 }, async t => {
