@@ -384,6 +384,31 @@ test('an Antigravity turn in Full access that the owner stops ends what it start
   assert.deepEqual(task.runs ?? [], [], 'a stopped turn is no run'); assert.equal(task.error.message, 'Stopped by the owner.');
   assert.deepEqual((task.stops ?? []).map(row => [row.role, shown(runSteps(row.logFile))]), [['lead', [['thinking', 'Reading the request.'], ['text', 'Working on it.'], ['tool', `Run ${slow}`, 'running']]]]);
 });
+// The same stop in Ask for approval, after the owner allowed the turn's command. It is no run and
+// its steps stay with the stops; what he decided stays with the session, and its next turn
+// goes on in the conversation the stopped one had opened.
+test('an Antigravity turn over ACP that the owner stops after he allowed its command keeps his decision and its steps, and the next turn goes on in its conversation', async t => {
+  const f = setup(t, 'agy'), slow = path.join(f.parent, 'slow.sh'); agySet(f, { pace: 100 });
+  fs.writeFileSync(slow, '#!/bin/sh\nsleep 5\n', { mode: 0o700 });
+  proven('agy', f.bin, '1.5.4', { relay: true });
+  const turn = f.controller.ask(`Run this command: ${slow}. Reply with the summary "late".`, null, { permissions: 'ask' }), ended = turn.finished.catch(() => null);
+  await answer('allow', { vendor: 'agy' });
+  // His answer has reached the turn once the turn's approvals log holds it; the command then runs.
+  const decided = () => { try { return /"decision":"allow"/.test(fs.readFileSync(readTask(f.controller.repo, turn.id).activeLog.replace(/\.log$/, '.approvals.jsonl'), 'utf8')); } catch { return false; } };
+  for (let i = 0; i < 400 && !decided(); i++) await sleep(25);
+  assert.equal(decided(), true, 'the decision reached the turn');
+  await f.controller.stop(turn.id).catch(() => {}); await ended;
+  const task = readTask(f.controller.repo, turn.id), [stop] = task.stops ?? [];
+  assert.equal(task.state, 'stopped', JSON.stringify(task.error)); assert.deepEqual(task.runs ?? [], [], 'a stopped turn is no run');
+  assert.deepEqual([(task.stops ?? []).length, stop?.role, stop?.vendor], [1, 'lead', 'agy']);
+  assert.ok(shown(runSteps(stop.logFile)).some(step => step[0] === 'tool' && step[1] === `Run ${slow}`), 'the steps it showed stay');
+  assert.deepEqual((task.approvals ?? []).map(row => [row.role, row.decision]), [['lead', 'allow']], 'what he decided stays with the session');
+  const opened = fs.readFileSync(stop.logFile, 'utf8').split('\n').map(line => { try { return JSON.parse(line); } catch { return null; } }).find(row => typeof row?.result?.sessionId === 'string')?.result.sessionId;
+  assert.ok(opened, 'the log names the conversation'); assert.deepEqual(task.interrupted?.lead, { vendor: 'agy', id: opened, log: stop.logFile });
+  const next = await f.controller.ask('Reply with the summary "again".', turn.id).finished;
+  assert.equal(next.state, 'answered', JSON.stringify(next.error)); assert.equal(next.result.summary, 'again');
+  assert.equal(next.runs.length, 1); assert.equal(next.runs[0].session, opened, 'the same conversation'); assert.deepEqual(f.calls().at(-1).args, ['acp']);
+});
 
 test('an Antigravity turn in Read only runs over ACP and writes nothing inside or outside the project, also where the vendor asks instead of refusing; the owner is asked nothing', async t => {
   const f = setup(t, 'agy'), outside = path.join(f.parent, 'outside.txt');
