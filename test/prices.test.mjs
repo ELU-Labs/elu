@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { PRICES, PRICES_CHECKED, listCost, priceOf } from '../lib/prices.mjs';
+import { PRICES, PRICES_CHECKED, listCost, longPriceOf, priceOf } from '../lib/prices.mjs';
 
 const near = (actual, expected) => assert.ok(Number.isFinite(actual) && Math.abs(actual - expected) < 1e-9, `${actual} is not ${expected}`);
 const tokens = (input, output, cacheRead = 0, cacheWrite = 0) => ({ input, output, cacheRead, cacheWrite });
@@ -67,4 +67,27 @@ test('a run costs each kind of token at its own rate; written tokens at the writ
   assert.equal(listCost('grok-4.6', null), null, 'no tokens: no cost');
   assert.equal(listCost('grok-4.6-fast', tokens(1, 1)), null);
   assert.equal(listCost('gpt-6.1-sol', tokens(0, 0)), 0, 'no tokens used is nothing spent');
+});
+
+// Checked 2026-11-14 on each maker's page: OpenAI bills a prompt over 272K input tokens at its
+// long-context rate, Google one over 200k, xAI one of 200k or more, every token of the request.
+test("a request whose prompt reaches its model's long-context size costs the long rate, every token of it", () => {
+  const long = (id, from, input, cached, output, write) => assert.deepEqual(longPriceOf(id), { from, input, cached, output, ...(write === undefined ? {} : { write }) }, id);
+  long('gpt-6-astra', 272_001, 20, 2, 75, 25); long('gpt-6.1-sol', 272_001, 4, 0.2, 15, 5); long('gpt-6.1-terra', 272_001, 2, 0.1, 7.5, 2.5);
+  long('gpt-6-sol', 272_001, 4, 0.4, 15, 5); long('gpt-6-luna', 272_001, 0.2, 0.02, 0.75, 0.25); long('gpt-5.6-sol', 272_001, 8, 0.8, 30, 10);
+  long('gpt-5.6-terra', 272_001, 4, 0.4, 18, 5); long('gpt-5.6-luna', 272_001, 0.4, 0.04, 1.8, 0.5); long('gpt-5.5', 272_001, 10, 1, 45); long('gpt-5.4', 272_001, 5, 0.5, 22.5);
+  long('gemini-3.1-pro-high', 200_001, 4, 0.4, 18); long('gemini-3.1-pro-preview-customtools', 200_001, 4, 0.4, 18);
+  long('grok-4.7', 200_000, 4, 1, 12); long('grok-4.6', 200_000, 4, 1, 12); long('grok-4.5', 200_000, 4, 0.6, 12); long('grok-4.3', 200_000, 2.5, 0.4, 5);
+  long('grok-4.20-0309-reasoning', 200_000, 2.5, 0.4, 5); long('grok-4.20-0309-non-reasoning', 200_000, 2.5, 0.4, 5); long('grok-4.20-multi-agent-0309', 200_000, 2.5, 0.4, 5); long('grok-build-0.1', 200_000, 2, 0.4, 4);
+  // A model its maker prices the same at any size has none; nor does one with no price.
+  for (const id of ['gpt-5.4-mini', 'gpt-5.4-nano', 'gpt-5.3-codex', 'gpt-5', 'gemini-3-flash', 'gemini-3.6-flash', 'gemini-4-carbon', 'claude-opus-5-5', 'grok-4.6-fast', null]) assert.equal(longPriceOf(id), null, String(id));
+  // The short price is the one priceOf gives.
+  assert.deepEqual(priceOf('gpt-6.1-terra'), { input: 1, cached: 0.05, output: 5, write: 1.25 });
+  // gpt-6.1-terra, which Codex gives 500K: of a run's tokens, those of a request of 400K input
+  // (100K of it cached) and its 10K output were over 272K.
+  const all = tokens(700_000, 20_000, 300_000, 0), over = tokens(300_000, 10_000, 100_000, 0);
+  near(listCost('gpt-6.1-terra', all, { long: over }), (400_000 * 1 + 10_000 * 5 + 200_000 * 0.05) / 1e6 + (300_000 * 2 + 10_000 * 7.5 + 100_000 * 0.1) / 1e6);
+  near(listCost('gpt-6.1-terra', all), (700_000 * 1 + 20_000 * 5 + 300_000 * 0.05) / 1e6);
+  // A model with no long rate costs its one rate for all of it.
+  near(listCost('gpt-5.4-mini', all, { long: over }), listCost('gpt-5.4-mini', all));
 });

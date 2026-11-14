@@ -566,9 +566,11 @@ on screen, and from the Usage tab ([what is read and when](SECURITY.md#credentia
 Its top agents add up what each run spent: the cost Claude Code reports (the API price, also
 on a subscription), and the tokens Codex, Grok Build and Antigravity report, at the model's
 API list price. Codex reports what its thread has used so far, so a session that goes on in
-the same thread counts each run's own share once. A run whose cost is not known shows a dash,
-never 0. A turn you stop counts with the tokens it had used; Claude Code says a cost only
-when a turn ends.
+the same thread counts each run's own share once. A Codex request whose prompt is over the
+model's long-context size is priced at that rate; the other vendors do not say how big each
+request was, so their runs are priced at the short rate. A run whose cost is not known shows
+a dash, never 0. A turn you stop counts with the tokens it had used; Claude Code says a cost
+only when a turn ends.
 
 You need macOS or Linux, Node 22 or newer, Git, and one vendor's command line installed and
 signed in: Claude Code (`claude`), Codex (`codex`), Antigravity CLI (`agy`) or Grok Build

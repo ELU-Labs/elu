@@ -40,10 +40,15 @@ test("a Codex run's own use is read from its thread's record: each of its turns 
   ]);
   // Input as runUsage counts Codex's: without the cached part, the written part still in it.
   // The model: the one the run's last turn ran on, which plain `codex exec` names nowhere else.
-  assert.deepEqual(rolloutRun(file, { thread: THREAD, from: at + 500, to: at + 5000 }), { tokens: { input: 2700, output: 30, cacheRead: 300, cacheWrite: 50 }, model: 'gpt-6.1-sol' });
-  assert.deepEqual(rolloutRun(file, { thread: THREAD, from: at + 9000, to: at + 13000 }), { tokens: { input: 8100, output: 90, cacheRead: 900, cacheWrite: 0 }, model: 'gpt-6.1-terra' });
+  // requests: each request's prompt (its input, cached and written included) and its tokens, in
+  // the order it made them, which a model billed higher over a prompt size needs.
+  const used = (input, output, cacheRead, cacheWrite = 0) => ({ input, output, cacheRead, cacheWrite });
+  assert.deepEqual(rolloutRun(file, { thread: THREAD, from: at + 500, to: at + 5000 }), { tokens: used(2700, 30, 300, 50), model: 'gpt-6.1-sol',
+    requests: [{ prompt: 1000, tokens: used(900, 10, 100) }, { prompt: 2000, tokens: used(1800, 20, 200, 50) }] });
+  assert.deepEqual(rolloutRun(file, { thread: THREAD, from: at + 9000, to: at + 13000 }), { tokens: used(8100, 90, 900), model: 'gpt-6.1-terra',
+    requests: [{ prompt: 4000, tokens: used(3600, 40, 400) }, { prompt: 5000, tokens: used(4500, 50, 500) }] });
   // A run that made no request: none recorded, not zero.
-  assert.deepEqual(rolloutRun(file, { thread: THREAD, from: at + 20000, to: at + 30000 }), { tokens: null, model: null });
+  assert.deepEqual(rolloutRun(file, { thread: THREAD, from: at + 20000, to: at + 30000 }), { tokens: null, model: null, requests: [] });
   // Found under the day the thread began, by its id, in the home the run was started with.
   assert.equal(rolloutFile(THREAD, { home }), file);
   assert.deepEqual(codexRunRecord({ thread: THREAD, env: { CODEX_HOME: home }, from: at + 9000, to: at + 13000 }).tokens.output, 90);

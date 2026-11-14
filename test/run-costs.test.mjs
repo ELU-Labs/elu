@@ -255,6 +255,30 @@ test("a Codex run on Codex's own default model is named by Codex's record of its
   assert.deepEqual([row.model, spend.costText(row)], ['gpt-6.1-sol', '$1.00']);
 });
 
+// OpenAI bills a request whose prompt is over 272K tokens at its long-context rate, every token
+// of it. Codex's record of the thread says how big each request's prompt was.
+test('a Codex request over 272K tokens costs the long-context rate, on each run of its thread', async t => {
+  const f = setup(t, 'answer');
+  // Each turn: a request of 100K, one of exactly 272K, and one of 400K (100K of it read from the cache, 50K written).
+  f.set({ codexTurn: { requests: [{ input_tokens: 100_000, output_tokens: 10_000 }, { input_tokens: 272_000, output_tokens: 1_000 }, { input_tokens: 400_000, cached_input_tokens: 100_000, cache_write_input_tokens: 50_000, output_tokens: 20_000 }] } });
+  environment(t, { CODEX_HOME: path.join(f.parent, 'codex-home') });
+  f.controller.setDefaultModel({ vendor: 'codex', model: 'gpt-6.1-terra' });
+  const first = await f.controller.ask('Where is coupon normalization?', null, { permissions: 'full' }).finished, id = first.id;
+  assert.equal(first.state, 'answered', JSON.stringify(first.error));
+  f.controller.setBudget(id, 10);
+  const next = await f.controller.ask('And the tests?', id).finished;
+  assert.equal(next.state, 'answered', JSON.stringify(next.error));
+  const task = readTask(f.repo, id);
+  // The 400K request is each run's long part, its input as Codex counts it (the written part in it).
+  assert.deepEqual(task.runs.map(run => run.longTokens), Array(2).fill(counted([300_000, 20_000, 100_000, 50_000])));
+  // gpt-6.1-terra, per million: $1 input and $5 output up to 272K; $2 input, $0.10 cached, $2.50 written and $7.50 output over it.
+  const each = (372_000 * 1 + 11_000 * 5) / 1e6 + (250_000 * 2 + 100_000 * 0.1 + 50_000 * 2.5 + 20_000 * 7.5) / 1e6;
+  spend.runCosts(task).forEach((cost, at) => near(cost, each, `run ${at + 1}`));
+  near(f.controller.budget(id).spent, 2 * each, 'spent');
+  const [row] = spend.agentSpend([{ root: f.repo.root, tasks: [task] }], { now: Date.now() }).rows;
+  near(row.costUsd, 2 * each, 'the row');
+});
+
 // A headless Antigravity run ends with the tokens of its turns (agy -p --output-format json).
 test('a headless Antigravity run keeps the tokens its result reports, priced at the model it was started with', async t => {
   const f = setup(t, 'answer');
