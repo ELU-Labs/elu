@@ -13,7 +13,7 @@ import { newHome, peerHome, withHome, makeTeam, registeredProject, answeringClis
 import { CLI, keyLike } from './helpers.mjs';
 import { peerFile, peerRepo } from '../lib/peer/paths.mjs';
 import { defaultBox, savePeerSettings, savePeerPolicy } from '../lib/peer/settings.mjs';
-import { createIdentity, identity as loadIdentity } from '../lib/peer/identity.mjs';
+import { createIdentity, identity as loadIdentity, plainUserName } from '../lib/peer/identity.mjs';
 import { appendOp, createTeam, head, makeOp, merge, readLog, setChannel, team, teamPath, teams as everyTeam } from '../lib/peer/roster.mjs';
 import { createInvite } from '../lib/peer/invite.mjs';
 import { share as shareWith, setTeamProject } from '../lib/peer/shares.mjs';
@@ -1747,6 +1747,20 @@ test('elu team leave and elu team remove: plain refusals, and the op written her
     assert.equal(team(teamId).members.find(m => m.key === sara.key).removed, true);
     await assert.rejects(peer.teamChange({ type: 'teamJoin', team: teamId }), /Unknown team change\./);
   });
+});
+
+// Some computers make the user name from the address they sign in with (name_gmail_com).
+// Teammates see the name ELU offers if it is taken as offered, so no part of an address is in it.
+test('elu id with no --name never takes an email address for the name: the plain part of name_gmail_com, or --name asked for', async t => {
+  const names = ['name_gmail_com', 'first_last_gmail_com', 'name_yahoo_co_uk', 'sam_example_com', 'jane.doe@corp.example', 'jane_doe', 'box_two_dev', 'kim'];
+  assert.deepEqual(names.map(plainUserName), ['name', 'first_last', 'name', '', 'jane.doe', 'jane_doe', 'box_two_dev', 'kim']);
+  const previous = { USER: process.env.USER, LOGNAME: process.env.LOGNAME };
+  t.after(() => { for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } });
+  delete process.env.LOGNAME;
+  process.env.USER = 'name_gmail_com';
+  assert.equal((await withHome(newHome(t), () => peerCli(['id'], {}))).identity.name, 'name');
+  process.env.USER = 'sam_example_com';
+  await assert.rejects(withHome(newHome(t), () => peerCli(['id'], {})), /Choose a name with --name\./);
 });
 
 test('elu peer trust and untrust resolve a roster name, refuse unknown and ambiguous names, and show in elu peers; peer on and status are gone, and peer off with no daemon running says so', async t => {
