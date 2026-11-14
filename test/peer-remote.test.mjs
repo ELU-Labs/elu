@@ -1443,7 +1443,7 @@ test("Projects lists my computer's project of this repository while Sessions lea
 // folder, neither with a repository of its own. Every session there that works in a repository
 // this project holds is part of this project: in Sessions under the computer's heading, and not
 // a second time in Projects.
-test("my computer's project is one with this one: Projects leaves it out while each of its sessions shows here, and lists it, with how many, for those that cannot", () => {
+test("my computer's project is one with this one: Projects leaves it out while each of its sessions shows here, and lists it, with how many, for those that cannot", async () => {
   const SHOP = 'a'.repeat(64), DOCS = 'f'.repeat(64), D = 'd'.repeat(64), now = Date.now(), ago = minutes => new Date(now - minutes * 60000).toISOString(), home = '5'.repeat(16);
   const status = { key: 'k'.repeat(64), name: 'ana', box: 'laptop', teams: [{ members: [{ key: 'k'.repeat(64), name: 'ana' }, { key: D, name: 'box', box: 'devbox', online: true }] }] };
   const session = (ref, title, minutes, extra = {}) => ({ id: crypto.randomUUID(), ref, project: home, title, state: 'answered', at: ago(minutes), createdAt: ago(minutes + 1), approvals: [], by: 'you', who: null, repoId: SHOP, ...extra });
@@ -1475,6 +1475,17 @@ test("my computer's project is one with this one: Projects leaves it out while e
   assert.deepEqual(view.projects(now, '/work/projects').map(row => [row.name, row.sessions]), [['work on devbox', 2]]);
   view.openProject(D, home);
   assert.deepEqual(shown(view).slice(-3), ['work on devbox', 'Tidy my notes', 'Edit the docs']);
+  // A third waits for me: it is under Needs you here, in a project this one cannot show. Once I
+  // answer it from here it is listed under its computer, so what it does next shows where I
+  // wrote, and Projects counts the other two alone.
+  machinesFile[0].sessions.push(session(`${home}:6`, 'Sort my inbox', 0, { repoId: null, state: 'needs_input', question: 'Which folder?' }));
+  view = glue();
+  const waits = view.rows(now).find(row => row.remote.title === 'Sort my inbox');
+  assert.ok(waits, 'under Needs you here'); assert.ok(!shown(view).includes('Sort my inbox'), 'not under its computer yet');
+  assert.deepEqual(view.projects(now, '/work/projects').map(row => [row.name, row.sessions]), [['work on devbox', 3]]);
+  assert.equal(await view.send(waits, 'yes'), 'Sent to the session on @devbox.');
+  assert.deepEqual(shown(view), ['On devbox · online', 'Sort my inbox', 'By hand there', 'From the laptop', 'A message from kim']);
+  assert.deepEqual(view.projects(now, '/work/projects').map(row => [row.name, row.sessions]), [['work on devbox', 2]]);
   // No sessions there yet: nothing to open, so nothing in Projects, and the heading says so.
   machinesFile[0].sessions = []; views.length = 0; view = glue();
   assert.deepEqual(view.projects(now, '/work/projects'), []);

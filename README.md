@@ -355,7 +355,8 @@ it waits on, and any other message continues it. The message box names its model
 computer ("Message Opus 5.5 on @devbox"), and its reply shows in the same pane. This works
 with ELU closed on the devbox, or open there in a view-only window: the devbox runs the
 session in the background. A message that has not run there yet shows in the pane as waiting,
-with why: its turn has not ended, no slot is free, or it could not start. `y`, `n` and `a`
+with why: its turn has not ended, no slot is free, or it could not start. With the devbox off,
+the line under the pane says so at once and your message stays in the box. `y`, `n` and `a`
 still answer its approvals.
 Start a message with `@here` to ask an agent on the laptop for help with that session instead:
 the first such message starts a session in the project open on the laptop, named "Help: " and
@@ -367,9 +368,9 @@ each message of yours, unless you stopped it, and asks you when it needs a decis
 or something only you can do. Its approvals wait on its own row in Sessions, and the devbox
 session's pane says so. Both agents show in the same pane, the devbox's as "Opus 5.5 on
 @devbox" and yours as "Opus 5.5 here", and the helper is also a session of its own in
-Sessions. A
-teammate's session on the devbox, such as a handoff you accepted there, has no agent here:
-what you type goes to it. A message to a devbox session that names files or folders on the laptop asks
+Sessions. A teammate's session on the devbox, such as a handoff you accepted there, has no
+agent here: every word you type goes to it.
+A message to a devbox session that names files or folders on the laptop asks
 "Send 14 files (2.1 MB) from this computer with this message?": y sends them along, n sends
 the text alone. `/send PATH...` sends files without a message. They land in that session's
 inbox on the devbox, which it may read in every mode, and each path in your message points
