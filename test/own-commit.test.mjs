@@ -9,11 +9,12 @@ import { projectFolder } from '../lib/workspace.mjs';
 import { readTask, saveTask, taskDir } from '../lib/state.mjs';
 import { stopLine } from '../lib/stop-line.mjs';
 import { boardRows, remoteRow, rowActions, rowBadge, rowTitle } from '../lib/board.mjs';
-import { committedLine, finished, movedLine, restingMove, settleFinished } from '../lib/task-head.mjs';
+import { committedLine, finished, movedLine, restingMove, settleFinished, settleHead } from '../lib/task-head.mjs';
 import { currentTask, reopenTask } from '../lib/plan.mjs';
 import { findBin } from '../lib/util.mjs';
 import { hostMethods, hostTick, listTick, relist, remoteCommand, remoteMachines, remoteSessions, viewMethods, viewTick } from '../lib/peer/remote.mjs';
 import { remoteError } from '../lib/peer/failure.mjs';
+import { otherSessions } from '../lib/peer/session-tools.mjs';
 import { markMine, noteTheirs } from '../lib/peer/mine.mjs';
 import { saveTeamAccess } from '../lib/peer/access.mjs';
 
@@ -246,6 +247,9 @@ test('my other computer lists a session that committed its own work as finished,
   }
   const blocked = at('Sort the coupons');
   assert.deepEqual([blocked.badge.icon, blocked.badge.title], ['✗', 'on box · blocked']); assert.match(blocked.title, /^Sort the coupons · sign Claude Code in$/i);
+  // An agent here that asks what runs on my other computer is told the same.
+  const told = withHome(p.laptop.home, () => otherSessions()).computers[0].sessions;
+  assert.deepEqual(told.map(row => [row.title, row.state]).sort(), [['Normalize coupons', 'committed'], ['Sort the coupons', 'blocked'], ['Trim coupon codes', 'committed']]);
 });
 
 test('a computer of mine on a version from before sends the refusal as an error: here that session is finished, never one to send again', async t => {
@@ -317,7 +321,7 @@ for (const [commit, branch] of [['once', 'feat/task-1'], ['twice', 'feat/task-1'
     const done = await f.controller.push(task.id, plan.confirmationId);
     assert.deepEqual([done.pushed, done.pr, done.commit], [true, 'https://github.com/example/sample/pull/7', head]);
     assert.deepEqual(there.pushes(), [`${head}:refs/heads/${branch}`]);
-    assert.equal(committedLine(readTask(f.repo, task.id)), `Committed on ${branch} at ${head.slice(0, 7)} and pushed.`, 'what /publish pushed reads as pushed');
+    assert.equal(committedLine(readTask(f.repo, task.id)), `Committed on ${branch} at ${head.slice(0, 7)} and pushed. Pull request: https://github.com/example/sample/pull/7`, 'what /publish pushed reads as pushed, with its pull request');
     const created = there.gh().find(args => args[1] === 'create');
     assert.ok(created.includes('--draft')); assert.equal(created[created.indexOf('--head') + 1], branch);
   });
@@ -347,6 +351,14 @@ test('/publish on a branch the agent pushed, with a pull request open for it, sa
   assert.deepEqual(there.pushes(), []); assert.ok(!there.gh().some(args => ['create', 'edit'].includes(args[1])));
   const saved = readTask(f.repo, task.id);
   assert.equal(saved.pr, PR); assert.equal(saved.pushedCommit, undefined, 'the session can still go on');
+  // GitHub holds the commit: the session says pushed, with the pull request, and keeps saying so.
+  const line = `Committed on feat/task-1 at ${head.slice(0, 7)} and pushed. Pull request: ${PR}`;
+  assert.equal(committedLine(saved), line); settleHead(f.repo, saved); assert.equal(committedLine(readTask(f.repo, task.id)), line);
+  // A commit on top of it is not pushed yet, and /publish has a pull request to push it to.
+  fs.writeFileSync(path.join(task.worktree, 'more.md'), 'More.\n'); git(task.worktree, ['add', 'more.md']); git(task.worktree, ['commit', '-m', 'Add more']);
+  const next = readTask(f.repo, task.id); settleHead(f.repo, next);
+  assert.equal(committedLine(next), `Committed on feat/task-1 at ${git(task.worktree, ['rev-parse', 'HEAD']).slice(0, 7)}, not pushed. /publish pushes it.`);
+  git(task.worktree, ['reset', '--hard', head]); settleHead(f.repo, next);
   // A draft, a merged one and a closed one are named as what they are.
   there.set({ prs: [pr(head, { isDraft: true })] }); assert.match(f.controller.published(task.id).message, /Pull request \(draft\): /);
   there.set({ prs: [pr(head, { state: 'MERGED' })] }); assert.match(f.controller.published(task.id).message, /Pull request \(merged\): /);
