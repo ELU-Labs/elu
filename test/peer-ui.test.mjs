@@ -1549,6 +1549,7 @@ test('in Chats a computer of mine that has not marked this one back says it wait
   assert.equal(drawn(member(true, true, 'ana'), 60), '● @sara-box waiting for @sara-box to agree');
   assert.equal(drawn(member(true), 78), '● @sara-box waiting for @sara-box to agree');
   assert.equal(drawn(member(true), 40), '● @sara-box waiting for it to agree');
+  assert.equal(drawn(member(true), 36), '● @sara-box waiting for it to agree', 'beside the name alone, rather than fewer words in its column');
   assert.equal(drawn(member(true), 30), '● @sara-box not agreed yet');
   assert.equal(drawn(member(false), 40), '● @sara-box yours · direct');
   assert.equal(drawn(member(false, false), 40), '○ @sara-box yours · offline');
