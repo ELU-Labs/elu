@@ -160,7 +160,7 @@ async function approveTask(v) {
   v.input.write('y'); await until(() => !/Task · waits for your approval/.test(v.current.panels.chat.getText()), 'the Task is approved');
 }
 // The two rows of a project's settings about its default model, where every stand-in vendor is installed and nothing is chosen.
-const DEFAULT_ROWS = ['Default model Opus · not chosen, so the first installed here', 'This computer not chosen · Opus, the first installed here'];
+const DEFAULT_ROWS = ['Default model Opus', 'This computer Opus'];
 async function send(v, text) {
   v.current.panels.ask.focus(); v.current.panels.ask.readInput();
   await until(() => v.current.panels.ask.__listener, 'message box');
@@ -676,36 +676,36 @@ test("a computer with only Grok Build: the project's settings show its default m
   // The program is named in full wherever the app names it: the box a new session starts from.
   assert.match(panels.ask._label.getText(), /New session → Grok Build · sample app/);
   await page();
-  // Nothing is chosen: Grok Build is the first vendor installed, so new sessions start on it.
-  assert.deepEqual(dialogRows(v, PAGE).slice(3, 5), ['Default model Grok Build · not chosen, so the first installed here', 'This computer not chosen · Grok Build, the first installed here']);
+  // Nothing is chosen: Grok Build is the first vendor installed, so new sessions start on it. Each row names the model alone.
+  assert.deepEqual(dialogRows(v, PAGE).slice(3, 5), ['Default model Grok Build', 'This computer Grok Build']);
   // Enter on This computer opens the picker; none is offered beside the models.
   for (let at = 0; at < 3; at += 1) v.input.write('\x1b[B');
   await until(() => dialogList(v, PAGE).selected === 4, 'on This computer'); v.input.write('\r'); await until(() => modal(v, 'Model'), 'the picker');
-  assert.match(dialogText(v, 'Model').replace(/\s+/g, ' '), /No default for this computer: Grok Build \(grok\) is the first installed here\./);
-  assert.match(dialogText(v, 'Model'), /none +no choice: the first one installed here/);
+  assert.match(dialogText(v, 'Model').replace(/\s+/g, ' '), /This computer's default is Grok Build \(grok\)\./);
+  assert.match(dialogText(v, 'Model'), /none +clears this computer's default/);
   await dialog(v, 'Model', 'grok');
-  await until(() => modal(v, PAGE) && dialogRows(v, PAGE)[4] === 'This computer Grok Build · used by every project that has not chosen', 'saved, and back in the settings');
-  assert.equal(dialogRows(v, PAGE)[3], "Default model Grok Build · this computer's default");
+  await until(() => modal(v, PAGE) && computerDefault()?.vendor === 'grok' && dialogRows(v, PAGE)[4] === 'This computer Grok Build', 'saved, and back in the settings');
+  assert.equal(dialogRows(v, PAGE)[3], 'Default model Grok Build');
   assert.match(status(), /This computer's default is Grok Build \(grok\)\./);
   assert.deepEqual(computerDefault(), { vendor: 'grok', model: null });
   // Enter on Default model is the picker of /model default: the project's own choice wins.
   v.input.write('\x1b[A'); await until(() => dialogList(v, PAGE).selected === 3, 'on Default model'); v.input.write('\r'); await until(() => modal(v, 'Model'), 'the picker');
-  assert.match(dialogText(v, 'Model').replace(/\s+/g, ' '), /sample app uses this computer's default, Grok Build \(grok\)\./);
-  assert.match(dialogText(v, 'Model'), /none +no choice: this computer's default/);
+  assert.match(dialogText(v, 'Model').replace(/\s+/g, ' '), /New sessions in sample app start with Grok Build \(grok\)\./);
+  assert.match(dialogText(v, 'Model'), /none +clears this project's default/);
   await dialog(v, 'Model', 'grok');
-  await until(() => modal(v, PAGE) && dialogRows(v, PAGE)[3] === 'Default model Grok Build', 'the project has its own');
+  await until(() => modal(v, PAGE) && v.current.controller.startModel().from === 'project' && dialogRows(v, PAGE)[3] === 'Default model Grok Build', 'the project has its own');
   assert.equal(v.current.controller.startModel().from, 'project');
   v.input.write('\x1b'); await until(() => !modal(v, PAGE), 'closed');
   // none goes back to no choice, by command too.
-  await send(v, '/model default none'); await until(() => /sample app uses this computer's default, Grok Build \(grok\)\./.test(status()), "back on this computer's");
-  await send(v, '/model computer none'); await until(() => /No default for this computer: Grok Build \(grok\) is the first installed here\./.test(status()), 'no choice on this computer');
+  await send(v, '/model default none'); await until(() => v.current.controller.startModel().from === 'computer' && /New sessions in sample app start with Grok Build \(grok\)\./.test(status()), "back on this computer's");
+  await send(v, '/model computer none'); await until(() => computerDefault() === null && /This computer's default is Grok Build \(grok\)\./.test(status()), 'no choice on this computer');
   assert.equal(computerDefault(), null);
-  await send(v, '/model computer grok'); await until(() => /This computer's default is Grok Build \(grok\)\.$/.test(status().trim()), 'set by command');
+  await send(v, '/model computer grok'); await until(() => computerDefault()?.vendor === 'grok' && /This computer's default is Grok Build \(grok\)\.$/.test(status().trim()), 'set by command');
   // A saved default whose vendor is not installed here is said wherever the default is shown.
   saveComputerDefault({ vendor: 'claude', model: 'opus' });
   await send(v, '/model'); await until(() => /Opus is this computer's default, but Claude Code is not installed here\./.test(status()), 'said by /model');
   await page();
-  assert.deepEqual(dialogRows(v, PAGE).slice(3, 5), ['Default model Grok Build · not chosen, so the first installed here', 'This computer Grok Build · Opus is chosen, but Claude Code is not installed']);
+  assert.deepEqual(dialogRows(v, PAGE).slice(3, 5), ['Default model Grok Build', 'This computer Grok Build · Opus is chosen, but Claude Code is not installed']);
   v.input.write('\x1b'); await until(() => !modal(v, PAGE), 'closed');
   await send(v, '/new'); await until(() => /Your message goes to Grok Build\. Opus is this computer's default, but Claude Code is not installed here\. Bots review/.test(panels.composeHint.getText().replace(/\s+/g, ' ')), 'said on the new session form');
 });
