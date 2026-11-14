@@ -10,7 +10,7 @@ import { EventEmitter } from 'node:events';
 import { fileURLToPath } from 'node:url';
 import crypto from 'node:crypto';
 import { newHome, peerHome, withHome, makeTeam, registeredProject, answeringClis, liveTask } from './peer-helpers.mjs';
-import { CLI, keyLike } from './helpers.mjs';
+import { CLI, git, keyLike, project } from './helpers.mjs';
 import { peerFile, peerRepo } from '../lib/peer/paths.mjs';
 import { defaultBox, savePeerSettings, savePeerPolicy } from '../lib/peer/settings.mjs';
 import { createIdentity, identity as loadIdentity } from '../lib/peer/identity.mjs';
@@ -554,7 +554,9 @@ test('elu invite never turns Auto on for a team that already has members; a new 
 test('elu access shows and changes what teammates can do here; --auto with --manual is refused', async t => {
   const crew = makeTeam(t), sara = crew.member;
   await withHome(sara.home, async () => {
-    const { root } = registeredProject(t);
+    const { parent, root } = registeredProject(t), was = process.cwd();
+    // Run outside any project: there --auto alone keeps the project set.
+    t.after(() => process.chdir(was)); process.chdir(parent);
     const unset = await peerCli(['access'], {});
     assert.equal(unset.access, null); assert.match(unset.lines[0], /core: not set\. Messages wait for you to approve them\./);
     await assert.rejects(peerCli(['access'], { auto: true, manual: true }), /Choose --auto or --manual\./);
@@ -567,9 +569,9 @@ test('elu access shows and changes what teammates can do here; --auto with --man
 });
 
 // The owner ran elu access --auto in his project's folder and its sessions still had no project
-// to start in. A change made in an ELU project's own folder is for that project, as /access saves
-// the open one; --project still names another.
-test('elu access --auto, --manual or --rules run in a project folder sets that project; showing it, or a folder that is no project, keeps the one set', async t => {
+// to start in. A change made in a project is for that project, as other commands take the
+// project they run in, from any folder in it; --project still names another.
+test('elu access --auto, --manual or --rules run in a project sets that project; showing it, or a folder outside one, keeps the one set', async t => {
   const crew = makeTeam(t), sara = crew.member;
   await withHome(sara.home, async () => {
     const first = registeredProject(t), second = registeredProject(t), was = process.cwd();
@@ -588,9 +590,19 @@ test('elu access --auto, --manual or --rules run in a project folder sets that p
     assert.equal((await peerCli(['access'], { manual: true, project: first.root })).access.root, first.root, '--project names another');
     assert.equal((await peerCli(['access'], {})).access.root, first.root, 'showing it changes nothing');
     process.chdir(path.join(second.root, 'src'));
-    assert.equal((await peerCli(['access'], { auto: true })).access.root, first.root, 'a folder inside a project is not that project');
+    assert.equal((await peerCli(['access'], { auto: true })).access.root, second.root, 'from a folder inside the project');
+    // A repository not opened in ELU yet is set, and the line says to open it.
+    const other = project(t); process.chdir(other.root);
+    const unopened = await peerCli(['access'], { auto: true });
+    assert.equal(unopened.access.root, fs.realpathSync(other.root));
+    assert.ok(unopened.lines.includes(`  Project: ${fs.realpathSync(other.root)} (open it in ELU so sessions can start there)`), unopened.lines.join('\n'));
+    // A linked worktree, as a session's, is not the project; nor is a folder outside one.
+    process.chdir(first.root); await peerCli(['access'], { auto: true });
+    const linked = path.join(first.parent, 'linked'); git(first.root, ['worktree', 'add', '-q', '-b', 'linked', linked]);
+    process.chdir(linked);
+    assert.equal((await peerCli(['access'], { manual: true })).access.root, first.root, 'a linked worktree keeps it');
     process.chdir(second.parent);
-    assert.equal((await peerCli(['access'], { manual: true })).access.root, first.root, 'nor is a folder that is no project');
+    assert.equal((await peerCli(['access'], { auto: true })).access.root, first.root, 'a folder outside a project keeps it');
   });
 });
 
