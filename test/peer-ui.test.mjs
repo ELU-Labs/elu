@@ -1212,7 +1212,7 @@ test("over a session on my other computer that waits for my answer, a typed yes 
   assert.match(ask._label.getText(), / Message Opus 5\.5 on @sara-box /);
   v.input.write('\r');
   await until(() => sentThere().length === 1, 'sent there');
-  assert.deepEqual(sentThere()[0], { type: 'remoteSend', id, text: 'yes' });
+  assert.deepEqual(sentThere()[0], { type: 'remoteSend', id, text: 'yes', typed: true });
   await until(() => /Sent to Opus 5\.5 on @sara-box\./.test(status()) && ask.getValue() === '', 'the line says where it went');
   // No session is made on this computer, and no agent here is linked to that one.
   assert.deepEqual(pendingRequests(p.root), [], 'nothing was queued here');
@@ -1231,7 +1231,7 @@ test("over a session on my other computer that waits for my answer, a typed yes 
   // A second plain message continues it there the same way.
   await send(v, 'now go on to the next ones');
   await until(() => sentThere().length === 2, 'sent there again');
-  assert.deepEqual(sentThere()[1], { type: 'remoteSend', id, text: 'now go on to the next ones' });
+  assert.deepEqual(sentThere()[1], { type: 'remoteSend', id, text: 'now go on to the next ones', typed: true });
   // That computer's @name first, by its row's name or its owner's there, still means the session there.
   await send(v, '@sara-box 1'); await until(() => sentThere().length === 3, 'with its name');
   await send(v, '@sara and the tests'); await until(() => sentThere().length === 4, 'with its owner name there');
@@ -1270,7 +1270,7 @@ test("over a session on my other computer that waits for my answer, a typed yes 
   board.focus(); selectRow(board, /^(?!.*Help:).*Invoice totals fix/);
   await send(v, 'yes');
   await until(() => sentThere().length === 5, 'sent there');
-  assert.deepEqual(sentThere()[4], { type: 'remoteSend', id, text: 'yes' });
+  assert.deepEqual(sentThere()[4], { type: 'remoteSend', id, text: 'yes', typed: true });
   assert.equal(pendingRequests(p.root).filter(row => row.continuationTaskId === '1').length, 1, 'it did not go to my agent here');
 });
 
@@ -1312,7 +1312,7 @@ test("over a session on my other computer, its @name that is also a name on my t
   await until(() => /enter send to @sara-box/.test(v.panels.keys.getText()), 'and the keys');
   ask.submit();
   await until(() => peer.sent().some(row => row.type === 'remoteSend'), 'sent there');
-  assert.deepEqual(peer.sent().filter(row => row.type === 'remoteSend'), [{ type: 'remoteSend', id, text: 'second message' }]);
+  assert.deepEqual(peer.sent().filter(row => row.type === 'remoteSend'), [{ type: 'remoteSend', id, text: 'second message', typed: true }]);
   assert.deepEqual(peer.sent().filter(row => row.type === 'ask'), [], 'no teammate was asked anything');
 });
 
@@ -1592,20 +1592,20 @@ test('/model NAME and a message over a session on my other computer go there as 
   await until(() => board.items.map(plainItem).some(row => /Nested routes e2e handoff/.test(row)), 'the row of the session there');
   await over(); await send(v, '/model opus can you check which files that session is asking about and instruction to start the handoff');
   await until(() => sentThere().length === 1, 'sent there');
-  assert.deepEqual(sentThere()[0], { type: 'remoteSend', id, text: 'opus can you check which files that session is asking about and instruction to start the handoff', model: true });
+  assert.deepEqual(sentThere()[0], { type: 'remoteSend', id, text: 'opus can you check which files that session is asking about and instruction to start the handoff', model: true, typed: true });
   await until(() => /Sent to the session on @sara-box, now on Opus 5\.5\./.test(status()), 'the status says where it went and names the model as that computer does');
   // The name alone. No Opus ever ran on this computer, so it has no model it shows as Opus 5.5: the two words still go as typed, and no id is made up here.
   await over(); await send(v, '/model opus 5.5');
   await until(() => sentThere().length === 2, 'the model alone');
-  assert.deepEqual(sentThere()[1], { type: 'remoteSend', id, text: 'opus 5.5', model: true });
+  assert.deepEqual(sentThere()[1], { type: 'remoteSend', id, text: 'opus 5.5', model: true, typed: true });
   await until(() => /The session on @sara-box uses Opus 5\.5 from your next message\./.test(status()), 'the status names the model');
   await over(); await send(v, '/model sonnet 5');
   await until(() => sentThere().length === 3 && /The session on @sara-box uses Sonnet 5 from your next message\./.test(status()), 'a name and version');
-  assert.deepEqual(sentThere()[2], { type: 'remoteSend', id, text: 'sonnet 5', model: true });
+  assert.deepEqual(sentThere()[2], { type: 'remoteSend', id, text: 'sonnet 5', model: true, typed: true });
   // A model only that computer has: this one's /model would say there is none, and it is not asked.
   await over(); await send(v, '/model devbox-model  and the tests');
   await until(() => sentThere().length === 4 && /Sent to the session on @sara-box, now on devbox-model\./.test(status()), 'a model of that computer alone');
-  assert.deepEqual(sentThere()[3], { type: 'remoteSend', id, text: 'devbox-model  and the tests', model: true });
+  assert.deepEqual(sentThere()[3], { type: 'remoteSend', id, text: 'devbox-model  and the tests', model: true, typed: true });
   // A name that computer does not know: its own line, and the text stays to be corrected.
   await over(); await send(v, '/model nosuch and the tests');
   await until(() => /@sara-box: No model named nosuch\. \/model lists them; \/model add adds one by name\./.test(status()), 'that computer says it has no such model');

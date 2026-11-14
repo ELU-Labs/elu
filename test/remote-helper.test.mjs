@@ -258,7 +258,7 @@ test("over a session of mine there, what I type goes to that session, as if type
   assert.deepEqual(hereMention(replied, '@re'), []); assert.deepEqual(hereMention(replied, 'yes @'), []);
   // Sending: the text alone, and the line says it went there, to whom.
   assert.equal(await app.send(row, app.route(row, 'yes').text), 'Sent to the session on @aki-devbox.');
-  assert.deepEqual(commands.at(-1), { type: 'remoteSend', id: ID, text: 'yes' });
+  assert.deepEqual(commands.at(-1), { type: 'remoteSend', id: ID, text: 'yes', typed: true });
   assert.equal(await app.send(replied, 'yes'), 'Sent to Codex on @aki-devbox.');
   // While it works there, the line says at once that the message waits for its turn to end.
   const busy = glue({ answer: () => ({ id: ID, working: true }) });
