@@ -1458,6 +1458,55 @@ test('over a session on my other computer: one on an ELU before 0.1.26 is named 
   await send(v, '/rename Nightly'); await until(() => /Renamed to Nightly\./.test(status()), 'renamed while it works');
 });
 
+// x on a session archived on my other computer, or on that computer's Archived heading, asks
+// what x asks here; the work is done there (the daemon's remoteClean), its work on no remote is
+// named from there, and what its lessons run saved there is shown. One on an ELU before 0.1.26
+// is named with the version it needs, and nothing goes.
+test('x on a session archived on my other computer cleans it up there: the same questions, its work there named, its lessons shown', async t => {
+  const { listed, machines, answer } = editableThere(), p = project(later(t)); environment(t, p.parent);
+  machines[0].sessions[0].archived = true; machines[0].clean = true;
+  const cleaned = command => {
+    if (command.type !== 'remoteClean') return answer(command);
+    if (command.check) return { sessions: [{ ref: listed.ref, shown: listed.title, commits: 2, edits: 1 }] };
+    machines[0].sessions = [];
+    return { lines: command.learn ? ['Saved to project context: Use pnpm, not npm.'] : [], deleted: [{ ref: listed.ref, shown: listed.title, ...(command.keep ? { kept: { branch: 'feat/task-1' } } : {}) }], failed: [] };
+  };
+  const peer = fakePeer({ items: [], mine: [{ key: SARA, mine: true, theirs: true }], machines, repoId: SHOP_REPO, answer: cleaned }), v = await view(t, { repo: repository(p.root), dashboard: true, peer });
+  const board = v.panels.board, status = () => v.panels.status.getText().replace(/\s+/g, ' '), rows = () => board.items.map(plainItem).map(row => row.trim());
+  const sent = () => peer.sent().filter(row => row.type === 'remoteClean').map(({ type: _type, ...rest }) => rest);
+  const notes = title => modal(v, title)?.children.filter(child => child.type === 'text').map(child => child.getText().replace(/\s+/g, ' ')).join(' ') ?? '';
+  await send(v, '/archived'); await until(() => rows().some(row => /▫ Make coupons upper case/.test(row)), 'listed under its computer with the archived ones');
+  // Its Archived heading takes the cursor: x there asks for every one it lists; Esc cancels.
+  board.focus(); selectRow(board, /ARCHIVED ON SARA-BOX/); await until(() => /x clean up all/.test(v.panels.keys.getText()), 'x clean up all on the heading');
+  v.input.write('x'); await until(() => modal(v, 'Clean up'), 'the question for all');
+  assert.match(notes('Clean up'), /Deletes "Make coupons upper case" on @sara-box for good\./);
+  v.input.write('\x1b'); await until(() => !modal(v, 'Clean up'), 'cancelled');
+  assert.deepEqual(sent(), [], 'nothing went');
+  // x on its row: Learn, then delete. Its work there is named from there, and kept when asked.
+  board.focus(); selectRow(board, /▫ Make coupons upper case/); await until(() => /x clean up/.test(v.panels.keys.getText()), 'x clean up on its row');
+  v.input.write('x'); await until(() => modal(v, 'Clean up'), 'the question');
+  v.input.write('\r'); await until(() => modal(v, 'Work not pushed'), 'its work on no remote, named from there');
+  assert.match(notes('Work not pushed'), /It has 2 commits not pushed and 1 file not committed\./);
+  v.input.write('\r');
+  await until(() => modal(v, 'Saved to the project context on @sara-box'), 'what its lessons run saved there');
+  assert.deepEqual(modal(v, 'Saved to the project context on @sara-box').children.find(child => child.type === 'list').items.map(item => item.getText().trim()), ['Use pnpm, not npm.']);
+  assert.match(notes('Saved to the project context on @sara-box'), /Deleted "Make coupons upper case" on @sara-box\. Kept its work on feat\/task-1\./);
+  assert.deepEqual(sent(), [{ to: SARA, refs: [listed.ref], check: true }, { to: SARA, refs: [listed.ref], keep: true, learn: true }]);
+  v.input.write('\r'); await until(() => !modal(v, 'Saved to the project context on @sara-box') && !rows().some(row => /Make coupons upper case|ARCHIVED ON SARA-BOX/.test(row)), 'gone from the list');
+});
+
+test('x on a session archived on my other computer that runs an ELU before 0.1.26 names the version it needs, and nothing goes', async t => {
+  const { machines, answer } = editableThere(), p = project(later(t)); environment(t, p.parent);
+  machines[0].sessions[0].archived = true; machines[0].clean = false;
+  const peer = fakePeer({ items: [], mine: [{ key: SARA, mine: true, theirs: true }], machines, repoId: SHOP_REPO, answer }), v = await view(t, { repo: repository(p.root), dashboard: true, peer });
+  const board = v.panels.board, status = () => v.panels.status.getText().replace(/\s+/g, ' ');
+  await send(v, '/archived'); await until(() => board.items.map(plainItem).some(row => /▫ Make coupons upper case/.test(row)), 'listed');
+  board.focus(); selectRow(board, /▫ Make coupons upper case/); await until(() => /x clean up/.test(v.panels.keys.getText()), 'x on its row');
+  v.input.write('x'); await until(() => /@sara-box needs ELU 0\.1\.26 to delete its sessions\./.test(status()), 'the version it needs');
+  assert.equal(modal(v, 'Clean up'), undefined, 'no question');
+  assert.deepEqual(peer.sent().filter(row => row.type === 'remoteClean'), [], 'nothing went');
+});
+
 test("over a session on my other computer, its @name that is also a name on my team keeps the box on that computer, never a teammate ask", async t => {
   const at = new Date().toISOString(), id = '55555555-5555-4555-8555-555555555555';
   const remote = [{ id, machine: SARA, createdAt: at, lastAt: at, title: 'Roll the release', state: 'needs_input', question: 'Ship it?', choices: [], steps: [], entries: [{ role: 'You', at, text: 'Roll the release' }], approvals: [] }];
