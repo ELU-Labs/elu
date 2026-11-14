@@ -6520,6 +6520,18 @@ test('kill -TERM puts the terminal back at once, before the sessions have stoppe
   await v.finished;
 });
 
+// What /slots limits, in /help's line for it: whole on one row of an 80-column screen.
+test("/help's line for /slots says a limit holds back what starts by itself and never what you type", { timeout: 15000 }, async t => {
+  const p = setup(t), v = await view(t, { repo: p.repo });
+  await send(v, '/help'); await until(() => modal(v, 'Commands'), 'help');
+  const body = modal(v, 'Commands').children.find(child => child.options?.scrollable), drawn = (body._clines ?? []).map(line => String(line).replace(/\x1b\[[\d;]*m/g, '').trim());
+  const at = drawn.indexOf('/slots [number|off]');
+  assert.ok(at >= 0, drawn.join('\n'));
+  assert.equal(drawn[at + 1], 'Limit what starts by itself; what you type always starts', 'the whole line on one row');
+  assert.match(drawn[at + 2], /^\//, 'the next row is the next command');
+  await dialog(v, 'Commands', '');
+});
+
 test('/help says c archives a session and names /archive, as the key bar does', { timeout: 15000 }, async t => {
   const p = setup(t), v = await view(t, { repo: p.repo });
   await send(v, '/help'); await until(() => modal(v, 'Commands'), 'help');
