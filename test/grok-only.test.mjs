@@ -102,6 +102,7 @@ test('@reviewer, @lead, @qa and @pair each answer there, and Grok Build can be a
   // The Bots tab says where each runs here, and its page says why.
   const rows = botLines(BOTS.map(getBot), 200, false);
   for (const row of rows) assert.match(row, /\bgrok here\b/);
+  assert.doesNotMatch(rows[1], /helpers/, "@lead's helpers start on Claude Code only, so its row names none here");
   assert.equal(botNotes(getBot('reviewer'), [])[0], 'Claude Code is not installed here, so this bot runs on Grok Build.');
   assert.equal(botNotes(getBot('pair'), [])[0], 'Codex is not installed here, so this bot runs on Grok Build.');
   // A bot can be saved on Grok Build, and answers.
