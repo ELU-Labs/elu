@@ -11,6 +11,7 @@ import { readTask } from '../lib/state.mjs';
 import { ADAPTERS } from '../lib/adapters/index.mjs';
 import { stopLine } from '../lib/stop-line.mjs';
 import { REFUSED, SHIM_VENDORS, shimEnvFile, shimFolder, shimPath, shimsBase } from '../lib/never-shims.mjs';
+import { STANDUP_QUESTION, newRound } from '../lib/standup.mjs';
 
 // A terminal app may wrap a vendor's command. Each of its panes puts a folder on PATH, ahead
 // of the vendor's own, with a small script named as the command (claude, codex). That script
@@ -259,6 +260,23 @@ test('a turn whose vendor program did not start says so in plain words, then wha
   const line = stopLine(task);
   assert.equal(line.text, `${said} Check that claude runs in your terminal, then type continue.`);
   assert.equal(line.action, 'Check that claude runs in your terminal, then type continue.'); assert.equal(line.short, 'check that claude runs in your terminal, then type continue');
+});
+// The same failure where the chat has no stop line: a bot's answer in a session that stays as
+// it stood, and a session's update for a standup. Each ends with what to do.
+test('a bot, and a session asked for its update, say the same when the program did not start, and what to do', async t => {
+  const f = setup(t, 'claude');
+  const first = await f.controller.ask('Where is coupon normalization?', null, { permissions: 'ask' }).finished;
+  givesUp(f, 'claude', "' -p '*");
+  const why = who => `${who} could not run: Claude Code did not start. The claude command said: termapp: gave up: the claude command keeps coming back to this script.`;
+  await assert.rejects(f.controller.ask('Is that right?', first.id, { bot: 'reviewer' }).finished, { message: why('@reviewer') });
+  let task = readTask(f.controller.repo, first.id);
+  assert.equal(task.state, 'answered'); assert.equal(task.error ?? null, null); assert.equal(task.messages.at(-1).failed, true);
+  assert.equal(task.messages.at(-1).text, `Could not answer. ${why('@reviewer')} Check that claude runs in your terminal, then write to @reviewer again.`);
+  await f.controller.ask(STANDUP_QUESTION, first.id, { standupFor: { round: newRound(), by: 'You' } }).finished;
+  task = readTask(f.controller.repo, first.id);
+  const update = task.messages.findLast(row => row.standup && row.failed);
+  assert.match(update.text, /^Could not answer\. \S.* could not run: Claude Code did not start\. The claude command said: termapp: gave up: the claude command keeps coming back to this script\. Check that claude runs in a terminal on its computer, then ask again\.$/);
+  assert.equal(task.state, 'answered');
 });
 test('a Codex program that cannot be run when its turn starts is named, with what the shell said of it', async t => {
   const f = setup(t, 'codex', { wrapped: ['claude'] }), real = path.join(f.fake.dir, 'codex');

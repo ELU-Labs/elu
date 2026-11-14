@@ -33,7 +33,7 @@ const source = f => fs.readFileSync(path.join(f.root, 'src/coupon.mjs'), 'utf8')
 // The session's Task once its subtasks read as these states, while a turn runs.
 async function shows(f, id, states) {
   let live = null;
-  for (const until = Date.now() + 20000; Date.now() < until; await new Promise(resolve => setTimeout(resolve, 50))) { live = currentTask(f.repo, id); if (live.subtasks.map(step => step.state).join() === states) break; }
+  for (const until = Date.now() + 20000; Date.now() < until; await new Promise(resolve => setTimeout(resolve, 50))) { live = currentTask(f.repo, id); if (live?.subtasks.map(step => step.state).join() === states) break; }
   return live;
 }
 // The model's own turns; a bot's review of the edit is a run too.
@@ -110,9 +110,12 @@ for (const vendor of ['claude', 'codex']) {
 for (const [mode, label] of [['ask', 'Ask for approval'], ['auto', 'Approve for me'], ['full', 'Full access']]) test(`claude: a working turn in ${label} is launched with the to-do tools, and its list ticks`, async t => {
   const f = fixture(t, 'normal', 'claude'), gate = path.join(f.parent, 'go-on'), settings = path.join(f.fake.dir, 'fake.json');
   fs.writeFileSync(settings, JSON.stringify({ ...JSON.parse(fs.readFileSync(settings, 'utf8')), live: gate }));
-  const asked = await f.controller.ask('Uppercase coupon codes', null, { permissions: mode }).finished;
-  approveTask(f.repo, asked.id);
-  const finished = f.controller.ask('Approved the Task: Uppercase coupons', asked.id, { approved: true }).finished;
+  // The Task is written in Ask for approval, where it waits. y starts its work there; giving the session one of the
+  // other two modes approves it (lib/terminal.mjs), and the work runs in that mode. A session that starts in one
+  // of those two approves its Task in the same message: the tests of that are further down.
+  const asked = await f.controller.ask('Uppercase coupon codes', null, { permissions: 'ask' }).finished;
+  assert.equal(approveTask(f.repo, asked.id, { by: mode }).approvedBy, approvesTasks(mode) ? mode : undefined);
+  const finished = f.controller.ask(approvesTasks(mode) ? `${label} approved the Task: Uppercase coupons` : 'Approved the Task: Uppercase coupons', asked.id, { approved: true, permissions: mode }).finished;
   assert.deepEqual((await shows(f, asked.id, 'done,doing')).subtasks.map(step => step.text), ['Change normalize', 'Run the coupon test']);
   const work = inputs(f).find(row => row.input.includes('this turn does its work'));
   assert.equal(work.args[work.args.indexOf('--permission-mode') + 1], { ask: 'default', auto: 'auto', full: 'bypassPermissions' }[mode]);
@@ -150,6 +153,20 @@ test('claude: a later turn of the same session ticks a step an earlier turn made
 // its answer only when it ends: there it keeps the list in a file of the run, which is read while it works.
 // Grok Build runs headless in Full access; Antigravity does where the relay check has not passed on this
 // machine (relay false below), and over ACP where it has.
+// In Full access the turn that plans may do the work too, so it is told to keep its list as well, and the stand-in
+// waits at the gate there, before any Task is on record. This lets that turn through, and shuts the gate again
+// before the working turn gets to it.
+async function pastPlanning(f, vendor, gate) {
+  const until = Date.now() + 20000, file = path.join(f.parent, 'inputs.jsonl');
+  const wait = async (check, what) => { for (;;) { const got = check(); if (got) return got; if (Date.now() > until) throw new Error(`Timed out waiting for ${what}`); await new Promise(resolve => setTimeout(resolve, 10)); } };
+  const named = () => (fs.existsSync(file) ? inputs(f) : []).filter(row => row.vendor === vendor).map(row => /Keep the Task's subtasks in the file ("[^\n]+?") as you work/.exec(row.input)?.[1]).find(Boolean);
+  const list = JSON.parse(await wait(named, 'the turn that plans'));
+  await wait(() => fs.existsSync(list), 'its list');
+  fs.writeFileSync(gate, '');
+  // Past the gate it writes every step done, and the file goes with the run.
+  await wait(() => { try { return !fs.readFileSync(list, 'utf8').includes('"doing"'); } catch { return true; } }, 'the turn that plans to go on');
+  fs.rmSync(gate);
+}
 const proven = (vendor, bin, version, relay = true) => atomic(path.join(personalDirectory(), 'conformance', `${vendor}.json`), { v: 1, bin, version, steps: Object.fromEntries(ADAPTERS[vendor].conformance.map(step => [step.id, 'pass'])), relay, at: new Date().toISOString() });
 for (const [vendor, label, version] of [['agy', 'Antigravity', '1.5.4'], ['grok', 'Grok Build', '1.0.77']]) for (const [mode, how] of [['ask', 'from its plan updates over ACP in Ask for approval'], ['full', 'from the list it keeps in a file, headless in Full access']]) test(`${label}: a working turn ticks the Task's subtasks ${how}, while it runs`, async t => {
   const f = fixture(t, 'normal', vendor, { home: true }), gate = path.join(f.parent, 'go-on'), settings = path.join(f.fake.dir, 'fake.json');
@@ -157,12 +174,18 @@ for (const [vendor, label, version] of [['agy', 'Antigravity', '1.5.4'], ['grok'
   if (vendor === 'grok') { fs.mkdirSync(path.join(f.parent, '.grok')); fs.writeFileSync(path.join(f.parent, '.grok', 'auth.json'), '{}\n', { mode: 0o600 }); }
   proven(vendor, path.join(f.fake.dir, vendor), version, !(vendor === 'agy' && mode === 'full'));
   const calls = () => fs.readFileSync(f.fake.calls, 'utf8').trim().split('\n').map(JSON.parse).filter(call => call.vendor === vendor);
-  // The first turn plans: the Task waits for the owner, and no list is asked for yet.
-  const asked = await f.controller.ask('Uppercase coupon codes', null, { permissions: mode }).finished;
-  assert.equal(currentTask(f.repo, asked.id).state, 'proposed', JSON.stringify(asked.error));
-  approveTask(f.repo, asked.id);
-  const finished = f.controller.ask('Approved the Task: Uppercase coupons', asked.id, { approved: true }).finished;
+  // The first turn plans. In Ask for approval the Task waits for the owner, and no list is asked for yet.
+  // Full access approves the Task itself, and the work goes on in the same message.
+  const first = f.controller.ask('Uppercase coupon codes', null, { permissions: mode }), asked = { id: first.id };
+  let finished = first.finished;
+  if (mode === 'ask') {
+    const planned = await finished;
+    assert.equal(currentTask(f.repo, asked.id).state, 'proposed', JSON.stringify(planned.error));
+    approveTask(f.repo, asked.id);
+    finished = f.controller.ask('Approved the Task: Uppercase coupons', asked.id, { approved: true }).finished;
+  } else await pastPlanning(f, vendor, gate);
   const live = await shows(f, asked.id, 'done,doing');
+  assert.equal(live.approvedBy, mode === 'full' ? 'full' : undefined);
   assert.equal(readTask(f.repo, asked.id).state, 'running');
   assert.deepEqual(live.subtasks, [{ id: 's1', text: 'Change normalize', state: 'done' }, { id: 's2', text: 'Run the coupon test', state: 'doing' }]);
   assert.equal(taskState(live), 'approved · 1 of 2 subtasks done');
@@ -462,6 +485,10 @@ for (const [mode, name] of [['full', 'Full access'], ['auto', 'Approve for me']]
     assert.doesNotMatch(told, /Plan first|change nothing in this turn|only after they approve|waits for the owner's approval/);
     const work = inputs(f).find(row => row.input.includes('this turn does its work')).input;
     assert.match(work, new RegExp(`This session's ${name} approved the Task below, and this turn does its work`)); assert.doesNotMatch(work, /The owner approved the Task below/);
+    // That turn keeps the model's own to-do list, which the Task's subtasks follow while it runs.
+    const launch = inputs(f).find(row => row.input.includes('this turn does its work')).args, tools = launch[launch.indexOf('--tools') + 1];
+    assert.match(work, /Keep the Task's subtasks in your task list as you work: make each step with TaskCreate/);
+    if (mode === 'full') assert.equal(tools, 'default'); else assert.match(tools, /,TaskCreate,TaskUpdate,TaskList,TaskGet,TodoWrite$/);
   });
 }
 

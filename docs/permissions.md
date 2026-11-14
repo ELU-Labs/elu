@@ -267,7 +267,14 @@ tool: a small MCP server over stdio, started from the same private config file
 as your own servers, with one tool. When Claude would prompt, the call becomes a
 request under ELU's personal directory and the terminal shows it under
 Needs you. Allow lets the action run; deny tells the model not to retry it
-another way; no answer within 20 minutes counts as a denial. The turn's limits
+another way. The request shows in every ELU window of yours that lists the
+session, on this computer and on your other computers: its row says what it
+waits for, any of those windows can answer it, and the terminal bell rings once.
+No answer within 20 minutes is not a no: the action does not run, and the model
+is told that nobody declined it, to go on with the work that does not need it,
+and to say at the end what still waits for your answer. The session then shows
+`Not done: ... No answer in 20 minutes; reply to try again.` under the reply, or
+`Stopped: ...` when the turn could not go on without it. The turn's limits
 (below) wait while a request is open, and the conductor does not treat the wait
 as a stall. Every decision is kept with the task, and blocked actions are kept
 on the run. In Full access the relay allows every call at once: nobody is asked
@@ -425,8 +432,11 @@ ELU enforces this much, on every vendor:
   or in a message. A few words that all say go (`yes`, `ok`, `I approve`, `go ahead`, `yes go ahead`,
   `do it`, `sounds good`, `continue`) approve at once. An approval in other words is read
   by the turn that answers your message, which is told that a plain approval in any words
-  counts; the work starts right after its reply. A teammate's message, a schedule and a
-  bot's own turn cannot approve a Task.
+  counts; the work starts right after its reply. Over a session on your other computer
+  the same few words approve its Task there, with or without that computer's `@name`; an
+  approval in other words goes to the session there, as any message typed over it does.
+  After `@here` either one is a message for your agent here. A teammate's message, a
+  schedule and a bot's own turn cannot approve a Task.
 - A mode approves a Task only in your own session. A session a teammate's message started
   keeps your approval in every mode (see below).
 - A Task is read as untrusted text. The title is one line of up to 80 characters; the
