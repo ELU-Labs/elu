@@ -38,7 +38,7 @@ import { task as a2aTask, TaskState } from '../lib/peer/a2a.mjs';
 import { peerDataBlock } from '../lib/peer/peerdata.mjs';
 import { peerCli } from '../lib/peer/cli.mjs';
 import { checkRules, saveTeamAccess, teamAccess, teammateRules } from '../lib/peer/access.mjs';
-import { refuse } from '../lib/util.mjs';
+import { EluCodeError, refuse } from '../lib/util.mjs';
 import { processIdentity } from '../lib/process.mjs';
 import { BOTS_TOLD, cleanBots, cleanBox, cleanRows, overlaps, statusRows, thisMachine } from '../lib/peer/status.mjs';
 import { createAsk, dismissAsk, reconnect, reviewText, teammate, tickAsks, teamAsk, dismissTeam, applyTask, getAsk, asks as allAsks } from '../lib/peer/asks.mjs';
@@ -47,7 +47,7 @@ import { base32, canonical } from '../lib/peer/canonical.mjs';
 import * as peer from '../lib/peer/index.mjs';
 import { bothMine, markMine, mineRows as readMine, noteTheirs, unmarkMine } from '../lib/peer/mine.mjs';
 import { LONG_MAX, textMethods } from '../lib/peer/texts.mjs';
-import { CARRY_MS, carryMethods, createCarrier, savedRoutes } from '../lib/peer/carry.mjs';
+import { CARRY_MS, carryMethods, createCarrier, reachOf, savedRoutes, teamTick, tellReach } from '../lib/peer/carry.mjs';
 import { inboxRoot } from '../lib/peer/files.mjs';
 import { reachText } from '../lib/peer/reach-text.mjs';
 import { admitProven, inviterProof, openRelays, relayKeys, sealRelays } from '../lib/peer/invite.mjs';
@@ -663,7 +663,7 @@ function fakeSocket() {
   const wire = { out: '' }, socket = Object.assign(new EventEmitter(), { destroyed: false, write: chunk => { wire.out += chunk; return true; }, destroy() { this.destroyed = true; this.emit('close'); } });
   return { socket, wire, frames: () => wire.out.split('\n').filter(Boolean).map(line => JSON.parse(line)), say: value => socket.emit('data', Buffer.from(`${JSON.stringify(value)}\n`)) };
 }
-const NOBODY = { name: '', teams: [], handles: [], plans: true, remote: 1, cards: 1, files: 1, standup: 1, folders: 1, carry: 1, model: 1, lists: 1 };
+const NOBODY = { name: '', teams: [], handles: [], plans: true, remote: 1, cards: 1, files: 1, standup: 1, folders: 1, carry: 1, model: 1, lists: 1, reach: 1 };
 
 test('a hello names only the teams its receiver is on, and a stranger or a removed teammate gets no team and no name', async t => {
   const crew = makeTeam(t), ana = crew.founder.identity, sara = crew.member, bob = withHome(newHome(t), () => createIdentity({ name: 'bob' }));
@@ -3018,6 +3018,33 @@ test('the computer that carries two teammates goes away without a word, as one w
   await until(() => via(ana.home, sara.identity.key) === "li's computer" && via(sara.home, ana.identity.key) === "li's computer", 'back through li', 120000);
 });
 
+test('a computer back after a long time is reached at once through the computer of the team that reaches it, from the teammate that cannot reach it directly too; that teammate says it is looking, never that there is no way', { ...skipLan, timeout: 300000 }, async t => {
+  // The owner's three computers, as their own: the Mac (li) and the devbox (ana) are paired, and
+  // the Grok box (sara) marked the Mac. The devbox and the Grok box cannot connect directly; the Mac reaches both.
+  const bootstrap = await testnet(t, lan), { teamId, ana, sara, li } = trio(t), prod = { conductor: false, tickMs: 2000, statusMs: 10000 };
+  for (const home of [ana.home, sara.home]) withHome(home, () => fs.rmSync(peerFile('mine.json'), { force: true }));
+  for (const [here, there] of [[ana, li], [li, ana]]) withHome(here.home, () => { markMine(here.identity.key, there.identity.key); noteTheirs(there.identity.key, true); });
+  withHome(sara.home, () => markMine(sara.identity.key, li.identity.key));
+  enable(ana.home, bootstrap, { box: 'devbox' }); enable(sara.home, bootstrap, { box: 'grokbot-box' }); enable(li.home, bootstrap, { box: 'macbookpro' });
+  await daemon(t, li.home, prod); await daemon(t, ana.home, { ...prod, noPunchTo: [sara.identity.key] });
+  await until(() => online(ana.home, li.identity.key) && online(li.home, ana.identity.key), 'the devbox and the Mac online');
+  // The Grok box has been away a while: the devbox's own tries to reach it now come many minutes apart.
+  await new Promise(resolve => setTimeout(resolve, 75000));
+  // It comes back. Its own tries through the Mac do not get through, as on a network that lets few through.
+  const back = Date.now(), said = new Set();
+  await daemon(t, sara.home, { ...prod, noPunchTo: [ana.identity.key], throughFails: 1000 });
+  const via = (home, key) => { const m = memberOf(home, teamId, key); return m?.online && m.path === 'relayed' ? m.via : null; };
+  await until(() => {
+    const m = memberOf(ana.home, teamId, sara.identity.key); if (m && !m.online) said.add(m.reach ?? 'offline');
+    return /^your computer (macbookpro|li)$/.test(via(ana.home, sara.identity.key) ?? '') && via(sara.home, ana.identity.key) === "li's computer";
+  }, 'the devbox and the Grok box online to each other through the Mac', 40000);
+  const took = Date.now() - back;
+  assert.ok(took < 40000, `within seconds of the Grok box coming back, not minutes: ${took} ms`);
+  assert.ok(!said.has('blocked'), `the devbox never said there was no way through while it looked: ${[...said].join(', ')}`);
+  assert.match(daemonLog(ana.home), /is there but cannot be connected to directly: through your computer (macbookpro|li)/);
+  assert.match(await peersText(ana.home), /● sara\s+member\s+online · through your computer (macbookpro|li)/);
+});
+
 test('a computer asked to carry for two teammates does it only while it reaches the other one, tells who runs a relay, and refuses a computer that is not on its team', async t => {
   const me = 'c'.repeat(64), a = 'a'.repeat(64), b = 'b'.repeat(64), stranger = 'd'.repeat(64), relay = 'e'.repeat(64);
   peerHome(t);
@@ -3049,7 +3076,72 @@ test('a computer asked to carry for two teammates does it only while it reaches 
   assert.equal(savedRoutes()[stranger], undefined, 'a route from someone who is no teammate is not kept');
 });
 
-test('how a teammate is reached reads the same in the roster and in elu peers: direct, through a computer, offline, or offline with why', () => {
+// One machine's daemon as teamTick and the carry methods see it, on a team with the devbox and the Mac, in a home of its own.
+function wayDaemon(t, { wayMs = 400 } = {}) {
+  peerHome(t);
+  const me = createIdentity({ name: 'grok' }), state = createTeam(me, 'core'), [D, M, X] = ['d', 'c', 'b'].map(char => char.repeat(64));
+  for (const [key, name] of [[D, 'devbox'], [M, 'mac'], [X, 'old']]) redeemCode(createInvite(me, state.id, { hours: 1 }), key, name);
+  const admitted = new Map(), sessions = new Map(), dials = new Map(), dialled = [], told = [];
+  const names = new Map([[D, 'devbox'], [M, 'mac'], [X, 'old']]);
+  const d = { me, testing: { join: { wayMs } }, sessions, log: () => {}, closed: false, myTeams: () => everyTeam(), teammateKeys: () => [D, M, X], machines: new Map(), name: key => names.get(key) ?? null,
+    ctx: { session: key => admitted.get(key) ?? null }, node: { connections: new Map(), dialOf: key => dials.get(key) ?? null, dial: key => dialled.push(key), route: () => {}, routeOf: () => [] } };
+  const session = (key, hello, request = async () => ({ relay: null, online: false })) => ({ key, admitted: true, remoteHello: hello, request, notify: (method, params) => told.push([key, method, params]) });
+  return { d, me, D, M, X, admitted, sessions, dials, dialled, told, session };
+}
+const later = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+test('a teammate that answered but cannot be connected to directly is looked for while a computer that could carry it is still connecting or did not answer, and only then said to have no way through', async t => {
+  const { d, D, M, X, admitted, sessions, dials, dialled, session } = wayDaemon(t);
+  const blocked = { pending: false, open: false, code: 'HOLEPUNCH_DOUBLE_RANDOMIZED_NATS', relay: false, startedAt: 1, endedAt: 2 };
+  const gone = { pending: false, open: false, code: 'PEER_NOT_FOUND', relay: false, startedAt: 1, endedAt: 2 };
+  dials.set(D, blocked); dials.set(X, gone);
+  // The Mac is still connecting: the devbox is looked for.
+  sessions.set(M, { key: M, admitted: false }); dials.set(M, { ...gone, pending: true, endedAt: null });
+  teamTick(d); await later(20);
+  assert.equal(reachOf(d, D), 'looking', 'a computer that could carry it is still connecting');
+  // It did not connect after all: every computer that could carry it has had its say, and none does.
+  sessions.delete(M); dials.set(M, gone);
+  await later(150); teamTick(d); await later(20);
+  assert.equal(reachOf(d, D), 'blocked', 'no computer on the team reaches both');
+  // The Mac connects, but its answer does not come in time: still looked for, and asked again within a moment.
+  let asked = 0;
+  const slow = session(M, { carry: 1 }, async () => { asked++; throw new EluCodeError('The teammate did not answer in time.', { timeout: true }); });
+  admitted.set(M, slow); sessions.set(M, slow); d.wayWoke = true;
+  teamTick(d); await later(20);
+  assert.equal(reachOf(d, D), 'looking', 'an answer that did not come is not a no');
+  await later(150); teamTick(d); await later(20);
+  assert.equal(asked, 2, 'asked again within a moment, not minutes later');
+  // It answers with a relay: the way is tried at once, and still looked for until it connects.
+  const relay = 'e'.repeat(64), quick = session(M, { carry: 1 }, async () => ({ relay, ms: CARRY_MS, online: true }));
+  admitted.set(M, quick); sessions.set(M, quick); dialled.length = 0;
+  await later(150); teamTick(d); await later(20);
+  assert.deepEqual(savedRoutes()[D].mine, [{ helper: M, relay }]);
+  assert.deepEqual(dialled, [D], 'dialled through it at once');
+  assert.equal(reachOf(d, D), 'looking');
+});
+
+test('a computer that connects hears of the teammates the computer it reached reaches directly, and they hear of it: each dials the other at once and looks for a way; an older build is told nothing', async t => {
+  const { d, D, M, X, admitted, sessions, dialled, told, session } = wayDaemon(t);
+  // On the Mac: the devbox and an older build are connected directly; one more is reached only through a relay.
+  const devbox = session(D, { carry: 1, reach: 1 }), old = session(X, { carry: 1 }), grok = session(M, { carry: 1, reach: 1 });
+  for (const row of [devbox, old, grok]) { admitted.set(row.key, row); sessions.set(row.key, row); }
+  tellReach(d, grok);
+  assert.deepEqual(told, [[M, 'elu.reach', { here: [D, X] }], [D, 'elu.reach', { here: [M] }]], 'the newcomer hears of both, the devbox hears of it, the older build hears nothing');
+  told.length = 0; d.node.connections.set(M, { via: 'f'.repeat(64) });
+  tellReach(d, grok);
+  assert.deepEqual(told, [], 'one reached through a relay is not said to be reached');
+  // On the devbox: the Mac says it reaches the Grok box, which is not connected here: dialled at once, and looked for.
+  admitted.clear();
+  const reach = carryMethods(d)['elu.reach'], mac = { key: M, admitted: true };
+  reach({ here: [D, 'a'.repeat(64), d.me.key, 'nonsense'] }, mac);
+  assert.deepEqual(dialled, [D], 'only a teammate, never this machine or a stranger');
+  assert.equal(reachOf(d, D), 'looking');
+  // From a computer that is not on a team with this machine, nothing is done.
+  dialled.length = 0; reach({ here: [X] }, { key: 'a'.repeat(64), admitted: true });
+  assert.deepEqual(dialled, []);
+});
+
+test('how a teammate is reached reads the same in the roster and in elu peers: direct, through a computer, offline, looking for a way, or offline with why', () => {
   assert.equal(reachText({ online: true, path: 'direct' }), 'direct');
   assert.equal(reachText({ online: true, path: null }), 'online');
   assert.equal(reachText({ online: true, path: 'relayed', via: "li's computer" }), "online · through li's computer");
@@ -3065,6 +3157,11 @@ test('how a teammate is reached reads the same in the roster and in elu peers: d
   assert.equal(reachText({ online: false, reach: 'blocked' }, { fit: 31 }), 'offline · no way through');
   assert.equal(reachText({ online: false, reach: 'blocked' }, { fit: 5 }), 'offline · no way through');
   assert.equal(reachText({ online: false }, { fit: 5 }), 'offline');
+  // While a way is still looked for, it says so, and never that there is none.
+  assert.equal(reachText({ online: false, reach: 'looking' }), 'offline · looking for a way through');
+  assert.equal(reachText({ online: false, reach: 'looking' }, { fit: 30 }), 'looking for a way through');
+  assert.equal(reachText({ online: false, reach: 'looking' }, { fit: 5 }), 'looking for a way');
+  assert.equal(reachText({ online: false, reach: 'looking' }, { whole: true }), 'offline. Their computer is on, but your two networks do not connect directly. ELU is looking for a computer on the team that reaches you both.');
   // Whole, for the window that shows one teammate.
   assert.equal(reachText({ online: false, reach: 'blocked' }, { whole: true }), 'offline. Their computer is on, but your two networks do not connect directly, and no computer on the team reaches you both. Open ELU on another computer on the team.');
   assert.equal(reachText({ online: true, path: 'relayed', via: 'your computer studio' }, { whole: true }), 'online, through your computer studio. Your two networks do not connect directly, so it passes the connection along. It cannot read it.');
