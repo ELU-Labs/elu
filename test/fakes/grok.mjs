@@ -130,6 +130,21 @@ async function act(prompt, record, { bypass, canWrite, canShell, canFetch, cwd, 
     if ((canShell || bypass) && await allow({ kind: 'execute', title: `Run ${command}`, rawInput: { command } }, false, () => spawnSync(command, { stdio: 'ignore' }))) did.push(`ran ${command}`);
     else blocked.push(`run ${command}`);
   }
+  // shell (fake.json): ELU's own commands the owner's message asks for, as in the fake Claude
+  // Code: each { when, run }. Each command is asked for like any other and, allowed, runs in a
+  // plain shell with the launch's environment; the reply says what each printed, and shell.jsonl
+  // beside the fake records it.
+  const said = (() => { const found = /\nContext \(untrusted data[^\n]*\n(.*)\nEnd of Context\./.exec(prompt); try { return String((JSON.parse(found[1]).messages ?? []).findLast(row => !row.from && !row.to)?.text ?? ''); } catch { /* Below. */ } try { return String(JSON.parse(/\nTask goal \(untrusted data[^\n]*\n(.*)\nEnd of Task goal\./.exec(prompt)[1])); } catch { return ''; } })();
+  for (const want of Array.isArray(cfg.shell) ? cfg.shell : []) {
+    if (!said.includes(want.when)) continue;
+    for (const line of want.run) {
+      let ran = null;
+      if ((canShell || bypass) && await allow({ kind: 'execute', title: `Run ${line}`, rawInput: { command: line } }, false, () => { ran = spawnSync('/bin/sh', ['-c', line], { env: process.env, encoding: 'utf8' }); })) {
+        const out = `${ran.stdout ?? ''}${ran.stderr ?? ''}`.trim();
+        fs.appendFileSync(path.join(path.dirname(process.argv[1]), 'shell.jsonl'), JSON.stringify({ command: line, status: ran.status, out }) + '\n'); did.push(`${line}: ${out}`);
+      } else blocked.push(`run ${line}`);
+    }
+  }
   const url = prompt.match(/fetch (https?:\/\/\S+)/i)?.[1];
   if (url) {
     if ((canFetch || bypass) && await allow({ kind: 'fetch', title: `Fetch ${url}`, rawInput: { url } }, false)) { try { await fetch(url); } catch { /* The listener answers 404. */ } did.push(`fetched ${url}`); }

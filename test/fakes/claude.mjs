@@ -58,7 +58,8 @@ if(args[0]==='mcp'){
 const home=process.env.CLAUDE_CONFIG_DIR??process.env.HOME??'';const readIn=name=>{try{return fs.readFileSync(path.join(home,name),'utf8');}catch{return null;}};
 let account=null;try{account=JSON.parse(readIn('.claude.json')).oauthAccount?.emailAddress??null;}catch{}
 const seen=()=>{const list=dir=>{try{return fs.readdirSync(path.join(home,dir)).sort();}catch{return null;}};const mcpAt=args.indexOf('--mcp-config');let mcp=null;try{const value=mcpAt>=0?args[mcpAt+1]:null;mcp=Object.keys(JSON.parse(value.trim().startsWith('{')?value:fs.readFileSync(value,'utf8')).mcpServers??{}).sort();}catch{}let userMcp=null;try{userMcp=Object.keys(JSON.parse(readIn('.claude.json')).mcpServers??{}).sort();}catch{}const memory=args.flatMap((arg,at)=>arg==='--add-dir'&&/memory$/.test(args[at+1]??'')?[args[at+1]]:[]).flatMap(dir=>{try{return fs.readdirSync(dir).sort().map(name=>`${name}:${fs.readFileSync(path.join(dir,name),'utf8')}`);}catch{return [];}});return {settings:readIn('settings.json'),claudeMd:readIn('CLAUDE.md'),skills:list('skills'),projects:list('projects'),mcp,userMcp,memory};};
-if(cfg.calls)fs.appendFileSync(cfg.calls, JSON.stringify({vendor,args,...(cfg.note?{tmp:process.env.CLAUDE_CODE_TMPDIR??null}:{}),...(cfg.accounts&&args[0]!=='auth'&&!args.includes('--version')&&!args.includes('--help')?{account,config:process.env.CLAUDE_CONFIG_DIR??null,...seen()}:{})})+'\n');
+// envs (fake.json): each call also records the turn's own elu folder and session it was started with (lib/session-commands.mjs).
+if(cfg.calls)fs.appendFileSync(cfg.calls, JSON.stringify({vendor,args,...(cfg.note?{tmp:process.env.CLAUDE_CODE_TMPDIR??null}:{}),...(cfg.envs?{own:process.env.ELU_COMMAND_FOLDER??null,session:process.env.ELU_SESSION??null}:{}),...(cfg.accounts&&args[0]!=='auth'&&!args.includes('--version')&&!args.includes('--help')?{account,config:process.env.CLAUDE_CONFIG_DIR??null,...seen()}:{})})+'\n');
 if(args.includes('--version')){console.log('2.1.319');process.exit(0);}
 // The --model entry of the real --help, which is where the aliases a bot's Model step offers come from.
 const MODEL_HELP="  --model <model>                       Model for the current session. Provide\n                                        an alias for the latest model (e.g.\n                                        'fable', 'opus', or 'sonnet') or a\n                                        model's full name.\n  -n, --name <name>                     Set a display name for this session";
@@ -497,6 +498,22 @@ if(Array.isArray(cfg.commands)&&promptTool){
  const fenced=cfg.fence&&sandbox?.enabled===true&&spawnSync('bwrap',['--version']).status===0;
  cfg.commands.forEach((command,i)=>{const id=`toolu_fake_${i+1}`;const script=['-c',`PATH="/usr/bin:/bin:$PATH"\n${ahead}\neval "$1"`,'sh',command];console.log(JSON.stringify({type:'assistant',message:{content:[{type:'tool_use',id,name:'Bash',input:{command,description:'Run it'}}]}}));const r=fenced?spawnSync('bwrap',[...fenceArgs(sandbox.filesystem??{}),'/bin/sh',...script],{env:process.env,encoding:'utf8'}):spawnSync('/bin/sh',script,{env:process.env,encoding:'utf8'});const denied=noted(i+1);if(denied&&r.status===0)r.status=1;const out=`${r.stdout}${r.stderr}${denied}`;
   console.log(JSON.stringify({type:'user',message:{content:[{type:'tool_result',tool_use_id:id,content:r.status===0?out:`Exit code ${r.status}\n${out}`,...(r.status===0?{}:{is_error:true})}]}}));});
+}
+// shell (fake.json): what the model runs when the message the turn answers asks for it, as a model
+// told of ELU's own commands does: each { when, run }, its commands run when the owner's last
+// message (a schedule's too) holds when. Each runs as commands above do, after CLAUDE_ENV_FILE,
+// with the turn's own environment; the reply says what each printed. Each one is recorded in
+// shell.jsonl beside the fake, with the session and project ELU named to the turn.
+if(Array.isArray(cfg.shell)&&promptTool){
+ const {spawnSync}=await import('node:child_process');const named=process.env.CLAUDE_ENV_FILE;const ahead=named&&fs.existsSync(named)?fs.readFileSync(named,'utf8').trim():'';
+ const said=lastOwner||(()=>{try{return String(JSON.parse(/\nTask goal \(untrusted data[^\n]*\n(.*)\nEnd of Task goal\./.exec(input)[1]));}catch{return '';}})();const outs=[];
+ for(const [n,ask] of cfg.shell.entries()){if(!said.includes(ask.when))continue;for(const [i,command] of ask.run.entries()){
+  const id=`toolu_fake_shell_${n+1}_${i+1}`;console.log(JSON.stringify({type:'assistant',message:{content:[{type:'tool_use',id,name:'Bash',input:{command,description:'Run it'}}]}}));
+  const r=spawnSync('/bin/sh',['-c',`PATH="/usr/bin:/bin:$PATH"\n${ahead}\neval "$1"`,'sh',command],{env:process.env,encoding:'utf8'});const out=`${r.stdout??''}${r.stderr??''}`.trim();
+  console.log(JSON.stringify({type:'user',message:{content:[{type:'tool_result',tool_use_id:id,content:r.status===0?out:`Exit code ${r.status}\n${out}`,...(r.status===0?{}:{is_error:true})}]}}));
+  fs.appendFileSync(path.join(path.dirname(process.argv[1]),'shell.jsonl'),JSON.stringify({command,status:r.status,out,session:process.env.ELU_SESSION??null,project:process.env.ELU_PROJECT??null})+'\n');outs.push(`${command}: ${out}`);
+ }}
+ if(outs.length&&typeof result.summary==='string')result.summary=`${result.summary}\n${outs.join('\n')}`;
 }
 // network (fake.json): hosts a sandboxed command of this turn connects to, in order. As in the real
 // CLI a host is let through when the settings list it in sandbox.network.allowedDomains or it was

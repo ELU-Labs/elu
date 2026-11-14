@@ -156,8 +156,27 @@ it, each followed by Enter. A new run archives the schedule's earlier ones, as `
 its row stays one; `u` or a new message brings one back. A time is `in 30m`, `every 2h` (15 minutes to 7 days),
 `daily 9:00`, `weekdays 9am`,
 `mon,thu 14:30`, `tomorrow 15:00` or `2026-12-01 9:00`, in this computer's local time.
-The model cannot make a schedule itself: asked to repeat work, it gives you the
-`/schedule` line to type.
+Asked to repeat work, the model makes the schedule with `elu schedules add` where it has
+[ELU's own commands](#elu-from-a-session), and otherwise gives you the `/schedule` line to type.
+
+### ELU from a session
+
+`elu sessions` and `elu schedules` change ELU from your shell and from inside a session, so a
+message or a schedule such as "archive this chat and start a new session that says hello" just
+works. The app shows each change at once.
+
+- `elu sessions [--all]` lists this project's sessions: number, name, state, the schedule that
+  started it, and whether it is archived. `elu sessions archive N|this`, `unarchive N`,
+  `rename N|this "name"` and `new "message" [--mode ask|auto|full]` change them. `this` is the
+  session the command runs in: it is archived when its turn ends, after its reply.
+- `elu schedules [--all]` lists the schedules, and `elu schedules add <when> <message>` (the
+  words `/schedule` takes), `pause N`, `resume N`, `delete N` and `run N` change them.
+
+A session started from a session gets that session's mode, or a lower one with `--mode`. In
+Ask for approval you are asked before one runs; Approve for me and Full access run them. Every
+vendor's session has them, in every mode. Inside a sandbox the command hands itself to ELU,
+which runs it only for that session and no higher than its mode. A teammate's question or
+review is never told about them and cannot run them.
 
 ## Keys
 

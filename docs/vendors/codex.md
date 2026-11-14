@@ -33,6 +33,7 @@ The `elu_ask` profile is one `-c permissions.elu_ask=…` value with `default_pe
 - Each named folder `"<dir>"="read"`: readable, not writable, the same entry a protected file gets below.
 - Each protected file `"<path>"="read"`: readable, not writable [run]. The structural checks still run afterwards.
 - Home secrets, ELU's state folder and the repository's `.git/elu-code` as `"<path>"="deny"`: a shell `cat` or `ls` there never starts and no item is reported [run]. The reviewer model in Approve for me sees the same deny list in its context [run].
+- In a turn of your own session, the folder its `elu` hands ELU's own commands through (`<temp>/elu-code-own-…/requests`, under each name of the temp folder) as `"<path>"="write"`, in answer turns too. ELU makes it for the turn and removes it after. ELU's own files stay denied [unverified: not run against the real Codex; the stand-in fences the same limits with bwrap].
 
 A profile value containing `*`, `?`, `[`, `]`, `{` or `}` is refused before launch: Codex reads those as patterns.
 
