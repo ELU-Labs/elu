@@ -243,6 +243,9 @@ test("over a session of mine there, what I type goes to that session, as if type
   assert.equal(app.label(replied), ' Message Codex on @ali-devbox ');
   assert.equal(app.label(replied, Infinity, 'yes'), ' Message Codex on @ali-devbox ');
   assert.equal(app.label(replied, 24), ' Message @ali-devbox ');
+  // The model its own computer names wins, and is known before its first reply.
+  assert.equal(app.label(remoteRow({ ...waiting, model: 'Opus 5.5' }, 'ali-devbox')), ' Message Opus 5.5 on @ali-devbox ');
+  assert.equal(app.label(remoteRow({ ...replied.remote, model: 'Opus 5.5' }, 'ali-devbox')), ' Message Opus 5.5 on @ali-devbox ');
   assert.equal(app.label(replied, Infinity, '@here find them'), ' Message your agent here · it helps the session on @ali-devbox ');
   assert.equal(app.label(replied, 40, '@here find them'), ' Message your agent here ');
   // The key bar says where Enter sends, and the one name that asks my agent here.
@@ -290,6 +293,9 @@ test('a message to a session there that has not run yet shows in its pane as wai
   assert.match(shown([{ at: at(20), text: 'yes', state: 'stuck' }]), /\(waiting\): yes\nELU has not started this on @ali-devbox yet and keeps trying\. If it stays, open ELU there\./);
   assert.match(shown([{ at: at(20), text: 'yes', state: 'blocked', reason: 'The repository this session edits has moved or is gone.' }]), /You → @ali-devbox \(blocked\): yes\nThe repository this session edits has moved or is gone\. Send it again once that is fixed\./);
   assert.match(shown([{ at: at(20), text: 'yes', state: 'blocked' }]), /\(blocked\): yes\nIt did not start on @ali-devbox\. Send it again once that is fixed\./);
+  // Typed while the session waits on an approval: the message does not answer it, and says so.
+  const asks = app.view(remoteRow({ ...base, approvals: [{ id: 'approval-1', role: 'lead', summary: 'Run: npm test', at: at(15) }], waiting: [{ at: at(20), text: 'yes', state: 'turn' }] }, 'ali-devbox', T), 120);
+  assert.match(asks, /\(waiting\): yes\nIt reads this when its current turn ends\. The approval below still needs your answer\.\n\nWaiting for your approval on @ali-devbox/);
   // Two that wait keep the order they were sent in, each a part of its own; none shows once they ran.
   const parts = app.parts(remoteRow({ ...base, waiting: [{ at: at(20), text: 'yes', state: 'turn' }, { at: at(25), text: 'and the tests', state: 'turn' }] }, 'ali-devbox', T), 120);
   assert.deepEqual(parts.filter(part => part.key.startsWith('waiting')).map(part => part.text.split('\n')[0]), ['You → @ali-devbox (waiting): yes', 'You → @ali-devbox (waiting): and the tests']);

@@ -847,7 +847,7 @@ test('a session started there by hand is watched from here: live, continued, sto
 test("a yes typed on my other computer answers the session that waits here, and until it runs that computer is told why it waits: queued, nothing running it, starting, blocked, its turn", async t => {
   const { laptop, devbox, project, toHost, hostCtx, viewCtx, viewer } = pair(t), at = new Date().toISOString();
   let kicks = 0; hostCtx.kick = () => { kicks++; };
-  withHome(devbox.home, () => { chat(project.root, 1, { goal: 'Session backlog 3h', state: 'needs_input', messages: [{ at, text: 'Get the issues, close the ones that are not real' }], result: { outcome: 'needs_input', question: 'May the next turn close the ones that are not real and go on?', choices: [] } }); relist(); });
+  withHome(devbox.home, () => { chat(project.root, 1, { goal: 'Session backlog 3h', state: 'needs_input', runs: [{ role: 'lead', vendor: 'claude', at, logFile: path.join(project.root, 'elsewhere', 'run.log') }], messages: [{ at, text: 'Get the issues, close the ones that are not real' }], result: { outcome: 'needs_input', question: 'May the next turn close the ones that are not real and go on?', choices: [] } }); relist(); });
   await withHome(laptop.home, () => listTick(viewCtx));
   const item = withHome(laptop.home, () => remoteMachines())[0].sessions[0];
   await withHome(laptop.home, () => remoteCommand(viewCtx, { type: 'remoteWatch', to: devbox.identity.key, ref: item.ref }));
@@ -864,6 +864,7 @@ test("a yes typed on my other computer answers the session that waits here, and 
   const queue = () => withHome(devbox.home, () => pendingRequests(project.root));
   look(); await withHome(laptop.home, () => viewTick(viewCtx));
   assert.equal(seen().state, 'needs_input'); assert.match(seen().question, /go on\?$/);
+  assert.equal(seen().model, 'Claude', 'the model its next message goes to, as the message box there names it');
   // Nothing waits, so nothing is said about it: a viewer from before gets no event it does not know.
   assert.equal(seen().waiting, undefined);
   assert.ok(!events().some(([, params]) => params.items.some(row => row.events.some(event => event.type === 'waiting'))));
