@@ -9,7 +9,7 @@ import { projectFolder } from '../lib/workspace.mjs';
 import { readTask, taskTitle, tasks } from '../lib/state.mjs';
 import { enqueue } from '../lib/conductor.mjs';
 import { peerFile } from '../lib/peer/paths.mjs';
-import { remoteSessions as remoteGlue } from '../lib/terminal-remote.mjs';
+import { boxKeys, hereMention, remoteSessions as remoteGlue } from '../lib/terminal-remote.mjs';
 import { remoteRow } from '../lib/board.mjs';
 import { AUTO_TEXT, HELPER_AUTO_MAX, answered, checkHelps, helperInstructions, helperLink, helperTask, helperTick, linkHelper, noteSend, ownerWrote, sendsTo } from '../lib/remote-helper.mjs';
 
@@ -246,12 +246,13 @@ test("over a session of mine there, what I type goes to that session, as if type
   assert.equal(app.label(replied, Infinity, '@here find them'), ' Message your agent here · it helps the session on @ali-devbox ');
   assert.equal(app.label(replied, 40, '@here find them'), ' Message your agent here ');
   // The key bar says where Enter sends, and the one name that asks my agent here.
-  assert.deepEqual(app.keys(replied, 'yes'), [['enter', 'send to @ali-devbox'], ['@here', 'asks your agent here'], ['esc', 'sessions']]);
-  assert.deepEqual(app.keys(replied, '@here find them'), [['enter', 'send to your agent here'], ['esc', 'sessions']]);
+  const keys = (row, typed) => boxKeys(row, app.route(row, typed).to);
+  assert.deepEqual(keys(replied, 'yes'), [['enter', 'send to @ali-devbox'], ['@here', 'asks your agent here'], ['esc', 'sessions']]);
+  assert.deepEqual(keys(replied, '@here find them'), [['enter', 'send to your agent here'], ['esc', 'sessions']]);
   // Typing @ offers that name alone: every other word goes to the session there.
-  assert.deepEqual(app.mentions(replied, '@').map(item => [item.word, item.value]), [['@here', '@here']]);
-  assert.match(app.mentions(replied, '@he')[0].description, /your agent on this computer · it helps the session on @ali-devbox/);
-  assert.deepEqual(app.mentions(replied, '@re'), []); assert.deepEqual(app.mentions(replied, 'yes @'), []);
+  assert.deepEqual(hereMention(replied, '@').map(item => [item.word, item.value]), [['@here', '@here']]);
+  assert.match(hereMention(replied, '@he')[0].description, /your agent on this computer · it helps the session on @ali-devbox/);
+  assert.deepEqual(hereMention(replied, '@re'), []); assert.deepEqual(hereMention(replied, 'yes @'), []);
   // Sending: the text alone, and the line says it went there, to whom.
   assert.equal(await app.send(row, app.route(row, 'yes').text), 'Sent to the session on @ali-devbox.');
   assert.deepEqual(commands.at(-1), { type: 'remoteSend', id: ID, text: 'yes' });
@@ -266,8 +267,8 @@ test("over a session of mine there, what I type goes to that session, as if type
   assert.deepEqual(app.route(theirs, '@here look'), { to: 'there', text: '@here look' });
   assert.deepEqual(app.route(theirs, '@model go on'), { to: 'there', text: '@model go on' });
   assert.equal(app.label(theirs), ' Message this session on @ali-devbox ');
-  assert.deepEqual(app.keys(theirs, 'yes'), [['enter', 'send to @ali-devbox'], ['esc', 'sessions']]);
-  assert.deepEqual(app.mentions(theirs, '@'), []);
+  assert.deepEqual(keys(theirs, 'yes'), [['enter', 'send to @ali-devbox'], ['esc', 'sessions']]);
+  assert.deepEqual(hereMention(theirs, '@'), []);
   // The pane says how to answer: below, in the box.
   const said = app.view(remoteRow({ ...waiting, question: 'Which one?', choices: ['A', 'B'] }, 'ali-devbox'), 100);
   assert.match(said, /2\. B\nType its number or your answer below\./); assert.doesNotMatch(said, /Answer it there/);
