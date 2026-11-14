@@ -773,57 +773,6 @@ test('a session started there by hand is watched from here: live, continued, sto
   assert.deepEqual(kim.sent, []);
 });
 
-test('a message that has not started on my other computer says here what it waits for, in the sentence its own chat shows', async t => {
-  const { laptop, devbox, project, toHost, hostCtx, viewCtx, viewer } = pair(t), at = new Date().toISOString();
-  const SLOT = 'Waiting for a free slot: 1 of 1 session is running. /slots changes it.';
-  const glue = remoteGlue({ facade: { mineRows: () => [], remoteSessions: () => [] }, peerRead: () => null, peerCommand: async () => ({}), chatMessage: ({ title, text }) => `${title}\n${text}`, ink: text => text, colour: false });
-  // The devbox runs one session at once (/slots 1), and another session of the project has the slot.
-  const conductor = withHome(devbox.home, () => {
-    chat(project.root, 1, { goal: 'Make coupons upper case', state: 'answered', messages: [{ at, text: 'Make coupons upper case' }, { at, from: 'Lead', text: 'Done: codes are upper case now.' }] });
-    chat(project.root, 2, { goal: 'Fix the cart total', state: 'running' });
-    saveConductorSettings({ maxAgents: 1 }); relist();
-    const conductor = new Conductor(); conductor.runs.set('run-2', { root: project.root, taskId: '2', requestId: 'request-2' }); return conductor;
-  });
-  await withHome(laptop.home, () => listTick(viewCtx));
-  const item = withHome(laptop.home, () => remoteMachines())[0].sessions.find(row => row.title === 'Make coupons upper case');
-  await withHome(laptop.home, () => remoteCommand(viewCtx, { type: 'remoteWatch', to: devbox.identity.key, ref: item.ref }));
-  let ticks = 0;
-  const push = () => { withHome(devbox.home, () => hostTick(hostCtx, Date.now() + ++ticks)); withHome(laptop.home, () => viewer['elu.remote.events'](toHost.sent.filter(([method]) => method === 'elu.remote.events').at(-1)[1], connection(devbox.identity.key))); };
-  const seen = id => withHome(laptop.home, () => remoteSessions().find(row => row.id === id)), shown = id => glue.view(remoteRow(seen(id), 'devbox'), 200);
-  push(); await withHome(laptop.home, () => viewTick(viewCtx));
-  assert.equal(seen(item.id).state, 'answered'); assert.equal(seen(item.id).waits, undefined);
-  // A message from here continues it there. The conductor there passes it over and notes why.
-  await withHome(laptop.home, () => remoteCommand(viewCtx, { type: 'remoteSend', id: item.id, to: devbox.identity.key, ref: item.ref, text: 'And the tests' }));
-  withHome(devbox.home, () => conductor.dispatch());
-  const [request] = withHome(devbox.home, () => pendingRequests(project.root));
-  assert.deepEqual([request.goal, request.state, request.reason], ['And the tests', 'queued', SLOT]);
-  push();
-  assert.deepEqual(seen(item.id).waits, { on: 'slot', running: 1, limit: 1 });
-  assert.match(shown(item.id), new RegExp(`A message to it waits on @devbox\\. ${SLOT.replace(/[.:/]/g, '\\$&')}`));
-  // A view that lists the waiting messages themselves says it under each one, not twice.
-  assert.doesNotMatch(glue.view(remoteRow({ ...seen(item.id), waiting: [{ at, text: 'And the tests', state: 'queued', reason: SLOT }] }, 'devbox'), 200), /A message to it waits on @devbox/);
-  // A session started from here that has not started there says it too, in place of only "Starting".
-  const started = await withHome(laptop.home, () => remoteCommand(viewCtx, { type: 'remoteStart', to: devbox.identity.key, text: 'Tidy the login form', permissions: 'ask', place: null, model: null, bots: [] }));
-  withHome(devbox.home, () => conductor.dispatch()); push();
-  assert.equal(seen(started.id).state, 'starting'); assert.deepEqual(seen(started.id).waits, { on: 'slot', running: 1, limit: 1 });
-  assert.match(shown(started.id), /Starting on @devbox\n\nWaiting for a free slot: 1 of 1 session is running\. \/slots changes it\./);
-  // Its row in Sessions reads as a queued one, with no spinner: it is not at work.
-  assert.deepEqual(rowBadge(remoteRow(seen(started.id), 'devbox')), { icon: '·', tone: 'muted', title: 'on devbox · queued' });
-  // The slot frees and its turn starts: nothing waits any more.
-  withHome(devbox.home, () => { updateRequest(project.root, request.id, { state: 'running', taskId: '1', waits: undefined, reason: 'Running.' }); chat(project.root, 1, { goal: 'Make coupons upper case', state: 'running', messages: [{ at, text: 'Make coupons upper case' }, { at, from: 'Lead', text: 'Done: codes are upper case now.' }, { at, text: 'And the tests' }] }); });
-  push();
-  assert.equal(seen(item.id).state, 'running'); assert.equal(seen(item.id).waits, undefined);
-  assert.doesNotMatch(shown(item.id), /waits on @devbox/);
-  // A message typed while that turn works waits for the turn: the count reaches this computer, which offers to send it now.
-  withHome(devbox.home, () => enqueue(project.root, 'Also the docs', { continuationTaskId: '1' }));
-  push();
-  assert.equal(seen(item.id).held, 1);
-  assert.match(shown(item.id), /Your message waits on @devbox while this turn works\. Enter in the empty message box sends it now\./);
-  // What a computer sends is read field by field: a wait that is not one is dropped.
-  withHome(laptop.home, () => viewer['elu.remote.events']({ items: [{ id: item.id, events: [{ seq: seen(item.id).seq + 1, type: 'state', state: 'answered', waits: { on: 'slot', running: 'many', limit: 1 }, held: 'x' }] }] }, connection(devbox.identity.key)));
-  assert.equal(seen(item.id).waits, undefined); assert.equal(seen(item.id).held, undefined);
-});
-
 test("a teammate's session there is watched and answered from here by its place, with no watch first", async t => {
   const { laptop, devbox, project, hostCtx, viewCtx } = pair(t);
   withHome(devbox.home, () => { chat(project.root, 2, { goal: 'Fix the login redirect', state: 'running', origin: { kind: 'handoff', peer: 'e'.repeat(64), name: 'kim', threadId: null } }); requestApproval({ id: 'approval-4', root: project.root, taskId: '2', role: 'lead', vendor: 'claude', tool: 'Bash', input: { command: 'git status' } }); relist(); });
@@ -888,6 +837,57 @@ test('a watch whose view here went while its computer still sends its events kee
   await withHome(laptop.home, () => listTick(viewCtx, Date.now() + 6002));
   const kept = withHome(laptop.home, () => remoteSessions().find(row => row.id === handoff));
   assert.equal(kept.ref, undefined); assert.equal(kept.handoff, true); assert.equal(kept.title, 'Your handoff');
+});
+
+test('a message that has not started on my other computer says here what it waits for, in the sentence its own chat shows', async t => {
+  const { laptop, devbox, project, toHost, hostCtx, viewCtx, viewer } = pair(t), at = new Date().toISOString();
+  const SLOT = 'Waiting for a free slot: 1 of 1 session is running. /slots changes it.';
+  const glue = remoteGlue({ facade: { mineRows: () => [], remoteSessions: () => [] }, peerRead: () => null, peerCommand: async () => ({}), chatMessage: ({ title, text }) => `${title}\n${text}`, ink: text => text, colour: false });
+  // The devbox runs one session at once (/slots 1), and another session of the project has the slot.
+  const conductor = withHome(devbox.home, () => {
+    chat(project.root, 1, { goal: 'Make coupons upper case', state: 'answered', messages: [{ at, text: 'Make coupons upper case' }, { at, from: 'Lead', text: 'Done: codes are upper case now.' }] });
+    chat(project.root, 2, { goal: 'Fix the cart total', state: 'running' });
+    saveConductorSettings({ maxAgents: 1 }); relist();
+    const conductor = new Conductor(); conductor.runs.set('run-2', { root: project.root, taskId: '2', requestId: 'request-2' }); return conductor;
+  });
+  await withHome(laptop.home, () => listTick(viewCtx));
+  const item = withHome(laptop.home, () => remoteMachines())[0].sessions.find(row => row.title === 'Make coupons upper case');
+  await withHome(laptop.home, () => remoteCommand(viewCtx, { type: 'remoteWatch', to: devbox.identity.key, ref: item.ref }));
+  let ticks = 0;
+  const push = () => { withHome(devbox.home, () => hostTick(hostCtx, Date.now() + ++ticks)); withHome(laptop.home, () => viewer['elu.remote.events'](toHost.sent.filter(([method]) => method === 'elu.remote.events').at(-1)[1], connection(devbox.identity.key))); };
+  const seen = id => withHome(laptop.home, () => remoteSessions().find(row => row.id === id)), shown = id => glue.view(remoteRow(seen(id), 'devbox'), 200);
+  push(); await withHome(laptop.home, () => viewTick(viewCtx));
+  assert.equal(seen(item.id).state, 'answered'); assert.equal(seen(item.id).waits, undefined);
+  // A message from here continues it there. The conductor there passes it over and notes why.
+  await withHome(laptop.home, () => remoteCommand(viewCtx, { type: 'remoteSend', id: item.id, to: devbox.identity.key, ref: item.ref, text: 'And the tests' }));
+  withHome(devbox.home, () => conductor.dispatch());
+  const [request] = withHome(devbox.home, () => pendingRequests(project.root));
+  assert.deepEqual([request.goal, request.state, request.reason], ['And the tests', 'queued', SLOT]);
+  push();
+  assert.deepEqual(seen(item.id).waits, { on: 'slot', running: 1, limit: 1 });
+  assert.match(shown(item.id), new RegExp(`A message to it waits on @devbox\\. ${SLOT.replace(/[.:/]/g, '\\$&')}`));
+  // A view that lists the waiting messages themselves says it under each one, not twice.
+  assert.doesNotMatch(glue.view(remoteRow({ ...seen(item.id), waiting: [{ at, text: 'And the tests', state: 'queued', reason: SLOT }] }, 'devbox'), 200), /A message to it waits on @devbox/);
+  // A session started from here that has not started there says it too, in place of only "Starting".
+  const started = await withHome(laptop.home, () => remoteCommand(viewCtx, { type: 'remoteStart', to: devbox.identity.key, text: 'Tidy the login form', permissions: 'ask', place: null, model: null, bots: [] }));
+  withHome(devbox.home, () => conductor.dispatch()); push();
+  assert.equal(seen(started.id).state, 'starting'); assert.deepEqual(seen(started.id).waits, { on: 'slot', running: 1, limit: 1 });
+  assert.match(shown(started.id), /Starting on @devbox\n\nWaiting for a free slot: 1 of 1 session is running\. \/slots changes it\./);
+  // Its row in Sessions reads as a queued one, with no spinner: it is not at work.
+  assert.deepEqual(rowBadge(remoteRow(seen(started.id), 'devbox')), { icon: '·', tone: 'muted', title: 'on devbox · queued' });
+  // The slot frees and its turn starts: nothing waits any more.
+  withHome(devbox.home, () => { updateRequest(project.root, request.id, { state: 'running', taskId: '1', waits: undefined, reason: 'Running.' }); chat(project.root, 1, { goal: 'Make coupons upper case', state: 'running', messages: [{ at, text: 'Make coupons upper case' }, { at, from: 'Lead', text: 'Done: codes are upper case now.' }, { at, text: 'And the tests' }] }); });
+  push();
+  assert.equal(seen(item.id).state, 'running'); assert.equal(seen(item.id).waits, undefined);
+  assert.doesNotMatch(shown(item.id), /waits on @devbox/);
+  // A message typed while that turn works waits for the turn: the count reaches this computer, which offers to send it now.
+  withHome(devbox.home, () => enqueue(project.root, 'Also the docs', { continuationTaskId: '1' }));
+  push();
+  assert.equal(seen(item.id).held, 1);
+  assert.match(shown(item.id), /Your message waits on @devbox while this turn works\. Enter in the empty message box sends it now\./);
+  // What a computer sends is read field by field: a wait that is not one is dropped.
+  withHome(laptop.home, () => viewer['elu.remote.events']({ items: [{ id: item.id, events: [{ seq: seen(item.id).seq + 1, type: 'state', state: 'answered', waits: { on: 'slot', running: 'many', limit: 1 }, held: 'x' }] }] }, connection(devbox.identity.key)));
+  assert.equal(seen(item.id).waits, undefined); assert.equal(seen(item.id).held, undefined);
 });
 
 test('a session followed here by the id both machines give it shows once in Sessions and under Needs you, and a handoff not listed yet shows once', async () => {
