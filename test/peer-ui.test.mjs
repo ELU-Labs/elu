@@ -15,6 +15,7 @@ import { readTask, saveTask } from '../lib/state.mjs';
 import { helperLink } from '../lib/remote-helper.mjs';
 import { clockTime } from '../lib/terminal-plan.mjs';
 import { botTarget, chatBar, dmTarget, fitWords, ink, membersLine, peerName, roomTarget, teamPanes, threadTarget, visible } from '../lib/terminal-visuals.mjs';
+import { joinWait, noRoute } from '../lib/peer/join-text.mjs';
 
 const ME = 'a'.repeat(64), SARA = 'b'.repeat(64), LI = 'c'.repeat(64);
 const LONG = 'Could you check whether the retry budget in the uploader resets after a successful flush or only after restart because we keep seeing duplicate batches';
@@ -1627,7 +1628,7 @@ test('the invite window shows a short code and copies it; a drag over its row co
   await until(() => ask.getValue() === `/join ${copied[0]}`, 'the box holds the paste as it came');
   v.input.write('\r'); await answerJoin(v);
   await until(() => peer.calls.some(row => row[0] === 'joinTeam'), 'joined');
-  assert.deepEqual(peer.calls.find(row => row[0] === 'joinTeam').slice(1), ['k7qm-x2pd-9fhw']);
+  assert.deepEqual(peer.calls.find(row => row[0] === 'joinTeam').slice(1, 2), ['k7qm-x2pd-9fhw']);
 });
 
 test('a code pasted into the message box with /join, broken by line breaks, spaces, tabs and CRLF as a terminal hands it over, joins with that code', async t => {
@@ -1677,9 +1678,103 @@ test('share, invite and join use the open project', async t => {
   const shares = () => peer.calls.filter(row => row[0] === 'share').length, before = shares();
   await send(v, '/join K7QM X2PD 9FHW'); await answerJoin(v);
   await until(() => /Joined Docs with sara\. Their messages start sessions here, as if you typed them\./.test(v.panels.status.getText()), 'joined');
-  assert.deepEqual(peer.calls.find(row => row[0] === 'joinTeam').slice(1), ['k7qm-x2pd-9fhw']);
+  assert.deepEqual(peer.calls.find(row => row[0] === 'joinTeam').slice(1, 2), ['k7qm-x2pd-9fhw']);
   assert.equal(shares(), before, 'nothing shared');
   assert.deepEqual(peer.calls.find(row => row[0] === 'saveTeamAccess').slice(1), ['team-2', { handling: 'auto', rules: '', root: p.root }]);
+});
+
+test('/join counts while it looks for the inviter and says their ELU must be open; Esc cancels it at once; a join that goes through clears the line', async t => {
+  const p = project(later(t)); environment(t, p.parent);
+  const peer = fakePeer(), v = await view(t, { repo: repository(p.root), peer }), status = () => v.panels.status.getText();
+  // A join that waits, as one does while the inviter's ELU is closed: the daemon answers a cancel a moment later.
+  let held = null; const signals = [];
+  peer.joinTeam = (code, options = {}) => {
+    peer.calls.push(['joinTeam', code]); signals.push(options.signal);
+    return new Promise((resolve, reject) => { held = { resolve, reject }; options.signal?.addEventListener('abort', () => setTimeout(() => reject(new Error('Join cancelled. You did not join.')), 400)); });
+  };
+  await send(v, '/join k7qm-x2pd-9fhw'); await answerJoin(v);
+  // The seconds shown, or NaN when the line says something else. A busy machine may skip a second, never go back.
+  const count = () => Number(/^› Looking for the person who invited you… (\d+) s\. Their ELU must be open\. Esc cancels\.$/.exec(status().replace(/\s+/g, ' ').trim())?.[1] ?? NaN);
+  await until(() => count() >= 0, 'the line as the search starts');
+  await until(() => count() >= 1, 'it counts');
+  const first = count(); await until(() => count() > first, 'and goes on counting');
+  // Esc says so at once, before the daemon has answered, and the count stops.
+  v.input.write('\x1b');
+  await until(() => /Join cancelled\. You did not join\./.test(status()), 'cancelled');
+  assert.equal(signals[0].aborted, true, 'the join was told to stop');
+  await new Promise(resolve => setTimeout(resolve, 1300));
+  assert.match(status(), /Join cancelled\. You did not join\./, 'the line no longer counts');
+  assert.doesNotMatch(status(), /Looking for/);
+  assert.deepEqual(peer.calls.filter(row => row[0] === 'saveTeamAccess'), [], 'nothing was saved for a team it did not join');
+  // The same wait, and this time the inviter answers: the line says it joined and stops counting.
+  await send(v, '/join k7qm-x2pd-9fhw'); await answerJoin(v);
+  await until(() => count() >= 1, 'counting again');
+  held.resolve({ id: 'team-2', name: 'Docs', inviter: { name: 'sara', fingerprint: 'bbbbbbbb' } });
+  await until(() => /^› Joined Docs with sara\./.test(status()), 'joined');
+  await new Promise(resolve => setTimeout(resolve, 1300));
+  assert.match(status(), /^› Joined Docs with sara\./, 'the line stays as it joined');
+  // One that gives up shows the daemon's reason and what to do, whole.
+  await send(v, '/join k7qm-x2pd-9fhw'); await answerJoin(v);
+  await until(() => /Looking for the person who invited you…/.test(status()), 'a third search');
+  held.reject(new Error('Nobody answered for this code. Their ELU is closed or offline, or the code was already used or is older than 24 h. Ask them to open ELU and send a new code with /invite.'));
+  await until(() => /Nobody answered for this code\./.test(status().replace(/\s+/g, ' ')), 'why it gave up');
+  assert.match(status().replace(/\s+/g, ' '), /Their ELU is closed or offline, or the code was already used or is older than 24 h\. Ask them to open ELU and send a new code with \/invite\./);
+});
+
+test('/join says when it has found the inviter and what it is trying; a reason too long for the status row shows whole in a window', async t => {
+  const p = project(later(t)); environment(t, p.parent);
+  const peer = fakePeer(), v = await view(t, { repo: repository(p.root), peer }), status = () => v.panels.status.getText().replace(/\s+/g, ' ');
+  let held = null, progress = null;
+  peer.joinTeam = code => { peer.calls.push(['joinTeam', code]); return new Promise((resolve, reject) => { held = { resolve, reject }; }); };
+  // What the daemon says it is doing now, as the app reads it while the join waits.
+  peer.joinLine = (seconds, cancel) => joinWait(progress, seconds, cancel);
+  await send(v, '/join k7qm-x2pd-9fhw'); await answerJoin(v);
+  await until(() => /Looking for the person who invited you… \d+ s\. Their ELU must be open\. Esc cancels\./.test(status()), 'looking');
+  progress = { stage: 'connecting', via: null };
+  await until(() => /Found them\. Connecting… \d+ s\. Esc cancels\./.test(status()), 'found');
+  progress = { stage: 'retrying', via: null };
+  await until(() => /Found them, but could not connect yet\. Trying again… \d+ s\. Esc cancels\./.test(status()), 'trying again');
+  assert.doesNotMatch(status(), /Looking for|Their ELU must be open/);
+  progress = { stage: 'relay', via: 'your computer studio' };
+  await until(() => /Found them\. Connecting through your computer studio… \d+ s\. Esc cancels\./.test(status()), 'through another computer');
+  held.resolve({ id: 'team-2', name: 'Docs', inviter: { name: 'sara', fingerprint: 'bbbbbbbb' }, via: 'your computer studio' });
+  await until(() => /^› Joined Docs with sara\. Their messages start sessions here, as if you typed them\./.test(status()), 'joined');
+  // No way through: longer than the row holds, so a window shows the reason and what works, a sentence to a line.
+  progress = null;
+  await send(v, '/join k7qm-x2pd-9fhw'); await answerJoin(v);
+  await until(() => /Looking for the person who invited you…/.test(status()), 'a second search');
+  const why = noRoute({ theirs: 3, mine: 2 });
+  held.reject(new Error(why));
+  await until(() => modal(v, 'Could not join'), 'the window');
+  assert.deepEqual(rowsOf(v, 'Could not join').map(line => line.trim()), ['Found their computer, but could not connect: their network gives every connection a', 'new port, as a phone hotspot does.', 'No other computer was online to pass it along.', 'Join again from another network, or while ELU is open on another computer on your', 'team or theirs.']);
+  assert.doesNotMatch(v.text(), /Nobody/);
+  v.input.write('\x1b');
+  await until(() => !modal(v, 'Could not join'), 'closed with Esc');
+  assert.match(status(), /^› Found their computer, but could not connect: their network gives every connection a new port/, 'the row keeps the start of it');
+  // A reason the row holds whole stays in the row, with no window.
+  await send(v, '/join k7qm-x2pd-9fhw'); await answerJoin(v);
+  await until(() => /Looking for the person who invited you…/.test(status()), 'a third search');
+  held.reject(new Error('Join cancelled. You did not join.'));
+  await until(() => /Join cancelled\. You did not join\./.test(status()), 'a short reason');
+  assert.equal(modal(v, 'Could not join'), undefined);
+  // A facade that cannot say what the daemon is doing keeps the plain line.
+  peer.joinLine = () => { throw new Error('no state'); };
+  await send(v, '/join k7qm-x2pd-9fhw'); await answerJoin(v);
+  await until(() => /Looking for the person who invited you… \d+ s\. Their ELU must be open\. Esc cancels\./.test(status()), 'the plain line');
+  held.resolve({ id: 'team-2', name: 'Docs', inviter: { name: 'sara', fingerprint: 'bbbbbbbb' } });
+  await until(() => /Joined Docs with sara\./.test(status()), 'joined');
+});
+
+test('/join at 80 columns: a reason the short status row cannot hold shows whole in a window, and Enter closes it', async t => {
+  const p = project(later(t)); environment(t, p.parent);
+  const peer = fakePeer(), v = await view(t, { repo: repository(p.root), peer, columns: 80, rows: 24 }), status = () => v.panels.status.getText().replace(/\s+/g, ' ');
+  peer.joinTeam = code => { peer.calls.push(['joinTeam', code]); return Promise.reject(new Error('Nobody answered for this code. Their ELU is closed or offline, or the code was already used or is older than 24 h. Ask them to open ELU and send a new code with /invite.')); };
+  await send(v, '/join k7qm-x2pd-9fhw'); await answerJoin(v);
+  await until(() => modal(v, 'Could not join'), 'the window');
+  assert.deepEqual(rowsOf(v, 'Could not join').map(line => line.trim()), ['Nobody answered for this code.', 'Their ELU is closed or offline, or the code was already used or is', 'older than 24 h.', 'Ask them to open ELU and send a new code with /invite.']);
+  v.input.write('\r');
+  await until(() => !modal(v, 'Could not join'), 'closed with Enter');
+  assert.match(status(), /^› Nobody answered for this code\./);
 });
 
 test('/join asks to join first, then what teammates can do here: Cancel or Esc joins nothing, Enter twice takes Auto with no rules', async t => {

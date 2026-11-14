@@ -39,6 +39,7 @@ import { peerDataBlock } from '../lib/peer/peerdata.mjs';
 import { peerCli } from '../lib/peer/cli.mjs';
 import { checkRules, saveTeamAccess, teamAccess, teammateRules } from '../lib/peer/access.mjs';
 import { refuse } from '../lib/util.mjs';
+import { processIdentity } from '../lib/process.mjs';
 import { BOTS_TOLD, cleanBots, cleanBox, cleanRows, overlaps, statusRows, thisMachine } from '../lib/peer/status.mjs';
 import { createAsk, dismissAsk, reconnect, reviewText, teammate, tickAsks, teamAsk, dismissTeam, applyTask, getAsk, asks as allAsks } from '../lib/peer/asks.mjs';
 import { RETRY_MS, checkInviterProof, inviteKeys, joinerProof, openInvites, parseInvite, redeemCode } from '../lib/peer/invite.mjs';
@@ -46,6 +47,9 @@ import { base32, canonical } from '../lib/peer/canonical.mjs';
 import * as peer from '../lib/peer/index.mjs';
 import { bothMine, markMine, mineRows as readMine, noteTheirs, unmarkMine } from '../lib/peer/mine.mjs';
 import { LONG_MAX, textMethods } from '../lib/peer/texts.mjs';
+import { CARRY_MS, createCarrier, savedRoutes } from '../lib/peer/carry.mjs';
+import { openRelays, relayKeys, sealRelays } from '../lib/peer/invite.mjs';
+import { joinWait, noRoute } from '../lib/peer/join-text.mjs';
 import { boardRows } from '../lib/board.mjs';
 import { botKey, botVendors, botsFile, canShare, removeBot, saveBot } from '../lib/bots.mjs';
 import { dashboardSnapshot } from '../lib/projects.mjs';
@@ -608,7 +612,7 @@ function fakeSocket() {
   const wire = { out: '' }, socket = Object.assign(new EventEmitter(), { destroyed: false, write: chunk => { wire.out += chunk; return true; }, destroy() { this.destroyed = true; this.emit('close'); } });
   return { socket, wire, frames: () => wire.out.split('\n').filter(Boolean).map(line => JSON.parse(line)), say: value => socket.emit('data', Buffer.from(`${JSON.stringify(value)}\n`)) };
 }
-const NOBODY = { name: '', teams: [], handles: [], plans: true, remote: 1, cards: 1, files: 1, standup: 1, folders: 1 };
+const NOBODY = { name: '', teams: [], handles: [], plans: true, remote: 1, cards: 1, files: 1, standup: 1, folders: 1, carry: 1 };
 
 test('a hello names only the teams its receiver is on, and a stranger or a removed teammate gets no team and no name', async t => {
   const crew = makeTeam(t), ana = crew.founder.identity, sara = crew.member, bob = withHome(newHome(t), () => createIdentity({ name: 'bob' }));
@@ -1315,6 +1319,75 @@ test('intake writes nothing for strangers or muted teammates, keeps no text on r
     // Every message counts toward the daily message cap, rejected or not.
     count(ana.key, [], { messages: MESSAGES_PER_DAY });
     assert.match(reason(send('Where?', { id: 'b-7', thread: 't-7' })), /too many messages/);
+  });
+});
+
+test('a join that gives up says why and what to do; a cancelled one stops at once; a computer that is not connected is told so without the wait', async t => {
+  const home = newHome(t);
+  await withHome(home, async () => {
+    const me = createIdentity({ name: 'sara' }), code = 'k7qm-x2pd-9fhw';
+    const made = network => Object.assign(new PeerDaemon({ conductor: () => {} }), { me, node: { dial() {}, leave() {}, joinTopic: () => null, leaveTopic() {}, ...(network ? { network } : {}) } });
+    const timed = async promise => { const started = Date.now(), error = await promise.then(() => null, caught => caught); return { message: error?.message ?? null, ms: Date.now() - started }; };
+    const connected = () => ({ bootstrapped: true, online: true, answers: 12 });
+    // Nobody on the code's topic: when the time is up it says what that means and what to do.
+    const gaveUp = await timed(made(connected).join(code, { timeoutMs: 1500 }));
+    assert.equal(gaveUp.message, 'Nobody answered for this code. Their ELU is closed or offline, or the code was already used or is older than 24 h. Ask them to open ELU and send a new code with /invite.');
+    // Cancelled while it looks: the join ends now, and the daemon is left with no join under way.
+    const looking = made(connected), joining = timed(looking.command({ type: 'join', code }));
+    await until(() => looking.shortJoin?.keys, 'the search under way', 20000);
+    assert.deepEqual(await looking.command({ type: 'joinCancel' }), { cancelled: true });
+    const cancelled = await joining;
+    assert.equal(cancelled.message, 'Join cancelled. You did not join.');
+    assert.equal(looking.shortJoin, null);
+    assert.deepEqual(await looking.command({ type: 'joinCancel' }), { cancelled: false }, 'nothing under way to cancel');
+    // A join sent right after a cancel, read by the daemon in the same pass, is taken: the cancelled one is not in its way.
+    const again = made(connected), one = timed(again.command({ type: 'join', code }));
+    await until(() => again.shortJoin?.keys, 'the search under way', 20000);
+    const stopped = again.command({ type: 'joinCancel' }), two = timed(again.join(code, { timeoutMs: 1200 }));
+    assert.deepEqual(await stopped, { cancelled: true });
+    assert.equal((await one).message, 'Join cancelled. You did not join.');
+    assert.match((await two).message, /^Nobody answered for this code\./, 'the second join ran, and gave up by itself');
+    assert.equal(again.shortJoin, null);
+    // Cancelled in the moment before the search starts, while the code's keys are worked out.
+    const early = made(connected), first = timed(early.command({ type: 'join', code }));
+    assert.deepEqual(await early.command({ type: 'joinCancel' }), { cancelled: true });
+    assert.equal((await first).message, 'Join cancelled. You did not join.');
+    assert.equal(early.shortJoin, null);
+    // Not connected at all: the first lookup is over and no node answered. It says so at once.
+    const offline = 'This computer is not connected to the network, so it cannot look for them. Check your internet connection, then join again.';
+    const alone = await timed(made(() => ({ bootstrapped: true, online: true, answers: 0 })).join(code));
+    assert.equal(alone.message, offline); assert.ok(alone.ms < 15000, `said after ${alone.ms} ms`);
+    const dropped = await timed(made(() => ({ bootstrapped: true, online: false, answers: 40 })).join(code));
+    assert.equal(dropped.message, offline); assert.ok(dropped.ms < 15000, `said after ${dropped.ms} ms`);
+    // Still starting up is not offline: it keeps looking until the first lookup is over.
+    let net = { bootstrapped: false, online: true, answers: 0 };
+    const starting = made(() => net), slow = timed(starting.join(code));
+    await until(() => starting.shortJoin?.keys, 'the search under way', 20000);
+    await new Promise(resolve => setTimeout(resolve, 1500));
+    assert.ok(starting.shortJoin?.keys, 'still looking while the network starts');
+    net = { bootstrapped: true, online: true, answers: 0 };
+    assert.equal((await slow).message, offline);
+  });
+});
+
+test('a join is cancelled before any daemon has read it, and a daemon that never starts is said as that, not as a timeout', async t => {
+  const home = newHome(t);
+  await withHome(home, async () => {
+    createIdentity({ name: 'sara' });
+    const code = 'k7qm-x2pd-9fhw', queued = () => fs.readdirSync(peerFile('commands')).filter(name => !name.endsWith('.result.json')).map(name => JSON.parse(fs.readFileSync(peerFile('commands', name), 'utf8')).type);
+    // Something else holds the daemon's lock and writes no state: no daemon is started here, and none answers.
+    fs.mkdirSync(path.dirname(peerFile('peer.lock')), { recursive: true }); fs.writeFileSync(peerFile('peer.lock'), JSON.stringify({ pid: process.pid, identity: processIdentity(process.pid) }));
+    const stopper = new AbortController(), joining = peer.joinTeam(code, { signal: stopper.signal }).then(() => null, error => error.message);
+    await new Promise(resolve => setTimeout(resolve, 300));
+    assert.deepEqual(queued(), ['join']);
+    const started = Date.now(); stopper.abort();
+    assert.equal(await joining, 'Join cancelled. You did not join.');
+    assert.ok(Date.now() - started < 1000, `no daemon had read it, so it is cancelled at once: ${Date.now() - started} ms`);
+    assert.deepEqual(queued(), ['joinCancel'], 'the join is taken back, and a daemon that had read it is told to stop');
+    for (const name of fs.readdirSync(peerFile('commands'))) fs.rmSync(peerFile('commands', name));
+    const dead = await peer.joinTeam(code, { startMs: 700 }).then(() => null, error => error.message);
+    assert.match(dead, /^ELU could not start its network helper on this computer, so nobody was looked for\. Try again\. See .*daemon\.log\.$/);
+    assert.deepEqual(queued(), ['joinCancel'], 'the join is not left for a daemon that starts later');
   });
 });
 
@@ -2345,4 +2418,165 @@ test('a relayed connection carries an ask and its answer, and the relay refuses 
   const socket = stranger.connect(Buffer.from(relay.key, 'hex'));
   const outcome = await new Promise(resolve => { socket.on('open', () => resolve('open')); socket.on('error', error => resolve(error.code ?? 'error')); socket.on('close', () => resolve('closed')); });
   assert.notEqual(outcome, 'open', 'a key outside the team gets no relay session');
+});
+
+// --- A join whose two computers cannot connect directly. The runner's noPunch stands in for
+// the two networks: no direct connection to a teammate or to whoever is found on a code's
+// topic, on a testnet at a LAN address as above. A computer started without it is reachable
+// by everyone, as one on an open network is. join shortens the waits.
+const quick = { connectMs: 30000, retryMs: 1500, carryMs: 2000 };
+const skipLan = { skip: lan ? false : 'This machine has no non-loopback IPv4 address for the testnet.', timeout: 240000 };
+const daemonLog = home => withHome(home, () => { const file = peerFile('daemon.log'); return fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : ''; });
+const memberOf = (home, teamId, key) => state(home)?.teams?.find(row => row.id === teamId)?.members.find(m => m.key === key);
+const relayed = (home, teamId, key) => { const m = memberOf(home, teamId, key); return Boolean(m?.online) && m.path === 'relayed'; };
+// An inviter on a team of its own, with an open invite.
+function inviter(t, bootstrap, name = 'ana') {
+  const home = newHome(t), made = withHome(home, () => { const me = createIdentity({ name }), crew = createTeam(me, 'core'); return { key: me.key, teamId: crew.id, code: createInvite(me, crew.id, { hours: 1 }) }; });
+  enable(home, bootstrap); return { home, ...made };
+}
+// A key outside the pair a relay was made for gets no session on it.
+async function shutOut(t, bootstrap, relay) {
+  const DHT = require('hyperdht'), stranger = new DHT({ bootstrap: bootstrap.map(row => ({ host: row.split(':')[0], port: Number(row.split(':')[1]) })) });
+  t.after(() => stranger.destroy());
+  const socket = stranger.connect(Buffer.from(relay, 'hex'));
+  const outcome = await new Promise(resolve => { socket.on('open', () => resolve('open')); socket.on('error', error => resolve(error.code ?? 'error')); socket.on('close', () => resolve('closed')); });
+  assert.notEqual(outcome, 'open', 'a stranger gets no session on the relay');
+}
+
+test('a join that finds the inviter but cannot connect keeps trying, then says it was found, why they could not connect and what works', skipLan, async t => {
+  const bootstrap = await testnet(t, lan), ana = inviter(t, bootstrap), sara = newHome(t);
+  withHome(sara, () => createIdentity({ name: 'sara' })); enable(sara, bootstrap);
+  await daemon(t, ana.home, { conductor: false, firewalled: true }); await daemon(t, sara, { conductor: false, noPunch: true, join: quick });
+  const started = Date.now(), joining = run(sara, { type: 'join', code: ana.code }, 120000).then(() => null, error => error);
+  // While it tries, the line the app counts with says the inviter was found.
+  let line = null; const watch = setInterval(() => { if (state(sara)?.join?.stage === 'retrying') line ??= withHome(sara, () => peer.joinLine?.(12, 'Esc')); }, 200);
+  const error = await joining; clearInterval(watch);
+  assert.equal(error?.message, 'Found their computer, but could not connect: the networks between you blocked it. No other computer was online to pass it along. Join again from another network, or while ELU is open on another computer on your team or theirs.');
+  assert.doesNotMatch(error.message, /Nobody/, 'the inviter was there, so it never says nobody was');
+  assert.equal(line, 'Found them, but could not connect yet. Trying again… 12 s. Esc cancels.');
+  assert.ok(Date.now() - started >= quick.connectMs - 1000, 'it kept trying for the whole wait');
+  const tries = daemonLog(sara).split('\n').filter(line => /invite join: found [0-9a-f]{8}, try \d+ failed: HOLEPUNCH_ABORTED/.test(line));
+  assert.ok(tries.length >= 4, `tried again and again, at the pace a new try needs: ${tries.length} tries`);
+  assert.equal(state(sara)?.join, undefined, 'the line is gone once the join has ended');
+  assert.deepEqual(withHome(ana.home, () => team(ana.teamId)).members.map(m => m.name), ['ana']);
+  assert.equal(withHome(ana.home, () => openInvites([ana.teamId])).length, 1, 'the code is still unused');
+});
+
+test('a join whose first direct try is aborted tries again and joins when a later one works', skipLan, async t => {
+  const bootstrap = await testnet(t, lan), ana = inviter(t, bootstrap), sara = newHome(t);
+  const saraKey = withHome(sara, () => createIdentity({ name: 'sara' }).key); enable(sara, bootstrap);
+  const a = await daemon(t, ana.home, { conductor: false, firewalled: true }); await daemon(t, sara, { conductor: false, abortFound: 2, join: quick });
+  assert.deepEqual(await run(sara, { type: 'join', code: ana.code }, 120000), { id: ana.teamId, name: 'core', inviter: { name: 'ana', fingerprint: a.key.slice(0, 8) } });
+  const log = daemonLog(sara);
+  assert.match(log, /invite join: found [0-9a-f]{8}, try 1 failed: HOLEPUNCH_ABORTED/); assert.match(log, /invite join: found [0-9a-f]{8}, try 2 failed: HOLEPUNCH_ABORTED/);
+  await until(() => online(ana.home, saraKey) && online(sara, a.key), 'teammates online after the join');
+  assert.equal(memberOf(sara, ana.teamId, a.key).path, 'direct');
+  assert.deepEqual(withHome(sara, () => savedRoutes()), {}, 'a direct join keeps no relay');
+});
+
+test('a join goes through another computer of the joiner when the two cannot connect directly, and they keep talking through it', skipLan, async t => {
+  const bootstrap = await testnet(t, lan), ana = inviter(t, bootstrap), own = makeTeam(t, { founderName: 'sara', memberName: 'sara', teamName: 'mine' }), sara = own.founder, box = own.member;
+  enable(sara.home, bootstrap); enable(box.home, bootstrap, { box: 'studio' });
+  // Both computers are sara's: each marked the other.
+  for (const [here, there] of [[sara, box], [box, sara]]) withHome(here.home, () => { markMine(here.identity.key, there.identity.key); noteTheirs(there.identity.key, true); });
+  await daemon(t, box.home, { conductor: false, join: quick });
+  const a = await daemon(t, ana.home, { conductor: false, noPunch: true, join: quick });
+  let s = await daemon(t, sara.home, { conductor: false, noPunch: true, join: quick });
+  await until(() => online(sara.home, box.identity.key), 'sara connected to her other computer');
+  const joined = await run(sara.home, { type: 'join', code: ana.code }, 120000);
+  assert.deepEqual(joined, { id: ana.teamId, name: 'core', inviter: { name: 'ana', fingerprint: a.key.slice(0, 8) }, via: 'your computer studio' });
+  assert.match(daemonLog(sara.home), /invite join: found [0-9a-f]{8}, try 1 failed: HOLEPUNCH_ABORTED/, 'the direct try came first, and failed');
+  assert.match(daemonLog(box.home), new RegExp(`passing along ${sara.identity.key.slice(0, 8)} and ${a.key.slice(0, 8)}`));
+  await until(() => relayed(sara.home, ana.teamId, a.key) && relayed(ana.home, ana.teamId, sara.identity.key), 'both sides online through the relay');
+  // The computer that carries is itself reached directly, by the one that asked it.
+  assert.equal(memberOf(sara.home, own.teamId, box.identity.key).path, 'direct'); assert.equal(memberOf(box.home, own.teamId, sara.identity.key).path, 'direct');
+  // The other computer only passes bytes along: it is on nobody's team because of it.
+  assert.deepEqual(withHome(ana.home, () => team(ana.teamId)).members.map(m => m.name), ['ana', 'sara']);
+  assert.equal(withHome(box.home, () => team(ana.teamId)), null);
+  // Each side keeps the relay for the other, so they find each other the same way later.
+  const route = withHome(sara.home, () => savedRoutes())[a.key];
+  assert.deepEqual(route.mine.map(entry => entry.helper), [box.identity.key]);
+  await until(() => withHome(ana.home, () => savedRoutes())[sara.identity.key]?.theirs[0] === route.mine[0].relay, 'the inviter was told the relay');
+  await shutOut(t, bootstrap, route.mine[0].relay);
+  // Sara's daemon stops and starts again: the two are back in touch, through the relay again.
+  await s.stop();
+  await until(() => !online(ana.home, sara.identity.key), 'sara offline at ana');
+  s = await daemon(t, sara.home, { conductor: false, noPunch: true, join: quick });
+  await until(() => relayed(sara.home, ana.teamId, a.key) && relayed(ana.home, ana.teamId, sara.identity.key), 'back online through the relay');
+});
+
+test('a join goes through a teammate of the inviter when the two cannot connect directly, and they keep talking through it', skipLan, async t => {
+  const bootstrap = await testnet(t, lan), crew = makeTeam(t, { memberName: 'li' }), ana = crew.founder, li = crew.member, sara = newHome(t);
+  const code = withHome(ana.home, () => createInvite(ana.identity, crew.teamId, { hours: 1 }));
+  const saraKey = withHome(sara, () => createIdentity({ name: 'sara' }).key);
+  for (const home of [ana.home, li.home, sara]) enable(home, bootstrap);
+  await daemon(t, li.home, { conductor: false, join: quick });
+  await daemon(t, ana.home, { conductor: false, noPunch: true, join: quick });
+  // Ana's teammate agrees to pass the join along, and ana publishes that for whoever holds the code.
+  await until(() => /invite [0-9a-f]{8}: 1 relay published/.test(daemonLog(ana.home)), 'the relay published');
+  let s = await daemon(t, sara, { conductor: false, noPunch: true, join: quick });
+  const joined = await run(sara, { type: 'join', code }, 120000);
+  assert.deepEqual(joined, { id: crew.teamId, name: 'core', inviter: { name: 'ana', fingerprint: ana.identity.key.slice(0, 8) }, via: 'a computer on their side' });
+  await until(() => relayed(sara, crew.teamId, ana.identity.key) && relayed(ana.home, crew.teamId, saraKey), 'both sides online through the relay');
+  assert.deepEqual(withHome(ana.home, () => team(crew.teamId)).members.map(m => m.name), ['ana', 'li', 'sara']);
+  assert.equal(memberOf(ana.home, crew.teamId, li.identity.key).path, 'direct', 'the teammate that carries is itself reached directly');
+  // Ana asks her teammate to carry the two of them from now on, and tells sara which relay that is.
+  const kept = await until(() => { const mine = withHome(ana.home, () => savedRoutes())[saraKey]?.mine ?? []; return mine.length ? mine : null; }, 'ana keeps a relay for sara');
+  assert.deepEqual(kept.map(entry => entry.helper), [li.identity.key]);
+  await until(() => withHome(sara, () => savedRoutes())[ana.identity.key]?.theirs.includes(kept[0].relay), 'sara was told the relay');
+  await shutOut(t, bootstrap, kept[0].relay);
+  await s.stop();
+  await until(() => !online(ana.home, saraKey), 'sara offline at ana');
+  s = await daemon(t, sara, { conductor: false, noPunch: true, join: quick });
+  await until(() => relayed(sara, crew.teamId, ana.identity.key) && relayed(ana.home, crew.teamId, saraKey), 'back online through the relay');
+});
+
+test('a relay made for a pair lets in those two keys only and stops letting anyone in once its time is up; an invite relay record opens only with the code', async t => {
+  const servers = [], keyOf = seed => ({ publicKey: crypto.createHash('sha256').update(seed).digest() });
+  const node = { keyPair: keyOf, dht: { createRawStream: () => ({}), createServer: (options, onconnection) => { const server = { options, onconnection, closed: false, listen: async keyPair => { server.keyPair = keyPair; }, close: async () => { server.closed = true; } }; servers.push(server); return server; } } };
+  const carrier = createCarrier(node, Buffer.alloc(32, 7)), a = 'a'.repeat(64), b = 'b'.repeat(64), c = 'c'.repeat(64), now = Date.now();
+  const lets = (server, key) => !server.options.firewall(Buffer.from(key, 'hex'));
+  const first = await carrier.grant(a, a, b, now);
+  assert.match(first, /^[0-9a-f]{64}$/); assert.equal(servers.length, 1);
+  assert.equal(await carrier.grant(a, b, a, now), first, 'the same pair has the same relay, whoever is named first');
+  assert.ok(lets(servers[0], a) && lets(servers[0], b)); assert.equal(lets(servers[0], c), false);
+  const second = await carrier.grant(a, a, c, now);
+  assert.notEqual(second, first, 'another pair has a relay of its own'); assert.equal(lets(servers[1], b), false);
+  // Past its time it lets nobody in; with no connection left on it, it is closed.
+  const later = now + CARRY_MS + 1000, real = Date.now; Date.now = () => later; t.after(() => { Date.now = real; });
+  assert.equal(lets(servers[0], a), false);
+  carrier.sweep(later); await new Promise(resolve => setImmediate(resolve));
+  assert.ok(servers[0].closed && servers[1].closed); assert.equal(carrier.grants.size, 0);
+  Date.now = real;
+  // One teammate cannot fill it: six pairs each, sixteen in all.
+  for (let i = 0; i < 6; i++) await carrier.grant(a, a, String(i).repeat(64));
+  await assert.rejects(carrier.grant(a, a, 'f'.repeat(64)), /passing along as many connections as it can/);
+  // The record an inviter publishes: sealed with a key the code gives, relay keys only.
+  const keys = inviteKeys('k7qm-x2pd-9fhw'), other = inviteKeys('k7qm-x2pd-9fhx'), secret = relayKeys(keys.prover), sealed = sealRelays(secret.box, [first, second]);
+  assert.deepEqual(openRelays(secret.box, sealed), [first, second]);
+  assert.deepEqual(openRelays(relayKeys(other.prover).box, sealed), [], 'another code opens nothing');
+  assert.deepEqual(openRelays(secret.box, null), []); assert.deepEqual(openRelays(secret.box, sealRelays(secret.box, [])), []);
+  assert.ok(!sealed.toString('hex').includes(first), 'the keys are not readable in the record');
+  assert.notDeepEqual(secret.record, secret.joiner);
+});
+
+test('what a join says: the line while it waits, and the reason when the two computers cannot connect', () => {
+  assert.equal(joinWait(null, 3, 'Esc'), 'Looking for the person who invited you… 3 s. Their ELU must be open. Esc cancels.');
+  assert.equal(joinWait({ stage: 'looking' }, 3, 'Ctrl-C'), 'Looking for the person who invited you… 3 s. Their ELU must be open. Ctrl-C cancels.');
+  assert.equal(joinWait({ stage: 'connecting' }, 4, 'Esc'), 'Found them. Connecting… 4 s. Esc cancels.');
+  assert.equal(joinWait({ stage: 'retrying' }, 31, 'Esc'), 'Found them, but could not connect yet. Trying again… 31 s. Esc cancels.');
+  assert.equal(joinWait({ stage: 'relay', via: 'your computer studio' }, 9, 'Esc'), 'Found them. Connecting through your computer studio… 9 s. Esc cancels.');
+  assert.equal(joinWait({ stage: 'relay', via: null }, 9, 'Esc'), 'Found them. Connecting through another computer… 9 s. Esc cancels.');
+  // Every line that counts fits the two rows an 80-column app has for it, a long name and three digits of seconds included.
+  for (const progress of [null, { stage: 'connecting' }, { stage: 'retrying' }, { stage: 'relay', via: `your computer ${'m'.repeat(32)}` }]) assert.ok(joinWait(progress, 180, 'Esc').length <= 92, joinWait(progress, 180, 'Esc'));
+  // In a shell the line is redrawn in place, so it is kept to one row: it drops what the search needs first, then is cut.
+  assert.equal(joinWait(null, 3, 'Ctrl-C', 79), 'Looking for the person who invited you… 3 s. Ctrl-C cancels.');
+  assert.equal(joinWait(null, 3, 'Ctrl-C', 120), 'Looking for the person who invited you… 3 s. Their ELU must be open. Ctrl-C cancels.');
+  assert.equal(joinWait({ stage: 'retrying' }, 31, 'Ctrl-C', 79), 'Found them, but could not connect yet. Trying again… 31 s. Ctrl-C cancels.');
+  assert.equal(joinWait({ stage: 'relay', via: 'your computer studio' }, 9, 'Ctrl-C', 40), 'Found them. Connecting through your com…');
+  const end = ' Join again from another network, or while ELU is open on another computer on your team or theirs.';
+  assert.equal(noRoute({ theirs: 3, mine: 2 }), `Found their computer, but could not connect: their network gives every connection a new port, as a phone hotspot does. No other computer was online to pass it along.${end}`);
+  assert.equal(noRoute({ theirs: 2, mine: 3, tried: ['your computer studio'] }), `Found their computer, but could not connect: your network gives every connection a new port, as a phone hotspot does. Your computer studio could not pass it along either.${end}`);
+  assert.equal(noRoute({ theirs: 3, mine: 3, tried: ['li\'s computer', 'a computer on their side'] }), `Found their computer, but could not connect: both networks give every connection a new port. Li\'s computer and a computer on their side could not pass it along either.${end}`);
+  assert.equal(noRoute(), `Found their computer, but could not connect: the networks between you blocked it. No other computer was online to pass it along.${end}`);
 });

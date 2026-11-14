@@ -262,6 +262,17 @@ elu id --name kim
 elu join CODE            # joins their team; your messages start sessions here
 ```
 
+A join finds the person who invited you only while their ELU is open and online. While it
+looks, it counts the seconds and says so; Esc (Ctrl-C in the shell) cancels it. If nobody
+answers within a minute it says why and what to do, and if your own computer is not
+connected it says that at once.
+
+Some networks will not connect two computers directly: a phone hotspot is one. A join that
+found their computer says so, keeps trying for three minutes, and goes through another
+computer that both can reach when one is on: another computer or teammate of yours, or a
+teammate of theirs, with ELU open. That computer passes along bytes it cannot read. If
+there is no way through, the join says why and what works.
+
 There is nothing to turn on. Once your computer is on a team, a background process (the
 peer daemon) keeps it reachable by your teammates, also while ELU is closed. Until you
 invite someone or join a team, nothing starts and nothing connects. There is no off switch
