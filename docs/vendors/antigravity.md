@@ -274,7 +274,13 @@ where the total counts them apart), or `_meta.quota.token_count`. A headless run
 `usage` its JSON result ends with (`input_tokens`, `output_tokens`, `thinking_tokens`,
 `cache_read_tokens`, `total_tokens`): thinking counts as output, and `total_tokens` says
 whether the cache read and the thinking are inside the input and the output or apart from
-them. A total that fits more than one reading, or none, leaves the run's tokens unknown. The
+them. A total that fits more than one reading, or none, leaves the run's tokens unknown.
+Those counts, and `num_turns`, are the whole conversation's (Antigravity's headless docs), and
+a session's next message resumes its conversation (`--conversation`). So a run keeps its own
+share: the conversation's count less what it had reported after the turn before. The run keeps
+the conversation's count beside it, with its turns, and the next run counts from those. When
+the turn before is not known (it ran over ACP, or outside this session), the run's own share
+is unknown, never the conversation's count again. The
 result names no model, so a headless run on Antigravity's own model (none chosen) has no
 known price. Antigravity reports no cost: the Usage tab's top agents price the tokens at the
 model's API list price, and show a dash where they cannot, never 0.

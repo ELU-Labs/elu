@@ -347,6 +347,53 @@ test('a headless Antigravity run keeps the tokens its result reports, priced at 
   near(spend.runCosts(task)[0], 0.5 + 0.01 + 0.6, 'its list price');
 });
 
+// Antigravity's docs: num_turns is the number of user turns in the conversation, and the
+// counters track the whole session. A session's next message resumes its conversation
+// (--conversation), so each run reports what the conversation has used so far. Three runs whose
+// own turns cost 0.81, 1.32 and 0.345 dollars report 0.81, 2.13 and 2.475: 5.415 where they
+// spent 2.475.
+const AGY_TURNS = [[1_000_000, 100_000, 0, 200_000], [2_000_000, 50_000, 50_000, 400_000], [500_000, 20_000, 10_000, 100_000]];
+const agyUse = ([input, output, thinking, read]) => ({ input_tokens: input, output_tokens: output, thinking_tokens: thinking, cache_read_tokens: read, total_tokens: input + output + thinking + read });
+// gemini-3-flash, per million: $0.50 input, $0.05 cached, $3 output (thinking is output).
+const flashCost = ([input, output, thinking, read]) => (input * 0.5 + read * 0.05 + (output + thinking) * 3) / 1e6;
+const sum = values => values.reduce((total, value) => total + value, 0);
+test('a headless Antigravity conversation that later runs resume counts what each run used once, from its logs and from its records', async t => {
+  const f = setup(t, 'answer');
+  f.set({ agy: { headlessTurns: AGY_TURNS.map(agyUse) } });
+  f.controller.setDefaultModel({ vendor: 'agy', model: 'gemini-3-flash' });
+  const first = await f.controller.ask('Where is coupon normalization?', null, { permissions: 'full' }).finished, id = first.id;
+  assert.equal(first.state, 'answered', JSON.stringify(first.error));
+  for (const text of ['And the tests?', 'And the docs?']) { const next = await f.controller.ask(text, id).finished; assert.equal(next.state, 'answered', JSON.stringify(next.error)); }
+  const launches = fs.readFileSync(path.join(f.parent, 'calls.jsonl'), 'utf8').trim().split('\n').map(JSON.parse).filter(call => call.vendor === 'agy' && call.args[0] === '-p' && call.args[1] !== '/usage');
+  assert.deepEqual(launches.map(call => call.args.includes('--conversation')), [false, true, true], 'each later run resumes the conversation');
+  const task = readTask(f.repo, id), real = sum(AGY_TURNS.map(flashCost));
+  near(real, 2.475, 'what the conversation spent');
+  // Each run keeps its own turn's tokens.
+  assert.deepEqual(task.runs.map(run => run.tokens), AGY_TURNS.map(([input, output, thinking, read]) => counted([input, output + thinking, read, 0])));
+  spend.runCosts(task).forEach((cost, at) => near(cost, flashCost(AGY_TURNS[at]), `run ${at + 1}`));
+  near(sum(spend.runCosts(task)), real, 'the three runs');
+  // Their logs gone, the records alone; and the logs, for runs ELU 0.1.25 recorded, which kept the conversation's count in tokens.
+  near(sum(spend.runCosts({ ...task, runs: task.runs.map(run => ({ ...run, logFile: path.join(f.parent, 'gone.log') })) })), real, 'from the records');
+  near(sum(spend.runCosts({ ...task, runs: task.runs.map(({ sessionTokens, conversationTurns, ...run }) => ({ ...run, tokens: sessionTokens })) })), real, 'from the logs');
+  const [row] = spend.agentSpend([{ root: f.repo.root, tasks: [task] }], { now: Date.now() }).rows;
+  near(row.costUsd, real, 'the row'); assert.equal(row.partial, false);
+});
+
+// Where the turn before a resumed run's is not known, what the run used itself is not either:
+// a dash, never the conversation's whole count again.
+test("a headless Antigravity run resumed after a turn ELU has no count for leaves its own spend unknown", t => {
+  const log = logs(t), conversation = '2f6c1d1e-2b1a-4c55-9a77-0d1f9b0c1e2a';
+  const result = (turns, usage) => [{ conversation_id: conversation, status: 'SUCCESS', response: '{}', num_turns: turns, usage, finished_reason: 'stop' }];
+  const run = (name, turns, used, extra = {}) => ({ role: 'lead', vendor: 'agy', at: AT, session: conversation, code: 0, costUsd: null, model: 'gemini-3-flash', logFile: log(name, result(turns, agyUse(used))), ...extra });
+  const soFar = count => AGY_TURNS.slice(0, count).reduce((total, used) => total.map((value, at) => value + used[at]), [0, 0, 0, 0]);
+  // Turn 2 of the conversation ran over ACP, which reports that turn's own count: turn 3 cannot tell its own share.
+  const acp = { role: 'lead', vendor: 'agy', at: AT, session: conversation, code: 0, costUsd: null, model: 'gemini-3-flash', logFile: log('acp.log', [{ jsonrpc: '2.0', id: 4, result: { stopReason: 'end_turn', usage: { inputTokens: 2_000_000, outputTokens: 50_000, cachedReadTokens: 400_000 } } }]) };
+  const mixed = { id: '1', createdAt: AT, runs: [run('a.log', 1, soFar(1)), acp, run('c.log', 3, soFar(3))] };
+  assert.deepEqual(spend.runCosts(mixed).map(cost => cost === null ? null : Number(cost.toFixed(3))), [0.81, 1.17, null]);
+  // A first run on a conversation that already had turns: not known either.
+  assert.deepEqual(spend.runCosts({ id: '2', createdAt: AT, runs: [run('d.log', 3, soFar(3))] }), [null]);
+});
+
 // Grok Build says when its count may miss some of a run's calls (usage_is_incomplete). The run
 // keeps that mark with its tokens, so once its log is gone it is still not priced as a whole count.
 test('a Grok Build run whose count Grok says may be incomplete keeps that mark, and reads the same once its log is gone', async t => {

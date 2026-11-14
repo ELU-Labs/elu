@@ -180,7 +180,7 @@ test('a headless Antigravity run records the tokens its result reports, read by 
   const result = (usage, extra = {}) => JSON.stringify({ conversation_id: '2f6c1d1e-2b1a-4c55-9a77-0d1f9b0c1e2a', status: 'SUCCESS', response: '{}', error: '', duration_seconds: 12, num_turns: 3, usage, finished_reason: 'stop', ...extra });
   const use = (input, output, thinking, cache, total) => ({ input_tokens: input, output_tokens: output, thinking_tokens: thinking, cache_read_tokens: cache, total_tokens: total });
   // Every count apart: the total is all four.
-  assert.deepEqual(runUsage('agy', result(use(1200, 80, 40, 200, 1520))), { tokens: { input: 1200, output: 120, cacheRead: 200, cacheWrite: 0 }, model: null });
+  assert.deepEqual(runUsage('agy', result(use(1200, 80, 40, 200, 1520))), { tokens: { input: 1200, output: 120, cacheRead: 200, cacheWrite: 0 }, model: null, thread: '2f6c1d1e-2b1a-4c55-9a77-0d1f9b0c1e2a', turns: 3 });
   // Thinking within output; the cache read within input; both.
   assert.deepEqual(runUsage('agy', result(use(1200, 80, 40, 200, 1480))).tokens, { input: 1200, output: 80, cacheRead: 200, cacheWrite: 0 });
   assert.deepEqual(runUsage('agy', result(use(1200, 80, 40, 200, 1320))).tokens, { input: 1000, output: 120, cacheRead: 200, cacheWrite: 0 });

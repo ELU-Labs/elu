@@ -18,9 +18,13 @@
 // An ACP session names its model as the protocol does, a `model` config option changed with
 // session/set_config_option, keeps it with the conversation, and ends each turn with the
 // protocol's `usage`. Headless, --model names the model and the output repeats it, and the
-// output ends with the run's turns and tokens as Antigravity CLI prints them (num_turns, usage:
-// input_tokens, output_tokens, thinking_tokens, cache_read_tokens, total_tokens); agy.headlessUsage
-// gives other counts, agy.noUsage none. A run that could not sign in prints them all 0, with no turn.
+// output ends with the turns and tokens as Antigravity CLI prints them (num_turns, usage:
+// input_tokens, output_tokens, thinking_tokens, cache_read_tokens, total_tokens), which, as its
+// docs say, count the whole conversation: a run resumed with --conversation prints the
+// conversation's turns and its counts so far, its own turn's added (kept in the conversation's
+// folder). Each turn uses agy.headlessTurns[n] for the conversation's turn n (from 0), else
+// agy.headlessUsage, else fixed counts; agy.noUsage prints none. A run that could not sign in
+// prints them all 0, with no turn.
 // auth: 'prompt' signs it out the way Antigravity CLI 1.5.8 is signed out (observed in a
 // scratch HOME): -p prints "Authentication required. Please visit the URL to log in:", the
 // link, "Waiting for authentication (timeout 60s)..." and "Or, paste the authorization code
@@ -196,8 +200,12 @@ async function headless() {
   if (schema?.properties?.intent) { result.intent = 'answer'; if (schema.properties.repository) result.repository = ''; }
   if (cfg.name !== undefined && schema?.properties?.name) result.name = cfg.name;
   planned(result, text, name => Boolean(schema?.properties?.[name]));
-  const usage = agy.noUsage ? {} : { usage: agy.headlessUsage ?? { input_tokens: 1200, output_tokens: 80, thinking_tokens: 40, cache_read_tokens: 200, total_tokens: 1520 } };
-  console.log(JSON.stringify({ conversationId: id, model: flag('--model') ?? MODELS[0], structured_output: result, stats: { turns: 1 }, num_turns: 1, ...usage }, null, 2));
+  // The conversation's turns and counts so far, this turn's added.
+  const kept = path.join(dir, 'usage.json'); let before = { turns: 0, usage: null }; try { before = JSON.parse(fs.readFileSync(kept, 'utf8')); } catch { /* Its first turn. */ }
+  const own = agy.headlessTurns?.[before.turns] ?? agy.headlessUsage ?? { input_tokens: 1200, output_tokens: 80, thinking_tokens: 40, cache_read_tokens: 200, total_tokens: 1520 };
+  const soFar = { turns: before.turns + 1, usage: Object.fromEntries(Object.keys(own).map(key => [key, (before.usage?.[key] ?? 0) + own[key]])) };
+  fs.writeFileSync(kept, JSON.stringify(soFar));
+  console.log(JSON.stringify({ conversationId: id, model: flag('--model') ?? MODELS[0], structured_output: result, stats: { turns: soFar.turns }, num_turns: soFar.turns, ...(agy.noUsage ? {} : { usage: soFar.usage }) }, null, 2));
 }
 async function acp() {
   if (agy.acpFails) { console.error('agy: unknown command "acp"'); process.exit(1); }
