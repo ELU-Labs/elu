@@ -1166,6 +1166,35 @@ test('/join names the project the team shares once it is in Projects', async t =
   await send(v, '/projects'); await until(() => v.current.view === 'projects' && v.panels.projectsList.items.some(item => /ELU\s+shared by @sara {3}on @sara-box/.test(plainItem(item))), 'and it is there');
 });
 
+// At 80 columns the status line cut what /peers and a join say: beside the session list it kept
+// two rows of it, and in Chats one. It now takes as many rows as the line needs.
+test('at 80x24 /peers and the line of a join that names the shared project show whole, beside the session list and in Chats', { timeout: 30000 }, async t => {
+  const p = project(later(t)); environment(t, p.parent);
+  // A team name long enough that the join's line is as long as the one a join gives when it also closes an own team of one.
+  const TEAM = 'The payments and platform guild, north', SHARED_NAME = 'checkout-service';
+  const peer = sharing(fakePeer({ joined: { id: 'team-2', name: TEAM, inviter: { name: 'sara', fingerprint: 'bbbbbbbb' } } }), []), v = await view(t, { columns: 80, rows: 24, repo: repository(p.root), peer });
+  const status = v.panels.status, drawn = () => status.getScreenLines().map(row => row.trimEnd()), whole = () => drawn().map((row, at) => at ? row.replace(/^ {2}/, '') : row.replace(/^› /, '')).join(' ');
+  const statusTop = 24 - 1 - 6 - 1, fits = name => { assert.ok(drawn().every(row => row.length < status.width), `${name}: every row fits`); assert.equal(status.atop + status.height - 1, statusTop, `${name}: it ends over the box`); };
+  // Two teammates online with long names: the line is longer than the two rows beside the list.
+  const members = peer.peerStatus().teams[0].members; peer.peerStatus = () => ({ running: true, pid: 1, key: members[0].key, name: 'ana', fingerprint: 'aaaaaaaa', error: null, counters: { direct: 1, relayed: 1, failed: 0 }, teams: [{ id: 'team-1', name: 'Core', role: 'admin', members: [members[0], { ...members[1], name: 'sara-of-the-platform-team' }, { ...members[2], name: 'li-on-the-night-shift', online: true, path: 'relayed' }], channels: [] }] });
+  const PEERS = '2 of 2 teammates online: @sara-of-the-platform-team (direct), @li-on-the-night-shift (relayed)';
+  await send(v, '/peers'); await until(() => whole() === PEERS, `beside the list: ${drawn().join(' | ')}`);
+  assert.ok(v.current.view === 'tasks' && drawn().length >= 3 && status.width < 50, 'on three rows or more beside the list'); fits('/peers beside the list');
+  assert.ok(v.panels.compose.atop + v.panels.compose.height <= status.atop, 'the form above ends over it');
+  await send(v, '/chats'); await until(() => v.current.view === 'chats', 'Chats');
+  await send(v, '/peers'); await until(() => whole() === PEERS, `in Chats: ${drawn().join(' | ')}`);
+  assert.equal(drawn().length, 2, 'two rows across the screen'); fits('/peers in Chats');
+  assert.ok(v.panels.teamBoxes.every(box => box.atop + box.height <= status.atop), 'the panes of Chats end over it');
+  // A join, then the project its team shares: the line that names it is whole too, on three rows.
+  await send(v, '/join k7qm-x2pd-9fhw'); await answerJoin(v);
+  await until(() => whole() === `Joined ${TEAM} with sara. Their messages start sessions here, as if you typed them.`, 'joined');
+  peer.shared = [sharedRow({ name: SHARED_NAME, teams: [{ id: 'team-2', name: TEAM }] })];
+  const JOINED = `Joined ${TEAM} with sara. Its project ${SHARED_NAME} is in Projects. Their messages start sessions here, as if you typed them.`;
+  await until(() => whole() === JOINED, `the join's line in Chats: ${drawn().join(' | ')}`); fits('the join in Chats');
+  assert.ok(JOINED.length > 150 && drawn().length === 3, 'three rows at 80 columns');
+  assert.ok(v.panels.teamBoxes.every(box => box.atop + box.height <= status.atop), 'the panes of Chats end over the three rows');
+});
+
 // The wheel at a pane, as SGR reports in one read: up or down, a step each.
 const wheelAt = (v, widget, step, times = 1) => v.input.write(`\x1b[<${step < 0 ? 64 : 65};${widget.aleft + 3};${widget.atop + 3}M`.repeat(times));
 const pause = (ms = 150) => new Promise(resolve => setTimeout(resolve, ms));

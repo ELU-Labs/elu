@@ -1338,6 +1338,44 @@ test('a second project view is read-only and releases no writer lock', async t =
   const next = claimView(p.repo); assert.equal(next.readOnly, false); next.release();
 });
 
+test('the status line shows a long message whole on as many rows as it needs, and the pane above gives them up, in every view at 80x24', { timeout: 60000 }, async t => {
+  const p = setup(t), v = await view(t, { repo: p.repo, peer: null }), panels = v.current.panels, g = geometry(80, 24);
+  const drawn = () => panels.status.getScreenLines().map(row => row.trimEnd()), whole = () => drawn().map((row, at) => at ? row.replace(/^ {2}/, '') : row.replace(/^› /, '')).join(' ');
+  // What /bots answers to words it does not know is one long line.
+  const LONG = 'Use /bots, /bots add NAME, /bots remove NAME, /bots schedule on NAME, /bots schedule off NAME, /bots run NAME or /bots color NAME COLOR.';
+  const above = { tasks: () => panels.chat.hidden ? panels.compose : panels.chat, kanban: () => panels.kanbanBoxes[0], bots: () => panels.botsBox, projects: () => panels.projectsBox, usage: () => panels.usageBox };
+  for (const [name, pane] of Object.entries(above)) {
+    // A new view starts with no message: the pane above has all its rows.
+    await send(v, `/${name === 'tasks' ? 'sessions' : name}`); await until(() => v.current.view === name && drawn().length === 1 && pane().atop + pane().height === g.statusTop, `${name}, with its rows`);
+    await send(v, '/bots frob x'); await until(() => /^› /.test(drawn()[0] ?? '') && drawn().length > 1, `a long line in ${name}`);
+    const rows = drawn();
+    assert.equal(whole(), LONG, `${name}: nothing is cut`);
+    assert.ok(rows.every(row => row.length < panels.status.width), `${name}: every row fits`);
+    assert.deepEqual([panels.status.height, panels.status.atop + panels.status.height - 1], [rows.length, g.statusTop], `${name}: it ends on the row over the box`);
+    assert.ok(pane().atop + pane().height <= panels.status.atop, `${name}: the pane above ends over it`);
+  }
+});
+
+test('at 80x24 what a key on a bot\'s page just did shows under the page, not behind it', { timeout: 30000 }, async t => {
+  const p = setup(t); noBots(); readModels();
+  saveBot({ name: 'nightly', vendor: 'claude', schedule: 'every 1h', instructions: 'Tidy the notes.' });
+  const v = await view(t, { repo: p.repo }), panels = v.current.panels, page = () => modal(v, 'Bot @nightly');
+  const drawn = () => panels.status.getScreenLines().map(row => row.trimEnd()), screenRow = y => v.frame().split('\n')[y];
+  await send(v, '/bots'); await until(() => v.current.view === 'bots' && panels.botsList.items.length === 1, 'one bot');
+  panels.botsList.focus(); v.input.write('\r'); await until(() => page(), 'its page');
+  dialogList(v, 'Bot @nightly').select(4); v.input.write('\r'); await dialog(v, 'Schedule', '');
+  await until(() => page() && /does not run by itself/.test(panels.status.getText()), 'the page is back and the line is set');
+  // The page covers the row the line has in the view, so the line is right under the page, over nothing of it.
+  assert.ok(page().atop <= geometry(80, 24).statusTop && page().atop + page().height > geometry(80, 24).statusTop, 'the page covers the status row');
+  await until(() => panels.status.atop === page().atop + page().height, 'right under the page'); assert.deepEqual(drawn(), ['› @nightly does not run by itself.']);
+  assert.equal(panels.status.atop, page().atop + page().height); assert.ok(panels.status.atop < geometry(80, 24).keysTop, 'over the key bar');
+  await until(() => /› @nightly does not run by itself\./.test(screenRow(panels.status.atop)), 'and it is what the screen shows there');
+  // Closed, the line is back over the message box.
+  v.input.write('\x1b'); await until(() => !page(), 'closed');
+  await until(() => panels.status.atop === geometry(80, 24).statusTop && panels.status.aleft === 1, 'the line is back in its row');
+  assert.deepEqual(drawn(), ['› @nightly does not run by itself.']);
+});
+
 test('Tasks reads every project without writing or starting a vendor', async t => {
   const one = setup(t), two = project(t); assert.equal(cli(two.root, ['init', '--yes'], one.env).status, 0);
   registerProject(one.repo); registerProject(repository(two.root));
