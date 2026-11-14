@@ -98,6 +98,9 @@ const resultText = result => mode === 'invalid' ? JSON.stringify({ outcome: 'nop
 //   files and rules go in projectInstructions, skills in skills, MCP servers in mcpServers,
 //   hooks in hooks (the real program lists hooks only in a trusted folder; here always).
 // - An agent file is listed in agents with its path and no vendor, beside the three built-in.
+// - A Claude settings file under $HOME that holds permission rules is named in
+//   permissions.sources as "<file> (settings)", beside the config, with every switch off:
+//   settings.local.json when there is one, else settings.json.
 // - permissions.managedSettingsPath is /etc/claude-code/managed-settings.json on every computer.
 // Not watched, taken from its docs: a switch still waiting to be decided ("unresolved" on the
 // entries; the cell's own form is a guess, enabled: null), and a signed-in home, where a
@@ -133,9 +136,10 @@ if (args.includes('inspect')) {
   const groups = (file, tool) => Object.entries(json(file)?.hooks ?? {}).flatMap(([event, rows]) => (Array.isArray(rows) ? rows : []).filter(row => Array.isArray(row?.hooks)).flatMap(row => row.hooks.map(hook => ({ event: event.replace(/[A-Z]/g, (letter, at) => `${at ? '_' : ''}${letter.toLowerCase()}`), hookType: hook.type ?? 'command', target: hook.command ?? '', source: { type: 'user', path: path.dirname(file) }, matcher: row.matcher ?? '', ...status(tool, 'hooks') }))));
   const hooks = [...groups(path.join(userHome, '.claude', 'settings.json'), 'claude'), ...groups(path.join(userHome, '.cursor', 'hooks.json'), 'cursor')];
   const config = path.join(home, 'config.toml'), hasConfig = fs.existsSync(config), cwd = process.cwd();
+  const claudeRules = ['settings.local.json', 'settings.json'].map(name => path.join(userHome, '.claude', name)).find(file => json(file)?.permissions);
   const report = {
     grokVersion: '1.0.77', channel: 'unknown', updateChannel: null, cwd, projectRoot: `${cwd}/`, projectTrusted: true, projectInstructions,
-    permissions: { sources: hasConfig ? [`${config} (config)`] : [], loaded: hasConfig ? 22 : 0, skipped: [], mcpServerAllowlist: [], mcpLockdownSources: [], mcpManagedServersOnly: 'off', marketplaceAllowlist: [], marketplaceLockdownSources: [], managedMarketplaces: [], managedSettingsPath: '/etc/claude-code/managed-settings.json', managedSettingsExists: false, managedSettingsActive: false, claudeBypassLockAdvisory: false },
+    permissions: { sources: [...(claudeRules ? [`${claudeRules} (settings)`] : []), ...(hasConfig ? [`${config} (config)`] : [])], loaded: hasConfig ? 22 : 0, skipped: [], mcpServerAllowlist: [], mcpLockdownSources: [], mcpManagedServersOnly: 'off', marketplaceAllowlist: [], marketplaceLockdownSources: [], managedMarketplaces: [], managedSettingsPath: '/etc/claude-code/managed-settings.json', managedSettingsExists: false, managedSettingsActive: false, claudeBypassLockAdvisory: false },
     loginPolicy: { disableApiKeyAuth: null, forceLoginTeamUuid: null, apiKeyAuthDisabled: false },
     hooks, skills, agents, plugins: [], marketplaces: [], mcpServers, lspServers: [], configSources: { layers: hasConfig ? [{ role: 'user', path: config }] : [] }, experiments: [],
     externalCompat: { remoteSettingsLoaded: false, cells },

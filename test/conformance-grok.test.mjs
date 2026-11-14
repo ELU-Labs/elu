@@ -136,14 +136,18 @@ test('childEnv carries every switch and no key variable; the private home holds 
 });
 
 // The real Grok Build 1.0.77, given a home that holds Claude, Cursor and .agents folders as
-// HOME, lists their hooks, rules, skills, agents, plugins and MCP servers as loaded with
-// GROK_HOME elsewhere and every switch off. So Full access cannot run in the owner's home:
-// its ~ is a mirror of it without those folders (lib/home-mirror.mjs).
+// HOME, with GROK_HOME elsewhere and every switch off, lists their instructions, rules, skills
+// and MCP servers as switched off, and still loads the agents of ~/.claude/agents and
+// ~/.grok/agents, a Claude plugin with its hook, the skills of ~/.agents and the permission
+// rules of a Claude settings file. So Full access cannot run in the owner's home: its ~ is a
+// mirror of it without those folders (lib/home-mirror.mjs).
 test('in Full access ~ is a mirror of the owner\'s home and GROK_HOME stays ELU\'s; the other modes keep the private home with nothing of his in it', t => {
   const w = world(t), personal = w.personal, put = (file, text) => { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, text, { mode: 0o600 }); };
   put(path.join(w.home, '.npmrc'), 'owner-npm-token\n'); put(path.join(w.home, '.config', 'gcloud', 'token'), 'owner-cloud-token\n');
   put(path.join(w.home, '.claude', 'CLAUDE.md'), 'his instructions\n'); put(path.join(w.home, '.claude', 'rules', 'r.md'), 'his rule\n'); put(path.join(w.home, '.grok', 'config.toml'), '# his own\n');
-  const his = () => ['.claude/CLAUDE.md', '.claude/rules/r.md', '.grok/config.toml', '.grok/auth.json'].map(name => `${name} ${fs.readFileSync(path.join(w.home, name), 'utf8')} ${fs.statSync(path.join(w.home, name)).mtimeMs}`).concat(fs.readdirSync(path.join(w.home, '.grok')).sort()), before = his();
+  const agent = path.join(w.home, '.claude', 'agents', 'reviewer.md'), settings = path.join(w.home, '.claude', 'settings.json');
+  put(agent, '---\nname: reviewer\ndescription: reviews a change\n---\nReview the change.\n'); put(settings, '{"permissions":{"deny":["Bash(rm:*)"]}}\n');
+  const his = () => ['.claude/CLAUDE.md', '.claude/rules/r.md', '.claude/agents/reviewer.md', '.claude/settings.json', '.grok/config.toml', '.grok/auth.json'].map(name => `${name} ${fs.readFileSync(path.join(w.home, name), 'utf8')} ${fs.statSync(path.join(w.home, name)).mtimeMs}`).concat(fs.readdirSync(path.join(w.home, '.grok')).sort()), before = his();
   const full = grok.childEnv({ mode: 'full', home: w.home });
   assert.equal(full.HOME, path.join(personal, 'grok-home-full')); assert.equal(grok.fullHome(), full.HOME); assert.equal(full.GROK_HOME, path.join(personal, 'grok-home', '.grok'));
   assert.equal(fs.statSync(full.HOME).mode & 0o777, 0o700);
@@ -152,10 +156,18 @@ test('in Full access ~ is a mirror of the owner\'s home and GROK_HOME stays ELU\
   // ~/.grok there is ELU's own, with the config written for this run and the link to his token.
   assert.equal(fs.realpathSync(path.join(full.HOME, '.grok')), fs.realpathSync(full.GROK_HOME)); assert.equal(fs.readFileSync(path.join(full.HOME, '.grok', 'config.toml'), 'utf8'), grok.configToml('full'));
   assert.equal(grok.signedIn({ env: full }), true); assert.deepEqual(agentEnv(w.env, [], full, { full: true }).HOME, full.HOME);
-  // What grok inspect lists: nothing of his under the mirror, his Claude files were his home the run's (the fake follows issue #34).
+  // What grok inspect lists under the mirror: nothing of his, and no rules but ELU's config.
   const inspect = env => JSON.parse(spawnSync(w.bin, ['inspect', '--json'], { cwd: w.repo, env, encoding: 'utf8' }).stdout);
-  assert.deepEqual(grok.foreignTraces(inspect(agentEnv(w.env, [], full, { full: true }))), []);
-  assert.deepEqual(grok.foreignTraces(inspect({ ...agentEnv(w.env, [], full, { full: true }), HOME: w.home })).filter(trace => trace.includes(path.sep)), [path.join(w.home, '.claude', 'CLAUDE.md'), path.join(w.home, '.claude', 'rules', 'r.md')]);
+  const run = agentEnv(w.env, [], full, { full: true }), under = inspect(run);
+  assert.deepEqual(grok.foreignTraces(under), []);
+  assert.deepEqual([...under.projectInstructions, ...under.skills, ...under.mcpServers, ...under.hooks, ...under.agents.filter(entry => entry.source.type !== 'builtin')], []);
+  assert.deepEqual(under.permissions.sources, [`${path.join(full.GROK_HOME, 'config.toml')} (config)`]);
+  // Were his home the run's, with the same switches: his Claude instructions and rule are
+  // listed as switched off, and his Claude agent and the permission rules of his Claude
+  // settings file load all the same (the fake follows the real 1.0.77).
+  const inHis = inspect({ ...run, HOME: w.home });
+  assert.deepEqual(inHis.projectInstructions.map(entry => [entry.path, entry.compatibilityStatus, entry.disabled]), [[path.join(w.home, '.claude', 'CLAUDE.md'), 'disabled', true], [path.join(w.home, '.claude', 'rules', 'r.md'), 'disabled', true]]);
+  assert.deepEqual(grok.foreignTraces(inHis), [{ what: 'Claude agent reviewer', from: agent, runs: false }, { what: 'Claude permissions', from: settings, runs: false }]);
   // Read only, Ask for approval and Approve for me: the private home, holding ELU's .grok and nothing else.
   for (const mode of ['locked', 'ask', 'auto']) { const env = grok.childEnv({ mode, home: w.home }); assert.equal(env.HOME, path.join(personal, 'grok-home'), mode); assert.deepEqual(fs.readdirSync(env.HOME), ['.grok'], mode); }
   // Their rules close the mirror, as the rest of ELU's folder, also before a Full access run has made it.
