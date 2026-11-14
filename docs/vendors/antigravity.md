@@ -143,6 +143,10 @@ approval and Approve for me do not fall back this way: their headless run cannot
 `/stop` ends an ACP turn and the commands it started, as it does a headless one. The steps
 it showed stay in the chat, and its line says `stopped`.
 
+The turn limits hold in both. Over ACP a turn that prints nothing for the quiet limit (10
+minutes, or the role's `timeoutSeconds`) is stopped, as with every vendor that prints as it
+works. A headless run prints only at the end, so it has no quiet limit, only the two-hour cap.
+
 ## What is not enforced, or not verified
 
 Everything above comes from Google's documentation and the Antigravity changelog; the
