@@ -374,6 +374,10 @@ if(cfg.live&&todoTools.includes('TaskCreate')&&cfg.liveTool!=='todowrite'){
 }
 else if(cfg.live&&todoTools.includes('TodoWrite')&&cfg.liveTool==='todowrite'){console.log(JSON.stringify({type:'assistant',parent_tool_use_id:null,message:{content:[{type:'tool_use',id:'toolu_fake_todo',name:'TodoWrite',input:{todos:[{content:'Change normalize',status:'completed',activeForm:'Changing normalize'},{content:'Run the coupon test',status:'in_progress',activeForm:'Running the coupon test'}]}}]}}));await liveGate();}
 if(mode==='stall'&&edit){console.log(JSON.stringify({type:'assistant',message:{content:[{type:'text',text:'Edited the file. Thinking.'}]}}));await new Promise(resolve=>setTimeout(resolve,60000));}
+// quiet (fake.json): a turn prints one line and then nothing for a minute, as one that stopped working does, an answering
+// turn as an editing one. 'always': every launch. 'once': not the launch ELU starts in its place, which is told that the
+// turn before it printed nothing: that one goes on to its answer.
+if(cfg.quiet&&(cfg.quiet==='always'||!input.includes('ELU stopped it and started this one in its place'))){console.log(JSON.stringify({type:'assistant',message:{content:[{type:'text',text:'Reading the code. Thinking.'}]}}));await new Promise(resolve=>setTimeout(resolve,60000));}
 if(mode==='question'&&!args.includes('--resume')&&!input.includes('Uppercase')){result.outcome='needs_input';result.question='Which format?';result.choices=['Uppercase','Lowercase'];}
 if((mode==='review-fix'||mode==='review-block')&&input.includes('Address the review')){result.responses=[{id:'R1',action:mode==='review-fix'?'fixed':'disputed',reason:mode==='review-fix'?'Handled the edge case.':'The finding still needs owner input.'}];}
 // steps (mode): a turn that shows its work as the real CLI writes it without partial messages:
