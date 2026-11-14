@@ -16,7 +16,8 @@ import { saveSchedule, parseWhen } from '../lib/schedules.mjs';
 import { SCHEDULE_NOTE, saveBot } from '../lib/bots.mjs';
 import { answerApproval, approvalsDir, awaitDecision, pendingApprovals, requestApproval } from '../lib/approvals.mjs';
 import { defaultConfig } from '../lib/config.mjs';
-import { READ_ONLY_REPLY } from '../lib/runner.mjs';
+import { FULL_REPLY, READ_ONLY_REPLY, promptRules } from '../lib/runner.mjs';
+import { helperPrompt } from '../lib/adapters/claude.mjs';
 import { ruleFor, saveRule } from '../lib/permission-rules.mjs';
 import { turnClock } from '../lib/turn-limits.mjs';
 import { runSteps } from '../lib/run-activity.mjs';
@@ -72,7 +73,10 @@ test('a new session gets the personal default; a follow-up inherits mode, place 
   assert.ok(writeDenied(settingsOf(run.args), fs.realpathSync(f.work)), 'which it reads and never writes');
   assert.equal(run.args.includes('--restricted'), false);
   const prompt = f.inputs()[0].input;
-  assert.match(prompt, /When an action is declined or blocked, do not retry it another way\. Return outcome needs_input and name the action you need\./);
+  // Only a declined action is a stop; a step that merely fails is the agent's to fix.
+  assert.match(prompt, /When the owner, the approver or a rule declines an action, do not retry it another way: return outcome needs_input and name the action you need\. Only a declined action is a stop\./);
+  assert.match(prompt, /A step that fails is yours to fix: a missing folder, a command that exits non-zero, a tool error, a network error\. Find the cause, fix it or go another way, and keep going\./);
+  assert.doesNotMatch(prompt, /When an action is declined or blocked/);
   assert.match(prompt, /You may also read these folders: /); assert.doesNotMatch(prompt, /install packages/);
   // The never list by name, once, with the read-only way to list tags.
   assert.equal(prompt.split('Never run these in this mode, alone or inside a longer command line: git push, git tag, git merge, gh pr merge, gh release, npm publish, pnpm publish, yarn publish, cargo publish, firebase deploy, vercel deploy, gcloud run deploy, gcloud app deploy, fly deploy, kubectl apply, terraform apply, claude mcp add, claude mcp add-json, claude mcp add-from-claude-desktop, claude mcp remove, elu mcp add, elu mcp remove. To list tags use git for-each-ref --sort=-creatordate refs/tags or git describe --tags, never git tag.').length, 2);
@@ -98,6 +102,25 @@ test('a new session gets the personal default; a follow-up inherits mode, place 
   assert.equal(pinnedConfig(f.controller.repo, null, { task: third }).configHash, first.configHash);
   // Nothing in the repository or its configuration records the mode.
   assert.equal(git(f.root, ['status', '--porcelain']), '');
+});
+
+test('the stop rule by mode: Full access is told of none, the other modes only of a declined action, and a failed step is the agent\'s to fix', () => {
+  const rules = Object.fromEntries(['full', 'auto', 'ask', 'locked'].map(mode => [mode, promptRules(mode).join(' ')]));
+  const DECLINED = 'When the owner, the approver or a rule declines an action, do not retry it another way: return outcome needs_input and name the action you need. Only a declined action is a stop.';
+  const KEEP_GOING = 'A step that fails is yours to fix: a missing folder, a command that exits non-zero, a tool error, a network error. Find the cause, fix it or go another way, and keep going. Ask the owner only when you cannot go on at all, or when the choice is truly theirs (spending money they did not approve, deleting their data); then ask once, and say what you will do by default.';
+  // The rule sessions quoted when they stopped at the first thing that failed is gone from every mode.
+  for (const text of Object.values(rules)) assert.doesNotMatch(text, /When an action is declined or blocked|Return outcome needs_input and name the action you need\./);
+  // Full access declines nothing, so it is told of no stop at all.
+  assert.doesNotMatch(rules.full, /declines an action|do not retry|needs_input/); assert.ok(rules.full.includes(KEEP_GOING));
+  for (const mode of ['ask', 'auto']) { assert.ok(rules[mode].includes(DECLINED), mode); assert.ok(rules[mode].includes(KEEP_GOING), mode); }
+  // Read only has no shell of its own choosing: nothing of its to fix, nothing to decline.
+  assert.doesNotMatch(rules.locked, /A step that fails|declines an action/);
+  // A helper is told the same: in Full access no stop, elsewhere only a declined action.
+  assert.doesNotMatch(helperPrompt(true), /declines an action|do not retry|declined or blocked/);
+  assert.match(helperPrompt(false), /When the owner, the approver or a rule declines an action, do not retry it another way: stop and say which action you needed\./);
+  for (const full of [true, false]) assert.match(helperPrompt(full), /A step that fails is yours to fix: a missing folder, a command that exits non-zero, a tool error, a network error\. Find the cause, fix it or go another way, and keep going\./);
+  // A reply in a Full access session is told where its files change, not that it cannot change them.
+  assert.doesNotMatch(FULL_REPLY, /cannot change files|refused/); assert.match(FULL_REPLY, /set intent to edit and the work goes on at once\.$/);
 });
 
 test('an automatic edit task inherits the conversation mode; the reviewer and the locked lead keep the locked launch', async t => {
