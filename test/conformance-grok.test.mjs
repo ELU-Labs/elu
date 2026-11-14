@@ -55,9 +55,10 @@ test('compile refuses until this machine\'s check passed, then builds each profi
   const base = { role: lead('read'), cwd: w.repo, session: SESSION, runDir };
   assert.throws(() => grok.compile({ ...base, mode: 'locked' }), /^EluCodeError: Grok Build \(the grok command\) has not been checked on this machine yet\. Your first message to it outside Full access runs the check; Full access needs none\.$/);
   passed(w.bin);
-  const home = fs.realpathSync(os.homedir()), personal = fs.realpathSync(w.personal);
+  // Home secrets are closed under the home's name on disk and, when HOME leads through a link, under HOME's name too.
+  const homes = [...new Set([fs.realpathSync(os.homedir()), os.homedir()])], personal = fs.realpathSync(w.personal);
   const secrets = [
-    ...HOME_SECRETS.flatMap(name => { const p = path.join(home, name); return [`Read(${p})`, `Read(${p}/**)`, `Grep(${p}/**)`]; }),
+    ...homes.flatMap(home => HOME_SECRETS.flatMap(name => { const p = path.join(home, name); return [`Read(${p})`, `Read(${p}/**)`, `Grep(${p}/**)`]; })),
     ...['.env*', '.npmrc', '.netrc', '.pypirc', 'auth.json', 'credentials', 'credentials.json', 'id_rsa', 'id_ed25519', '*.pem'].map(name => `Read(**/${name})`),
     // The Full access mirror is closed whether or not a run has made it yet.
     ...[...fs.readdirSync(personal).filter(name => name !== 'grok-home'), 'grok-home-full'].flatMap(name => { const p = path.join(personal, name); return [`Read(${p})`, `Read(${p}/**)`, `Grep(${p}/**)`]; }),
