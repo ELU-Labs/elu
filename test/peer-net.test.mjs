@@ -558,7 +558,7 @@ test('elu access shows and changes what teammates can do here; --auto with --man
     // Run outside any project: there --auto alone keeps the project set.
     t.after(() => process.chdir(was)); process.chdir(parent);
     const unset = await peerCli(['access'], {});
-    assert.equal(unset.access, null); assert.match(unset.lines[0], /core: not set\. Messages wait for you to approve them\./);
+    assert.equal(unset.access, null); assert.equal(unset.lines[0], 'core: Manual. elu access --auto or --manual changes it.');
     await assert.rejects(peerCli(['access'], { auto: true, manual: true }), /Choose --auto or --manual\./);
     const saved = await peerCli(['access'], { manual: true, rules: 'Only answer questions, do not edit files.', project: root });
     assert.equal(saved.message, 'Saved what teammates can do here.');
