@@ -387,8 +387,8 @@ for (const [mode, name] of [['full', 'Full access'], ['auto', 'Approve for me']]
       const deny = JSON.parse(first.args[first.args.indexOf('--settings') + 1]).permissions?.deny ?? [];
       for (const rule of ['Bash(git push:*)', 'Bash(git merge:*)', 'Bash(gh pr merge:*)', 'Bash(git tag:*)', 'Bash(npm publish:*)']) assert.ok(!deny.includes(rule), rule);
     }
-    // The turn spends at most what intake reserved for the message; its working turn has no teammate cap.
-    assert.equal(first.args[first.args.indexOf('--max-budget-usd') + 1], '0.5');
+    // As a session he typed: no dollar cap of ELU's on its first turn or its working turn. Only a teammate's question keeps runUsd.
+    assert.equal(first.args.includes('--max-budget-usd'), false, 'the first turn has no cap');
     const work = p.prompts().find(call => call.input.includes('this turn does its work'));
     assert.ok(work, 'the editing turn ran'); assert.match(work.input, new RegExp(`This session's ${name} approved the Task below, and this turn does its work`));
     assert.ok(work.input.includes(MODE_ACCEPTED(name))); assert.ok(!work.input.includes(RULES_PROPOSE)); assert.ok(!work.input.includes(RULES_ACCEPTED)); assert.ok(work.input.includes(WAIT_RULE));
