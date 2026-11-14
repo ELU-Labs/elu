@@ -404,6 +404,23 @@ test('an Antigravity turn runs headless where ACP is not proven or cannot start,
   assert.deepEqual(turns().slice(-2).map(call => call.args[0]), ['acp', '-p']); assert.ok(turns().at(-1).args.includes('--sandbox')); assert.equal(fs.existsSync(made), false); assert.equal(third.result.outcome, 'blocked');
 });
 
+// The limits of a turn hold over ACP as they do for any turn that shows its steps: one that
+// prints nothing for the quiet limit is stopped. A headless run prints only at the end, so
+// silence says nothing about it and only the cap applies, as before.
+test('an Antigravity turn in Full access over ACP is stopped when it prints nothing for the quiet limit; headless it runs on to its result', async t => {
+  const f = setup(t, 'agy'); agySet(f, { pace: 2500 });
+  const { turnClock } = await import('../lib/turn-limits.mjs'), before = { ...turnClock }; Object.assign(turnClock, { quietSeconds: 1, capSeconds: 30 }); t.after(() => Object.assign(turnClock, before));
+  const turns = () => f.calls().filter(call => !call.args.includes('/usage') && !['--version', '--help'].includes(call.args[0])).map(call => call.args[0]);
+  proven('agy', f.bin, '1.5.4', { relay: true });
+  const turn = f.controller.ask('Reply with the summary "slow".', null, { permissions: 'full' });
+  const quiet = await turn.finished.catch(() => readTask(f.controller.repo, turn.id));
+  assert.match(quiet.error?.message ?? '', /^Stopped after 1 second with no output\./, JSON.stringify(quiet.error)); assert.deepEqual(turns(), ['acp'], 'a limit is not a start that failed: nothing ran headless after it');
+  proven('agy', f.bin, '1.5.4', { relay: false });
+  const started = Date.now(), printed = await f.controller.ask('Reply with the summary "slow".', null, { permissions: 'full' }).finished;
+  assert.equal(printed.state, 'answered', JSON.stringify(printed.error)); assert.equal(printed.result.summary, 'slow'); assert.ok(Date.now() - started >= 2500, 'it was silent for longer than the quiet limit');
+  assert.deepEqual(turns(), ['acp', '-p']);
+});
+
 // The option each launch above carries is one a release may not take. `claude <any flag>
 // --version` exits 0 for a made-up flag, so nothing can be asked first: the program's own file
 // is read for the text (lib/vendor-extras.mjs), and a launch that ends at once over it runs
