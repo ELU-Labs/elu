@@ -310,6 +310,13 @@ relay) has no clock at all: silence says nothing about it, so it runs until it e
 `/stop` it. So does each of the project's checks: a check runs until it ends, however long
 that takes.
 
+A push with `/publish` has no time limit either, in every mode, and nor do the project's
+pre-push guards it runs. A guard, or the push itself, that prints nothing for 10 minutes is
+stopped and says so: "Stopped the pre-push guard after 10 minutes with no output. Nothing was
+pushed."
+ELU 0.1.24 and earlier stopped a guard, and the push, after 2 minutes; a session from then
+keeps its guards again, without that limit, at its next `/publish`.
+
 ELU 0.1.19 and earlier also stopped a turn after 2 hours, working or not. A session stopped
 that way says "Stopped by a time limit an earlier version had. Reply to carry on." In Approve
 for me and Full access ELU carries it on by itself the next time the app opens, once, and
