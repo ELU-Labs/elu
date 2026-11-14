@@ -2521,6 +2521,23 @@ test('the Team list says how a teammate is reached in the room its row has: thro
   assert.equal(row(blocked, 51, { trusted: [SARA] }), '○ @sara offline · nobody reaches you both · trusted');
 });
 
+// The owner's report: at 140 columns a long teammate name cut how they are reached to
+// "online ·…". The name gives way first: the reason keeps the room a name of 12 columns
+// leaves, in the longest words that fit there, and the name is cut to what is left.
+test('a long teammate name gives way to how they are reached: the name is cut, the computer it goes through is named whole', () => {
+  const team = (name, member) => ({ key: ME, teams: [{ id: 'team-1', name: 'Core', members: [{ key: ME, name: 'ana' }, { key: SARA, name, ...member }], channels: [] }] });
+  const row = (name, member, width, extra = {}) => visible(chatBar({ status: team(name, member), items: [], ...extra }, width, false).find(item => item.value?.type === 'member').line);
+  const through = { online: true, path: 'relayed', via: "li's computer" }, blocked = { online: false, reach: 'blocked' };
+  // The list beside the chat at 140 columns is 40 wide.
+  assert.equal(row('alexandra-whitfield', through, 40), "● @alexandra-whit… through li's computer");
+  assert.equal(row('alexandra-whitfield', through, 60), "● @alexandra-whitfield online · through li's computer", 'with room, whole');
+  assert.equal(row('alexandra-whitfield', blocked, 40), '○ @alexandra-w… offline · no way through');
+  assert.equal(row('alexandra-whitfield', through, 44, { trusted: [SARA] }), "● @alexandr… through li's computer · trusted", 'with less room the name gives more');
+  for (const width of [28, 34, 40, 44]) assert.ok(row('alexandra-whitfield', through, width).length <= width, `fits ${width}`);
+  // A short name is never cut for it.
+  assert.equal(row('sara', through, 40), "● @sara online · through li's computer");
+});
+
 test('quitting ELU while /join is still looking ends that join first, as Esc does, and saves nothing', async t => {
   const p = project(later(t)); environment(t, p.parent);
   const peer = fakePeer(), v = await view(t, { repo: repository(p.root), peer });
