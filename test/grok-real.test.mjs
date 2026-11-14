@@ -73,3 +73,28 @@ test('the real grok inspect, with no switch set: what it loads of another tool i
   for (const what of ['Cursor hooks', 'Claude hooks']) assert.ok(loads.some(row => row.what === what && row.from === 'switched on (default)' && row.runs), `${what}: ${JSON.stringify(loads)}`);
   assert.ok(!loads.some(row => /sessions/.test(row.what)), 'sessions puts nothing into a turn');
 });
+
+// What Grok Build has no switch for. An agent file under .claude/agents is its own to load:
+// its docs say "Loaded as subagents", its Claude agents switch is the CLAUDE.md scan, and
+// inspect lists the file the same with every switch off, with no vendor and no mark. A Claude
+// settings file in its home is named as a source of its permission rules, beside ELU's
+// config. Both load with all of ELU's switches set, so both are named with their files, as
+// text the model reads: neither is something that runs, and the step is not a required one.
+test('the real grok inspect, with ELU\'s switches: a Claude agent file and a Claude settings file in its home still load, and each is named with its file', { skip, timeout: 180000 }, async t => {
+  const w = world(t), harness = await conformanceHarness({ scratch: path.join(w.dir, 'scratch') });
+  t.after(() => harness.close());
+  const child = agentEnv(w.env, [], grok.childEnv({ mode: 'locked', home: w.home }));
+  const agent = path.join(child.HOME, '.claude', 'agents', 'reviewer.md'), settings = path.join(child.HOME, '.claude', 'settings.json');
+  fs.mkdirSync(path.dirname(agent), { recursive: true }); fs.writeFileSync(agent, '---\nname: reviewer\ndescription: reviews a change\n---\nReview the change.\n');
+  fs.writeFileSync(settings, '{"permissions":{"deny":["Bash(rm:*)"]}}\n');
+  const listed = inspect(harness.repo, child), real = file => fs.realpathSync(file);
+  assert.deepEqual(listed.externalCompat.cells.filter(cell => cell.enabled !== false).map(cell => `${cell.vendor}.${cell.surface}`), [], 'every switch is off');
+  const entry = listed.agents.find(item => item.name === 'reviewer');
+  assert.equal(real(entry.source.path), real(agent), 'the agent file is listed');
+  for (const mark of ['vendor', 'compatibilityStatus', 'disabled']) assert.equal(entry[mark], undefined, `the agent carries no ${mark}`);
+  assert.ok(listed.permissions.sources.some(source => source.endsWith(' (settings)') && real(source.replace(/ \([^()]*\)$/, '')) === real(settings)), JSON.stringify(listed.permissions.sources));
+  assert.deepEqual(grok.foreignTraces(listed).map(row => [row.what, real(row.from), row.runs]), [['Claude agent reviewer', real(agent), false], ['Claude permissions', real(settings), false]]);
+  const step = grok.conformance.find(item => item.id === 'isolation');
+  assert.equal(step.required, false);
+  await assert.rejects(step.run(harness, { bin: REAL, env: w.env }), error => error.loads.length === 2 && error.loads.every(row => row.runs === false) && /Claude agent reviewer/.test(error.message) && /Claude permissions/.test(error.message));
+});
