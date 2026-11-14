@@ -15,6 +15,7 @@ import { readTask, saveTask } from '../lib/state.mjs';
 import { helperLink } from '../lib/remote-helper.mjs';
 import { clockTime } from '../lib/terminal-plan.mjs';
 import { botTarget, chatBar, dmTarget, fitWords, ink, membersLine, peerName, roomTarget, teamPanes, threadTarget, visible } from '../lib/terminal-visuals.mjs';
+import { columns } from '../lib/width.mjs';
 
 const ME = 'a'.repeat(64), SARA = 'b'.repeat(64), LI = 'c'.repeat(64);
 const LONG = 'Could you check whether the retry budget in the uploader resets after a successful flush or only after restart because we keep seeing duplicate batches';
@@ -265,15 +266,16 @@ test('a thread whose row is as wide as its pane keeps its last word, in colour a
   const peer = fakePeer({ items: [] }), v = await view(t, { peer });
   await send(v, '/chats'); await until(() => v.current.view === 'chats', 'Chats');
   await openRow(v, /@sara/, '@sara');
-  // A list row stops one column short of its pane, and 中 takes two columns: the row fills the
-  // pane. blessed wrapped it again at its last space, and a list shows one row of each.
+  // A list row stops one column short of its pane. This one is as wide as a row may be, 中
+  // counted as the two columns it takes. blessed wrapped it again at its last space, and a
+  // list shows one row of each.
   const list = v.panels.teamLists[1], room = list.width - 2, lead = '← @sara asks you · ', words = 'alpha beta gamma delta epsilon zeta eta theta iota kappa lambda'.split(' ');
-  let question = '中 '; for (let at = 0; question.length < room - lead.length - 12; at++) question += `${words[at % words.length]} `;
-  question += `${'m'.repeat(room - lead.length - question.length - 3)} et`;
+  let question = '中 '; for (let at = 0; columns(question) < room - lead.length - 12; at++) question += `${words[at % words.length]} `;
+  question += `${'m'.repeat(room - lead.length - columns(question) - 3)} et`;
   peer.peerItems = () => [{ id: 'incoming-9', kind: 'incoming', peer: SARA, name: 'sara', project: 'web', text: question, at: ago(1), state: 'submitted', threadId: 'th-9' }];
   const row = () => list.items.find(item => /asks you/.test(plainItem(item)));
   await until(() => row(), 'the thread'); v.current.screen.render();
-  assert.equal(plainItem(row()).replace(/\x03/g, '').trimEnd(), `${lead}${question}`); assert.equal(plainItem(row()).replace(/\x03/g, '').trimEnd().length, room, 'one short of the pane, as every list row is');
+  assert.equal(plainItem(row()).replace(/\x03/g, '').trimEnd(), `${lead}${question}`); assert.equal(columns(plainItem(row()).replace(/\x03/g, '').trimEnd()), room, 'one short of the pane, as every list row is');
   assert.equal(row()._clines.length, 1, 'one row, not two');
   assert.ok(v.lines()[row().atop].replace(/\x03/g, '').includes(`${lead}${question}`), 'the whole row is drawn, "et" with it');
 });
