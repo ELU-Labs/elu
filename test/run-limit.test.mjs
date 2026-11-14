@@ -1,11 +1,12 @@
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { project, fakeClis, cli, git } from './helpers.mjs';
 import { repository } from '../lib/git.mjs';
 import { dashboardSnapshot, projectSnapshot, registerProject } from '../lib/projects.mjs';
-import { ownerTyped, pendingRequests, updateRequest } from '../lib/workspace.mjs';
+import { ownerTyped, pendingRequests, removeRequest, updateRequest } from '../lib/workspace.mjs';
 import { Conductor, DEFAULT_SETTINGS, conductorSettings, enqueue, retryRequest, saveConductorSettings, sendCommand } from '../lib/conductor.mjs';
 import { boardRows, boardSections, rowTitle } from '../lib/board.mjs';
 import { SLOTS_RULE, SLOTS_RULE_UNSET, cleanWait, waitOf, waitShort, waitText, waitingText } from '../lib/waiting.mjs';
@@ -13,6 +14,15 @@ import { personalDirectory, readJson } from '../lib/util.mjs';
 import * as v19 from './fixtures/conductor-0.1.19/conductor.mjs';
 import { saveBot } from '../lib/bots.mjs';
 import { saveSchedule, pauseSchedule, runDue, runScheduleNow, parseWhen } from '../lib/schedules.mjs';
+import { createIdentity } from '../lib/peer/identity.mjs';
+import { createTeam } from '../lib/peer/roster.mjs';
+import { createInvite, redeemCode } from '../lib/peer/invite.mjs';
+import { share } from '../lib/peer/shares.mjs';
+import { saveTeamAccess } from '../lib/peer/access.mjs';
+import { message } from '../lib/peer/a2a.mjs';
+import { intakeMethods } from '../lib/peer/intake.mjs';
+import { acceptIncoming } from '../lib/peer/replies.mjs';
+import { getRecord } from '../lib/peer/taskstore.mjs';
 
 // Nothing limits how many sessions run at once until the owner sets a limit with /slots. A
 // limit he set is one number, for one project as for several, and a message that waits for
@@ -351,9 +361,7 @@ test('the number holds back only what starts by itself: each kind the owner make
   assert.deepEqual([byGoal('Check the build when due').scheduleId, byGoal('Check the build when due').typed], [due.id, undefined]);
   assert.deepEqual([byGoal('Check the build now').scheduleId, byGoal('Check the build now').typed], [now.id, true]);
   assert.deepEqual([ownerTyped(byGoal('Check the build when due')), ownerTyped(byGoal('Check the build now'))], [false, true]);
-  // Only he marks a request typed: a teammate's message never is.
-  assert.throws(() => enqueue(p.root, "A teammate's question", { ...teammate('ask'), typed: true }), { message: 'Only what the owner typed himself is marked typed.' });
-  assert.throws(() => enqueue(p.root, "A teammate's handoff", { ...teammate('handoff'), typed: true }), { message: 'Only what the owner typed himself is marked typed.' });
+  // typed is only ever true: it is written where his own hand makes the request.
   assert.throws(() => enqueue(p.root, 'A message', { typed: false }), { message: 'Only what the owner typed himself is marked typed.' });
   assert.equal(SLOTS_RULE, 'What you type always starts; this number limits what starts by itself.');
   assert.equal(SLOTS_RULE_UNSET, 'What you type always starts; a limit holds back what starts by itself.');
@@ -379,23 +387,58 @@ test('his message still waits where waiting is right: for the turn of a session 
   assert.deepEqual(p.pass(), ['Go on', 'Use the short form']);
 });
 
-test("a teammate's message keeps the teammate rule and waits for a slot like all that starts by itself, also once the owner let it start", t => {
-  const p = dispatcher(t, [{ origin: teammate('ask').origin }]);
-  // One teammate slot (the default), taken: the next question of a teammate's waits for it, with slots free.
-  const question = enqueue(p.root, "A teammate's question", teammate('ask'));
-  // A handoff waits for the owner; his y lets it start (retryRequest), and it is still the teammate's.
-  const handoff = enqueue(p.root, "A teammate's handoff", { ...teammate('handoff', { own: true }), permissions: undefined });
-  assert.equal(handoff.state, 'waiting');
-  assert.equal(retryRequest(p.root, handoff.id).typed, true);
-  assert.equal(ownerTyped(request(p.root, handoff.id)), false);
+// Kai's daemon as far as a teammate's message goes (as in ask-failure.test.mjs): ana is on
+// his team, the project is the one teammates' messages run in, and send() delivers one of
+// hers as the wire would. A team with no setting saved is Manual.
+const ANA = 'b'.repeat(64);
+function answering(root) {
+  const me = createIdentity({ name: 'kai' }), team = createTeam(me, 'core');
+  redeemCode(createInvite(me, team.id, { hours: 1 }), ANA, 'ana');
+  share(root, { teams: [team.id], handle: 'shop' });
+  const ctx = { me, kick: () => {}, event: () => {}, push: () => {} }, methods = intakeMethods(ctx);
+  const send = text => getRecord(methods.SendMessage({ message: message({ text, contextId: crypto.randomUUID(), messageId: crypto.randomUUID(), ext: { kind: 'ask', project: 'shop', hop: 1, from: { key: ANA, name: 'ana' } } }) }, { key: ANA }).id);
+  return { team, ctx, send };
+}
+const fromAna = (root, record) => pendingRequests(root).find(row => row.origin?.a2aTaskId === record.task.id);
+
+test("a teammate's message he accepts with his own key starts at once, past /slots and the teammate slot; one that starts by itself keeps the teammate rule and waits for a slot", t => {
+  // /slots 1 with one session of his working, and the one teammate slot (the default) taken.
+  const p = dispatcher(t, [{}, { origin: teammate('ask').origin }]); saveConductorSettings({ maxAgents: 1 });
+  const kai = answering(p.root);
+  // Manual: each message waits for his key, and nothing is queued until then.
+  const sent = ['Add a note to the readme', 'Fix the cart total', 'Where are coupon codes normalized?'].map(kai.send);
+  for (const record of sent) { assert.equal(record.waiting, true); assert.equal(fromAna(p.root, record), undefined); }
+  // y (the session his own prompt would start), w (in a mode he picks now) and the read-only
+  // answer, in Chats or on its card: his decision at that moment, so each is typed.
+  acceptIncoming(kai.ctx, sent[0].task.id, { how: 'own' });
+  acceptIncoming(kai.ctx, sent[1].task.id, { how: 'work', permissions: 'ask', place: { kind: 'worktree' }, folders: [] });
+  acceptIncoming(kai.ctx, sent[2].task.id, { how: 'answer' });
+  const accepted = sent.map(record => fromAna(p.root, record));
+  for (const row of accepted) { assert.equal(row.typed, true, row.goal); assert.equal(ownerTyped(row), true, row.goal); }
+  // All three start at once: neither the number /slots sets nor the teammate slot holds them back.
+  assert.deepEqual(p.pass(), accepted.map(row => row.goal).sort());
+  for (const row of accepted) assert.equal(request(p.root, row.id).waits, undefined, row.goal);
+  for (const row of accepted) removeRequest(p.root, row.id);
+  // One the conductor held for the home folder, which his y on its card lets start (retryRequest), starts at once too.
+  const home = enqueue(p.root, "A teammate's handoff", { ...teammate('handoff', { own: true }), permissions: undefined });
+  assert.equal(home.state, 'waiting');
+  assert.equal(retryRequest(p.root, home.id).typed, true); assert.equal(ownerTyped(request(p.root, home.id)), true);
+  assert.deepEqual(p.pass(), ["A teammate's handoff"]);
+  removeRequest(p.root, home.id);
+  // Auto: the message starts a session by itself, with no key from him. It is not his, keeps
+  // the teammate rule, and waits for the teammate slot.
+  saveTeamAccess(kai.team.id, { handling: 'auto', root: p.root });
+  const auto = fromAna(p.root, kai.send('Check the coupon module'));
+  assert.equal(auto.state, 'queued'); assert.equal(auto.typed, undefined); assert.equal(ownerTyped(auto), false);
   assert.deepEqual(p.pass(), []);
-  for (const row of [question, handoff]) assert.deepEqual(request(p.root, row.id).waits, { on: 'teammates', running: 1, limit: 1 }, row.goal);
-  assert.equal(waitingText(request(p.root, handoff.id)), 'Waiting for a free teammate slot: 1 of 1 is in use.');
-  // The teammate slot frees while every slot is taken: both wait for a slot, as a scheduled run does.
-  p.conductor.runs.delete('run-0'); p.run(); p.run(); saveConductorSettings({ maxAgents: 2 });
+  assert.deepEqual(request(p.root, auto.id).waits, { on: 'teammates', running: 1, limit: 1 });
+  assert.equal(waitingText(request(p.root, auto.id)), 'Waiting for a free teammate slot: 1 of 1 is in use.');
+  // The teammate slot frees while every slot of his is taken: it waits for a slot, as a scheduled run does.
+  p.conductor.runs.delete('run-1');
   assert.deepEqual(p.pass(), []);
-  for (const row of [question, handoff]) assert.deepEqual(request(p.root, row.id).waits, { on: 'slot', running: 2, limit: 2 }, row.goal);
-  // The owner's own message starts beside them.
+  assert.deepEqual(request(p.root, auto.id).waits, { on: 'slot', running: 1, limit: 1 });
+  assert.equal(waitingText(request(p.root, auto.id)), 'Waiting for a free slot: 1 of 1 session is running. /slots changes it.');
+  // The owner's own message starts beside it.
   enqueue(p.root, 'His own message', { continuationTaskId: '31', priority: 0, typed: true });
   assert.deepEqual(p.pass(), ['His own message']);
 });
