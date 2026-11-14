@@ -221,6 +221,26 @@ test("requests put in a Codex turn's folder by hand are held to its own session 
   assert.ok(f.rows('shell.jsonl').every(row => row.inherit === 'core' && row.fenced === BWRAP));
 });
 
+// ELU writes its answer outside the sandbox, in the one folder a sandboxed command may write.
+// A link the command puts where ELU drafts that answer is never followed: the file it names,
+// any file of the owner's, stays as it was.
+test("a link put in a Codex turn's folder where ELU drafts an answer is never followed", { timeout: 90000 }, async t => {
+  const elsewhere = fs.mkdtempSync(path.join(os.tmpdir(), 'elu-linked-')), kept = path.join(elsewhere, 'profile');
+  t.after(() => fs.rmSync(elsewhere, { recursive: true, force: true }));
+  fs.writeFileSync(kept, 'export KEEP=1\n');
+  // The draft's name as ELU made it: the request's id, which the command picks, and ELU's pid.
+  const id = crypto.randomBytes(12).toString('hex');
+  const f = setup(t, { fence: true, shell: [{ when: 'link the draft', run: [`${DROP}; ln -s ${JSON.stringify(kept)} "$d/.${id}.answer.${process.pid}"; printf 'not a request' > "$d/${id}.request.json"; ${answered(id)}`] }] });
+  f.controller.setDefaultModel({ vendor: 'codex' });
+  f.conduct(); await until(() => conductorAlive(), 'the conductor');
+  const request = enqueue(f.root, 'link the draft', { priority: 0, typed: true, permissions: 'auto', bots: [] });
+  await until(() => pendingRequests(f.root).find(row => row.id === request.id)?.state === 'done', 'the turn');
+  const [row] = f.rows('shell.jsonl');
+  assert.equal(row.status, 0, row.out);
+  assert.deepEqual(JSON.parse(row.out), { code: 1, err: 'ELU could not read this request. Nothing was changed.\n' });
+  assert.equal(fs.readFileSync(kept, 'utf8'), 'export KEEP=1\n');
+});
+
 test('in Ask for approval, a command that no longer waits when the owner allows it changes nothing', { timeout: 90000 }, async t => {
   // A request with nobody waiting for it: the command that wrote it never says it still waits.
   const f = setup(t, { fence: true, shell: [{ when: 'rename it late', run: [forged('1', 'ask', ['sessions', 'rename', 'this', 'Late'])] }] });
