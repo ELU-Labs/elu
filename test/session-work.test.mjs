@@ -276,6 +276,30 @@ test('a session that merged main into its branch, or rebased onto it, still show
   assert.deepEqual(parts(forward), [['look', true, 1, 1, 0, BRANCHED], ['feat/task-1', false, 2, 2, 1, BRANCHED]]);
 });
 
+test('a rebase that makes someone else\'s commit anew along with the session\'s own does not make it the session\'s', t => {
+  const { root, repo, folder, land } = scene(t);
+  // The owner commits on main in the project and does not push it. The session branches from that main and commits.
+  commit(root, { 'owner.txt': 'committed here, not pushed\n' }, 'Owner work, not pushed');
+  git(folder, ['checkout', '-q', '-b', 'work', 'main']);
+  commit(folder, { 'src/own.mjs': 'export const own = 1;\n' }, 'Own work');
+  // Other people land work and the session rebases onto it: Git makes the owner's commit anew there, then the session's.
+  land({ 'landed/a.txt': 'a\n'.repeat(30) }, 'Land a file');
+  git(folder, ['fetch', '-q', 'origin']); git(folder, ['rebase', '-q', 'origin/main']);
+  assert.deepEqual(git(folder, ['log', '--format=%s', '-3']).split('\n'), ['Own work', 'Owner work, not pushed', 'Land a file']);
+  write(folder, { 'docs/after.md': 'after the rebase\n' });
+  const changes = taskPatch(repo, '1');
+  assert.deepEqual(names(changes).sort(), ['docs/after.md', 'src/own.mjs']);
+  assert.deepEqual(parts(changes).map(row => row.slice(0, 5)), [['work', true, 2, 2, 0]]);
+  assert.match(changes.parts[0].compared, /^commit [0-9a-f]{8}, where this session branched$/);
+  assert.equal(changes.note, null);
+  assert.deepEqual([sent(repo).names.sort(), sent(repo).counts], [['docs/after.md', 'src/own.mjs'], [2, 2, 0]]);
+  assert.deepEqual(sessionFiles(readTask(repo, '1')), ['docs/after.md', 'src/own.mjs']);
+  // It rebases once more, onto newer work, and rewords its own commit: both are still told apart.
+  land({ 'landed/b.txt': 'b\n'.repeat(30) }, 'Land another');
+  git(folder, ['stash', '-q', '-u']); git(folder, ['fetch', '-q', 'origin']); git(folder, ['rebase', '-q', 'origin/main']); git(folder, ['commit', '-q', '--amend', '-m', 'Own work, said better']);
+  assert.deepEqual([names(taskPatch(repo, '1')), counts(taskPatch(repo, '1'))], [['src/own.mjs'], [1, 1, 0]]);
+});
+
 test('where ELU cannot tell which commits are the session\'s it says so in one line, and counts only what it can stand behind', t => {
   const { repo, folder, land, origin } = scene(t);
   land({ 'landed/a.txt': 'a\n'.repeat(30) }, 'Land a file');
