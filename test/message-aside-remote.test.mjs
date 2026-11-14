@@ -81,6 +81,7 @@ test('a message from my other computer to a session whose turn takes none is ans
   assert.equal(task().state, 'running', 'the turn there goes on');
   look();
   assert.deepEqual(seen().entries.slice(-3).map(entry => [entry.role.replace(/^.* · /, '· '), entry.text, entry.update === true, entry.line === true]), [['You', 'How far are you?', false, false], ['· beside the turn', 'Two of three steps are done. It is running the tests now.', true, false], ['ELU', ASIDE_ANSWERED, false, true]]);
+  assert.equal(seen().beside, 3, 'that computer says which rows are beside its running turn');
   assert.equal(seen().waiting?.length ?? 0, 0, 'nothing of it is left to run');
   // Under the working line there, where he typed it, so a turn with many steps never pushes it out of sight.
   assert.match(pane(), /Working on @box\n[\s\S]*You → @box: How far are you\?\n\n[^\n]+ on @box · beside the turn: Two of three steps are done\. It is running the tests now\.\n\nAnswered beside the running turn, from what it has done so far\. The turn goes on\.\n\n(?:Catching up with @box…\n\n)?Runs on @box/);
@@ -103,4 +104,10 @@ test('a message from my other computer to a session whose turn takes none is ans
   look();
   assert.ok(seen().entries.some(entry => entry.role === 'You' && entry.text === 'Rename the helper too'), 'it is a message of the chat here now');
   assert.equal(seen().waiting?.length ?? 0, 0);
+  // Its turn is over: the answered question is part of the chat here once, in its place, before the message that started the next turn.
+  assert.equal(seen().entries.filter(entry => entry.text === 'How far are you?').length, 1, 'the question is kept once');
+  assert.equal(seen().entries.filter(entry => entry.text === 'Two of three steps are done. It is running the tests now.').length, 1, 'its answer is kept once');
+  assert.equal(seen().beside, undefined, 'nothing is beside a running turn any more');
+  assert.equal(pane().split('How far are you?').length, 2, 'the answered question shows once');
+  assert.match(pane(), /You → @box: Tidy the coupon module\n\nYou → @box: How far are you\?\n\n[^\n]+ on @box · beside the turn: Two of three steps are done\. It is running the tests now\.\n\nAnswered beside the running turn, from what it has done so far\. The turn goes on\.\n[\s\S]*You → @box: Rename the helper too/);
 });
