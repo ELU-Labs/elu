@@ -334,7 +334,7 @@ project folder, reads your home folder (not the secret folders) and uses your MC
 in your default permission mode but never Full access, and its answer goes back without you
 reading it unless it looks like a secret. Any Task it proposes waits for your approval, and
 only an approved Task's edit runs in a new worktree. **Manual** keeps each message waiting
-until you press y. You can also write rules in plain English, such as "Only work on the elu
+until you press y, and its sender reads that it waits for you. You can also write rules in plain English, such as "Only work on the elu
 repo. Don't write anything until I accept it.", and every session a teammate starts is told
 them. A teammate's message never runs in your home folder on its own: ELU asks you
 first, and runs it there only when you press y. Their session shows their own words under their name. Push, merge, tag, deploy and publish stay blocked as they are for your own sessions in
@@ -496,9 +496,9 @@ cost, so its cost reads not reported. A run whose vendor sent no tokens says `no
 never 0. A turn you stop counts with the tokens it had used; Claude Code says a cost only
 when a turn ends.
 
-You need macOS or Linux, Node 22 or newer, Git, and Claude Code (`claude`) installed and
-signed in: new projects and the built-in bots run on it. To run sessions on Codex
-(`codex`), sign in to it and choose it with `/model`.
+You need macOS or Linux, Node 22 or newer, Git, and one vendor's command line installed and
+signed in: Claude Code (`claude`), Codex (`codex`), Antigravity CLI (`agy`) or Grok Build
+(`grok`). With more than one, choose with `/model`.
 
 New sessions start on the default model. A project's default is set with `/model default
 <name>`, or in its settings: Projects, Enter, Default model. This computer's default, which
@@ -508,8 +508,11 @@ default is the first vendor installed on this computer, in this order: Claude Co
 Antigravity CLI, Grok Build. So a computer that has only Grok Build runs every new session on
 it, also one that a teammate's message, your other computer or a schedule starts. A default
 whose vendor is not installed here is not used, and ELU says so wherever it shows the
-default. A bot that names no model, and whose vendor is not installed here, runs on this
-computer's default; a bot that names its model keeps it.
+default. A bot whose vendor is not installed here runs on this computer's default, reviews
+too: its row in the Bots tab says so. Where no vendor installed can review, an edit goes on
+and the chat says `Not reviewed: no model on this computer can review.` A teammate's
+question (the read-only kind) is answered by Claude Code only; without it, both sides read
+why, and the owner can set `/access` to Auto so teammates' messages start sessions instead.
 
 Codex must be installed even if your sessions run on Claude Code, but it does not need to
 be signed in. ELU runs your project's checks and its pre-push hooks inside Codex's

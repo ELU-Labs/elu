@@ -26,10 +26,17 @@ out, the session says
 ## The one-time check
 
 ELU starts the check by itself before the first turn on Grok goes out, whether you wrote
-to a session on it or to a bot on it, or the turn started without you: a scheduled turn, a
+to a session on it or to a bot on it, or the turn started without you: a teammate's message
+that starts a session of yours (`/access` Auto, or your `y` or `w` on it), a scheduled turn, a
 shadow turn, a review, a standup or a Task's work. The session says so first, then shows
 each step as it ends, and then the turn goes on. The check takes about seven short turns on
 Grok and a few minutes. `c` in the Usage tab starts it too.
+
+Grok Build reviews, and can be a bot's vendor, once the check passed: a review runs on its
+Read only launch, which the check proves writes nothing, runs no command and reaches no
+network on this machine. It does not answer a teammate's question (the read-only kind
+teammates ask of a shared project): only Claude Code's launch keeps every read inside the
+project, hides what Git does not track, and holds the run under a dollar cap.
 
 The Usage tab shows whether Grok is signed in before the check has run: it looks for
 `~/.grok/auth.json`, never opens it, and runs nothing. Its line then says
@@ -69,7 +76,7 @@ What a result turns off:
   signed in, say). A step that failed because Grok did what the step forbids stays failed
   until `c` in the Usage tab checks again.
 - **`relay` fails.** Ask and Auto still work, but a blocked action is reported instead of
-  asked: `Grok can't ask live here. Blocked actions are reported.`
+  asked: `Grok Build can't ask live here. Blocked actions are reported.`
 - **`isolation` finds something.** Nothing is turned off by that alone. Text the model reads
   (instructions, a rule, a skill, an agent) is named once after the check and under Grok's
   line in the Usage tab, with its file. A hook, an MCP server or a plugin, which would run,
