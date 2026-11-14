@@ -2207,6 +2207,30 @@ test("Sessions groups my computer's sessions of this repository under its name, 
   assert.deepEqual(older.slice(0, 2), ['On devbox · offline', 'Update ELU on devbox to see its sessions here.']);
 });
 
+// A schedule's run there opens with the schedule's message, which nobody typed: it reads as the
+// schedule's, as that computer's own chat says it, never as one sent from here.
+test("a schedule's run on my other computer shows its first message as the schedule's", () => {
+  const SHOP = 'a'.repeat(64), D = 'd'.repeat(64), shop = '1'.repeat(16), now = Date.now(), ago = minutes => new Date(now - minutes * 60000).toISOString();
+  const status = { key: 'k'.repeat(64), name: 'ana', box: 'laptop', teams: [{ members: [{ key: 'k'.repeat(64), name: 'ana' }, { key: D, name: 'ana', box: 'devbox', online: true }] }] };
+  const shown = (by, entries) => {
+    const listed = { id: crypto.randomUUID(), ref: `${shop}:2`, project: shop, title: 'Nightly check', state: 'answered', at: ago(1), createdAt: ago(6), approvals: [], by, who: null };
+    const watched = { id: crypto.randomUUID(), machine: D, ref: `${shop}:2`, createdAt: ago(6), lastAt: ago(1), state: 'answered', title: 'Nightly check', entries, steps: [], approvals: [] };
+    const facade = { mineRows: () => [{ key: D, mine: true, theirs: true }], remoteSessions: () => [watched], remoteMachines: () => [{ key: D, listedAt: ago(0), older: false, projects: [{ id: shop, name: 'shop', repoId: SHOP, home: false }], sessions: [listed] }], projectRepoId: root => root === '/work/shop' ? SHOP : null };
+    const glue = remoteGlue({ facade, peerRead: () => status, peerCommand: async () => ({}), chatMessage: ({ title, text }) => `${title}: ${text}`, ink: text => text, colour: false, restMs: 0 });
+    return glue.view(glue.sections(now, '/work/shop').find(line => line.row?.ref === `${shop}:2`).row, 80);
+  };
+  const chat = [{ n: 1, role: 'You', at: ago(5), text: 'Check the build' }, { n: 2, role: 'Opus 5.5', lead: true, at: ago(4), text: 'It builds.' }, { n: 3, role: 'You', at: ago(2), text: 'And the tests?' }];
+  const timed = shown('schedule', chat);
+  assert.match(timed, /^Schedule: Check the build$/m);
+  assert.doesNotMatch(timed, /You → @devbox: Check the build/);
+  // What came after it is the owner's, as before.
+  assert.match(timed, /Opus 5\.5 on @devbox: It builds\.[\s\S]*You → @devbox: And the tests\?/);
+  // Only its first message: when the newest entries alone are here, the first one held is not the schedule's.
+  assert.match(shown('schedule', chat.slice(1)), /^You → @devbox: And the tests\?$/m);
+  // A session the owner started reads as his, as before.
+  assert.match(shown('you', chat), /^You → @devbox: Check the build$/m);
+});
+
 // The owner's two computers as they are: projects that are folders holding clones, with no
 // origin of their own. A session there shows here when it works in a repository this project
 // holds, found as the Kanban finds it.
