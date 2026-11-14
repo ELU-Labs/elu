@@ -134,8 +134,8 @@ test('each way a session a teammate\'s message started can fail is told in plain
 test('a teammate gets the reason with paths cut, a trusted one and my own computer with paths kept, and a possible secret stays here', t => {
   const p = setup(t), kai = answering(p), place = '/srv/kai/private/notes.txt';
   const error = `Refusing a symbolic link at ${place}`;
-  // A message that has a project to run in says nothing more while it waits for the owner.
-  assert.equal(said(kai.send().task), null);
+  // A message that has a project to run in and waits for the owner's yes says that: delivered is not started.
+  assert.equal(said(kai.send().task), 'It waits for a yes on @kai: messages there are accepted by hand (Chats, then y).');
   assert.equal(ended(p, kai, { error, session: {} }), 'Refusing a symbolic link at [path] on @kai. Send it again.');
   assert.equal(ended(p, kai, { error: 'Could not read the settings: API_KEY=sk-ant-abcdefghijklmnopqrstuvwxyz0123456789', session: {} }), 'The run failed on @kai. Its reason stays there: it may hold a secret.');
   savePeerPolicy(ANA, { trusted: true });
