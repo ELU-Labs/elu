@@ -5,7 +5,7 @@ import { PassThrough } from 'node:stream';
 import { project, temp, fakeClis } from './helpers.mjs';
 import { liveTask } from './peer-helpers.mjs';
 import { repository } from '../lib/git.mjs';
-import { registerProject, taskDetails } from '../lib/projects.mjs';
+import { registerProject, sessionWire } from '../lib/projects.mjs';
 import { saveRequest, pendingRequests, updateRequest } from '../lib/workspace.mjs';
 import { launchTerminal } from '../lib/terminal.mjs';
 import { listBots, removeBot, saveBot } from '../lib/bots.mjs';
@@ -2749,15 +2749,18 @@ test('the Changes of a session its computer has not sent yet say so and ask for 
   assert.ok(Date.now() - started < 3000, `it took ${Date.now() - started} ms`);
   assert.equal(sessionTabs.getText().trim(), 'Chat   Changes 302');
   assert.doesNotMatch(changes.getText(), /not shown|not read|truncated/);
-  assert.match(cursorLine(v), /^▌▸ src\/f0\.mjs +\+100 −100$/, 'a long list starts folded, the cursor on its first file');
+  assert.match(cursorLine(v), /^▌▸ big\.txt +new +\+30,000 +−0$/, 'a long list starts folded, the cursor on its first file');
+  // So many files are listed folder by folder: the project's own files first, then each folder's under its name, the counts in columns.
+  assert.deepEqual(changeLines(v).slice(2, 7).map(squeezed), ['▌▸ big.txt  new  +30,000  −0', ' ▸ wide.txt  new  +1  −0', ' src/', '  ▸ f0.mjs  +100 −100', '  ▸ f1.mjs  +100 −100']);
+  assert.deepEqual([...new Set(changeLines(v).slice(2, 7).filter(row => /▸/.test(row)).map(row => row.length))].length, 1);
   // The end of the list, and the end of the longest file: every line is there.
-  v.input.write('\x1b[F'); await until(() => /^▌▸ wide\.txt +new +\+1 −0$/.test(cursorLine(v)), 'End goes to the last file');
-  v.input.write('['); await until(() => /^▌▸ big\.txt +new +\+30,000 −0$/.test(cursorLine(v)), 'the file before it');
+  v.input.write('\x1b[F'); await until(() => /^▌ {2}▸ f299\.mjs +\+100 −100$/.test(cursorLine(v)), 'End goes to the last file');
+  v.input.write('\x1b[H]'); await until(() => /^▌▸ big\.txt +new +\+30,000 +−0$/.test(cursorLine(v)), 'Home, then ] to the first file');
   const opened = Date.now();
   v.input.write('\r'); await until(() => /^▌▾ big\.txt/.test(cursorLine(v)) && changeLines(v).some(row => / {5}1 \+ line 1$/.test(row)), 'its 30,000 lines open');
   assert.ok(Date.now() - opened < 3000, `unfolding took ${Date.now() - opened} ms`);
-  v.input.write('\x1b[F'); await until(() => /^▌▸ wide\.txt/.test(cursorLine(v)) && changeLines(v).some(row => /30000 \+ line 30000$/.test(row)), 'its last line is one End away');
-  v.input.write('\r\x1b[F'); await until(() => /^▌ +(?:word ?)+$/.test(cursorLine(v)), 'the line of 50,000 characters, to its end');
+  v.input.write(']'); await until(() => /^▌▸ wide\.txt/.test(cursorLine(v)) && changeLines(v).some(row => /30000 \+ line 30000$/.test(row)), 'its last line is one file away');
+  v.input.write('\r]'); await until(() => /^▌ {2}▸ f0\.mjs/.test(cursorLine(v)) && changeLines(v).some(row => /^ +(?:word ?)+$/.test(row)), 'the line of 50,000 characters, to its end');
   assert.doesNotMatch(changes.getText(), /not shown|more character/);
 });
 
@@ -2766,7 +2769,7 @@ test('the Changes of a session here and of the same session followed from anothe
   const files = { 'src/coupon.mjs': 'export const normalize = (value) => value.trim().toUpperCase();\n', 'src/report.mjs': `export function report(d) {\n  const lines = [];\n${WIDE(', buyers or notes')}\n  return lines;\n}\n`, 'docs/notes.md': '# Notes\n\nOne.\nTwo.\n' };
   const { repo } = liveTask(p.root, { id: '1', goal: 'Fix the coupons', files });
   // What this session's computer sends of it is what a computer that follows it shows.
-  const at = new Date().toISOString(), patch = taskDetails(repo, '1').diff;
+  const at = new Date().toISOString(), patch = sessionWire(repo, '1');
   const session = { id: '88888888-8888-4888-8888-888888888888', machine: SARA, createdAt: at, lastAt: at, title: 'Followed from afar', state: 'ready', approvals: [], steps: [], entries: [{ role: 'You', at, text: 'Fix the coupons' }], diff: { summary: '3 files', patch } };
   const peer = fakePeer({ items: [], mine: [{ key: SARA, mine: true, theirs: true }], remote: [session] }), v = await view(t, { columns: 140, rows: 50, repo, dashboard: true, peer });
   const { board, chat, changes } = v.panels, keys = () => v.panels.keys.getText().trim(), focused = () => v.current.screen.focused;
@@ -2775,7 +2778,7 @@ test('the Changes of a session here and of the same session followed from anothe
   board.focus(); selectRow(board, /Fix the coupons/); v.input.write('d');
   await until(() => v.current.sessionView === 'changes' && focused() === changes && /3 files changed/.test(changes.getText()), 'the Changes of the session here');
   const here = changeLines(v);
-  assert.match(here[0], /· 3 files changed · \+10 −1$/);
+  assert.equal(here[0], ' 3 files changed · +10 −1 · compared with main as it was when this session started');
   assert.equal(squeezed(here[2]), '▌▾ src/coupon.mjs  +1 −1');
   assert.deepEqual(here.slice(3, 7), [' src/coupon.mjs · line 1', ' 1   - export const normalize = (value) => value;', '   1 + export const normalize = (value) => value.trim().toUpperCase();', '']);
   assert.ok(here.some(row => /^ src\/report\.mjs · line 1$/.test(row)) && here.some(row => /^ docs\/notes\.md · line 1$/.test(row)));
@@ -2793,8 +2796,8 @@ test('the Changes of a session here and of the same session followed from anothe
   // There: the same files and the same rows under the summary, drawn by the same code.
   v.input.write('\x1b'); await until(() => focused() === board, 'back to the list');
   selectRow(board, /Followed from afar/); v.input.write('d');
-  await until(() => v.current.sessionView === 'changes' && focused() === changes && /^ 3 files changed · \+10 −1$/.test(changeLines(v)[0]), 'the Changes of the session there');
-  assert.deepEqual(changeLines(v).slice(1), here.slice(1));
+  await until(() => v.current.sessionView === 'changes' && focused() === changes && /^ 3 files changed · \+10 −1 · compared with main/.test(changeLines(v)[0]), 'the Changes of the session there');
+  assert.deepEqual(changeLines(v), here);
 });
 
 test('at 80x24 the line that says a session’s changes are not here yet is whole, on the rows it needs, with no cursor beside it', { timeout: 30000 }, async t => {
