@@ -2548,6 +2548,8 @@ test('a result of any length reaches the teammate whole: over 16000 characters a
   assert.ok(long.length > 16000 && long.length < 160000, String(long.length));
   tell(long);
   await until(() => askRecord(ana.home, askId)?.result?.text === long, 'the long result at ana');
+  // The thread gets its line right after the result is kept: a moment later under load.
+  await until(() => lines(ana.home, 'in').length === 1, 'the long result in the thread at ana');
   assert.deepEqual(lines(sara.home, 'out'), [long]); assert.deepEqual(lines(ana.home, 'in'), [long]);
   await until(() => continued().length === 1, 'the chat continued with the long result');
   assert.deepEqual(continued(), [long]);
@@ -2561,6 +2563,7 @@ test('a result of any length reaches the teammate whole: over 16000 characters a
   assert.ok(Buffer.byteLength(huge) > 2 * 1024 * 1024, String(huge.length));
   await run(sara.home, { type: 'approve', id: held.id, text: huge });
   await until(() => askRecord(ana.home, askId)?.result?.text === huge, 'the result over 1 MiB at ana', 120000);
+  await until(() => lines(ana.home, 'in').length === 2, 'the result over 1 MiB in the thread at ana');
   assert.deepEqual(lines(sara.home, 'out'), [long, huge]); assert.deepEqual(lines(ana.home, 'in'), [long, huge]);
   // The chat is continued right after the result is kept: a moment later under load.
   await until(() => continued().length === 2, 'the chat continued with the second result');
@@ -2576,6 +2579,7 @@ test('a result of any length reaches the teammate whole: over 16000 characters a
   await until(() => askRecord(ana.home, askId)?.result?.text === `${huge}\nAgain.`, 'the second long result at ana', 120000);
   tell('All done.');
   await until(() => askRecord(ana.home, askId)?.result?.text === 'All done.', 'the result after a long thread');
+  await until(() => withHome(ana.home, () => thread(threadId)).at(-1)?.text === 'All done.', 'the result after a long thread in the thread at ana');
   for (const home of [ana.home, sara.home]) {
     const kept = withHome(home, () => thread(threadId));
     assert.equal(kept.at(-1).text, 'All done.'); assert.ok(verifyThread(kept));
