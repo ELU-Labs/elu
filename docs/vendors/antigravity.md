@@ -147,6 +147,28 @@ The turn limits hold in both. Over ACP a turn that prints nothing for the quiet 
 minutes, or the role's `timeoutSeconds`) is stopped, as with every vendor that prints as it
 works. A headless run prints only at the end, so it has no quiet limit, only the two-hour cap.
 
+## The model and the tokens
+
+Headless, the model you chose with `/model` goes on the command line (`--model`), and the
+output names the model that ran. Over ACP there is no such flag: the session itself holds
+its model. Right after the session opens and before anything is asked, ELU sets the model
+you chose the way the session offers it: `session/set_config_option` on its `model` option,
+or `session/set_model` where it lists its models instead. A resumed conversation that
+already runs your model is left as it is. With no model chosen nothing is set, and `agy`
+runs its own.
+
+Where `agy acp` offers no way to choose a model, or refuses the one you chose, the turn has
+not started. Full access and Read only then run headless with `--model`, once, and the chat
+shows the line that counts the time. Ask for approval and Approve for me do not run on
+another model: the turn ends with `Antigravity could not finish. It offers no way to choose
+a model over ACP.` Choose Antigravity's own model with `/model`, or Full access.
+
+The run keeps the model the session named, and the tokens `agy` sent with the answer to the
+turn: ACP's `usage` (input, output, cache read, cache write; thought tokens count as output
+where the total counts them apart), or `_meta.quota.token_count`. The Usage tab's top agents
+show them. Where `agy` sent none, and for every headless run, the row says `not reported`,
+never 0. Antigravity reports no cost.
+
 ## What is not enforced, or not verified
 
 Everything above comes from Google's documentation and the Antigravity changelog; the
@@ -173,6 +195,9 @@ one-time check is the proof, per machine. In particular, until a check says othe
   before every run); and that a Read only session follows the deny rules in its settings.
   The `relay` and `live-read-only` steps check the last on your machine; where the real
   `agy` behaves otherwise they fail, and the mode runs headless;
+- the model and the tokens over ACP were seen only in tests against a stand-in `agy`, which
+  follows the ACP standard: that `agy acp` lists a `model` option or its models, takes the
+  ids `--model` takes, and ends a turn with `usage`;
 - whether a command can write in a folder given with `--add-dir`: the `write_file` deny
   covers the file tool;
 - on Linux, `--sandbox` needs unprivileged user namespaces; without them Read only and

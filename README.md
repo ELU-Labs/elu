@@ -423,8 +423,9 @@ Claude Code reports during your sessions. For Codex plan usage, ELU starts Codex
 open a project that is set up or send a message, at most once a minute while a session is
 on screen, and from the Usage tab ([what is read and when](SECURITY.md#credentials)).
 Its top agents add up what each vendor reported for each run: the cost and tokens Claude Code
-reports (its cost is the API price, also on a subscription), and Codex's tokens. Codex
-reports no cost, so its cost shows as —.
+reports (its cost is the API price, also on a subscription), Codex's tokens, and the tokens
+Grok Build and Antigravity send with a turn (Antigravity over ACP only). Codex reports no
+cost, so its cost shows as —. A run whose vendor sent no tokens says `not reported`, never 0.
 
 You need macOS or Linux, Node 22 or newer, Git, and Claude Code (`claude`) installed and
 signed in: new projects and the built-in bots run on it. To run sessions on Codex
