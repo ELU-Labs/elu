@@ -25,11 +25,25 @@ test("the owner's stopped session: 0.1.9's time limit, kept as could not finish,
   assert.equal(said({ error: { message: 'Antigravity could not finish.', cause: 'unknown', timedOut: true, stoppedBy: 'quiet' } }).text, 'Stopped before it finished. Your changes are kept. Type continue to carry on.');
 });
 
-test("0.1.11's quiet and cap lines already say what to do, and stay as they are", () => {
-  for (const message of ['Stopped after 10 minutes with no output. Your changes are kept. Reply to carry on.', 'Stopped after 2 hours, the most one turn may run. Reply to carry on.']) {
-    const stop = said({ error: { message, cause: 'quiet', timedOut: true, stoppedBy: 'quiet' } });
-    assert.equal(stop.text, message); assert.equal(stop.action, 'Reply to carry on.'); assert.equal(stop.short, 'reply to carry on');
-  }
+test("0.1.11's quiet line already says what to do, and stays as it is", () => {
+  const message = 'Stopped after 10 minutes with no output. Your changes are kept. Reply to carry on.';
+  const stop = said({ error: { message, cause: 'quiet', timedOut: true, stoppedBy: 'quiet' } });
+  assert.equal(stop.text, message); assert.equal(stop.action, 'Reply to carry on.'); assert.equal(stop.short, 'reply to carry on');
+});
+
+// 0.1.19 and earlier stopped a turn that had run two hours, working or not. This version has
+// no such limit, and a session stopped that way says so, however long ago it was saved.
+test('a session an earlier version stopped at its two-hour cap reads as stopped by a time limit this version does not have', () => {
+  const cap = { message: 'Stopped after 2 hours, the most one turn may run. Reply to carry on.', cause: 'time-limit', timedOut: true, stoppedBy: 'cap', logFile: null };
+  const stop = said({ kind: 'conversation', error: cap });
+  assert.equal(stop.text, 'Stopped by a time limit an earlier version had. Reply to carry on.');
+  assert.equal(stop.action, 'Reply to carry on.'); assert.equal(stop.short, 'reply to carry on');
+  // An editing turn's changes are on disk, as its own line said.
+  assert.equal(said({ error: { ...cap, message: 'Stopped after 2 hours, the most one turn may run. Your changes are kept. Reply to carry on.' } }).text, 'Stopped by a time limit an earlier version had. Your changes are kept. Reply to carry on.');
+  // A vendor over ACP that reported only that it could not finish, stopped at the cap.
+  assert.equal(said({ kind: 'conversation', error: { message: 'Antigravity could not finish.', cause: 'unknown', timedOut: true, stoppedBy: 'cap' } }).text, 'Stopped by a time limit an earlier version had. Reply to carry on.');
+  assert.equal(said({ error: { message: 'Antigravity could not finish.', cause: 'unknown', timedOut: true, stoppedBy: 'cap' } }).text, 'Stopped by a time limit an earlier version had. Your changes are kept. Reply to carry on.');
+  assert.doesNotMatch(stop.text, /2 hours|most one turn/);
 });
 
 test('a turn that could not finish names the cause when it is known, then the one thing to do', () => {
