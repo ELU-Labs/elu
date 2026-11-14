@@ -28,9 +28,11 @@ test('a run records the tokens and model its vendor reported, and none where it 
   assert.deepEqual(runUsage('claude', JSON.stringify({ type: 'result', usage: { input_tokens: 6, output_tokens: 6, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } })).tokens, { input: 6, output: 6, cacheRead: 0, cacheWrite: 0 });
   // The recorded native stream: its result's usage.
   assert.deepEqual(runUsage('claude', fs.readFileSync(path.join(FIXTURES, 'native-claude.jsonl'), 'utf8')).tokens?.output, 6);
-  // Codex: every turn, input without the cached part, which is the cache read.
-  const codex = fs.readFileSync(path.join(FIXTURES, 'codex-blocked.jsonl'), 'utf8') + '\n' + JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1000, cached_input_tokens: 400, output_tokens: 10 } });
-  assert.deepEqual(runUsage('codex', codex), { tokens: { input: 34605 - 17024 + 600, output: 612, cacheRead: 17024 + 400, cacheWrite: 0 }, model: null });
+  // Codex: the thread's total when the run ended (each turn.completed holds what the thread has
+  // used so far), input without the cached part, which is the cache read; and the thread.
+  const codex = fs.readFileSync(path.join(FIXTURES, 'codex-blocked.jsonl'), 'utf8');
+  assert.deepEqual(runUsage('codex', codex), { tokens: { input: 34605 - 17024, output: 602, cacheRead: 17024, cacheWrite: 0 }, model: null, thread: '0199c0de-0000-7000-8000-00000000b10c' });
+  assert.deepEqual(runUsage('codex', codex + '\n' + JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 40000, cached_input_tokens: 20000, output_tokens: 700 } })).tokens, { input: 20000, output: 700, cacheRead: 20000, cacheWrite: 0 });
   // Grok Build: its one JSON result.
   const grok = JSON.stringify({ text: '{}', stopReason: 'end_turn', usage: { input_tokens: 10, cache_read_input_tokens: 2, cache_creation_input_tokens: 0, output_tokens: 5 } });
   assert.deepEqual(runUsage('grok', grok), { tokens: { input: 10, output: 5, cacheRead: 2, cacheWrite: 0 }, model: null });

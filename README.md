@@ -563,10 +563,10 @@ Claude Code reports during your sessions. For Codex plan usage, ELU starts Codex
 `app-server`, which asks with your Codex sign-in, whenever `codex` is installed: when you
 open a project that is set up or send a message, at most once a minute while a session is
 on screen, and from the Usage tab ([what is read and when](SECURITY.md#credentials)).
-Its top agents add up what each vendor reported for each run: the cost and tokens Claude Code
-reports (its cost is the API price, also on a subscription), Codex's tokens, and the tokens
-Grok Build and Antigravity send with a turn (Antigravity over ACP only). Codex reports no
-cost, so its cost reads not reported. A run whose vendor sent no tokens says `not reported`,
+Its top agents add up what each run spent: the cost Claude Code reports (the API price, also
+on a subscription), and the tokens Codex, Grok Build and Antigravity report, at the model's
+API list price. Codex reports what its thread has used so far, so a session that goes on in
+the same thread counts each run's own share once. A run whose cost is not known shows a dash,
 never 0. A turn you stop counts with the tokens it had used; Claude Code says a cost only
 when a turn ends.
 

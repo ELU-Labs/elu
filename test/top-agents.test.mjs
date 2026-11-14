@@ -49,7 +49,8 @@ function records(t) {
     claudeLog(logFile, { session: id, model: 'fable', total, usage: fable.slice(0, 4), models: { fable, ...(opus ? { opus } : {}) } });
     return { role: 'bot:lead', vendor: 'claude', at: at(hours), session: id, logFile, code: 0, costUsd: total, model: MODELS.fable };
   };
-  // A Codex turn: [input_tokens, cached_input_tokens, output_tokens]. Codex reports no cost.
+  // A Codex turn: what its thread had used when it ended, [input_tokens, cached_input_tokens,
+  // output_tokens], as Codex reports it; each turn goes on with the session's thread. Codex reports no cost.
   const codex = (hours, usage) => {
     const logFile = log('lead');
     fs.writeFileSync(logFile, [{ type: 'thread.started' }, { type: 'turn.started' }, { type: 'turn.completed', usage: { input_tokens: usage[0], cached_input_tokens: usage[1], cache_write_input_tokens: 0, output_tokens: usage[2] } }].map(row => JSON.stringify(row)).join('\n'));
@@ -85,7 +86,7 @@ function records(t) {
       cart('lead', 2.3, [2, 700, 31000, 6000, 0.1]),
       cart('lead', 2.4, [4, 1300, 80000, 7000, 0.15]),
       cart('lead', 2.5, [30, 5000, 800000, 14000, 0.4]),
-      codex(4.3, [80000, 60000, 900]), codex(4.35, [50000, 30000, 400]), codex(6.3, [400000, 350000, 2000])], { bots: null }),
+      codex(4.3, [80000, 60000, 900]), codex(4.35, [130000, 90000, 1300]), codex(6.3, [530000, 440000, 3300])], { bots: null }),
     task(5, 'Password reset email flow', [
       reset('lead', -2.2, [8, 2400, 70000, 26000, 0.3]),
       reset('lead', 0.9, [6, 3200, 60000, 33000, 0.45])], { bots: null }),

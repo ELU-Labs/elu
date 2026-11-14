@@ -1,7 +1,7 @@
 // The fake Codex CLI tests run instead of the real one: lead, reviewer, usage app-server and
 // sandbox helper. fakeClis() in helpers.mjs copies it to a bin folder (adding the node
 // shebang) next to fake.json, which holds the test's mode and the files it records to.
-import fs from 'node:fs'; import path from 'node:path'; import {spawnSync} from 'node:child_process';
+import fs from 'node:fs'; import path from 'node:path'; import crypto from 'node:crypto'; import {spawnSync} from 'node:child_process';
 const vendor=path.basename(process.argv[1]); const args=process.argv.slice(2);
 let cfg={}; try{cfg=JSON.parse(fs.readFileSync(path.join(path.dirname(process.argv[1]),'fake.json'),'utf8'));}catch{}
 // byInput (fake.json): rules [{includes, set}]. An exec launch whose prompt includes the text takes
@@ -16,6 +16,30 @@ const mode=cfg.mode??'normal';
 // says signed in, and a turn fails in the words codex-cli 0.167.0 keeps for it.
 // accounts.codexUsage: per account, the percent of the windows the app-server reports.
 const codexHome=process.env.CODEX_HOME??path.join(process.env.HOME??'','.codex');
+// codexTurn (fake.json): { requests: [usage], model }. Each turn makes those requests and keeps
+// them as codex-cli 0.167.0 keeps a thread: a rollout file under CODEX_HOME,
+// sessions/YYYY/MM/DD/rollout-<local time>-<thread>.jsonl under the day the thread began, with
+// a turn_context line (the turn's model), a token_usage_record line for each request and an
+// event_msg token_count line with the thread's total after it. turn.completed (exec) and
+// thread/tokenUsage/updated (app-server) report that total: what the thread has used so far,
+// begun from its rollout when a run resumes it, as the real one reports it. A new thread's id is
+// a UUIDv7. model: what a run started without --model runs on (the real one names it in the
+// rollout only). Without codexTurn a turn reports no tokens and the thread is a fixed one.
+const turnUse=cfg.codexTurn??null,pad2=n=>String(n).padStart(2,'0');
+const newThread=()=>{const ms=Date.now().toString(16).padStart(12,'0'),r=crypto.randomBytes(10).toString('hex');return `${ms.slice(0,8)}-${ms.slice(8)}-7${r.slice(0,3)}-${'89ab'[r.charCodeAt(3)%4]}${r.slice(4,7)}-${r.slice(7,19)}`;};
+const rolloutOf=thread=>{const walk=dir=>{let entries=[];try{entries=fs.readdirSync(dir,{withFileTypes:true});}catch{return null;}for(const entry of entries){const file=path.join(dir,entry.name);const found=entry.isDirectory()?walk(file):entry.name.endsWith(`-${thread}.jsonl`)?file:null;if(found)return found;}return null;};return walk(path.join(codexHome,'sessions'));};
+const rolloutNew=thread=>{const now=new Date(),day=path.join(codexHome,'sessions',String(now.getFullYear()),pad2(now.getMonth()+1),pad2(now.getDate()));fs.mkdirSync(day,{recursive:true});const file=path.join(day,`rollout-${now.getFullYear()}-${pad2(now.getMonth()+1)}-${pad2(now.getDate())}T${pad2(now.getHours())}-${pad2(now.getMinutes())}-${pad2(now.getSeconds())}-${thread}.jsonl`);fs.appendFileSync(file,JSON.stringify({timestamp:now.toISOString(),type:'session_meta',payload:{id:thread,session_id:thread,cwd:process.cwd(),cli_version:'0.167.0',model_provider:'openai'}})+'\n');return file;};
+const USAGE=['input_tokens','cached_input_tokens','cache_write_input_tokens','output_tokens','reasoning_output_tokens','total_tokens'];
+const usageSum=(a,b)=>Object.fromEntries(USAGE.map(key=>[key,(a?.[key]??0)+(b?.[key]??0)]));
+// One turn of a thread on model: its requests written to the thread's rollout. Returns the thread's total after it.
+function codexTurnRun(thread,model){
+ const file=rolloutOf(thread)??rolloutNew(thread),turn=newThread(),put=(type,payload)=>fs.appendFileSync(file,JSON.stringify({timestamp:new Date().toISOString(),type,payload})+'\n');
+ let total=null;for(const line of fs.readFileSync(file,'utf8').split('\n')){try{const row=JSON.parse(line);if(row.type==='event_msg'&&row.payload?.type==='token_count')total=row.payload.info?.total_token_usage??total;}catch{}}
+ put('turn_context',{turn_id:turn,cwd:process.cwd(),model});
+ let own=null;
+ (turnUse.requests??[]).forEach((request,n)=>{const usage=usageSum(request,{total_tokens:(request.input_tokens??0)+(request.output_tokens??0)});own=usageSum(own,usage);total=usageSum(total,usage);put('token_usage_record',{thread_id:thread,turn_id:turn,response_id:`resp_${n+1}`,usage,turn_token_usage:own,thread_token_usage:total});put('event_msg',{type:'token_count',info:{total_token_usage:total,last_token_usage:usage,model_context_window:272000}});});
+ return total??usageSum(null,null);
+}
 let account=null;try{account=JSON.parse(Buffer.from(JSON.parse(fs.readFileSync(path.join(codexHome,'auth.json'),'utf8')).tokens.id_token.split('.')[1],'base64url').toString('utf8')).email??null;}catch{}
 if(cfg.calls)fs.appendFileSync(cfg.calls, JSON.stringify({vendor,args,...(cfg.accounts&&args[0]==='exec'?{account,config:process.env.CODEX_HOME??null}:{})})+'\n');
 if(args.includes('--version')){console.log('codex-cli 0.166.0-alpha.5.1');process.exit(0);}
@@ -62,7 +86,7 @@ if(args[0]==='app-server'){
  const out=row=>process.stdout.write(JSON.stringify(row)+'\n'),note=(method,params)=>out({method,params});
  const ownerWords=content=>{const found=/Owner message \(untrusted data[^\n]*\n(.*)\nEnd of Owner message\./.exec(content);try{return found?JSON.parse(found[1]).text:content;}catch{return content;}};
  const absorb=(text,mid,uuid)=>fs.appendFileSync(path.join(dir,'absorbed.jsonl'),JSON.stringify({content:text,mid,...(uuid?{uuid}:{})})+'\n');
- let thread=null,active=null,turns=0,items=0;const heard=[];
+ let thread=null,threadModel=null,active=null,turns=0,items=0;const heard=[];
  const item=(state,kind,value)=>note(`item/${kind}`,{threadId:thread,turnId:state.id,item:value});
  const shown=(state,texts,client)=>{const value={type:'userMessage',id:`item_${++items}`,clientId:client??null,content:texts.map(text=>({type:'text',text,text_elements:[]}))};item(state,'started',value);item(state,'completed',value);};
  const takeQueued=state=>{for(const message of state.queue.splice(0)){heard.push(ownerWords(message.text));absorb(message.text,true,message.id);shown(state,[message.text],message.id);}};
@@ -98,7 +122,8 @@ if(args[0]==='app-server'){
   takeQueued(state);if(!await pause(state,cfg.afterMs??20))return ended(state,'interrupted');takeQueued(state);
   const result=reply(texts.join('\n'),schema);if(heard.length)result.summary+=` Also took in what you sent while it worked: ${heard.join(' | ')}`;
   const said=JSON.stringify(result);item(state,'completed',{type:'agentMessage',id:`item_${++items}`,text:said});
-  const total={totalTokens:32,inputTokens:20,cachedInputTokens:5,cacheWriteInputTokens:0,outputTokens:12,reasoningOutputTokens:2};
+  const used=turnUse?codexTurnRun(thread,threadModel):null;
+  const total=used?{totalTokens:used.total_tokens,inputTokens:used.input_tokens,cachedInputTokens:used.cached_input_tokens,cacheWriteInputTokens:used.cache_write_input_tokens,outputTokens:used.output_tokens,reasoningOutputTokens:used.reasoning_output_tokens}:{totalTokens:32,inputTokens:20,cachedInputTokens:5,cacheWriteInputTokens:0,outputTokens:12,reasoningOutputTokens:2};
   note('thread/tokenUsage/updated',{threadId:thread,turnId:state.id,tokenUsage:{total,last:total,modelContextWindow:200000}});
   ended(state,'completed');
  };
@@ -111,7 +136,7 @@ if(args[0]==='app-server'){
   if(row.method==='account/rateLimits/read'){const resetsAt=Math.floor(Date.now()/1000)+7200,used=cfg.accounts?.codexUsage?.[account]??{fiveHour:18,weekly:62};out({id:row.id,result:{rateLimits:{primary:{usedPercent:used.fiveHour,windowDurationMins:300,resetsAt},secondary:{usedPercent:used.weekly,windowDurationMins:10080,resetsAt:resetsAt+604800}}}});continue;}
   if(!speaks||row.method==='turn/steer'&&cfg.appServer!=='steer'){refuse(row.id,`Invalid request: unknown variant \`${row.method}\`, expected one of \`initialize\`, \`account/rateLimits/read\``);continue;}
   if(row.method==='config/read'){let own='';try{own=fs.readFileSync(path.join(codexHome,'config.toml'),'utf8');}catch{}out({id:row.id,result:{config:{},origins:{},layers:[{name:{type:'sessionFlags'},version:'1',config:{}},...(own.trim()?[{name:{type:'user',file:path.join(codexHome,'config.toml'),profile:null},version:'1',config:{model:'owner-model'}}]:[]),{name:{type:'system',file:'/etc/codex/config.toml'},version:'1',config:{}}]}});continue;}
-  if(row.method==='thread/start'||row.method==='thread/resume'){thread=row.method==='thread/resume'?params.threadId:'12345678-1234-4234-8234-123456789abc';out({id:row.id,result:{thread:{id:thread,turns:[]},model:params.model??'fake-model',modelProvider:'openai',cwd:params.cwd??process.cwd(),approvalPolicy:params.approvalPolicy??'on-request',sandbox:{type:params.sandbox==='danger-full-access'?'dangerFullAccess':'readOnly'},reasoningEffort:null}});if(row.method==='thread/start')note('thread/started',{thread:{id:thread,turns:[]}});continue;}
+  if(row.method==='thread/start'||row.method==='thread/resume'){thread=row.method==='thread/resume'?params.threadId:turnUse?newThread():'12345678-1234-4234-8234-123456789abc';threadModel=params.model??(turnUse?turnUse.model??'gpt-6.1-sol':'fake-model');const kept=turnUse?{path:rolloutOf(thread)??rolloutNew(thread)}:{};out({id:row.id,result:{thread:{id:thread,turns:[],...kept},model:threadModel,modelProvider:'openai',cwd:params.cwd??process.cwd(),approvalPolicy:params.approvalPolicy??'on-request',sandbox:{type:params.sandbox==='danger-full-access'?'dangerFullAccess':'readOnly'},reasoningEffort:null}});if(row.method==='thread/start')note('thread/started',{thread:{id:thread,turns:[]}});continue;}
   if(row.method==='turn/start'){
    if(params.threadId!==thread){refuse(row.id,`thread not found: ${params.threadId}`);continue;}
    const texts=(params.input??[]).map(part=>String(part.text??'')),state={id:`turn_${++turns}`,queue:[],cut:false,client:params.clientUserMessageId??null};active=state;
@@ -154,7 +179,7 @@ if(schema?.properties?.task)result.task=result.intent!=='edit'||input.includes('
 if(schema?.properties?.subtasks){result.subtasks=cfg.subtasks??[{text:'Change normalize',state:'done'},{text:'Run the coupon test',state:'done'}];result.objectivesMet=cfg.objectivesMet??[1,2];}
 // `exec resume <id> -` continues that thread; a new run starts a fixed one.
 const resumed=args[0]==='exec'&&args[1]==='resume'?args[2]:null;
-const session=resumed??'12345678-1234-4234-8234-123456789abc';
+const session=resumed??(turnUse?newThread():'12345678-1234-4234-8234-123456789abc');
 if(mode==='review-block'||mode==='review-fix'&&!input.includes('Handled the edge case.'))result.comments=[{id:'R1',severity:'must_fix',body:'Handle the edge case.'}];
 console.log(JSON.stringify({type:'thread.started',thread_id:session}));
 if(cfg.accounts?.lapsed===true||cfg.accounts?.lapsed?.includes?.(account)){const message='Your access token could not be refreshed because your refresh token has expired. Please log out and sign in again.';console.log(JSON.stringify({type:'turn.started'}));console.log(JSON.stringify({type:'error',message}));console.log(JSON.stringify({type:'turn.failed',error:{message}}));process.exit(1);}
@@ -193,4 +218,6 @@ if(cfg.live&&args.includes('tools.update_plan.enabled=true')){console.log(JSON.s
 // summary (a byInput rule): what this reply says.
 if(typeof cfg.summary==='string')result.summary=cfg.summary;
 console.log(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:JSON.stringify(result)}}));
-console.log(JSON.stringify({type:'turn.completed',usage:{input_tokens:0,output_tokens:0}}));
+{const named=args.flatMap((arg,i)=>['--model','-m'].includes(args[i-1])?[arg]:[]).at(-1);
+ const {total_tokens,...usage}=turnUse?codexTurnRun(session,named??turnUse.model??'gpt-6.1-sol'):{input_tokens:0,output_tokens:0};
+ console.log(JSON.stringify({type:'turn.completed',usage}));}

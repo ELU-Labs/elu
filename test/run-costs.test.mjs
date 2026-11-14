@@ -83,6 +83,70 @@ test("a run over ACP counts the tokens its vendor sent with the turn where runs 
   assert.deepEqual(row.tokens, counted([1217, 127, 230, 10])); near(row.costUsd, costs[0]); assert.equal(row.partial, true); assert.equal(spend.costText(row), '≥$0.00');
 });
 
+// Grok Build's spend covers every turn a run made and none of an earlier run of its session, so
+// a run that resumed a session reports its own. A count Grok says may miss a model call is
+// shown, and not priced: its cost is not known.
+test("a Grok Build run that resumed its session counts what it reported, and a count Grok says may be incomplete is not priced", t => {
+  const log = logs(t), answer = result => ({ jsonrpc: '2.0', id: 4, result }), session = 'grok-session-1';
+  const headless = (usage, extra = {}) => [{ text: '{}', stopReason: 'end_turn', sessionId: session, usage, ...extra }];
+  const runs = [
+    { role: 'lead', vendor: 'grok', at: AT, session, code: 0, costUsd: null, model: 'grok-4.6', logFile: log('lead-1.log', headless({ input_tokens: 100_000, cache_read_input_tokens: 400_000, cache_creation_input_tokens: 0, output_tokens: 20_000 })) },
+    { role: 'lead', vendor: 'grok', at: AT, session, code: 0, costUsd: null, model: 'grok-4.6', logFile: log('lead-2.log', headless({ input_tokens: 50_000, cache_read_input_tokens: 200_000, cache_creation_input_tokens: 0, output_tokens: 10_000 })) },
+    { role: 'lead', vendor: 'grok', at: AT, session, code: 0, costUsd: null, model: 'grok-4.6', logFile: log('lead-3.log', headless({ input_tokens: 50_000, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 1_000 }, { usage_is_incomplete: true })) },
+    { role: 'lead', vendor: 'grok', at: AT, session, code: 0, costUsd: null, model: 'grok-4.6', logFile: log('lead-4.log', [answer({ stopReason: 'end_turn', _meta: { usage: { inputTokens: 40, outputTokens: 5, cachedReadTokens: 30, usageIsIncomplete: true } } })]) },
+  ];
+  const task = { id: '1', goal: 'Search speed', createdAt: AT, runs };
+  // grok-4.6, per million: $2 input, $0.50 cached, $6 output.
+  const costs = spend.runCosts(task);
+  near(costs[0], 0.52, 'first'); near(costs[1], 0.26, 'second, its own'); assert.deepEqual(costs.slice(2), [null, null]);
+  assert.deepEqual(spend.runSpends(task).slice(2).map(row => row.tokens), [counted([50_000, 1_000, 0, 0]), counted([10, 5, 30, 0])]);
+});
+
+// Codex reports what its thread has used so far: each turn.completed holds the thread's total,
+// begun from the thread's own record when a run resumes it. A session's next message resumes
+// its thread, so a run that resumed it used its total less the total of the run before it on
+// that thread. Three runs whose own requests cost about 2, 4 and 6 dollars report about 2, 6
+// and 12: 20 dollars where they spent 12.
+const THREAD = '019a1b2c-3d4e-7f00-8a00-000000000001';
+const codexRows = (thread, [input, cached, output, write = 0], extra = {}) => [{ type: 'thread.started', thread_id: thread, ...extra }, { type: 'turn.completed', usage: { input_tokens: input, cached_input_tokens: cached, cache_write_input_tokens: write, output_tokens: output, reasoning_output_tokens: 0 } }];
+// gpt-6.1-sol, per million: $2 input, $0.10 cached, $2.50 cache write, $10 output. tokens as Codex
+// counts them: input holds the cache write.
+const solCost = ({ input, output, cacheRead, cacheWrite }) => ((input - cacheWrite) * 2 + cacheRead * 0.1 + cacheWrite * 2.5 + output * 10) / 1e6;
+const priced = tokens => ({ ...tokens, input: tokens.input - tokens.cacheWrite });
+
+test("a Codex thread that later runs resume counts what each run used once, on today's records and on those 0.1.25 kept", t => {
+  const log = logs(t);
+  // The thread's totals after each run, [input (the cached ones in it), cached, output, cache write].
+  const totals = [[1_000_000, 100_000, 10_000, 50_000], [3_000_000, 300_000, 30_000, 150_000], [6_000_000, 600_000, 60_000, 300_000]];
+  const own = [counted([900_000, 10_000, 100_000, 50_000]), counted([1_800_000, 20_000, 200_000, 100_000]), counted([2_700_000, 30_000, 300_000, 150_000])];
+  // As 0.1.25 recorded them: the thread's total as each run's tokens, the thread as its session.
+  const runs = totals.map((total, at) => ({ role: 'lead', vendor: 'codex', at: AT, session: THREAD, code: 0, costUsd: null, model: 'gpt-6.1-sol', tokens: counted([total[0] - total[1], total[2], total[1], total[3]]), logFile: log(`lead-${at + 1}.log`, codexRows(THREAD, total)) }));
+  const task = { id: '1', goal: 'Checkout page', title: 'Checkout page', kind: 'conversation', state: 'answered', createdAt: AT, messages: [{ at: AT, text: 'Checkout page' }], result: { summary: 'Done.' }, runs };
+  assert.deepEqual(spend.runSpends(task).map(row => row.tokens), own.map(priced));
+  spend.runCosts(task).forEach((cost, at) => near(cost, solCost(own[at]), `run ${at + 1}`)); near(solCost(own[0]), 1.935, 'the first run');
+  // With their logs gone, the totals the records kept are taken less the one before them.
+  const gone = { ...task, runs: runs.map(run => ({ ...run, logFile: path.join(path.dirname(run.logFile), 'gone.log') })) };
+  spend.runCosts(gone).forEach((cost, at) => near(cost, solCost(own[at]), `run ${at + 1}, its log gone`));
+  // The session's row, the Usage tab and the stop line add the three runs' own spend up once: 11.61, not 19.35.
+  const [row] = spend.agentSpend([{ root: '/work/shop', tasks: [task] }], { now: Date.parse(AT) + 60000 }).rows;
+  assert.deepEqual(row.tokens, counted([5_100_000, 60_000, 600_000, 300_000])); near(row.costUsd, 11.61, 'the row');
+  assert.equal(String(boardRows([{ name: 'shop', root: '/work/shop', activity: [], queue: [], tasks: [task] }], Date.parse(AT) + 60000)[0].cost), '$11.61');
+  const stopped = { ...task, state: 'blocked', budgetUsd: 15, error: { message: 'The model could not finish.', cause: 'quota' } }, read = { logCause: () => null, account: () => null };
+  assert.equal(stopLine(stopped, read).text, 'The model could not finish: the account hit its usage limit. Switch account in Usage, then type continue.');
+  // A run lib/codex-live.mjs ran names its model on thread.started, and counts the same way.
+  const live = runs.map((run, at) => ({ ...run, model: undefined, tokens: undefined, logFile: log(`live-${at + 1}.log`, codexRows(THREAD, totals[at], { model: 'gpt-6.1-sol' })) }));
+  assert.deepEqual(spend.runSpends({ ...task, runs: live }).map(spent => [spent.model, spent.tokens]), own.map(tokens => ['gpt-6.1-sol', priced(tokens)]));
+  // A run on another thread starts its own count, and so does one whose total went down: Codex began counting again.
+  const other = [runs[0], { ...runs[1], session: 'another', logFile: log('lead-other.log', codexRows('019a1b2c-3d4e-7f00-8a00-000000000002', totals[1])) }];
+  assert.deepEqual(spend.runSpends({ ...task, runs: other }).map(spent => spent.tokens.output), [10_000, 30_000]);
+  const reset = [runs[1], { ...runs[0], logFile: log('lead-reset.log', codexRows(THREAD, [2_000_000, 100_000, 5_000])) }];
+  assert.deepEqual(spend.runSpends({ ...task, runs: reset }).map(spent => spent.tokens.output), [30_000, 5_000]);
+  // A run recorded since runs keep their own share holds it, and the thread's total beside it: no
+  // log is read for it, and a run after it on the thread counts from that total.
+  const kept = [{ ...runs[0], ownCost: true, tokens: own[0], logFile: '/nowhere.log' }, { ...runs[1], ownCost: true, tokens: own[1], sessionTokens: counted([2_700_000, 30_000, 300_000, 150_000]), logFile: '/nowhere.log' }, { ...runs[2], logFile: '/nowhere.log' }];
+  assert.deepEqual(spend.runSpends({ ...task, runs: kept }).map(spent => spent.tokens.output), [10_000, 20_000, 30_000]);
+});
+
 function environment(t, values) {
   const previous = Object.fromEntries(Object.keys(values).map(key => [key, process.env[key]])); Object.assign(process.env, values);
   t.after(() => { for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } });
@@ -132,6 +196,45 @@ test("a session's budget is spent once by a session that goes on over several tu
   // A reply to a teammate says what the turns it took cost: all four here, 1.20.
   new Conductor().outbox({ controller: f.controller, taskId: id, runsBefore: 0, root: f.repo.root, requestId: 'request-1', origin: { peer: 'p', name: 'sara', kind: 'ask' } }, null, AT);
   near(JSON.parse(fs.readFileSync(peerFile('outbox', 'request-1.json'), 'utf8')).costUsd, 1.2, 'reply');
+});
+
+test('a session on Codex whose thread goes on over several turns spends each turn once, and its budget is not used up early', async t => {
+  const f = setup(t, 'answer');
+  // Each Codex turn makes one request: 10,000 cached input tokens and 99,900 output, a dollar at
+  // gpt-6.1-sol's list price. The stand-in reports the thread's total, as Codex does.
+  f.set({ codexTurn: { requests: [{ input_tokens: 10_000, cached_input_tokens: 10_000, output_tokens: 99_900 }] } });
+  const home = path.join(f.parent, 'codex-home'); environment(t, { CODEX_HOME: home });
+  f.controller.setDefaultModel({ vendor: 'codex', model: 'gpt-6.1-sol' });
+  const first = await f.controller.ask('Where is coupon normalization?', null, { permissions: 'full' }).finished, id = first.id;
+  assert.equal(first.state, 'answered', JSON.stringify(first.error));
+  f.controller.setBudget(id, 5);
+  for (const text of ['And the tests?', 'And the docs?']) { const next = await f.controller.ask(text, id).finished; assert.equal(next.state, 'answered', JSON.stringify(next.error)); }
+  const execs = fs.readFileSync(path.join(f.parent, 'calls.jsonl'), 'utf8').trim().split('\n').map(JSON.parse).filter(call => call.vendor === 'codex' && call.args[0] === 'exec');
+  assert.deepEqual(execs.map(call => call.args[1] === 'resume'), [false, true, true], 'each later turn resumes the thread');
+  const task = readTask(f.repo, id), thread = task.sessions.lead.id;
+  assert.ok(execs.slice(1).every(call => call.args[2] === thread));
+  // Codex reported one, two and three dollars' worth: what the thread had used so far. Each run keeps its own dollar's worth.
+  const each = counted([0, 99_900, 10_000, 0]);
+  assert.deepEqual(task.runs.map(run => [run.vendor, run.tokens]), Array(3).fill(['codex', each]));
+  // Beside it, the thread's total, which the next run on the thread counts from.
+  assert.deepEqual(task.runs.map(run => run.sessionTokens?.output ?? null), [null, 199_800, 299_700]);
+  assert.ok(task.runs.every(run => run.ownCost === true));
+  spend.runCosts(task).forEach((cost, at) => near(cost, 1, `run ${at + 1}`));
+  near(f.controller.budget(id).spent, 3, 'spent');
+  // The stop line: three dollars have not spent the $5 limit.
+  const read = { logCause: () => null, account: () => null };
+  assert.equal(stopLine({ ...task, state: 'blocked', error: { message: 'The model could not finish.', cause: 'quota' } }, read).text, 'The model could not finish: the account hit its usage limit. Switch account in Usage, then type continue.');
+  // The next turn, on Claude Code, may spend the two dollars left. (Six dollars would be over the limit, and refused.)
+  f.controller.setModel(id, { vendor: 'claude' });
+  const fourth = await f.controller.ask('And the changelog?', id).finished;
+  assert.equal(fourth.state, 'answered', JSON.stringify(fourth.error));
+  near(Number(valueOf(f.turns().at(-1).args, '--max-budget-usd')), 2, 'the Claude Code turn');
+  // Usage: the three Codex turns once, three dollars, and the Claude Code turn's 30 cents.
+  const [row] = spend.agentSpend([{ root: f.repo.root, tasks: [readTask(f.repo, id)] }], { now: Date.now() }).rows;
+  assert.deepEqual(row.tokens, counted([10, 299_900, 33_000, 400])); near(row.costUsd, 3.3, 'the row'); assert.equal(row.partial, false);
+  // A reply to a teammate says what the turns it took cost: all four here.
+  new Conductor().outbox({ controller: f.controller, taskId: id, runsBefore: 0, root: f.repo.root, requestId: 'request-2', origin: { peer: 'p', name: 'sara', kind: 'ask' } }, null, AT);
+  near(JSON.parse(fs.readFileSync(peerFile('outbox', 'request-2.json'), 'utf8')).costUsd, 3.3, 'reply');
 });
 
 test('a turn the owner stops is kept with what it had used; Usage shows it, and counts it once when its session goes on', async t => {
