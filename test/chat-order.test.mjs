@@ -401,3 +401,18 @@ test('the Changes tab of a session here that moved to a newer main counts only i
   await pause(1200); assert.equal(tab(), 'Chat   Changes 2');
   assert.equal(changes.hidden, true, 'its Changes were never opened');
 });
+
+test('the Changes tab of a session here counts a commit made in its folder between turns, at the next draw', { timeout: 60000 }, async t => {
+  const p = start(t), repo = localSession(p, { state: 'answered', replies: [[9, 'It is fixed.']] }), worktree = readTask(repo, '4').worktree;
+  const v = await view(p, { columns: 140, rows: 50, repo: p.repo, dashboard: true, peer: fakePeer() });
+  await onRow(v, /Fix the report/);
+  const { sessionTabs, changes } = v.panels, tab = () => sessionTabs.getText().trim();
+  await until(() => tab() === 'Chat   Changes 1', `its one changed file: "${tab()}"`);
+  // Between turns, with nothing about the session's state changing, a second file is committed in its folder.
+  fs.writeFileSync(path.join(worktree, 'src', 'rows.mjs'), 'export const rows = [];\n'); git(worktree, ['add', 'src/rows.mjs']); git(worktree, ['commit', '-q', '-m', 'Add the rows']);
+  await pause(2000); v.current.screen.emit('resize');
+  await pause(1200); assert.equal(tab(), 'Chat   Changes 1', 'a fresh count is not read again on every draw');
+  await pause(8000); v.current.screen.emit('resize');
+  await until(() => tab() === 'Chat   Changes 2', `the commit counts once the count is ten seconds old and the screen changes: "${tab()}"`);
+  assert.equal(changes.hidden, true, 'its Changes were never opened');
+});
