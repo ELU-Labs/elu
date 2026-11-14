@@ -728,6 +728,32 @@ test('a session on my other computer that waits for y or n shows n once in the k
   assert.doesNotMatch(keys(), /new session/);
 });
 
+test('over a session on my other computer whose Task waits, a plainly typed yes approves the Task there as y does, with or without that computer\'s @name', async t => {
+  const at = new Date().toISOString(), plan = { title: 'Uppercase coupons', description: 'Make coupon codes upper case.', goal: 'Codes match in any case.', objectives: ['Codes are upper case'], priority: 'low', severity: 'low', state: 'proposed', subtasks: [], met: [] };
+  const waits = (id, title, task = plan.title) => ({ id, machine: SARA, createdAt: at, lastAt: at, title, state: 'answered', steps: [], entries: [], plan: { ...plan, title: task }, approvals: [] });
+  const first = '22222222-2222-4222-8222-222222222222', second = '33333333-3333-4333-8333-333333333333';
+  const p = project(later(t)); environment(t, p.parent);
+  const peer = fakePeer({ items: [], mine: [{ key: SARA, mine: true, theirs: true }], remote: [waits(first, 'Uppercase plan'), waits(second, 'Trim plan', 'Trim coupons')] }), v = await view(t, { repo: repository(p.root), dashboard: true, peer });
+  const board = v.panels.board, ask = v.panels.ask, sent = type => peer.sent().filter(row => row.type === type);
+  await until(() => board.items.map(plainItem).some(row => /on sara-box · Uppercase plan/.test(row)), 'the rows of the sessions there');
+  board.focus(); selectRow(board, /on sara-box · Uppercase plan/);
+  await until(() => /Message your agent here/.test(ask._label.getText()), 'the box says where a message goes');
+  // No @name: the yes is his answer to the Task that waits there, not a question for his agent here.
+  await send(v, 'yes go ahead');
+  await until(() => sent('remoteTask').length === 1, 'the Task is approved there');
+  assert.deepEqual(sent('remoteTask')[0], { type: 'remoteTask', id: first, decision: 'approve' });
+  // With the @name: the same approval, not a message that the session there has to read.
+  board.focus(); selectRow(board, /on sara-box · Trim plan/); await until(() => /Trim coupons/.test(v.panels.chat.getText()), 'the second session beside the list');
+  await send(v, '@sara-box sounds good, do it');
+  await until(() => sent('remoteTask').length === 2, 'the second Task is approved there');
+  assert.deepEqual(sent('remoteTask')[1], { type: 'remoteTask', id: second, decision: 'approve' });
+  assert.deepEqual(sent('remoteSend'), [], 'no message went to either session'); assert.deepEqual(pendingRequests(p.root).filter(row => row.helps), [], 'and no agent started here');
+  // Anything that is not a plain yes goes where it went before: to the agent here.
+  await send(v, 'why does this need a new helper?');
+  await until(() => pendingRequests(p.root).some(row => row.helps), 'a question starts my agent here');
+  assert.equal(sent('remoteTask').length, 2);
+});
+
 test('over a session on my other computer the box writes to my agent here, started once and then continued, and @ that computer writes there', async t => {
   const at = new Date().toISOString(), id = '44444444-4444-4444-8444-444444444444';
   const remote = [{ id, machine: SARA, createdAt: at, lastAt: at, title: 'Native replay e2e handoff', state: 'needs_input', question: 'Which batch results?', choices: ['Mine', 'New ones'], steps: [], entries: [{ role: 'You', at, text: 'Start the handoff' }], approvals: [] }];

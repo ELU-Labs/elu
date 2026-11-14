@@ -347,8 +347,10 @@ ELU enforces this much, on every vendor:
   or in a message. A few words that all say go (`yes`, `ok`, `go ahead`, `yes go ahead`,
   `do it`, `sounds good`, `continue`) approve at once. An approval in other words is read
   by the turn that answers your message, which is told that a plain approval in any words
-  counts; the work starts right after its reply. A teammate's message, a schedule and a
-  bot's own turn cannot approve a Task.
+  counts; the work starts right after its reply. Over a session on your other computer
+  the same few words approve its Task there, with or without that computer's `@name`; an
+  approval in other words goes to the session there after its `@name`. A teammate's
+  message, a schedule and a bot's own turn cannot approve a Task.
 - A mode approves a Task only in your own session. A session a teammate's message started
   keeps your approval in every mode (see below).
 - A Task is read as untrusted text. The title is one line of up to 80 characters; the
