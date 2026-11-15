@@ -15,7 +15,7 @@ import { readBoard, reopenSession, closeSession } from '../lib/kanban.mjs';
 import { proposeTask, rejectTask } from '../lib/plan.mjs';
 import { enqueue, conductorStatus } from '../lib/conductor.mjs';
 import { pendingRequests, updateRequest } from '../lib/workspace.mjs';
-import { project, fakeClis, CLI } from './helpers.mjs';
+import { project, fakeClis, CLI, git } from './helpers.mjs';
 import { standIn } from './login-item-helpers.mjs';
 import { liveTask } from './peer-helpers.mjs';
 import { saveDefaultMode } from '../lib/modes.mjs';
@@ -286,6 +286,29 @@ test("a schedule's new run archives its earlier runs, each once, and leaves the 
   removeSchedule(row.id); assert.equal(runScheduleNow(twin.id, new Date(), { start }), true);
   assert.deepEqual(archivedNow(repo), ['2', '3', '4', '5', '6', '8', '9', '11']);
   assert.equal(projectSnapshot(repo).closed.includes('10'), false, "the owner's own session with the same words stays");
+});
+
+// A daily run that planned an edit and found nothing to change ends ready (or kept as not
+// verified) with no change of its own: nothing committed beyond the commit it started from, on
+// any branch, and nothing changed in its folder. Nothing of it waits to be pushed, so the next
+// run archives it as it archives a failed one, and they do not pile up in Sessions.
+test("a schedule's run that turned into an edit and changed nothing is archived by the next run; one with work of its own stays", t => {
+  home(t); const p = project(t), repo = repository(p.root), start = () => true;
+  const row = saveSchedule({ root: p.root, goal: 'Check the nightly build', when: parseWhen('every 3h') });
+  const edit = (id, state, files = {}) => { const made = liveTask(p.root, { id, goal: 'Check the nightly build', state, files }); saveTask(repo, { ...readTask(repo, id), scheduleId: row.id }); return made; };
+  edit('1', 'ready'); edit('2', 'unverified');
+  // A commit of its own, and one on a branch it made and left.
+  const committed = edit('3', 'ready', { 'src/extra.mjs': 'export const extra = 1;\n' });
+  git(committed.worktree, ['add', '.']); git(committed.worktree, ['commit', '-m', 'Add extra']);
+  const aside = edit('4', 'ready');
+  git(aside.worktree, ['checkout', '-b', 'aside']); fs.writeFileSync(path.join(aside.worktree, 'notes.txt'), 'notes\n');
+  git(aside.worktree, ['add', '.']); git(aside.worktree, ['commit', '-m', 'Add notes']); git(aside.worktree, ['checkout', 'feat/task-4']);
+  // A change not committed, and a folder that is gone, which cannot be read.
+  edit('5', 'unverified', { 'src/coupon.mjs': 'export const normalize = (value) => value.trim();\n' });
+  fs.rmSync(edit('6', 'ready').worktree, { recursive: true, force: true });
+  assert.equal(runScheduleNow(row.id, new Date(), { start }), true);
+  assert.deepEqual(archivedNow(repo), ['1', '2']);
+  assert.deepEqual(listSchedules().find(value => value.id === row.id).keptRuns, ['3', '4', '5', '6']);
 });
 
 test('of the runs an earlier version started, only the one the schedule kept the number of is archived; none is guessed from its words', t => {

@@ -52,7 +52,7 @@ as `.env`, stops it until `.gitignore` keeps that file out.
 | --- | --- |
 | Sessions | Every session across your projects. The selected one is open beside the list. Typing on a row writes a message to it; a row's key is its letter, then Enter. Task in a session's header (a click on it, or Ctrl+T) opens its Task: the goal, the objectives with the model's marks, and the checklist of its work from ELU's own records (committed, checks, review, pushed, pull request, and what it waits for). |
 | Projects | Your projects. `n` makes one, `o` makes another the active one. A project a teammate shares that is not on this computer is listed too, as `ELU   shared by @rio   on @rio-mac`: Enter opens its team board, and `c` clones it here. |
-| Kanban | The open project's tasks and sessions: To do, In progress, Needs you, Done. On a team, everyone with a clone of the same repository shares one board: every session a teammate, or another computer of yours, runs in it shows in the same columns with who started it and on which machine, to read only. A project whose folder holds several repositories has a board for each. `/share off` keeps a project off it both ways. Nothing goes to Done until you check it: Shift+→ under Needs you, or `/done` in a session, shows its goal and objectives, then Done, a new goal, or a copy with one. Sessions that went to Done by themselves in the 14 days before 0.1.26 are back under Needs you. A project on another computer of yours that no project here holds is "<project> on devbox" under Board ▾: its board is read from there, and what you do on it is done there. With no project here, Kanban opens on it. |
+| Kanban | The open project's tasks and sessions: To do, In progress, Needs you, Done. On a team, everyone with a clone of the same repository shares one board: every session a teammate, or another computer of yours, runs in it shows in the same columns with who started it and on which machine, to read only. A project whose folder holds several repositories has a board for each. `/share off` keeps a project off it both ways. Nothing goes to Done until you check it: Shift+→ under Needs you, or `/done` in a session, shows its goal and objectives, then Done, a new goal, or a copy with one. A project on another computer of yours that no project here holds is "<project> on devbox" under Board ▾: its board is read from there, and what you do on it is done there. With no project here, Kanban opens on it. |
 | Chats | Your team's channels, your teammates and your bots. |
 | Bots | Your bots. `n` makes one, Enter opens one. |
 | Usage | Your vendor accounts and their plan usage, then your top 10 agents by cost with their tokens. `t` switches between today and the last 7 days. |
@@ -142,9 +142,11 @@ While the model or a bot works, the chat shows what it does now under the workin
 | `/quit` | Closes ELU. Sessions that are running or queued go on in the background; `elu conductor stop` stops them |
 
 One ELU window at a time makes changes in a project. A second window on the same project
-opens view only: it shows everything and `/stop` works there, but it sends nothing. It takes
-the project by itself within seconds once the other window closes, and `/takeover` moves it
-at once.
+opens view only: it shows everything, and `/stop` works there. The first change you make in
+it (a message, `x`, Enter) takes the project and then goes through: the other window lets go
+and turns view only, and one that does not answer is closed when no session or command runs
+in it (ELU asks first when one does). It also takes the project by itself once the other
+window closes, and `/takeover` moves it at once.
 
 A schedule also runs while ELU is closed, through a login item, once ELU is
 installed (not run through `npx`). The login item is there only while a schedule is on, a
@@ -167,9 +169,11 @@ message or a schedule such as "archive this chat and start a new session that sa
 works. The app shows each change at once.
 
 - `elu sessions [--all]` lists this project's sessions: number, name, state, the schedule that
-  started it, and whether it is archived. `elu sessions archive N|this`, `unarchive N`,
+  started it, and whether it is archived or in Done. `elu sessions archive N|this`, `unarchive N`,
   `rename N|this "name"` and `new "message" [--mode ask|auto|full]` change them. `this` is the
   session the command runs in: it is archived when its turn ends, after its reply.
+  `elu sessions goal N "goal"` keeps one open with a new goal; it carries on at once.
+  `elu sessions copy N "goal"` starts a copy of one, with a new goal.
   `elu sessions delete N|archived [--learn]` deletes an archived session for good, or every
   archived one; `--learn` first saves what you taught in them to the project context. Work
   on no remote stays in its folder and on its branch.
@@ -179,9 +183,11 @@ works. The app shows each change at once.
 A session started from a session gets that session's mode, or a lower one with `--mode`. In
 Ask for approval you are asked before one runs; Approve for me and Full access run them. Every
 vendor's session has them, in every mode. Inside a sandbox the command hands itself to ELU,
-which runs it only for that session and no higher than its mode. A teammate's question or
-review, or a session a teammate's message started, is never told about them and cannot run
-them.
+which runs it only for that session and no higher than its mode. A schedule added in a session
+gets that session's mode or a lower one, and `elu schedules run`, `resume` and `delete` there
+take only a schedule whose runs get no more: the others are yours, in ELU. A teammate's
+question or review, or a session a teammate's message started, is never told about them and
+cannot run them.
 
 ## Keys
 

@@ -26,6 +26,7 @@ import { ADAPTERS } from '../lib/adapters/index.mjs';
 import { atomic, personalDirectory } from '../lib/util.mjs';
 import { OWN_COMMANDS, SESSIONS_HELP, SCHEDULES_HELP, TEAMMATE_REFUSAL, checkRequest, runOwnCommand } from '../lib/session-commands.mjs';
 import { answerApproval, pendingApprovals } from '../lib/approvals.mjs';
+import { saveDefaultMode } from '../lib/modes.mjs';
 
 // ELU from inside a session (README, "ELU from a session"): elu sessions and elu schedules,
 // from the owner's shell and from a turn, through the app's own records and locks.
@@ -410,6 +411,71 @@ test('elu schedules adds, lists, pauses, resumes, runs and deletes with the word
   r = elu(f, ['schedules', 'pause', '7']); assert.equal(r.status, 1); assert.match(r.stderr, /No schedule 7 in sample app/);
 });
 
+// README "ELU from a session": a session started from a session gets that session's mode or a
+// lower one, and ELU runs a command handed to it no higher than the session's mode. A schedule's
+// run gets the schedule's mode, so inside a session run, resume and delete refuse a schedule
+// whose runs get more. Approve for me runs elu schedules without asking the owner, and text in
+// the repository may tell it to: here it would start his Full access deploy, or turn it back on
+// after he paused it. From his own shell nothing changes.
+test("a session in Approve for me cannot run, resume or delete the owner's Full access schedule; from his own shell he can", { timeout: 90000 }, async t => {
+  const f = setup(t);
+  const auto = await f.controller.ask('Check the build', null, { permissions: 'auto' }).finished;
+  const row = saveSchedule({ root: f.root, goal: 'deploy the site', when: parseWhen('every 3h'), permissions: 'full', picked: true });
+  f.conduct(); await until(() => conductorAlive(), 'the conductor');
+  const runs = () => pendingRequests(f.root).filter(value => value.scheduleId === row.id);
+  const refused = said => `Schedule 1 has Full access: only you ${said}, in ELU.\n`;
+  // Handed to ELU from the turn (runOwnCommand), and run with the session's marks (ELU_SESSION), by number and by id.
+  for (const [verb, said] of [['run', 'run it'], ['delete', 'delete it']]) {
+    assert.deepEqual(await runOwnCommand(['schedules', verb, '1'], { repo: f.repo, taskId: auto.id, mode: 'auto' }), { code: 1, err: refused(said) });
+    const r = elu(f, ['schedules', verb, row.id], { session: auto.id }); assert.equal(r.status, 1); assert.equal(r.stderr, refused(said));
+  }
+  assert.deepEqual(runs(), [], 'no run started'); assert.deepEqual(listSchedules().map(value => value.id), [row.id], 'the schedule is still there');
+  let r = elu(f, ['schedules', 'pause', '1']); assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(await runOwnCommand(['schedules', 'resume', '1'], { repo: f.repo, taskId: auto.id, mode: 'auto' }), { code: 1, err: refused('resume it') });
+  r = elu(f, ['schedules', 'resume', '1'], { session: auto.id }); assert.equal(r.status, 1); assert.equal(r.stderr, refused('resume it'));
+  assert.equal(listSchedules()[0].enabled, false, 'still paused');
+  // His own shell, as before: it runs in Full access.
+  r = elu(f, ['schedules', 'resume', '1']); assert.equal(r.status, 0, r.stderr); assert.equal(listSchedules()[0].enabled, true);
+  r = elu(f, ['schedules', 'run', '1']); assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(runs().map(value => [value.permissions, value.picked]), [['full', true]]);
+  r = elu(f, ['schedules', 'delete', '1']); assert.equal(r.status, 0, r.stderr); assert.deepEqual(listSchedules(), []);
+});
+// Judged by the mode a run gets when it starts (lib/schedules.mjs runMode): the mode picked for
+// the schedule, or one nobody picked no higher than the default now; a schedule with no mode
+// runs read only.
+test('inside a session elu schedules run, resume and delete a schedule whose runs get no more than its mode', { timeout: 90000 }, async t => {
+  const f = setup(t);
+  const asking = await f.controller.ask('Where is normalization?', null, { permissions: 'ask' }).finished;
+  const auto = await f.controller.ask('Check the build', null, { permissions: 'auto' }).finished;
+  const full = await f.controller.ask('Ship the fix', null, { permissions: 'full' }).finished;
+  saveDefaultMode('ask');
+  const picked = saveSchedule({ root: f.root, goal: 'lint the code', when: parseWhen('every 3h'), permissions: 'auto', picked: true });
+  const plain = saveSchedule({ root: f.root, goal: 'tidy the notes', when: parseWhen('every 3h'), permissions: 'auto' });
+  saveSchedule({ root: f.root, goal: 'read the logs', when: parseWhen('every 3h') });
+  saveSchedule({ root: f.root, goal: 'deploy the site', when: parseWhen('every 3h'), permissions: 'full', picked: true });
+  f.conduct(); await until(() => conductorAlive(), 'the conductor');
+  const own = (task, ...args) => runOwnCommand(['schedules', ...args], { repo: f.repo, taskId: task.id, mode: task.permissions });
+  assert.deepEqual(await own(asking, 'run', '1'), { code: 1, err: 'Schedule 1 has Approve for me: only you run it, in ELU.\n' });
+  // Not picked: no more than the default, Ask for approval; no mode: read only.
+  for (const n of ['2', '3']) { const r = await own(asking, 'run', n); assert.equal(r.code, 0, r.err); }
+  assert.equal(pendingRequests(f.root).find(value => value.scheduleId === plain.id).permissions, 'ask');
+  let r = await own(auto, 'run', '1'); assert.equal(r.code, 0, r.err);
+  assert.deepEqual(pendingRequests(f.root).filter(value => value.scheduleId === picked.id).map(value => [value.permissions, value.picked]), [['auto', true]]);
+  // A higher default now gives schedule 2's runs Approve for me.
+  saveDefaultMode('auto');
+  r = elu(f, ['schedules', 'pause', '2']); assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(await own(asking, 'resume', '2'), { code: 1, err: 'Schedule 2 has Approve for me: only you resume it, in ELU.\n' });
+  assert.equal(listSchedules()[1].enabled, false, 'still paused');
+  r = await own(auto, 'resume', '2'); assert.equal(r.code, 0, r.err); assert.equal(listSchedules()[1].enabled, true);
+  assert.deepEqual(await own(auto, 'delete', '4'), { code: 1, err: 'Schedule 4 has Full access: only you delete it, in ELU.\n' });
+  r = await own(full, 'delete', '4'); assert.equal(r.code, 0, r.err); assert.equal(listSchedules().length, 3);
+  // A mode this version cannot read, written by a later one: below Full access, the owner's.
+  const file = path.join(personalDirectory(), 'schedules.json'), saved = JSON.parse(fs.readFileSync(file, 'utf8'));
+  atomic(file, { ...saved, schedules: [...saved.schedules, { ...saved.schedules[0], id: 'schedule-0000000c', goal: 'from a later version', permissions: 'yolo' }] });
+  assert.deepEqual(await own(auto, 'delete', '4'), { code: 1, err: 'Schedule 4 has permissions this version of ELU cannot read: only you delete it, in ELU.\n' });
+  r = await own(full, 'delete', '4'); assert.equal(r.code, 0, r.err); assert.equal(listSchedules().length, 3);
+});
+
 test('each vendor of the owner\'s session is told the commands; the shell can run them, and Approve for me runs them unasked', { timeout: 120000 }, async t => {
   const f = setup(t);
   // Claude Code: outside the sandbox, so they read ELU's files; Approve for me allows them, Ask for approval asks.
@@ -463,6 +529,14 @@ test('elu --help and elu sessions --help list the commands', () => {
   for (const line of ['sessions [--all] | sessions archive N|this | sessions unarchive N', 'sessions rename N|this NAME | sessions new MESSAGE [--mode ask|auto|full]', 'schedules [--all] | schedules add WHEN MESSAGE [--mode ask|auto|full]', 'schedules pause|resume|delete|run N']) assert.ok(help.includes(line), line);
   assert.equal(run(['sessions', '--help']).stdout, SESSIONS_HELP); assert.equal(run(['schedules', '-h']).stdout, SCHEDULES_HELP);
   assert.match(SESSIONS_HELP, /elu sessions archive N\|this/); assert.match(SESSIONS_HELP, /elu sessions new MESSAGE/);
+  assert.ok(SCHEDULES_HELP.split('\n').filter(line => !line.startsWith(' ')).every(line => line.length < 80), 'each line of its words fits a terminal of 80 columns');
+  // goal and copy, one line each, in the words elu sessions --help has; README's list names them too.
+  const readme = fs.readFileSync(new URL('../README.md', import.meta.url), 'utf8'), section = readme.slice(readme.indexOf('### ELU from a session'), readme.indexOf('## Keys'));
+  for (const [verb, words, said] of [['goal', 'Keep one open with a new goal; it carries on at once.', 'keeps one open with a new goal; it carries on at once.'], ['copy', 'Start a copy of one, with a new goal.', 'starts a copy of one, with a new goal.']]) {
+    assert.ok(SESSIONS_HELP.includes(`elu sessions ${verb} N GOAL `) && SESSIONS_HELP.includes(words), verb);
+    assert.ok(help.split('\n').some(line => line.startsWith(`  sessions ${verb} N GOAL `) && line.endsWith(words) && line.length < 80), verb);
+    assert.ok(section.replace(/\s+/g, ' ').includes(`\`elu sessions ${verb} N "goal"\` ${said}`), verb);
+  }
 });
 
 // Deleted for good from the shell, as x deletes them in Sessions: only an archived session, its
