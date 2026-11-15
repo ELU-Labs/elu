@@ -8,10 +8,12 @@ import { project, fakeClis, CLI, git } from './helpers.mjs';
 import { liveTask } from './peer-helpers.mjs';
 import { repository } from '../lib/git.mjs';
 import { projectSnapshot, registerProject } from '../lib/projects.mjs';
-import { readTask, saveTask } from '../lib/state.mjs';
+import { readTask, saveTask, taskDir } from '../lib/state.mjs';
+import { boardRows } from '../lib/board.mjs';
+import { deleteSession } from '../lib/session-delete.mjs';
 import { pendingRequests } from '../lib/workspace.mjs';
 import { Conductor, conductorAlive, enqueue } from '../lib/conductor.mjs';
-import { addCard, boardColumns, checksSince, closeSession, fitCheckCard, linkCards, readBoard, sessionPlace, setDone, startCard } from '../lib/kanban.mjs';
+import { addCard, boardColumns, checksSince, closeSession, fitCheckCard, linkCards, readBoard, reopenSession, sessionPlace, setDone, startCard } from '../lib/kanban.mjs';
 import { approveTask, currentTask, finishTask, proposeTask, reportProgress, sessionTasks, sharedTask } from '../lib/plan.mjs';
 import { answerCheck, checkDone, checkView, copySession, keepOpen, readGoal } from '../lib/owner-check.mjs';
 import { parseWhen, runScheduleNow, saveSchedule } from '../lib/schedules.mjs';
@@ -388,4 +390,69 @@ test("a copy starts on the model and folders of the session it copies", t => {
   withTask(f.repo, 6, { permissions: 'auto', folders: [extra], runs: [{ role: 'lead', vendor: 'codex', at: new Date().toISOString() }] });
   const { request } = copySession(f.repo, f.root, readTask(f.repo, '6'), 'Next goal');
   assert.deepEqual([request.model, request.folders, request.permissions], [{ vendor: 'codex', model: null }, [fs.realpathSync(extra)], 'auto']);
+});
+
+// A session he checked Done is in Done, not archived. Sessions leaves it out of its list as
+// before, and never lists it under Archived or counts it there; no clean-up deletes it, from
+// his shell or from a model's turn in another session, and its card stays in Done. What he
+// archived is listed, counted and cleaned up as before, and so is what a board saved before
+// the archived list closed.
+test('a session he checked Done is in Done, not archived: /archived never lists or counts it, and no clean-up deletes it', t => {
+  const f = setup(t, { mode: 'answer' });
+  chat(f.repo, 1, { goal: 'Uppercase coupons' }); chat(f.repo, 2, { goal: 'Old question' }); chat(f.repo, 3, { goal: 'Tidy the docs', permissions: 'auto' });
+  checkDone(f.repo, readTask(f.repo, '1')); closeSession(f.repo, '2');
+  const listed = (options = {}) => boardRows([projectSnapshot(f.repo)], Date.now(), options).filter(row => row.kind === 'task').map(row => [row.id, row.label]);
+  assert.deepEqual(listed(), [['3', 'answered']], 'both leave the list');
+  assert.deepEqual(listed({ archived: true }), [['3', 'answered'], ['2', 'archived']], 'only the archived one is under Archived');
+  let r = elu(f, ['sessions', '--all']); assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /"Uppercase coupons" {2}· in Done\n/); assert.match(r.stdout, /"Old question" {2}· archived\n/);
+  assert.doesNotMatch(elu(f, ['sessions']).stdout, /Uppercase coupons/, 'out of the list as before');
+  // Deleted for good: refused for it in plain words, alone and with every archived one, here and from a model's turn.
+  assert.throws(() => deleteSession(f.repo, '1'), { message: 'It is in Done, not archived.' });
+  r = elu(f, ['sessions', 'delete', '1'], { session: '3' }); assert.equal(r.status, 1); assert.match(r.stderr, /^Session 1 "Uppercase coupons" is in Done, not archived\.\n$/);
+  r = elu(f, ['sessions', 'unarchive', '1']); assert.equal(r.status, 0, r.stderr); assert.match(r.stdout, /Session 1 "Uppercase coupons" is in Done, not archived\./);
+  r = elu(f, ['sessions', 'delete', 'archived'], { session: '3' }); assert.equal(r.status, 0, r.stderr); assert.match(r.stdout, /^Deleted session 2\.\n$/);
+  assert.equal(fs.existsSync(taskDir(f.repo, '1')), true); assert.equal(fs.existsSync(taskDir(f.repo, '2')), false);
+  assert.equal(cardOf(f, '1').column, 'done', 'its card stays in Done'); assert.equal(typeof readBoard(f.repo).checked['1'], 'string');
+  assert.equal(elu(f, ['sessions', 'delete', 'archived']).stdout.trim(), 'No archived sessions.');
+  // A board saved before the archived list closed sessions it did not tell apart: each counts as archived, as before.
+  chat(f.repo, 4, { goal: 'Older archive' });
+  const file = path.join(f.repo.state, 'kanban.json'), board = JSON.parse(fs.readFileSync(file, 'utf8'));
+  delete board.archived; delete board.checked; board.done.push('4'); board.closed['4'] = new Date(Date.now() + 1000).toISOString(); fs.writeFileSync(file, JSON.stringify(board));
+  assert.deepEqual(listed({ archived: true }).sort(), [['1', 'archived'], ['3', 'answered'], ['4', 'archived']]);
+  assert.equal(deleteSession(f.repo, '4').id, '4'); assert.equal(deleteSession(f.repo, '1').id, '1');
+});
+
+// Brought back from the archive (u, elu sessions unarchive, or my other computer's u), a session
+// he had checked Done comes out of Done as Shift+← brings it: its Task is open again, here and
+// for a teammate, and its card waits for his check under Needs you.
+test('a session he checked Done and archived comes back with its Task open, as Shift+← brings it', t => {
+  const f = setup(t);
+  // 2 has a card, which followed it into Done.
+  const card = addCard(f.repo, 'Uppercase the coupons'); startCard(f.repo, card.id, 'request-2');
+  for (const id of ['1', '2']) withTask(f.repo, id);
+  linkCards(f.repo, [{ id: 'request-2', taskId: '2' }]);
+  for (const id of ['1', '2']) { reportProgress(f.repo, id, { met: [1] }); checkDone(f.repo, readTask(f.repo, id)); closeSession(f.repo, id); assert.equal(currentTask(f.repo, id).state, 'done'); }
+  assert.equal(readBoard(f.repo).cards[0].column, 'done');
+  reopenSession(f.repo, '1');
+  const r = elu(f, ['sessions', 'unarchive', '2']); assert.equal(r.status, 0, r.stderr); assert.match(r.stdout, /is back in the list/);
+  for (const id of ['1', '2']) {
+    const task = currentTask(f.repo, id);
+    assert.deepEqual([task.state, task.checkedAt, sharedTask(task).state, readBoard(f.repo).checked?.[id]], ['approved', undefined, 'approved', undefined], id);
+    assert.deepEqual([cardOf(f, id).column, cardOf(f, id).check], ['needs', true], id);
+  }
+  // One he only archived comes back as it was: its Task stays as it is.
+  withTask(f.repo, 3); closeSession(f.repo, '3'); reopenSession(f.repo, '3');
+  assert.equal(currentTask(f.repo, '3').state, 'approved');
+});
+
+// The check of a session at work is refused before it opens, with the words its answer would
+// get, so nothing he types there is lost; my other computer asks the same (elu.remote.check).
+test('the check of a session at work is refused before anything is asked', t => {
+  const f = setup(t);
+  const working = chat(f.repo, 1, { goal: 'Run the tests', state: 'running' }), starting = chat(f.repo, 2, { goal: 'Lint the code', state: 'preparing' });
+  assert.throws(() => checkView(f.repo, working), { message: '"Run the tests" is working. Check it when it stops.' });
+  assert.throws(() => checkView(f.repo, starting), { message: '"Lint the code" is working. Check it when it stops.' });
+  // Once it stops, its check opens as any other: how it ended, in plain words, and its checklist.
+  assert.deepEqual(checkView(f.repo, chat(f.repo, 1, { goal: 'Run the tests' })), { title: 'Run the tests', ended: 'replied', first: 'Run the tests', checklist: [{ text: 'Replied', met: true, evidence: 'Its reply is in the chat.' }] });
 });

@@ -23,7 +23,7 @@ import { proposeTask, approveTask as approvePlan, reportProgress, finishTask, re
 import { clockTime } from '../lib/terminal-plan.mjs';
 import { columns } from '../lib/width.mjs';
 import { saveTask, readTask, taskDir, taskTitle, setTitle, lock, tasks } from '../lib/state.mjs';
-import { processIdentity, processRecord } from '../lib/process.mjs';
+import { closeWindow, eluWindow, processIdentity, processRecord } from '../lib/process.mjs';
 import { activeLogin, listLogins } from '../lib/logins.mjs';
 import { detect } from '../lib/detect.mjs';
 import { signInCommand } from '../lib/vendors.mjs';
@@ -143,9 +143,15 @@ function modal(v, title) {
   return v.current.screen.children.find(child => !child.destroyed && child.options?.label?.trim() === title);
 }
 function dialogText(v, title) { return modal(v, title).children.find(child => child.options?.scrollable).getText(); }
-// A list dialog's rows, and an editor dialog's text box.
-const dialogList = (v, title) => modal(v, title)?.children.find(child => child.type === 'list');
-const dialogRows = (v, title) => dialogList(v, title)?.items.map(item => item.getText()) ?? [];
+// A list dialog's rows, and an editor dialog's text box. A dialog whose text sits over its
+// choices (the check) has its text in a list of its own: its rows are that text, then the
+// choices, and the list that takes the keys is the last one.
+const dialogLists = (v, title) => modal(v, title)?.children.filter(child => child.type === 'list') ?? [];
+const dialogList = (v, title) => dialogLists(v, title).at(-1);
+const dialogRows = (v, title) => dialogLists(v, title).flatMap(list => list.items.map(item => item.getText()));
+// The choice the highlight is on, and a choice marked by what it says.
+const dialogPicked = (v, title) => { const list = dialogList(v, title); return list?.items[list.selected ?? 0]?.getText().trimEnd(); };
+const markChoice = (v, title, label) => { const list = dialogList(v, title), at = list.items.findIndex(item => item.getText().trimEnd() === label); assert.ok(at >= 0, `${label} in ${title}`); list.select(at); };
 const editor = (v, title) => modal(v, title)?.children.find(child => child.type === 'textarea');
 async function dialog(v, title, value) {
   await until(() => modal(v, title), title);
@@ -1480,6 +1486,146 @@ test('/takeover says so when the other window does not let go', async t => {
   assert.equal(v.current.controller.readOnly, true);
   older.release(); await until(() => v.current.controller.readOnly === false, 'taken once the older window closed');
   key(v, 'q'); await v.finished;
+});
+
+// Another ELU window in a process of its own, run as ELU's own program is (bin/elu-code.mjs),
+// so it reads as an ELU window. how: 'answers' lets go when asked, as a window of 0.1.20 and
+// later does on its timer; 'deaf' never reads what was asked, as a window of 0.1.19 or a hung
+// one; 'hung' also stays when asked to end; 'busy' runs a command of its own; 'awake' runs
+// caffeinate (the program named after it), as a Mac window keeps awake; 'blinks' starts
+// commands that end in a moment, as a window asks git or gh.
+const HOLDER = `import { spawn } from 'node:child_process'; import { claimView } from ${JSON.stringify(new URL('../lib/projects.mjs', import.meta.url).href)}; import { repository } from ${JSON.stringify(new URL('../lib/git.mjs', import.meta.url).href)};
+const [root, how] = process.argv.slice(2), claim = claimView(repository(root)); console.log(claim.readOnly ? 'view' : 'held');
+if (how === 'hung') process.on('SIGTERM', () => {});
+if (how === 'busy') spawn('sleep', ['60'], { stdio: 'ignore' });
+if (how === 'awake') spawn(process.argv[4], ['60'], { stdio: 'ignore' });
+if (how === 'blinks') setInterval(() => spawn('sleep', ['0.3'], { stdio: 'ignore' }), 250);
+setInterval(() => { if (how === 'answers' && claim.wanted()) { claim.giveUp(); console.log('let go ' + Date.now()); } }, 200);`;
+// The message reached a session (it went), or what the status says instead.
+const sent = async (v, tasks, text) => {
+  try { await until(() => tasks().some(task => task.messages?.some(row => row.text === text)), 'the message is sent', 20000); } catch (error) { throw new Error(`${error.message}: it shows ${JSON.stringify(statusShown(v))}`); }
+};
+function holderWindow(t, root, how) {
+  const bin = path.join(temp(t), 'bin'), awake = path.join(bin, 'caffeinate'); fs.mkdirSync(bin); fs.writeFileSync(path.join(bin, 'elu-code.mjs'), HOLDER);
+  fs.symlinkSync(['/usr/bin/sleep', '/bin/sleep'].find(file => fs.existsSync(file)), awake);
+  const child = spawn(process.execPath, [path.join(bin, 'elu-code.mjs'), root, how, awake], { stdio: ['ignore', 'pipe', 'inherit'] }), lines = [];
+  child.stdout.setEncoding('utf8').on('data', chunk => lines.push(...chunk.split('\n').filter(Boolean)));
+  const ended = new Promise(resolve => child.once('exit', resolve)); let exited = false; ended.then(() => { exited = true; });
+  t.after(() => { try { process.kill(-child.pid, 'SIGKILL'); } catch { /* Not a group. */ } child.kill('SIGKILL'); });
+  return { child, lines, ended, exited: () => exited };
+}
+// The owner's case: a second window was view-only, and x, Enter and a message were refused
+// until he typed /takeover, which the older window ignored. A change takes the project on the
+// first press, and goes through.
+test('a message in a view-only window takes the project on the first press: the other window lets go, and the message is sent', { timeout: 40000 }, async t => {
+  const p = setup(t), tasks = () => projectSnapshot(p.repo).tasks, other = holderWindow(t, p.root, 'answers');
+  await until(() => other.lines.includes('held'), 'the other window has the project');
+  const said = [], v = await view(t, { repo: p.repo, onRender: value => said.push(value.panels.status.getText().replace(/\s+/g, ' ')) });
+  await until(() => /View only/.test(v.current.panels.ask._label.getText()), 'view-only');
+  // The box, the line and the key bar say what a change here does: it takes the project, and Enter sends.
+  await until(() => / · a change here takes it over $/.test(v.current.panels.ask._label.getText()) && statusShown(v) === '› View only: another ELU window has this project. A change here takes it over.', 'it says a change takes it over');
+  v.current.panels.ask.focus(); v.current.panels.ask.readInput(); await until(() => v.current.panels.ask.__listener, 'the box reads');
+  const bar = () => v.current.panels.keys.getText().trim();
+  // What reaches the terminal, and when: the window waits for the other one without drawing.
+  const wrote = [], program = v.current.screen.program, owrite = program._owrite.bind(program);
+  program._owrite = text => { wrote.push([Date.now(), String(text)]); return owrite(text); };
+  v.input.write('Rename billing');
+  try { await until(() => /^enter send /.test(bar()), 'the key bar names Enter'); } catch (error) { throw new Error(`${error.message}: it shows ${JSON.stringify(bar())}`); }
+  v.input.write('\r');
+  await sent(v, tasks, 'Rename billing');
+  assert.ok(said.some(text => /Taking over from the other ELU window…/.test(text)), 'it says so while it waits for that window');
+  const letGo = other.lines.find(line => line.startsWith('let go'));
+  assert.ok(letGo, 'the other window let go'); assert.equal(other.exited(), false, 'and is still open');
+  assert.ok(wrote.some(([at, text]) => at < Number(letGo.split(' ')[2]) && text.includes('Taking over')), 'and the terminal shows it before that window lets go');
+  assert.equal(v.current.controller.readOnly, false);
+  await until(() => !/View only/.test(v.current.panels.ask._label.getText()), 'the box is no longer view-only');
+  key(v, 'q'); await v.finished;
+});
+
+// His keys exactly: the clean-up of archived sessions from a view-only window asks its question at once.
+test('cleaning up archived sessions in a view-only window takes the project on the first press and asks the clean-up question', { timeout: 40000 }, async t => {
+  const p = setup(t); registerProject(p.repo);
+  liveTask(p.root, { id: '4', goal: 'Trim coupon codes', state: 'stopped' }); closeSession(p.repo, '4');
+  const other = holderWindow(t, p.root, 'answers'); await until(() => other.lines.includes('held'), 'the other window has the project');
+  const v = await view(t, { repo: p.repo });
+  await until(() => /View only/.test(v.current.panels.ask._label.getText()), 'view-only');
+  await send(v, '/sessions'); await send(v, '/archived clean');
+  try { await until(() => modal(v, 'Clean up'), 'the clean-up question', 15000); } catch (error) { throw new Error(`${error.message}: it shows ${JSON.stringify(statusShown(v))}`); }
+  assert.equal(v.current.controller.readOnly, false); await until(() => other.lines.some(line => line.startsWith('let go')), 'the other window let go');
+  v.input.write('\x1b'); await until(() => !modal(v, 'Clean up'), 'cancelled');
+  key(v, 'q'); await v.finished;
+});
+
+test('a change in a view-only window closes another window that does not let go and runs nothing, says so, and goes through', { timeout: 90000 }, async t => {
+  for (const how of ['deaf', 'hung', 'awake', 'blinks']) {
+    const p = setup(t), tasks = () => projectSnapshot(p.repo).tasks, other = holderWindow(t, p.root, how);
+    await until(() => other.lines.includes('held'), 'the other window has the project');
+    const said = [], v = await view(t, { repo: p.repo, onRender: value => said.push(value.panels.status.getText().replace(/\s+/g, ' ')) });
+    await until(() => /View only/.test(v.current.panels.ask._label.getText()), 'view-only');
+    await send(v, 'Rename billing');
+    await sent(v, tasks, 'Rename billing');
+    assert.equal(other.exited(), true, `${how}: the other window was closed`);
+    assert.ok(said.some(text => /Closed the other ELU window \(started [^)]+\) and took over\./.test(text)), `${how}: it says so`);
+    assert.match(statusShown(v), /^› Closed the other ELU window \(started [^)]+\) and took over\./, `${how}: and the line stays while the message goes`);
+    assert.ok(!modal(v, 'Take over'), `${how}: nothing was asked`);
+    assert.equal(v.current.controller.readOnly, false, how);
+    key(v, 'q'); await v.finished;
+  }
+});
+
+test('a window that does not let go and runs a command of its own is closed only when the owner says yes', { timeout: 40000 }, async t => {
+  const p = setup(t), other = holderWindow(t, p.root, 'busy');
+  await until(() => other.lines.includes('held'), 'the other window has the project');
+  const v = await view(t, { repo: p.repo });
+  await until(() => /View only/.test(v.current.panels.ask._label.getText()), 'view-only');
+  await send(v, 'Rename billing');
+  await until(() => modal(v, 'Take over'), 'it asks', 20000);
+  assert.match(dialogText(v, 'Take over').replace(/\s+/g, ' '), /^The other ELU window is running "sleep 60"\. Close it and take over\?/);
+  assert.equal(other.exited(), false, 'nothing is closed before the owner says yes');
+  v.input.write('y');
+  await until(() => other.exited() && v.current.controller.readOnly === false, 'closed and taken over', 15000);
+  // The message that asked carries on, and the line says the window was closed.
+  await sent(v, () => projectSnapshot(p.repo).tasks, 'Rename billing');
+  assert.match(statusShown(v), /^› Closed the other ELU window( \(started [^)]+\))? and took over\./);
+  key(v, 'q'); await v.finished;
+});
+
+// A session that runs in that window (its record names the window's process) is named, and
+// one the conductor runs is not that window's. n leaves the window and the session running.
+test('a window that does not let go while a session of its own runs is named in the question, and n leaves it running', { timeout: 40000 }, async t => {
+  const p = setup(t), other = holderWindow(t, p.root, 'deaf');
+  await until(() => other.lines.includes('held'), 'the other window has the project');
+  liveTask(p.root, { id: '4', goal: 'Trim coupon codes', state: 'running' }); saveTask(p.repo, { ...readTask(p.repo, '4'), owner: processRecord(other.child.pid) });
+  liveTask(p.root, { id: '5', goal: 'Round refund amounts', state: 'running' }); saveTask(p.repo, { ...readTask(p.repo, '5'), owner: processRecord() });
+  const v = await view(t, { repo: p.repo });
+  await until(() => /View only/.test(v.current.panels.ask._label.getText()), 'view-only');
+  await send(v, 'Rename billing');
+  await until(() => modal(v, 'Take over'), 'it asks', 20000);
+  assert.match(dialogText(v, 'Take over').replace(/\s+/g, ' '), /^The other ELU window is running "Trim coupon codes"\. Close it and take over\?/);
+  v.input.write('n'); await until(() => !modal(v, 'Take over'), 'no');
+  assert.equal(other.exited(), false, 'the window stays'); assert.equal(v.current.controller.readOnly, true);
+  key(v, 'q'); await v.finished;
+});
+
+// Only a process of this user that is an ELU window, and still the one its lock names, is ever closed.
+test('closeWindow closes only an ELU window that is still the one its lock names, never this process or a daemon', async t => {
+  assert.equal(eluWindow('node /usr/lib/node_modules/@elu-labs/elu/bin/elu-code.mjs'), true);
+  assert.equal(eluWindow('node /home/me/.npm/_npx/1a2b/node_modules/.bin/elu'), true);
+  assert.equal(eluWindow('node /usr/lib/node_modules/@elu-labs/elu/bin/elu-code.mjs conductor --daemon'), false);
+  assert.equal(eluWindow('node /usr/lib/node_modules/@elu-labs/elu/bin/elu-code.mjs peer --daemon'), false);
+  assert.equal(eluWindow('node /usr/lib/node_modules/@elu-labs/elu/bin/elu-code.mjs mcp'), false);
+  assert.equal(eluWindow('vim elu-notes.txt'), false);
+  assert.equal(eluWindow('/usr/local/bin/elu'), true);
+  assert.equal(eluWindow('node --max-old-space-size=4096 /usr/lib/node_modules/@elu-labs/elu/bin/elu-code.mjs'), true);
+  for (const command of ['vim /tmp/elu', 'less elu', 'node /tmp/elu-notes.txt', 'tail -f /tmp/elu']) assert.equal(eluWindow(command), false, command);
+  assert.equal(closeWindow(processRecord()), false, 'never this process');
+  const plain = staying(t); await until(() => psLine(plain.child.pid), 'a process that is not ELU');
+  assert.equal(closeWindow(processRecord(plain.child.pid)), false, 'not an ELU window');
+  const p = setup(t), other = holderWindow(t, p.root, 'deaf'); await until(() => other.lines.includes('held'), 'the window');
+  const record = processRecord(other.child.pid);
+  assert.equal(closeWindow({ ...record, born: `${record.born}0` }), false, 'a lock that names another start is another process');
+  assert.equal(other.exited(), false);
+  assert.equal(closeWindow(record), true); await other.ended;
 });
 
 // The owner's devbox, over SSH: the connection froze, he opened ELU again in a new one, and
@@ -4299,7 +4445,7 @@ test('Kanban: a session that ended waits under Needs you; Shift+→ shows its go
   const rows = dialogRows(v, 'Check').map(row => row.trimEnd());
   for (const line of ['Uppercase coupons', 'ready to publish', 'Goal', TASK.goal, 'Objectives · 1 of 2 met', '  ✓ normalize returns upper case', '    src/coupon.mjs returns value.toUpperCase()', '  · The coupon test passes']) assert.ok(rows.includes(line), line);
   assert.deepEqual(rows.slice(-3), ['› Done', '› Keep open, new goal', '› Done, and a copy with a new goal']);
-  assert.equal(dialogList(v, 'Check').selected, rows.length - 3, 'on Done');
+  assert.equal(dialogPicked(v, 'Check'), '› Done', 'on Done');
   v.input.write('\x1b'); await until(() => !modal(v, 'Check'), 'Esc closes it');
   assert.ok(card(2, /Uppercase coupons/)); assert.equal(readBoard(p.repo).checked?.['3'], undefined);
   // Enter shows the card: its goal and objectives, with the evidence too.
@@ -4308,7 +4454,7 @@ test('Kanban: a session that ended waits under Needs you; Shift+→ shows its go
   v.input.write('\x1b'); await until(() => !cardDialog(v), 'closed');
   // Keep open, new goal: typed in the editor, one objective a line; it carries on as his message.
   pick(/Uppercase coupons/); v.input.write('>'); await until(() => modal(v, 'Check'), 'the check again');
-  dialogList(v, 'Check').select(rows.length - 2); v.input.write('\r');
+  markChoice(v, 'Check', '› Keep open, new goal'); v.input.write('\r');
   const goalTitle = 'New goal (objectives below it, one per line)';
   await until(() => editor(v, goalTitle)?.__listener, 'the new goal editor');
   editor(v, goalTitle).setValue('Trim spaces too\nnormalize trims the code'); v.input.write('\x13');
@@ -4322,7 +4468,7 @@ test('Kanban: a session that ended waits under Needs you; Shift+→ shows its go
   await until(() => card(2, /Uppercase coupons/), 'still under Needs you');
   pick(/Uppercase coupons/); v.input.write('>'); await until(() => modal(v, 'Check'), 'the check once more');
   assert.ok(dialogRows(v, 'Check').includes('Trim spaces too'), 'with the new goal');
-  dialogList(v, 'Check').select(dialogRows(v, 'Check').length - 1); v.input.write('\r');
+  markChoice(v, 'Check', '› Done, and a copy with a new goal'); v.input.write('\r');
   const copyTitle = 'Copy with a new goal (objectives below it, one per line)';
   await until(() => editor(v, copyTitle)?.__listener, 'the copy editor');
   editor(v, copyTitle).setValue('Show the code as typed'); v.input.write('\x13');
@@ -4355,6 +4501,149 @@ test('/done on a session in Sessions with no project open here checks it in its 
   v.input.write('\r'); await until(() => typeof readBoard(p.repo).checked?.['5'] === 'string' || /Cannot read|writable/.test(status()), 'the answer');
   assert.doesNotMatch(status(), /Cannot read|writable/);
   assert.equal(typeof readBoard(p.repo).checked['5'], 'string');
+});
+
+// A session he checks Done is in Done, not archived: it leaves Sessions as before, and /archived
+// never lists it, the line under the list never counts it, and no clean-up deletes it.
+test('a session checked Done leaves Sessions and is never archived: /archived does not list or count it, and /archived clean leaves it in Done', { timeout: 60000 }, async t => {
+  const p = setup(t);
+  liveTask(p.root, { id: '3', goal: 'Uppercase coupon codes', state: 'ready' });
+  liveTask(p.root, { id: '4', goal: 'Trim coupon codes', state: 'stopped' }); closeSession(p.repo, '4');
+  const v = await view(t, { repo: p.repo, conductor: false }), panels = v.current.panels, status = () => panels.status.getText();
+  v.output.columns = 140; v.output.rows = 50; v.output.emit('resize');
+  await openTask(v, /Uppercase coupon codes/);
+  await send(v, '/done'); await until(() => modal(v, 'Check'), 'the check');
+  v.input.write('\r'); await until(() => /Moved "Uppercase coupon codes" to Done\./.test(status()), 'checked Done');
+  await send(v, '/sessions'); await until(() => v.current.view === 'tasks' && !rows(v).some(row => /Uppercase coupon codes/.test(row)), 'it leaves the list');
+  await until(() => /1 archived · \/archived/.test(rows(v).at(-1)), `only the archived one is counted, not ${rows(v).at(-1)}`);
+  await send(v, '/archived'); await until(() => rows(v).some(row => /ARCHIVED 1 /.test(row)) && rows(v).some(row => /Trim coupon codes/.test(row)), 'Archived lists the archived one');
+  assert.ok(!rows(v).some(row => /Uppercase coupon codes/.test(row)), 'and not the one in Done');
+  // /archived clean takes the archived one alone.
+  await send(v, '/archived clean'); await until(() => modal(v, 'Clean up'), 'the clean-up');
+  assert.match(dialogNotes(v, 'Clean up'), /Deletes "Trim coupon codes" for good\./);
+  dialogList(v, 'Clean up').select(1); v.input.write('\r');
+  await until(() => modal(v, 'Work not pushed'), 'its work on no remote'); dialogList(v, 'Work not pushed').select(1); v.input.write('\r');
+  await until(() => !fs.existsSync(taskDir(p.repo, '4')), 'the archived one is deleted');
+  assert.equal(fs.existsSync(taskDir(p.repo, '3')), true, 'the one in Done stays');
+  assert.equal(typeof readBoard(p.repo).checked['3'], 'string');
+  await send(v, '/archived clean'); await until(() => /No archived sessions\./.test(status()), 'nothing archived is left');
+});
+
+// The check of a session at work is refused before it opens. One that starts working while he
+// writes his answer keeps what he wrote: the editor opens again with it, and says why.
+test('/done on a session at work says so before the check opens; what he wrote for a check is kept when the session starts working before he saves it', { timeout: 60000 }, async t => {
+  const p = setup(t);
+  liveTask(p.root, { id: '3', goal: 'Run the coupon tests', state: 'ready' }); liveTask(p.root, { id: '4', goal: 'Tidy the coupon notes', state: 'ready' });
+  const began = new Date().toISOString(), owner = { pid: process.pid, identity: processIdentity(process.pid) };
+  const work = id => saveTask(p.repo, { ...readTask(p.repo, id), state: 'running', activeRole: 'lead', activeSince: began, owner, messages: [{ at: began, text: readTask(p.repo, id).goal }] });
+  work('3'); resources(t).files.push(lock(p.repo, 'task-3'));
+  const v = await view(t, { repo: p.repo, conductor: false }), panels = v.current.panels, status = () => panels.status.getText();
+  await wide(v); await openTask(v, /Run the coupon/);
+  await send(v, '/done'); await until(() => /"Run the coupon tests" is working\. Check it when it stops\./.test(status()), 'refused at once');
+  await pause(300); assert.equal(modal(v, 'Check'), undefined, 'no check opened');
+  await openTask(v, /Tidy the coupon notes/);
+  await send(v, '/done'); await until(() => modal(v, 'Check'), 'the check');
+  markChoice(v, 'Check', '› Keep open, new message'); v.input.write('\r');
+  await until(() => editor(v, 'New message')?.__listener, 'the editor');
+  editor(v, 'New message').setValue('and list the slow tests too');
+  work('4'); v.input.write('\x13');
+  await until(() => /"Tidy the coupon notes" is working\. Check it when it stops\./.test(dialogNotes(v, 'New message')) && editor(v, 'New message')?.__listener, 'the editor again, with why');
+  assert.equal(editor(v, 'New message').getValue(), 'and list the slow tests too');
+  assert.deepEqual(pendingRequests(p.root), []);
+  // Once it stops, saving sends it.
+  saveTask(p.repo, { ...readTask(p.repo, '4'), state: 'ready', owner: null }); v.input.write('\x13');
+  await until(() => /"Tidy the coupon notes" carries on\./.test(status()), 'sent');
+  assert.deepEqual(pendingRequests(p.root).map(row => [row.goal, row.continuationTaskId]), [['and list the slow tests too', '4']]);
+});
+
+// The check of a session with no Task names it once: its first message shows only where it says
+// more than the title. Only its answers are chosen: ↑ on the first leaves the highlight on it.
+test('the check of a session with no Task says its first message once, and only its answers can be chosen', { timeout: 60000 }, async t => {
+  const p = setup(t);
+  // Names short enough for a Kanban card at 80 columns.
+  liveTask(p.root, { id: '3', goal: 'Tidy notes', state: 'ready' });
+  liveTask(p.root, { id: '4', goal: 'Fix the links\nand the broken ones in the notes', state: 'ready' });
+  const v = await view(t, { repo: p.repo, conductor: false }), panels = v.current.panels, status = () => panels.status.getText();
+  await send(v, '/kanban'); await until(() => v.current.view === 'kanban' && panels.kanbanLists[2].items.length === 2, 'both under Needs you');
+  // The card picked is the one named: a name not found would pick the first.
+  const pick = pattern => { const list = panels.kanbanLists[2]; pickRow(list, pattern); assert.match(list.items[list.selected].getText(), pattern); };
+  pick(/Tidy notes/); v.input.write('>'); await until(() => modal(v, 'Check'), 'its check');
+  const rows = dialogRows(v, 'Check').map(row => row.trimEnd());
+  assert.deepEqual(rows.filter(row => row === 'Tidy notes'), ['Tidy notes'], 'its name once');
+  assert.deepEqual(rows.slice(-2), ['› Done', '› Keep open, new message']);
+  assert.equal(dialogPicked(v, 'Check'), '› Done');
+  v.input.write('\x1b[A'); v.input.write('\x1b[A'); await pause(200);
+  assert.equal(dialogPicked(v, 'Check'), '› Done', 'the highlight stays on Done');
+  v.input.write('\r'); await until(() => /Moved "Tidy notes" to Done\./.test(status()), 'Enter answers Done');
+  // A first message that says more than the title shows what more it says under it, the name once.
+  pick(/Fix the links/); v.input.write('>'); await until(() => modal(v, 'Check'), 'the other check');
+  const more = dialogRows(v, 'Check').map(row => row.trimEnd());
+  assert.deepEqual([more.filter(row => /Fix the links/.test(row)), more.filter(row => row === 'and the broken ones in the notes').length], [['Fix the links'], 1], more.join('\n'));
+  v.input.write('\x1b'); await until(() => !modal(v, 'Check'), 'closed');
+});
+
+// A check taller than its dialog (at 80x24, a Task of eight objectives with their evidence) opens
+// on its name with every answer in view under its text. PgDn and PgUp page the text, ↑ on the
+// first answer brings back a line above, and no key moves the highlight off the answers or out of
+// view: Enter answers only an answer that shows.
+test('at 80x24 a check taller than its dialog shows its name and every answer, and the highlight stays on an answer in view while its text scrolls', { timeout: 60000 }, async t => {
+  const p = setup(t), objectives = Array.from({ length: 8 }, (_, index) => `Objective ${index + 1} of the coupon work holds`);
+  liveTask(p.root, { id: '3', goal: 'Uppercase coupon codes', state: 'ready' });
+  proposeTask(p.repo, '3', { title: 'Upper coupons', description: 'Upper case.', goal: 'Coupon codes compare equal whatever their case.', objectives, priority: 'medium', severity: 'low' });
+  approvePlan(p.repo, '3'); reportProgress(p.repo, '3', { met: objectives.map((_, index) => index + 1), evidence: objectives.map((_, index) => [index + 1, `Checked in step ${index + 1}: the run printed the expected result and the test log shows it passing.`]) });
+  const v = await view(t, { repo: p.repo, conductor: false }), panels = v.current.panels, status = () => panels.status.getText();
+  await send(v, '/kanban'); await until(() => v.current.view === 'kanban' && panels.kanbanLists[2].items.length === 1, 'under Needs you');
+  panels.kanbanLists[2].focus(); panels.kanbanLists[2].select(0);
+  v.input.write('>'); await until(() => modal(v, 'Check'), 'its check');
+  const page = () => modal(v, 'Check'), ANSWERS = ['› Done', '› Keep open, new goal', '› Done, and a copy with a new goal'];
+  // The dialog's rows as drawn, inside its borders.
+  const seen = () => { v.current.screen.render(); return v.frame().split('\n').map(row => row.replace(/\x1b\[[\d;]*m/g, '')).slice(page().atop + 1, page().atop + page().height - 1).map(row => row.slice(page().aleft + 1, page().aleft + page().width - 1).replace(/[┃│]\s*$/, '').trimEnd()); };
+  // The highlight is on that answer, its row is in view, and every answer shows.
+  const fine = (label, why) => {
+    const list = dialogList(v, 'Check'), at = (list.selected ?? 0) - list.childBase, rows = seen();
+    assert.equal(dialogPicked(v, 'Check'), label, `${why}: the highlight`);
+    assert.ok(at >= 0 && at < list.height - list.iheight, `${why}: the highlight in view\n${rows.join('\n')}`);
+    for (const answer of ANSWERS) assert.ok(rows.some(row => row.trim() === answer), `${why}: ${answer} shows\n${rows.join('\n')}`);
+  };
+  fine('› Done', 'opened'); assert.ok(seen().some(row => row.trim() === 'Upper coupons'), `its name at the top\n${seen().join('\n')}`);
+  for (const n of [1, 2, 3]) { v.input.write('\x1b[A'); await pause(60); fine('› Done', `↑ ${n}`); }
+  // PgDn pages the text to its end, over the answers.
+  for (const n of [1, 2, 3, 4]) { v.input.write('\x1b[6~'); await pause(60); fine('› Done', `PgDn ${n}`); }
+  assert.ok(seen().some(row => /Checked in step 8/.test(row)), `the last evidence shows\n${seen().join('\n')}`);
+  // ↑ on Done brings back the line above: what was the top row is now the one under it.
+  const top = seen()[0]; v.input.write('\x1b[A'); await pause(60); fine('› Done', '↑ at the end');
+  assert.equal(seen()[1], top, `a line back\n${seen().join('\n')}`);
+  v.input.write('\x1b[5~'); await pause(60); fine('› Done', 'PgUp');
+  v.input.write('\x1b[B'); await pause(60); fine('› Keep open, new goal', '↓');
+  v.input.write('\x1b[A'); await pause(60); fine('› Done', '↑ back');
+  v.input.write('\r'); await until(() => /Moved "Upper coupons" to Done\./.test(status()), 'Enter answers Done');
+});
+
+// The key bar under Needs you names what ⇧→ does on the card: check where it opens the check (a
+// session that waits for it, or one that asks him something), nothing where ⇧→ is refused (a Task
+// to approve, a message not started). A card whose session is gone says done (the key bar test
+// with Enter left out).
+test('Kanban names what ⇧→ does under Needs you: check on a session that waits for the check or asks you, none on a Task to approve or a message not started', { timeout: 60000 }, async t => {
+  const p = setup(t);
+  // Names short enough for a Kanban card at 80 columns.
+  liveTask(p.root, { id: '3', goal: 'Rename coupons', state: 'ready' });
+  liveTask(p.root, { id: '4', goal: 'Uppercase coupon codes', state: 'ready' });
+  proposeTask(p.repo, '4', { title: 'Upper coupons', description: 'Upper case.', goal: 'Codes match.', objectives: ['normalize uppercases'], priority: 'medium', severity: 'low' });
+  liveTask(p.root, { id: '5', goal: 'Find docs', state: 'needs_input' });
+  saveRequest(p.root, 'Add a retry', null, { state: 'blocked', reason: 'Stopped.' });
+  const v = await view(t, { repo: p.repo, conductor: false }), panels = v.current.panels, keys = () => panels.keys.getText().trim(), status = () => panels.status.getText();
+  await send(v, '/kanban'); await until(() => v.current.view === 'kanban' && panels.kanbanLists[2].items.length === 4, 'four under Needs you');
+  // The card picked is the one named: a name not found would pick the first.
+  const pick = pattern => { const list = panels.kanbanLists[2]; pickRow(list, pattern); assert.match(list.items[list.selected].getText(), pattern); };
+  // Each card picked has a bar other than the one before it, so a bar not yet drawn again is never taken for its own.
+  pick(/Rename coupons/); await until(() => keys() === 'enter open  ⇧→ check  ←→ columns  n new task', `check, not ${keys()}`);
+  pick(/Upper coupons/); await until(() => keys() === 'enter open  ←→ columns  n new task', `no ⇧→ on a Task to approve, not ${keys()}`);
+  v.input.write('>'); await until(() => /Its Task waits for your approval first\./.test(status()), 'refused'); assert.equal(modal(v, 'Check'), undefined);
+  // One that asks him something: ⇧→ opens its check there too, and the bar says so.
+  pick(/Find docs/); await until(() => keys() === 'enter open  ⇧→ check  ←→ columns  n new task', `check on one that asks you, not ${keys()}`);
+  v.input.write('>'); await until(() => modal(v, 'Check'), 'its check'); v.input.write('\x1b'); await until(() => !modal(v, 'Check'), 'closed');
+  pick(/Add a retry/); await until(() => keys() === 'enter open  ←→ columns  n new task', `no ⇧→ on a message not started, not ${keys()}`);
+  v.input.write('>'); await until(() => /Enter opens it: send it again, or \/stop cancels it\./.test(status()), 'refused');
 });
 
 test('a question waiting on the owner is answered from Tasks', { timeout: 30000 }, async t => {
@@ -4470,6 +4759,7 @@ test('x cleans up archived sessions, one or all: Learn, then delete or Delete, E
   await until(() => modal(v, 'Saved to the project context'), 'what was saved', 15000);
   assert.deepEqual(dialogRows(v, 'Saved to the project context').map(row => row.trim()), ['Use pnpm, not npm.']);
   assert.match(dialogNotes(v, 'Saved to the project context'), /Deleted 2 sessions\. Kept its work on feat\/task-5\./);
+  assert.doesNotMatch(panels.status.getText(), /Deleted|Kept/, 'said once, in the dialog');
   assert.match(readProjectSettings(p.root).context, /Use pnpm, not npm\./);
   assert.deepEqual(tasks(p.repo).map(task => task.id), ['7']);
   assert.deepEqual(branches(), ['feat/task-5', 'feat/task-7', 'main']);
@@ -4528,11 +4818,10 @@ test('Learn, then delete leaves a session that came back while the lessons ran, 
   assert.ok(branches().includes('feat/task-4') && branches().includes('feat/task-5'), branches().join(' '));
 });
 
-// What a dialog's key just did shows in the status line, beside the list. A dialog over the
-// line's own rows sends it to the foot of the message box, inside its border, and stays where it
-// is. The line is drawn across neither the list nor a box's border (at 80x24 it once ran from the
-// list to "──┐" over the message box).
-for (const [columns, size, place] of [[80, 24, 'at the foot of the message box'], [140, 50, 'in its own rows']]) test(`at ${columns}x${size} the line under Saved to the project context shows ${place}, beside the list, and nothing draws over a border`, async t => {
+// What a clean-up with Learn did is said once, in Saved to the project context: no line under
+// it says it again, here or once it closes. Nothing is drawn across the list or a box's border
+// (at 80x24 a line once ran from the list to "──┐" over the message box).
+for (const [columns, size] of [[80, 24], [140, 50]]) test(`at ${columns}x${size} what Saved to the project context says is said once, in it, and nothing draws over a border`, async t => {
   const p = setup(t, 'answer', { learned: { add: ['Use pnpm, not npm.'], remove: [] } }); registerProject(p.repo);
   for (const [id, goal] of [['4', 'Trim coupon codes'], ['5', 'Round totals']]) liveTask(p.root, { id, goal, state: 'stopped' });
   // 4 holds nothing on no remote; 5 has a file not committed, which is kept.
@@ -4545,35 +4834,33 @@ for (const [columns, size, place] of [[80, 24, 'at the foot of the message box']
   v.input.write('\r'); await until(() => modal(v, 'Work not pushed'), 'its work on no remote');
   v.input.write('\r'); await until(() => modal(v, SAVED), 'what was saved', 20000);
   const g = geometry(columns, size), status = panels.status, list = panels.boardBox, ask = panels.ask, page = () => modal(v, SAVED), box = columns === 80;
-  // Its own rows end right over the message box; the box's last rows end over its bottom border.
-  const said = () => status.getText().replace(/\s+/g, ' ').trim(), at = foot => status.aleft === list.aleft + list.width + 1 && status.atop + status.height - 1 === foot;
-  const own = () => at(g.statusTop), inBox = () => at(ask.atop + ask.height - 2) && status.atop > ask.atop;
-  await until(() => said() === `› ${LINE}` && (box ? inBox() : own()), `the line ${place}: ${status.aleft},${status.atop} ${said()}`);
-  // The dialog stays in the middle, where at 80x24 it covers the line's own row, and ends over the line.
+  const said = () => status.getText().replace(/\s+/g, ' ').trim();
+  assert.ok(dialogNotes(v, SAVED).replace(/\s+/g, ' ').includes(LINE), `the dialog says it: ${dialogNotes(v, SAVED)}`);
+  assert.equal(said(), '', 'and no line under it says it again');
+  // The dialog stays in the middle, where at 80x24 it covers the line's own row.
   assert.equal(page().atop, Math.floor((size - page().height) / 2), 'the dialog stays where it was laid out');
   assert.equal(page().atop + page().height > g.statusTop, box, 'it covers the own row at 80x24 only');
-  assert.ok(page().atop + page().height <= status.atop, `the dialog ends over the line: ${page().atop}+${page().height} > ${status.atop}`);
   v.current.screen.render(); const frame = v.frame().split('\n').map(row => row.replace(/\x1b\[[\d;]*m/g, ''));
-  // Each row of the line keeps the list's right border, and in the box its two side borders; the line is all that is drawn between them.
-  for (let y = status.atop; y < status.atop + status.height; y += 1) {
+  // Outside the dialog nothing says it, and the list's right border is whole on every row beside the message box.
+  assert.ok(frame.every((row, y) => y >= page().atop && y < page().atop + page().height || !row.includes('Deleted')), `said once:\n${frame.join('\n')}`);
+  for (let y = ask.atop + 1; y < ask.atop + ask.height - 1; y += 1) {
+    if (y >= page().atop && y < page().atop + page().height) continue;
     assert.equal(frame[y][list.aleft + list.width - 1], '│', `the list's border on row ${y}:\n${frame.join('\n')}`);
-    if (box) assert.deepEqual([frame[y][ask.aleft], frame[y][ask.aleft + ask.width - 1]], ['│', '│'], `the box's borders on row ${y}:\n${frame.join('\n')}`);
+    assert.deepEqual([frame[y][ask.aleft], frame[y][ask.aleft + ask.width - 1]], ['│', '│'], `the box's borders on row ${y}:\n${frame.join('\n')}`);
   }
-  assert.equal(frame.slice(status.atop, status.atop + status.height).map(row => row.slice(status.aleft, status.aleft + status.width).trim()).join(' '), `› ${LINE}`);
   // The message box's borders and the dialog's are whole.
   assert.match(frame[ask.atop].slice(ask.aleft, ask.aleft + ask.width), /^┌─.*─┐$/, `the top of the box:\n${frame.join('\n')}`);
   assert.match(frame[ask.atop + ask.height - 1].slice(ask.aleft, ask.aleft + ask.width), /^└─+┘$/, 'the bottom of the box');
   assert.match(frame[page().atop].slice(page().aleft, page().aleft + page().width), /^┌─ Saved to the project context ─+┐$/, 'the top of the dialog');
   assert.match(frame[page().atop + page().height - 1].slice(page().aleft, page().aleft + page().width), /^└─+┘$/, 'the bottom of the dialog');
-  // Closed, the line is back in its own rows.
+  // Closed, nothing says it again.
   v.input.write('\r'); await until(() => !modal(v, SAVED), 'closed');
-  await until(() => said() === `› ${LINE}` && own(), 'its own rows once the dialog closes');
+  await pause(300); assert.equal(said(), '', 'not said again once it closes');
 });
 
-// A draft in the message box shows whole under that dialog: the line takes the rows under the
-// draft, in fewer words where they are too few (the dialog says it whole), and is never drawn
-// over the draft's text, where it read as part of the draft.
-test('at 80x24 a draft in the message box shows whole under Saved to the project context, the line in the row under it', async t => {
+// A draft in the message box shows whole under that dialog, and nothing is drawn over the
+// draft's text, where a line once read as part of the draft.
+test('at 80x24 a draft in the message box shows whole under Saved to the project context, with nothing drawn over it', async t => {
   const p = setup(t, 'answer', { learned: { add: ['Use pnpm, not npm.'], remove: [] } }); registerProject(p.repo);
   for (const [id, goal] of [['4', 'Trim coupon codes'], ['5', 'Round totals']]) liveTask(p.root, { id, goal, state: 'stopped' });
   for (const args of [['checkout', '--', '.'], ['clean', '-fdq']]) git(path.join(p.repo.worktrees, '4'), args);
@@ -4591,16 +4878,14 @@ test('at 80x24 a draft in the message box shows whole under Saved to the project
   v.input.write('\r'); await until(() => modal(v, SAVED), 'what was saved', 20000);
   const g = geometry(80, 24), page = () => modal(v, SAVED), plain = row => row.replace(/\x1b\[[\d;]*m/g, '');
   assert.ok(page().atop + page().height > g.statusTop, 'the dialog covers the line\'s own row');
-  await until(() => status.atop > ask.atop && status.atop + status.height <= ask.atop + ask.height - 1 && /^› Deleted 2 sessions\./.test(status.getText().trim()), `the line in the box: ${status.atop} ${status.getText()}`);
+  assert.equal(status.getText().trim(), '', 'what was done is said in the dialog alone');
   v.current.screen.render(); const frame = v.frame().split('\n').map(plain), inside = y => frame[y].slice(ask.aleft + 1, ask.aleft + ask.width - 1).trim();
-  // The draft's three rows, whole, then the line in the row left under them, in fewer words.
+  // The draft's three rows, whole, and nothing in the row under them.
   assert.equal([1, 2, 3].map(at => inside(ask.atop + at)).join(' '), DRAFT, `the draft shows whole:\n${frame.join('\n')}`);
-  assert.deepEqual([status.atop, status.height], [ask.atop + 4, 1], 'the line takes the one row under the draft');
-  assert.equal(inside(ask.atop + 4), '› Deleted 2 sessions. Kept its work on…');
+  assert.equal(inside(ask.atop + 4), '', 'nothing under the draft');
   assert.match(frame[ask.atop + ask.height - 1].slice(ask.aleft, ask.aleft + ask.width), /^└─+┘$/, 'the bottom of the box is whole');
-  // Closed, the line is back in its own rows, whole, and the draft is as it was.
+  // Closed, the draft is as it was.
   v.input.write('\r'); await until(() => !modal(v, SAVED), 'closed');
-  await until(() => status.atop + status.height - 1 === g.statusTop && status.getText().replace(/\s+/g, ' ').trim() === '› Deleted 2 sessions. Kept its work on feat/task-5.', 'its own rows once the dialog closes');
   assert.equal(ask.getValue(), DRAFT);
 });
 

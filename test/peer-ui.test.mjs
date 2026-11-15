@@ -10,7 +10,7 @@ import { saveRequest, pendingRequests, updateRequest } from '../lib/workspace.mj
 import { launchTerminal } from '../lib/terminal.mjs';
 import { listBots, removeBot, saveBot } from '../lib/bots.mjs';
 import { boardRows, barCells, barColumns } from '../lib/board.mjs';
-import { closeSession, readBoard } from '../lib/kanban.mjs';
+import { closeSession, readBoard, reopenSession } from '../lib/kanban.mjs';
 import { readTask, saveTask, tasks } from '../lib/state.mjs';
 import { helperLink } from '../lib/remote-helper.mjs';
 import { clockTime } from '../lib/terminal-plan.mjs';
@@ -1561,7 +1561,8 @@ test('/done over a session on my other computer that waits for my check shows it
   const peer = fakePeer({ items: [], mine: [{ key: SARA, mine: true, theirs: true }], machines, repoId: SHOP_REPO, answer: checked }), v = await view(t, { repo: repository(p.root), dashboard: true, peer });
   const board = v.panels.board, status = () => v.panels.status.getText().replace(/\s+/g, ' ');
   const sent = type => peer.sent().filter(row => row.type === type).map(({ type: _type, ...rest }) => rest);
-  const dialogList = title => modal(v, title)?.children.find(child => child.type === 'list'), dialogRows = title => dialogList(title)?.items.map(item => item.getText()) ?? [];
+  // The check's rows: its text, then its answers, the last list, which takes the keys.
+  const lists = title => modal(v, title)?.children.filter(child => child.type === 'list') ?? [], dialogList = title => lists(title).at(-1), dialogRows = title => lists(title).flatMap(list => list.items.map(item => item.getText()));
   const over = async () => { board.focus(); selectRow(board, /Make coupons upper case/); await until(() => /Message the session on @sara-box/.test(v.panels.ask._label.getText()), 'the session there beside the list'); };
   await until(() => board.items.map(plainItem).some(row => /Make coupons upper case/.test(row)), 'the row there');
   await over(); await until(() => /Make coupons upper case {2}· {2}Task\b/.test(v.panels.header.getText()), 'its title names its Task');
@@ -1574,7 +1575,7 @@ test('/done over a session on my other computer that waits for my check shows it
   assert.deepEqual(sent('remoteCheck'), [{ id: THERE_ID, to: SARA, ref: listed.ref }], 'only what it shows was asked');
   // Keep open, new goal: typed here, done there.
   await over(); await send(v, '/done'); await until(() => modal(v, 'Check'), 'the check again');
-  dialogList('Check').select(rows.length - 2); v.input.write('\r');
+  dialogList('Check').select(dialogList('Check').items.findIndex(item => item.getText().trimEnd() === '› Keep open, new goal')); v.input.write('\r');
   const title = 'New goal (objectives below it, one per line)';
   await until(() => modal(v, title)?.children.find(child => child.type === 'textarea')?.__listener, 'the new goal editor');
   modal(v, title).children.find(child => child.type === 'textarea').setValue('Trim spaces too\nnormalize trims the code'); v.input.write('\x13');
@@ -1713,6 +1714,65 @@ for (const [cols, high] of [[80, 24], [140, 50]]) test(`at ${cols}x${high} every
   assert.deepEqual(tail().slice(-end.length), end, 'the result stays whole under the rows');
   assert.doesNotMatch(tail().join(' '), /sara-box/);
   v.input.write('\r'); await until(() => !modal(v, 'Saved to the project context'), 'closed');
+  assert.deepEqual(peer.sent().filter(row => row.type === 'remoteClean'), [], 'nothing went to sara-box');
+});
+
+// /archived clean on this computer where 8 of its 9 archived sessions were brought back while
+// the question was open: each is not deleted, and says why. At 80x24 those notes do not fit, so
+// they go on after what was saved, under the OK button's keys, and the hint says pgdn more only
+// while there is more below; PgDn and End show the last of them, PgUp and Home the top again.
+// At 140x50 every note shows.
+for (const [cols, high] of [[80, 24], [140, 50]]) test(`at ${cols}x${high} the notes of /archived clean's result that do not fit go on after what was saved, and pgdn more says so`, async t => {
+  const { machines, answer } = editableThere(), p = project(later(t)); environment(t, p.parent);
+  const fake = fakeClis(p.parent, { mode: 'answer', learned: { add: ['Use pnpm, not npm.', 'Keep replies short.'], remove: [] } }), previous = Object.fromEntries(['PATH', 'XDG_DATA_HOME', 'CLAUDE_CONFIG_DIR'].map(key => [key, process.env[key]]));
+  for (const key of Object.keys(previous)) process.env[key] = fake.env[key];
+  owned(t).files.push(() => { for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } });
+  // Here: one archived session with a file not committed, and 8 more. sara-box: one archived there.
+  const repo = repository(p.root); registerProject(repo);
+  liveTask(p.root, { id: '4', goal: 'Tidy the logs', state: 'stopped' }); closeSession(repo, '4');
+  const back = Array.from({ length: 8 }, (_, at) => String(at + 5));
+  for (const [at, id] of back.entries()) { liveTask(p.root, { id, goal: `Round the refunds to the cent for shop ${at + 1}`, state: 'stopped', files: {} }); closeSession(repo, id); }
+  machines[0].sessions[0].archived = true; machines[0].clean = true;
+  const peer = fakePeer({ items: [], mine: [{ key: SARA, mine: true, theirs: true }], machines, repoId: SHOP_REPO, answer }), v = await view(t, { repo, dashboard: true, peer, columns: cols, rows: high });
+  const board = v.panels.board, rows = () => board.items.map(plainItem).map(row => row.trim()), narrow = cols === 80, title = 'Saved to the project context';
+  await send(v, '/archived'); await until(() => rows().some(row => /^ARCHIVED 9\b/.test(row)), "this computer's 9 archived sessions");
+  await send(v, '/archived clean'); await until(() => modal(v, 'Clean up'), 'the question');
+  assert.match(framed(v, 'Clean up').join(' '), /Deletes 9 archived sessions for good\./);
+  // While it is open, 8 of them are brought back on this computer, from another window.
+  for (const id of back) reopenSession(repo, id);
+  v.input.write('\r'); await until(() => modal(v, 'Work not pushed'), 'its work on no remote');
+  assert.match(framed(v, 'Work not pushed').join(' '), /1 of them has 1 file not committed\./);
+  v.input.write('\r'); await until(() => modal(v, title), 'the result', 20000);
+  const saved = framed(v, title), text = () => framed(v, title).join(' ').replace(/\s+/g, ' ');
+  // What was saved shows first, under the border; then the button, and the hint last.
+  // (A list with more than it shows draws its scrollbar at its right.)
+  assert.deepEqual(saved.slice(0, 2).map(row => row.replace(/┃$/, '').trim()), ['Use pnpm, not npm.', 'Keep replies short.']);
+  assert.ok(saved.some(row => row.trim() === 'OK'), saved.join('\n'));
+  assert.equal(saved.at(-1).trim(), narrow ? 'enter close · pgdn more' : 'enter close');
+  // The newest first, as the list shows them: shop 1's note is the last.
+  const last = () => framed(v, title).some(row => row.includes('the cent for shop 1"'));
+  if (narrow) {
+    // The notes are in the text the keys scroll: PgDn shows the last of them, inside the border,
+    // where they stand when they fit: one column in, in line with the hint.
+    assert.ok(!last(), `the last note is further down:\n${saved.join('\n')}`);
+    v.input.write('\x1b[6~'); await until(last, 'the last note, after PgDn');
+    assert.ok(framed(v, title).some(row => row.startsWith(' Not deleted: "Round the refunds to the cent for shop 1"')), framed(v, title).join('\n'));
+    // At the end nothing more is below, and the hint says only what Enter does.
+    assert.equal(framed(v, title).at(-1).trim(), 'enter close', 'at the end');
+    v.input.write('\x1b[5~'); await until(() => framed(v, title).some(row => row.includes('Use pnpm, not npm.')), 'the top again, after PgUp');
+    assert.equal(framed(v, title).at(-1).trim(), 'enter close · pgdn more', 'more below again');
+    // End and Home do the same.
+    v.input.write('\x1b[F'); await until(last, 'the last note, after End');
+    assert.equal(framed(v, title).at(-1).trim(), 'enter close', 'at the end again');
+    v.input.write('\x1b[H'); await until(() => framed(v, title).some(row => row.includes('Use pnpm, not npm.')), 'the top again, after Home');
+    assert.equal(framed(v, title).at(-1).trim(), 'enter close · pgdn more', 'more below once more');
+  } else assert.match(text(), /OK Deleted "Tidy the logs"\. Kept its work on feat\/task-4\. Not deleted: "Round the refunds to the cent for shop 8": It is no longer archived\..* Not deleted: "Round the refunds to the cent for shop 1": It is no longer archived\. enter close$/, `every note shows:\n${framed(v, title).join('\n')}`);
+  assert.doesNotMatch(text(), /sara-box/);
+  v.input.write('\r'); await until(() => !modal(v, title), 'closed');
+  // The 8 brought back are still here, open; the one still archived is deleted. Nothing went to sara-box.
+  const left = tasks(repo).map(task => String(task.id));
+  assert.ok(back.every(id => left.includes(id)) && !left.includes('4'), left.join(' '));
+  assert.deepEqual(readBoard(repo).archived.filter(id => back.includes(id)), []);
   assert.deepEqual(peer.sent().filter(row => row.type === 'remoteClean'), [], 'nothing went to sara-box');
 });
 
@@ -3910,7 +3970,10 @@ test('Kanban on a computer with no project opens the board of a project on my ot
   // Shift+→ on the session that needs me: its check, from there, as on that computer's own
   // board. Esc changes nothing; the check's Done moves it there, and no key does.
   const checks = () => peer.sent().filter(command => command.type === 'remoteCheck');
-  panels.kanbanLists[2].focus(); panels.kanbanLists[2].select(0); v.input.write('>');
+  panels.kanbanLists[2].focus(); panels.kanbanLists[2].select(0);
+  // It asks me something there: Shift+→ still opens its check, and the bar names it.
+  await until(() => /^enter open {2}⇧→ check {2}←→ columns/.test(keys()), `the bar names its check, not ${keys()}`);
+  v.input.write('>');
   await until(() => modal(v, 'Check'), 'its check');
   assert.deepEqual(checks().map(({ type: _type, ...rest }) => rest), [{ to: SARA, ref: `${ELU}:1` }], 'read from there');
   v.input.write('\x1b'); await until(() => !modal(v, 'Check'), 'Esc closes it');

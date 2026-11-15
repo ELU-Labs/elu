@@ -1596,7 +1596,8 @@ test('a session on my other computer that waits for my check is checked from her
     const copy = pendingRequests(project.root).find(row => row.copied);
     assert.deepEqual([copy.goal, copy.place, copy.copied.goal, copy.copied.from.session], ['Show the code as typed', { kind: 'branch', branch: 'feat/task-1-next' }, 'Show the code as typed', '1']);
   });
-  // One at work is not checked.
+  // One at work is not checked: refused before anything is shown, and its answer too.
+  await assert.rejects(check(three), /"Run the tests" is working\. Check it when it stops\./);
   await assert.rejects(check(three, { answer: 'done' }), /"Run the tests" is working\. Check it when it stops\./);
   // A computer on an ELU before 0.1.26 is sent nothing; a teammate's computer is refused there.
   const sent = [], answer = toViewer.request; toViewer.request = async (method, params) => { sent.push(method); return answer(method, params); };
@@ -1672,6 +1673,40 @@ test('archived sessions on my other computer are deleted there by its own code, 
   use('answer');
   assert.deepEqual((await clean({ refs: [refOf('Tidy the logs')] })).deleted.map(row => row.shown), ['Tidy the logs']);
   assert.ok(!withHome(devbox.home, () => projectSnapshot(repo).tasks.some(task => task.id === '4')));
+});
+
+// A session the owner checked Done on his other computer is in Done there, not archived: its list leaves
+// it out, as Sessions there does, and a clean-up from a computer that still lists it as archived
+// (ELU 0.1.26) is refused there in plain words. One he checked Done and then archived, brought
+// back from here, comes out of Done there with its Task open, as Shift+← brings it.
+test('a session checked Done on my other computer is not archived there: its list leaves it out, a clean-up of it is refused, and u brings one back with its Task open', async t => {
+  const { laptop, devbox, project, toViewer, host, viewCtx } = pair(t);
+  toViewer.remoteHello = { remote: 1, edit: 1, clean: 1, check: 1 };
+  const TASK = { title: 'Uppercase coupons', description: 'Make normalize return upper case.', goal: 'Codes compare equal whatever their case.', objectives: ['normalize returns upper case'], priority: 'medium', severity: 'low' };
+  const repo = withHome(devbox.home, () => {
+    const made = chat(project.root, 1, { goal: 'Where is the export?' }); chat(project.root, 2, { goal: 'Old question' }); chat(project.root, 3, { goal: 'Make coupons upper case' });
+    proposeTask(made, '3', TASK); approveTask(made, '3'); reportProgress(made, '3', { met: [1] }); relist(); return made;
+  });
+  await withHome(laptop.home, () => listTick(viewCtx));
+  const refOf = title => withHome(laptop.home, () => remoteMachines()[0].sessions.find(row => row.title === title)?.ref);
+  const one = refOf('Where is the export?'), two = refOf('Old question'), three = refOf('Uppercase coupons');
+  const command = extra => withHome(laptop.home, () => remoteCommand(viewCtx, { to: devbox.identity.key, ...extra }));
+  for (const ref of [one, three]) await command({ type: 'remoteCheck', ref, answer: 'done' });
+  await command({ type: 'remoteArchive', ref: two, archived: true });
+  const listed = withHome(devbox.home, () => { relist(); return host['elu.remote.list']({ archived: true }, connection(laptop.identity.key)).sessions.map(row => [row.title, row.archived === true]); });
+  assert.deepEqual(listed, [['Old question', true]], 'what was checked Done is not listed; what was archived is, as archived');
+  // A clean-up of it, as a computer that still lists it as archived sends one: refused there, and nothing goes.
+  assert.throws(() => withHome(devbox.home, () => host['elu.remote.delete']({ refs: [one], check: true }, connection(laptop.identity.key))), { message: '"Where is the export?" is in Done, not archived.' });
+  assert.throws(() => withHome(devbox.home, () => host['elu.remote.delete']({ refs: [one] }, connection(laptop.identity.key))), { message: '"Where is the export?" is in Done, not archived.' });
+  assert.ok(withHome(devbox.home, () => fs.existsSync(taskDir(repo, '1'))));
+  // Checked Done, then archived there, and brought back from here: out of Done there, its Task open again.
+  await command({ type: 'remoteArchive', ref: three, archived: true });
+  withHome(devbox.home, () => assert.equal(currentTask(repo, '3').state, 'done'));
+  await command({ type: 'remoteArchive', ref: three, archived: false });
+  withHome(devbox.home, () => {
+    assert.deepEqual([currentTask(repo, '3').state, readBoard(repo).checked?.['3']], ['approved', undefined]);
+    assert.equal(sessionPlace(readBoard(repo), readTask(repo, '3')), 'needs');
+  });
 });
 
 // The lessons run there takes as long as the model does. What was checked before it is checked
