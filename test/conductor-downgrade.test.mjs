@@ -178,6 +178,10 @@ test('elu conductor stop beside 0.1.16 leaves nothing queued where 0.1.16 never 
   // Every conductor stops, and 0.1.16 is installed again before any other starts.
   sendCommand({ type: 'shutdown' });
   await until(() => old.conductor.closed && fresh.conductor.closed, 'both to stop');
+  // closed is set as a stop begins; each lets go of its lock, and the one beside gives back what
+  // waited there, only once its turn has stopped. 0.1.16 starts after that, as a new process would.
+  const locks = ['conductor', conductorFiles.BESIDE_LOCK].map(name => path.join(personalDirectory(), `${name}.lock`));
+  await until(() => locks.every(file => !fs.existsSync(file)) && !besideFiles().length, 'both to let go of their locks');
   downgrade(t, '0.1.16'); saveConductorSettings({ maxAgents: 4 });
   assert.deepEqual(besideFiles(), []);
   const again = published(t, { module: earlier16, version: '0.1.16' });

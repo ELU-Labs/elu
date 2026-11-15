@@ -73,7 +73,7 @@ test('elu sessions lists the project\'s sessions and archives, brings back and r
   const two = await f.controller.ask('Check the build', null, { permissions: 'auto' }).finished;
   let out = json(elu(f, ['sessions', '--json']));
   assert.deepEqual(out.sessions.map(row => [row.id, row.state, row.archived, row.mode]), [[one.id, 'answered', false, 'ask'], [two.id, 'answered', false, 'auto']]);
-  assert.match(elu(f, ['sessions']).stdout, /^Sessions in sample app:\n {2}1 {2}answered {4}"Where is coupon normalization\?"\n {2}2 {2}answered {4}"Check the build"\n$/);
+  assert.match(elu(f, ['sessions']).stdout, /^Sessions in sample app:\n {2}1 {2}replied {10}"Where is coupon normalization\?"\n {2}2 {2}replied {10}"Check the build"\n$/);
   let r = elu(f, ['sessions', 'archive', '1']); assert.equal(r.status, 0, r.stderr);
   assert.equal(r.stdout, 'Archived session 1 "Where is coupon normalization?". elu sessions unarchive 1 brings it back.\n');
   assert.ok(closed(f, 1) && !closed(f, 2), 'Sessions in the app no longer lists it');

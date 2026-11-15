@@ -19,7 +19,7 @@ import { Conductor, conductorSettings, enqueue } from '../lib/conductor.mjs';
 import { liveTask } from './peer-helpers.mjs';
 import { standIn } from './login-item-helpers.mjs';
 import { readBoard, sessionClosed, closeSession, setDone } from '../lib/kanban.mjs';
-import { proposeTask, approveTask as approvePlan, reportProgress, finishTask, reopenTask, planFile } from '../lib/plan.mjs';
+import { proposeTask, approveTask as approvePlan, reportProgress, finishTask, reopenTask, planFile, sessionTasks } from '../lib/plan.mjs';
 import { clockTime } from '../lib/terminal-plan.mjs';
 import { columns } from '../lib/width.mjs';
 import { saveTask, readTask, taskDir, taskTitle, setTitle, lock, tasks } from '../lib/state.mjs';
@@ -205,11 +205,11 @@ test('a message that starts with ! runs in a shell: in a session it joins the ch
   const v = await view(t, { repo: p.repo }), panels = v.current.panels, chat = () => panels.chat.getText();
   const saved = () => { try { return fs.readFileSync(path.join(taskDir(p.repo, '4'), 'shell.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line)); } catch { return []; } };
   await openTask(v, /Trim coupon codes/);
-  // The key bar keeps to what is not obvious, and names Enter only once there is something to send. At 80 columns it ends where the room does; a wider terminal shows the rest.
-  panels.ask.focus(); await until(() => panels.keys.getText().trim() === '@name ask a bot  / commands  /model choose the model  ! run a shell command', 'key bar');
+  // The key bar keeps to what is not obvious, and names Enter only once there is something to send. Ctrl+T opens the Task in the header. At 80 columns it ends where the room does; a wider terminal shows the rest.
+  panels.ask.focus(); await until(() => panels.keys.getText().trim() === 'ctrl+t Task  @name ask a bot  / commands  /model choose the model', 'key bar');
   v.output.columns = 120; v.output.emit('resize');
-  await until(() => panels.keys.getText().trim() === '@name ask a bot  / commands  /model choose the model  ! run a shell command  esc sessions', 'the whole key bar');
-  v.output.columns = 80; v.output.emit('resize'); await until(() => v.current.screen.width === 80 && panels.keys.getText().trim() === '@name ask a bot  / commands  /model choose the model  ! run a shell command', 'back to 80 columns');
+  await until(() => panels.keys.getText().trim() === 'ctrl+t Task  @name ask a bot  / commands  /model choose the model  ! run a shell command  esc sessions', 'the whole key bar');
+  v.output.columns = 80; v.output.emit('resize'); await until(() => v.current.screen.width === 80 && panels.keys.getText().trim() === 'ctrl+t Task  @name ask a bot  / commands  /model choose the model', 'back to 80 columns');
   // The label says where a command will run, as soon as the text starts with !.
   panels.ask.readInput(); await until(() => panels.ask.__listener, 'message box');
   v.input.write('!'); await until(() => / Run in .+ · Enter runs it /.test(panels.ask._label.getText()), 'the label names the folder');
@@ -1357,7 +1357,7 @@ test('a bot at work is named in the chat; one that is stopped or cannot answer s
   // While the bot works the chat names it, and a second message waits under the name it was written to.
   fs.writeFileSync(fake, JSON.stringify({ ...JSON.parse(fs.readFileSync(fake, 'utf8')), mode: 'listen', steps: 150, stepMs: 200 }));
   const started = () => fs.readFileSync(p.calls, 'utf8').split('\n').filter(line => line.includes('"-p"')).length, before = started();
-  await send(v, '@sec Still there?'); await until(() => /@sec is working/.test(chat()) && /@sec working/.test(panels.header.getText()), 'the bot is shown at work');
+  await send(v, '@sec Still there?'); await until(() => /@sec is working/.test(chat()) && / {2}· {2}Task\b/.test(panels.header.getText()), 'the bot is shown at work');
   // The session reads as working before the vendor starts. The run has read its mode once its call is recorded; only then may the mode change.
   await until(() => started() > before, 'the slow run has started');
   // Written to the bot while it works, a message goes to its turn, which takes it at its next step.
@@ -2208,7 +2208,7 @@ test('switching tabs keeps running work alive and returns to the same chat', { t
   await send(v, '/sessions'); await until(() => v.current.view === 'tasks' && v.current.session === id && /^.[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] Keep working/.test(cursor(v)), 'the same session');
   assert.match(rows(v).join('\n'), /RUNNING 1 /); assert.doesNotMatch(rows(v).join('\n'), /#\d/, 'no row shows a number');
   await openTask(v, /Keep working/);
-  assert.equal(v.current.session, id); assert.match(v.current.panels.header.getText(), /Keep working while I look… {2}· {2}working {2}· /, 'the title is cut at a word, and the state after it is whole'); assert.doesNotMatch(v.current.panels.header.getText(), /#\d/); assert.equal(modal(v, 'Open project'), undefined);
+  assert.equal(v.current.session, id); assert.match(v.current.panels.header.getText(), /Keep working while I look at… {2}· {2}Task {2}· /, 'the title is cut at a word, and Task after it is whole'); assert.doesNotMatch(v.current.panels.header.getText(), /#\d/); assert.equal(modal(v, 'Open project'), undefined);
   await send(v, '/stop'); await until(() => projectSnapshot(p.repo).tasks[0].state === 'stopped', 'stopped response');
 });
 
@@ -2350,7 +2350,7 @@ test('a task is reviewed by its bot, answers the lead, inspects evidence, and as
   frame('Lead asks a question');
   await send(v, 'Uppercase'); await approveTask(v);
   await until(() => projectSnapshot(p.repo).tasks[0]?.state === 'ready', 'checks and review', 15000);
-  await until(() => /ready/.test(v.current.panels.header.getText()), 'ready in the header'); frame('Checks and review passed');
+  await until(() => / {2}· {2}Task\b/.test(v.current.panels.header.getText()), 'Task in the header'); frame('Checks and review passed');
   const reviewed = projectSnapshot(p.repo).tasks[0];
   assert.equal(reviewed.reviewStatus, 'passed'); assert.deepEqual(reviewed.runs.filter(run => run.role === 'bot:reviewer').map(run => run.vendor), ['codex'], '@reviewer reviewed it, on Codex');
   await send(v, '/details');
@@ -2672,7 +2672,7 @@ test('a session is renamed while its turn waits on an approval: the name shows a
   const box = () => modal(v, 'Rename session').children.find(child => child.type === 'textbox');
   assert.equal(box().getValue(), '', 'the box does not open with the request');
   await dialog(v, 'Rename session', 'Receipt email fixes');
-  await until(() => /Renamed to Receipt email fixes\./.test(status()) && /· {2}Receipt email fixes {2}· {2}needs approval/.test(panels.header.getText()), 'renamed, and the title shows it');
+  await until(() => /Renamed to Receipt email fixes\./.test(status()) && /· {2}Receipt email fixes {2}· {2}Task/.test(panels.header.getText()), 'renamed, and the title shows it');
   assert.equal(named(), 'Receipt email fixes'); assert.equal(projectSnapshot(p.repo).tasks[0].state, 'running', 'the turn goes on');
   // The list shows the new name on the row that waits, before what is wanted. Once the approval is answered the row is the session's alone.
   await until(() => rows(v).some(row => /^.\? Receipt email fixes · run: cd/.test(row)), 'the list shows it beside the approval');
@@ -2747,7 +2747,7 @@ test('a session shows the first words of its request in one row, then the short 
   // An older session has no name: its row and its title are the first words of the request, cut at a word.
   liveTask(p.root, { id: '7', goal: LONG_REQUEST, state: 'ready' });
   await openTask(v, /Work on our receipt email/);
-  await until(() => /· {2}Work on our receipt email, we have two cases for it that… {2}· {2}ready/.test(panels.header.getText()), 'the title is the first words');
+  await until(() => /· {2}Work on our receipt email, we have two cases for it that… {2}· {2}Task/.test(panels.header.getText()), 'the title is the first words');
   assert.ok(rows(v).some(row => /^.✓ Work on our receipt email, we… +now$/.test(row)), rows(v).join('|'));
   await send(v, '/rename'); await until(() => modal(v, 'Rename session') && box().__listener, 'the dialog');
   assert.equal(box().getValue(), '', 'a request is never put in the box'); assert.match(dialogText(v, 'Rename session').replace(/\s+/g, ' '), /Leave it empty to go back to the name ELU gave it\./);
@@ -2755,7 +2755,7 @@ test('a session shows the first words of its request in one row, then the short 
   // A new session: its first reply names it, in the list and in the title.
   await send(v, '/new'); await until(() => !panels.compose.hidden, 'the form');
   await send(v, LONG_REQUEST.replace('Work on', 'Look at'));
-  await until(() => rows(v).some(row => /^.✓ Receipt email fixes +now$/.test(row)) && /· {2}Receipt email fixes {2}· {2}answered/.test(panels.header.getText()), 'the model\'s name');
+  await until(() => rows(v).some(row => /^.✓ Receipt email fixes +now$/.test(row)) && /· {2}Receipt email fixes {2}· {2}Task/.test(panels.header.getText()), 'the model\'s name');
   const id = v.current.session, by = () => [readTask(p.repo, id).title, readTask(p.repo, id).titleBy];
   assert.deepEqual(by(), ['Receipt email fixes', 'model']); assert.equal(readTask(p.repo, id).runs.length, 1, 'one reply, and no call for the name');
   // The box opens with the model's name. The owner's name shows instead, and taking it away brings the model's back.
@@ -3028,7 +3028,7 @@ test('a working turn shows its thinking and tool calls as they happen, then fold
   const gate = path.join(temp(t), 'gate'), p = setup(t, 'steps', { intent: 'answer', gate }), v = await view(t, { repo: p.repo }), panels = v.current.panels;
   const flat = () => panels.chat.getText().replace(/\s+/g, ' '), lines = () => panels.chat.getText().split('\n');
   await send(v, 'Why do lower case coupons fail?');
-  await until(() => /Opus is working ✻ The coupon code should compare in upper case\. I will read the module first\. ✓ Read: src\/coupon\.mjs ● Run: npm test ?$/.test(flat()), 'the thought, the file read and the command still running', 15000);
+  await until(() => /Opus is working ▸ 2 earlier steps · ctrl\+o shows all ● Run: npm test ?$/.test(flat()), 'the command still running, the thought and the file read folded above it', 15000);
   assert.equal(projectSnapshot(p.repo).tasks[0].state, 'running');
   assert.doesNotMatch(flat(), /Opus is working model: started/, 'not the line that never changed');
   const frames = [{ step: 'working', text: v.frame() }];
@@ -3059,6 +3059,122 @@ test('a working turn shows its thinking and tool calls as they happen, then fold
   captureFrames('live-steps', frames);
 });
 
+// The owner's case: "the agent thinking doesn't need to expand this way, it can just show the
+// latest what is doing, and the old part of it can be expandable see more". A long turn, a long
+// thought before each command, listed every step under the working line and grew down the
+// screen. While it works the chat shows its newest step alone, a long thought cut to its last
+// rows, and every step before folds into one line above it. A click or Ctrl-O opens them, and
+// an opened turn stays open while it grows. When it ends it folds above its reply, as before.
+// A bot's turn shows the same.
+test('a long working turn shows only its newest step; the steps before fold into one line that opens to them all and stays open while the turn grows', { timeout: 60000 }, async t => {
+  const gate = path.join(temp(t), 'gate'), last = path.join(temp(t), 'last');
+  const p = setup(t, 'many', { intent: 'answer', gate, many: { rounds: 7, more: 2, gate: last } });
+  saveBot({ name: 'sec', vendor: 'claude', instructions: 'Review the change for leaked secrets.' });
+  const v = await view(t, { repo: p.repo }), panels = v.current.panels;
+  const flat = () => panels.chat.getText().replace(/\s+/g, ' '), lines = () => panels.chat.getText().split('\n');
+  const row = pattern => (panels.chat._clines ?? []).findIndex(line => pattern.test(String(line).replace(/\x1b\[[\d;]*m/g, '').trimStart()));
+  const clickRow = async pattern => {
+    const at = row(pattern); assert.ok(at >= 0, `the line is drawn: ${pattern}`);
+    panels.chat.scrollTo(at); v.current.screen.render();
+    click(v, panels.chat, 3, panels.chat.itop + at - panels.chat.childBase);
+  };
+  await send(v, 'Why do lower case coupons fail?');
+  // Seven rounds in, a thought and a command each: the command of the last one runs.
+  await until(() => /Opus is working ▸ 13 earlier steps · ctrl\+o shows all ● Run: npm test -- --grep round-7( · \d+s)? ?$/.test(flat()), 'the newest step alone, under one line for the rest', 15000);
+  assert.doesNotMatch(flat(), /Round \d starts here|round-6/, 'no earlier thought or command');
+  const frames = [{ step: 'working, folded', text: v.frame() }];
+  // A click on the line opens every step of the turn.
+  v.input.write('\x1b'); await until(() => v.current.screen.focused !== panels.ask, 'out of the box');
+  panels.chat.focus(); v.current.screen.render(); await until(() => /ctrl\+o steps/.test(panels.keys.getText()), 'ctrl+o in the key bar while it works');
+  await clickRow(/^▸ 13 earlier steps/);
+  await until(() => /Opus is working ▾ 13 earlier steps · ctrl\+o hides them ✻ Round 1 starts here\.[^]*✓ Run: npm test -- --grep round-6 ✻ Round 7 starts here\.[^]*● Run: npm test -- --grep round-7/.test(flat()), 'the click opened them all');
+  frames.push({ step: 'working, opened', text: v.frame() });
+  // The command ends and more rounds come: opened, the turn stays open while it grows.
+  fs.writeFileSync(gate, '');
+  await until(() => /▾ 18 earlier steps · ctrl\+o hides them ✻ Round 1 starts here\.[^]*✓ Run: npm test -- --grep round-9 ✻ Round 10 starts here\.[^]*The last check is whether the refund path normalizes the codes too\. ?$/.test(flat()), 'still open, with every step that came since', 15000);
+  await pause(300); assert.equal(projectSnapshot(p.repo).tasks[0].state, 'running', 'the turn waits for its last gate: it still works');
+  // Ctrl-O does what the line says, at the first press: it hides them. The newest thought shows by its last rows.
+  v.input.write('\x0f');
+  await until(() => /Opus is working ▸ 18 earlier steps · ctrl\+o shows all ✻ … [^✻●✓]*The last check is whether the refund path normalizes the codes too\. ?$/.test(flat()), 'ctrl+o folded it at the first press, the end of the newest thought');
+  assert.doesNotMatch(flat(), /Round \d+ starts here|round-9/, 'not the start of that thought, and nothing before it');
+  const under = lines().slice(lines().findIndex(line => /▸ 18 earlier steps/.test(line)) + 1);
+  assert.ok(under.length <= 3 && /^✻ … /.test(under[0]), `three rows at most: ${under.join(' / ')}`);
+  frames.push({ step: 'grown, folded', text: v.frame() });
+  // Ctrl-O opens it again, from the message box too; a click folds it, and Ctrl-O then opens it, as its line says.
+  panels.ask.focus(); panels.ask.readInput(); await until(() => panels.ask.__listener, 'message box');
+  v.input.write('\x0f'); await until(() => /▾ 18 earlier steps · ctrl\+o hides them ✻ Round 1 starts here/.test(flat()), 'ctrl+o opens them');
+  assert.equal(panels.ask.getValue(), '', 'nothing typed');
+  await clickRow(/^▾ 18 earlier steps/);
+  await until(() => /▸ 18 earlier steps · ctrl\+o shows all ✻ … /.test(flat()) && !/Round 1 starts here/.test(flat()), 'the click folded it');
+  v.input.write('\x0f'); await until(() => /▾ 18 earlier steps · ctrl\+o hides them ✻ Round 1 starts here/.test(flat()), 'ctrl+o opens it at the first press, as its line said');
+  v.input.write('\x0f'); await until(() => /▸ 18 earlier steps · ctrl\+o shows all ✻ … /.test(flat()) && !/Round 1 starts here/.test(flat()), 'ctrl+o folds them');
+  // The turn ends: its steps fold into one line above its reply, as before.
+  fs.writeFileSync(last, '');
+  await until(() => projectSnapshot(p.repo).tasks[0].state === 'answered' && /┃ Why do lower case coupons fail\? ▸ 19 steps in \d+s · ctrl\+o shows them [^┃]+┃ Looked\./.test(flat()), 'folded above the reply', 15000);
+  assert.doesNotMatch(flat(), /earlier steps|Round \d+ starts here/);
+  frames.push({ step: 'ended', text: v.frame() });
+  // A bot's turn shows only its newest step too.
+  fs.rmSync(gate); fs.rmSync(last);
+  await send(v, '@sec Check the refund path');
+  await until(() => /@sec is working ▸ 13 earlier steps · ctrl\+o shows all ● Run: npm test -- --grep round-7( · \d+s)? ?$/.test(flat()), 'the bot\'s newest step alone', 15000);
+  assert.doesNotMatch(flat().split('@sec is working')[1], /Round \d starts here/);
+  frames.push({ step: 'bot working', text: v.frame() });
+  fs.writeFileSync(gate, ''); fs.writeFileSync(last, '');
+  await until(() => projectSnapshot(p.repo).tasks[0].state === 'answered' && !/@sec is working/.test(flat()) && (flat().match(/▸ 19 steps in \d+s · ctrl\+o shows them/g) ?? []).length === 2, 'the bot\'s steps folded above its reply', 15000);
+  captureFrames('working-latest-step', frames);
+});
+
+// He opens a working turn and pages up to read it while his message waits under it. The turn
+// grows, and its line counts more earlier steps: the lines he reads stay where they are, as
+// they did when every step showed, and the chat never jumps to his message.
+test('an opened working turn keeps the lines the owner reads while it grows, with his message waiting under it', { timeout: 60000 }, async t => {
+  const gate = path.join(temp(t), 'gate'), last = path.join(temp(t), 'last');
+  const p = setup(t, 'many', { intent: 'answer', gate, many: { rounds: 7, more: 3, gate: last } });
+  saveBot({ name: 'sec', vendor: 'claude', instructions: 'Review the change for leaked secrets.' });
+  const v = await view(t, { repo: p.repo }), chat = v.current.panels.chat, flat = () => chat.getText().replace(/\s+/g, ' ');
+  const bare = line => String(line ?? '').replace(/\x1b\[[\d;]*m/g, '').replace(/^\s*[┃▌│]/, '').trim();
+  const top = () => bare(chat._clines?.[chat.childBase]), lineOf = pattern => (chat._clines ?? []).findIndex(line => pattern.test(bare(line)));
+  await send(v, 'Why do lower case coupons fail?');
+  await until(() => /▸ 13 earlier steps · ctrl\+o shows all ● Run: npm test -- --grep round-7/.test(flat()), 'round 7 runs', 15000);
+  await send(v, '@sec Check the refund path');
+  await until(() => /Opus is working[^]*Check the refund path/.test(chat.getText()), 'his message waits under the turn');
+  v.input.write('\x0f'); await until(() => /▾ 13 earlier steps · ctrl\+o hides them/.test(flat()) && chat.getScrollPerc(true) === 100, 'opened, at the end of the chat');
+  const to = lineOf(/^✻ Round 6 starts here/); assert.ok(to > 0 && to < chat.childBase, 'round 6 is above the pane');
+  v.input.write(`\x1b[<64;${chat.aleft + 3};${chat.atop + 3}M`.repeat(chat.childBase - to)); await until(() => /^✻ Round 6 starts here/.test(top()), 'round 6 at the top');
+  const reading = top(); await pause(200); assert.equal(top(), reading);
+  fs.writeFileSync(gate, '');
+  await until(() => /▾ 20 earlier steps/.test(flat()) && /The last check/.test(flat()), 'rounds 8 to 10 came', 15000); await pause(200);
+  assert.equal(top(), reading, 'the lines he reads stay at the top');
+  assert.equal(projectSnapshot(p.repo).tasks[0].state, 'running');
+  fs.writeFileSync(last, '');
+});
+
+// Most turns open with a long thought, alone until the first call comes: it shows by its last
+// rows from the start, with no line above it, and Ctrl-O shows it whole. Later the turn runs a
+// command and starts two helper agents beside it: the command and both agents show while they
+// run, and the newest step of a helper shows under its own agent.
+test('a turn\'s first long thought shows by its last rows; a command with two helper agents beside it shows each, the newest helper step under its own agent', { timeout: 60000 }, async t => {
+  const first = path.join(temp(t), 'first'), gate = path.join(temp(t), 'gate'), last = path.join(temp(t), 'last');
+  const p = setup(t, 'many', { intent: 'answer', gate, many: { rounds: 2, more: 0, first, helpers: true, gate: last } });
+  const v = await view(t, { repo: p.repo }), panels = v.current.panels;
+  const flat = () => panels.chat.getText().replace(/\s+/g, ' '), lines = () => panels.chat.getText().split('\n'), timed = text => text.replace(/ · \d+s/g, '');
+  await send(v, 'Why do lower case coupons fail?');
+  await until(() => /Opus is working ✻ … [^✻●✓▸]*Round 1 ends here\. ?$/.test(flat()), 'the end of the first thought, alone', 15000);
+  const under = lines().slice(lines().findIndex(line => /Opus is working/.test(line)) + 1).filter(line => line.trim());
+  assert.ok(under.length <= 3 && /^✻ … /.test(under[0].trimStart()), `three rows at most: ${under.join(' / ')}`);
+  assert.doesNotMatch(flat(), /Round 1 starts here|earlier step/);
+  const frames = [{ step: 'first thought', text: v.frame() }];
+  v.input.write('\x0f'); await until(() => /Opus is working ✻ Round 1 starts here\.[^✻●✓▸]*Round 1 ends here\. ?$/.test(flat()), 'ctrl+o shows it whole');
+  v.input.write('\x0f'); await until(() => /Opus is working ✻ … /.test(flat()), 'ctrl+o cuts it again');
+  fs.writeFileSync(first, '');
+  await until(() => /Opus is working ▸ 4 earlier steps · ctrl\+o shows all ● Run: npm test -- --grep round-2 ● Agent: Check the checkout path ● Read: src\/checkout\.mjs ● Agent: Check the refund path ?$/.test(timed(flat())), 'the command, both agents, and the checkout one\'s read under it', 15000);
+  assert.match(panels.chat.getText(), /\n {2}● Read: src\/checkout\.mjs/, 'the read sits under its agent');
+  frames.push({ step: 'command and two helpers', text: v.frame() });
+  fs.writeFileSync(gate, ''); fs.writeFileSync(last, '');
+  await until(() => projectSnapshot(p.repo).tasks[0].state === 'answered' && /▸ 9 steps in \d+s · ctrl\+o shows them/.test(flat()), 'folded above the reply', 15000);
+  captureFrames('working-first-thought-and-helpers', frames);
+});
+
 // What real Claude Code sends in a long turn, which is all the owner had for ten minutes:
 // a thought with no text, counted in tokens; a command that prints nothing, with a heartbeat
 // every half minute; and a command it left running in the background. The stand-in writes
@@ -3068,7 +3184,7 @@ test('a long turn shows its thought as a token count, how long its silent comman
   const gate = path.join(temp(t), 'gate'), p = setup(t, 'live', { intent: 'answer', gate, live: { speed: 600, seconds: 180, think: 200 } }), v = await view(t, { repo: p.repo }), panels = v.current.panels;
   const flat = () => panels.chat.getText().replace(/\s+/g, ' ');
   await send(v, 'Run the coupon tests');
-  await until(() => /Opus is working ✻ thought · 1\.2k tokens • Starting the watcher, then the tests\. ✓ Run: npm run watch ● Run: npm test · 3m \d+s ● 1 background command: npm run watch · 3m \d+s ?$/.test(flat()), 'the count, the command three minutes in, and the background command that started before it', 15000);
+  await until(() => /Opus is working ▸ 3 earlier steps · ctrl\+o shows all ● Run: npm test · 3m \d+s ● 1 background command: npm run watch · 3m \d+s ?$/.test(flat()), 'the command three minutes in, and the background command that started before it', 15000);
   // The command prints nothing more, and its line still counts every second.
   const ran = () => Number(/● Run: npm test · 3m (\d+)s/.exec(flat())?.[1]), first = ran();
   await until(() => ran() > first, 'the line counts on between heartbeats', 5000);
@@ -3124,7 +3240,7 @@ test('after the agent pushed its work, the status line and the chat say pushed, 
   const v = await view(t, { repo: p.repo }), panels = v.current.panels, chat = () => panels.chat.getText().replace(/\s+/g, ' '), status = () => panels.status.getText().replace(/\s+/g, ' ');
   await send(v, '/permissions full'); await dialog(v, 'Full access', 'y');
   await send(v, 'Make coupon codes uppercase.');
-  try { await until(() => /ready \| pushed · \/publish opens a draft pull request/.test(status()), 'the status line says pushed', 40000); } catch { assert.fail(`the status line says pushed: "${status()}" under "${chat().slice(-240)}"`); }
+  try { await until(() => /ready to publish \| pushed · \/publish opens a draft pull request/.test(status()), 'the status line says pushed', 40000); } catch { assert.fail(`the status line says pushed: "${status()}" under "${chat().slice(-240)}"`); }
   const task = projectSnapshot(p.repo).tasks[0];
   assert.deepEqual([task.state, task.committed?.pushed], ['ready', true]);
   assert.match(chat(), /Committed on feat\/task-1 at [0-9a-f]{7} and pushed\./);
@@ -3305,12 +3421,12 @@ test('an Antigravity turn in Full access shows its thought and each tool call as
   const asked = [], watch = setInterval(() => { try { asked.push(...pendingApprovals().map(row => row.summary)); if (/Waiting for your approval/.test(flat())) asked.push('the chat asks'); } catch { /* Between two writes. */ } }, 20);
   t.after(() => clearInterval(watch));
   await send(v, 'Create the file notes.txt with the text "x". Run this command: ./marker.sh. Reply with the summary "Wrote the notes."');
-  await until(() => /Antigravity is working ✻ Reading the request\. • Working on it\. ?$/.test(flat()), 'its thought, before any tool call', 15000);
+  await until(() => /Antigravity is working ▸ 1 earlier step · ctrl\+o shows all • Working on it\. ?$/.test(flat()), 'what it writes after its thought, the thought folded', 15000);
   const frames = [{ step: 'thinking', text: v.frame() }];
-  await until(() => /• Working on it\. ● Write[^✓●✗]*notes\.txt ?$/.test(flat()), 'the write as it starts', 15000);
-  await until(() => /✓ Write[^✓●✗]*notes\.txt ● Run[^✓●✗]*marker\.sh ?$/.test(flat()), 'the write ended, the command as it starts', 15000);
+  await until(() => /▸ 2 earlier steps · ctrl\+o shows all ● Write[^✓●✗]*notes\.txt ?$/.test(flat()), 'the write as it starts', 15000);
+  await until(() => /▸ 3 earlier steps · ctrl\+o shows all ● Run[^✓●✗]*marker\.sh ?$/.test(flat()), 'the write ended, the command as it starts', 15000);
   frames.push({ step: 'the command runs', text: v.frame() });
-  await until(() => /✓ Write[^✓●✗]*notes\.txt ✓ Run[^✓●✗]*marker\.sh ?$/.test(flat()), 'both calls ended, the reply not there yet', 15000);
+  await until(() => /▸ 3 earlier steps · ctrl\+o shows all ✓ Run[^✓●✗]*marker\.sh ?$/.test(flat()), 'both calls ended, the reply not there yet', 15000);
   assert.equal(projectSnapshot(p.repo).tasks[0].state, 'running'); assert.equal(fs.readFileSync(made('ran.txt'), 'utf8'), 'ran'); assert.equal(fs.readFileSync(made('notes.txt'), 'utf8'), 'elu-code\n');
   assert.doesNotMatch(flat(), /reports only when it ends/, 'a run that shows its steps is not one that prints at the end');
   await until(() => projectSnapshot(p.repo).tasks[0].state === 'answered' && /▸ 5 steps in \d+s · ctrl\+o shows them [^┃]+┃ Wrote the notes\./.test(flat()), 'the steps fold above the reply', 15000);
@@ -3623,7 +3739,7 @@ test('the list shows live agents and stops, retries, and starts work from its ro
   await send(v, '/tasks'); await until(() => v.current.view === 'tasks', 'Tasks');
   const board = panels.board, spinner = '[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]';
   // The row has the spinner and the session's title. Its latest step shows beside the list, in the session.
-  await until(() => new RegExp(`${spinner} Keep working`).test(cursor(v)) && /Opus is working\n\n• Working on the requested change\.$/.test(panels.chat.getText()) && /^Keep working on the board {2}· {2}working {2}· {2}Ask/.test(panels.header.getText()), 'live row, with the work under way beside it');
+  await until(() => new RegExp(`${spinner} Keep working`).test(cursor(v)) && /Opus is working\n\n• Working on the requested change\.$/.test(panels.chat.getText()) && /^Keep working on the board {2}· {2}Task {2}· {2}Ask/.test(panels.header.getText()), 'live row, with the work under way beside it');
   assert.match(cursor(v), /0m\d\d$/, 'a running row counts its time');
   assert.match(rows(v)[0], /\+ New session/); assert.match(rows(v)[2], /RUNNING 1/);
   board.focus(); await until(() => /s stop/.test(panels.keys.getText()), 's stop in the key bar'); v.input.write('s');
@@ -4286,7 +4402,7 @@ test('c and /close archive a session: it leaves Sessions and the board, /archive
   await until(() => /Trim coupon codes/.test(cursor(v)) && v.current.session === '4' && v.current.screen.focused === board, 'the cursor is on the session that is left');
   // /close in an open session archives it and goes back to the list.
   await openTask(v, /Trim coupon codes/);
-  await until(() => /^@name ask a bot {2}\/ commands/.test(panels.keys.getText().trim()), 'the open session key bar');
+  await until(() => /^ctrl\+t Task {2}@name ask a bot {2}\/ commands/.test(panels.keys.getText().trim()), 'the open session key bar');
   await send(v, '/close');
   await until(() => v.current.view === 'tasks' && !rows(v).some(row => /Trim coupon codes/.test(row)), 'archived from the chat');
   // No session is left, so the cursor is on + New session and the form shows. A command leaves the focus in the message box.
@@ -4576,7 +4692,7 @@ test('a message that fills the pane beside the list keeps its last word on its r
   }
 });
 
-test('from 80 to 120 columns no pane wraps a row that fits it a second time: the title over a session keeps its state, the key bar its last word and the new session form the end of each hint', { timeout: 120000 }, async t => {
+test('from 80 to 120 columns no pane wraps a row that fits it a second time: the title over a session keeps its Task, the key bar its last word and the new session form the end of each hint', { timeout: 120000 }, async t => {
   const p = twoSessions(t); delete process.env.NO_COLOR;
   const v = await view(t, { repo: p.repo }), panels = v.current.panels;
   // The widths where each one filled its row to the last column: there blessed wrapped it again, and its last word was not shown.
@@ -4592,7 +4708,7 @@ test('from 80 to 120 columns no pane wraps a row that fits it a second time: the
   await selectRow(v, /Which format/); await until(() => v.current.session === '5', 'its session shows');
   await sweep('a session beside the list', width => {
     const title = panels.header.getText();
-    assert.match(title, /waiting for you$/); assert.deepEqual(drawnIn(v, panels.header), [title], `the title at ${width}`);
+    assert.match(title, / {2}· {2}Task$/); assert.deepEqual(drawnIn(v, panels.header), [title], `the title at ${width}`);
     if (title.length === panels.header.width) filled.title.push(width);
     keys(width);
   });
@@ -5960,7 +6076,8 @@ test('Esc and a / command in one piece, as tmux sends them: Esc acts and the com
   await until(() => ask.getValue() === '/chats' && focused() === ask, 'the command is in the box');
   v.input.write('\r'); await until(() => v.current.view === 'chats', '/chats opens Chats');
   // On a session's row in the list: Esc goes to its box, and the command is typed there.
-  await selectRow(v, /Trim coupon codes/);
+  // Its session shows on the next draw: the keys go once it does, as a person's would.
+  await selectRow(v, /Trim coupon codes/); await until(() => v.current.session === '4', 'its session shows');
   v.input.write('\x1b/chats');
   await until(() => ask.getValue() === '/chats' && focused() === ask, 'the command is in the box, from the list');
   v.input.write('\r'); await until(() => v.current.view === 'chats', '/chats opens Chats, from the list');
@@ -6324,11 +6441,11 @@ test('the message box names Enter only while Enter sends something: an open sess
   const v = await view(t, { repo: p.repo }), panels = v.current.panels, ask = panels.ask, keys = () => panels.keys.getText().trim();
   await openTask(v, /Trim coupon codes/);
   ask.focus(); ask.readInput(); await until(() => ask.__listener && ask.getValue() === '', 'the empty message box');
-  await until(() => keys() === '@name ask a bot  / commands  /model choose the model  ! run a shell command', `the empty box names no Enter, not ${keys()}`);
+  await until(() => keys() === 'ctrl+t Task  @name ask a bot  / commands  /model choose the model', `the empty box names no Enter, not ${keys()}`);
   v.input.write('\r'); await new Promise(resolve => setTimeout(resolve, 300));
   assert.deepEqual(pendingRequests(p.root), [], 'an empty Enter sends nothing'); assert.equal(v.current.screen.focused, ask);
-  v.input.write('ok'); await until(() => keys().startsWith('enter send  @name ask a bot  / commands'), 'with text, Enter sends it');
-  v.input.write('\x7f\x7f'); await until(() => ask.getValue() === '' && keys().startsWith('@name ask a bot'), 'emptied again, no Enter');
+  v.input.write('ok'); await until(() => keys().startsWith('enter send  ctrl+t Task  @name ask a bot  / commands'), 'with text, Enter sends it');
+  v.input.write('\x7f\x7f'); await until(() => ask.getValue() === '' && keys().startsWith('ctrl+t Task  @name ask a bot'), 'emptied again, no Enter');
   // The new session form: the same, and a bot with a schedule in it makes an empty Enter start the session.
   saveBot({ name: 'nightly', vendor: 'claude', instructions: 'Tidy the notes.', schedule: 'every 1h' });
   ask.cancel(); await selectRow(v, /\+ New session/);
@@ -6437,10 +6554,10 @@ test('Sessions shows the list on the left and the open session on the right, at 
     }
     assert.ok(!rows(v).some(row => /sample/.test(row)));
     // The right side is the session as before: its header line, its chat, its status and its message box.
-    assert.match(panels.header.getText(), width === 100 ? /^Trim coupon codes before they are compared at checkout {2}· {2}ready$/ : /^Trim coupon codes before they are… {2}· {2}ready$/);
+    assert.match(panels.header.getText(), width === 100 ? /^Trim coupon codes before they are compared at checkout {2}· {2}Task$/ : /^Trim coupon codes before they are… {2}· {2}Task$/);
     assert.match(panels.chat.getText(), /^You {2}\d{1,2}:\d\d [AP]M\n┃ Trim coupon codes before they are/); assert.match(panels.chat.getText().replace(/\s+/g, ' '), /Checks complete\. \/changes to inspect · \/publish to review push/);
     assert.equal(panels.chat._clines.length, panels.chat.getContent().split('\n').length, 'the chat fits its pane without a second wrap');
-    assert.equal(panels.status.getText(), 'ready'); assert.equal(panels.ask._label.getText(), ' Message Opus · with @reviewer ');
+    assert.equal(panels.status.getText(), 'ready to publish'); assert.equal(panels.ask._label.getText(), ' Message Opus · with @reviewer ');
     // The key bar is the focused pane's: here the list's, with the keys of the row under the cursor.
     // A row's letters act with Enter: the bar says so in words where there is room, and with the Enter sign at 80 columns.
     assert.equal(v.current.screen.focused, panels.board); assert.equal(panels.keys.getText().trim(), width === 100 ? 'enter open  p publish  d changes  e rename  c archive  n new session  letter then enter  tab next' : 'enter open  p publish  d changes  e rename  c archive  n new session  letter ⏎');
@@ -6472,11 +6589,11 @@ test('moving the list’s cursor shows each row on the right at once, and the fo
   };
   // Down: the first session, with its own header, chat and message box. No Enter is needed.
   await shows('\x1b[B', /\? Which format/, '5', 'Down shows the first session');
-  await until(() => /^Which format should the export use {2}· {2}waiting for you$/.test(panels.header.getText()) && /┃ Which format should the export use/.test(panels.chat.getText()), 'the header and the chat are that session’s');
+  await until(() => /^sample app {2}· {2}Which format should the export use {2}· {2}Task$/.test(panels.header.getText()) && /┃ Which format should the export use/.test(panels.chat.getText()), 'the header and the chat are that session’s');
   assert.equal(panels.compose.hidden, true); assert.equal(panels.chat.hidden, false); assert.equal(panels.ask.getValue(), '', 'the box is that session’s, not the new session’s'); assert.equal(panels.ask._label.getText(), ' Message Opus · with @reviewer ');
   assert.match(panels.keys.getText(), /enter open {2}a answer/);
   await shows('\x1b[B', /✓ Trim coupon/, '4', 'Down again shows the next session');
-  await until(() => /^Trim coupon codes before they are compared at checkout {2}· {2}ready$/.test(panels.header.getText()) && /┃ Trim coupon codes before they are compared at checkout/.test(panels.chat.getText()), 'the header and the chat are that session’s');
+  await until(() => /^Trim coupon codes before they are compared at checkout {2}· {2}Task$/.test(panels.header.getText()) && /┃ Trim coupon codes before they are compared at checkout/.test(panels.chat.getText()), 'the header and the chat are that session’s');
   assert.match(panels.keys.getText(), /enter open {2}p publish {2}d changes/);
   // Home and End jump, and the right side follows them too.
   await shows('\x1b[1~', /\+ New session/, 'new', 'Home shows the new session form');
@@ -6494,9 +6611,9 @@ test('Enter, Right, Tab, Esc, Left and a click move the focus between the list a
   await sized(v, 100, 30); await selectRow(v, /Trim coupon/); await until(() => v.current.session === '4', 'its session shows');
   const moves = async (keys, target, message) => { v.input.write(keys); await until(() => focused() === target, message); assert.equal(v.current.session, '4', message); assert.match(cursor(v), /Trim coupon/, message); };
   await moves('\r', panels.ask, 'Enter moves into the session, to its message box');
-  // The box is empty, so the bar names no Enter. At 100 columns it then has room for every hint, Esc as the way back too, and so does a wider screen.
-  await until(() => /^@name ask a bot {2}\/ commands {2}\/model choose the model {2}! run a shell command {2}esc sessions$/.test(panels.keys.getText().trim()), 'the message box’s keys');
-  await sized(v, 120, 30); await until(() => /^@name ask a bot {2}\/ commands {2}\/model choose the model {2}! run a shell command {2}esc sessions$/.test(panels.keys.getText().trim()), 'with room, Esc as the way back');
+  // The box is empty, so the bar names no Enter. At 100 columns it has room for all but its last hint, Esc. A wider screen names it too.
+  await until(() => /^ctrl\+t Task {2}@name ask a bot {2}\/ commands {2}\/model choose the model {2}! run a shell command$/.test(panels.keys.getText().trim()), 'the message box’s keys');
+  await sized(v, 120, 30); await until(() => /^ctrl\+t Task {2}@name ask a bot {2}\/ commands {2}\/model choose the model {2}! run a shell command {2}esc sessions$/.test(panels.keys.getText().trim()), 'with room, Esc as the way back');
   await sized(v, 100, 30); assert.equal(focused(), panels.ask); assert.equal(v.current.session, '4');
   await moves('\x1b', panels.board, 'Esc goes back to the list');
   await until(() => /enter open {2}p publish/.test(panels.keys.getText()), 'the list’s keys');
@@ -6589,7 +6706,7 @@ test('+ New session shows the new session form, and a message sent from it opens
   // It is open on the right, its row is the selected one, and the focus is in its message box.
   await until(() => v.current.session === id && /✓ Can I add/.test(cursor(v)), 'the new session is open, with its row selected');
   assert.equal(focused(), panels.ask); assert.equal(panels.compose.hidden, true); assert.equal(panels.chat.hidden, false); assert.equal(panels.ask.getValue(), '');
-  assert.match(panels.header.getText(), /^sample app {2}· {2}Can I add multiple agents\? {2}· {2}answered/); assert.match(panels.chat.getText(), /You {2}\d{1,2}:\d\d [AP]M\n┃ Can I add multiple agents\?[^]*\nFable 5\.1 \(high\) {2}\d{1,2}:\d\d [AP]M\n┃ Yes/);
+  assert.match(panels.header.getText(), /^sample app {2}· {2}Can I add multiple agents\? {2}· {2}Task/); assert.match(panels.chat.getText(), /You {2}\d{1,2}:\d\d [AP]M\n┃ Can I add multiple agents\?[^]*\nFable 5\.1 \(high\) {2}\d{1,2}:\d\d [AP]M\n┃ Yes/);
   assert.deepEqual(rows(v).filter(row => /^.[?✓] /.test(row)).map(row => /^.[?✓] (\w+ \w+)/.exec(row)[1]).sort(), ['Can I', 'Trim coupon', 'Which format'], 'the list has all three sessions'); assert.match(rows(v)[0], /^ \+ New session$/);
   // A follow-up from the same box stays in that session.
   await send(v, 'Can one review security?');
@@ -6619,7 +6736,7 @@ test('a session opened from Kanban takes the whole width, and ‹ Kanban or Esc 
   v.input.write('\x1b'); await until(() => !cardDialog(v), 'Esc closes it'); assert.equal(v.current.view, 'kanban');
   pickRow(needs, /Trim coupon codes/); v.input.write('\r'); await until(() => cardButton(v), 'Enter shows the card');
   click(v, cardButton(v));
-  await until(() => v.current.view === 'chat' && v.current.session === '4' && /^sample app {2}· {2}Trim coupon codes before they are compared at checkout {2}· {2}ready$/.test(panels.header.getText()), 'the button opens its session');
+  await until(() => v.current.view === 'chat' && v.current.session === '4' && /^sample app {2}· {2}Trim coupon codes before they are compared at checkout {2}· {2}Task$/.test(panels.header.getText()), 'the button opens its session');
   assert.equal(cardDialog(v), undefined);
   // No list is behind this session. Its title line reads the session at every redraw: what it shows about schedules comes from this project.
   const titles = new Set(); for (const end = Date.now() + 2600; Date.now() < end;) { titles.add(panels.header.getText()); await new Promise(resolve => setTimeout(resolve, 10)); }
@@ -6741,7 +6858,7 @@ test('a finished session\'s card in Done says how it ended: never in progress, a
   await sized(v, 200, 40);
   await send(v, '/kanban'); await until(() => v.current.view === 'kanban' && done().length === 3, 'the three cards under Done');
   // Beside each title, how it ended, never where its Task stood while it worked.
-  assert.ok(done().some(text => /Nightly dependency check {2}answered · high/.test(text)), done().join('|'));
+  assert.ok(done().some(text => /Nightly dependency check {2}replied · high/.test(text)), done().join('|'));
   assert.ok(done().some(text => /Tidy the log files {2}stopped · high · medium/.test(text)), done().join('|'));
   assert.ok(done().some(text => /Ship the cart fix {2}published · high · medium/.test(text)), done().join('|'));
   const open = async (title, end, objectives) => {
@@ -6756,7 +6873,7 @@ test('a finished session\'s card in Done says how it ended: never in progress, a
     assert.match(rows.at(-1), /^last activity /);
     v.input.write('\x1b'); await until(() => !cardDialog(v), `${title}: Esc closes it`);
   };
-  await open('Nightly dependency check', 'answered', 'Objectives');
+  await open('Nightly dependency check', 'replied', 'Objectives');
   await open('Tidy the log files', 'stopped', 'Objectives');
   await open('Ship the cart fix', 'published', 'Objectives · 1 of 3 met');
 });
@@ -6778,7 +6895,7 @@ test('the Task block in the chat of a session in Done says how it ended, as its 
   const v = await view(t, { repo: p.repo }), panels = v.current.panels, chat = () => panels.chat.getText(), done = () => panels.kanbanLists[3].items.map(item => item.getText());
   await sized(v, 200, 40);
   // Each opens from its card under Done, with its Go to session button.
-  for (const [id, title, end] of [['4', 'Nightly dependency check', 'answered'], ['5', 'Tidy the log files', 'stopped'], ['6', 'Ship the cart fix', 'published']]) {
+  for (const [id, title, end] of [['4', 'Nightly dependency check', 'replied'], ['5', 'Tidy the log files', 'stopped'], ['6', 'Ship the cart fix', 'published']]) {
     await send(v, '/kanban'); await until(() => v.current.view === 'kanban' && done().length === 3, 'the three cards under Done');
     pickRow(panels.kanbanLists[3], new RegExp(title)); v.input.write('\r'); await until(() => cardButton(v), `${title}: the card`);
     v.input.write('\r'); await until(() => v.current.view === 'chat' && v.current.session === id, `${title}: its session`);
@@ -6934,7 +7051,7 @@ test('a session a teammate\'s message started shows their own words under their 
   theirs('7', BLOCKED, 'blocked', { error: { message: 'The model could not run: Claude says this account is out of usage credits for Fable 5.2.' } });
   // elu status lists it by their words too.
   const listed = formatResult({ tasks: [readTask(p.repo, '6')] });
-  assert.match(listed, /^Task 6: answered — Fix the totals from May, check the old ones$/m); assert.doesNotMatch(listed, /Work on the handoff/);
+  assert.match(listed, /^Task 6: replied — Fix the totals from May, check the old ones$/m); assert.doesNotMatch(listed, /Work on the handoff/);
   assert.equal(taskTitle(readTask(p.repo, '6')), WORDS);
   const v = await view(t, { repo: p.repo }), chat = () => v.current.panels.chat.getText();
   // The list is narrow, so the row holds the start of their words.
@@ -6948,7 +7065,7 @@ test('a session a teammate\'s message started shows their own words under their 
   // Its details open with their words.
   const DETAILS = 'Session details: diff / checks / review / log', flat = text => text.replace(/\s+/g, ' ').trim();
   await send(v, '/details'); await until(() => modal(v, DETAILS), 'the details');
-  assert.ok(flat(dialogText(v, DETAILS)).startsWith(`${WORDS} State: answered`), dialogText(v, DETAILS)); assert.doesNotMatch(dialogText(v, DETAILS), /Work on the handoff/);
+  assert.ok(flat(dialogText(v, DETAILS)).startsWith(`${WORDS} State: replied`), dialogText(v, DETAILS)); assert.doesNotMatch(dialogText(v, DETAILS), /Work on the handoff/);
   // A closed dialog gives the focus back on the next turn of the loop; the keys below go to the list after that.
   const settled = () => new Promise(resolve => setImmediate(resolve)), onList = async (pattern, keys) => { await settled(); await selectRow(v, pattern); await until(() => v.current.screen.focused === v.current.panels.board && keys.test(v.current.panels.keys.getText()), `${keys} in the key bar`); };
   await dialog(v, DETAILS, '');
@@ -7653,7 +7770,7 @@ test('PgUp and PgDn move a chat a page, in the chat and from the message box und
   // In the chat itself.
   v.input.write('\x1b'); await until(() => v.current.screen.focused !== ask, 'out of the box');
   chat.focus(); await until(() => v.current.screen.focused === chat, 'the chat');
-  await until(() => /↑↓ scroll {2}esc sessions {2}pgup pgdn page/.test(v.current.panels.keys.getText()), 'the keys in the bar, in the chat');
+  await until(() => /↑↓ scroll {2}esc sessions {2}ctrl\+t Task {2}pgup pgdn page/.test(v.current.panels.keys.getText()), 'the keys in the bar, in the chat');
   v.input.write('\x1b[6~'); await until(() => chat.getScrollPerc(true) === 100, 'a page down reaches the end');
   v.input.write('\x1b[5~'); await until(() => chat.childBase === end - page(), 'a page up in the chat');
 });
@@ -7671,7 +7788,7 @@ test('PgUp and PgDn from the message box page what a session changed while Chang
   v.input.write('\x1b'); await until(() => v.current.screen.focused !== ask, 'out of the short chat');
   // More chat than the pane shows: the bar names the keys, from the box and in the chat.
   await openTask(v, /Cart note/);
-  await until(() => /Cart note 40/.test(chat.getContent()) && /^pgup pgdn page {2}@name/.test(keys()), 'the keys in the bar, from the box');
+  await until(() => /Cart note 40/.test(chat.getContent()) && /^pgup pgdn page {2}ctrl\+t Task {2}@name/.test(keys()), 'the keys in the bar, from the box').catch(error => { throw new Error(`${error.message}: ${keys()}`); });
   // /help says it.
   await send(v, '/help'); await until(() => modal(v, 'Commands'), 'help');
   assert.match(dialogText(v, 'Commands').replace(/\s+/g, ' '), /Enter moves into it and Esc moves back\. PgUp and PgDn page its chat, from the message box too\./); await dialog(v, 'Commands', '');
@@ -7712,4 +7829,111 @@ test('PgUp and PgDn from the message box page a Standup chat, at 80x24 and at 14
     v.input.write('\x1b[6~'); await until(() => chat.childBase === end - page(), `a page down, ${columns}x${rows}`);
     v.input.write('\x1b[6~'); await until(() => chat.getScrollPerc(true) === 100, `back at the end, ${columns}x${rows}`);
   }
+});
+
+// The session's header names its Task, never its state (README, "Sessions"): a click on Task, or
+// Ctrl+T, opens the Task with its goal, its objectives with the agent's marks and evidence, and
+// the checklist of its work from ELU's own records, where the state's word used to be. Check
+// under it goes on to the owner's check when the session waits for it, and the check shows the
+// same checklist. A session with no Task of its own opens the same view, its first message as its goal.
+test('the session header says Task, not its state: a click on it or Ctrl+T opens the Task with its goal, objectives and checklist, and Check goes on to the check', { timeout: 60000 }, async t => {
+  const p = setup(t), TASK = { title: 'Uppercase coupons', description: 'Make normalize return upper case.', goal: 'Codes compare equal whatever their case.', objectives: ['normalize returns upper case', 'The coupon test passes'], priority: 'medium', severity: 'low' };
+  liveTask(p.root, { id: '3', goal: 'Uppercase coupon codes', state: 'unverified' });
+  proposeTask(p.repo, '3', TASK); approvePlan(p.repo, '3'); reportProgress(p.repo, '3', { met: [1], evidence: [[1, 'src/coupon.mjs returns value.toUpperCase()']] });
+  // A chat, saved as the app saves one: it replied.
+  const at = new Date().toISOString();
+  saveTask(p.repo, { id: '4', kind: 'conversation', goal: 'Where are the coupon notes?', state: 'answered', worktree: p.root, branch: null, base: null, createdAt: at, runs: [], reviews: [], responses: [], sessions: {}, result: { outcome: 'done', intent: 'answer', summary: 'They are in docs/coupons.md.', question: null, choices: [], comments: [], responses: [] }, messages: [{ at, text: 'Where are the coupon notes?' }] });
+  const v = await view(t, { repo: p.repo, conductor: false }), panels = v.current.panels, header = () => panels.header.getText().trim(), keys = () => panels.keys.getText().trim();
+  for (const [columns, rows] of [[140, 50], [80, 24]]) {
+    v.output.columns = columns; v.output.rows = rows; v.output.emit('resize'); await until(() => v.current.screen.width === columns, `${columns}x${rows}`);
+    await openTask(v, /Uppercase coupons/);
+    // The header: its name, then Task. No state word, stored or plain.
+    await until(() => /Uppercase coupons {2}· {2}Task$/.test(header()), `the header names its Task at ${columns}x${rows}`);
+    assert.doesNotMatch(header(), /unverified|not verified|ready|answered|replied|committed|waiting|working/);
+    // The message box's bar names Ctrl+T first while the box is empty (it names no Enter then), or after the page keys where the chat is longer than its pane.
+    await until(() => /^(pgup pgdn page {2})?ctrl\+t Task {2}/.test(keys()), `the key bar at ${columns}x${rows}`).catch(error => { throw new Error(`${error.message}: ${keys()}`); });
+    // A click on Task opens it: the goal, the objectives with the agent's marks and evidence, then the checklist.
+    const was = v.current.screen.focused;
+    click(v, panels.header, header().lastIndexOf('Task')); await until(() => modal(v, 'Task'), `a click opens the Task at ${columns}x${rows}`);
+    const shown = dialogRows(v, 'Task').map(row => row.trimEnd());
+    const want = ['Uppercase coupons', 'It waits for your check.', 'Goal', TASK.goal, 'Objectives · 1 of 2 met', '  ✓ normalize returns upper case', '    src/coupon.mjs returns value.toUpperCase()', '  · The coupon test passes', 'Checklist', '  · Edits committed', '    Not committed: src/coupon.mjs. /publish commits them.', '  · Checks passed', '    Not run since the last edit. /publish runs them first.', '  · Pushed', '    /publish commits and pushes it.', '  · Pull request', '    /publish opens a draft pull request.'];
+    assert.deepEqual(shown.filter(row => row), want, `the Task at ${columns}x${rows}`);
+    assert.equal(modal(v, 'Task').children.find(child => child.type === 'button')?.getText().trim(), 'Check');
+    v.input.write('\x1b'); await until(() => !modal(v, 'Task'), 'Esc closes it');
+    // The click left the focus where it was: the header is not a place to type or choose.
+    await until(() => v.current.screen.focused === was, `Esc puts the focus back where it was before the click at ${columns}x${rows}`);
+    // Ctrl+T opens it too, typed in the message box, and Enter presses Check: the owner's check, with the same checklist.
+    panels.ask.focus(); await until(() => panels.ask.__listener, 'the message box reads');
+    v.input.write('\x14'); await until(() => modal(v, 'Task'), 'Ctrl+T opens it');
+    v.input.write('\r'); await until(() => modal(v, 'Check'), 'Check goes on to the check');
+    const check = dialogRows(v, 'Check').map(row => row.trimEnd());
+    for (const line of ['Checklist', '  · Edits committed', '    Not committed: src/coupon.mjs. /publish commits them.', '  · Pull request']) assert.ok(check.includes(line), line);
+    assert.deepEqual(check.slice(-3), ['› Done', '› Keep open, new goal', '› Done, and a copy with a new goal']);
+    v.input.write('\x1b'); await until(() => !modal(v, 'Check'), 'Esc changes nothing');
+    // Ctrl+T was pressed while typing: Esc goes back to the message box, not to the list.
+    await until(() => v.current.screen.focused === panels.ask && panels.ask._reading, `Esc goes back to the message box at ${columns}x${rows}`);
+    assert.equal(readBoard(p.repo).checked?.['3'], undefined);
+    // A chat with no Task: Task all the same, its first message as the goal, no objectives, and that it replied.
+    // Its row is cut at 80 columns: Where are the…
+    await send(v, '/sessions'); await openTask(v, /Where are the/);
+    await until(() => /Where are the coupon notes\? {2}· {2}Task$/.test(header()), 'its header');
+    v.input.write('\x14'); await until(() => modal(v, 'Task'), 'its Task');
+    assert.deepEqual(dialogRows(v, 'Task').map(row => row.trimEnd()).filter(row => row), ['Where are the coupon notes?', 'It waits for your check.', 'Goal', 'Where are the coupon notes?', 'Checklist', '  ✓ Replied', '    Its reply is in the chat.']);
+    v.input.write('\x1b'); await until(() => !modal(v, 'Task'), 'closed');
+    await send(v, '/sessions');
+  }
+});
+
+// Task in the header opens the Task of the session the header names wherever it shows: while a
+// message to that session waits (its queued row, then its message box), beside the list, and
+// in its Changes. Each of those bars names Ctrl+T where it has room, and Ctrl+T does it there.
+test('Task in the header opens the session\'s Task while a message to it waits, from the list and from its Changes, and their bars name Ctrl+T', { timeout: 30000 }, async t => {
+  const p = setup(t);
+  liveTask(p.root, { id: '3', goal: 'Uppercase coupon codes', state: 'answered' });
+  liveTask(p.root, { id: '4', goal: 'Trim coupon codes', state: 'ready' });
+  const v = await view(t, { repo: p.repo, conductor: false }), panels = v.current.panels, header = () => panels.header.getText().trim(), keys = () => panels.keys.getText().trim();
+  v.output.columns = 140; v.output.rows = 50; v.output.emit('resize'); await until(() => v.current.screen.width === 140, '140x50');
+  // Each opens the Task, and Esc puts the focus back where it was.
+  const opens = async (title, what, back) => {
+    await until(() => modal(v, 'Task'), what).catch(error => { throw new Error(`${error.message}: ${panels.status.getContent()}`); });
+    assert.equal(dialogRows(v, 'Task')[0].trim(), title, what);
+    v.input.write('\x1b'); await until(() => !modal(v, 'Task') && v.current.screen.focused === back, `${what}: closed, the focus back`);
+  };
+  // A message queued to session 3: its row shows that session, and the header names its Task.
+  v.current.controller.queue('Also trim the codes', null, { state: 'queued', continuationTaskId: '3', reason: 'Waiting for a free slot.' });
+  await selectRow(v, /Also trim the codes/);
+  await until(() => /Uppercase coupon codes {2}· {2}Task$/.test(header()), 'the header names the Task of the session it continues');
+  await until(() => / {2}ctrl\+t Task$/.test(keys()), 'the bar of the list names Ctrl+T').catch(error => { throw new Error(`${error.message}: ${keys()}`); });
+  v.input.write('\x14'); await opens('Uppercase coupon codes', 'Ctrl+T from the list', panels.board);
+  // Enter on its row: its message box, whose bar names Ctrl+T too. Ctrl+T and a click open it.
+  v.input.write('\r'); await until(() => v.current.screen.focused === panels.ask, 'the message box');
+  await until(() => /Uppercase coupon codes {2}· {2}Task$/.test(header()) && /^ctrl\+t Task {2}/.test(keys()), 'the bar of the box names Ctrl+T').catch(error => { throw new Error(`${error.message}: ${keys()}`); });
+  v.input.write('\x14'); await opens('Uppercase coupon codes', 'Ctrl+T from the box', panels.ask);
+  click(v, panels.header, header().lastIndexOf('Task')); await opens('Uppercase coupon codes', 'a click on Task', panels.ask);
+  // Its Changes: d, then Enter, on the row of session 4. Its bar names Ctrl+T, and it opens the Task there too.
+  await selectRow(v, /Trim coupon/);
+  v.input.write('d'); await until(() => v.current.sessionView === 'changes' && v.current.screen.focused === panels.changes, 'its Changes');
+  await until(() => /Trim coupon codes {2}· {2}Task$/.test(header()) && / {2}ctrl\+t Task$/.test(keys()), 'the bar of its Changes names Ctrl+T').catch(error => { throw new Error(`${error.message}: ${keys()}`); });
+  v.input.write('\x14'); await opens('Trim coupon codes', 'Ctrl+T from its Changes', panels.changes);
+});
+
+// A session whose Task waits for the owner's yes: its Task says so with the keys that answer it,
+// and y or n there answers it as on its row.
+test('the Task of a session whose Task waits for approval names y and n, and y or n in it answers the Task', { timeout: 30000 }, async t => {
+  const p = setup(t), TASK = { title: 'Uppercase coupons', description: 'Make normalize return upper case.', goal: 'Codes compare equal whatever their case.', objectives: ['normalize returns upper case', 'The coupon test passes'], priority: 'medium', severity: 'low' };
+  liveTask(p.root, { id: '3', goal: 'Uppercase coupon codes', state: 'answered' }); proposeTask(p.repo, '3', TASK);
+  liveTask(p.root, { id: '4', goal: 'Trim coupon codes', state: 'answered' }); proposeTask(p.repo, '4', { ...TASK, title: 'Trim coupons' });
+  const v = await view(t, { repo: p.repo, conductor: false }), panels = v.current.panels, status = () => panels.status.getContent();
+  const hint = () => modal(v, 'Task').children.filter(child => child.type === 'text').map(child => child.getText()).join(' ');
+  const answer = async (row, id, key, state, said) => {
+    await openTask(v, row);
+    v.input.write('\x14'); await until(() => modal(v, 'Task'), `its Task, ${row}`);
+    assert.equal(dialogRows(v, 'Task')[1].trimEnd(), 'Its Task waits for your approval: y approves it, n rejects it.');
+    assert.match(hint(), /y approve · n reject · ↑↓ scroll · esc close/);
+    v.input.write(key);
+    await until(() => !modal(v, 'Task') && sessionTasks(p.repo, id).at(-1)?.state === state, `${key} in its Task answers it`).catch(error => { throw new Error(`${error.message}: ${sessionTasks(p.repo, id).map(row => row.state)}`); });
+    await until(() => said.test(status()), 'and says so');
+  };
+  await answer(/Uppercase coupon/, '3', 'y', 'approved', /Task approved\./);
+  await answer(/Trim coupon/, '4', 'n', 'rejected', /Task rejected\. Nothing was changed\./);
 });
