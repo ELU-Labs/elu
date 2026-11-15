@@ -15,6 +15,7 @@ import { defaultConfig } from '../lib/config.mjs';
 import { loopStopMessage, stopLine } from '../lib/stop-line.mjs';
 import { currentTask, markChecked, planFile } from '../lib/plan.mjs';
 import { lessLine, reviewRequest } from '../lib/runner.mjs';
+import { sessionChecklist } from '../lib/checklist.mjs';
 
 // After the agent's edit ELU runs the checks and the session's reviewing bots review the
 // change; their must-fix findings go back to the agent. What the agent leaves in its worktree
@@ -340,6 +341,52 @@ test('when every bot leaves the review of the fixed change, its checks decide an
   assert.deepEqual(task.reviews.map(review => [review.round, review.role]), [[1, 'bot:critic']]);
   assert.deepEqual(task.messages.filter(row => /could not review/.test(row.text)).map(row => row.text), [TOO_LARGE('reviewer'), TOO_LARGE('critic')]);
   assert.doesNotThrow(() => assertReady(readTask(f.repo, task.id)));
+});
+
+// The bot that could not take a change sits out every later turn that leaves the change as it
+// was: it is not asked again, and the chat says the line once. A later turn that changes the
+// files asks it again, and the chat says so again when it cannot take that change either. A
+// message the owner writes to it asks it again whatever the change, and the line answers him.
+test('a later turn that leaves the change as it was does not ask the bot that could not take it again, and the chat says so once', async t => {
+  const f = bigChange(t, 'normal', { tooLong: 'all' });
+  const first = await f.controller.ask('Normalize coupon codes', null, { bots: ['reviewer'] }).finished;
+  assert.equal(first.state, 'ready', JSON.stringify(first.error));
+  const digest = readTask(f.repo, first.id).evidence.digest, lines = task => conversationEntries(f.repo, task).filter(row => row.text === TOO_LARGE('reviewer')).length;
+  assert.equal(reviewOf(f.inputs('claude'), 'reviewer').length, 3);
+  const same = await f.controller.ask('Normalize coupon codes', first.id).finished;
+  let task = readTask(f.repo, same.id);
+  assert.equal(task.evidence.digest, digest, 'the turn left the change as it was');
+  assert.equal(task.state, 'ready', JSON.stringify(task.error)); assert.equal(task.error, null); assert.equal(task.reviewStatus, 'skipped');
+  assert.equal(reviewOf(f.inputs('claude'), 'reviewer').length, 3, 'not asked again');
+  assert.equal(lines(task), 1, 'the chat says it once');
+  assert.doesNotThrow(() => assertReady(task));
+  // A turn that changes the files: it tries the new change.
+  const moved = await f.controller.ask('Trim spaces too', first.id).finished;
+  task = readTask(f.repo, moved.id);
+  assert.notEqual(task.evidence.digest, digest, 'the turn changed the files');
+  assert.equal(task.state, 'ready', JSON.stringify(task.error)); assert.equal(task.reviewStatus, 'skipped');
+  assert.equal(reviewOf(f.inputs('claude'), 'reviewer').length, 6, 'it tried the new change');
+  assert.equal(lines(task), 2, 'and says it cannot take that one either');
+  assert.doesNotThrow(() => assertReady(task));
+  // The owner writes to it about the edits: it tries again, and the line is its answer.
+  const asked = await f.controller.ask('Review it again', first.id, { bot: 'reviewer' }).finished;
+  task = readTask(f.repo, asked.id);
+  assert.equal(task.state, 'ready', JSON.stringify(task.error)); assert.equal(task.reviewStatus, 'skipped');
+  assert.equal(reviewOf(f.inputs('claude'), 'reviewer').length, 9, 'asked again');
+  assert.deepEqual(task.messages.slice(-2).map(row => [row.text, row.to ?? row.from]), [['Review it again', '@reviewer'], [TOO_LARGE('reviewer'), 'ELU']]);
+  assert.doesNotThrow(() => assertReady(task));
+});
+
+// A session whose bots could not take its change is as one with no bot in its Task checklist
+// too: no review row, and nothing there left to do for a review.
+test('after a must-fix whose fix is too large for the bot, the Task checklist has no review row, as in a session no bot reviews', async t => {
+  const f = bigChange(t, 'review-fix', { tooLong: 'all', tooLongOn: ['Handled the edge case.'] });
+  const task = await f.controller.ask('Normalize coupon codes', null, { bots: ['critic'] }).finished;
+  assert.equal(task.state, 'ready', JSON.stringify(task.error)); assert.equal(task.reviewStatus, 'skipped');
+  assert.equal(task.reviews.length, 1, 'its review of the change before the fix');
+  const list = sessionChecklist(readTask(f.repo, task.id));
+  assert.deepEqual(list.map(row => row.text), ['Edits committed', 'Checks passed', 'Pushed', 'Pull request']);
+  assert.equal(list.find(row => row.text === 'Checks passed').met, true);
 });
 
 test('a must-fix found in the excerpts of a change too long for the model goes to the agent, and the review runs again', async t => {

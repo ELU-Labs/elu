@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { temp, project, fakeClis, autoApprove } from './helpers.mjs';
 import { BOTS_MAX, BOT_COLORS, CHAT_BOTS_MAX, EFFORTS, botColor, botColorProblem, pickBotColor, botReviews, botWorks, botShadows, botsFile, botVendors, botEfforts, listBots, getBot, needBot, saveBot, removeBot, botRuns, sharedBots, chatBots, botRole, botKey, botOfKey, chatBotsNote, botNameProblem, BOT_FINDINGS, sessionBots } from '../lib/bots.mjs';
 import { ProjectController, conversationEntries, registerProject, activity } from '../lib/projects.mjs';
@@ -20,6 +21,8 @@ import { botModelProblem, botRoomProblem } from '../lib/bots.mjs';
 import { stopLine } from '../lib/stop-line.mjs';
 import { openTask, sessionTasks } from '../lib/plan.mjs';
 import { signInCommand } from '../lib/vendors.mjs';
+import { runBotSchedules, botScheduleLines, botSchedulesShown, setBotSchedule } from '../lib/bot-schedules.mjs';
+import { personalDirectory } from '../lib/util.mjs';
 
 // Bots: named agents the owner defines once (lib/bots.mjs) and uses in any chat. In a chat a
 // bot answers a message written to it, reviews the lead's edits, and, when shared, answers
@@ -295,6 +298,43 @@ test('@reviewer the owner adds to a session reviews its edits; a session that ha
   const edited = await f.controller.ask('Normalize coupon codes', old.id).finished;
   assert.deepEqual(reviewed(edited), ['ready', 'skipped', []], JSON.stringify(edited.error));
   assert.doesNotThrow(() => assertReady(readTask(f.repo, edited.id)));
+});
+
+// A bot's schedule runs in the sessions it is in (sessionBots), so never in one that held
+// @reviewer only by the old default: /bots shows no schedule there, nor does its title, the
+// tick queues nothing, even from what an earlier version's tick kept of that session, and a
+// run queued for it before does nothing. Once the owner adds it there, it runs.
+test('a scheduled @reviewer never runs in a session that held it only by the old default; added by the owner, it does', async t => {
+  const f = setup(t); registerProject(f.repo);
+  const chat = await f.controller.ask('Where is coupon normalization?').finished;
+  const record = readTask(f.repo, chat.id); delete record.botsPicked; record.bots = ['reviewer']; saveTask(f.repo, record);
+  saveBot({ ...getBot('reviewer'), schedule: 'every 1h' });
+  const old = readTask(f.repo, chat.id), tick = () => runBotSchedules(new Date(), { start: () => true });
+  assert.deepEqual(sessionBots(old), []);
+  assert.deepEqual(botScheduleLines(f.repo, old), [], '/bots shows no schedule');
+  assert.deepEqual(botSchedulesShown(f.repo, [old]), {}, 'nor does its title');
+  assert.throws(() => setBotSchedule(f.repo, chat.id, 'reviewer', true), { message: '@reviewer is not in this session. /bots add reviewer adds it.' });
+  assert.equal(tick(), 0); assert.equal(pendingRequests(f.root).filter(row => row.bot === 'reviewer').length, 0, 'nothing queued');
+  // What an earlier version's tick kept of the session, in its own words: its bots as saved.
+  const seenFile = path.join(personalDirectory(), 'bot-schedule-sessions.json'), seen = JSON.parse(fs.readFileSync(seenFile, 'utf8'));
+  assert.equal(Object.keys(seen.files).length, 1);
+  for (const entry of Object.values(seen.files)) { const { id, state, createdAt, runs, peer, place, permissions, botChat, asked } = entry.row; entry.row = { id, state, createdAt, runs, messages: [], bots: ['reviewer'], peer, place, permissions, botChat, asked }; }
+  fs.writeFileSync(seenFile, JSON.stringify(seen));
+  const lib = new URL('../lib/bot-schedules.mjs', import.meta.url).href;
+  const ran = spawnSync(process.execPath, ['--input-type=module', '-e', `import { runBotSchedules } from ${JSON.stringify(lib)}; process.stdout.write(String(runBotSchedules(new Date(), { start: () => true })));`], { env: process.env, encoding: 'utf8' });
+  assert.equal(ran.stdout, '0', ran.stderr); assert.equal(pendingRequests(f.root).filter(row => row.bot === 'reviewer').length, 0, 'nothing queued after the update');
+  // A run an earlier version queued there does nothing, and leaves the session without @reviewer.
+  enqueue(f.root, 'Scheduled run (every 1h).', { continuationTaskId: chat.id, bot: 'reviewer', scheduled: true, priority: 1 });
+  const conductor = conduct(t);
+  await until(() => pendingRequests(f.root).every(row => row.state === 'done'), 'the queued run');
+  await conductor.stop();
+  const after = readTask(f.repo, chat.id);
+  assert.deepEqual(sessionBots(after), []); assert.equal(after.botsPicked, undefined);
+  assert.equal(after.messages.some(row => row.to === '@reviewer' || row.bot === 'reviewer'), false, 'nothing in the chat');
+  // Added by the owner, it runs on its schedule.
+  f.controller.setBots(chat.id, ['reviewer']);
+  assert.equal(botScheduleLines(f.repo, readTask(f.repo, chat.id)).length, 1);
+  assert.equal(tick(), 1);
 });
 
 test('a message written to a bot runs the bot and not the lead, saves the reply as the bot\'s, and adds the bot to the chat', async t => {

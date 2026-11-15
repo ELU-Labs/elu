@@ -533,3 +533,30 @@ test('files are not received into a Git work tree: a home folder that is a repos
   withHome(p.devbox.home, () => assert.equal(requestsFor(p.project.root).length, 1));
   assert.equal(spawnSync('git', ['-C', HOME, 'status', '--porcelain', '--untracked-files=all', '--', '.local'], { encoding: 'utf8' }).stdout.trim(), '');
 });
+
+// The owner's case: ELU on his devbox over ssh, a session on his Mac open there, and a Mac
+// CleanShot capture dropped on the terminal. The devbox does not have it, so the message goes
+// as text; the session runs on the Mac, which has the picture, under ~/Library, which no session
+// may read. As for a message typed on the Mac itself, the session is given a copy it may read:
+// in a message to a session, to one that waits to start, and in the first of a new one. What a
+// session's tool sends there goes as it is: only what the owner typed is read for pictures.
+test('a typed message from my other computer naming a picture under ~/Library here gives the session here a copy it may read', async t => {
+  const p = pair(t), PNG = Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex');
+  const shot = path.join(HOME, 'Library', 'Application Support', 'Shots', 'shot 1.png'), dropped = shot.replaceAll(' ', '\\ ');
+  fs.mkdirSync(path.dirname(shot), { recursive: true }); fs.writeFileSync(shot, PNG); t.after(() => fs.rmSync(path.join(HOME, 'Library'), { recursive: true, force: true }));
+  const copies = goal => goal.match(/\/\S*elu-code-pictures\/[0-9a-f]{8}-shot-1\.png/g) ?? [];
+  const view = command => withHome(p.laptop.home, () => remoteCommand(p.viewCtx, { to: p.devbox.identity.key, ...command }));
+  const goals = () => withHome(p.devbox.home, () => requestsFor(p.project.root).map(row => row.goal));
+  await view({ type: 'remoteSend', id: p.id, ref: p.ref, text: `${dropped} why is this cut off`, typed: true });
+  const [typed] = goals();
+  assert.equal(copies(typed).length, 1, `the session gets the path under ~/Library, which it may not read: ${typed}`); assert.equal(typed, `${copies(typed)[0]} why is this cut off`);
+  assert.deepEqual(fs.readFileSync(copies(typed)[0]), PNG);
+  await view({ type: 'remoteSend', id: p.id, ref: p.ref, text: `${dropped} from a tool` });
+  assert.equal(goals()[1], `${dropped} from a tool`, "a session's tool sends text as it is");
+  // A new session there, as the app starts it, and a message to it before it starts.
+  const started = await view({ type: 'remoteStart', text: `what is in ${dropped}`, permissions: 'ask', typed: true });
+  const first = () => withHome(p.devbox.home, () => pendingRequests(p.project.root).find(row => row.mine?.remoteId === started.id)).goal;
+  assert.equal(copies(first()).length, 1, first()); assert.equal(first(), `what is in ${copies(first())[0]}`);
+  await view({ type: 'remoteSend', id: started.id, text: `and ${dropped}`, typed: true });
+  assert.equal(copies(first()).length, 2, first()); assert.ok(!first().includes(dropped), first());
+});

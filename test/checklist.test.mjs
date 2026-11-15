@@ -55,6 +55,10 @@ test('the checklist says from ELU\'s records whether the edits are committed, th
   assert.deepEqual(rows(sessionChecklist(task))[2], ['✓', 'Review passed', '@qa asked for no fixes.']);
   task = save(repo, '1', row => { row.reviewStatus = 'blocked'; row.reviews.push({ round: 2, role: 'bot:qa', result: { summary: 'Two left', comments: [{ severity: 'must_fix', body: 'a' }, { severity: 'must_fix', body: 'b' }, { severity: 'note', body: 'c' }] } }); });
   assert.deepEqual(rows(sessionChecklist(task))[2], ['·', 'Review passed', 'It still asks for 2 fixes.']);
+  // No bot reviewed the change, with reviews from before it: its bots could not take it, or it
+  // has none now. As in a session no bot reviews, there is no row.
+  task = save(repo, '1', row => { row.reviewStatus = 'skipped'; });
+  assert.equal(sessionChecklist(task).some(row => row.text === 'Review passed'), false);
   // Pushed, and its pull request.
   task = save(repo, '1', row => { row.reviewStatus = 'passed'; row.committed = { ...row.committed, pushed: true }; });
   assert.deepEqual(rows(sessionChecklist(task)).slice(3), [['✓', 'Pushed', 'feat/task-1 is on the remote.'], ['·', 'Pull request', '/publish opens a draft pull request.']]);
