@@ -1632,6 +1632,41 @@ test('over a teammate\'s session in a shared project its Task says whose check i
   await send(v, '/done'); await until(() => /It is sara's session: only sara can check it\./.test(status()), 'only sara can check it').catch(error => { throw new Error(`${error.message}: ${status()}`); });
   assert.deepEqual(peer.sent().filter(row => row.type === 'remoteCheck').map(row => row.look === true), [true], 'only its Task was asked');
 });
+// A teammate's session in a shared project: /send says at once that it is theirs, as every
+// other key on its row does. Nothing is offered, asked or sent, and its hint says the same.
+test('/send over a teammate\'s session in a shared project says at once that only they can work in it, asks nothing and sends nothing', async t => {
+  const { machines } = editableThere(), p = project(later(t)); environment(t, p.parent);
+  machines[0].theirs = true; machines[0].projects[0].teams = ['team-1'];
+  const peer = fakePeer({ items: [], mine: [], machines, repoId: SHOP_REPO });
+  Object.assign(peer, { offerFiles, offerPaths, stageFiles });
+  peer.teamProjectRoots = () => [{ team: 'team-1', root: repository(p.root).root, name: 'shop' }];
+  const v = await view(t, { repo: repository(p.root), dashboard: true, peer }), board = v.panels.board, ask = v.panels.ask, status = () => v.panels.status.getText().replace(/\s+/g, ' ');
+  await until(() => board.items.map(plainItem).some(row => /Make coupons upper case/.test(row)), 'the row there');
+  board.focus(); selectRow(board, /Make coupons upper case/); await until(() => /sara's session on @sara-box · read here/.test(ask._label.getText()), 'read here');
+  // Its hint, while /send is typed: whose session it is, never "your other computer".
+  ask.focus(); ask.readInput(); await until(() => ask.__listener, 'message box');
+  v.input.write('/send '); await until(() => /\/send path\.\.\./.test(v.panels.keys.getText()), 'the hint of /send');
+  assert.doesNotMatch(v.panels.keys.getText(), /your other computer/);
+  assert.match(v.panels.keys.getText().replace(/\s+/g, ' '), /It is sara's session: only sara can work in it\./);
+  v.input.write('package.json\r');
+  await until(() => /It is sara's session: only sara can work in it\./.test(status()), 'refused at once').catch(error => { throw new Error(`${error.message}: ${status()}`); });
+  assert.equal(modal(v, 'Send files'), undefined, 'nothing is asked');
+  assert.deepEqual(peer.sent().filter(row => ['remoteFiles', 'remoteSend'].includes(row.type)), [], 'nothing is sent');
+});
+// A shared project with no origin remote: its sessions are seen by everyone on its team, so
+// the line under its Kanban never says teammates do not see them.
+test('the Kanban of a shared project with no origin remote does not say teammates do not see its sessions', async t => {
+  const { machines } = editableThere(), p = project(later(t)); environment(t, p.parent);
+  machines[0].theirs = true; machines[0].projects[0].teams = ['team-1']; machines[0].projects[0].repoId = null; machines[0].sessions[0].repoId = null;
+  const repo = repository(p.root), at = ago(1);
+  saveTask(repo, { id: '1', kind: 'conversation', goal: 'Write the release notes', state: 'answered', worktree: repo.root, base: null, branch: null, createdAt: at, runs: [], reviews: [], responses: [], messages: [{ at, text: 'Write the release notes' }], sessions: {}, result: null });
+  const peer = fakePeer({ items: [], mine: [], machines });
+  peer.teamProjectRoots = () => [{ team: 'team-1', root: repo.root, name: 'shop' }]; peer.boardKeptOff = () => false;
+  const v = await view(t, { repo, peer }), panels = v.panels, cards = () => panels.kanbanLists.flatMap(list => list.items.map(item => plainItem(item).trimEnd()));
+  await send(v, '/kanban'); await until(() => v.current.view === 'kanban' && cards().some(card => /^Make coupons.*@sara · sara-box/.test(card)) && cards().some(card => /Write the release notes/.test(card)), 'its cards and sara\'s').catch(error => { throw new Error(`${error.message}: ${JSON.stringify(cards())} ${v.current.view} ${panels.kanbanTeam.getText()}`); });
+  await new Promise(resolve => setTimeout(resolve, 3500));
+  assert.ok(panels.kanbanTeam.hidden || !/teammates do not see/.test(panels.kanbanTeam.getText()), panels.kanbanTeam.getText());
+});
 test('/done over a session on my other computer that waits for my check shows its goal and objectives from there, and its answers go there', async t => {
   const { listed, machines, answer } = editableThere(), p = project(later(t)); environment(t, p.parent);
   machines[0].check = true; machines[0].sessions[0].check = true;
@@ -4754,7 +4789,7 @@ test('a picture dropped over a session on my other computer, its path first with
   const PNG = Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex'), at = new Date().toISOString();
   const team = makeTeam(t, { founderName: 'ana', memberName: 'box' }), laptop = team.founder, devbox = team.member;
   const home = temp(later(t)), shot = path.join(home, 'Library', 'Application Support', 'Shots', 'shot 1.png'), dropped = shot.replaceAll(' ', '\\ ');
-  const values = { HOME: home, XDG_DATA_HOME: path.join(home, 'data'), XDG_CONFIG_HOME: laptop.home, NO_COLOR: '1', TERM: 'xterm-256color' }, previous = Object.fromEntries(Object.keys(values).map(key => [key, process.env[key]]));
+  const values = { HOME: home, XDG_DATA_HOME: path.join(home, 'data'), XDG_CONFIG_HOME: laptop.home, ELU_NO_COLOR: '1', TERM: 'xterm-256color' }, previous = Object.fromEntries(Object.keys(values).map(key => [key, process.env[key]]));
   owned(t).files.push(() => { for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } });
   Object.assign(process.env, values);
   fs.mkdirSync(path.dirname(shot), { recursive: true }); fs.writeFileSync(shot, PNG);
@@ -4826,4 +4861,113 @@ test('in Chats a dropped picture shows in the box at once from the list, and a m
   await until(() => peer.sent().some(row => row.type === 'ask') || /Unknown command/.test(status()), 'answered');
   assert.doesNotMatch(status(), /Unknown command/);
   assert.deepEqual(peer.sent().at(-1), { type: 'ask', to: LI, project: null, text: `${dropped} see this` });
+});
+
+// The owner's case: his Mac's ELU, the New session box, @ his devbox first, then a CleanShot
+// capture dragged onto the terminal, then his words. The picture is on the Mac only. As for a
+// session that runs there already, Enter offers it to go with the message, and y sends both:
+// the session there starts with the message naming where the picture landed, and may read it
+// from its first turn. A build there from before this takes files only into a session that has
+// started: he is asked whether the text goes alone, and n keeps the message in the box.
+test('a picture dropped in the New session box after @ my other computer goes there with the message; an older ELU there asks whether the text goes alone', { timeout: 60000 }, async t => {
+  const PNG = Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex');
+  const team = makeTeam(t, { founderName: 'ana', memberName: 'box' }), laptop = team.founder, devbox = team.member;
+  const home = temp(later(t)), shot = path.join(home, 'Library', 'Application Support', 'Shots', 'shot 1.png'), dropped = shot.replaceAll(' ', '\\ ');
+  const values = { HOME: home, XDG_DATA_HOME: path.join(home, 'data'), XDG_CONFIG_HOME: laptop.home, ELU_NO_COLOR: '1', TERM: 'xterm-256color' }, previous = Object.fromEntries(Object.keys(values).map(key => [key, process.env[key]]));
+  owned(t).files.push(() => { for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } });
+  Object.assign(process.env, values);
+  fs.mkdirSync(path.dirname(shot), { recursive: true }); fs.writeFileSync(shot, PNG);
+  const there = withHome(devbox.home, () => {
+    const made = registeredProject(t); saveTeamAccess(team.teamId, { root: made.root });
+    markMine(devbox.identity.key, laptop.identity.key); noteTheirs(laptop.identity.key, true);
+    return made;
+  });
+  markMine(laptop.identity.key, devbox.identity.key); noteTheirs(devbox.identity.key, true);
+  const link = key => ({ key, admitted: true, remoteHello: { remote: 1, files: 1, startFiles: 1 }, notify: () => {}, request: async () => { throw new Error('No answer'); } });
+  const ctx = (me, sessions) => ({ me, session: key => sessions[key] ?? null, name: key => key.slice(0, 4), box: key => key === me.key ? null : 'mac', log: () => {}, kick: () => {}, soon: () => {}, event: () => {} });
+  const toHost = link(laptop.identity.key), toViewer = link(devbox.identity.key);
+  const host = hostMethods(ctx(devbox.identity, { [laptop.identity.key]: toHost })), viewCtx = ctx(laptop.identity, { [devbox.identity.key]: toViewer });
+  // The devbox has a home of its own, without the picture.
+  const devboxHome = temp(later(t));
+  toViewer.request = async (method, params) => withHome(devbox.home, () => { const mac = process.env.HOME; process.env.HOME = devboxHome; try { return host[method](params, toHost); } finally { process.env.HOME = mac; } });
+  // The Mac's window: its daemon is the stand-in, which hands a start to the real calls.
+  const peer = fakePeer({ items: [], mine: [{ key: SARA, mine: true, theirs: true }], answer: command => command.type === 'remoteStart' ? remoteCommand(viewCtx, { ...command, to: devbox.identity.key }) : null });
+  Object.assign(peer, { offerFiles, offerPaths, stageFiles });
+  const p = project(later(t)), v = await view(t, { repo: repository(p.root), dashboard: true, peer });
+  const ask = v.panels.ask, status = () => v.panels.status.getText().replace(/\s+/g, ' ');
+  const asked = () => modal(v, 'Send files')?.children.map(child => child.getText?.() ?? '').join(' ').replace(/\s+/g, ' ') ?? '';
+  const started = () => withHome(devbox.home, () => pendingRequests(there.root).filter(row => row.mine));
+  const landed = goal => /Files from @\S+: 1 file \(1 KB\) in (.+)$/m.exec(goal)?.[1];
+  ask.focus(); ask.readInput(); await until(() => ask.__listener, 'message box');
+  v.input.write('@sara-box '); v.input.write(`\x1b[200~${dropped}\x1b[201~`); v.input.write(' why is this cut off');
+  await until(() => ask.getValue() === `@sara-box ${dropped} why is this cut off`, 'typed');
+  v.input.write('\r');
+  await until(() => /Send 1 file \(1 KB\) from this computer with this message\?/.test(asked()) || /Started on @sara-box/.test(status()), 'asked, or started');
+  assert.match(asked(), /Send 1 file \(1 KB\) from this computer with this message\?/, `the picture is offered, not left behind: ${status()}`);
+  assert.deepEqual(started(), [], 'nothing starts before he answers');
+  v.input.write('y');
+  await until(() => /Started on @sara-box in .+ with 1 file\. It shows here as it works\./.test(status()), 'started there with the picture');
+  // There, its first message names where the picture landed, and the session may read that folder.
+  const [first] = started(), dir = landed(first.goal);
+  assert.ok(dir, first.goal); assert.ok(first.goal.startsWith(`"${path.join(dir, 'shot 1.png')}" why is this cut off`), first.goal);
+  assert.ok(!first.goal.includes(dropped) && !first.goal.includes(path.dirname(shot)), 'the path on the Mac is gone from it');
+  assert.equal(first.continuationTaskId, null); assert.deepEqual(first.folders, [path.dirname(dir)]);
+  assert.deepEqual(fs.readFileSync(path.join(dir, 'shot 1.png')), PNG);
+  // The copies made for sending are gone once sent.
+  assert.deepEqual(fs.readdirSync(path.join(laptop.home, 'elu-code', 'peer', 'files', 'out')), []);
+  // An older ELU there: y to the files asks whether the text goes alone. n sends nothing and keeps it.
+  toViewer.remoteHello = { remote: 1, files: 1 };
+  await send(v, `@sara-box ${dropped} and this`);
+  await until(() => /Send 1 file/.test(asked()), 'offered'); v.input.write('y');
+  await until(() => /@sara-box has an older ELU, which takes files only into a session that has started\. Start it with the text only\?/.test(asked()), 'asked about the text alone');
+  assert.doesNotMatch(status(), /Sending/, 'nothing under the question says the file is on its way');
+  v.input.write('n');
+  await until(() => /Nothing was sent\. The message is still here\./.test(status()) && ask.getValue() === `@sara-box ${dropped} and this`, 'kept in the box');
+  assert.equal(started().length, 1);
+  // y: the text alone starts it, as typed.
+  ask.setValue(''); await send(v, `@sara-box ${dropped} and this`);
+  await until(() => /Send 1 file/.test(asked()), 'offered again'); v.input.write('y');
+  await until(() => /older ELU/.test(asked()), 'asked again'); v.input.write('y');
+  await until(() => started().length === 2 && /Started on @sara-box/.test(status()), 'the text alone');
+  assert.equal(started()[1].goal, `${dropped} and this`);
+});
+
+// @here and a CleanShot capture dropped from ~/Library, over a session on my other computer:
+// my agent here runs on the computer that has the picture, but no session may read ~/Library.
+// As a message to a session here does, each message to it names a copy it may read: its first,
+// one that goes with that first before it starts, and one that continues it.
+test('a picture dropped after @here over a session on my other computer goes to my agent here as a copy it may read', { timeout: 30000 }, async t => {
+  const PNG = Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex'), at = new Date().toISOString(), id = '44444444-4444-4444-8444-444444444444';
+  const p = project(later(t)); environment(t, p.parent);
+  const home = temp(later(t)), shot = path.join(home, 'Library', 'Application Support', 'Shots', 'shot 1.png'), dropped = shot.replaceAll(' ', '\\ '), before = process.env.HOME;
+  process.env.HOME = home; owned(t).files.push(() => { if (before === undefined) delete process.env.HOME; else process.env.HOME = before; });
+  fs.mkdirSync(path.dirname(shot), { recursive: true }); fs.writeFileSync(shot, PNG);
+  const remote = [{ id, machine: SARA, createdAt: at, lastAt: at, title: 'Invoice totals fix', state: 'answered', steps: [], entries: [{ role: 'You', at, text: 'Fix the totals' }, { role: 'Opus 5.5', lead: true, at, text: 'Done.' }], approvals: [] }];
+  const peer = fakePeer({ items: [], mine: [{ key: SARA, mine: true, theirs: true }], remote }), v = await view(t, { repo: repository(p.root), dashboard: true, peer });
+  const board = v.panels.board, status = () => v.panels.status.getText();
+  const copies = goal => goal.match(/\/\S*elu-code-pictures\/[0-9a-f]{8}-shot-1\.png/g) ?? [];
+  await until(() => board.items.map(plainItem).some(row => /Invoice totals fix/.test(row)), 'the session there is listed');
+  board.focus(); selectRow(board, /Invoice totals fix/);
+  await until(() => / on @sara-box /.test(v.panels.ask._label.getText()), 'the box writes to the session there');
+  await send(v, `@here what is in ${dropped}`);
+  await until(() => pendingRequests(p.root).some(row => row.helps), 'my agent here starts');
+  const first = pendingRequests(p.root).find(row => row.helps);
+  assert.ok(!first.goal.includes(dropped), `it is given the path under ~/Library, which it may not read: ${first.goal}`);
+  assert.equal(copies(first.goal).length, 1, first.goal); assert.equal(first.goal, `what is in ${copies(first.goal)[0]}`);
+  assert.deepEqual(fs.readFileSync(copies(first.goal)[0]), PNG);
+  await until(() => /Sent to your agent here\./.test(status()), 'the line says so');
+  // Before it started, the next one goes with the first, with its own copy.
+  await send(v, `@here and ${dropped}`);
+  await until(() => pendingRequests(p.root).find(row => row.id === first.id)?.goal.includes('\n\nand '), 'with the first message');
+  const both = pendingRequests(p.root).find(row => row.id === first.id).goal;
+  assert.equal(copies(both).length, 2, both); assert.ok(!both.includes(dropped), both);
+  // Once it started, the next one continues it, with a copy too.
+  const repo = repository(p.root);
+  saveTask(repo, { id: '1', kind: 'conversation', goal: first.goal, state: 'answered', worktree: repo.root, base: null, branch: null, createdAt: at, runs: [], reviews: [], responses: [], messages: [{ at, text: first.goal }], sessions: {}, result: null, helps: first.helps });
+  updateRequest(p.root, first.id, { taskId: '1', state: 'done' });
+  board.focus(); selectRow(board, /^(?!.*Help:).*Invoice totals fix/);
+  await send(v, `@here ${dropped} again`);
+  await until(() => pendingRequests(p.root).some(row => row.continuationTaskId === '1'), 'the helper is continued');
+  const next = pendingRequests(p.root).find(row => row.continuationTaskId === '1').goal;
+  assert.equal(copies(next).length, 1, next); assert.equal(next, `${copies(next)[0]} again`);
 });

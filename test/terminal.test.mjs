@@ -4016,6 +4016,20 @@ test('a message sent before the conductor has picked up the first one goes with 
   await until(() => tasks()[0]?.state === 'answered', 'the session answered');
   assert.equal(tasks().length, 1, 'one session'); assert.equal(tasks()[0].goal, 'Keep working on the board\n\nAnd the tests too', 'with both messages');
 });
+// A picture dropped in the message that goes with it, from ~/Library as a CleanShot capture is,
+// goes as a copy the session may read, as it does in a message of its own.
+test('a dropped picture in a message that goes with a first message still waiting goes as a copy the session may read', { timeout: 30000 }, async t => {
+  const p = setup(t, 'answer'), d = droppedShot(t, p);
+  const v = await view(t, { repo: p.repo }), conductor = resources(t).conductor, goals = () => pendingRequests(p.root).map(row => row.goal);
+  conductor.busy = true;
+  await send(v, 'Keep working on the board'); await until(() => goals().length === 1, 'the first message saved');
+  await send(v, `${d.dropped} and this`); await until(() => goals().some(goal => goal.endsWith(' and this')), 'the second saved');
+  const [goal] = goals(), copy = /\/\S*elu-code-pictures\/[0-9a-f]{8}-shot-1\.png/.exec(goal)?.[0];
+  assert.ok(copy, `it names the path under ~/Library, which the session may not read: ${goal}`);
+  assert.equal(goal, `Keep working on the board\n\n${copy} and this`); assert.deepEqual(fs.readFileSync(copy), SHOT_PNG);
+  conductor.busy = false;
+  await until(() => projectSnapshot(p.repo).tasks[0]?.state === 'answered', 'the session answered');
+});
 
 // The conductor starts a session a moment before the screen draws it. What is sent in that
 // moment acts on the session like anything sent later. Saved over the request that started

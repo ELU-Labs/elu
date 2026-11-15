@@ -496,7 +496,8 @@ A message to a devbox session that names files or folders on the laptop asks
 "Send 14 files (2.1 MB) from this computer with this message?": y sends them along, n sends
 the text alone. `/send PATH...` sends files without a message. They land in that session's
 inbox on the devbox, which it may read in every mode, and each path in your message points
-there. A Claude Code session of yours can list your sessions on your other computers and send
+there. `@devbox` and a screenshot dragged into the new session box asks the same, and y
+starts the session with it. A Claude Code session of yours can list your sessions on your other computers and send
 them files itself; in Ask for approval you allow each send.
 A project's instructions, context and lessons are the same on all your computers, for every
 model and bot there, like its tasks: the project a team was invited to, else the one of the

@@ -4,6 +4,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import { newHome, withHome, makeTeam, registeredProject } from './peer-helpers.mjs';
+import { repository } from '../lib/git.mjs';
+import { nameProject } from '../lib/projects.mjs';
 import { readProjectSettings, projectPromptParts, saveContext, saveInstructions } from '../lib/project-settings.mjs';
 import { saveLearned } from '../lib/project-learnings.mjs';
 import { ensureTrustStore, pendingTrust } from '../lib/project-trust.mjs';
@@ -185,4 +187,22 @@ test('only the owner\'s own computers are sent instructions and context, a teamm
     daemon.closed = true; clearInterval(daemon.timer);
   });
   void box;
+});
+
+test('two computers of the owner with projects of one name in different repositories keep their own instructions and context', t => {
+  const { laptop, devbox } = ownComputers(t);
+  const one = on(laptop, () => registeredProject(t, { origin: 'https://example.invalid/one/web.git' })), two = on(devbox, () => registeredProject(t, { origin: 'https://example.invalid/two/web.git' }));
+  on(laptop, () => { nameProject(repository(one.root), 'web'); saveInstructions(one.root, 'Rules of the first web repository.'); saveLearned(one.root, { add: ['The first one deploys on Fridays.'], remove: [] }); });
+  on(devbox, () => { nameProject(repository(two.root), 'web'); saveInstructions(two.root, 'Rules of the second web repository.'); });
+  talk(laptop, devbox); talk(laptop, devbox);
+  assert.equal(on(laptop, () => readProjectSettings(one.root).instructions), 'Rules of the first web repository.\n');
+  assert.equal(on(devbox, () => readProjectSettings(two.root).instructions), 'Rules of the second web repository.\n');
+  assert.ok(!on(devbox, () => readProjectSettings(two.root).context).includes('Fridays'));
+  assert.deepEqual(on(laptop, () => projectLinks(one.root)).map(row => row.linked), [null], 'not the same project');
+  // One with a repository and one with none, of one name, are not the same project either.
+  const three = on(devbox, () => registeredProject(t));
+  on(devbox, () => { nameProject(repository(two.root), 'web two'); nameProject(repository(three.root), 'web'); saveInstructions(three.root, 'Rules of a folder with no remote.'); });
+  talk(laptop, devbox); talk(laptop, devbox);
+  assert.equal(on(laptop, () => readProjectSettings(one.root).instructions), 'Rules of the first web repository.\n');
+  assert.equal(on(devbox, () => readProjectSettings(three.root).instructions), 'Rules of a folder with no remote.\n');
 });
