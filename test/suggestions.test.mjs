@@ -59,6 +59,16 @@ test('/permissions offers the modes, the default, and the folders the model may 
   for (const done of ['/permissions folders add ', '/permissions auto ', '/permissions']) assert.deepEqual(values(done), [], done);
 });
 
+test('/computer runs alone, and offers name, then default to go back to the host name', () => {
+  const computer = COMMANDS.find(row => row.name === 'computer');
+  assert.equal(computer?.usage, '/computer [name NAME]'); assert.equal(needsArgument(computer), false, 'bare /computer says the name');
+  assert.deepEqual(commandMatches('/comp').map(row => row.name), ['computer']);
+  assert.deepEqual(argumentMatches('/computer ', ctx).map(row => `${row.value} · ${row.description} · ${row.more}`), ['/computer name · Rename this computer: name NAME, or name default for its host name · true']);
+  assert.deepEqual(argumentMatches('/computer name ', ctx).map(row => `${row.value} · ${row.description} · ${row.more}`), ['/computer name default · Go back to its host name · false']);
+  assert.deepEqual(values('/computer name studio '), []);
+  assert.deepEqual(parseCommand('/computer name box-one').args, ['name', 'box-one']);
+});
+
 test('a removed command is not listed, offers no next word, and is unknown when typed', () => {
   const names = COMMANDS.map(command => command.name);
   for (const gone of ['ask', 'review', 'handoff', 'folders', 'open', 'create', 'verify', 'diff']) {

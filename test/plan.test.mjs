@@ -366,6 +366,29 @@ test('a Task is checked as untrusted text', () => {
   for (const estimate of [0, -5, 1.5, '30', TASK_LIMITS.minutes + 1]) assert.equal(checkProposal({ ...TASK, estimateMinutes: estimate }).estimateMinutes, null, `estimate ${estimate}`);
 });
 
+// The owner's own words for a Task have no length or count of ours (README, "No caps"): his goal,
+// his objectives and the description that carries them are taken whole, as many as he wrote, and
+// still made safe. A model's proposal keeps its limits. The model's marks reach every objective
+// of the Task the work goes on under, however many he gave it.
+test("the owner's goal and objectives are taken whole however long and however many; a model's proposal keeps its limits, and its marks reach each objective he wrote", () => {
+  const goal = `Make the export whole. ${'Every word of this goal matters. '.repeat(190)}THE END`;
+  const objectives = Array.from({ length: 12 }, (_, index) => `Objective ${index + 1}: ${'it holds whole. '.repeat(25)}done`);
+  assert.ok(goal.length > 6000 && objectives.every(text => text.length > TASK_LIMITS.objective));
+  const owned = checkProposal({ ...TASK, description: goal, goal, objectives }, { owner: true });
+  assert.deepEqual([owned.description, owned.goal, owned.objectives], [goal, goal, objectives]);
+  assert.throws(() => checkProposal({ ...TASK, goal: `${goal}${String.fromCharCode(27)}[31m` }, { owner: true }), /control characters/);
+  assert.throws(() => checkProposal({ ...TASK, title: 'x'.repeat(TASK_LIMITS.title + 1) }, { owner: true }), /at most 80 characters/);
+  assert.throws(() => checkProposal({ ...TASK, goal }), /at most 500 characters/);
+  assert.throws(() => checkProposal({ ...TASK, objectives }), /1 to 8 objectives/);
+  // The marks: up to the open Task's own number of objectives, in the schema and as read.
+  const open = { objectives }, schema = planSchema(conversationSchema({}), { progress: true, open });
+  assert.deepEqual([schema.properties.objectivesMet.maxItems, schema.properties.objectivesEvidence.maxItems], [12, 12]);
+  assert.equal(planSchema(conversationSchema({}), { progress: true }).properties.objectivesMet.maxItems, TASK_LIMITS.objectives);
+  const read = readPlanReply({ outcome: 'done', objectivesMet: [12, 9, 13, 1], objectivesEvidence: [{ objective: 12, evidence: 'npm test: 12 passed' }, { objective: 13, evidence: 'no such objective' }] }, { progress: true, open });
+  assert.deepEqual([read.reply.met, read.reply.evidence], [[1, 9, 12], [[12, 'npm test: 12 passed']]]);
+  assert.deepEqual(readPlanReply({ objectivesMet: [12, 1] }, { progress: true }).reply.met, [1], 'with no open Task, as before');
+});
+
 test('the reply fields: one Task at most, subtasks read leniently, and the result keeps its own keys', () => {
   const schema = planSchema(conversationSchema({}), { propose: true, progress: true });
   assert.deepEqual(schema.required.slice(-5), ['task', 'subtasks', 'objectivesMet', 'etaMinutes', 'objectivesEvidence']); assert.equal(schema.properties.task.maxItems, 1);
@@ -569,6 +592,17 @@ test('Full access: a reply that starts an edit with no Task, twice, gets the Tas
   const task = sessionTasks(f.repo, done.id)[0];
   assert.deepEqual([task.title, task.goal, task.approvedBy, task.by], ['Uppercase coupon codes and keep the tests green', 'Uppercase coupon codes and keep the tests green', 'full', 'lead']);
   assert.equal(task.description, 'Uppercase coupon codes\nand keep the tests green'); assert.deepEqual(task.objectives, ['The request is done as the owner wrote it']);
+});
+
+// That Task holds his request whole, however long: its goal and its description are his words.
+test('Full access: the Task ELU writes from a request of any length keeps the request whole', async t => {
+  const f = fixture(t, 'no-task');
+  const asked = `Uppercase coupon codes. ${'Every word of this request matters to the coupons. '.repeat(130)}THE END`;
+  assert.ok(asked.length > 6000);
+  const done = await f.controller.ask(asked, null, { permissions: 'full' }).finished;
+  const task = sessionTasks(f.repo, done.id)[0];
+  assert.ok(task.goal === asked, 'the whole request is its goal'); assert.ok(task.description === asked, 'and its description');
+  assert.equal(task.title, `${asked.slice(0, TASK_LIMITS.title - 1).trimEnd()}…`);
 });
 
 test('work that edits no file: Full access does it in the turn that writes the Task; Ask for approval waits, and an approval starts it', async t => {

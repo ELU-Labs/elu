@@ -110,6 +110,21 @@ test('a schedule keeps its bots and branch and each run starts with them; an old
   assert.deepEqual(pendingRequests(p.root).find(request => request.goal === 'Check the build' && request.state === 'queued').bots, ['reviewer']);
 });
 
+// An earlier build put @reviewer in the form of each new schedule by itself. A schedule it saved
+// with @reviewer alone is taken as that default: its runs start with no bots. Any other list,
+// and every list saved now, is the owner's.
+test('a schedule an earlier build saved with @reviewer alone starts its runs with no bots; one saved with @reviewer now keeps it', t => {
+  const dir = home(t), p = project(t), start = () => true;
+  const old = { id: 'schedule-0a1b2c3e', root: p.root, project: 'old', goal: 'Old default', when: parseWhen('every 1h', at(9, 8)), enabled: true, createdAt: at(9, 8).toISOString(), nextRunAt: at(9, 9).toISOString(), lastRunAt: null, lastRequestId: null, lastTaskId: null, runs: 0, note: null, permissions: null, bots: ['reviewer'] };
+  fs.mkdirSync(path.join(dir, 'personal', 'elu-code'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'personal', 'elu-code', 'schedules.json'), JSON.stringify({ version: 1, schedules: [old, { ...old, id: 'schedule-0a1b2c3f', goal: 'Old with qa', bots: ['reviewer', 'qa'] }] }));
+  const row = saveSchedule({ root: p.root, goal: 'New with reviewer', when: parseWhen('every 1h', at(9, 8)), bots: ['reviewer'] }, at(9, 8));
+  assert.deepEqual([row.bots, row.botsPicked], [['reviewer'], true]);
+  assert.equal(runDue(at(9, 10), { start }), 3);
+  const of = goal => pendingRequests(p.root).find(request => request.goal === goal).bots;
+  assert.deepEqual([of('Old default'), of('Old with qa'), of('New with reviewer')], [[], ['reviewer', 'qa'], ['reviewer']]);
+});
+
 test('a due schedule queues one run, skips while it is still pending, and catches up once after sleep', t => {
   home(t); const p = project(t), starts = [];
   const start = () => { starts.push(1); return true; };

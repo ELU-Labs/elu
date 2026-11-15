@@ -133,8 +133,8 @@ async function until(check, message = 'condition', timeout = 10000) {
 }
 async function view(t, { protocol = 'sgr' } = {}) {
   const removals = [], p = project({ after: close => removals.push(close) });
-  const previous = { XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME, NO_COLOR: process.env.NO_COLOR, TERM: process.env.TERM };
-  Object.assign(process.env, { XDG_CONFIG_HOME: path.join(p.parent, 'personal'), NO_COLOR: '1', TERM: 'xterm-256color' });
+  const previous = { XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME, ELU_NO_COLOR: process.env.ELU_NO_COLOR, TERM: process.env.TERM };
+  Object.assign(process.env, { XDG_CONFIG_HOME: path.join(p.parent, 'personal'), ELU_NO_COLOR: '1', TERM: 'xterm-256color' });
   const input = new PassThrough(), output = new PassThrough(), copied = [];
   input.isTTY = output.isTTY = true; input.setRawMode = () => {}; output.columns = 100; output.rows = 30;
   let sent = ''; output.on('data', data => { sent += data.toString(); });

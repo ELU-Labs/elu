@@ -34,7 +34,7 @@ function environment(t, values) {
 }
 function setup(t, mode = 'normal') {
   const p = project({ after: close => resources(t).files.push(close) }), fake = fakeClis(p.parent, { mode });
-  environment(t, { ...fake.env, XDG_CONFIG_HOME: path.join(p.parent, 'personal'), NO_COLOR: '1' });
+  environment(t, { ...fake.env, XDG_CONFIG_HOME: path.join(p.parent, 'personal'), ELU_NO_COLOR: '1' });
   assert.equal(cli(p.root, ['init', '--yes'], fake.env).status, 0);
   git(p.root, ['add', '.']); git(p.root, ['commit', '-m', 'Configure checks']);
   return { ...p, ...fake, repo: repository(p.root) };

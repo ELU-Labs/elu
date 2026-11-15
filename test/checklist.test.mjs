@@ -136,11 +136,12 @@ test('the Task view and the check carry the checklist: with no Task its goal is 
   assert.equal(taskView(repo, save(repo, '6', row => { row.state = 'running'; })).waits, false);
 });
 
-test('an older computer\'s session gets the rows its list told; a checklist another computer sends is kept short', () => {
+test('an older computer\'s session gets the rows its list told; a checklist another computer sends is kept whole, every row, each a line', () => {
   assert.deepEqual(rows(toldChecklist({ state: 'needs_input', question: 'Which folder?' })), [['·', 'Needs your answer', 'Which folder?']]);
   assert.deepEqual(rows(toldChecklist({ state: 'unverified', finished: true })), [['✓', 'Edits committed', 'Its work is committed.']]);
   assert.deepEqual(rows(toldChecklist({ state: 'stopped', error: 'Stopped before it finished. Type continue to carry on.' })), [['·', 'Stopped', 'Stopped before it finished. Type continue to carry on.']]);
-  const kept = cleanChecklist([...Array.from({ length: 20 }, (_, index) => ({ text: `Row ${index}`, met: index % 2 === 0, evidence: 'x'.repeat(400) })), null, { text: '' }]);
-  assert.equal(kept.length, 12); assert.equal(kept[0].evidence.length, 200); assert.deepEqual([kept[0].met, kept[1].met], [true, false]);
+  // No number of rows and no length of ours: every row, its text and its evidence whole, each made one line.
+  const kept = cleanChecklist([...Array.from({ length: 20 }, (_, index) => ({ text: `Row ${index} ${'t'.repeat(300)}`, met: index % 2 === 0, evidence: `${'x'.repeat(400)}\n${'y'.repeat(4000)}` })), null, { text: '' }]);
+  assert.equal(kept.length, 20); assert.equal(kept[19].text, `Row 19 ${'t'.repeat(300)}`); assert.equal(kept[0].evidence, `${'x'.repeat(400)} ${'y'.repeat(4000)}`); assert.deepEqual([kept[0].met, kept[1].met], [true, false]);
   assert.deepEqual(cleanChecklist('no'), []);
 });

@@ -47,7 +47,7 @@ test('questions work in an existing dirty project with no configured checks', as
 
 test('a coding request prepares its workspace automatically and reports missing verification honestly', async t => {
   const f = plain(t, 'scaffold');
-  const task = await f.controller.ask('Create a coupon normalizer and its tests').finished;
+  const task = await f.controller.ask('Create a coupon normalizer and its tests', null, { bots: ['reviewer'] }).finished;
   assert.equal(task.mode, 'automatic'); assert.equal(task.state, 'unverified'); assert.equal(task.reviewStatus, 'passed');
   assert.ok(task.evidence.results.some(row => row.name === 'project-checks' && row.status === 'not-configured'));
   assert.equal(fs.existsSync(path.join(task.worktree, 'src/coupon.mjs')), true);
@@ -100,7 +100,7 @@ test('automatic editing copies a local file over 4 MiB and more than 5000 local 
 test('a question after an edit preserves the implementation and its verification', async t => {
   const p = project(t), fake = fakeClis(p.parent, { mode: 'dialogue' }); environment(t, fake.env);
   const controller = autoApprove(new ProjectController(projectFolder(p.root)));
-  const task = await controller.ask('Normalize coupon codes').finished;
+  const task = await controller.ask('Normalize coupon codes', null, { bots: ['reviewer'] }).finished;
   assert.equal(task.state, 'ready');
   const legacy = { ...task }; delete legacy.messages;
   fs.writeFileSync(path.join(taskDir(controller.repo, task.id), 'task.json'), JSON.stringify(legacy));
@@ -118,7 +118,7 @@ test('a question after an edit preserves the implementation and its verification
 
 test('a conversation becomes an editing task without losing earlier messages or logs', async t => {
   const f = plain(t, 'answer');
-  const question = await f.controller.ask('Can I add agents?').finished;
+  const question = await f.controller.ask('Can I add agents?', null, { bots: ['reviewer'] }).finished;
   fakeClis(f.parent, { mode: 'scaffold' });
   const edit = await f.controller.ask('Create a normalizer and its tests', question.id).finished;
   assert.equal(edit.id, question.id); assert.equal(edit.kind, undefined);

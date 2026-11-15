@@ -88,8 +88,11 @@ const hooks = readJson(path.join(HOME, '.gemini', 'config', 'hooks.json'));
 const brain = path.join(HOME, '.gemini', 'antigravity-cli', 'brain');
 const flag = name => { const at = args.indexOf(name); return at >= 0 ? args[at + 1] : null; };
 const notice = (tool, rule) => process.stderr.write(`agy: soft-denied ${tool} (${rule})\n`);
-const ACTION = { write_to_file: 'write_file', run_command: 'command', read_url: 'read_url', search_web: null };
-const KIND = { write_to_file: 'edit', run_command: 'execute', read_url: 'fetch', search_web: 'search' };
+// view_file has no permission action: agy has no read deny (docs/vendors/antigravity.md).
+const ACTION = { write_to_file: 'write_file', run_command: 'command', read_url: 'read_url', search_web: null, view_file: null };
+const KIND = { write_to_file: 'edit', run_command: 'execute', read_url: 'fetch', search_web: 'search', view_file: 'read' };
+const onDisk = p => { try { return fs.realpathSync(p); } catch { return path.resolve(p); } };
+const inside = (dir, file) => { const root = onDisk(dir), real = onDisk(file); return real === root || real.startsWith(`${root}${path.sep}`); };
 const pause = () => new Promise(resolve => setTimeout(resolve, Number.isFinite(agy.pace) ? agy.pace : 0));
 const MODELS = ['gemini-3-pro', 'gemini-3-flash'];
 
@@ -107,12 +110,12 @@ function hookDecision(tool, input, cwd) {
 }
 const ruleMatches = (rules, action, target) => (rules ?? []).some(rule => { const m = /^([a-z_]+)\((.*)\)$/.exec(rule); return m && m[1] === action && (m[2] === '*' || target === m[2] || (m[2].endsWith('/') && target.startsWith(m[2]))); });
 // Hook deny, settings deny and the sandbox refuse; a hook ask, a settings ask or an outside
-// write asks, which headless mode cannot do; otherwise the tool runs. review: an ACP session
+// write or read asks, which headless mode cannot do; otherwise the tool runs. review: an ACP session
 // no mode was set for, which asks before each command and each write.
 function permit(tool, input, { cwd, skip, sandbox, review = false, free = false }) {
   if (skip) return { verdict: 'allow' };
-  const action = ACTION[tool], target = tool === 'write_to_file' ? input.TargetFile : tool === 'run_command' ? input.CommandLine.split(/\s+/)[0] : input.Url ?? '';
-  const outside = tool === 'write_to_file' && !target.startsWith(`${cwd}${path.sep}`);
+  const action = ACTION[tool], target = tool === 'write_to_file' ? input.TargetFile : tool === 'run_command' ? input.CommandLine.split(/\s+/)[0] : tool === 'view_file' ? input.AbsolutePath : input.Url ?? '';
+  const outside = tool === 'write_to_file' && !target.startsWith(`${cwd}${path.sep}`) || tool === 'view_file' && !inside(cwd, target);
   if (free && tool === 'write_to_file' && !outside) return { verdict: 'allow' };
   const hook = hookDecision(tool, input, cwd);
   if (hook === 'deny') return { verdict: 'deny', rule: 'hook' };
@@ -132,9 +135,12 @@ function plan(text, cwd) {
   const run = /\b[Rr]un (?:this |the )?command(?: and report its output)?:?\s+(\S+)/.exec(text); if (run) attempts.push({ tool: 'run_command', input: { CommandLine: clean(run[1]), Cwd: cwd } });
   const url = /\b[Ff]etch (https?:\/\/\S+)/.exec(text); if (url) attempts.push({ tool: 'read_url', input: { Url: clean(url[1]) } });
   const search = /\b[Ss]earch the web for ([^.\n]+)/.exec(text); if (search) attempts.push({ tool: 'search_web', input: { query: search[1] } });
+  // reads (fake.json): the files it reads with view_file, whatever the prompt says.
+  for (const file of Array.isArray(cfg.reads) ? cfg.reads : []) attempts.push({ tool: 'view_file', input: { AbsolutePath: file } });
   return attempts;
 }
 async function perform({ tool, input }) {
+  if (tool === 'view_file') return `Read ${input.AbsolutePath}.`;
   if (tool === 'write_to_file') { fs.mkdirSync(path.dirname(input.TargetFile), { recursive: true }); fs.writeFileSync(input.TargetFile, input.CodeContent); return `Created ${input.TargetFile}.`; }
   if (tool === 'run_command') { const r = spawnSync('/bin/sh', ['-c', input.CommandLine], { cwd: input.Cwd, encoding: 'utf8' }); return `Ran ${input.CommandLine} (exit ${r.status}).`; }
   if (tool === 'read_url') { try { const r = await fetch(input.Url); return `Fetched ${input.Url}: ${r.status}.`; } catch (error) { return `Fetch failed: ${error.message}`; } }
@@ -169,6 +175,8 @@ async function turn(text, { cwd, skip, sandbox, ask, dir, review = false, show =
       else if (ask) { verdict = (await ask(attempt, call)) === 'allow' ? 'allow' : 'deny'; rule = 'permission request rejected'; }
       else { verdict = 'deny'; rule = `${rule}; headless`; }
     }
+    // Each file of reads, and whether it was read, in reads.jsonl beside the fake.
+    if (attempt.tool === 'view_file') { let read = false; if (verdict !== 'deny' || agy.ignoreDenies) { try { fs.readFileSync(attempt.input.AbsolutePath); read = true; } catch { /* Not there. */ } } fs.appendFileSync(path.join(path.dirname(process.argv[1]), 'reads.jsonl'), JSON.stringify({ vendor: 'agy', path: attempt.input.AbsolutePath, read }) + '\n'); }
     if (verdict === 'deny' && !agy.ignoreDenies) { notice(attempt.tool, rule); denied.push(`${attempt.tool} denied (${rule})`); show?.end(call, false); continue; }
     done.push(await perform(attempt)); show?.end(call, true);
   }

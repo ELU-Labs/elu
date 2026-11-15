@@ -80,7 +80,7 @@ test("a run over ACP counts the tokens its vendor sent with the turn where runs 
   near(costs[0], (1200 * 0.5 + 200 * 0.05 + 10 * 0.5 + 120 * 3) / 1e6, 'gemini-3-flash'); assert.deepEqual(costs.slice(1), [null, null, null]);
   // The Usage tab's row adds them up: at least the priced run's cost.
   const [row] = spend.agentSpend([{ root: '/work/shop', tasks: [task] }], { now: Date.parse(AT) + 60000 }).rows;
-  assert.deepEqual(row.tokens, counted([1217, 127, 230, 10])); near(row.costUsd, costs[0]); assert.equal(row.partial, true); assert.equal(spend.costText(row), '≥$0.00');
+  assert.deepEqual(row.tokens, counted([1217, 127, 230, 10])); near(row.costUsd, costs[0]); assert.equal(row.partial, true); assert.equal(spend.costText(row), '—');
 });
 
 // Grok Build's spend covers every turn a run made and none of an earlier run of its session, so

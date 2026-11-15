@@ -1,9 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import path from 'node:path';
 import { PassThrough } from 'node:stream';
 import { project, temp, fakeClis, keyThenEnter } from './helpers.mjs';
-import { liveTask } from './peer-helpers.mjs';
+import { liveTask, makeTeam, registeredProject, withHome } from './peer-helpers.mjs';
+import { hash } from '../lib/util.mjs';
+import { markMine, noteTheirs } from '../lib/peer/mine.mjs';
+import { hostMethods, remoteCommand, watchId } from '../lib/peer/remote.mjs';
+import { saveTeamAccess } from '../lib/peer/access.mjs';
+import { offerFiles, offerPaths, stageFiles } from '../lib/peer/index.mjs';
 import { repository } from '../lib/git.mjs';
 import { claimView, nameProject, registerProject, sessionWire } from '../lib/projects.mjs';
 import { saveRequest, pendingRequests, updateRequest } from '../lib/workspace.mjs';
@@ -18,6 +24,7 @@ import { botTarget, chatBar, dmTarget, fitWords, ink, membersLine, peerName, roo
 import { joinWait, noRoute } from '../lib/peer/join-text.mjs';
 import { columns } from '../lib/width.mjs';
 import { readProjectSettings } from '../lib/project-settings.mjs';
+import { defaultBox, peerBox, peerSettings } from '../lib/peer/settings.mjs';
 
 const ME = 'a'.repeat(64), SARA = 'b'.repeat(64), LI = 'c'.repeat(64);
 const LONG = 'Could you check whether the retry budget in the uploader resets after a successful flush or only after restart because we keep seeing duplicate batches';
@@ -109,7 +116,7 @@ async function until(check, message = 'condition', timeout = 10000) {
   while (!check()) { if (Date.now() - started > timeout) throw new Error(`Timed out waiting for ${message}`); await new Promise(resolve => setTimeout(resolve, 10)); }
 }
 function environment(t, parent) {
-  const values = { XDG_CONFIG_HOME: path.join(parent, 'personal'), NO_COLOR: '1', TERM: 'xterm-256color' };
+  const values = { XDG_CONFIG_HOME: path.join(parent, 'personal'), ELU_NO_COLOR: '1', TERM: 'xterm-256color' };
   const previous = Object.fromEntries(Object.keys(values).map(key => [key, process.env[key]]));
   Object.assign(process.env, values);
   owned(t).files.push(() => { for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } });
@@ -274,7 +281,7 @@ test('Chats shows channels and direct messages beside the open one at 160x40', a
 });
 
 test('a thread whose row is as wide as its pane keeps its last word, in colour as the app runs', async t => {
-  const parent = temp(later(t)); environment(t, parent); delete process.env.NO_COLOR;
+  const parent = temp(later(t)); environment(t, parent); delete process.env.ELU_NO_COLOR;
   const peer = fakePeer({ items: [] }), v = await view(t, { peer });
   await send(v, '/chats'); await until(() => v.current.view === 'chats', 'Chats');
   await openRow(v, /@sara/, '@sara');
@@ -881,10 +888,67 @@ test('@name in an open session asks that teammate from the session, and /ask say
   assert.equal(ask.getValue(), '/ask @nobody hello'); assert.equal(pendingRequests(p.root).length, 0); assert.equal(peer.sent().length, 2);
 });
 
+// /ask typed on the list over a draft, refused with a teammate's name: the box held "@sara why"
+// and the draft was gone. It comes back once the question is sent or cleared; Esc brings it
+// back too, and ↑ the question.
+test('a draft /ask was typed over comes back once the question to the teammate is sent or cleared, and Esc keeps both', { timeout: 30000 }, async t => {
+  const p = project(later(t)); environment(t, p.parent);
+  const peer = fakePeer({ items: [] }), v = await view(t, { repo: repository(p.root), dashboard: true, peer });
+  const board = v.panels.board, ask = v.panels.ask, focused = () => v.current.screen.focused, status = () => v.panels.status.getText().replace(/\s+/g, ' '), asked = () => peer.sent().filter(row => row.type === 'ask');
+  const askOver = async () => {
+    v.input.write('\x1b'); await until(() => focused() === board, 'the list');
+    v.type('/ask @sara why'); await until(() => ask.getValue() === '/ask @sara why', 'the command, set apart from the draft');
+    v.type('\r'); await until(() => /Ask by name: Enter sends this to @sara\./.test(status()) && ask.getValue() === '@sara why' && ask.__listener, 'the question, ready to send');
+  };
+  ask.focus(); ask.readInput(); await until(() => ask.__listener && v.current.session === 'new', 'the new session box');
+  ask.setValue('fix login'); await askOver();
+  // Sent: the draft is back in the box.
+  v.type('\r'); await until(() => asked().length === 1, 'asked');
+  await until(() => ask.getValue() === 'fix login', `the draft is back once it is sent, not "${ask.getValue()}"`);
+  // Cleared: the draft is back.
+  await askOver();
+  v.type('\x7f'.repeat('@sara why'.length)); await until(() => ask.getValue() === 'fix login', `the draft is back once it is cleared, not "${ask.getValue()}"`);
+  assert.equal(asked().length, 1, 'nothing more was sent');
+  // Esc: the draft is back, and ↑ brings the question back.
+  await askOver();
+  v.input.write('\x1b'); await until(() => focused() === board && ask.getValue() === 'fix login', `Esc brings the draft back, not "${ask.getValue()}"`);
+  ask.focus(); ask.readInput(); await until(() => ask.__listener, 'the box'); ask.setValue('');
+  v.input.write('\x1b[A'); await until(() => ask.getValue() === '@sara why', `↑ brings the question back, not "${ask.getValue()}"`);
+});
+
+// A character that is no key on a session's row went to that session as a message on Enter: x on
+// a row under my other computer started a turn there with "x". It is not sent: the line under the
+// box says it is no key there and names the row's keys, and more typed after it makes a message.
+test('a lone character that is no key on a session row is not sent on Enter, there or here; the line under the box names the row keys, and more typing makes a message', { timeout: 30000 }, async t => {
+  const T = Date.now(), stamp = minutes => new Date(T - minutes * 60000).toISOString(), id = '44444444-4444-4444-8444-444444444444';
+  const remote = [{ id, machine: SARA, createdAt: stamp(5), lastAt: stamp(5), title: 'Invoice totals fix', state: 'answered', question: null, choices: [], steps: [], entries: [{ role: 'You', at: stamp(5), text: 'Fix the totals' }, { role: 'Opus 5.5', lead: true, at: stamp(5), text: 'Fixed them.' }], approvals: [] }];
+  const p = project(later(t)); environment(t, p.parent);
+  const repo = repository(p.root), at = new Date().toISOString();
+  saveTask(repo, { id: '1', kind: 'conversation', goal: 'Find the tax rates', state: 'answered', worktree: repo.root, base: null, branch: null, createdAt: at, runs: [], reviews: [], responses: [], messages: [{ at, text: 'Find the tax rates' }], sessions: {}, result: null });
+  const peer = fakePeer({ items: [], mine: [{ key: SARA, mine: true, theirs: true }], remote, answer: command => command.type === 'remoteSend' ? { id: command.id } : null }), v = await view(t, { repo, dashboard: true, peer });
+  const board = v.panels.board, ask = v.panels.ask, keys = () => v.panels.keys.getText().trim(), status = () => v.panels.status.getText().replace(/\s+/g, ' '), sentThere = () => peer.sent().filter(row => row.type === 'remoteSend');
+  // A session on my other computer, under its name: x is no key there.
+  await until(() => board.items.map(plainItem).some(row => /Invoice totals fix/.test(row)), 'its row');
+  board.focus(); selectRow(board, /Invoice totals fix/); await until(() => / on @sara-box /.test(ask._label.getText()), 'its box');
+  v.type('x'); await until(() => ask.getValue() === 'x', 'x in the box');
+  await until(() => /^x is no key on this row {2}.*d changes/.test(keys()), `the line names it and the row's keys, not "${keys()}"`);
+  v.type('\r'); await until(() => /x is no key on this row\./.test(status()), 'Enter says so');
+  await new Promise(resolve => setTimeout(resolve, 300)); assert.deepEqual(sentThere(), [], 'nothing went there'); assert.equal(ask.getValue(), 'x', 'it stays in the box');
+  // More typed after it is a message, sent there as always.
+  v.type('yz'); await until(() => ask.getValue() === 'xyz', 'typed on');
+  v.type('\r'); await until(() => sentThere().length === 1, 'sent there');
+  assert.equal(sentThere()[0].text, 'xyz');
+  // A session here: the same.
+  board.focus(); selectRow(board, /Find the tax rates/); await until(() => v.current.session === '1', 'the session here');
+  v.type('k'); await until(() => ask.getValue() === 'k' && /^k is no key on this row {2}.*e rename/.test(keys()), `k is no key there, not "${keys()}"`);
+  v.type('\r'); await until(() => /k is no key on this row\./.test(status()), 'Enter says so');
+  await new Promise(resolve => setTimeout(resolve, 300)); assert.deepEqual(pendingRequests(p.root), [], 'nothing was sent here');
+});
+
 test('at 80 columns the key bar of an open session on a team shows whole hints, none cut in the middle', { timeout: 20000 }, async t => {
   const p = project(later(t)); environment(t, p.parent);
   // In colour, as a terminal shows it: a coloured line as wide as its box loses its last word there.
-  delete process.env.NO_COLOR;
+  delete process.env.ELU_NO_COLOR;
   const repo = repository(p.root), at = new Date().toISOString();
   saveTask(repo, { id: '1', kind: 'conversation', goal: 'Find the tax rates', state: 'answered', worktree: repo.root, base: null, branch: null, createdAt: at, runs: [], reviews: [], responses: [], messages: [{ at, text: 'Find the tax rates' }], sessions: {}, result: null });
   const peer = fakePeer({ items: [] }), v = await view(t, { repo, dashboard: true, peer, columns: 80, rows: 24 });
@@ -1132,6 +1196,7 @@ test('joining with a code made for another computer asks whether it is yours: No
   await send(v, '/join k7qm-x2pd-9fhw'); await answerJoin(v);
   await until(() => rowsOf(v, title).length === 2, 'the question');
   assert.deepEqual(rowsOf(v, title), ['No', 'Yes, both are mine']);
+  await until(() => v.panels.keys.getText().trim() === '↑↓ choose  enter choose  esc no', `its keys, not "${v.panels.keys.getText().trim()}"`);
   await until(() => /Only say yes if you set up both computers\./.test(v.text()), 'the note under the question');
   v.input.write('\r'); await until(() => /Joined Core with sara\..*Not marked as yours\./.test(status()), 'no');
   assert.deepEqual(marked(), []);
@@ -1548,6 +1613,25 @@ test('over a session on my other computer the title says Task: Ctrl+T or a click
   assert.equal(sent('remoteCheck').length, before, 'nothing asked');
   v.input.write('\x1b'); await until(() => !modal(v, 'Task'), 'closed');
 });
+// A teammate's session in a shared project is read here: its Task says whose check it waits
+// for and offers no Check, and /done says only its owner can check it. Only the look is asked.
+test('over a teammate\'s session in a shared project its Task says whose check it waits for, with no Check, and /done says only they can check it', async t => {
+  const { machines } = editableThere({ state: 'unverified' }), p = project(later(t)); environment(t, p.parent);
+  machines[0].theirs = true; machines[0].check = true; machines[0].projects[0].teams = ['team-1']; machines[0].sessions[0].check = true; machines[0].sessions[0].finished = true;
+  const LOOK = { title: 'Make coupons upper case', waits: true, goal: 'Codes compare equal whatever their case.', objectives: null, checklist: [] };
+  const peer = fakePeer({ items: [], mine: [], machines, repoId: SHOP_REPO, answer: command => command.type === 'remoteCheck' ? LOOK : null });
+  peer.teamProjectRoots = () => [{ team: 'team-1', root: repository(p.root).root, name: 'shop' }];
+  const v = await view(t, { repo: repository(p.root), dashboard: true, peer }), board = v.panels.board, status = () => v.panels.status.getText().replace(/\s+/g, ' ');
+  const dialogRows = title => (modal(v, title)?.children.find(child => child.type === 'list')?.items.map(item => item.getText().trimEnd()) ?? []).filter(Boolean);
+  await until(() => board.items.map(plainItem).some(row => /Make coupons upper case/.test(row)), 'the row there');
+  board.focus(); selectRow(board, /Make coupons upper case/); await until(() => /sara's session on @sara-box · read here/.test(v.panels.ask._label.getText()), 'read here');
+  v.panels.ask.focus(); v.input.write('\x14'); await until(() => modal(v, 'Task'), 'its Task');
+  assert.deepEqual(dialogRows('Task').slice(0, 2), ['Make coupons upper case', "It waits for sara's check."]);
+  assert.equal(modal(v, 'Task').children.find(child => child.type === 'button'), undefined, 'no Check');
+  v.input.write('\x1b'); await until(() => !modal(v, 'Task'), 'closed');
+  await send(v, '/done'); await until(() => /It is sara's session: only sara can check it\./.test(status()), 'only sara can check it').catch(error => { throw new Error(`${error.message}: ${status()}`); });
+  assert.deepEqual(peer.sent().filter(row => row.type === 'remoteCheck').map(row => row.look === true), [true], 'only its Task was asked');
+});
 test('/done over a session on my other computer that waits for my check shows its goal and objectives from there, and its answers go there', async t => {
   const { listed, machines, answer } = editableThere(), p = project(later(t)); environment(t, p.parent);
   machines[0].check = true; machines[0].sessions[0].check = true;
@@ -1590,6 +1674,46 @@ test('/done over a session on my other computer that waits for my check shows it
   const before = sent('remoteCheck').length;
   await over(); await send(v, '/done'); await until(() => /@sara-box needs ELU 0\.1\.26 to check its sessions\./.test(status()), 'the version it needs');
   assert.equal(modal(v, 'Check'), undefined); assert.equal(sent('remoteCheck').length, before);
+});
+
+// A new goal of any length goes with /done to a session on my other computer: the daemon is
+// waited for as long as for a message that long, not the 10 s of a short command. One refused
+// there keeps what he typed: the editor opens again with it and says why.
+test('/done over a session on my other computer: a long new goal is waited for as long as a message that long, and a refused one keeps what he typed', async t => {
+  const { listed, machines, answer } = editableThere(), p = project(later(t)); environment(t, p.parent);
+  machines[0].check = true; machines[0].sessions[0].check = true;
+  const VIEW = { title: 'Make coupons upper case', ended: 'published', goal: 'Codes compare equal whatever their case.', objectives: [{ text: 'normalize returns upper case', met: true, evidence: 'npm test: 1 passed' }] };
+  const REFUSED = '@sara-box could not take the new goal: try again.';
+  let refusals = 1;
+  const checked = command => command.type !== 'remoteCheck' ? answer(command) : command.answer ? { answer: command.answer, shown: listed.title } : VIEW;
+  const refuse = command => command.type === 'remoteCheck' && command.answer && refusals > 0 ? (refusals -= 1, REFUSED) : null;
+  const peer = fakePeer({ items: [], mine: [{ key: SARA, mine: true, theirs: true }], machines, repoId: SHOP_REPO, answer: checked, refuse }), v = await view(t, { repo: repository(p.root), dashboard: true, peer });
+  const board = v.panels.board, status = () => v.panels.status.getText().replace(/\s+/g, ' ');
+  // The check's answers are its last list: the text above them is a list of its own.
+  const choose = label => { const list = modal(v, 'Check').children.filter(child => child.type === 'list').at(-1), at = list.items.findIndex(item => item.getText().trimEnd() === label); assert.ok(at >= 0, label); list.select(at); };
+  const title = 'New goal (objectives below it, one per line)', field = () => modal(v, title)?.children.find(child => child.type === 'textarea');
+  const why = () => modal(v, title)?.children.find(child => child.type === 'text' && /Ctrl-S saves/.test(child.getText()))?.getText().replace(/\s+/g, ' ') ?? '';
+  await until(() => board.items.map(plainItem).some(row => /Make coupons upper case/.test(row)), 'the row there');
+  board.focus(); selectRow(board, /Make coupons upper case/); await until(() => /Message the session on @sara-box/.test(v.panels.ask._label.getText()), 'the session there beside the list');
+  await send(v, '/done'); await until(() => modal(v, 'Check'), 'the check');
+  choose('› Keep open, new goal'); v.input.write('\r');
+  await until(() => field()?.__listener, 'the new goal editor');
+  const goal = `Codes compare equal ${'whatever their case and wherever they are typed '.repeat(2500)}THE END`, text = `${goal}\n${Array.from({ length: 12 }, (_, n) => `Objective ${n + 1}`).join('\n')}`;
+  assert.ok(Buffer.byteLength(text) > 120000);
+  field().setValue(text); v.input.write('\x13');
+  // Refused there: the editor again, with every character he typed and why.
+  await until(() => field()?.__listener && why().includes(REFUSED), 'the editor again, saying why').catch(error => { throw new Error(`${error.message}: ${why()} | ${status()}`); });
+  assert.ok(field().getValue() === text, 'what he typed, every character');
+  // Saved again, it goes, and the daemon is waited for as long as for a message that long.
+  v.input.write('\x13');
+  await until(() => /"Make coupons upper case" carries on with the new goal\./.test(status()), 'carried on there').catch(error => { throw new Error(`${error.message}: ${status()}`); });
+  const asked = peer.calls.flatMap((row, index) => row[0] === 'sendPeerCommand' && row[1].type === 'remoteCheck' && row[1].answer ? [index] : []);
+  assert.equal(asked.length, 2, 'sent twice: refused, then taken');
+  for (const index of asked) {
+    assert.ok(peer.calls[index][1].text === text, 'the whole goal');
+    const waited = peer.calls.slice(index).find(row => row[0] === 'awaitCommand');
+    assert.equal(waited[2], 10000 + Math.ceil(Buffer.byteLength(text) / 300));
+  }
 });
 
 // The owner: "archived should only show the ones on my machine, not the other machines". Each
@@ -1849,7 +1973,7 @@ test("in a session open on this computer, my other computer reads as your comput
   assert.deepEqual([asked.to, asked.text], [SARA, 'what runs there?'], 'asked by its key, since the daemon does not know its box name');
   await until(() => /Sent to @sara-box, your computer\. Its reply shows in this thread\./.test(status()), 'and the line after sending');
   await send(v, '/peers');
-  await until(() => /^› 0 of 1 teammates online · 1 of 1 of your computers online: @sara-box \(direct\)$/.test(status().trim()), '/peers counts it apart, under the same name');
+  await until(() => /^› 0 of 1 teammate online · 1 of 1 computer of yours online: @sara-box \(direct\)$/.test(status().trim()), '/peers counts it apart, under the same name');
 });
 
 for (const [columns, rows] of [[140, 50], [80, 24]]) test(`at ${columns}x${rows} the box label of a message to my other computer fits the box, and gives up its last part before it would be cut`, async t => {
@@ -1878,9 +2002,11 @@ for (const [columns, rows] of [[160, 40], [140, 50], [80, 24]]) test(`at ${colum
   // Beside the list on a small screen a long line is cut at a word after two rows: its first sentence shows whole.
   await until(() => /Sent to @sara-box, your computer\. Its reply shows in this thread\./.test(status()), 'the line after sending');
   await send(v, '/peers');
-  await until(() => (columns === 80 ? /^› 0 of 1 teammates online · 1 of 1 of your computers online: @sara-box \(direct\)/ : /^› 0 of 1 teammates online · 1 of 1 of your computers online: @sara-box \(direct\) · waiting for @sara-box to agree$/).test(status().trim()), '/peers says which one waits');
+  // One teammate and one computer of mine: each counted in the singular.
+  await until(() => (columns === 80 ? /^› 0 of 1 teammate online · 1 of 1 computer of yours online: @sara-box \(direct\)/ : /^› 0 of 1 teammate online · 1 of 1 computer of yours online: @sara-box \(direct\) · waiting for @sara-box to agree$/).test(status().trim()), '/peers says which one waits');
   await send(v, '/mine');
-  await until(() => /^› @sara-box: waiting for it to mark this machine too/.test(status().trim()), '/mine, as before');
+  // In the word the rows, the dialog and the line use.
+  await until(() => /^› @sara-box: waiting for it to agree$/.test(status().trim()), '/mine says agree');
 });
 
 // The new session box over a computer of mine that has not agreed: where the box is narrow, it
@@ -1961,7 +2087,7 @@ test('in Chats my other computer is yours in the bar, the box, its screen, the t
   assert.equal(peer.sent().at(-1).to, SARA);
   // /peers counts it apart; /invite lists it as yours and adds it by the name shown.
   await send(v, '/peers');
-  await until(() => /^› 0 of 1 teammates online · 1 of 1 of your computers online: @sara-box \(direct\)$/.test(status().trim()), '/peers');
+  await until(() => /^› 0 of 1 teammate online · 1 of 1 computer of yours online: @sara-box \(direct\)$/.test(status().trim()), '/peers');
   await openRow(v, /# ops/, '#ops');
   await type('/invite '); await until(() => rows().some(row => /^@sara-box add to #ops · your computer · online$/.test(row)), '/invite lists it as yours');
   await send(v, '/invite @sara-box');
@@ -1996,13 +2122,15 @@ test('in Chats a computer of mine that has not marked this one back says it wait
   const label = () => ask._label.getText(), status = () => v.panels.status.getText(), body = title => modal(v, title).children.find(child => child.options?.scrollable).getText();
   const rows = () => palette.hidden ? [] : palette.items.map(item => item.getText().replace(/\s+/g, ' ').trim());
   // Not mine yet, so the row says whose agreement it waits for in place of yours, in the words the bar has room for.
-  await until(() => bar.items.some(item => /^● @sara-box\s+(waiting for @sara-box to agree( · run \/mine @ana there)?|waiting for it to agree)$/.test(plainItem(item).trimEnd())), 'its row in the bar');
+  await until(() => bar.items.some(item => /^● @sara-box\s+waiting for it to agree( · run \/mine @ana there)?$/.test(plainItem(item).trimEnd())), 'its row in the bar');
   // A bar with the room for it, as under 100 columns, says it whole.
   const member = (waiting, online = true, self = undefined) => ({ status: { key: ME, teams: [{ id: 'team-1', name: 'Core', members: [{ key: ME, name: 'ana' }, { key: SARA, name: 'sara-box', online, path: 'direct', mine: true, waiting, self }] }] }, items: [] });
   const drawn = (frame, width) => visible(chatBar(frame, width, false).find(row => row.value?.type === 'member').line).replace(/\s+/g, ' ').trim();
-  assert.equal(drawn(member(true, true, 'ana'), 78), '● @sara-box waiting for @sara-box to agree · run /mine @ana there');
-  assert.equal(drawn(member(true, true, 'ana'), 60), '● @sara-box waiting for @sara-box to agree');
-  assert.equal(drawn(member(true), 78), '● @sara-box waiting for @sara-box to agree');
+  // The row starts with the computer's name, so what it waits for says "it" (at 80x24 the bar is 78 wide).
+  assert.equal(drawn(member(true, true, 'ana'), 78), '● @sara-box waiting for it to agree · run /mine @ana there');
+  assert.equal(drawn(member(true, true, 'ana'), 60), '● @sara-box waiting for it to agree · run /mine @ana there');
+  assert.equal(drawn(member(true, true, 'ana'), 50), '● @sara-box waiting for it to agree');
+  assert.equal(drawn(member(true), 78), '● @sara-box waiting for it to agree');
   assert.equal(drawn(member(true), 40), '● @sara-box waiting for it to agree');
   assert.equal(drawn(member(true), 36), '● @sara-box waiting for it to agree', 'beside the name alone, rather than fewer words in its column');
   assert.equal(drawn(member(true), 30), '● @sara-box not agreed yet');
@@ -2076,7 +2204,8 @@ test('at 80x24 the row of a computer that says it is mine stays in sight under t
   const onScreen = pattern => v.lines().some(line => pattern.test(line));
   await until(() => bar.items.some(item => /says it is yours$/.test(plainItem(item).trimEnd())), 'its row');
   selectRow(bar, /says it is yours/); bar.focus();
-  await until(() => /^enter agree or write/.test(keys()), 'the key bar on its row');
+  // h and o work on its row, as its pane says: the bar names them, and what does not fit at 80 columns is left out from the end.
+  await until(() => keys() === 'enter agree or write  t trust  h hold replies  o auto-continue  tab threads', `the key bar on its row, not "${keys()}"`);
   await until(() => /says it is your computer\. To agree: Enter on its row in Chats, or \/mine @spare-laptop-in-the-back-room-01\./.test(status().replace(/\s+/g, ' ')), 'the line that says so', 8000);
   await until(() => onScreen(/@spare-laptop-in-the-back-room-01\s+says it is yours/), 'its row in sight under that line', 3000);
   // Its dialog: inside the screen, every line of it shown, none cut.
@@ -2100,18 +2229,21 @@ test('in Chats Enter on a computer that says it is mine asks first, naming it an
   const peer = fakePeer({ items: [], mine, answer: command => command.type === 'mine' ? { both: true } : null });
   const { v } = await teamView(t, { peer }), [bar] = v.panels.teamLists, status = () => v.panels.status.getText(), keys = () => v.panels.keys.getText().trim();
   // Li is on 0.1.25: another computer of mine said it is mine, and it cannot take that until it updates.
-  await until(() => bar.items.some(item => /^○ @li\s+update ELU on @li$/.test(plainItem(item).trimEnd())), 'its row says to update ELU there');
+  await until(() => bar.items.some(item => /^○ @li\s+update ELU there$/.test(plainItem(item).trimEnd())), 'its row says to update ELU there');
   const member = older => ({ status: { key: ME, teams: [{ id: 'team-1', name: 'Core', members: [{ key: ME, name: 'ana' }, { key: LI, name: 'li', online: true, path: 'direct', mine: true, waiting: true, self: 'ana', older }] }] }, items: [] });
   const drawn = (frame, width) => visible(chatBar(frame, width, false).find(row => row.value?.type === 'member').line).replace(/\s+/g, ' ').trim();
-  assert.equal(drawn(member(true), 78), '● @li update ELU on @li');
-  assert.equal(drawn(member(false), 78), '● @li waiting for @li to agree · run /mine @ana there', 'one marked by hand waits as before');
+  assert.equal(drawn(member(true), 78), '● @li update ELU there');
+  assert.equal(drawn(member(false), 78), '● @li waiting for it to agree · run /mine @ana there', 'one marked by hand waits as before');
   // Enter on the row that says it is yours asks first: any teammate's computer can say so, and
   // agreeing gives it all of the owner's computers.
   await until(() => bar.items.some(item => /^● @sara-box\s+says it is yours$/.test(plainItem(item).trimEnd())), 'its row says it is yours');
   selectRow(bar, /@sara-box/); bar.focus();
-  await until(() => /^enter agree or write/.test(keys()), 'the key bar says what Enter does');
+  await until(() => keys() === 'enter agree or write  t trust  h hold replies  o auto-continue  tab threads  n new channel', `the key bar says what Enter does, and h and o, not "${keys()}"`);
   const title = 'Is @sara-box your computer?', marked = () => peer.sent().some(command => command.type === 'mine');
   v.input.write('\r'); await until(() => modal(v, title), 'it asks first');
+  // Its keys are y and w; Enter and Esc agree to nothing, and its field names no Enter.
+  await until(() => keys() === 'y agrees  w writes to it instead  esc cancel', `the keys of the dialog, not "${keys()}"`);
+  assert.equal(modal(v, title).children.find(child => child.type === 'textbox')._label.getText().trim(), 'Press y or w / Esc cancels', 'its text fits: no page keys');
   assert.match(dialogBody(v, title).replace(/\s+/g, ' '), /@sara-box says it is yours\. If you agree, it can start, read and change sessions and Kanban here and on all your other computers\. y agrees · w writes to it instead/);
   assert.equal(marked(), false, 'nothing is marked before y');
   // Enter again, Esc, and a click on the row that is selected agree to nothing.
@@ -2185,6 +2317,44 @@ test('/access says a message from my other computer follows the setting too, and
     assert.doesNotMatch(notes(v, 'What teammates can do here'), /your computer/);
     await choose(v, 'What teammates can do here', /^Auto/); await closeDialog(v, 'Rules for teammates', '');
   });
+});
+
+// The owner's other computer heads this one's sessions with its name (On laptop-one · online).
+// /computer says that name here and how to change it, and /computer name changes it at once;
+// the other computers hear the new one from the daemon within a tick (test/peer-e2e.test.mjs).
+// A bot's name is refused too: on the other computer @name finds the bot first, never this one.
+for (const [columns, rows] of [[140, 50], [80, 24]]) test(`at ${columns}x${rows} /computer says what this computer is called and how to rename it, /computer name renames it at once, and a bad or taken name or a bot's name is refused in one line`, async t => {
+  const p = project(later(t)); environment(t, p.parent); saveBot({ name: 'sec', instructions: 'Check for secrets.' });
+  const peer = fakePeer({ items: [], mine: [{ key: SARA, mine: true, theirs: true }], remoteBots: [{ name: 'deploy', about: 'Ships it' }] }), v = await view(t, { repo: repository(p.root), peer, columns, rows });
+  const status = () => v.panels.status.getText().replace(/\s+/g, ' ').trim(), host = defaultBox();
+  const says = async (typed, line) => { await send(v, typed); await until(() => status() === `› ${line}`, `${typed}: ${line}`).catch(error => { throw new Error(`${error.message}\nThe status: ${status()}`); }); };
+  // At 80 columns the status is narrow: each line says it in fewer words.
+  const wide = columns > 80, renamed = name => wide ? `This computer is @${name} now. Your other computers and teammates see it within seconds.` : `This computer is @${name} now; the others see it within seconds.`;
+  await says('/computer', wide ? `This computer is @${host}, from its host name. /computer name NAME renames it.` : `This computer is @${host}. /computer name NAME renames it.`);
+  await says('/computer name studio', renamed('studio'));
+  assert.equal(peerSettings().box, 'studio'); assert.equal(peerBox(), 'studio');
+  await says('/computer', wide ? 'This computer is @studio. /computer name NAME renames it, or default for its host name.' : 'This computer is @studio. /computer name NAME renames it.');
+  const RULE = "A computer's name is 1 to 32 letters, digits, dots, - or _.";
+  for (const [typed, line] of [['/computer name my box', RULE], [`/computer name ${'x'.repeat(33)}`, RULE], ['/computer name sara-box', 'Another computer on your team is called sara-box.'], ['/computer name model', '@model already means something in ELU. Choose another name.'],
+    // Bots: one ELU comes with, one saved here, one the other computer shares.
+    ['/computer name qa', '@qa is the name of a bot. Choose another name.'], ['/computer name Reviewer', '@reviewer is the name of a bot. Choose another name.'], ['/computer name sec', '@sec is the name of a bot. Choose another name.'], ['/computer name deploy', '@deploy is the name of a bot. Choose another name.'], ['/computer studio', 'Use /computer name NAME, or /computer name default.']]) {
+    await send(v, typed); await until(() => status().includes(line), `${typed}: ${line}`);
+  }
+  assert.equal(peerBox(), 'studio', 'a refused name changes nothing');
+  await says('/computer name @box-one', renamed('box-one'));
+  await says('/computer name default', `This computer goes by its host name again: @${host}.`);
+  assert.equal(peerSettings().box, null); assert.equal(peerBox(), host);
+  await says('/computer name studio', renamed('studio'));
+  // Typed in the box: Enter on /computer name fills it in and offers default, and Enter on that gives the host name back.
+  const ask = v.panels.ask; ask.focus(); ask.readInput(); await until(() => ask.__listener, 'message box'); ask.clearValue(); v.input.write('/computer name');
+  await until(() => v.lines().some(line => /name\s+Rename this computer/.test(line)), 'name offered');
+  v.input.write('\r'); await until(() => ask.getValue() === '/computer name ', 'filled in');
+  await until(() => v.lines().some(line => /default\s+Go back to its host name/.test(line)), 'default offered');
+  v.input.write('\r'); await until(() => status() === `› This computer goes by its host name again: @${host}.`, 'back to the host name');
+  assert.equal(peerSettings().box, null);
+  // The command list names it.
+  ask.clearValue(); v.input.write('/comp');
+  await until(() => v.lines().some(line => /\/computer\s+This computer's name/.test(line)), 'the command list');
 });
 
 test('Sessions names a message from my other computer by the name it shows under everywhere, and /mine names no teammate for a name nobody has', async t => {
@@ -2308,6 +2478,30 @@ test('Sessions lists every session of my other computer in this repository under
   assert.equal(peer.sent().find(row => row.type === 'remoteWatch').to, SARA);
 });
 
+// A session of my other computer in a project of that computer that is not here shows under
+// its project's sub-heading: its row does not say the project again, so its name has the room.
+// One under its computer's heading, beside a session here, still says its project.
+test("a session of my other computer under its project's sub-heading leaves the project out of its row, at 140x50 and at 80x24", async t => {
+  const now = Date.now(), at = minutes => new Date(now - minutes * 60000).toISOString(), SHOP = 'e'.repeat(64), p1 = '1'.repeat(16), p3 = '3'.repeat(16);
+  const session = (ref, title, minutes) => ({ id: `${ref.slice(-1)}1111111-1111-4111-8111-11111111111${ref.slice(-1)}`, ref, project: ref.split(':')[0], title, state: 'answered', at: at(minutes), createdAt: at(minutes + 1), approvals: [], by: 'you', who: null });
+  const machines = [{ key: SARA, listedAt: at(0), older: false, projects: [{ id: p1, name: 'shop', repoId: SHOP, home: false }, { id: p3, name: 'notes', repoId: null, home: false }],
+    sessions: [session(`${p1}:1`, 'Typed there by hand', 5), session(`${p3}:6`, 'Tidy the notes index and the links between its pages', 19)] }];
+  const p = project(later(t)); environment(t, p.parent); liveTask(p.root, { id: '1', goal: 'Fix the cart total here', state: 'answered' });
+  const peer = fakePeer({ items: [], mine: [{ key: SARA, mine: true, theirs: true }], machines, repoId: SHOP }), v = await view(t, { columns: 140, rows: 50, repo: repository(p.root), dashboard: true, peer });
+  const board = v.panels.board, rows = () => board.items.map(plainItem).map(row => row.trim());
+  for (const [columns, lines] of [[140, 50], [80, 24]]) {
+    v.output.columns = columns; v.output.rows = lines; v.output.emit('resize');
+    await until(() => v.current.screen.width === columns && rows().some(row => /^notes 1$/.test(row)), `the sub-heading at ${columns} columns`);
+    const shown = rows(), under = shown[shown.findIndex(row => /^notes 1$/.test(row)) + 1];
+    assert.match(under, /^✓ Tidy the notes/, `the row under it at ${columns} columns`);
+    assert.doesNotMatch(under, /\snotes\s+\S+$/, `no project column at ${columns} columns: "${under}"`);
+    if (columns === 140) {
+      assert.match(under, /^✓ Tidy the notes index[\w ]*…\s+19m$/, `more of its name, where the project was: "${under}"`);
+      assert.match(shown.find(row => /Typed there by hand/.test(row)), /\sshop\s+5m$/, 'one under its computer\'s heading says its project');
+    }
+  }
+});
+
 // The home folder there holds sessions of many repositories. Its newest works in this project's
 // repository, so Sessions lists it under that computer already; Projects counts only the other.
 // Opening the home folder from Projects puts the cursor on that other one, under its own heading.
@@ -2409,6 +2603,25 @@ test('Projects lists a project a teammate shares that is not on this computer: E
   assert.ok(fs.existsSync(path.join(here, '.git')));
   await until(() => rows().length === 2 && rows().some(row => /^● Shop\s/.test(row)), 'one row for it: the project here');
   assert.ok(!rows().some(row => /shared by/.test(row)), 'never a second row for the same project');
+});
+
+// No length of ours on what the owner sends: a long spec typed on a shared project's team board
+// goes to whoever shares it whole, as a long message in Chats goes (lib/peer/asks.mjs sends one
+// too long for a line on the link in pieces ahead of its message).
+test("a message of any length on a shared project's team board goes to whoever shares it, whole", async t => {
+  const p = project(later(t)); environment(t, p.parent);
+  const peer = sharing(fakePeer({ items: [] }), [sharedRow()]);
+  const v = await view(t, { repo: repository(p.root), dashboard: true, peer }), panels = v.panels, list = panels.projectsList, status = () => panels.status.getText();
+  await send(v, '/projects'); await until(() => v.current.view === 'projects' && list.items.some(item => /shared by @sara/.test(plainItem(item))), 'the shared project');
+  list.focus(); selectRow(list, /shared by @sara/); v.input.write('\r');
+  await until(() => v.current.view === 'kanban' && /Message @sara/.test(panels.ask._label.getText()), 'its team board');
+  const spec = `Spec for the cart page.\n${'Every line of this spec matters to the cart. '.repeat(460)}THE END`;
+  assert.ok(spec.length > 20000);
+  await send(v, spec);
+  await until(() => peer.sent().some(row => row.type === 'ask') || /Keep it under/.test(status()), 'the message, or a refusal');
+  assert.doesNotMatch(status(), /Keep it under/);
+  assert.deepEqual(peer.sent().filter(row => row.type === 'ask'), [{ type: 'ask', to: SARA, project: 'shop', text: spec }]);
+  await until(() => /Sent to @sara\./.test(status()), 'what happened to it');
 });
 
 test('a shared project with no git address says how to get it here, the board of one that is no longer shared closes, and its row fits at 80 columns', async t => {
@@ -2774,7 +2987,9 @@ test("PgUp and PgDn page a teammate's thread in its dialog a page at a time, as 
     await until(() => modal(v, title) && /Thread line 1\b/.test(body().getText()) && field().__listener, `the thread, ${where}`);
     const text = body(), page = text.height - text.iheight - 1;
     assert.equal(text.childBase, 0, 'it opens at its first message'); assert.ok(text.getScrollHeight() > 3 * text.height, 'more than three pages');
-    assert.match(field()._label.getText(), /Enter submits \/ Esc cancels \/ PgUp PgDn page/);
+    assert.match(field()._label.getText(), /Press y, w, n or Enter \/ Esc cancels \/ PgUp PgDn page/);
+    // Its keys, with the page keys where they fit.
+    await until(() => /^y start it {2}w pick the mode {2}n decline {2}enter start it {2}esc cancel(?: {2}pgup pgdn page)?$/.test(v.panels.keys.getText().trim()), `the keys of the thread, ${where}`);
     v.input.write(PGDN); await until(() => text.childBase === page, `a page down, ${where}`);
     v.input.write(PGDN); await until(() => text.childBase === 2 * page, `another page down, ${where}`);
     v.input.write(PGUP); await until(() => text.childBase === page, `a page up, ${where}`);
@@ -3874,6 +4089,8 @@ test('Kanban shows every session teammates run in the same repository, with who 
   assert.match(column(1)[0], /^Fix the cart total  @sara · sara-box/); assert.match(column(2)[0], /^Which tax rate\?  @li · sara-box/);
   assert.deepEqual([label(0), label(1), label(2), label(3)], ['To do 0', 'In progress 1', 'Needs you 1', 'Done 0']);
   await until(() => !panels.kanbanPick.hidden && /Board: acme\/web ▾/.test(panels.kanbanPick.getText()), 'the board picker');
+  // Each board goes by its repository, so the title beside Board ▾ names the project.
+  assert.ok(v.current.snapshot.name); assert.equal(panels.header.getText().trim(), v.current.snapshot.name);
   // Read-only: Enter reads it, no key moves it.
   panels.kanbanLists[1].focus(); panels.kanbanLists[1].select(0);
   await until(() => /@sara's session on sara-box · In progress · Task: Fix the login redirect · read-only/.test(panels.status.getText()), 'the card\'s line');
@@ -3935,20 +4152,37 @@ test('Kanban on a computer with no project opens the board of a project on my ot
   const item = (key, column, title, extra = {}) => ({ key, column, title, detail: '', first: title, at: ago(2), ...extra });
   const boards = {
     [ELU]: { name: 'ELU', columns: [{ column: 'todo', name: 'To do', items: [item('card-1234abcd', 'todo', 'Write the release notes', { card: { id: 'card-1234abcd', column: 'todo', text: 'Write the release notes' } })] }, { column: 'progress', name: 'In progress', items: [] },
-      { column: 'needs', name: 'Needs you', items: [item('task-1', 'needs', 'Fix the login redirect', { ref: `${ELU}:1`, state: 'needs_input', detail: 'needs you' })] }, { column: 'done', name: 'Done', items: [item('card-9876abcd', 'done', 'Update the logo', { card: { id: 'card-9876abcd', column: 'done', text: 'Update the logo' } })] }] },
+      // One that waits for my check there is sent as one (check), and reads so here as on its own board.
+      { column: 'needs', name: 'Needs you', items: [item('task-1', 'needs', 'Fix the login redirect', { ref: `${ELU}:1`, state: 'needs_input', detail: 'needs you' }), item('task-3', 'needs', 'Tidy the docs index before the release goes out', { ref: `${ELU}:3`, state: 'answered', detail: 'answered · check it', check: true })] }, { column: 'done', name: 'Done', items: [item('card-9876abcd', 'done', 'Update the logo', { card: { id: 'card-9876abcd', column: 'done', text: 'Update the logo' } })] }] },
     [API]: { name: 'api', columns: [{ column: 'todo', name: 'To do', items: [] }, { column: 'progress', name: 'In progress', items: [] }, { column: 'needs', name: 'Needs you', items: [] }, { column: 'done', name: 'Done', items: [item('task-2', 'done', 'Speed up search', { ref: `${API}:2`, state: 'answered' })] }] },
   };
+  let actOlder = false;
   const checked = command => command.answer ? { answer: command.answer, shown: 'Fix the login redirect' } : { title: 'Fix the login redirect', ended: 'needs you', first: 'Fix the login redirect' };
-  const peer = fakePeer({ items: [], mine: [{ key: SARA, mine: true, theirs: true }], machines, answer: command => command.type === 'remoteBoard' ? boards[command.project] : command.type === 'remoteBoardAct' ? { said: 'Started. It moves to Needs you when the model stops.' } : command.type === 'remoteCheck' ? checked(command) : undefined });
+  const peer = fakePeer({ items: [], mine: [{ key: SARA, mine: true, theirs: true }], machines, answer: command => command.type === 'remoteBoard' ? boards[command.project] : command.type === 'remoteBoardAct' ? actOlder ? { older: true } : { said: 'Started. It moves to Needs you when the model stops.' } : command.type === 'remoteCheck' ? checked(command) : undefined });
   const v = await view(t, { peer, startDirectory: folder }), panels = v.panels;
   const column = index => panels.kanbanLists[index].items.map(row => plainItem(row).trimEnd());
   await send(v, '/kanban');
   // It opens on its own on the project there worked in last, read from that computer.
   await until(() => v.current.view === 'kanban' && column(0)[0] === 'Write the release notes' && /^Fix the login redirect/.test(column(2)[0] ?? ''), 'the board from there');
   assert.ok(peer.sent().some(command => command.type === 'remoteBoard' && command.to === SARA && command.project === ELU), 'read from there');
-  assert.match(panels.header.getText(), /ELU {2}· {2}on your computer @sara-box/);
-  await until(() => /ELU is on your computer @sara-box\. What you change here changes there\./.test(v.text()), 'the line under it');
+  // Where it is, said twice and spelled one way: in the title, and in the line under the board.
+  // Board ▾ and the box name it by its project, as they name a project here; the title beside
+  // Board ▾ does not name it again.
+  await until(() => panels.header.getText().trim() === 'on your computer @sara-box', 'the title says where, not the project again');
+  assert.equal(v.lines().find(line => line.includes('Board: ELU ▾')).match(/ELU/g).length, 1, 'the project once in that row');
+  await until(() => /What you change here changes on @sara-box\./.test(v.text()), 'the line under it');
+  assert.equal(panels.kanbanPick.getText().trim(), 'Board: ELU ▾');
+  assert.equal(panels.ask._label.getText().trim(), 'Add a task to To do · ELU');
+  assert.equal(v.text().match(/sara-box/g).length, 2, 'said twice');
+  assert.doesNotMatch(v.text(), /on sara-box|ELU is on/);
   assert.equal(panels.kanbanTeam._label.getText().trim(), 'Your computer', 'it is no team board');
+  // Its title is cut for "check it", as its own board cuts it (fitCheckCard).
+  assert.match(column(2)[1] ?? '', /^Tidy the docs index[\w ]*… {2}check it$/);
+  v.output.columns = 80; v.output.rows = 24; v.output.emit('resize');
+  await until(() => v.current.screen.width === 80, '80 columns');
+  assert.equal(panels.kanbanPick.getText().trim(), 'Board: ELU ▾');
+  assert.ok(/What you change here changes on @sara-box\./.test(v.text()), 'the line at 80 columns');
+  v.output.columns = 160; v.output.rows = 40; v.output.emit('resize'); await until(() => v.current.screen.width === 160, '160 columns');
   assert.equal(panels.kanbanOff.hidden, true);
   // Shift+→ on the To do card starts it there.
   panels.kanbanLists[0].focus(); panels.kanbanLists[0].select(0); v.input.write('\x1b[1;2C');
@@ -3991,13 +4225,18 @@ test('Kanban on a computer with no project opens the board of a project on my ot
   // The picker lists each project there by its computer.
   panels.kanbanPick.focus(); panels.kanbanPick.emit('press');
   await until(() => modal(v, 'Kanban board'), 'the picker');
-  assert.deepEqual(rowsOf(v, 'Kanban board').map(line => line.trim()), ['ELU on sara-box', 'api on sara-box']);
+  assert.deepEqual(rowsOf(v, 'Kanban board').map(line => line.trim()), ['ELU on @sara-box', 'api on @sara-box']);
   v.input.write('\x1b[B'); v.input.write('\r');
   await until(() => column(3)[0]?.startsWith('Speed up search') && column(0).length === 0, 'the api board');
+  assert.equal(panels.kanbanPick.getText().trim(), 'Board: api ▾');
   assert.ok(peer.sent().some(command => command.type === 'remoteBoard' && command.project === API));
-  // A computer on ELU 0.1.25 sends no board: Kanban says to update ELU there.
+  // A change that computer refuses as too old says so with its @name, as the title spells it.
+  actOlder = true; panels.kanbanLists[3].focus(); v.input.write('n'); await closeDialog(v, 'New task', 'Tidy the API docs');
+  await until(() => /Update ELU on @sara-box to change its board from here\./.test(panels.status.getText()), 'the older act');
+  // A computer on ELU 0.1.25 sends no board: Kanban says to update ELU there, with its @name.
   delete machines[0].board;
-  await until(() => /Update ELU on sara-box to see its board here\./.test(v.text()) && column(3).length === 0, 'the older note', 8000);
+  await until(() => /Update ELU on @sara-box to see its board here\./.test(v.text()) && column(3).length === 0, 'the older note', 8000);
+  assert.doesNotMatch(v.text(), /on sara-box/);
 });
 
 test('Kanban that opened a project of my other computer by itself shows the project made here once there is one, and writes to it here', async t => {
@@ -4020,8 +4259,10 @@ test('Kanban that opened a project of my other computer by itself shows the proj
   await until(() => v.current.controller && !modal(v, 'New project'), 'made and open');
   // Kanban is its board now.
   await send(v, '/kanban');
-  await until(() => v.current.view === 'kanban' && /^notes/.test(panels.header.getText().trim()) && column(0).length === 0, 'the board of the project here');
-  assert.doesNotMatch(panels.header.getText(), /on your computer/);
+  await until(() => v.current.view === 'kanban' && panels.kanbanPick.getText().trim() === 'Board: notes ▾' && column(0).length === 0, 'the board of the project here');
+  // Board ▾ names this project's board by the project: the title beside it does not say it again.
+  assert.equal(panels.header.getText().trim(), '');
+  assert.equal(v.lines().find(line => line.includes('Board: notes ▾')).match(/notes/g).length, 1, 'the project once in that row');
   // Writing in the box adds to To do here, not there.
   await send(v, 'Draft the index');
   await until(() => readBoard(v.current.controller.repo).cards.some(card => card.text === 'Draft the index'), 'added here');
@@ -4029,7 +4270,9 @@ test('Kanban that opened a project of my other computer by itself shows the proj
   // Board ▾ still offers the one there, after this project's own (it has no repository yet).
   panels.kanbanPick.focus(); panels.kanbanPick.emit('press');
   await until(() => modal(v, 'Kanban board'), 'the picker');
-  assert.deepEqual(rowsOf(v, 'Kanban board').map(line => line.trim()), ['No repository', 'ELU on sara-box']);
+  // This project's one board goes by the project's name, as the one there does.
+  assert.deepEqual(rowsOf(v, 'Kanban board').map(line => line.trim()), ['notes', 'ELU on @sara-box']);
+  assert.equal(panels.kanbanPick.getText().trim(), 'Board: notes ▾');
   v.input.write('\x1b');
 });
 
@@ -4472,48 +4715,115 @@ test('at 80x24 the line that says a session’s changes are not here yet is whol
   assert.ok(rows.every(row => !row.includes('▌') && row.length <= changes.width - 2));
 });
 
-test("a project's Linked row shows its value alone; Enter offers the project of the same name on my other computer first, another or none can be chosen, an older computer there is named when Enter is pressed, and a text both changed is said once", { timeout: 30000 }, async t => {
+test("a project's settings say which other computers have it, read only, with nothing to link; with none there is no row; a text both changed is said once", { timeout: 30000 }, async t => {
   const p = project(later(t)); environment(t, p.parent);
   const repo = repository(p.root), there = [{ id: '1'.repeat(16), name: 'sample app', home: true }, { id: '2'.repeat(16), name: 'shop', home: false }], said = [];
   const peer = fakePeer({ items: [], mine: [{ key: SARA, mine: true, theirs: true }] });
-  let links = [{ key: SARA, older: false, linked: null, same: { id: there[0].id, name: 'sample app' }, projects: there }];
+  let links = [{ key: SARA, older: false, linked: { id: there[0].id, name: 'sample app' }, same: null, projects: there }];
   peer.projectLinks = () => links;
-  peer.linkProject = (root, key, id) => { peer.calls.push(['linkProject', root, key, id]); const row = there.find(item => item.id === id); links = [{ ...links[0], linked: row ? { id: row.id, name: row.name } : null, same: row ? null : { id: there[0].id, name: 'sample app' } }]; };
   peer.notesSaid = after => said.filter(row => row.at > after);
   const v = await view(t, { repo, dashboard: true, peer }), list = v.panels.projectsList, status = () => v.panels.status.getText(), title = 'Project sample app';
-  const row = () => rowsOf(v, title).map(text => text.trimEnd()).find(text => /^Linked/.test(text));
+  const row = () => rowsOf(v, title).map(text => text.trimEnd()).find(text => /^Also on/.test(text));
   await send(v, '/projects'); await until(() => v.current.view === 'projects' && list.items.some(item => /sample app/.test(plainItem(item))), 'Projects');
   list.focus(); selectRow(list, /sample app/); v.input.write('\r');
   await until(() => modal(v, title) && row(), 'its settings');
-  rowsOf(v, title).forEach((text, n) => assert.match(text, [/^● Active project/, /^Instructions/, /^Context/, /^Linked/, /^Default model/, /^This computer/, /^Archive/][n]));
-  // The value alone: what Enter offers is in the choice it opens, with the project of the same name under the cursor.
-  assert.equal(row(), 'Linked        not linked');
-  await choose(v, title, /^Linked/);
-  await until(() => rowsOf(v, 'Link sample app').length, 'the offer');
-  assert.deepEqual(rowsOf(v, 'Link sample app').map(text => text.trim()), ['sample app on sara-box', 'shop on sara-box', 'Not linked']);
-  assert.equal(modal(v, 'Link sample app').children.find(child => child.type === 'list').selected, 0);
+  rowsOf(v, title).forEach((text, n) => assert.match(text, [/^● Active project/, /^Instructions/, /^Context/, /^Also on/, /^Default model/, /^This computer/, /^Archive/][n]));
+  assert.equal(row(), 'Also on       @sara-box');
+  assert.ok(!rowsOf(v, title).some(text => /link/i.test(text)));
+  // Enter on it only says what it means: nothing to choose, nothing changed.
+  await choose(v, title, /^Also on/);
+  await until(() => /sample app is the same project on @sara-box: the same instructions, context and lessons\./.test(status()), 'what it means');
   assert.deepEqual(peer.calls.filter(call => call[0] === 'linkProject'), []);
-  v.input.write('\r');
-  await until(() => /Linked to sample app on sara-box\./.test(status()), 'linked');
-  assert.deepEqual(peer.calls.filter(call => call[0] === 'linkProject'), [['linkProject', repo.root, SARA, there[0].id]]);
-  await until(() => row() === 'Linked        sample app on sara-box', 'the row says which');
-  // Enter again: each project there, then none, with the linked one under the cursor.
-  await choose(v, title, /^Linked/);
-  await until(() => rowsOf(v, 'Link sample app').length, 'the choice');
-  assert.deepEqual(rowsOf(v, 'Link sample app').map(text => text.trim()), ['sample app on sara-box', 'shop on sara-box', 'Not linked']);
-  assert.equal(modal(v, 'Link sample app').children.find(child => child.type === 'list').selected, 0);
-  await choose(v, 'Link sample app', /^Not linked/);
-  await until(() => /Not linked to sara-box\./.test(status()) && row() === 'Linked        not linked', 'unlinked');
-  assert.deepEqual(peer.calls.filter(call => call[0] === 'linkProject').at(-1), ['linkProject', repo.root, SARA, null]);
-  // ELU there is older: the row says not linked, and Enter says what to do, naming it.
+  // On no other computer (one there on an older ELU says none): no row.
   links = [{ key: SARA, older: true, linked: null, same: null, projects: [] }];
   v.input.write('\x1b'); await until(() => !modal(v, title), 'closed');
   list.focus(); selectRow(list, /sample app/); v.input.write('\r');
-  await until(() => row() === 'Linked        not linked', 'the row with an older computer there');
-  await choose(v, title, /^Linked/);
-  await until(() => /Update ELU on sara-box to share instructions and context with it\./.test(status()), 'what to do');
+  await until(() => modal(v, title) && rowsOf(v, title).some(text => /^Default model/.test(text)), 'its settings again');
+  assert.equal(row(), undefined);
   v.input.write('\x1b'); await until(() => !modal(v, title), 'closed again');
   // A text both computers changed: said once, with where the other one is kept.
   said.push({ at: Date.now(), text: 'Instructions of sample app changed here and on @sara-box: the newer, from @sara-box, is in use. The other is in ~/sample app/.elu-code/history/instructions-2026-11-14-101500.md.' });
   await until(() => status().includes('Instructions of sample app changed here and on @sara-box'), 'said');
+});
+
+// The owner's case: his Mac's ELU, a session on his devbox open, and a CleanShot capture
+// dragged onto the terminal, which pastes its path bare with the spaces escaped. Two homes,
+// one for each computer, marked as each other's; the daemons are joined by calls, each side's
+// methods running in its own home (test/peer-files.test.mjs).
+test('a picture dropped over a session on my other computer, its path first with spaces escaped, shows in the box at once and goes there with the message, never Unknown command; with words after it and quoted too', { timeout: 60000 }, async t => {
+  const PNG = Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex'), at = new Date().toISOString();
+  const team = makeTeam(t, { founderName: 'ana', memberName: 'box' }), laptop = team.founder, devbox = team.member;
+  const home = temp(later(t)), shot = path.join(home, 'Library', 'Application Support', 'Shots', 'shot 1.png'), dropped = shot.replaceAll(' ', '\\ ');
+  const values = { HOME: home, XDG_DATA_HOME: path.join(home, 'data'), XDG_CONFIG_HOME: laptop.home, NO_COLOR: '1', TERM: 'xterm-256color' }, previous = Object.fromEntries(Object.keys(values).map(key => [key, process.env[key]]));
+  owned(t).files.push(() => { for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } });
+  Object.assign(process.env, values);
+  fs.mkdirSync(path.dirname(shot), { recursive: true }); fs.writeFileSync(shot, PNG);
+  // The devbox: a session of the owner's (1) in the project of the team, followed from the Mac.
+  const there = withHome(devbox.home, () => {
+    const made = registeredProject(t); saveTeamAccess(team.teamId, { root: made.root });
+    markMine(devbox.identity.key, laptop.identity.key); noteTheirs(laptop.identity.key, true);
+    liveTask(made.root, { id: '1', goal: 'Look at the batch results', state: 'ready' });
+    return made;
+  });
+  markMine(laptop.identity.key, devbox.identity.key); noteTheirs(devbox.identity.key, true);
+  const link = key => ({ key, admitted: true, remoteHello: { remote: 1, files: 1 }, notify: () => {}, request: async () => { throw new Error('No answer'); } });
+  const ctx = (me, sessions) => ({ me, session: key => sessions[key] ?? null, name: key => key.slice(0, 4), box: key => key === me.key ? null : 'mac', log: () => {}, kick: () => {}, soon: () => {}, event: () => {} });
+  const toHost = link(laptop.identity.key), toViewer = link(devbox.identity.key);
+  const host = hostMethods(ctx(devbox.identity, { [laptop.identity.key]: toHost })), viewCtx = ctx(laptop.identity, { [devbox.identity.key]: toViewer });
+  toViewer.request = async (method, params) => withHome(devbox.home, () => host[method](params, toHost));
+  const ref = `${hash(`project\0${there.root}`).slice(0, 16)}:1`, id = watchId(laptop.identity.key, devbox.identity.key, ref);
+  // The Mac's window: its daemon is the stand-in, which hands what goes to the session there to the real calls.
+  const remote = [{ id, machine: SARA, createdAt: at, lastAt: at, title: 'Look at the batch results', state: 'answered', steps: [], entries: [{ role: 'You', at, text: 'Look at the batch results' }, { role: 'Opus 5.5', lead: true, at, text: 'Done.' }], approvals: [] }];
+  const peer = fakePeer({ items: [], mine: [{ key: SARA, mine: true, theirs: true }], remote, answer: command => ['remoteFiles', 'remoteSend'].includes(command.type) ? remoteCommand(viewCtx, { ...command, to: devbox.identity.key, ref }) : null });
+  Object.assign(peer, { offerFiles, offerPaths, stageFiles });
+  const p = project(later(t)), v = await view(t, { repo: repository(p.root), dashboard: true, peer });
+  const board = v.panels.board, ask = v.panels.ask, status = () => v.panels.status.getText().replace(/\s+/g, ' ');
+  const asked = () => modal(v, 'Send files')?.children.map(child => child.getText?.() ?? '').join(' ').replace(/\s+/g, ' ') ?? '';
+  const goals = () => withHome(devbox.home, () => pendingRequests(there.root).filter(row => row.continuationTaskId === '1').map(row => row.goal));
+  const landed = goal => /Files from @\S+: 1 file \(1 KB\) in (.+)$/m.exec(goal)?.[1];
+  await until(() => board.items.map(plainItem).some(row => /Look at the batch results/.test(row)), 'the session there is listed');
+  board.focus(); selectRow(board, /Look at the batch results/);
+  await until(() => / on @sara-box /.test(ask._label.getText()), 'the box writes to the session there');
+  // Dropped in the box: Enter offers the picture to go with the message, and y sends both.
+  ask.focus(); ask.readInput(); await until(() => ask.__listener, 'message box');
+  v.input.write(`\x1b[200~${dropped}\x1b[201~`); await until(() => ask.getValue() === dropped, 'the drop is in the box');
+  v.input.write('\r');
+  await until(() => /Send 1 file \(1 KB\) from this computer with this message\?/.test(asked()) || /Unknown command/.test(status()), 'answered');
+  assert.doesNotMatch(status(), /Unknown command/); assert.match(asked(), /Send 1 file \(1 KB\) from this computer with this message\?/);
+  v.input.write('y');
+  await until(() => /Sent 1 file to the session on @sara-box\./.test(status()) && ask.getValue() === '', 'sent there with the picture');
+  // There, the message names where the picture landed, and the picture is whole.
+  const [first] = goals(), dir = landed(first);
+  assert.ok(dir, first); assert.ok(first.startsWith(`"${path.join(dir, 'shot 1.png')}"`), first); assert.ok(!first.includes(path.dirname(shot)), 'the path on the Mac is gone from it');
+  assert.deepEqual(fs.readFileSync(path.join(dir, 'shot 1.png')), PNG);
+  // Dropped while the list has the focus: it shows in the box at once; words after it go too.
+  board.focus(); await until(() => v.current.screen.focused === board, 'the list has the focus');
+  v.input.write(`\x1b[200~${dropped}\x1b[201~`);
+  await until(() => ask.getValue() === dropped && v.current.screen.focused === ask, 'the drop shows in the box at once');
+  v.input.write(' this is stuck'); await until(() => ask.getValue() === `${dropped} this is stuck`, 'typed after the drop');
+  v.input.write('\r'); await until(() => /Send 1 file/.test(asked()), 'offered again'); v.input.write('y');
+  await until(() => goals().length === 2, 'the second one went');
+  assert.match(goals()[1], /^".*shot 1\.png" this is stuck\n\nFiles from @\S+: 1 file \(1 KB\) in /);
+  // Quoted, as some terminals paste it.
+  await send(v, `'${shot}' and this one`); await until(() => /Send 1 file/.test(asked()), 'offered for the quoted one'); v.input.write('y');
+  await until(() => goals().length === 3, 'the quoted one went');
+  assert.match(goals()[2], /^".*shot 1\.png" and this one\n\nFiles from @\S+: 1 file \(1 KB\) in /);
+  // A command over that session is still a command: /foo is refused here, and nothing more goes.
+  await send(v, '/foo'); await until(() => status().includes('Unknown command: /foo. Type / to see commands.'), '/foo is refused');
+  assert.equal(goals().length, 3);
+});
+
+// In Chats the message box writes to the open channel or person: a dropped file shows in it at
+// once while the list has the focus, and a message that starts with its path goes to them.
+test('in Chats a dropped picture shows in the box at once from the list, and a message that starts with its path goes to the person, never Unknown command', async t => {
+  const { v, peer } = await teamView(t), ask = v.panels.ask, [bar] = v.panels.teamLists, status = () => v.panels.status.getText().replace(/\s+/g, ' ');
+  const dropped = '/Users/someone/Library/Application\\ Support/Shots/shot\\ 1.png';
+  await openRow(v, /@li\s+offline/, '@li');
+  bar.focus(); await until(() => v.current.screen.focused === bar, 'the list has the focus');
+  v.input.write(`\x1b[200~${dropped}\x1b[201~`);
+  await until(() => ask.getValue() === dropped && v.current.screen.focused === ask, 'the drop shows in the box at once');
+  v.input.write(' see this'); v.input.write('\r');
+  await until(() => peer.sent().some(row => row.type === 'ask') || /Unknown command/.test(status()), 'answered');
+  assert.doesNotMatch(status(), /Unknown command/);
+  assert.deepEqual(peer.sent().at(-1), { type: 'ask', to: LI, project: null, text: `${dropped} see this` });
 });

@@ -116,7 +116,7 @@ test("on a Mac's folders a new project under /tmp, a turn, its review, a standup
   assert.equal(controller.repo.root, m.on('private', 'tmp', 'sample app'));
 
   // A turn that edits in a worktree beside the project, the checks, and the reviewing bot's review.
-  const edit = await controller.ask('Normalize coupon codes').finished;
+  const edit = await controller.ask('Normalize coupon codes', null, { bots: ['reviewer'] }).finished;
   assert.equal(edit.state, 'ready', JSON.stringify(edit.error)); assert.equal(edit.error, null);
   assert.equal(edit.reviewStatus, 'passed'); assert.deepEqual(edit.reviews.map(review => review.role), ['bot:reviewer']);
   assert.ok(edit.worktree.startsWith(m.on('private', 'tmp') + path.sep), edit.worktree);

@@ -29,8 +29,8 @@ elu
 
 The first start asks for a project name; later starts open your last project. Type a
 message and press Enter. That starts a session: the model answers, or edits in a new Git
-worktree on its own branch. Then the project's checks run and `@reviewer` reviews the
-change. Nothing is pushed until you type `/publish` and confirm.
+worktree on its own branch. Then the project's checks run, and any bot you added to the
+session reviews the change. Nothing is pushed until you type `/publish` and confirm.
 
 What installing, building and testing leave in the worktree is not a change when Git ignores
 the folder itself: `node_modules`, `vendor`, `.venv`, `venv`, `__pycache__`, `*.egg-info`,
@@ -51,7 +51,7 @@ as `.env`, stops it until `.gitignore` keeps that file out.
 | Tab | What it shows |
 | --- | --- |
 | Sessions | Every session across your projects. The selected one is open beside the list. Typing on a row writes a message to it; a row's key is its letter, then Enter. Task in a session's header (a click on it, or Ctrl+T) opens its Task: the goal, the objectives with the model's marks, and the checklist of its work from ELU's own records (committed, checks, review, pushed, pull request, and what it waits for). |
-| Projects | Your projects. `n` makes one, `o` makes another the active one. A project a teammate shares that is not on this computer is listed too, as `ELU   shared by @rio   on @rio-mac`: Enter opens its team board, and `c` clones it here. |
+| Projects | Your projects. `n` makes one, `o` makes another the active one. Enter opens a project's settings: its Instructions and Context open to read, and `e` edits them. A project a teammate shares that is not on this computer is listed too, as `ELU   shared by @rio   on @rio-mac`: Enter opens its team board, and `c` clones it here. |
 | Kanban | The open project's tasks and sessions: To do, In progress, Needs you, Done. On a team, everyone with a clone of the same repository shares one board: every session a teammate, or another computer of yours, runs in it shows in the same columns with who started it and on which machine, to read only. A project whose folder holds several repositories has a board for each. `/share off` keeps a project off it both ways. Nothing goes to Done until you check it: Shift+→ under Needs you, or `/done` in a session, shows its goal and objectives, then Done, a new goal, or a copy with one. A project on another computer of yours that no project here holds is "<project> on devbox" under Board ▾: its board is read from there, and what you do on it is done there. With no project here, Kanban opens on it. |
 | Chats | Your team's channels, your teammates and your bots. |
 | Bots | Your bots. `n` makes one, Enter opens one. |
@@ -59,6 +59,8 @@ as `.env`, stops it until `.gitignore` keeps that file out.
 
 Click a tab's name. Or press Tab until the tab row is selected, choose with ← and →, and
 press Enter.
+
+ELU draws in color also where `NO_COLOR` is set; `ELU_NO_COLOR=1 elu` opens it without color.
 
 ## Tasks
 
@@ -132,11 +134,12 @@ While the model or a bot works, the chat shows what it does now under the workin
 | `/archived` | Lists this computer's archived sessions last in Sessions; `/archived` again hides them. `c` archives a session, and `u` or a new message brings it back. `/archived clean` deletes them for good, or first saves what you taught in them to the project context. Each of your other computers lists and cleans up its own |
 | Enter (empty box) | While a turn works and a message of yours waits, sends that message now. On Claude Code the command the turn waits on moves to the background and the same turn reads the message. On the other vendors the turn stops as `/stop` stops it and the message starts the next turn, in the same vendor session where it can go on |
 | `/schedule in 1h check the build` | Starts a session later or on a schedule: `/schedule [when] [message]`. `/schedule ` lists times such as `in 5m`, `in 1h` and `daily 9:00`. Each run is a new session with the model, mode and bots of the form (a bot with its own schedule is left out); it does not see the chat it was made in. Each run is named with the schedule's message, or with the name you gave its last run, and it archives the schedule's earlier runs, so Sessions lists one run of each schedule; `/archived` shows the others. A run that still works or needs you stays until a later run finds it done. A schedule gets Full access only when you pick it for that schedule, and the form asks you once before saving it |
-| `/budget 5` | Limits this session to 5 dollars; `/budget` alone says what it has spent, and `/budget off` removes the limit. See [Install details](#install-details) for where the limit is checked |
+| `/budget 5` | Limits this session to 5 dollars, or any amount from a cent up; `/budget` alone says what it has spent, and `/budget off` removes the limit. At the limit it offers a higher one, or `/budget off` while a run's cost is not known. See [Install details](#install-details) for where the limit is checked |
 | `/slots 12` | Limits how many sessions run at once, in one project as in several, to any whole number from 1. Until you set a limit there is none and no session waits for a slot; `/slots off` removes it, and `/slots` alone says which it is. What you type always starts; this number limits what starts by itself. A new session you start, a message you send, here or from your other computer, a Task you approve, a teammate's message you accept with y or w and a schedule or bot you run now start whatever runs. A scheduled run that comes due, a bot's scheduled turn, a teammate's message that Auto starts, a retry after a failure and a message one session sends another wait under Queued past the limit, and the chat says what each waits for, such as "Waiting for a free slot: 13 sessions are running, and 12 run at once. /slots changes it."; it starts when a slot frees. Running work is not interrupted |
 | `/standup` | Asks every open session of yours, here and on your other computers, and your teammates' shared ones, for an update, in a new Standup session. See [Standup](#standup) |
 | `@everyone did anyone touch auth?` | In a Standup session, asks the sessions of its last round again, with your question; `@everyone standup` asks for an update. Elsewhere it starts a Standup with the question |
 | `! git status` | Runs a shell command. In an open session the model gets the command and its output with your next message |
+| `/computer name studio` | Renames this computer. Your other computers and teammates see the new name within seconds, in their Sessions headings and `@studio`. `/computer` alone says its name; `/computer name default` goes back to its host name. On the command line: `elu id --computer studio` |
 | `/update` | Says how to update: `/quit`, then `elu update` |
 | `/takeover` | In a view-only window, moves the project to this window. The other window turns view only |
 | `/quit` | Closes ELU. Sessions that are running or queued go on in the background; `elu conductor stop` stops them |
@@ -285,14 +288,15 @@ Five come with the app. You can edit or remove any of them in the Bots tab.
 
 | Bot | Runs on | What it does |
 | --- | --- | --- |
-| `@reviewer` | Claude, Opus | Reviews every change for correctness, security, performance and maintainability |
+| `@reviewer` | Claude, Opus | Reviews each change of a session you add it to, for correctness, security, performance and maintainability |
 | `@lead` | Claude, Fable, with Opus helpers | When you write to it: plans the work, hands the pieces to helpers, and checks what they return |
 | `@qa` | Claude, Opus | When you write to it: tests the change like a user, fixes what it finds, and verifies each fix |
 | `@pair` | Codex, `gpt-6.1-sol`, high effort | A second model beside the working agent: says what it would challenge after each turn, and reviews each change |
 | `@elu` | Claude, every hour | Finds issues in your live product with [ELU](https://elu.dev), then reviews and merges the fix pull request or writes the fix |
 
-- A new session starts with `@reviewer`. `/bots add qa` adds another bot, and so does `@qa`
-  alone and then Enter.
+- A new session has no bots. `/bots add reviewer` adds one, and so does `@reviewer` alone
+  and then Enter. With no bots, the checks alone decide whether a change is ready.
+  `elu run` takes `--bot reviewer`.
 - `@lead plan the refund change` gives a bot work. `@lead`, `@qa`, `@elu` and each bot you
   make do the work you write to them, within the session's permissions; `@reviewer` and
   `@pair` read and answer.
@@ -300,6 +304,8 @@ Five come with the app. You can edit or remove any of them in the Bots tab.
   the change. Its must-fix findings go to the model, which fixes each one or disputes it with
   a reason; then the checks and the review run again, up to the policy's review rounds. The
   chat shows each step, such as `@reviewer: 2 must-fix`, `Fixed 2` and `@reviewer: Passed.`
+  A bot whose model cannot take the change, not even its diff alone, says so in one line,
+  and the session goes on without its review. It tries again once a fix changes the files.
   The model is told which bots review its change and that ELU runs the checks and
   publishing, so it never asks you to wait for a bot, review, commit, push or merge.
 - Write to a reviewing bot about edits the session has not published, such as `@reviewer make
@@ -340,6 +346,7 @@ the two connect directly over Hyperswarm.
 ```sh
 # on your computer
 elu id --name sam        # once: your name on the team
+elu id --computer studio # optional: this computer's name; it starts as its host name
 elu team create shop
 elu invite               # prints a code like k7qm-x2pd-9fhw; it works once, within 24 hours
 
@@ -407,10 +414,17 @@ or `elu access`, shows and changes all of it.
 `elu share`, or `/share` in the app, shares the project you are in, so teammates can name it
 and see its live work. Inviting a teammate shares one too: `elu invite` shares the folder you
 run it in when it is an ELU project (`--project PATH` names another), and `/invite`
-the open project. Joining shares no project of yours, but the Kanban board needs no share:
+the open project. A computer that joins takes the folder it joins in as that same project,
+whatever its folder, repository or name: it is one project on every computer that has it,
+with no step. Everyone on it sees its sessions from each of those computers in
+Sessions, under that computer and its owner ("On studio · sara"): Enter opens one, with its
+chat, steps and changes, and its tasks are on the Kanban. Only the computer's owner works in
+them. Its instructions, context and lessons are the same everywhere it is. A project you
+never shared, or keep off with `/share off`, stays on your computer.
+The Kanban board needs no share either:
 every session you run in a repository a teammate also has is on their Kanban, with its title,
 its column, who started it, which machine and its approved Task, and theirs are on yours, so
-their agents also know what yours is working on. Nothing else about it
+their agents also know what yours is working on. Of a project you did not share, nothing else
 is sent: no chat, file or path. `/share off` in a project keeps it off both ways. The wire
 format is in [docs/peer-network.md](docs/peer-network.md).
 
@@ -484,16 +498,15 @@ the text alone. `/send PATH...` sends files without a message. They land in that
 inbox on the devbox, which it may read in every mode, and each path in your message points
 there. A Claude Code session of yours can list your sessions on your other computers and send
 them files itself; in Ask for approval you allow each send.
-A project's instructions and context are the same on all your computers, for every model and
-bot there, like its tasks. A project of the same repository on both is linked by itself. Any
-other, such as `ELU` in the devbox's home folder and `~/projects/ELU` on the laptop, you link
-once in its settings: Projects, Enter, Linked, Enter; when the devbox has one of the same
-name, the cursor is on it. From then on an edit on either, and every line a session
-learned from you, is on the other within seconds, and on one that was off when it comes back.
+A project's instructions, context and lessons are the same on all your computers, for every
+model and bot there, like its tasks: the project a team was invited to, else the one of the
+same repository, else the one of the same name. An edit on one, and every line a session
+learned from you, is on the others within seconds, and on one that was off when it comes back.
 When both changed the same text while apart, the newer edit is used, and the line that says so
-names where the other was kept (`.elu-code/history/` in the project). A computer on an older
-ELU shares none, and Enter on the row says to update it.
+names where the other was kept (`.elu-code/history/` in the project). The project's settings
+say where else it is: "Also on @devbox, @studio". A computer on an older ELU shares none.
 `/mine` lists your computers and `/mine remove @devbox` ends it.
+Each computer goes by its host name until you name it: `/computer name devbox` on it (or `elu id --computer devbox`) renames it, and your other computers show the new name within seconds, ELU 0.1.27 and older too. `/computer name default` goes back to the host name.
 Your other computers take a new one as yours with no step on them: a computer that is already yours on both sides tells them, signed, and a teammate's computer is never heard. `/mine remove` reaches them the same way.
 A computer on ELU 0.1.25 still needs `/mine` on each side: one that your other computers said is yours reads "update ELU on <name>" until it agrees.
 
@@ -617,12 +630,13 @@ was, at the short rate. A cost that may be too low shows as at least that (≥$1
 past the model's long-context size, one whose count leaves some calls out (a Grok Build
 compaction, Codex's reviewer in Approve for me), an Antigravity run whose total leaves its
 thinking out, and a total with an unknown cost in it. A run
-whose cost is not known shows a dash, never 0, and one under a cent shows as <$0.01. A turn you
+whose cost is not known shows a dash, never 0, and so does one known only to be at least
+an amount under a cent; a known cost under a cent shows as <$0.01. A turn you
 stop counts with the tokens it had used; Claude Code says a cost only when a turn ends.
 
 `/budget` counts the same costs. A run whose cost is not known counts as all of the limit,
 so nothing more runs until `/budget off`; one that ELU 0.1.25 or earlier ran counts as it did
-there. A Codex run that failed before Codex recorded a request of it costs at least $0.00. A turn starts only while some of the limit is left.
+there. A Codex run that failed before Codex recorded a request of it cost at least nothing: it shows a dash, and does not count as all of the limit. A run that never started spent nothing. A turn starts only while some of the limit is left.
 Claude Code stops itself at the limit. ELU stops a Codex turn that runs through its
 `app-server`, a Grok Build turn that streams, and a turn over ACP whose vendor sends its cost,
 when what it has spent reaches the limit, as soon as the turn shows it goes on: a turn whose
@@ -648,6 +662,10 @@ too: its row in the Bots tab says so. Where no vendor installed can review, an e
 and the chat says `Not reviewed: no model on this computer can review.` A teammate's
 question (the read-only kind) is answered by Claude Code only; without it, both sides read
 why, and the owner can set `/access` to Auto so teammates' messages start sessions instead.
+On Codex, Antigravity or Grok Build the question is refused with the read that vendor cannot
+keep out (Codex and Grok Build read outside the shared project, and Antigravity reads its Git
+folder and the files Git does not track) and how to choose Claude Code: `/model default` with a
+Claude model.
 
 ELU runs your project's checks and its pre-push hooks in a sandbox: Codex's (`codex
 sandbox`, signed in or not) where Codex is installed, otherwise the computer's own,
@@ -674,8 +692,9 @@ Finding that out runs each of them, and one that is slow to answer can take half
 the tab says `Reading what is installed and signed in here…` meanwhile and every key works.
 It keeps several Claude Code or Codex accounts signed in at once, so when one runs out of its
 limit you switch instead of signing in again: `a` adds an account with the vendor's own
-sign-in, Enter on an account makes new turns use it, and `x` forgets one. Each account shows
-its own five-hour and weekly usage ([how accounts are kept](SECURITY.md#several-accounts)).
+sign-in, Enter on an account makes new turns use it, and `x` forgets one. Claude accounts
+also switch by themselves ([below](#several-claude-accounts)). Each account shows its own
+five-hour and weekly usage ([how accounts are kept](SECURITY.md#several-accounts)).
 Antigravity (`agy`) and Grok Build (`grok`) are checked once on each machine, for each
 release of them. The check proves what Read only, Ask for approval and Approve for me stand
 on, so your first message to one in those modes starts it by itself and waits for it: eight
@@ -694,6 +713,28 @@ then type continue.
 Google's FAQ says that using another app to reach Antigravity breaks its terms and can get
 your account suspended or terminated. ELU wraps `agy`, so read
 [docs/vendors/antigravity.md](docs/vendors/antigravity.md) before you send it a message.
+
+### Several Claude accounts
+
+With two or more Claude accounts in the Usage tab, Claude work moves between them by itself.
+When the account in use reaches 98% of its five-hour or weekly limit, or Anthropic refuses it
+for one, the turn goes on, on the next account with room: first in your order (`u` on an
+account moves it up), then the one whose week resets soonest. The chat says so in one line,
+such as `Moved to b@example.com: a@example.com reached its weekly limit.`, and the status
+line says it once. A per-minute slowdown is waited out on the same account.
+
+When every account is at its limit, the session names the one that resets first and when.
+Your message waits, with any you type meanwhile, and goes on by itself then, or as soon as
+you pick, add or sign in an account again. A teammate's message or a bot's scheduled turn
+only says when. Enter on an account still makes new turns use it.
+
+An account whose sign-in ended and could not be renewed shows `sign in again` in Usage and
+is skipped. ELU reads it again each minute and uses it once its sign-in works.
+
+Under the Claude accounts, `Switch accounts by itself` turns this off (it is on), and `Use
+paid extra usage` lets an account at its limit go on with extra usage you pay for (it is
+off). Codex and the other vendors switch only when you pick an account. How ELU uses the
+sign-ins: [SECURITY.md](SECURITY.md#claude-account-switching).
 
 ## Update and remove
 

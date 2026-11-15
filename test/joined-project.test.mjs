@@ -75,7 +75,8 @@ test('a teammate is told each project shared with a team they are on: its handle
     assert.deepEqual(status().projects, [
       { handle: 'shop', name: 'Shop', repoId: SHOP, address: ORIGIN, teams: [crew.teamId] },
       { handle: 'notes', name: 'sample app', repoId: null, address: null, teams: [crew.teamId] },
-      { handle: 'tools', name: 'sample app', repoId: hash('file/srv/git/tools'), address: null, teams: [crew.teamId] },
+      // The team's project (the one an invite shares) says so.
+      { handle: 'tools', name: 'sample app', repoId: hash('file/srv/git/tools'), address: null, teams: [crew.teamId], project: [crew.teamId] },
     ]);
     assert.equal(JSON.stringify(status()).includes('ghp_secretToken1234'), false, 'the sign-in in the remote never leaves');
     // Renamed, or no longer shared: every teammate hears it on the next tick.

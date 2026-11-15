@@ -15,7 +15,9 @@ import { atomic, personalDirectory } from '../lib/util.mjs';
 import { ADAPTERS } from '../lib/adapters/index.mjs';
 import * as spend from '../lib/agent-spend.mjs';
 import { budgetMessage } from '../lib/budget.mjs';
-import { boardRows } from '../lib/board.mjs';
+import { boardRows, rowActions } from '../lib/board.mjs';
+import { stopLine } from '../lib/stop-line.mjs';
+import * as runner from '../lib/runner.mjs';
 
 // A session's /budget, on every vendor: what it says the session spent, a run whose cost is not
 // known, and a turn that would go over the limit.
@@ -93,7 +95,7 @@ async function openTask(v, pattern) {
 
 test('/budget says what the session spent as far as it is known: $X, ≥$X when a run has no price, and not known yet when none has', { timeout: 60000 }, async t => {
   const p = project({ after: close => resources(t).files.push(close) }), fake = fakeClis(p.parent, { mode: 'normal' });
-  viewEnvironment(t, { ...fake.env, XDG_CONFIG_HOME: path.join(p.parent, 'personal'), NO_COLOR: '1' });
+  viewEnvironment(t, { ...fake.env, XDG_CONFIG_HOME: path.join(p.parent, 'personal'), ELU_NO_COLOR: '1' });
   assert.equal(cli(p.root, ['init', '--yes'], fake.env).status, 0);
   git(p.root, ['add', '.']); git(p.root, ['commit', '-m', 'Configure checks']);
   const repo = repository(p.root);
@@ -122,6 +124,13 @@ test('/budget says what the session spent as far as it is known: $X, ≥$X when 
   // A limit under a dollar is the owner's to set too.
   await send(v, '/budget 0.01'); await until(() => status().endsWith('This session may now spend up to $0.01.'), `the limit of a cent, not ${JSON.stringify(status())}`);
   await said([claude(0.4), codex('gpt-6.1-sol')], 'This session has spent $1.40 of its $0.01 limit. /budget off removes the limit.');
+  // And one over $100.
+  await send(v, '/budget 150'); await until(() => status().endsWith('This session may now spend up to $150.00.'), `the limit of $150, not ${JSON.stringify(status())}`);
+  // A session stopped with a run whose cost is not known: that run counts as all of any limit,
+  // so a higher one does not let it go on, and /budget says what does.
+  { const task = readTask(repo, '4'); Object.assign(task, { state: 'blocked', error: { message: 'The model could not finish.', cause: 'unknown' }, runs: [{ ...codex('gpt-unlisted'), costUnknown: true }] }); saveTask(repo, task); await sleep(500); }
+  await send(v, '/budget 300'); await until(() => status().endsWith('This session may now spend up to $300.00. A run of unknown cost counts as all of it; only /budget off lets it go on.'), `the limit that does not help, not ${JSON.stringify(status())}`);
+  await send(v, '/budget off'); await until(() => status().endsWith('This session has no spending limit. Send your message again.'), `no limit, not ${JSON.stringify(status())}`);
 });
 
 // The runner, against the stand-in vendors.
@@ -273,6 +282,8 @@ test('a Codex session given /budget 0.01 after it spent more starts no more turn
 
 // A turn of a vendor that reports what it spends while it works stops when that reaches the limit.
 const STOPPED = (spent, limit, more = 20) => `ELU stopped this turn: this session has spent ${spent} of its $${limit} limit. /budget ${more} raises it and /budget off removes it; then send your message again.`;
+// The keys a session's row offers (lib/board.mjs rowActions).
+const keysOf = (f, task) => rowActions(boardRows([{ root: f.root, name: 'shop', tasks: [task], activity: [], queue: [] }]).find(row => row.id === task.id)).map(([key]) => key);
 
 test('a Codex turn through its app-server stops when what it has spent reaches the limit', { timeout: 60000 }, async t => {
   // Four requests of 50 cents a turn, a second apart; the app-server reports the thread's tokens after each.
@@ -319,6 +330,14 @@ test('a Grok Build turn that streams its usage stops when what it has spent reac
   assert.equal(spend.moneyText(usage.costUsd, usage.partial, usage.runs), '≥$3.00', 'the Usage tab');
   assert.equal(spend.costText(usage.rows[0]), '≥$3.00', 'its row');
   assert.equal(String(boardRows([{ root: f.root, name: 'shop', tasks: [next], activity: [], queue: [] }]).find(row => row.id === next.id).cost), '≥$3.00', 'its row in elu conductor --json');
+  // The run keeps the limit ELU stopped it at. While that holds, the row offers no retry.
+  assert.equal(next.runs[1].stoppedAtLimitUsd, 3);
+  assert.ok(!keysOf(f, next).includes('r'), keysOf(f, next).join(' '));
+  // Raised, its line says so and to type continue, and r is back.
+  f.controller.setBudget(next.id, 10);
+  const raised = readTask(f.repo, next.id);
+  assert.equal(stopLine(raised).text, 'This session reached its $3 limit, and the limit is now $10. Type continue to carry on.');
+  assert.ok(keysOf(f, raised).includes('r'));
 });
 
 // The response that reaches the limit may be the turn's last, its answer already written: Codex
@@ -432,3 +451,103 @@ for (const [name, vendor, mode, version] of [['An Antigravity', 'agy', 'full', '
     assert.equal(spend.runCosts(next)[1], null); assert.equal(next.runs[1].stoppedAtUsd, 2);
   });
 }
+
+// /budget takes any limit from a cent up. A session that has spent $150 of a $150 limit is
+// offered a higher one, and goes on under it.
+test('a session given /budget 150 that has spent it starts no more turns, and is offered a higher limit', async t => {
+  const f = setup(t);
+  const first = await f.controller.ask('Where is coupon normalization?', null, { permissions: 'full' }).finished;
+  assert.equal(first.state, 'answered', JSON.stringify(first.error));
+  // Its first turn cost $150.
+  const task = readTask(f.repo, first.id); task.runs[0].costUsd = 150; saveTask(f.repo, task);
+  assert.equal(f.controller.setBudget(first.id, 150).budgetUsd, 150);
+  const next = await refused(f, first.id, 'And the tests?');
+  assert.equal(next.error?.message, REFUSED('$150.00', 150, 300));
+  assert.equal(stopLine(next).text, next.error.message);
+  assert.ok(!keysOf(f, next).includes('r'), 'no retry while the limit holds');
+  assert.equal(f.controller.setBudget(first.id, 300).budgetUsd, 300);
+  assert.equal(stopLine(readTask(f.repo, first.id)).text, 'This session reached its $150 limit, and the limit is now $300. Send your message again.');
+  assert.ok(keysOf(f, readTask(f.repo, first.id)).includes('r'));
+  const after = await f.controller.ask('And the tests?', first.id).finished;
+  assert.equal(after.state, 'answered', JSON.stringify(after.error));
+  near(Number(f.launches('claude').at(-1).args.at(f.launches('claude').at(-1).args.indexOf('--max-budget-usd') + 1)), 150, 'Claude Code is told what is left');
+});
+
+// A turn whose connection dropped before Grok Build said what it cost counts as all of the
+// session's limit. Its stop line, the message the next turn is refused with and the row's keys
+// say the same: only /budget off lets it go on, so r is not offered, nor a higher limit.
+test("a Grok Build turn whose cost is not known holds the session at its /budget, and each line says /budget off", async t => {
+  const f = setup(t);
+  f.controller.setDefaultModel({ vendor: 'grok', model: 'grok-4.6' });
+  const first = await f.controller.ask('Where is coupon normalization?', null, { permissions: 'full' }).finished;
+  assert.equal(first.state, 'answered', JSON.stringify(first.error));
+  f.controller.setBudget(first.id, 5);
+  f.set({ grok: { dropped: true } });
+  const next = await refused(f, first.id, 'And the tests?');
+  assert.equal(next.state, 'blocked'); assert.equal(next.runs.at(-1).costUnknown, true, JSON.stringify(next.runs.at(-1)));
+  assert.equal(stopLine(next).text, 'What this session has spent is not known, so it counts as all of its $5 limit. /budget off removes it, then type continue.');
+  assert.ok(!keysOf(f, next).includes('r'), 'no retry: it would be refused');
+  // A higher limit is refused the same way. What is known of the spend is under a cent, at
+  // least that: it is not known, never ≥$0.00.
+  f.controller.setBudget(first.id, 20); f.set({ grok: {} });
+  const again = await refused(f, first.id, 'And the tests?');
+  assert.equal(again.error?.message, 'What this session has spent is not known, so it counts as all of its $20 limit. /budget off removes it; then send your message again.');
+  assert.equal(stopLine(again).text, again.error.message);
+  assert.ok(!keysOf(f, again).includes('r'));
+  // A still higher limit: the line says that one, and still only /budget off.
+  f.controller.setBudget(first.id, 40);
+  assert.equal(stopLine(readTask(f.repo, first.id)).text, 'What this session has spent is not known, so it counts as all of its $40 limit. /budget off removes it, then send your message again.');
+  // /budget off lets it go on, and the line and the row say so.
+  f.controller.setBudget(first.id, null);
+  assert.equal(stopLine(readTask(f.repo, first.id)).text, 'This session reached its $20 limit, and it has no limit now. Send your message again.');
+  assert.ok(keysOf(f, readTask(f.repo, first.id)).includes('r'));
+  const after = await f.controller.ask('And the tests?', first.id).finished;
+  assert.equal(after.state, 'answered', JSON.stringify(after.error));
+});
+
+// Claude Code stops itself at what is left of the session's /budget (--max-budget-usd). Its run
+// keeps the limit it was stopped at, so once the owner raises it the line says so, its log there
+// or not, and never that the account hit its usage limit. r is offered only then.
+test('a Claude Code turn stopped at the /budget the owner raised since says so, and r comes back', async t => {
+  const SPEND = usd => ({ spend: { model: 'claude-opus-5-5', tokens: [10, 200, 3000, 400], usd } });
+  const f = setup(t, SPEND(3));
+  const first = await f.controller.ask('Where is coupon normalization?', null, { permissions: 'full' }).finished;
+  assert.equal(first.state, 'answered', JSON.stringify(first.error));
+  f.controller.setBudget(first.id, 5);
+  // The next turn would spend $4: Claude Code is told $2 is left, and stops there.
+  f.set({ ...SPEND(4), stopsAtBudget: true });
+  const next = await refused(f, first.id, 'And the tests?');
+  assert.equal(next.state, 'blocked');
+  const args = f.launches('claude').at(-1).args; near(Number(args[args.indexOf('--max-budget-usd') + 1]), 2, 'what was left');
+  assert.equal(next.runs.at(-1).stoppedAtLimitUsd, 5, JSON.stringify(next.runs.at(-1)));
+  assert.equal(stopLine(next).text, 'This session has spent its $5 limit. /budget 20 raises it, then type continue.');
+  assert.ok(!keysOf(f, next).includes('r'), keysOf(f, next).join(' '));
+  // Its log is gone, and the owner raises the limit.
+  fs.rmSync(next.runs.at(-1).logFile);
+  f.controller.setBudget(first.id, 20);
+  const raised = readTask(f.repo, first.id);
+  assert.equal(stopLine(raised).text, 'This session reached its $5 limit, and the limit is now $20. Type continue to carry on.');
+  assert.ok(keysOf(f, raised).includes('r'));
+  f.controller.setBudget(first.id, null);
+  assert.equal(stopLine(readTask(f.repo, first.id)).text, 'This session reached its $5 limit, and it has no limit now. Type continue to carry on.');
+  f.set({ stopsAtBudget: false });
+  const after = await f.controller.ask('continue', first.id).finished;
+  assert.equal(after.state, 'answered', JSON.stringify(after.error));
+});
+
+// A teammate's question has a dollar budget of its own for each message, which the owner's
+// /budget does not raise: a turn stopped at it is told so without /budget, with what this
+// message's own runs spent.
+test("a teammate's question stopped at its own dollar budget is told so without /budget, with what its message spent", () => {
+  const at = new Date().toISOString();
+  const task = { id: '9', runs: [{ role: 'lead', vendor: 'claude', at, ownCost: true, costUsd: 2 }, { role: 'lead', vendor: 'claude', at, ownCost: true, costUsd: 0.3 }, { role: 'lead', vendor: 'grok', at, costUnknown: true, stoppedAtUsd: 0.2 }] };
+  const said = runner.budgetStopText?.(task, 'lead', { peer: true, before: 1 });
+  assert.equal(said, 'The model has used its dollar budget for this message: it spent ≥$0.50.');
+  assert.doesNotMatch(said, /\/budget/);
+  const unknown = { ...task, runs: [...task.runs, { role: 'lead', vendor: 'grok', at, costUnknown: true }] };
+  assert.equal(runner.budgetStopText(unknown, 'lead', { peer: true, before: 3 }), 'The model has used its dollar budget for this message.');
+  // The owner's own session is told of his /budget, as before, and a message capped by what a
+  // teammate's message may spend here of that.
+  assert.equal(runner.budgetStopText(task, 'lead', { limit: 2 }), 'This session has spent ≥$2.50 of its $2 limit. /budget 20 raises it and /budget off removes it; then send your message again.');
+  assert.equal(runner.budgetStopText(task, 'lead', { who: '@scout', capped: true }), "@scout has used what a teammate's message may spend here.");
+});

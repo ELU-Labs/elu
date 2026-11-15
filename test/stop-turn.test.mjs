@@ -2,11 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
-import { project, fakeClis, autoApprove } from './helpers.mjs';
-import { ProjectController, conversationEntries } from '../lib/projects.mjs';
+import { spawn, spawnSync } from 'node:child_process';
+import { project, fakeClis, autoApprove, git } from './helpers.mjs';
+import { ProjectController, conversationEntries, registerProject } from '../lib/projects.mjs';
+import { repository } from '../lib/git.mjs';
+import { Conductor, enqueue, openingConductor } from '../lib/conductor.mjs';
+import { pendingRequests } from '../lib/workspace.mjs';
 import { projectFolder } from '../lib/workspace.mjs';
-import { readTask } from '../lib/state.mjs';
+import { readTask, taskDir } from '../lib/state.mjs';
 import { afterResult } from '../lib/process.mjs';
 import { runSteps, endedSteps, runsOfEntries } from '../lib/run-activity.mjs';
 
@@ -169,5 +172,61 @@ test('a stop while Claude Code runs a command leaves none of the empty files its
     // tree, where Git listed them and the protected-path check of the next turn failed on them.
     assert.deepEqual(seen.made.filter(file => fs.existsSync(file)), [], `${permissions}: the stop leaves none of them`);
     assert.equal(readTask(controller.repo, run.id).state, 'stopped');
+  }
+});
+
+// ELU itself ends while Claude Code runs a command in an edit turn (a crash, kill -9, the
+// computer losing power), and the owner opens ELU again and does nothing more. Opening it starts
+// the conductor for the turn left running (openingConductor), and that start recovers it. Where
+// Claude Code still runs, it is stopped as a stop does, and it takes its empty files away. Where
+// it ended with ELU, killed with its command, the start takes them away: only the paths the
+// turn's file names, and only where each is an empty file Git does not track. The owner's own
+// empty files stay: tracked ones at a protected path and at a name of Claude Code's own, and one
+// he made while the turn ran. Before: opening ELU started nothing, so the turn showed as running
+// with every one of them in the work tree, and Claude Code and its command ran on, until a
+// message, a stop or an approval of the owner's started a conductor; that start then killed
+// Claude Code, or found it gone, and every one of them stayed.
+const conductorLib = new URL('../lib/conductor.mjs', import.meta.url).href, helpersLib = new URL('./helpers.mjs', import.meta.url).href;
+test('an ELU that ends while Claude Code runs a command takes away the empty files its sandbox laid when it is opened again, and nothing of the owner\'s', async t => {
+  const p = project(t), fake = fakeClis(p.parent), real = path.join(fake.dir, 'claude-real'), record = path.join(p.parent, 'sandbox.json'), owned = ['.gitignore', '.profile'];
+  for (const name of owned) fs.writeFileSync(path.join(p.root, name), '');
+  git(p.root, ['add', ...owned]); git(p.root, ['commit', '-m', 'Add empty settings']);
+  environment(t, { ...fake.env, HOME: p.parent, GIT_AUTHOR_NAME: 'Test Owner', GIT_AUTHOR_EMAIL: 'owner@example.invalid', GIT_COMMITTER_NAME: 'Test Owner', GIT_COMMITTER_EMAIL: 'owner@example.invalid' });
+  fs.renameSync(path.join(fake.dir, 'claude'), real); fs.writeFileSync(path.join(fake.dir, 'claude'), SANDBOXED(real, record), { mode: 0o755 });
+  const repo = repository(p.root); registerProject(repo);
+  for (const ending of ['ELU alone', 'ELU, Claude Code and its command']) {
+    fs.rmSync(record, { force: true });
+    const elu = spawn(process.execPath, ['--input-type=module', '-e', `import { Conductor } from ${JSON.stringify(conductorLib)}; import { approvingConductor } from ${JSON.stringify(helpersLib)}; approvingConductor(new Conductor({ tickMs: 20 })).start();`], { stdio: 'ignore' });
+    const exited = new Promise(resolve => elu.once('exit', resolve));
+    t.after(() => { try { elu.kill('SIGKILL'); } catch {} });
+    const sent = enqueue(p.root, 'Run the tests.', { permissions: 'ask' });
+    await until(() => fs.existsSync(record), `the turn's command (${ending})`);
+    const seen = JSON.parse(fs.readFileSync(record, 'utf8')), worktree = path.dirname(seen.made[0]), notes = path.join(worktree, 'notes.txt');
+    t.after(() => { for (const pid of [seen.claude, seen.command]) { try { process.kill(pid, 'SIGKILL'); } catch {} } });
+    // ELU names Claude Code in the turn's file as it starts it, a moment before the command runs.
+    const taskId = () => pendingRequests(p.root).find(row => row.id === sent.id)?.taskId, named = () => { try { return JSON.parse(fs.readFileSync(path.join(taskDir(repo, taskId()), 'process.json'), 'utf8')).pid; } catch { return null; } };
+    await until(() => named() === seen.claude, `the turn's file to name Claude Code (${ending})`);
+    assert.ok(seen.made.length > 20, `${ending}: an empty file at each missing denied path while the command runs (${seen.made.length})`);
+    assert.deepEqual(owned.filter(name => seen.made.includes(path.join(worktree, name))), [], `${ending}: none over the owner's own`);
+    fs.writeFileSync(notes, '');
+    elu.kill('SIGKILL'); await exited;
+    if (ending !== 'ELU alone') {
+      // Claude Code first: killed after its command, it would take its files away first.
+      for (const pid of [seen.claude, seen.command]) process.kill(pid, 'SIGKILL');
+      await until(() => !alive(seen.command) && !alive(seen.claude), 'Claude Code and its command to end');
+    }
+    assert.deepEqual(seen.made.filter(file => !fs.existsSync(file)), [], `${ending}: ELU ended and every one is still there`);
+    let again = null;
+    openingConductor({ start: () => { again = new Conductor({ tickMs: 20 }).start(); } });
+    assert.ok(again, `${ending}: opening ELU starts the conductor for the turn left running`);
+    try {
+      assert.deepEqual([alive(seen.command), alive(seen.claude)], [false, false], `${ending}: the command and Claude Code have ended`);
+      assert.deepEqual(seen.made.filter(file => fs.existsSync(file)), [], `${ending}: the start leaves none of them`);
+      assert.deepEqual(owned.map(name => fs.lstatSync(path.join(worktree, name)).size), [0, 0], `${ending}: the owner's tracked empty files stay`);
+      assert.equal(fs.existsSync(notes), true, `${ending}: so does the empty file he made`);
+      const left = spawnSync('git', ['-C', worktree, 'status', '--porcelain', '-z', '--untracked-files=all'], { encoding: 'utf8' }).stdout.split('\0').map(row => row.slice(3)).filter(name => seen.made.includes(path.join(worktree, name)));
+      assert.deepEqual(left, [], `${ending}: Git lists none of them`);
+      assert.equal(readTask(repo, taskId()).state, 'stopped');
+    } finally { await again.stop(); fs.rmSync(notes, { force: true }); }
   }
 });

@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -80,6 +81,54 @@ test('recovery stops only the exact recorded process, never a reused PID', async
   assert.equal(processIdentity(child.pid), identity);
   assert.equal(recoverProcess({ pid: child.pid, identity }), 'stopped'); await ended;
   assert.equal(processIdentity(child.pid), null);
+});
+// A gentle run's file (runProcess gentle, placeholders) names its mark and the paths where its
+// vendor's sandbox may lay an empty file in the work tree. An ELU that ended with the run ended
+// too takes away, on its next start, what the run left running and the empty files: only the
+// paths the file names, and of those only the ones that are an empty regular file in the work
+// tree that Git does not track. A process that got the run's number is not touched.
+test('recovery of a gentle run that ended with ELU ends what it left running and removes only its empty untracked placeholders', async (t) => {
+  const dir = temp(t), cwd = path.join(dir, 'work tree'), outside = path.join(dir, 'outside'), plain = path.join(dir, 'not a repository');
+  for (const folder of [cwd, outside, plain]) fs.mkdirSync(folder);
+  const git = (...args) => { const r = spawnSync('git', ['-C', cwd, ...args], { encoding: 'utf8' }); assert.equal(r.status, 0, r.stderr); };
+  git('init', '--initial-branch=main');
+  const at = name => path.join(cwd, name), write = (file, text = '') => { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, text); };
+  // Laid by the sandbox: at a protected path, at Claude Code's own name, and one folder down.
+  const laid = [at('.github'), at('.bashrc'), at('src/AGENTS.md')];
+  for (const file of laid) write(file);
+  // The owner's: tracked and empty, untracked with something in it, a folder, a link to an empty
+  // file, an empty file through a linked folder, an empty file outside the work tree, and an
+  // empty file the turn's file does not name.
+  write(at('.gitignore')); git('add', '.gitignore');
+  write(at('.zshrc'), 'export EDITOR=vi\n'); fs.mkdirSync(at('.idea'));
+  write(path.join(outside, 'empty')); fs.symlinkSync(path.join(outside, 'empty'), at('.profile'));
+  write(path.join(outside, 'CLAUDE.md')); fs.symlinkSync(outside, at('linked'));
+  write(path.join(outside, 'AGENTS.md')); write(at('notes.txt'));
+  const kept = [at('.gitignore'), at('.zshrc'), at('.profile'), path.join(outside, 'empty'), at('linked/CLAUDE.md'), path.join(outside, 'AGENTS.md'), at('notes.txt')];
+  const named = [...laid, at('.gitignore'), at('.zshrc'), at('.idea'), at('.profile'), at('linked/CLAUDE.md'), path.join(outside, 'AGENTS.md'), path.join(cwd, '..', 'outside', 'AGENTS.md'), 'relative/.gitconfig'];
+  const mark = crypto.randomUUID(), dead = Number(spawnSync(process.execPath, ['-e', 'console.log(process.pid)'], { encoding: 'utf8' }).stdout.trim());
+  // What the run started, left running after its vendor ended: found by the mark alone.
+  const left = spawn('sleep', ['30'], { detached: true, stdio: 'ignore', env: { ...process.env, ELU_TURN: mark } });
+  // A process that got the number of another run: not that run, and not marked.
+  const other = spawn(process.execPath, ['-e', 'setInterval(()=>{},1000)'], { detached: true, stdio: 'ignore' });
+  t.after(() => { for (const child of [left, other]) { try { process.kill(child.pid, 'SIGKILL'); } catch {} } });
+  const leftEnded = new Promise(resolve => left.once('close', resolve)), alive = pid => { try { process.kill(pid, 0); return true; } catch { return false; } };
+  await new Promise(resolve => setTimeout(resolve, 200));
+  // Where Git cannot say what it tracks, nothing is removed.
+  write(path.join(plain, '.bashrc'));
+  assert.equal(recoverProcess({ pid: dead, identity: 'gone', born: 'gone', gentle: true, mark: crypto.randomUUID(), cwd: plain, placeholders: [path.join(plain, '.bashrc')] }), 'interrupted');
+  assert.equal(fs.existsSync(path.join(plain, '.bashrc')), true, 'no repository, nothing removed');
+  assert.equal(recoverProcess({ pid: other.pid, identity: 'another', born: 'another', gentle: true, mark: crypto.randomUUID(), cwd, placeholders: [] }), 'interrupted');
+  assert.equal(alive(other.pid), true, 'a process with the number of the run is left running');
+  assert.equal(recoverProcess({ pid: dead, identity: 'gone', born: 'gone', gentle: true, mark, cwd, placeholders: named }), 'interrupted');
+  assert.deepEqual(laid.filter(file => fs.existsSync(file)), [], 'the empty files the sandbox laid are gone');
+  assert.deepEqual(kept.filter(file => !fs.existsSync(file)), [], 'everything of the owner\'s stays');
+  assert.equal(fs.readFileSync(at('.zshrc'), 'utf8'), 'export EDITOR=vi\n'); assert.equal(fs.statSync(at('.idea')).isDirectory(), true);
+  assert.equal(await Promise.race([leftEnded.then(() => true), new Promise(resolve => setTimeout(resolve, 3000, false))]), true, 'what the run left running has ended');
+  // A record of an earlier version names no placeholders, and a run that is not gentle was killed as before.
+  write(at('.bashrc'));
+  assert.equal(recoverProcess({ pid: dead, identity: 'gone', born: 'gone', bin: 'claude' }), 'interrupted');
+  assert.equal(fs.existsSync(at('.bashrc')), true);
 });
 test('role environments omit application credentials and nested-session control variables', () => {
   const env = agentEnv({ PATH: '/usr/bin', HOME: '/example', CLAUDECODE: '1', GH_TOKEN: 'synthetic', OPENAI_API_KEY: 'synthetic', ANTHROPIC_API_KEY: 'synthetic', CLOUDSDK_AUTH_ACCESS_TOKEN: 'synthetic', SECRET: 'synthetic' });

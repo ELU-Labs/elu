@@ -7,7 +7,7 @@ import { PassThrough } from 'node:stream';
 import { EventEmitter } from 'node:events';
 import { project, fakeClis, fakeKeychain, claudeKeychainNames, cli, git, temp, approveProjectFiles, autoApprove, keyLike, CLI, keyThenEnter } from './helpers.mjs';
 import { repository } from '../lib/git.mjs';
-import { ProjectController, projectSnapshot, dashboardSnapshot, claimView, takeOver, registerProject, registeredProjects, nameProject, savedProjectName, personalDirectory, setupCommitPlan, commitSetup, taskDetails } from '../lib/projects.mjs';
+import { CHANGES_PAGE, ProjectController, projectSnapshot, dashboardSnapshot, claimView, takeOver, registerProject, registeredProjects, nameProject, savedProjectName, personalDirectory, setupCommitPlan, commitSetup, taskDetails } from '../lib/projects.mjs';
 import { answerTrust, pendingTrust, trustedText, unusedTrust } from '../lib/project-trust.mjs';
 import { launchTerminal, geometry, plain, foldersNamed } from '../lib/terminal.mjs';
 import { WHEEL_FRAME_MS } from '../lib/wheel.mjs';
@@ -15,7 +15,7 @@ import { projectFolder, saveRequest, pendingRequests, updateRequest } from '../l
 import { displayText } from '../lib/terminal-visuals.mjs';
 import { vendorText, typedCommand, needsArgument } from '../lib/terminal-commands.mjs';
 import { formatResult } from '../lib/format.mjs';
-import { Conductor, conductorSettings, enqueue } from '../lib/conductor.mjs';
+import { Conductor, OLDER_COPY, conductorSettings, enqueue } from '../lib/conductor.mjs';
 import { liveTask } from './peer-helpers.mjs';
 import { standIn } from './login-item-helpers.mjs';
 import { readBoard, sessionClosed, closeSession, setDone } from '../lib/kanban.mjs';
@@ -25,6 +25,7 @@ import { columns } from '../lib/width.mjs';
 import { saveTask, readTask, taskDir, taskTitle, setTitle, lock, tasks } from '../lib/state.mjs';
 import { closeWindow, eluWindow, processIdentity, processRecord } from '../lib/process.mjs';
 import { activeLogin, listLogins } from '../lib/logins.mjs';
+import { readSwitch } from '../lib/claude-switch.mjs';
 import { detect } from '../lib/detect.mjs';
 import { signInCommand } from '../lib/vendors.mjs';
 import { ADAPTERS } from '../lib/adapters/index.mjs';
@@ -33,7 +34,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { approvalsDir, requestApproval, answerApproval } from '../lib/approvals.mjs';
 import { defaultMode } from '../lib/modes.mjs';
 import { listEntries, readStore } from '../lib/permission-rules.mjs';
-import { readProjectSettings } from '../lib/project-settings.mjs';
+import { readProjectSettings, saveContext } from '../lib/project-settings.mjs';
 import { shellSandboxLine } from '../lib/sandbox.mjs';
 import { listSchedules, saveSchedule, parseWhen } from '../lib/schedules.mjs';
 import { listBots, getBot, saveBot, removeBot, botVendors, botEfforts } from '../lib/bots.mjs';
@@ -76,7 +77,7 @@ function clockAt(t, hour) {
 }
 function setup(t, mode = 'normal', options = {}) {
   const p = project({ after: close => resources(t).files.push(close) }), fake = fakeClis(p.parent, { mode, ...options });
-  environment(t, { ...fake.env, XDG_CONFIG_HOME: path.join(p.parent, 'personal'), NO_COLOR: '1' });
+  environment(t, { ...fake.env, XDG_CONFIG_HOME: path.join(p.parent, 'personal'), ELU_NO_COLOR: '1' });
   assert.equal(cli(p.root, ['init', '--yes'], fake.env).status, 0);
   git(p.root, ['add', '.']); git(p.root, ['commit', '-m', 'Configure checks']);
   return { ...p, ...fake, repo: repository(p.root) };
@@ -188,13 +189,19 @@ function click(v, widget, dx = 1, dy = 0) {
 const rows = v => v.current.panels.board.items.map(item => item.getText());
 // The list's cursor: the row it is on, and what that row shows on the right.
 const cursor = v => rows(v)[v.current.panels.board.selected] ?? '';
+// The session a row of the open project shows, by its id in the snapshot: rows carry no number,
+// only the session's title. The longest title the row holds is its own.
+function rowSession(v, text) {
+  const titled = (v.current.controller?.snapshot().tasks ?? []).filter(task => taskTitle(task) && text.includes(taskTitle(task)));
+  return titled.sort((a, b) => taskTitle(b).length - taskTitle(a).length)[0]?.id ?? /#(\d+) /.exec(text)?.[1];
+}
 // Moves the list's cursor to the first row whose text matches. Its session shows on the
-// right while the focus stays in the list.
+// right while the focus stays in the list, and what is typed next goes to that session.
 async function selectRow(v, pattern) {
   if (v.current.view !== 'tasks') await send(v, '/tasks');
   await until(() => v.current.view === 'tasks' && rows(v).some(row => pattern.test(row)), `row ${pattern}`);
   const board = v.current.panels.board, before = v.current; board.focus(); board.select(rows(v).findIndex(row => pattern.test(row)));
-  const text = rows(v).find(row => pattern.test(row)), id = /\+ New session/.test(text) && v.current.controller ? 'new' : /#(\d+) /.exec(text)?.[1];
+  const text = rows(v).find(row => pattern.test(row)), id = /\+ New session/.test(text) && v.current.controller ? 'new' : rowSession(v, text);
   // The right side follows on the next draw.
   await until(() => v.current !== before && pattern.test(cursor(v)) && v.current.screen.focused === board && (!id || v.current.session === id), `row ${pattern} shown`);
 }
@@ -219,7 +226,7 @@ test('a message that starts with ! runs in a shell: in a session it joins the ch
   // The label says where a command will run, as soon as the text starts with !.
   panels.ask.readInput(); await until(() => panels.ask.__listener, 'message box');
   v.input.write('!'); await until(() => / Run in .+ · Enter runs it /.test(panels.ask._label.getText()), 'the label names the folder');
-  v.input.write('\x7f'); await until(() => /^ Message Opus · with @reviewer $/.test(panels.ask._label.getText()), 'the label returns');
+  v.input.write('\x7f'); await until(() => /^ Message Opus $/.test(panels.ask._label.getText()), 'the label returns');
   // In an open session the command and its output sit in the chat. Nothing goes to the lead.
   await send(v, "!printf 'one\\ntwo\\n'; pwd; exit 3");
   await until(() => saved().length === 1 && /Shell/.test(chat()) && /\$ printf/.test(chat()) && /exit 3/.test(chat()), 'the command in the chat');
@@ -243,6 +250,115 @@ test('a message that starts with ! runs in a shell: in a session it joins the ch
   await send(v, '!true'); await until(() => modal(v, '$ true') && /\(no output\)/.test(dialogText(v, '$ true')), 'a quiet command says so');
   v.input.write('\x1b'); await until(() => !modal(v, '$ true'), 'closed');
   assert.equal(saved().length, 2); assert.equal(leadRan(), false, 'the lead never ran');
+});
+
+// A file dropped on the terminal arrives as a paste of its path: bare with its spaces escaped,
+// as a CleanShot capture under ~/Library does, or in quotes. A message that starts with that
+// path is a message, sent with the picture, never "Unknown command".
+const SHOT_PNG = Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex');
+function droppedShot(t, p) {
+  const home = temp(t); environment(t, { HOME: home });
+  const shot = path.join(home, 'Library', 'Application Support', 'Shots', 'shot 1.png');
+  fs.mkdirSync(path.dirname(shot), { recursive: true }); fs.writeFileSync(shot, SHOT_PNG);
+  const inputs = () => { try { return fs.readFileSync(path.join(p.parent, 'inputs.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line)).filter(row => row.vendor === 'claude').map(row => row.input); } catch { return []; } };
+  return { shot, dropped: shot.replaceAll(' ', '\\ '), inputs, said: text => inputs().some(input => input.includes(text)),
+    copies: () => [...new Set(inputs().flatMap(text => text.match(/\/\S*elu-code-pictures\/[0-9a-f]{8}-shot-1\.png/g) ?? []))] };
+}
+const paste = (v, text) => v.input.write(`\x1b[200~${text}\x1b[201~`);
+test('a picture dropped in the message box, its path first with spaces escaped, goes as a message with the picture, never Unknown command; with words after it and quoted too; commands stay commands', { timeout: 60000 }, async t => {
+  const p = setup(t, 'answer'), d = droppedShot(t, p);
+  liveTask(p.root, { id: '4', goal: 'Trim coupon codes', state: 'answered' });
+  const v = await view(t, { repo: p.repo }), panels = v.current.panels, status = () => panels.status.getText().replace(/\s+/g, ' ');
+  // The turn ended and the screen said so: the line it brings would else replace the next one.
+  const ended = message => until(() => readTask(p.repo, '4').state === 'answered' && pendingRequests(p.root).every(row => !['queued', 'starting', 'running'].includes(row.state)) && / answered/.test(status()), message);
+  await openTask(v, /Trim coupon codes/);
+  paste(v, d.dropped); await until(() => panels.ask.getValue() === d.dropped, 'the drop is in the box');
+  v.input.write('\r');
+  await until(() => d.copies().length === 1 || /Unknown command/.test(status()), 'sent');
+  assert.doesNotMatch(status(), /Unknown command/); assert.equal(d.copies().length, 1, 'sent to the model with the picture'); assert.equal(panels.ask.getValue(), '');
+  assert.deepEqual(fs.readFileSync(d.copies()[0]), SHOT_PNG, 'the model is given the picture, copied where it may read it');
+  assert.ok(readTask(p.repo, '4').messages.some(row => row.text === d.copies()[0]), 'the chat keeps the message as sent');
+  await ended('the turn ended');
+  // With words after it.
+  paste(v, d.dropped); v.input.write(' this is stuck');
+  await until(() => panels.ask.getValue() === `${d.dropped} this is stuck`, 'typed after the drop');
+  v.input.write('\r'); await until(() => d.said('-shot-1.png this is stuck'), 'sent with its words');
+  await ended('the turn ended again');
+  // Quoted, as some terminals paste it.
+  await send(v, `'${d.shot}' and this one`); await until(() => d.said('-shot-1.png and this one'), 'the quoted form is sent too');
+  assert.equal(d.copies().length, 3, 'each message carries its own copy');
+  await ended('the turn ended once more');
+  // A typed /word that is no command is still refused, and a command still runs.
+  await send(v, '/foo'); await until(() => status().includes('Unknown command: /foo. Type / to see commands.'), '/foo is refused');
+  assert.equal(panels.ask.getValue(), '/foo'); panels.ask.setValue('');
+  await send(v, '/sessions'); await until(() => v.current.view === 'tasks', '/sessions runs');
+});
+
+test('a file dropped where no box is typed in shows in the message box at once: beside the list, in the chat, in the New session form; a picture not on this computer goes with one line', { timeout: 60000 }, async t => {
+  const p = setup(t, 'answer'), d = droppedShot(t, p);
+  liveTask(p.root, { id: '4', goal: 'Trim coupon codes', state: 'answered' });
+  const v = await view(t, { repo: p.repo }), panels = v.current.panels, status = () => panels.status.getText().replace(/\s+/g, ' ');
+  const shows = async (text, where) => { paste(v, text); await until(() => panels.ask.getValue() === text && v.current.screen.focused === panels.ask, `the drop shows in the box at once, ${where}`); };
+  // The cursor on the session's row in the list, the focus there.
+  await selectRow(v, /Trim coupon codes/);
+  await shows(d.dropped, 'beside the list');
+  v.input.write('\r'); await until(() => d.copies().length === 1, 'sent with the picture');
+  await until(() => readTask(p.repo, '4').state === 'answered' && pendingRequests(p.root).every(row => !['queued', 'starting', 'running'].includes(row.state)), 'the turn ended');
+  // A picture this computer does not have (dropped on the terminal of the other computer, which
+  // reaches ELU here over ssh), dropped while the chat has the focus: it shows in the box, the
+  // message goes, and one line says the picture did not.
+  const away = '/Users/someone/Library/Application\\ Support/Shots/shot\\ 2.png';
+  panels.ask.cancel(); panels.chat.focus(); await until(() => v.current.screen.focused === panels.chat, 'the chat has the focus');
+  await shows(away, 'in the chat');
+  v.input.write('\r');
+  // One short row, beside the list of an 80-column screen: the file's name can be long, so it is not in it.
+  const rowsShown = () => panels.status.getText().split('\n').length;
+  await until(() => /^\s*› The picture is on the other computer\.\s*$/.test(status()), 'one line says the picture did not go');
+  assert.equal(rowsShown(), 1, 'one row');
+  const sentLine = status();
+  // The model reads the messages as JSON, where each backslash is doubled.
+  await until(() => d.said(JSON.stringify(away).slice(1, -1)), 'the message went as typed');
+  // The line the answer brings keeps saying it: a model can take minutes, and the owner may look only then.
+  await until(() => status() !== sentLine && / answered/.test(status()), 'the line the answer brings');
+  assert.match(status(), /^\s*› \S.* answered without the picture\.\s*$/, 'the answered line still says the picture did not go');
+  assert.equal(rowsShown(), 1, 'one row once the answer came');
+  // The New session form, its list focused: the drop starts the new session's message.
+  await send(v, '/new'); await until(() => v.current.session === 'new' && !panels.compose.hidden, 'the new session form');
+  panels.ask.cancel(); panels.composeList.focus(); await until(() => v.current.screen.focused === panels.composeList, 'the form has the focus');
+  await shows(d.dropped, 'in the New session form');
+  // Over a dialog nothing goes into the box behind it.
+  panels.ask.setValue(''); await send(v, '/projects'); await until(() => v.current.view === 'projects' && panels.projectsList.items.length === 1, 'Projects');
+  panels.projectsList.focus(); v.input.write('\r'); await until(() => dialogList(v, 'Project sample app')?.lpos, 'a dialog');
+  paste(v, 'not for the box'); await new Promise(resolve => setTimeout(resolve, 300));
+  assert.equal(panels.ask.getValue(), ''); assert.ok(modal(v, 'Project sample app'), 'the dialog stays');
+});
+
+// A dropped picture's path in the box is a draft like any other: a / typed from the list sets it
+// aside and starts a command of its own, and the path is back once the command ran. It had been
+// added to the path, and Enter sent both to the model. A drop where no box is typed in goes after
+// a draft with a space between, as a word of its own: ELU picks where it goes there.
+test('a / typed over a dropped picture in the box starts a command of its own, and a drop over a draft is a word of its own', { timeout: 60000 }, async t => {
+  const p = setup(t, 'answer'), d = droppedShot(t, p);
+  liveTask(p.root, { id: '4', goal: 'Trim coupon codes', state: 'answered' });
+  const v = await view(t, { repo: p.repo }), panels = v.current.panels, ask = panels.ask, focused = () => v.current.screen.focused;
+  await selectRow(v, /Trim coupon codes/);
+  paste(v, d.dropped); await until(() => ask.getValue() === d.dropped && focused() === ask, 'the drop is in the box');
+  v.input.write('\x1b'); await until(() => focused() !== ask, 'out of the box');
+  v.input.write('/help');
+  await until(() => ask.getValue() === '/help' && focused() === ask && !panels.palette.hidden, `a command of its own, with the command list: ${JSON.stringify(ask.getValue())}`);
+  v.input.write('\r'); await until(() => modal(v, 'Commands'), '/help opens');
+  assert.deepEqual(d.inputs(), [], 'nothing went to the model');
+  await dialog(v, 'Commands', ''); await until(() => !modal(v, 'Commands') && ask.getValue() === d.dropped, 'help closed, and the dropped path is back in the box');
+  // A draft in the box, the chat with the focus: the drop goes after it, a space between.
+  ask.setValue('look at this'); ask.cancel(); panels.chat.focus(); await until(() => focused() === panels.chat, 'the chat has the focus');
+  paste(v, d.dropped); await until(() => ask.getValue().endsWith(d.dropped) && focused() === ask, 'the drop is in the box after the draft');
+  assert.equal(ask.getValue(), `look at this ${d.dropped}`);
+  // A draft that ends in a space keeps its one space.
+  ask.setValue('and this '); ask.cancel(); panels.chat.focus(); await until(() => focused() === panels.chat, 'the chat has the focus again');
+  paste(v, d.dropped); await until(() => ask.getValue().endsWith(d.dropped) && focused() === ask, 'the second drop is in the box');
+  assert.equal(ask.getValue(), `and this ${d.dropped}`);
+  v.input.write('\r'); await until(() => d.copies().length === 1, 'sent with the picture');
+  assert.ok(d.said('and this /'), 'the words and the picture went as one message');
 });
 
 test('Sessions fits an 80 by 24 terminal, with six tabs and a four-line message box', async t => {
@@ -439,41 +555,185 @@ test('+ New project asks for a folder and a name, gives a new folder Git history
   assert.equal(fs.readFileSync(p.calls, 'utf8'), calls, 'no vendor runs');
 });
 
-test('project settings edit instructions and context in place: Enter adds a line, Ctrl-S saves, Esc cancels', async t => {
+test('project settings show instructions and context to read, and e edits them in place: Enter adds a line, Ctrl-S saves, Esc goes back', async t => {
   const p = setup(t), v = await view(t, { repo: p.repo }), panels = v.current.panels;
+  // The text to read, with e edit in its hint and no editor open.
+  const reading = (title, what) => until(() => modal(v, title) && !editor(v, title) && modal(v, title).children.some(child => child.type === 'text' && /e edit/.test(child.getText())), what);
+  const shown = title => modal(v, title).children.find(child => child.options?.scrollable).getText();
   await send(v, '/projects'); await until(() => v.current.view === 'projects' && panels.projectsList.items.length === 1, 'Projects');
   panels.projectsList.focus(); v.input.write('\r'); await until(() => modal(v, 'Project sample app'), 'settings');
-  v.input.write('\r'); await until(() => editor(v, 'Instructions · sample app')?.__listener, 'instructions editor');
+  v.input.write('\r'); await reading('Instructions · sample app', 'instructions to read');
+  v.input.write('e'); await until(() => editor(v, 'Instructions · sample app')?.__listener, 'instructions editor');
   v.input.write('Always answer in French'); v.input.write('\r'); v.input.write('Keep it short');
   await until(() => editor(v, 'Instructions · sample app').getValue() === 'Always answer in French\nKeep it short', 'typed, with Enter as a newline');
   assert.match(v.frame(), /Enter adds a line · Ctrl-S saves · Esc cancels/);
   v.input.write('\x13');
-  await until(() => dialogRows(v, 'Project sample app')[1] === 'Instructions  Always answer in French', 'saved and back in the settings');
+  await reading('Instructions · sample app', 'saved and shown to read');
+  assert.equal(shown('Instructions · sample app'), 'Always answer in French\nKeep it short');
   assert.equal(fs.readFileSync(path.join(p.root, '.elu-code', 'instructions.md'), 'utf8'), 'Always answer in French\nKeep it short\n');
   assert.match(panels.status.getText(), /Saved\./);
+  v.input.write('\x1b'); await until(() => dialogRows(v, 'Project sample app')[1] === 'Instructions  Always answer in French', 'back in the settings');
   // The editor reopens with the text, without the file's last newline.
-  v.input.write('\r'); await until(() => editor(v, 'Instructions · sample app')?.__listener, 'editor again');
+  v.input.write('\r'); await reading('Instructions · sample app', 'to read again');
+  v.input.write('\r'); await until(() => editor(v, 'Instructions · sample app')?.__listener, 'Enter opens the editor too');
   assert.equal(editor(v, 'Instructions · sample app').getValue(), 'Always answer in French\nKeep it short');
-  v.input.write('\x1b'); await until(() => modal(v, 'Project sample app') && !modal(v, 'Instructions · sample app'), 'Esc keeps the file');
+  v.input.write('\x1b'); await reading('Instructions · sample app', 'Esc keeps the file and goes back to read');
+  v.input.write('\x1b'); await until(() => modal(v, 'Project sample app') && !modal(v, 'Instructions · sample app'), 'and Esc again to the settings');
   assert.equal(fs.readFileSync(path.join(p.root, '.elu-code', 'instructions.md'), 'utf8'), 'Always answer in French\nKeep it short\n');
   // Context: Esc saves nothing; a paste goes in whole; a save over the limit comes back with the reason.
-  v.input.write('\x1b[B'); v.input.write('\r'); await until(() => editor(v, 'Context · sample app')?.__listener, 'context editor');
+  v.input.write('\x1b[B'); v.input.write('\r'); await reading('Context · sample app', 'context to read');
+  v.input.write('e'); await until(() => editor(v, 'Context · sample app')?.__listener, 'context editor');
   v.input.write('draft'); await until(() => editor(v, 'Context · sample app').getValue() === 'draft', 'typed');
-  v.input.write('\x1b'); await until(() => modal(v, 'Project sample app') && !modal(v, 'Context · sample app'), 'cancelled');
+  v.input.write('\x1b'); await reading('Context · sample app', 'cancelled');
+  v.input.write('\x1b'); await until(() => modal(v, 'Project sample app') && !modal(v, 'Context · sample app'), 'back in the settings');
   assert.equal(fs.existsSync(path.join(p.root, '.elu-code', 'context.md')), false); assert.equal(dialogRows(v, 'Project sample app')[2], 'Context       none');
-  v.input.write('\r'); await until(() => editor(v, 'Context · sample app')?.__listener, 'context editor again');
+  v.input.write('\r'); await reading('Context · sample app', 'context to read again');
+  v.input.write('e'); await until(() => editor(v, 'Context · sample app')?.__listener, 'context editor again');
   v.input.write('\x1b[200~The API lives in src/.\nTests in test/.\x1b[201~');
   await until(() => editor(v, 'Context · sample app').getValue() === 'The API lives in src/.\nTests in test/.', 'pasted with its newline');
-  v.input.write('\x13'); await until(() => dialogRows(v, 'Project sample app')[2] === 'Context       The API lives in src/.', 'context saved');
+  v.input.write('\x13'); await reading('Context · sample app', 'context saved');
+  v.input.write('\x1b'); await until(() => dialogRows(v, 'Project sample app')[2] === 'Context       The API lives in src/.', 'shown in the settings');
   assert.equal(fs.readFileSync(path.join(p.root, '.elu-code', 'context.md'), 'utf8'), 'The API lives in src/.\nTests in test/.\n');
-  v.input.write('\r'); await until(() => editor(v, 'Context · sample app')?.__listener, 'context editor once more');
+  v.input.write('\r'); await reading('Context · sample app', 'context to read once more');
+  v.input.write('e'); await until(() => editor(v, 'Context · sample app')?.__listener, 'context editor once more');
   // A long context is saved whole: ELU sets no size limit of its own.
   const long = Array.from({ length: 2100 }, (_, n) => `Note ${n}: ${'x'.repeat(100)}`).join('\n');
   editor(v, 'Context · sample app').setValue(long); v.input.write('\x13');
   await until(() => fs.readFileSync(path.join(p.root, '.elu-code', 'context.md'), 'utf8') === `${long}\n`, 'saved whole');
-  await until(() => modal(v, 'Project sample app') && !editor(v, 'Context · sample app')?.__listener, 'back in the settings');
+  await reading('Context · sample app', 'back to read');
+  v.input.write('\x1b'); await until(() => modal(v, 'Project sample app') && !modal(v, 'Context · sample app'), 'back in the settings');
   v.input.write('\x1b'); await until(() => !modal(v, 'Project sample app') && v.current.screen.focused === panels.projectsList, 'Esc closes the settings and the list keeps focus');
   assert.ok(!fs.readFileSync(p.calls, 'utf8').includes('"-p"'), 'no lead runs');
+});
+
+// The owner's context holds what his sessions learned, one dated line each, many of them two to
+// four rows long. It opens to read: a heading in bold, each lesson a bullet whose rows stay under
+// its own text, a blank row between lessons, the date short and muted over that day's lessons.
+// e (or Enter) opens the editor on the file's text as it is; its Esc and its save come back here.
+test('a project\'s context opens to read: bullets with their rows under their own text and short dates; e edits the file as it is', { timeout: 60000 }, async t => {
+  const p = setup(t), year = new Date().getFullYear(), title = 'Context · sample app', file = path.join(p.root, '.elu-code', 'context.md');
+  const WORDS = 'keep replies short and plain because the owner reads them between meetings on a small screen and run every check on the second computer before a branch is pushed so the first one stays quiet'.split(' ');
+  const lessons = Array.from({ length: 25 }, (_, n) => ({ day: 9 + Math.floor(n / 5), text: `Lesson ${n + 1}: ${Array.from({ length: 22 + (n % 4) * 9 }, (_, w) => WORDS[(n * 3 + w) % WORDS.length]).join(' ')}.` }));
+  const text = `The API lives in src/. Tests are in test/ and run with npm test.\n\n## Learned from you\n\n${lessons.map(item => `- ${year}-11-${String(item.day).padStart(2, '0')}: ${item.text}`).join('\n')}\n`;
+  saveContext(p.root, text); const bytes = fs.readFileSync(file);
+  let draws = 0; const v = await view(t, { repo: p.repo, onRender: () => { draws += 1; } }), panels = v.current.panels;
+  const reader = () => modal(v, title)?.children.find(child => child.options?.scrollable && child.type !== 'textarea');
+  const hint = () => modal(v, title)?.children.filter(child => child.type === 'text').map(child => child.getText()).join(' ') ?? '';
+  // The rows as the app made them, and the ones the screen shows: what blessed last sent the
+  // terminal (olines). Its working copy (lines) is blank under the dialog where the status and
+  // the message box behind it have their text set again on the app's timer, until the next frame,
+  // and a tick that changed nothing draws none (lib/selection.mjs draws first for the same reason).
+  const made = () => reader().getText().split('\n');
+  const onScreen = () => { const box = reader(); return v.current.screen.olines.slice(box.atop, box.atop + box.height).map(row => row.slice(box.aleft, box.aleft + box.width - 1).map(cell => cell[1]).join('').trimEnd()); };
+  const reading = what => until(() => reader()?.lpos && !editor(v, title) && /e edit/.test(hint()), what);
+  // Every lesson is one bullet: its first row behind "• ", the rest two columns in, under its
+  // text, nothing of it cut, a blank row or its day's date above it, and a blank row after it.
+  const readable = width => {
+    const rows = made();
+    assert.equal(rows[0], 'The API lives in src/. Tests are in test/ and run with npm test.');
+    assert.ok(rows.includes('Learned from you') && rows.every(row => !/##|\d{4}-\d\d-\d\d/.test(row)), 'no markup and no long dates');
+    assert.match(reader().content, /\{bold\}Learned from you\{\/bold\}/, 'the heading is bold');
+    assert.deepEqual(rows.filter(row => /^[A-Z][a-z]{2} \d+$/.test(row)), ['Nov 9', 'Nov 10', 'Nov 11', 'Nov 12', 'Nov 13'], 'one short date over each day');
+    let tall = 0;
+    for (const [n, lesson] of lessons.entries()) {
+      const at = rows.findIndex(row => row.startsWith(`• Lesson ${n + 1}: `)); assert.ok(at > 0, `lesson ${n + 1} is a bullet`);
+      let end = at + 1; while (end < rows.length && rows[end] !== '') { assert.match(rows[end], /^ {2}\S/, `lesson ${n + 1} row ${end - at + 1} hangs under its text: "${rows[end]}"`); end += 1; }
+      assert.equal(rows.slice(at, end).map(row => row.trim()).join(' ').replace(/^• /, ''), lesson.text, `lesson ${n + 1} whole`);
+      assert.ok(rows[at - 1] === '' || rows[at - 1] === `Nov ${lesson.day}`, `lesson ${n + 1} has room above it`);
+      if (n % 5 === 0) assert.equal(rows[at - 1], `Nov ${lesson.day}`, `lesson ${n + 1} starts its day`);
+      if (end - at >= 3) tall += 1;
+    }
+    assert.ok(tall >= 5, `lessons of three rows or more: ${tall}`);
+    assert.ok(rows.every(row => columns(row) <= width), `every row fits ${width} columns`);
+    assert.equal(reader()._clines.length, rows.length, 'and blessed wraps none of them again');
+  };
+  await send(v, '/projects'); await until(() => v.current.view === 'projects' && panels.projectsList.items.length === 1, 'Projects');
+  panels.projectsList.focus(); v.input.write('\r'); await until(() => modal(v, 'Project sample app') && dialogList(v, 'Project sample app').selected === 1, 'settings');
+  v.input.write('\x1b[B'); v.input.write('\r'); await reading('the context opens to read');
+  assert.equal(hint(), 'e edit · ↑↓ scroll · esc close');
+  readable(reader().width - 1);
+  // The app's timer draws on while nothing changes, and the screen still shows the first rows.
+  const drawn = draws; await until(() => draws >= drawn + 3, 'three more draws');
+  await until(() => onScreen()[0] === made()[0] && onScreen().join('\n') === made().slice(0, onScreen().length).join('\n'), 'the screen shows the first rows');
+  // The arrows, the page keys, Home and End and the wheel scroll it.
+  const top = () => reader().childBase;
+  v.input.write('\x1b[B'); await until(() => top() === 1, '↓ scrolls a row');
+  v.input.write('\x1b[6~'); await until(() => top() > 5, 'PgDn scrolls a page');
+  v.input.write('\x1b[A'); const paged = top(); await until(() => top() === paged, '↑ back a row');
+  v.input.write('\x1b[F'); await until(() => onScreen().filter(Boolean).at(-1) === made().filter(Boolean).at(-1), 'End shows the last lesson');
+  v.input.write('\x1b[H'); await until(() => top() === 0 && onScreen()[0] === made()[0], 'Home the top');
+  const box = reader(); v.input.write(`\x1b[<65;${box.aleft + 3};${box.atop + 2}M`); await until(() => top() === 1, 'the wheel scrolls a row');
+  // e opens the editor on the file's text as it is, with its own keys; its Esc comes back here.
+  v.input.write('e'); await until(() => editor(v, title)?.__listener, 'e opens the editor');
+  assert.equal(editor(v, title).getValue(), text.replace(/\n$/, '')); assert.match(v.frame(), /Enter adds a line · Ctrl-S saves · Esc cancels/);
+  v.input.write('\x1b'); await reading('Esc in the editor comes back to the view');
+  assert.ok(modal(v, title) && !modal(v, 'Project sample app'), 'the view, not the settings');
+  // Enter opens it too, and a save of nothing changed keeps the file byte for byte, then shows it again.
+  v.input.write('\r'); await until(() => editor(v, title)?.__listener, 'Enter opens the editor');
+  v.input.write('\x13'); await reading('the save comes back to the view');
+  assert.ok(fs.readFileSync(file).equals(bytes), 'the file is byte for byte as it was'); assert.match(panels.status.getText(), /Saved\./);
+  // At 140 by 50 it is drawn again for the width: the same bullets, rows and dates, nothing cut.
+  v.output.columns = 140; v.output.rows = 50; v.output.emit('resize'); await until(() => v.current.screen.width === 140 && reader()?.width > 80, '140 by 50');
+  await until(() => made().length < 150 && onScreen()[0] !== undefined, 'drawn again for the width');
+  readable(reader().width - 1);
+  v.input.write('\x1b'); await until(() => modal(v, 'Project sample app') && !modal(v, title), 'Esc closes the view');
+  assert.ok(fs.readFileSync(file).equals(bytes), 'still as it was');
+});
+
+test('empty instructions and context open to read and say e adds text; what e saves shows there', async t => {
+  const p = setup(t), v = await view(t, { repo: p.repo }), panels = v.current.panels;
+  const reader = title => modal(v, title)?.children.find(child => child.options?.scrollable && child.type !== 'textarea');
+  const hint = title => modal(v, title)?.children.filter(child => child.type === 'text').map(child => child.getText()).join(' ') ?? '';
+  const reading = (title, what) => until(() => reader(title)?.lpos && !editor(v, title) && /e edit/.test(hint(title)), what);
+  await send(v, '/projects'); await until(() => v.current.view === 'projects' && panels.projectsList.items.length === 1, 'Projects');
+  panels.projectsList.focus(); v.input.write('\r'); await until(() => modal(v, 'Project sample app'), 'settings');
+  for (const [row, title, empty, typed, file] of [[1, 'Instructions · sample app', 'No instructions yet. e adds text.', 'Use pnpm, not npm.', 'instructions.md'], [2, 'Context · sample app', 'No context yet. e adds text.', '## Notes\n- The API lives in src/.', 'context.md']]) {
+    if (row === 2) v.input.write('\x1b[B');
+    await until(() => dialogList(v, 'Project sample app')?.selected === row, `on the row of ${title}`);
+    v.input.write('\r'); await reading(title, `${title} opens to read`);
+    assert.equal(reader(title).getText().trim(), empty); assert.equal(hint(title), 'e edit · esc close', 'nothing to scroll');
+    v.input.write('e'); await until(() => editor(v, title)?.__listener, 'the editor');
+    v.input.write(`\x1b[200~${typed}\x1b[201~`); await until(() => editor(v, title).getValue() === typed, 'typed');
+    v.input.write('\x13'); await reading(title, 'saved, and shown to read');
+    assert.equal(fs.readFileSync(path.join(p.root, '.elu-code', file), 'utf8'), `${typed}\n`);
+    assert.deepEqual(reader(title).getText().split('\n'), row === 1 ? ['Use pnpm, not npm.'] : ['Notes', '', '• The API lives in src/.']);
+    v.input.write('\x1b'); await until(() => modal(v, 'Project sample app') && !modal(v, title), 'back in the settings');
+  }
+});
+
+// A file that came with the folder (a teammate's, by Git) and that he chose not to use is there
+// all the same: the view says so and where it shows, not that there is none, and says what e does.
+test('instructions and context that came with the folder and are not in use open to say so; e writes new text in their place', { timeout: 40000 }, async t => {
+  const p = setup(t, 'answer'); registerProject(p.repo);
+  const came = { 'instructions.md': 'Answer in French.\n', 'context.md': 'The API lives in src/.\n' }, PAGE = 'Project sample app';
+  for (const [name, text] of Object.entries(came)) fs.writeFileSync(path.join(p.root, '.elu-code', name), text);
+  for (const row of pendingTrust(p.root)) answerTrust(p.root, row, false);
+  const v = await view(t, { dashboard: true }), panels = v.current.panels;
+  const reader = title => modal(v, title)?.children.find(child => child.options?.scrollable && child.type !== 'textarea');
+  const hint = title => modal(v, title)?.children.filter(child => child.type === 'text').map(child => child.getText()).join(' ') ?? '';
+  const reading = (title, what) => until(() => reader(title)?.lpos && !editor(v, title) && /e edit/.test(hint(title)), what);
+  await send(v, '/projects'); await until(() => v.current.view === 'projects' && panels.projectsList.items.length === 1, 'the project row');
+  panels.projectsList.focus(); v.input.write('\r'); await until(() => modal(v, PAGE), 'the project page');
+  assert.deepEqual(dialogRows(v, PAGE).slice(1, 3), ['Instructions  not in use', 'Context       not in use']);
+  for (const [row, file, title] of [[1, 'instructions.md', 'Instructions · sample app'], [2, 'context.md', 'Context · sample app']]) {
+    v.input.write('\x1b[B'); await until(() => dialogList(v, PAGE)?.selected === row, `on the row of ${title}`);
+    v.input.write('\r'); await reading(title, `${title} opens to read`);
+    assert.equal(reader(title).getText().split('\n').map(line => line.trim()).join(' '), `${file} came with the folder and is not in use. Shared files shows it. e writes new text in its place.`);
+    assert.equal(hint(title), 'e edit · esc close');
+    // e opens the editor empty, as before; its Esc writes nothing.
+    v.input.write('e'); await until(() => editor(v, title)?.__listener, 'the editor'); assert.equal(editor(v, title).getValue(), '');
+    v.input.write('\x1b'); await reading(title, 'Esc goes back to read');
+    assert.equal(fs.readFileSync(path.join(p.root, '.elu-code', file), 'utf8'), came[file], 'the file is as it came');
+    if (row === 2) {
+      // What e saves takes its place, and is what the view and the page then show.
+      v.input.write('e'); await until(() => editor(v, title)?.__listener, 'the editor again');
+      v.input.write('\x1b[200~Tests are in test/.\x1b[201~'); await until(() => editor(v, title).getValue() === 'Tests are in test/.', 'typed');
+      v.input.write('\x13'); await reading(title, 'saved, and shown to read');
+      assert.equal(fs.readFileSync(path.join(p.root, '.elu-code', file), 'utf8'), 'Tests are in test/.\n'); assert.equal(reader(title).getText(), 'Tests are in test/.');
+    }
+    v.input.write('\x1b'); await until(() => modal(v, PAGE) && !modal(v, title), 'back on the project page');
+  }
+  assert.deepEqual(dialogRows(v, PAGE).slice(1, 3), ['Instructions  not in use', 'Context       Tests are in test/.']);
 });
 
 // A dialog is modal: the mouse reaches nothing behind it, and its keys stay with it.
@@ -630,7 +890,8 @@ test('a click outside a dialog with typed text keeps the dialog, its text and th
   const box = title => modal(v, title)?.children.find(child => child.type === 'textbox');
   await send(v, '/projects'); await until(() => v.current.view === 'projects' && list.items.length === 1, 'Projects');
   list.focus(); v.input.write('\r'); await until(() => modal(v, 'Project sample app'), 'settings');
-  v.input.write('\r'); await until(() => editor(v, 'Instructions · sample app')?.__listener, 'instructions editor');
+  v.input.write('\r'); await until(() => modal(v, 'Instructions · sample app') && !editor(v, 'Instructions · sample app'), 'instructions to read');
+  v.input.write('e'); await until(() => editor(v, 'Instructions · sample app')?.__listener, 'instructions editor');
   const field = editor(v, 'Instructions · sample app'), kept = () => { assert.equal(v.current.view, 'projects'); assert.equal(editor(v, 'Instructions · sample app'), field, 'the editor stays open'); assert.equal(v.current.screen.focused, field); assert.ok(field._reading); };
   v.input.write('Always answer in French'); await until(() => field.getValue() === 'Always answer in French', 'typed');
   // The tabs are above the editor: a click and the wheel there change nothing.
@@ -641,7 +902,8 @@ test('a click outside a dialog with typed text keeps the dialog, its text and th
   // A click on the dialog's own border or hint does not reach the list behind it either.
   click(v, modal(v, 'Instructions · sample app'), 0, 0); click(v, modal(v, 'Instructions · sample app').children.find(child => child.type === 'text')); await pause();
   kept(); assert.equal(field.getValue(), 'Always answer in French!');
-  v.input.write('\x1b'); await until(() => modal(v, 'Project sample app') && !modal(v, 'Instructions · sample app'), 'Esc closes the editor');
+  v.input.write('\x1b'); await until(() => modal(v, 'Instructions · sample app') && !editor(v, 'Instructions · sample app'), 'Esc closes the editor');
+  v.input.write('\x1b'); await until(() => modal(v, 'Project sample app') && !modal(v, 'Instructions · sample app'), 'and the text to read');
   v.input.write('\x1b'); await until(() => !modal(v, 'Project sample app') && v.current.screen.focused === list, 'and the settings');
   // A prompt nothing was typed in closes on a click outside, as on Esc.
   v.input.write('n'); await until(() => box('New project')?.__listener, 'folder prompt');
@@ -721,7 +983,7 @@ test("a computer with only Grok Build: the project's settings show its default m
   await page();
   assert.deepEqual(dialogRows(v, PAGE).slice(3, 5), ['Default model Grok Build', 'This computer Grok Build · Opus is chosen, but Claude Code is not installed']);
   v.input.write('\x1b'); await until(() => !modal(v, PAGE), 'closed');
-  await send(v, '/new'); await until(() => /Your message goes to Grok Build\. Opus is this computer's default, but Claude Code is not installed here\. Bots review/.test(panels.composeHint.getText().replace(/\s+/g, ' ')), 'said on the new session form');
+  await send(v, '/new'); await until(() => /Your message goes to Grok Build\. Opus is this computer's default, but Claude Code is not installed here\. No bot reviews/.test(panels.composeHint.getText().replace(/\s+/g, ' ')), 'said on the new session form');
 });
 
 test('the default model of a project that is not the active one is set from its settings too', { timeout: 60000 }, async t => {
@@ -750,7 +1012,7 @@ test('clicks inside a list dialog mark and pick its rows; one on its border or h
   // A click marks a row, and a click on the marked row picks it.
   click(v, rows.items[2]); await until(() => rows.selected === 2, 'a click marks the row');
   assert.ok(modal(v, title)); assert.equal(v.current.screen.focused, rows);
-  click(v, rows.items[2]); await until(() => editor(v, 'Context · sample app')?.__listener, 'a click on the marked row picks it');
+  click(v, rows.items[2]); await until(() => modal(v, 'Context · sample app')?.lpos && !editor(v, 'Context · sample app'), 'a click on the marked row picks it');
   v.input.write('\x1b'); await until(() => modal(v, title) && !modal(v, 'Context · sample app'), 'back in the settings');
   v.input.write('\x1b'); await until(() => !modal(v, title) && v.current.screen.focused === list, 'Esc closes the settings');
 });
@@ -1096,7 +1358,7 @@ test('a long list of models is clipped to the dialog with a count of the rest, a
   v.input.write('\x1b'); await until(() => !modal(v, 'Model') && v.current.screen.focused === panels.botsList, 'Esc makes nothing'); assert.deepEqual(listBots(), []);
   // agy is never run for its models: the dialog is the plain one, Tab does nothing, and any name goes on to the next step.
   await start('pages', 'agy');
-  assert.deepEqual(modelLines(v), ['A model agy knows by name. Empty uses Antigravity CLI\'s own.']); assert.match(plainFrame(v), /┌─ Enter submits \/ Esc cancels \/ PgUp PgDn page ─/);
+  assert.deepEqual(modelLines(v), ['A model agy knows by name. Empty uses Antigravity CLI\'s own.']); assert.match(plainFrame(v), /┌─ Enter submits \/ Esc cancels ─/, 'its one line fits: no page keys');
   v.input.write('\t'); v.input.write('some-model'); await modelHolds(v, 'some-model'); v.input.write('\r'); await plainBot(v);
   await until(() => editor(v, 'Instructions · @pages')?.__listener, 'on to the instructions, with no effort list'); v.input.write('Check the pages.');
   await until(() => editor(v, 'Instructions · @pages').getValue() === 'Check the pages.', 'typed'); v.input.write('\x13');
@@ -1133,7 +1395,7 @@ test('a model name that cannot be saved is refused at the Model step, so a long 
 });
 
 test('@name in a session asks that bot, not the lead: @ offers the saved bots, the reply joins the chat in its own tone, and /bots add or remove changes who is in it', { timeout: 40000 }, async t => {
-  const p = setup(t, 'answer'); delete process.env.NO_COLOR;
+  const p = setup(t, 'answer'); delete process.env.ELU_NO_COLOR;
   saveBot({ name: 'sec', vendor: 'claude', color: 'violet', instructions: 'Review the change for leaked secrets.' }); saveBot({ name: 'docs', vendor: 'claude', model: 'opus', color: 'gold', instructions: 'Check that the docs match the change.' });
   const v = await view(t, { repo: p.repo }), panels = v.current.panels, status = () => panels.status.getText(), chat = () => panels.chat.getText(), label = () => panels.ask._label.getText();
   // At 120 columns the message box has room for its whole label, bots included.
@@ -1150,10 +1412,10 @@ test('@name in a session asks that bot, not the lead: @ offers the saved bots, t
   assert.deepEqual(offered().filter(row => /^@(docs|sec) /.test(row)), ['@docs Check that the docs match the change.', '@sec Review the change for leaked secrets.']);
   v.input.write('s'); await until(() => panels.palette.items.length === 1 && /^@sec /.test(panels.palette.items[0].getText().trim()), 'narrowed to @sec');
   v.input.write('\t'); await until(() => panels.ask.getValue() === '@sec ' && panels.palette.hidden, 'Tab fills it in');
-  // The name alone adds the bot to the session the form starts: nothing runs, and the form and the label name it beside the reviewer every session starts with.
+  // The name alone adds the bot to the session the form starts: nothing runs, and the form and the label name it.
   v.input.write('\r'); await until(() => /@sec is in this session\. It reviews the changes\./.test(status()) && panels.ask.getValue() === '', 'added to the new session');
   assert.equal(v.current.view, 'tasks'); assert.equal(tasks().length, 0); assert.equal(runs().length, 0);
-  await until(() => /New session → Opus · sample app · with @reviewer @sec /.test(label()) && panels.composeList.items.some(item => /^Bots\s+@reviewer @sec\b/.test(item.getText())), 'the form and the label name both bots');
+  await until(() => /New session → Opus · sample app · with @sec /.test(label()) && panels.composeList.items.some(item => /^Bots\s+@sec\b/.test(item.getText())), 'the form and the label name the bot');
   // With a message, a new session starts and the bot answers it. The session's model does not run.
   await typing(); v.input.write('@sec Is the token in config.js a secret?'); await until(() => panels.ask.getValue() === '@sec Is the token in config.js a secret?', 'typed');
   v.input.write('\r'); await until(() => tasks()[0]?.state === 'answered' && v.current.session === tasks()[0].id, 'the bot answered in a new session');
@@ -1167,10 +1429,10 @@ test('@name in a session asks that bot, not the lead: @ offers the saved bots, t
   // The bot's reply sits behind a bar of the bot's own color, violet here; your message keeps its blue one.
   assert.match(panels.chat.content, /\{141-fg\}\{bold\}@sec \(fable 5\.1 high\)\{\/bold\}/); assert.match(panels.chat.content, /\{75-fg\}\{bold\}You → @sec\{\/bold\}/);
   // The session keeps the bots its form had. The owner wrote to @sec, so the message box names @sec as who gets the next message.
-  assert.deepEqual(task(id).bots, ['reviewer', 'sec']); await until(() => /^ Message @sec · @model writes to Opus $/.test(label()), 'the label names who gets the next message');
+  assert.deepEqual(task(id).bots, ['sec']); await until(() => /^ Message @sec · @model writes to Opus $/.test(label()), 'the label names who gets the next message');
   // @model writes to the session's model, and the message box names it and the bots again. A message that starts with a word that is no bot goes there too.
   await send(v, '@model Can I add multiple agents?'); await until(() => roles(id).length === 2 && task(id).state === 'answered', 'the lead answered');
-  await until(() => /^ Message Opus · Ask for approval · with @reviewer @sec $/.test(label()), 'the label names the bots');
+  await until(() => /^ Message Opus · Ask for approval · with @sec $/.test(label()), 'the label names the bots');
   await send(v, '@nobody what does this function do?'); await until(() => roles(id).length === 3 && task(id).state === 'answered', 'the lead answered again');
   assert.deepEqual(roles(id), ['bot:sec', 'lead', 'lead']); assert.equal(task(id).messages.at(-1).text, '@nobody what does this function do?', 'sent as typed');
   await until(() => /^Fable 5\.1 \(high\) {2}\d{1,2}:\d\d [AP]M\n┃ Yes/m.test(chat()) && /You {2}\d{1,2}:\d\d [AP]M\n┃ @nobody what does this function do\?/.test(chat()), 'the model’s side of the chat, under its name'); assert.doesNotMatch(chat(), /\(lead\)/);
@@ -1181,17 +1443,17 @@ test('@name in a session asks that bot, not the lead: @ offers the saved bots, t
   v.input.write('\r'); await until(() => roles(id).length === 4 && task(id).state === 'answered', '@docs answered');
   assert.equal(roles(id).at(-1), 'bot:docs'); assert.equal(runs().at(-1).args[runs().at(-1).args.indexOf('--model') + 1], 'opus');
   await until(() => /You → @docs {2}\d{1,2}:\d\d [AP]M\n┃ Is the README still right\?/.test(chat()) && /@docs \(fable 5\.1 high\) {2}\d{1,2}:\d\d [AP]M\n┃ Yes/.test(chat()) && /^ Message @docs · @model writes to Opus $/.test(label()), 'its reply, and the label names who gets the next message now');
-  assert.deepEqual(task(id).bots, ['reviewer', 'sec', 'docs'], 'the bot that was written to joined the session');
+  assert.deepEqual(task(id).bots, ['sec', 'docs'], 'the bot that was written to joined the session');
   assert.match(panels.chat.content, /\{221-fg\}\{bold\}@docs \(fable 5\.1 high\)\{\/bold\}/, '@docs answers in its own color, gold');
   // /bots remove and /bots add change who is in the chat. The command list offers the bots each can take.
-  await send(v, '/bots remove docs'); await until(() => /@docs left this session\./.test(status()) && /with @reviewer @sec $/.test(label()), 'removed'); assert.deepEqual(task(id).bots, ['reviewer', 'sec']);
+  await send(v, '/bots remove docs'); await until(() => /@docs left this session\./.test(status()) && /with @sec $/.test(label()), 'removed'); assert.deepEqual(task(id).bots, ['sec']);
   await send(v, '/bots remove docs'); await until(() => /@docs is not in this session\./.test(status()), 'not in it');
   await typing(); panels.ask.setValue(''); v.input.write('/bots add'); await until(() => panels.ask.getValue() === '/bots add' && !panels.palette.hidden, 'the command list');
-  v.input.write('\r'); await until(() => panels.ask.getValue() === '/bots add ' && offered().map(row => row.split(' ')[0]).join() === 'lead,qa,pair,docs,elu', 'only the bots that are not in the session');
+  v.input.write('\r'); await until(() => panels.ask.getValue() === '/bots add ' && offered().map(row => row.split(' ')[0]).join() === 'reviewer,lead,qa,pair,docs,elu', 'only the bots that are not in the session');
   assert.ok(offered().includes('docs Check that the docs match the change.'));
   v.input.write('d'); await until(() => offered().join('|') === 'docs Check that the docs match the change.', 'narrowed as typed');
   v.input.write('\r'); await until(() => /@docs is in this session\. It reviews the changes\./.test(status()), 'added');
-  assert.deepEqual(task(id).bots, ['reviewer', 'sec', 'docs']);
+  assert.deepEqual(task(id).bots, ['sec', 'docs']);
   await send(v, '/bots add @docs'); await until(() => /@docs is already in this session\./.test(status()), 'already in it');
   await send(v, '/bots add nobody'); await until(() => /There is no bot named nobody\./.test(status()), 'not a saved bot');
   await send(v, '/bots keep sec'); await until(() => /Use \/bots, \/bots add NAME, \/bots remove NAME, \/bots schedule on NAME, \/bots schedule off NAME, \/bots run NAME or \/bots color NAME COLOR\./.test(status().replace(/\s+/g, ' ')), 'usage');
@@ -1201,14 +1463,14 @@ test('@name in a session asks that bot, not the lead: @ offers the saved bots, t
   await selectRow(v, /daily 9:00/); await until(() => v.current.session === null, 'a row that is not a session');
   await send(v, '/bots add sec'); await until(() => /Open a session first\./.test(status()), 'no session open');
   await send(v, '/new'); await until(() => v.current.session === 'new' && !panels.compose.hidden, 'the new session form');
-  await send(v, '/bots add sec'); await until(() => /@sec is in this session\. It reviews the changes\./.test(status()) && /New session → Opus · sample app · with @reviewer @sec $/.test(label()), 'kept for the session about to start');
+  await send(v, '/bots add sec'); await until(() => /@sec is in this session\. It reviews the changes\./.test(status()) && /New session → Opus · sample app · with @sec $/.test(label()), 'kept for the session about to start');
   await send(v, 'Can I add multiple agents?'); await until(() => tasks().length === 2 && tasks().every(row => row.state === 'answered'), 'the new session ran');
   const next = tasks().find(row => row.id !== id);
-  assert.deepEqual(next.bots, ['reviewer', 'sec']); assert.deepEqual(next.runs.map(run => run.role), ['lead']);
+  assert.deepEqual(next.bots, ['sec']); assert.deepEqual(next.runs.map(run => run.role), ['lead']);
   // A bot that was deleted since drops out of a session the next time its bots change.
-  removeBot('docs'); await openTask(v, /✓ Is the token in…/); await until(() => v.current.session === id && /with @reviewer @sec @docs $/.test(label()), 'the first session, still naming all three');
-  await send(v, '/bots remove sec'); await until(() => /@sec left this session\./.test(status()) && /· with @reviewer $/.test(label()), 'only the reviewer is left in it');
-  assert.deepEqual(task(id).bots, ['reviewer']);
+  removeBot('docs'); await openTask(v, /✓ Is the token in…/); await until(() => v.current.session === id && /with @sec @docs $/.test(label()), 'the first session, still naming both');
+  await send(v, '/bots remove sec'); await until(() => /@sec left this session\./.test(status()) && !/ with @/.test(label()), 'no bot is left in it');
+  assert.deepEqual(task(id).bots, []);
 });
 
 // The owner wrote to a bot, then sent "continue" with no name, and the session's model took
@@ -1347,7 +1609,7 @@ test('a message with no @name sent before the first message to a bot is picked u
 });
 
 test('a bot at work is named in the chat; one that is stopped or cannot answer says so and leaves the session as it stood; a retry or a saved request goes to whoever the message was written to', { timeout: 40000 }, async t => {
-  const p = setup(t, 'answer'); delete process.env.NO_COLOR;
+  const p = setup(t, 'answer'); delete process.env.ELU_NO_COLOR;
   saveBot({ name: 'sec', vendor: 'claude', instructions: 'Review the change for leaked secrets.' });
   const v = await view(t, { repo: p.repo }), panels = v.current.panels, status = () => panels.status.getText(), chat = () => panels.chat.getText();
   v.output.columns = 120; v.output.rows = 30; v.output.emit('resize'); await until(() => v.current.screen.width === 120, 'room for whole lines');
@@ -1955,6 +2217,30 @@ test('with TERM=dumb ELU says the terminal cannot draw it and what to do, and dr
   assert.equal(raw, '', 'nothing was drawn');
 });
 
+// Some computers set NO_COLOR for every command line. The app draws in colour there all the same,
+// as if started with env -u NO_COLOR, and leaves NO_COLOR in the environment for what it starts
+// (the vendors, gh, git). ELU_NO_COLOR=1 is the switch that turns its colours off.
+// A colour on the terminal: a foreground or background of the 256 (38;5;N or 48;5;N).
+const COLOURED = /\x1b\[(?:\d+;)*[34]8;5;\d+/;
+test('with NO_COLOR=1 the app draws in colour, and leaves NO_COLOR in the environment for what it starts', async t => {
+  const p = setup(t); delete process.env.ELU_NO_COLOR; environment(t, { NO_COLOR: '1' });
+  const v = await view(t, { repo: p.repo, peer: null });
+  await until(() => COLOURED.test(v.raw), 'colours on the terminal', 3000);
+  assert.match(v.frame(), COLOURED, 'the screen holds colours');
+  assert.equal(process.env.NO_COLOR, '1', 'NO_COLOR is still in the environment');
+});
+
+test('with ELU_NO_COLOR=1 the app draws without colour, marking with bold, underline and inverse', async t => {
+  const p = setup(t), before = process.env.NO_COLOR; delete process.env.NO_COLOR;
+  resources(t).files.push(() => { if (before !== undefined) process.env.NO_COLOR = before; });
+  environment(t, { ELU_NO_COLOR: '1' });
+  const v = await view(t, { repo: p.repo, peer: null });
+  await until(() => v.raw.includes('ELU'), 'drawn', 3000); v.current.screen.render();
+  assert.doesNotMatch(v.raw, COLOURED, 'no colour reached the terminal');
+  assert.doesNotMatch(v.frame(), COLOURED, 'the screen holds no colour');
+  assert.match(v.frame(), /\x1b\[(?:\d+;)*[147][;m]/, 'bold, underline or inverse mark what colour would');
+});
+
 test('the status line shows a long message whole on as many rows as it needs, and the pane above gives them up, in every view at 80x24', { timeout: 60000 }, async t => {
   const p = setup(t), v = await view(t, { repo: p.repo, peer: null }), panels = v.current.panels, g = geometry(80, 24);
   const drawn = () => panels.status.getScreenLines().map(row => row.trimEnd()), whole = () => drawn().map((row, at) => at ? row.replace(/^ {2}/, '') : row.replace(/^› /, '')).join(' ');
@@ -1977,7 +2263,7 @@ test('the status line shows a long message whole on as many rows as it needs, an
 
 test('the row of a Task that waits for approval keeps its keys whole and ends at Enter or the Task at every width from 80 to 140 columns', { timeout: 120000 }, async t => {
   // In colour, as the app runs: a coloured row as wide as its place loses its last word to the next row.
-  const p = setup(t); delete process.env.NO_COLOR;
+  const p = setup(t); delete process.env.ELU_NO_COLOR;
   liveTask(p.root, { id: '5', goal: 'Uppercase coupon codes', state: 'answered' });
   proposeTask(p.repo, '5', { title: 'Uppercase coupons', description: 'One file changes.', goal: 'Coupon codes compare equal whatever their case.', objectives: ['It works', 'Its test passes'], priority: 'high', severity: 'low' });
   const v = await view(t, { repo: p.repo }), panels = v.current.panels, drawn = () => panels.status.getScreenLines().map(line => line.replace(/\x1b\[[^m]*m/g, '').trimEnd());
@@ -2084,7 +2370,7 @@ test('arrows move between the tabs, the session list, the chat and the message b
 
 test('with no project, Enter or + New session names this folder as a project first', async t => {
   const folder = temp({ after: close => resources(t).files.push(close) }), fake = fakeClis(folder), root = path.join(folder, 'start');
-  environment(t, { ...fake.env, NO_COLOR: '1' }); fs.mkdirSync(root);
+  environment(t, { ...fake.env, ELU_NO_COLOR: '1' }); fs.mkdirSync(root);
   const v = await view(t, { startDirectory: root }), panels = v.current.panels;
   // The list says there is no project. Beside it, where a session would show, is how to make one.
   assert.match(rows(v).join('\n'), /\+ New session\n\n No project yet\./); assert.equal(v.current.session, null);
@@ -2111,7 +2397,9 @@ test('with no project, Enter or + New session names this folder as a project fir
   assert.deepEqual(fs.readdirSync(root), ['.elu-code']); assert.equal(JSON.parse(fs.readFileSync(path.join(root, '.elu-code', 'project.json'), 'utf8')).name, 'Shop'); assert.equal(fs.existsSync(fake.calls), false);
   // Beside the list at 80 columns a row keeps its name and value. Its hint shows where there is room.
   assert.match(panels.compose._label.getText(), /New session/);
-  assert.deepEqual(panels.composeList.items.map(item => item.getText().trimEnd().replace(/ {2,}/g, '  ')), ['Project  Shop', 'When  now  /schedule', 'Permissions  Ask for approval  /permissions', 'Runs in  New worktree  /place', 'Folders  none', 'Model  Opus  /model NAME', 'Bots  @reviewer  /bots add NAME']);
+  assert.deepEqual(panels.composeList.items.map(item => item.getText().trimEnd().replace(/ {2,}/g, '  ')), ['Project  Shop', 'When  now  /schedule', 'Permissions  Ask for approval  /permissions', 'Runs in  New worktree  /place', 'Folders  none', 'Model  Opus  /model NAME', 'Bots  none  /bots add NAME']);
+  // A new session has no bots until the owner adds one; the note under the form says so.
+  assert.match(panels.composeHint.getText().replace(/\s+/g, ' '), /No bot reviews the changes\. Type @name to add one\./);
   assert.equal(v.current.screen.focused, panels.ask);
 });
 
@@ -2176,7 +2464,7 @@ test('/ typed on the New session form starts a command in the box: /permissions 
 });
 
 test('a new session opens beside the list; mouse and keys move between Sessions, Chats and the session', { timeout: 20000 }, async t => {
-  const p = setup(t, 'answer'); delete process.env.NO_COLOR;
+  const p = setup(t, 'answer'); delete process.env.ELU_NO_COLOR;
   const v = await view(t, { repo: p.repo }), frames = [];
   t.after(() => captureFrames('workspace-frames', frames));
   v.output.columns = 160; v.output.rows = 42; v.output.emit('resize');
@@ -2189,21 +2477,21 @@ test('a new session opens beside the list; mouse and keys move between Sessions,
   click(v, panels.board, 1, 0); await until(() => focused() === panels.ask && v.current.session === 'new' && !panels.compose.hidden, 'mouse opens the New session form');
   // The form names the model the message goes to and the bots of the session. Its last row is Bots: a second click on it lists every bot, with a tick on the ones in the session.
   const form = () => panels.composeList.items.map(item => item.getText().trimEnd().replace(/ {2,}/g, '  '));
-  assert.deepEqual(form().slice(-2), ['Model  Opus  /model NAME, or /model to pick', 'Bots  @reviewer  /bots add NAME, /bots remove NAME']);
-  assert.match(panels.composeHint.getText().replace(/\s+/g, ' '), /Your message goes to Opus\. Bots review the changes\. Type @name to add one or to write to it\./);
+  assert.deepEqual(form().slice(-2), ['Model  Opus  /model NAME, or /model to pick', 'Bots  none  /bots add NAME, /bots remove NAME']);
+  assert.match(panels.composeHint.getText().replace(/\s+/g, ' '), /Your message goes to Opus\. No bot reviews the changes\. Type @name to add one\./);
   click(v, panels.composeList, 1, panels.composeList.items.length - 1);
   click(v, panels.composeList, 1, panels.composeList.items.length - 1);
   await until(() => dialogRows(v, 'Bots in this session').length === 5, 'the bots to add or remove');
-  assert.deepEqual(dialogRows(v, 'Bots in this session').map(row => row.split(/\s{2,}/)[0]), ['[x] @reviewer', '[ ] @lead', '[ ] @qa', '[ ] @pair', '[ ] @elu']);
+  assert.deepEqual(dialogRows(v, 'Bots in this session').map(row => row.split(/\s{2,}/)[0]), ['[ ] @reviewer', '[ ] @lead', '[ ] @qa', '[ ] @pair', '[ ] @elu']);
   dialogList(v, 'Bots in this session').select(2); v.input.write('\r');
   await until(() => /@qa is in this session\. It works when you write to @qa\./.test(panels.status.getText()) && /^\[x\] @qa/.test(dialogRows(v, 'Bots in this session')[2] ?? ''), 'a bot added from the form, and ticked');
-  v.input.write('\x1b'); await until(() => !modal(v, 'Bots in this session') && form().at(-1) === 'Bots  @reviewer @qa  /bots add NAME, /bots remove NAME', 'the form lists it');
+  v.input.write('\x1b'); await until(() => !modal(v, 'Bots in this session') && form().at(-1) === 'Bots  @qa  /bots add NAME, /bots remove NAME', 'the form lists it');
   frames.push({ title: 'New session: the model gets the message, and the bots review', width: 160, height: 42, text: v.frame() });
   await send(v, 'Can I add multiple agents?');
   await until(() => v.current.snapshot.tasks[0]?.state === 'answered', 'lead response');
   const id = v.current.snapshot.tasks[0].id;
   await until(() => /Can I add multiple agents\?/.test(panels.header.getText()) && /Can I add multiple agents/.test(panels.chat.getText()), 'the chat shows the session, under its title');
-  assert.doesNotMatch(panels.header.getText(), /#\d/, 'the title line shows no number'); assert.deepEqual(v.current.snapshot.tasks[0].bots, ['reviewer', 'qa']);
+  assert.doesNotMatch(panels.header.getText(), /#\d/, 'the title line shows no number'); assert.deepEqual(v.current.snapshot.tasks[0].bots, ['qa']);
   frames.push({ title: 'The task’s chat', width: 160, height: 42, text: v.frame() });
   panels.ask.setValue('Please keep this unfinished prompt.');
   // The session stays open on the right, and the list on the left has its row, selected.
@@ -2272,7 +2560,7 @@ test('slash commands filter as typed and Tab completes without calling a model',
   await until(() => palette.items.map(item => item.getText().split(' ')[0]).join() === 'add,remove', 'what /agent takes');
   v.input.write('\x1b'); await until(() => palette.hidden, 'list closed');
   // With no more words it says who is in the session, in the status line. No dialog opens.
-  v.input.write('\r'); await until(() => /In this session: Opus, @reviewer\. \/agent add <model> adds another\./.test(v.current.panels.status.getText().replace(/\s+/g, ' ')), 'who is in the session');
+  v.input.write('\r'); await until(() => /In this session: Opus\. \/agent add <model> adds another\./.test(v.current.panels.status.getText().replace(/\s+/g, ' ')), 'who is in the session');
   assert.equal(v.current.screen.focused, v.current.panels.ask, 'no dialog took the focus');
   frames.push({ title: 'Who is in this session', text: v.frame() });
   const calls = fs.readFileSync(p.calls, 'utf8').trim().split('\n').map(JSON.parse);
@@ -2320,18 +2608,18 @@ test('/agent add offers the models, puts one in the session as an agent, and /ag
   v.input.write('\r'); await until(() => /@sonnet is in this session\. It works when you write to @sonnet\./.test(status()), 'added');
   assert.deepEqual(listBots().map(bot => bot.name), ['reviewer', 'lead', 'qa', 'pair', 'sonnet', 'elu']);
   assert.deepEqual([getBot('sonnet').vendor, getBot('sonnet').model, getBot('sonnet').works, getBot('sonnet').about], ['claude', 'sonnet', true, 'Sonnet: works when you write to it']);
-  await until(() => bots() === 'Bots  @reviewer @sonnet  /bots add NAME', 'the form lists it');
+  await until(() => bots() === 'Bots  @sonnet  /bots add NAME', 'the form lists it');
   assert.equal(modal(v, 'Save agent'), undefined, 'no dialog asks to save anything');
   // Words after the model say what the agent is for, and --name names it.
   await send(v, '/agent add opus you review my SQL --name sql'); await until(() => /@sql is in this session\. It works when you write to @sql\./.test(status()), 'a named agent with a job');
   assert.deepEqual([getBot('sql').vendor, getBot('sql').model, getBot('sql').about], ['claude', 'opus', 'you review my SQL']);
   assert.match(getBot('sql').instructions, /^What the owner wants you to be in this session, in their words:\nyou review my SQL\n\nYou are a second agent in this session/);
   // /agents says who is in the session: its model first, then its bots.
-  await send(v, '/agents'); await until(() => /In this session: Opus, @reviewer, @sonnet, @sql\. \/agent add <model> adds another\./.test(status()), 'who is in it');
+  await send(v, '/agents'); await until(() => /In this session: Opus, @sonnet, @sql\. \/agent add <model> adds another\./.test(status()), 'who is in it');
   // /agent remove offers the bots of the session and takes one out. Its bot stays in the Bots tab.
-  await typing(); v.input.write('/agent remove '); await until(() => rows().join() === 'reviewer,sonnet,sql', 'the ones in the session');
+  await typing(); v.input.write('/agent remove '); await until(() => rows().join() === 'sonnet,sql', 'the ones in the session');
   v.input.write('so'); await until(() => rows().join() === 'sonnet', 'filtered as typed');
-  v.input.write('\r'); await until(() => /@sonnet left this session\./.test(status()) && bots() === 'Bots  @reviewer @sql  /bots add NAME', 'removed');
+  v.input.write('\r'); await until(() => /@sonnet left this session\./.test(status()) && bots() === 'Bots  @sql  /bots add NAME', 'removed');
   assert.equal(getBot('sonnet').model, 'sonnet', 'the bot is kept');
   // A model that is not listed is refused and nothing is made; any other word gets the usage.
   await send(v, '/agent add nosuchmodel'); await until(() => /No model named nosuchmodel\. \/model lists them; \/model add adds one by name\./.test(status()), 'unknown model');
@@ -2378,7 +2666,7 @@ test('a chat shows both sides, and a saved request comes back from Tasks', { tim
 
 test('unknown commands never reach a model, the removed ones included', { timeout: 15000 }, async t => {
   const folder = temp({ after: close => resources(t).files.push(close) }), fake = fakeClis(folder);
-  environment(t, { ...fake.env, NO_COLOR: '1' });
+  environment(t, { ...fake.env, ELU_NO_COLOR: '1' });
   const start = path.join(folder, 'start'); fs.mkdirSync(start); fs.mkdirSync(path.join(folder, 'new project'));
   const v = await view(t, { startDirectory: start });
   for (const gone of ['/open "../new project"', '/create Shop', '/ask @li hello', '/handoff @li run the evals', '/review @li', '/verify', '/folders add ~/evals', '/diff']) {
@@ -2397,7 +2685,7 @@ test('unknown commands never reach a model, the removed ones included', { timeou
 });
 
 test('terminal accents add hierarchy while labels remain readable without colour', async t => {
-  const p = setup(t, 'answer'); delete process.env.NO_COLOR;
+  const p = setup(t, 'answer'); delete process.env.ELU_NO_COLOR;
   const v = await view(t, { repo: p.repo });
   await until(() => v.raw.length > 0, 'terminal output flushed');
   assert.match(v.raw, /\x1b\[(?:[0-9;]*;)?(?:36|96|38;5;[0-9]+)m/);
@@ -2482,9 +2770,9 @@ test('a task is reviewed by its bot, answers the lead, inspects evidence, and as
   const v = await view(t, { repo: p.repo }), frames = [];
   const frame = title => frames.push({ title, text: v.frame() });
   frame('Tasks');
-  // The session's reviewer is the @reviewer bot the form names. It runs on Codex here, so the model and its reviewer are two vendors.
+  // The owner puts @reviewer in the session from the form. It runs on Codex here, so the model and its reviewer are two vendors.
   saveBot({ ...getBot('reviewer'), vendor: 'codex', model: null });
-  assert.match(composeText(v), /^Bots +@reviewer\b/m); frame('The reviewer in the form');
+  await send(v, '/bots add reviewer'); await until(() => /^Bots +@reviewer\b/m.test(composeText(v)), 'the reviewer in the form'); frame('The reviewer in the form');
   assert.equal(modal(v, 'Review project setup'), undefined);
   await send(v, 'Normalize coupon codes');
   assert.equal(modal(v, 'Start task'), undefined);
@@ -2736,7 +3024,7 @@ test('on a row that waits on an approval y, n, f and a act with Enter, and a mes
 
 test('in colour, the key bar of a row keeps the note whole where the keys and the note are exactly as wide as the bar', { timeout: 30000 }, async t => {
   // In colour, as the app runs: a coloured line as wide as its row loses its last word to the next row.
-  const p = setup(t); delete process.env.NO_COLOR;
+  const p = setup(t); delete process.env.ELU_NO_COLOR;
   liveTask(p.root, { id: '4', goal: 'Trim coupon codes', state: 'answered' }); liveTask(p.root, { id: '5', goal: 'Rename billing', state: 'ready' });
   const v = await view(t, { repo: p.repo }), panels = v.current.panels, bar = () => panels.keys.getScreenLines().map(line => line.replace(/\x1b\[[^m]*m/g, '').trimEnd());
   await selectRow(v, /Trim coupon/);
@@ -2750,7 +3038,7 @@ test('in colour, the key bar of a row keeps the note whole where the keys and th
 
 test('in colour, the line of a session that waits on an approval keeps to one row and ends at Enter, with the last message under it', { timeout: 30000 }, async t => {
   // In colour, as the app runs: a coloured line as wide as its row loses its last word to the next row.
-  const p = setup(t); delete process.env.NO_COLOR;
+  const p = setup(t); delete process.env.ELU_NO_COLOR;
   const began = new Date().toISOString();
   liveTask(p.root, { id: '3', goal: 'Check the build', state: 'ready' });
   saveTask(p.repo, { ...readTask(p.repo, '3'), permissions: 'ask', state: 'running', activeRole: 'lead', activeSince: began, owner: { pid: process.pid, identity: processIdentity(process.pid) }, messages: [{ at: began, text: 'Check the build' }] });
@@ -2942,7 +3230,7 @@ test('a question gets an answer without any setup or start dialogs', async t => 
 
 test('a missing vendor keeps the request in its task without creating project settings', async t => {
   const p = project({ after: close => resources(t).files.push(close) }), f = fakeClis(p.parent, { mode: 'signed-out' });
-  environment(t, { ...f.env, NO_COLOR: '1' });
+  environment(t, { ...f.env, ELU_NO_COLOR: '1' });
   const v = await view(t, { repo: repository(p.root) });
   await send(v, 'Keep my task');
   await until(() => v.current.snapshot.tasks?.[0]?.state === 'blocked', 'vendor unavailable');
@@ -2952,7 +3240,7 @@ test('a missing vendor keeps the request in its task without creating project se
 
 test('the first screen creates a project in its folder, and the form picks one by number, without Git, settings, or vendor calls', async t => {
   const folder = temp({ after: close => resources(t).files.push(close) }), fake = fakeClis(folder), root = path.join(folder, 'new project');
-  environment(t, { ...fake.env, NO_COLOR: '1' }); fs.mkdirSync(root);
+  environment(t, { ...fake.env, ELU_NO_COLOR: '1' }); fs.mkdirSync(root);
   const v = await view(t, { startDirectory: root }), panels = v.current.panels;
   const frames = [{ title: 'Open ELU outside Git', text: v.frame() }];
   assert.equal(v.current.view, 'tasks'); assert.match(v.frame(), /New session/); assert.equal(fs.existsSync(fake.calls), false);
@@ -2979,7 +3267,7 @@ test('the first screen creates a project in its folder, and the form picks one b
 
 test('a coding prompt in a fresh folder starts without setup dialogs, and /publish runs the checks first', { timeout: 60000 }, async t => {
   const folder = temp({ after: close => resources(t).files.push(close) }), fake = fakeClis(folder, { mode: 'scaffold' });
-  environment(t, { ...fake.env, NO_COLOR: '1', GIT_AUTHOR_NAME: 'Test Owner', GIT_AUTHOR_EMAIL: 'owner@example.invalid', GIT_COMMITTER_NAME: 'Test Owner', GIT_COMMITTER_EMAIL: 'owner@example.invalid' });
+  environment(t, { ...fake.env, ELU_NO_COLOR: '1', GIT_AUTHOR_NAME: 'Test Owner', GIT_AUTHOR_EMAIL: 'owner@example.invalid', GIT_COMMITTER_NAME: 'Test Owner', GIT_COMMITTER_EMAIL: 'owner@example.invalid' });
   const root = path.join(folder, 'brand-new'); fs.mkdirSync(root);
   const v = await view(t, { repo: projectFolder(root) });
   assert.equal(fs.existsSync(path.join(root, '.git')), false);
@@ -3911,14 +4199,14 @@ test('a task scheduled from + New task lists under Scheduled and pauses, runs no
   await wide(v);
   await send(v, '/schedule'); await until(() => modal(v, 'When') && dialogRows(v, 'When').length === 8, 'the list of times');
   dialogList(v, 'When').select(6); v.input.write('\r');
-  await until(() => /Schedule → Opus · weekdays 9:00 · sample app · with @reviewer/.test(panels.ask._label.getText()), 'the message box says it is a schedule');
+  await until(() => /Schedule → Opus · weekdays 9:00 · sample app(?! · with)/.test(panels.ask._label.getText()), 'the message box says it is a schedule');
   assert.match(panels.composeList.items.map(item => item.getText()).join('\n'), /When\s+weekdays 9:00\s+next \w{3} \w{3} \d+ 9:00/);
   assert.match(panels.status.getText(), /Runs weekdays 9:00, next/);
   await send(v, 'Check dependencies for updates');
   await until(() => v.current.view === 'tasks' && rows(v).some(row => /SCHEDULED 1/.test(row)), 'Scheduled group');
   // The row has the time, the start of the message and the next run. The form is fresh again beside the list.
   assert.ok(rows(v).some(row => /◷ weekdays 9:00 · Check… +in \d+[mhd]$/.test(row)), rows(v).join('\n'));
-  assert.match(panels.status.getText().replace(/\s+/g, ' '), /Scheduled weekdays 9:00, next \w{3} \w{3} \d+ 9:00\. Each run starts a new session in sample app with your message, Opus, Ask for approval and @reviewer\. It does not see this chat\.$/);
+  assert.match(panels.status.getText().replace(/\s+/g, ' '), /Scheduled weekdays 9:00, next \w{3} \w{3} \d+ 9:00\. Each run starts a new session in sample app with your message, Opus, Ask for approval and no bots\. It does not see this chat\.$/);
   assert.equal(v.current.session, 'new'); assert.match(panels.ask._label.getText(), /New session → Opus · sample app/); assert.equal(panels.ask.getValue(), '');
   assert.deepEqual(calls, ['install']); assert.equal(pendingRequests(p.root).length, 0, 'nothing runs now');
   // On its row the whole message and the next run show beside the list, with its keys.
@@ -4225,7 +4513,7 @@ test('/schedule offers times in the command list, saves a time and message typed
   const status = () => panels.status.getText().replace(/\s+/g, ' '), keys = () => panels.keys.getText().trim(), saved = goal => listSchedules().find(row => row.goal === goal);
   const offered = () => panels.palette.hidden ? [] : panels.palette.items.map(item => item.getText().replace(/\s+/g, ' ').trim());
   const typing = async () => { ask.focus(); ask.readInput(); await until(() => ask.__listener, 'message box'); };
-  const RUNS = 'Each run starts a new session in sample app with your message, Opus, Ask for approval and @reviewer. It does not see this chat.';
+  const RUNS = 'Each run starts a new session in sample app with your message, Opus, Ask for approval and no bots. It does not see this chat.';
   await wide(v); await typing();
   // Typing /schedule and a space lists the times to start from, each with what it means.
   v.input.write('/schedule '); await until(() => offered().length === 7, 'the times');
@@ -4236,19 +4524,19 @@ test('/schedule offers times in the command list, saves a time and message typed
   await until(() => keys() === '/schedule [when] [message] · Start a session later or on a schedule', 'the usage in the key bar');
   v.input.write('check the build\r');
   await until(() => saved('check the build'), 'saved at once');
-  assert.equal(saved('check the build').when.kind, 'once'); assert.deepEqual(saved('check the build').bots, ['reviewer']); assert.equal('place' in saved('check the build'), false);
+  assert.equal(saved('check the build').when.kind, 'once'); assert.deepEqual(saved('check the build').bots, []); assert.equal('place' in saved('check the build'), false);
   assert.match(status(), new RegExp(`^› Scheduled once \\w{3} \\w{3} \\d+ \\d+:\\d\\d\\. ${RUNS.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`));
   assert.equal(pendingRequests(p.root).length, 0, 'nothing runs now');
   // A time and a message typed together are saved at once; the message keeps its apostrophes.
   await send(v, "/schedule daily 9:00 triage new issues, don't close any");
   await until(() => saved("triage new issues, don't close any")?.when.label === 'daily 9:00' && /^› Scheduled daily 9:00/.test(status()) && v.current.session === 'new', 'daily saved, and the form beside the list again');
   // The form it is typed in keeps what it holds: a bot added there goes with the schedule.
-  await send(v, '/bots add qa'); await until(() => /Bots\s+@reviewer @qa/.test(composeText(v)), 'qa in the form');
+  await send(v, '/bots add qa'); await until(() => /Bots\s+@qa/.test(composeText(v)), 'qa in the form');
   await send(v, '/schedule every 2h'); await until(() => /Runs every 2h, next .+\. Write the message below\./.test(status()), 'the time is set and the message is next');
-  assert.match(composeText(v), /When\s+every 2h/); assert.match(panels.ask._label.getText(), /Schedule → Opus · every 2h · sample app · with @reviewer @qa/);
-  assert.equal(panels.composeHint.getContent().replace(/\s+/g, ' ').trim(), `${RUNS.replace('@reviewer', '@reviewer @qa')} Runs while this computer is awake, even with ELU closed.`);
+  assert.match(composeText(v), /When\s+every 2h/); assert.match(panels.ask._label.getText(), /Schedule → Opus · every 2h · sample app · with @qa/);
+  assert.equal(panels.composeHint.getContent().replace(/\s+/g, ' ').trim(), `${RUNS.replace('no bots', '@qa')} Runs while this computer is awake, even with ELU closed.`);
   await send(v, 'Run the linters'); await until(() => saved('Run the linters'), 'saved from the form');
-  assert.deepEqual([saved('Run the linters').when.label, saved('Run the linters').bots], ['every 2h', ['reviewer', 'qa']]);
+  assert.deepEqual([saved('Run the linters').when.label, saved('Run the linters').bots], ['every 2h', ['qa']]);
   // A start that is no time says which forms work, and the text stays in the box.
   await send(v, '/schedule sometime soon check');
   await until(() => status() === '› Could not read when it runs. Start with when it runs, such as in 30m, every 2h, daily 9:00, weekdays 9am or tomorrow 15:00, then your message.', 'what works');
@@ -4258,7 +4546,7 @@ test('/schedule offers times in the command list, saves a time and message typed
   await send(v, '/schedule'); await until(() => modal(v, 'When') && dialogRows(v, 'When').length === 8, 'the list of times');
   const rows = dialogRows(v, 'When').map(row => row.replace(/\s+/g, ' ').trim());
   assert.deepEqual([rows[0], rows[6], rows[7]], ['in 5m once, in 5 minutes', 'weekdays 9am Monday to Friday at 9:00', 'Other time…']);
-  assert.ok(modal(v, 'When').children.some(child => child.type !== 'list' && child.getText?.().replace(/\s+/g, ' ').includes(RUNS.replace('@reviewer', '@reviewer'))), 'the list says what each run gets');
+  assert.ok(modal(v, 'When').children.some(child => child.type !== 'list' && child.getText?.().replace(/\s+/g, ' ').includes(RUNS)), 'the list says what each run gets');
   dialogList(v, 'When').select(7); v.input.write('\r');
   await until(() => modal(v, 'When')?.children.some(child => child.type === 'textbox'), 'Other time');
   assert.match(dialogText(v, 'When'), /in 30m {12}once, in 30 minutes/);
@@ -4320,14 +4608,14 @@ test('/schedule typed in a session saves that session\'s bots, and the form keep
   // The schedule's message came with the command, so the form's draft is still there.
   await selectRow(v, /\+ New session/); await until(() => v.current.session === 'new' && panels.ask.getValue() === 'Keep this draft', 'the draft is still there');
   // A bot with its own schedule would start it in every session a run makes, so the runs leave it out, and the form says so.
-  await send(v, '/bots add elu'); await until(() => /Bots\s+@reviewer @elu/.test(composeText(v)), 'elu in the form');
+  await send(v, '/bots add elu'); await until(() => /Bots\s+@elu/.test(composeText(v)), 'elu in the form');
   await send(v, '/schedule every 2h'); await until(() => /When\s+every 2h/.test(composeText(v)), 'the time is set');
-  assert.match(panels.composeHint.getContent().replace(/\s+/g, ' '), /Ask for approval and @reviewer\. @elu runs on its own schedule, so it is left out\. It does not see this chat\./);
+  assert.match(panels.composeHint.getContent().replace(/\s+/g, ' '), /Ask for approval and no bots\. @elu runs on its own schedule, so it is left out\. It does not see this chat\./);
 });
 
 test('the first start in a new folder asks for a project name and saves it there', async t => {
   const folder = temp({ after: close => resources(t).files.push(close) }), fake = fakeClis(folder), root = path.join(folder, 'shop');
-  environment(t, { ...fake.env, XDG_CONFIG_HOME: path.join(folder, 'personal'), NO_COLOR: '1' });
+  environment(t, { ...fake.env, XDG_CONFIG_HOME: path.join(folder, 'personal'), ELU_NO_COLOR: '1' });
   fs.mkdirSync(root);
   const v = await view(t, { startDirectory: root, askProject: true });
   await until(() => modal(v, 'New project'), 'name prompt');
@@ -4356,7 +4644,7 @@ test('the first start in a new folder asks for a project name and saves it there
 // names a command it holds and how to run it, and saves nothing until the name has none.
 test('the first start\'s name box refuses a /: a typed /kanban is named as a command, and nothing is saved until the name has no /', async t => {
   const folder = temp({ after: close => resources(t).files.push(close) }), fake = fakeClis(folder), root = path.join(folder, 'elsewhere');
-  environment(t, { ...fake.env, XDG_CONFIG_HOME: path.join(folder, 'personal'), NO_COLOR: '1' });
+  environment(t, { ...fake.env, XDG_CONFIG_HOME: path.join(folder, 'personal'), ELU_NO_COLOR: '1' });
   fs.mkdirSync(root);
   const v = await view(t, { startDirectory: root, askProject: true }), box = () => modal(v, 'New project')?.children.find(child => child.type === 'textbox'), said = () => modal(v, 'New project') ? dialogText(v, 'New project').replace(/\s+/g, ' ') : '';
   const saved = () => fs.existsSync(path.join(root, '.elu-code', 'project.json'));
@@ -4375,7 +4663,7 @@ test('the first start\'s name box refuses a /: a typed /kanban is named as a com
 
 test('a Git repository that is not a project yet is named, or opens unnamed on Esc', async t => {
   const p = project({ after: close => resources(t).files.push(close) }), fake = fakeClis(p.parent);
-  environment(t, { ...fake.env, XDG_CONFIG_HOME: path.join(p.parent, 'personal'), NO_COLOR: '1' });
+  environment(t, { ...fake.env, XDG_CONFIG_HOME: path.join(p.parent, 'personal'), ELU_NO_COLOR: '1' });
   const v = await view(t, { repo: repository(p.root), startDirectory: p.root, askProject: true });
   await until(() => modal(v, 'New project'), 'name prompt');
   assert.match(dialogText(v, 'New project'), /Esc skips and opens the repository unnamed/);
@@ -4501,6 +4789,22 @@ test('/done on a session in Sessions with no project open here checks it in its 
   v.input.write('\r'); await until(() => typeof readBoard(p.repo).checked?.['5'] === 'string' || /Cannot read|writable/.test(status()), 'the answer');
   assert.doesNotMatch(status(), /Cannot read|writable/);
   assert.equal(typeof readBoard(p.repo).checked['5'], 'string');
+});
+
+// The check of a session with no Task shows its first message whole, however long: the dialog scrolls.
+test('the check of a session with no Task shows its first message whole, however long', { timeout: 30000 }, async t => {
+  const p = setup(t); registerProject(p.repo);
+  const first = `Rename the coupon module. ${'Every word of this message matters to the rename. '.repeat(40)}THE END`;
+  assert.ok(first.length > 2000);
+  liveTask(p.root, { id: '5', goal: first, state: 'ready' });
+  const v = await view(t, { dashboard: true });
+  await until(() => rows(v).some(row => /Rename the/.test(row)), 'its row');
+  await selectRow(v, /Rename the/);
+  await send(v, '/done'); await until(() => modal(v, 'Check'), '/done opens the check');
+  const said = dialogRows(v, 'Check').map(row => row.trim()).join(' ').replace(/\s+/g, ' ');
+  assert.ok(said.includes(first.trim()), said);
+  assert.deepEqual(dialogRows(v, 'Check').slice(-2), ['› Done', '› Keep open, new message']);
+  v.input.write('\x1b'); await until(() => !modal(v, 'Check'), 'Esc closes it');
 });
 
 // A session he checks Done is in Done, not archived: it leaves Sessions as before, and /archived
@@ -4727,6 +5031,8 @@ test('x cleans up archived sessions, one or all: Learn, then delete or Delete, E
   // x on an archived row: one question, two answers, and how many go for good, said once.
   await selectRow(v, /Trim coupon codes/); await until(() => /x clean up/.test(panels.keys.getText()), 'x clean up in the key bar');
   v.input.write('x'); await until(() => modal(v, 'Clean up'), 'the clean-up question');
+  // The key bar names the dialog's keys, not the list's behind it.
+  await until(() => panels.keys.getText().trim() === '↑↓ choose  enter choose  esc cancel', `the keys of Clean up, not "${panels.keys.getText().trim()}"`);
   assert.deepEqual(dialogRows(v, 'Clean up').map(row => row.trim()), ['Learn, then delete', 'Delete']);
   assert.match(dialogNotes(v, 'Clean up'), /Deletes "Trim coupon codes" for good\. Learn first saves what you taught in it to the project context\./);
   // Esc cancels: nothing goes.
@@ -4736,6 +5042,7 @@ test('x cleans up archived sessions, one or all: Learn, then delete or Delete, E
   await selectRow(v, /Trim coupon codes/); v.input.write('x'); await until(() => modal(v, 'Clean up'), 'asked again');
   dialogList(v, 'Clean up').select(1); v.input.write('\r');
   await until(() => modal(v, 'Work not pushed'), 'the question about work on no remote');
+  await until(() => panels.keys.getText().trim() === '↑↓ choose  enter choose  esc cancel', `the keys of Work not pushed, not "${panels.keys.getText().trim()}"`);
   assert.deepEqual(dialogRows(v, 'Work not pushed').map(row => row.trim()), ['Keep it', 'Delete it too']);
   assert.match(dialogNotes(v, 'Work not pushed'), /It has 1 file not committed\./);
   dialogList(v, 'Work not pushed').select(1); v.input.write('\r');
@@ -4757,6 +5064,7 @@ test('x cleans up archived sessions, one or all: Learn, then delete or Delete, E
   assert.match(dialogNotes(v, 'Work not pushed'), /1 of them has 1 file not committed\./);
   v.input.write('\r');
   await until(() => modal(v, 'Saved to the project context'), 'what was saved', 15000);
+  await until(() => panels.keys.getText().trim() === 'enter close', `the keys of what was saved, not "${panels.keys.getText().trim()}"`);
   assert.deepEqual(dialogRows(v, 'Saved to the project context').map(row => row.trim()), ['Use pnpm, not npm.']);
   assert.match(dialogNotes(v, 'Saved to the project context'), /Deleted 2 sessions\. Kept its work on feat\/task-5\./);
   assert.doesNotMatch(panels.status.getText(), /Deleted|Kept/, 'said once, in the dialog');
@@ -4915,7 +5223,7 @@ test('a long message keeps its bar on every row, and blessed does not wrap it ag
 });
 
 test('a coloured line under the chat that would fill the pane to its last column is not wrapped again: a stop line keeps "carry on." on one row', async t => {
-  const p = setup(t); delete process.env.NO_COLOR;
+  const p = setup(t); delete process.env.ELU_NO_COLOR;
   const STOP = 'Stopped after 3 seconds with no output. Your changes are kept. Reply to carry on.', at = new Date().toISOString();
   saveTask(p.repo, { id: '7', kind: 'conversation', goal: 'Fix the build on main', state: 'blocked', worktree: p.root, branch: null, base: null, createdAt: at, runs: [], reviews: [], responses: [], sessions: {}, result: null, messages: [{ at, text: 'Fix the build on main' }], error: { message: STOP } });
   const v = await view(t, { repo: p.repo }), panels = v.current.panels;
@@ -4958,7 +5266,7 @@ const drawnIn = (v, widget) => screenRows(v).slice(widget.atop, widget.atop + wi
 const fillingRow = room => { const words = 'alpha beta gamma delta epsilon zeta eta theta iota kappa lambda'.split(' '); let row = ''; for (let at = 0; row.length < room - 12; at++) row += `${words[at % words.length]} `; return `${row}${'m'.repeat(room - row.length - 3)} et`; };
 
 test('a message that fills the pane beside the list keeps its last word on its row, behind its bar, at 80 and at 140 columns', { timeout: 60000 }, async t => {
-  const p = setup(t, 'answer'); delete process.env.NO_COLOR;
+  const p = setup(t, 'answer'); delete process.env.ELU_NO_COLOR;
   const v = await view(t, { repo: p.repo }), panels = v.current.panels, bare = row => row.replace(/\x1b\[[\d;]*m/g, '');
   for (const [width, height] of [[80, 24], [140, 50]]) {
     await sized(v, width, height); await nextDraw(v);
@@ -4978,7 +5286,7 @@ test('a message that fills the pane beside the list keeps its last word on its r
 });
 
 test('from 80 to 120 columns no pane wraps a row that fits it a second time: the title over a session keeps its Task, the key bar its last word and the new session form the end of each hint', { timeout: 120000 }, async t => {
-  const p = twoSessions(t); delete process.env.NO_COLOR;
+  const p = twoSessions(t); delete process.env.ELU_NO_COLOR;
   const v = await view(t, { repo: p.repo }), panels = v.current.panels;
   // The widths where each one filled its row to the last column: there blessed wrapped it again, and its last word was not shown.
   const filled = { title: [], keys: [], form: [] };
@@ -5008,7 +5316,7 @@ test('from 80 to 120 columns no pane wraps a row that fits it a second time: the
 });
 
 test('the Changes view keeps the whole of a line that holds emoji, where blessed cut it short by a column for each, at 80 and at 140 columns', { timeout: 60000 }, async t => {
-  const p = setup(t); delete process.env.NO_COLOR; registerProject(p.repo);
+  const p = setup(t); delete process.env.ELU_NO_COLOR; registerProject(p.repo);
   liveTask(p.root, { id: '4', goal: 'Write the launch notes', state: 'ready', files: { 'NOTES.md': `🚀 ${'launch '.repeat(12)}\n🎉🎉 ${'x'.repeat(150)}\n` } });
   // A row as blessed holds it has a cell after each emoji, for its second column.
   const v = await view(t, { repo: p.repo }), panels = v.current.panels, bare = row => row.replace(/\x1b\[[\d;]*m/g, '').replace(/\x03/g, '');
@@ -5024,7 +5332,7 @@ test('the Changes view keeps the whole of a line that holds emoji, where blessed
 });
 
 test('a Usage row cut to its pane keeps its end when one character in it is two columns wide', { timeout: 30000 }, async t => {
-  const p = setup(t), fake = fakeUsage(t); delete process.env.NO_COLOR;
+  const p = setup(t), fake = fakeUsage(t); delete process.env.ELU_NO_COLOR;
   fs.writeFileSync(path.join(fake.home, 'claude', '.claude.json'), JSON.stringify({ oauthAccount: { accountUuid: 'uuid-never-shown', emailAddress: 'owner@example.invalid', organizationName: 'Example', planDisplayName: `Max 中 ${'plan '.repeat(30)}`.trim(), userRateLimitTier: 'default_claude_max_20x', hasExtraUsageEnabled: false } }));
   const v = await view(t, { repo: p.repo, usage: fake }), panels = v.current.panels, row = () => panels.usageList.items.find(item => /owner@example\.invalid/.test(item.getText()));
   await send(v, '/usage'); await until(() => v.current.view === 'usage' && row(), 'the account in Usage'); await nextDraw(v);
@@ -5036,7 +5344,7 @@ test('a Usage row cut to its pane keeps its end when one character in it is two 
 });
 
 test('a note in a dialog that fills its text box keeps its last word on its row, at 80 and at 140 columns', { timeout: 60000 }, async t => {
-  const p = setup(t); delete process.env.NO_COLOR; readModels();
+  const p = setup(t); delete process.env.ELU_NO_COLOR; readModels();
   const v = await view(t, { repo: p.repo }), bare = row => row.replace(/\x1b\[[\d;]*m/g, '');
   const field = () => modal(v, 'Add a model')?.children.find(child => child.type === 'textbox'), box = () => modal(v, 'Add a model').children.find(child => child.options?.scrollable);
   const refused = async name => {
@@ -6024,7 +6332,7 @@ test('Usage shows each account with the usage its sessions reported, r checks ag
   const recorded = () => JSON.parse(fs.readFileSync(accountsFile, 'utf8')).rows.find(row => row.vendor === 'claude' && row.account === 'owner@example.invalid')?.usage?.weekly?.usedPercent;
   assert.equal(recorded(), undefined);
   v.input.write('r'); await until(() => recorded() === 12, 'second check');
-  await until(() => /^Claude {6}owner@example.invalid · Max 20x · active\n {12}5h  \[------\]    —   not reported\n {12}wk  \[#-----\]   12%  resets [^\n]+\n {12}old@example.invalid · last seen Nov 9 · wk 100% then\n {12}enter on an account uses it · x forgets it · a adds one$/m.test(text()), 'the Claude windows');
+  await until(() => /^Claude {6}owner@example.invalid · Max 20x · active\n {12}wk  \[#-----\]   12%  resets [^\n]+\n {12}old@example.invalid · last seen Nov 9 · wk 100% then\n {12}enter on an account uses it · x forgets it · a adds one$/m.test(text()), 'the Claude windows');
   // Enter on the account in use says so; d opens the vendor's details.
   panels.usageList.select(0); v.input.write('\r'); await until(() => /New Claude Code turns already use owner@example.invalid\./.test(status()), 'already in use');
   v.input.write('d'); await until(() => modal(v, 'Claude usage'), 'details');
@@ -6103,7 +6411,23 @@ test('Usage: a signs another account in with the vendor\'s own sign-in, Enter ma
   assert.deepEqual(asked.map(row => [row.vendor, row.args]), [['claude', ['auth', 'login']], ['claude', ['auth', 'login']]]);
   assert.equal(asked[1].config, path.join(personalDirectory(), 'logins', 'claude', id, '.claude'));
   assert.equal(fs.readFileSync(own, 'utf8'), signedIn); assert.equal(activeLogin('claude'), 'default');
-  await until(() => /^Claude {6}owner@example.invalid · Max 20x · active\n {12}Usage shows after your next session on Claude Code\.\n {12}second@example\.com · Pro\n {12}Usage shows after a session on this account\.\n {12}enter on an account uses it · x forgets it · a adds one$/m.test(text()), 'both accounts');
+  // Two Claude accounts take over from each other: the two settings of that, each its value, and u.
+  await until(() => /^Claude {6}owner@example.invalid · Max 20x · active\n {12}Usage shows after your next session on Claude Code\.\n {12}second@example\.com · Pro\n {12}Usage shows after a session on this account\.\n {12}Switch accounts by itself  on\n {12}Use paid extra usage {7}off\n {12}enter on an account uses it · x forgets it · a adds one$/m.test(text()), 'both accounts');
+  // Enter on a setting turns it off, and on again.
+  panels.usageList.select(rowOf(/Switch accounts by itself/)); v.input.write('\r');
+  await until(() => /Claude accounts switch only when you pick one\./.test(status()) && /^ {12}Switch accounts by itself  off$/m.test(text()), 'switching off');
+  assert.equal(readSwitch().auto, false);
+  v.input.write('\r'); await until(() => /Claude accounts switch by themselves\./.test(status()) && /^ {12}Switch accounts by itself  on$/m.test(text()), 'switching on');
+  // On an account's line at 80 columns the key bar still ends with tab next: u takes the room of d, which still works.
+  panels.usageList.select(rowOf(/^ {12}second@example\.com · Pro/));
+  await until(() => panels.keys.getText().trim() === 'enter use  u move up  a add account  x forget  r refresh  t 7 days  tab next', `the keys of an account line: ${panels.keys.getText().trim()}`);
+  // u moves an account up the order the switching tries them in.
+  panels.usageList.select(rowOf(/^ {12}second@example\.com · Pro/)); v.input.write('u');
+  await until(() => /second@example\.com moved up\./.test(status()) && /^Claude {6}second@example\.com · Pro\n/m.test(text()), 'moved up');
+  assert.deepEqual(readSwitch().order, [listLogins('claude')[1], 'default']);
+  panels.usageList.select(rowOf(/owner@example\.invalid · Max 20x · active/)); v.input.write('u');
+  await until(() => /owner@example\.invalid moved up\./.test(status()) && /^Claude {6}owner@example\.invalid · Max 20x · active\n/m.test(text()), 'back up');
+  assert.deepEqual(readSwitch().order, ['default', listLogins('claude')[1]]);
   // The same account again is not added twice.
   v.input.write('a'); await until(() => /second@example\.com is already signed in here\./.test(status()), 'already here');
   assert.equal(listLogins('claude').length, 2);
@@ -6410,7 +6734,7 @@ test('Esc and a command in one piece inside a dialog: the dialog closes and the 
 
 test('the first start\'s name box: Esc and a command in one piece skip naming, and the command runs', async t => {
   const folder = temp({ after: close => resources(t).files.push(close) }), fake = fakeClis(folder), root = path.join(folder, 'elsewhere');
-  environment(t, { ...fake.env, XDG_CONFIG_HOME: path.join(folder, 'personal'), NO_COLOR: '1' });
+  environment(t, { ...fake.env, XDG_CONFIG_HOME: path.join(folder, 'personal'), ELU_NO_COLOR: '1' });
   fs.mkdirSync(root);
   const v = await view(t, { startDirectory: root, askProject: true }), ask = v.current.panels.ask, box = () => modal(v, 'New project')?.children.find(child => child.type === 'textbox'), said = () => modal(v, 'New project') ? dialogText(v, 'New project').replace(/\s+/g, ' ') : '';
   await until(() => box()?.__listener && box().getValue() === 'elsewhere', 'the name box, with the folder name');
@@ -6451,6 +6775,180 @@ test('a / typed on a list over a draft starts a command of its own, and the draf
   v.input.write('\r'); await until(() => v.current.view === 'chats', '/chats opens Chats from Kanban');
   assert.deepEqual(readBoard(p.repo).cards, [], 'no task');
   assert.equal(named(), false, 'no session or task holds a command');
+});
+
+// Under every dialog the key bar said tab next, ? help and q quit: none of them does that
+// there, and in a field q and ? only type. In the Keep open editor q typed a q and ELU stayed
+// open. The bar names the dialog's own keys, and a field's label only keys that act there.
+test('under a dialog the key bar names its own keys: the check, the new goal editor, /help, a new task, a choice of keys; q and ? type in a field', { timeout: 60000 }, async t => {
+  const p = setup(t), TASK = { title: 'Uppercase coupons', description: 'Make normalize return upper case.', goal: 'Codes compare equal whatever their case.', objectives: ['normalize returns upper case'], priority: 'medium', severity: 'low' };
+  liveTask(p.root, { id: '3', goal: 'Uppercase coupon codes', state: 'ready' }); proposeTask(p.repo, '3', TASK); approvePlan(p.repo, '3');
+  const v = await view(t, { repo: p.repo, conductor: false }), panels = v.current.panels, keys = () => panels.keys.getText().trim();
+  const field = title => modal(v, title)?.children.find(child => child.type === 'textbox'), label = title => field(title)._label.getText().trim();
+  // Kanban, Shift+→ under Needs you: the check is a list to choose from.
+  v.output.columns = 160; v.output.rows = 40; v.output.emit('resize');
+  await send(v, '/kanban'); await until(() => v.current.view === 'kanban' && !panels.kanbanBoxes[0].hidden && v.current.screen.width === 160, 'Kanban');
+  const needs = panels.kanbanLists[2], at = () => needs.items.findIndex(item => /Uppercase coupons/.test(item.getText()));
+  await until(() => at() >= 0, 'it waits under Needs you'); needs.focus(); needs.select(at());
+  v.input.write('\x1b[1;2C'); await until(() => modal(v, 'Check'), 'the check');
+  await until(() => keys() === '↑↓ choose  enter choose  esc cancel', `the keys of the check, not "${keys()}"`);
+  // Keep open, new goal: the editor's keys. q and ? are letters of the goal there, and ELU stays open.
+  // The check's text sits in a pane of its own over the answers: the list holds only the answers.
+  const answers = dialogList(v, 'Check'); answers.select(answers.items.length - 2); v.input.write('\r');
+  const goal = 'New goal (objectives below it, one per line)';
+  await until(() => editor(v, goal)?.__listener, 'the new goal editor');
+  await until(() => keys() === 'ctrl-s save  esc cancel', `the keys of the editor, not "${keys()}"`);
+  v.input.write('q'); v.input.write('?'); await until(() => editor(v, goal).getValue() === 'q?', 'q and ? are typed into it');
+  await pause(); assert.ok(!v.current.screen.destroyed, 'ELU is still open'); assert.equal(keys(), 'ctrl-s save  esc cancel');
+  v.input.write('\x1b'); await until(() => !modal(v, goal), 'Esc closes it');
+  // A new task: a field to fill. Enter submits it.
+  panels.kanbanLists[0].focus(); v.input.write('n'); await until(() => field('New task')?.__listener, 'New task');
+  await until(() => keys() === 'enter submit  esc cancel', `the keys of a field, not "${keys()}"`);
+  // Its text fits: PgUp and PgDn move nothing, and neither the bar nor the label names them.
+  assert.equal(label('New task'), 'Enter submits / Esc cancels');
+  v.input.write('\x1b'); await until(() => !modal(v, 'New task'), 'closed');
+  // /help is to read: Esc closes it, and the page keys move it. q types there too.
+  await send(v, '/help'); await until(() => field('Commands')?.__listener, '/help');
+  await until(() => keys() === 'esc close  pgup pgdn page', `the keys of /help, not "${keys()}"`);
+  assert.equal(label('Commands'), 'Esc closes / PgUp PgDn page');
+  v.input.write('q'); await until(() => field('Commands').getValue() === 'q', 'q is typed'); assert.ok(!v.current.screen.destroyed, 'ELU is still open');
+  v.input.write('\x1b'); await until(() => !modal(v, 'Commands'), 'closed');
+  // A choice made with keys: its keys, and its field names no Enter, which does nothing there.
+  await send(v, '/sessions'); await send(v, '/new'); await until(() => v.current.session === 'new', 'the new session form');
+  await send(v, '/permissions'); await until(() => field('Permissions')?.__listener, 'the permissions choice');
+  await until(() => keys() === '1 2 3 choose  r without asking  esc cancel', `the keys of a choice, not "${keys()}"`);
+  assert.equal(label('Permissions'), 'Press 1, 2, 3 or r / Esc cancels');
+  v.input.write('\x1b'); await until(() => !modal(v, 'Permissions'), 'closed');
+  // A shell command's output is to read. Its label and its bar name the page keys while the output
+  // runs past its box, and drop them once it fits: a short one, then a longer one that fits at
+  // 160x40 and runs past at 80x24.
+  await send(v, '!echo short'); await until(() => field('$ echo short')?.__listener, 'a short output');
+  await until(() => keys() === 'esc close', `the keys of a short output, not "${keys()}"`);
+  assert.equal(label('$ echo short'), 'Esc closes');
+  v.input.write('\x1b'); await until(() => !modal(v, '$ echo short'), 'closed');
+  await send(v, '!seq 1 15'); await until(() => field('$ seq 1 15')?.__listener && /\b15\b/.test(dialogText(v, '$ seq 1 15')), 'a longer output');
+  await until(() => keys() === 'esc close' && label('$ seq 1 15') === 'Esc closes', `all of it shows at 160x40: "${keys()}", "${label('$ seq 1 15')}"`);
+  v.output.columns = 80; v.output.rows = 24; v.output.emit('resize');
+  await until(() => v.current.screen.height === 24 && keys() === 'esc close  pgup pgdn page' && label('$ seq 1 15') === 'Esc closes / PgUp PgDn page', `it runs past at 80x24: "${keys()}", "${label('$ seq 1 15')}"`);
+  v.output.columns = 160; v.output.rows = 40; v.output.emit('resize');
+  await until(() => v.current.screen.height === 40 && keys() === 'esc close' && label('$ seq 1 15') === 'Esc closes', `back at 160x40: "${keys()}", "${label('$ seq 1 15')}"`);
+  v.input.write('\x1b'); await until(() => !modal(v, '$ seq 1 15'), 'closed');
+  // With no dialog, the bar is the view's again.
+  await until(() => !/esc cancel|esc close/.test(keys()), 'the view\'s keys');
+});
+
+// A refused command stays in the box to change. A / command typed next, from the list or as the
+// first key in the box, joined it: "/budget lots/usage" said the /budget refusal again. The new
+// command takes its place, and ↑ brings the refused one back.
+test('a / command typed after a refused one takes its place, from the Sessions list or as the first key in the box, and ↑ brings the refused one back', { timeout: 40000 }, async t => {
+  const p = setup(t); liveTask(p.root, { id: '4', goal: 'Trim coupon codes', state: 'answered' });
+  const v = await view(t, { repo: p.repo }), panels = v.current.panels, ask = panels.ask, focused = () => v.current.screen.focused, status = () => panels.status.getText().replace(/\s+/g, ' ');
+  const refused = /Use \/budget with a number of dollars/;
+  await openTask(v, /Trim coupon codes/);
+  // From the list: /budget lots is refused and stays; Esc, then /usage typed on the row.
+  await send(v, '/budget lots'); await until(() => refused.test(status()) && ask.getValue() === '/budget lots', 'refused, and in the box');
+  v.input.write('\x1b'); await until(() => focused() === panels.board, 'the list');
+  v.type('/usage'); await until(() => focused() === ask && /usage$/.test(ask.getValue()), 'typed on the row');
+  assert.equal(ask.getValue(), '/usage', 'the new command alone');
+  v.input.write('\r'); await until(() => v.current.view === 'usage', '/usage ran');
+  // In the box: refused again, then a / as the first key starts the next command in its place.
+  await openTask(v, /Trim coupon codes/);
+  await send(v, '/budget lots'); await until(() => refused.test(status()) && ask.getValue() === '/budget lots' && ask.__listener, 'refused again');
+  v.type('/'); await until(() => /\/$/.test(ask.getValue()), 'a / typed');
+  assert.equal(ask.getValue(), '/', 'a new command begins');
+  v.type('chats'); v.input.write('\r'); await until(() => v.current.view === 'chats', '/chats ran');
+  // Any other first key changes the refused command, as before.
+  await openTask(v, /Trim coupon codes/);
+  await send(v, '/budget lots'); await until(() => refused.test(status()) && ask.getValue() === '/budget lots' && ask.__listener, 'refused once more');
+  v.input.write('\x7f'); await until(() => ask.getValue() === '/budget lot', 'Backspace edits it');
+  // ↑ in the empty box brings back what was refused.
+  ask.setValue(''); const seen = [];
+  for (let step = 0; step < 6 && !seen.includes('/budget lots'); step++) { v.input.write('\x1b[A'); await pause(80); seen.push(ask.getValue()); }
+  assert.ok(seen.includes('/budget lots'), `↑ brings it back: ${seen.join(' | ')}`);
+});
+
+// A / right after a refused command's last word starts a new command in its place. A / after its
+// last space is the start of the path it waits for: '/permissions folders add ' is refused with
+// its usage, and '/tmp/evals' typed next completes it, in the box or from the list.
+test('a / typed after a refused command that waits for a path is that path, in the box and from the list, and Enter runs the command', { timeout: 40000 }, async t => {
+  const p = setup(t), home = path.join(p.parent, 'home'), evals = path.join(home, 'evals'), more = path.join(home, 'more'); fs.mkdirSync(evals, { recursive: true }); fs.mkdirSync(more);
+  environment(t, { HOME: fs.realpathSync(home) });
+  liveTask(p.root, { id: '4', goal: 'Trim coupon codes', state: 'answered' });
+  const v = await view(t, { repo: p.repo }), panels = v.current.panels, ask = panels.ask, focused = () => v.current.screen.focused, status = () => panels.status.getText().replace(/\s+/g, ' ');
+  const waits = '/permissions folders add ', usage = /Use \/permissions folders add <path>\./;
+  await openTask(v, /Trim coupon codes/);
+  // In the box: the path typed right after the refusal joins the command.
+  await send(v, waits); await until(() => usage.test(status()) && ask.getValue() === waits && ask.__listener, 'refused, and in the box with its space');
+  v.type(fs.realpathSync(evals)); await until(() => ask.getValue().endsWith('evals'), 'the path typed');
+  assert.equal(ask.getValue(), `${waits}${fs.realpathSync(evals)}`, 'the path completes the command');
+  v.input.write('\r'); await until(() => /Added ~\/evals\. The model reads it from your next message\./.test(status()), `Enter runs it: ${status()}`);
+  // From the list: refused, Esc, then the path typed on the row.
+  await send(v, waits); await until(() => usage.test(status()) && ask.getValue() === waits, 'refused again');
+  v.input.write('\x1b'); await until(() => focused() === panels.board, 'the list');
+  v.type(fs.realpathSync(more)); await until(() => focused() === ask && ask.getValue().endsWith('more'), 'typed on the row');
+  assert.equal(ask.getValue(), `${waits}${fs.realpathSync(more)}`, 'the path completes the command');
+  v.input.write('\r'); await until(() => /Added ~\/more\. The model reads it from your next message\./.test(status()), `Enter runs it: ${status()}`);
+});
+
+// A refused /mcp add with its URL never goes to ↑ (the URL may hold a key), so a new command
+// that took its place dropped it for good. It is set aside instead, and is back in its session's
+// box once the new command has run; Esc keeps it in the box rather than dropping it.
+test('a refused /mcp add with its URL is set aside when a new command takes its place, and is back in its box after; Esc keeps it; ↑ never has it', { timeout: 60000 }, async t => {
+  const p = setup(t); liveTask(p.root, { id: '4', goal: 'Trim coupon codes', state: 'answered' });
+  const v = await view(t, { repo: p.repo }), panels = v.current.panels, ask = panels.ask, focused = () => v.current.screen.focused, status = () => panels.status.getText().replace(/\s+/g, ' ');
+  const line = '/mcp add bad https://x.example.invalid/mcp?key=abc --env TOKEN', refused = /--env goes with a command\. A URL takes --header\./, aside = /Your \/mcp add is set aside\. It is back in the box once this command has run\./;
+  await openTask(v, /Trim coupon codes/);
+  // From the list: refused, Esc, then /usage typed on the row.
+  await send(v, line); await until(() => refused.test(status()) && ask.getValue() === line, 'refused, and in the box');
+  v.input.write('\x1b'); await until(() => focused() === panels.board, 'the list');
+  v.type('/usage'); await until(() => focused() === ask && /usage$/.test(ask.getValue()), 'typed on the row');
+  assert.equal(ask.getValue(), '/usage', 'the new command alone'); assert.match(status(), aside);
+  v.input.write('\r'); await until(() => v.current.view === 'usage', '/usage ran');
+  await openTask(v, /Trim coupon codes/); await until(() => ask.getValue() === line, `back in its box, not "${ask.getValue()}"`);
+  // In the box: refused again, then / as the first key.
+  await send(v, line); await until(() => refused.test(status()) && ask.getValue() === line && ask.__listener, 'refused again');
+  v.type('/'); await until(() => ask.getValue() === '/', 'a new command begins'); assert.match(status(), aside);
+  v.type('chats'); v.input.write('\r'); await until(() => v.current.view === 'chats', '/chats ran');
+  await openTask(v, /Trim coupon codes/); await until(() => ask.getValue() === line, `back in its box again, not "${ask.getValue()}"`);
+  // Esc over a draft: the /mcp add stays in the box, and the draft comes back once it is gone.
+  await selectRow(v, /\+ New session/); ask.focus(); ask.readInput(); await until(() => ask.__listener && v.current.session === 'new', 'the new session box');
+  ask.setValue('fix login'); v.input.write('\x1b'); await until(() => focused() === panels.board, 'the list');
+  v.type(line); await until(() => ask.getValue() === line, 'the /mcp add typed over the draft');
+  for (let step = 0; step < 2 && focused() === ask; step++) { v.input.write('\x1b'); await pause(150); }
+  await until(() => focused() === panels.board, 'Esc leaves the box');
+  assert.equal(ask.getValue(), line, 'Esc keeps the /mcp add in the box');
+  ask.focus(); ask.readInput(); await until(() => ask.__listener, 'the box');
+  for (let step = 0; step < line.length; step++) v.input.write('\x7f');
+  await until(() => ask.getValue() === 'fix login', `the draft is back once the command is gone, not "${ask.getValue()}"`);
+  // ↑ walks back through what was typed and never comes to the /mcp add.
+  ask.setValue(''); const seen = [];
+  for (let step = 0; step < 8; step++) { v.input.write('\x1b[A'); await pause(80); seen.push(ask.getValue()); }
+  assert.ok(seen.includes('/chats') && !seen.some(text => /mcp add/.test(text)), `↑ never has it: ${seen.join(' | ')}`);
+});
+
+// Drafts were lost around / commands and views: the New session box lost its draft on a visit to
+// Chats, so a draft /chats was typed over never came back; and Esc over a command typed over a
+// draft dropped that command for good.
+test('the New session draft outlives a visit to Chats, and the command Esc drops for the draft goes to ↑', { timeout: 40000 }, async t => {
+  const p = setup(t);
+  const v = await view(t, { repo: p.repo }), panels = v.current.panels, ask = panels.ask, focused = () => v.current.screen.focused;
+  await until(() => focused() === ask && ask.__listener && v.current.session === 'new', 'the new session box');
+  ask.setValue('fix login'); v.input.write('\x1b'); await until(() => focused() === panels.board, 'the list');
+  v.type('/chats'); await until(() => ask.getValue() === '/chats', 'the command, set apart from the draft');
+  v.input.write('\r'); await until(() => v.current.view === 'chats', '/chats opens Chats');
+  await send(v, '/sessions'); await until(() => v.current.view === 'tasks' && v.current.session === 'new', 'back on New session');
+  await pause(300); assert.equal(ask.getValue(), 'fix login', 'the draft is back in its box');
+  // Leaving by the tabs keeps it too.
+  panels.tabs[3].focus(); v.input.write('\r'); await until(() => v.current.view === 'chats', 'Chats by its tab');
+  panels.tabs[0].focus(); v.input.write('\r'); await until(() => v.current.view === 'tasks' && v.current.session === 'new', 'Sessions by its tab');
+  await pause(300); assert.equal(ask.getValue(), 'fix login', 'still there');
+  // A command typed over the draft and left with Esc: the draft is back, and ↑ brings the command back.
+  ask.focus(); ask.readInput(); await until(() => ask.__listener, 'the box'); v.input.write('\x1b'); await until(() => focused() === panels.board, 'the list');
+  v.type('/budg'); await until(() => ask.getValue() === '/budg', 'a command over the draft');
+  v.input.write('\x1b'); await until(() => panels.palette.hidden, 'the command list closed');
+  v.input.write('\x1b'); await until(() => focused() === panels.board && ask.getValue() === 'fix login', 'Esc brings the draft back');
+  ask.focus(); ask.readInput(); await until(() => ask.__listener, 'the box again'); ask.setValue('');
+  v.input.write('\x1b[A'); await until(() => ask.getValue() === '/budg', `↑ brings the command back, not "${ask.getValue()}"`);
 });
 
 // Rename session and Edit task open with the name or the task in the box, so a command typed
@@ -6813,7 +7311,7 @@ test('Usage names Enter only where it acts: not while the vendors are read; on a
 
 test('Sessions shows the list on the left and the open session on the right, at 100 columns and at 80', { timeout: 30000 }, async t => {
   // In colour, as the app runs. The drawn rows are checked too, and colour is what once cost a row its age.
-  const p = twoSessions(t); delete process.env.NO_COLOR;
+  const p = twoSessions(t); delete process.env.ELU_NO_COLOR;
   const v = await view(t, { repo: p.repo }), panels = v.current.panels;
   for (const [width, height] of [[100, 30], [80, 24]]) {
     await sized(v, width, height); await selectRow(v, /Trim coupon/); await until(() => v.current.session === '4', 'its session shows'); v.current.screen.render();
@@ -6842,7 +7340,7 @@ test('Sessions shows the list on the left and the open session on the right, at 
     assert.match(panels.header.getText(), width === 100 ? /^Trim coupon codes before they are compared at checkout {2}· {2}Task$/ : /^Trim coupon codes before they are… {2}· {2}Task$/);
     assert.match(panels.chat.getText(), /^You {2}\d{1,2}:\d\d [AP]M\n┃ Trim coupon codes before they are/); assert.match(panels.chat.getText().replace(/\s+/g, ' '), /Checks complete\. \/changes to inspect · \/publish to review push/);
     assert.equal(panels.chat._clines.length, panels.chat.getContent().split('\n').length, 'the chat fits its pane without a second wrap');
-    assert.equal(panels.status.getText(), 'ready to publish'); assert.equal(panels.ask._label.getText(), ' Message Opus · with @reviewer ');
+    assert.equal(panels.status.getText(), 'ready to publish'); assert.equal(panels.ask._label.getText(), ' Message Opus ');
     // The key bar is the focused pane's: here the list's, with the keys of the row under the cursor.
     // A row's letters act with Enter: the bar says so in words where there is room, and with the Enter sign at 80 columns.
     assert.equal(v.current.screen.focused, panels.board); assert.equal(panels.keys.getText().trim(), width === 100 ? 'enter open  p publish  d changes  e rename  c archive  n new session  letter then enter  tab next' : 'enter open  p publish  d changes  e rename  c archive  n new session  letter ⏎');
@@ -6875,7 +7373,7 @@ test('moving the list’s cursor shows each row on the right at once, and the fo
   // Down: the first session, with its own header, chat and message box. No Enter is needed.
   await shows('\x1b[B', /\? Which format/, '5', 'Down shows the first session');
   await until(() => /^sample app {2}· {2}Which format should the export use {2}· {2}Task$/.test(panels.header.getText()) && /┃ Which format should the export use/.test(panels.chat.getText()), 'the header and the chat are that session’s');
-  assert.equal(panels.compose.hidden, true); assert.equal(panels.chat.hidden, false); assert.equal(panels.ask.getValue(), '', 'the box is that session’s, not the new session’s'); assert.equal(panels.ask._label.getText(), ' Message Opus · with @reviewer ');
+  assert.equal(panels.compose.hidden, true); assert.equal(panels.chat.hidden, false); assert.equal(panels.ask.getValue(), '', 'the box is that session’s, not the new session’s'); assert.equal(panels.ask._label.getText(), ' Message Opus ');
   assert.match(panels.keys.getText(), /enter open {2}a answer/);
   await shows('\x1b[B', /✓ Trim coupon/, '4', 'Down again shows the next session');
   await until(() => /^Trim coupon codes before they are compared at checkout {2}· {2}Task$/.test(panels.header.getText()) && /┃ Trim coupon codes before they are compared at checkout/.test(panels.chat.getText()), 'the header and the chat are that session’s');
@@ -6979,8 +7477,8 @@ test('+ New session shows the new session form, and a message sent from it opens
   // With a session open, the cursor on + New session shows the form in its place: the project, the model, the bots and the message box.
   await selectRow(v, /\+ New session/);
   assert.equal(panels.compose.hidden, false); assert.equal(panels.chat.hidden, true); assert.deepEqual([panels.compose.aleft, panels.compose.width], [30, 70]);
-  assert.match(panels.compose._label.getText(), /New session/); assert.match(composeText(v), /^Project {6}sample app\nWhen {9}now +\/schedule to run it later\nPermissions {2}Ask for approval +\/permissions ask, auto or full\nRuns in {6}New worktree +\/place\nFolders {6}none +\S.*\nModel {8}Opus +\/model NAME, or \/model to pick\nBots {9}@reviewer +\/bots add NAME$/);
-  assert.match(panels.composeHint.getText(), /^Your message goes to Opus\.\nBots review the changes\./); assert.match(panels.ask._label.getText(), /^ New session → Opus · sample app · with @reviewer $/); assert.match(panels.header.getText(), /^sample app {2}· {2}New session$/);
+  assert.match(panels.compose._label.getText(), /New session/); assert.match(composeText(v), /^Project {6}sample app\nWhen {9}now +\/schedule to run it later\nPermissions {2}Ask for approval +\/permissions ask, auto or full\nRuns in {6}New worktree +\/place\nFolders {6}none +\S.*\nModel {8}Opus +\/model NAME, or \/model to pick\nBots {9}none +\/bots add NAME$/);
+  assert.match(panels.composeHint.getText(), /^Your message goes to Opus\.\nNo bot reviews the changes\./); assert.match(panels.ask._label.getText(), /^ New session → Opus · sample app $/); assert.match(panels.header.getText(), /^sample app {2}· {2}New session$/);
   // Enter on the row moves into the form's message box. A message from there starts a session.
   v.input.write('\r'); await until(() => focused() === panels.ask, 'Enter moves into the message box');
   // Empty, the box names no Enter: there is nothing to send yet.
@@ -8093,6 +8591,70 @@ test('PgUp and PgDn from the message box page what a session changed while Chang
   assert.equal(ask.getValue(), 'half a thought');
 });
 
+// No limit of ours on what the owner reads: the Changes of a session here list every file it
+// changed, folded so the list costs a row a file, and every line of each opens.
+for (const [columns, high] of [[140, 50], [80, 24]]) test(`Changes of a session here that changed 400 files lists all 400 at ${columns}x${high}, and every line of the longest opens`, { timeout: 90000 }, async t => {
+  const p = setup(t), at = new Date(Date.now() - 60000).toISOString(), base = git(p.root, ['rev-parse', 'HEAD']), worktree = path.join(p.repo.worktrees, '1');
+  fs.mkdirSync(p.repo.worktrees, { recursive: true }); git(p.root, ['worktree', 'add', '-b', 'feat/task-1', worktree, base]);
+  for (let index = 1; index <= 400; index++) fs.writeFileSync(path.join(worktree, `note-${String(index).padStart(3, '0')}.txt`), `Cart file ${index}\n`);
+  fs.writeFileSync(path.join(worktree, 'note-400.txt'), Array.from({ length: 2500 }, (_, index) => `Cart line ${index + 1}\n`).join(''));
+  saveTask(p.repo, { id: '1', goal: 'Cart notes', state: 'ready', worktree, branch: 'feat/task-1', base, createdAt: at, runs: [], reviews: [], responses: [], sessions: {}, messages: [] });
+  const v = await view(t, { repo: p.repo }), panels = v.current.panels, changes = panels.changes;
+  v.output.columns = columns; v.output.rows = high; v.output.emit('resize');
+  await until(() => v.current.screen.width === columns && v.current.screen.height === high, `${columns}x${high}`);
+  await openTask(v, /Cart notes/);
+  await send(v, '/changes');
+  await until(() => v.current.sessionView === 'changes' && /400 files changed/.test(changes.getText()), 'what it changed');
+  assert.equal(panels.sessionTabs.getText().trim(), 'Chat   Changes 400');
+  assert.doesNotMatch(changes.getText(), /not shown/i);
+  const marked = () => changes.getText().split('\n').find(row => row.startsWith('▌')) ?? '';
+  // The last file is on the list, folded.
+  changes.focus(); await until(() => v.current.screen.focused === changes, 'the Changes view');
+  v.input.write('\x1b[4~'); await until(() => /note-400\.txt/.test(marked()), 'End goes to the last file, the 400th');
+  assert.match(marked(), /▸ note-400\.txt/);
+  // Every line of it opens.
+  v.input.write('\r'); await until(() => /▾ note-400\.txt/.test(marked()), 'Enter unfolds it');
+  v.input.write('\x1b[4~');
+  for (const started = Date.now(); !/Cart line 2500\b/.test(changes.getText());) { if (Date.now() - started > 10000) throw new Error(`End did not reach its last line:\n${changes.getText()}`); await pause(10); }
+  // The cursor on a line is the + that notes it.
+  assert.match(changes.getText().split('\n').filter(row => row.trim()).at(-1), /^\s*\+\s+2500 \+ Cart line 2500\b/, 'the cursor on it');
+});
+
+// Changes reads a page at a time (CHANGES_PAGE): a new file larger than a page shows its first
+// page and, under it, a row that says how many lines are still to come; Enter on that row reads
+// on, to the last line. Nothing is said to be left out.
+test('Changes of a new file larger than a page: a row under it counts the lines still to come, and Enter on it reads on to the last line', { timeout: 120000 }, async t => {
+  const p = setup(t), at = new Date(Date.now() - 60000).toISOString(), base = git(p.root, ['rev-parse', 'HEAD']), worktree = path.join(p.repo.worktrees, '1');
+  fs.mkdirSync(p.repo.worktrees, { recursive: true }); git(p.root, ['worktree', 'add', '-b', 'feat/task-1', worktree, base]);
+  const line = index => `Cart line ${String(index).padStart(7, '0')} ${'z'.repeat(81)}\n`, total = Math.ceil(CHANGES_PAGE * 1.25 / 100), first = Math.floor(CHANGES_PAGE / 100);
+  assert.equal(line(1).length, 100);
+  const fd = fs.openSync(path.join(worktree, 'dump.txt'), 'w');
+  for (let from = 1; from <= total; from += 20000) fs.writeSync(fd, Array.from({ length: Math.min(20000, total - from + 1) }, (_, n) => line(from + n)).join(''));
+  fs.closeSync(fd);
+  saveTask(p.repo, { id: '1', goal: 'Cart dump', state: 'ready', worktree, branch: 'feat/task-1', base, createdAt: at, runs: [], reviews: [], responses: [], sessions: {}, messages: [] });
+  const v = await view(t, { repo: p.repo }), panels = v.current.panels, changes = panels.changes;
+  v.output.columns = 140; v.output.rows = 50; v.output.emit('resize');
+  await until(() => v.current.screen.width === 140 && v.current.screen.height === 50, '140x50');
+  await openTask(v, /Cart dump/);
+  await send(v, '/changes');
+  await until(() => v.current.sessionView === 'changes' && /dump\.txt/.test(changes.getText()), 'what it changed', 60000);
+  assert.match(changes.getText().replace(/\s+/g, ' '), /Long changes show a part at a time\. Enter on "more" reads the next part\./);
+  assert.doesNotMatch(changes.getText(), /not shown/i);
+  const marked = () => changes.getText().split('\n').find(row => row.startsWith('▌')) ?? '';
+  changes.focus(); await until(() => v.current.screen.focused === changes, 'the Changes view');
+  v.input.write('\x1b[4~'); await until(() => /dump\.txt/.test(marked()), 'End goes to the file');
+  v.input.write('\r'); await until(() => /▾ dump\.txt/.test(marked()), 'Enter unfolds it', 60000);
+  // Under its first page: how many lines are still to come.
+  v.input.write('\x1b[4~'); await until(() => /… [\d,]+ more lines/.test(marked()), 'End goes to the row of what is still to come').catch(error => { throw new Error(`${error.message}:\n${changes.getText()}`); });
+  assert.ok(marked().includes(`… ${(total - first).toLocaleString('en-US')} more lines`), marked());
+  assert.ok(changes.getText().includes(line(first).trimEnd().slice(0, 40)), 'the last line of the first page above it');
+  await until(() => /enter read more/.test(panels.keys.getText()), 'the bar says Enter reads more').catch(error => { throw new Error(`${error.message}: ${panels.keys.getText()}`); });
+  // Enter reads on: the rest is there, to the last line.
+  v.input.write('\r');
+  for (const started = Date.now(); !changes.getText().includes(line(total).trimEnd().slice(0, 40));) { if (Date.now() - started > 60000) throw new Error(`Enter did not read on to its last line:\n${changes.getText()}`); v.input.write('\x1b[4~'); await pause(100); }
+  assert.doesNotMatch(changes.getText(), /more lines/);
+});
+
 test('PgUp and PgDn from the message box page a Standup chat, at 80x24 and at 140x50', { timeout: 60000 }, async t => {
   const p = setup(t), at = new Date(Date.now() - 60000).toISOString(), round = 'standup-0123456789abcdef', result = { outcome: 'done', intent: 'answer', summary: 'Everyone answered.', question: null, choices: [], comments: [], responses: [] };
   const said = [{ at, text: 'You ask: standup', from: 'Standup', standup: round, line: true }, ...Array.from({ length: 60 }, (_, index) => ({ at, text: `Cart update ${index + 1}: still on the coupon codes.`, from: 'Opus 5.5', who: 'Opus 5.5', standup: round, answer: true })), { at, text: 'Sent to your Standup', from: 'Standup', standup: round, line: true }];
@@ -8167,6 +8729,74 @@ test('the session header says Task, not its state: a click on it or Ctrl+T opens
     v.input.write('\x1b'); await until(() => !modal(v, 'Task'), 'closed');
     await send(v, '/sessions');
   }
+});
+
+// His new goal has no length or count of ours: the check takes a goal of 6,000 characters with
+// 12 objectives, and the session's Task shows it whole, every objective. At 80x24 the check opens
+// with every answer on screen and its hint says there is more to page; a resize keeps them there.
+// A goal that is refused keeps what he typed: the editor opens again with it and says why, whole.
+test('the check takes a new goal of any length with any number of objectives and the Task shows it whole; at 80x24 its answers stay on screen; a refused goal keeps what he typed', { timeout: 60000 }, async t => {
+  const p = setup(t), TASK = { title: 'Uppercase coupons', description: 'Make normalize return upper case.', goal: 'Codes compare equal whatever their case.', objectives: ['normalize returns upper case', 'The coupon test passes', 'The docs say so', 'The changelog says so'], priority: 'medium', severity: 'low' };
+  liveTask(p.root, { id: '3', goal: 'Uppercase coupon codes', state: 'ready' });
+  proposeTask(p.repo, '3', TASK); approvePlan(p.repo, '3'); reportProgress(p.repo, '3', { met: [1], evidence: [[1, 'src/coupon.mjs returns value.toUpperCase()']] });
+  const v = await view(t, { repo: p.repo, conductor: false }), panels = v.current.panels, status = () => panels.status.getText();
+  const ANSWERS = ['› Done', '› Keep open, new goal', '› Done, and a copy with a new goal'];
+  const drawn = () => { v.current.screen.render(); return screenRows(v).join('\n'); };
+  v.output.columns = 80; v.output.rows = 24; v.output.emit('resize'); await until(() => v.current.screen.width === 80 && v.current.screen.height === 24, '80x24');
+  await openTask(v, /Uppercase coupons/);
+  await send(v, '/done'); await until(() => modal(v, 'Check'), 'the check');
+  const rows = dialogRows(v, 'Check').map(row => row.trimEnd());
+  assert.deepEqual(rows.slice(-3), ANSWERS); assert.ok(rows.length > 20, 'more rows than the dialog shows at 80x24');
+  // Every answer on screen, on Done, and the hint says there is more to page.
+  await until(() => ANSWERS.every(label => drawn().includes(label)), 'every answer on screen at 80x24').catch(error => { throw new Error(`${error.message}:\n${drawn()}`); });
+  assert.equal(dialogPicked(v, 'Check'), '› Done', 'on Done');
+  assert.match(drawn(), /enter choose · esc cancel · pgdn more/);
+  // A resize keeps them there.
+  v.output.columns = 100; v.output.rows = 30; v.output.emit('resize'); await until(() => v.current.screen.width === 100, '100x30');
+  v.output.columns = 80; v.output.rows = 24; v.output.emit('resize'); await until(() => v.current.screen.width === 80 && v.current.screen.height === 24, '80x24 again');
+  await until(() => ANSWERS.every(label => drawn().includes(label)), 'every answer on screen after a resize').catch(error => { throw new Error(`${error.message}:\n${drawn()}`); });
+  assert.equal(dialogPicked(v, 'Check'), '› Done', 'still on Done');
+  // Keep open, new goal: 6,000 characters and 12 objectives carry on.
+  const goal = `Codes compare equal ${'whatever their case and wherever they are typed '.repeat(125)}THE END`;
+  const objectives = Array.from({ length: 12 }, (_, n) => `Objective ${n + 1} holds: ${'the code compares in upper case and '.repeat(10)}done.`);
+  assert.ok(goal.length > 6000 && objectives.every(text => text.length > 300));
+  const text = [goal, ...objectives].join('\n');
+  markChoice(v, 'Check', '› Keep open, new goal'); v.input.write('\r');
+  const goalTitle = 'New goal (objectives below it, one per line)';
+  await until(() => editor(v, goalTitle)?.__listener, 'the new goal editor');
+  editor(v, goalTitle).setValue(text); v.input.write('\x13');
+  await until(() => /"Uppercase coupons" carries on with the new goal\./.test(status()), 'carried on').catch(error => { throw new Error(`${error.message}: ${status()}`); });
+  const plan = () => JSON.parse(fs.readFileSync(planFile(p.repo, '3'), 'utf8')).tasks.at(-1);
+  assert.ok(plan().goal === goal, 'the whole goal'); assert.deepEqual(plan().objectives, objectives);
+  const sent = pendingRequests(p.root).find(row => row.continuationTaskId === '3');
+  assert.equal(sent.goal, text); updateRequest(p.root, sent.id, { state: 'done', taskId: '3' });
+  // Its Task shows it whole, every objective.
+  panels.ask.focus(); await until(() => panels.ask.__listener, 'the message box reads');
+  v.input.write('\x14'); await until(() => modal(v, 'Task'), 'Ctrl+T opens its Task');
+  const said = dialogRows(v, 'Task').map(row => row.trim()).join(' ').replace(/\s+/g, ' ');
+  assert.ok(said.includes(goal), 'the whole goal in its Task');
+  for (const objective of objectives) assert.ok(said.includes(objective), objective.slice(0, 20));
+  assert.match(said, /Objectives · 0 of 12 met/);
+  // A copy while ELU still runs its sessions on an older build is refused: the editor opens again
+  // with what he typed and says why, every word of it.
+  v.input.write('\r'); await until(() => modal(v, 'Check'), 'Check goes on to the check');
+  const conductorState = path.join(personalDirectory(), 'conductor', 'state.json');
+  fs.mkdirSync(path.dirname(conductorState), { recursive: true }); t.after(() => fs.rmSync(conductorState, { force: true }));
+  fs.writeFileSync(conductorState, JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString(), stopped: false, error: null, queued: 0, runs: [], heartbeatAt: new Date().toISOString(), standup: 1, standupAside: 1 }));
+  markChoice(v, 'Check', '› Done, and a copy with a new goal'); v.input.write('\r');
+  const copyTitle = 'Copy with a new goal (objectives below it, one per line)';
+  await until(() => editor(v, copyTitle)?.__listener, 'the copy editor');
+  editor(v, copyTitle).setValue(text); v.input.write('\x13');
+  const why = () => modal(v, copyTitle)?.children.find(child => child.type === 'text' && /Ctrl-S saves/.test(child.getText()))?.getText().replace(/\s+/g, ' ') ?? '';
+  await until(() => editor(v, copyTitle)?.__listener && why().includes(OLDER_COPY), 'the editor again, saying why').catch(error => { throw new Error(`${error.message}: ${why()}`); });
+  assert.equal(editor(v, copyTitle).getValue(), text, 'what he typed, every character');
+  assert.ok(drawn().includes('try again then.'), `why, whole on screen:\n${drawn()}`);
+  assert.equal(pendingRequests(p.root).filter(row => row.copied).length, 0, 'nothing was copied');
+  // Once it runs the new build, Ctrl+S copies it.
+  fs.rmSync(conductorState, { force: true }); v.input.write('\x13');
+  await until(() => /Its copy starts in Sessions\./.test(status()), 'copied').catch(error => { throw new Error(`${error.message}: ${status()}`); });
+  const copied = pendingRequests(p.root).find(row => row.copied).copied;
+  assert.ok(copied.goal === goal, 'the copy has the whole goal'); assert.deepEqual(copied.objectives, objectives);
 });
 
 // Task in the header opens the Task of the session the header names wherever it shows: while a

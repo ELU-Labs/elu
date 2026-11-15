@@ -10,6 +10,8 @@ import { withHome, registeredProject, answeringClis } from './peer-helpers.mjs';
 import { savePeerSettings } from '../lib/peer/settings.mjs';
 import * as peer from '../lib/peer/index.mjs';
 import { saveBot } from '../lib/bots.mjs';
+import { defaultBox } from '../lib/peer/settings.mjs';
+import { remoteSessions as remoteGlue } from '../lib/terminal-remote.mjs';
 
 // End to end through the CLI: two homes (XDG_CONFIG_HOME values), each with its own
 // detached peer daemon, on a local hyperdht testnet. Nothing turns it on: A's starts when A
@@ -166,6 +168,36 @@ test('two homes team up, ask, answer, route a local A2A call through the CLI, sh
   await command(homes.a, { type: 'ask', to: 'b', text: 'And yours?', bot: 'private' });
   const refused = await until(() => items(homes.a).find(row => row.kind === 'rejected' && row.question === 'And yours?'), 'the refusal at a');
   assert.equal(refused.text, 'That bot is not shared with teammates.'); assert.equal(refused.bot, 'private');
+});
+
+// The owner's other computer heads this one's sessions with its name, which was its host name
+// (On laptop-one · online). Renamed here with elu id --computer, the other computer heads them
+// with the new name within a few ticks, with no restart, and elu mine there names it so too.
+// An empty name gives the host name back, there as well.
+test('a computer renamed with elu id --computer shows under its new name on the owner\'s other computer, and an empty name gives back its host name', { timeout: 600000 }, async t => {
+  const homes = await twoHomes(t);
+  const a = (await ok(homes.a, ['id', '--name', 'ana'])).identity; await ok(homes.b, ['id', '--name', 'ana']);
+  await ok(homes.a, ['team', 'create', 'core']);
+  await until(() => running(homes.a), `a's daemon running\n${log(homes.a)}`);
+  const { invite } = await ok(homes.a, ['invite', '--mine', '--hours', '1']);
+  await ok(homes.b, ['join', invite.code, '--mine']);
+  const both = home => withHome(home.dir, () => peer.mineRows()).some(row => row.mine && row.theirs);
+  await until(() => both(homes.a) && both(homes.b), `both computers are the owner's\n${log(homes.a)}\n${log(homes.b)}`);
+  // B's Sessions heading for A, as the app draws it from B's daemon (lib/terminal-remote.mjs).
+  const heading = () => withHome(homes.b.dir, () => {
+    const facade = { ...peer, remoteMachines: () => [{ key: a.key, listedAt: new Date().toISOString(), older: false, projects: [], sessions: [] }] };
+    const glue = remoteGlue({ facade, peerRead: (name, ...args) => peer[name](...args), peerCommand: async () => ({}), chatMessage: () => '', ink: text => text, colour: false, restMs: 1e9 });
+    return glue.sections(Date.now(), null).find(line => line.header)?.header ?? null;
+  });
+  const host = defaultBox();
+  await until(() => heading() === `On ${host} · online`, `a under its host name at b\n${log(homes.b)}`);
+  const renamed = await ok(homes.a, ['id', '--computer', 'studio']);
+  assert.equal(renamed.message, 'This computer is @studio now. Your other computers and teammates see it within seconds.');
+  await until(() => heading() === 'On studio · online', `a under its new name at b\n${heading()}\n${log(homes.b)}`, 30000);
+  assert.equal(withHome(homes.b.dir, () => peer.peerStatus()).teams[0].members.find(m => m.key === a.key).box, 'studio');
+  assert.ok((await ok(homes.b, ['mine'])).lines.includes('@studio  yours'), 'elu mine at b names it so');
+  await ok(homes.a, ['id', '--computer', '']);
+  await until(() => heading() === `On ${host} · online`, `a under its host name again at b\n${log(homes.b)}`, 30000);
 });
 
 test('a teammate leaves and joins again with the same identity, then is removed and joins again', { timeout: 600000 }, async t => {

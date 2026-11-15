@@ -24,6 +24,8 @@
 // (or grok.usage's sum): usage and modelUsage, and extra, more fields of its result (usage_is_incomplete,
 // cost_is_partial, total_cost_usd); sideCalls, the types of the events a streaming-json turn
 // prints for model calls its usage leaves out (auto_compact_started, memory_flush_started).
+// grok.dropped (fake.json): a headless turn whose connection drops after its first event: it
+// prints an error and ends, having reported no usage, so what it cost is not known.
 // grok.checkSeconds: a slow one-time check. Each model turn of ELU's check (a turn whose
 // folder is under the check's scratch folder, elu-code-check-grok-*) answers only after this
 // many seconds; seven such turns make a check. grok.checkGate names a file that ends the wait
@@ -60,6 +62,18 @@ const slowCheck = async folder => {
 };
 if (args.includes('--version')) { console.log(RELEASE); process.exit(0); }
 if (args.includes('--help')) { console.log('--output-format --permission-mode --sandbox --max-turns --cwd --no-auto-update --tools --disallowed-tools --allow --deny --prompt-file --prompt-json --no-alt-screen --no-memory --no-subagents --disable-web-search --session-id --resume --model'); process.exit(0); }
+// grok.together (fake.json): { file, count }. Runs that start at the same moment: a headless
+// run or an ACP agent notes its start beside file, waits until count runs have (ten seconds at
+// most), and only then reads the config.toml of its GROK_HOME, as a run reads what is there
+// when it gets to it. It writes { args, home, config } to file.
+if (cfg.grok?.together && (args.includes('agent') || args.includes('--prompt-file'))) {
+  const { file, count } = cfg.grok.together, started = `${file}.started`;
+  fs.appendFileSync(started, `${process.pid}\n`);
+  const until = Date.now() + 10000;
+  while (Date.now() < until && fs.readFileSync(started, 'utf8').split('\n').filter(Boolean).length < count) await new Promise(resolve => setTimeout(resolve, 20));
+  let config = null; try { config = fs.readFileSync(path.join(home, 'config.toml'), 'utf8'); } catch {}
+  fs.appendFileSync(file, `${JSON.stringify({ args, home, config })}\n`);
+}
 // login: grok.login on, the device code sign-in as grok 1.0.77 runs it (watched in a scratch
 // home, with --device-auth and without): a link with the code in it, the code to confirm on
 // that page, and a wait for the owner to approve there. It reads nothing from its input, and
@@ -344,7 +358,24 @@ fs.writeFileSync(path.join(sessions, encodeURIComponent(record.cwd), session, 's
 const streaming = value('--output-format') === 'streaming-json', line = row => console.log(JSON.stringify(row));
 await slowCheck(cwd);
 if (streaming) line({ type: 'thought', data: 'Reading the request.' });
+if (cfg.grok?.dropped) { console.error('error: connection reset by peer'); line({ type: 'error', message: 'connection reset by peer' }); process.exit(1); }
 const report = streaming ? (call, status) => line(status === 'in_progress' ? { type: 'tool_call', ...call, status, content: [], locations: [] } : { type: 'tool_call_update', toolCallId: call.toolCallId, status, content: [], rawOutput: {}, locations: [] }) : undefined;
+// reads (fake.json): the files the model reads with read_file this turn, each as the launch lets
+// it: read_file among the tools, and named by no --deny rule (Read alone, Read(path),
+// Read(path/**), Read(**/name)). Grok Build has no rule that keeps a read inside --cwd, and its
+// read-only sandbox keeps no read out (docs/vendors/grok.md). Each is recorded in reads.jsonl
+// beside the fake, with whether it was read.
+if (Array.isArray(cfg.reads)) {
+  const onDisk = p => { try { return fs.realpathSync(p); } catch { return path.resolve(p); } }, under = (p, dir) => p === dir || p.startsWith(`${dir}/`);
+  const glob = text => new RegExp(`^${text.replace(/[.+^$(){}|[\]\\]/g, '\\$&').replace(/\*/g, '.*')}$`);
+  const rules = denied.flatMap(rule => rule === 'Read' ? ['**/*'] : /^Read\((.*)\)$/.exec(rule)?.slice(1) ?? []);
+  const blocked = file => rules.some(rule => rule.startsWith('**/') ? glob(rule.slice(3)).test(path.basename(file)) : rule.endsWith('/**') ? under(file, onDisk(rule.slice(0, -3))) : file === onDisk(rule));
+  for (const asked of cfg.reads) {
+    const file = onDisk(asked); let read = false;
+    if (has('read_file') && !blocked(file)) { try { fs.readFileSync(file); read = true; } catch { /* Not there. */ } }
+    fs.appendFileSync(path.join(path.dirname(process.argv[1]), 'reads.jsonl'), JSON.stringify({ vendor, path: asked, read }) + '\n');
+  }
+}
 const todoFile = cfg.live && bypass ? listFile(prompt) : null;
 if (todoFile) { writeList(todoFile, ['done', 'doing']); await liveGate(); }
 const result = await act(prompt, record, { bypass, canWrite, canShell, canFetch, cwd, ask: null, report });

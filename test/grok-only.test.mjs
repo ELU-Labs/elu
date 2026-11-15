@@ -91,10 +91,10 @@ const BOTS = ['reviewer', 'lead', 'qa', 'pair'];
 
 test('on a computer with only Grok Build, an edit is reviewed by @reviewer on Grok Build and reaches ready', async t => {
   const p = setup(t, { fake: { mode: 'normal', grok: 'edits' }, helper: true }), controller = autoApprove(new ProjectController(projectFolder(p.root)));
-  const task = await controller.ask('Normalize coupon codes', null, { permissions: 'ask' }).finished;
+  const task = await controller.ask('Normalize coupon codes', null, { permissions: 'ask', bots: ['reviewer'] }).finished;
   assert.equal(task.error, null, JSON.stringify(task.error)); assert.equal(task.state, 'ready');
   assert.equal(fs.readFileSync(path.join(task.worktree, 'src/coupon.mjs'), 'utf8'), 'export const normalize = (value) => value.toUpperCase();\n', 'the edit was made');
-  // The session has @reviewer, as every new one does, and its review ran here, on Grok Build.
+  // The owner put @reviewer in the session, and its review ran here, on Grok Build.
   assert.equal(task.reviewStatus, 'passed'); assert.deepEqual(task.reviews.map(review => review.role), ['bot:reviewer']);
   assert.deepEqual([...new Set(task.runs.map(run => run.vendor))], ['grok']);
   assert.ok(task.evidence.results.every(row => row.status === 'passed'), JSON.stringify(task.evidence.results));
@@ -233,7 +233,7 @@ function sandboxTest(p, fenced) {
 test("on a computer with only Grok Build and no Codex, an edit's checks run in the system's own sandbox, and it reaches ready", { skip: !SYSTEM_SANDBOX && 'this computer has no sandbox of its own' }, async t => {
   const p = setup(t, { fake: { mode: 'normal', grok: 'edits' } }), written = sandboxTest(p, true), controller = autoApprove(new ProjectController(projectFolder(p.root)));
   assert.equal(findBin('codex'), null, 'no Codex here');
-  const task = await controller.ask('Normalize coupon codes', null, { permissions: 'ask' }).finished;
+  const task = await controller.ask('Normalize coupon codes', null, { permissions: 'ask', bots: ['reviewer'] }).finished;
   assert.equal(task.error, null, JSON.stringify(task.error)); assert.equal(task.state, 'ready');
   assert.ok(task.evidence.results.some(row => row.logFile) && task.evidence.results.every(row => row.status === 'passed'), JSON.stringify(task.evidence.results));
   assert.equal(fs.existsSync(written), false, 'the check was fenced in');

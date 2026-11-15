@@ -24,8 +24,8 @@ async function until(check, message = 'condition', timeout = 10000) {
 // colour, as it does in a terminal.
 function session(t, { colour = false } = {}) {
   const removals = [], p = project({ after: close => removals.push(close) }), fake = fakeClis(p.parent);
-  const values = { ...fake.env, XDG_CONFIG_HOME: path.join(p.parent, 'personal'), NO_COLOR: '1', TERM: 'xterm-256color' }, previous = Object.fromEntries(Object.keys(values).map(key => [key, process.env[key]]));
-  Object.assign(process.env, values); if (colour) delete process.env.NO_COLOR;
+  const values = { ...fake.env, XDG_CONFIG_HOME: path.join(p.parent, 'personal'), ELU_NO_COLOR: '1', TERM: 'xterm-256color' }, previous = Object.fromEntries(Object.keys(values).map(key => [key, process.env[key]]));
+  Object.assign(process.env, values); if (colour) delete process.env.ELU_NO_COLOR;
   t.after(async () => {
     for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
     for (const close of removals.reverse()) await close();

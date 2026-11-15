@@ -3,7 +3,10 @@
 `agy` is Google's terminal coding agent for Google One AI Pro and Ultra subscribers (Plus
 and Free with a quota). In ELU it can run sessions and reviews, in every permission mode. In
 Read only, Ask for approval and Approve for me `agy` runs only after it passes the one-time
-check below on this machine. Full access needs no check.
+check below on this machine. Full access needs no check. It does not answer a teammate's
+question: Antigravity has no read deny, so it cannot keep such a question out of the
+project's Git folder or the files Git does not track. The refusal says so, and that Claude
+Code answers teammates' questions.
 
 ## Install
 

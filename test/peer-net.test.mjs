@@ -663,7 +663,7 @@ function fakeSocket() {
   const wire = { out: '' }, socket = Object.assign(new EventEmitter(), { destroyed: false, write: chunk => { wire.out += chunk; return true; }, destroy() { this.destroyed = true; this.emit('close'); } });
   return { socket, wire, frames: () => wire.out.split('\n').filter(Boolean).map(line => JSON.parse(line)), say: value => socket.emit('data', Buffer.from(`${JSON.stringify(value)}\n`)) };
 }
-const NOBODY = { name: '', teams: [], handles: [], plans: true, remote: 1, cards: 1, files: 1, standup: 1, folders: 1, carry: 1, model: 1, lists: 1, edit: 1, reach: 1, clean: 1, notes: 1, check: 1, own: 1, board: 1 };
+const NOBODY = { name: '', teams: [], handles: [], plans: true, remote: 1, cards: 1, files: 1, standup: 1, folders: 1, carry: 1, model: 1, lists: 1, edit: 1, reach: 1, clean: 1, notes: 1, check: 1, own: 1, board: 1, whole: 1, shared: 1 };
 
 test('a hello names only the teams its receiver is on, and a stranger or a removed teammate gets no team and no name', async t => {
   const crew = makeTeam(t), ana = crew.founder.identity, sara = crew.member, bob = withHome(newHome(t), () => createIdentity({ name: 'bob' }));
@@ -1645,6 +1645,41 @@ test('asks reach a teammate by display name or fingerprint, are scanned, paced o
   });
 });
 
+// What the owner types on a shared project's team board is an ask about that project (the box
+// there sends { type: 'ask', project }). It reaches whoever shares it whole: in its message when
+// it fits one line on the link, else in elu.text.put pieces ahead of it, as a long DM goes.
+test('a long message about a shared project reaches whoever shares it whole: in its message, or in pieces ahead of it', async t => {
+  const crew = makeTeam(t), ana = crew.founder.identity, sara = crew.member;
+  const methods = withHome(sara.home, () => { const { root } = registeredProject(t); share(root, { handle: 'app' }); const ctx = { me: loadIdentity(), kick: () => {}, event: () => {} }; return textMethods(ctx, intakeMethods(ctx)); });
+  const from = { key: ana.key, admitted: true };
+  const session = { request: async (method, params) => withHome(sara.home, () => { const result = methods[method](params, from); return method === 'SendMessage' ? { task: result } : result; }) };
+  await withHome(crew.founder.home, async () => {
+    const ctx = { me: loadIdentity(), session: () => session, dial: () => {}, event: () => {}, kick: () => {} };
+    const spec = `Spec for the cart page.\n${'Every line of this spec matters to the cart. '.repeat(460)}THE END`;
+    const huge = `A longer spec.\n${'Every line of this spec matters too. '.repeat(40000)}THE END`;
+    assert.ok(spec.length > 20000 && Buffer.byteLength(JSON.stringify(huge)) > FRAME_MAX);
+    const asked = [createAsk(ctx, { to: 'sara', project: 'app', text: spec, byOwner: true }), createAsk(ctx, { to: 'sara', project: 'app', text: huge, byOwner: true })];
+    await until(() => asked.every(ask => getAsk(ask.id)?.taskId), 'both delivered', 30000);
+    const ids = asked.map(ask => getAsk(ask.id).taskId), got = withHome(sara.home, () => ids.map(id => getRecord(id)));
+    assert.deepEqual(got.map(record => [record.project, record.text.length]), [['app', spec.length], ['app', huge.length]]);
+    assert.ok(got[0].text === spec && got[1].text === huge, 'every character of each');
+  });
+});
+
+// elu peers says each message whole on its line: no length of ours cuts what the owner reads.
+test('elu peers shows each message whole on its line, however long', async t => {
+  const crew = makeTeam(t);
+  await withHome(crew.founder.home, async () => {
+    const ctx = { me: loadIdentity(), session: () => null, dial: () => {}, event: () => {}, kick: () => {} };
+    const text = `Where is the coupon export? ${'Every word of this question matters. '.repeat(30)}THE END`;
+    assert.ok(text.length > 1000);
+    createAsk(ctx, { to: 'sara', text, byOwner: true });
+    const told = await peerCli(['peers'], {});
+    assert.ok(told.lines.includes(`asked  @sara  ${text}`), told.lines.join('\n'));
+    assert.equal(told.items.find(item => item.kind === 'asked').text, text);
+  });
+});
+
 test('a local /a2a task keeps the client context and answers GetTask after the conductor drops its row', t => {
   withHome(newHome(t), () => {
     createIdentity({ name: 'ana' });
@@ -1802,6 +1837,64 @@ test('elu id with no --name never takes an email address for the name: the plain
   assert.equal((await withHome(newHome(t), () => peerCli(['id'], {}))).identity.name, 'name');
   process.env.USER = 'sam_example_com';
   await assert.rejects(withHome(newHome(t), () => peerCli(['id'], {})), /Choose a name with --name\./);
+});
+
+// The owner's other computer shows this one by its name (On laptop-one · online). elu id says
+// that name and how to change it; --computer changes it, and an empty name or default goes
+// back to the host name. A bad name, one another computer on the team goes by, or a bot's
+// name (there @name finds the bot first) is refused.
+test('elu id --computer names this computer for its owner\'s other computers and teammates, refuses a bad or taken name or a bot\'s name in one line, and an empty name or default gives back the host name', async t => {
+  const crew = makeTeam(t), sara = crew.member.identity;
+  await withHome(crew.founder.home, async () => {
+    const me = loadIdentity(), host = defaultBox();
+    const first = await peerCli(['id'], {});
+    assert.equal(first.lines.at(-1), `Computer: @${host}, from its host name. elu id --computer NAME renames it.`);
+    const named = await peerCli(['id'], { computer: 'studio' });
+    assert.equal(named.computer, 'studio'); assert.equal(named.message, 'This computer is @studio now. Your other computers and teammates see it within seconds.');
+    assert.equal(named.lines.at(-1), 'Computer: @studio. elu id --computer NAME renames it.');
+    assert.equal(peer.peerSettings().box, 'studio'); assert.equal(peer.peerBox(), 'studio'); assert.equal(peer.peerStatus().box, 'studio');
+    assert.equal(loadIdentity().name, 'ana', 'the owner\'s name on the team stays');
+    // What teammates last said their computers are called (the daemon's state.json): a name one of them goes by is taken.
+    fs.writeFileSync(peerFile('state.json'), JSON.stringify({ running: false, key: me.key, teams: [{ id: crew.teamId, name: 'core', members: [{ key: me.key, name: 'ana' }, { key: sara.key, name: 'sara', box: 'box-two', bots: [{ name: 'deploy', about: 'Ships it.' }] }] }] }));
+    // Bots: the ones ELU comes with (removed here too, since the other computers have them), one saved here, one another computer shares.
+    saveBot({ name: 'sec', instructions: 'Check for secrets.' }); assert.equal(removeBot('pair'), true);
+    const BOT = name => `@${name} is the name of a bot. Choose another name.`;
+    const RULE = "A computer's name is 1 to 32 letters, digits, dots, - or _.";
+    for (const [typed, said] of [['my box', RULE], ['x'.repeat(33), RULE], ['bøx', RULE], ['a/b', RULE], ['@', RULE], ['Box-Two', 'Another computer on your team is called Box-Two.'], ['model', '@model already means something in ELU. Choose another name.'], ['everyone', '@everyone already means something in ELU. Choose another name.'],
+      ['qa', BOT('qa')], ['LEAD', BOT('lead')], ['reviewer', BOT('reviewer')], ['elu', BOT('elu')], ['pair', BOT('pair')], ['sec', BOT('sec')], ['Deploy', BOT('deploy')]])
+      await assert.rejects(peerCli(['id'], { computer: typed }), { message: said }, typed);
+    assert.equal(peer.peerBox(), 'studio', 'a refused name changes nothing');
+    // A leading @ is not part of the name.
+    assert.equal((await peerCli(['id'], { computer: '@box-one' })).computer, 'box-one'); assert.equal(peer.peerBox(), 'box-one');
+    for (const reset of ['', 'default', 'DEFAULT']) {
+      savePeerSettings({ box: 'box-one' });
+      const back = await peerCli(['id'], { computer: reset });
+      assert.equal(back.computer, host); assert.equal(back.message, `This computer goes by its host name again: @${host}.`, JSON.stringify(reset));
+      assert.equal(peer.peerSettings().box, null); assert.equal(peer.peerBox(), host);
+    }
+    // Both flags: the name on the team and the computer's.
+    const both = await peerCli(['id'], { name: 'ana2', computer: 'studio' });
+    assert.equal(both.message, 'Name changed. This computer is @studio now. Your other computers and teammates see it within seconds.');
+    assert.equal(loadIdentity().name, 'ana2'); assert.equal(peer.peerBox(), 'studio');
+  });
+  // With no identity yet, naming the computer makes none.
+  await withHome(newHome(t), async () => {
+    const alone = await peerCli(['id'], { computer: 'box-three' });
+    assert.equal(alone.computer, 'box-three'); assert.equal(alone.identity, undefined); assert.equal(peer.peerStatus().key, null);
+    assert.equal(alone.message, 'This computer is @box-three now.');
+  });
+  // The command line: --computer takes a name, an empty one too, and is listed in --help.
+  const home = newHome(t), run = (...args) => spawnSync(process.execPath, [CLI, ...args, '--json'], { cwd: os.tmpdir(), encoding: 'utf8', env: { ...process.env, XDG_CONFIG_HOME: home } });
+  const said = (...args) => JSON.parse(run(...args).stdout);
+  assert.equal(said('id', '--computer', 'box-four').computer, 'box-four');
+  assert.equal(said('id', '--computer=box-five').computer, 'box-five');
+  assert.equal(withHome(home, () => peer.peerBox()), 'box-five');
+  assert.equal(said('id', '--computer', '').message, `This computer goes by its host name again: @${defaultBox()}.`);
+  assert.equal(said('id', '--computer').message, '--computer needs a value.');
+  assert.equal(said('id', '--computer', 'my box').message, "A computer's name is 1 to 32 letters, digits, dots, - or _.");
+  // A bot ELU comes with, on the command line too.
+  assert.equal(said('id', '--computer', 'qa').message, '@qa is the name of a bot. Choose another name.');
+  assert.match(spawnSync(process.execPath, [CLI, '--help'], { encoding: 'utf8', env: { ...process.env, XDG_CONFIG_HOME: home } }).stdout, /\n {2}id \[--name N\] \[--computer NAME\] \[--export\] \[--import CODE\]\n/);
 });
 
 test('elu peer trust and untrust resolve a roster name, refuse unknown and ambiguous names, and show in elu peers; peer on and status are gone, and peer off with no daemon running says so', async t => {

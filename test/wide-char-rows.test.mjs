@@ -329,8 +329,8 @@ async function app(t, [width, height], { name = null, peer = undefined, more = n
   const closers = []; t.after(async () => { let failure = null; for (const close of closers.reverse()) { try { await close(); } catch (error) { failure ??= error; } } if (failure) throw failure; });
   const p = project({ after: close => closers.push(close) }), fake = fakeClis(p.parent, { mode: 'answer' }), home = path.join(p.parent, 'home');
   for (const name of ['claude', 'codex']) fs.mkdirSync(path.join(home, name), { recursive: true });
-  const env = { ...fake.env, XDG_CONFIG_HOME: path.join(p.parent, 'personal'), TERM: 'xterm-256color', NCURSES_NO_UTF8_ACS: '1' }, before = Object.fromEntries([...Object.keys(env), 'NO_COLOR'].map(key => [key, process.env[key]]));
-  Object.assign(process.env, env); delete process.env.NO_COLOR;
+  const env = { ...fake.env, XDG_CONFIG_HOME: path.join(p.parent, 'personal'), TERM: 'xterm-256color', NCURSES_NO_UTF8_ACS: '1' }, before = Object.fromEntries([...Object.keys(env), 'ELU_NO_COLOR'].map(key => [key, process.env[key]]));
+  Object.assign(process.env, env); delete process.env.ELU_NO_COLOR;
   closers.push(() => { for (const [key, value] of Object.entries(before)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } });
   assert.equal(cli(p.root, ['init', '--yes'], fake.env).status, 0);
   git(p.root, ['add', '.']); git(p.root, ['commit', '-m', 'Configure checks']);

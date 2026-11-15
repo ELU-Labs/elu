@@ -6,7 +6,7 @@ import { PassThrough } from 'node:stream';
 import { project, fakeClis, keyLike, git } from './helpers.mjs';
 import { makeTeam, answeringClis, withHome } from './peer-helpers.mjs';
 import { markMine, noteTheirs } from '../lib/peer/mine.mjs';
-import { ProjectController, registerProject } from '../lib/projects.mjs';
+import { ProjectController, archiveProject, registerProject } from '../lib/projects.mjs';
 import { projectFolder, pendingRequests, updateRequest } from '../lib/workspace.mjs';
 import { readTask, saveTask, taskTitle } from '../lib/state.mjs';
 import { enqueue } from '../lib/conductor.mjs';
@@ -426,9 +426,14 @@ test("a teammate's standup: manual waits for the owner and a decline is told; au
   saveProofs(member.identity.key, [repoProof(member.identity.key, founder.identity.key, row.repoId, row.commit)]);
   const card = sessionCards({ owner: 'ana', repos }).find(value => value.taskId === task.id).card.id;
   let kicks = 0; const ctx = { me: founder.identity, repos: () => repos, kick: () => kicks++, event: () => {} };
-  // A card they were never told is not asked.
+  // A card of no session here is not asked: its session is not on this computer any more
+  // (deleted, moved, or its project closed here), which is what the reason says.
   const unknown = teamStandupAsk(ctx, member.identity.key, { round: newRound(), cards: ['abcdefabcdefabcd'] });
-  assert.deepEqual(unknown.skipped, [{ card: 'abcdefabcdefabcd', why: 'not shared with you' }]);
+  assert.deepEqual(unknown.skipped, [{ card: 'abcdefabcdefabcd', why: 'no longer on that computer' }]);
+  // One here that they cannot see now (their proof of the repository is gone) is not shared with them.
+  saveProofs(member.identity.key, []);
+  assert.deepEqual(teamStandupAsk(ctx, member.identity.key, { round: newRound(), cards: [card] }).skipped, [{ card, why: 'not shared with you' }]);
+  saveProofs(member.identity.key, [repoProof(member.identity.key, founder.identity.key, row.repoId, row.commit)]);
   // Manual (no setting yet): one item waits for the owner; n declines, and the asker reads that.
   const round = newRound(), waiting = teamStandupAsk(ctx, member.identity.key, { round, cards: [card] });
   assert.equal(waiting.state, 'waiting'); assert.equal(kicks, 0);
@@ -458,6 +463,23 @@ test("a teammate's standup: manual waits for the owner and a decline is told; au
   const older = await teamStandupCommand({ ...ctx, session: () => ({ remoteHello: { cards: 1 }, request: async (...args) => { requests.push(args); return {}; } }) }, { type: 'teamStandup', to: member.identity.key, round: newRound(), cards: [card] });
   assert.deepEqual(older, { older: true }); assert.deepEqual(requests, []);
   assert.deepEqual(await teamStandupCommand({ ...ctx, session: () => null }, { type: 'teamStandupRead', to: member.identity.key, round: newRound() }), { offline: true });
+  savePeerPolicy(member.identity.key, { muted: false });
+  // Its project is closed here (it leaves the projects list): the reason says the session is not
+  // on this computer any more, never that it is not shared.
+  assert.equal(archiveProject(controller.repo.root), true);
+  assert.deepEqual(teamStandupAsk(ctx, member.identity.key, { round: newRound(), cards: [card] }).skipped, [{ card, why: 'no longer on that computer' }]);
+  registerProject(controller.repo);
+  // Still listed here (the list reads a record again only when its file changes), but its record
+  // cannot be read now: the same reason, never that it is not shared.
+  const file = path.join(controller.repo.state, 'tasks', task.id, 'task.json'), whole = fs.readFileSync(file), second = Math.floor(Date.now() / 1000);
+  fs.utimesSync(file, second, second); assert.ok(sessionCards({ owner: 'ana', repos }).some(value => value.card.id === card), 'listed');
+  fs.writeFileSync(file, Buffer.alloc(whole.length, 0x20)); fs.utimesSync(file, second, second);
+  assert.ok(sessionCards({ owner: 'ana', repos }).some(value => value.card.id === card), 'still listed');
+  assert.deepEqual(teamStandupAsk(ctx, member.identity.key, { round: newRound(), cards: [card] }).skipped, [{ card, why: 'no longer on that computer' }]);
+  fs.writeFileSync(file, whole);
+  // The session they were told of is deleted here: asked again, the reason says it is not on this computer any more.
+  fs.rmSync(path.join(controller.repo.state, 'tasks', task.id), { recursive: true, force: true });
+  assert.deepEqual(teamStandupAsk(ctx, member.identity.key, { round: newRound(), cards: [card] }).skipped, [{ card, why: 'no longer on that computer' }]);
 });
 
 // A session a teammate's message started is never asked in a teammate's standup, though its

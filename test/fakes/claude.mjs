@@ -2,7 +2,8 @@
 // copies it to a bin folder (adding the node shebang) next to fake.json, which holds the
 // test's mode and the files it records to. Without fake.json it behaves as a signed-in
 // 2.1.319 that records nothing.
-import fs from 'node:fs'; import path from 'node:path'; import readline from 'node:readline'; import crypto from 'node:crypto';
+import fs from 'node:fs'; import path from 'node:path'; import readline from 'node:readline'; import crypto from 'node:crypto'; import { createRequire } from 'node:module';
+const require=createRequire(import.meta.url);
 const vendor=path.basename(process.argv[1]); const args=process.argv.slice(2);
 let cfg={}; try{cfg=JSON.parse(fs.readFileSync(path.join(path.dirname(process.argv[1]),'fake.json'),'utf8'));}catch{}
 // byMode (fake.json): what a turn started in that --permission-mode does (default, auto,
@@ -58,8 +59,22 @@ if(args[0]==='mcp'){
 const home=process.env.CLAUDE_CONFIG_DIR??process.env.HOME??'';const readIn=name=>{try{return fs.readFileSync(path.join(home,name),'utf8');}catch{return null;}};
 let account=null;try{account=JSON.parse(readIn('.claude.json')).oauthAccount?.emailAddress??null;}catch{}
 const seen=()=>{const list=dir=>{try{return fs.readdirSync(path.join(home,dir)).sort();}catch{return null;}};const mcpAt=args.indexOf('--mcp-config');let mcp=null;try{const value=mcpAt>=0?args[mcpAt+1]:null;mcp=Object.keys(JSON.parse(value.trim().startsWith('{')?value:fs.readFileSync(value,'utf8')).mcpServers??{}).sort();}catch{}let userMcp=null;try{userMcp=Object.keys(JSON.parse(readIn('.claude.json')).mcpServers??{}).sort();}catch{}const memory=args.flatMap((arg,at)=>arg==='--add-dir'&&/memory$/.test(args[at+1]??'')?[args[at+1]]:[]).flatMap(dir=>{try{return fs.readdirSync(dir).sort().map(name=>`${name}:${fs.readFileSync(path.join(dir,name),'utf8')}`);}catch{return [];}});return {settings:readIn('settings.json'),claudeMd:readIn('CLAUDE.md'),skills:list('skills'),projects:list('projects'),mcp,userMcp,memory};};
+// The sign-in this folder keeps, as the real CLI keeps it: in .credentials.json, or with
+// accounts.keychain in the Keychain (the stand-in security first on PATH). { claudeAiOauth }.
+const keychainService=()=>{const dir=process.env.CLAUDE_CONFIG_DIR;return `Claude Code-credentials${dir?`-${crypto.createHash('sha256').update(dir.normalize('NFC')).digest('hex').substring(0,8)}`:''}`;};
+function readSignIn(){
+ let text=null;
+ if(cfg.accounts?.keychain){const {spawnSync}=require('node:child_process');const found=spawnSync('security',['find-generic-password','-a',process.env.USER||'claude-code-user','-w','-s',keychainService()],{encoding:'utf8'});if(found.status===0){text=found.stdout.trim();if(/^[0-9a-f]+$/i.test(text))text=Buffer.from(text,'hex').toString('utf8');}}
+ else text=readIn('.credentials.json');
+ try{return JSON.parse(text).claudeAiOauth??null;}catch{return null;}
+}
+function writeSignIn(row){
+ const text=JSON.stringify({claudeAiOauth:row});
+ if(cfg.accounts?.keychain){const {spawnSync}=require('node:child_process');spawnSync('security',['add-generic-password','-U','-a',process.env.USER||'claude-code-user','-s',keychainService(),'-X',Buffer.from(text).toString('hex')],{stdio:'ignore'});}
+ else fs.writeFileSync(path.join(home,'.credentials.json'),text,{mode:0o600});
+}
 // envs (fake.json): each call also records the turn's own elu folder and session it was started with (lib/session-commands.mjs).
-if(cfg.calls)fs.appendFileSync(cfg.calls, JSON.stringify({vendor,args,...(cfg.note?{tmp:process.env.CLAUDE_CODE_TMPDIR??null}:{}),...(cfg.envs?{own:process.env.ELU_COMMAND_FOLDER??null,session:process.env.ELU_SESSION??null}:{}),...(cfg.accounts&&args[0]!=='auth'&&!args.includes('--version')&&!args.includes('--help')?{account,config:process.env.CLAUDE_CONFIG_DIR??null,...seen()}:{})})+'\n');
+if(cfg.calls)fs.appendFileSync(cfg.calls, JSON.stringify({vendor,args,...(cfg.note?{tmp:process.env.CLAUDE_CODE_TMPDIR??null}:{}),...(cfg.envs?{own:process.env.ELU_COMMAND_FOLDER??null,session:process.env.ELU_SESSION??null}:{}),...(cfg.api?{base:process.env.ANTHROPIC_BASE_URL?'relay':null,envFile:process.env.CLAUDE_ENV_FILE?fs.readFileSync(process.env.CLAUDE_ENV_FILE,'utf8'):null}:{}),...(cfg.accounts&&args[0]!=='auth'&&!args.includes('--version')&&!args.includes('--help')?{account,config:process.env.CLAUDE_CONFIG_DIR??null,...seen()}:{})})+'\n');
 if(args.includes('--version')){console.log('2.1.319');process.exit(0);}
 // The --model entry of the real --help, which is where the aliases a bot's Model step offers come from.
 const MODEL_HELP="  --model <model>                       Model for the current session. Provide\n                                        an alias for the latest model (e.g.\n                                        'fable', 'opus', or 'sonnet') or a\n                                        model's full name.\n  -n, --name <name>                     Set a display name for this session";
@@ -104,6 +119,16 @@ if(args[0]==='auth'&&args[1]==='login'){
  if(cfg.accounts.keychain){const {createHash}=await import('node:crypto'),{spawnSync}=await import('node:child_process');const dir=process.env.CLAUDE_CONFIG_DIR;const service=`Claude Code-credentials${dir?`-${createHash('sha256').update(dir.normalize('NFC')).digest('hex').substring(0,8)}`:''}`;const saved=spawnSync('security',['add-generic-password','-U','-a',process.env.USER||'claude-code-user','-s',service,'-X',Buffer.from(signIn).toString('hex')],{stdio:'ignore'});if(saved.status!==0){console.error('Could not save the sign-in in the Keychain.');process.exit(1);}}
  else fs.writeFileSync(path.join(home,'.credentials.json'),signIn,{mode:0o600});
  console.log('Login successful.');process.exit(0);
+}
+// api.tokenUrl (fake.json): auth status renews a sign-in of its folder that ends within five
+// minutes, as 2.1.325 does: its refresh token for a new pair from that address (the stand-in
+// API's /v1/oauth/token), written back where it keeps the sign-in.
+if(args[0]==='auth'&&cfg.api?.tokenUrl){
+ const held=readSignIn();
+ if(held?.refreshToken&&Number.isFinite(held.expiresAt)&&held.expiresAt-Date.now()<5*60*1000){
+  try{const res=await fetch(cfg.api.tokenUrl,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({grant_type:'refresh_token',refresh_token:held.refreshToken,client_id:'00000000-0000-4000-8000-000000000000'})});
+   if(res.ok){const got=await res.json();writeSignIn({...held,accessToken:got.access_token,refreshToken:got.refresh_token,expiresAt:Date.now()+got.expires_in*1000});}}catch{}
+ }
 }
 if(args[0]==='auth'){console.log(JSON.stringify({loggedIn:mode!=='signed-out'&&(!cfg.accounts||Boolean(account))}));process.exit(0);}
 // refuses (fake.json): options this release does not take. A run started with one ends at once
@@ -208,6 +233,9 @@ if(mode==='no-sandbox'){console.error('Error: sandbox required but unavailable: 
 // included), a new session starts from nothing. As the real CLI, modelUsage has one line per
 // model the session used: a turn on another model (after /model) adds its own line and keeps
 // the others as they were. An assistant row with the turn's tokens comes before any answer.
+// stopsAtBudget (fake.json): as the real CLI, a turn that spends more than --max-budget-usd
+// ends there, its result error_max_budget_usd with what the session has used (below).
+let spentSoFar=null;
 if(cfg.spend){
  const kept=path.join(path.dirname(process.argv[1]),'spent.json'),own=cfg.spend,[input,output,read,write]=own.tokens;
  const id=flag=>args.includes(flag)?args[args.indexOf(flag)+1]:null,mine=id('--resume')??id('--session-id')??session;
@@ -216,6 +244,7 @@ if(cfg.spend){
  const models={...before,[own.model]:{tokens:was.tokens.map((value,at)=>value+own.tokens[at]),usd:was.usd+own.usd}};fs.writeFileSync(kept,JSON.stringify({...all,[mine]:models}));
  const total=Object.values(models).reduce((sum,line)=>sum+line.usd,0);
  const usage={input_tokens:input,output_tokens:output,cache_read_input_tokens:read,cache_creation_input_tokens:write},print=console.log;
+ spentSoFar={total_cost_usd:total,usage,modelUsage:Object.fromEntries(Object.entries(models).map(([model,line])=>[model,{inputTokens:line.tokens[0],outputTokens:line.tokens[1],cacheReadInputTokens:line.tokens[2],cacheCreationInputTokens:line.tokens[3],costUSD:line.usd}]))};
  console.log=text=>{let row=null;try{row=JSON.parse(text);}catch{}
   if(row?.session_id===session)row.session_id=mine;
   print(row?.type==='result'&&!row.is_error?JSON.stringify({...row,total_cost_usd:total,usage,modelUsage:Object.fromEntries(Object.entries(models).map(([model,line])=>[model,{inputTokens:line.tokens[0],outputTokens:line.tokens[1],cacheReadInputTokens:line.tokens[2],cacheCreationInputTokens:line.tokens[3],costUSD:line.usd}]))}):row?JSON.stringify(row):text);};
@@ -237,9 +266,50 @@ if(cfg.calls&&servers['elu-code-approval'])fs.appendFileSync(path.join(path.dirn
 const permissionMode=args.includes('--permission-mode')?args[args.indexOf('--permission-mode')+1]:'default';
 // permissionMode (fake.json): the mode this run says it really got, when that is not the one it was started with.
 console.log(JSON.stringify({type:'system',subtype:'init',session_id:session,model:reported,permissionMode:cfg.permissionMode??permissionMode,mcp_servers:mcp,...(cfg.capabilities===false?{}:{capabilities:Array.isArray(cfg.capabilities)?cfg.capabilities:CAPABILITIES})}));
+if(cfg.stopsAtBudget&&spentSoFar&&args.includes('--max-budget-usd')&&cfg.spend.usd>Number(args[args.indexOf('--max-budget-usd')+1])){console.log(JSON.stringify({type:'result',subtype:'error_max_budget_usd',is_error:true,duration_ms:90,num_turns:1,session_id:session,errors:[],...spentSoFar}));process.exit(1);}
 if(cfg.accounts?.limited?.includes(account)){console.log(JSON.stringify({type:'result',subtype:'success',is_error:true,duration_ms:90,num_turns:1,result:"You've hit your session limit · resets 5pm",session_id:session,total_cost_usd:nothingSpent}));process.exit(1);}
-const used=cfg.accounts?.usage?.[account]??{fiveHour:0.36,weekly:0.71};
-console.log(JSON.stringify({type:'rate_limit_event',rate_limit_info:{unifiedWindows:{five_hour:{utilization:used.fiveHour,resetsAt:Math.floor(Date.now()/1000)+10800},seven_day:{utilization:used.weekly,resetsAt:Math.floor(Date.now()/1000)+604800}}}}));
+// api (fake.json): the turn talks to Anthropic as the real CLI signed in with OAuth does, at
+// ANTHROPIC_BASE_URL when that is set: api.requests requests (3 by default) to
+// <base>/v1/messages?beta=true, each with the sign-in its folder keeps and its account in the
+// metadata, and each answer taken as 2.1.325 takes it (seen in a probe): its rate limit headers
+// become a rate_limit_event row; a 429 that carries them ends the turn at once (api_error
+// usage_limit_reached, exit 1); a 429 without them, or a 5xx, is tried again after its
+// retry-after, up to 10 times, unless x-should-retry says false; a 401 reads the sign-in again
+// and tries once more. api.log: a file each answer's status is added to.
+// api.direct: the address it was started with is not used, as when the owner's own Claude Code
+// settings name another: the requests go straight to api.direct.
+if(cfg.api&&(process.env.ANTHROPIC_BASE_URL||cfg.api.direct)){
+ const base=(cfg.api.direct??process.env.ANTHROPIC_BASE_URL).replace(/\/$/,''),U='anthropic-ratelimit-unified-',sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+ let uuid=null;try{uuid=JSON.parse(readIn('.claude.json')).oauthAccount?.accountUuid??null;}catch{}
+ const end=(status,code,text)=>{console.log(JSON.stringify({type:'result',subtype:'success',is_error:true,api_error_status:status,api_error:code,duration_ms:150,num_turns:1,result:text,terminal_reason:'api_error',session_id:session,total_cost_usd:0}));process.exit(1);};
+ for(let n=0;n<(cfg.api.requests??3);n++){
+  let tries=0,again=false;
+  for(;;){
+   const token=readSignIn()?.accessToken??'';let res;
+   try{res=await fetch(`${base}/v1/messages?beta=true`,{method:'POST',headers:{authorization:`Bearer ${token}`,'anthropic-beta':'claude-code-20250219,oauth-2025-04-20','anthropic-version':'2023-06-01','content-type':'application/json'},body:JSON.stringify({model:reported,max_tokens:32000,stream:true,messages:[{role:'user',content:`Step ${n+1} of the turn.`}],metadata:{user_id:JSON.stringify({device_id:'device-standin',account_uuid:uuid??'',session_id:session})}})});}
+   catch{if(++tries>10)end(null,'connection_error','API Error: Connection error.');await sleep(200);continue;}
+   const said=await res.text(),h=name=>res.headers.get(name),any=[...res.headers.keys()].some(name=>name.startsWith(U));
+   if(cfg.api.log)fs.appendFileSync(cfg.api.log,JSON.stringify({n,status:res.status,unified:any})+'\n');
+   const win=key=>h(`${U}${key}-utilization`)!==null?{utilization:Number(h(`${U}${key}-utilization`)),resetsAt:Number(h(`${U}${key}-reset`))}:undefined;
+   if(res.status===200){if(any)console.log(JSON.stringify({type:'rate_limit_event',rate_limit_info:{status:h(`${U}status`)??'allowed',unifiedWindows:{five_hour:win('5h'),seven_day:win('7d')}},session_id:session}));break;}
+   if(res.status===429&&any){
+    const own=[...res.headers.keys()].map(name=>new RegExp(`^${U}(7d_[a-z]+)-status$`).exec(name)?.[1]).find(key=>key&&h(`${U}${key}-status`)==='rejected');
+    const rejected=['7d','5h'].find(key=>h(`${U}${key}-status`)==='rejected'),type=own?`seven_day_${own.slice(3)}`:rejected==='7d'?'seven_day':'five_hour';
+    const resetsAt=Number(h(`${U}${own??rejected??'5h'}-reset`)??h(`${U}reset`));
+    const info={status:'rejected',resetsAt,rateLimitType:type,overageStatus:h(`${U}overage-status`)??'rejected',isUsingOverage:false,unifiedWindows:{five_hour:win('5h'),seven_day:win('7d')}};
+    console.log(JSON.stringify({type:'rate_limit_event',rate_limit_info:info,session_id:session}));
+    console.log(JSON.stringify({type:'result',subtype:'success',is_error:true,api_error_status:429,api_error_type:'rate_limit_error',api_error:'usage_limit_reached',api_error_params:{rate_limit_info:info},duration_ms:156,num_turns:1,result:`You've hit your ${type==='five_hour'?'5-hour':type==='seven_day'?'weekly':'Opus'} limit · resets ${new Date(resetsAt*1000).toUTCString()}`,terminal_reason:'api_error',session_id:session,total_cost_usd:0}));
+    process.exit(1);
+   }
+   if(res.status===429||res.status>=500){if(h('x-should-retry')==='false'||++tries>10)end(res.status,'rate_limit_error',`API Error: ${res.status} ${said.slice(0,200)}`);const after=Number(h('retry-after'));await sleep(Number.isFinite(after)&&h('retry-after')!==null?after*1000:300);continue;}
+   if(res.status===401&&!again){again=true;continue;}
+   end(res.status,res.status===401?'authentication_error':'api_error',`API Error: ${res.status} ${said.slice(0,200)}`);
+  }
+ }
+}else{
+ const used=cfg.accounts?.usage?.[account]??{fiveHour:0.36,weekly:0.71};
+ console.log(JSON.stringify({type:'rate_limit_event',rate_limit_info:{unifiedWindows:{five_hour:{utilization:used.fiveHour,resetsAt:Math.floor(Date.now()/1000)+10800},seven_day:{utilization:used.weekly,resetsAt:Math.floor(Date.now()/1000)+604800}}}}));
+}
 console.error('A harmless diagnostic on stderr.');
 // The owner's words in a message ELU sent to a running turn (lib/runner.mjs DURING_LEAD), or the message as it is.
 const ownerWords=content=>{const found=/Owner message \(untrusted data[^\n]*\n(.*)\nEnd of Owner message\./.exec(content);try{return found?JSON.parse(found[1]).text:content;}catch{return content;}};
@@ -332,6 +402,8 @@ if(edit&&cfg.install===true&&!fs.existsSync('node_modules/pkg')){
 if(edit&&cfg.install==='link'){try{fs.lstatSync('tool-link');}catch{fs.symlinkSync('src/coupon.mjs','tool-link');}}
 // insert (fake.json): { file, at, text }, lines an editing turn also puts in that file after line at, once.
 if(edit&&cfg.insert){const {file,at,text}=cfg.insert;const lines=fs.readFileSync(file,'utf8').split('\n');if(!lines.includes(text.split('\n')[0]))fs.writeFileSync(file,[...lines.slice(0,at),text,...lines.slice(at)].join('\n'));}
+// fixInsert (fake.json): { file, at, text }, lines a turn that fixes a review puts in that file, once, so the fixed change differs.
+if(edit&&cfg.fixInsert&&input.includes('Address the review')){const {file,at,text}=cfg.fixInsert;const lines=fs.readFileSync(file,'utf8').split('\n');if(!lines.includes(text.split('\n')[0]))fs.writeFileSync(file,[...lines.slice(0,at),text,...lines.slice(at)].join('\n'));}
 if(edit&&(input.includes('Trim spaces')||cfg.next&&continued))fs.writeFileSync('src/coupon.mjs','export const normalize = (value) => value.trim().toUpperCase();\n');
 // commit (fake.json): an editing turn commits its own work with Git, as an agent that was told
 // to commit does. 'once': one commit of everything it changed. 'twice': a second commit after
@@ -568,6 +640,24 @@ if(Array.isArray(cfg.network)){
   console.log(JSON.stringify({type:'assistant',message:{content:[{type:'tool_use',id,name:'Bash',input:{command,description:'Fetch it'}}]}}));
   console.log(JSON.stringify({type:'user',message:{content:[{type:'tool_result',tool_use_id:id,content:allowed?'connected':`Exit code 56\ncurl: (56) CONNECT tunnel failed, response 403\n<sandbox_violations>\ndeny network-outbound ${host}:443 (user denied)\n</sandbox_violations>`,...(allowed?{}:{is_error:true})}]}}));
   fs.appendFileSync(path.join(path.dirname(process.argv[1]),'network.jsonl'),JSON.stringify({host,allowed,asked:ask,streaming})+'\n');
+ }
+}
+// reads (fake.json): the files the model reads with Read this turn, each as the launch lets it:
+// Read among --tools; inside the working folder or an --add-dir folder while the settings'
+// permissions.blockReadsOutsideWorkingDirectories is on; and named by no Read deny rule of theirs
+// (Read(//path), Read(//path/**), Read(**/name)). Each is recorded in reads.jsonl beside the fake,
+// with whether it was read.
+if(Array.isArray(cfg.reads)){
+ const onDisk=p=>{try{return fs.realpathSync(p);}catch{return path.resolve(p);}},under=(p,dir)=>p===dir||p.startsWith(`${dir}/`);
+ const at=args.indexOf('--settings'),perms=at>=0?JSON.parse(args[at+1]).permissions??{}:{},toolsAt=args.indexOf('--tools'),tools=toolsAt>=0?args[toolsAt+1].split(','):null;
+ const dirs=[process.cwd(),...args.flatMap((arg,i)=>args[i-1]==='--add-dir'?[arg]:[])].map(onDisk);
+ const glob=text=>new RegExp(`^${text.replace(/[.+^$(){}|[\]\\]/g,'\\$&').replace(/\*/g,'.*')}$`);
+ const rules=(perms.deny??[]).flatMap(rule=>/^Read\((.*)\)$/.exec(rule)?.slice(1)??[]);
+ const denied=file=>rules.some(rule=>rule.startsWith('**/')?glob(rule.slice(3)).test(path.basename(file)):rule.startsWith('//')&&(rule.endsWith('/**')?under(file,onDisk(rule.slice(1,-3))):file===onDisk(rule.slice(1))));
+ for(const asked of cfg.reads){
+  const file=onDisk(asked);let read=false;
+  if((!tools||tools.includes('Read'))&&(perms.blockReadsOutsideWorkingDirectories!==true||dirs.some(dir=>under(file,dir)))&&!denied(file)){try{fs.readFileSync(file);read=true;}catch{}}
+  fs.appendFileSync(path.join(path.dirname(process.argv[1]),'reads.jsonl'),JSON.stringify({vendor,path:asked,read})+'\n');
  }
 }
 // hostAsks (fake.json): what this turn asks its host on its own output, each { tool_name, input }

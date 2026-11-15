@@ -7,10 +7,15 @@
 //   delete-generic-password -a ACCOUNT -s SERVICE   (one matching item, as the real one)
 // A missing item exits 44, as the real one does. keychain.json { locked: true }: a change
 // fails as it does on a locked Keychain with no one to unlock it (exit 36). Every call is
-// recorded to keychain-calls.jsonl, its value as <value>.
+// recorded to keychain-calls.jsonl, its value as <value>. The values themselves are kept apart,
+// in keychain-values.json, for find-generic-password -w to print as the real one does (hex when
+// it was saved with -X), so a test of ELU reading a sign-in can find one; keychain.json, which a
+// test reads, never has one.
 import fs from 'node:fs'; import path from 'node:path';
-const dir = path.dirname(process.argv[1]), file = path.join(dir, 'keychain.json'), args = process.argv.slice(2);
+const dir = path.dirname(process.argv[1]), file = path.join(dir, 'keychain.json'), valuesFile = path.join(dir, 'keychain-values.json'), args = process.argv.slice(2);
 let store = { items: [] }; try { store = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { /* An empty Keychain. */ }
+let values = {}; try { values = JSON.parse(fs.readFileSync(valuesFile, 'utf8')); } catch { /* None kept. */ }
+const valueKey = (account, service) => JSON.stringify([account, service]);
 fs.appendFileSync(path.join(dir, 'keychain-calls.jsonl'), `${JSON.stringify({ args: args.map((arg, at) => ['-X', '-w'].includes(args[at - 1]) && args[0] === 'add-generic-password' ? '<value>' : arg) })}\n`);
 const flag = name => { const at = args.indexOf(name); return at >= 0 ? args[at + 1] : undefined; };
 const [command] = args, account = flag('-a'), service = flag('-s');
@@ -21,11 +26,14 @@ const LOCKED = 'security: SecKeychainItemDelete: User interaction is not allowed
 if (command === 'add-generic-password') {
   if (store.locked) { console.error(LOCKED); process.exit(36); }
   store.items = store.items.filter(item => !(item.account === account && item.service === service));
-  store.items.push({ account, service }); save(); process.exit(0);
+  store.items.push({ account, service }); save();
+  const value = flag('-X') ?? (flag('-w') !== undefined ? Buffer.from(flag('-w')).toString('hex') : undefined);
+  if (value !== undefined) fs.writeFileSync(valuesFile, JSON.stringify({ ...values, [valueKey(account, service)]: value }), { mode: 0o600 });
+  process.exit(0);
 }
 if (command === 'find-generic-password') {
   if (!store.items.some(matches)) { console.error(NOT_FOUND); process.exit(44); }
-  if (args.includes('-w')) console.log('{}');
+  if (args.includes('-w')) { const item = store.items.find(matches), hex = values[valueKey(item.account, item.service)]; console.log(hex ? hex : '{}'); }
   process.exit(0);
 }
 if (command === 'delete-generic-password') {

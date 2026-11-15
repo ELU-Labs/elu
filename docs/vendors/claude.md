@@ -250,6 +250,20 @@ commands killed and nothing more done, its empty files were gone within 44 ms. A
 to end while its command ran, it left all 29. In an answer turn the folder is closed
 to writes and nothing is laid there. Not seen: macOS.
 
+ELU itself can end without stopping a turn: a crash, `kill -9`, the computer losing
+power. The turn's file names Claude Code's process, the mark on everything the turn
+started, and the paths where its sandbox may lay an empty file: those in the work tree
+the launch closed to writes, and Claude Code's own names, each only where nothing was
+there as the turn started. Opening ELU again starts its background conductor for a turn
+left running, with nothing more from you. If Claude Code still runs then, it is stopped
+the same way as above, and it takes its empty files away. Where it ended with ELU, ELU
+ends what the turn left running and removes those paths, each only where it is now an
+empty regular file in the work tree that Git does not track. Nothing else is
+removed: a file of yours that was there as the turn started, a tracked empty file, a
+file with anything in it, a folder, a link, or a file reached through a link stays.
+Where Git cannot say what it tracks, nothing is removed. Seen with a stand-in that lays
+and takes away the files as the sandbox does; not seen with Claude Code itself.
+
 `parse` reads the profile Claude ran with from its init line. A run asked for
 Auto that reports `default` is shown as Ask. Denied tool calls come back on the
 result as `permission_denials` and are kept on the run.

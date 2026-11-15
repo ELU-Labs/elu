@@ -33,7 +33,7 @@ test('run dry-run validates setup without a task, worktree, or agent execution',
  assert.equal(fs.existsSync(path.join(repository(p.root).state,'tasks')),false);const calls=fs.readFileSync(p.calls,'utf8').trim().split('\n').map(JSON.parse);assert.equal(calls.some(x=>x.args.includes('-p')||x.args[0]==='exec'),false);
 });
 test('task ids skip branches left by uninstall and session ids agree',(t)=>{
- const p=setup(t);git(p.root,['branch','feat/task-1']);const result=cli(p.root,['run','Normalize coupons','--yes'],p.env);assert.equal(result.status,0,result.stdout);assert.equal(result.json.id,'2');
+ const p=setup(t);git(p.root,['branch','feat/task-1']);const result=cli(p.root,['run','Normalize coupons','--yes','--bot','reviewer'],p.env);assert.equal(result.status,0,result.stdout);assert.equal(result.json.id,'2');
  const task=readTask(repository(p.root),'2');assert.equal(task.runs.findLast(x=>x.role==='bot:reviewer').session,task.sessions['bot:reviewer'].id);
 });
 test('a failed worktree add cleans only the new clean worktree',(t)=>{

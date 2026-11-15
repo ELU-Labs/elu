@@ -198,12 +198,13 @@ test('the Usage tab names the active account per vendor, lists the others, and h
   const lines = usageBlocks([claude, codex, agy, grok], { now: new Date(now) }), text = lines.map(row => row.text).join('\n');
   assert.ok(lines.every(row => row.text.length <= 76), text);
   assert.match(text, /^Claude {6}owner@example.invalid · Max 20x · active$/m);
-  assert.match(text, /^ {12}5h  \[------\]    —   not reported$/m); assert.match(text, /^ {12}wk  \[#-----\]   12%  resets /m);
+  // Claude Code reported its weekly window only: the 5-hour one is left out, never "not reported".
+  assert.match(text, /^Claude {6}owner@example.invalid · Max 20x · active\n {12}wk  \[#-----\]   12%  resets /m); assert.doesNotMatch(text.split('\nCodex')[0], /5h|not reported/);
   assert.match(text, /^ {12}old@example.invalid · last seen \w{3} \d+ · wk 100% then$/m);
   assert.match(text, /^ {12}old@example.invalid · last seen \w{3} \d+ · wk 100% then\n {12}enter on an account uses it · x forgets it · a adds one$/m); assert.match(text, /^Codex {7}owner@example.invalid · Team · active$/m); assert.match(text, /^ {12}5h  \[##----\]   34%  resets /m);
   assert.match(text, /^Antigravity not signed in for ELU · s signs in$/m); assert.match(text, /^Grok Build {2}not installed$/m);
   const details = usageDetailLines(claude, new Date(now)).join('\n');
-  assert.match(details, /owner@example.invalid · Max 20x · default_claude_max_20x\nReported \d\d:\d\d\n\n5h  \[------\]    —   not reported\nwk  \[#-----\]   12%  resets /); assert.match(details, /Other accounts\nold@example.invalid · Pro · first seen/);
+  assert.match(details, /owner@example.invalid · Max 20x · default_claude_max_20x\nReported \d\d:\d\d\n\nwk  \[#-----\]   12%  resets /); assert.doesNotMatch(details, /5h|not reported/); assert.match(details, /Other accounts\nold@example.invalid · Pro · first seen/);
   // The keys are the list's: in the dialog Enter closes it.
   assert.doesNotMatch(details, /enter|x forget|a add/);
   assert.deepEqual(usageDetailLines(grok), ['Not installed.']); assert.deepEqual(usageDetailLines(agy), ['Not signed in for ELU. s signs it in.']);
@@ -216,6 +217,13 @@ test('the Usage tab names the active account per vendor, lists the others, and h
     assert.deepEqual(usageBlocks([unseen], { now: new Date(now) }).map(row => row.text.trim()).slice(0, 2), ['Claude      owner@example.invalid · Max 20x · active', 'Usage shows after your next session on Claude Code.']);
     assert.deepEqual(usageDetailLines(unseen, new Date(now)).slice(0, 3), ['owner@example.invalid · Max 20x · default_claude_max_20x', '', 'Usage shows after your next session on Claude Code.']);
   }
+  // A record that names neither window's percent or reset says the same, not two rows of "not reported".
+  const reported = (row, usage) => ({ ...row, usage, accounts: (row.accounts ?? []).map(item => item.active ? { ...item, usage } : item) });
+  const bare = reported(claude, { observedAt, fiveHour: null, weekly: { usedPercent: null, resetsAt: null } });
+  assert.deepEqual(usageBlocks([bare], { now: new Date(now) }).map(row => row.text.trim()).slice(0, 2), ['Claude      owner@example.invalid · Max 20x · active', 'Usage shows after your next session on Claude Code.']);
+  assert.deepEqual(usageDetailLines(bare, new Date(now)).slice(0, 3), ['owner@example.invalid · Max 20x · default_claude_max_20x', '', 'Usage shows after your next session on Claude Code.']);
+  // Codex says so of a window it did not report, as before.
+  assert.match(usageBlocks([reported(codex, { observedAt, fiveHour: null, weekly: codexSeen.weekly })], { now: new Date(now) }).map(row => row.text).join('\n'), /^ {12}5h  \[------\]    —   not reported$/m);
 });
 
 test('the Usage tab reads Antigravity and Grok Build sign-in before their one-time check, starting no turn, and says c runs it', async t => {

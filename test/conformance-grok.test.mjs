@@ -83,7 +83,7 @@ test('compile refuses until this machine\'s check passed, then builds each profi
   assert.deepEqual(grok.compile({ ...base, role: lead(undefined, { model: 'grok-4.6' }), mode: 'ask', resume: SESSION }).filter((a, i, all) => ['--model', '-r'].includes(all[i - 1]) || ['--model', '-r', '-s'].includes(a)), ['--model', 'grok-4.6', '-r', SESSION]);
   for (const mode of ['ask', 'auto', 'full']) assert.ok(!grok.compile({ ...base, role: lead(), mode }).includes('read-only'), mode);
   for (const mode of ['locked', 'ask', 'auto']) assert.ok(!grok.compile({ ...base, role: lead(mode === 'locked' ? 'read' : 'edit'), mode }).some(a => /bypass|yolo|always-approve/.test(a)), mode);
-  assert.throws(() => grok.compile({ ...base, mode: 'locked', peer: true }), /A teammate's question needs Claude as the model/);
+  assert.throws(() => grok.compile({ ...base, mode: 'locked', peer: true }), { message: "Only Claude Code answers a teammate's question. Grok Build cannot keep its reads inside the shared project. Choose a Claude model with /model default to answer them." });
   assert.throws(() => grok.compile({ ...base, role: lead(), mode: 'locked' }), /Grok Build cannot edit in Read only/);
   assert.throws(() => grok.compile({ ...base, role: lead(), mode: 'ask', place: { kind: 'here' } }), /Here needs Full access/);
   assert.throws(() => grok.compile({ ...base, role: lead('read', { maxCostUsd: 1 }), mode: 'locked' }), /dollar budget/);
@@ -95,11 +95,11 @@ test('compile refuses until this machine\'s check passed, then builds each profi
   assert.ok(grok.meta.flags.includes('--prompt-file'));
 });
 
-test('childEnv carries every switch and no key variable; the private home holds ELU\'s config and a link to the real token', t => {
+test('childEnv carries every switch and no key variable; each mode\'s private home holds ELU\'s config for it and a link to the real token', t => {
   const w = world(t);
   const env = grok.childEnv({ mode: 'locked', home: w.home }), personal = w.personal;
   assert.deepEqual(env, {
-    HOME: path.join(personal, 'grok-home'), GROK_HOME: path.join(personal, 'grok-home', '.grok'),
+    HOME: path.join(personal, 'grok-home', 'locked'), GROK_HOME: path.join(personal, 'grok-home', 'locked', '.grok'),
     GROK_DISABLE_AUTOUPDATER: '1', GROK_TELEMETRY_ENABLED: '0', GROK_TELEMETRY_TRACE_UPLOAD: '0', GROK_TELEMETRY_MIXPANEL_ENABLED: '0', GROK_FEEDBACK_ENABLED: '0', GROK_MEMORY: '0', GROK_SUBAGENTS: '0', GROK_CAMPAIGNS: '0', GROK_BACKEND_SEARCH: '0',
     GROK_CLAUDE_SKILLS_ENABLED: '0', GROK_CLAUDE_RULES_ENABLED: '0', GROK_CLAUDE_AGENTS_ENABLED: '0', GROK_CLAUDE_MCPS_ENABLED: '0', GROK_CLAUDE_HOOKS_ENABLED: '0', GROK_CLAUDE_SESSIONS_ENABLED: '0',
     GROK_CURSOR_SKILLS_ENABLED: '0', GROK_CURSOR_RULES_ENABLED: '0', GROK_CURSOR_AGENTS_ENABLED: '0', GROK_CURSOR_MCPS_ENABLED: '0', GROK_CURSOR_HOOKS_ENABLED: '0', GROK_CURSOR_SESSIONS_ENABLED: '0',
@@ -111,20 +111,24 @@ test('childEnv carries every switch and no key variable; the private home holds 
   assert.deepEqual(grok.meta.envKeys, []);
   const merged = agentEnv({ ...w.env, XAI_API_KEY: 'sk-nope', GROK_API_KEY: 'nope', GROK_TELEMETRY_ENABLED: '1' }, grok.meta.envKeys, env);
   assert.equal(merged.XAI_API_KEY, undefined); assert.equal(merged.GROK_API_KEY, undefined); assert.equal(merged.GROK_TELEMETRY_ENABLED, '0'); assert.equal(merged.HOME, env.HOME); assert.equal(merged.PATH, w.env.PATH);
-  // The private GROK_HOME: config and no-trust files written by ELU, a session store, and the token link.
-  // The config is written for each run's profile: Full access has no never list there either.
-  const dir = env.GROK_HOME, configOf = mode => { grok.childEnv({ mode, home: w.home }); return fs.readFileSync(path.join(dir, 'config.toml'), 'utf8'); };
+  // The private GROK_HOME of each mode: config and no-trust files written by ELU, and links to
+  // the session store and the token of the home every mode shares. The config is written for
+  // the mode: Full access has no never list there either, and no mode writes another's.
+  const dir = env.GROK_HOME, shared = grok.grokHome(), configOf = mode => fs.readFileSync(path.join(grok.childEnv({ mode, home: w.home }).GROK_HOME, 'config.toml'), 'utf8');
   const fullConfig = configOf('full');
   assert.equal(fullConfig, grok.configToml('full')); assert.doesNotMatch(fullConfig, /\[permission\]|deny|Bash\(/);
   for (const mode of ['locked', 'ask', 'auto']) assert.equal(configOf(mode), grok.CONFIG_TOML, mode);
+  assert.equal(fs.readFileSync(grok.childEnv({ mode: 'full', home: w.home }).GROK_HOME + '/config.toml', 'utf8'), fullConfig, 'and Full access keeps its own');
+  for (const mode of PROFILES) { const own = grok.childEnv({ mode, home: w.home }).GROK_HOME; assert.equal(own, grok.modeGrokHome(mode)); for (const name of ['sessions', 'auth.json']) assert.equal(fs.readlinkSync(path.join(own, name)), path.join(shared, name), `${mode} ${name}`); }
   const config = configOf('locked');
   assert.equal(config, grok.CONFIG_TOML); assert.equal(fs.statSync(path.join(dir, 'config.toml')).mode & 0o777, 0o600);
   for (const line of ['[compat.claude]\nskills = false\nrules = false\nagents = false\nmcps = false\nhooks = false\nsessions = false\n', '[compat.cursor]\nskills = false\nrules = false\nagents = false\nmcps = false\nhooks = false\nsessions = false\n', '[compat.codex]\nskills = false\nrules = false\nagents = false\nmcps = false\nhooks = false\nsessions = false\n', 'telemetry = false', 'feedback = false', 'managed_config = false', 'campaigns = false', 'remote_fetch = false', 'backend_tools = false', 'trace_upload = false', 'mixpanel_enabled = false', '[harness]\ndisable_workspace_teleport = true\ndisable_codebase_upload = true', 'auto_update = false', '[relay]\nenabled = false', 'load_envrc = false', '[subagents]\nenabled = false', 'deny = ["Bash(git push:*)", "Bash(git tag:*)"']) assert.ok(config.includes(line), line);
   for (const mode of PROFILES) assert.equal(grok.childEnv({ mode, home: w.home }).GROK_BACKEND_SEARCH, mode === 'full' ? undefined : '0', `server-side search is off in ${mode}, and Full access switches nothing of the agent's off`);
   assert.ok(!/api_key|env_key|token/i.test(config), 'no key or token in the config');
-  assert.ok(fs.existsSync(path.join(dir, 'trusted_folders.toml'))); assert.ok(fs.statSync(path.join(dir, 'sessions')).isDirectory());
+  assert.ok(fs.existsSync(path.join(dir, 'trusted_folders.toml'))); assert.ok(fs.statSync(path.join(dir, 'sessions')).isDirectory()); assert.ok(fs.lstatSync(path.join(shared, 'sessions')).isDirectory());
   assert.equal(fs.statSync(path.join(personal, 'grok-home')).mode & 0o777, 0o700);
-  const link = path.join(dir, 'auth.json'), real = path.join(w.home, '.grok', 'auth.json');
+  for (const mode of PROFILES) assert.equal(fs.statSync(grok.modeHome(mode)).mode & 0o777, 0o700, mode);
+  const link = path.join(shared, 'auth.json'), real = path.join(w.home, '.grok', 'auth.json');
   assert.ok(fs.lstatSync(link).isSymbolicLink()); assert.equal(fs.readlinkSync(link), real);
   assert.equal(grok.signedIn({ env }), true); assert.equal(grok.signedIn({ env: { HOME: w.home } }), true, 'detect checks the real ~/.grok');
   assert.equal(grok.signedIn({ env: {} }), false, 'no home, no guess'); assert.equal(grok.signedIn({ env: { HOME: path.join(w.dir, 'nobody') } }), false);
@@ -151,7 +155,7 @@ test('in Full access ~ is a mirror of the owner\'s home and GROK_HOME stays ELU\
   put(agent, '---\nname: reviewer\ndescription: reviews a change\n---\nReview the change.\n'); put(settings, '{"permissions":{"deny":["Bash(rm:*)"]}}\n');
   const his = () => ['.claude/CLAUDE.md', '.claude/rules/r.md', '.claude/agents/reviewer.md', '.claude/settings.json', '.grok/config.toml', '.grok/auth.json'].map(name => `${name} ${fs.readFileSync(path.join(w.home, name), 'utf8')} ${fs.statSync(path.join(w.home, name)).mtimeMs}`).concat(fs.readdirSync(path.join(w.home, '.grok')).sort()), before = his();
   const full = grok.childEnv({ mode: 'full', home: w.home });
-  assert.equal(full.HOME, path.join(personal, 'grok-home-full')); assert.equal(grok.fullHome(), full.HOME); assert.equal(full.GROK_HOME, path.join(personal, 'grok-home', '.grok'));
+  assert.equal(full.HOME, path.join(personal, 'grok-home-full')); assert.equal(grok.fullHome(), full.HOME); assert.equal(full.GROK_HOME, path.join(personal, 'grok-home', 'full', '.grok'));
   assert.equal(fs.statSync(full.HOME).mode & 0o777, 0o700);
   assert.equal(fs.readFileSync(path.join(full.HOME, '.npmrc'), 'utf8'), 'owner-npm-token\n'); assert.equal(fs.readFileSync(path.join(full.HOME, '.config', 'gcloud', 'token'), 'utf8'), 'owner-cloud-token\n');
   assert.equal(fs.existsSync(path.join(full.HOME, '.claude')), false, 'his Claude Code folder is not under the run\'s home');
@@ -171,18 +175,51 @@ test('in Full access ~ is a mirror of the owner\'s home and GROK_HOME stays ELU\
   assert.deepEqual(inHis.projectInstructions.map(entry => [entry.path, entry.compatibilityStatus, entry.disabled]), [[path.join(w.home, '.claude', 'CLAUDE.md'), 'disabled', true], [path.join(w.home, '.claude', 'rules', 'r.md'), 'disabled', true]]);
   assert.deepEqual(grok.foreignTraces(inHis), [{ what: 'Claude agent reviewer', from: agent, runs: false }, { what: 'Claude permissions', from: settings, runs: false }]);
   // Read only, Ask for approval and Approve for me: the private home, holding ELU's .grok and nothing else.
-  for (const mode of ['locked', 'ask', 'auto']) { const env = grok.childEnv({ mode, home: w.home }); assert.equal(env.HOME, path.join(personal, 'grok-home'), mode); assert.deepEqual(fs.readdirSync(env.HOME), ['.grok'], mode); }
+  for (const mode of ['locked', 'ask', 'auto']) { const env = grok.childEnv({ mode, home: w.home }); assert.equal(env.HOME, path.join(personal, 'grok-home', mode), mode); assert.deepEqual(fs.readdirSync(env.HOME), ['.grok'], mode); }
   // Their rules close the mirror, as the rest of ELU's folder, also before a Full access run has made it.
   passed(w.bin);
   for (const mode of ['locked', 'ask', 'auto']) { const args = grok.compile({ role: lead(mode === 'locked' ? 'read' : 'edit'), mode, cwd: w.repo, session: SESSION, runDir: runDirIn(w) }); for (const rule of [`Read(${full.HOME})`, `Read(${full.HOME}/**)`, `Grep(${full.HOME}/**)`]) assert.equal(args[args.indexOf(rule) - 1], '--deny', `${mode} ${rule}`); }
   fs.rmSync(full.HOME, { recursive: true }); assert.ok(grok.compile({ role: lead(), mode: 'ask', cwd: w.repo, session: SESSION, runDir: runDirIn(w) }).includes(`Read(${full.HOME}/**)`));
   // Opening the session in Grok's own terminal keeps the private home.
-  assert.equal(grok.interactive({ session: SESSION, cwd: w.repo }).env.HOME, path.join(personal, 'grok-home')); assert.equal(fs.existsSync(full.HOME), false, 'and makes no mirror');
+  assert.equal(grok.interactive({ session: SESSION, cwd: w.repo }).env.HOME, path.join(personal, 'grok-home', 'full')); assert.equal(fs.existsSync(full.HOME), false, 'and makes no mirror');
   // When a Full access run ends, what a command made at the top of ~ goes to his home; another mode's run settles nothing.
   grok.childEnv({ mode: 'full', home: w.home }); fs.writeFileSync(path.join(full.HOME, '.yarnrc'), 'made in the run\n');
   grok.settleHome({ mode: 'ask', home: w.home }); assert.equal(fs.existsSync(path.join(w.home, '.yarnrc')), false);
   grok.settleHome({ mode: 'full', home: w.home }); assert.equal(fs.readFileSync(path.join(w.home, '.yarnrc'), 'utf8'), 'made in the run\n'); assert.ok(fs.lstatSync(path.join(full.HOME, '.yarnrc')).isSymbolicLink());
   assert.deepEqual(his(), before, 'his own ~/.grok and ~/.claude were never written');
+});
+
+// A Full access turn of one session starts at the moment another session's Ask turn starts,
+// and a step of the check (c in Usage) beside them. Each run writes the config of its mode
+// before it starts, and Grok reads it as it starts. Before, every mode wrote the one
+// GROK_HOME/config.toml: whichever was written last was read by all three, so the Full access
+// turn ran with the never list and server-side search off, or a check step ran with subagents
+// and search on and recorded what Full access does as Read only.
+test('a Full access run, an Ask run and a step of the check that start together each read the config of their own mode, signed in, with one session store', async t => {
+  const w = world(t), together = path.join(w.dir, 'together.jsonl'), fake = path.join(path.dirname(w.bin), 'fake.json');
+  fs.writeFileSync(fake, JSON.stringify({ ...JSON.parse(fs.readFileSync(fake, 'utf8')), grok: { together: { file: together, count: 3 } } }));
+  passed(w.bin);
+  const harness = { scratch: path.join(w.dir, 'check'), repo: w.repo }; fs.mkdirSync(harness.scratch);
+  const json = grok.conformance.find(step => step.id === 'json');
+  const [full, ask] = await Promise.all([
+    headless(w, { mode: 'full', prompt: 'Reply done with the summary "full".' }),
+    grok.run({ bin: w.bin, role: lead(), mode: 'ask', cwd: w.repo, env: w.env, logFile: path.join(w.dir, 'ask.log'), timeoutSeconds: 30, prompt: 'Reply done with the summary "ask".' }),
+    json.run(harness, { bin: w.bin, env: w.env }),
+  ]);
+  assert.equal(full.exit.code, 0, full.log); assert.equal(grok.parse(full.log).result.summary, 'full'); assert.equal(ask.result.summary, 'ask');
+  const rows = fs.readFileSync(together, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+  const kind = row => row.args.includes('agent') ? 'ask' : row.args.includes('bypassPermissions') ? 'full' : 'check';
+  assert.deepEqual(rows.map(kind).sort(), ['ask', 'check', 'full'], 'all three started together');
+  for (const row of rows) assert.equal(row.config, kind(row) === 'full' ? grok.configToml('full') : grok.CONFIG_TOML, `the ${kind(row)} run read the config of its own mode`);
+  assert.equal(new Set(rows.map(row => row.home)).size, 3, 'each mode has a Grok home of its own');
+  // One session store for every mode: a session begun in Ask for approval goes on in Full access.
+  const resumed = await headless(w, { mode: 'full', resume: ask.session, prompt: 'Reply done with the summary "again".' });
+  assert.equal(resumed.exit.code, 0, resumed.log); assert.equal(grok.parse(resumed.log).result.summary, 'again');
+  // One sign-in: a token Grok wrote over the link in one mode's home is the one every mode reads.
+  const env = mode => grok.childEnv({ mode, home: w.home }), link = path.join(env('auto').GROK_HOME, 'auth.json');
+  fs.unlinkSync(link); fs.writeFileSync(link, '{"token":"refreshed"}\n', { mode: 0o600 });
+  for (const mode of PROFILES) assert.equal(fs.readFileSync(path.join(env(mode).GROK_HOME, 'auth.json'), 'utf8'), '{"token":"refreshed"}\n', mode);
+  assert.equal(grok.signInFile({ env: { HOME: path.join(w.dir, 'nobody') } }), true, 'and the Usage tab reads it as signed in');
 });
 
 test('prepareInput writes the prompt file with the schema; the fake reads it, ignores stdin and reports a session the runner can resume', async t => {
@@ -242,7 +279,7 @@ test('parse reads the json object, pulls the result out of fences, and names aut
   assert.deepEqual(grok.logRow({ method: 'session/request_permission', params: { toolCall: { title: 'Write /x' } } }), { speaker: 'lead', text: 'Asks: Write /x' });
   assert.equal(grok.logRow({ jsonrpc: '2.0', id: 1, result: {} }), null); assert.equal(grok.logRow('x'), null);
   const open = grok.interactive({ session: SESSION, cwd: w.repo });
-  assert.deepEqual([open.bin, open.args], ['grok', ['--no-auto-update', '--cwd', w.repo, '-r', SESSION]]); assert.equal(open.env.GROK_HOME, path.join(w.personal, 'grok-home', '.grok'));
+  assert.deepEqual([open.bin, open.args], ['grok', ['--no-auto-update', '--cwd', w.repo, '-r', SESSION]]); assert.equal(open.env.GROK_HOME, path.join(w.personal, 'grok-home', 'full', '.grok'));
   for (const mode of PROFILES) { const report = policyReport(lead(mode === 'locked' ? 'read' : 'edit'), { mode }); assert.equal(report.rules.length, 7, mode); assert.ok(report.rules.every(rule => typeof rule.enforcement === 'string' && rule.enforcement), mode); }
   assert.match(policyReport(lead(), { mode: 'full' }).rules.find(rule => rule.rule.startsWith('never')).enforcement, /^none: Full access runs/);
   assert.match(policyReport(lead('read'), { mode: 'locked' }).rules.find(rule => rule.rule === 'dollar limit').enforcement, /not requested/);
@@ -345,7 +382,7 @@ test('run() relays an ACP permission request through the approval files: allow w
   assert.ok(lastInput(w).includes('"outcome"'), 'the schema rides in the ACP prompt too');
   await assert.rejects(grok.run(start('locked', { mode: 'locked', role: lead('read'), prompt: 'x' })), /ACP in Ask or Auto only/);
   await assert.rejects(grok.run(start('full', { mode: 'full', prompt: 'x' })), /ACP in Ask or Auto only/);
-  await assert.rejects(grok.run(start('peer', { peer: true, prompt: 'x' })), /A teammate's question needs Claude as the model/);
+  await assert.rejects(grok.run(start('peer', { peer: true, prompt: 'x' })), { message: "Only Claude Code answers a teammate's question. Grok Build cannot keep its reads inside the shared project. Choose a Claude model with /model default to answer them." });
   await assert.rejects(grok.run(start('relative', { bin: 'grok', prompt: 'x' })), /resolved binary path/);
   await assert.rejects(grok.run(start('empty', { prompt: ' ' })), /needs a prompt/);
   const out = world(t, { signedIn: false }); passed(out.bin);

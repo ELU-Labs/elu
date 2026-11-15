@@ -6,10 +6,10 @@ import blessed from 'blessed';
 import { project, git, command, keyLike } from './helpers.mjs';
 import { repository } from '../lib/git.mjs';
 import { saveTask } from '../lib/state.mjs';
-import { sessionWire, taskPatch } from '../lib/projects.mjs';
+import { CHANGES_PAGE, sessionWire, taskPatch } from '../lib/projects.mjs';
 import { buildChanges, sessionChanges } from '../lib/diff.mjs';
 import { changeCounts, changeRows, changeSummary, noteKey, notesMessage } from '../lib/changes.mjs';
-import { parseDiff, LIMITS } from '../lib/diff.mjs';
+import { parseDiff } from '../lib/diff.mjs';
 import { visible } from '../lib/terminal-visuals.mjs';
 
 // Git as it is installed, without the settings of whoever runs the tests.
@@ -195,57 +195,98 @@ test('taskPatch lists the tracked and the new files of a session', t => {
   assert.equal(changeSummary(changes), 'Changes 7');
 });
 
-test('taskPatch holds a huge change to its limits and counts what it leaves out', t => {
+// No limit of ours on what the owner reads (owner rule): the Changes of a session here show
+// every file and every line it changed, as the Changes tab of a session on another computer of
+// his does (sessionChanges). The view folds files, so a long list costs a row a file.
+test('taskPatch shows every file and every line of a huge change, and counts each', t => {
   const { repo, worktree } = session(t);
   write(worktree, { 'src/coupon.mjs': numbered(2300), 'a-big.txt': numbered(2500) });
   for (let index = 0; index < 9; index++) write(worktree, { [`fill-${index}.txt`]: numbered(2000) });
-  for (let index = 0; index < 300; index++) write(worktree, { [`z-${String(index).padStart(3, '0')}.txt`]: 'x\n' });
+  for (let index = 0; index < 400; index++) write(worktree, { [`z-${String(index).padStart(3, '0')}.txt`]: 'x\n' });
   const changes = taskPatch(repo, '1'), kept = changes.files.map(file => linesOf(file).length);
-  assert.deepEqual(LIMITS, { files: 300, fileLines: 2000, lines: 20000, lineChars: 2000, previewBytes: 64000 });
-  assert.equal(changes.files.length, 300); assert.equal(changes.hiddenFiles, 11); assert.equal(changes.cut, true); assert.equal(changes.uncounted, true);
-  assert.equal(Math.max(...kept), 2000); assert.equal(kept.reduce((sum, value) => sum + value, 0), 20000);
-  // The totals count every line that was read, shown or not.
-  assert.deepEqual([changes.added, changes.removed], [2300 + 2500 + 9 * 2000 + 289, 1]);
-  assert.equal(changes.hiddenLines, changes.added + changes.removed - 20000);
-  assert.deepEqual([changes.files[0].path, changes.files[0].added, changes.files[0].removed, changes.files[0].note], ['src/coupon.mjs', 2300, 1, '301 more lines not shown']);
-  assert.deepEqual([changes.files[1].path, changes.files[1].added, changes.files[1].note], ['a-big.txt', 2500, '500 more lines not shown']);
-  // Past 20,000 lines a file is still listed, with its count and no lines.
-  assert.deepEqual([changes.files[10].path, changes.files[10].added, changes.files[10].hunks.length, changes.files[10].note], ['fill-8.txt', 2000, 0, '2,000 more lines not shown']);
-  assert.deepEqual([changes.files[299].added, changes.files[299].note], [1, '1 more line not shown']);
-  assert.equal(changeSummary(changes), 'Changes 311');
-  const rows = changeRows(changes, 100, false);
-  assert.match(shown(rows[0]), /^311 files changed · \+23,089 −1 · compared with main as it was when this session started$/);
-  // What is left out is said under the summary, on as many rows as the sentence needs.
-  assert.deepEqual(rows.slice(1, 4).map(row => row.kind), ['note', 'note', 'blank']);
-  assert.equal(rows.slice(1, 3).map(shown).join(' '), 'Not shown: 11 files · 3,090 changed lines. The totals leave out new files that were not read in full.');
+  assert.equal(changes.files.length, 411); assert.equal(changes.hiddenFiles, 0); assert.equal(changes.cut, false); assert.equal(changes.uncounted, false);
+  assert.deepEqual(kept.slice(0, 11), [2301, 2500, ...new Array(9).fill(2000)]); assert.ok(kept.slice(11).every(count => count === 1));
+  assert.deepEqual([changes.added, changes.removed, changes.hiddenLines], [2300 + 2500 + 9 * 2000 + 400, 1, 0]);
+  assert.ok(changes.files.every(file => file.note === null && file.hidden === 0), 'nothing is said to be left out');
+  assert.deepEqual([changes.files[1].path, linesOf(changes.files[1]).at(-1).text, changes.files[410].path], ['a-big.txt', 'line 2500', 'z-399.txt']);
+  assert.equal(changeSummary(changes), 'Changes 411');
+  const rows = changeRows(changes, 100, false, { open: new Set() });
+  assert.match(shown(rows[0]), /^411 files changed · \+23,200 −1 · compared with main as it was when this session started$/);
+  assert.equal(rows.filter(row => row.kind === 'file').length, 411, 'folded: a row a file');
+  assert.equal(rows.some(row => /Not shown|not shown/.test(shown(row))), false);
 });
 
-test('taskPatch cuts the preview of a large new file and still counts its lines', t => {
+test('taskPatch shows a large new file whole and counts its lines', t => {
   const { repo, worktree } = session(t);
   write(worktree, { 'wide.txt': numbered(3000, index => `${String(index).padStart(6, '0')} ${'x'.repeat(32)}`) });
   const changes = taskPatch(repo, '1'), [file] = changes.files;
   assert.equal(fs.statSync(path.join(worktree, 'wide.txt')).size, 120000);
-  assert.deepEqual([file.added, linesOf(file).length, file.note, file.hunks[0].header], [3000, 1600, 'preview cut at 64,000 bytes · 1,400 more lines not shown', '@@ -0,0 +1,3000 @@']);
-  assert.deepEqual([changes.added, changes.cut, changes.uncounted, changes.hiddenLines], [3000, true, false, 1400]);
-  assert.equal(linesOf(file).at(-1).text, `001600 ${'x'.repeat(32)}`);
-  // A new file too large to read whole is counted only as far as its preview, and says so.
+  assert.deepEqual([file.added, linesOf(file).length, file.note, file.hunks[0].header], [3000, 3000, null, '@@ -0,0 +1,3000 @@']);
+  assert.deepEqual([changes.added, changes.cut, changes.uncounted, changes.hiddenLines], [3000, false, false, 0]);
+  assert.equal(linesOf(file).at(-1).text, `003000 ${'x'.repeat(32)}`);
+  // One of 5 MB too: the first page shows its start and counts every line, and the next page reads it whole.
   write(worktree, { 'giant.txt': numbered(100000, index => `${String(index).padStart(6, '0')} ${'y'.repeat(42)}`) });
-  const next = taskPatch(repo, '1'), giant = next.files[0];
+  const first = taskPatch(repo, '1'), start = first.files[0], read = Math.floor(CHANGES_PAGE / 50);
   assert.equal(fs.statSync(path.join(worktree, 'giant.txt')).size, 5000000);
-  assert.deepEqual([giant.path, giant.added, linesOf(giant).length, giant.note], ['giant.txt', 1280, 1280, 'preview cut at 64,000 bytes']);
-  assert.deepEqual([next.added, next.cut, next.uncounted], [4280, true, true]);
-  assert.match(changeRows(next, 80, false).filter(row => row.kind === 'note' && row.file === null).map(shown).join(' '), /^Not shown: 1,400 changed lines\. The totals leave out new files that were not read in full\.$/);
+  assert.deepEqual([start.path, start.added, linesOf(start).length, start.more, linesOf(start).at(-1).text], ['giant.txt', 100000, read, true, `${String(read).padStart(6, '0')} ${'y'.repeat(42)}`]);
+  assert.deepEqual([first.added, first.cut, first.uncounted, first.more], [103000, false, false, true]);
+  const next = taskPatch(repo, '1', { pages: 2 }), giant = next.files[0];
+  assert.deepEqual([giant.path, giant.added, linesOf(giant).length, giant.note, linesOf(giant).at(-1).text], ['giant.txt', 100000, 100000, null, `100000 ${'y'.repeat(42)}`]);
+  assert.deepEqual([next.added, next.cut, next.uncounted], [103000, false, false]);
+  // A binary new file is named as one, however large.
+  write(worktree, { 'blob.bin': Buffer.concat([Buffer.from([0]), Buffer.alloc(9000000, 1)]) });
+  assert.deepEqual(taskPatch(repo, '1').files.find(row => row.path === 'blob.bin').note, 'binary file');
 });
 
-test('taskPatch takes its totals from Git when the patch is too large to hold', t => {
+// The view reads a patch a page at a time (CHANGES_PAGE): nothing is left out, what is not read
+// yet is counted and is a row under its file, and the next page reads on to its last line.
+test('taskPatch reads a patch of any size a page at a time: the rest is counted, and the next page reads on to its last line', t => {
   const { repo, worktree } = session(t);
-  // About 18 MB of new lines: more than one Git answer may hold.
+  // About 18 MB of new lines.
   write(worktree, { 'src/coupon.mjs': `${'data '.repeat(11)}\n`.repeat(320000), 'zz later.txt': 'new\n' }); git(worktree, ['add', 'zz later.txt']);
-  const changes = taskPatch(repo, '1');
-  assert.deepEqual(changes.files.map(file => [file.path, file.status, file.added, file.removed, linesOf(file).length, file.note]), [
-    ['src/coupon.mjs', 'modified', 320000, 1, 2000, '318,001 more lines not shown'], ['zz later.txt', 'added', 1, 0, 0, '1 more line not shown'],
+  const changes = taskPatch(repo, '1'), [coupon, later] = changes.files;
+  assert.deepEqual([coupon.path, coupon.status, coupon.added, coupon.removed, coupon.more, later.path, later.added, later.more], ['src/coupon.mjs', 'modified', 320000, 1, true, 'zz later.txt', 1, true]);
+  const read = linesOf(coupon).length;
+  assert.ok(read > 20000 && read < 320001, `a page of it: ${read} lines`); assert.equal(coupon.hidden, 320001 - read);
+  assert.deepEqual([changes.added, changes.removed, changes.more, changes.cut, changes.hiddenFiles], [320001, 1, true, false, 0]);
+  assert.doesNotMatch(JSON.stringify(changes.files.map(file => file.note)), /not shown/);
+  // The view: a row under the file says how many lines are still to come, and the summary says how to read them.
+  const rows = changeRows(changes, 100, false);
+  assert.deepEqual(rows.filter(row => row.kind === 'more').map(row => [shown(row), row.file]), [[`  … ${(320001 - read).toLocaleString('en-US')} more lines`, 0], ['  … 1 more line', 1]]);
+  assert.ok(rows.some(row => shown(row) === 'Long changes show a part at a time. Enter on "more" reads the next part.'), 'the summary says how');
+  // As many pages as it takes: whole.
+  const whole = taskPatch(repo, '1', { pages: Math.ceil(20 * 1024 * 1024 / CHANGES_PAGE) });
+  assert.deepEqual(whole.files.map(file => [file.path, file.status, file.added, file.removed, linesOf(file).length, file.note, file.more ?? false]), [
+    ['src/coupon.mjs', 'modified', 320000, 1, 320001, null, false], ['zz later.txt', 'added', 1, 0, 1, null, false],
   ]);
-  assert.deepEqual([changes.added, changes.removed, changes.cut, changes.hiddenFiles, changes.hiddenLines], [320001, 1, true, 0, 318002]);
+  assert.deepEqual([whole.added, whole.removed, whole.cut, whole.more ?? false, whole.hiddenFiles, whole.hiddenLines], [320001, 1, false, false, 0, 0]);
+  assert.equal(changeRows(whole, 100, false).some(row => row.kind === 'more'), false);
+});
+
+// However many lines a file shows, its rows are drawn: a file of 300,000 lines unfolds.
+test('changeRows draws a file of any number of lines', () => {
+  const changes = buildChanges({ untracked: ['orders.jsonl'], read: () => ({ bytes: Buffer.from('{"order":1}\n'.repeat(300000)), size: 300000 * 12 }) });
+  const rows = changeRows(changes, 100, false);
+  assert.equal(rows.filter(row => row.kind === 'add').length, 300000);
+  assert.equal(shown(rows.at(-1)).trim(), '300000 + {"order":1}');
+});
+
+// A new file of any size: the view reads a page of it, counts every line of it without holding
+// it, and reads on a page at a time. A file far larger than a string can hold never fails it.
+test('taskPatch reads a new file larger than a page a page at a time, counting every line of it', t => {
+  const { repo, worktree } = session(t);
+  const line = index => `${String(index).padStart(7, '0')} ${'z'.repeat(41)}\n`, total = Math.ceil(CHANGES_PAGE * 2.5 / 50);
+  const fd = fs.openSync(path.join(worktree, 'dump.jsonl'), 'w');
+  for (let at = 1; at <= total; at += 20000) fs.writeSync(fd, Array.from({ length: Math.min(20000, total - at + 1) }, (_, n) => line(at + n)).join(''));
+  fs.closeSync(fd);
+  assert.ok(fs.statSync(path.join(worktree, 'dump.jsonl')).size > CHANGES_PAGE * 2);
+  for (const [pages, more] of [[1, true], [2, true], [3, false]]) {
+    const changes = taskPatch(repo, '1', { pages }), [file] = changes.files, read = linesOf(file).length;
+    assert.deepEqual([file.path, file.added, file.note, file.more ?? false, changes.more ?? false, changes.cut, changes.uncounted], ['dump.jsonl', total, null, more, more, false, false], `${pages} pages`);
+    assert.equal(read, more ? Math.floor(pages * CHANGES_PAGE / 50) : total, `${pages} pages: the lines read`);
+    assert.equal(file.hidden, total - read); assert.equal(linesOf(file).at(-1).text, line(read).trimEnd());
+    assert.equal(changes.added, total, 'every line counted');
+  }
 });
 
 test('taskPatch answers an empty list for a conversation', t => {
@@ -273,7 +314,7 @@ test('buildChanges applies its limits and takes the totals from Git when the pat
   assert.deepEqual([half.added, half.removed, half.cut, half.hiddenFiles, half.hiddenLines], [14, 10, true, 0, 4]);
   assert.deepEqual(linesOf(half.files[1]), []);
   // New files are read one at a time, and not at all once the list is full.
-  const asked = [], full = buildChanges({ untracked: ['one.txt', 'gone.txt', 'two.txt', 'three.txt'], read: name => { asked.push(name); return name === 'gone.txt' ? null : { bytes: Buffer.from('a\nb\n'), size: 4 }; } }, { ...LIMITS, files: 2 });
+  const asked = [], full = buildChanges({ untracked: ['one.txt', 'gone.txt', 'two.txt', 'three.txt'], read: name => { asked.push(name); return name === 'gone.txt' ? null : { bytes: Buffer.from('a\nb\n'), size: 4 }; } }, { files: 2, fileLines: Infinity, lines: Infinity, lineChars: Infinity, previewBytes: Infinity });
   assert.deepEqual(asked, ['one.txt', 'gone.txt', 'two.txt']);
   assert.deepEqual([full.files.map(file => file.path), full.hiddenFiles, full.added, full.cut, full.uncounted], [['one.txt', 'two.txt'], 1, 4, true, true]);
 });
@@ -400,8 +441,12 @@ test('changeRows masks secrets, hides Windows line ends and says what a limit le
   // A file with Windows line ends shows no mark for them. A change of line ends shows each one.
   assert.deepEqual(text(changeRows({ files: [file('win.txt', ['a\r', 'b\r'])], added: 2, removed: 0 }, 80, false)), ['a', 'b']);
   assert.deepEqual(text(changeRows({ files: [file('mixed.txt', ['a\r', 'b', 'x\u202ey'])], added: 3, removed: 0 }, 80, false)), ['a␍', 'b', 'x<U+202E>y']);
-  // A very long line keeps its start and says how much is missing.
-  const clipped = buildChanges({ untracked: ['min.js'], read: () => ({ bytes: Buffer.from(`${'z'.repeat(5000)}\n`), size: 5001 }) }), rows = changeRows(clipped, 120, false);
+  // A very long line shows whole, on as many rows as it needs.
+  const minified = { untracked: ['min.js'], read: () => ({ bytes: Buffer.from(`${'z'.repeat(5000)}\n`), size: 5001 }) }, whole = buildChanges(minified);
+  assert.equal(whole.cut, false); assert.equal(linesOf(whole.files[0])[0].text, 'z'.repeat(5000));
+  assert.equal(changeRows(whole, 120, false).filter(row => row.kind === 'add').map(row => shown(row).slice(6)).join(''), 'z'.repeat(5000));
+  // Where a caller gives limits, a very long line keeps its start and says how much is missing.
+  const clipped = buildChanges(minified, { files: Infinity, fileLines: Infinity, lines: Infinity, lineChars: 2000, previewBytes: Infinity }), rows = changeRows(clipped, 120, false);
   assert.equal(clipped.cut, true); assert.equal(linesOf(clipped.files[0])[0].more, 3000);
   assert.deepEqual(rows.filter(row => row.kind === 'note').map(shown), ['Parts of some files are not shown. Each file says what is missing.', '      … 3,000 more characters not shown']);
   assert.equal(rows.filter(row => row.kind === 'add').map(row => shown(row).slice(6)).join(''), 'z'.repeat(2000));
@@ -644,7 +689,7 @@ test('the Changes of a session of real size read as a list: files under their fo
   for (const text of listed) assert.equal(text.length, 100, text);
   // The same list, as wide as the pane beside the sessions of a terminal 80 columns across.
   const narrow = changeRows(changes, 52, false, { open: new Set() }).map(shown);
-  assert.deepEqual(narrow.slice(0, 4), ['35 files changed · +3,249 −35', 'compared with main as it was when this session', 'started', 'Not shown: 1,200 changed lines.']);
+  assert.deepEqual(narrow.slice(0, 4), ['35 files changed · +3,249 −35', 'compared with main as it was when this session', 'started', '']);
   for (const wanted of [edge('  ▸ api.md', 'new  +3,200  −0', 52), edge('  ▸ gone.mjs', 'deleted      +0  −2', 52), edge('  ▸ a-new-name.mjs', 'renamed      +0  −0', 52), edge('  ▸ run.sh', `now runs as a program  ${' '.repeat(10)}`, 52)]) assert.ok(narrow.includes(wanted), wanted);
   // The file with twenty changes: each one under its place in words, the line and the function.
   const big = changes.files.findIndex(file => file.path === 'src/big.mjs'), opened = changeRows(changes, 100, false, { open: new Set([big]) });
@@ -664,8 +709,9 @@ test('the Changes of a session of real size read as a list: files under their fo
   const few = changeRows(changes, 100, false, { open: some }).map(shown);
   assert.equal(few.filter(text => /now runs as a program/.test(text)).length, 1);
   assert.deepEqual(few.slice(few.indexOf(mid('  ▾ gone.mjs', 'deleted  ', '    +0  −2')) + 1).slice(0, 3), ['src/gone.mjs · line 1', '1   - export const gone = 1;', '2   - export const more = 2;']);
-  // This computer shows up to 2,000 lines of one file and says what it left out. What another computer is sent is whole, and reads the same.
-  assert.equal(texts[1], 'Not shown: 1,200 changed lines.');
-  assert.deepEqual(changeRows(far, 100, false, { open: new Set() }).map(shown), texts.filter((_, at) => at !== 1));
+  // This computer shows every line of every file, as another computer is sent them, and the two read the same.
+  assert.equal(texts.some(text => /not shown/i.test(text)), false);
+  assert.equal(linesOf(changes.files.find(file => file.path === 'docs/generated/api.md')).length, 3200);
+  assert.deepEqual(changeRows(far, 100, false, { open: new Set() }).map(shown), texts);
   assert.deepEqual([far.files.length, far.added, far.removed, far.cut, linesOf(far.files.find(file => file.path === 'docs/generated/api.md')).length], [35, 3249, 35, false, 3200]);
 });

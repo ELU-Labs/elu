@@ -276,7 +276,8 @@ test('a Grok Build session refuses a push that a script makes over ACP in Ask fo
   assert.equal(full.state, 'answered', JSON.stringify(full.error)); const args = f.calls().at(-1).args; assert.ok(args.includes('--prompt-file'));
   assert.equal(publish.code(), '0'); assert.deepEqual(publish.refs(), ['refs/heads/from-script', 'refs/tags/v2']);
   assert.equal(args.some(arg => /^Bash\(/.test(arg)), false, 'no never-list rule on the command line');
-  assert.doesNotMatch(fs.readFileSync(path.join(personalDirectory(), 'grok-home', '.grok', 'config.toml'), 'utf8'), /Bash\(/, 'nor in the config');
+  assert.doesNotMatch(fs.readFileSync(path.join(personalDirectory(), 'grok-home', 'full', '.grok', 'config.toml'), 'utf8'), /Bash\(/, 'nor in the config of Full access');
+  assert.match(fs.readFileSync(path.join(personalDirectory(), 'grok-home', 'ask', '.grok', 'config.toml'), 'utf8'), /Bash\(git push:\*\)/, 'which leaves the config of Ask for approval as it was');
 });
 
 test('an Antigravity session refuses a push that a script makes over ACP in Ask for approval, and runs one over ACP in Full access with nobody asked', async t => {
@@ -750,9 +751,9 @@ test('a Grok lead runs headless from the prompt file under its private HOME, res
   const second = await f.controller.ask(`Run the command ${f.marker} then reply done with the summary "again".`, task.id).finished;
   assert.equal(second.state, 'needs_input'); assert.match(second.result.summary, /^Blocked: run /); assert.equal(fs.existsSync(f.ran), false);
   assert.deepEqual(f.calls().at(-1).args.slice(-2), ['-r', run.session]); assert.equal(second.runs[1].denials, undefined, 'headless output carries no denial record');
-  // Opening the session interactively runs grok under the private home, where the session lives.
+  // Opening the session interactively runs grok under a private home, where the session lives.
   const open = cli(f.root, ['open', task.id], { ...f.fake.env, HOME: f.parent });
-  assert.equal(open.status, 0, open.stdout); assert.match(open.json.command, /^cd '[^']+' && HOME='[^']+grok-home' GROK_HOME='[^']+grok-home\/\.grok' .* grok '--no-auto-update' '--cwd' '[^']+' '-r' '[0-9a-f-]{36}'$/);
+  assert.equal(open.status, 0, open.stdout); assert.match(open.json.command, /^cd '[^']+' && HOME='[^']+grok-home\/full' GROK_HOME='[^']+grok-home\/full\/\.grok' .* grok '--no-auto-update' '--cwd' '[^']+' '-r' '[0-9a-f-]{36}'$/);
 });
 
 test('a Grok lead asks over ACP once the relay is proven here: allow runs the command, deny is a recorded denial', async t => {

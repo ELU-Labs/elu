@@ -47,7 +47,7 @@ function writePlans(root, id, tasks) {
 const told = (extra = {}) => ({ repoId: REPO, handle: 'app', id: 't-0a1b2c3d', revision: 2, title: 'Fix the login redirect', description: 'Text', goal: 'Sign-in returns to the page that asked.', objectives: ['One', 'Two'],
   priority: 'high', severity: 'critical', state: 'approved', startedBy: 'owner', who: 'Opus 5.5', subtasks: [{ text: 'First', state: 'done' }, { text: 'Second', state: 'todo' }], met: [1], approvedAt: iso(Date.now(), 60000), doneAt: null, updatedAt: iso(Date.now(), 30000), ...extra });
 
-test('a told Task keeps only its own fields, each cleaned and within its limit, and anything else is dropped', () => {
+test('a told Task keeps only its own fields, each cleaned; its goal, description and objectives come whole, the rest within its limit; anything else is dropped', () => {
   const clean = cleanPlan(told({ edit: { repository: '/Users/x/app', request: 'secret words' }, session: '7', worktree: '/Users/x/app.elu-code/7', extra: 'x', title: '  Fix \x1b[31mthe\x1b[0m\nlogin‮ redirect\x07  ', description: `a\r\nb\n\n\n\nc\x00${'d'.repeat(3000)}` }));
   assert.deepEqual(Object.keys(clean), ['repoId', 'handle', 'id', 'revision', 'title', 'description', 'goal', 'objectives', 'priority', 'severity', 'state', 'startedBy', 'subtasks', 'met', 'approvedAt', 'doneAt', 'criteria', 'estimateMinutes', 'etaMinutes', 'etaAt', 'who', 'updatedAt']);
   // The success criteria, the estimate and the minutes left, cleaned and cut. A Task from an older build has none: not set.
@@ -56,11 +56,14 @@ test('a told Task keeps only its own fields, each cleaned and within its limit, 
   assert.deepEqual((({ criteria, estimateMinutes, etaMinutes, etaAt }) => ({ criteria, estimateMinutes, etaMinutes, etaAt }))(clean), { criteria: [], estimateMinutes: null, etaMinutes: null, etaAt: null });
   assert.deepEqual([cleanPlan(told({ estimateMinutes: 0 })).estimateMinutes, cleanPlan(told({ estimateMinutes: '30' })).estimateMinutes, cleanPlan(told({ etaMinutes: -1 })).etaMinutes, cleanPlan(told({ etaAt: 'soon' })).etaAt], [null, null, null, null]);
   assert.equal(clean.title, 'Fix the login redirect');
-  assert.equal(clean.description.length, 2000); assert.ok(clean.description.startsWith('a\nb\n\ncd'));
+  assert.equal(clean.description, `a\nb\n\nc${'d'.repeat(3000)}`);
   assert.equal(JSON.stringify(clean).includes('/Users/x'), false);
-  // Limits: long text is cut, long lists are cut, numbers outside the objectives are dropped.
-  const big = cleanPlan(told({ title: 'T'.repeat(200), goal: 'g'.repeat(900), objectives: Array.from({ length: 12 }, (_, n) => `Objective ${n} ${'o'.repeat(400)}`), subtasks: Array.from({ length: 50 }, (_, n) => ({ text: `Step ${n} ${'s'.repeat(300)}`, state: 'todo', id: 'x', secret: 1 })), met: [0, 1, 1, 8, 9, 2.5, '3'] }));
-  assert.deepEqual([big.title.length, big.goal.length, big.objectives.length, big.objectives[0].length, big.subtasks.length, big.subtasks[0].text.length, Object.keys(big.subtasks[0]), big.met], [80, 500, 8, 300, 30, 200, ['text', 'state'], [1, 8]]);
+  // The goal and the objectives may be the owner's own words (his check's new goal): whole, as
+  // many as he wrote. The title and the model's subtasks keep their limits; numbers outside the
+  // objectives are dropped.
+  const objectives = Array.from({ length: 12 }, (_, n) => `Objective ${n} ${'o'.repeat(400)}`);
+  const big = cleanPlan(told({ title: 'T'.repeat(200), goal: 'g'.repeat(6000), objectives, subtasks: Array.from({ length: 50 }, (_, n) => ({ text: `Step ${n} ${'s'.repeat(300)}`, state: 'todo', id: 'x', secret: 1 })), met: [0, 1, 1, 8, 9, 12, 13, 2.5, '3'] }));
+  assert.deepEqual([big.title.length, big.goal, big.objectives, big.subtasks.length, big.subtasks[0].text.length, Object.keys(big.subtasks[0]), big.met], [80, 'g'.repeat(6000), objectives, 30, 200, ['text', 'state'], [1, 8, 9, 12]]);
   // Who works on it: a bot by a valid @name, anything else that starts with @ is only "bot", a model name keeps plain characters.
   assert.deepEqual(['@scout', '@Not A Bot', 'Opus 5.5 <b>', '', 7].map(who => cleanPlan(told({ who })).who), ['@scout', 'bot', 'Opus 5.5 b', 'model', 'model']);
   assert.deepEqual(['schedule', 'handoff', 'owner', 'root', undefined].map(startedBy => cleanPlan(told({ startedBy })).startedBy), ['schedule', 'handoff', 'owner', 'owner', 'owner']);
@@ -245,7 +248,7 @@ test('every Task of a teammate reaches the Kanban: a list too long for one messa
     for (const part of parts) assert.ok(Buffer.byteLength(JSON.stringify(part.rows)) <= BYTES_MAX);
     const all = parts.flatMap(part => part.rows);
     assert.equal(all.length, 400, 'every Task is in the parts'); assert.equal(new Set(all.map(task => task.id)).size, 400);
-    assert.ok(all.every(task => task.description.length === 2000), 'each whole');
+    assert.ok(all.every(task => task.description === '\u{1F600}'.repeat(2000)), 'each whole');
     // Nothing changed: it is not sent again.
     await settle(); daemon.tellPlans(); await settle(); assert.equal(toAna.parts().length, parts.length);
     // The older build still gets one message it can read: the newest that fit.
