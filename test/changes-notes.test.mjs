@@ -93,6 +93,21 @@ async function view(t, repo, { columns = 100, rows = 30, shows = OLD, click = fa
   return v;
 }
 
+// The Changes view's letters act at once (s sends the notes). A / starts a command in the
+// box, as on the other lists, so /chats typed there opens Chats and never reaches its s.
+test('Changes: / starts a command in the box, so /chats opens Chats and the notes stay unsent', async t => {
+  const s = session(t), v = await view(t, s.repo);
+  const added = v.row(NEW); v.click(added.mark + 12, added.y);
+  await until(() => v.lines()[added.y - v.changes.atop - 1].startsWith('+'), 'the cursor on the changed line');
+  v.input.write('+'); await v.type('Note', 'Round it to cents');
+  await until(() => /s send notes/.test(v.current.panels.keys.getText()), 'a note to send');
+  for (const ch of '/chats') v.input.write(ch);
+  await until(() => v.current.panels.ask.getValue() === '/chats' && v.current.screen.focused === v.current.panels.ask, 'the command is in the box');
+  assert.doesNotMatch(v.status(), /Sent/); assert.ok(fs.existsSync(s.notes), 'the note is kept');
+  v.input.write('\r'); await until(() => v.current.view === 'chats', '/chats opens Chats');
+  assert.equal(JSON.parse(fs.readFileSync(s.notes, 'utf8')).notes.length, 1, 'still unsent');
+});
+
 test('Changes: a click on the + or the + key notes a line, the note stays with the session, a changed line keeps its note, and s sends them', async t => {
   const s = session(t), first = await view(t, s.repo);
   assert.match(first.flat(), /\+ beside a line notes what should change\. Notes go to the model together\./);

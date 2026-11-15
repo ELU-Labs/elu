@@ -141,11 +141,11 @@ test('a teammate gets the reason with paths cut, a trusted one and my own comput
   assert.equal(ended(p, kai, { error: 'Could not read the settings: API_KEY=sk-ant-abcdefghijklmnopqrstuvwxyz0123456789', session: {} }), 'The run failed on @kai. Its reason stays there: it may hold a secret.');
   savePeerPolicy(ANA, { trusted: true });
   assert.equal(ended(p, kai, { error, session: {} }), `Refusing a symbolic link at ${place} on @kai. Send it again.`);
-  // Ana's key is another computer of kai's own: it reads this one by its machine name.
+  // Ana's key is another computer of kai's own: it reads this one by its machine name, as its lists show it.
   savePeerPolicy(ANA, { trusted: false }); savePeerSettings({ box: 'Devbox' });
   markMine(kai.me.key, ANA); noteTheirs(ANA, true);
-  assert.equal(ended(p, kai, { error, session: {} }), `Refusing a symbolic link at ${place} on @devbox. Send it again.`);
-  assert.equal(ended(p, kai, { error: 'Grok Build is signed out. Run grok login to sign in, then send again.', session: {} }), 'Grok Build is signed out. Sign Grok Build in on @devbox, then send it again.');
+  assert.equal(ended(p, kai, { error, session: {} }), `Refusing a symbolic link at ${place} on @Devbox. Send it again.`);
+  assert.equal(ended(p, kai, { error: 'Grok Build is signed out. Run grok login to sign in, then send again.', session: {} }), 'Grok Build is signed out. Sign Grok Build in on @Devbox, then send it again.');
 });
 
 test('a message to a computer with no project for teammates\' messages waits there, and its sender is told why', t => {
@@ -153,6 +153,26 @@ test('a message to a computer with no project for teammates\' messages waits the
   const record = kai.send();
   assert.equal(record.waiting, true); assert.equal(record.root, null); assert.equal(record.task.status.state, TaskState.SUBMITTED);
   assert.equal(said(record.task), 'No project is set on @kai for teammates\' messages, so it waits for its owner. On @kai: open ELU in the project teammates work in, then use /access there.');
+});
+
+// The sender's lists call a computer that one side marked as the owner's by its machine name,
+// before the other agrees (docs/peer-network.md, "What the app calls one"), so what this computer
+// says about itself does too: never by the name the team calls its owner.
+test('a message from my other computer that has not agreed yet is told about this computer by its machine name, as the lists there show it', t => {
+  const p = setup(t), kai = answering(p, { shared: false }); savePeerSettings({ box: 'Studio' });
+  const none = at => `No project is set on ${at} for teammates' messages, so it waits for its owner. On ${at}: open ELU in the project teammates work in, then use /access there.`;
+  assert.equal(said(kai.send().task), none('@kai'), 'a teammate reads the name the team calls its owner');
+  // Ana's computer marked this one as its own, and this one has not agreed.
+  noteTheirs(ANA, true);
+  assert.equal(said(kai.send().task), none('@Studio'));
+  // A project to run in: the message waits for the owner's y, and says so under the same name.
+  share(p.root, { teams: everyTeam().map(state => state.id), handle: 'shop' });
+  assert.equal(said(kai.send().task), 'It waits for its owner on @Studio, who approves each message from a teammate. On @Studio: y on the message starts it, and /access set to Auto starts the next ones without asking.');
+  // This one marked ana's, which has not agreed: ana's lists call this one by its machine name too.
+  noteTheirs(ANA, false); markMine(kai.me.key, ANA);
+  assert.equal(said(kai.send().task), 'It waits for its owner on @Studio, who approves each message from a teammate. On @Studio: y on the message starts it, and /access set to Auto starts the next ones without asking.');
+  // Paths and accounts still go out as to a teammate until both agree.
+  assert.equal(ended(p, kai, { error: 'Refusing a symbolic link at /srv/kai/private/notes.txt', session: {} }), 'Refusing a symbolic link at [path] on @Studio. Send it again.');
 });
 
 const rowsOf = (items, width) => teamPanes({ status: { key: 'f'.repeat(64), teams: [] }, agents: [], items }, [30, 30, width], false)[2].map(row => visible(row.line));

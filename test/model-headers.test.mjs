@@ -171,12 +171,14 @@ test('a Claude Code whose catalog cannot be read falls back to the table: on 2.1
   assert.equal(header(conversationEntries(f.repo, task).find(entry => entry.bot)), '@lead (fable 5.2)  4:37 PM');
 });
 
-test('a header keeps one row on a narrow pane: the parentheses go before the name or the time is cut', () => {
+test('a header on a narrow pane: the parentheses go before the name, then the time takes a row of its own', () => {
   const lead = { role: '@lead', bot: 'lead', model: 'claude-fable-5-2', effort: 'medium' };
   assert.equal(header(lead, 80, ' on @second-box'), '@lead (fable 5.2 med) on @second-box  4:37 PM');
   assert.equal(header(lead, 36, ' on @second-box'), '@lead on @second-box  4:37 PM');
-  assert.equal(header(lead, 30), '@lead (fable 5.2 med)  4:37 PM', 'exactly the width still fits');
-  assert.equal(header(lead, 29), '@lead  4:37 PM');
+  // The time counts as wide as 12:37 PM, so the header reads the same at any hour.
+  assert.equal(header(lead, 31), '@lead (fable 5.2 med)  4:37 PM', 'exactly the width still fits');
+  assert.equal(header(lead, 30), '@lead  4:37 PM');
+  assert.equal(visible(chatBlock({ ...tagged('@a-long-bot-name', 'fable 5.2 med'), time: '4:37 PM', text: 'x', tone: 'orange', width: 24, colour: false })), '@a-long-bot-name\n4:37 PM\n┃ x');
   assert.equal(header({ role: 'You → @lead' }, 80), 'You → @lead  4:37 PM', 'the owner\'s own message is unchanged');
   assert.equal(header({ role: 'Shell', shell: true, model: 'claude-opus-5-5' }, 80), 'Shell  4:37 PM', 'only an entry a model wrote has a model');
 });

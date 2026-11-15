@@ -6,7 +6,7 @@ import { temp, project, fakeClis } from './helpers.mjs';
 import { LEARNED_HEADING, LEARNED_USE, projectPromptParts, readProjectSettings, saveContext } from '../lib/project-settings.mjs';
 import { LEARN_NOTE, applyLearned, learnedLines, mayHoldSecret, readLearned, saveLearned } from '../lib/project-learnings.mjs';
 import { answerTrust, approvedAsItStands, pendingTrust, trustRows, unusedTrust } from '../lib/project-trust.mjs';
-import { ProjectController, conversationEntries } from '../lib/projects.mjs';
+import { ProjectController, conversationEntries, learnArchived } from '../lib/projects.mjs';
 import { projectFolder } from '../lib/workspace.mjs';
 import { git, head, taskChanges, diff } from '../lib/git.mjs';
 import { saveBot } from '../lib/bots.mjs';
@@ -165,6 +165,28 @@ test('a teammate\'s message, with its peer data, never teaches: the turn is not 
   assert.equal(task.state, 'answered', JSON.stringify(task.error));
   assert.equal(f.offered(f.inputs()[0]), false); assert.equal(f.inputs()[0].input.includes(LEARN_NOTE), false);
   assert.equal(fs.existsSync(contextFile(f.root)), false); assert.equal(task.messages.some(row => row.learned), false);
+});
+
+// Esc during a clean-up stops its lessons run, and its line says nothing is deleted. A run
+// stopped after its model had answered (a turn keeps such an answer) saves nothing either, so
+// that line stays true: the clean-up deletes only after the lessons were saved.
+test('a lessons run before a clean-up that is stopped after its model answered saves nothing', async t => {
+  const f = setup(t);
+  const chat = await f.controller.ask('No, we use pnpm here.').finished;
+  assert.equal(chat.state, 'answered', JSON.stringify(chat.error));
+  // The model answers, then stays open for a command it left running, until the run ends it.
+  const fake = f.fake({ learned: { add: ['Use pnpm, not npm.'], remove: [] } }), file = path.join(fake.dir, 'fake.json'), pidFile = path.join(fake.dir, 'background.pid');
+  fs.writeFileSync(file, JSON.stringify({ ...JSON.parse(read(file)), background: true }));
+  const stopper = new AbortController(), run = learnArchived(f.repo, [chat.id], { signal: stopper.signal });
+  run.catch(() => {});
+  for (const end = Date.now() + 20000; !fs.existsSync(pidFile) && Date.now() < end;) await new Promise(resolve => setTimeout(resolve, 20));
+  assert.ok(fs.existsSync(pidFile), 'the model answered');
+  stopper.abort();
+  await assert.rejects(run, { message: 'Stopped before the lessons were saved.' });
+  assert.equal(fs.existsSync(contextFile(f.root)), false, 'nothing was saved');
+  const pid = Number(read(pidFile)), alive = () => { try { process.kill(pid, 0); return true; } catch { return false; } };
+  for (const end = Date.now() + 5000; alive() && Date.now() < end;) await new Promise(resolve => setTimeout(resolve, 100));
+  assert.equal(alive(), false, 'the command it left ended with the run');
 });
 
 test('in the real checkout the project\'s notes are never part of a task\'s change', t => {

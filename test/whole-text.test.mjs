@@ -9,6 +9,8 @@ import { repository } from '../lib/git.mjs';
 import { launchTerminal } from '../lib/terminal.mjs';
 import { Conductor } from '../lib/conductor.mjs';
 import { saveTask, firstWords, firstLine, taskTitle, teammateText } from '../lib/state.mjs';
+import { personalDirectory } from '../lib/util.mjs';
+import { listBots, removeBot, saveBot } from '../lib/bots.mjs';
 import { columns, head } from '../lib/width.mjs';
 
 // Long text on screen: the idle app with a long message open, a dialog through a change of the
@@ -205,13 +207,27 @@ test('a dialog open while the window changes size is laid out again as one opene
 
 test('the review of a project file open while the window changes size is paged for the new size, both ways', { timeout: 120000 }, async t => {
   const p = setup(t, 'answer'), title = 'New · .elu-code/instructions.md';
-  fs.writeFileSync(path.join(p.root, '.elu-code/instructions.md'), `${Array.from({ length: 90 }, (_, at) => `Rule ${at + 1}: keep the answer to rule ${at + 1} short, and say which file of the project it is about.`).join('\n')}\n`);
-  const v = await view(t, { repo: p.repo, columns: 140, rows: 50 });
-  await throughSizes(v, title, async () => {
-    // It opens with the app; put off with Esc, it is asked again before the next message goes.
-    if (!modal(v, title) && v.current.panels.status.getText().includes('until you decide')) await send(v, 'hello');
-    await until(() => modal(v, title), 'the review');
-  });
+  const rules = `${Array.from({ length: 90 }, (_, at) => `Rule ${at + 1}: keep the answer to rule ${at + 1} short, and say which file of the project it is about.`).join('\n')}\n`;
+  fs.writeFileSync(path.join(p.root, '.elu-code/instructions.md'), rules);
+  // It opens with the app; put off with Esc, it is asked again before the next message goes, with
+  // "not used until you decide" under it. A dialog moves up as far as that line reaches into it
+  // (two rows beside the list at 80x24), so each one compared is that second asking, the line under it.
+  const askedAgain = async v => {
+    await until(() => modal(v, title), 'the review'); await closed(v, title);
+    const putOff = () => /until you decide/.test(v.current.panels.status.getText().replace(/\s+/g, ' '));
+    await until(putOff, 'put off'); await send(v, 'hello'); await until(() => modal(v, title), 'the review again'); await pause(60);
+    assert.ok(putOff(), 'the line is under the review'); return placed(v, title);
+  };
+  const v = await view(t, { repo: p.repo, columns: 140, rows: 50 }), wide = await askedAgain(v);
+  await sized(v, 80, 24); await pause(60); const narrowed = placed(v, title);
+  // The same project files, with the app opened at 80x24.
+  const other = project({ after: close => resources(t).files.push(close) });
+  assert.equal(cli(other.root, ['init', '--yes'], p.env).status, 0); git(other.root, ['add', '.']); git(other.root, ['commit', '-m', 'Configure checks']);
+  fs.writeFileSync(path.join(other.root, '.elu-code/instructions.md'), rules);
+  const w = await view(t, { repo: repository(other.root), columns: 80, rows: 24 });
+  assert.equal(narrowed, await askedAgain(w), `${title}: 140x50 made 80x24 reads as one opened at 80x24`);
+  await sized(w, 140, 50); await pause(60);
+  assert.equal(placed(w, title), wide, `${title}: 80x24 made 140x50 reads as one opened at 140x50`);
 });
 
 test("a message of any length shows whole in the chat: my own over 512,000 characters, a teammate's over 16,000", { timeout: 90000 }, async t => {
@@ -229,4 +245,56 @@ test("a message of any length shows whole in the chat: my own over 512,000 chara
   v.input.write('\x1b'); await until(() => v.current.screen.focused === v.current.panels.board, 'back in the list');
   await openTask(v, /A note from Kai/);
   await until(() => /THE LAST WORDS OF KAI\./.test(chat.getText().replace(/\s+/g, ' ')), 'the last words of the teammate\'s message', 40000);
+});
+
+// A list too long for the screen scrolls, and the line under it shows whole: at 80x24 the rules
+// of /permissions rules keep 13 rows, with a scrollbar, and the note under them is all there.
+// Nothing is cut, so the hint says only what its keys do.
+for (const count of [11, 20]) test(`at 80x24 the note under ${count + 3} rows of /permissions rules shows whole while the rows scroll`, { timeout: 60000 }, async t => {
+  const p = setup(t), title = 'Allowed without asking', file = path.join(personalDirectory(), 'permission-rules.json');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify({ version: 1, rules: Array.from({ length: count }, (_, at) => ({ kind: 'fetch', domain: `d${at + 1}.example.com`, scope: 'all' })), off: [] }));
+  const v = await view(t, { repo: p.repo });
+  await send(v, '/permissions rules'); await until(() => modal(v, title), 'the rules');
+  // The dialog's rows inside its border, without the list's scrollbar.
+  const inside = () => shown(v, title).split('\n').filter(row => row.startsWith('│')).map(row => row.slice(1, -1).replace(/┃$/, '').trim());
+  const note = 'a beside y and n adds a rule when a session asks. Push, tag, merge, deploy and publish are refused outside Full access.';
+  const check = last => {
+    const rows = inside(), listed = rows.filter(row => /^\d+\. /.test(row));
+    assert.equal(listed.length, 13, `13 rows show:\n${rows.join('\n')}`);
+    assert.equal(listed.at(-1).startsWith(`${last}. `), true, `row ${last} is the last shown:\n${rows.join('\n')}`);
+    assert.equal(rows.slice(listed.length).join(' ').replace(/\s+/g, ' ').trim(), `${note} x remove or turn off · o turn on · esc close`, `the whole note, then the hint:\n${rows.join('\n')}`);
+  };
+  check(13);
+  // The last row, reached with the arrows: the list scrolls, the note stays whole.
+  for (let at = 1; at < count + 3; at++) v.input.write('\x1b[B');
+  await until(() => inside().some(row => row.startsWith(`${count + 3}. `)), 'the last row');
+  check(count + 3);
+  v.input.write('\x1b'); await until(() => !modal(v, title), 'closed');
+});
+
+// Lines under a page that fit beside its rows, with the rows scrolling, show whole: at 80x24 a
+// bot saved with helpers, a schedule, MCP servers that are not set up, merging and speaking
+// after each turn has more lines under its page than half the dialog, and every one shows over
+// its 11 rows, which scroll. Nothing is cut, so the hint says only what its keys do.
+test('at 80x24 every line under a bot\'s page shows while its rows scroll', { timeout: 60000 }, async t => {
+  const p = setup(t), title = 'Bot @sec';
+  for (const bot of listBots()) removeBot(bot.name);
+  saveBot({ name: 'sec', vendor: 'claude', model: 'opus', effort: 'high', color: 'violet', works: true, subagents: 'sonnet', merge: true, shadow: true, schedule: 'every 1h', mcp: ['elu', 'tracker'], instructions: 'Review the change for leaked secrets.' });
+  const v = await view(t, { repo: p.repo }), list = v.current.panels.botsList;
+  await send(v, '/bots'); await until(() => v.current.view === 'bots' && list.items.length === 1, 'the bot');
+  list.focus(); v.input.write('\r'); await until(() => modal(v, title), 'its page', 30000);
+  const inside = () => shown(v, title).split('\n').filter(row => row.startsWith('│')).map(row => row.slice(1, -1).replace(/┃$/, '').trim());
+  const said = modal(v, title).children.filter(child => child.type === 'text')[0].getText().split('\n').map(line => line.trim());
+  assert.ok(said.length > 7 && said.length < 13, `${said.length} lines: more than half the room the rows and the lines share, and fewer than all but three rows of it`);
+  const check = () => {
+    const rows = inside();
+    assert.deepEqual(rows.slice(-said.length - 2), [...said, '', 'enter choose · esc close'], `every line, then the hint:\n${rows.join('\n')}`);
+    return rows.slice(0, -said.length - 3);
+  };
+  assert.equal(check().includes('Remove'), false, 'the rows scroll: Remove, the last, is further down');
+  for (let at = 0; at < 10; at++) v.input.write('\x1b[B');
+  await until(() => inside().includes('Remove'), 'the last row');
+  check();
+  v.input.write('\x1b'); await until(() => !modal(v, title), 'closed');
 });

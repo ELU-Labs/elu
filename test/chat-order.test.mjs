@@ -60,10 +60,15 @@ const SCENES = {
 const remoteView = view => ({ id: '66666666-6666-4666-8666-666666666666', machine: BOX, createdAt: ago(10), lastAt: ago(0), title: 'Fix the report', project: 'shop', approvals: [], steps: [], ...view });
 // What the pane says as one line, however it wrapped its sentences: a message's bar off each row.
 const flat = said => said.replace(/^\s*┃ ?/gm, '').replace(/\s+/g, ' ').trim();
-// Each text after the one before it; what follows the last one found.
+// Each text after the one before it; what follows the last one found. A part may be a list of
+// the words that can stand there, such as a message's tag and its short form.
+const shows = (text, part) => [part].flat().some(one => text.includes(one));
 function inOrder(said, order) {
   const text = flat(said); let from = 0;
-  for (const part of order) { const found = text.indexOf(part, from); assert.ok(found >= from, `"${part}" is not after what comes before it:\n${said}`); from = found + part.length; }
+  for (const part of order) {
+    const [found, length] = [part].flat().map(one => [text.indexOf(one, from), one.length]).filter(([at]) => at >= from).sort((a, b) => a[0] - b[0])[0] ?? [-1, 0];
+    assert.ok(found >= from, `"${part}" is not after what comes before it:\n${said}`); from = found + length;
+  }
   return text.slice(from).trim();
 }
 const rowsOf = said => said.split('\n').map(row => row.trimEnd()).filter(row => row.trim());
@@ -259,7 +264,9 @@ const HERE = {
     order: ['Fix the report', 'Here is the Task for it.', 'Task · approved', 'Done. The totals add up.', '(starts next)', 'Also update the docs'] },
   'a working session with steps and one waiting message': {
     make: { state: 'running', live: true, replies: [[9, 'Here is the Task for it.']], plan: { minutes: 8.9, approved: true }, asked: [[1, 'Go on with it']], waiting: [[0.1, 'Use CSV for it']] },
-    order: ['Fix the report', 'Here is the Task for it.', 'Task · approved', 'Go on with it', 'is working', 'Read: src/report.mjs', 'Run: npm test', '(read or answered in a moment)', 'Use CSV for it'] },
+    // The row's tag gives way to its short form where it and the time do not fit on one row:
+    // at 80 columns from 10:00 to 12:59, when the time takes one more column.
+    order: ['Fix the report', 'Here is the Task for it.', 'Task · approved', 'Go on with it', 'is working', 'Read: src/report.mjs', 'Run: npm test', ['(read or answered in a moment)', '(read or answered soon)'], 'Use CSV for it'] },
   'a working session with steps and a message answered beside its turn': {
     make: { state: 'running', live: true, replies: [[9, 'Here is the Task for it.']], plan: { minutes: 8.9, approved: true }, asked: [[1, 'Go on with it']], aside: [[0.3, 'How far are you?', 'Two of three steps are done.']] },
     order: ['Fix the report', 'Here is the Task for it.', 'Task · approved', 'Go on with it', 'is working', 'Read: src/report.mjs', 'Run: npm test', 'How far are you?', 'beside the turn', 'Two of three steps are done.', 'Answered beside the running turn'] },
@@ -276,7 +283,7 @@ for (const [columns, rows] of [[140, 50], [80, 24]]) for (const [name, scene] of
   const v = await view(p, { columns, rows, repo: p.repo, dashboard: true, peer: fakePeer() });
   await onRow(v, /Fix the report/);
   const { chat } = v.panels, waiting = (scene.make.waiting ?? []).map(([, text]) => text);
-  await until(() => flat(chat.getText()).includes(scene.order.at(-1)) && flat(chat.getText()).includes(scene.order.at(-2)), 'its chat beside the list');
+  await until(() => shows(flat(chat.getText()), scene.order.at(-1)) && shows(flat(chat.getText()), scene.order.at(-2)), 'its chat beside the list');
   const said = chat.getText(), rest = inOrder(said, scene.order);
   // A session here has no line of its chat for its changes either.
   assert.doesNotMatch(flat(said), /Changes · |d opens them/);
@@ -353,7 +360,7 @@ for (const [columns, rows] of [[140, 50], [80, 24]]) test(`the app at ${columns}
   await until(() => flat(chat.getText()).includes('Use CSV for it') && flat(chat.getText()).includes('Run: npm test'), 'its chat beside the list');
   const said = flat(chat.getText());
   assert.doesNotMatch(said, /type a message any time|\/stop to stop/, `a hint is drawn in the chat:\n${chat.getText()}`);
-  assert.doesNotMatch(said.slice(said.indexOf('Run: npm test'), said.indexOf('(read or answered in a moment)')), /\/stop|message/, 'something is between the live steps and the waiting message');
+  assert.doesNotMatch(said.slice(said.indexOf('Run: npm test'), said.search(/\(read or answered (?:in a moment|soon)\)/)), /\/stop|message/, 'something is between the live steps and the waiting message');
   ask.focus();
   await until(() => /(?:^| {2})\/stop stop(?: {2}|$)/.test(keys.getText().trim()), `/stop in the key bar: ${keys.getText().trim()}`);
   assert.ok(keys.getText().trim().length <= columns - 2, 'the key bar fits');

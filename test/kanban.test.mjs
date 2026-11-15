@@ -10,7 +10,7 @@ import { projectFolder } from '../lib/workspace.mjs';
 const names = columns => Object.fromEntries(columns.map(column => [column.column, column.items.map(item => item.title)]));
 const task = (id, goal, state, extra = {}) => ({ id, goal, state, createdAt: new Date().toISOString(), runs: [], messages: [], ...extra });
 
-test('cards wait in To do, follow their session once started, and go to Done by hand', t => {
+test('cards wait in To do, follow their session once started, wait for the owner\'s check, and go to Done by hand', t => {
   const p = project(t), repo = projectFolder(p.root);
   const first = addCard(repo, 'Add rate limiting to login'), second = addCard(repo, 'Write coupon docs');
   assert.throws(() => addCard(repo, '   '), /Write the task first/);
@@ -30,10 +30,12 @@ test('cards wait in To do, follow their session once started, and go to Done by 
   assert.equal(detail({}), '@sec reviewing');
   assert.equal(detail({ messages: [{ at: new Date().toISOString(), text: 'safe?', to: '@sec' }] }), '@sec answering');
   assert.equal(columns[1].items[0].detail, 'working');
-  columns = boardColumns(readBoard(repo), { tasks: [task('4', 'Add rate limiting to login', 'ready')], queue: [] });
-  assert.deepEqual(names(columns).needs, ['Add rate limiting to login']); assert.equal(columns[2].items[0].detail, 'ready to publish');
+  // The session ended a minute ago: nothing happened in it after the owner moved it to Done.
+  const ended = { createdAt: new Date(Date.now() - 60000).toISOString() };
+  columns = boardColumns(readBoard(repo), { tasks: [task('4', 'Add rate limiting to login', 'ready', ended)], queue: [] });
+  assert.deepEqual(names(columns).needs, ['Add rate limiting to login']); assert.equal(columns[2].items[0].detail, 'ready to publish · check it');
   setDone(repo, columns[2].items[0], true);
-  columns = boardColumns(readBoard(repo), { tasks: [task('4', 'Add rate limiting to login', 'ready')], queue: [] });
+  columns = boardColumns(readBoard(repo), { tasks: [task('4', 'Add rate limiting to login', 'ready', ended)], queue: [] });
   assert.deepEqual(names(columns).done, ['Add rate limiting to login']);
   setDone(repo, columns[3].items[0], false);
   assert.equal(readBoard(repo).cards[0].column, 'started', 'a started card reopens to its session');
@@ -57,13 +59,14 @@ test('a session with a Task is on the board as that Task, and one that waits for
   // Under Needs you what the session waits for comes first.
   assert.deepEqual(cards([task('1', 'Make coupons upper case', 'needs_input', { ...named, plan: plan('approved', { subtasks: steps }) })]),
     [['needs', 'Uppercase coupons', 'asks you · 1/2 · high · low', 'Task · approved · 1 of 2 subtasks done · high priority · low severity · asks you']]);
+  // One that waits for his check says so first in the row under the board too, where a narrow screen still shows it.
   assert.deepEqual(cards([task('1', 'Make coupons upper case', 'ready', { ...named, plan: plan('done', { met: [1, 2], subtasks: steps }) })]),
-    [['needs', 'Uppercase coupons', 'ready to publish · done 2/2 · high · low', 'Task · done · 2 of 2 objectives reported met · high priority · low severity · ready to publish']]);
+    [['needs', 'Uppercase coupons', 'ready to publish · check it · done 2/2 · high · low', 'ready to publish · check it · Task · done · 2 of 2 objectives reported met · high priority · low severity']]);
   // Beside a title the detail is cut between its parts, never inside a word.
   assert.equal(fitDetail('to approve · high · low', 17), 'to approve · high'); assert.equal(fitDetail('to approve · high · low', 16), 'to approve');
   assert.equal(fitDetail('ready to publish · done 2/2 · high · low', 17), 'ready to publish'); assert.equal(fitDetail('1/2 · high · low', 40), '1/2 · high · low'); assert.equal(fitDetail('to approve · high · low', 5), '');
-  // A rejected Task leaves the session's own card.
-  assert.deepEqual(cards([task('1', 'Make coupons upper case', 'answered', { kind: 'conversation', plan: plan('rejected') })]), [['done', 'Make coupons upper case', 'answered', undefined]]);
+  // A rejected Task leaves the session's own card, which waits for the owner's check.
+  assert.deepEqual(cards([task('1', 'Make coupons upper case', 'answered', { kind: 'conversation', plan: plan('rejected') })]), [['needs', 'Make coupons upper case', 'answered · check it', undefined]]);
   // A card the owner wrote keeps its own words; its session's Task shows beside them.
   const written = { ...empty, cards: [{ id: 'card-1', text: 'Coupons in capitals\nmore', column: 'started', requestId: 'request-1', taskId: '1' }] };
   assert.deepEqual(cards([task('1', 'Coupons in capitals', 'answered', { kind: 'conversation', plan: plan('proposed') })], written),
@@ -96,7 +99,7 @@ test('a Task card is its title first: the detail goes beside a whole title, and 
   }
 });
 
-test('sessions typed elsewhere appear by state; answered questions are done, old quiet ones drop off', t => {
+test('sessions typed elsewhere appear by state; answered and published ones wait for the owner\'s check, old quiet ones drop off', t => {
   const p = project(t), repo = projectFolder(p.root), old = new Date(Date.now() - 30 * 86400000).toISOString();
   const tasks = [
     task('1', 'Speed up search', 'running'), task('2', 'Which cache does checkout use?', 'needs_input'),
@@ -105,19 +108,20 @@ test('sessions typed elsewhere appear by state; answered questions are done, old
   ];
   const queue = [{ id: 'request-9', goal: 'Bump dependencies', state: 'queued', createdAt: new Date(Date.now() + 1000).toISOString() }, { id: 'request-10', goal: 'Follow-up', state: 'queued', continuationTaskId: '2' }, { id: 'request-11', goal: 'Peer ask', state: 'waiting', origin: { kind: 'ask' } }];
   let columns = boardColumns(readBoard(repo), { tasks, queue });
-  assert.deepEqual(names(columns), { todo: [], progress: ['Speed up search', 'Bump dependencies'], needs: ['Which cache does checkout use?', 'Rename billing'], done: ['What is our test runner?', 'Fix the footer'] });
-  setDone(repo, columns[2].items[1], true);
+  assert.deepEqual(names(columns), { todo: [], progress: ['Speed up search', 'Bump dependencies'], needs: ['Which cache does checkout use?', 'What is our test runner?', 'Fix the footer', 'Rename billing'], done: [] });
+  assert.deepEqual(columns[2].items.map(item => item.detail), ['asks you', 'answered · check it', 'ready to publish · check it', 'blocked · check it']);
+  for (const item of columns[2].items.slice(1)) setDone(repo, item, true);
   columns = boardColumns(readBoard(repo), { tasks, queue });
-  assert.ok(names(columns).done.includes('Rename billing')); assert.deepEqual(names(columns).needs, ['Which cache does checkout use?']);
+  assert.deepEqual([...names(columns).done].sort(), ['Fix the footer', 'Rename billing', 'What is our test runner?']); assert.deepEqual(names(columns).needs, ['Which cache does checkout use?']);
   // An archived session is on no column, Done included. One moved to Done by hand stays there.
   const shown = value => value.flatMap(column => column.items).some(item => item.task?.id === '3');
   assert.equal(shown(columns), true); closeSession(repo, '3');
   columns = boardColumns(readBoard(repo), { tasks, queue });
   assert.equal(shown(columns), false); assert.deepEqual([...names(columns).done].sort(), ['Fix the footer', 'Rename billing']);
-  // A new message opens it again, and so does bringing it back by hand.
+  // A new message opens it again, and so does bringing it back by hand: it waits for the owner's check again.
   const written = tasks.map(row => row.id === '3' ? { ...row, messages: [{ at: new Date(Date.now() + 60000).toISOString(), text: 'And in CI?' }] } : row);
-  assert.ok(names(boardColumns(readBoard(repo), { tasks: written, queue })).done.includes('What is our test runner?'));
-  reopenSession(repo, '3'); assert.ok(names(boardColumns(readBoard(repo), { tasks, queue })).done.includes('What is our test runner?'));
+  assert.ok(names(boardColumns(readBoard(repo), { tasks: written, queue })).needs.includes('What is our test runner?'));
+  reopenSession(repo, '3'); assert.ok(names(boardColumns(readBoard(repo), { tasks, queue })).needs.includes('What is our test runner?'));
 });
 
 test('teammates\' Tasks are cards on the same columns, with their name, counted with mine', t => {
@@ -153,6 +157,8 @@ test('Done holds every finished card, mine and teammates\', newest first, and co
   const p = project(t), repo = projectFolder(p.root), now = Date.now(), ago = minutes => new Date(now - minutes * 60000).toISOString();
   const tasks = Array.from({ length: 27 }, (_, n) => task(String(n + 1), `Question ${n + 1}`, 'answered', { kind: 'conversation', createdAt: ago(60 - n) }));
   const cards = Array.from({ length: 27 }, (_, n) => ({ repoId: 'e'.repeat(64), id: n.toString(16).padStart(16, '0'), title: `Cam question ${n + 1}`, column: 'done', by: 'cam', at: ago(120 - n) }));
+  // The owner checked each of his and moved it to Done.
+  for (const row of tasks) setDone(repo, { task: row }, true);
   const done = boardColumns(readBoard(repo), { tasks, queue: [] }, now, [], [{ peer: 'b'.repeat(64), name: 'cam', box: 'cbox', online: true, heardAt: ago(0), sessions: cards }]).find(column => column.column === 'done');
   assert.equal(done.items.length, 54);
   assert.deepEqual([done.items[0].title, done.items[26].title, done.items[27].title, done.items.at(-1).title], ['Question 27', 'Question 1', 'Cam question 27', 'Cam question 1']);
@@ -228,6 +234,18 @@ test('one session is one card on the owner\'s board while its first turn runs, t
   // Before its session exists the request is the card, and a request whose session is not in the list stays one.
   assert.deepEqual(boardColumns(board, { tasks: [], queue: [{ ...running, state: 'queued', taskId: null }] }).flatMap(column => column.items.map(item => [column.column, item.detail])), [['progress', 'queued']]);
   assert.deepEqual(boardColumns(board, { tasks: [], queue: [running] }).flatMap(column => column.items.map(item => [column.column, item.detail])), [['progress', 'running']]);
+});
+
+// The owner renamed a schedule's latest run, so its next run waits to start under that name
+// (lib/schedules.mjs) and its session takes it when it starts: its card reads the name before
+// and after. A run with no name goes by the first line of the schedule's message.
+test("a schedule's run that waits to start is a card under the name it takes, as its session is once it starts", t => {
+  const p = project(t), board = readBoard(projectFolder(p.root)), goal = 'Check the nightly build\nand say what failed';
+  const named = { id: 'request-n', goal, state: 'queued', priority: 1, scheduleId: 'schedule-1', title: 'Nightly review' };
+  const plain = { id: 'request-p', goal, state: 'queued', priority: 1, scheduleId: 'schedule-2' };
+  assert.deepEqual(names(boardColumns(board, { tasks: [], queue: [named, plain] })).progress, ['Nightly review', 'Check the nightly build']);
+  const started = boardColumns(board, { tasks: [task('5', goal, 'running', { title: 'Nightly review', scheduleId: 'schedule-1' })], queue: [{ ...named, state: 'running', taskId: '5' }] });
+  assert.deepEqual(names(started).progress, ['Nightly review']);
 });
 
 test('a session in a folder above its clones is on its repository\'s board: the one its Task names, else the project\'s main repository', t => {

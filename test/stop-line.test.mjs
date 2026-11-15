@@ -8,6 +8,7 @@ import { stopLine, errorText, logCause, logLimit, limitOf } from '../lib/stop-li
 import { boardRows, remoteRow, rowTitle } from '../lib/board.mjs';
 import { failureLine } from '../lib/peer/failure.mjs';
 import { STUCK_LINE } from '../lib/runner.mjs';
+import { roleSpend } from '../lib/budget.mjs';
 import * as claude from '../lib/adapters/claude.mjs';
 import { signInCommand } from '../lib/vendors.mjs';
 
@@ -303,6 +304,33 @@ test("a turn stopped by the session's own /budget says so, not that the account 
   fs.writeFileSync(logFile, [init('claude-opus-5-5'), refused({ subtype: 'error_max_budget_usd', is_error: true, errors: [] })].map(row => JSON.stringify(row)).join('\n') + '\n');
   assert.equal(logCause(logFile), 'budget');
   assert.equal(stopLine(session({ budgetUsd: 5, runs: [{ role: 'lead', vendor: 'claude', at, costUnknown: true, logFile }], error: { message: 'The model could not finish.', cause: 'quota', logFile } })).text, 'This session has spent its $5 limit. /budget 20 raises it, then type continue.');
+});
+
+// Whether a vendor's quota stop was the session's own /budget is told by what the budget
+// itself counts: /budget, the runner's limit and the session's row add the role's runs up the
+// same way (lib/budget.mjs roleSpend).
+test('a quota stop after a turn ELU stopped at the limit counts what that turn had spent, as /budget does', () => {
+  // A Grok Build turn ELU stopped at a $3 limit had spent $3 then, its own cost not known
+  // (stoppedAtUsd). The owner raised the limit to $5, and Claude, given the $2 left, stopped
+  // there; its log is not there to say so.
+  const task = session({ budgetUsd: 5, runs: [{ role: 'lead', vendor: 'grok', at, costUnknown: true, stoppedAtUsd: 3, logFile: null }, { role: 'lead', vendor: 'claude', at, ownCost: true, costUsd: 2.01, logFile: null }], error: { message: 'The model could not finish.', cause: 'quota', logFile: null } });
+  assert.equal(roleSpend(task, 'lead').known.toFixed(2), '5.01', '/budget counts $5.01');
+  assert.equal(String(boardRows([{ root: '/repo', name: 'shop', tasks: [task], activity: [], queue: [] }], Date.parse(at) + 60000).find(row => row.id === task.id).cost), '≥$5.01', 'and so does the session\'s row');
+  assert.equal(stopLine(task, { logCause: none, account: none }).text, 'This session has spent its $5 limit. /budget 20 raises it, then type continue.');
+  // A bot's turn ELU stopped counts toward that bot's share only.
+  const bot = session({ budgetUsd: 5, runs: [{ role: 'bot:scout', vendor: 'grok', at, costUnknown: true, stoppedAtUsd: 3, logFile: null }, { role: 'lead', vendor: 'claude', at, ownCost: true, costUsd: 2.01, logFile: null }], error: { message: 'The model could not finish.', cause: 'quota', logFile: null } });
+  assert.equal(stopLine(bot, { logCause: none, account: none }).text, 'The model could not finish: the account hit its usage limit. Switch account in Usage, then type continue.');
+});
+
+test('a quota stop counts a cost that may be more at least as much, and a run of no known cost is not all of the limit', () => {
+  // A Codex turn whose count left some calls out cost at least $3 (≥$3.00 on /budget).
+  const task = session({ budgetUsd: 5, runs: [{ role: 'lead', vendor: 'codex', at, ownCost: true, costUsd: 3, incomplete: true, logFile: null }, { role: 'lead', vendor: 'claude', at, ownCost: true, costUsd: 2.01, logFile: null }], error: { message: 'The model could not finish.', cause: 'quota', logFile: null } });
+  assert.equal(roleSpend(task, 'lead').partial, true);
+  assert.equal(stopLine(task, { logCause: none, account: none }).text, 'This session has spent its $5 limit. /budget 20 raises it, then type continue.');
+  // The run that stopped before it said its cost is most often the one the account's limit
+  // stopped: it is not taken as all of the session's limit.
+  const unknown = session({ budgetUsd: 5, runs: [{ role: 'lead', vendor: 'codex', at, costUnknown: true, logFile: null }], error: { message: 'The model could not finish.', cause: 'quota', logFile: null } });
+  assert.equal(stopLine(unknown, { logCause: none, account: none }).text, 'The model could not finish: the account hit its usage limit. Switch account in Usage, then type continue.');
 });
 
 test('only a session that stopped and waits for the owner has the line', () => {

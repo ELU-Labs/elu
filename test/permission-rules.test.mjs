@@ -124,7 +124,7 @@ test('defaults are on from the first run, listed, and each can be turned off and
   const { project } = home(t);
   const ctx = { project, cwd: project, saved: false, sandboxed: true };
   assert.deepEqual(DEFAULTS.map(row => row.id), ['read', 'git-read', 'checks']);
-  assert.deepEqual(listEntries().map(entryLine), ['1. on   Read and search files in the project (default, all projects)', '2. on   Git read commands: status, diff, log, show, branch, blame, inside the sandbox (default, all projects)', "3. on   The project's own test, lint, typecheck, format and build scripts, inside the sandbox (default, all projects)"]);
+  assert.deepEqual(listEntries().map(entryLine), ['1. on   Read and search files in the project · all projects', '2. on   Git read commands: status, diff, log, show, branch, blame, inside the sandbox · all projects', "3. on   The project's own test, lint, typecheck, format and build scripts, inside the sandbox · all projects"]);
   // Reading and searching in the project.
   for (const command of ['ls', 'ls -la src', 'cat package.json', 'grep -rn todo src', 'rg needle', 'find . -name "*.js"', `cat ${path.join(project, 'package.json')}`, 'wc -l src/a.js | tail -1']) assert.equal(allowedBy(...bash(command), ctx)?.by, 'default', command);
   assert.equal(allowedBy('Read', { file_path: path.join(project, 'a.js') }, ctx)?.by, 'default');
@@ -289,7 +289,7 @@ test('elu permissions lists, removes and turns on, numbered as /permissions numb
   const run = args => spawnSync(process.execPath, [CLI, 'permissions', ...args], { cwd: dir, env: { ...process.env, HOME: dir }, encoding: 'utf8' });
   const listed = run([]);
   assert.equal(listed.status, 0, listed.stderr);
-  assert.match(listed.stdout, /^Allowed without asking:\n1\. on {3}Read and search files in the project \(default, all projects\)\n2\. on {3}Git read commands/);
+  assert.match(listed.stdout, /^Allowed without asking:\n1\. on {3}Read and search files in the project · all projects\n2\. on {3}Git read commands/);
   assert.match(listed.stdout, /\n4\. Run npm test, with any arguments · This project: ~\/shop\n/, 'the project is named from home, as the CLI is run with HOME there');
   assert.equal(run(['list', '--json']).status, 0); assert.equal(JSON.parse(run(['list', '--json']).stdout).permissions.length, 4);
   assert.match(run(['remove', '4']).stdout, /Removed: Run npm test, with any arguments\./);

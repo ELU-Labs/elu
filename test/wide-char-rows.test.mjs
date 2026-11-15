@@ -175,7 +175,8 @@ test('a chat message keeps every row behind its bar and inside the pane at every
     frame.setContent(content);
     const rows = content.split('\n').map(shown);
     assert.deepEqual(frame._clines.map(row => cellText(row.replace(/\x1b\[[\d;]*m/g, '').replace(/\x03/g, ''))), rows, `blessed wraps no row a second time at ${width}`);
-    assert.ok(rows.filter(row => row.startsWith('┃')).length >= 3 && rows.every(row => row.startsWith('┃') || /5:1\d PM$/.test(row)), `every row of a message is behind its bar at ${width}`);
+    // A header with no room for the widest time (12:13 PM) has its time on the row under it.
+    assert.ok(rows.filter(row => row.startsWith('┃')).length >= 3 && rows.every(row => row.startsWith('┃') || /5:1\d PM$/.test(row) || /^(?:You|@sec)$/.test(row)), `every row of a message is behind its bar at ${width}`);
     if (room >= 45) assert.ok(rows.includes(padEnd(`┃ ${SAMPLES['two emoji']}`, room)), `a message that fits is one whole row at ${width}`);
     return { top: frame, height: 30, framed: true, rows: rows.slice(0, 28).map((row, at) => [at + 1, 3, row, room]) };
   });
@@ -229,13 +230,17 @@ test('a Kanban card keeps its title and its detail inside its column at every wi
 });
 
 test('a Usage row keeps its columns under their headers at every width from 20 to 200', t => {
-  const AGENTS = TEXTS.map((title, at) => ({ agent: at % 2 ? '@审查' : '@lead', title, where: at % 3 ? 'on 开发机' : '', model: 'opus 5.5', tokens: { input: 1200000, output: 34000, cacheRead: 8100000, cacheWrite: 0 }, costUsd: 12.4 - at, partial: false }));
+  const AGENTS = TEXTS.map((title, at) => ({ agent: at % 2 ? '@审查' : '@lead', title, where: at % 3 ? '开发机' : 'here', model: 'opus 5.5', tokens: { input: 1200000, output: 34000, cacheRead: 8100000, cacheWrite: 0 }, costUsd: 12.4 - at, partial: false }));
   sweep(t, 'Usage', (screen, width) => {
-    const frame = framed(screen, width, AGENTS.length + 3), list = listIn(frame), room = Math.max(8, list.width - 2), table = agentTable(AGENTS, { width: room, total: 60 });
-    list.setItems(table.map(text => ink(cut(text, room, '...'), 'text', true)));
-    // Each column starts in the same screen column on every row: the header's.
-    const model = table[0].indexOf('Model'); if (model >= 0) for (const row of table.slice(1)) { assert.equal(columns(head(row, model)), model, `no character straddles the model column at ${width}: ${row}`); assert.ok(row.slice(head(row, model).length).startsWith('opus 5.5'), `the model is under its header at ${width}: ${row}`); }
-    return { top: frame, height: AGENTS.length + 3, framed: true, rows: table.map((text, at) => [at + 1, 1, text, room]) };
+    const frame = framed(screen, width, AGENTS.length + 4), list = listIn(frame), room = Math.max(8, list.width - 2), table = agentTable(AGENTS, { width: room, total: 60 }), lines = [table.head, table.rule, ...table.rows];
+    list.setItems(lines.map(text => ink(cut(text, room, '...'), 'text', true)));
+    // Each column starts in the same screen column on every row: the header's. A cost ends where its header ends.
+    const model = table.head.indexOf('Model'), cost = table.head.indexOf('Cost');
+    for (const row of table.rows) {
+      if (model >= 0) { assert.equal(columns(head(row, model)), model, `no character straddles the model column at ${width}: ${row}`); assert.ok(row.slice(head(row, model).length).startsWith('Opus'), `the model is under its header at ${width}: ${row}`); }
+      if (cost >= 0) { const before = head(row, cost + 4); assert.equal(columns(before), cost + 4, `no character straddles the cost column at ${width}: ${row}`); assert.match(before, /\$\d+\.\d\d$/, `the cost ends under its header at ${width}: ${row}`); }
+    }
+    return { top: frame, height: AGENTS.length + 4, framed: true, rows: lines.map((text, at) => [at + 1, 1, text, room]) };
   });
 });
 
@@ -534,7 +539,7 @@ test('the app at every width from 80 to 200: the settings of a project named wit
     assert.equal(cellsOf(top)[box.aleft + box.width - 1], '┐', `the dialog's corner at ${width}: ${top}`);
     const text = label => inside.find(row => row.includes(label));
     assert.ok(text(`Instructions  ${cut(TEXT, 48, '...')}`), `the instructions row, cut between two characters at ${width}:\n${inside.join('\n')}`);
-    assert.ok(text('Default model Opus · not chosen, so the first installed here') && text('This computer not chosen · Opus, the first installed here'), `the rows that name the model at ${width}:\n${inside.join('\n')}`);
+    assert.ok(text('Default model Opus') && text('This computer Opus'), `the rows that name the model at ${width}:\n${inside.join('\n')}`);
     assert.deepEqual(['● Active project', 'Instructions', 'Context', 'Default model', 'This computer', 'Archive'].map(label => columnOf(text(label), label)), Array(6).fill(box.aleft + 1), `every row starts in the dialog's first column at ${width}`);
   }
 });

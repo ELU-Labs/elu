@@ -10,7 +10,9 @@ import { saveBot, removeBot } from '../lib/bots.mjs';
 import { scheduleTick, setBotSchedule } from '../lib/bot-schedules.mjs';
 import { repository } from '../lib/git.mjs';
 import { registerProject, projectSnapshot } from '../lib/projects.mjs';
-import { readTask, saveTask, taskDir } from '../lib/state.mjs';
+import { readTask, saveTask, setTitle, suggestTitle, taskDir, taskTitle } from '../lib/state.mjs';
+import { readBoard, reopenSession, closeSession } from '../lib/kanban.mjs';
+import { proposeTask, rejectTask } from '../lib/plan.mjs';
 import { enqueue, conductorStatus } from '../lib/conductor.mjs';
 import { pendingRequests, updateRequest } from '../lib/workspace.mjs';
 import { project, fakeClis, CLI } from './helpers.mjs';
@@ -233,6 +235,88 @@ test('a schedule whose mode was not picked runs with no more access than the def
   for (const request of pendingRequests(p.root)) updateRequest(p.root, request.id, { state: 'done' });
   assert.equal(runDue(at(9, 12, 2), { start }), 1);
   assert.equal(pendingRequests(p.root).find(request => request.scheduleId === row.id && request.state !== 'done').permissions, 'auto');
+});
+
+// A session a schedule's run started, as the conductor makes one: scheduleId names the
+// schedule. An earlier version made it without one.
+function run(repo, id, { goal = 'Check the nightly build', state = 'answered', minutes = 10, ...extra } = {}) {
+  const at = new Date(Date.now() - minutes * 60000).toISOString();
+  saveTask(repo, { id: String(id), kind: 'conversation', goal, state, worktree: repo.root, base: null, branch: null, createdAt: at, runs: [], reviews: [], responses: [], messages: [], sessions: {}, result: null, ...extra });
+}
+const archivedNow = repo => projectSnapshot(repo).closed.sort((a, b) => a - b);
+const TASK = { title: 'Fix the nightly build', description: 'The build fails on the new lint rule.', goal: 'The nightly build passes.', objectives: ['The lint rule passes'], priority: 'medium', severity: 'low' };
+
+test("a schedule's new run archives its earlier runs, each once, and leaves the ones that still work or need the owner until a later run finds them done", t => {
+  home(t); const p = project(t), repo = repository(p.root), start = () => true;
+  const row = saveSchedule({ root: p.root, goal: 'Check the nightly build', when: parseWhen('every 3h') });
+  const twin = saveSchedule({ root: p.root, goal: 'Check the nightly build', when: parseWhen('every 3h') });
+  const mine = { scheduleId: row.id };
+  run(repo, 1, mine);
+  run(repo, 2, { ...mine, state: 'needs_input' });
+  run(repo, 3, { ...mine, state: 'running' });
+  run(repo, 4, mine); proposeTask(repo, '4', TASK);
+  liveTask(p.root, { id: '5', goal: 'Check the nightly build', state: 'ready' }); saveTask(repo, { ...readTask(repo, '5'), scheduleId: row.id });
+  run(repo, 6, mine); const typed = enqueue(p.root, 'And the docs build', { continuationTaskId: '6' });
+  run(repo, 7, { ...mine, state: 'blocked', error: { message: 'Claude Code could not finish.' } });
+  // A run whose Task's work stopped before it was done: nothing of it waits to be pushed.
+  liveTask(p.root, { id: '8', goal: 'Check the nightly build', state: 'blocked' }); saveTask(repo, { ...readTask(repo, '8'), scheduleId: row.id, error: { message: 'Claude Code could not finish.' } });
+  // Another schedule with the same words, and the owner's own session with them.
+  run(repo, 9, { scheduleId: twin.id }); run(repo, 10);
+  assert.equal(runScheduleNow(row.id, new Date(), { start }), true, 'r on its row counts as a run');
+  // Answered and failed runs are archived as c archives them; what asks him, works, waits for his yes, holds edits not pushed or has a message waiting stays.
+  assert.deepEqual(archivedNow(repo), ['1', '7', '8']);
+  assert.deepEqual(readBoard(repo).archived.sort(), ['1', '7', '8']);
+  let saved = listSchedules().find(value => value.id === row.id);
+  assert.deepEqual([saved.archivedThrough, saved.keptRuns], ['8', ['2', '3', '4', '5', '6']]);
+  // The run it queued names the schedule; the conductor makes its session (11) with it.
+  const queued = pendingRequests(p.root).find(value => value.scheduleId === row.id);
+  assert.equal(queued.goal, 'Check the nightly build'); assert.equal('title' in queued, false, 'no name of the owner to take');
+  run(repo, 11, mine); updateRequest(p.root, queued.id, { state: 'done', taskId: '11' });
+  // By the next run they no longer need him: answered, the Task rejected, the edits pushed, his message ran.
+  saveTask(repo, { ...readTask(repo, '2'), state: 'answered' }); saveTask(repo, { ...readTask(repo, '3'), state: 'answered' }); rejectTask(repo, '4');
+  saveTask(repo, { ...readTask(repo, '5'), pr: 'https://github.com/acme/shop/pull/5' }); updateRequest(p.root, typed.id, { state: 'done', taskId: '6' });
+  // He brought run 1 back with u, and run 7 with a new message.
+  reopenSession(repo, '1'); saveTask(repo, { ...readTask(repo, '7'), messages: [{ at: new Date(Date.now() + 1000).toISOString(), text: 'Why did it fail?' }] });
+  assert.equal(runScheduleNow(row.id, new Date(), { start }), true);
+  assert.deepEqual(archivedNow(repo), ['2', '3', '4', '5', '6', '8', '11'], 'each run is archived once: the ones he brought back stay');
+  saved = listSchedules().find(value => value.id === row.id);
+  assert.deepEqual([saved.archivedThrough, saved.keptRuns], ['11', undefined]);
+  // A deleted schedule leaves its runs as they are; the other schedule archives only its own.
+  for (const value of pendingRequests(p.root)) updateRequest(p.root, value.id, { state: 'done' });
+  removeSchedule(row.id); assert.equal(runScheduleNow(twin.id, new Date(), { start }), true);
+  assert.deepEqual(archivedNow(repo), ['2', '3', '4', '5', '6', '8', '9', '11']);
+  assert.equal(projectSnapshot(repo).closed.includes('10'), false, "the owner's own session with the same words stays");
+});
+
+test('of the runs an earlier version started, only the one the schedule kept the number of is archived; none is guessed from its words', t => {
+  const dir = home(t), p = project(t), repo = repository(p.root), start = () => true;
+  // Five sessions with the schedule's words, made before runs named their schedule; it kept the number of the last.
+  for (const id of [1, 2, 3, 4, 5]) run(repo, id, { minutes: 60 - id });
+  fs.mkdirSync(path.join(dir, 'personal', 'elu-code'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'personal', 'elu-code', 'schedules.json'), JSON.stringify({ version: 1, schedules: [{ id: 'schedule-0a1b2c3d', root: p.root, project: 'shop', goal: 'Check the nightly build', when: parseWhen('every 3h', at(9, 8)), enabled: true, createdAt: at(9, 8).toISOString(), nextRunAt: at(9, 9).toISOString(), lastRunAt: at(9, 8).toISOString(), lastRequestId: 'request-00000000-0000-4000-8000-000000000000', lastTaskId: '4', runs: 5, note: null, permissions: 'full', picked: true }] }));
+  assert.equal(runScheduleNow('schedule-0a1b2c3d', new Date(), { start }), true);
+  assert.deepEqual(archivedNow(repo), ['4']);
+  assert.equal(listSchedules()[0].archivedThrough, '4');
+});
+
+test("a schedule's run takes the name the owner gave its latest run, and otherwise none: it shows the schedule's message", t => {
+  home(t); const p = project(t), repo = repository(p.root), start = () => true;
+  const row = saveSchedule({ root: p.root, goal: 'Review the unreviewed session findings and record a verdict for each\nSecond line', when: parseWhen('every 3h') });
+  const next = () => { for (const value of pendingRequests(p.root)) updateRequest(p.root, value.id, { state: 'done' }); runScheduleNow(row.id, new Date(), { start }); return pendingRequests(p.root).find(value => value.scheduleId === row.id && value.state === 'queued'); };
+  run(repo, 1, { scheduleId: row.id, goal: row.goal });
+  // The model's name never shows on a run, nor is it taken by the next one.
+  assert.equal(suggestTitle(repo, '1', 'Adjudicate unreviewed findings'), true);
+  assert.equal(taskTitle(readTask(repo, '1')), 'Review the unreviewed session findings and record a verdict…');
+  assert.equal('title' in next(), false);
+  // He renamed the latest run himself (e on its row): the next run takes his name.
+  run(repo, 2, { scheduleId: row.id, goal: row.goal }); setTitle(repo, '2', 'Backlog review');
+  assert.equal(next().title, 'Backlog review');
+  // A name an earlier version kept that is too long for a name now is not taken; the run goes.
+  run(repo, 3, { scheduleId: row.id, goal: row.goal }); fs.writeFileSync(path.join(taskDir(repo, '3'), 'name.json'), JSON.stringify({ owner: 'x'.repeat(90) }));
+  const plain = next(); assert.ok(plain); assert.equal('title' in plain, false);
+  // Only a schedule's run takes a name this way, of one line of up to 60 characters.
+  assert.throws(() => enqueue(p.root, 'Plain', { title: 'Backlog review' }), /A schedule's run is named with one line of up to 60 characters\./);
+  assert.throws(() => enqueue(p.root, 'Plain', { scheduleId: row.id, title: 'x'.repeat(61) }), /up to 60 characters/);
 });
 
 test('a schedule whose project folder is gone is noted, not run', t => {

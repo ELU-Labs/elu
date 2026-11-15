@@ -19,7 +19,8 @@ function environment(t, values) {
   const previous = Object.fromEntries(Object.keys(values).map(key => [key, process.env[key]])); Object.assign(process.env, values);
   t.after(() => { for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } });
 }
-const rows = file => fs.existsSync(file) ? fs.readFileSync(file, 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse) : [];
+// A line the stand-in is still writing is read on the next look.
+const rows = file => fs.existsSync(file) ? fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).flatMap(line => { try { return [JSON.parse(line)]; } catch { return []; } }) : [];
 // background: the turn also starts a command in the background and stays open for it after
 // its result, as the real CLI does (fake.json, see the fake).
 function setup(t, { background = false, ...options } = {}) {

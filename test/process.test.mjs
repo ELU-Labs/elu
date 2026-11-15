@@ -174,6 +174,73 @@ test('a limit that stops a run ends its background commands too', async (t) => {
   const gone = Date.now() + 3000; while (alive(loop) && Date.now() < gone) await new Promise(resolve => setTimeout(resolve, 20));
   assert.equal(alive(loop), false); assert.deepEqual(ended?.map(row => row.pid), [loop]);
 });
+// A gentle run (Claude Code's: lib/adapters/claude.mjs gentleStop) is stopped as one that
+// answered is ended: asked first (SIGTERM), so it can take away what it laid in the work tree,
+// and ended for certain two seconds later. What it started ends at once, and it is asked once
+// it has taken that end: Claude Code takes its empty files away there, and leaves them when it
+// is asked to end while its command runs. The stand-in vendor runs a command in a session of
+// its own, as a sandboxed one runs, and notes when it is asked to end whether that command was
+// still there and whether it had taken its end. deaf: it stays when asked.
+const gentleVendor = (dir, { deaf = false } = {}) => `const { spawn, spawnSync } = require('node:child_process'); const fs = require('node:fs');
+  const command = spawn('sh', ['-c', 'while :; do sleep 1; done'], { detached: true, stdio: 'ignore' });
+  let taken = false; command.on('exit', () => { taken = true; });
+  fs.writeFileSync(${JSON.stringify(path.join(dir, 'pids.json'))}, JSON.stringify([process.pid, command.pid]));
+  process.on('SIGTERM', () => { const r = spawnSync('ps', ['-o', 'stat=', '-p', String(command.pid)], { encoding: 'utf8' }), there = r.status === 0 && Boolean(r.stdout.trim()) && !r.stdout.trim().startsWith('Z');
+    fs.writeFileSync(${JSON.stringify(path.join(dir, 'asked.json'))}, JSON.stringify({ commandThere: there, commandTaken: taken })); ${deaf ? '' : 'process.exit(143);'} });
+  setInterval(() => {}, 1000);`;
+const livePid = id => { const r = spawnSync('ps', ['-o', 'stat=', '-p', String(id)], { encoding: 'utf8' }); return r.status === 0 && Boolean(r.stdout.trim()) && !r.stdout.trim().startsWith('Z'); };
+async function pidsOf(t, dir) {
+  const file = path.join(dir, 'pids.json'), until = Date.now() + 10000; while (!fs.existsSync(file) && Date.now() < until) await new Promise(resolve => setTimeout(resolve, 20));
+  const pids = JSON.parse(fs.readFileSync(file, 'utf8')); t.after(() => { for (const pid of pids) { try { process.kill(pid, 'SIGKILL'); } catch {} } }); return pids;
+}
+const askedOf = dir => { try { return JSON.parse(fs.readFileSync(path.join(dir, 'asked.json'), 'utf8')); } catch { return null; } };
+test('a gentle run stopped by the owner or a limit ends its command at once and is asked to end itself', async (t) => {
+  for (const how of ['owner', 'quiet']) {
+    const cwd = temp(t), stop = new AbortController(); let ended = null;
+    const run = runProcess({ bin: process.execPath, args: ['-e', gentleVendor(cwd)], cwd, env: agentEnv(), logFile: path.join(cwd, 'run.log'), timeoutSeconds: 60, signal: stop.signal, gentle: true, onEnded: rows => { ended = rows; }, ...(how === 'quiet' ? { quietSeconds: 1 } : {}) }).then(value => ({ value }), error => ({ error }));
+    const [vendor, command] = await pidsOf(t, cwd);
+    if (how === 'owner') stop.abort(new Error('Stopped by the owner.'));
+    const since = Date.now(), r = await run;
+    if (how === 'owner') assert.match(String(r.error?.message), /Stopped by the owner/); else assert.deepEqual([r.value.stoppedBy, r.value.code], ['quiet', 143], 'it ended itself when asked');
+    if (how === 'owner') assert.ok(Date.now() - since < 1500, `it took ${Date.now() - since} ms`);
+    assert.deepEqual(askedOf(cwd), { commandThere: false, commandTaken: true }, `${how}: asked to end once its command was gone`);
+    assert.deepEqual([livePid(vendor), livePid(command)], [false, false]);
+    assert.deepEqual(ended?.map(row => row.pid), [command], `${how}: it names the command it ended`);
+  }
+});
+test('a gentle run that stays when asked to end is ended two seconds later', async (t) => {
+  const cwd = temp(t), stop = new AbortController();
+  const run = runProcess({ bin: process.execPath, args: ['-e', gentleVendor(cwd, { deaf: true })], cwd, env: agentEnv(), logFile: path.join(cwd, 'run.log'), timeoutSeconds: 60, signal: stop.signal, gentle: true });
+  const [vendor, command] = await pidsOf(t, cwd);
+  const since = Date.now(); stop.abort(new Error('Stopped by the owner.'));
+  await assert.rejects(run, /Stopped by the owner/);
+  const took = Date.now() - since;
+  assert.ok(took >= 1500 && took < 5000, `it took ${took} ms`);
+  assert.deepEqual(askedOf(cwd), { commandThere: false, commandTaken: true });
+  assert.deepEqual([livePid(vendor), livePid(command)], [false, false], 'nothing of it is left');
+});
+// ELU itself told to end (the conductor or the app sent SIGTERM, SIGINT or SIGHUP): a gentle run
+// is asked as at a stop, and the command it runs in a session of its own ends too.
+test('ELU told to end asks a gentle run to end, and ends the command it runs', async (t) => {
+  const cwd = temp(t), lib = new URL('../lib/process.mjs', import.meta.url).href, ready = path.join(cwd, 'ready');
+  // runProcess has its signal handlers once its call returns (its body runs to its first await):
+  // only then is ELU told to end, as the conductor and the app are while a turn runs.
+  const elu = `import fs from 'node:fs'; import { runProcess, agentEnv } from ${JSON.stringify(lib)};
+    const running = runProcess({ bin: process.execPath, args: ['-e', ${JSON.stringify(gentleVendor(cwd))}], cwd: ${JSON.stringify(cwd)}, env: agentEnv(), logFile: ${JSON.stringify(path.join(cwd, 'run.log'))}, timeoutSeconds: 60, gentle: true });
+    fs.writeFileSync(${JSON.stringify(ready)}, ''); const r = await running;
+    console.log(JSON.stringify({ code: r.code })); process.exit(0);`;
+  const child = spawn(process.execPath, ['--input-type=module', '-e', elu], { stdio: ['ignore', 'pipe', 'pipe'] });
+  t.after(() => { try { child.kill('SIGKILL'); } catch {} });
+  let out = '', err = ''; child.stdout.on('data', chunk => { out += chunk; }); child.stderr.on('data', chunk => { err += chunk; });
+  const closed = new Promise(resolve => child.on('close', (code, signal) => resolve({ code, signal })));
+  const [vendor, command] = await pidsOf(t, cwd);
+  for (const until = Date.now() + 10000; !fs.existsSync(ready) && Date.now() < until;) await new Promise(resolve => setTimeout(resolve, 20));
+  child.kill('SIGHUP'); const ended = await closed;
+  assert.deepEqual([ended, out.trim()], [{ code: 0, signal: null }, JSON.stringify({ code: 143 })], `ELU went on to the end of its run, where the vendor had ended itself when asked: ${err}`);
+  assert.deepEqual(askedOf(cwd), { commandThere: false, commandTaken: true });
+  const until = Date.now() + 3000; while (livePid(command) && Date.now() < until) await new Promise(resolve => setTimeout(resolve, 20));
+  assert.deepEqual([livePid(vendor), livePid(command)], [false, false], 'before: the command in its own session ran on');
+});
 
 // A look from a process of its own with that environment: an app in a terminal and a daemon
 // that a login item started do not have the same time zone, language or COLUMNS.

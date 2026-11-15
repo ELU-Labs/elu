@@ -155,7 +155,9 @@ test('Tasks go only to teammates on a team the project is shared with, again whe
     // On connect each is told the Tasks of the projects open to them, and nothing of the other project.
     assert.deepEqual([toAna.titles(), toBob.titles()], [['Fix the login redirect'], ['Write the setup page']]);
     assert.equal(toAna.wire.out.includes('Write the setup page'), false); assert.equal(toBob.wire.out.includes('Fix the login redirect'), false);
-    for (const word of ['"edit"', app.root, 'fix the login redirect please']) assert.equal(toAna.wire.out.includes(word), false, word);
+    // The Task's own edit (its repository and the owner's words) never goes out; "edit" alone is also a hello flag, so that word is looked for in the Tasks sent.
+    for (const word of [app.root, 'fix the login redirect please']) assert.equal(toAna.wire.out.includes(word), false, word);
+    assert.equal(JSON.stringify(toAna.sent()).includes('"edit"'), false, 'edit');
     // Nothing changed: nothing is sent again.
     daemon.tellPlans(); assert.deepEqual([toAna.sent().length, toBob.sent().length], [1, 1]);
     // A subtask finished: the teammate on that project's team hears, the other does not.
@@ -710,7 +712,7 @@ test('a card\'s title leaves without a secret or a path, and its id says nothing
   });
 });
 
-test('a session waiting for its owner to approve a Task is in Needs you on a teammate\'s board, as on the owner\'s own', t => {
+test('a session waiting for its owner to approve a Task, or to check what it did, is in Needs you on a teammate\'s board, as on the owner\'s own', t => {
   const crew = makeTeam(t), ana = crew.founder, now = Date.now();
   withHome(ana.home, () => {
     // Conversations work in the project's own folder, here the repository itself.
@@ -719,7 +721,7 @@ test('a session waiting for its owner to approve a Task is in Needs you on a tea
     talk(1, 'Plan the export'); talk(2, 'Where is the export?');
     writePlans(app.root, 1, [plan({ session: '1', state: 'proposed', approvedAt: null })]);
     const rows = sessionCards({ owner: 'ana', repos: localRepos(now), now });
-    assert.deepEqual(rows.map(row => [row.card.title, row.card.column]).sort(), [['Plan the export', 'needs'], ['Where is the export?', 'done']]);
+    assert.deepEqual(rows.map(row => [row.card.title, row.card.column]).sort(), [['Plan the export', 'needs'], ['Where is the export?', 'needs']]);
   });
 });
 
@@ -836,6 +838,48 @@ test('my other computer is told each session\'s Task with its card, or its first
   assert.ok(sent.length > 1); assert.equal(sent.flat().length, 160); assert.ok(sent.flat().every(card => card.task.description.length === 4000));
   for (const part of sent) assert.ok(Buffer.byteLength(JSON.stringify(part)) <= PART_BYTES);
   assert.deepEqual(listParts([]), [[]]);
+});
+
+// Nothing goes to Done by itself (lib/owner-check.mjs): a session of mine that ended waits for
+// my check on my other computer's board too, saying how it ended. A teammate is told neither.
+test('a session of mine that waits for my check says so on my other computer\'s board, with how it ended; a teammate is told nothing of it', t => {
+  const crew = makeTeam(t), ana = crew.founder, sara = crew.member, now = Date.now();
+  withHome(ana.home, () => { markMine(ana.identity.key, sara.identity.key); noteTheirs(sara.identity.key, true); });
+  withHome(sara.home, () => { markMine(sara.identity.key, ana.identity.key); noteTheirs(ana.identity.key, true); });
+  const atAna = withHome(ana.home, () => {
+    const repo = folderProject(t), shop = cloneIn(repo, 'shop');
+    session(repo, 1, shop, { goal: 'Speed up the search page', state: 'ready' });
+    session(repo, 2, shop, { goal: 'Publish the cart fix', state: 'done', pr: 'https://github.com/elu-labs/sample/pull/2' });
+    session(repo, 3, shop, { goal: 'Still at work' });
+    session(repo, 4, shop, { goal: 'Checked already', state: 'ready' }); setDone(repo, { task: { id: '4' } }, true);
+    return { repo, shop, repos: localRepos(now) };
+  });
+  const rows = withHome(ana.home, () => sessionCards({ me: ana.identity.key, owner: 'ana', repos: atAna.repos, now }));
+  const proofs = key => [...atAna.repos.values()].map(row => repoProof(key, ana.identity.key, row.repoId, row.commit));
+  const toLaptop = withHome(ana.home, () => cardsFor(sara.identity.key, ana.identity.key, rows, atAna.repos, proofs(sara.identity.key)));
+  const toBob = withHome(ana.home, () => cardsFor('d'.repeat(64), ana.identity.key, rows, atAna.repos, proofs('d'.repeat(64))));
+  const checks = list => Object.fromEntries(list.map(card => [card.title, [card.column, card.check ?? null]]));
+  assert.deepEqual(checks(toLaptop), { 'Speed up the search page': ['needs', 'ready to publish'], 'Publish the cart fix': ['needs', 'published'], 'Still at work': ['progress', null], 'Checked already': ['done', null] });
+  for (const card of toBob) assert.equal(card.check, undefined, card.title);
+  // At the laptop: shown as mine, under Needs you, with how it ended and that it waits for my check.
+  withHome(sara.home, () => {
+    const repo = folderProject(t); cloneIn(repo, 'shop', { from: atAna.shop }); const saraRepos = localRepos(now);
+    fs.mkdirSync(peerFile(), { recursive: true });
+    fs.writeFileSync(peerFile('state.json'), JSON.stringify({ key: sara.identity.key, running: true, at: new Date().toISOString(), teams: [{ id: crew.teamId, members: [{ key: ana.identity.key, name: 'ana', online: true, box: 'devbox' }] }] }));
+    saveLocalRepos(saraRepos); saveProofs(ana.identity.key, proofsFor(ana.identity.key, sara.identity.key, atAna.repos));
+    saveCards(ana.identity.key, sara.identity.key, toLaptop);
+    const people = teammateSessions(repo.root).people, items = boardColumns(readBoard(repo), { tasks: [], queue: [] }, Date.now(), [], people).flatMap(column => column.items.map(item => [item.title, column.column, item.detail]));
+    assert.deepEqual(items.filter(([title]) => title !== 'Still at work').sort(), [['Checked already', 'done', 'you · devbox'], ['Publish the cart fix', 'needs', 'you · devbox · published · check it'], ['Speed up the search page', 'needs', 'you · devbox · ready to publish · check it']]);
+    // The row under the board says it too, where Needs you would be.
+    const notes = Object.fromEntries(boardColumns(readBoard(repo), { tasks: [], queue: [] }, Date.now(), [], people).flatMap(column => column.items.map(item => [item.title, item.note])));
+    assert.equal(notes['Publish the cart fix'], 'Your session on devbox · published · check it'); assert.equal(notes['Checked already'], 'Your session on devbox · Done');
+    // No longer mine: kept as a teammate's card, without it.
+    unmarkMine(ana.identity.key); saveCards(ana.identity.key, sara.identity.key, toLaptop);
+    for (const card of teammateSessions(repo.root).people[0].sessions) assert.equal(card.check, undefined, card.title);
+  });
+  assert.equal(cleanCard(cardOf({ column: 'needs', check: 'published' }), { mine: true }).check, 'published');
+  assert.equal(cleanCard(cardOf({ column: 'needs', check: 'published' })).check, undefined, 'not from a teammate');
+  assert.equal(cleanCard(cardOf({ column: 'done', check: 'published' }), { mine: true }).check, undefined, 'only under Needs you');
 });
 
 test('every session\'s Task goes with its card, without /share, to a teammate who proves they have the repository, and shows on their board and to their models', async t => {

@@ -144,8 +144,9 @@ host you did not allow (a push to `github.com` asks you for that host, and it is
 as a rule) and the common directory is read-only, which is what holds. A bot that is
 allowed to merge pull requests (`@elu` comes allowed; a bot you make is not) runs its
 own working turn without the `gh pr merge` rule; in Ask that command asks you instead.
-Full access has none of these rules, no stand-in commands and no `CLAUDE_ENV_FILE`: a turn
-there runs push, tags, merges, publishing and deploys as your own shell would.
+Full access has none of these rules and no stand-in commands, and its `CLAUDE_ENV_FILE` only
+puts the turn's own `elu` first: a turn there runs push, tags, merges, publishing and deploys
+as your own shell would.
 
 A turn that works on an approved Task is launched with Claude Code's to-do tools, in every
 mode: `--tools` adds `TaskCreate,TaskUpdate,TaskList,TaskGet,TodoWrite`, and Ask and Auto
@@ -220,6 +221,34 @@ on 2.1.322 in Ask for approval, in an answer turn: `git status`, `git diff` and
 filter named in the Git settings ran inside the sandbox when `git diff` used it:
 it could write nothing, and its call to the network was refused. Not seen with the
 real service: Approve for me, Read only, an edit turn in a worktree, Linux.
+
+A denied path that is not there stops no command. For a denied read that is missing
+Claude Code's sandbox mounts nothing, and it looks again before each command, so ELU
+names `<Git folder>/elu-code`, its own folder and the home secrets whether they are
+there or not, and makes nothing for them. Seen on 2.1.322 on Linux, with a stand-in
+for the model, in Read only, Ask for approval and Approve for me, edit and answer
+turns: commands ran in a repository without that folder, in a worktree, outside a
+repository and with the home folder as the project. In Ask for approval and Approve
+for me a transcript in that folder and a file in ELU's own folder could not be read,
+and neither could a transcript ELU wrote there after the turn started and before its
+command. Not seen: macOS.
+
+A denied write that is missing is different where the command may write, as with
+the protected paths of an edit turn: the sandbox lays an empty file there for as
+long as the command runs (29 at the top of the work tree, Claude Code's own
+`.bashrc`, `.gitconfig` and the rest among them). Claude Code takes them away once
+the command has ended. Killed, or asked to end while the command still runs, it
+leaves them all: Git listed them, the next turn's protected-path check refused
+them, and with `.elu-code` a file checks could not make their folder. So a stop
+kills the turn's commands at once, waits until Claude Code has taken their end (one
+second at most), then asks it to end (SIGTERM), and kills it if it is still there
+two seconds after the stop. In that short wait Claude Code sends the model one more
+request, with what the command had printed. Seen on 2.1.322 on Linux: stopped by the
+owner, by the quiet limit or by a signal to ELU in Ask for approval and Approve for
+me, Claude Code ended within 400 ms and left the work tree clean; with its
+commands killed and nothing more done, its empty files were gone within 44 ms. Asked
+to end while its command ran, it left all 29. In an answer turn the folder is closed
+to writes and nothing is laid there. Not seen: macOS.
 
 `parse` reads the profile Claude ran with from its init line. A run asked for
 Auto that reports `default` is shown as Ask. Denied tool calls come back on the

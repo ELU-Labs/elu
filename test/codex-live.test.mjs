@@ -80,9 +80,11 @@ test('a message sent while Codex works goes to that turn at its next step, and t
   for (const row of f.absorbed()) assert.deepEqual(lifecycle(log, row.uuid), ['queued', 'started', 'completed']);
   assert.ok(f.absorbed()[0].content.startsWith(DURING_LEAD), 'the turn is told what the message is');
   assert.ok(f.absorbed()[0].content.includes('"text":"Also keep the old name"'));
-  // Its log reads as an exec --json log: the thread, the steps, the answer, the tokens.
+  // Its log reads as an exec --json log: the thread, the steps, the answer, the tokens. The
+  // thread names the model the program runs it on, which a run on Codex's own default names nowhere else.
   const written = logRows(log), kinds = written.map(row => row.type);
-  assert.deepEqual(written[0], { type: 'thread.started', thread_id: THREAD });
+  assert.deepEqual(written[0], { type: 'thread.started', thread_id: THREAD, model: 'fake-model' });
+  assert.equal(task.runs[0].model, 'fake-model', 'the run keeps that model, which Usage prices it by');
   assert.ok(kinds.includes('turn.started') && kinds.at(-1) !== 'turn.failed');
   assert.deepEqual(written.find(row => row.type === 'item.started').item, { id: written.find(row => row.type === 'item.started').item.id, type: 'command_execution', command: "/bin/zsh -lc 'npm test'", aggregated_output: '', exit_code: null, status: 'in_progress' });
   assert.deepEqual(written.filter(row => row.type === 'item.completed' && row.item.type === 'command_execution').map(row => [row.item.aggregated_output, row.item.exit_code, row.item.status]).at(0), ['ok\n', 0, 'completed']);

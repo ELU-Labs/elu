@@ -13,7 +13,7 @@ import { changed, diff, outputFolders, publishable, taskChanges } from '../lib/g
 import { structuralChecks } from '../lib/checks.mjs';
 import { defaultConfig } from '../lib/config.mjs';
 import { loopStopMessage, stopLine } from '../lib/stop-line.mjs';
-import { currentTask, planFile } from '../lib/plan.mjs';
+import { currentTask, markChecked, planFile } from '../lib/plan.mjs';
 import { lessLine, reviewRequest } from '../lib/runner.mjs';
 
 // After the agent's edit ELU runs the checks and the session's reviewing bots review the
@@ -158,6 +158,8 @@ test('the owner\'s message to a reviewing bot about the edits runs a review: its
   f.mode('review-fix');
   const owner = 'work with the agent on the fixes, make sure it does not break anything and fixes real problems, not nitpicks';
   assert.equal(reviewsEdits(f.repo, readTask(f.repo, ready.id), 'critic', owner), true);
+  // He checked it Done before he wrote: his check made the Task done.
+  markChecked(f.repo, ready.id);
   assert.equal(currentTask(f.repo, ready.id).state, 'done', 'the Task was done before the owner wrote');
   const done = await f.controller.ask(owner, ready.id, { bot: 'critic' }).finished;
   assert.equal(done.state, 'ready', JSON.stringify(done.error)); assert.equal(done.reviewStatus, 'passed');
@@ -170,9 +172,10 @@ test('the owner\'s message to a reviewing bot about the edits runs a review: its
   assert.match(review, /Review as @critic/); assert.ok(review.includes(`The owner wrote this to you about the change. Let it guide this review; the agent fixes or disputes each must_fix finding of yours. Use must_fix only for a defect in this change within the session's approved Task; new work beyond that Task is at most a suggestion, never must_fix:\n${owner}`));
   const fix = f.inputs('claude').at(-1).input;
   assert.ok(fix.includes('Address the review') && fix.includes('"body":"Handle the edge case."'));
-  // The fix turn worked under the session's Task, opened again for it, and done again when the review passed.
+  // The fix turn worked under the session's Task, opened again for it. Its work ended when the
+  // review passed, and the Task waits for his check again.
   assert.ok(fix.includes('The owner approved the Task below, and this turn does its work.') && fix.includes('Uppercase coupons'), 'the fix turn carries the approved Task');
-  assert.equal(currentTask(f.repo, done.id).state, 'done');
+  assert.equal(currentTask(f.repo, done.id).state, 'approved'); assert.equal(currentTask(f.repo, done.id).checkedAt, undefined);
   assert.ok(fix.includes('After this turn ELU runs the checks again and @critic reviews your change again.'));
   // The chat shows each step.
   assert.deepEqual({ ...done.messages.at(-1), at: null }, { at: null, text: owner, to: '@critic', review: true });

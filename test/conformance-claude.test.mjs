@@ -8,6 +8,8 @@ import { defaultConfig } from '../lib/config.mjs';
 import { temp, readRole, git as gitIn } from './helpers.mjs';
 import { commandRule } from '../lib/policy.mjs';
 import { APPROVAL_TOOL } from '../lib/mcp.mjs';
+import { HOME_SECRETS } from '../lib/vendors.mjs';
+import { personalDirectoryNames } from '../lib/util.mjs';
 
 test('Claude launch keeps safe modes, exact permissions, empty MCP, and sandboxing that a shell requires', (t) => {
   const cwd = temp(t); const role = defaultConfig().roles.lead;
@@ -144,6 +146,45 @@ test('ask and auto keep the file tools out of the repository\'s Git folder, whic
     for (const spelling of spelled) assert.ok(fenced.denyRead.includes(path.join(spelling, 'elu-code')), `Read only ${where}: a command reads none of the records`);
   }
   assert.throws(() => claude({ ...f.base, mode: 'ask', commonDir: path.join(common, 'odd*name') }), /cannot be expressed safely/);
+});
+// Claude Code's sandbox mounts nothing for a denied read that is not there and looks again
+// before each command (2.1.322 on Linux: "Read deny path mounts nothing this wrap can place
+// (absent ...)"), so a missing one stops no command, and once ELU makes it while a turn runs the
+// next command is kept out of it. Codex's sandbox has to make a missing denied path, and cannot
+// in .git (lib/adapters/codex.mjs ownState). So Claude's launch names ELU's records, its own
+// folder and the home secrets whether they are there or not, and makes nothing for them. The
+// home folder and the config folder are empty ones of this test: on a computer that has run
+// ELU, its own folder is there, and a launch that named it only when there would pass unseen.
+test('a denied path that is not there stays in the Claude launch, which makes nothing for it', t => {
+  const f = modeFixture(t), answer = readRole('claude'), exists = p => { try { fs.lstatSync(p); return true; } catch { return false; } };
+  const scratch = fs.realpathSync(temp(t)), home = path.join(scratch, 'home'), config = path.join(scratch, 'config'); fs.mkdirSync(home);
+  const kept = { HOME: process.env.HOME, XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME }; Object.assign(process.env, { HOME: home, XDG_CONFIG_HOME: config });
+  t.after(() => { for (const [key, value] of Object.entries(kept)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } });
+  const gitFolder = () => { const root = temp(t); gitIn(root, ['init', '-q', '--template=', '--initial-branch=main']); return path.join(root, '.git'); };
+  const secrets = HOME_SECRETS.filter(name => name !== 'Library').map(name => path.join(home, name)), state = personalDirectoryNames();
+  assert.deepEqual([fs.realpathSync(os.homedir()), state.includes(path.join(config, 'elu-code'))], [home, true], 'the test\'s own home and config folders');
+  assert.deepEqual([...state, ...secrets].filter(exists), [], 'none of them is there yet');
+  for (const there of [false, true]) for (const mode of ['locked', 'ask', 'auto']) for (const role of [f.role, answer]) {
+    if (there) for (const p of [...state, path.join(home, '.ssh'), path.join(home, '.config')]) fs.mkdirSync(p, { recursive: true });
+    const at = `${mode} ${role.access}, ${there ? 'with' : 'without'} ELU's own folder`;
+    const launch = (cwd, commonDir) => settingsOf(mode === 'locked' ? claude({ role, cwd, protectedPaths: f.protectedPaths, commonDir, session: SESSION }) : claude({ ...f.base, mode, role, cwd, commonDir }));
+    // A repository whose .git/elu-code is missing, a common Git folder outside the turn's folder
+    // (a worktree's), and <cwd>/.git where there is no repository.
+    const repo = gitFolder(), outside = gitFolder(), plain = temp(t);
+    for (const [cwd, common] of [[path.dirname(repo), repo], [temp(t), outside], [plain, path.join(plain, '.git')]]) {
+      const records = path.join(common, 'elu-code'), settings = launch(cwd, common);
+      assert.ok(settings.sandbox.filesystem.denyRead.includes(records), `${at}: a command is kept out of ${records} once it is there`);
+      for (const rule of [`Read(//${records.slice(1)})`, `Read(//${records.slice(1)}/**)`]) assert.ok(settings.permissions.deny.includes(rule), `${at}: ${rule}`);
+      assert.equal(exists(records), false, `${at}: the launch makes nothing for ${records}`);
+    }
+    assert.equal(exists(path.join(plain, '.git')), false, `${at}: no Git folder is made where there is no repository`);
+    // Outside a repository the runner names no Git folder. ELU's own folder and the home secrets
+    // stay denied to a command whether they are there or not.
+    const settings = launch(plain, null), none = settings.sandbox.filesystem.denyRead, git = path.join(plain, '.git');
+    assert.equal(none.some(entry => entry === git || entry.startsWith(`${git}/`)), false, `${at}: nothing named in a Git folder that is not there`);
+    for (const p of [...state, ...secrets]) assert.ok(none.includes(p) && settings.permissions.deny.includes(`Read(//${p.slice(1)})`), `${at}: ${p}`);
+    if (!there) assert.deepEqual([...state, ...secrets].filter(exists), [], `${at}: the launch makes none of them`);
+  }
 });
 test('a mode needs the relay and the MCP file; a peer run and a locked run refuse every lift', t => {
   const f = modeFixture(t);

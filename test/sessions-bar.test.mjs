@@ -98,6 +98,22 @@ test('a session reads as its title, never its number, and any other row as what 
   assert.deepEqual([barCells(find(one, 'request', 'request-b'), 30, now)[0], barCells(find(one, 'schedule'), 30, now)[0]].map(cell => [cell.text, cell.tone]), [['✗ ', 'red'], ['◷ ', 'blue']]);
 });
 
+// A schedule's run that waits to start goes by the name the owner gave its latest run
+// (lib/schedules.mjs), as its session does once it starts; without one, by the first line of
+// the schedule's message. Its row says what it waits for first, as any other's does.
+test("a schedule's run that waits to start reads as the name it takes, else as the schedule's words", () => {
+  const goal = 'Check the nightly build\nand say what failed';
+  const timed = boardRows([{ ...shop, tasks: [], queue: [
+    { id: 'request-n', goal, state: 'queued', priority: 1, scheduleId: 'schedule-1', title: 'Nightly review', queuedAt: at(2), createdAt: at(2) },
+    { id: 'request-s', goal, state: 'starting', priority: 1, scheduleId: 'schedule-2', title: 'Weekly review', queuedAt: at(1), createdAt: at(1) },
+    { id: 'request-w', goal, state: 'queued', priority: 1, scheduleId: 'schedule-3', queuedAt: at(0), createdAt: at(0) },
+    { id: 'request-r', goal, state: 'queued', priority: 1, scheduleId: 'schedule-4', title: 'Retry review', notBefore: new Date(now + 30000).toISOString(), queuedAt: at(0), createdAt: at(0) },
+  ] }], now);
+  const of = id => timed.find(row => row.request?.id === id);
+  assert.deepEqual(['request-n', 'request-s', 'request-w', 'request-r'].map(id => rowTitle(of(id), now)), ['Nightly review', 'Weekly review', 'Check the nightly build', 'retry 30s · Retry review']);
+  assert.match(line(of('request-n'), 30), /^· Nightly review +2m$/);
+});
+
 test('the age sits at the right edge, in its short form', () => {
   const ends = (kind, id) => line(find(one, kind, id), 30).split(' ').at(-1);
   assert.deepEqual([ends('task', '2'), ends('task', '3'), ends('task', '4'), ends('request', 'request-a'), ends('approval'), ends('peer')], ['4m00', '30m', '3h', '2m', '2m', '5m']);
@@ -154,7 +170,8 @@ test('a session that waits for your approval is listed once, under Needs you, an
 });
 
 test('a row that is not a session shows its own text and keys beside the list', () => {
-  assert.deepEqual(rowCard(find(one, 'schedule'), now), { title: '◷ daily 9:00 · shop', tone: 'blue', text: 'Check the nightly build and list what failed\nNext run in 18h.', keys: 'r run now · p pause · x delete · enter last run' });
+  // It has not run yet: there is no last run for Enter to open.
+  assert.deepEqual(rowCard(find(one, 'schedule'), now), { title: '◷ daily 9:00 · shop', tone: 'blue', text: 'Check the nightly build and list what failed\nNext run in 18h.', keys: 'r run now · p pause · x delete' });
   assert.deepEqual(rowCard(find(one, 'approval'), now), { title: '? wants to · shop', tone: 'orange', text: 'The model wants to edit: src/auth.mjs', keys: 'y allow · n deny · enter open' });
   const ask = rowCard(find(one, 'peer'), now);
   assert.deepEqual([ask.title, ask.tone, ask.keys], ['? @sara question · shop', 'orange', 'y accept · n decline · enter read · c decline']);
@@ -201,6 +218,34 @@ test("the owner's list: one session is one row, and the teammate's question is t
   // e edits what waits to go to a teammate; a draft of his own ask is sent or dropped.
   const draft = boardRows([home], now, { items: [{ ...ownerAsk, id: 'peer-draft', kind: 'draft', request: undefined }] }).find(row => row.kind === 'peer');
   assert.deepEqual(rowActions(draft), [['y', 'send'], ['n', 'discard'], ['enter', 'read'], ['c', 'discard']]);
+});
+
+// Enter is named on a row only where it opens something: a teammate's standup is y or n and
+// has no thread to read, and a schedule that never ran has no last run.
+test('a row names Enter only where it opens something: not on a teammate\'s standup, nor on a schedule that has not run yet', () => {
+  const home = { name: 'home', root: '/p/home', activity: [], tasks: [], queue: [] };
+  const standup = boardRows([home], now, { items: [{ ...ownerAsk, id: 'peer-standup', kind: 'standup', request: undefined }] }).find(row => row.kind === 'peer');
+  assert.deepEqual(rowActions(standup), [['y', 'accept'], ['n', 'decline'], ['c', 'decline']]);
+  const schedule = { id: 'schedule-1', root: '/p/home', project: 'home', goal: 'Check the build', when: { kind: 'every', label: 'every 2h' }, enabled: true, createdAt: at(60), nextRunAt: new Date(now + 3600000).toISOString(), lastRunAt: null, lastRequestId: null, lastTaskId: null, runs: 0, note: null };
+  const row = (value, project = home) => boardRows([project], now, { schedules: [value] }).find(item => item.kind === 'schedule');
+  assert.deepEqual(rowActions(row(schedule)), [['r', 'run now'], ['p', 'pause'], ['x', 'delete']]);
+  // The run r queued opens until it starts: its request waits in the queue.
+  const queued = { ...home, queue: [{ id: 'request-1', goal: 'Check the build', state: 'queued', scheduleId: 'schedule-1', priority: 1, createdAt: at(5) }] };
+  assert.deepEqual(rowActions(row({ ...schedule, runs: 1, lastRequestId: 'request-1', lastRunAt: at(5) }, queued)).at(-1), ['enter', 'last run']);
+  // Its session opens once it started, archived or not.
+  const ran = { ...home, tasks: [{ ...base, id: '7', state: 'answered', goal: 'Check the build', scheduleId: 'schedule-1' }] };
+  assert.deepEqual(rowActions(row({ ...schedule, runs: 1, lastTaskId: '7', lastRunAt: at(5) }, ran)).at(-1), ['enter', 'last run']);
+  assert.deepEqual(rowActions(row({ ...schedule, runs: 1, lastTaskId: '7', lastRunAt: at(5) }, { ...ran, closed: ['7'] })).at(-1), ['enter', 'last run']);
+  // One saved before runs were counted, with its last run named, still opens it.
+  const { runs, ...older } = schedule;
+  assert.deepEqual(rowActions(row({ ...older, lastTaskId: '7' }, ran)).at(-1), ['enter', 'last run']);
+  // It ran, and its last run was cleaned up since: Enter has nothing to open, so neither the
+  // row nor its card beside the list names it.
+  const gone = row({ ...schedule, runs: 1, lastTaskId: '7', lastRunAt: at(5) });
+  assert.deepEqual(rowActions(gone), [['r', 'run now'], ['p', 'pause'], ['x', 'delete']]);
+  assert.equal(rowCard(gone, now).keys, 'r run now · p pause · x delete');
+  // A run r queued that was then removed is gone too.
+  assert.deepEqual(rowActions(row({ ...schedule, runs: 1, lastRequestId: 'request-1', lastRunAt: at(5) })), [['r', 'run now'], ['p', 'pause'], ['x', 'delete']]);
 });
 
 test("only the owner's own later turns spend his blocked message: a bot's scheduled turn or a teammate's message in the session does not", () => {
