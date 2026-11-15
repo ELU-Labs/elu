@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { temp } from './helpers.mjs';
-import { agentSpend, agentTable, cleanTopAgents, costText, moneyText, runCosts, topAgentsWire } from '../lib/agent-spend.mjs';
+import { agentSpend, agentTable, cleanTopAgents, costText, moneyText, runCosts, shareText, topAgentsWire } from '../lib/agent-spend.mjs';
 
 // What a run costs where its vendor reports tokens but no cost: each kind of token at the
 // model's API list price (lib/prices.mjs). Every number here is made up; the log shapes are
@@ -145,8 +145,10 @@ test('a cost under a cent reads <$0.01 in the row, the total and each computer�
   const table = agentTable(spend.rows.map(row => ({ ...row, where: 'here' })), { width: 136, total: spend.costUsd, foot: { label: 'Today', costUsd: spend.costUsd, partial: spend.partial, runs: spend.runs, parts: [{ name: 'here', costUsd: spend.costUsd, partial: false, runs: 1 }, { name: 'devbox', costUsd: 0.004, partial: false, runs: 1 }] } });
   assert.match(table.rows[0], / <\$0\.01 +100%$/);
   assert.deepEqual(table.foot.map(line => line.trim()), ['Today  <$0.01', 'here <$0.01 · devbox <$0.01']);
-  // Nothing spent, a cent rounded, and a cost that may be more, as before.
-  assert.deepEqual([moneyText(0), moneyText(0.005), moneyText(0.00005, true), moneyText(null, false, 0)], ['$0.00', '$0.01', '≥$0.00', '$0.00']);
+  // Nothing spent, a cent rounded, and a cost that may be more. One that may be more and rounds
+  // to no cent shows as not known (a dash), never as ≥$0.00, and its share too.
+  assert.deepEqual([moneyText(0), moneyText(0.005), moneyText(0.00005, true), moneyText(0, true), moneyText(0.004), moneyText(1.234, true), moneyText(null, false, 0)], ['$0.00', '$0.01', '—', '—', '<$0.01', '≥$1.23', '$0.00']);
+  assert.equal(shareText({ costUsd: 0.004, partial: true }, 10), '—'); assert.equal(shareText({ costUsd: 0.004, partial: false }, 10), '<1%');
 });
 
 test('a model with no known price shows a dash, never 0, and is left out of the total', t => {

@@ -98,7 +98,8 @@ test('two computers signed in to the same GitHub account pair with no step, from
   assert.ok(gh.gists('octo-user')[0].files[`${laptop.identity.key}.json`], 'the laptop file is untouched');
   // The app says it once.
   const glue = glueFor(laptop);
-  assert.equal(glue.paired(), '@devbox is yours: both computers are signed in to GitHub as octo-user.');
+  // Once, with what the other computer calls this one and how to change that.
+  assert.equal(glue.paired(), '@devbox is yours: both computers are signed in to GitHub as octo-user. It calls this one @laptop: /computer name renames it.');
   assert.equal(glue.paired(), null);
   assert.equal(await glue.mine([]), '@devbox is yours');
 });

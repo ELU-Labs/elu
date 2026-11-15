@@ -113,7 +113,7 @@ test('argv per profile is a fixed snapshot; settings and the hook are written pe
   const id = crypto.randomUUID();
   assert.deepEqual(agy.launch({ ...base, role: { ...lead, model: 'gemini-3-pro' }, mode: 'ask', resume: id }).slice(-4), ['--model', 'gemini-3-pro', '--conversation', id]);
   assert.ok(!agy.launch({ ...base, role: reader, mode: 'locked' }).includes('--add-dir'), 'locked reads the workspace only');
-  assert.throws(() => agy.launch({ ...base, role: reader, mode: 'locked', peer: true }), /A teammate's question needs Claude as the model/);
+  assert.throws(() => agy.launch({ ...base, role: reader, mode: 'locked', peer: true }), { message: "Only Claude Code answers a teammate's question. Antigravity cannot keep its reads out of the project's Git folder and the files Git does not track. Choose a Claude model with /model default to answer them." });
   assert.throws(() => agy.launch({ ...base, role: lead, mode: 'locked' }), /Antigravity CLI cannot edit in Read only/);
   assert.throws(() => agy.launch({ ...base, role: lead, mode: 'ask', place: { kind: 'here' } }), /Here needs Full access/);
   assert.throws(() => agy.launch({ ...base, role: { ...lead, maxCostUsd: 3 }, mode: 'ask' }), /dollar budget/);

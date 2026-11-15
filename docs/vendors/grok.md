@@ -50,8 +50,9 @@ turn.
 Grok Build reviews, and can be a bot's vendor, once the check passed: a review runs on its
 Read only launch, which the check proves writes nothing, runs no command and reaches no
 network on this machine. It does not answer a teammate's question (the read-only kind
-teammates ask of a shared project): only Claude Code's launch keeps every read inside the
-project, hides what Git does not track, and holds the run under a dollar cap.
+teammates ask of a shared project): that launch has no rule that keeps a read inside the
+project, and only Claude Code's launch keeps every read there and hides the Git folder and
+what Git does not track. The refusal says so.
 
 The Usage tab shows whether Grok is signed in before the check has run: it looks for
 `~/.grok/auth.json`, never opens it, and runs nothing. Its line then says
@@ -216,7 +217,9 @@ loading with every switch off, and the `~/.claude` scan is anchored on `HOME`, w
 `GROK_HOME` does not move.
 
 So every run gets a private `HOME` under ELU's state (`grok-home` in your personal
-directory) and a `GROK_HOME` inside it holding only what ELU wrote:
+directory) and a `GROK_HOME` holding only what ELU wrote. Each mode has a home of its own,
+`grok-home/<mode>` (`locked` for Read only, `ask`, `auto` and `full`), whose `.grok` is that
+mode's `GROK_HOME`:
 
 - `config.toml`: Claude, Cursor and Codex compatibility off, telemetry, trace upload, Mixpanel,
   feedback, managed config, campaigns and remote fetch off, workspace snapshots and codebase
@@ -224,16 +227,24 @@ directory) and a `GROK_HOME` inside it holding only what ELU wrote:
   Full, server-side search off, subagents off and the never list as deny rules. Full access
   is everything: its config has none of those three, and its run also drops `--no-memory`,
   `--no-subagents`, `--max-turns`, `GROK_MEMORY=0`, `GROK_SUBAGENTS=0` and
-  `GROK_BACKEND_SEARCH=0`. It is
-  rewritten before every run, for that run's profile. Runs share it: a run that reads one
-  written for another profile still has the never list in its flags wherever it holds.
+  `GROK_BACKEND_SEARCH=0`. It is written before every run of that mode, and only runs of that
+  mode write it: a Full access turn that starts at the moment another session's Ask turn, or
+  a step of the check, starts reads its own config, and so does each of them. (Up to 0.1.26
+  every mode wrote one shared file, and a run could read the one written for another mode.)
 - `trusted_folders.toml`: empty. A workspace is never trusted, so its `.grok/config.toml`,
   hooks, MCP servers and skills never load. Its `AGENTS.md` and `CLAUDE.md` still reach the
   prompt; they are repository content, treated as untrusted.
-- `sessions/`: Grok's session store, so `-r` works.
+- `sessions` and `auth.json`: links to the ones every mode shares, in `grok-home/.grok`.
+
+`grok-home/.grok` holds what the modes share, and is where `grok login` runs:
+
+- `sessions/`: Grok's session store, so `-r` works, and a session goes on after
+  `/permissions` changed its mode.
 - `auth.json`: a symbolic link to your real `~/.grok/auth.json`. `grok login`, `grok logout`
   and token refreshes write through it; ELU holds no copy. If Grok ever replaces the
-  link with a file, the newer token wins at the next run. Which of the two `grok login`
+  link with a file, the newer token wins at the next run. A token Grok writes over a mode's
+  own link is moved here first when it is the newer one, so one sign-in serves every mode
+  and nothing asks you to sign in again. Which of the two `grok login`
   does has not been watched: ELU's tests sign it in both ways. Written through the link,
   the token is in your own `~/.grok/auth.json`; written over it, the token stays in ELU's
   Grok home, ELU's runs are signed in, and your own `grok` is signed in only by its own
@@ -259,7 +270,7 @@ So a Full access run gets `HOME` set to `grok-home-full`, a folder of links:
 - every entry at the top of your home is a link to yours, made again before each run, so
   what you added since is there and nothing of yours is copied;
 - `~/.claude`, `~/.claude.json`, `~/.codex`, `~/.cursor`, `~/.gemini`, `~/.agents` and your
-  own `~/.grok` are left out, and `~/.grok` there is ELU's `GROK_HOME`. The same
+  own `~/.grok` are left out, and `~/.grok` there is the `GROK_HOME` of Full access. The same
   `grok inspect --json` under this folder lists nothing from your home;
 - a file or folder a command makes at the top of `~` is moved to your home when the run
   ends (or before the next one, if ELU was stopped). A file saved in place of yours

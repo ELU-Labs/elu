@@ -81,6 +81,9 @@ test('a session reads as its title, never its number, and any other row as what 
   assert.equal(rowTitle(find(one, 'schedule'), now), 'daily 9:00 · Check the nightly build and list what failed');
   const later = boardRows([{ ...shop, tasks: [], queue: [{ id: 'request-c', goal: 'Try again', state: 'queued', notBefore: new Date(now + 30000).toISOString(), queuedAt: at(1) }, { id: 'request-d', goal: 'Continue it', state: 'queued', continuationTaskId: '7', queuedAt: at(0) }] }], now);
   assert.deepEqual(later.map(row => rowTitle(row, now)), ['retry 30s · Try again', 'Continue it']);
+  // One that waits longer, such as a session waiting for a Claude account to reset, says it in minutes or hours.
+  const longer = boardRows([{ ...shop, tasks: [], queue: [{ id: 'request-x', goal: 'And the tests?', state: 'queued', continuationTaskId: '7', notBefore: new Date(now + 48 * 3600000 - 5000).toISOString(), queuedAt: at(1) }, { id: 'request-y', goal: 'Try once more', state: 'queued', notBefore: new Date(now + 20 * 60000).toISOString(), queuedAt: at(0) }] }], now);
+  assert.deepEqual(longer.map(row => rowTitle(row, now)), ['retry 48h · And the tests?', 'retry 20m · Try once more']);
   // What the conductor said a queued one waits for (lib/waiting.mjs): a free slot is said once, in the Queued heading, with a
   // shorter form for a narrow list; its session's turn is said on its row, where the row has room for both.
   const held = boardRows([{ ...shop, tasks: [], queue: [{ id: 'request-f', goal: 'Rename the order model', state: 'queued', queuedAt: at(1), waits: { on: 'slot', running: 4, limit: 4 } }, { id: 'request-g', goal: 'Go on', state: 'queued', continuationTaskId: '7', queuedAt: at(0), waits: { on: 'turn' } }] }], now);

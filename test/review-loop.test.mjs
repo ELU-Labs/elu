@@ -42,7 +42,7 @@ function setup(t, mode = 'normal', options = {}) {
 
 test('npm install, pip install -e and a coverage run in the worktree are not a change: the checks run, the reviewer reviews, nothing installed is published, and reading it stays fast', async t => {
   const f = setup(t, 'normal', { install: true });
-  const task = await f.controller.ask('Normalize coupon codes').finished;
+  const task = await f.controller.ask('Normalize coupon codes', null, { bots: ['reviewer'] }).finished;
   assert.equal(task.state, 'ready', JSON.stringify(task.error)); assert.equal(task.error, null);
   assert.equal(task.reviewStatus, 'passed'); assert.deepEqual(task.reviews.map(review => review.role), ['bot:reviewer'], 'the review loop ran');
   assert.ok(task.evidence.results.length > 2 && task.evidence.results.every(row => row.status === 'passed'), JSON.stringify(task.evidence.results));
@@ -211,7 +211,7 @@ test('an error after the edit shows a plain stop line with what to do, never the
 // A review is given the change whole, whatever its size: ELU sets no limit of its own.
 // Only when the bot's model says the prompt is too long for it is the same review asked again
 // with the large files as excerpts around each change, then with the diff alone; when even the
-// diff alone is too long, the session stops and says what to do.
+// diff alone is too long, the bot leaves the review and the session goes on without it.
 const ADDED = ['export const added1 = 1;', 'export const added2 = 2;', 'export const added3 = 3;', 'export const added4 = 4;', 'export const added5 = 5;'].join('\n');
 const COUPON = { path: 'src/coupon.mjs', content: 'export const normalize = (value) => value.toUpperCase();\n' };
 function largeFile(root, file, count) {
@@ -225,7 +225,7 @@ const bigChange = (t, mode, options = {}) => { const f = setup(t, mode, { insert
 
 test('a five-line change to a 400,000-character file is reviewed with the whole file and the whole diff', async t => {
   const f = bigChange(t, 'normal');
-  const task = await f.controller.ask('Normalize coupon codes').finished;
+  const task = await f.controller.ask('Normalize coupon codes', null, { bots: ['reviewer'] }).finished;
   assert.equal(task.state, 'ready', JSON.stringify(task.error)); assert.equal(task.reviewStatus, 'passed');
   assert.deepEqual(taskChanges(task).paths, ['src/big.mjs', 'src/coupon.mjs']);
   const reviews = reviewOf(f.inputs('claude'), 'reviewer');
@@ -239,7 +239,7 @@ test('a five-line change to a 400,000-character file is reviewed with the whole 
 
 test('a model that says the prompt is too long reviews the large file as excerpts around the change, and the review passes', async t => {
   const f = bigChange(t, 'normal', { tooLong: 200000 });
-  const task = await f.controller.ask('Normalize coupon codes').finished;
+  const task = await f.controller.ask('Normalize coupon codes', null, { bots: ['reviewer'] }).finished;
   assert.equal(task.state, 'ready', JSON.stringify(task.error)); assert.equal(task.reviewStatus, 'passed');
   assert.deepEqual(task.runs.filter(run => run.role === 'bot:reviewer').map(run => run.code), [1, 0], 'the whole change was refused, then the excerpts reviewed');
   const reviews = reviewOf(f.inputs('claude'), 'reviewer');
@@ -260,7 +260,7 @@ test('a model that says the prompt is too long reviews the large file as excerpt
 // started nothing and spent nothing, and names the model it was asked for.
 test('a review Claude Code refuses for its input size is reviewed as excerpts, and the refused run spent nothing', async t => {
   const f = bigChange(t, 'normal', { stdinLimit: 200000 });
-  const task = await f.controller.ask('Normalize coupon codes').finished;
+  const task = await f.controller.ask('Normalize coupon codes', null, { bots: ['reviewer'] }).finished;
   assert.equal(task.state, 'ready', JSON.stringify(task.error)); assert.equal(task.reviewStatus, 'passed');
   const runs = task.runs.filter(run => run.role === 'bot:reviewer');
   assert.deepEqual(runs.map(run => [run.code, run.started ?? true, run.costUsd, run.ownCost]), [[1, false, 0, true], [0, true, 0, true]], 'the whole change was refused before it started, then the excerpts reviewed');
@@ -272,7 +272,7 @@ test('a review Claude Code refuses for its input size is reviewed as excerpts, a
 
 test('a model that takes no file of the change reviews its diff alone', async t => {
   const f = bigChange(t, 'normal', { tooLong: 'files' });
-  const task = await f.controller.ask('Normalize coupon codes').finished;
+  const task = await f.controller.ask('Normalize coupon codes', null, { bots: ['reviewer'] }).finished;
   assert.equal(task.state, 'ready', JSON.stringify(task.error)); assert.equal(task.reviewStatus, 'passed');
   const reviews = reviewOf(f.inputs('claude'), 'reviewer');
   assert.equal(reviews.length, 3); assert.ok(reviews[1].includes('"lines":"4851-5155 of 8005"'));
@@ -282,15 +282,64 @@ test('a model that takes no file of the change reviews its diff alone', async t 
   assert.deepEqual(source.files, [{ path: 'src/big.mjs', content: null }, { path: 'src/coupon.mjs', content: null }]);
 });
 
-test('a model that takes not even the diff stops the session with what to do, and the edits are kept', async t => {
+// A bot whose model takes not even the diff alone cannot review the change. That never stops
+// the session: its checks decide as in a session with no bot, and the chat says so in one line.
+const TOO_LARGE = name => `@${name} could not review this change: it is too large for its model.`;
+test('a bot whose model takes not even the diff leaves the session as one with no bot would be, says so in one line, and the edits are kept', async t => {
   const f = bigChange(t, 'normal', { tooLong: 'all' });
-  const run = f.controller.ask('Normalize coupon codes');
-  const said = "Your edits are kept, but the checks and review could not go on: this change is too large for @reviewer's model to review in one go. Ask the agent to split it into smaller sessions.";
-  await assert.rejects(run.finished, { message: said });
-  const task = readTask(f.repo, run.id);
-  assert.notEqual(task.state, 'ready'); assert.equal(task.error.message, said); assert.equal(stopLine(task).text, said);
+  const task = await f.controller.ask('Normalize coupon codes', null, { bots: ['reviewer'] }).finished;
+  assert.equal(task.state, 'ready', JSON.stringify(task.error)); assert.equal(task.error, null); assert.equal(task.reviewStatus, 'skipped');
+  assert.ok(task.evidence.results.every(row => row.status === 'passed'), 'the checks ran');
+  assert.equal(stopLine(task), null, 'nothing stopped');
   assert.equal(reviewOf(f.inputs('claude'), 'reviewer').length, 3, 'whole, excerpts, then the diff alone');
+  assert.deepEqual(task.messages.filter(row => /could not review|too large/.test(row.text)).map(row => [row.text, row.from]), [[TOO_LARGE('reviewer'), 'ELU']]);
+  assert.equal(conversationEntries(f.repo, task).filter(row => row.text === TOO_LARGE('reviewer')).length, 1, 'the chat shows the line once');
+  assert.doesNotMatch(JSON.stringify(readTask(f.repo, task.id)), /smaller sessions/);
+  assert.doesNotThrow(() => assertReady(readTask(f.repo, task.id)), 'nothing waits for that bot to publish');
   assert.ok(fs.readFileSync(path.join(task.worktree, 'src/big.mjs'), 'utf8').includes(ADDED), 'the edits are kept');
+});
+
+test('when one bot cannot take the change, the other bots of the session still review it', async t => {
+  const f = bigChange(t, 'normal', { tooLong: 'all', tooLongOn: ['Review as @reviewer'] });
+  const task = await f.controller.ask('Normalize coupon codes', null, { bots: ['reviewer', 'critic'] }).finished;
+  assert.equal(task.state, 'ready', JSON.stringify(task.error)); assert.equal(task.reviewStatus, 'passed');
+  assert.deepEqual(task.reviews.map(review => review.role), ['bot:critic']);
+  assert.deepEqual(task.messages.filter(row => /could not review/.test(row.text)).map(row => row.text), [TOO_LARGE('reviewer')]);
+  assert.doesNotThrow(() => assertReady(readTask(f.repo, task.id)));
+});
+
+test('a bot whose model cannot take the change once its must-fix is fixed leaves it to the checks, and its earlier must-fix never holds back publishing', async t => {
+  const f = bigChange(t, 'review-fix', { tooLong: 'all', tooLongOn: ['Handled the edge case.'] });
+  const task = await f.controller.ask('Normalize coupon codes', null, { bots: ['critic'] }).finished;
+  assert.equal(task.state, 'ready', JSON.stringify(task.error)); assert.equal(task.error, null); assert.equal(task.reviewStatus, 'skipped');
+  assert.deepEqual(task.reviews.map(review => [review.role, review.result.comments.some(row => row.severity === 'must_fix')]), [['bot:critic', true]], 'its review of the change before the fix');
+  assert.deepEqual(task.messages.filter(row => /could not review/.test(row.text)).map(row => row.text), [TOO_LARGE('critic')]);
+  assert.doesNotThrow(() => assertReady(readTask(f.repo, task.id)));
+});
+
+// Another bot's must-fix is fixed with an edit, so the change moves on after a bot left the review.
+// The bot that left tries the fixed change, and leaves that too when its model cannot take it:
+// publishing never waits for a bot that could not take the change it publishes.
+const FIXED = { file: 'src/big.mjs', at: 10, text: 'export const fixedLater = 1;' };
+test('a bot that cannot take the change tries the fixed one after another bot\'s must-fix, and publishing never waits for it', async t => {
+  const f = bigChange(t, 'review-fix', { tooLong: 'all', tooLongOn: ['Review as @reviewer'], fixInsert: FIXED });
+  const task = await f.controller.ask('Normalize coupon codes', null, { bots: ['reviewer', 'critic'] }).finished;
+  assert.ok(fs.readFileSync(path.join(task.worktree, 'src/big.mjs'), 'utf8').includes(FIXED.text), 'the fix changed the files');
+  assert.equal(task.state, 'ready', JSON.stringify(task.error)); assert.equal(task.error, null); assert.equal(task.reviewStatus, 'passed');
+  assert.deepEqual(task.reviews.map(review => [review.round, review.role]), [[1, 'bot:critic'], [2, 'bot:critic']]);
+  assert.equal(reviewOf(f.inputs('claude'), 'reviewer').length, 6, 'the change and the fixed one, each whole, as excerpts and as the diff alone');
+  assert.deepEqual(task.messages.filter(row => /could not review/.test(row.text)).map(row => row.text), [TOO_LARGE('reviewer')], 'said once');
+  assert.doesNotThrow(() => assertReady(readTask(f.repo, task.id)));
+});
+
+test('when every bot leaves the review of the fixed change, its checks decide and publishing waits for none of them', async t => {
+  const f = bigChange(t, 'review-fix', { tooLong: 'all', tooLongOn: ['Review as @reviewer', 'Handled the edge case.'], fixInsert: FIXED });
+  const task = await f.controller.ask('Normalize coupon codes', null, { bots: ['reviewer', 'critic'] }).finished;
+  assert.ok(fs.readFileSync(path.join(task.worktree, 'src/big.mjs'), 'utf8').includes(FIXED.text), 'the fix changed the files');
+  assert.equal(task.state, 'ready', JSON.stringify(task.error)); assert.equal(task.error, null); assert.equal(task.reviewStatus, 'skipped');
+  assert.deepEqual(task.reviews.map(review => [review.round, review.role]), [[1, 'bot:critic']]);
+  assert.deepEqual(task.messages.filter(row => /could not review/.test(row.text)).map(row => row.text), [TOO_LARGE('reviewer'), TOO_LARGE('critic')]);
+  assert.doesNotThrow(() => assertReady(readTask(f.repo, task.id)));
 });
 
 test('a must-fix found in the excerpts of a change too long for the model goes to the agent, and the review runs again', async t => {
@@ -310,21 +359,21 @@ const shownOf = (f, task, name) => conversationEntries(f.repo, readTask(f.repo, 
 
 test('a review given the whole change shows only its result', async t => {
   const f = bigChange(t, 'normal');
-  const task = await f.controller.ask('Normalize coupon codes').finished;
+  const task = await f.controller.ask('Normalize coupon codes', null, { bots: ['reviewer'] }).finished;
   assert.equal(task.state, 'ready', JSON.stringify(task.error));
   assert.deepEqual(shownOf(f, task, 'reviewer'), ['Passed.']);
 });
 
 test('the chat says when a review was given the large file as excerpts because the model refused the whole change', async t => {
   const f = bigChange(t, 'normal', { tooLong: 200000 });
-  const task = await f.controller.ask('Normalize coupon codes').finished;
+  const task = await f.controller.ask('Normalize coupon codes', null, { bots: ['reviewer'] }).finished;
   assert.equal(task.state, 'ready', JSON.stringify(task.error));
   assert.deepEqual(shownOf(f, task, 'reviewer'), ["Passed.\nThis change is too large for @reviewer's model, so it reviewed src/big.mjs as excerpts."]);
 });
 
 test('the chat says when a review was given the diff alone', async t => {
   const f = bigChange(t, 'normal', { tooLong: 'files' });
-  const task = await f.controller.ask('Normalize coupon codes').finished;
+  const task = await f.controller.ask('Normalize coupon codes', null, { bots: ['reviewer'] }).finished;
   assert.equal(task.state, 'ready', JSON.stringify(task.error));
   assert.deepEqual(shownOf(f, task, 'reviewer'), ["Passed.\nThis change is too large for @reviewer's model, so it reviewed the diff alone."]);
 });
@@ -366,7 +415,7 @@ const MiB = 1024 * 1024;
 test('a five-line change to a file over 4 MiB is checked and reviewed with the whole file', async t => {
   const f = setup(t, 'normal', { insert: { file: 'src/big.mjs', at: 5000, text: ADDED } }); largeFile(f.root, 'src/big.mjs', 80000);
   assert.ok(fs.statSync(path.join(f.root, 'src/big.mjs')).size > 4 * MiB);
-  const task = await f.controller.ask('Normalize coupon codes').finished;
+  const task = await f.controller.ask('Normalize coupon codes', null, { bots: ['reviewer'] }).finished;
   assert.equal(task.state, 'ready', JSON.stringify(task.error)); assert.equal(task.reviewStatus, 'passed');
   assert.ok(task.evidence.results.every(row => row.status === 'passed'), JSON.stringify(task.evidence.results));
   const [review] = reviewOf(f.inputs('claude'), 'reviewer'), { source } = contextOf(review), big = fs.readFileSync(path.join(task.worktree, 'src/big.mjs'), 'utf8');
@@ -394,7 +443,7 @@ test('a new file and an ignored file over 4 MiB are read whole, and a diff over 
 
 test('a model that refuses a change over 4 MiB whole reviews it as excerpts', async t => {
   const f = setup(t, 'normal', { insert: { file: 'src/big.mjs', at: 5000, text: ADDED }, tooLong: 1000000 }); largeFile(f.root, 'src/big.mjs', 80000);
-  const task = await f.controller.ask('Normalize coupon codes').finished;
+  const task = await f.controller.ask('Normalize coupon codes', null, { bots: ['reviewer'] }).finished;
   assert.equal(task.state, 'ready', JSON.stringify(task.error));
   assert.ok(reviewOf(f.inputs('claude'), 'reviewer')[1].includes('"lines":"4851-5155 of 80005"'));
 });

@@ -245,6 +245,31 @@ test('a card that waits for his check says check it beside its title where it fi
 const TASK = { title: 'Uppercase coupons', description: 'Make normalize return upper case.', goal: 'Codes compare equal whatever their case.', objectives: ['normalize returns upper case'], priority: 'medium', severity: 'low' };
 const withTask = (repo, id, extra = {}) => { const task = chat(repo, id, { goal: `Session ${id}`, ...extra }); proposeTask(repo, String(id), TASK); approveTask(repo, String(id)); return readTask(repo, String(task.id)); };
 
+// His new goal has no length or count of ours (README, "No caps"): however long, with as many
+// objectives as he wrote, Keep open gives it to the session's Task whole, and a copy starts with
+// it whole, with all the session before it did.
+test('his new goal is taken whole however long and with any number of objectives: kept open, and copied', t => {
+  const f = setup(t);
+  withTask(f.repo, 11); withTask(f.repo, 12);
+  const goal = `Make the export whole. ${'Every word of this goal matters. '.repeat(190)}THE END`;
+  const objectives = Array.from({ length: 12 }, (_, index) => `Objective ${index + 1}: ${'it holds whole. '.repeat(25)}done`);
+  assert.ok(goal.length > 6000 && objectives.every(text => text.length > 300));
+  const text = [goal, ...objectives.map(row => `- ${row}`)].join('\n');
+  assert.deepEqual(readGoal(text), { goal, objectives });
+  // Keep open, new goal.
+  assert.equal(answerCheck(f.repo, f.root, readTask(f.repo, '11'), 'goal', text).answer, 'goal');
+  const kept = currentTask(f.repo, '11');
+  assert.ok(kept.goal === goal, 'the whole goal'); assert.deepEqual(kept.objectives, objectives);
+  assert.equal(pendingRequests(f.root).find(row => row.continuationTaskId === '11').goal, text, 'sent as his message');
+  // A copy with it.
+  assert.equal(answerCheck(f.repo, f.root, readTask(f.repo, '12'), 'copy', text).answer, 'copy');
+  const { copied } = pendingRequests(f.root).find(row => row.copied);
+  assert.ok(copied.goal === goal, 'the whole goal'); assert.deepEqual(copied.objectives, objectives);
+  // A copy of the session that took it: what it was, whole.
+  const again = copySession(f.repo, f.root, readTask(f.repo, '11'), 'Next goal').request.copied;
+  assert.ok(again.description.includes(`Goal: ${goal}\nNot met: ${objectives.join('; ')}`), 'its goal and every objective, whole');
+});
+
 test("a model's goal or copy gives no session more than its own turn's mode, and never approves a Task where only the owner does", async t => {
   const f = setup(t);
   withTask(f.repo, 7, { permissions: 'full' }); withTask(f.repo, 8, { permissions: 'ask' }); chat(f.repo, 90, { goal: 'Plan the next step', permissions: 'auto' });

@@ -125,7 +125,7 @@ test('the stop rule by mode: Full access is told of none, the other modes only o
 
 test('an automatic edit task inherits the conversation mode; the reviewer and the locked lead keep the locked launch', async t => {
   const f = setup(t);
-  const task = await f.controller.ask('Normalize coupon codes', null, { permissions: 'auto', place: 'worktree', folders: [f.work] }).finished;
+  const task = await f.controller.ask('Normalize coupon codes', null, { permissions: 'auto', place: 'worktree', folders: [f.work], bots: ['reviewer'] }).finished;
   assert.equal(task.state, 'ready'); assert.equal(task.kind, undefined); assert.equal(task.mode, 'automatic');
   assert.equal(task.permissions, 'auto'); assert.deepEqual(task.folders, [fs.realpathSync(f.work)]); assert.deepEqual(task.place, { kind: 'worktree' });
   const leads = task.runs.filter(run => run.role === 'lead'); assert.equal(leads.length, 2);
@@ -665,7 +665,7 @@ test('a check that runs past the cap an earlier version had passes: a check has 
 
 test('bypassPermissions never asks: a full session touches without an approval', async t => {
   const f = setup(t, 'relay');
-  const run = f.controller.ask('Normalize coupon codes', null, { permissions: 'full' });
+  const run = f.controller.ask('Normalize coupon codes', null, { permissions: 'full', bots: ['reviewer'] });
   const task = await run.finished;
   assert.equal(task.state, 'ready'); assert.equal(task.approvals, undefined);
   assert.equal(fs.existsSync(path.join(f.fake.dir, 'touched')), false, 'the fake only touches through the relay');

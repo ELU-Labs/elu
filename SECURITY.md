@@ -188,10 +188,13 @@ deploy, publish, and adding or removing an MCP server) holds for every session a
 your own (`docs/permissions.md`): in Ask for approval and Approve for me it is backed by
 the sandbox and deny rules; Full access has none, so a teammate's message can then push,
 merge, tag, deploy and publish, and reach any file you can. A session started as your own
-has no spending cap of ELU's on its turns, as one you typed; what it cost is charged to that
-teammate's daily allowance, and a cost a vendor does not report counts as the per-request
-amount (`caps.runUsd`) intake reserved for it. A teammate's question may spend at most that
-amount in each turn. These sessions share the peer
+has no spending cap of ELU's on its turns, as one you typed, and it is yours: none of what it
+costs is charged to that teammate's thread, daily or team allowance, and it is none of their
+requests or of their thread's messages. A message Auto takes as your own is refused by none
+of their limits, only by the 200 messages a day and the limit on how many agents it has passed
+through. A teammate's question
+is charged what it cost, and a cost a vendor does not report counts as the per-request
+amount (`caps.runUsd`) intake reserved for it; it may spend at most that amount in each turn. These sessions share the peer
 slots with teammates' questions, so they never fill every slot of yours. One you accept
 yourself with y or w starts at once.
 
@@ -254,6 +257,21 @@ repository, and is kept only from someone who proved it. For a public repository
 get the history, so any teammate can. `/share off` in a project keeps its sessions and its
 repositories to itself, and shows no teammate's session in it.
 
+**A shared project's sessions, instructions, context and lessons.** The project a team was
+invited to (the one `elu invite` or `/invite` shared, or that `/share` made the team's
+project) and the folder each member joined it in (`/join` in a project, or `elu join` in a
+folder: never the home folder or a folder that holds it) are one project. Every member of that
+team is shown, on each of their computers whose ELU does this, the sessions of that project on
+yours: each one's title, state, question, the approvals it waits on, and, once they open it,
+its chat, the steps of its runs, its Task and its changes (the diff). The same goes from their
+computers to yours. Its instructions, context and the lines it learned are put together with
+theirs, as between your own computers (see Your other computers), and are in force at once:
+what a teammate writes there is read by your models in that project as you would write it.
+Seeing is all: only your own computers can start, write to, stop, answer, rename, archive or
+check a session on yours. Nothing of another project is listed or sent, and `/share off` in
+the project, unsharing it or leaving the team stops all of it. A teammate's ELU up to 0.1.28
+neither asks nor is sent any of it.
+
 **A project you share is the exception.** Sharing a project with a team is your say that its
 members may see it, so the cards of the sessions in that project's own repository also go to
 the members of that team who have no clone, and they keep them without a proof. They see them
@@ -271,7 +289,8 @@ is an https, http, ssh or git address, without any password or token that is wri
 never sent, and neither is the project's path. Neither is told of a project turned off with
 `/share off`. A teammate who clones it uses their own git sign-in: ELU sends none.
 Nothing else about your work is told: not a Task you have not approved or a rejected one,
-the rest of your request, the chat, file contents or absolute paths. A teammate's question
+the rest of your request, the chat, file contents or absolute paths, except in a shared
+project as said above. A teammate's question
 and its answer are another matter, covered above.
 
 What a teammate tells is untrusted text: each field is checked and cut to its limit before
@@ -534,12 +553,15 @@ Agents do not receive cloud or GitHub credentials from ELU's inherited environme
 Vendor authentication remains the vendor CLI's responsibility. ELU never signs you in by
 itself: an account you add in the Usage tab (`a`) is signed in by the vendor's own command
 (`claude auth login`, `codex login`), which ELU runs in your terminal. It never signs you out.
-It never reads Claude Code's sign-in, in the macOS Keychain or in its credentials file, and
-it sends no request of its own with any vendor sign-in.
+It reads Claude Code's sign-ins only to switch Claude accounts, while two or more are signed
+in here and switching is on, and sends them only to Anthropic
+([Claude account switching](#claude-account-switching)). It sends no other request with any
+vendor sign-in.
 
 The Usage tab shows plan usage. Claude usage comes from the rate limit lines Claude Code
-writes to its own output during a session that ELU runs. No request is made for it,
-and until such a session has run, the tab says so.
+writes to its own output during a session that ELU runs and, while Claude accounts switch,
+from the rate limit headers of Anthropic's answers to that session. No request is made for
+it, and until such a session has run, the tab says so.
 
 Codex usage comes from Codex's own `app-server` command: ELU starts it and asks it for
 your plan's rate limits, so the request with your Codex sign-in is made by Codex. It starts
@@ -584,8 +606,9 @@ Each Claude Code or Codex account you add in the Usage tab gets a folder of its 
 as its home (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`) for each run on that account. The vendor
 keeps that account's sign-in there: Claude Code in `.credentials.json` on Linux and, on
 macOS, in a Keychain item named after the folder ("Claude Code-credentials-" and eight hex
-digits); Codex in `auth.json`. ELU never reads, copies or moves a sign-in, and your own
-sign-in stays where the vendor keeps it, as the first account. The rest of an account's
+digits); Codex in `auth.json`. ELU never writes, copies or moves a sign-in (it reads Claude
+ones only to switch accounts, below), and your own sign-in stays where the vendor keeps it,
+as the first account. The rest of an account's
 folder is links to your own Claude Code or Codex home: settings, `CLAUDE.md`, memory and
 the sessions a later turn resumes, skills, agents, commands, plugins and hooks (for Codex:
 `config.toml`, `AGENTS.md`, skills, prompts, rules and sessions). So every account runs with
@@ -607,8 +630,9 @@ not in that file, so each account signs in to such a server once on its own.
 
 `logins.json` records which accounts were added and which one new runs use; it holds no
 email, token or path. Switching (Enter on an account) changes the account of the next run
-only: a run keeps the account it started on. When a run stops at an account's limit, the
-chat names that account and says to switch in Usage; ELU never switches by itself.
+only. For Codex, and for Claude with switching off, a run keeps the account it started on,
+and when a run stops at an account's limit the chat names that account and says to switch
+in Usage.
 Forgetting an account (`x`) deletes its folder after you confirm. It is not signed out, so
 nothing is revoked. On macOS ELU also deletes the Keychain items Claude Code keeps for that
 folder, with macOS's `security delete-generic-password`, for your user and by exact name:
@@ -619,6 +643,44 @@ in the Keychain stay. When the Keychain is locked or refuses, the account is sti
 forgotten, and ELU names the item for you to delete in Keychain Access.
 Accounts belong to the machine they were added on and are never sent to a teammate or to
 another of your machines.
+
+### Claude account switching
+
+With two or more Claude accounts signed in here, every Claude Code run ELU starts sends its
+requests to a relay of ELU's on this computer instead of to Anthropic (`ANTHROPIC_BASE_URL`).
+The relay listens on 127.0.0.1 only, on a port the system picks, and stops after five idle
+minutes. Each run's address carries a random 64-hex-digit token of its own, and a request
+without the token of a running run gets nothing. In Ask for approval and Approve for me, the
+commands a run's agent starts do not get the address. In Read only they get it, inside a
+sandbox with no network. In Full access they get it, and a command there could send requests
+on your Claude accounts while the run lasts.
+
+The relay sends each request on to `api.anthropic.com` and nowhere else. On the run's own
+account it passes Claude Code's request and sign-in on untouched. On another account it puts
+that account's sign-in in place of Claude Code's, and that account's id in place of the
+first one's in the request's metadata. It reads the rate limit headers of each answer, and
+moves to another account when the one in use reaches 98% of its five-hour or weekly window
+or Anthropic refuses it for a limit, so with `Use paid extra usage` off an account is left
+before it would go on to paid extra usage. When Claude Code was not sent through the relay, a
+run stopped at a limit is resumed in the same session (`--resume`) on the next account.
+
+To do that, ELU reads each Claude account's sign-in where Claude Code keeps it: on macOS from
+the login Keychain with `security find-generic-password`, for the item Claude Code named
+after that account's folder (macOS may ask you to allow this once), and on Linux from that
+folder's `.credentials.json`. A sign-in is held in this ELU's memory only, while it runs.
+It is never written to a file, a log, a record, an environment or an error, never shown, and
+never sent anywhere but Anthropic. ELU never renews a sign-in: when one ends within five
+minutes it runs `claude auth status` in that account's folder, and Claude Code renews it and
+writes it back itself. An account whose sign-in still ended after that, or that Anthropic
+turned down after it, is left out, and Usage says to sign in to it again. ELU reads that
+account's sign-in again each minute and takes the account back once one that works is there.
+The run's own account is never left for this: its run uses Claude Code's own sign-in.
+
+`claude-switch.json`, beside `logins.json`, keeps whether switching is on, whether paid extra
+usage may be used, your order of the accounts, which account reached which limit and until
+when, which one needs signing in again, and the last move: account ids and times only, never
+an email, a token or a path. A session's record keeps the moves by account ids. `Switch
+accounts by itself` off stops all of it: no relay, no address, and no sign-in is read.
 
 ## Checks and evidence
 

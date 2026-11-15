@@ -67,7 +67,7 @@ test('a locked edit role is refused; a budget is refused in every mode; peer run
   assert.throws(() => codex({ role: lead(), cwd, schemaFile }), /Codex cannot edit in Read only/);
   for (const mode of ['locked', 'ask', 'auto', 'full']) {
     assert.throws(() => codex({ mode, role: { ...lead(), maxCostUsd: 2 }, cwd, schemaFile }), /dollar budget/, mode);
-    assert.throws(() => codex({ mode, role: reviewer(), cwd, schemaFile, peer: true }), /A teammate's question needs Claude as the model/, mode);
+    assert.throws(() => codex({ mode, role: reviewer(), cwd, schemaFile, peer: true }), { message: "Only Claude Code answers a teammate's question. Codex cannot keep its reads inside the shared project. Choose a Claude model with /model default to answer them." }, mode);
   }
   assert.throws(() => codex({ mode: 'locked', role: reviewer(), cwd, schemaFile, folders: [cwd] }), /stays in the task worktree/);
   assert.throws(() => codex({ mode: 'locked', role: reviewer(), cwd, schemaFile, place: { kind: 'branch', branch: 'x' } }), /stays in the task worktree/);

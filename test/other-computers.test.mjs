@@ -228,10 +228,19 @@ test('a computer of mine that has not agreed while it is offline says offline, t
   const D = 'd'.repeat(64), ME = 'k'.repeat(64);
   const frame = online => ({ status: { key: ME, teams: [{ id: 'team-1', name: 'Core', members: [{ key: ME, name: 'ana' }, { key: D, name: 'devbox', online, path: 'direct', mine: true, waiting: true }] }] }, items: [] });
   const bar = (online, width) => visuals.visible(visuals.chatBar(frame(online), width, false).find(row => row.value?.type === 'member').line).replace(/\s+/g, ' ').trim();
-  assert.deepEqual([bar(false, 78), bar(false, 40), bar(true, 78)], ['○ @devbox offline · waiting for @devbox to agree', '○ @devbox offline · not agreed yet', '● @devbox waiting for @devbox to agree']);
+  // The row starts with its name: what it waits for says "it", never the name again.
+  assert.deepEqual([bar(false, 78), bar(false, 40), bar(true, 78)], ['○ @devbox offline · waiting for it to agree', '○ @devbox offline · not agreed yet', '● @devbox waiting for it to agree']);
   assert.deepEqual([yourComputer({ waiting: true, online: false }), yourComputer({ waiting: true, online: true }), yourComputer({ waiting: true }), yourComputer({ online: false })], ['your computer · offline, not agreed yet', 'your computer · waiting for it to agree', 'your computer · waiting for it to agree', 'your computer']);
   const glue = online => remoteGlue({ facade: { mineRows: () => [{ key: D, mine: true, theirs: false }], remoteSessions: () => [] }, peerRead: () => ({ key: ME, name: 'ana', box: 'laptop', teams: [{ members: [{ key: ME, name: 'ana' }, { key: D, name: 'ana', box: 'devbox', online }] }] }), peerCommand: async () => ({}), chatMessage: ({ text }) => text, ink: text => text, colour: false });
   assert.deepEqual([glue(false).words(D), glue(true).words(D)], ['your computer · offline, not agreed yet', 'your computer · waiting for it to agree']);
+});
+
+test('elu mine lists a computer that has not agreed by its name once, as /mine in the app does', async t => {
+  const { founder: laptop, member: devbox } = makeTeam(t, { founderName: 'ana', memberName: 'devbox' });
+  withHome(laptop.home, () => markMine(laptop.identity.key, devbox.identity.key));
+  // Its line starts with its name: what it waits for says "it", never the name again.
+  const told = await withHome(laptop.home, () => peerCli(['mine'], {}));
+  assert.equal(told.lines[0], '@devbox  waiting for it to agree');
 });
 
 test('a computer that says it is mine is named, in the line and in its row, only by a name /mine finds it by', () => {

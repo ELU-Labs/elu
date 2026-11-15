@@ -3,9 +3,9 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { temp, project, fakeClis, autoApprove } from './helpers.mjs';
-import { BOTS_MAX, BOT_COLORS, CHAT_BOTS_MAX, EFFORTS, botColor, botColorProblem, pickBotColor, botReviews, botWorks, botShadows, botsFile, botVendors, botEfforts, listBots, getBot, needBot, saveBot, removeBot, botRuns, sharedBots, chatBots, botRole, botKey, botOfKey, chatBotsNote, botNameProblem, BOT_FINDINGS } from '../lib/bots.mjs';
+import { BOTS_MAX, BOT_COLORS, CHAT_BOTS_MAX, EFFORTS, botColor, botColorProblem, pickBotColor, botReviews, botWorks, botShadows, botsFile, botVendors, botEfforts, listBots, getBot, needBot, saveBot, removeBot, botRuns, sharedBots, chatBots, botRole, botKey, botOfKey, chatBotsNote, botNameProblem, BOT_FINDINGS, sessionBots } from '../lib/bots.mjs';
 import { ProjectController, conversationEntries, registerProject, activity } from '../lib/projects.mjs';
-import { projectFolder, pendingRequests } from '../lib/workspace.mjs';
+import { projectFolder, pendingRequests, saveRequest } from '../lib/workspace.mjs';
 import { runConversation, botReplies, ownerMessages } from '../lib/runner.mjs';
 import { readTask, saveTask, taskDir, tasks } from '../lib/state.mjs';
 import { assertReady } from '../lib/publish.mjs';
@@ -248,14 +248,63 @@ test('the bots of a chat are saved names, each once, at most five', t => {
   assert.equal(chatBotsNote(['b']), null); assert.equal(chatBotsNote([]), null);
 });
 
+// No bot is in a session unless the owner puts it there: with /bots, @name, the form's Bots row
+// or the first message's settings. @reviewer and the others stay saved, for him to add.
+test('a new session has no bots: it saves an empty list, its edits are checked and not reviewed, and a session saved without a list has none', async t => {
+  const f = setup(t, 'normal');
+  assert.ok(getBot('reviewer'), '@reviewer is saved, for the owner to add');
+  const ready = await f.controller.ask('Normalize coupon codes').finished;
+  const saved = readTask(f.repo, ready.id);
+  assert.deepEqual(saved.bots, [], 'an empty list, so an earlier build reads no bots in it too');
+  assert.deepEqual(sessionBots(saved), []);
+  assert.equal(ready.state, 'ready', JSON.stringify(ready.error)); assert.equal(ready.reviewStatus, 'skipped'); assert.deepEqual(ready.reviews, []);
+  assert.equal(f.inputs('claude').filter(row => row.input.includes('Review as @')).length, 0, 'no bot reviewed it');
+  assert.doesNotThrow(() => assertReady(saved), 'nothing waits for a review to publish');
+  // A session saved without a list, by an earlier build or by a path that passes none.
+  const { bots, ...older } = saved;
+  assert.equal(bots.length, 0); assert.deepEqual(sessionBots(older), []); assert.deepEqual(sessionBots(null), []);
+  assert.doesNotThrow(() => assertReady(older));
+});
+
+test('a session that holds @reviewer only because an earlier build put it in each new session has no bots; a list the owner chose stands', t => {
+  store(t);
+  const at = '2026-11-14T08:00:00.000Z';
+  assert.deepEqual(sessionBots({ bots: ['reviewer'] }), [], 'the old default, never written to');
+  assert.deepEqual(sessionBots({ bots: ['reviewer'], messages: [{ at, text: 'Is this safe?' }, { at, text: 'Passed.', from: '@reviewer', bot: 'reviewer', quiet: true }] }), []);
+  assert.deepEqual(sessionBots({ bots: ['reviewer'], messages: [{ at, text: 'Look again', to: '@reviewer' }] }), ['reviewer'], 'he wrote to it');
+  assert.deepEqual(sessionBots({ bots: ['reviewer'], botsPicked: true }), ['reviewer'], 'saved by this build: the owner put it there');
+  assert.deepEqual(sessionBots({ bots: ['reviewer', 'qa'] }), ['reviewer', 'qa'], 'a list he changed by hand');
+  assert.deepEqual(sessionBots({ bots: ['qa'] }), ['qa']); assert.deepEqual(sessionBots({ bots: [] }), []);
+});
+
+test('@reviewer the owner adds to a session reviews its edits; a session that had it only by the old default is not reviewed', async t => {
+  const f = setup(t, 'normal');
+  const reviewed = task => [task.state, task.reviewStatus, task.reviews.map(review => review.role)];
+  // In the first message's settings, as the form's Bots row sends them.
+  const added = await f.controller.ask('Normalize coupon codes', null, { bots: ['reviewer'] }).finished;
+  assert.deepEqual(reviewed(added), ['ready', 'passed', ['bot:reviewer']], JSON.stringify(added.error));
+  assert.deepEqual([readTask(f.repo, added.id).bots, readTask(f.repo, added.id).botsPicked], [['reviewer'], true]);
+  // With /bots add in a session that has none.
+  const chat = await f.controller.ask('Where is coupon normalization?').finished;
+  f.controller.setBots(chat.id, ['reviewer']);
+  const later = await f.controller.ask('Normalize coupon codes', chat.id).finished;
+  assert.deepEqual(reviewed(later), ['ready', 'passed', ['bot:reviewer']], JSON.stringify(later.error));
+  // A session an earlier build saved: @reviewer alone, put there by default.
+  const old = await f.controller.ask('Where is coupon normalization?').finished;
+  const record = readTask(f.repo, old.id); delete record.botsPicked; record.bots = ['reviewer']; saveTask(f.repo, record);
+  const edited = await f.controller.ask('Normalize coupon codes', old.id).finished;
+  assert.deepEqual(reviewed(edited), ['ready', 'skipped', []], JSON.stringify(edited.error));
+  assert.doesNotThrow(() => assertReady(readTask(f.repo, edited.id)));
+});
+
 test('a message written to a bot runs the bot and not the lead, saves the reply as the bot\'s, and adds the bot to the chat', async t => {
   const f = setup(t);
   const first = await f.controller.ask('Where is coupon normalization?').finished;
-  assert.equal(first.state, 'answered'); assert.equal(f.calls('claude').length, 1); assert.equal(first.bots, undefined);
+  assert.equal(first.state, 'answered'); assert.equal(f.calls('claude').length, 1); assert.deepEqual(first.bots, []);
   const task = await f.controller.ask('Is that the whole story?', first.id, { bot: '@critic' }).finished;
   assert.equal(f.calls('claude').length, 1, 'the lead did not run'); assert.equal(f.calls('codex').length, 1, 'the bot ran once');
-  // The session had no list of its own, so @reviewer was its one bot. The bot written to joins it.
-  assert.equal(task.state, 'answered'); assert.deepEqual(task.bots, ['reviewer', 'critic']); assert.deepEqual(readTask(f.repo, task.id).bots, ['reviewer', 'critic']);
+  // The session had no bots. The bot written to joins it, as the owner's own choice.
+  assert.equal(task.state, 'answered'); assert.deepEqual(task.bots, ['critic']); assert.deepEqual(readTask(f.repo, task.id).bots, ['critic']); assert.equal(readTask(f.repo, task.id).botsPicked, true);
   // The bot's vendor, model and effort, in a launch that can only read.
   const call = f.calls('codex')[0];
   assert.equal(after(call.args, '--model'), 'big-model'); assert.ok(call.args.includes('model_reasoning_effort="xhigh"')); assert.equal(after(call.args, '--sandbox'), 'read-only'); assert.ok(call.args.includes('features.shell_tool=false'));
@@ -290,9 +339,9 @@ test('the lead is told which bots are in its chat and reads what they said', asy
   const prompt = f.inputs('claude').at(-1).input;
   assert.ok(prompt.includes('\n@critic — Look for edge cases.\n\n') && !prompt.includes('@scout —'), 'a bot that is no longer saved is not named');
   assert.match(prompt, /"text":"Is that right\?","to":"@critic"/); assert.match(prompt, /"from":"@critic","bot":"critic"/);
-  // A session started with no list has @reviewer, and is told so.
+  // A session started with no list has no bots, and is told nothing about them.
   await f.controller.ask('And a plain one?').finished;
-  assert.ok(f.inputs('claude').at(-1).input.includes(`\n\n${note.split('\n')[0]}\n@reviewer — ${getBot('reviewer').about}\n\n`));
+  assert.doesNotMatch(f.inputs('claude').at(-1).input, /Bots in this chat/);
   // A session the owner gave no bots says nothing about them.
   await f.controller.ask('And one with none?', null, { bots: [] }).finished;
   assert.doesNotMatch(f.inputs('claude').at(-1).input, /Bots in this chat/);
@@ -344,13 +393,33 @@ test('a queued request carries its bots to the session; an unknown name is refus
   await until(() => request(sent.id)?.state === 'done' && request(plain.id)?.state === 'done', 'both requests');
   const task = readTask(f.repo, request(sent.id).taskId);
   assert.deepEqual(task.bots, ['scout', 'critic']); assert.deepEqual(task.runs.map(run => run.role), ['bot:critic']); assert.equal(task.state, 'answered');
-  assert.equal(readTask(f.repo, request(plain.id).taskId).bots, undefined);
+  assert.deepEqual(readTask(f.repo, request(plain.id).taskId).bots, [], 'a request with no bots starts a session with none');
   // A follow-up to the bot in the same session.
   const follow = enqueue(f.root, 'And the tests?', { continuationTaskId: task.id, bot: 'critic' });
   await until(() => request(follow.id)?.state === 'done', 'the follow-up');
   const later = readTask(f.repo, task.id);
   assert.deepEqual(later.runs.map(run => run.role), ['bot:critic', 'bot:critic']); assert.equal(later.messages.length, 4);
   assert.deepEqual(readTask(f.repo, request(plain.id).taskId).runs.map(run => run.role), ['lead']); assert.equal(f.calls('claude').length, 1, 'only the plain request reached the session\'s model');
+});
+
+// An earlier build queued each new session with @reviewer by itself, and its requests carry no
+// mark that the list is the owner's: one still queued when this build starts it has no bots.
+// A request this build queues is the owner's choice, @reviewer alone included.
+test('a request an earlier build queued with @reviewer alone starts a session with no bots; one this build queued keeps it', async t => {
+  const f = setup(t); registerProject(f.repo);
+  const own = enqueue(f.root, 'Where is coupon normalization?', { bots: ['reviewer'] });
+  const older = enqueue(f.root, 'Where are the tests?', { bots: ['reviewer'] }), chose = enqueue(f.root, 'Where is the README?', { bots: ['reviewer', 'scout'] });
+  // As the earlier build saved them: the same rows, without the mark.
+  for (const row of [older, chose]) saveRequest(f.root, row.goal, row.id, { state: 'queued', reason: row.reason, botsPicked: undefined });
+  assert.equal(pendingRequests(f.root).find(row => row.id === older.id).botsPicked, undefined);
+  conduct(t);
+  const request = id => pendingRequests(f.root).find(row => row.id === id);
+  await until(() => [own, older, chose].every(row => request(row.id)?.state === 'done'), 'the three requests');
+  const bots = row => { const task = readTask(f.repo, request(row.id).taskId); return [task.bots, sessionBots(task)]; };
+  assert.deepEqual(bots(own), [['reviewer'], ['reviewer']], 'the owner put it there');
+  assert.deepEqual(bots(older), [[], []], 'the earlier default');
+  assert.deepEqual(bots(chose), [['reviewer', 'scout'], ['reviewer', 'scout']], 'a list he changed by hand');
+  assert.deepEqual([own.bots, own.botsPicked], [['reviewer'], true], 'this build marks the list as his');
 });
 
 test('the chat shows a message to a bot and its reply as their own entries, in time order', async t => {
@@ -691,15 +760,15 @@ test('a teammate\'s question reads its messages as before; the owner\'s session,
 
 test('a bot asked about an editing session reads its edits, and reviews them before they are published', async t => {
   const f = setup(t, 'normal');
-  const ready = await f.controller.ask('Normalize coupon codes').finished;
+  const ready = await f.controller.ask('Normalize coupon codes', null, { bots: ['reviewer'] }).finished;
   assert.equal(ready.state, 'ready', JSON.stringify(ready.error)); assert.doesNotThrow(() => assertReady(readTask(f.repo, ready.id)));
-  // The session has no list of its own, so @reviewer reviewed it, under its own key.
-  assert.equal(ready.bots, undefined); assert.deepEqual(ready.reviews.map(review => review.role), ['bot:reviewer']);
-  // A session from before bots did the reviews saved its review under the name reviewer. That review
-  // stands for @reviewer there, and never in a session that has a list of its own.
-  const before = { ...readTask(f.repo, ready.id), reviews: ready.reviews.map(review => ({ ...review, role: 'reviewer' })) };
+  // The owner put @reviewer in the session, and it reviewed under its own key.
+  assert.deepEqual(ready.bots, ['reviewer']); assert.deepEqual(ready.reviews.map(review => review.role), ['bot:reviewer']);
+  // A session from before bots did the reviews saved its review under the name reviewer and has
+  // no list of its own, so no bots: nothing waits. A list of the owner's own waits for its bot's review.
+  const { bots: _bots, botsPicked: _picked, ...before } = { ...readTask(f.repo, ready.id), reviews: ready.reviews.map(review => ({ ...review, role: 'reviewer' })) };
   assert.doesNotThrow(() => assertReady(before));
-  assert.throws(() => assertReady({ ...before, bots: ['reviewer'] }), { message: '@reviewer has not reviewed this change. It reviews after the next edit; or take @reviewer out of the session.' });
+  assert.throws(() => assertReady({ ...before, bots: ['reviewer'], botsPicked: true }), { message: '@reviewer has not reviewed this change. It reviews after the next edit; or take @reviewer out of the session.' });
   const leadRuns = f.calls('claude').length, reviews = ready.reviews.length;
   const task = await f.controller.ask('Is this change risky?', ready.id, { bot: 'critic' }).finished;
   assert.equal(task.state, 'ready', 'the session stays where it stood with the lead'); assert.equal(f.calls('claude').length, leadRuns, 'the lead did not run');
@@ -751,7 +820,7 @@ test('a teammate\'s request for a shared bot is answered by that bot, after the 
   saveBot({ name: 'helper', model: 'opus', effort: 'low', shared: true, instructions: 'Explain where things are.' });
   // The session's model here is Codex, which cannot answer a teammate; the bot's own vendor is what counts.
   Object.assign(f.controller.draftConfig.roles.lead, { vendor: 'codex', maxCostUsd: null });
-  assert.throws(() => f.controller.ask('Answer the question from @sara.', null, { origin: SARA, readOnly: true, context: 'Where is normalization?' }), { message: "A teammate's question needs Claude as the model." });
+  assert.throws(() => f.controller.ask('Answer the question from @sara.', null, { origin: SARA, readOnly: true, context: 'Where is normalization?' }), { message: "Only Claude Code answers a teammate's question. Codex cannot keep its reads inside the shared project. Choose a Claude model with /model default to answer them." });
   const origin = { ...SARA, bot: 'helper' };
   assert.deepEqual(peerOrigin(origin), origin); assert.equal('bot' in peerOrigin(SARA), false);
   for (const bad of [{ bot: 'Not A Name' }, { bot: 7 }, { kind: 'handoff', bot: 'helper' }]) assert.throws(() => peerOrigin({ ...SARA, ...bad }), { message: 'A peer request names an invalid bot.' });

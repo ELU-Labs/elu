@@ -29,7 +29,7 @@ const runs = p => fs.readFileSync(p.calls, 'utf8').split('\n').filter(Boolean).m
 const byCodex = row => row.vendor === 'codex' && row.args[0] === 'exec';
 test('init, run, checks, the review by the session\'s reviewer bot, and draft body work without publication', (t) => {
   const p = setup(t); const original = git(p.root, ['rev-parse', 'HEAD']);
-  const r = cli(p.root, ['run', 'Normalize coupon codes', '--yes'], p.env);
+  const r = cli(p.root, ['run', 'Normalize coupon codes', '--yes', '--bot', 'reviewer'], p.env);
   assert.equal(r.status, 0, r.stdout + r.stderr); assert.equal(r.json.state, 'ready');
   assert.deepEqual(r.json.reviews.map(review => [review.round, review.role]), [[1, 'bot:reviewer']]); assert.equal(r.json.reviewStatus, 'passed');
   assert.match(r.json.draftPrBody, /tests: passed/); assert.match(r.json.draftPrBody, /build: passed/);
@@ -50,15 +50,24 @@ test('init, run, checks, the review by the session\'s reviewer bot, and draft bo
 });
 test('review is bounded to two rounds and unresolved comments prevent done', (t) => {
   const p = setup(t, 'review-block'); reviewerOnCodex(p);
-  const r = cli(p.root, ['run', 'Normalize coupons', '--yes'], p.env);
+  const r = cli(p.root, ['run', 'Normalize coupons', '--yes', '--bot', 'reviewer'], p.env);
   assert.equal(r.json.state, 'blocked', r.stdout); assert.deepEqual(r.json.reviews.map(review => [review.round, review.role]), [[1, 'bot:reviewer'], [2, 'bot:reviewer']]);
   assert.equal(runs(p).filter(byCodex).length, 2, 'a reviewer bot on another vendor reviews with that vendor');
   const task = readTask(repository(p.root), '1'); assert.throws(() => assertReady(task));
 });
 test('review fixes get responses, checks rerun, and the final reviewer verifies the change', (t) => {
-  const p = setup(t, 'review-fix'); reviewerOnCodex(p); const r = cli(p.root, ['run', 'Normalize coupons', '--yes'], p.env);
+  const p = setup(t, 'review-fix'); reviewerOnCodex(p); const r = cli(p.root, ['run', 'Normalize coupons', '--yes', '--bot', 'reviewer'], p.env);
   assert.equal(r.json.state, 'ready', r.stdout); assert.equal(r.json.reviews.length, 2);
   assert.match(r.json.draftPrBody, /R1: fixed/);
+});
+// No bot is in a run unless --bot names it: without one the checks alone decide.
+test('a run without --bot has no bots: its checks decide and nothing reviews it; an unknown bot is refused', (t) => {
+  const p = setup(t); const r = cli(p.root, ['run', 'Normalize coupon codes', '--yes'], p.env);
+  assert.equal(r.status, 0, r.stdout + r.stderr); assert.equal(r.json.state, 'ready'); assert.equal(r.json.reviewStatus, 'skipped');
+  assert.deepEqual(r.json.reviews, []); assert.deepEqual(r.json.bots, []);
+  assert.equal(runs(p).filter(row => row.vendor === 'claude' && row.args.includes('--model')).length, 0, 'no bot ran');
+  const two = cli(p.root, ['run', 'Normalize coupon codes', '--yes', '--bot', 'nobody'], p.env);
+  assert.equal(two.status, 1); assert.match(two.stdout + two.stderr, /There is no bot named nobody\./);
 });
 test('questions stop the flow and preserve choices', (t) => {
   const p = setup(t, 'question'); const r = cli(p.root, ['run', 'Choose format', '--yes'], p.env);

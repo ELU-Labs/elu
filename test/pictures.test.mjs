@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { readablePictures } from '../lib/pictures.mjs';
+import { picturesElsewhere, readablePictures } from '../lib/pictures.mjs';
+import { isCommand, startsWithPath } from '../lib/terminal-commands.mjs';
 
 const PNG = Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex');
 function scratch(t) {
@@ -33,4 +34,40 @@ test('a copy folder that is a link, or open to others, is not trusted as it is',
   fs.rmSync(target); fs.mkdirSync(target); fs.chmodSync(target, 0o777);
   const open = readablePictures(`see ${shot}`, { home, folder });
   assert.equal(open.copied.length, 1); assert.equal(fs.statSync(target).mode & 0o777, 0o700);
+});
+
+// A file dropped on a terminal is pasted as its path. A message that starts with one is a
+// message, not a command: its first word has a second slash, or names something here.
+test('a message that starts with a path is no command; a command, a lone / and an unknown /word still are', () => {
+  const dropped = '/Users/someone/Library/Application\\ Support/Shots/shot\\ 1.png', here = fs.realpathSync(os.tmpdir());
+  for (const text of [dropped, `${dropped} this is stuck`, '  /Users/someone/shot.png', '/Model/notes.md please', here, `${here} is full`])
+    assert.ok(startsWithPath(text) && !isCommand(text), text);
+  for (const text of ['/model', '/model opus fix it', '/permissions folders add /some/path', '/send /Users/someone/shot.png', '/TASKS', '/close', '/foo', '/foo bar', '/', '/ nothing'])
+    assert.ok(!startsWithPath(text) && isCommand(text), text);
+  // Quoted, or from the home folder, it never started with /.
+  for (const text of [`'/Users/someone/Library/Application Support/Shots/shot 1.png'`, '"/Users/someone/shot.png" see', '~/Desktop/shot.png', 'look at /Users/someone/shot.png'])
+    assert.ok(!isCommand(text), text);
+  // A name with no second slash is a path only when it is there.
+  assert.equal(startsWithPath('/nothing-here-at-all', { exists: () => false }), false);
+  assert.equal(startsWithPath('/srv', { exists: file => file === '/srv' }), true);
+});
+
+test('the pictures a message names that are not on this computer are named by their files', t => {
+  const { home } = scratch(t), shot = path.join(home, 'Library', 'shot 1.png'); fs.writeFileSync(shot, PNG);
+  const away = '/Users/someone/Library/Application\\ Support/Shots/shot\\ 2.png';
+  assert.deepEqual(picturesElsewhere(`${shot.replace(/ /g, '\\ ')} and ${away}.`, { home }), ['shot 2.png']);
+  assert.deepEqual(picturesElsewhere(`'/Users/someone/a b.jpg' "/Users/someone/c.webp", ~/Library/shot\\ 1.png ~/Desktop/d.png`, { home }), ['a b.jpg', 'c.webp', 'd.png']);
+  assert.deepEqual(picturesElsewhere('/Users/someone/notes.txt and /Users/someone/folder', { home }), [], 'only pictures');
+  assert.deepEqual(picturesElsewhere(`${away} ${away}`, { home }), ['shot 2.png'], 'once each');
+});
+
+// A path starts the message or a word. In a project's path or a link the / is inside a word:
+// public/images/hero.png is no /images/hero.png, and a link is no //example.com/... path.
+test('a project path or a link is never a picture on the other computer; a path after a space, a quote or a bracket is', t => {
+  const { home } = scratch(t);
+  for (const text of ['the hero in public/images/hero.png is blurry', 'fix the hero image in public/images/hero.png please', 'the logo at https://example.com/img/logo.png is blurry',
+    'see src/assets/icon.svg and docs/shot.jpg', 'open file:///Users/someone/shot.png', 'a/Users/someone/shot.png', 'name=/Users/someone/shot.png'])
+    assert.deepEqual(picturesElsewhere(text, { home }), [], text);
+  assert.deepEqual(picturesElsewhere('(/Users/someone/a.png) and "/Users/someone/b.png",\t/Users/someone/c.png [/Users/someone/d.png]', { home }), ['a.png', 'b.png', 'c.png', 'd.png']);
+  assert.deepEqual(picturesElsewhere('/Users/someone/Library/Application\\ Support/Shots/shot\\ 2.png in public/images/hero.png', { home }), ['shot 2.png']);
 });

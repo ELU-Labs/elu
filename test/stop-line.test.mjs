@@ -8,7 +8,9 @@ import { stopLine, errorText, logCause, logLimit, limitOf } from '../lib/stop-li
 import { boardRows, remoteRow, rowTitle } from '../lib/board.mjs';
 import { failureLine } from '../lib/peer/failure.mjs';
 import { STUCK_LINE } from '../lib/runner.mjs';
-import { roleSpend } from '../lib/budget.mjs';
+import * as budget from '../lib/budget.mjs';
+import * as stopLines from '../lib/stop-line.mjs';
+import { rowActions } from '../lib/board.mjs';
 import * as claude from '../lib/adapters/claude.mjs';
 import { signInCommand } from '../lib/vendors.mjs';
 
@@ -293,7 +295,9 @@ test("a turn stopped by the session's own /budget says so, not that the account 
   assert.equal(claude.classify(JSON.stringify(refused({ subtype: 'error_max_budget_usd', is_error: true }))), 'quota');
   const stop = said({ ...spent, error: { message: 'The model could not finish.', cause: 'quota', logFile: null } });
   assert.equal(stop.text, 'This session has spent its $5 limit. /budget 20 raises it, then type continue.');
-  assert.equal(said({ budgetUsd: 100, runs: [{ role: 'lead', vendor: 'claude', at, costUsd: 100 }], error:{ message: 'The model could not finish.', cause: 'quota' } }).text, 'This session has spent its $100 limit. /budget off removes it, then type continue.');
+  // A limit of $100 or more is raised too: the limit offered is always above it.
+  assert.equal(said({ budgetUsd: 100, runs: [{ role: 'lead', vendor: 'claude', at, costUsd: 100 }], error:{ message: 'The model could not finish.', cause: 'quota' } }).text, 'This session has spent its $100 limit. /budget 200 raises it, then type continue.');
+  assert.equal(said({ budgetUsd: 150, runs: [{ role: 'lead', vendor: 'claude', at, costUsd: 150.2 }], error:{ message: 'The model could not finish.', cause: 'quota' } }).text, 'This session has spent its $150 limit. /budget 300 raises it, then type continue.');
   // A bot's own share of the limit.
   assert.equal(said({ budgetUsd: 5, runs: [{ role: 'bot:scout', vendor: 'claude', at, costUsd: 5, logFile: '/runs/scout.log' }], error: { message: '@scout could not finish.', cause: 'quota', logFile: '/runs/scout.log' } }).text, '@scout has spent its $5 limit in this session. /budget 20 raises it, then type continue.');
   // Under the limit, quota is the account's.
@@ -301,9 +305,11 @@ test("a turn stopped by the session's own /budget says so, not that the account 
   // The log says it too, when the cost of the run that stopped is not known.
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'stop-line-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const logFile = path.join(dir, 'lead.log');
-  fs.writeFileSync(logFile, [init('claude-opus-5-5'), refused({ subtype: 'error_max_budget_usd', is_error: true, errors: [] })].map(row => JSON.stringify(row)).join('\n') + '\n');
+  fs.writeFileSync(logFile, [init('claude-opus-5-5'), refused({ subtype: 'error_max_budget_usd', is_error: true, errors: [], total_cost_usd: undefined })].map(row => JSON.stringify(row)).join('\n') + '\n');
   assert.equal(logCause(logFile), 'budget');
-  assert.equal(stopLine(session({ budgetUsd: 5, runs: [{ role: 'lead', vendor: 'claude', at, costUnknown: true, logFile }], error: { message: 'The model could not finish.', cause: 'quota', logFile } })).text, 'This session has spent its $5 limit. /budget 20 raises it, then type continue.');
+  // That run's cost is not known, so it counts as all of the limit: a higher one would be
+  // refused the same way, and only /budget off lets the session go on.
+  assert.equal(stopLine(session({ budgetUsd: 5, runs: [{ role: 'lead', vendor: 'claude', at, costUnknown: true, logFile }], error: { message: 'The model could not finish.', cause: 'quota', logFile } })).text, 'What this session has spent is not known, so it counts as all of its $5 limit. /budget off removes it, then type continue.');
 });
 
 // Whether a vendor's quota stop was the session's own /budget is told by what the budget
@@ -314,7 +320,7 @@ test('a quota stop after a turn ELU stopped at the limit counts what that turn h
   // (stoppedAtUsd). The owner raised the limit to $5, and Claude, given the $2 left, stopped
   // there; its log is not there to say so.
   const task = session({ budgetUsd: 5, runs: [{ role: 'lead', vendor: 'grok', at, costUnknown: true, stoppedAtUsd: 3, logFile: null }, { role: 'lead', vendor: 'claude', at, ownCost: true, costUsd: 2.01, logFile: null }], error: { message: 'The model could not finish.', cause: 'quota', logFile: null } });
-  assert.equal(roleSpend(task, 'lead').known.toFixed(2), '5.01', '/budget counts $5.01');
+  assert.equal(budget.roleSpend(task, 'lead').known.toFixed(2), '5.01', '/budget counts $5.01');
   assert.equal(String(boardRows([{ root: '/repo', name: 'shop', tasks: [task], activity: [], queue: [] }], Date.parse(at) + 60000).find(row => row.id === task.id).cost), '≥$5.01', 'and so does the session\'s row');
   assert.equal(stopLine(task, { logCause: none, account: none }).text, 'This session has spent its $5 limit. /budget 20 raises it, then type continue.');
   // A bot's turn ELU stopped counts toward that bot's share only.
@@ -325,12 +331,94 @@ test('a quota stop after a turn ELU stopped at the limit counts what that turn h
 test('a quota stop counts a cost that may be more at least as much, and a run of no known cost is not all of the limit', () => {
   // A Codex turn whose count left some calls out cost at least $3 (≥$3.00 on /budget).
   const task = session({ budgetUsd: 5, runs: [{ role: 'lead', vendor: 'codex', at, ownCost: true, costUsd: 3, incomplete: true, logFile: null }, { role: 'lead', vendor: 'claude', at, ownCost: true, costUsd: 2.01, logFile: null }], error: { message: 'The model could not finish.', cause: 'quota', logFile: null } });
-  assert.equal(roleSpend(task, 'lead').partial, true);
+  assert.equal(budget.roleSpend(task, 'lead').partial, true);
   assert.equal(stopLine(task, { logCause: none, account: none }).text, 'This session has spent its $5 limit. /budget 20 raises it, then type continue.');
-  // The run that stopped before it said its cost is most often the one the account's limit
-  // stopped: it is not taken as all of the session's limit.
+  // A run that stopped before it said its cost counts as all of the session's limit, so the
+  // next turn would be refused whatever else stopped this one: the line says what lets it go
+  // on, as the refusal does, and the row offers no retry.
   const unknown = session({ budgetUsd: 5, runs: [{ role: 'lead', vendor: 'codex', at, costUnknown: true, logFile: null }], error: { message: 'The model could not finish.', cause: 'quota', logFile: null } });
-  assert.equal(stopLine(unknown, { logCause: none, account: none }).text, 'The model could not finish: the account hit its usage limit. Switch account in Usage, then type continue.');
+  assert.equal(stopLine(unknown, { logCause: none, account: none }).text, 'What this session has spent is not known, so it counts as all of its $5 limit. /budget off removes it, then type continue.');
+  // One that never started spent nothing, whatever else its record keeps.
+  const never = session({ budgetUsd: 5, runs: [{ role: 'lead', vendor: 'codex', at, started: false, costUsd: 0, costUnknown: true, logFile: null }], error: { message: 'The model could not finish.', cause: 'quota', logFile: null } });
+  assert.deepEqual([budget.roleSpend(never, 'lead').counted, budget.roleSpend(never, 'lead').known], [0, 0]);
+  assert.equal(stopLine(never, { logCause: none, account: none }).text, 'The model could not finish: the account hit its usage limit. Switch account in Usage, then type continue.');
+});
+
+// The row of a session its /budget holds offers no r: trying again would be refused. A raise,
+// or /budget off, that lets it go on brings r back.
+test("a session its /budget holds offers no retry until a turn could run", () => {
+  const keys = task => rowActions({ task, group: 3 }).map(([key]) => key);
+  const spent = session({ budgetUsd: 5, runs: [{ role: 'lead', vendor: 'claude', at, ownCost: true, costUsd: 5.2, logFile: '/runs/lead.log' }], error: { message: 'The model could not finish.', cause: 'quota', logFile: '/runs/lead.log' } });
+  assert.ok(!keys(spent).includes('r'), keys(spent).join(' '));
+  assert.ok(keys({ ...spent, budgetUsd: 20 }).includes('r')); assert.ok(keys({ ...spent, budgetUsd: undefined }).includes('r'));
+  // A run whose cost is not known holds it at any limit.
+  const unknown = { ...spent, runs: [{ role: 'lead', vendor: 'codex', at, costUnknown: true, logFile: '/runs/lead.log' }] };
+  assert.ok(!keys({ ...unknown, budgetUsd: 20 }).includes('r')); assert.ok(keys({ ...unknown, budgetUsd: undefined }).includes('r'));
+  assert.deepEqual(stopLines.budgetBlocks?.({ ...unknown, budgetUsd: 20 }), { counted: true });
+  // A message that did not run is the same.
+  assert.ok(!rowActions({ task: spent, request: { id: 'r1' } }).some(([key]) => key === 'r'));
+  assert.ok(rowActions({ task: { ...spent, budgetUsd: 20 }, request: { id: 'r1' } }).some(([key]) => key === 'r'));
+});
+
+// A turn stopped at the session's /budget keeps that limit (stoppedAtLimitUsd), so once the owner
+// raises it or takes it off the line says the limit it stopped at, what it is now, and to
+// type continue: never that the account hit its usage limit, whether the log is there or not.
+test('a turn stopped at the /budget the owner raised since says so, and to type continue', () => {
+  const logFile = '/runs/gone.log';
+  const stopped = fields => session({ runs: [{ role: 'lead', vendor: 'claude', at, ownCost: true, costUsd: 3, logFile: '/runs/one.log' }, { role: 'lead', vendor: 'claude', at, ownCost: true, costUsd: 4, stoppedAtLimitUsd: 5, logFile }], error: { message: 'The model could not finish.', cause: 'quota', logFile }, ...fields });
+  const read = { logCause: none, account: none };
+  assert.equal(stopLine(stopped({ budgetUsd: 5 }), read).text, 'This session has spent its $5 limit. /budget 20 raises it, then type continue.');
+  assert.equal(stopLine(stopped({ budgetUsd: 20 }), read).text, 'This session reached its $5 limit, and the limit is now $20. Type continue to carry on.');
+  assert.equal(stopLine(stopped({}), read).text, 'This session reached its $5 limit, and it has no limit now. Type continue to carry on.');
+  // A raise that still leaves nothing to spend says what that limit needs.
+  assert.equal(stopLine(stopped({ budgetUsd: 6 }), read).text, 'This session has spent its $6 limit. /budget 20 raises it, then type continue.');
+  // A turn ELU stopped itself (Codex, Grok Build) keeps its own line until the limit changes.
+  const live = 'ELU stopped this turn: this session has spent ≥$3.00 of its $3 limit. /budget 20 raises it and /budget off removes it; then send your message again.';
+  const grok = fields => session({ runs: [{ role: 'lead', vendor: 'grok', at, costUnknown: true, stoppedAtUsd: 3, stoppedAtLimitUsd: 3, logFile }], error: { message: live, logFile }, ...fields });
+  assert.equal(stopLine(grok({ budgetUsd: 3 }), read).text, live);
+  assert.equal(stopLine(grok({ budgetUsd: 10 }), read).text, 'This session reached its $3 limit, and the limit is now $10. Type continue to carry on.');
+  // A bot's turn names the bot.
+  const bot = session({ budgetUsd: 10, runs: [{ role: 'bot:scout', vendor: 'grok', at, costUnknown: true, stoppedAtUsd: 3, stoppedAtLimitUsd: 3, logFile }], error: { message: live.replace('this session has', '@scout has'), logFile } });
+  assert.equal(stopLine(bot, read).text, '@scout reached its $3 limit in this session, and the limit is now $10. Type continue to carry on.');
+  // A record from before the field, its log gone: as it read there. Its log there says it
+  // reached its limit for that turn, never that it has spent the one there is now.
+  const before = stopped({ budgetUsd: 20, runs: [{ role: 'lead', vendor: 'claude', at, ownCost: true, costUsd: 7, logFile }] });
+  assert.equal(stopLine(before, read).text, 'The model could not finish: the account hit its usage limit. Switch account in Usage, then type continue.');
+  assert.equal(stopLine(before, { ...read, logCause: () => 'budget' }).text, 'The model reached its spending limit for this turn. Type continue to try again.');
+});
+
+// A message the session's /budget refused before its turn began keeps the limit it was refused at
+// (refusedAtLimitUsd) and whose it was (role). Once the owner raises the limit or takes it off,
+// the line says what lets it go on now, as the status line and the row's keys do: never the old
+// limit's refusal and its raise.
+test("a message /budget refused says what lets it go on once the owner changes the limit", () => {
+  const read = { logCause: none, account: none };
+  const keys = task => rowActions({ task, group: 3 }).map(([key]) => key);
+  const refusal = 'This session has spent $5.20 of its $5 limit. /budget 20 raises it and /budget off removes it; then send your message again.';
+  const lead = fields => session({ runs: [{ role: 'lead', vendor: 'claude', at, ownCost: true, costUsd: 5.2, logFile: '/runs/lead.log' }], error: { message: refusal, refusedAtLimitUsd: 5, role: 'lead' }, ...fields });
+  // Under the limit it was refused at, the refusal is the line, and r is not offered.
+  assert.equal(stopLine(lead({ budgetUsd: 5 }), read).text, refusal);
+  assert.ok(!keys(lead({ budgetUsd: 5 })).includes('r'));
+  // Raised over what was spent, or taken off: send the message again, and r is back.
+  assert.equal(stopLine(lead({ budgetUsd: 20 }), read).text, 'This session reached its $5 limit, and the limit is now $20. Send your message again.');
+  assert.equal(stopLine(lead({}), read).text, 'This session reached its $5 limit, and it has no limit now. Send your message again.');
+  assert.ok(keys(lead({ budgetUsd: 20 })).includes('r')); assert.ok(keys(lead({})).includes('r'));
+  // Raised, but not over what was spent: what that limit needs.
+  assert.equal(stopLine(lead({ budgetUsd: 5.2 }), read).text, 'This session has spent its $5.2 limit. /budget 20 raises it, then send your message again.');
+  // A run whose cost is not known counts as all of any limit: only /budget off lets it go on.
+  const unknown = fields => session({ runs: [{ role: 'lead', vendor: 'grok', at, costUnknown: true, logFile: '/runs/lead.log' }], error: { message: 'What this session has spent is not known, so it counts as all of its $20 limit. /budget off removes it; then send your message again.', refusedAtLimitUsd: 20, role: 'lead' }, ...fields });
+  assert.equal(stopLine(unknown({ budgetUsd: 40 }), read).text, 'What this session has spent is not known, so it counts as all of its $40 limit. /budget off removes it, then send your message again.');
+  assert.ok(!keys(unknown({ budgetUsd: 40 })).includes('r'));
+  assert.equal(stopLine(unknown({}), read).text, 'This session reached its $20 limit, and it has no limit now. Send your message again.');
+  assert.ok(keys(unknown({})).includes('r'));
+  // A bot's message: its own share of the limit, by its name. Only its runs hold it.
+  const bot = fields => session({ runs: [{ role: 'lead', vendor: 'claude', at, ownCost: true, costUsd: 1, logFile: '/runs/lead.log' }, { role: 'bot:scout', vendor: 'claude', at, ownCost: true, costUsd: 5.2, logFile: '/runs/scout.log' }], error: { message: `Could not answer. ${refusal.replace('This session has', '@scout has').replace('limit.', 'limit in this session.')}`, refusedAtLimitUsd: 5, role: 'bot:scout' }, ...fields });
+  assert.ok(!keys(bot({ budgetUsd: 5 })).includes('r'), 'its retry would be refused');
+  assert.equal(stopLine(bot({ budgetUsd: 20 }), read).text, '@scout reached its $5 limit in this session, and the limit is now $20. Send your message again.');
+  assert.ok(keys(bot({ budgetUsd: 20 })).includes('r'));
+  // A refusal kept before the field: as it read there.
+  const before = session({ budgetUsd: 20, runs: [{ role: 'lead', vendor: 'claude', at, ownCost: true, costUsd: 5.2 }], error: { message: refusal } });
+  assert.equal(stopLine(before, read).text, refusal);
 });
 
 test('only a session that stopped and waits for the owner has the line', () => {

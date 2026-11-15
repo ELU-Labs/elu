@@ -61,19 +61,14 @@ test('an edit of the context in the Projects tab keeps a line learned while it w
   });
 });
 
-test('two computers of the owner with the same project in different folders: linked once, a lesson on one is in the next prompt on the other, an edit on the other is on the first, and a line taken out stays out', t => {
+test('two computers of the owner with the same project in different folders: the same one by its name with no step, a lesson on one is in the next prompt on the other, an edit on the other is on the first, and a line taken out stays out', t => {
   const { laptop, devbox } = ownComputers(t);
   const mac = on(laptop, () => registeredProject(t)), box = on(devbox, () => registeredProject(t));
   assert.notEqual(mac.root, box.root);
   on(laptop, () => saveInstructions(mac.root, 'Use pnpm, not npm.'));
   talk(laptop, devbox);
-  // Not linked yet: no shared repository, so nothing moves; the project of the same name is offered.
-  assert.equal(on(devbox, () => readProjectSettings(box.root).instructions), '');
-  const offered = on(laptop, () => projectLinks(mac.root));
-  assert.deepEqual(offered.map(row => [row.key, row.older, row.linked, row.same?.name]), [[devbox.key, false, null, 'sample app']]);
-  on(laptop, () => linkProject(mac.root, devbox.key, offered[0].same.id));
-  talk(laptop, devbox);
-  // Linked on both, from the one link made on the laptop.
+  // No repository on either: the one project of that name on each is the same project, with nothing to link.
+  assert.deepEqual(on(laptop, () => projectLinks(mac.root)).map(row => [row.key, row.older, row.linked?.name]), [[devbox.key, false, 'sample app']]);
   assert.equal(on(devbox, () => projectLinks(box.root))[0].linked.name, 'sample app');
   assert.equal(on(devbox, () => readProjectSettings(box.root).instructions), 'Use pnpm, not npm.\n');
   assert.deepEqual(on(devbox, () => pendingTrust(box.root)), [], 'his own text from his own computer is not asked about');
@@ -92,7 +87,7 @@ test('two computers of the owner with the same project in different folders: lin
   on(devbox, () => saveLearned(box.root, { add: [], remove: [line] }));
   talk(laptop, devbox); talk(laptop, devbox);
   for (const [side, root] of [[laptop, mac.root], [devbox, box.root]]) assert.ok(!on(side, () => readProjectSettings(root).context).includes('staging'), side.name);
-  // Unlinked: a change no longer moves.
+  // A pair an ELU up to 0.1.28 unlinked stays apart: a change no longer moves.
   on(devbox, () => linkProject(box.root, laptop.key, null));
   talk(laptop, devbox);
   on(laptop, () => saveInstructions(mac.root, 'Only on the laptop.'));
@@ -163,17 +158,24 @@ test('only the owner\'s own computers are sent instructions and context, a teamm
     const toBox = connect(devbox.key, { plans: true, remote: 1, lists: 1, notes: 1 });
     const sent = joinRows(toBox.frames('elu.notes').at(-1)?.params.notes);
     assert.deepEqual(sent.map(row => [row.name, row.notes.instructions.text]), [['sample app', 'Use pnpm, not npm.\n']]);
-    // What the devbox sends is taken: its project is offered for the link here.
+    // What the devbox sends is taken: its project of the same name is this one.
     const rows = withHome(devbox.home, () => notesRows(laptop.key, notesTick({ me: devbox.key })));
     toBox.say({ method: 'elu.notes', params: { notes: rows } });
-    assert.equal(projectLinks(mac.root)[0].same.name, 'sample app');
-    // Sara, a teammate: sent nothing, and what she sends is not taken.
+    assert.equal(projectLinks(mac.root)[0].linked.name, 'sample app');
+    // Sara, a teammate on an ELU from before shared projects: sent nothing.
     const toSara = connect(sara.key, { plans: true, remote: 1, lists: 1, notes: 1 });
     daemon.tellNotes();
     assert.deepEqual(toSara.frames('elu.notes'), []);
-    toSara.say({ method: 'elu.notes', params: { notes: rows } });
-    assert.equal(fs.existsSync(peerFile('notes', 'from', `${sara.key}.json`)), false);
-    assert.throws(() => takeNotes(laptop.key, sara.key, rows), { message: 'Only your own computers share instructions and context.' });
+    // On this build, with no project shared with her team: told no project, and nothing she sends is taken.
+    toSara.close();
+    const newer = connect(sara.key, { plans: true, remote: 1, lists: 1, notes: 1, shared: 1 });
+    daemon.tellNotes();
+    assert.deepEqual(joinRows(newer.frames('elu.notes').at(-1)?.params.notes ?? []), []);
+    newer.say({ method: 'elu.notes', params: { notes: rows } });
+    assert.deepEqual(JSON.parse(fs.readFileSync(peerFile('notes', 'from', `${sara.key}.json`), 'utf8')).projects, []);
+    assert.equal(projectLinks(mac.root).length, 1, 'only the devbox has this project');
+    const stranger = withHome(newHome(t), () => createIdentity({ name: 'eve' }));
+    assert.throws(() => takeNotes(laptop.key, stranger.key, rows), { message: 'Only computers on a project with this one share its instructions and context.' });
     // The devbox on a build from before this: it is sent none, and the app can say it needs an update.
     toBox.close();
     const older = connect(devbox.key, { plans: true, remote: 1, lists: 1 });

@@ -17,6 +17,7 @@ import { accountOf, forgetAccount, readAccounts, refreshUsage, usageTab } from '
 import { signInCommand, signInHintHere } from '../lib/vendors.mjs';
 import { stopLine } from '../lib/stop-line.mjs';
 import { usageBlocks } from '../lib/terminal.mjs';
+import { setAuto } from '../lib/claude-switch.mjs';
 
 // Several accounts of one vendor signed in at once, against stand-in command lines that read
 // the account from the folder they are started with (test/fakes: accounts in fake.json).
@@ -107,7 +108,7 @@ test('Claude: a second account signs in beside the first; a switch moves new tur
   const [claude] = usageTab({ vendors: [{ vendor: 'claude', available: true, signedIn: true }], now: Date.now() });
   assert.deepEqual(claude.accounts.map(row => [row.login, row.account, row.plan, row.active, row.usage?.weekly?.usedPercent ?? null]), [['default', 'first@example.com', 'Max 20x', true, 71], [slot.id, 'second@example.com', 'Max 5x', false, 40]]);
   const text = usageBlocks([claude]).map(row => row.text).join('\n');
-  assert.match(text, /^Claude {6}first@example\.com · Max 20x · active\n {12}5h  \[##----\]   36%  resets [^\n]+\n {12}wk  \[####--\]   71%  resets [^\n]+\n {12}second@example\.com · Max 5x\n {12}5h  \[------\]    5%  resets [^\n]+\n {12}wk  \[##----\]   40%  resets [^\n]+\n {12}enter on an account uses it · x forgets it · a adds one$/m);
+  assert.match(text, /^Claude {6}first@example\.com · Max 20x · active\n {12}5h  \[##----\]   36%  resets [^\n]+\n {12}wk  \[####--\]   71%  resets [^\n]+\n {12}second@example\.com · Max 5x\n {12}5h  \[------\]    5%  resets [^\n]+\n {12}wk  \[##----\]   40%  resets [^\n]+\n {12}Switch accounts by itself  on\n {12}Use paid extra usage {7}off\n {12}enter on an account uses it · x forgets it · a adds one$/m);
   assert.deepEqual(usageBlocks([claude]).filter(row => row.login === slot.id).length, 3, 'Enter on any line of the account uses it');
   // No sign-in, and no account's email, is kept with a session.
   for (const task of [first, second, finished, back]) assert.doesNotMatch(JSON.stringify(readTask(f.controller.repo, task.id)), /@example\.com|never-shown/);
@@ -115,8 +116,9 @@ test('Claude: a second account signs in beside the first; a switch moves new tur
   assert.doesNotMatch(read(path.join(personalDirectory(), 'logins.json')), /@/);
 });
 
-test('Claude: a run that hits the account limit names that account, the limit it hit and when it resets, and says to switch in Usage; nothing switches by itself', { timeout: 60000 }, async t => {
+test('Claude, with switching turned off: a run that hits the account limit names that account, the limit it hit and when it resets, and says to switch in Usage; nothing switches by itself', { timeout: 60000 }, async t => {
   const f = setup(t, 'claude', { loginAs: 'second@example.com', limited: ['second@example.com'] });
+  setAuto(false);
   const slot = addAccount(f, 'claude'); useLogin('claude', slot.id);
   const { id, finished } = f.controller.ask('Where is coupon normalization?');
   await assert.rejects(finished, /The model could not finish/);

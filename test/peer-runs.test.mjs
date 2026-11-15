@@ -32,7 +32,7 @@ import { saveBot } from '../lib/bots.mjs';
 // Shared with every team on the machine, as /share does.
 const share = (root, options = {}) => shareWith(root, { teams: everyTeam().map(state => state.id), ...options });
 import { artifact, message, task as a2aTask, TaskState } from '../lib/peer/a2a.mjs';
-import { intakeMethods, readCaps } from '../lib/peer/intake.mjs';
+import { count, intakeMethods, readCaps } from '../lib/peer/intake.mjs';
 import { acceptIncoming, discardReply, processOutbox } from '../lib/peer/replies.mjs';
 import { markMine, noteTheirs } from '../lib/peer/mine.mjs';
 import { checkRoot, saveTeamAccess } from '../lib/peer/access.mjs';
@@ -41,6 +41,7 @@ import { getRecord, thread } from '../lib/peer/taskstore.mjs';
 import { applyTask, asks as sentAsks, continueAnswer, createAsk, dismissAsk, dropHeldResult, getAsk, sendHeldResult } from '../lib/peer/asks.mjs';
 import { heldText, peerItems, threadMessages } from '../lib/peer/index.mjs';
 import { liveTask } from './peer-helpers.mjs';
+import { failureHere, failureLine } from '../lib/peer/failure.mjs';
 
 const SARA = 'b'.repeat(64), ME = 'a'.repeat(64);
 const origin = (kind = 'ask', extra = {}) => ({ kind, peer: SARA, name: 'sara', a2aTaskId: 'task-1', threadId: 'thread-1', hop: 1, ...extra });
@@ -201,15 +202,36 @@ test('a peer follow-up continues only that teammate\'s conversation', async t =>
   assert.equal(outbox(again.id).error, null); assert.equal(task(p.repo, id).messages.length, 2);
 });
 
-test('a peer ask is refused when the read role is not Claude', async t => {
-  const p = setup(t, 'answer');
-  config(p.root, value => { value.roles.lead = { vendor: 'codex', access: 'read', network: 'off', commands: [], writablePaths: [], timeoutSeconds: 300, maxCostUsd: null }; return value; });
-  approveProjectFiles(p.root);
-  const row = ask(p.root); conduct(t);
-  await until(() => request(p.root, row.id)?.state === 'done', 'refused ask');
-  assert.equal(outbox(row.id).error, 'A teammate\'s question needs Claude as the model.'); assert.equal(outbox(row.id).outcome, 'failed');
-  assert.equal(p.prompts().length, 0);
-  assert.throws(() => codex.compile({ role: { vendor: 'codex', access: 'read', network: 'off', commands: [], writablePaths: [], timeoutSeconds: 300, maxCostUsd: null }, cwd: p.root, schemaFile: '/x', peer: true }), /^EluCodeError: A teammate's question needs Claude as the model\.$/);
+// A teammate's question is held to every limit a Claude Code peer run has: read only, no shell
+// command, helper or message while it runs, no home, MCP server or memory, reads of the shared
+// project alone and its own dollar cap. Codex, Antigravity and Grok Build cannot be held to
+// every one, so a question on any of them is refused before a model turn, in words that say
+// Claude Code answers it, what the vendor cannot do and how the owner chooses Claude Code;
+// the launch of each refuses it too.
+test('a peer ask is refused when the read role is not Claude, saying Claude Code answers it and why that vendor cannot', async t => {
+  const p = setup(t, 'answer'), turns = () => fs.existsSync(path.join(p.parent, 'inputs.jsonl')) ? fs.readFileSync(path.join(p.parent, 'inputs.jsonl'), 'utf8').trim().split('\n').filter(Boolean) : [];
+  const said = {
+    codex: "Only Claude Code answers a teammate's question. Codex cannot keep its reads inside the shared project. Choose a Claude model with /model default to answer them.",
+    agy: "Only Claude Code answers a teammate's question. Antigravity cannot keep its reads out of the project's Git folder and the files Git does not track. Choose a Claude model with /model default to answer them.",
+    grok: "Only Claude Code answers a teammate's question. Grok Build cannot keep its reads inside the shared project. Choose a Claude model with /model default to answer them.",
+  };
+  conduct(t);
+  for (const vendor of ['codex', 'agy', 'grok']) {
+    const role = { vendor, access: 'read', network: 'off', commands: [], writablePaths: [], timeoutSeconds: 300, maxCostUsd: null };
+    config(p.root, value => { value.roles.lead = role; return value; });
+    approveProjectFiles(p.root);
+    const row = ask(p.root);
+    await until(() => request(p.root, row.id)?.state === 'done', `refused ask on ${vendor}`);
+    assert.equal(outbox(row.id).error, said[vendor], vendor); assert.equal(outbox(row.id).outcome, 'failed');
+    assert.deepEqual(turns(), [], `${vendor}: no model turn`);
+    // The owner's line says it as it is, with what he can do; the asker's says where to do it. Neither says to send it again.
+    assert.equal(failureHere({ outcome: 'failed', error: said[vendor], requestId: row.id }), said[vendor]);
+    assert.equal(failureLine({ error: said[vendor], at: '@ana' }), `${said[vendor].replace(' Choose a Claude model', ' On @ana: Choose a Claude model')}`);
+  }
+  const base = { cwd: p.root, schemaFile: '/x', peer: true };
+  assert.throws(() => codex.compile({ ...base, role: { vendor: 'codex', access: 'read', network: 'off', commands: [], writablePaths: [], timeoutSeconds: 300, maxCostUsd: null } }), { message: said.codex });
+  assert.throws(() => agy.launch({ ...base, role: { vendor: 'agy', access: 'read', network: 'off', commands: [], writablePaths: [], timeoutSeconds: 300, maxCostUsd: null }, mode: 'locked' }), { message: said.agy });
+  // Grok Build's launch refuses it once its check has passed (test/conformance-grok.test.mjs).
 });
 
 test("a teammate's question asks the owner nothing: it is answered without the project's unapproved files, and its session says so", async t => {
@@ -263,25 +285,118 @@ test('a run whose cost is unknown is charged all its message reserved', t => {
   const p = setup(t, 'answer'), sara = teammate(p);
   const record = sara.send('Where is it?', { kind: 'ask' });
   assert.equal(record.reservedUsd, 0.5); assert.equal(readCaps().peers[SARA].usd, 0.5);
-  acceptIncoming(sara.ctx, record.task.id, { how: 'own' });
+  acceptIncoming(sara.ctx, record.task.id, { how: 'answer' });
   const requestId = getRecord(record.task.id).requestId;
   fs.mkdirSync(peerFile('outbox'), { recursive: true });
-  fs.writeFileSync(peerFile('outbox', `${requestId}.json`), JSON.stringify({ requestId, root: p.root, origin: origin('handoff', { a2aTaskId: record.task.id, own: true }), taskId: '1', outcome: 'done', text: 'Here.', costUsd: null, finishedAt: new Date().toISOString(), error: null }));
+  fs.writeFileSync(peerFile('outbox', `${requestId}.json`), JSON.stringify({ requestId, root: p.root, origin: origin('ask', { a2aTaskId: record.task.id }), taskId: '1', outcome: 'done', text: 'Here.', costUsd: null, finishedAt: new Date().toISOString(), error: null }));
   processOutbox(sara.ctx);
   assert.equal(getRecord(record.task.id).costUsd, 0.5); assert.equal(getRecord(record.task.id).reservedUsd, 0); assert.equal(readCaps().peers[SARA].usd, 0.5, 'the reservation stays spent');
+});
+
+// A session the owner takes as his own (Auto, or his y or w) runs as one he typed, with no cap
+// of ELU's on its turns in Full access: what it costs is his, and none of it is charged to the
+// thread, day or team allowance of the teammate whose message started it. A teammate's question
+// is charged what it cost, as before.
+test("a session the owner took as his own is not charged to the teammate whose message started it", t => {
+  const p = setup(t, 'answer'), sara = teammate(p), teamId = everyTeam()[0].id;
+  saveDefaultMode('full');
+  const cents = value => Number((value ?? 0).toFixed(2)), usd = () => cents(readCaps().peers[SARA]?.usd), team = () => cents(readCaps().teams[teamId]?.usd);
+  const ran = (record, costUsd, extra) => {
+    const requestId = getRecord(record.task.id).requestId;
+    fs.mkdirSync(peerFile('outbox'), { recursive: true });
+    fs.writeFileSync(peerFile('outbox', `${requestId}.json`), JSON.stringify({ requestId, root: p.root, origin: origin(record.kind, { a2aTaskId: record.task.id, threadId: record.threadId, ...extra }), taskId: '1', outcome: 'done', text: 'Done.', costUsd, finishedAt: new Date().toISOString(), error: null }));
+    processOutbox(sara.ctx);
+    return getRecord(record.task.id);
+  };
+  // y: he takes her handoff as his own session. What its message reserved is given back.
+  const handoff = sara.send(HANDOFF);
+  assert.equal(usd(), 0.5);
+  acceptIncoming(sara.ctx, handoff.task.id, { how: 'own' });
+  assert.deepEqual([usd(), team()], [0, 0]);
+  assert.equal(getRecord(handoff.task.id).own, true);
+  // Its turns cost $3, more than her thread ($1) or a question's turn may spend.
+  assert.equal(ran(handoff, 3, { own: true }).costUsd, 0);
+  assert.deepEqual([usd(), team()], [0, 0]);
+  // Her next message in that thread is taken.
+  const next = sara.send('Now the docs too.');
+  assert.notEqual(next.task.status.state, TaskState.REJECTED, JSON.stringify(next.task.status));
+  assert.equal(usd(), 0.5);
+  // w: the same.
+  acceptIncoming(sara.ctx, next.task.id, { how: 'work', permissions: 'full' });
+  assert.equal(ran(next, 2.5, { own: true }).costUsd, 0); assert.equal(usd(), 0);
+  // Her question, answered, is hers: charged what it cost, to her day and her team's.
+  const question = sara.send('Where is it?', { kind: 'ask', threadId: 'thread-2' });
+  acceptIncoming(sara.ctx, question.task.id, { how: 'answer' });
+  assert.equal(ran(question, 0.4).costUsd, 0.4);
+  assert.deepEqual([usd(), team()], [0.4, 0.4]);
+  // Auto: the team's setting takes her message as his own session at once, and reserves nothing.
+  saveTeamAccess(teamId, { handling: 'auto', root: p.root });
+  const auto = sara.send('And the changelog.', { threadId: 'thread-3' });
+  assert.deepEqual([auto.own, auto.reservedUsd, auto.waiting], [true, 0, false]);
+  assert.equal(usd(), 0.4);
+  assert.equal(ran(auto, 3, { own: true }).costUsd, 0);
+  assert.deepEqual([usd(), team()], [0.4, 0.4]);
+  assert.notEqual(sara.send('And the release notes.', { threadId: 'thread-3' }).task.status.state, TaskState.REJECTED);
 });
 
 // A run whose cost may be more than its tokens say (atLeast: a Codex run in Approve for me, whose
 // reviewer's calls no count holds) is charged at least what its message reserved, as one whose
 // cost is not known is charged all of it; one that cost more is charged that.
+// Auto takes a teammate's message as the owner's own session at once. It is his, so none of the
+// teammate's limits refuses it or counts it: not their thread's messages or dollars, not their
+// day's requests or dollars, not their team's. Only how far a message has come (hops) and the
+// day's message count hold for it, as for any message. A message that waits for the owner is
+// held to them all, as before.
+test("a message Auto takes as the owner's own session is refused or counted by none of the teammate's limits", t => {
+  const p = setup(t, 'answer'), sara = teammate(p), teamId = everyTeam()[0].id;
+  const reason = record => record.task.status.message?.parts?.[0]?.text ?? '';
+  const spent = () => [readCaps().peers[SARA]?.runs ?? 0, Number((readCaps().peers[SARA]?.usd ?? 0).toFixed(2)), Number((readCaps().teams[teamId]?.usd ?? 0).toFixed(2))];
+  savePeerSettings({ caps: { threadMessages: 2, peerRunsPerDay: 3 } });
+  // Her questions have used three requests and $4.60 of her $5 today, and of her team's $10.
+  count(SARA, [teamId], { runs: 3, usd: 4.6 });
+  // Manual: her next message waits for the owner, so it is held to her limits, and refused.
+  assert.match(reason(sara.send(HANDOFF, { threadId: 'thread-0' })), /daily request limit/);
+  // Auto: the same message, and more of them in one thread than her thread may hold, are his
+  // own sessions at no charge to her.
+  saveTeamAccess(teamId, { handling: 'auto', root: p.root });
+  const taken = [HANDOFF, 'And the docs.', 'And the changelog.'].map(text => sara.send(text));
+  for (const record of taken) { assert.notEqual(record.task.status.state, TaskState.REJECTED, reason(record)); assert.equal(record.own, true); }
+  assert.deepEqual(spent(), [3, 4.6, 4.6], 'none of them counts');
+});
+
+// A message the owner takes as his own session with y or w gives back the request it counted
+// while it waited for him, as it gives back its dollars, and the thread's message limit does
+// not count it: a thread he keeps going as his own is never refused for it. Her questions in
+// that thread count, as before.
+test("a thread the owner keeps taking as his own session is not refused for its message limit, and its requests are given back", t => {
+  const p = setup(t, 'answer'), sara = teammate(p);
+  const reason = record => record.task.status.message?.parts?.[0]?.text ?? '', runs = () => readCaps().peers[SARA]?.runs ?? 0;
+  savePeerSettings({ caps: { threadMessages: 2, peerRunsPerDay: 2 } });
+  for (const text of [HANDOFF, 'And the docs.', 'And the changelog.']) {
+    const record = sara.send(text);
+    assert.notEqual(record.task.status.state, TaskState.REJECTED, `${text}: ${reason(record)}`);
+    assert.equal(runs(), 1, 'it counts while it waits for him');
+    acceptIncoming(sara.ctx, record.task.id, { how: text === HANDOFF ? 'own' : 'work', ...(text === HANDOFF ? {} : { permissions: 'full' }) });
+    assert.equal(runs(), 0, 'his own session is none of her requests');
+  }
+  // Her questions in that thread are hers: two fit its limit, and the third is refused.
+  for (const text of ['Where is it?', 'And the tests?']) {
+    const question = sara.send(text, { kind: 'ask' });
+    assert.notEqual(question.task.status.state, TaskState.REJECTED, `${text}: ${reason(question)}`);
+    acceptIncoming(sara.ctx, question.task.id, { how: 'answer' });
+  }
+  assert.equal(runs(), 2);
+  assert.match(reason(sara.send('And the docs?', { kind: 'ask' })), /message limit/);
+});
+
 test('a run whose cost may be more is charged at least what its message reserved', t => {
   const p = setup(t, 'answer'), sara = teammate(p);
   const charged = (usd, threadId) => {
     const record = sara.send('Where is it?', { kind: 'ask', threadId });
-    acceptIncoming(sara.ctx, record.task.id, { how: 'own' });
+    acceptIncoming(sara.ctx, record.task.id, { how: 'answer' });
     const requestId = getRecord(record.task.id).requestId;
     fs.mkdirSync(peerFile('outbox'), { recursive: true });
-    fs.writeFileSync(peerFile('outbox', `${requestId}.json`), JSON.stringify({ requestId, root: p.root, origin: origin('handoff', { a2aTaskId: record.task.id, own: true, threadId }), taskId: '1', outcome: 'done', text: 'Here.', costUsd: usd, costAtLeast: true, finishedAt: new Date().toISOString(), error: null }));
+    fs.writeFileSync(peerFile('outbox', `${requestId}.json`), JSON.stringify({ requestId, root: p.root, origin: origin('ask', { a2aTaskId: record.task.id, threadId }), taskId: '1', outcome: 'done', text: 'Here.', costUsd: usd, costAtLeast: true, finishedAt: new Date().toISOString(), error: null }));
     processOutbox(sara.ctx);
     return getRecord(record.task.id).costUsd;
   };

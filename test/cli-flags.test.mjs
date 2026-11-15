@@ -29,6 +29,8 @@ test('-h prints the help --help prints, alone or straight after a command', (t) 
   const long = run(cwd, '--help');
   assert.equal(long.status, 0, long.stderr);
   assert.match(long.stdout, /Options:\n {2}--help, -h\n {2}--version\n/);
+  // ELU's own switch for no colour, since the app draws in colour where NO_COLOR is set.
+  assert.match(long.stdout, /\nELU_NO_COLOR=1 elu opens the app without color\.\n/);
 
   for (const args of [['-h'], ['run', '-h'], ['-h', 'peers']]) {
     const short = run(cwd, ...args);

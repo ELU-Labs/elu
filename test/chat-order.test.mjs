@@ -172,7 +172,7 @@ function owned(t) {
 }
 function start(t) {
   const mine = owned(t), p = project({ after: close => mine.files.push(close) });
-  const values = { XDG_CONFIG_HOME: path.join(p.parent, 'personal'), NO_COLOR: '1', TERM: 'xterm-256color' }, previous = Object.fromEntries(Object.keys(values).map(key => [key, process.env[key]]));
+  const values = { XDG_CONFIG_HOME: path.join(p.parent, 'personal'), ELU_NO_COLOR: '1', TERM: 'xterm-256color' }, previous = Object.fromEntries(Object.keys(values).map(key => [key, process.env[key]]));
   Object.assign(process.env, values);
   mine.files.push(() => { for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } });
   return { ...p, repo: repository(p.root), mine };

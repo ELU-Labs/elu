@@ -286,6 +286,23 @@ if(mode==='steps'){
  item('item.completed',{id:'item_12',type:'agent_message',text:'The test fails on lower case codes. Fixing normalize.'});
  item('item.completed',{id:'item_13',type:'file_change',changes:[{path:path.join(process.cwd(),'src','coupon.mjs'),kind:'update'}],status:'completed'});
 }
+// reads (fake.json): the files the model reads this turn. Codex reads a file by running a command,
+// so a launch without its shell tool (features.shell_tool=false, the Read only one) reads none.
+// One with it runs `cat` in its sandbox, read-only or the elu_ask profile, which reads every file
+// but the profile's "deny" entries and what is under them. Each is recorded in reads.jsonl beside
+// the fake, with whether it was read.
+if(Array.isArray(cfg.reads)){
+ const onDisk=p=>{try{return fs.realpathSync(p);}catch{return path.resolve(p);}},under=(p,dir)=>p===dir||p.startsWith(`${dir}/`);
+ const shell=!args.includes('features.shell_tool=false'),profileText=args.find(a=>a.startsWith('permissions.elu_ask='))??'';
+ const deny=[...profileText.matchAll(/("(?:[^"\\]|\\.)*")="deny"/g)].map(m=>onDisk(JSON.parse(m[1])));
+ cfg.reads.forEach((asked,i)=>{
+  const file=onDisk(asked);let read=false;
+  if(shell){const item={id:`item_read_${i+1}`,type:'command_execution',command:`/bin/sh -c 'cat ${asked}'`};console.log(JSON.stringify({type:'item.started',item:{...item,aggregated_output:'',exit_code:null,status:'in_progress'}}));
+   if(!deny.some(dir=>under(file,dir))){try{fs.readFileSync(file);read=true;}catch{}}
+   console.log(JSON.stringify({type:'item.completed',item:{...item,aggregated_output:read?'':`cat: ${asked}: Operation not permitted`,exit_code:read?0:1,status:read?'completed':'failed'}}));}
+  fs.appendFileSync(path.join(path.dirname(process.argv[1]),'reads.jsonl'),JSON.stringify({vendor,path:asked,read})+'\n');
+ });
+}
 // live (fake.json): a file; a turn launched with the plan tool on prints its to-do list, first
 // step done, as the real one prints a todo_list item, and goes on once that file exists.
 if(cfg.live&&args.includes('tools.update_plan.enabled=true')){console.log(JSON.stringify({type:'item.started',item:{id:'item_todo',type:'todo_list',items:[{text:'Change normalize',completed:true},{text:'Run the coupon test',completed:false}]}}));const until=Date.now()+30000;while(!fs.existsSync(cfg.live)&&Date.now()<until)await new Promise(resolve=>setTimeout(resolve,50));}

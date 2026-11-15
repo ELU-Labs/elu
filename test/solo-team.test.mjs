@@ -204,7 +204,7 @@ async function until(check, message = 'condition', timeout = 10000) {
 }
 // The home the app reads, for the rest of the test.
 function useHome(t, home) {
-  const values = { XDG_CONFIG_HOME: home, NO_COLOR: '1', TERM: 'xterm-256color' };
+  const values = { XDG_CONFIG_HOME: home, ELU_NO_COLOR: '1', TERM: 'xterm-256color' };
   const previous = Object.fromEntries(Object.keys(values).map(key => [key, process.env[key]]));
   Object.assign(process.env, values);
   owned(t).files.push(() => { for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } });

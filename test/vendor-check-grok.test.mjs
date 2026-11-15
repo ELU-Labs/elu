@@ -162,7 +162,7 @@ test('a Claude agent and Claude permission rules in the owner\'s home: a Full ac
   const [home, token, ...top] = fs.readFileSync(out, 'utf8').trim().split('\n'), mirror = ADAPTERS.grok.fullHome();
   assert.equal(home, mirror); assert.equal(token, '//registry.npmjs.org/:_authToken=owner-npm-token');
   assert.ok(top.includes('.npmrc'), top.join(' ')); assert.deepEqual(top.filter(name => TOOL_HOMES.includes(name)), ['.grok']);
-  assert.equal(fs.realpathSync(path.join(mirror, '.grok')), fs.realpathSync(path.join(f.privateHome, '.grok')));
+  assert.equal(fs.realpathSync(path.join(mirror, '.grok')), fs.realpathSync(path.join(f.privateHome, 'full', '.grok')));
   // What the stand-in loads in the run's own environment: every switch off, no agent of his, no rules but ELU's config.
   const run = JSON.parse(fs.readFileSync(kept, 'utf8')), under = JSON.parse(fs.readFileSync(listed, 'utf8'));
   assert.equal(run.HOME, mirror); assert.equal(under.externalCompat.cells.length, 13); assert.deepEqual(under.externalCompat.cells.filter(cell => cell.enabled !== false || cell.source !== 'env'), []);
@@ -180,7 +180,10 @@ test('a Claude agent and Claude permission rules in the owner\'s home: a Full ac
     assert.equal(task.state, 'answered', `${permissions}: ${why(task)}`); assert.deepEqual(said(task), permissions === 'ask' ? [FIRST, 'Grok Build 1.0.77 passed its check on this machine.'] : [], permissions); assert.deepEqual(pendingApprovals(), []);
   }
   assert.deepEqual(notPassed(), []);
-  assert.deepEqual(fs.readdirSync(f.privateHome), ['.grok'], 'the private home holds nothing of his');
+  // The private home holds the Grok home every mode shares and a home for each mode that ran, with nothing of his.
+  const modes = fs.readdirSync(f.privateHome).filter(name => name !== '.grok');
+  assert.deepEqual(modes.filter(name => !['locked', 'ask', 'auto', 'full'].includes(name)), [], 'the private home holds nothing of his');
+  for (const name of modes) assert.deepEqual(fs.readdirSync(path.join(f.privateHome, name)), ['.grok'], name);
   assert.equal(fs.existsSync(path.join(mirror, '.claude')), false); assert.deepEqual(his(), before, 'his Claude files were not written');
   assert.deepEqual(checkResult('grok', { bin: f.bin, version: '1.0.77' }).loads, []);
 });
