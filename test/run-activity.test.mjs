@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { runSteps, endedSteps, runsOfEntries, runSeconds } from '../lib/run-activity.mjs';
-import { stepLines, stepsLine, STEPS_LINE, workedFor } from '../lib/terminal-visuals.mjs';
+import { stepLines, stepsLine, STEPS_LINE, workedFor, workingSteps } from '../lib/terminal-visuals.mjs';
 import { temp } from './helpers.mjs';
 
 // The owner asked why he sees nothing of what the model thinks and does while it works.
@@ -120,8 +120,72 @@ test('steps draw one under another, wrapped under their first word, and fold int
   assert.equal(stepLines([{ kind: 'thinking', text: '**Reading the module**\n\nThe codes should compare in upper case.' }], { width: 80, colour: false }), '✻ Reading the module\n  The codes should compare in upper case.', 'a heading without its stars, no empty line');
   assert.equal(stepsLine(12, 72, false, false), '▸ 12 steps in 1m 12s · ctrl+o shows them');
   assert.equal(stepsLine(1, null, true, false), '▾ 1 step · ctrl+o hides it');
-  assert.ok(STEPS_LINE.test('▸ 1 step · ctrl+o shows it') && !STEPS_LINE.test('┃ ▸ 1 step in 3s'));
+  assert.ok(STEPS_LINE.test('▸ 1 step · ctrl+o shows it') && !STEPS_LINE.test('┃ ▸ 1 step in 3s') && !STEPS_LINE.test('▸ 1 earlier thing'));
   assert.deepEqual([workedFor(42), workedFor(185), workedFor(3840), workedFor(null)], ['42s', '3m 5s', '1h 4m', null]);
+});
+
+// The owner's case: "the agent thinking doesn't need to expand this way, it can just show the
+// latest what is doing, and the old part of it can be expandable see more". While a turn works
+// only its newest step shows, in three rows at most: a thought keeps its last rows, a command
+// its start and how long it has run. The steps before fold into one line above it; open, every
+// step shows whole. What the turn has going in the background stays under it.
+test('a working turn shows its newest step in a few rows, under one line that folds the steps before it', () => {
+  const long = 'one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty';
+  const steps = [{ kind: 'thinking', text: 'Round 1.' }, { kind: 'tool', text: 'Run: npm test', status: 'ok' }, { kind: 'tool', text: 'Read: src/coupon.mjs', status: 'ok' }, { kind: 'thinking', text: long }];
+  let open = false, asked = 0; const shown = () => { asked++; return open; };
+  assert.equal(workingSteps(steps, { width: 30, colour: false, shown }), ['▸ 3 earlier steps · ctrl+o shows all', '✻ … fourteen fifteen sixteen', '  seventeen eighteen', '  nineteen twenty'].join('\n'), 'the end of the thought, under one line for the rest');
+  assert.ok(STEPS_LINE.test('▸ 3 earlier steps · ctrl+o shows all'), 'a click on it opens it, as on a finished turn\'s line');
+  open = true;
+  assert.equal(workingSteps(steps, { width: 30, colour: false, shown }), ['▾ 3 earlier steps · ctrl+o hides them', stepLines(steps, { width: 30, colour: false })].join('\n'), 'open: every step, whole');
+  assert.equal(asked, 2);
+  // One step alone has nothing before it to fold. A short one shows whole; a long thought, the
+  // first of most turns, is cut to its last rows all the same, and ctrl+o shows it whole.
+  assert.equal(workingSteps(steps.slice(0, 1), { width: 30, colour: false, shown }), '✻ Round 1.');
+  assert.equal(asked, 2, 'nothing cut, so nothing to open');
+  open = false;
+  assert.equal(workingSteps(steps.slice(3), { width: 30, colour: false, shown }), ['✻ … fourteen fifteen sixteen', '  seventeen eighteen', '  nineteen twenty'].join('\n'), 'the end of the thought, no line above it');
+  assert.equal(asked, 3);
+  open = true;
+  assert.equal(workingSteps(steps.slice(3), { width: 30, colour: false, shown }), stepLines(steps.slice(3), { width: 30, colour: false }), 'open: whole');
+  // A command keeps its start and how long it has run; the background command stays under it.
+  open = false;
+  const now = Date.now(), running = [...steps, { kind: 'tool', text: `Run: node -e "${long} ${long}"`, status: 'running', since: now - 5000 }, { kind: 'background', text: 'npm run watch', count: 1, since: now - 60000 }];
+  const drawn = workingSteps(running, { width: 50, colour: false, now, shown }).split('\n');
+  assert.equal(drawn[0], '▸ 4 earlier steps · ctrl+o shows all');
+  assert.match(drawn[1], /^● Run: node -e "one two/); assert.match(drawn.at(-2), /… · 5s$/);
+  assert.equal(drawn.length, 5, 'three rows for the command');
+  assert.equal(drawn.at(-1), '● 1 background command: npm run watch · 1m 0s');
+  // A helper agent's step shows under the call that started it.
+  const helper = [...steps, { kind: 'tool', text: 'Agent: check the refund path', status: 'running' }, { kind: 'tool', text: 'Read: src/refund.mjs', status: 'running', sub: true }];
+  assert.equal(workingSteps(helper, { width: 40, colour: false, shown }), ['▸ 4 earlier steps · ctrl+o shows all', '● Agent: check the refund path', '  ● Read: src/refund.mjs'].join('\n'));
+});
+
+// What a working turn does now is every call it still has running, not only its newest step:
+// one message of Claude Code can start a command and read a file at once, and the read ends
+// while the command runs. Two helper agents work side by side, and the newest step of one
+// shows under its own call. A plan that is the newest step shows how far it is in a few rows.
+test('a working turn shows every call still running beside its newest step, a helper\'s step under its own agent, and a long plan in a few rows', t => {
+  const now = Date.now(), shown = () => false;
+  const parallel = [{ kind: 'thinking', text: 'Round 1.' }, { kind: 'tool', text: 'Run: npm test', status: 'running', since: now - 130000 }, { kind: 'tool', text: 'Read: src/coupon.mjs', status: 'ok' }];
+  assert.equal(workingSteps(parallel, { width: 46, colour: false, now, shown }), ['▸ 1 earlier step · ctrl+o shows all', '● Run: npm test · 2m 10s', '✓ Read: src/coupon.mjs'].join('\n'), 'the command still running, with its time');
+  assert.equal(workingSteps(parallel.slice(1), { width: 46, colour: false, now, shown }), ['● Run: npm test · 2m 10s', '✓ Read: src/coupon.mjs'].join('\n'), 'nothing before them: no line');
+  // Two helpers from one message, as Claude Code writes them: each step of a helper names the call it ran under.
+  const dir = temp(t), file = path.join(dir, 'lead.log');
+  const say = (content, parent = null) => ({ type: 'assistant', message: { id: 'm', role: 'assistant', content: [content] }, parent_tool_use_id: parent, session_id: 's' });
+  const result = id => ({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: 'out' }] } });
+  write(file, [say({ type: 'thinking', thinking: 'Two paths to check.', signature: 'x' }),
+    say({ type: 'tool_use', id: 'checkout', name: 'Agent', input: { description: 'Check the checkout path', prompt: 'Look' } }), say({ type: 'tool_use', id: 'refund', name: 'Agent', input: { description: 'Check the refund path', prompt: 'Look' } }),
+    say({ type: 'tool_use', id: 'r1', name: 'Read', input: { file_path: '/src/refund.mjs' } }, 'refund'), result('r1'),
+    say({ type: 'tool_use', id: 'c1', name: 'Read', input: { file_path: '/src/checkout.mjs' } }, 'checkout')]);
+  const steps = runSteps(file);
+  assert.deepEqual(steps.map(step => step.under), [undefined, undefined, undefined, 2, 1], 'each helper step names its agent by its place');
+  assert.equal(workingSteps(steps, { width: 46, colour: false, shown }), ['▸ 2 earlier steps · ctrl+o shows all', '● Agent: Check the checkout path', '  ● Read: /src/checkout.mjs', '● Agent: Check the refund path'].join('\n'), 'under its own agent, the other one still running');
+  fs.appendFileSync(file, JSON.stringify(say({ type: 'tool_use', id: 'r2', name: 'Grep', input: { pattern: 'refund' } }, 'refund')) + '\n');
+  assert.equal(workingSteps(runSteps(file), { width: 46, colour: false, shown }), ['▸ 3 earlier steps · ctrl+o shows all', '● Agent: Check the checkout path', '● Agent: Check the refund path', '  ● Search: refund'].join('\n'));
+  // A plan of twelve at 80x24 (46 columns): how far it is, and what it does now and next.
+  const plan = { kind: 'plan', text: '', entries: Array.from({ length: 12 }, (_, n) => ({ text: `Entry ${n + 1}`, state: n < 3 ? 'done' : n === 3 ? 'doing' : 'todo' })) };
+  assert.equal(workingSteps([parallel[0], plan], { width: 46, colour: false, shown }), ['▸ 1 earlier step · ctrl+o shows all', '• Plan · 3 of 12 done', '  ● Entry 4', '  ○ Entry 5'].join('\n'));
+  assert.equal(workingSteps([parallel[0], { ...plan, entries: plan.entries.slice(0, 2) }], { width: 46, colour: false, shown }), ['▸ 1 earlier step · ctrl+o shows all', '• Plan', '  ✓ Entry 1', '  ✓ Entry 2'].join('\n'), 'a short plan whole');
 });
 
 // What real Claude Code 2.1.322 writes in a long turn, and the first builder's reader took none

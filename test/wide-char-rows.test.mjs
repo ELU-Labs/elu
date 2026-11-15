@@ -407,7 +407,7 @@ test('the app at 80 by 24 and 140 by 50: a session named in CJK, an answer with 
     let rows = await v.screen(where('the chat'));
     const bar = v.current.panels.boardBox.width, right = row => row.endsWith('│') || row.endsWith('┐') || row.endsWith('┘');
     assert.ok(rows.some(row => row.includes(`✓ ${NAME}`) || row.includes('✓ 修复上传器')), where('the Sessions row is named in CJK'));
-    assert.ok(rows[1].includes(NAME) && rows[1].includes('answered'), `${where('the title')}: ${rows[1]}`);
+    assert.ok(rows[1].includes(NAME) && rows[1].includes('Task'), `${where('the title')}: ${rows[1]}`);
     assert.ok(rows.some(row => row.includes('┃ Done ✅ shipped 🚀 the uploader notes.')) && rows.some(row => row.includes('┃ 修复完成 ✅ 所有测试通过 🚀')), where('the answer is whole'));
     assert.ok(bar >= 24 && rows.slice(2, height - 10).every(right), `${where('every row of the chat ends at its border')}:\n${rows.join('\n')}`);
     // Typing and deleting in the message box: the text stands where it was typed, and Backspace takes one whole character.
@@ -566,7 +566,7 @@ test('the app at every width from 80 to 200: typing on the Sessions row of a ses
     // The list's right border is in its column on that row, and the pane beside it ends at the screen's edge.
     assert.deepEqual([cellsOf(row).length, cellsOf(row)[wide - 1]], [width, '│'], `the list's border on the row at ${width}: ${row}`);
     assert.ok(row.includes(TITLED) || row.includes('…'), `the row's title is whole or cut with its mark at ${width}: ${row}`);
-    assert.ok(rows[1].includes('🚀 Ship') && rows[1].includes('answered'), `the title beside the list at ${width}: ${rows[1]}`);
+    assert.ok(rows[1].includes('🚀 Ship') && rows[1].includes('Task'), `the title beside the list at ${width}: ${rows[1]}`);
     assert.ok(rows.slice(2, 18).every(ends), `every row ends at its border at ${width}:\n${rows.join('\n')}`);
     assert.ok(rows.some(value => value.includes(`│ ${typed} `) && value.endsWith('│')), `the message box at ${width}:\n${rows.slice(-8).join('\n')}`);
   }

@@ -89,10 +89,11 @@ test('outside Full access the first message still waits for the check, and says 
   assert.deepEqual(said(readTask(f.controller.repo, session(f))), [FIRST]);
   // Under the working line: the steps done of the real number, and the time so far, counted on while a step runs.
   const counted = () => notes(f).map(row => row.note).filter(note => COUNTING.test(note));
-  await until(() => counted().length >= 3, 'the counting line, said again while the first step runs', 30000);
+  // A step that ends says the line again too, so the third line need not be the 5 s tick.
+  const seconds = () => counted().map(note => Number(/(\d+)s so far/.exec(note)[1]));
+  await until(() => counted().length >= 3 && seconds().at(-1) >= 5, 'the counting line, said again while a step runs', 30000);
   assert.match(counted()[0], /^Grok Build: 0 of 8 steps, 0s so far\.$/);
-  const seconds = counted().map(note => Number(/(\d+)s so far/.exec(note)[1]));
-  assert.ok(seconds.at(-1) >= 5, `the time is counted on: ${counted().join(' | ')}`);
+  assert.ok(seconds().at(-1) >= 5, `the time is counted on: ${counted().join(' | ')}`);
   assert.equal(ended, false, 'the message waits for the check');
   assert.ok(checkTurns(f.calls()).length > 0, 'the check is running');
   // The check ends: the turn goes on by itself and the chat keeps what it found.

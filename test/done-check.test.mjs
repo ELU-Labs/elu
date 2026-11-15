@@ -129,8 +129,8 @@ test('a session that ended waits under Needs you; the check shows its goal and o
 test('a session with no Task: the check shows its first message; Keep open sends a new message, a copy is refused; one at work or whose Task waits is not checked', t => {
   const f = setup(t, { mode: 'answer' });
   const task = chat(f.repo, 1, { goal: 'Where is the export?' });
-  assert.equal(cardOf(f, '1').detail, 'answered · check it');
-  assert.deepEqual(checkView(f.repo, task), { title: 'Where is the export?', ended: 'answered', first: 'Where is the export?' });
+  assert.equal(cardOf(f, '1').detail, 'replied · check it');
+  assert.deepEqual(checkView(f.repo, task), { title: 'Where is the export?', ended: 'replied', first: 'Where is the export?', checklist: [{ text: 'Replied', met: true, evidence: 'Its reply is in the chat.' }] });
   assert.throws(() => copySession(f.repo, f.root, task, 'Move the export'), { message: 'Only a session with a Task is copied. Keep it open with a new message instead.' });
   assert.throws(() => keepOpen(f.repo, f.root, task, '  '), { message: 'Write the new goal first.' });
   keepOpen(f.repo, f.root, task, 'And the import?');
@@ -195,10 +195,10 @@ test('a session that went to Done by itself before this version comes back under
   const board = () => readBoard(f.repo);
   // Answered 20 days before then: stays in Done, saying how it ended.
   const old = chat(f.repo, 1, { goal: 'Last month', days: 22 });
-  assert.equal(sessionPlace(board(), old), 'done'); assert.equal(cardOf(f, '1').detail, 'answered');
+  assert.equal(sessionPlace(board(), old), 'done'); assert.equal(cardOf(f, '1').detail, 'replied');
   // Answered and published within the 14 days before: back under Needs you.
   const recent = chat(f.repo, 2, { goal: 'This week', days: 5 });
-  assert.equal(sessionPlace(board(), recent), 'needs'); assert.equal(cardOf(f, '2').detail, 'answered · check it');
+  assert.equal(sessionPlace(board(), recent), 'needs'); assert.equal(cardOf(f, '2').detail, 'replied · check it');
   liveTask(f.root, { id: '3', goal: 'Publish the fix', state: 'done' }); saveTask(f.repo, { ...readTask(f.repo, '3'), pr: 'https://github.com/acme/shop/pull/3', createdAt: new Date(Date.now() - 3 * 86400000).toISOString() });
   assert.equal(cardOf(f, '3').column, 'needs'); assert.equal(cardOf(f, '3').detail, 'published · check it');
   // One he moved to Done himself stays there; one archived leaves the board.
@@ -223,7 +223,7 @@ test("a schedule's run that ended waits for his check; the next run archives it 
   const f = setup(t);
   const row = saveSchedule({ root: f.root, goal: 'Check the nightly build', when: parseWhen('every 3h') });
   const ran = chat(f.repo, 1, { goal: 'Check the nightly build', scheduleId: row.id });
-  assert.equal(cardOf(f, '1').column, 'needs'); assert.equal(cardOf(f, '1').detail, 'answered · check it');
+  assert.equal(cardOf(f, '1').column, 'needs'); assert.equal(cardOf(f, '1').detail, 'replied · check it');
   assert.equal(runScheduleNow(row.id, new Date(), { start: () => true }), true);
   assert.ok(readBoard(f.repo).archived.includes('1'));
   assert.equal(sessionPlace(readBoard(f.repo), ran), null); assert.equal(readBoard(f.repo).checked?.['1'], undefined);
@@ -334,7 +334,7 @@ test('a session he checked Done comes out of Done when more work comes, with a c
     checkDone(f.repo, readTask(f.repo, id));
     const later = new Date(Date.now() + 1000).toISOString(); saveTask(f.repo, { ...readTask(f.repo, id), messages: [{ at: later, text: 'One more thing' }], result: { outcome: 'done', summary: 'Here.' } });
     assert.equal(sessionPlace(readBoard(f.repo), readTask(f.repo, id)), 'needs', id);
-    assert.deepEqual([cardOf(f, id).column, cardOf(f, id).check, cardOf(f, id).detail], ['needs', true, 'answered · check it'], id);
+    assert.deepEqual([cardOf(f, id).column, cardOf(f, id).check, cardOf(f, id).detail], ['needs', true, 'replied · check it'], id);
   }
 });
 

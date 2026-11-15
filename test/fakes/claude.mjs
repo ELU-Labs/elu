@@ -417,6 +417,38 @@ if(mode==='steps'){
  say({type:'text',text:'The test fails on lower case codes. Fixing normalize.'});
  say({type:'tool_use',id:'toolu_reply',name:'StructuredOutput',input:result});done('toolu_reply','Structured output provided successfully');
 }
+// many (mode): a long turn as the owner saw one, a long thought before each command, round
+// after round. many.rounds (7) rounds; the command of the last one runs until gate (fake.json)
+// exists. Then many.more (2) rounds and one last long thought, which waits for many.gate, if
+// given, before the reply. many.first: a file the turn waits for after its first thought.
+// many.helpers: in the last round two helper agents start beside its command, the refund one
+// reads a file and the checkout one is reading one, until gate. many.plan: in the last round a
+// plan of that many entries takes the command's place, until gate.
+if(mode==='many'){
+ const many=cfg.many??{},rounds=many.rounds??7,more=many.more??2,wait=async file=>{while(file&&!fs.existsSync(file))await new Promise(resolve=>setTimeout(resolve,20));};
+ const say=(content,parent=null)=>console.log(JSON.stringify({type:'assistant',message:{id:'msg_fake',role:'assistant',content:[content]},parent_tool_use_id:parent,session_id:session}));
+ const done=(id,content,parent=null)=>console.log(JSON.stringify({type:'user',message:{role:'user',content:[{type:'tool_result',tool_use_id:id,content}]},parent_tool_use_id:parent,session_id:session}));
+ const thought=n=>`Round ${n} starts here. I am reading the coupon module again to see where the codes are compared, and lower case codes reach the lookup as they were typed. I will run the tests of this round next, then read the module that calls it, and note what each of them expects. Round ${n} ends here.`;
+ for(let n=1;n<=rounds+more;n++){
+  say({type:'thinking',thinking:thought(n),signature:'sig-fake'});
+  if(n===1)await wait(many.first);
+  const gated=n===rounds,planned=gated&&many.plan;
+  if(planned)say({type:'tool_use',id:`toolu_round_${n}`,name:'TodoWrite',input:{todos:Array.from({length:many.plan},(_,at)=>({content:`Check coupon case ${at+1}`,status:at<3?'completed':at===3?'in_progress':'pending'}))}});
+  else say({type:'tool_use',id:`toolu_round_${n}`,name:'Bash',input:{command:`npm test -- --grep round-${n}`}});
+  if(gated&&many.helpers){
+   say({type:'tool_use',id:'toolu_checkout',name:'Agent',input:{description:'Check the checkout path',prompt:'Look'}});
+   say({type:'tool_use',id:'toolu_refund',name:'Agent',input:{description:'Check the refund path',prompt:'Look'}});
+   say({type:'tool_use',id:'toolu_refund_read',name:'Read',input:{file_path:path.join(process.cwd(),'src','refund.mjs')}},'toolu_refund');done('toolu_refund_read','ok','toolu_refund');
+   say({type:'tool_use',id:'toolu_checkout_read',name:'Read',input:{file_path:path.join(process.cwd(),'src','checkout.mjs')}},'toolu_checkout');
+  }
+  if(gated)await wait(cfg.gate);
+  if(gated&&many.helpers){done('toolu_checkout_read','ok','toolu_checkout');done('toolu_checkout','Checkout is fine.');done('toolu_refund','Refund is fine.');}
+  done(`toolu_round_${n}`,planned?'Todos have been modified successfully':'ok 1 - normalizes coupons');
+ }
+ say({type:'thinking',thinking:`${thought(rounds+more+1)} The last check is whether the refund path normalizes the codes too.`,signature:'sig-fake'});
+ await wait(many.gate);
+ say({type:'tool_use',id:'toolu_reply',name:'StructuredOutput',input:result});done('toolu_reply','Structured output provided successfully');
+}
 // live (mode): a long turn as Claude Code 2.1.322 writes it (the shapes of its real logs, with
 // made-up content). It counts a thought's tokens while it thinks (system/thinking_tokens) and
 // sends the thought with no text; only with live.text and --thinking-display summarized does

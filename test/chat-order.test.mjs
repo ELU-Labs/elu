@@ -43,11 +43,11 @@ const SCENES = {
   'a working session with steps and one waiting message': {
     view: { state: 'running', held: 1, plan: approved(ago(8.9)), waiting: [{ at: ago(0), text: 'Use CSV for it', state: 'turn', takes: 'beside' }], runs: [{ run: 'run-1', role: 'lead', startedAt: ago(1), at: null, steps: STEPS }],
       entries: [{ role: 'You', at: ago(10), text: 'Fix the report' }, { role: 'Claude', lead: true, at: ago(9), text: 'Here is the Task for it.' }, { role: 'You', at: ago(1), text: 'Go on with it' }] },
-    order: ['Fix the report', 'Here is the Task for it.', 'Task · approved', 'Go on with it', 'Working on @my-box', 'Read: src/report.mjs', 'Run: npm test', '(answered in a moment)', 'Use CSV for it', 'takes no message while it works'], last: 'sends it now: that stops the turn on @my-box and the command that is running' },
+    order: ['Fix the report', 'Here is the Task for it.', 'Task · approved', 'Go on with it', 'Working on @my-box', '1 earlier step · ctrl+o shows all', 'Run: npm test', '(answered in a moment)', 'Use CSV for it', 'takes no message while it works'], last: 'sends it now: that stops the turn on @my-box and the command that is running' },
   'a working session with steps and a message answered beside its turn': {
     view: { state: 'running', beside: 3, plan: approved(ago(8.9)), runs: [{ run: 'run-1', role: 'lead', startedAt: ago(1), at: null, steps: STEPS }],
       entries: [{ role: 'You', at: ago(10), text: 'Fix the report' }, { role: 'Claude', lead: true, at: ago(9), text: 'Here is the Task for it.' }, { role: 'You', at: ago(1), text: 'Go on with it' }, { role: 'You', at: ago(0.3), text: 'How far are you?', beside: true }, { role: 'Codex · beside the turn', at: ago(0.2), text: 'Two of three steps are done.', update: true, beside: true }, { role: 'ELU', at: ago(0.2), text: ASIDE_ANSWERED, line: true, beside: true }] },
-    order: ['Fix the report', 'Here is the Task for it.', 'Task · approved', 'Go on with it', 'Working on @my-box', 'Read: src/report.mjs', 'Run: npm test', 'How far are you?', 'beside the turn', 'Two of three steps are done.', 'Answered beside the running turn'], last: 'The turn goes on.' },
+    order: ['Fix the report', 'Here is the Task for it.', 'Task · approved', 'Go on with it', 'Working on @my-box', '1 earlier step · ctrl+o shows all', 'Run: npm test', 'How far are you?', 'beside the turn', 'Two of three steps are done.', 'Answered beside the running turn'], last: 'The turn goes on.' },
   'two waiting messages': {
     view: { state: 'answered', waiting: [{ at: ago(2), text: 'First of the two', state: 'queued', reason: 'Waiting for a free slot: 1 of 1 session is running. /slots changes it.' }, { at: ago(1), text: 'Second of the two', state: 'queued' }],
       entries: [{ role: 'You', at: ago(10), text: 'Fix the report' }, { role: 'Claude', lead: true, at: ago(9), text: 'It is fixed.' }] },
@@ -266,10 +266,10 @@ const HERE = {
     make: { state: 'running', live: true, replies: [[9, 'Here is the Task for it.']], plan: { minutes: 8.9, approved: true }, asked: [[1, 'Go on with it']], waiting: [[0.1, 'Use CSV for it']] },
     // The row's tag gives way to its short form where it and the time do not fit on one row:
     // at 80 columns from 10:00 to 12:59, when the time takes one more column.
-    order: ['Fix the report', 'Here is the Task for it.', 'Task · approved', 'Go on with it', 'is working', 'Read: src/report.mjs', 'Run: npm test', ['(read or answered in a moment)', '(read or answered soon)'], 'Use CSV for it'] },
+    order: ['Fix the report', 'Here is the Task for it.', 'Task · approved', 'Go on with it', 'is working', '1 earlier step · ctrl+o shows all', 'Run: npm test', ['(read or answered in a moment)', '(read or answered soon)'], 'Use CSV for it'] },
   'a working session with steps and a message answered beside its turn': {
     make: { state: 'running', live: true, replies: [[9, 'Here is the Task for it.']], plan: { minutes: 8.9, approved: true }, asked: [[1, 'Go on with it']], aside: [[0.3, 'How far are you?', 'Two of three steps are done.']] },
-    order: ['Fix the report', 'Here is the Task for it.', 'Task · approved', 'Go on with it', 'is working', 'Read: src/report.mjs', 'Run: npm test', 'How far are you?', 'beside the turn', 'Two of three steps are done.', 'Answered beside the running turn'] },
+    order: ['Fix the report', 'Here is the Task for it.', 'Task · approved', 'Go on with it', 'is working', '1 earlier step · ctrl+o shows all', 'Run: npm test', 'How far are you?', 'beside the turn', 'Two of three steps are done.', 'Answered beside the running turn'] },
   'two waiting messages': {
     make: { state: 'answered', replies: [[9, 'It is fixed.']], waiting: [[2, 'First of the two'], [1, 'Second of the two']] },
     order: ['Fix the report', 'It is fixed.', '(starts next)', 'First of the two', '(starts next)', 'Second of the two'] },
