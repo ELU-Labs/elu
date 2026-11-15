@@ -5,8 +5,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { fakeClis, temp } from './helpers.mjs';
-import { TOP_AGENTS, agentSpend, agentTable, byCost, cleanTopAgents, compact, costText, runSpends, runUsage, shareText, spendText, tokensText, topAgentsWire } from '../lib/agent-spend.mjs';
-import { todayCost } from '../lib/terminal.mjs';
+import { TOP_AGENTS, agentSpend, agentTable, byCost, cleanTopAgents, compact, costText, modelLabel, moneyText, runSpends, runUsage, shareText, topAgentsWire } from '../lib/agent-spend.mjs';
+import { usageTotal } from '../lib/terminal.mjs';
 
 const FIXTURES = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures');
 const NOW = new Date(2026, 10, 12, 15, 0, 0).getTime();
@@ -28,16 +28,18 @@ test('a run records the tokens and model its vendor reported, and none where it 
   assert.deepEqual(runUsage('claude', JSON.stringify({ type: 'result', usage: { input_tokens: 6, output_tokens: 6, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } })).tokens, { input: 6, output: 6, cacheRead: 0, cacheWrite: 0 });
   // The recorded native stream: its result's usage.
   assert.deepEqual(runUsage('claude', fs.readFileSync(path.join(FIXTURES, 'native-claude.jsonl'), 'utf8')).tokens?.output, 6);
-  // Codex: every turn, input without the cached part, which is the cache read.
-  const codex = fs.readFileSync(path.join(FIXTURES, 'codex-blocked.jsonl'), 'utf8') + '\n' + JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1000, cached_input_tokens: 400, output_tokens: 10 } });
-  assert.deepEqual(runUsage('codex', codex), { tokens: { input: 34605 - 17024 + 600, output: 612, cacheRead: 17024 + 400, cacheWrite: 0 }, model: null });
+  // Codex: the thread's total when the run ended (each turn.completed holds what the thread has
+  // used so far), input without the cached part, which is the cache read; and the thread.
+  const codex = fs.readFileSync(path.join(FIXTURES, 'codex-blocked.jsonl'), 'utf8');
+  assert.deepEqual(runUsage('codex', codex), { tokens: { input: 34605 - 17024, output: 602, cacheRead: 17024, cacheWrite: 0 }, model: null, thread: '0199c0de-0000-7000-8000-00000000b10c' });
+  assert.deepEqual(runUsage('codex', codex + '\n' + JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 40000, cached_input_tokens: 20000, output_tokens: 700 } })).tokens, { input: 20000, output: 700, cacheRead: 20000, cacheWrite: 0 });
   // Grok Build: its one JSON result.
   const grok = JSON.stringify({ text: '{}', stopReason: 'end_turn', usage: { input_tokens: 10, cache_read_input_tokens: 2, cache_creation_input_tokens: 0, output_tokens: 5 } });
   assert.deepEqual(runUsage('grok', grok), { tokens: { input: 10, output: 5, cacheRead: 2, cacheWrite: 0 }, model: null });
   // A streaming-json run: its end event, not the per-response usage lines before it.
   const streamed = [{ type: 'text', data: '{}' }, { type: 'usage', usage: { input_tokens: 99, output_tokens: 99 } }, { type: 'end', stopReason: 'end_turn', usage: { input_tokens: 10, cache_read_input_tokens: 2, cache_creation_input_tokens: 0, output_tokens: 5 }, modelUsage: { 'grok-4.6': { inputTokens: 10, outputTokens: 5, cacheReadInputTokens: 2 } } }].map(row => JSON.stringify(row)).join('\n');
   assert.deepEqual(runUsage('grok', streamed), { tokens: { input: 10, output: 5, cacheRead: 2, cacheWrite: 0 }, model: 'grok-4.6' });
-  // Antigravity reports none; nor does a log of noise, a negative count, or a result without usage.
+  // Claude Code's result is not Antigravity's; nor does a log of noise, a negative count, or a result without usage report any.
   assert.deepEqual(runUsage('agy', claude), { tokens: null, model: null });
   assert.deepEqual(runUsage('claude', 'not json\n{"type":"result"}'), { tokens: null, model: null });
   assert.deepEqual(runUsage('codex', JSON.stringify({ type: 'turn.completed', usage: { input_tokens: -5 } })), { tokens: null, model: null });
@@ -68,24 +70,27 @@ test('top agents are one row per agent in a session, named as the chat names the
     ['Claude', 'Old shape', 'claude', 1.1, false],
     ['@reviewer', 'Fix the coupons', 'sonnet 5', 0.3, false],
     ['@writer', 'Notes', 'claude', 0.2, false],
-    ['@pair', 'Fix the coupons', 'gpt-6.1-sol', null, false],
+    ['@pair', 'Fix the coupons', 'gpt-6.1-sol', 0.02, false],
   ]);
   assert.deepEqual(today.rows[0].tokens, { input: 1200000, output: 34000, cacheRead: 8100000, cacheWrite: 10 });
   assert.equal(today.rows[1].tokens, null, 'an old run has no tokens');
-  // The spend line counts the same runs: some reported no cost, so at least.
-  assert.equal(Number(today.costUsd.toFixed(2)), 14); assert.equal(today.partial, true);
-  assert.equal(spendText(today), 'at least $14.00');
-  assert.equal(todayCost(projects, new Date(NOW)), spendText(today), 'the spend line and the section agree');
+  // The Codex run reported tokens and no cost: it costs gpt-6.1-sol's list price, 5k × $2 + 1k
+  // × $0.10 + 900 × $10 per million, so the day's total is known. The total under the table counts the same runs.
+  assert.equal(Number(today.rows[4].costUsd.toFixed(4)), 0.0191);
+  assert.equal(Number(today.costUsd.toFixed(2)), 14.02); assert.equal(today.partial, false);
+  const total = usageTotal([{ name: 'here', costUsd: today.costUsd, partial: today.partial, runs: today.runs }]);
+  assert.equal(agentTable(today.rows, { width: 120, total: today.costUsd, foot: total }).foot[0].trim(), 'Today  $14.02', 'the total and the section agree');
   const week = agentSpend(projects, { now: NOW, days: 7 });
   assert.deepEqual(week.rows.slice(0, 2).map(row => [row.title, row.costUsd]), [['Last week', 50], ['Fix the coupons', 12.4]]);
   assert.ok(!week.rows.some(row => row.title === 'Too old'));
-  // A row with some runs of unknown cost is at least its known cost, and names what reported none.
+  // A row with some runs of unknown cost is at least its known cost.
   const mixed = agentSpend([{ root: '/r', tasks: [task(1, 'Mixed', [run('lead', { costUsd: 3 }), run('lead', { costUsd: null })])] }], { now: NOW });
-  assert.equal(costText(mixed.rows[0]), '$3.00 + claude'); assert.equal(spendText(mixed), 'at least $3.00');
-  assert.equal(costText({ costUsd: 3, partial: true }), '≥$3.00', 'a lower bound with no reason known');
-  // Nothing reported a cost: it says so; no run at all spent nothing.
+  assert.equal(costText(mixed.rows[0]), '≥$3.00'); assert.equal(moneyText(mixed.costUsd, mixed.partial, mixed.runs), '≥$3.00');
+  // No cost known (no tokens to price): a dash, never $0.00; no run at all spent nothing.
   const none = agentSpend([{ root: '/r', tasks: [task(1, 'Codex only', [run('lead', { vendor: 'codex', costUsd: null })])] }], { now: NOW });
-  assert.equal(costText(none.rows[0]), 'not reported'); assert.equal(spendText(none), 'not reported'); assert.equal(todayCost([], new Date(NOW)), '$0.00');
+  assert.equal(costText(none.rows[0]), '—'); assert.equal(moneyText(none.costUsd, none.partial, none.runs), '—');
+  const idle = agentSpend([], { now: NOW });
+  assert.equal(moneyText(idle.costUsd, idle.partial, idle.runs), '$0.00'); assert.equal(usageTotal([{ name: 'here', costUsd: idle.costUsd, partial: idle.partial, runs: idle.runs }]).costUsd, 0);
   // Tasks of any shape a state file may hold do not break it.
   assert.deepEqual(agentSpend([{ root: '/r', tasks: [{ id: '1' }, { id: '2', runs: null }, null] }], { now: NOW }).rows, []);
 });
@@ -159,48 +164,110 @@ test('an ACP run records the tokens its vendor sent with the turn, however it na
   assert.deepEqual(runUsage('agy', log(answer({ stopReason: 'end_turn', _meta: { quota: { token_count: { input_tokens: 900, output_tokens: 30 } } } }))).tokens, { input: 900, output: 30, cacheRead: 0, cacheWrite: 0 });
   // Two turns of one run add up.
   assert.deepEqual(runUsage('agy', log(answer({ stopReason: 'end_turn', usage: { inputTokens: 5, outputTokens: 1 } }), answer({ stopReason: 'end_turn', usage: { inputTokens: 7, outputTokens: 2 } }))).tokens, { input: 12, output: 3, cacheRead: 0, cacheWrite: 0 });
-  // No tokens with the turn: not reported, whatever the context meter said, and never zeros.
+  // No tokens with the turn: none, whatever the context meter said, and never zeros.
   assert.deepEqual(runUsage('agy', log(meter, answer({ stopReason: 'end_turn' }))), { tokens: null, model: null });
   assert.deepEqual(runUsage('grok', log(answer({ stopReason: 'end_turn', _meta: { usage: { usageIsIncomplete: true } } }))), { tokens: null, model: null });
-  assert.equal(tokensText(runUsage('agy', log(answer({ stopReason: 'end_turn' }))).tokens), 'not reported');
+  assert.match(agentTable([{ agent: 'Gemini 3 Flash', title: 'Docs', model: 'gemini-3-flash', tokens: runUsage('agy', log(answer({ stopReason: 'end_turn' }))).tokens, costUsd: null }], { width: 80 }).rows[0], /^Docs +Gemini 3 Flash +— +— +— +— +—$/);
 });
 
-test('tokens read compact, costs and shares say only what was reported', () => {
+// Antigravity CLI headless (-p --output-format json) ends with the run's turns and tokens:
+// usage { input_tokens, output_tokens, thinking_tokens, cache_read_tokens, total_tokens }
+// (seen on agy 1.5.8, and in its changelog: "The JSON usage object emitted by json and
+// stream-json now reports token accounting including cache_read_tokens"). The cache read is
+// apart from the input, as Antigravity's docs print it. The total says whether the thinking is
+// counted apart from the output, and is then output too; where it is not, the thinking may be
+// inside the output or apart, so the run is at least its output (incomplete). A total that fits
+// no reading, or no total, says nothing for sure: no tokens.
+test('a headless Antigravity run records the tokens its result reports, read by its total, and none where the total does not say', () => {
+  const result = (usage, extra = {}) => JSON.stringify({ conversation_id: '2f6c1d1e-2b1a-4c55-9a77-0d1f9b0c1e2a', status: 'SUCCESS', response: '{}', error: '', duration_seconds: 12, num_turns: 3, usage, finished_reason: 'stop', ...extra });
+  const use = (input, output, thinking, cache, total) => ({ input_tokens: input, output_tokens: output, thinking_tokens: thinking, cache_read_tokens: cache, total_tokens: total });
+  // Every count apart: the total is all four.
+  assert.deepEqual(runUsage('agy', result(use(1200, 80, 40, 200, 1520))), { tokens: { input: 1200, output: 120, cacheRead: 200, cacheWrite: 0 }, model: null, thread: '2f6c1d1e-2b1a-4c55-9a77-0d1f9b0c1e2a', turns: 3 });
+  // The thinking counted apart, the cache read left out of the total: the same tokens.
+  assert.deepEqual(runUsage('agy', result(use(1200, 80, 40, 200, 1320))), { tokens: { input: 1200, output: 120, cacheRead: 200, cacheWrite: 0 }, model: null, thread: '2f6c1d1e-2b1a-4c55-9a77-0d1f9b0c1e2a', turns: 3 });
+  // A total with no thinking in it, the cache read in it or not: at least the output.
+  assert.deepEqual(runUsage('agy', result(use(1200, 80, 40, 200, 1480))), { tokens: { input: 1200, output: 80, cacheRead: 200, cacheWrite: 0 }, model: null, thread: '2f6c1d1e-2b1a-4c55-9a77-0d1f9b0c1e2a', turns: 3, incomplete: true });
+  assert.deepEqual(runUsage('agy', result(use(1200, 80, 40, 200, 1280))), { tokens: { input: 1200, output: 80, cacheRead: 200, cacheWrite: 0 }, model: null, thread: '2f6c1d1e-2b1a-4c55-9a77-0d1f9b0c1e2a', turns: 3, incomplete: true });
+  // Printed over several lines, as JSON may be.
+  assert.deepEqual(runUsage('agy', JSON.stringify(JSON.parse(result(use(10, 5, 0, 0, 15))), null, 2)).tokens, { input: 10, output: 5, cacheRead: 0, cacheWrite: 0 });
+  // A total that a reading with the thinking apart and one without it fit (thinking and the cache read the same size): at least the output.
+  assert.deepEqual(runUsage('agy', result(use(1200, 80, 200, 200, 1480))), { tokens: { input: 1200, output: 80, cacheRead: 200, cacheWrite: 0 }, model: null, thread: '2f6c1d1e-2b1a-4c55-9a77-0d1f9b0c1e2a', turns: 3, incomplete: true });
+  // A total no reading fits, or no total: none.
+  assert.equal(runUsage('agy', result(use(1200, 80, 40, 200, 9999))).tokens, null);
+  assert.equal(runUsage('agy', result({ input_tokens: 1200, output_tokens: 80 })).tokens, null);
+  // A run that made no turn (it could not sign in) spent nothing; one with turns that reports all 0 reported nothing.
+  assert.deepEqual(runUsage('agy', result(use(0, 0, 0, 0, 0), { status: 'ERROR', num_turns: 0, error: 'authentication failed or timed out', finished_reason: 'error' })).tokens, { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
+  assert.equal(runUsage('agy', result(use(0, 0, 0, 0, 0))).tokens, null);
+  // No usage at all (an older agy): none.
+  assert.equal(runUsage('agy', JSON.stringify({ conversationId: 'c', structured_output: {} })).tokens, null);
+});
+
+// Antigravity's own headless docs (antigravity.google/docs/cli/headless.md): a run of 10,415
+// input, 657 output, 616 thinking and 8,113 read from the cache totals 11,072, the input and the
+// output; in a two-turn conversation, the second turn's 278 input read 30,214 from the cache
+// (total 282), and the conversation's counts after it are 30,662 input, 8 output and 30,214 read
+// (total 30,670), its first turn's 30,384 input and 4 output added. So the cache read is apart
+// from the input and out of the total. On gemini-3.1-pro ($2 input, $0.20 cached, $12 output a
+// million) the first turn cost $0.0608 and the second $0.0066.
+test("a headless Antigravity run reads Antigravity's own documented counts: the cache read apart from the input, and its conversation's next run counted", () => {
+  const conversation = '2f6c1d1e-2b1a-4c55-9a77-0d1f9b0c1e2a', at = hoursAgo(1);
+  const use = (input, output, thinking, cache, total) => ({ input_tokens: input, output_tokens: output, thinking_tokens: thinking, cache_read_tokens: cache, total_tokens: total });
+  const result = (turns, usage) => JSON.stringify({ conversation_id: conversation, status: 'SUCCESS', response: '{}', num_turns: turns, usage, finished_reason: 'stop' });
+  const logs = { 'one.log': result(1, use(10415, 657, 616, 8113, 11072)), 'first.log': result(1, use(30384, 4, 0, 0, 30388)), 'second.log': result(2, use(30662, 8, 0, 30214, 30670)) };
+  const read = file => ({ started: true, ...runUsage('agy', logs[file]) });
+  const near = (value, wanted, text) => assert.ok(Math.abs(value - wanted) < 1e-9, `${text}: ${value}, not ${wanted}`);
+  // The one run: its input apart from what it read, its thinking left out of the total, inside the output or not: at least $0.0303.
+  assert.deepEqual(runUsage('agy', logs['one.log']), { tokens: { input: 10415, output: 657, cacheRead: 8113, cacheWrite: 0 }, model: null, thread: conversation, turns: 1, incomplete: true });
+  const [one] = runSpends({ id: '1', createdAt: at, runs: [{ role: 'lead', vendor: 'agy', at, session: conversation, code: 0, costUsd: null, model: 'gemini-3.1-pro', logFile: 'one.log' }] }, read);
+  near(one.costUsd, (10415 * 2 + 8113 * 0.2 + 657 * 12) / 1e6, 'the one run'); assert.equal(one.atLeast, true);
+  // The conversation: each run counted once, at what it cost, from the counts the docs print.
+  const runs = ['first.log', 'second.log'].map(logFile => ({ role: 'lead', vendor: 'agy', at, session: conversation, code: 0, costUsd: null, model: 'gemini-3.1-pro', logFile }));
+  const [first, second] = runSpends({ id: '2', createdAt: at, runs }, read);
+  assert.deepEqual([first.tokens, second.tokens], [{ input: 30384, output: 4, cacheRead: 0, cacheWrite: 0 }, { input: 278, output: 4, cacheRead: 30214, cacheWrite: 0 }]);
+  near(first.costUsd, (30384 * 2 + 4 * 12) / 1e6, 'its first run'); near(second.costUsd, (278 * 2 + 30214 * 0.2 + 4 * 12) / 1e6, 'its second run');
+  assert.equal(first.atLeast ?? false, false); assert.equal(second.atLeast ?? false, false);
+  // Printed as the second turn's own counts in a run of its own (one turn): the same.
+  const own = runSpends({ id: '3', createdAt: at, runs: [{ ...runs[0], logFile: 'own.log' }] }, () => ({ started: true, ...runUsage('agy', result(1, use(278, 4, 0, 30214, 282))) }))[0];
+  near(own.costUsd, (278 * 2 + 30214 * 0.2 + 4 * 12) / 1e6, 'the turn alone');
+});
+
+test('tokens read compact, costs and shares say only what is known, and a model reads by its name', () => {
   assert.deepEqual([0, 950, 1000, 1234, 9949, 9950, 34000, 999499, 999500, 1200000, 12345678, 1100000000, 25e9].map(compact), ['0', '950', '1k', '1.2k', '9.9k', '10k', '34k', '999k', '1M', '1.2M', '12M', '1.1B', '25B']);
   assert.equal(compact(-1), '—'); assert.equal(compact(NaN), '—');
-  assert.equal(tokensText({ input: 1200000, output: 340000, cacheRead: 8100000, cacheWrite: 5 }), '1.2M · 340k · 8.1M');
-  assert.equal(tokensText(null), 'not reported'); assert.equal(tokensText(null, { started: false }), 'did not start');
-  assert.equal(costText({ costUsd: 12.4 }), '$12.40'); assert.equal(costText({ costUsd: null }), 'not reported');
-  assert.equal(costText({ costUsd: 2.75, partial: true, unpriced: ['codex'] }), '$2.75 + codex');
+  assert.equal(costText({ costUsd: 12.4 }), '$12.40'); assert.equal(costText({ costUsd: null }), '—');
+  assert.equal(costText({ costUsd: 2.75, partial: true, unpriced: ['codex'] }), '≥$2.75');
+  assert.equal(moneyText(null, false, 0), '$0.00'); assert.equal(moneyText(null), '—');
+  assert.deepEqual(['claude-opus-5-5', 'opus 5.5', 'gpt-6.1-sol', 'opus 5.5 + sonnet 5.5', 'codex', 'grok-4.6', 'gemini-3.1-pro-high', ''].map(modelLabel),
+    ['Opus 5.5', 'Opus 5.5', 'GPT-6.1 Sol', 'Opus 5.5 + Sonnet 5.5', 'Codex', 'Grok 4.6', 'Gemini 3.1 Pro High', '']);
   assert.equal(shareText({ costUsd: 12.4 }, 97.51), '13%'); assert.equal(shareText({ costUsd: 0.1 }, 97.51), '<1%'); assert.equal(shareText({ costUsd: null }, 97.51), '—'); assert.equal(shareText({ costUsd: 1 }, 0), '—');
 });
 
-test('the table labels the cost once, and a narrow pane drops the share, then the model, the tokens and where, keeping the cost, without wrapping', () => {
+test('a pane too narrow for Session, Model, Cost and Share cuts the model, then drops the share and the model, keeping the cost, without wrapping', () => {
   const rows = [
-    { agent: '@lead', title: 'Make the coupon codes upper case everywhere', where: '', model: 'opus 5.5', tokens: { input: 1200000, output: 34000, cacheRead: 8100000, cacheWrite: 0 }, costUsd: 12.4, partial: false },
-    { agent: '@pair', title: 'Make the coupon codes upper case everywhere', where: 'on devbox', model: 'gpt-6.1-sol', tokens: null, costUsd: null, partial: false },
+    { agent: '@lead', title: 'Make the coupon codes upper case everywhere', where: 'here', model: 'opus 5.5', tokens: { input: 1200000, output: 34000, cacheRead: 8100000, cacheWrite: 0 }, costUsd: 12.4, partial: false },
+    { agent: '@pair', title: 'Make the coupon codes upper case everywhere', where: 'devbox', model: 'gpt-6.1-sol', tokens: null, costUsd: null, partial: false },
   ];
+  const ALL = ['Session', 'Computer', 'Model', 'In', 'Out', 'Cache', 'Cost', 'Share'], ORDER = ['Cache', 'In', 'Out', 'Computer', 'Share', 'Model'];
+  // A header cut with … stands for its column.
+  const headers = width => agentTable(rows, { width, total: 20 }).head.split(/ {2,}/).filter(Boolean).map(name => ALL.find(full => full === name || name.endsWith('…') && full.startsWith(name.slice(0, -1))));
   const wide = agentTable(rows, { width: 120, total: 20 });
-  assert.equal(wide.length, 3);
-  assert.match(wide[0], /^Agent +Session +Model +in · out · cache +Cost \(API price\) +Share$/);
-  assert.match(wide[1], /^@lead +Make the coupon codes upper case everywhere +opus 5\.5 +1\.2M · 34k · 8\.1M +\$12\.40 +62%$/);
-  assert.match(wide[2], /^@pair +Make the coupon .* +on devbox +gpt-6\.1-sol +not reported +not reported +—$/);
-  assert.equal(wide.join('\n').match(/Cost \(API price\)/g).length, 1, 'the cost column is labelled once');
-  const headers = width => agentTable(rows, { width, total: 20 })[0].split(/ {2,}/).filter(Boolean);
+  assert.deepEqual(headers(120), ALL);
+  assert.match(wide.rows[0], /^@lead Make the coupon codes upper case everywhere +here +Opus 5\.5 +1\.2M +34k +8\.1M +\$12\.40 +62%$/);
+  assert.match(wide.rows[1], /^@pair Make the coupon codes upper case everywhere +devbox +GPT-6\.1 Sol +— +— +— +— +—$/);
+  assert.equal([wide.head, ...wide.rows].join('\n').match(/Cost/g).length, 1, 'the cost column is labelled once');
   let last = null;
   for (let width = 120; width >= 12; width--) {
-    const lines = agentTable(rows, { width, total: 20 });
-    assert.equal(lines.length, 3, `${width}: one line per row`);
-    for (const line of lines) { assert.ok(line.length <= width, `${width}: ${JSON.stringify(line)}`); assert.ok(!line.includes('\n')); }
-    const now = headers(width);
-    // What is gone went in this order: the share, the model, the tokens (then where it ran, and the cost last).
-    const gone = ['Share', 'Model', 'in · out · cache'].filter(name => !now.includes(name));
-    assert.deepEqual(gone, ['Share', 'Model', 'in · out · cache'].slice(0, gone.length), `${width}: ${now}`);
+    const table = agentTable(rows, { width, total: 20 });
+    assert.equal(table.rows.length, 2, `${width}: one line per row`);
+    for (const line of [table.head, table.rule, ...table.rows]) { assert.ok(line.length <= width, `${width}: ${JSON.stringify(line)}`); assert.ok(!line.includes('\n')); }
+    const now = headers(width), gone = ORDER.filter(name => !now.includes(name));
+    assert.deepEqual(gone, ORDER.slice(0, gone.length), `${width}: ${now}`);
+    assert.ok(now.includes('Cost'), `${width}: the cost stays`); assert.match(table.rows[0], /\$12\.40( +62%)?$/, `${width}`);
     if (last) assert.ok(now.length <= last.length, `${width}: ${now}`);
     last = now;
   }
-  assert.deepEqual(headers(64), ['Agent', 'Session', 'in · out · cache', 'Cost'], 'at 64 the share and the model have gone; the cost stays');
-  // Narrower, the tokens go before the session's title is cut below 12 columns.
-  assert.deepEqual(headers(62), ['Agent', 'Session', 'Cost']);
-  assert.match(agentTable(rows, { width: 62, total: 20 })[1], /^@lead +Make the coupon codes upper.* +\$12\.40$/);
+  assert.deepEqual(headers(60), ['Session', 'Model', 'Cost', 'Share']);
+  assert.deepEqual(headers(20), ['Session', 'Model', 'Cost'], 'the model cut to fit, the share gone');
+  assert.deepEqual(headers(12), ['Session', 'Cost']);
+  assert.equal(agentTable(rows, { width: 12, total: 20 }).rows[0], '@le…  $12.40');
 });

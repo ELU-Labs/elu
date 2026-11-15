@@ -121,3 +121,53 @@ test('a stopped turn keeps its steps: with no answer yet they stay where it stop
   assert.equal(entries.indexOf(entries.findLast(row => row.text === said[1].text)), entries.indexOf(reply) + 1, 'and the line on what the stop ended right below that answer');
   assert.deepEqual(placed.before.get(entries.find(row => row.text === said[0].text))?.map(run => run.key), [task.stops[0].logFile], 'the turn stopped before it stays in its place');
 });
+
+// Claude Code's sandbox on Linux (sandbox-runtime 0.0.82 in 2.1.322) keeps a command from
+// making a denied path that is missing, in a folder the command may write, by laying an empty
+// file there while the command runs: ELU's protected paths in an edit turn, and Claude Code's
+// own (.bashrc, .gitconfig and the rest). It takes them away once the command has ended, and
+// leaves them when it is killed, or asked to end, while the command runs ("Leaving mount points
+// in place while this process ends"). The stand-in does the same in a turn that may write its
+// folder, where it runs its command in a session of its own, as bubblewrap's runs. Every other
+// call, the turn that reads the message first among them, goes to the usual stand-in, which
+// takes the message as work: the Task it proposes is approved (autoApprove), and the turn that
+// works on it is the one stopped here.
+const SANDBOXED = (real, record) => `#!${process.execPath}
+const fs = require('node:fs'), path = require('node:path'), { spawn, spawnSync } = require('node:child_process');
+const onDisk = p => { try { return fs.realpathSync(p); } catch { return path.resolve(p); } }, spelled = p => path.join(onDisk(path.dirname(p)), path.basename(p));
+const args = process.argv.slice(2), at = args.indexOf('--settings'), settings = at < 0 ? null : JSON.parse(args[at + 1]);
+const deny = settings?.sandbox?.enabled ? settings.sandbox.filesystem?.denyWrite ?? [] : [], cwd = onDisk(process.cwd());
+if (!deny.length || deny.some(p => onDisk(p) === cwd)) { const r = spawnSync(${JSON.stringify(real)}, args, { stdio: 'inherit' }); process.exit(r.status ?? 1); }
+const own = ['.gitconfig', '.gitmodules', '.bashrc', '.bash_profile', '.zshrc', '.zprofile', '.profile', '.ripgreprc', '.mcp.json', '.vscode', '.idea'];
+const made = [...new Set([...deny.map(spelled), ...own.map(name => path.join(cwd, name))])].filter(p => path.dirname(p) === cwd && !fs.existsSync(p));
+for (const p of made) fs.writeFileSync(p, '');
+const tidy = () => { for (const p of made) { try { const held = fs.lstatSync(p); if (held.isFile() && held.size === 0) fs.unlinkSync(p); } catch {} } };
+let running = true;
+process.on('SIGTERM', () => { if (!running) tidy(); process.exit(143); });
+process.on('exit', () => { if (!running) tidy(); });
+const command = spawn('sh', ['-c', 'sleep 30'], { detached: true, stdio: 'ignore' });
+command.on('exit', () => { running = false; tidy(); });
+fs.writeFileSync(${JSON.stringify(record)}, JSON.stringify({ claude: process.pid, command: command.pid, made }));
+setInterval(() => {}, 1000);
+`;
+test('a stop while Claude Code runs a command leaves none of the empty files its sandbox laid over missing denied paths', async t => {
+  const p = project(t), fake = fakeClis(p.parent), real = path.join(fake.dir, 'claude-real'), record = path.join(p.parent, 'sandbox.json');
+  environment(t, { ...fake.env, HOME: p.parent, GIT_AUTHOR_NAME: 'Test Owner', GIT_AUTHOR_EMAIL: 'owner@example.invalid', GIT_COMMITTER_NAME: 'Test Owner', GIT_COMMITTER_EMAIL: 'owner@example.invalid' });
+  fs.renameSync(path.join(fake.dir, 'claude'), real); fs.writeFileSync(path.join(fake.dir, 'claude'), SANDBOXED(real, record), { mode: 0o755 });
+  const controller = autoApprove(new ProjectController(projectFolder(p.root)));
+  for (const permissions of ['ask', 'auto']) {
+    fs.rmSync(record, { force: true });
+    const run = controller.ask('Run the tests.', null, { permissions });
+    await until(() => fs.existsSync(record), `the ${permissions} turn's command`);
+    const seen = JSON.parse(fs.readFileSync(record, 'utf8'));
+    t.after(() => { for (const pid of [seen.claude, seen.command]) { try { process.kill(pid, 'SIGKILL'); } catch {} } });
+    assert.ok(seen.made.length > 20 && seen.made.every(file => fs.statSync(file).size === 0), `${permissions}: an edit turn, an empty file at each missing denied path while the command runs (${seen.made.length})`);
+    const since = Date.now(); await controller.stop(run.id); await run.finished.catch(() => {});
+    assert.ok(Date.now() - since < 3000, `${permissions}: the stop took ${Date.now() - since} ms`);
+    assert.deepEqual([alive(seen.command), alive(seen.claude)], [false, false], `${permissions}: the command and Claude Code ended with the turn`);
+    // Before: Claude Code was killed with its command, and every one of them stayed in the work
+    // tree, where Git listed them and the protected-path check of the next turn failed on them.
+    assert.deepEqual(seen.made.filter(file => fs.existsSync(file)), [], `${permissions}: the stop leaves none of them`);
+    assert.equal(readTask(controller.repo, run.id).state, 'stopped');
+  }
+});

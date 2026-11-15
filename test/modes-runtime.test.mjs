@@ -247,7 +247,7 @@ test("a bot's own scheduled turn runs with Full access in a Full access session;
   saveBot({ name: 'nightly', vendor: 'claude', instructions: 'Tidy the notes.', schedule: 'every 1h' });
   const chat = await f.controller.ask('Check the build every 3 hours.', null, { bots: ['nightly'], permissions: 'full' }).finished;
   assert.equal(chat.permissions, 'full');
-  assert.match(SCHEDULE_NOTE, /typing \/schedule, a time such as every 3h, and the message/); assert.match(SCHEDULE_NOTE, /you cannot create schedules or cron jobs yourself/);
+  assert.match(SCHEDULE_NOTE, /typing \/schedule, a time such as every 3h, and the message/); assert.match(SCHEDULE_NOTE, /Never create cron jobs or other timers yourself/);
   assert.ok(f.inputs()[0].input.includes(SCHEDULE_NOTE), "the model's answer turn is told");
   const before = f.leads().length, asked = f.inputs().length;
   const run = await f.controller.ask('Do your scheduled work.', chat.id, { bot: 'nightly', scheduled: true }).finished;

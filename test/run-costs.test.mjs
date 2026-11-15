@@ -12,7 +12,7 @@ import { boardRows } from '../lib/board.mjs';
 import { stopLine } from '../lib/stop-line.mjs';
 import { Conductor } from '../lib/conductor.mjs';
 import { peerFile } from '../lib/peer/paths.mjs';
-import { spendLine } from '../lib/terminal.mjs';
+import { usageTotal } from '../lib/terminal.mjs';
 
 // What a run cost by itself, wherever a session's runs are added up: its budget, its stop
 // line, its row and its reply to a teammate. Claude Code reports what a whole session has spent
@@ -62,8 +62,9 @@ test('runs recorded before 0.1.20 cost what each added, in the helper, a Session
 
 // Antigravity and Grok Build over ACP send a turn's tokens with its answer. They count where
 // every run's spend is worked out: from the run's record, and from its log for a run recorded
-// without them. Neither vendor reports a cost.
-test('a run over ACP counts the tokens its vendor sent with the turn where runs are added up, and no cost', t => {
+// without them. Neither vendor reports a cost: a run that named its model costs that model's
+// list price, and one that named none has no known cost.
+test("a run over ACP counts the tokens its vendor sent with the turn where runs are added up, at its model's list price", t => {
   const log = logs(t), answer = result => ({ jsonrpc: '2.0', id: 4, result });
   const runs = [
     { role: 'lead', vendor: 'agy', at: AT, code: 0, costUsd: null, model: 'gemini-3-flash', tokens: counted([1200, 120, 200, 10]), logFile: log('lead-1.log', [answer({ stopReason: 'end_turn', usage: { inputTokens: 1200, outputTokens: 120, cachedReadTokens: 200, cachedWriteTokens: 10 } })]) },
@@ -74,10 +75,101 @@ test('a run over ACP counts the tokens its vendor sent with the turn where runs 
   ];
   const task = { id: '1', goal: 'Checkout page', createdAt: AT, runs };
   assert.deepEqual(spend.runSpends(task).map(row => row.tokens), [counted([1200, 120, 200, 10]), counted([7, 2, 0, 0]), counted([10, 5, 30, 0]), null]);
-  assert.deepEqual(spend.runCosts(task), [null, null, null, null]);
-  // The Usage tab's row adds them up, and says its cost is not reported.
+  // gemini-3-flash, per million: $0.50 input and cache write, $0.05 cached, $3 output.
+  const costs = spend.runCosts(task);
+  near(costs[0], (1200 * 0.5 + 200 * 0.05 + 10 * 0.5 + 120 * 3) / 1e6, 'gemini-3-flash'); assert.deepEqual(costs.slice(1), [null, null, null]);
+  // The Usage tab's row adds them up: at least the priced run's cost.
   const [row] = spend.agentSpend([{ root: '/work/shop', tasks: [task] }], { now: Date.parse(AT) + 60000 }).rows;
-  assert.deepEqual(row.tokens, counted([1217, 127, 230, 10])); assert.equal(row.costUsd, null); assert.equal(spend.costText(row), 'not reported');
+  assert.deepEqual(row.tokens, counted([1217, 127, 230, 10])); near(row.costUsd, costs[0]); assert.equal(row.partial, true); assert.equal(spend.costText(row), '≥$0.00');
+});
+
+// Grok Build's spend covers every turn a run made and none of an earlier run of its session, so
+// a run that resumed a session reports its own. A count Grok says may miss a model call is
+// priced from what it shows, and is at least that.
+test("a Grok Build run that resumed its session counts what it reported, and a count Grok says may be incomplete is at least its price", t => {
+  const log = logs(t), answer = result => ({ jsonrpc: '2.0', id: 4, result }), session = 'grok-session-1';
+  const headless = (usage, extra = {}) => [{ text: '{}', stopReason: 'end_turn', sessionId: session, usage, ...extra }];
+  const runs = [
+    { role: 'lead', vendor: 'grok', at: AT, session, code: 0, costUsd: null, model: 'grok-4.6', logFile: log('lead-1.log', headless({ input_tokens: 100_000, cache_read_input_tokens: 400_000, cache_creation_input_tokens: 0, output_tokens: 20_000 })) },
+    { role: 'lead', vendor: 'grok', at: AT, session, code: 0, costUsd: null, model: 'grok-4.6', logFile: log('lead-2.log', headless({ input_tokens: 50_000, cache_read_input_tokens: 200_000, cache_creation_input_tokens: 0, output_tokens: 10_000 })) },
+    { role: 'lead', vendor: 'grok', at: AT, session, code: 0, costUsd: null, model: 'grok-4.6', logFile: log('lead-3.log', headless({ input_tokens: 50_000, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 1_000 }, { usage_is_incomplete: true })) },
+    { role: 'lead', vendor: 'grok', at: AT, session, code: 0, costUsd: null, model: 'grok-4.6', logFile: log('lead-4.log', [answer({ stopReason: 'end_turn', _meta: { usage: { inputTokens: 40, outputTokens: 5, cachedReadTokens: 30, usageIsIncomplete: true } } })]) },
+  ];
+  const task = { id: '1', goal: 'Search speed', createdAt: AT, runs };
+  // grok-4.6, per million: $2 input, $0.50 cached, $6 output.
+  const costs = spend.runCosts(task);
+  near(costs[0], 0.52, 'first'); near(costs[1], 0.26, 'second, its own'); near(costs[2], 0.106, 'third'); near(costs[3], (10 * 2 + 30 * 0.5 + 5 * 6) / 1e6, 'fourth');
+  assert.deepEqual(spend.runSpends(task).slice(2).map(row => row.tokens), [counted([50_000, 1_000, 0, 0]), counted([10, 5, 30, 0])]);
+  // Each is at least its price: the first two as Grok does not say how big each request's prompt was and theirs add up past 200k, the others as their counts may be incomplete.
+  assert.deepEqual(spend.runSpends(task).map(row => row.atLeast ?? false), [true, true, true, true]);
+});
+
+// Codex reports what its thread has used so far: each turn.completed holds the thread's total,
+// begun from the thread's own record when a run resumes it. A session's next message resumes
+// its thread, so a run that resumed it used its total less the total of the run before it on
+// that thread. Three runs whose own requests cost about 2, 4 and 6 dollars report about 2, 6
+// and 12: 20 dollars where they spent 12.
+const THREAD = '019a1b2c-3d4e-7f00-8a00-000000000001';
+const codexRows = (thread, [input, cached, output, write = 0], extra = {}) => [{ type: 'thread.started', thread_id: thread, ...extra }, { type: 'turn.completed', usage: { input_tokens: input, cached_input_tokens: cached, cache_write_input_tokens: write, output_tokens: output, reasoning_output_tokens: 0 } }];
+// gpt-6.1-sol, per million: $2 input, $0.10 cached, $2.50 cache write, $10 output. tokens as Codex
+// counts them: input holds the cache write.
+const solCost = ({ input, output, cacheRead, cacheWrite }) => ((input - cacheWrite) * 2 + cacheRead * 0.1 + cacheWrite * 2.5 + output * 10) / 1e6;
+const priced = tokens => ({ ...tokens, input: tokens.input - tokens.cacheWrite });
+
+test("a Codex thread that later runs resume counts what each run used once, on today's records and on those 0.1.25 kept", t => {
+  const log = logs(t);
+  // The thread's totals after each run, [input (the cached ones in it), cached, output, cache write].
+  const totals = [[1_000_000, 100_000, 10_000, 50_000], [3_000_000, 300_000, 30_000, 150_000], [6_000_000, 600_000, 60_000, 300_000]];
+  const own = [counted([900_000, 10_000, 100_000, 50_000]), counted([1_800_000, 20_000, 200_000, 100_000]), counted([2_700_000, 30_000, 300_000, 150_000])];
+  // As 0.1.25 recorded them: the thread's total as each run's tokens, the thread as its session.
+  const runs = totals.map((total, at) => ({ role: 'lead', vendor: 'codex', at: AT, session: THREAD, code: 0, costUsd: null, model: 'gpt-6.1-sol', tokens: counted([total[0] - total[1], total[2], total[1], total[3]]), logFile: log(`lead-${at + 1}.log`, codexRows(THREAD, total)) }));
+  const task = { id: '1', goal: 'Checkout page', title: 'Checkout page', kind: 'conversation', state: 'answered', createdAt: AT, messages: [{ at: AT, text: 'Checkout page' }], result: { summary: 'Done.' }, runs };
+  assert.deepEqual(spend.runSpends(task).map(row => row.tokens), own.map(priced));
+  spend.runCosts(task).forEach((cost, at) => near(cost, solCost(own[at]), `run ${at + 1}`)); near(solCost(own[0]), 1.935, 'the first run');
+  // With their logs gone, the totals the records kept are taken less the one before them.
+  const gone = { ...task, runs: runs.map(run => ({ ...run, logFile: path.join(path.dirname(run.logFile), 'gone.log') })) };
+  spend.runCosts(gone).forEach((cost, at) => near(cost, solCost(own[at]), `run ${at + 1}, its log gone`));
+  // The session's row, the Usage tab and the stop line add the three runs' own spend up once: 11.61, not 19.35. No record
+  // says how big each request was, and the prompts add up past 272k: at least that.
+  const [row] = spend.agentSpend([{ root: '/work/shop', tasks: [task] }], { now: Date.parse(AT) + 60000 }).rows;
+  assert.deepEqual(row.tokens, counted([5_100_000, 60_000, 600_000, 300_000])); near(row.costUsd, 11.61, 'the row');
+  assert.equal(String(boardRows([{ name: 'shop', root: '/work/shop', activity: [], queue: [], tasks: [task] }], Date.parse(AT) + 60000)[0].cost), '≥$11.61');
+  const stopped = { ...task, state: 'blocked', budgetUsd: 15, error: { message: 'The model could not finish.', cause: 'quota' } }, read = { logCause: () => null, account: () => null };
+  assert.equal(stopLine(stopped, read).text, 'The model could not finish: the account hit its usage limit. Switch account in Usage, then type continue.');
+  // A run lib/codex-live.mjs ran names its model on thread.started, and counts the same way.
+  const live = runs.map((run, at) => ({ ...run, model: undefined, tokens: undefined, logFile: log(`live-${at + 1}.log`, codexRows(THREAD, totals[at], { model: 'gpt-6.1-sol' })) }));
+  assert.deepEqual(spend.runSpends({ ...task, runs: live }).map(spent => [spent.model, spent.tokens]), own.map(tokens => ['gpt-6.1-sol', priced(tokens)]));
+  // A run on another thread starts its own count, and so does one whose total went down: Codex began counting again.
+  const other = [runs[0], { ...runs[1], session: 'another', logFile: log('lead-other.log', codexRows('019a1b2c-3d4e-7f00-8a00-000000000002', totals[1])) }];
+  assert.deepEqual(spend.runSpends({ ...task, runs: other }).map(spent => spent.tokens.output), [10_000, 30_000]);
+  const reset = [runs[1], { ...runs[0], logFile: log('lead-reset.log', codexRows(THREAD, [2_000_000, 100_000, 5_000])) }];
+  assert.deepEqual(spend.runSpends({ ...task, runs: reset }).map(spent => spent.tokens.output), [30_000, 5_000]);
+  // A run recorded since runs keep their own share holds it, and the thread's total beside it: no
+  // log is read for it, and a run after it on the thread counts from that total.
+  const kept = [{ ...runs[0], ownCost: true, tokens: own[0], logFile: '/nowhere.log' }, { ...runs[1], ownCost: true, tokens: own[1], sessionTokens: counted([2_700_000, 30_000, 300_000, 150_000]), logFile: '/nowhere.log' }, { ...runs[2], logFile: '/nowhere.log' }];
+  assert.deepEqual(spend.runSpends({ ...task, runs: kept }).map(spent => spent.tokens.output), [10_000, 20_000, 30_000]);
+});
+
+// A run on the thread that failed, or was stopped by the quiet limit, reported no thread total:
+// its record holds only its own share, from Codex's record of the thread. That share is not a
+// thread total, so a later run with no such record of its own takes out the last total that
+// was reported and that share both, and is at least what is left (never the total again).
+test('a Codex run after one on its thread that kept only its own share counts no run twice, and is at least what is left', t => {
+  const log = logs(t);
+  const failed = (name, own) => ({ role: 'lead', vendor: 'codex', at: AT, session: THREAD, code: 1, costUsd: null, model: 'gpt-6.1-sol', ownCost: true, tokens: own, logFile: log(name, [{ type: 'thread.started', thread_id: THREAD }, { type: 'turn.failed', error: { message: 'stopped' } }]) });
+  const reported = (name, total, extra = {}) => ({ role: 'lead', vendor: 'codex', at: AT, session: THREAD, code: 0, costUsd: null, model: 'gpt-6.1-sol', logFile: log(name, codexRows(THREAD, total)), ...extra });
+  const read = runs => index => spend.logSpend(runs[index].logFile, runs[index].vendor);
+  const own = [counted([900_000, 10_000, 100_000, 50_000]), counted([1_800_000, 20_000, 200_000, 100_000]), counted([2_700_000, 30_000, 300_000, 150_000])];
+  // Run 1 reported its total; run 2 failed and kept its own share; run 3 reports the thread's total.
+  const runs = [reported('lead-1.log', [1_000_000, 100_000, 10_000, 50_000], { ownCost: true, tokens: own[0] }), failed('lead-2.log', own[1]), reported('lead-3.log', [6_000_000, 600_000, 60_000, 300_000])];
+  const third = spend.ownRunSpend(runs, 2, read(runs));
+  assert.deepEqual([third.tokens, third.incomplete], [own[2], true]);
+  // The first run on the thread failed: the next one is at least the total less that share.
+  const first = [failed('lead-4.log', own[0]), reported('lead-5.log', [3_000_000, 300_000, 30_000, 150_000])];
+  assert.deepEqual([spend.ownRunSpend(first, 1, read(first)).tokens, spend.ownRunSpend(first, 1, read(first)).incomplete], [own[1], true]);
+  // A share bigger than what is left says the counts do not fit: not known, never a guess.
+  const over = [failed('lead-6.log', counted([9_000_000, 0, 0, 0])), reported('lead-7.log', [3_000_000, 300_000, 30_000, 150_000])];
+  assert.equal(spend.ownRunSpend(over, 1, read(over)).tokens, null);
 });
 
 function environment(t, values) {
@@ -131,6 +223,219 @@ test("a session's budget is spent once by a session that goes on over several tu
   near(JSON.parse(fs.readFileSync(peerFile('outbox', 'request-1.json'), 'utf8')).costUsd, 1.2, 'reply');
 });
 
+test('a session on Codex whose thread goes on over several turns spends each turn once, and its budget is not used up early', async t => {
+  const f = setup(t, 'answer');
+  // Each Codex turn makes one request: 10,000 cached input tokens and 99,900 output, a dollar at
+  // gpt-6.1-sol's list price. The stand-in reports the thread's total, as Codex does.
+  f.set({ codexTurn: { requests: [{ input_tokens: 10_000, cached_input_tokens: 10_000, output_tokens: 99_900 }] } });
+  const home = path.join(f.parent, 'codex-home'); environment(t, { CODEX_HOME: home });
+  f.controller.setDefaultModel({ vendor: 'codex', model: 'gpt-6.1-sol' });
+  const first = await f.controller.ask('Where is coupon normalization?', null, { permissions: 'full' }).finished, id = first.id;
+  assert.equal(first.state, 'answered', JSON.stringify(first.error));
+  f.controller.setBudget(id, 5);
+  for (const text of ['And the tests?', 'And the docs?']) { const next = await f.controller.ask(text, id).finished; assert.equal(next.state, 'answered', JSON.stringify(next.error)); }
+  const execs = fs.readFileSync(path.join(f.parent, 'calls.jsonl'), 'utf8').trim().split('\n').map(JSON.parse).filter(call => call.vendor === 'codex' && call.args[0] === 'exec');
+  assert.deepEqual(execs.map(call => call.args[1] === 'resume'), [false, true, true], 'each later turn resumes the thread');
+  const task = readTask(f.repo, id), thread = task.sessions.lead.id;
+  assert.ok(execs.slice(1).every(call => call.args[2] === thread));
+  // Codex reported one, two and three dollars' worth: what the thread had used so far. Each run keeps its own dollar's worth.
+  const each = counted([0, 99_900, 10_000, 0]);
+  assert.deepEqual(task.runs.map(run => [run.vendor, run.tokens]), Array(3).fill(['codex', each]));
+  // Beside it, the thread's total, which the next run on the thread counts from (the first run's too).
+  assert.deepEqual(task.runs.map(run => run.sessionTokens?.output ?? null), [99_900, 199_800, 299_700]);
+  assert.ok(task.runs.every(run => run.ownCost === true));
+  spend.runCosts(task).forEach((cost, at) => near(cost, 1, `run ${at + 1}`));
+  near(f.controller.budget(id).spent, 3, 'spent');
+  // The stop line: three dollars have not spent the $5 limit.
+  const read = { logCause: () => null, account: () => null };
+  assert.equal(stopLine({ ...task, state: 'blocked', error: { message: 'The model could not finish.', cause: 'quota' } }, read).text, 'The model could not finish: the account hit its usage limit. Switch account in Usage, then type continue.');
+  // The next turn, on Claude Code, may spend the two dollars left. (Six dollars would be over the limit, and refused.)
+  f.controller.setModel(id, { vendor: 'claude' });
+  const fourth = await f.controller.ask('And the changelog?', id).finished;
+  assert.equal(fourth.state, 'answered', JSON.stringify(fourth.error));
+  near(Number(valueOf(f.turns().at(-1).args, '--max-budget-usd')), 2, 'the Claude Code turn');
+  // Usage: the three Codex turns once, three dollars, and the Claude Code turn's 30 cents.
+  const [row] = spend.agentSpend([{ root: f.repo.root, tasks: [readTask(f.repo, id)] }], { now: Date.now() }).rows;
+  assert.deepEqual(row.tokens, counted([10, 299_900, 33_000, 400])); near(row.costUsd, 3.3, 'the row'); assert.equal(row.partial, false);
+  // A reply to a teammate says what the turns it took cost: all four here.
+  new Conductor().outbox({ controller: f.controller, taskId: id, runsBefore: 0, root: f.repo.root, requestId: 'request-2', origin: { peer: 'p', name: 'sara', kind: 'ask' } }, null, AT);
+  near(JSON.parse(fs.readFileSync(peerFile('outbox', 'request-2.json'), 'utf8')).costUsd, 3.3, 'reply');
+});
+
+// A log longer than 16MB is read at its end, and the thread a Codex run went on with is named on
+// its first line (thread.started). When the run ends its record still names ELU's own launch id,
+// so the thread comes from that first line, else from the thread the run resumed.
+test('a Codex run whose log is longer than ELU reads whole still counts only its own share of the thread it went on with', async t => {
+  const f = setup(t, 'answer');
+  f.set({ codexTurn: { requests: [{ input_tokens: 10_000, cached_input_tokens: 10_000, output_tokens: 99_900 }] } });
+  environment(t, { CODEX_HOME: path.join(f.parent, 'codex-home') });
+  f.controller.setDefaultModel({ vendor: 'codex', model: 'gpt-6.1-sol' });
+  const first = await f.controller.ask('Where is coupon normalization?', null, { permissions: 'full' }).finished, id = first.id;
+  assert.equal(first.state, 'answered', JSON.stringify(first.error));
+  // The second turn prints 17MB before its answer.
+  f.set({ codexTurn: { requests: [{ input_tokens: 10_000, cached_input_tokens: 10_000, output_tokens: 99_900 }], printed: 17 * 1024 * 1024 } });
+  const next = await f.controller.ask('And the tests?', id).finished;
+  assert.equal(next.state, 'answered', JSON.stringify(next.error));
+  const task = readTask(f.repo, id);
+  assert.ok(fs.statSync(task.runs[1].logFile).size > 16 * 1024 * 1024, 'the second log is longer than 16MB');
+  // Each run keeps its own dollar's worth, not the thread's two.
+  assert.deepEqual(task.runs.map(run => run.tokens), Array(2).fill(counted([0, 99_900, 10_000, 0])));
+  spend.runCosts(task).forEach((cost, at) => near(cost, 1, `run ${at + 1}`));
+});
+
+test('a Codex run whose log names no thread counts from the thread it resumed', t => {
+  const log = logs(t), totals = [[1_000_000, 100_000, 10_000, 50_000], [3_000_000, 300_000, 30_000, 150_000]];
+  const runs = [
+    { role: 'lead', vendor: 'codex', at: AT, session: THREAD, code: 0, costUsd: null, model: 'gpt-6.1-sol', logFile: log('lead-1.log', codexRows(THREAD, totals[0])) },
+    // As the runner reads it when it ends: its record names ELU's launch id, and its log only the thread's total.
+    { role: 'lead', vendor: 'codex', at: AT, session: 'launch-2', code: 0, costUsd: null, model: 'gpt-6.1-sol', logFile: log('lead-2.log', codexRows(THREAD, totals[1]).slice(1)) },
+  ];
+  const spent = spend.ownRunSpend(runs, 1, index => spend.logSpend(runs[index].logFile, runs[index].vendor), { thread: THREAD });
+  assert.deepEqual(spent.tokens, counted([1_800_000, 20_000, 200_000, 100_000]));
+});
+
+// A Codex run started with no model runs on Codex's own default, which plain `codex exec`
+// names nowhere in what it prints: only Codex's record of the thread names it (turn_context).
+test("a Codex run on Codex's own default model is named by Codex's record of its thread, and priced", async t => {
+  const f = setup(t, 'answer');
+  f.set({ codexTurn: { requests: [{ input_tokens: 10_000, cached_input_tokens: 10_000, output_tokens: 99_900 }], model: 'gpt-6.1-sol' } });
+  environment(t, { CODEX_HOME: path.join(f.parent, 'codex-home') });
+  f.controller.setDefaultModel({ vendor: 'codex' });
+  const first = await f.controller.ask('Where is coupon normalization?', null, { permissions: 'full' }).finished;
+  assert.equal(first.state, 'answered', JSON.stringify(first.error));
+  const [exec] = fs.readFileSync(path.join(f.parent, 'calls.jsonl'), 'utf8').trim().split('\n').map(JSON.parse).filter(call => call.vendor === 'codex' && call.args[0] === 'exec');
+  assert.ok(!exec.args.includes('--model'), "started on Codex's own default");
+  const task = readTask(f.repo, first.id);
+  assert.equal(task.runs[0].model, 'gpt-6.1-sol');
+  near(spend.runCosts(task)[0], 1, 'its list price');
+  const [row] = spend.agentSpend([{ root: f.repo.root, tasks: [task] }], { now: Date.now() }).rows;
+  assert.deepEqual([row.model, spend.costText(row)], ['gpt-6.1-sol', '$1.00']);
+});
+
+// OpenAI bills a request whose prompt is over 272K tokens at its long-context rate, every token
+// of it. Codex's record of the thread says how big each request's prompt was.
+test('a Codex request over 272K tokens costs the long-context rate, on each run of its thread', async t => {
+  const f = setup(t, 'answer');
+  // Each turn: a request of 100K, one of exactly 272K, and one of 400K (100K of it read from the cache, 50K written).
+  f.set({ codexTurn: { requests: [{ input_tokens: 100_000, output_tokens: 10_000 }, { input_tokens: 272_000, output_tokens: 1_000 }, { input_tokens: 400_000, cached_input_tokens: 100_000, cache_write_input_tokens: 50_000, output_tokens: 20_000 }] } });
+  environment(t, { CODEX_HOME: path.join(f.parent, 'codex-home') });
+  f.controller.setDefaultModel({ vendor: 'codex', model: 'gpt-6.1-terra' });
+  const first = await f.controller.ask('Where is coupon normalization?', null, { permissions: 'full' }).finished, id = first.id;
+  assert.equal(first.state, 'answered', JSON.stringify(first.error));
+  f.controller.setBudget(id, 10);
+  const next = await f.controller.ask('And the tests?', id).finished;
+  assert.equal(next.state, 'answered', JSON.stringify(next.error));
+  const task = readTask(f.repo, id);
+  // The 400K request is each run's long part, its input as Codex counts it (the written part in it).
+  assert.deepEqual(task.runs.map(run => run.longTokens), Array(2).fill(counted([300_000, 20_000, 100_000, 50_000])));
+  // gpt-6.1-terra, per million: $1 input and $5 output up to 272K; $2 input, $0.10 cached, $2.50 written and $7.50 output over it.
+  const each = (372_000 * 1 + 11_000 * 5) / 1e6 + (250_000 * 2 + 100_000 * 0.1 + 50_000 * 2.5 + 20_000 * 7.5) / 1e6;
+  spend.runCosts(task).forEach((cost, at) => near(cost, each, `run ${at + 1}`));
+  near(f.controller.budget(id).spent, 2 * each, 'spent');
+  const [row] = spend.agentSpend([{ root: f.repo.root, tasks: [task] }], { now: Date.now() }).rows;
+  near(row.costUsd, 2 * each, 'the row');
+});
+
+// A headless Antigravity run ends with the tokens of its turns (agy -p --output-format json).
+test('a headless Antigravity run keeps the tokens its result reports, priced at the model it was started with', async t => {
+  const f = setup(t, 'answer');
+  // 1M input, 100k output and 100k thinking, 200k read from the cache: every count apart in the total.
+  f.set({ agy: { headlessUsage: { input_tokens: 1_000_000, output_tokens: 100_000, thinking_tokens: 100_000, cache_read_tokens: 200_000, total_tokens: 1_400_000 } } });
+  f.controller.setDefaultModel({ vendor: 'agy', model: 'gemini-3-flash' });
+  const first = await f.controller.ask('Where is coupon normalization?', null, { permissions: 'full' }).finished;
+  assert.equal(first.state, 'answered', JSON.stringify(first.error));
+  const task = readTask(f.repo, first.id);
+  assert.deepEqual(task.runs.map(run => [run.vendor, run.tokens]), [['agy', counted([1_000_000, 200_000, 200_000, 0])]]);
+  // gemini-3-flash, per million: $0.50 input, $0.05 cached, $3 output (thinking is output).
+  near(spend.runCosts(task)[0], 0.5 + 0.01 + 0.6, 'its list price');
+});
+
+// Antigravity's docs: num_turns is the number of user turns in the conversation, and the
+// counters track the whole session. A session's next message resumes its conversation
+// (--conversation), so each run reports what the conversation has used so far. Three runs whose
+// own turns cost 0.81, 1.32 and 0.345 dollars report 0.81, 2.13 and 2.475: 5.415 where they
+// spent 2.475.
+const AGY_TURNS = [[1_000_000, 100_000, 0, 200_000], [2_000_000, 50_000, 50_000, 400_000], [500_000, 20_000, 10_000, 100_000]];
+const agyUse = ([input, output, thinking, read]) => ({ input_tokens: input, output_tokens: output, thinking_tokens: thinking, cache_read_tokens: read, total_tokens: input + output + thinking + read });
+// gemini-3-flash, per million: $0.50 input, $0.05 cached, $3 output (thinking is output).
+const flashCost = ([input, output, thinking, read]) => (input * 0.5 + read * 0.05 + (output + thinking) * 3) / 1e6;
+const sum = values => values.reduce((total, value) => total + value, 0);
+test('a headless Antigravity conversation that later runs resume counts what each run used once, from its logs and from its records', async t => {
+  const f = setup(t, 'answer');
+  f.set({ agy: { headlessTurns: AGY_TURNS.map(agyUse) } });
+  f.controller.setDefaultModel({ vendor: 'agy', model: 'gemini-3-flash' });
+  const first = await f.controller.ask('Where is coupon normalization?', null, { permissions: 'full' }).finished, id = first.id;
+  assert.equal(first.state, 'answered', JSON.stringify(first.error));
+  for (const text of ['And the tests?', 'And the docs?']) { const next = await f.controller.ask(text, id).finished; assert.equal(next.state, 'answered', JSON.stringify(next.error)); }
+  const launches = fs.readFileSync(path.join(f.parent, 'calls.jsonl'), 'utf8').trim().split('\n').map(JSON.parse).filter(call => call.vendor === 'agy' && call.args[0] === '-p' && call.args[1] !== '/usage');
+  assert.deepEqual(launches.map(call => call.args.includes('--conversation')), [false, true, true], 'each later run resumes the conversation');
+  const task = readTask(f.repo, id), real = sum(AGY_TURNS.map(flashCost));
+  near(real, 2.475, 'what the conversation spent');
+  // Each run keeps its own turn's tokens.
+  assert.deepEqual(task.runs.map(run => run.tokens), AGY_TURNS.map(([input, output, thinking, read]) => counted([input, output + thinking, read, 0])));
+  spend.runCosts(task).forEach((cost, at) => near(cost, flashCost(AGY_TURNS[at]), `run ${at + 1}`));
+  near(sum(spend.runCosts(task)), real, 'the three runs');
+  // Their logs gone, the records alone; and the logs, for runs ELU 0.1.25 recorded, which kept the conversation's count in tokens.
+  near(sum(spend.runCosts({ ...task, runs: task.runs.map(run => ({ ...run, logFile: path.join(f.parent, 'gone.log') })) })), real, 'from the records');
+  near(sum(spend.runCosts({ ...task, runs: task.runs.map(({ sessionTokens, conversationTurns, ...run }) => ({ ...run, tokens: sessionTokens })) })), real, 'from the logs');
+  const [row] = spend.agentSpend([{ root: f.repo.root, tasks: [task] }], { now: Date.now() }).rows;
+  near(row.costUsd, real, 'the row'); assert.equal(row.partial, false);
+});
+
+// Where the turn before a resumed run's is not known, what the run used itself is not either:
+// a dash, never the conversation's whole count again.
+test("a headless Antigravity run resumed after a turn ELU has no count for leaves its own spend unknown", t => {
+  const log = logs(t), conversation = '2f6c1d1e-2b1a-4c55-9a77-0d1f9b0c1e2a';
+  const result = (turns, usage) => [{ conversation_id: conversation, status: 'SUCCESS', response: '{}', num_turns: turns, usage, finished_reason: 'stop' }];
+  const run = (name, turns, used, extra = {}) => ({ role: 'lead', vendor: 'agy', at: AT, session: conversation, code: 0, costUsd: null, model: 'gemini-3-flash', logFile: log(name, result(turns, agyUse(used))), ...extra });
+  const soFar = count => AGY_TURNS.slice(0, count).reduce((total, used) => total.map((value, at) => value + used[at]), [0, 0, 0, 0]);
+  // Turn 2 of the conversation ran over ACP, which reports that turn's own count: turn 3 cannot tell its own share.
+  const acp = { role: 'lead', vendor: 'agy', at: AT, session: conversation, code: 0, costUsd: null, model: 'gemini-3-flash', logFile: log('acp.log', [{ jsonrpc: '2.0', id: 4, result: { stopReason: 'end_turn', usage: { inputTokens: 2_000_000, outputTokens: 50_000, cachedReadTokens: 400_000 } } }]) };
+  const mixed = { id: '1', createdAt: AT, runs: [run('a.log', 1, soFar(1)), acp, run('c.log', 3, soFar(3))] };
+  assert.deepEqual(spend.runCosts(mixed).map(cost => cost === null ? null : Number(cost.toFixed(3))), [0.81, 1.17, null]);
+  // A first run on a conversation that already had turns: not known either.
+  assert.deepEqual(spend.runCosts({ id: '2', createdAt: AT, runs: [run('d.log', 3, soFar(3))] }), [null]);
+});
+
+// Grok Build says when its count may miss some of a run's calls (usage_is_incomplete). The run
+// keeps that mark with its tokens, so once its log is gone it is still not priced as a whole count.
+test('a Grok Build run whose count Grok says may be incomplete keeps that mark, and reads the same once its log is gone', async t => {
+  const f = setup(t, 'answer');
+  fs.mkdirSync(path.join(f.parent, '.grok')); fs.writeFileSync(path.join(f.parent, '.grok', 'auth.json'), '{}\n', { mode: 0o600 });
+  // 100k in, 40k read from the cache, 10k out: $0.28 at grok-4.6's list price, were the count whole.
+  f.set({ grokSpend: { usage: { input_tokens: 100_000, cache_read_input_tokens: 40_000, cache_creation_input_tokens: 0, output_tokens: 10_000, reasoning_tokens: 0, total_tokens: 150_000 }, modelUsage: { 'grok-4.6': { inputTokens: 100_000, outputTokens: 10_000, cacheReadInputTokens: 40_000, modelCalls: 3 } }, extra: { usage_is_incomplete: true } } });
+  f.controller.setDefaultModel({ vendor: 'grok', model: 'grok-4.6' });
+  const first = await f.controller.ask('Where is coupon normalization?', null, { permissions: 'full' }).finished;
+  assert.equal(first.state, 'answered', JSON.stringify(first.error));
+  const task = readTask(f.repo, first.id);
+  assert.deepEqual(task.runs.map(run => [run.vendor, run.tokens, run.incomplete]), [['grok', counted([100_000, 10_000, 40_000, 0]), true]]);
+  const read = () => { const [spent] = spend.runSpends(readTask(f.repo, first.id)), [row] = spend.agentSpend([{ root: f.repo.root, tasks: [readTask(f.repo, first.id)] }], { now: Date.now() }).rows; return [Number(spent.costUsd.toFixed(6)), spent.incomplete ?? false, spend.costText(row)]; };
+  assert.deepEqual(read(), [0.28, true, '≥$0.28'], 'at least its price, not a whole count');
+  fs.rmSync(task.runs[0].logFile);
+  assert.deepEqual(read(), [0.28, true, '≥$0.28'], 'its log gone, the same');
+});
+
+// Grok Build's usage leaves out compaction and its other side-model calls (its headless guide):
+// a run whose stream shows one is at least what its tokens cost, and keeps that with its record.
+test('a Grok Build run whose stream shows a compaction is at least its price, its log there or gone', async t => {
+  const f = setup(t, 'answer');
+  fs.mkdirSync(path.join(f.parent, '.grok')); fs.writeFileSync(path.join(f.parent, '.grok', 'auth.json'), '{}\n', { mode: 0o600 });
+  f.set({ grokSpend: { usage: { input_tokens: 100_000, cache_read_input_tokens: 40_000, cache_creation_input_tokens: 0, output_tokens: 10_000, reasoning_tokens: 0, total_tokens: 150_000 }, modelUsage: { 'grok-4.6': { inputTokens: 100_000, outputTokens: 10_000, cacheReadInputTokens: 40_000, modelCalls: 3 } }, sideCalls: ['auto_compact_started', 'auto_compact_completed'] } });
+  f.controller.setDefaultModel({ vendor: 'grok', model: 'grok-4.6' });
+  const first = await f.controller.ask('Where is coupon normalization?', null, { permissions: 'full' }).finished;
+  assert.equal(first.state, 'answered', JSON.stringify(first.error));
+  const task = readTask(f.repo, first.id);
+  assert.match(fs.readFileSync(task.runs[0].logFile, 'utf8'), /"type":"auto_compact_started"/);
+  assert.deepEqual(task.runs.map(run => [run.vendor, run.tokens, run.incomplete]), [['grok', counted([100_000, 10_000, 40_000, 0]), true]]);
+  const shown = () => spend.costText(spend.agentSpend([{ root: f.repo.root, tasks: [readTask(f.repo, first.id)] }], { now: Date.now() }).rows[0]);
+  assert.equal(shown(), '≥$0.28');
+  // The session's row and its /budget say the same.
+  assert.equal(String(boardRows([{ name: 'shop', root: f.repo.root, activity: [], queue: [], tasks: [readTask(f.repo, first.id)] }], Date.now())[0].cost), '≥$0.28');
+  const budget = f.controller.budget(first.id); near(budget.spent, 0.28, 'spent'); assert.equal(budget.partial, true);
+  fs.rmSync(task.runs[0].logFile);
+  assert.equal(shown(), '≥$0.28', 'its log gone');
+});
+
 test('a turn the owner stops is kept with what it had used; Usage shows it, and counts it once when its session goes on', async t => {
   const f = setup(t, 'slow');
   const run = f.controller.ask('Where is coupon normalization?', null, { permissions: 'full' });
@@ -144,11 +449,11 @@ test('a turn the owner stops is kept with what it had used; Usage shows it, and 
   const [stop] = task.stops, named = valueOf(f.turns()[0].args, '--session-id');
   assert.deepEqual({ ...stop, startedAt: null, at: null, logFile: null }, { role: 'lead', vendor: 'claude', logFile: null, session: named, startedAt: null, at: null, asked: 'opus', model: OPUS, tokens: counted(EACH.tokens) });
   assert.ok(fs.existsSync(stop.logFile) && Date.parse(stop.startedAt) <= Date.parse(stop.at));
-  // Usage: its tokens under the model its first line named, and no cost, which Claude Code says only when a turn ends. The line under the table says so.
+  // Usage: its tokens under the model its first line named, and no cost, which Claude Code says only when a turn ends: a dash.
   const usage = () => spend.agentSpend([{ root: f.repo.root, tasks: [readTask(f.repo, run.id)] }], { now: Date.now() });
   let today = usage();
   assert.deepEqual(today.rows.map(row => [row.agent, row.tokens, row.costUsd, row.started, row.unpriced]), [['Opus 5.5', counted(EACH.tokens), null, true, ['claude']]]);
-  assert.equal(spend.costText(today.rows[0]), 'not reported'); assert.equal(today.runs, 1); assert.deepEqual(today.unpriced, ['claude']);
+  assert.equal(spend.costText(today.rows[0]), '—'); assert.equal(today.runs, 1); assert.deepEqual(today.unpriced, ['claude']);
   // It does not use up the session's budget: the next turn may spend all of it.
   f.controller.setBudget(run.id, 1); assert.equal(f.controller.budget(run.id).spent, 0);
   // Where the stopped session cannot be picked up again (its record is taken away here, as when a
@@ -249,7 +554,7 @@ test('an agent that did not start stays in the top ten on a busy day, and the ch
   assert.equal(all.length, 13); assert.equal(all.at(-1).started, false);
   const shown = spend.topRows(all);
   assert.deepEqual(shown.map(row => row.title), ['Job 12', 'Job 11', 'Job 10', 'Job 9', 'Job 8', 'Job 7', 'Job 6', 'Job 5', 'Job 4', 'Refused review']);
-  assert.match(spend.agentTable(shown, { width: 130, total: 78 }).at(-1), /^@reviewer +Refused review +opus 5\.5 +did not start +\$0\.00 +0%$/);
+  assert.match(spend.agentTable(shown, { width: 130, total: 78 }).rows.at(-1), /^@reviewer Refused review \(did not start\) +Opus 5\.5 +— +— +— +\$0\.00 +0%$/);
   // What a computer of mine sends is chosen the same way.
   assert.deepEqual(spend.topAgentsWire(projects, now).today.rows.map(row => row.title).slice(-2), ['Job 4', 'Refused review']);
   // Nothing failed: the ten that cost most, as before.
@@ -276,11 +581,11 @@ test('two computers on different builds: 0.1.20 says which one counts the old wa
   const older = { today: { costUsd: 9, partial: false, rows: [{ ref: `${'a'.repeat(16)}:3`, agent: '@lead', title: 'Search speed', model: 'opus 5.5', tokens: null, costUsd: 9, partial: false, at: AT }] }, week: { costUsd: 9, partial: false, rows: [] } };
   const there = spend.cleanTopAgents(older);
   assert.equal(there.own, false);
-  // Usage says so under the table, and beside that computer's part of the spend line.
-  assert.equal(spend.OLD_COUNT('devbox'), 'devbox: older ELU, its costs may be too high. Update ELU there.');
-  const here = spend.agentSpend(projects, { now });
-  assert.equal(spendLine([{ name: 'this computer', spend: here }, { name: 'devbox', spend: there.today, old: true }]), 'ELU spend today $11.00: this computer $2.00, devbox $9.00 (older ELU)');
-  assert.equal(spendLine([{ name: 'this computer', spend: here }, { name: 'devbox', spend: spend.cleanTopAgents(sent).today }]), 'ELU spend today $4.00: this computer $2.00, devbox $2.00');
+  // Usage says so beside that computer's part of the total under the table.
+  const here = spend.agentSpend(projects, { now }), part = (name, period, extra = {}) => ({ name, costUsd: period.costUsd, partial: period.partial, runs: period.runs, ...extra });
+  const foot = parts => spend.agentTable(here.rows, { width: 100, total: 2, foot: usageTotal(parts) }).foot.map(line => line.trim());
+  assert.deepEqual(foot([part('here', here), part('devbox', there.today, { old: true })]), ['Today  $11.00', 'here $2.00 · devbox $9.00 (older ELU)']);
+  assert.deepEqual(foot([part('here', here), part('devbox', spend.cleanTopAgents(sent).today)]), ['Today  $4.00', 'here $2.00 · devbox $2.00']);
   // A viewer on 0.1.19 keeps every row a 0.1.20 computer sends, with its cost and tokens; the session's own agent reads @lead there.
   const read = cleanAs019(sent);
   assert.deepEqual(read.today.rows.map(row => [row.agent, row.title, row.model, row.costUsd, row.tokens]), [['@lead', 'Checkout page', 'opus 5.5', 1.5, counted([1, 2, 3, 4])], ['@lead', 'Checkout page', 'opus 5.5', 0.5, counted([1, 2, 3, 4])]]);

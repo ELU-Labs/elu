@@ -11,7 +11,7 @@ import { runChecks } from '../lib/checks.mjs';
 import { policyReport, assertPolicy } from '../lib/policy.mjs';
 import { unsupportedVendors } from '../lib/detect.mjs';
 import { ADAPTERS } from '../lib/adapters/index.mjs';
-import { preparePublish, publish, prBody } from '../lib/publish.mjs';
+import { preparePublish, publish, prBody, pushesRunning, stopPushes } from '../lib/publish.mjs';
 import { refuse, quote, readJson, noSymlinks } from '../lib/util.mjs';
 import { recoverProcess, addUserBin } from '../lib/process.mjs';
 import {formatResult}from'../lib/format.mjs';
@@ -23,7 +23,7 @@ addUserBin();
 sweepServers();
 // Peer commands load lib/peer/ only when used; it never imports the optional packages at load time.
 const PEER_COMMANDS = new Set(['id', 'team', 'invite', 'join', 'access', 'share', 'unshare', 'peers', 'peer', 'ask', 'relay', 'mine']);
-const HELP = `ELU — terminal coding workspace\n\nRun elu anywhere to open the terminal app.\nThe first start asks for a project name; later starts open your last project.\nSessions lists every session; type a message to start one.\nKanban shows the open project's tasks. Chats holds your channels and direct messages. Type / for commands and help.\nEditing workspaces are prepared automatically. Pushes require separate approval.\n\nCommands:\n  update\n  conductor [stop]\n  schedule [list]\n  dashboard\n  init [--yes] [--dry-run]\n  run <goal> [--yes] [--dry-run] [--permissions auto|full] [--place here|branch:NAME] [--folder PATH]...\n  run <id> --publish [--approve-push <confirmationId>]\n  status [id] [--recover]\n  open <id> [--bot NAME] [--exec]\n  check <id>\n  policy show\n  permissions [list|remove N|on N]\n  allow-home <session>\n  uninstall [--yes] [--dry-run]\n\nMCP servers (Claude Code's own; a key is asked for, never an argument):\n  mcp [list]\n  mcp add NAME URL [--header NAME] | mcp add NAME [--env NAME] -- COMMAND [ARGS]...\n  mcp remove NAME [--yes]\n\nPeer network:\n  id [--name N] [--export] [--import CODE]\n  team create NAME | team | team leave [TEAM] | team remove NAME [--team ID]\n  invite [--team ID] [--hours N] [--project PATH] [--auto|--manual] [--rules TEXT] [--mine]\n  join CODE [--project PATH] [--auto|--manual] [--rules TEXT] [--mine]\n  access [--team ID] [--auto|--manual] [--rules TEXT] [--project PATH]\n  mine [@NAME | remove @NAME | auto on|off]\n  share [PATH] [--as HANDLE] [--no-status] | unshare HANDLE\n  peers\n  peer off | peer install|uninstall | peer trust|untrust @NAME\n  ask [@NAME] [--project H] TEXT\n  relay [--team ID]\n\nEvery command accepts --json. --dry-run prints the proposed task setup;\nit does not execute the task or verify the resulting implementation.\n`;
+const HELP = `ELU — terminal coding workspace\n\nRun elu anywhere to open the terminal app.\nThe first start asks for a project name; later starts open your last project.\nSessions lists every session; type a message to start one.\nKanban shows the open project's tasks. Chats holds your channels and direct messages. Type / for commands and help.\nEditing workspaces are prepared automatically. Pushes require separate approval.\n\nCommands:\n  update\n  conductor [stop]\n  schedule [list]\n  dashboard\n  init [--yes] [--dry-run]\n  run <goal> [--yes] [--dry-run] [--permissions auto|full] [--place here|branch:NAME] [--folder PATH]...\n  run <id> --publish [--approve-push <confirmationId>]\n  status [id] [--recover]\n  open <id> [--bot NAME] [--exec]\n  check <id>\n  policy show\n  permissions [list|remove N|on N]\n  allow-home <session>\n  uninstall [--yes] [--dry-run]\n\nSessions and schedules (in your shell, and in a session's):\n  sessions [--all] | sessions archive N|this | sessions unarchive N\n  sessions rename N|this NAME | sessions new MESSAGE [--mode ask|auto|full]\n  sessions delete N|archived [--learn]\n  schedules [--all] | schedules add WHEN MESSAGE [--mode ask|auto|full]\n  schedules pause|resume|delete|run N\n\nMCP servers (Claude Code's own; a key is asked for, never an argument):\n  mcp [list]\n  mcp add NAME URL [--header NAME] | mcp add NAME [--env NAME] -- COMMAND [ARGS]...\n  mcp remove NAME [--yes]\n\nPeer network:\n  id [--name N] [--export] [--import CODE]\n  team create NAME | team | team leave [TEAM] | team remove NAME [--team ID]\n  invite [--team ID] [--hours N] [--project PATH] [--auto|--manual] [--rules TEXT] [--mine]\n  join CODE [--project PATH] [--auto|--manual] [--rules TEXT] [--mine]\n  access [--team ID] [--auto|--manual] [--rules TEXT] [--project PATH]\n  mine [@NAME | remove @NAME | auto on|off]\n  share [PATH] [--as HANDLE] [--no-status] | unshare HANDLE\n  peers\n  peer off | peer install|uninstall | peer trust|untrust @NAME\n  ask [@NAME] [--project H] TEXT\n  relay [--team ID]\n\nEvery command accepts --json. --dry-run prints the proposed task setup;\nit does not execute the task or verify the resulting implementation.\n`;
 function argumentsOf(argv) {
   const flags = {}; const words = [];
   const boolean = new Set(['json', 'yes', 'dry-run', 'publish', 'recover', 'exec', 'help', 'version', 'daemon', 'export', 'no-status', 'auto', 'manual', 'mine']);
@@ -57,8 +57,14 @@ async function confirm(plan, flags) {
 }
 // elu mcp reads its own arguments: what follows its -- is a command's, untouched.
 const mcpAt = argv => { const at = argv.findIndex(arg => !arg.startsWith('--')); return argv[at] === 'mcp' ? at : -1; };
-const ownArgs = argv => mcpAt(argv) >= 0 && argv.includes('--') ? argv.slice(0, argv.indexOf('--')) : argv;
+// elu sessions and elu schedules read theirs too (lib/session-commands.mjs): after -- is the message.
+const ownAt = argv => { const at = argv.findIndex(arg => !arg.startsWith('-')); return ['sessions', 'schedules'].includes(argv[at]) ? at : -1; };
+const ownArgs = argv => (mcpAt(argv) >= 0 || ownAt(argv) >= 0) && argv.includes('--') ? argv.slice(0, argv.indexOf('--')) : argv;
 export async function main(argv = process.argv.slice(2)) {
+  if (ownAt(argv) >= 0) {
+    const commands = await import('../lib/session-commands.mjs'), at = ownAt(argv), rest = [...argv.slice(0, at), ...argv.slice(at + 1)];
+    return argv[at] === 'sessions' ? commands.sessionsCli(rest) : commands.schedulesCli(rest);
+  }
   // Your Claude Code MCP servers: the key is asked for with echo off, or read from stdin.
   if (mcpAt(argv) >= 0) {
     const { mcpArguments, mcpCli } = await import('../lib/mcp.mjs'), at = mcpAt(argv), { flags, words } = mcpArguments([...argv.slice(0, at), ...argv.slice(at + 1)]);
@@ -169,9 +175,9 @@ export async function main(argv = process.argv.slice(2)) {
     if (text !== null && approved !== text) refuse(NOT_APPROVED);
     const committed = baseFile(repo.root, 'HEAD', '.elu-code/config.yaml', { optional: true });
     const config = text !== null ? parseConfig(text) : approved !== null ? parseConfig(approved) : defaultConfig();
-    const note = text === null ? `No .elu-code/config.yaml here, so this is ${approved !== null ? 'the one you approved last' : 'the default policy'}. elu init writes one.`
-      : committed === null ? 'This is .elu-code/config.yaml as it is now. It is not committed yet: elu run needs it committed.'
-        : committed !== text ? 'This is .elu-code/config.yaml as it is now. It differs from the last commit: elu run needs it committed.' : null;
+    const note = text === null ? `${approved !== null ? 'The policy you approved last' : 'The default policy'}. elu init writes .elu-code/config.yaml.`
+      : committed === null ? '.elu-code/config.yaml is not committed yet: elu run needs it committed.'
+        : committed !== text ? '.elu-code/config.yaml differs from the last commit: elu run needs it committed.' : null;
     // Only the lead entry runs. Bots do the reviews, read-only, whatever an older config lists.
     const role = config.roles.lead; let refusal = null; try { assertPolicy(role); } catch (e) { refusal = e.message; }
     // The table names the OS sandbox among what enforces a rule; where it cannot start, say so.
@@ -182,8 +188,16 @@ export async function main(argv = process.argv.slice(2)) {
     if (flags.publish) {
       if (flags.yes || flags['dry-run']) refuse('Publication uses its own exact push confirmation.');
       const task = readTask(repo, words[1]); const release = lock(repo, `task-${task.id}`);
+      // The push runs in a process group of its own, which Ctrl-C and a closing terminal do not
+      // reach: they stop it here, with its guards, and the line says what reached GitHub.
+      // Outside the push they end the command as they always did.
+      const signals = [];
+      for (const [signal, why] of flags['approve-push'] ? [['SIGINT', 'owner'], ['SIGTERM', 'closed'], ['SIGHUP', 'closed']] : []) {
+        const handler = () => { if (pushesRunning()) stopPushes(why); else { process.off(signal, handler); process.kill(process.pid, signal); } };
+        signals.push([signal, handler]); process.on(signal, handler);
+      }
       try { return flags['approve-push'] ? await publish(repo, task, flags['approve-push']) : await preparePublish(repo, task); }
-      finally { release(); }
+      finally { for (const [signal, handler] of signals) process.off(signal, handler); release(); }
     }
     if (flags['approve-push']) refuse('--approve-push requires --publish.');
     // A scripted run picks a mode too; ask needs someone at the terminal to answer.

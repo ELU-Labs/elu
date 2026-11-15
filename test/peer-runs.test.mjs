@@ -6,6 +6,7 @@ import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { project, fakeClis, config, keyLike, approveProjectFiles, git, autoApprove, cli } from './helpers.mjs';
 import { approveTask, sessionTasks } from '../lib/plan.mjs';
+import { checkDone } from '../lib/owner-check.mjs';
 import { repository } from '../lib/git.mjs';
 import { ProjectController, conversationEntries, projectSnapshot, registerProject, personalDirectory } from '../lib/projects.mjs';
 import { readTask, saveTask, requestGoal, sessionGoal, taskTitle, taskPlace } from '../lib/state.mjs';
@@ -39,6 +40,7 @@ import { HOME_QUESTION, HOME_TARGET, homeOrAbove, homeRefusal } from '../lib/uti
 import { getRecord, thread } from '../lib/peer/taskstore.mjs';
 import { applyTask, asks as sentAsks, continueAnswer, createAsk, dismissAsk, dropHeldResult, getAsk, sendHeldResult } from '../lib/peer/asks.mjs';
 import { heldText, peerItems, threadMessages } from '../lib/peer/index.mjs';
+import { liveTask } from './peer-helpers.mjs';
 
 const SARA = 'b'.repeat(64), ME = 'a'.repeat(64);
 const origin = (kind = 'ask', extra = {}) => ({ kind, peer: SARA, name: 'sara', a2aTaskId: 'task-1', threadId: 'thread-1', hop: 1, ...extra });
@@ -269,6 +271,35 @@ test('a run whose cost is unknown is charged all its message reserved', t => {
   assert.equal(getRecord(record.task.id).costUsd, 0.5); assert.equal(getRecord(record.task.id).reservedUsd, 0); assert.equal(readCaps().peers[SARA].usd, 0.5, 'the reservation stays spent');
 });
 
+// A run whose cost may be more than its tokens say (atLeast: a Codex run in Approve for me, whose
+// reviewer's calls no count holds) is charged at least what its message reserved, as one whose
+// cost is not known is charged all of it; one that cost more is charged that.
+test('a run whose cost may be more is charged at least what its message reserved', t => {
+  const p = setup(t, 'answer'), sara = teammate(p);
+  const charged = (usd, threadId) => {
+    const record = sara.send('Where is it?', { kind: 'ask', threadId });
+    acceptIncoming(sara.ctx, record.task.id, { how: 'own' });
+    const requestId = getRecord(record.task.id).requestId;
+    fs.mkdirSync(peerFile('outbox'), { recursive: true });
+    fs.writeFileSync(peerFile('outbox', `${requestId}.json`), JSON.stringify({ requestId, root: p.root, origin: origin('handoff', { a2aTaskId: record.task.id, own: true, threadId }), taskId: '1', outcome: 'done', text: 'Here.', costUsd: usd, costAtLeast: true, finishedAt: new Date().toISOString(), error: null }));
+    processOutbox(sara.ctx);
+    return getRecord(record.task.id).costUsd;
+  };
+  assert.equal(charged(0.2, 'thread-1'), 0.5); assert.equal(readCaps().peers[SARA].usd, 0.5);
+  assert.equal(charged(0.8, 'thread-2'), 0.8); assert.equal(readCaps().peers[SARA].usd, 1.3);
+});
+
+// The reply the conductor leaves for the daemon says so of such a run.
+test("a teammate's reply says when its runs' cost may be more", t => {
+  const p = setup(t, 'answer'), { repo } = liveTask(p.root), at = new Date().toISOString();
+  const task = readTask(repo, '1');
+  task.runs = [{ role: 'lead', vendor: 'codex', at, ownCost: true, model: 'gpt-6.1-sol', tokens: { input: 100_000, output: 0, cacheRead: 0, cacheWrite: 0 }, permissions: 'auto', logFile: path.join(p.parent, 'gone.jsonl') }];
+  saveTask(repo, task);
+  new Conductor({ tickMs: 20 }).outbox({ controller: { repo }, taskId: '1', runsBefore: 0, origin: origin(), requestId: 'request-1', root: p.root }, null, at);
+  const reply = outbox('request-1');
+  assert.equal(reply.costUsd, 0.2); assert.equal(reply.costAtLeast, true);
+});
+
 test('a handoff waits with nothing queued; w with Ask runs it as the owner\'s session, and the summary replies in the thread', async t => {
   const p = setup(t, 'normal'), sara = teammate(p);
   const record = sara.send(HANDOFF);
@@ -371,8 +402,9 @@ for (const [mode, name] of [['full', 'Full access'], ['auto', 'Approve for me']]
     // The mode approved the Task and the work ran in the same request, as for a message he typed.
     assert.notEqual(value.kind, 'conversation', 'the edit started');
     assert.match(fs.readFileSync(path.join(value.worktree, 'src/coupon.mjs'), 'utf8'), /toUpperCase/);
-    const [done] = sessionTasks(p.repo, value.id);
-    assert.deepEqual([done.state, done.approvedBy, done.startedBy], ['done', mode, 'owner']);
+    // Its work ended, and the Task waits for his check.
+    const [ended] = sessionTasks(p.repo, value.id);
+    assert.deepEqual([ended.state, ended.approvedBy, ended.startedBy], ['approved', mode, 'owner']);
     const first = p.prompts()[0];
     assert.match(first.input, new RegExp(`This session runs with ${name}, which approves the Task: it is recorded as approved by ${name}, nobody has to approve it`));
     assert.doesNotMatch(first.input, /Plan first|The owner approves or rejects the Task|only after they approve/);
@@ -397,6 +429,10 @@ for (const [mode, name] of [['full', 'Full access'], ['auto', 'Approve for me']]
     processOutbox(sara.ctx);
     assert.equal(getRecord(record.task.id).task.status.state, TaskState.COMPLETED);
     assert.ok(!getRecord(record.task.id).reply.text.endsWith(PLAN_WAITS), getRecord(record.task.id).reply.text);
+    // His check makes the Task done. The reply carried its result, so nothing more goes to her.
+    checkDone(p.repo, readTask(p.repo, value.id), p.root);
+    assert.equal(sessionTasks(p.repo, value.id)[0].state, 'done');
+    assert.equal(fs.readdirSync(peerFile('outbox')).filter(name => name.startsWith('result-')).length, 0);
   });
 }
 
@@ -419,7 +455,7 @@ test('Auto in Ask for approval: the Task a teammate\'s message led to waits for 
   // The owner types yes in that session: it is his, so it approves the Task, and the edit is told his approval is his acceptance.
   const yes = enqueue(p.root, 'yes', { continuationTaskId: id, priority: 0 });
   await until(() => request(p.root, yes.id)?.state === 'done', 'his yes', 60000);
-  assert.equal(sessionTasks(p.repo, id)[0].state, 'done'); assert.equal(sessionTasks(p.repo, id)[0].approvedBy, undefined);
+  assert.equal(sessionTasks(p.repo, id)[0].state, 'approved'); assert.equal(sessionTasks(p.repo, id)[0].approvedBy, undefined);
   const work = p.prompts().find(call => call.input.includes('this turn does its work'));
   assert.ok(work.input.includes(RULES_ACCEPTED)); assert.ok(!work.input.includes(RULES_PROPOSE)); assert.match(work.input, /The owner approved the Task below, and this turn does its work/);
   // In another thread her message leads to a Task that waits too. The owner gives that session
@@ -432,13 +468,13 @@ test('Auto in Ask for approval: the Task a teammate\'s message led to waits for 
   const own = enqueue(p.root, 'Please make the checkout codes uppercase too.', { continuationTaskId: second, priority: 0 });
   await until(() => request(p.root, own.id)?.state === 'done', 'his message in Full access', 60000);
   const approved = sessionTasks(p.repo, second).at(-1);
-  assert.deepEqual([approved.id, approved.state, approved.approvedBy], [waiting.id, 'done', 'full']);
+  assert.deepEqual([approved.id, approved.state, approved.approvedBy], [waiting.id, 'approved', 'full']);
   assert.notEqual(readTask(p.repo, second).kind, 'conversation', 'the edit started');
   const told = p.prompts().findLast(call => call.input.includes('Please make the checkout codes uppercase too.') && call.input.includes('Task waiting'));
   assert.match(told.input, /The Task below was written before this session had Full access and still waits\. It needs no approval now\./);
 });
 
-test('once the owner approves the Task a teammate\'s message led to and its work is done, the result goes back to that teammate\'s thread', async t => {
+test('once the owner approves the Task a teammate\'s message led to and checks its work Done, the result goes back to that teammate\'s thread', async t => {
   const p = setup(t, 'normal'), sara = teammate(p), teamId = everyTeam()[0].id;
   saveTeamAccess(teamId, { handling: 'auto', root: p.root });
   // Sara's machine: the message she sent, and what her daemon does with what comes back.
@@ -459,6 +495,10 @@ test('once the owner approves the Task a teammate\'s message led to and its work
   await until(() => request(p.root, approved.id)?.state === 'done', 'approved Task', 60000);
   const done = readTask(p.repo, id), summary = (done.reply ?? done.result).summary;
   assert.ok(summary);
+  // Its work ended: the Task waits for his check, and nothing goes to her yet.
+  assert.equal(sessionTasks(p.repo, id)[0].state, 'approved');
+  assert.equal(fs.readdirSync(peerFile('outbox')).filter(name => name.startsWith('result-')).length, 0);
+  checkDone(p.repo, readTask(p.repo, id), p.root);
   // The owner's daemon sends the result into the thread, to Sara's machine.
   const sent = [];
   const ctx = { ...sara.ctx, dial: () => {}, session: key => key === SARA ? { request: async (method, params) => { sent.push(method); return { task: saraSide.SendMessage(params, { key: sara.me.key }) }; } } : null };
@@ -500,7 +540,9 @@ async function plannedBySara(t) {
   const approve = async () => { const [proposed] = sessionTasks(p.repo, id); approveTask(p.repo, id); return turn(`Approved the Task: ${proposed.title}`, { approved: true }); };
   const results = dir => thread('thread-1').filter(line => line.kind === 'result' && (!dir || line.dir === dir));
   const summary = () => { const done = readTask(p.repo, id); return (done.reply ?? done.result).summary; };
-  return { p, sara, saraCtx, saraEvents, id, ctx, sent, turn, approve, results, summary };
+  // His check of the session: Done, which makes the Task done.
+  const check = () => checkDone(p.repo, readTask(p.repo, id), p.root);
+  return { p, sara, saraCtx, saraEvents, id, ctx, sent, turn, approve, check, results, summary };
 }
 const heldResults = () => peerItems().filter(row => row.kind === 'held' && row.result);
 
@@ -508,7 +550,7 @@ test('a result for a teammate whose replies the owner checks first waits with hi
   const s = await plannedBySara(t);
   createAsk(s.saraCtx, { to: s.sara.me.key, kind: 'ask', text: HANDOFF, threadId: 'thread-1' });
   savePeerPolicy(SARA, { holdReplies: true });
-  await s.approve();
+  await s.approve(); s.check();
   processOutbox(s.ctx);
   // Nothing went out: the result waits where held replies do, with its text to read.
   assert.deepEqual(s.sent, []); assert.equal(s.results().length, 0);
@@ -530,7 +572,7 @@ test('a result with a possible secret is held as blocked: it goes only once edit
   const s = await plannedBySara(t), KEY = `AKIA${'A1B2'.repeat(4)}`;
   createAsk(s.saraCtx, { to: s.sara.me.key, kind: 'ask', text: HANDOFF, threadId: 'thread-1' });
   s.p.extra({ summary: `Done. The key is ${KEY}.` });
-  await s.approve();
+  await s.approve(); s.check();
   processOutbox(s.ctx);
   assert.deepEqual(s.sent, []);
   const [held] = heldResults(), ref = held?.id.slice('held:result-'.length);
@@ -551,7 +593,7 @@ test('a result with a possible secret is held as blocked: it goes only once edit
   assert.equal(heldResults().length, 0); assert.deepEqual(s.sent, ['SendMessage']); assert.equal(s.results().length, 2);
 });
 
-test('approved work that stops on a question sends its result once the owner\'s later turn finishes the Task, and only once', async t => {
+test('approved work that stops on a question sends its result once the owner\'s later turn ends its work and he checks it Done, and only once', async t => {
   const s = await plannedBySara(t);
   createAsk(s.saraCtx, { to: s.sara.me.key, kind: 'ask', text: HANDOFF, threadId: 'thread-1' });
   s.p.extra({ workQuestion: true });
@@ -561,9 +603,13 @@ test('approved work that stops on a question sends its result once the owner\'s 
   assert.equal(sessionTasks(s.p.repo, s.id).at(-1).state, 'approved');
   assert.equal(readTask(s.p.repo, s.id).reply?.outcome ?? readTask(s.p.repo, s.id).result?.outcome, 'needs_input');
   assert.deepEqual(s.sent, []); assert.equal(s.results().length, 0);
-  // The owner answers in the session, and that turn finishes the Task: its result goes now.
+  // The owner answers in the session, and that turn ends the work. Nothing goes until his check
+  // makes the Task done: its result goes then.
   s.p.extra({ summary: 'Coupon codes are uppercase now.' });
   await s.turn('Yes, go on.');
+  assert.equal(sessionTasks(s.p.repo, s.id).at(-1).state, 'approved');
+  processOutbox(s.ctx); assert.equal(s.results().length, 0);
+  s.check();
   assert.equal(sessionTasks(s.p.repo, s.id).at(-1).state, 'done');
   processOutbox(s.ctx);
   await until(() => s.results('in').length === 1, 'the result at sara');
@@ -589,8 +635,9 @@ test('a result the model wrote itself reaches the teammate whole whatever its le
   await s.approve();
   const done = readTask(s.p.repo, s.id);
   assert.equal(done.error ?? null, null, JSON.stringify(done.error)); assert.ok(done.runs.every(run => !run.again), JSON.stringify(done.runs.map(run => run.again)));
-  assert.equal(sessionTasks(s.p.repo, s.id).at(-1).state, 'done');
+  assert.equal(sessionTasks(s.p.repo, s.id).at(-1).state, 'approved');
   assert.equal(s.summary(), LONG_REPLY, 'the session keeps every character the model wrote');
+  s.check();
   processOutbox(s.ctx);
   await until(() => s.results('in').length === 1, 'the result at sara');
   // Every character is in the thread on both computers, on the ask it answers, and in what the thread screen reads.
@@ -659,10 +706,11 @@ test('approved work that fails again and again tells the teammate once for its T
   }
   await new Promise(resolve => setTimeout(resolve, 200));
   assert.equal(told(), 1, thread('thread-1').map(line => `${line.dir} ${line.kind} ${line.text}`).join('\n')); assert.deepEqual(s.sent, ['SendMessage']);
-  // The owner's next message continues the work; once it is done, what it did goes to her as before.
+  // The owner's next message continues the work; once he checks it Done, what it did goes to her as before.
   s.p.extra({ summary: 'Coupon codes are uppercase now.' });
   await s.turn('Go on.');
-  assert.equal(sessionTasks(s.p.repo, s.id).at(-1).state, 'done');
+  assert.equal(sessionTasks(s.p.repo, s.id).at(-1).state, 'approved');
+  s.check();
   processOutbox(s.ctx);
   await until(() => s.results('in').some(line => line.text === 'Coupon codes are uppercase now.'), 'the result at sara');
   assert.equal(told(), 1); assert.deepEqual(s.sent, ['SendMessage', 'SendMessage']);
@@ -765,13 +813,13 @@ test('an approved run that is queued again after a rate limit starts again and f
   updateRequest(s.p.root, row.id, { notBefore: null });
   await until(() => ['done', 'blocked'].includes(request(s.p.root, row.id)?.state), 'the retried run', 60000);
   assert.deepEqual([request(s.p.root, row.id).state, request(s.p.root, row.id).reason], ['done', 'Finished.']);
-  // Approved once: the Task is the one he approved, done, and the chat says so one time.
+  // Approved once: the Task is the one he approved, its work ended, and the chat says so one time.
   const task = sessionTasks(s.p.repo, s.id).at(-1);
-  assert.deepEqual([task.state, task.approvedAt], ['done', approvedAt]); assert.equal(sessionTasks(s.p.repo, s.id).length, 1);
+  assert.deepEqual([task.state, task.approvedAt], ['approved', approvedAt]); assert.equal(sessionTasks(s.p.repo, s.id).length, 1);
   assert.equal(approvals(s).length, 1, JSON.stringify(readTask(s.p.repo, s.id).messages.map(m => m.text)));
   assert.match(fs.readFileSync(path.join(readTask(s.p.repo, s.id).worktree, 'src/coupon.mjs'), 'utf8'), /toUpperCase/);
-  // Sara gets the result, once, and was never told the work stopped.
-  processOutbox(s.ctx);
+  // Sara gets the result at his check, once, and was never told the work stopped.
+  s.check(); processOutbox(s.ctx);
   await until(() => s.results('in').length === 1, 'the result at sara');
   assert.equal(s.results('in')[0].text, 'Coupon codes are uppercase now.'); assert.deepEqual(s.sent, ['SendMessage']);
   assert.equal(thread('thread-1').filter(line => line.text === STOPPED).length, 0);
@@ -791,12 +839,12 @@ test('a Task approved by typing yes whose run is queued again after a rate limit
   updateRequest(s.p.root, row.id, { notBefore: null });
   await until(() => ['done', 'blocked'].includes(request(s.p.root, row.id)?.state), 'the retried run', 60000);
   assert.deepEqual([request(s.p.root, row.id).state, request(s.p.root, row.id).reason], ['done', 'Finished.']);
-  assert.equal(sessionTasks(s.p.repo, s.id).at(-1).state, 'done'); assert.equal(sessionTasks(s.p.repo, s.id).length, 1);
+  assert.equal(sessionTasks(s.p.repo, s.id).at(-1).state, 'approved'); assert.equal(sessionTasks(s.p.repo, s.id).length, 1);
   // The chat keeps his yes once, as it keeps one approval made with the key.
   const texts = readTask(s.p.repo, s.id).messages.map(m => m.text);
   assert.equal(texts.filter(text => text === 'yes').length, 1, JSON.stringify(texts));
   assert.match(fs.readFileSync(path.join(readTask(s.p.repo, s.id).worktree, 'src/coupon.mjs'), 'utf8'), /toUpperCase/);
-  processOutbox(s.ctx);
+  s.check(); processOutbox(s.ctx);
   await until(() => s.results('in').length === 1, 'the result at sara');
   assert.equal(s.results('in')[0].text, 'Coupon codes are uppercase now.'); assert.deepEqual(s.sent, ['SendMessage']);
   assert.equal(thread('thread-1').filter(line => line.text === STOPPED).length, 0);
@@ -816,8 +864,8 @@ test('an approved run that stops making progress is queued again, starts again a
   assert.equal(request(s.p.root, row.id).approved, true);
   await until(() => ['done', 'blocked'].includes(request(s.p.root, row.id)?.state), 'the retried run', 60000);
   assert.deepEqual([request(s.p.root, row.id).state, request(s.p.root, row.id).reason], ['done', 'Finished.']);
-  assert.equal(sessionTasks(s.p.repo, s.id).at(-1).state, 'done'); assert.equal(approvals(s).length, 1);
-  processOutbox(s.ctx);
+  assert.equal(sessionTasks(s.p.repo, s.id).at(-1).state, 'approved'); assert.equal(approvals(s).length, 1);
+  s.check(); processOutbox(s.ctx);
   await until(() => s.results('in').length === 1, 'the result at sara');
   assert.equal(s.results('in')[0].text, 'Coupon codes are uppercase now.');
   assert.equal(thread('thread-1').filter(line => line.text === STOPPED).length, 0);
@@ -834,8 +882,9 @@ test('r on an approved message that is blocked starts its Task\'s work again, an
   assert.equal(retryRequest(s.p.root, row.id).state, 'queued');
   await until(() => ['done', 'blocked'].includes(request(s.p.root, row.id)?.state), 'the retried run', 60000);
   assert.equal(request(s.p.root, row.id).state, 'done', request(s.p.root, row.id).reason);
-  assert.equal(sessionTasks(s.p.repo, s.id).at(-1).state, 'done'); assert.equal(approvals(s).length, 1);
-  // A Task that is done starts no work for an approval that comes again.
+  assert.equal(sessionTasks(s.p.repo, s.id).at(-1).state, 'approved'); assert.equal(approvals(s).length, 1);
+  // A Task he checked Done starts no work for an approval that comes again.
+  s.check();
   const again = enqueue(s.p.root, 'Approved the Task: Uppercase coupons', { continuationTaskId: s.id, priority: 0, approved: true });
   await until(() => ['done', 'blocked'].includes(request(s.p.root, again.id)?.state), 'the late approval', 30000);
   assert.deepEqual([request(s.p.root, again.id).state, request(s.p.root, again.id).reason], ['blocked', 'That Task is no longer waiting to start.']);
@@ -856,11 +905,11 @@ test('a Task approved by typing yes tells the teammate when its work fails, as o
   await s.turn('Go on.');
   processOutbox(s.ctx); await new Promise(resolve => setTimeout(resolve, 200));
   assert.equal(told(), 1); assert.deepEqual(s.sent, ['SendMessage']);
-  // Done at last: the result follows.
+  // Its work ends at last and he checks it Done: the result follows.
   s.p.extra({ summary: 'Coupon codes are uppercase now.' });
   await s.turn('Go on.');
-  assert.equal(sessionTasks(s.p.repo, s.id).at(-1).state, 'done');
-  processOutbox(s.ctx);
+  assert.equal(sessionTasks(s.p.repo, s.id).at(-1).state, 'approved');
+  s.check(); processOutbox(s.ctx);
   await until(() => s.results('in').some(line => line.text === 'Coupon codes are uppercase now.'), 'the result at sara');
   assert.equal(told(), 1); assert.deepEqual(s.sent, ['SendMessage', 'SendMessage']);
 });

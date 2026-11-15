@@ -388,8 +388,10 @@ test("the Standup's Kanban tools change only this computer's boards for its roun
   assert.equal(card.from, '@billing on @kim');
   assert.throws(() => kanbanTool('kanban_add', { board, text: 'x', from: 'u9' }, session), /No update of this standup has that id/);
   assert.match(kanbanTool('kanban_edit', { board, card: card.id, text: 'Check the aud claim' }, session), /^Changed 'Check JWT aud claim' to 'Check the aud claim'/);
-  assert.equal(kanbanTool('kanban_move', { board, id: card.id, done: true }, session), "Moved 'Check the aud claim' to Done");
-  assert.throws(() => kanbanTool('kanban_move', { board, id: 'peer-0123', done: true }, session), /teammate's card/);
+  // Only the owner moves work to Done, after he checks it: never the Standup's model.
+  assert.throws(() => kanbanTool('kanban_move', { board, id: card.id, done: true }, session), /Only the owner moves work to Done/);
+  assert.equal(readBoard(f.repo).done.includes(card.id), false);
+  assert.throws(() => kanbanTool('kanban_move', { board, id: 'peer-0123', done: false }, session), /teammate's card/);
   assert.throws(() => kanbanTool('kanban_list_x', { board }, session), /Unknown tool/);
   assert.throws(() => kanbanTool('kanban_add', { board: 'elsewhere', text: 'x' }, session), /not one of this standup's on this computer/);
   const other = readBoard(f.repo).cards.length, own = addCard(f.repo, 'Owner card');
@@ -456,6 +458,28 @@ test("a teammate's standup: manual waits for the owner and a decline is told; au
   const older = await teamStandupCommand({ ...ctx, session: () => ({ remoteHello: { cards: 1 }, request: async (...args) => { requests.push(args); return {}; } }) }, { type: 'teamStandup', to: member.identity.key, round: newRound(), cards: [card] });
   assert.deepEqual(older, { older: true }); assert.deepEqual(requests, []);
   assert.deepEqual(await teamStandupCommand({ ...ctx, session: () => null }, { type: 'teamStandupRead', to: member.identity.key, round: newRound() }), { offline: true });
+});
+
+// A session a teammate's message started is never asked in a teammate's standup, though its
+// card is shared with them. The reason says so: to the teammate whose message started it, that
+// it was theirs; to anyone else, that a teammate's message did. Never that it is not shared.
+test("a teammate's standup skips a session a teammate's message started, and says that, not that it is not shared", async t => {
+  const { teamId, founder, member } = makeTeam(t);
+  const p = project(t), fake = fakeClis(p.parent, { mode: 'answer' }); environment(t, { ...fake.env, XDG_CONFIG_HOME: founder.home });
+  git(p.root, ['remote', 'add', 'origin', 'https://github.com/example/shop.git']);
+  const controller = new ProjectController(projectFolder(p.root)); controller.draftConfig.checks = []; registerProject(controller.repo);
+  const theirs = await controller.ask('Explain coupons').finished, other = await controller.ask('Explain carts').finished;
+  // Hers, taken on as the owner's own; another teammate's, through the same team.
+  saveTask(controller.repo, { ...readTask(controller.repo, theirs.id), origin: { kind: 'handoff', peer: member.identity.key, name: 'sara', threadId: 'thread-1', teams: [teamId], own: true } });
+  saveTask(controller.repo, { ...readTask(controller.repo, other.id), origin: { kind: 'handoff', peer: 'c'.repeat(64), name: 'kim', threadId: 'thread-2', teams: [teamId], own: true } });
+  const repos = localRepos(), [row] = repos.values();
+  saveProofs(member.identity.key, [repoProof(member.identity.key, founder.identity.key, row.repoId, row.commit)]);
+  const cards = sessionCards({ owner: 'ana', repos }), card = id => cards.find(value => value.taskId === id).card.id;
+  saveTeamAccess(teamId, { handling: 'auto' });
+  const asked = teamStandupAsk({ me: founder.identity, repos: () => repos, kick: () => {}, event: () => {} }, member.identity.key, { round: newRound(), cards: [card(theirs.id), card(other.id)] });
+  assert.deepEqual(asked.asked, []);
+  assert.deepEqual(asked.skipped, [{ card: card(theirs.id), why: 'your message started it' }, { card: card(other.id), why: "a teammate's message started it" }]);
+  assert.equal(pendingRequests(p.root).filter(value => value.standupFor).length, 0);
 });
 
 test('another computer of mine whose hello lacks standup: 1 is never sent the question', async () => {

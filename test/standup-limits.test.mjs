@@ -20,7 +20,7 @@ import { readCaps } from '../lib/peer/intake.mjs';
 import { savePeerPolicy, savePeerSettings } from '../lib/peer/settings.mjs';
 import { share } from '../lib/peer/shares.mjs';
 import { saveRemotePlans } from '../lib/peer/plans.mjs';
-import { approveStandup, hostStandup, hostStandupRead, teamStandupAsk, teamStandupCommand, teamStandupRead, waitingStandups } from '../lib/peer/standup.mjs';
+import { UPDATE_USD, approveStandup, hostStandup, hostStandupRead, standupSpend, teamStandupAsk, teamStandupCommand, teamStandupRead, waitingStandups } from '../lib/peer/standup.mjs';
 import { remoteCommand } from '../lib/peer/remote.mjs';
 import { FRAME_MAX } from '../lib/peer/transport.mjs';
 import { STANDUP_QUESTION, newRound, standupOpen, standupStage } from '../lib/standup.mjs';
@@ -185,7 +185,7 @@ test('the same rule says which sessions are open everywhere: an answered chat is
   assert.equal(standupOpen(readBoard(f.repo), readTask(f.repo, task.id)), false);
   // On the asker's side a teammate's card is asked by what their computer says, in any column,
   // and one moved to Done is not, as his own. A card of an older build in Done may have
-  // answered: it is listed with why, never dropped. A withheld card is never one to ask.
+  // answered: it is listed with why, never dropped. A withheld card in Done is not listed.
   const kim = 'f'.repeat(64), now = new Date().toISOString();
   const people = () => [{ peer: kim, name: 'kim', online: true, sessions: [
     { id: '0123456789abcdef', title: 'Answered chat', column: 'done', by: 'kim', at: now, standup: true },
@@ -312,6 +312,19 @@ test("a teammate's standup asks every session: each model update counts what it 
   savePeerSettings({ caps: { peerUsdPerDay: 5, teamUsdPerDay: 3.95 } });
   const team = newRound(); teamStandupAsk(ctx, sara, { round: team, cards: [cards[0].id] });
   assert.deepEqual((await answer(team)).map(value => value.text), ["Not asked: your team has used the $3.95 a day this teammate's computer allows it."]);
+});
+
+// A model update whose cost may be more than its tokens say (atLeast: a Codex run in Approve for
+// me) counts at least what it held, as one whose cost is not known counts all of it.
+test("a teammate's model update whose cost may be more counts at least what it held", t => {
+  const { founder, member } = makeTeam(t); environment(t, { XDG_CONFIG_HOME: founder.home });
+  const sara = member.identity.key, at = new Date().toISOString(), near = (value, wanted) => assert.ok(Math.abs(value - wanted) < 1e-6, `${value}, not ${wanted}`);
+  // On gpt-6.1-sol, $2 a million input tokens.
+  const run = usd => ({ role: 'lead', vendor: 'codex', at, ownCost: true, model: 'gpt-6.1-sol', tokens: { input: usd * 500_000, output: 0, cacheRead: 0, cacheWrite: 0 }, permissions: 'auto', logFile: '/nowhere.log' });
+  standupSpend({ peer: sara, teams: [] })([run(0.02)]);
+  near(readCaps().peers[sara].usd, UPDATE_USD);
+  standupSpend({ peer: sara, teams: [] })([run(0.3)]);
+  near(readCaps().peers[sara].usd, UPDATE_USD + 0.3);
 });
 
 // What a session answers leaves its computer whole, for my other computer and for a teammate:

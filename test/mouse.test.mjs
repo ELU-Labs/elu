@@ -7,7 +7,7 @@ import { repository } from '../lib/git.mjs';
 import { launchTerminal } from '../lib/terminal.mjs';
 import { layout, position, indexAt, editKey } from '../lib/editor.mjs';
 import { spans, spanText, wordSpan, systemClipboard, reportSplitter } from '../lib/selection.mjs';
-import { pasteSplitter, pastedText } from '../lib/paste.mjs';
+import { escapeApart, keyQueue, pasteSplitter, pastedText } from '../lib/paste.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 
@@ -82,6 +82,36 @@ test('a paste is split from the keys around it, however the input is chunked', (
   assert.deepEqual(run('\x1b', '[D'), { keys: ['\x1b', '[D'], pastes: [] }, 'a lone escape is a key at once');
   assert.deepEqual(run('\x1b[200~a\x1b[201~\x1b[200~b\x1b[201~'), { keys: [], pastes: ['a', 'b'] });
   assert.equal(pastedText('a\r\nb\rc\td\x07e\x1b'), 'a\nb\nc\tde');
+});
+
+// Esc and the key after it can come in one read (tmux sends them so within its escape-time).
+// blessed reads Esc before a letter or a digit as Alt and that key, and drops both before any
+// other character, / included: such a pair goes to it as two keys. Key codes stay whole.
+test('Esc before a character blessed would drop goes as its own key; Alt letters and key codes stay whole', () => {
+  assert.deepEqual(escapeApart('\x1b/chats'), ['\x1b', '/chats']);
+  assert.deepEqual(escapeApart('ab\x1b.c\x1b/d'), ['ab\x1b', '.c\x1b', '/d']);
+  assert.deepEqual(escapeApart('\x1b\x1b/'), ['\x1b\x1b', '/'], 'Esc Esc stays Alt+Esc');
+  assert.deepEqual(escapeApart('\x1b\u00e9'), ['\x1b', '\u00e9']);
+  for (const whole of ['/chats', '\x1b', '\x1bb', '\x1bB', '\x1b1', '\x1b[A', '\x1b[1;2C', '\x1bOA', '\x1b[<0;3;4M', '\x1b ', '\x1b\x7f', '\x1b\r']) assert.deepEqual(escapeApart(whole), [whole], JSON.stringify(whole));
+});
+
+// What follows an Esc set apart is read a turn later, once the Esc has acted: a dialog it
+// closes gives the focus back on that turn, and the keys go where the focus then is. Input that
+// comes meanwhile, a paste included, waits behind it, in order.
+test('the keys after an Esc set apart wait a turn, and what comes meanwhile waits behind them in order', () => {
+  const got = [], turns = [];
+  const feed = keyQueue(text => got.push(['keys', text]), text => got.push(['paste', text]), fn => turns.push(fn));
+  feed.keys('\x1b/chats'); assert.deepEqual(got, [['keys', '\x1b']]); assert.equal(turns.length, 1);
+  feed.paste('pasted'); feed.keys('x'); assert.deepEqual(got, [['keys', '\x1b']], 'later input waits');
+  turns.shift()();
+  assert.deepEqual(got, [['keys', '\x1b'], ['keys', '/chats'], ['paste', 'pasted'], ['keys', 'x']]);
+  got.length = 0;
+  feed.keys('ab\x1b.c\x1b/d'); assert.deepEqual(got, [['keys', 'ab\x1b']]);
+  turns.shift()(); assert.deepEqual(got, [['keys', 'ab\x1b'], ['keys', '.c\x1b']]);
+  turns.shift()(); assert.deepEqual(got, [['keys', 'ab\x1b'], ['keys', '.c\x1b'], ['keys', '/d']]);
+  // Keys with no Esc set apart, and a lone Esc, go at once.
+  got.length = 0; feed.keys('abc'); feed.keys('\x1b[A'); feed.keys('\x1b'); feed.paste('p');
+  assert.deepEqual(got, [['keys', 'abc'], ['keys', '\x1b[A'], ['keys', '\x1b'], ['paste', 'p']]); assert.equal(turns.length, 0);
 });
 
 test('a selection runs in reading order inside its pane and copies trimmed text', () => {

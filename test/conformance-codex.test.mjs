@@ -7,7 +7,7 @@ import { compile as codex, parse as parseCodex, signedIn, meta } from '../lib/ad
 import { defaultConfig } from '../lib/config.mjs';
 import { HOME_SECRETS } from '../lib/vendors.mjs';
 import { personalDirectory } from '../lib/util.mjs';
-import { temp, fakeClis, readRole } from './helpers.mjs';
+import { temp, fakeClis, readRole, command } from './helpers.mjs';
 import { shimsBase } from '../lib/never-shims.mjs';
 
 const fixture = (file) => fs.readFileSync(new URL(`./fixtures/${file}`, import.meta.url), 'utf8');
@@ -15,6 +15,18 @@ const lead = () => ({ ...defaultConfig().roles.lead, vendor: 'codex', maxCostUsd
 const reviewer = () => readRole('codex');
 const setting = (args, key) => { const row = args.find(a => a.startsWith(`${key}=`)); return row?.slice(key.length + 1); };
 const profileOf = args => setting(args, 'permissions.elu_ask');
+// The profile's filesystem table, read strictly: every entry a quoted key and one access, and
+// no key twice. TOML refuses a table that names a key twice, and Codex then runs no command.
+const filesystemOf = profile => {
+  let rest = profile.match(/filesystem=\{(.*)\}\}$/)?.[1]; assert.ok(rest != null, profile);
+  const entries = new Map();
+  while (rest) {
+    const entry = rest.match(/^("(?:[^"\\]|\\.)*")="(deny|read|write)"(?:, (?=")|$)/); assert.ok(entry, `not a "path"="access" entry: ${rest}`);
+    const key = JSON.parse(entry[1]); assert.equal(entries.has(key), false, `${key} is named twice: ${profile}`);
+    entries.set(key, entry[2]); rest = rest.slice(entry[0].length);
+  }
+  return entries;
+};
 const assertIsolated = (args) => {
   for (const expected of ['--ignore-user-config', '--ignore-rules', '--json', 'mcp_servers={}', 'features.hooks=false', 'features.apps=false', 'features.multi_agent=false', 'features.browser_use=false', 'features.plugins=false', 'tools.experimental_request_user_input.enabled=false', 'tools.update_plan.enabled=false', 'skills.bundled.enabled=false']) assert.ok(args.includes(expected), expected);
   assert.equal(args.some((a) => /dangerously|bypass|--yolo|--approve-for-me/.test(a)), false, 'no bypass flag');
@@ -65,7 +77,7 @@ test('a locked edit role is refused; a budget is refused in every mode; peer run
 
 test('argv per mode: ask and auto run the elu_ask profile with a sandboxed shell, full runs without a sandbox', (t) => {
   const cwd = temp(t), schemaFile = path.join(cwd, 'schema.json'), folder = temp(t), common = path.join(cwd, '.git');
-  const home = fs.realpathSync(os.homedir());
+  const home = fs.realpathSync(os.homedir()); fs.mkdirSync(common);
   const ask = codex({ mode: 'ask', role: lead(), cwd, schemaFile, folders: [folder], protectedPaths: ['package.json', '.github'], commonDir: common });
   const auto = codex({ mode: 'auto', role: lead(), cwd, schemaFile, folders: [folder], protectedPaths: ['package.json'], commonDir: common });
   const full = codex({ mode: 'full', role: lead(), cwd, schemaFile, folders: [folder], protectedPaths: ['package.json'], commonDir: common });
@@ -110,6 +122,7 @@ test('argv per mode: ask and auto run the elu_ask profile with a sandboxed shell
   assert.equal(setting(codex({ mode: 'full', role: lead(), cwd, schemaFile, place: { kind: 'here' } }), 'sandbox_mode'), '"danger-full-access"');
   assert.equal(profileOf(codex({ role: reviewer(), cwd, schemaFile })), undefined); assert.equal(codex({ role: reviewer(), cwd, schemaFile }).includes('allow_login_shell=false'), false, 'a reviewer runs no command');
   for (const args of [ask, auto]) assert.ok(profileOf(args).includes(`${JSON.stringify(shimsBase())}="read"`), 'the stand-in commands stay read-only wherever a named folder reaches');
+  for (const args of [ask, auto, answer]) filesystemOf(profileOf(args));
 });
 
 test('resume keeps the -c set and drops the flags exec resume lacks', (t) => {
@@ -122,6 +135,61 @@ test('resume keeps the -c set and drops the flags exec resume lacks', (t) => {
     const configs = args => args.filter((a, i) => args[i - 1] === '-c');
     assert.deepEqual(configs(resumed), configs(fresh), `${mode}: the same -c set`);
     assert.deepEqual(resumed.filter(a => a.startsWith('--')), fresh.filter(a => a.startsWith('--')).filter(a => a !== '--cd'), mode);
+  }
+});
+
+test('a path named twice gets one entry in the Codex profile: deny over read over write, and the hand-off folder stays writable unless it is denied', (t) => {
+  const cwd = temp(t), schemaFile = path.join(cwd, 'schema.json'), folder = temp(t), common = path.join(cwd, '.git');
+  const own = path.join(temp(t), 'elu-code-own-x', 'requests'); fs.mkdirSync(own, { recursive: true });
+  // The hand-off folder under each name the system temp folder has (a link on macOS).
+  const ownNames = [...new Set([own, path.join(path.resolve(os.tmpdir()), path.relative(fs.realpathSync(os.tmpdir()), own))])];
+  const denied = personalDirectory(), shims = shimsBase();
+  const answer = { ...lead(), access: 'read', writablePaths: [] };
+  for (const mode of ['ask', 'auto']) for (const role of [lead(), answer]) {
+    const at = `${mode} ${role.access}`;
+    const entries = filesystemOf(profileOf(codex({ mode, role, cwd, schemaFile, commonDir: common, handoff: own,
+      folders: [folder, folder, `${folder}/`, shims, denied, ...ownNames],
+      protectedPaths: ['package.json', './package.json', path.join(cwd, 'package.json'), folder, shims, denied, ...ownNames] })));
+    assert.equal(entries.get(folder), 'read', at); assert.equal(entries.get(path.join(cwd, 'package.json')), 'read', at); assert.equal(entries.get(shims), 'read', at);
+    assert.equal(entries.get(denied), 'deny', `${at}: nothing weakens a deny`);
+    for (const name of ownNames) assert.equal(entries.get(name), 'write', `${at}: the hand-off folder stays writable`);
+    // A hand-off folder that is denied stays denied.
+    const closed = filesystemOf(profileOf(codex({ mode, role, cwd, schemaFile, commonDir: common, handoff: denied, folders: [denied] })));
+    assert.equal(closed.get(denied), 'deny', at);
+  }
+});
+
+// On Linux Codex hides a denied path that does not exist by making it, and in .git, which it
+// keeps read-only in the workspace, it cannot: bwrap then refuses every command of the turn
+// ("Can't create file at <repo>/.git/elu-code: Read-only file system"; outside a repository,
+// "Can't create file at <cwd>/.git: Is a directory").
+test('a denied folder missing from the Git folder cannot stop the Codex sandbox: ELU makes its state folder there, and names none without a Git folder', (t) => {
+  const schemaFile = path.join(temp(t), 'schema.json'), answer = { ...lead(), access: 'read', writablePaths: [] };
+  const exists = p => { try { fs.lstatSync(p); return true; } catch { return false; } };
+  const gitFolder = () => { const root = temp(t); assert.equal(command('git', ['init', '-q', '--template=', '--initial-branch=main'], root).status, 0); return path.join(root, '.git'); };
+  for (const mode of ['ask', 'auto']) for (const role of [lead(), answer]) {
+    const at = `${mode} ${role.access}`;
+    // A repository whose .git/elu-code is missing, and a common Git folder outside the workspace.
+    const repo = gitFolder(), outside = gitFolder();
+    for (const [cwd, common] of [[path.dirname(repo), repo], [temp(t), outside]]) {
+      const state = path.join(common, 'elu-code'); assert.equal(exists(state), false);
+      const entries = filesystemOf(profileOf(codex({ mode, role, cwd, schemaFile, commonDir: common })));
+      assert.equal(entries.get(state), 'deny', `${at}: ELU's state stays denied`);
+      assert.ok(fs.statSync(state).isDirectory(), `${at}: ${state} is made, so Codex need not make it`);
+      assert.equal(fs.statSync(state).mode & 0o777, 0o700, at);
+      for (const [p, access] of entries) if (access === 'deny' && !path.relative(common, p).startsWith('..')) assert.ok(exists(p), `${at}: ${p} is denied but missing`);
+    }
+    // A state folder already there is denied as it was, and what it holds is untouched.
+    const kept = gitFolder(), held = path.join(kept, 'elu-code', 'transcript.jsonl'); fs.mkdirSync(path.dirname(held), { mode: 0o700 }); fs.writeFileSync(held, 'kept\n');
+    assert.equal(filesystemOf(profileOf(codex({ mode, role, cwd: path.dirname(kept), schemaFile, commonDir: kept }))).get(path.dirname(held)), 'deny', at);
+    assert.equal(fs.readFileSync(held, 'utf8'), 'kept\n', at);
+    // Outside a repository: no entry under <cwd>/.git, no .git made, and the rest is denied as before.
+    const plain = temp(t), none = path.join(plain, '.git');
+    const entries = filesystemOf(profileOf(codex({ mode, role, cwd: plain, schemaFile, commonDir: none })));
+    assert.deepEqual([...entries.keys()].filter(p => p === none || p.startsWith(`${none}/`)), [], `${at}: nothing named under a missing Git folder`);
+    assert.equal(exists(none), false, `${at}: no Git folder is made`);
+    assert.equal(entries.get(path.resolve(personalDirectory())), 'deny', at);
+    for (const name of HOME_SECRETS) assert.equal(entries.get(path.join(fs.realpathSync(os.homedir()), name)), 'deny', `${at}: ${name}`);
   }
 });
 

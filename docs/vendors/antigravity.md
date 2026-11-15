@@ -270,9 +270,26 @@ a model over ACP.` Choose Antigravity's own model with `/model`, or Full access.
 
 The run keeps the model the session named, and the tokens `agy` sent with the answer to the
 turn: ACP's `usage` (input, output, cache read, cache write; thought tokens count as output
-where the total counts them apart), or `_meta.quota.token_count`. The Usage tab's top agents
-show them. Where `agy` sent none, and for every headless run, the row says `not reported`,
-never 0. Antigravity reports no cost.
+where the total counts them apart), or `_meta.quota.token_count`. A headless run keeps the
+`usage` its JSON result ends with (`input_tokens`, `output_tokens`, `thinking_tokens`,
+`cache_read_tokens`, `total_tokens`). Antigravity's headless docs print the cache read apart
+from the input and leave it out of `total_tokens`, which is the input and the output there.
+Thinking counts as output where `total_tokens` counts it apart. Where the total leaves it out,
+as in the docs, it may be inside the output or apart, so the run shows as at least what its
+output costs (≥). A total that fits no reading leaves the run's tokens unknown. The docs say
+the counts and `num_turns` are the whole session's in a session that takes more than one
+prompt. They do not say so of a run that resumes a conversation (`--conversation`), as a
+session's next message does: one whose `num_turns` goes on from the run before it is read as
+the conversation's so far. So a run keeps its own share: the conversation's count less what it
+had reported after the turn before. The run keeps
+the conversation's count beside it, with its turns, and the next run counts from those. When
+the turn before is not known (it ran over ACP, or outside this session), the run's own share
+is unknown, never the conversation's count again. Antigravity does not say how big each
+request's prompt was, so a run on a model billed higher for a long prompt (Gemini 3.1 Pro,
+over 200k) is priced at the short rate, and shows as at least that (≥) once its prompts add up
+past that size. The result names no model, so a headless run on Antigravity's own model
+(none chosen) has no known price. Antigravity reports no cost: the Usage tab's top agents
+price the tokens at the model's API list price, and show a dash where they cannot, never 0.
 
 A turn that works on an approved Task shows its subtasks as it goes. Over ACP, ELU reads
 the `plan` updates `agy` sends for its own to-do list. Headless in Full access, the turn is

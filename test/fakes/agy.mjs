@@ -17,7 +17,16 @@
 // with no mode set reviews: it asks before each command and each write that no rule allows.
 // An ACP session names its model as the protocol does, a `model` config option changed with
 // session/set_config_option, keeps it with the conversation, and ends each turn with the
-// protocol's `usage`. Headless, --model names the model and the output repeats it.
+// protocol's `usage`. Headless, --model names the model and the output repeats it, and the
+// output ends with the turns and tokens as Antigravity CLI prints them (num_turns, usage:
+// input_tokens, output_tokens, thinking_tokens, cache_read_tokens, total_tokens), which count
+// the whole conversation, as its docs say a session that takes more than one prompt does: a run
+// resumed with --conversation prints the conversation's turns and its counts so far, its own
+// turn's added (kept in the conversation's folder). Each turn uses agy.headlessTurns[n] for the
+// conversation's turn n (from 0), else agy.headlessUsage, else fixed counts as its docs print
+// them (the cache read apart from the input, the total the input and the output);
+// agy.noUsage prints none. A run that could not sign in
+// prints them all 0, with no turn.
 // auth: 'prompt' signs it out the way Antigravity CLI 1.5.8 is signed out (observed in a
 // scratch HOME): -p prints "Authentication required. Please visit the URL to log in:", the
 // link, "Waiting for authentication (timeout 60s)..." and "Or, paste the authorization code
@@ -172,7 +181,7 @@ async function turn(text, { cwd, skip, sandbox, ask, dir, review = false, show =
 async function headless() {
   const prompt = flag('-p') ?? '';
   if (signedOut() && agy.auth === 'prompt' && !await signIn()) {
-    if (flag('--output-format') === 'json') console.log(JSON.stringify({ conversation_id: '', status: 'ERROR', response: '', error: 'authentication failed or timed out', finished_reason: 'error' }));
+    if (flag('--output-format') === 'json') console.log(JSON.stringify({ conversation_id: '', status: 'ERROR', response: '', error: 'authentication failed or timed out', duration_seconds: 0, num_turns: 0, usage: { input_tokens: 0, output_tokens: 0, thinking_tokens: 0, cache_read_tokens: 0, total_tokens: 0 }, finished_reason: 'error' }));
     process.exit(1);
   }
   if (signedOut()) { console.error('authentication required: run agy to sign in'); process.exit(1); }
@@ -193,7 +202,12 @@ async function headless() {
   if (schema?.properties?.intent) { result.intent = 'answer'; if (schema.properties.repository) result.repository = ''; }
   if (cfg.name !== undefined && schema?.properties?.name) result.name = cfg.name;
   planned(result, text, name => Boolean(schema?.properties?.[name]));
-  console.log(JSON.stringify({ conversationId: id, model: flag('--model') ?? MODELS[0], structured_output: result, stats: { turns: 1 } }, null, 2));
+  // The conversation's turns and counts so far, this turn's added.
+  const kept = path.join(dir, 'usage.json'); let before = { turns: 0, usage: null }; try { before = JSON.parse(fs.readFileSync(kept, 'utf8')); } catch { /* Its first turn. */ }
+  const own = agy.headlessTurns?.[before.turns] ?? agy.headlessUsage ?? { input_tokens: 1200, output_tokens: 80, thinking_tokens: 40, cache_read_tokens: 200, total_tokens: 1280 };
+  const soFar = { turns: before.turns + 1, usage: Object.fromEntries(Object.keys(own).map(key => [key, (before.usage?.[key] ?? 0) + own[key]])) };
+  fs.writeFileSync(kept, JSON.stringify(soFar));
+  console.log(JSON.stringify({ conversationId: id, model: flag('--model') ?? MODELS[0], structured_output: result, stats: { turns: soFar.turns }, num_turns: soFar.turns, ...(agy.noUsage ? {} : { usage: soFar.usage }) }, null, 2));
 }
 async function acp() {
   if (agy.acpFails) { console.error('agy: unknown command "acp"'); process.exit(1); }
@@ -242,6 +256,18 @@ async function acp() {
         };
         const result = await turn(text, { cwd: session.cwd, skip: false, sandbox: false, ask, dir: path.join(brain, p.sessionId), review: session.mode === undefined, show });
         if (session.always) fs.writeFileSync(path.join(brain, p.sessionId, 'always'), '');
+        // agy.usage: the turn's model responses, each { cost }, agy.usageMs apart, each followed by
+        // a usage_update with the conversation's cost so far, as ACP sends it. Each but the last
+        // asks for a tool call, which runs until the next.
+        if (Array.isArray(agy.usage)) {
+          const kept = path.join(brain, p.sessionId, 'cost'), wait = () => new Promise(resolve => setTimeout(resolve, agy.usageMs ?? 0));
+          for (const [n, one] of agy.usage.entries()) {
+            await wait(); if (n) change({ sessionUpdate: 'tool_call_update', toolCallId: `call_cost_${n}`, status: 'completed' });
+            let cost = 0; try { cost = Number(fs.readFileSync(kept, 'utf8')) || 0; } catch {} cost += one.cost ?? 0; fs.writeFileSync(kept, String(cost)); if (one.cost !== undefined) change({ sessionUpdate: 'usage_update', used: 1000, size: 200000, cost: { amount: cost, currency: 'USD' } });
+            if (n < agy.usage.length - 1) change({ sessionUpdate: 'tool_call', toolCallId: `call_cost_${n + 1}`, title: 'Read', kind: 'read', status: 'in_progress' });
+          }
+          await wait();
+        }
         await pause();
         // The runner's conversation schema rides in the prompt: an answer turn.
         if (/"intent"\s*:\s*\{/.test(text)) { result.intent = 'answer'; if (/"repository"\s*:\s*\{/.test(text)) result.repository = ''; }

@@ -171,7 +171,24 @@ as Grok's docs give it). The run keeps the model the session then named.
 The tokens of a run come from its result headless, and over ACP from `_meta.usage` on the
 answer to the turn. There `inputTokens` is the whole prompt, so ELU takes the cache read
 and the cache write out of it, as Grok's headless output does. The Usage tab's top agents
-show them; a turn that carried none says `not reported`, never 0.
+show them, priced at the model's API list price where Grok reported no cost; a turn that
+carried none shows a dash, never 0. ELU prices a run from those counts, which do not say how
+big each request's prompt was (the streaming output's `usage` rows do, one per model response,
+but its json output and ACP do not), so a run is priced at the short rate, and shows as at
+least that (≥) once its prompts add up to 200k. So does one whose count Grok says may be incomplete (`usage_is_incomplete`,
+`usageIsIncomplete`), and one whose stream shows a call its usage leaves out: compaction
+(`auto_compact_*`), which the guide in Grok Build's repository
+(`crates/codegen/xai-grok-pager/docs/user-guide/14-headless-mode.md`) says its usage leaves
+out with the other side-model calls, and those other calls the same guide's pages name: a
+memory flush, an LLM-written summary on its own `flush_model` (`13-memory.md`); a memory
+capture, with its generated content, and a Dream that runs, with its model calls per batch
+(`26-config-reference.md`); and a session summary or recap Grok generates on its
+`models.session_summary` model (the same page), by the names Grok's program gives those
+updates. A Dream that is only queued, or a session saved, is no call. The run keeps that mark with its tokens, so it reads the same once
+its log is gone. `cost_is_partial` says only that some calls had no cost: Grok then leaves
+every cost out, the tokens are whole, and they are priced at list as usual. Grok's spend
+covers every turn the run made and none of an earlier run of its session (its `usage` sums
+the tokens for the prompt, the same guide says), so a resumed session's run counts its own.
 
 A turn that works on an approved Task shows its subtasks as it goes. Over ACP, ELU reads
 the `plan` updates Grok sends for its own to-do list. Headless in Full access, the turn is

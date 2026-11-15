@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { spawnSync } from 'node:child_process';
 import { temp, project, fakeClis, autoApprove, readRole } from './helpers.mjs';
 import * as claude from '../lib/adapters/claude.mjs';
 import * as codex from '../lib/adapters/codex.mjs';
@@ -13,7 +14,7 @@ import * as grok from '../lib/adapters/grok.mjs';
 import { ProjectController, registerProject } from '../lib/projects.mjs';
 import { createFolder, createFolderPlan, projectFolder, pendingRequests, updateRequest } from '../lib/workspace.mjs';
 import { readTask } from '../lib/state.mjs';
-import { assertGitSafe, git, repository } from '../lib/git.mjs';
+import { assertGitSafe, git, repository, snapshotHooks } from '../lib/git.mjs';
 import { claudeAccount, codexAccount } from '../lib/usage.mjs';
 import { installScheduler, listSchedules, parseWhen, runDue, saveSchedule, schedulerFiles } from '../lib/schedules.mjs';
 import { readablePictures } from '../lib/pictures.mjs';
@@ -23,6 +24,7 @@ import { servicePath } from '../lib/peer/index.mjs';
 import { standupReply } from '../lib/standup.mjs';
 import { shimsBase, writeShims } from '../lib/never-shims.mjs';
 import { atomic, mkdir, noSymlinks, onDiskPath, personalDirectory, personalDirectoryNames, readJson, systemTemp, systemTempNames, tempFolder } from '../lib/util.mjs';
+import { HOME_SECRETS } from '../lib/vendors.mjs';
 
 // macOS keeps /var and /tmp as links to /private/var and /private/tmp, and its temp folder is
 // /var/folders/…/T/. ELU refuses a link in a path it writes, so every folder it is handed is
@@ -207,6 +209,56 @@ test('a scratch home made in the temp folder, as mktemp -d gives on a Mac, runs 
     assert.ok(servicePath({ platform, home: scratch, env }).startsWith(onDisk + path.sep));
   }
   assert.deepEqual(saysLink(personalDirectory()), []);
+});
+
+// A path to a file under the owner's home can come with either of the home's names: as HOME
+// names it, through /var, or as it is on disk. Below Full access every vendor closes his home
+// secrets by the name they have on disk, as the sandboxes and a vendor that follows links
+// compare them; Grok Build and Antigravity, whose own rules compare the path given, by HOME's
+// name too. Before, those two named only HOME's, so a read by the name on disk was not denied.
+test("a home under /var, which is a link: below Full access every vendor closes the owner's home secrets by the name they have on disk, Grok Build and Antigravity by HOME's name too", t => {
+  const m = mac(t), scratch = path.join(m.temp, 'tmp.scratchhome'), onDisk = path.join(m.tempOnDisk, 'tmp.scratchhome');
+  fs.mkdirSync(scratch);
+  const fake = fakeClis(scratch, { mode: 'answer' });
+  environment(t, { ...fake.env, HOME: scratch, TMPDIR: `${m.temp}/` });
+  const sample = project(t), cwd = path.join(onDisk, 'sample app'), commonDir = path.join(cwd, '.git'), session = crypto.randomUUID(), runDir = path.join(onDisk, 'run');
+  fs.cpSync(sample.root, cwd, { recursive: true }); fs.mkdirSync(runDir);
+  atomic(path.join(personalDirectory(), 'conformance', 'grok.json'), { v: 1, bin: path.join(fake.dir, 'grok'), version: '1.0.77', steps: Object.fromEntries(grok.conformance.map(step => [step.id, 'pass'])), relay: true, at: new Date().toISOString() });
+  const edit = { ...readRole('grok'), access: 'edit', writablePaths: ['.'] };
+  const grokRules = mode => grok.compile({ mode, role: mode === 'locked' ? readRole('grok') : edit, cwd, protectedPaths: ['.git'], session, runDir });
+  const agyRules = mode => agy.settingsFor(mode, { cwd, protectedPaths: ['.git'], commonDir }).permissions.deny ?? [];
+  for (const name of HOME_SECRETS) {
+    const [named, real] = [scratch, onDisk].map(home => path.join(home, name));
+    for (const mode of ['locked', 'ask', 'auto']) {
+      const rules = grokRules(mode);
+      for (const dir of [named, real]) assert.equal(rules[rules.indexOf(`Read(${dir}/**)`) - 1], '--deny', `Grok Build ${mode} ${dir}`);
+    }
+    for (const mode of ['ask', 'auto']) for (const dir of [named, real]) assert.ok(agyRules(mode).some(rule => rule.startsWith(`write_file(${dir}`)), `Antigravity ${mode} ${dir}`);
+    assert.ok(claude.compile({ mode: 'locked', role: readRole('claude'), cwd, protectedPaths: ['.git'], commonDir, session }).join('\n').includes(`Read(/${real}/**)`), `Claude Code ${real}`);
+    assert.ok(codex.compile({ mode: 'ask', role: readRole('codex'), cwd, protectedPaths: ['.git'], commonDir, schemaFile: path.join(cwd, 'schema.json') }).some(arg => arg.includes(`${JSON.stringify(real)}="deny"`)), `Codex ${real}`);
+    // Full access is everything: neither name is in a rule.
+    for (const dir of [named, real]) { assert.equal(grokRules('full').some(arg => arg.includes(dir)), false); assert.equal(JSON.stringify(agy.settingsFor('full', { cwd, commonDir })).includes(dir), false); }
+  }
+});
+
+// A pre-push guard below Full access runs in a sandbox closed to the owner's home secrets. A
+// sandbox that follows links compares the name on disk, so it names both. Before, it named
+// only HOME's. The sandbox helper here keeps what it was given and runs the guard.
+test("a home under /var, which is a link: a pre-push guard's sandbox closes the owner's home secrets under both of the home's names", t => {
+  const m = mac(t), scratch = path.join(m.temp, 'tmp.guardhome'), onDisk = path.join(m.tempOnDisk, 'tmp.guardhome'), record = path.join(m.tempOnDisk, 'sandbox.jsonl'), helper = path.join(m.tempOnDisk, 'sandbox-helper');
+  fs.mkdirSync(scratch);
+  fs.writeFileSync(helper, `#!${process.execPath}\nimport fs from 'node:fs';import {spawnSync} from 'node:child_process';const args=process.argv.slice(2);if(args.includes('elu-code-sandbox-probe')){console.log(JSON.stringify({writeDenied:true,networkDenied:true}));process.exit(0);}fs.appendFileSync(${JSON.stringify(record)},JSON.stringify(args)+'\\n');const run=args.slice(args.indexOf('--')+1);process.exit(spawnSync(run[0],run.slice(1),{stdio:'inherit'}).status??1);\n`, { mode: 0o755 });
+  const fake = fakeClis(scratch);
+  environment(t, { ...fake.env, HOME: scratch, TMPDIR: `${m.temp}/`, ELU_CODE_SANDBOX_HELPER: helper });
+  const p = project(t), repo = repository(p.root);
+  fs.mkdirSync(path.join(p.root, '.githooks')); fs.writeFileSync(path.join(p.root, '.githooks/pre-push'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  git(p.root, ['config', 'core.hooksPath', '.githooks']); git(p.root, ['add', '.']); git(p.root, ['commit', '-m', 'Add a guard']);
+  const task = { id: '1', worktree: p.root, hookDigest: assertGitSafe(repo).hookDigest };
+  task.hooksDirectory = snapshotHooks(repo, task);
+  const ran = spawnSync(path.join(task.hooksDirectory, 'pre-push'), [], { cwd: p.root, input: '', encoding: 'utf8' });
+  assert.equal(ran.status, 0, ran.stderr);
+  const given = fs.readFileSync(record, 'utf8');
+  for (const name of ['.ssh', '.aws', '.config', '.claude', '.codex', '.netrc', '.npmrc']) for (const home of [scratch, onDisk]) assert.ok(given.includes(JSON.stringify(`${JSON.stringify(path.join(home, name))}="deny"`).slice(1, -1)), `${home}/${name}`);
 });
 
 // Grok Build and Antigravity in Full access run under a mirror of the owner's home, a folder of

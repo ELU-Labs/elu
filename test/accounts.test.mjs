@@ -107,7 +107,7 @@ test('Claude: a second account signs in beside the first; a switch moves new tur
   const [claude] = usageTab({ vendors: [{ vendor: 'claude', available: true, signedIn: true }], now: Date.now() });
   assert.deepEqual(claude.accounts.map(row => [row.login, row.account, row.plan, row.active, row.usage?.weekly?.usedPercent ?? null]), [['default', 'first@example.com', 'Max 20x', true, 71], [slot.id, 'second@example.com', 'Max 5x', false, 40]]);
   const text = usageBlocks([claude]).map(row => row.text).join('\n');
-  assert.match(text, /^Claude {6}first@example\.com · Max 20x · active\n {12}5h  \[##----\]   36%  resets [^\n]+\n {12}wk  \[####--\]   71%  resets [^\n]+\n {12}second@example\.com · Max 5x\n {12}5h  \[------\]    5%  resets [^\n]+\n {12}wk  \[##----\]   40%  resets [^\n]+\n {12}enter use · a add account · x forget$/m);
+  assert.match(text, /^Claude {6}first@example\.com · Max 20x · active\n {12}5h  \[##----\]   36%  resets [^\n]+\n {12}wk  \[####--\]   71%  resets [^\n]+\n {12}second@example\.com · Max 5x\n {12}5h  \[------\]    5%  resets [^\n]+\n {12}wk  \[##----\]   40%  resets [^\n]+\n {12}enter on an account uses it · x forgets it · a adds one$/m);
   assert.deepEqual(usageBlocks([claude]).filter(row => row.login === slot.id).length, 3, 'Enter on any line of the account uses it');
   // No sign-in, and no account's email, is kept with a session.
   for (const task of [first, second, finished, back]) assert.doesNotMatch(JSON.stringify(readTask(f.controller.repo, task.id)), /@example\.com|never-shown/);

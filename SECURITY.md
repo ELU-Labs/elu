@@ -442,7 +442,12 @@ use until you approve a change: a file that changed, that you turned down or tha
 removed does not put the defaults back. A file over 100 KB is never used. Scripted runs
 are refused while the settings file in the folder is not one you approved. Your answers are
 kept by content hash, with the text you approved last, in ELU's own state folder,
-never in the project. Like approvals, this is not a boundary against a process that already
+never in the project. Instructions and context you saved on another computer of yours (both
+marked as yours) count as approved here: they are your own edit. They never write over a
+file that changed some other way, such as a pull of a teammate's change: that file still
+waits for your answer, the text from your other computer is the one in use meanwhile, and the
+teammate's text is never sent on. A teammate's computer is never sent your instructions and
+context, and nothing from one is taken. Like approvals, this is not a boundary against a process that already
 runs as your user: a Full access session can write that folder, and so can a command that
 was approved to leave the sandbox in Ask for approval or in Approve for me, where the
 approver is the vendor's reviewer model. With a Codex model, the repository's own

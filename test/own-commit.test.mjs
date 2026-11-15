@@ -170,12 +170,12 @@ test('a session an earlier version left stopped on its own commit reads as finis
   const row = rowOf(f, read);
   assert.deepEqual([rowBadge(row, NOW).icon, rowBadge(row, NOW).title], ['✓', 'committed']); assert.doesNotMatch(`${rowTitle(row, NOW)} ${row.now}`, /continue|not verified/);
   assert.ok(raw(f, done.id).error, 'reading alone leaves the file');
-  // The app reads it (its start, and every look after): its commit is taken in and its Task closed, once.
+  // The app reads it (its start, and every look after): its commit is taken in and its Task's work ended, once.
   const shown = f.controller.snapshot().tasks.find(task => task.id === done.id);
   assert.equal(shown.commit, head); assert.deepEqual(shown.committed, { branch: 'feat/task-1', clean: true, pushed: false }); assert.equal(shown.error, null);
   const saved = raw(f, done.id);
   assert.equal(saved.error, null); assert.equal(saved.state, 'unverified'); assert.equal(saved.commit, head);
-  assert.equal(currentTask(f.repo, done.id).state, 'done', 'its Task is closed');
+  assert.equal(currentTask(f.repo, done.id).state, 'approved', 'its Task waits for his check');
   assert.equal(f.turns(), turns, 'no turn ran'); assert.equal(saved.messages.length, done.messages.length, 'and no message was added');
   assert.equal(settleFinished(f.repo, done.id), false, 'settled once');
   // One that was saved as blocked for the same reason heals the same way.

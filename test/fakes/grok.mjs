@@ -20,6 +20,10 @@
 // src/coupon.mjs where the launch lets it write, and reports its subtasks. Without it every
 // conversation turn is an answer, as before.
 // grok.version (fake.json): the release it says it is, 1.0.77 when not set.
+// grokSpend (fake.json): what a headless turn reports it used, in place of its fixed figures
+// (or grok.usage's sum): usage and modelUsage, and extra, more fields of its result (usage_is_incomplete,
+// cost_is_partial, total_cost_usd); sideCalls, the types of the events a streaming-json turn
+// prints for model calls its usage leaves out (auto_compact_started, memory_flush_started).
 // grok.checkSeconds: a slow one-time check. Each model turn of ELU's check (a turn whose
 // folder is under the check's scratch folder, elu-code-check-grok-*) answers only after this
 // many seconds; seven such turns make a check. grok.checkGate names a file that ends the wait
@@ -41,6 +45,14 @@ const load = id => { try { return JSON.parse(fs.readFileSync(path.join(sessions,
 const list = dir => { try { return fs.readdirSync(dir); } catch { return []; } };
 
 const RELEASE = cfg.grok?.version ?? '1.0.77';
+// grok.usage: a turn's model responses, each { input_tokens, output_tokens, cost? }, grok.usageMs
+// apart. streaming-json reports each as it comes (a usage row by its response's id); its end
+// event, the json object and an ACP turn's answer report their sum. Over ACP each is followed
+// by a usage_update with the session's cost so far (the costs added up). Without it a turn is
+// one response of 10 input and 5 output tokens.
+const responses = Array.isArray(cfg.grok?.usage) ? cfg.grok.usage : null;
+const used = responses ? responses.reduce((all, one) => ({ input: all.input + (one.input_tokens ?? 0), output: all.output + (one.output_tokens ?? 0) }), { input: 0, output: 0 }) : { input: 10, output: 5 };
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const slowCheck = async folder => {
   if (!cfg.grok?.checkSeconds || !String(folder ?? '').includes('elu-code-check-grok-')) return;
   const until = Date.now() + cfg.grok.checkSeconds * 1000;
@@ -129,6 +141,21 @@ async function act(prompt, record, { bypass, canWrite, canShell, canFetch, cwd, 
   if (command) {
     if ((canShell || bypass) && await allow({ kind: 'execute', title: `Run ${command}`, rawInput: { command } }, false, () => spawnSync(command, { stdio: 'ignore' }))) did.push(`ran ${command}`);
     else blocked.push(`run ${command}`);
+  }
+  // shell (fake.json): ELU's own commands the owner's message asks for, as in the fake Claude
+  // Code: each { when, run }. Each command is asked for like any other and, allowed, runs in a
+  // plain shell with the launch's environment; the reply says what each printed, and shell.jsonl
+  // beside the fake records it.
+  const said = (() => { const found = /\nContext \(untrusted data[^\n]*\n(.*)\nEnd of Context\./.exec(prompt); try { return String((JSON.parse(found[1]).messages ?? []).findLast(row => !row.from && !row.to)?.text ?? ''); } catch { /* Below. */ } try { return String(JSON.parse(/\nTask goal \(untrusted data[^\n]*\n(.*)\nEnd of Task goal\./.exec(prompt)[1])); } catch { return ''; } })();
+  for (const want of Array.isArray(cfg.shell) ? cfg.shell : []) {
+    if (!said.includes(want.when)) continue;
+    for (const line of want.run) {
+      let ran = null;
+      if ((canShell || bypass) && await allow({ kind: 'execute', title: `Run ${line}`, rawInput: { command: line } }, false, () => { ran = spawnSync('/bin/sh', ['-c', line], { env: process.env, encoding: 'utf8' }); })) {
+        const out = `${ran.stdout ?? ''}${ran.stderr ?? ''}`.trim();
+        fs.appendFileSync(path.join(path.dirname(process.argv[1]), 'shell.jsonl'), JSON.stringify({ command: line, status: ran.status, out }) + '\n'); did.push(`${line}: ${out}`);
+      } else blocked.push(`run ${line}`);
+    }
   }
   const url = prompt.match(/fetch (https?:\/\/\S+)/i)?.[1];
   if (url) {
@@ -257,9 +284,19 @@ if (args.includes('agent') && args.includes('stdio')) {
         const report = (call, status) => new Promise(resolve => process.stdout.write(`${JSON.stringify({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: record.id, update: status === 'in_progress' ? { sessionUpdate: 'tool_call', ...call, status, content: [], locations: [] } : { sessionUpdate: 'tool_call_update', toolCallId: call.toolCallId, status } } })}\n`, resolve));
         if (cfg.live && /Keep the Task's subtasks in your own to-do list/.test(text)) { send({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: record.id, update: { sessionUpdate: 'plan', entries: [{ content: STEPS[0], priority: 'medium', status: 'completed' }, { content: STEPS[1], priority: 'medium', status: 'in_progress' }] } } }); await liveGate(); }
         const result = await act(text, record, { bypass: record.yolo || mode === 'leaky', canWrite, canShell: true, canFetch: true, cwd: record.cwd, ask, report });
+        if (responses) {
+          // Each response but the last asks for a tool call, which runs until the next.
+          for (const [n, one] of responses.entries()) {
+            await sleep(cfg.grok.usageMs ?? 0); if (n) update({ sessionUpdate: 'tool_call_update', toolCallId: `call_cost_${n}`, status: 'completed' });
+            record.cost = (record.cost ?? 0) + (one.cost ?? 0); save(record); if (one.cost !== undefined) update({ sessionUpdate: 'usage_update', used: 1000, size: 200000, cost: { amount: record.cost, currency: 'USD' } });
+            if (n < responses.length - 1) update({ sessionUpdate: 'tool_call', toolCallId: `call_cost_${n + 1}`, title: 'Read', kind: 'read', status: 'in_progress' });
+          }
+          await sleep(cfg.grok.usageMs ?? 0);
+        }
         record.turns.push(text); save(record);
         send({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: record.id, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: resultText(result) } } } });
         // The turn's tokens ride on the answer: inputTokens is the whole prompt, 10 of it new, 30 read from the cache.
+        if (responses) return reply({ stopReason: 'end_turn', _meta: { usage: { inputTokens: used.input, outputTokens: used.output, totalTokens: used.input + used.output, cachedReadTokens: 0, cacheCreationTokens: 0, reasoningTokens: 0, modelUsage: { [record.model ?? MODELS[0]]: { inputTokens: used.input, outputTokens: used.output, modelCalls: responses.length } }, usageIsIncomplete: false } } });
         return reply({ stopReason: mode === 'max-turns' ? 'max_turn_requests' : 'end_turn', _meta: { usage: { inputTokens: 40, outputTokens: 5, totalTokens: 45, cachedReadTokens: 30, cacheCreationTokens: 0, reasoningTokens: 2, modelUsage: { [record.model ?? MODELS[0]]: { inputTokens: 40, outputTokens: 5, modelCalls: 1 } }, usageIsIncomplete: false } } });
       }
       default: return error(-32601, 'Method not found');
@@ -298,6 +335,12 @@ else {
   if (load(session)) fail('That session id is already in use.');
   record = { id: session, cwd, sandbox, turns: [] };
 }
+// The session's record as Grok Build's guide lays it out (17-sessions.md): summary.json under
+// sessions/<working folder, URL-encoded>/<session id>/, with the model it runs on
+// (current_model_id): the one --model named when it began, else grok-4.6.
+record.model ??= value('--model') ?? 'grok-4.6';
+fs.mkdirSync(path.join(sessions, encodeURIComponent(record.cwd), session), { recursive: true });
+fs.writeFileSync(path.join(sessions, encodeURIComponent(record.cwd), session, 'summary.json'), JSON.stringify({ info: { id: session, cwd: record.cwd }, current_model_id: record.model }));
 const streaming = value('--output-format') === 'streaming-json', line = row => console.log(JSON.stringify(row));
 await slowCheck(cwd);
 if (streaming) line({ type: 'thought', data: 'Reading the request.' });
@@ -307,14 +350,21 @@ if (todoFile) { writeList(todoFile, ['done', 'doing']); await liveGate(); }
 const result = await act(prompt, record, { bypass, canWrite, canShell, canFetch, cwd, ask: null, report });
 if (todoFile) writeList(todoFile, ['done', 'done']);
 record.turns.push(prompt); save(record);
-const usage = { input_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 5, reasoning_tokens: 0, total_tokens: 15 }, modelUsage = { 'grok-4.6': { inputTokens: 10, outputTokens: 5, cacheReadInputTokens: 0, modelCalls: 1 } };
+const spent = cfg.grokSpend ?? {}, extra = spent.extra ?? {};
+const tokens = one => ({ input_tokens: one.input, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: one.output, reasoning_tokens: 0, total_tokens: one.input + one.output });
+const usage = spent.usage ?? tokens(used), modelUsage = spent.modelUsage ?? { 'grok-4.6': { inputTokens: used.input, outputTokens: used.output, cacheReadInputTokens: 0, modelCalls: responses?.length ?? 1 } };
+// Each of grok.usage's responses as it comes, before the answer.
+if (responses) for (const [n, one] of responses.entries()) { await sleep(cfg.grok.usageMs ?? 0); if (streaming) line({ type: 'usage', messageId: `resp_${n + 1}`, stopReason: n < responses.length - 1 ? 'tool_use' : 'end_turn', usage: tokens({ input: one.input_tokens ?? 0, output: one.output_tokens ?? 0 }), signature: 'sig' }); }
 // The answer as text chunks, a response boundary, then end with what the json object carries but the text.
 if (streaming) {
   const text = mode === 'max-turns' ? 'Still working on it.' : `Done reading. ${resultText(result)}`;
   for (let at = 0; at < text.length; at += 40) line({ type: 'text', data: text.slice(at, at + 40) });
-  line({ type: 'usage', messageId: 'resp_1', stopReason: 'end_turn', usage, signature: 'sig' });
-  line({ type: 'end', stopReason: mode === 'max-turns' ? 'max_turn_requests' : 'end_turn', sessionId: session, requestId: 'req-1', cwd, num_turns: mode === 'max-turns' ? 3 : 1, ...(mode === 'max-turns' ? {} : { usage, modelUsage }) });
+  for (const type of spent.sideCalls ?? []) line({ type, sessionId: session });
+  if (!responses) line({ type: 'usage', messageId: 'resp_1', stopReason: 'end_turn', usage, signature: 'sig' });
+  // grok.endMs: how long the run takes to end after its last response.
+  await sleep(cfg.grok?.endMs ?? 0);
+  line({ type: 'end', stopReason: mode === 'max-turns' ? 'max_turn_requests' : 'end_turn', sessionId: session, requestId: 'req-1', cwd, num_turns: mode === 'max-turns' ? 3 : 1, ...(mode === 'max-turns' ? {} : { usage, modelUsage, ...extra }) });
   process.exit(0);
 }
 if (mode === 'max-turns') { console.log(JSON.stringify({ text: 'Still working on it.', stopReason: 'max_turn_requests', sessionId: session, requestId: 'req-1', num_turns: 3 })); process.exit(0); }
-console.log(JSON.stringify({ text: resultText(result), stopReason: 'end_turn', sessionId: session, requestId: 'req-1', num_turns: 1, usage, modelUsage }));
+console.log(JSON.stringify({ text: resultText(result), stopReason: 'end_turn', sessionId: session, requestId: 'req-1', num_turns: 1, usage, modelUsage, ...extra }));
