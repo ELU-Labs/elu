@@ -27,6 +27,8 @@ import { atomic, personalDirectory } from '../lib/util.mjs';
 import { OWN_COMMANDS, SESSIONS_HELP, SCHEDULES_HELP, TEAMMATE_REFUSAL, checkRequest, runOwnCommand } from '../lib/session-commands.mjs';
 import { answerApproval, pendingApprovals } from '../lib/approvals.mjs';
 import { saveDefaultMode } from '../lib/modes.mjs';
+import { readStore } from '../lib/artifacts.mjs';
+import { approveTask, checkProposal, proposeTask } from '../lib/plan.mjs';
 
 // ELU from inside a session (README, "ELU from a session"): elu sessions and elu schedules,
 // from the owner's shell and from a turn, through the app's own records and locks.
@@ -484,9 +486,10 @@ test('each vendor of the owner\'s session is told the commands; the shell can ru
   assert.equal(runs.length, 3); assert.ok(told.every(row => OWN_COMMANDS.every(line => row.input.includes(line))));
   const [ask, auto, full] = runs.map(call => call.args);
   for (const args of [ask, auto]) assert.deepEqual(settingsOf(args).sandbox.excludedCommands, ['elu sessions:*', 'elu schedules:*', 'elu artifacts:*']);
-  assert.ok(auto.includes('--allowedTools=Bash(elu sessions:*)') && auto.includes('--allowedTools=Bash(elu schedules:*)'));
-  // elu artifacts only changes what the Artifacts tab draws: no mode asks for it.
-  assert.deepEqual(ask.filter(arg => arg.startsWith('--allowedTools=Bash(elu')), ['--allowedTools=Bash(elu artifacts:*)'], 'Ask for approval asks for the others');
+  assert.deepEqual(auto.filter(arg => arg.startsWith('--allowedTools=Bash(elu')), ['--allowedTools=Bash(elu sessions:*)', '--allowedTools=Bash(elu schedules:*)']);
+  // elu artifacts reads the file it names outside the sandbox: Claude Code allows it in no mode,
+  // and ELU's relay answers it (lib/permission-rules.mjs allowedBy).
+  assert.deepEqual(ask.filter(arg => arg.startsWith('--allowedTools=Bash(elu')), [], 'Ask for approval asks for each');
   assert.equal(settingsOf(full).sandbox.enabled, false);
   const ctx = { project: f.root, cwd: f.root, access: 'read', saved: true, sandboxed: true };
   assert.deepEqual(allowedBy('Bash', { command: 'elu sessions archive this' }, { ...ctx, mode: 'auto' }), { by: 'default', text: 'elu sessions' });
@@ -522,6 +525,42 @@ test('each vendor of the owner\'s session is told the commands; the shell can ru
   }
   // Repeating work: made with elu schedules where the turn has it, never by a timer of the model's own.
   assert.match(SCHEDULE_NOTE, /Never create cron jobs or other timers yourself/);
+});
+
+// elu artifacts reads the data or script file it is given outside Claude Code's sandbox. A file
+// the sandbox keeps from the turn (a key in ~/.ssh, a .env) is never read unasked, in Ask for
+// approval or Approve for me: the owner is asked, and declined, the turn gets none of it. A file
+// that names no secret is read unasked, as a sandboxed command may read it.
+test('a Claude Code turn that hands elu artifacts a file the sandbox keeps from it is asked about it first, and declined reads nothing of it', { timeout: 120000 }, async t => {
+  const key = path.join('.ssh', 'id_test'), SECRET = 'not a real key, a stand-in for a secret';
+  const f = setup(t, { asksOutside: true });
+  const asked = [`elu artifacts set Probe --file ~/${key}`, `elu artifacts script Probe ~/${key}`], read = `elu artifacts set Probe --file ${JSON.stringify(path.join(f.root, 'results.json'))}`;
+  const fake = path.join(f.dir, 'fake.json'); fs.writeFileSync(fake, JSON.stringify({ ...JSON.parse(fs.readFileSync(fake, 'utf8')), shell: [{ when: 'show the key', run: [...asked, read] }] }));
+  fs.mkdirSync(path.join(f.parent, '.ssh'), { mode: 0o700 }); fs.writeFileSync(path.join(f.parent, key), `${SECRET}\nline two of it\n`, { mode: 0o600 });
+  fs.writeFileSync(path.join(f.root, 'results.json'), '{"blocks":[{"kind":"note","text":"Run 3 read from the project."}]}\n');
+  for (const mode of ['ask', 'auto']) {
+    const turn = f.controller.ask(`show the key ${mode}`, null, { permissions: mode });
+    for (const command of asked) {
+      const start = `Run: ${command}`;
+      // Run unasked, it would be in shell.jsonl with no question before it.
+      await until(() => waiting(f, start) || f.rows('shell.jsonl').some(row => row.command === command && row.asked !== true), `${mode}: the question for ${command}`);
+      assert.ok(waiting(f, start), `${mode}: ${command} ran unasked: ${JSON.stringify(f.rows('shell.jsonl').at(-1))}`);
+      assert.ok(answerApproval(waiting(f, start).id, 'deny'));
+    }
+    const task = await turn.finished;
+    // The file in the project was read unasked, as the relay's default allows it.
+    assert.ok((task.approvals ?? []).some(row => row.decision === 'allow' && row.by === 'default' && row.rule === 'elu artifacts set'), JSON.stringify(task.approvals));
+  }
+  const ran = f.rows('shell.jsonl'), stores = sessions(f).map(task => readStore(f.repo, task.id));
+  assert.deepEqual(ran.map(row => [row.status, row.asked === true]), [[1, true], [1, true], [0, false], [1, true], [1, true], [0, false]]);
+  assert.ok(!JSON.stringify([ran, f.inputs(), stores]).includes('not a real key'), 'nothing of the key reached the turn or the records');
+  assert.deepEqual(stores.map(store => [store.items.probe?.updates.length, store.items.probe?.script ?? null]), [[1, null], [1, null]]);
+  // The relay's answers, as each mode reads them.
+  const ctx = { project: f.root, cwd: f.root, access: 'read', saved: true, sandboxed: true };
+  for (const mode of ['ask', 'auto']) {
+    for (const command of [`elu artifacts set 1 --file ~/${key}`, `elu artifacts set 1 --file=${path.join(f.parent, key)}`, `elu artifacts script 1 ~/${key}`, 'elu artifacts set 1 --file .env', `elu artifacts set 1 - < ~/${key}`, `cat ~/${key} | elu artifacts set 1 -`]) assert.equal(allowedBy('Bash', { command }, { ...ctx, mode }), null, `${mode}: ${command}`);
+    for (const command of ['elu artifacts', 'elu artifacts set 1 --file results.json', `elu artifacts set 1 '{"kind":"note","text":"x"}'`, 'elu artifacts script 1 refresh.sh', 'elu artifacts script 1 --remove', 'elu artifacts set 1 -', `elu artifacts set 1 --file ${path.join(f.parent, 'elsewhere.json')}`]) assert.equal(allowedBy('Bash', { command }, { ...ctx, mode })?.by, 'default', `${mode}: ${command}`);
+  }
 });
 
 test('elu --help and elu sessions --help list the commands', () => {
@@ -632,4 +671,50 @@ test("elu sessions delete handed to ELU from a session a teammate's message star
   const done = await runOwnCommand(['sessions', 'delete', 'archived', '--learn'], { repo: f.repo, taskId: mine, mode: 'auto' });
   assert.equal(done.code, 0, done.err); assert.match(done.out, new RegExp(`^Deleted session ${old}\\.\\nSaved to memory: Use pnpm, not npm\\.\\n?$`));
   assert.ok(!sessions(f).some(task => String(task.id) === old));
+});
+
+// A refresh script runs on its own with no turn, so the owner reads it whole before it is kept:
+// in every mode but Full access, elu artifacts script asks him, with the script as written, the
+// artifact it fills and how often it runs. Declined, nothing is kept and the session is told.
+const SCRIPT = ['#!/usr/bin/env node', '// Reads the last chat eval run and prints it for the Artifacts tab.', "const run = JSON.parse(require('fs').readFileSync('.evals/chat.json', 'utf8'));", 'const note = `## Run ${run.run}`;', "console.log(JSON.stringify({ blocks: [{ kind: 'score', label: 'Answered', value: run.answered, unit: '%', target: 85 }, { kind: 'note', text: note }] }));", ''].join('\n');
+test('saving a refresh script asks the owner first with the whole script, in Ask for approval and Approve for me; declined, nothing is kept and the session is told', { timeout: 180000 }, async t => {
+  const f = setup(t, { fence: true, shell: [{ when: 'keep the refresh script', run: ['elu artifacts script 1 refresh.cjs'] }] });
+  fs.writeFileSync(path.join(f.root, 'refresh.cjs'), SCRIPT); git(f.root, ['add', 'refresh.cjs']); git(f.root, ['commit', '-qm', 'Add the refresh script']);
+  f.conduct(); await until(() => conductorAlive(), 'the conductor');
+  const watched = { title: 'Chat answers at 85%', description: 'Raise the answered share.', goal: 'Answer 85% of the eval questions.', objectives: ['Answered at 85%'], priority: 'medium', severity: 'low', criteria: [], estimateMinutes: null, artifacts: [{ title: 'Chat eval', shows: 'Answered against 85%', everyMinutes: 1 }] };
+  const start = async mode => {
+    const first = codexTurn(f, `start ${mode}`, mode); await until(() => ended(f, first), `the first turn in ${mode}`);
+    const id = String(sessions(f).find(task => task.goal === `start ${mode}`).id);
+    proposeTask(f.repo, id, checkProposal(watched)); approveTask(f.repo, id);
+    return { id, again: () => enqueue(f.root, 'keep the refresh script', { priority: 0, typed: true, continuationTaskId: id, permissions: mode, bots: [], model: { vendor: 'codex', model: null } }) };
+  };
+  const question = 'Save the refresh script of "Chat eval", which ELU runs every 1 min';
+  for (const mode of ['ask', 'auto']) {
+    const { id, again } = await start(mode);
+    for (const decision of ['deny', 'allow']) {
+      const request = again();
+      await until(() => waiting(f, question) || ended(f, request), `${mode}: the question`);
+      const asked = waiting(f, question);
+      assert.ok(asked, `${mode}: it was kept unasked: ${JSON.stringify(f.rows('shell.jsonl').at(-1))}`);
+      // The question holds the script whole, as written, and nothing is kept before the answer.
+      assert.deepEqual(asked.script, { artifact: 'Chat eval', every: 1, text: SCRIPT });
+      assert.equal(asked.summary, question);
+      assert.equal(readStore(f.repo, id).items['chat eval']?.script, undefined);
+      assert.ok(answerApproval(asked.id, decision));
+      await until(() => ended(f, request), `${mode}: the turn after ${decision}`, 90000);
+      const out = f.rows('shell.jsonl').at(-1);
+      if (decision === 'deny') {
+        assert.deepEqual([out.status, out.out], [1, 'The owner did not save the refresh script of "Chat eval". Nothing was saved. Do not try it another way.']);
+        assert.equal(readStore(f.repo, id).items['chat eval']?.script, undefined);
+      } else {
+        assert.equal(out.status, 0, out.out); assert.match(out.out, /^Saved the refresh script of "Chat eval"\./);
+        assert.equal(readStore(f.repo, id).items['chat eval'].script.text, SCRIPT);
+      }
+    }
+  }
+  // Full access is everything: kept at once, nobody asked.
+  const { id, again } = await start('full');
+  const request = again(); await until(() => ended(f, request), 'the turn in Full access', 90000);
+  assert.equal(readStore(f.repo, id).items['chat eval'].script.text, SCRIPT);
+  assert.ok(!(readTask(f.repo, id).approvals ?? []).some(row => row.summary === question));
 });

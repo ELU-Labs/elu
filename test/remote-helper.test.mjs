@@ -224,11 +224,12 @@ test("over a session of mine there, what I type goes to that session, as if type
   assert.deepEqual(app.route(row, 'yes'), { to: 'there', text: 'yes' });
   assert.deepEqual(app.route(row, '1'), { to: 'there', text: '1' });
   assert.deepEqual(app.route(row, 'yes, it is a simple task: clear the queue'), { to: 'there', text: 'yes, it is a simple task: clear the queue' });
-  // That computer's @name first means the session there, as before, and so does @model: neither is sent.
+  // That computer's @name first means the session there, as before, and so does @model: neither is
+  // sent, and @model is said apart (toModel), for the session there to write to its model.
   assert.deepEqual(app.route(row, '@second-box 1'), { to: 'there', text: '1' });
   assert.deepEqual(app.route(row, '  @DevBox  use the ones in ~/e2e'), { to: 'there', text: 'use the ones in ~/e2e' });
   assert.deepEqual(app.route(row, '@second-box'), { to: 'there', text: '' });
-  assert.deepEqual(app.route(row, '@model go on'), { to: 'there', text: 'go on' });
+  assert.deepEqual(app.route(row, '@model go on'), { to: 'there', text: 'go on', toModel: true });
   // Any other @word goes there as typed: on that computer it may name one of its bots.
   assert.deepEqual(app.route(row, '@reviewer look'), { to: 'there', text: '@reviewer look' });
   assert.deepEqual(app.route(row, '@rio hello'), { to: 'there', text: '@rio hello' }, "this computer's own owner name is not that computer");

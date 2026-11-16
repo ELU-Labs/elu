@@ -4,16 +4,16 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { PassThrough } from 'node:stream';
-import { project, fakeClis, autoApprove, cli, git, CLI } from './helpers.mjs';
+import { project, fakeClis, autoApprove, cli, git, CLI, keyThenEnter } from './helpers.mjs';
 import { repository } from '../lib/git.mjs';
 import { ProjectController, registerProject } from '../lib/projects.mjs';
 import { launchTerminal } from '../lib/terminal.mjs';
 import { projectFolder, pendingRequests } from '../lib/workspace.mjs';
-import { readTask, saveTask, taskTitle } from '../lib/state.mjs';
+import { readTask, saveTask, setTitle, taskTitle } from '../lib/state.mjs';
 import { Conductor } from '../lib/conductor.mjs';
 import { approveTask, proposeTask } from '../lib/plan.mjs';
 import { keepOpen } from '../lib/owner-check.mjs';
-import { sessionTalker, sessionWorker } from '../lib/bots.mjs';
+import { getBot, sessionTalker, sessionWorker } from '../lib/bots.mjs';
 import { standupAgent } from '../lib/standup.mjs';
 
 // A session the owner wrote to a working bot (@lead, @qa) stays that bot's (lib/bots.mjs
@@ -168,14 +168,59 @@ test('his y on a Task the model wrote in a session written to @lead: @lead does 
 
 // The record the vendor fake says has no usage credits for the model.
 const NO_CREDITS = { models: { fable: 'claude-fable-5-2', opus: 'claude-opus-5-5' } };
-test('@lead that ran on the session\'s model once (no credits) still has the session: the next turn is @lead\'s', { timeout: 90000 }, async t => {
+// Each turn after that tries @lead's own model first: while the account still has no credits
+// for it the turn runs on the session's model again, and the chat does not say so twice; once
+// it has credits again the turn runs on @lead's own model.
+test('@lead that ran on the session\'s model once (no credits) still has the session: the next turn is @lead\'s, and tries its own model again', { timeout: 90000 }, async t => {
   const f = await leadSession(t, { fake: { ...NO_CREDITS, noCredits: 'fable' } });
   assert.deepEqual(f.session().modelFallback, { lead: 'fable' }, 'it ran on the session\'s model in its place');
+  const said = () => f.session().messages.filter(row => row.bot === 'lead' && / ran on .* instead\.$/.test(row.text ?? '')).length;
+  assert.equal(said(), 1, 'the chat says it once');
   saveTask(f.repo, { ...f.session(), messages: [...f.session().messages, ...LATER_ROWS()] });
-  const count = f.session().runs.length;
+  let count = f.session().runs.length, calls = f.runs().length;
   const r = await elu(f, ['sessions', 'goal', '1', 'The keys are in the settings now.']);
   assert.equal(r.status, 0, r.stderr);
-  assert.deepEqual(await nextTurn(f, count), ['bot:lead'], 'the next turn is @lead again, not the model');
+  const roles = await nextTurn(f, count);
+  assert.ok(roles.length && roles.every(role => role === 'bot:lead'), `the next turn is @lead again, not the model: ${roles}`);
+  assert.deepEqual(f.runs().slice(calls).map(row => after(row.args, '--model')), ['fable', 'opus'], 'it tried its own model first, then ran on the session\'s');
+  assert.equal(said(), 1, 'and the chat does not say it again');
+  // His account has credits for @lead's model again: the following turn runs on it.
+  withAgents(fakeClis(f.parent, { mode: 'answer', ...NO_CREDITS }).dir);
+  count = f.session().runs.length; calls = f.runs().length;
+  const again = await elu(f, ['sessions', 'goal', '1', 'And trim the spaces.']);
+  assert.equal(again.status, 0, again.stderr);
+  assert.deepEqual(await nextTurn(f, count), ['bot:lead']);
+  assert.deepEqual(f.runs().slice(calls).map(row => after(row.args, '--model')), ['fable'], "the following turn runs on @lead's own model");
+  assert.equal(f.session().modelFallback, undefined, 'and the session no longer keeps the fallback');
+});
+
+// The owner gave @lead another model and an effort for this session (lib/agent-change.mjs), and
+// his account has no credits for that model: @lead's turn runs on the session's model in its
+// place, with the effort he gave it, and the chat says so once. Its next turn tries the model he
+// gave it first again. Once he gives it one that runs, the session keeps no fallback for it.
+test("@lead on a model the owner gave it for this session, with no credits for it: its turn runs on the session's model with his effort, and a model that runs ends the fallback", { timeout: 90000 }, async t => {
+  const f = await leadSession(t, { fake: { models: { ...NO_CREDITS.models, sonnet: 'claude-sonnet-5' }, noCredits: 'sonnet' }, conduct: false });
+  assert.equal(f.session().modelFallback, undefined);
+  assert.equal(after(f.runs().at(-1).args, '--model'), 'fable', "its first turn ran on @lead's own model");
+  const said = () => f.session().messages.filter(row => row.bot === 'lead' && / ran on .* instead\.$/.test(row.text ?? '')).map(row => row.text);
+  const turn = async text => {
+    const calls = f.runs().length, task = await f.controller.ask(text, '1', { bot: 'lead' }).finished;
+    assert.equal(task.state, 'answered', JSON.stringify(task.error));
+    assert.ok(task.runs.slice(-1).every(run => run.role === 'bot:lead'));
+    return f.runs().slice(calls).map(row => [after(row.args, '--model'), row.args.includes('--effort') ? after(row.args, '--effort') : null]);
+  };
+  f.controller.changeAgent('1', { bot: 'lead', to: { vendor: 'claude', model: 'sonnet', effort: 'high' } });
+  assert.deepEqual(await turn('Go on.'), [['sonnet', 'high'], ['opus', 'high']], "the model he gave it, then the session's, each with his effort");
+  assert.deepEqual(f.session().modelFallback, { lead: 'sonnet' });
+  assert.equal(said().length, 1, said().join('\n')); assert.match(said()[0], /@lead ran on Opus[^\n]* instead\.$/);
+  // His next message: the model he gave it first again, and the chat says nothing more.
+  assert.deepEqual(await turn('And the tests.'), [['sonnet', 'high'], ['opus', 'high']]);
+  assert.equal(said().length, 1);
+  // He gives it a model that runs: the turn runs on it alone, and the fallback is no longer kept.
+  f.controller.changeAgent('1', { bot: 'lead', to: { vendor: 'claude', model: 'fable', effort: 'high' } });
+  assert.deepEqual(await turn('And the notes.'), [['fable', 'high']]);
+  assert.equal(f.session().modelFallback, undefined, 'the session no longer keeps the fallback');
+  assert.equal(said().length, 1);
 });
 
 // The app, as the owner uses it: his sessions' records, and what he types.
@@ -255,4 +300,135 @@ test('his session written to @lead, then his approval, two command-line messages
   count = roles().length;
   await send(v, 'continue');
   assert.deepEqual(await turn(count, 'the model answers again'), ['lead'], 'continue after @model is the model');
+});
+
+// A dialog of the app by its label, and its text field answered.
+const modalNamed = (v, pattern) => v.current.screen.children.find(child => !child.destroyed && pattern.test(child.options?.label ?? ''));
+async function fill(v, pattern, value) {
+  await until(() => modalNamed(v, pattern), `the dialog ${pattern}`);
+  const field = modalNamed(v, pattern).children.find(child => child.type === 'textbox');
+  await until(() => field.__listener, 'its text field');
+  field.setValue(value); field.submit();
+}
+// A session's row under Sessions, selected there (not opened).
+async function selectRow(v, title, id) {
+  if (v.current.view !== 'tasks') await send(v, '/tasks');
+  const items = () => v.current.panels.board.items.map(item => item.getText());
+  await until(() => v.current.view === 'tasks' && items().some(row => row.includes(title)), `the row of ${title}`);
+  const board = v.current.panels.board; board.focus(); board.select(items().findIndex(row => row.includes(title)));
+  await until(() => v.current.session === id && v.current.screen.focused === board, 'the row is selected');
+}
+// @lead's own work turn after his y stopped on what Ask for approval refuses, the internet: its
+// run as the runner keeps it, by @lead (bot:lead), with the action it was refused.
+function stoppedOnTheInternet(repo, id) {
+  const task = readTask(repo, id), log = path.join(path.dirname(task.runs.at(-1).logFile), 'bot-lead-work.jsonl');
+  fs.writeFileSync(log, `${JSON.stringify({ type: 'result', structured_output: { summary: 'I stopped here.' } })}\n`);
+  const run = { role: 'bot:lead', vendor: 'claude', session: 'work-1', launch: 'work-1', at: new Date().toISOString(), logFile: log, permissions: 'ask', denials: [{ tool: 'Bash', tool_use_id: 'toolu_1', input: { command: 'curl -sS https://elu.dev/' }, network: 'elu.dev' }] };
+  saveTask(repo, { ...task, state: 'needs_input', permissions: 'ask', runs: [...task.runs, run] });
+}
+
+// Before, the work turn after his y was the model's, and the chat said what stopped it and
+// /permissions full continued it at once. The work turn is @lead's now: so does @lead's.
+test("his session written to @lead: @lead's work turn after his y stops on the internet, the chat says what blocked it, and /permissions full continues it with @lead", { timeout: 120000 }, async t => {
+  const p = appEnvironment(t, 'answer');
+  const controller = autoApprove(new ProjectController(projectFolder(p.root)));
+  const first = await controller.ask('Plan coupons', null, { bot: 'lead', permissions: 'ask' }).finished;
+  await controller.close();
+  saveTask(p.repo, { ...readTask(p.repo, first.id), messages: [...readTask(p.repo, first.id).messages, { at: at(), text: 'Approved the Task: Uppercase coupons' }] });
+  stoppedOnTheInternet(p.repo, first.id);
+  const session = () => readTask(p.repo, first.id), count = session().runs.length;
+  const v = await app(t, p.repo);
+  await open(v, taskTitle(first), first.id);
+  const chat = () => v.current.panels.chat.getText().replace(/\s+/g, ' ');
+  await until(() => /Blocked: Connect to elu\.dev\. The internet is off for commands in Ask for approval: \/permissions full continues it\./.test(chat()), `the Blocked line in the chat: "${chat().slice(-400)}"`);
+  await send(v, '/permissions full');
+  await fill(v, /Full access/, 'y');
+  await until(() => /Full access\. Continuing where it stopped\./.test(v.current.panels.status.getText()), `the status line: "${v.current.panels.status.getText()}"`);
+  assert.deepEqual(pendingRequests(p.root).filter(row => /^Continue where you stopped: /.test(row.goal)).map(row => row.bot ?? null), ['lead'], 'it goes on with @lead');
+  await until(() => session().runs.length > count && pendingRequests(p.root).every(row => row.state === 'done') && !['running', 'preparing'].includes(session().state), 'the turn that goes on');
+  assert.deepEqual(session().runs.slice(count).map(run => run.role), ['bot:lead']);
+});
+
+// a on a session's row answers it from the list: as a message typed in it with no @name goes,
+// to the working bot it is written to; a bot that does not work (@reviewer) keeps today, and
+// the answer goes to the model.
+test('the answer prompt (a on its row) sends to @lead in a session written to @lead, and to the model in one written only to @reviewer, as before', { timeout: 120000 }, async t => {
+  const p = appEnvironment(t, 'answer');
+  const controller = autoApprove(new ProjectController(projectFolder(p.root)));
+  const lead = await controller.ask('Plan coupons', null, { bot: 'lead', permissions: 'ask' }).finished;
+  const reviewer = await controller.ask('Look at the coupon code', null, { bot: 'reviewer', permissions: 'ask' }).finished;
+  await controller.close();
+  saveTask(p.repo, { ...readTask(p.repo, lead.id), messages: [...readTask(p.repo, lead.id).messages, ...LATER_ROWS()] });
+  setTitle(p.repo, lead.id, 'Coupons plan'); setTitle(p.repo, reviewer.id, 'Coupon review');
+  const v = await app(t, p.repo);
+  // A key on the list is its letter, then Enter, as he presses it.
+  keyThenEnter(v.input, () => v.current);
+  const answer = async (title, id, text) => {
+    await selectRow(v, title, id);
+    v.input.write('a');
+    await fill(v, /Answer /, text);
+    await until(() => pendingRequests(p.root).some(row => row.goal === text), 'the answer is sent');
+    return pendingRequests(p.root).find(row => row.goal === text);
+  };
+  assert.equal((await answer('Coupon review', reviewer.id, 'Use upper case.')).bot ?? null, null, 'a bot that does not work keeps today: the model');
+  assert.equal((await answer('Coupons plan', lead.id, 'Trim them too.')).bot, 'lead');
+});
+
+// A session written to @lead, and the page of an agent (lib/terminal-agent.mjs): a click on the
+// heading of @lead's reply opens @lead's page, not the model's. An effort saved there is @lead's
+// in this session only: the chat keeps the line, the box still writes to @lead, and @lead's
+// next turn runs with it on its own model.
+test("a click on @lead's reply heading in a session written to @lead opens @lead's page: an effort saved there is kept in the chat, the box still writes to @lead, and its next turn runs with it", { timeout: 120000 }, async t => {
+  const p = appEnvironment(t, 'answer');
+  const controller = autoApprove(new ProjectController(projectFolder(p.root)));
+  const first = await controller.ask('Plan coupons', null, { bot: 'lead', permissions: 'ask' }).finished;
+  await controller.close();
+  const title = taskTitle(first), session = () => readTask(p.repo, first.id), roles = () => session().runs.map(run => run.role);
+  const calls = () => rows(p.calls).filter(row => row.vendor === 'claude' && row.args.includes('-p'));
+  const v = await app(t, p.repo), chat = v.current.panels.chat, status = () => v.current.panels.status.getText().replace(/\s+/g, ' ');
+  const listOf = pattern => modalNamed(v, pattern)?.children.filter(child => child.type === 'list').at(-1);
+  const choose = async (pattern, index) => { await until(() => listOf(pattern), `the list of ${pattern}`); const list = listOf(pattern); list.focus(); list.select(index); v.input.write('\r'); };
+  const shown = pattern => listOf(pattern).items.map(item => item.getText().replace(/\s+/g, ' ').trim());
+  await open(v, title, first.id);
+  await until(() => /^ Message @lead · @model writes to Opus $/.test(label(v)), `the box names @lead: "${label(v)}"`);
+  // The heading of @lead's reply, where the chat draws it.
+  const plainRow = index => String(chat._clines?.[index] ?? '').replace(/\x1b\[[\d;]*m/g, '').trimStart();
+  await until(() => (chat._clines ?? []).some((_, index) => plainRow(index).startsWith('@lead')), "the heading of @lead's reply");
+  const row = (chat._clines ?? []).findIndex((_, index) => plainRow(index).startsWith('@lead'));
+  const x = chat.aleft + 3, y = chat.atop + row + chat.itop - chat.childBase + 1;
+  v.input.write(`\x1b[<0;${x};${y}M`); v.input.write(`\x1b[<0;${x};${y}m`);
+  await until(() => modalNamed(v, /^ ?Agent @lead/), "@lead's page");
+  assert.deepEqual(shown(/^ ?Agent @lead/).map(text => text.split(' ')[0]), ['Model', 'Effort', 'For', 'Save', 'Cancel']);
+  assert.match(shown(/^ ?Agent @lead/)[0], /^Model Fable/); assert.equal(shown(/^ ?Agent @lead/)[2], 'For this session');
+  // Its effort, picked from Claude Code's levels, saved for this session.
+  await choose(/^ ?Agent @lead/, 1); await choose(/^ ?Effort/, 3);
+  await until(() => modalNamed(v, /^ ?Agent @lead/) && !modalNamed(v, /^ ?Effort/) && /^Effort high/.test(shown(/^ ?Agent @lead/)[1]), 'back on its page, with the level');
+  await choose(/^ ?Agent @lead/, 3);
+  await until(() => /Effort of @lead: .+ → high/.test(status()), `saved, and said in one line: ${status()}`);
+  assert.deepEqual(session().botModels, { lead: { vendor: 'claude', model: 'fable', effort: 'high' } });
+  assert.equal(getBot('lead').effort ?? null, null, 'the saved bot is as it was');
+  await until(() => /Effort of @lead: .+ → high/.test(chat.getContent().replace(/\x1b\[[\d;]*m/g, '')), 'the chat keeps the line');
+  // The session is still @lead's: the box says so, and what he types next goes to @lead, with that effort.
+  await until(() => /^ Message @lead · @model writes to Opus $/.test(label(v)), `still @lead: "${label(v)}"`);
+  const count = roles().length;
+  await send(v, 'go on');
+  await until(() => roles().length > count && session().state === 'answered' && pendingRequests(p.root).every(row => row.state === 'done'), '@lead answers');
+  assert.deepEqual(roles().slice(count), ['bot:lead']);
+  const sent = calls().at(-1).args;
+  assert.deepEqual([after(sent, '--model'), after(sent, '--effort')], ['fable', 'high']);
+  // /agent change names it too, and the model stays the session's own.
+  await send(v, '/agent change @lead effort low');
+  await until(() => /Effort of @lead: high → low/.test(status()), `changed from the keyboard: ${status()}`);
+  assert.equal(session().botModels.lead.effort, 'low'); assert.equal(session().leadEffort, undefined);
+  await until(() => /^ Message @lead · @model writes to Opus $/.test(label(v)), 'and still @lead');
+  // While @lead works, its heading names the model and effort it runs on in this session.
+  await send(v, '/agent change @lead model opus');
+  await until(() => session().botModels.lead.model === 'opus', 'its model in this session');
+  const fake = path.join(p.dir, 'fake.json'); fs.writeFileSync(fake, JSON.stringify({ ...JSON.parse(fs.readFileSync(fake, 'utf8')), mode: 'listen', steps: 20, stepMs: 150 }));
+  const turns = roles().length;
+  await send(v, 'and then?');
+  await until(() => /@lead[^\n]* is working/.test(chat.getContent().replace(/\x1b\[[\d;]*m/g, '')), '@lead at work');
+  assert.match(chat.getContent().replace(/\x1b\[[\d;]*m/g, ''), /@lead \(opus(?: [\d.]+)? low\) is working/);
+  await until(() => roles().length > turns && session().state === 'answered' && pendingRequests(p.root).every(row => row.state === 'done'), 'its turn ends', 60000);
+  assert.deepEqual([after(calls().at(-1).args, '--model'), after(calls().at(-1).args, '--effort')], ['opus', 'low']);
 });

@@ -14,7 +14,8 @@ import { deleteSession } from '../lib/session-delete.mjs';
 import { pendingRequests } from '../lib/workspace.mjs';
 import { Conductor, conductorAlive, enqueue } from '../lib/conductor.mjs';
 import { addCard, boardColumns, checksSince, closeSession, fitCheckCard, linkCards, readBoard, reopenSession, sessionPlace, setDone, startCard } from '../lib/kanban.mjs';
-import { approveTask, currentTask, finishTask, proposeTask, reportProgress, sessionTasks, sharedTask } from '../lib/plan.mjs';
+import { approveTask, checkProposal, currentTask, finishTask, proposeTask, reportProgress, sessionTasks, sharedTask } from '../lib/plan.mjs';
+import { addUpdate, artifactText, taskArtifacts } from '../lib/artifacts.mjs';
 import { answerCheck, checkDone, checkView, copySession, keepOpen, readGoal } from '../lib/owner-check.mjs';
 import { parseWhen, runScheduleNow, saveSchedule } from '../lib/schedules.mjs';
 import { runOwnCommand } from '../lib/session-commands.mjs';
@@ -244,6 +245,60 @@ test('a card that waits for his check says check it beside its title where it fi
 
 const TASK = { title: 'Uppercase coupons', description: 'Make normalize return upper case.', goal: 'Codes compare equal whatever their case.', objectives: ['normalize returns upper case'], priority: 'medium', severity: 'low' };
 const withTask = (repo, id, extra = {}) => { const task = chat(repo, id, { goal: `Session ${id}`, ...extra }); proposeTask(repo, String(id), TASK); approveTask(repo, String(id)); return readTask(repo, String(task.id)); };
+
+// The New goal box shows each artifact of the Task as a line (artifactText), to change or remove.
+// Left as it shows, it is the same artifact, whatever its title and what it shows hold: renamed,
+// its data and its script would stay under the old title and its refresh would stop.
+test('an artifact line the New goal box shows reads back as the same artifact: kept open, and copied', t => {
+  const f = setup(t);
+  const artifacts = [{ title: 'Chat eval: surfaces', shows: 'Answered per surface', everyMinutes: 10 }, { title: 'Latency · p50', shows: 'Latency · p50', everyMinutes: null }, { title: 'Chat — eval', shows: 'Median — by day', everyMinutes: 60 }, { title: 'Writes', shows: 'What the eval wrote, written every 30 min', everyMinutes: 5 }, { title: 'Nightly', shows: 'The run, refreshed every 2 h', everyMinutes: null }];
+  for (const id of [15, 16]) { chat(f.repo, id); proposeTask(f.repo, String(id), checkProposal({ ...TASK, criteria: [], estimateMinutes: null, artifacts })); approveTask(f.repo, String(id)); }
+  const before = taskArtifacts(currentTask(f.repo, '15'));
+  assert.deepEqual(before.map(row => row.title), artifacts.map(row => row.title));
+  const text = ['Codes compare equal, trimmed too.', '- normalize trims the code', ...before.map(artifactText)].join('\n');
+  // Kept open with a new goal: the same artifacts. As the box shows them, they change nothing.
+  assert.equal(answerCheck(f.repo, f.root, readTask(f.repo, '15'), 'goal', text).answer, 'goal');
+  assert.deepEqual(taskArtifacts(currentTask(f.repo, '15')), before);
+  // A copy with it starts with them.
+  assert.equal(answerCheck(f.repo, f.root, readTask(f.repo, '16'), 'copy', text).answer, 'copy');
+  const { copied } = pendingRequests(f.root).find(row => row.copied);
+  assert.deepEqual(taskArtifacts(copied), before);
+  // He changes what one shows, or how often: it keeps its title.
+  answerCheck(f.repo, f.root, readTask(f.repo, '15'), 'goal', ['Codes compare equal, trimmed too.', 'Artifact: Chat eval: surfaces · Answered, by surface · every 15 min', 'Artifact: Latency · p50 · every 1 h'].join('\n'));
+  assert.deepEqual(taskArtifacts(currentTask(f.repo, '15')), [{ title: 'Chat eval: surfaces', shows: 'Answered, by surface', every: 15 }, { title: 'Latency · p50', shows: 'Latency · p50', every: 60 }]);
+  // Removed, then named again as it was: the same one, whose data and script ELU still keeps.
+  addUpdate(f.repo, '15', 'Chat eval: surfaces', { blocks: [{ kind: 'note', text: 'Run 1' }] });
+  answerCheck(f.repo, f.root, readTask(f.repo, '15'), 'goal', 'Codes compare equal, trimmed too.\nArtifact: none');
+  assert.deepEqual(taskArtifacts(currentTask(f.repo, '15')), []);
+  answerCheck(f.repo, f.root, readTask(f.repo, '15'), 'goal', 'Codes compare equal, trimmed too.\nArtifact: Chat eval: surfaces · Answered per surface · every 1 min');
+  assert.deepEqual(taskArtifacts(currentTask(f.repo, '15')), [{ title: 'Chat eval: surfaces', shows: 'Answered per surface', every: 1 }]);
+});
+
+// The two together: the New goal box shows the Task's artifacts as lines. Left as they show, with
+// one more added or one's interval changed, only the artifacts change: the Task keeps its
+// revision, what was marked met, its evidence and its ETA, and each line reads back as the
+// artifact it was, whatever its title holds.
+test("artifact lines left as the New goal box shows them, with one added, keep the Task's progress and read back as the same artifacts", t => {
+  const f = setup(t);
+  const artifacts = [{ title: 'Chat eval: surfaces', shows: 'Answered per surface', everyMinutes: 10 }, { title: 'Latency · p50', shows: 'Latency · p50', everyMinutes: null }, { title: 'Writes', shows: 'What the eval wrote, written every 30 min', everyMinutes: 5 }];
+  chat(f.repo, 17); proposeTask(f.repo, '17', checkProposal({ ...TASK, criteria: [], estimateMinutes: null, artifacts })); approveTask(f.repo, '17');
+  reportProgress(f.repo, '17', { met: [1], evidence: [[1, 'It returns upper case']], eta: 15 });
+  const before = currentTask(f.repo, '17'), shown = taskArtifacts(before), progress = task => [task.id, task.revision, task.state, task.met, task.evidence, task.etaMinutes, task.goal, task.objectives];
+  const box = [TASK.goal, ...TASK.objectives, ...shown.map(artifactText)];
+  // One added under the lines as they show.
+  assert.equal(answerCheck(f.repo, f.root, readTask(f.repo, '17'), 'goal', [...box, 'Artifact: Cost · dollars per run'].join('\n')).artifacts, true);
+  let after = currentTask(f.repo, '17');
+  assert.deepEqual(progress(after), progress(before), 'its progress stays');
+  assert.deepEqual(taskArtifacts(after), [...shown, { title: 'Cost', shows: 'dollars per run', every: null }]);
+  // His words reach the session as a message, never as a new goal.
+  assert.deepEqual(pendingRequests(f.root).filter(row => String(row.continuationTaskId) === '17').map(row => row.goalChange), [undefined]);
+  // One's interval changed, the rest as the box shows them now.
+  const now = taskArtifacts(after).map(artifactText); now[0] = 'Artifact: Chat eval: surfaces · Answered per surface · every 30 min';
+  assert.equal(answerCheck(f.repo, f.root, readTask(f.repo, '17'), 'goal', [TASK.goal, ...TASK.objectives, ...now].join('\n')).artifacts, true);
+  after = currentTask(f.repo, '17');
+  assert.deepEqual(progress(after), progress(before));
+  assert.deepEqual(taskArtifacts(after).map(row => [row.title, row.every]), [['Chat eval: surfaces', 30], ['Latency · p50', null], ['Writes', 5], ['Cost', null]]);
+});
 
 // His new goal has no length or count of ours (README, "No caps"): however long, with as many
 // objectives as he wrote, Keep open gives it to the session's Task whole, and a copy starts with

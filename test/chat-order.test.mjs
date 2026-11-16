@@ -219,8 +219,8 @@ for (const [columns, rows] of [[140, 50], [80, 24]]) for (const [name, scene] of
   inOrder(said, scene.order); endsWith(said, scene.last);
   assert.match(flat(said), /^Runs on @my-box in shop\. Type below to write to it there\. Start with @here to ask your agent here\./);
   assert.doesNotMatch(flat(said), /Changes · |d opens them/);
-  // Its changes are the tab's name, as for a session here.
-  assert.equal(sessionTabs.hidden, false); assert.equal(sessionTabs.getText().trim(), scene.view.diff ? 'Chat   Changes 2' : 'Chat   Changes');
+  // Its changes are the tab's name, as for a session here; a session with a Task has its Artifacts tab.
+  assert.equal(sessionTabs.hidden, false); assert.equal(sessionTabs.getText().trim(), `${scene.view.diff ? 'Chat   Changes 2' : 'Chat   Changes'}${scene.view.plan && scene.view.plan.state !== 'rejected' ? '   Artifacts' : ''}`);
   // On the screen: the pane ends with it, and the message box starts right under the pane.
   const screen = onScreen(v); assert.ok(screen.box >= screen.under && screen.box - screen.under <= 1, 'the message box is under the pane, after the status row at most');
   assert.ok(flat(screen.shown.join('\n')).endsWith(scene.last), `the pane on the screen does not end with "${scene.last}":\n${screen.rows.join('\n')}`);
