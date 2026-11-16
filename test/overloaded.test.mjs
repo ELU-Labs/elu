@@ -5,7 +5,9 @@ import path from 'node:path';
 import { project, fakeClis, autoApprove } from './helpers.mjs';
 import { ProjectController, activity, conversationEntries } from '../lib/projects.mjs';
 import { projectFolder } from '../lib/workspace.mjs';
-import { readTask } from '../lib/state.mjs';
+import { readTask, taskDir } from '../lib/state.mjs';
+import { parseConfig } from '../lib/config.mjs';
+import { changeLine } from '../lib/agent-change.mjs';
 import { overloadClock } from '../lib/runner.mjs';
 import * as claude from '../lib/adapters/claude.mjs';
 import * as codex from '../lib/adapters/codex.mjs';
@@ -62,6 +64,40 @@ test('a turn Claude answers with 529 Overloaded is tried again after a short wai
   const chat = conversationEntries(f.controller.repo, task).map(row => String(row.text));
   assert.ok(!chat.some(text => /529|Overloaded/.test(text)), chat.join(' | '));
   assert.equal(chat.filter(text => text === 'Claude was overloaded. Tried again 2 times.').length, 1);
+});
+
+// A model and an effort the owner chooses for the session while its turn waits to try again
+// (lib/agent-change.mjs): the turn goes on as it started, every try on the model and effort it
+// began with, and takes the choice in as it ends. The next turn runs on it, in the same
+// conversation. The chat keeps one line of each.
+test('a model and effort chosen while an overloaded turn waits to try again start with the next turn', { timeout: 60000 }, async t => {
+  shortWaits(t); overloadClock.waits = [600, 600, 600];
+  const f = await setup(t, 2), repo = f.controller.repo, id = f.first.id;
+  const policy = () => parseConfig(fs.readFileSync(path.join(taskDir(repo, id), 'policy.yaml'), 'utf8')).roles.lead;
+  const launches = () => rows(f.fake.calls).filter(row => row.vendor === 'claude' && row.args.includes('-p')), arg = (call, name) => call.args.includes(name) ? call.args[call.args.indexOf(name) + 1] : null;
+  const started = launches().at(-1), before = launches().length, own = policy().model ?? null;
+  assert.notEqual(own, 'sonnet');
+  const asked = f.controller.ask('What would you change?', id);
+  for (const from = Date.now(); !f.lines().some(row => /Trying again/.test(row.text));) { assert.ok(Date.now() - from < 20000, 'the turn waits to try again'); await new Promise(resolve => setTimeout(resolve, 10)); }
+  const saved = f.controller.changeAgent(id, { bot: null, to: { vendor: 'claude', model: 'sonnet', effort: 'low' }, line: later => changeLine({ who: 'this session', model: ['Opus', 'Sonnet'], effort: ['medium', 'low'], later }) });
+  assert.deepEqual(saved, { later: true, line: 'Model of this session: Opus → Sonnet, effort medium → low. It applies from the next turn.' });
+  assert.equal(policy().model ?? null, own, 'the turn that waits keeps its model');
+  const task = await asked.finished;
+  assert.equal(task.state, 'answered', JSON.stringify(task.error));
+  // Twice overloaded, then it ran: each try as the turn started.
+  const tries = launches().slice(before);
+  assert.deepEqual(tries.map(call => [arg(call, '--model'), arg(call, '--effort')]), Array.from({ length: 3 }, () => [arg(started, '--model'), null]));
+  // As it ended it took the choice in: the session's saved model, and nothing left waiting.
+  assert.equal(policy().model, 'sonnet');
+  const kept = readTask(repo, id);
+  assert.equal(kept.nextModel, undefined); assert.equal(kept.leadEffort, 'low');
+  assert.deepEqual(conversationEntries(repo, kept).filter(entry => entry.role === 'ELU' && entry.line).map(entry => entry.text).sort(), ['Claude was overloaded. Tried again 2 times.', 'Model of this session: Opus → Sonnet, effort medium → low. It applies from the next turn.']);
+  // The next turn: the same conversation, on the model and effort he chose.
+  const next = await f.controller.ask('And then?', id).finished;
+  assert.equal(next.state, 'answered', JSON.stringify(next.error));
+  const call = launches().at(-1);
+  assert.equal(launches().length, before + 4, 'one launch: nothing is overloaded now');
+  assert.deepEqual([arg(call, '--model'), arg(call, '--effort'), arg(call, '--resume')], ['sonnet', 'low', task.runs.at(-1).session]);
 });
 
 test('a turn still overloaded after three more tries is reported as Claude said it', { timeout: 60000 }, async t => {

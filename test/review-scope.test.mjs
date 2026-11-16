@@ -145,6 +145,43 @@ test('a change of its own its model cannot take in one piece is reviewed in part
   assert.doesNotThrow(() => assertReady(task));
 });
 
+// The owner gave @reviewer another model and an effort for this session (lib/agent-change.mjs).
+// Its review of a change too long for that model in one piece goes in parts, and Claude answers
+// one part that it is overloaded: that part alone is tried again after the wait, and the review
+// is one review, every turn of it on the model and effort he gave the bot here.
+test("a review in parts whose vendor answers one part overloaded tries that part again, on the model the owner gave the bot for this session", { timeout: 120000 }, async t => {
+  const waits = runner.overloadClock.waits; runner.overloadClock.waits = [300, 300, 300]; t.after(() => { runner.overloadClock.waits = waits; });
+  const f = setup(t, 'normal');
+  write(f.root, Object.fromEntries([1, 2, 3, 4].map(n => [`lib/part-${n}.mjs`, code(600, `old${n}`)]))); git(f.root, ['add', '-A']); git(f.root, ['commit', '-q', '-m', 'Add four parts']);
+  const first = await f.controller.ask('Normalize coupon codes', null, { bots: ['reviewer'] }).finished;
+  assert.equal(first.state, 'ready', JSON.stringify(first.error)); assert.equal(first.reviewStatus, 'passed');
+  f.controller.changeAgent(first.id, { bot: 'reviewer', to: { vendor: 'claude', model: 'sonnet', effort: 'high' } });
+  write(first.worktree, Object.fromEntries([1, 2, 3, 4].map(n => [`lib/part-${n}.mjs`, code(600, `new${n}`)])));
+  // Too long in one piece; and the first part it is given is answered 529 Overloaded once.
+  const fake = f.mode('normal', { tooLong: 150000 }), file = path.join(fake.dir, 'fake.json');
+  fs.writeFileSync(file, JSON.stringify({ ...JSON.parse(fs.readFileSync(file, 'utf8')), overloaded: 1, overloadedOn: ['"otherFiles":'] }));
+  const launches = () => rows(fake.calls).filter(row => row.vendor === 'claude' && row.args.includes('-p')), before = launches().length, asked = reviewOf(f.inputs('claude'), 'reviewer').length;
+  const task = readTask(f.repo, (await f.controller.ask('Normalize coupon codes', first.id).finished).id);
+  assert.equal(task.state, 'ready', JSON.stringify(task.error)); assert.equal(task.error ?? null, null); assert.equal(task.reviewStatus, 'passed');
+  // One review, in two parts. The part answered overloaded was given again as it was; the model
+  // then said that part was too long, so it was given once more with less, as the next part was.
+  assert.deepEqual(task.reviews.slice(1).map(row => [row.role, row.parts, row.result.comments.length]), [['bot:reviewer', 2, 0]]);
+  const given = reviewOf(f.inputs('claude'), 'reviewer').slice(asked), parts = given.filter(input => input.includes('"otherFiles":'));
+  assert.deepEqual(parts.map(input => contextOf(input).source.files.map(row => row.path).join()), ['lib/part-1.mjs,lib/part-2.mjs', 'lib/part-1.mjs,lib/part-2.mjs', 'lib/part-1.mjs,lib/part-2.mjs', 'lib/part-3.mjs,lib/part-4.mjs,src/coupon.mjs']);
+  assert.equal(parts[0], parts[1], 'the try after the wait is the same part, whole');
+  assert.ok(parts[2].length < parts[1].length, 'then with less');
+  // Every turn of the review ran on the model and effort he gave @reviewer in this session: the
+  // change whole, twice, then its parts.
+  const reviews = launches().slice(before).filter(call => call.args[call.args.indexOf('--model') + 1] === 'sonnet');
+  assert.equal(reviews.length, given.length); assert.equal(given.length, 6);
+  assert.ok(reviews.every(call => call.args[call.args.indexOf('--effort') + 1] === 'high'));
+  // The chat: one line for the wait, and the review with the line that says it went in parts.
+  assert.deepEqual((task.messages ?? []).filter(row => row.from === 'ELU' && row.line).map(row => row.text), ['Claude was overloaded. Tried again once.']);
+  assert.deepEqual(shownOf(f, task, 'reviewer').slice(-1), ["Passed.\nThis change is too long for @reviewer's model in one piece, so it reviewed it in 2 parts."]);
+  assert.deepEqual(said(task), [], 'no file was left out');
+  assert.doesNotThrow(() => assertReady(task));
+});
+
 test('a file its model refuses on its own is left out of the review, the chat names it in one line, and publishing never waits for it', async t => {
   const f = setup(t, 'normal', { models: { opus: 'claude-opus-5-5' } });
   write(f.root, { 'backend/x.json': '[]\n', 'src/a.mjs': 'export const a = 1;\n', 'src/b.mjs': 'export const b = 1;\n' }); git(f.root, ['add', '-A']); git(f.root, ['commit', '-q', '-m', 'Add data']);
