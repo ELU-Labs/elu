@@ -51,7 +51,9 @@ if(args[0]==='mcp'){
 // what it sees there of the owner's settings and memory. accounts.loginAs: the account
 // `auth login` signs in, into that folder; none ends it as cancelled. accounts.limited: accounts
 // whose runs end as the real CLI ends one at its session limit. accounts.usage: per account,
-// the fractions of the windows a run reports. accounts.keychain: `auth login` keeps the sign-in
+// the fractions of the windows a run reports; with models ({ "<family>": fraction }) a run also
+// reports that family's own week, in the event the real CLI has for one limit (rateLimitType
+// seven_day_<family>, its utilization and reset; rejected at 1). accounts.keychain: `auth login` keeps the sign-in
 // where the real CLI keeps it on macOS, in the Keychain (the stand-in security first on PATH),
 // as a generic password for $USER named "Claude Code-credentials", then, when
 // CLAUDE_CONFIG_DIR is set, "-" and the first 8 hex digits of the SHA-256 of that value.
@@ -318,6 +320,7 @@ if(cfg.api&&(process.env.ANTHROPIC_BASE_URL||cfg.api.direct)){
 }else{
  const used=cfg.accounts?.usage?.[account]??{fiveHour:0.36,weekly:0.71};
  console.log(JSON.stringify({type:'rate_limit_event',rate_limit_info:{unifiedWindows:{five_hour:{utilization:used.fiveHour,resetsAt:Math.floor(Date.now()/1000)+10800},seven_day:{utilization:used.weekly,resetsAt:Math.floor(Date.now()/1000)+604800}}}}));
+ for(const [family,share] of Object.entries(used.models??{}))console.log(JSON.stringify({type:'rate_limit_event',rate_limit_info:{status:share>=1?'rejected':'allowed_warning',rateLimitType:`seven_day_${family}`,utilization:share,resetsAt:Math.floor(Date.now()/1000)+432000}}));
 }
 console.error('A harmless diagnostic on stderr.');
 // The owner's words in a message ELU sent to a running turn (lib/runner.mjs DURING_LEAD), or the message as it is.

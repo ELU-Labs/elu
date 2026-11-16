@@ -15,7 +15,7 @@ import { findBin } from '../lib/util.mjs';
 import { hostMethods, hostTick, listTick, relist, remoteCommand, remoteMachines, remoteSessions, viewMethods, viewTick } from '../lib/peer/remote.mjs';
 import { remoteError } from '../lib/peer/failure.mjs';
 import { otherSessions } from '../lib/peer/session-tools.mjs';
-import { markMine, noteTheirs } from '../lib/peer/mine.mjs';
+import { shareProjects } from './peer-helpers.mjs';
 import { saveTeamAccess } from '../lib/peer/access.mjs';
 
 // A session whose agent commits its own work with Git, end to end against the stand-in
@@ -203,13 +203,13 @@ test('one with edits left uncommitted heals to edits that are not verified: no e
 // calls: the devbox hosts a project, the laptop lists and follows its sessions.
 function connection(key) {
   const sent = [];
-  return { key, admitted: true, remoteHello: { remote: 1 }, sent, notify: (method, params) => sent.push([method, params]), request: async () => { throw new Error('No answer'); } };
+  return { key, admitted: true, remoteHello: { remote: 1, shared: 1 }, sent, notify: (method, params) => sent.push([method, params]), request: async () => { throw new Error('No answer'); } };
 }
 const context = (me, sessions = {}) => ({ me, session: key => sessions[key] ?? null, name: key => key.slice(0, 4), box: () => null, log: () => {}, kick: () => {}, soon: () => {}, event: () => {} });
 function pair(t) {
   const team = makeTeam(t, { founderName: 'ana', memberName: 'box' }), laptop = team.founder, devbox = team.member;
-  const shop = withHome(devbox.home, () => { const shop = registeredProject(t, { origin: 'https://github.com/acme/shop.git' }); saveTeamAccess(team.teamId, { root: shop.root }); markMine(devbox.identity.key, laptop.identity.key); noteTheirs(laptop.identity.key, true); return shop; });
-  withHome(laptop.home, () => { markMine(laptop.identity.key, devbox.identity.key); noteTheirs(devbox.identity.key, true); });
+  const shop = withHome(devbox.home, () => { const shop = registeredProject(t, { origin: 'https://github.com/acme/shop.git' }); saveTeamAccess(team.teamId, { root: shop.root }); shareProjects(devbox.identity.key, laptop.identity.key); return shop; });
+  withHome(laptop.home, () => { shareProjects(laptop.identity.key, devbox.identity.key); });
   const toHost = connection(laptop.identity.key), toViewer = connection(devbox.identity.key);
   const hostCtx = context(devbox.identity, { [laptop.identity.key]: toHost }), viewCtx = context(laptop.identity, { [devbox.identity.key]: toViewer });
   const host = hostMethods(hostCtx), viewer = viewMethods(viewCtx);

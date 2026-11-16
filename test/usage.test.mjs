@@ -15,6 +15,13 @@ function environment(t, values) {
 }
 const event = windows => JSON.stringify({ type: 'rate_limit_event', rate_limit_info: { unifiedWindows: windows } });
 const future = () => Math.floor(Date.now() / 1000) + 3600;
+// The tab's lines under the summary, without the rules between the vendors.
+const vendorLines = (rows, options) => usageBlocks(rows, options).filter(row => !row.summary && !row.rule);
+const RULE = width => '─'.repeat(width);
+// A limit's columns as the tab draws them: its name, its bar, the percent in four columns, the time left in seven.
+const bar = (filled, size) => '█'.repeat(filled) + '░'.repeat(size - filled);
+const fullBar = size => { const before = Math.floor((size - 4) / 2); return `${'█'.repeat(before)}FULL${'█'.repeat(size - 4 - before)}`; };
+const limit = (name, cells, percent, left) => `${name} ${cells} ${percent.padStart(4)}  ${left.padStart(7)}`;
 
 test('Claude headless windows are fractions and missing windows stay unreported', () => {
   const resetsAt = future();
@@ -194,47 +201,49 @@ test('the Usage tab names the active account per vendor, lists the others, and h
   assert.deepEqual([grok.installed, grok.signedIn, grok.active], [false, false, null]);
   const signedOut = usageTab({ vendors: vendors.map(row => ({ ...row, signedIn: false })), env, now });
   assert.equal(signedOut[0].usage, null); assert.equal(signedOut[0].active, null);
-  // The blocks fit the 80-column pane and read as designed: one line per account, its usage after it.
+  // The blocks fit the 80-column pane and read as designed: the summary, then each account with its limit in its columns.
   const lines = usageBlocks([claude, codex, agy, grok], { now: new Date(now) }), text = lines.map(row => row.text).join('\n');
   assert.ok(lines.every(row => row.text.length <= 76), text);
+  assert.match(lines[0].text, /^2 accounts · 2 free {2,}used {5}left$/); assert.equal(lines[1].text, '─'.repeat(76));
   // Claude Code reported its weekly window only: the 5-hour one is left out, never "not reported".
-  assert.match(text, /^Claude {6}owner@example.invalid · Max 20x · active  wk  12% resets [^\n]+$/m); assert.doesNotMatch(text.split('\nCodex')[0], /5h|not reported/);
-  assert.match(text, /^ {12}old@example.invalid · Pro {17}last seen \w{3} \d+\n {12}enter on an account uses it · x forgets it · a adds one$/m);
-  // Of Codex's two windows the tightest, its 5 hours, where both do not fit.
-  assert.match(text, /^Codex {7}owner@example.invalid · Team · active {5}5h  34% resets [^\n]+$/m);
+  assert.match(text, /^Claude {6}owner@exam…e\.invalid · Max 20x · active {2}wk █░░░░░ {2}12% +(?:59m|1h 0m)$/m); assert.doesNotMatch(text.split('\nCodex')[0], /5h|not reported/);
+  assert.match(text, /^ {12}old@example.invalid · Pro {16}last seen \w{3} \d+\n {12}enter on an account uses it · x forgets it · a adds one$/m);
+  // Codex reported both its windows: the account in use is open, a line for each.
+  assert.match(text, /^Codex {5}▾ owner@example.invalid · Team · active\n {53}5h ██░░░░ {2}34% +(?:59m|1h 0m)\n {53}wk █░░░░░ {2}10% +(?:59m|1h 0m)$/m);
   assert.match(text, /^Antigravity not signed in for ELU · s signs in$/m); assert.match(text, /^Grok Build {2}not installed$/m);
-  // At 140 columns: the bars, the windows' whole resets, both of Codex's windows, and the week an old account used.
+  // At 140 columns: a bar of 20, and the week an old account used.
   const wide = usageBlocks([claude, codex, agy, grok], { now: new Date(now), width: 136 }).map(row => row.text).join('\n');
-  assert.match(wide, /^Claude {6}owner@example.invalid · Max 20x · active  wk \[#-----\]  12% resets [^\n]+\n {12}old@example.invalid · Pro {17}last seen \w{3} \d+ · wk 100% then$/m);
-  assert.match(wide, /^Codex {7}owner@example.invalid · Team · active {5}5h \[##----\]  34% resets [^\n]+? {2}wk \[#-----\]  10% resets /m);
+  assert.match(wide, /^Claude {6}owner@example.invalid · Max 20x · active {2}wk ██░{18} {2}12% [^\n]+\n {12}old@example.invalid · Pro {17}last seen \w{3} \d+ · wk 100% then$/m);
+  assert.match(wide, /^Codex {5}▾ owner@example.invalid · Team · active\n {54}5h █{7}░{13} {2}34% [^\n]+\n {54}wk ██░{18} {2}10% /m);
   const details = usageDetailLines(claude, new Date(now)).join('\n');
-  assert.match(details, /owner@example.invalid · Max 20x · default_claude_max_20x\nReported \d\d:\d\d\n\nwk  \[#-----\]   12%  resets /); assert.doesNotMatch(details, /5h|not reported/); assert.match(details, /Other accounts\nold@example.invalid · Pro · first seen/);
+  assert.match(details, /owner@example.invalid · Max 20x · default_claude_max_20x\nReported \d\d:\d\d\n\nwk █░░░░░░░ {3}12% {2}resets /); assert.doesNotMatch(details, /5h|not reported/); assert.match(details, /Other accounts\nold@example.invalid · Pro · first seen/);
   // The keys are the list's: in the dialog Enter closes it.
   assert.doesNotMatch(details, /enter|x forget|a add/);
   assert.deepEqual(usageDetailLines(grok), ['Not installed.']); assert.deepEqual(usageDetailLines(agy), ['Not signed in for ELU. s signs it in.']);
   // Before a session on Claude Code has reported a window, or once every window it reported
-  // has reset, the Claude block and its details say when usage shows.
+  // has reset, the Claude block and its details say when usage shows, and the summary that
+  // there is no reading.
   for (const seen of [null, { observedAt, fiveHour: { usedPercent: 99, resetsAt: Math.floor(now / 1000) - 1 }, weekly: null }]) {
     fs.writeFileSync(usageFile, JSON.stringify({ version: 1, claude: seen, codex: codexSeen }));
     const [unseen] = usageTab({ vendors, env, now });
     assert.equal(unseen.usage, null);
-    assert.equal(usageBlocks([unseen], { now: new Date(now), width: 136 })[0].text, 'Claude      owner@example.invalid · Max 20x · active  Usage shows after your next session on Claude Code.');
-    assert.equal(usageBlocks([unseen], { now: new Date(now) })[0].text, 'Claude      owner@example.invalid · Max 20x · active  no usage yet');
+    assert.equal(usageBlocks([unseen], { now: new Date(now), width: 136 })[0].text, '1 account · 1 no reading');
+    assert.equal(vendorLines([unseen], { now: new Date(now), width: 136 })[0].text, 'Claude      owner@example.invalid · Max 20x · active  Usage shows after your next session on Claude Code.');
+    assert.equal(vendorLines([unseen], { now: new Date(now) })[0].text, 'Claude      owner@example.invalid · Max 20x · active  no usage yet');
     assert.deepEqual(usageDetailLines(unseen, new Date(now)).slice(0, 3), ['owner@example.invalid · Max 20x · default_claude_max_20x', '', 'Usage shows after your next session on Claude Code.']);
   }
   // A record that names neither window's percent or reset says the same, not two rows of "not reported".
   const reported = (row, usage) => ({ ...row, usage, accounts: (row.accounts ?? []).map(item => item.active ? { ...item, usage } : item) });
   const bare = reported(claude, { observedAt, fiveHour: null, weekly: { usedPercent: null, resetsAt: null } });
-  assert.equal(usageBlocks([bare], { now: new Date(now), width: 136 })[0].text, 'Claude      owner@example.invalid · Max 20x · active  Usage shows after your next session on Claude Code.');
+  assert.equal(vendorLines([bare], { now: new Date(now), width: 136 })[0].text, 'Claude      owner@example.invalid · Max 20x · active  Usage shows after your next session on Claude Code.');
   assert.deepEqual(usageDetailLines(bare, new Date(now)).slice(0, 3), ['owner@example.invalid · Max 20x · default_claude_max_20x', '', 'Usage shows after your next session on Claude Code.']);
-  // Codex says so of a window it did not report, as before; and of an account with neither, in a few words.
-  assert.match(usageBlocks([reported(codex, { observedAt, fiveHour: null, weekly: codexSeen.weekly })], { now: new Date(now), width: 136 })[0].text, /^Codex {7}owner@example.invalid · Team · active  5h \[------\]    — not reported  wk \[#-----\]  10% resets /);
-  assert.equal(usageBlocks([reported(codex, null)], { now: new Date(now) })[0].text, 'Codex       owner@example.invalid · Team · active  usage not reported');
+  // Codex shows the window it reported and none it did not; an account with neither says so in a few words.
+  assert.match(vendorLines([reported(codex, { observedAt, fiveHour: null, weekly: codexSeen.weekly })], { now: new Date(now), width: 136 })[0].text, /^Codex {7}owner@example.invalid · Team · active {2}wk ██░{18} {2}10% +(?:59m|1h 0m)$/);
+  assert.equal(vendorLines([reported(codex, null)], { now: new Date(now) })[0].text, 'Codex       owner@example.invalid · Team · active  usage not reported');
 });
 
-// The owner's case: five Claude accounts and a Codex account with its two windows. Each
-// account was two lines, its name and under it its usage, all in one colour.
-test('Usage: each account is one line, its plan and then its usage in columns that line up, the account in use in its own colour, and nothing cut mid-word at 80 columns', () => {
+// The owner's case: five Claude accounts and a Codex account with its two windows.
+test('Usage: an account with one limit is one line, the limits in columns that line up, the account in use in its own colour, and no name or number cut at 80 columns', () => {
   const now = new Date(2026, 10, 15, 17, 29), at = (...parts) => Math.floor(new Date(2026, 10, ...parts).getTime() / 1000), observedAt = now.toISOString();
   const week = (usedPercent, resetsAt) => ({ observedAt, fiveHour: null, weekly: { usedPercent, resetsAt } });
   const claudeAccounts = [
@@ -252,55 +261,58 @@ test('Usage: each account is one line, its plan and then its usage in columns th
   const blocks = width => usageBlocks(rows, { now, width }), text = width => blocks(width).map(row => row.text);
   const after = ['            Switch accounts by itself  on', '            Use paid extra usage       off', `            ${keysHint}`];
   // An account's line: the vendor's column, the account in a column as wide as the widest
-  // account would be in use (someone992@mail.test · Ultra · active), then its usage.
+  // account would be in use (someone992@mail.test · Ultra · active), then its limit.
   const line = (column, cell, usage, vendor = '') => `${vendor.padEnd(12)}${cell.padEnd(column)}  ${usage}`;
-  // 80 columns: the reset's day, and of Codex's two windows the tightest, its week at its limit.
+  // 80 columns: a bar of 8, and both of Codex's windows under its account, which is in use.
   assert.deepEqual(text(76), [
-    line(37, 'admin@ab.test · Ultra · active', 'wk  42% resets Nov 18', 'Claude'),
+    `6 accounts · 2 free · 2 FULL · 2 no reading${' '.repeat(20)}used     left`,
+    RULE(76),
+    line(37, 'admin@ab.test · Ultra · active', limit('wk', bar(3, 8), '42%', '2d 18h'), 'Claude'),
     line(37, 'engineering@ab.test · Ultra', 'no usage yet'),
-    line(37, 'someone992@mail.test · Ultra', 'wk 100% resets Nov 20'),
-    line(37, 'owner@ab.test · Ultra', 'wk  70% resets Nov 19'),
+    line(37, 'someone992@mail.test · Ultra', limit('wk', fullBar(8), '100%', '4d 19h')),
+    line(37, 'owner@ab.test · Ultra', limit('wk', bar(6, 8), '70%', '4d 1h')),
     line(37, 'no-reply@ab.test · Ultra', 'no usage yet'),
     ...after,
-    line(37, 'owner@ab.test · Team · active', 'wk 100% resets Nov 17', 'Codex'),
+    RULE(76),
+    'Codex     ▾ owner@ab.test · Team · active',
+    `${' '.repeat(51)}${limit('5h', bar(0, 8), '0%', '3h 23m')}`,
+    `${' '.repeat(51)}${limit('wk', fullBar(8), '100%', '2d 3h')}`,
     `            ${keysHint}`,
+    RULE(76),
     'Antigravity not installed',
+    RULE(76),
     'Grok Build  not installed',
   ]);
-  // 100 columns: the bars and the clock too, and the other window's percent after the tightest.
-  assert.equal(text(96)[0], line(37, 'admin@ab.test · Ultra · active', 'wk [###---]  42% resets Nov 18 12:00', 'Claude'));
-  assert.equal(text(96)[8], line(37, 'owner@ab.test · Team · active', 'wk [######] 100% resets Nov 17 20:35  5h   0%', 'Codex'));
-  // 140 columns: both of Codex's windows, in their order, and the whole sentence.
-  assert.deepEqual(text(136).slice(0, 9), [
-    line(37, 'admin@ab.test · Ultra · active', 'wk [###---]  42% resets Nov 18 12:00', 'Claude'),
-    line(37, 'engineering@ab.test · Ultra', 'Usage shows after a session on this account.'),
-    line(37, 'someone992@mail.test · Ultra', 'wk [######] 100% resets Nov 20 13:00'),
-    line(37, 'owner@ab.test · Ultra', 'wk [####--]  70% resets Nov 19 19:00'),
-    line(37, 'no-reply@ab.test · Ultra', 'Usage shows after a session on this account.'),
-    ...after,
-    line(37, 'owner@ab.test · Team · active', '5h [------]   0% resets 20:52  wk [######] 100% resets Nov 17 20:35', 'Codex'),
-  ]);
+  // 100 columns: a bar of 20 and the whole sentence of an account not seen yet.
+  assert.deepEqual(text(96).slice(2, 4), [line(37, 'admin@ab.test · Ultra · active', limit('wk', bar(8, 20), '42%', '2d 18h'), 'Claude'), line(37, 'engineering@ab.test · Ultra', 'Usage shows after a session on this account.')]);
+  assert.deepEqual(text(96).slice(11, 14), ['Codex     ▾ owner@ab.test · Team · active', `${' '.repeat(51)}${limit('5h', bar(0, 20), '0%', '3h 23m')}`, `${' '.repeat(51)}${limit('wk', fullBar(20), '100%', '2d 3h')}`]);
   for (const width of [76, 96, 136]) {
-    const lines = blocks(width), accounts = lines.filter(row => row.login);
+    const lines = blocks(width), accounts = lines.filter(row => row.login), named = accounts.filter(row => /@/.test(row.text));
     assert.ok(lines.every(row => row.text.length <= width), `every line fits ${width}`);
-    // One line per account, and Enter on it uses that account.
-    assert.deepEqual(accounts.map(row => [row.vendor, row.login]), [...claudeAccounts.map(item => ['claude', item.login]), ['codex', 'default']]);
-    // The usage of every account starts in one column, after the account and its plan.
-    assert.deepEqual([...new Set(accounts.map(row => row.text.length - row.parts[2].text.trimStart().length))], [51]);
+    // Every line of an account is the account's, and Enter on it uses that account: one line
+    // for each of Claude's, and Codex's with a line under it for each of its two windows.
+    assert.deepEqual(accounts.map(row => [row.vendor, row.login]), [...claudeAccounts.map(item => ['claude', item.login]), ['codex', 'default'], ['codex', 'default'], ['codex', 'default']]);
+    // Every percent ends in one column, down both vendors.
+    assert.equal(new Set(accounts.map(row => row.text.indexOf('%')).filter(place => place >= 0)).size, 1, `one column of percents at ${width}`);
     // The account in use in the accent colour, its word active kept; the others as the text.
-    assert.deepEqual(accounts.map(row => [row.parts[1].text.trim(), row.parts[1].tone, row.parts[1].bold]), [['admin@ab.test · Ultra · active', 'orange', true], ...claudeAccounts.slice(1).map(item => [`${item.account} · Ultra`, 'text', false]), ['owner@ab.test · Team · active', 'orange', true]]);
-    assert.deepEqual(accounts.map(row => row.parts[2].tone), ['text', 'muted', 'text', 'text', 'muted', 'text']);
+    assert.deepEqual(named.map(row => { const part = row.parts.find(part => /@/.test(part.text)); return [part.text.trim(), part.tone, part.bold]; }), [['admin@ab.test · Ultra · active', 'orange', true], ...claudeAccounts.slice(1).map(item => [`${item.account} · Ultra`, 'text', false]), ['owner@ab.test · Team · active', 'orange', true]]);
+    // A limit's percent in the colour of how full it is, and the words of an account with none muted.
+    assert.deepEqual(named.slice(0, 5).map(row => (row.parts.find(part => /%/.test(part.text)) ?? row.parts.at(-1)).tone), ['green', 'muted', 'red', 'gold', 'muted']);
     assert.equal(accounts[0].parts[0].text, 'Claude      '); assert.equal(accounts[0].parts[0].bold, true);
     assert.equal(accounts.map(row => row.parts.map(part => part.text).join('')).join('\n'), accounts.map(row => row.text).join('\n'));
   }
-  // An account at its limit says until when, and one whose sign-in lapsed says so, on its line.
-  claudeAccounts[3].spentUntil = at(19, 19) * 1000; claudeAccounts[4].needsSignIn = true;
-  assert.deepEqual(text(76).slice(3, 5), [line(37, 'owner@ab.test · Ultra', 'at its limit until Nov 19'), line(37, 'no-reply@ab.test · Ultra', 'sign in again')]);
-  // A narrower pane: the fewest words that still say it, never part of one.
-  assert.deepEqual(text(70).slice(0, 5), [
-    line(33, 'admin@ab.test · Ultra · active', 'wk  42% resets Nov 18', 'Claude'),
+  // An account ELU holds at its week is FULL until then, whatever share it last read; one whose sign-in lapsed says so.
+  claudeAccounts[3].spentUntil = at(19, 19) * 1000; claudeAccounts[3].spent = { window: 'weekly', until: at(19, 19) * 1000 }; claudeAccounts[4].needsSignIn = true;
+  assert.deepEqual(text(76).slice(5, 7), [line(37, 'owner@ab.test · Ultra', limit('wk', fullBar(8), '70%', '4d 1h')), line(37, 'no-reply@ab.test · Ultra', 'sign in again')]);
+  assert.equal(text(76)[0].replace(/ {2,}.*$/, ''), '6 accounts · 1 free · 3 FULL · 2 no reading');
+  // One ELU holds for another reason than a limit it reads says until when, on its line.
+  claudeAccounts[3].spent = { window: 'billing', until: at(19, 19) * 1000 };
+  assert.equal(text(76)[5], line(37, 'owner@ab.test · Ultra', 'at its limit until Nov 19'));
+  // A narrower pane: a shorter bar, and the fewest words that still say it, never part of one.
+  assert.deepEqual(text(70).slice(2, 7), [
+    line(33, 'admin@ab.test · Ultra · active', limit('wk', bar(3, 6), '42%', '2d 18h'), 'Claude'),
     line(33, 'engineering@ab.test · Ultra', 'no usage yet'),
-    line(33, 'someone992@mail.test · Ultra', 'wk 100% resets Nov 20'),
+    line(33, 'someone992@mail.test · Ultra', limit('wk', fullBar(6), '100%', '4d 19h')),
     line(33, 'owner@ab.test · Ultra', 'until Nov 19 19:00'),
     line(33, 'no-reply@ab.test · Ultra', 'sign in again'),
   ]);
@@ -310,15 +322,15 @@ test('Usage: each account is one line, its plan and then its usage in columns th
 // column left the other accounts so little room that their texts lost their meaning ("sign
 // in", "last seen", "usage not"). Another account in use changed every line, and at 140
 // columns one account's week stood where another's 5 hours did.
-test('Usage: a long account name has its usage whole under it, every text keeps its meaning, another account in use changes no other line, and windows line up by kind', () => {
+test('Usage: a long account name in use is whole with its limits under it, every text keeps its meaning, another account in use changes no other line, and limits line up by kind', () => {
   const now = new Date(2026, 10, 15, 17, 29), at = (...parts) => Math.floor(new Date(2026, 10, ...parts).getTime() / 1000), observedAt = now.toISOString();
   const keysHint = 'enter on an account uses it · x forgets it · a adds one', keys = `            ${keysHint}`, settings = ['            Switch accounts by itself  on', '            Use paid extra usage       off'];
   const windows = (fiveHour, weekly) => ({ observedAt, fiveHour, weekly });
   const claude = (accounts, others = []) => ({ vendor: 'claude', installed: true, signedIn: true, accounts, usage: accounts.find(item => item.active)?.usage ?? null, others, keysHint, switches: { auto: true, extraUsage: false } });
   const codex = usage => ({ vendor: 'codex', installed: true, signedIn: true, accounts: [{ login: 'default', account: 'owner@ab.test', plan: 'Team', active: true, usage }], usage, others: [], keysHint });
-  // A line: the vendor's column, the account in a column this wide, then its usage.
+  // A line: the vendor's column, the account in a column this wide, then its limit.
   const line = (column, cell, usage, vendor = '') => `${vendor.padEnd(12)}${cell.padEnd(column)}  ${usage}`;
-  // A long name in use, an account whose sign-in lapsed, one at its limit, one seen before, and Codex with no usage.
+  // A long name in use, an account whose sign-in lapsed, one ELU holds at its limit, one seen before, and Codex with no usage.
   const long = claude([
     { login: 'default', account: 'firstname.lastname@longcompany.test', plan: 'Max 20x', active: true, usage: windows({ usedPercent: 8, resetsAt: at(15, 22, 10) }, { usedPercent: 42, resetsAt: at(18, 12) }) },
     { login: 'b', account: 'b@ab.test', plan: 'Pro', active: false, usage: null, needsSignIn: true },
@@ -326,24 +338,30 @@ test('Usage: a long account name has its usage whole under it, every text keeps 
   ], [{ account: 'old@ab.test', plan: 'Pro', lastSeen: new Date(2026, 10, 9, 12).toISOString(), usage: windows(null, { usedPercent: 100, resetsAt: at(16, 12) }) }]);
   const narrow = usageBlocks([long, codex(null)], { now, width: 76 });
   assert.deepEqual(narrow.map(row => row.text), [
-    'Claude      firstname.lastname@longcompany.test · Max 20x · active',
-    line(29, '', 'wk [###---]  42% resets Nov 18'),
-    line(29, 'b@ab.test · Pro', 'sign in again'),
-    line(29, 'c@ab.test · Pro', 'at its limit until Nov 19 19:00'),
+    `4 accounts · 1 free · 1 FULL · 2 no reading${' '.repeat(20)}used     left`,
+    RULE(76),
+    'Claude    ▾ firstname.lastname@longcompany.test · Max 20x · active',
+    `${' '.repeat(53)}${limit('5h', bar(1, 6), '8%', '4h 41m')}`,
+    `${' '.repeat(53)}${limit('wk', bar(3, 6), '42%', '2d 18h')}`,
+    line(39, 'b@ab.test · Pro', 'sign in again'),
+    // Held at its limit with no share read: FULL, and the time left until ELU tries it again.
+    line(39, 'c@ab.test · Pro', limit('wk', fullBar(6), '—', '4d 1h')),
     ...settings,
-    line(29, 'old@ab.test · Pro', 'last seen Nov 9 · wk 100% then'),
+    line(39, 'old@ab.test · Pro', 'last seen Nov 9'),
     keys,
-    line(29, 'owner@ab.test · Team · active', 'usage not reported', 'Codex'),
+    RULE(76),
+    line(39, 'owner@ab.test · Team · active', 'usage not reported', 'Codex'),
     keys,
   ]);
-  // Both lines are the account's, so Enter on either uses it; the account in its colour, its usage as the text.
-  assert.deepEqual(narrow.slice(0, 2).map(row => [row.vendor, row.login]), [['claude', 'default'], ['claude', 'default']]);
-  assert.deepEqual([narrow[0].parts[1].tone, narrow[0].parts[1].bold, narrow[1].parts.at(-1).tone], ['orange', true, 'text']);
-  for (const row of narrow.slice(0, 2)) assert.equal(row.parts.map(part => part.text).join(''), row.text);
-  // Where the pane has room, the long account is one line with both its windows.
+  // The three lines are the account's, so Enter on any uses it; the account in its colour, a limit's time left as the text.
+  assert.deepEqual(narrow.slice(2, 5).map(row => [row.vendor, row.login]), [['claude', 'default'], ['claude', 'default'], ['claude', 'default']]);
+  const named = narrow[2].parts.find(part => /@/.test(part.text));
+  assert.deepEqual([named.tone, named.bold, narrow[3].parts.at(-1).tone], ['orange', true, 'text']);
+  for (const row of narrow.slice(2, 5)) assert.equal(row.parts.map(part => part.text).join(''), row.text);
+  // Where the pane has room, the same lines with a longer bar.
   const wide = usageBlocks([long, codex(null)], { now, width: 136 }).map(row => row.text);
-  assert.equal(wide[0], line(54, 'firstname.lastname@longcompany.test · Max 20x · active', '5h [------]   8% resets 22:10  wk [###---]  42% resets Nov 18 12:00', 'Claude'));
-  assert.equal(wide.length, narrow.length - 1);
+  assert.deepEqual(wide.slice(2, 5), ['Claude    ▾ firstname.lastname@longcompany.test · Max 20x · active', `${' '.repeat(68)}${limit('5h', bar(2, 20), '8%', '4h 41m')}`, `${' '.repeat(68)}${limit('wk', bar(8, 20), '42%', '2d 18h')}`]);
+  assert.equal(wide.length, narrow.length);
   // The owner's five accounts: the column is as wide as the widest account would be in use,
   // so putting another one in use changes those two accounts' lines and nothing else.
   const five = active => claude([
@@ -355,31 +373,40 @@ test('Usage: a long account name has its usage whole under it, every text keeps 
   ].map(item => ({ ...item, active: item.login === active })));
   const both = codex(windows({ usedPercent: 0, resetsAt: at(15, 20, 52) }, { usedPercent: 100, resetsAt: at(17, 20, 35) }));
   const text = (active, width) => usageBlocks([five(active), both], { now, width }).map(row => row.text);
-  const rest = [...settings, keys, line(37, 'owner@ab.test · Team · active', 'wk 100% resets Nov 17', 'Codex'), keys];
+  const head = [`6 accounts · 2 free · 2 FULL · 2 no reading${' '.repeat(20)}used     left`, RULE(76)], under = size => ' '.repeat(51);
+  const rest = [...settings, keys, RULE(76), 'Codex     ▾ owner@ab.test · Team · active', under() + limit('5h', bar(0, 8), '0%', '3h 23m'), under() + limit('wk', fullBar(8), '100%', '2d 3h'), keys];
   assert.deepEqual(text('default', 76), [
-    line(37, 'admin@ab.test · Ultra · active', 'wk  42% resets Nov 18', 'Claude'),
+    ...head,
+    'Claude    ▾ admin@ab.test · Ultra · active',
+    under() + limit('5h', bar(1, 8), '8%', '4h 41m'),
+    under() + limit('wk', bar(3, 8), '42%', '2d 18h'),
     line(37, 'engineering@ab.test · Ultra', 'no usage yet'),
-    line(37, 'someone992@mail.test · Ultra', 'wk 100% resets Nov 20'),
-    line(37, 'owner@ab.test · Ultra', 'wk  70% resets Nov 19'),
+    line(37, 'someone992@mail.test · Ultra', limit('wk', fullBar(8), '100%', '4d 19h')),
+    line(37, 'owner@ab.test · Ultra', limit('wk', bar(6, 8), '70%', '4d 1h')),
     line(37, 'no-reply@ab.test · Ultra', 'no usage yet'),
     ...rest,
   ]);
+  // The one that was in use has room, so it stays open.
   assert.deepEqual(text('c', 76), [
-    line(37, 'admin@ab.test · Ultra', 'wk  42% resets Nov 18', 'Claude'),
+    ...head,
+    'Claude    ▾ admin@ab.test · Ultra',
+    under() + limit('5h', bar(1, 8), '8%', '4h 41m'),
+    under() + limit('wk', bar(3, 8), '42%', '2d 18h'),
     line(37, 'engineering@ab.test · Ultra', 'no usage yet'),
-    line(37, 'someone992@mail.test · Ultra · active', 'wk 100% resets Nov 20'),
-    line(37, 'owner@ab.test · Ultra', 'wk  70% resets Nov 19'),
+    line(37, 'someone992@mail.test · Ultra · active', limit('wk', fullBar(8), '100%', '4d 19h')),
+    line(37, 'owner@ab.test · Ultra', limit('wk', bar(6, 8), '70%', '4d 1h')),
     line(37, 'no-reply@ab.test · Ultra', 'no usage yet'),
     ...rest,
   ]);
-  // At 140 columns a vendor's windows line up by kind: an account's week under another's week, never under its 5 hours.
-  assert.deepEqual(text('default', 136).filter((row, at) => at < 5 || /^Codex/.test(row)), [
-    line(37, 'admin@ab.test · Ultra · active', '5h [------]   8% resets 22:10  wk [###---]  42% resets Nov 18 12:00', 'Claude'),
+  // At 140 columns too a limit stands under the same kind of limit: an account's week under another's week, never under its 5 hours.
+  assert.deepEqual(text('default', 136).slice(2, 9), [
+    'Claude    ▾ admin@ab.test · Ultra · active',
+    under() + limit('5h', bar(2, 20), '8%', '4h 41m'),
+    under() + limit('wk', bar(8, 20), '42%', '2d 18h'),
     line(37, 'engineering@ab.test · Ultra', 'Usage shows after a session on this account.'),
-    line(37, 'someone992@mail.test · Ultra', `${''.padEnd(31)}wk [######] 100% resets Nov 20 13:00`),
-    line(37, 'owner@ab.test · Ultra', `${''.padEnd(31)}wk [####--]  70% resets Nov 19 19:00`),
+    line(37, 'someone992@mail.test · Ultra', limit('wk', fullBar(20), '100%', '4d 19h')),
+    line(37, 'owner@ab.test · Ultra', limit('wk', bar(14, 20), '70%', '4d 1h')),
     line(37, 'no-reply@ab.test · Ultra', 'Usage shows after a session on this account.'),
-    line(37, 'owner@ab.test · Team · active', '5h [------]   0% resets 20:52  wk [######] 100% resets Nov 17 20:35', 'Codex'),
   ]);
   for (const width of [76, 96, 136]) for (const active of ['default', 'c']) assert.ok(text(active, width).every(row => row.length <= width), `every line fits ${width}`);
 });
@@ -391,7 +418,7 @@ test('the Usage tab reads Antigravity and Grok Build sign-in before their one-ti
   // detect() never runs such a vendor: null sign-in, and no release.
   const waiting = vendor => ({ vendor, available: true, bin: path.join(fake.dir, vendor), supported: false, signedIn: null, version: null, conformant: false });
   const rows = [waiting('agy'), waiting('grok')], tab = () => { const [, , agy, grok] = usageTab({ vendors: withCheck(rows, { env }), env, now, browser: true }); return { agy, grok }; };
-  const text = row => usageBlocks([row], { now: new Date(now) }).map(line => line.text);
+  const text = row => vendorLines([row], { now: new Date(now) }).map(line => line.text);
   // Before any read: Grok's token file is looked for at once, Antigravity is not read yet.
   let { agy, grok } = tab();
   assert.deepEqual([agy.unchecked, agy.check, agy.signInRead, grok.check, grok.signInRead], [true, 'needed', null, 'needed', false]);
@@ -448,6 +475,6 @@ test('the Usage tab reads Antigravity and Grok Build sign-in before their one-ti
   assert.equal(denied.asks, true); assert.deepEqual(text(denied).slice(2), ['            It would also run on this machine: Cursor hook /x/.cursor.', '            You said no, so it runs in Full access only. c asks again.']);
   // A check c started shows its lines under the vendor as it goes, then why it stopped.
   const checks = new Map([['grok', { running: true, lines: ['Checking Grok Build (the grok command): 8 steps, once on this machine for release 1.0.77.'], current: 'Grok Build: 2 of 8 steps, 14s so far. Proven: a read-only turn writes no file.', error: null }]]);
-  assert.deepEqual(usageBlocks([usageTab({ vendors: withCheck([waiting('grok')], { env }), env, now })[3]], { checks }).map(line => line.text), ['Grok Build  (grok) signed in · checking…', '            Checking Grok Build (the grok command): 8 steps, once on this', '            machine for release 1.0.77.', '            Grok Build: 2 of 8 steps, 14s so far. Proven: a read-only turn', '            writes no file.']);
+  assert.deepEqual(vendorLines([usageTab({ vendors: withCheck([waiting('grok')], { env }), env, now })[3]], { checks }).map(line => line.text), ['Grok Build  (grok) signed in · checking…', '            Checking Grok Build (the grok command): 8 steps, once on this', '            machine for release 1.0.77.', '            Grok Build: 2 of 8 steps, 14s so far. Proven: a read-only turn', '            writes no file.']);
   assert.ok(!calls().some(call => call.vendor === 'grok'), 'grok was never run');
 });

@@ -50,7 +50,7 @@ async function leadSession(t, { mode = 'ask', fake = {}, artifacts = [HISTORY] }
 const RUNS = JSON.stringify({ blocks: Array.from({ length: 22 }, (_, index) => ({ kind: 'score', label: `Run ${index + 1}`, value: 60 + index, unit: '%', target: 85 })) });
 const ASK = 'Fill the eval history with the score of each run.';
 
-test('@lead fills the session\'s artifacts from its shell, with as many blocks as it built, and has no other ELU command there', { timeout: 90000 }, async t => {
+test('@lead fills the session\'s artifacts from its shell, with as many blocks as it built, and has elu jobs and no other ELU command there', { timeout: 90000 }, async t => {
   const f = await leadSession(t, { fake: { shell: [{ when: ASK, anywhere: true, run: [`elu artifacts set 1 '${RUNS}'`, 'elu artifacts', `elu artifacts set Latency '{"kind":"score","value":4}'`, 'elu sessions'] }] } });
   const before = f.runs().length;
   const task = await f.controller.ask(ASK, '1', { bot: 'lead' }).finished;
@@ -60,16 +60,17 @@ test('@lead fills the session\'s artifacts from its shell, with as many blocks a
   assert.equal(list.status, 0, list.out); assert.match(list.out, /"Eval history"/);
   // A title the Task does not have is never said to be added to it.
   assert.equal(loose.status, 0, loose.out); assert.match(loose.out, /The Task has no artifact "Latency", so it is not on the Artifacts tab/);
-  assert.equal(sessions.status, 1); assert.match(sessions.out, /In a bot's turn, elu has elu artifacts\./);
+  assert.equal(sessions.status, 1); assert.match(sessions.out, /In a bot's turn, elu has elu artifacts and elu jobs\./);
   const kept = readStore(f.repo, '1').items['eval history'].updates;
   assert.equal(kept.length, 1); assert.equal(kept[0].by, 'model'); assert.equal(kept[0].data.blocks.length, 22);
-  // Its launch: elu artifacts runs outside the sandbox, and no other ELU command does. Claude
-  // Code allows it in no mode, as in the model's turn: ELU's relay answers it, unasked where
+  // Its launch: elu artifacts and elu jobs (lib/jobs.mjs) run outside the sandbox, and no other
+  // ELU command does. Claude Code allows elu artifacts in no mode, as in the model's turn, and
+  // elu jobs only in Approve for me: ELU's relay answers elu artifacts, unasked where
   // the file it names is one the sandbox lets the turn read (lib/permission-rules.mjs allowedBy).
   // Its helpers are of the same launch (--agents), with its shell and these settings.
   const run = f.runs().slice(before).find(row => after(row.args, '--model') === 'fable');
   assert.ok(run, "@lead's turn"); assert.ok(run.args.includes('--agents'), 'with its helpers');
-  assert.deepEqual(JSON.parse(after(run.args, '--settings')).sandbox.excludedCommands, ['elu artifacts:*']);
+  assert.deepEqual(JSON.parse(after(run.args, '--settings')).sandbox.excludedCommands, ['elu artifacts:*', 'elu jobs:*']);
   assert.deepEqual(run.args.filter(arg => arg.startsWith('--allowedTools=Bash(elu')), []);
 });
 

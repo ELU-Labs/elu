@@ -308,13 +308,12 @@ test('with /slots 8 and eight scheduled runs working, his message to a ninth ses
 test('the number holds back only what starts by itself: each kind the owner makes himself starts past it, and each kind nobody typed waits for a slot', t => {
   const p = dispatcher(t, [{}, {}]); saveConductorSettings({ maxAgents: 2 });
   saveBot({ name: 'sec', vendor: 'claude', instructions: 'Review the change for leaked secrets.' });
-  // What he does himself, here or on his other computer.
+  // What he does himself here.
   const mine = [
     enqueue(p.root, 'A new session he starts', { priority: 0, permissions: 'ask', typed: true }),
     enqueue(p.root, 'A message to a session at rest', { continuationTaskId: '11', priority: 0, typed: true }),
     enqueue(p.root, 'His answer to its question', { continuationTaskId: '12', priority: 0, typed: true }),
     enqueue(p.root, 'Approved the Task: Uppercase coupons', { continuationTaskId: '13', priority: 0, approved: true }),
-    enqueue(p.root, 'A session from his other computer', { priority: 0, permissions: 'ask', mine: { machine: KEY, name: 'laptop', remoteId: 'session-1' } }),
     enqueue(p.root, 'A standup he asks for', { priority: 0, permissions: 'ask', standup: true }),
     enqueue(p.root, 'A schedule he runs now with its key', { ...nightly(3), typed: true }),
     enqueue(p.root, 'A bot he runs now with /bots run', { continuationTaskId: '15', bot: 'sec', scheduled: true, priority: 1, typed: true }),
@@ -326,6 +325,9 @@ test('the number holds back only what starts by itself: each kind the owner make
     enqueue(p.root, "A bot's scheduled turn", { continuationTaskId: '21', bot: 'sec', scheduled: true, priority: 1 }),
     enqueue(p.root, "A helper's turn by itself", { continuationTaskId: '22', priority: 0 }),
     enqueue(p.root, 'A program on this computer', { permissions: 'ask' }),
+    // A session another computer started here, which an ELU up to 0.1.33 there called his own
+    // (mine): a member's, as every computer on a shared project is.
+    enqueue(p.root, 'A session from another computer', { priority: 0, permissions: 'ask', mine: { machine: KEY, name: 'laptop', remoteId: 'session-1' } }),
     enqueue(p.root, "A teammate's question", teammate('ask')),
     enqueue(p.root, "A teammate's handoff he chose a mode for", teammate('handoff')),
     enqueue(p.root, 'An answer that continues by itself', { continuationTaskId: '23', priority: 0, readOnly: true, origin: { kind: 'answer', peer: KEY, name: 'sara', a2aTaskId: 'task-3', threadId: 'thread-3', hop: 0 }, context: 'In src/coupon.mjs.' }),
@@ -451,13 +453,14 @@ test('a request saved before requests said who typed them is his only where noth
   const p = dispatcher(t, [{}, {}]); saveConductorSettings({ maxAgents: 2 });
   // As 0.1.21 and earlier saved them, or an ELU window of such a version still open does.
   const approved = enqueue(p.root, 'Approved the Task: Uppercase coupons', { continuationTaskId: '41', priority: 0, approved: true });
-  const session = enqueue(p.root, 'A session from his other computer', { priority: 0, permissions: 'ask', mine: { machine: KEY, name: 'laptop', remoteId: 'session-2' } });
+  const session = enqueue(p.root, 'A session from another computer', { priority: 0, permissions: 'ask', mine: { machine: KEY, name: 'laptop', remoteId: 'session-2' } });
   const standup = enqueue(p.root, '/standup', { priority: 0, permissions: 'ask', standup: true });
   const plain = enqueue(p.root, 'A message of then', { continuationTaskId: '42', priority: 0 });
   const fresh = enqueue(p.root, 'A new session of then', { priority: 0, permissions: 'ask' });
   for (const row of [approved, session, standup, plain, fresh]) assert.equal(row.typed, undefined, row.goal);
-  // His approval, his standup and his session from the other computer start: only his own hand ever made those.
-  assert.deepEqual(p.pass(), [approved, session, standup].map(row => row.goal).sort());
+  // His approval and his standup start: only his own hand ever made those. A session another
+  // computer started (mine, from an ELU up to 0.1.33) is a member's, and waits as one does.
+  assert.deepEqual(p.pass(), [approved, standup].map(row => row.goal).sort());
   // A plain message of then may be one ELU sent in his place (a helper's turn, a carried-on session): it waits for a slot as it did, and says so.
-  for (const row of [plain, fresh]) assert.equal(waitingText(request(p.root, row.id)), SLOT(2, 2), row.goal);
+  for (const row of [session, plain, fresh]) assert.equal(waitingText(request(p.root, row.id)), SLOT(2, 2), row.goal);
 });

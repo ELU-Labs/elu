@@ -242,7 +242,7 @@ posing as your inviter (see Invite codes), can bring your clone of it onto their
 and teammates' Tasks are not shown in it or given to its models. `/share on` puts it back.
 
 **Sessions on the Kanban.** Every session you run in a repository is a card on the Kanban of
-each teammate, and each other computer of yours, who has a clone of that same repository.
+each teammate's computer, and each other computer on the team, that has a clone of that same repository.
 No share is needed. A card holds only the session's title (its name, or the first line of
 what was asked, up to 80 characters), its column (In progress, Needs you or Done), who
 started it, the time it last moved, and the id of its Task when it has one. Its Task goes
@@ -269,10 +269,11 @@ team who has a folder of that project is shown, on each of their computers whose
 yours: each one's title, state, question, the approvals it waits on, and, once they open it,
 its chat, the steps of its runs, its Task and its changes (the diff). The same goes from their
 computers to yours. Its instructions and memory, with the lines it learned, are put together with
-theirs, as between your own computers (see Your other computers), and are in force at once:
+theirs, and are in force at once:
 what a teammate writes there is read by your models in that project as you would write it.
-Seeing is all: only your own computers can start, write to, stop, answer, rename, archive or
-check a session on yours. A teammate on the same team who has no folder of a project is not
+Every computer on that project, yours and theirs alike, can also start, write to, stop, answer,
+rename, archive or check a session of it on yours, under that project's access here (see
+Computers on a shared project). A teammate on the same team who has no folder of a project is not
 shown its sessions nor sent its notes (an ELU before 0.1.31, which names no project it has, is
 shown only the team's first, as before). A message from a teammate written in another project of
 the team runs in your folder of that project, and waits for you there unless /access set that folder. Nothing of another project is listed or sent, an archived session
@@ -340,47 +341,48 @@ What others learn:
   The titles and columns of the joiner's sessions in a repository the other side proves it
   has go to them too (see Sessions on the Kanban).
 
-## Your other computers
+## Computers on a shared project
 
-Marking another machine as yours (`/mine`, `elu mine`, or an invite for "Another computer of
-mine") lets it start sessions on this machine as if you typed them here: in your default or
-chosen mode, Full access included, with your bots and your MCP servers, and without the
-limits teammates get. Treat it like a login to this machine.
+There is no "mine": no computer is marked as yours, by hand, by an invite or by GitHub. A
+computer counts here by the projects it shares with this one, the same way whoever owns it,
+your own other computers included.
 
-- A machine counts as yours only when both machines marked each other, and only while they
-  share a team. The mark is kept on each machine and keyed by its peer key. Either side ends
-  it with `/mine remove @name`; leaving or being removed from the last shared team ends it too.
-- Only such a machine can start, continue, stop or answer a session here. Everyone else,
-  teammates included, is refused. A teammate is sent the events of a session only when it is
-  in a project shared with a team you are both on, and is never sent an archived one (see A
-  shared project's sessions, instructions and memory).
-- The never list, the sandbox, approvals and this machine's limits still apply to those
-  sessions as they do to your own: push, merge and deploy stay blocked outside Full access.
-- An invite code for another computer of yours works once, for 1 hour unless you choose
-  otherwise. Anyone who uses it first becomes one of your computers, so type it on the other
-  machine yourself and check `/mine` afterwards; `elu peers` shows each machine's fingerprint.
-- Joining with such a code marks nothing on the joining machine until the person there says
-  yes ("Is <name>'s computer yours too?", or `elu join CODE --mine`). A teammate who sends you
-  one cannot make their computer yours: say No.
-- Two machines on a team together that are both signed in to GitHub (with `gh`) as the same
-  account mark each other by themselves. Each keeps its public peer key and box name in one
-  secret gist of that account; only `gh` talks to GitHub, and the token is never read. Anyone
-  signed in to that GitHub account counts as you, so sign in to it only on your own machines,
-  or turn this off with `/mine auto off` or `ELU_NO_GITHUB_PAIRING=1`. A teammate signed in as
-  someone else cannot write to your gist. A machine you `/mine remove` is not paired by GitHub
-  again until you mark it yourself.
-- An approval waits on both machines. The first answer, from either one, is the one that counts.
-- A session your other computer starts is your own, not a teammate's: your rules (`a`,
-  `/permissions rules`) and the defaults answer for it, it may run in your home folder as your
-  own sessions do, and its messages read as yours. `a` on its approval, from either machine,
-  keeps the rule on the machine where the session runs, since that is where its approvals are
-  answered. That machine makes the rule from its own copy of the request, never from what the
-  other one sends, so the never list and the limits on rules hold there too.
-- A machine of yours sees every session on the other one, not only the ones it started:
-  sessions you started there, ones a schedule or a bot started, and ones a teammate's message
-  started, with their chat, steps, changes and approvals. It can continue, stop and answer
-  each of them. A teammate's question answered in Chats is not shown. A teammate sees only
-  the sessions of a project shared with a team you are both on, and can act on none of them.
+- A computer on a team with this one sees the sessions of a project shared with that team and
+  works on them, and nothing else here: no other project, no archived session, no session of a
+  project kept off with `/share off`, and nothing about this computer as a whole (its other
+  projects, its usage, its paths and accounts in an error). A computer that shares no project
+  with this one is refused everything.
+- What it asks for runs under that project's access here (`/access`): with Auto, a new session
+  or a message starts at once, in at most this machine's default mode, and approving a Task,
+  renaming, archiving, checking, the board and a standup's question are done; with Manual a new
+  session or a message waits for your yes here (`r` on it in Sessions), and the rest is refused.
+  A project that is your home folder is taken as Manual, whatever is set, until you pick Auto
+  in `/access` there and answer y to its question about your home folder (or run
+  `elu access --auto --home` there): that lets every computer on the project work across your
+  home folder without asking, so say yes only for people you would give that. Manual takes it
+  back. A folder above your home folder is never Auto.
+- What starts by itself this way waits for a free slot once the number `/slots` sets is
+  reached, as a schedule's run does; it takes none of the teammate slots, which hold back the
+  messages of Chats.
+- Your `/access` rules are told to every turn that answers what another computer sent: in a
+  session it started, and in a session of yours it wrote into, where its message is a turn of
+  its own, never joined to yours. Your own next message there is told none of them. A message
+  of theirs that waits for your yes stays until you answer it, whatever you write meanwhile.
+- A session another computer starts answers to the defaults and that team's `/access` rules,
+  never your saved rules (`a`, `/permissions rules`), and takes none of your session commands.
+  The never list, the sandbox, approvals and this machine's limits apply as to every session:
+  push, merge and deploy stay blocked outside Full access.
+- An approval waits on both machines; the first answer counts. `a` on it from another computer
+  keeps the rule here for that project only, never for all projects, and only in a session
+  that uses your saved rules. The rule is made here from this machine's own copy of the
+  request, never from what the other one sends.
+- Files from another computer land only in the inbox of a session of that project that no other
+  computer's message started. A path its message names here is not copied for the session.
+- `peer/mine.json` and `peer/github.json`, from ELU 0.1.26 to 0.1.33, stay on disk. No power and
+  no label is read from them. Only the one-time repair of what ELU 0.1.29 mixed
+  (`lib/peer/put-back.mjs`) still looks at the old marks, to leave out computers that were the
+  owner's then. Such an ELU that still says this computer is its own is not heard: it gets
+  nothing for it, and what it asks is handled as above.
 
 ## Leaving, removal and coming back
 
@@ -451,8 +453,7 @@ sandbox either. What a rule can do: allow one program and subcommand with any ar
 file outside the project, or pages on one host, in one project or all of them. What it
 cannot do: allow anything on the never list, joined or wrapped commands, removals, `sudo`,
 inline code, a secret file, `.git`, an MCP tool or a web search; leave the sandbox unless it
-was kept from a request that left it; or apply in a session a teammate started. A session
-your other computer started is yours, so they apply there, from that machine's own rules. Where a
+was kept from a request that left it; or apply in a session a teammate or another computer started. Where a
 vendor runs commands with no sandbox (Antigravity, Grok Build, Claude Code where its sandbox
 cannot start), every command counts as leaving it. Arguments are checked each time only for
 secrets, ELU's own files and git options that run a program or write a file, so `npm
@@ -471,8 +472,8 @@ use until you approve a change: a file that changed, that you turned down or tha
 removed does not put the defaults back. A file over 100 KB is never used. Scripted runs
 are refused while the settings file in the folder is not one you approved. Your answers are
 kept by content hash, with the text you approved last, in ELU's own state folder,
-never in the project. Instructions and memory you saved on another computer of yours (both
-marked as yours) count as approved here: they are your own edit. A project there is the same
+never in the project. Instructions and memory saved on another computer that has the same
+shared project count as approved here: they are that project's own edit. A project there is the same
 as one here when both are one team's shared project, else when both are of one repository,
 else when they have the same name and the same repository or none on both: two repositories
 of one name are two projects. They never write over a file that changed some other way, such
@@ -601,9 +602,10 @@ tab opens and has not read that `agy` yet, when the tab's check is due, and on `
 `usage.json` keeps the program's path, whether it is signed in and when that was read.
 `c` on either vendor's line runs its one-time check, the same check a first message runs.
 
-What is saved, in `~/.config/elu-code`, is usage reduced to numbers and times
-(`usage.json`), and the email and plan name of each account seen, with its last usage
-(`accounts.json`). The Usage tab takes the Claude email, plan name and rate limit tier from
+What is saved, in `~/.config/elu-code`, is usage reduced to numbers and times, with the
+name of the model where a limit is one model's own (`usage.json`), and the email and plan
+name of each account seen, with its last usage (`accounts.json`). The Usage tab takes
+the Claude email, plan name and rate limit tier from
 `~/.claude.json`. It decodes the Codex email and plan on your machine from the id token in
 `auth.json` in the Codex home. No token from that file is sent, saved or shown.
 

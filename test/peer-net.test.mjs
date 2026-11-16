@@ -45,7 +45,7 @@ import { createAsk, dismissAsk, reconnect, reviewText, teammate, tickAsks, teamA
 import { RETRY_MS, checkInviterProof, inviteKeys, joinerProof, openInvites, parseInvite, redeemCode } from '../lib/peer/invite.mjs';
 import { base32, canonical } from '../lib/peer/canonical.mjs';
 import * as peer from '../lib/peer/index.mjs';
-import { bothMine, markMine, mineRows as readMine, noteTheirs, unmarkMine } from '../lib/peer/mine.mjs';
+import { shareProjects } from './peer-helpers.mjs';
 import { LONG_MAX, textMethods } from '../lib/peer/texts.mjs';
 import { CARRY_MS, carryMethods, createCarrier, reachOf, savedRoutes, teamTick, tellReach } from '../lib/peer/carry.mjs';
 import { inboxRoot } from '../lib/peer/files.mjs';
@@ -308,8 +308,7 @@ test('intake checks membership, caps and shares, is idempotent, and cancels a wa
     assert.match(reason(methods.SendMessage({ message: message({ text: 'x', messageId: 'm-4', ext: { kind: 'ask', from: { key: 'c'.repeat(64), name: 'eve' } } }) }, { key: 'c'.repeat(64) })), /not on a team/);
     assert.throws(() => methods.SendMessage({ message: message({ text: 'x', messageId: 'm-6', ext: { kind: 'ask', from: { key: 'c'.repeat(64), name: 'eve' } } }) }, session), /does not match/);
     savePeerSettings({ caps: { peerRunsPerDay: 1 } }); // m-1 already used today's only run.
-    assert.match(reason(send('x', { id: 'm-7', thread: 'thread-b' })), /daily request limit for this teammate\./);
-    noteTheirs(ana.key, true); assert.match(reason(send('x', { id: 'm-7b', thread: 'thread-c' })), /daily request limit for this computer\./, 'to another computer of its owner it is a computer'); noteTheirs(ana.key, false);
+    assert.match(reason(send('x', { id: 'm-7', thread: 'thread-b' })), /daily request limit for this computer\./);
     assert.throws(() => methods.GetTask({ id: first.id }, { key: 'c'.repeat(64) }), error => error.details.rpc.code === ErrorCode.TASK_NOT_FOUND);
     const canceled = methods.CancelTask({ id: first.id }, session);
     assert.equal(canceled.status.state, 'TASK_STATE_CANCELED');
@@ -422,9 +421,7 @@ test('a message reaches a teammate who shares no project and waits; y with the o
     // The real refusals still refuse.
     assert.match(reason(send('x', 'm-4', { project: 'nope' })), /No project named nope is shared\./);
     assert.match(reason(send('   ', 'm-5')), /The message has no text\./);
-    savePeerPolicy(ana.key, { muted: true }); assert.match(reason(send('x', 'm-6')), /^This teammate is not taking requests from you\.$/);
-    // To another computer of its owner's this machine is a computer, never a teammate.
-    noteTheirs(ana.key, true); assert.equal(reason(send('x', 'm-6b')), 'This computer is not taking requests from you.'); noteTheirs(ana.key, false);
+    savePeerPolicy(ana.key, { muted: true }); assert.match(reason(send('x', 'm-6')), /^This computer is not taking requests from you\.$/);
     savePeerPolicy(ana.key, { muted: false });
     assert.match(reason(methods.SendMessage({ message: message({ text: 'x', messageId: 'm-7', ext: { kind: 'ask', from: { key: 'c'.repeat(64), name: 'eve' } } }) }, { key: 'c'.repeat(64) })), /not on a team/);
     // A question for a shared bot still needs a project to read.
@@ -436,9 +433,9 @@ test('a message reaches a teammate who shares no project and waits; y with the o
 });
 
 // A short message travels in its request (SendMessage); a long one goes ahead of it in pieces
-// (elu.text.put). A refusal on either way calls this machine a computer to another computer
-// of its owner's, by either side's mark.
-test("one of the owner's own computers is never worded as a teammate in a refusal, for a short message and for a long one", t => {
+// (elu.text.put). A refusal on either way calls this machine a computer, whoever owns the one
+// that sent it, and whatever an ELU from 0.1.26 to 0.1.33 marked in peer/mine.json.
+test('every computer reads this one as a computer in a refusal, whoever owns it and whatever an older ELU marked, for a short message and for a long one', t => {
   const crew = makeTeam(t), ana = crew.founder.identity, sara = crew.member;
   withHome(sara.home, () => {
     const ctx = { me: loadIdentity(), kick() {}, event() {}, push() {} };
@@ -448,31 +445,17 @@ test("one of the owner's own computers is never worded as a teammate in a refusa
     const bytes = Buffer.from('A long message, here in one piece.'), sha256 = crypto.createHash('sha256').update(bytes).digest('hex');
     const long = (extra = {}) => { try { return methods['elu.text.put']({ id: crypto.randomUUID(), seq: 0, last: true, size: bytes.length, sha256, data: bytes.toString('base64'), ...extra }, session); } catch (error) { return error.message; } };
     const tooBig = () => long({ size: LONG_MAX + 1 });
-    // A teammate reads teammate, on both ways.
-    savePeerPolicy(ana.key, { muted: true });
-    assert.equal(short(), 'This teammate is not taking requests from you.');
-    assert.equal(long(), 'This teammate is not taking requests from you.');
-    savePeerPolicy(ana.key, { muted: false });
-    assert.equal(tooBig(), 'A message to this teammate can be up to 64 MB.');
-    // That computer marks this one as its own, or this one marks it, or both: a computer on both ways.
-    const marks = { 'that computer marks this one': () => noteTheirs(ana.key, true), 'this computer marks that one': () => { noteTheirs(ana.key, false); markMine(ctx.me.key, ana.key); }, 'both mark each other': () => noteTheirs(ana.key, true) };
-    for (const [which, mark] of Object.entries(marks)) {
-      mark();
-      const both = bothMine(ctx.me.key, ana.key);
-      assert.equal(both, which === 'both mark each other', which);
+    const reads = () => {
       savePeerPolicy(ana.key, { muted: true });
-      assert.equal(short(), 'This computer is not taking requests from you.', which);
-      // Mine on both sides, its pieces are taken whatever its teammate setting says.
-      if (both) assert.deepEqual(long(), { ok: true }, which);
-      else assert.equal(long(), 'This computer is not taking requests from you.', which);
+      assert.equal(short(), 'This computer is not taking requests from you.');
+      assert.equal(long(), 'This computer is not taking requests from you.');
       savePeerPolicy(ana.key, { muted: false });
-      assert.equal(tooBig(), 'A message to this computer can be up to 64 MB.', which);
-    }
-    // No mark on either side any more: a teammate again.
-    unmarkMine(ana.key); noteTheirs(ana.key, false);
-    savePeerPolicy(ana.key, { muted: true });
-    assert.equal(short(), 'This teammate is not taking requests from you.');
-    assert.equal(long(), 'This teammate is not taking requests from you.');
+      assert.equal(tooBig(), 'A message to this computer can be up to 64 MB.');
+    };
+    reads();
+    // An older ELU's record that both are the owner's: read by nothing, so nothing changes.
+    fs.mkdirSync(peerFile(), { recursive: true }); fs.writeFileSync(peerFile('mine.json'), JSON.stringify({ [ana.key]: { at: new Date().toISOString(), theirs: true, theirsAt: new Date().toISOString() } }));
+    reads();
   });
 });
 
@@ -591,6 +574,28 @@ test('elu access shows and changes what teammates can do here; --auto with --man
     assert.deepEqual(saved.lines, ['core', '  Manual: each message waits for you to approve it.', '  Rules: Only answer questions, do not edit files.', `  Project: ${root}`]);
     const auto = await peerCli(['access'], { auto: true });
     assert.equal(auto.access.handling, 'auto'); assert.equal(auto.access.rules, 'Only answer questions, do not edit files.'); assert.equal(auto.access.root, root);
+  });
+});
+
+// The home folder as the project (a computer that joined from it) takes the project's work by
+// itself only once its owner says so there. From a terminal that is --home, with --auto.
+test('elu access --auto --home, run in the home folder, lets the other computers on its project work there; elsewhere and without --auto it is refused', async t => {
+  const crew = makeTeam(t), sara = crew.member;
+  await withHome(sara.home, async () => {
+    const { root } = registeredProject(t), was = process.cwd(), home = process.env.HOME;
+    t.after(() => { process.chdir(was); if (home === undefined) delete process.env.HOME; else process.env.HOME = home; });
+    process.chdir(root);
+    await assert.rejects(peerCli(['access'], { auto: true, home: true }), /Only your home folder itself is allowed this way\. Run it there\./);
+    assert.equal((await peerCli(['access'], {})).access, null, 'nothing was saved');
+    process.env.HOME = root;
+    await assert.rejects(peerCli(['access'], { home: true }), /Use --home with --auto, in your home folder\./);
+    await assert.rejects(peerCli(['access'], { manual: true, home: true }), /Use --home with --auto, in your home folder\./);
+    const saved = await peerCli(['access'], { auto: true, home: true, rules: 'Never print a key.' });
+    assert.deepEqual([saved.access.handling, saved.access.root, saved.access.home, saved.access.rules], ['auto', null, true, 'Never print a key.']);
+    assert.equal(saved.lines.at(-1), '  Project: your home folder');
+    // --manual takes it back.
+    const back = await peerCli(['access'], { manual: true });
+    assert.equal(back.access.home, undefined); assert.match(back.lines.at(-1), /^  Project: none yet/);
   });
 });
 
@@ -964,7 +969,7 @@ test('a joiner whose reply was lost comes back with the same code and gets the s
   });
 });
 
-test('a code for another computer of mine is only offered: the inviter marks nothing at the join, and a machine already on the team is told to use /mine on both', async t => {
+test('a code is a plain invite to the team, whatever an older caller asked: the join is offered nothing and nothing is marked', async t => {
   const anaHome = newHome(t), li = withHome(newHome(t), () => createIdentity({ name: 'li' }));
   await withHome(anaHome, async () => {
     const me = createIdentity({ name: 'ana' }), made = createTeam(me, 'core');
@@ -977,15 +982,10 @@ test('a code for another computer of mine is only offered: the inviter marks not
       joiner.socket.destroy(); void reply;
       return { result: proved.result, error: proved.error?.message };
     };
+    // mine: true, as an ELU up to 0.1.33 passed it for another computer of the owner's, asks for nothing now.
     const first = await exchange(inviteKeys(createInvite(me, made.id, { hours: 1, mine: true })));
-    assert.equal(first.error, undefined); assert.equal(first.result.mineOffer, true); assert.equal('mine' in first.result, false);
-    assert.deepEqual(readMine(), [], 'nothing is marked until li says yes');
-    // li is on the team now. Another mine code from li is refused, stays unused, and says what to do instead.
-    const keys = inviteKeys(createInvite(me, made.id, { hours: 1, mine: true }));
-    const again = await exchange(keys);
-    assert.equal(again.error, "This computer is already on ana's team. To make the two yours, type /mine @ana-laptop here, and /mine @li on the other one.");
-    assert.ok(openInvites([made.id]).some(row => row.topic === keys.topic), 'the code is still unused');
-    assert.deepEqual(readMine(), []);
+    assert.equal(first.error, undefined); assert.equal('mineOffer' in first.result, false); assert.equal('mine' in first.result, false);
+    assert.equal(fs.existsSync(peerFile('mine.json')), false, 'nothing is marked');
   });
 });
 
@@ -1952,7 +1952,7 @@ test('elu id --computer names this computer for its owner\'s other computers and
     const first = await peerCli(['id'], {});
     assert.equal(first.lines.at(-1), `Computer: @${host}, from its host name. elu id --computer NAME renames it.`);
     const named = await peerCli(['id'], { computer: 'studio' });
-    assert.equal(named.computer, 'studio'); assert.equal(named.message, 'This computer is @studio now. Your other computers and teammates see it within seconds.');
+    assert.equal(named.computer, 'studio'); assert.equal(named.message, 'This computer is @studio now. Every computer on your team sees it within seconds.');
     assert.equal(named.lines.at(-1), 'Computer: @studio. elu id --computer NAME renames it.');
     assert.equal(peer.peerSettings().box, 'studio'); assert.equal(peer.peerBox(), 'studio'); assert.equal(peer.peerStatus().box, 'studio');
     assert.equal(loadIdentity().name, 'ana', 'the owner\'s name on the team stays');
@@ -1976,7 +1976,7 @@ test('elu id --computer names this computer for its owner\'s other computers and
     }
     // Both flags: the name on the team and the computer's.
     const both = await peerCli(['id'], { name: 'ana2', computer: 'studio' });
-    assert.equal(both.message, 'Name changed. This computer is @studio now. Your other computers and teammates see it within seconds.');
+    assert.equal(both.message, 'Name changed. This computer is @studio now. Every computer on your team sees it within seconds.');
     assert.equal(loadIdentity().name, 'ana2'); assert.equal(peer.peerBox(), 'studio');
   });
   // With no identity yet, naming the computer makes none.
@@ -2092,28 +2092,6 @@ test('team create, invite and join over the network with a short code', async t 
   assert.ok(Array.isArray(routing) && routing.length && routing.every(node => node.host && node.port));
   assert.equal(withHome(ana, () => peer.peerStatus()).running, false);
   void s;
-});
-
-test('elu join with a code for another computer of mine marks nothing without --mine; with it, both computers count each other as mine', async t => {
-  const bootstrap = await testnet(t), ana = newHome(t), sara = newHome(t), box = newHome(t);
-  const { teamId, codes } = withHome(ana, () => { const me = createIdentity({ name: 'ana' }), made = createTeam(me, 'core'); return { teamId: made.id, codes: [createInvite(me, made.id, { hours: 1, mine: true }), createInvite(me, made.id, { hours: 1, mine: true })] }; });
-  const saraKey = withHome(sara, () => createIdentity({ name: 'sara' }).key), boxKey = withHome(box, () => createIdentity({ name: 'ana' }).key);
-  for (const home of [ana, sara, box]) enable(home, bootstrap);
-  const a = await daemon(t, ana, { conductor: false }); await daemon(t, sara, { conductor: false }); await daemon(t, box, { conductor: false });
-  const marks = home => withHome(home, () => readMine().filter(row => row.mine).map(row => row.key));
-  // Sara is a teammate. A mine code alone marks nothing on her machine, and she is told how to say yes if it were hers.
-  const plain = await withHome(sara, () => peerCli(['join', codes[0]], {}));
-  assert.equal(plain.team.mineOffer.key, a.key);
-  assert.match(plain.message, /ana made this code for another computer of theirs\. Nothing was marked as yours\. If you set up both computers, run elu mine @ana\./);
-  await until(() => online(ana, saraKey) && online(sara, a.key), 'sara online');
-  // The other computer of ana's says yes with --mine: it marks ana's laptop, and the laptop marks it back.
-  const yes = await withHome(box, () => peerCli(['join', codes[1]], { mine: true }));
-  assert.match(yes.message, /ana's computer and this one are yours: each can start sessions on the other\./);
-  await until(() => withHome(ana, () => bothMine(a.key, boxKey)) && withHome(box, () => bothMine(boxKey, a.key)), 'both mine');
-  // Sara, who never said yes, is mine on neither side.
-  assert.deepEqual(marks(sara), []); assert.deepEqual(marks(ana), [boxKey]);
-  assert.equal(withHome(ana, () => bothMine(a.key, saraKey)), false);
-  assert.deepEqual(withHome(ana, () => team(teamId)).members.map(m => m.name), ['ana', 'sara', 'ana']);
 });
 
 test('a long code from 0.1.3 still joins over the network', async t => {
@@ -3021,14 +2999,14 @@ test('a join whose first direct try is aborted tries again and joins when a late
 test('a join goes through another computer of the joiner when the two cannot connect directly, and they keep talking through it', skipLan, async t => {
   const bootstrap = await testnet(t, lan), ana = inviter(t, bootstrap), own = makeTeam(t, { founderName: 'sara', memberName: 'sara', teamName: 'mine' }), sara = own.founder, box = own.member;
   enable(sara.home, bootstrap); enable(box.home, bootstrap, { box: 'studio' });
-  // Both computers are sara's: each marked the other.
-  for (const [here, there] of [[sara, box], [box, sara]]) withHome(here.home, () => { markMine(here.identity.key, there.identity.key); noteTheirs(there.identity.key, true); });
+  // Both computers are sara's and share a project; neither marks the other, and it carries her join as any computer would.
+  for (const [here, there] of [[sara, box], [box, sara]]) withHome(here.home, () => { shareProjects(here.identity.key, there.identity.key); });
   await daemon(t, box.home, { conductor: false, join: quick });
   const a = await daemon(t, ana.home, { conductor: false, noPunch: true, join: quick });
   let s = await daemon(t, sara.home, { conductor: false, noPunch: true, join: quick });
   await until(() => online(sara.home, box.identity.key), 'sara connected to her other computer');
   const joined = await run(sara.home, { type: 'join', code: ana.code }, 120000);
-  assert.deepEqual(joined, { id: ana.teamId, name: 'core', inviter: { name: 'ana', fingerprint: a.key.slice(0, 8) }, via: 'your computer studio' });
+  assert.deepEqual(joined, { id: ana.teamId, name: 'core', inviter: { name: 'ana', fingerprint: a.key.slice(0, 8) }, via: "sara's computer" });
   assert.match(daemonLog(sara.home), /invite join: found [0-9a-f]{8}, try 1 failed: HOLEPUNCH_ABORTED/, 'the direct try came first, and failed');
   assert.match(daemonLog(box.home), new RegExp(`passing along ${sara.identity.key.slice(0, 8)} and ${a.key.slice(0, 8)}`));
   await until(() => relayed(sara.home, ana.teamId, a.key) && relayed(ana.home, ana.teamId, sara.identity.key), 'both sides online through the relay');
@@ -3109,7 +3087,7 @@ function trio(t) {
   const crew = makeTeam(t), ana = crew.founder, sara = crew.member, home = newHome(t), third = withHome(home, () => createIdentity({ name: 'li' }));
   const log = withHome(ana.home, () => { redeemCode(createInvite(ana.identity, crew.teamId, { hours: 1 }), third.key, 'li'); return readLog(crew.teamId).ops; });
   for (const at of [sara.home, home]) withHome(at, () => { const { rejected } = merge(crew.teamId, log); if (rejected.length) throw new Error(rejected[0].reason); });
-  for (const [here, there] of [[ana, sara], [sara, ana]]) withHome(here.home, () => { markMine(here.identity.key, there.identity.key); noteTheirs(there.identity.key, true); });
+  for (const [here, there] of [[ana, sara], [sara, ana]]) withHome(here.home, () => { shareProjects(here.identity.key, there.identity.key); });
   return { teamId: crew.teamId, ana, sara, li: { home, identity: third } };
 }
 const peersText = home => withHome(home, async () => (await peerCli(['peers'], {})).lines.join('\n'));
@@ -3119,7 +3097,8 @@ test('two teammates who cannot connect directly reach each other through a third
   const bootstrap = await testnet(t, lan), { teamId, ana, sara, li } = trio(t), ways = { ...quick, wayMs: 1500, directMs: 3000 };
   enable(ana.home, bootstrap, { box: 'vm' }); enable(sara.home, bootstrap, { box: 'laptop' }); enable(li.home, bootstrap, { box: 'studio' });
   const side = answering(t, sara.home);
-  withHome(sara.home, () => savePeerPolicy(ana.identity.key, { autoAccept: true }));
+  // Its project is the team's project, so ana works in its sessions from her computer (Auto).
+  withHome(sara.home, () => { shareProjects(sara.identity.key, ana.identity.key); savePeerPolicy(ana.identity.key, { autoAccept: true }); });
   // sara's computer has a home folder of its own, so what it receives lands in an inbox only this test writes to.
   const house = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'elu-code-house-'))), inbox = inboxRoot({ home: house, env: {} }); t.after(() => fs.rmSync(house, { recursive: true, force: true }));
   // ana and sara cannot connect to each other directly (noPunchTo, for that pair only); each connects to li as usual.
@@ -3214,12 +3193,11 @@ test('the computer that carries two teammates goes away without a word, as one w
 });
 
 test('a computer back after a long time is reached at once through the computer of the team that reaches it, from the teammate that cannot reach it directly too; that teammate says it is looking, never that there is no way', { ...skipLan, timeout: 300000 }, async t => {
-  // The owner's three computers, as their own: the laptop (li) and the devbox (ana) are paired, and
-  // the studio (sara) marked the laptop. The devbox and the studio cannot connect directly; the laptop reaches both.
+  // Three computers on a team: the laptop (li) and the devbox (ana) share a project. The devbox
+  // and the studio (sara) cannot connect directly; the laptop reaches both.
   const bootstrap = await testnet(t, lan), { teamId, ana, sara, li } = trio(t), prod = { conductor: false, tickMs: 2000, statusMs: 10000 };
   for (const home of [ana.home, sara.home]) withHome(home, () => fs.rmSync(peerFile('mine.json'), { force: true }));
-  for (const [here, there] of [[ana, li], [li, ana]]) withHome(here.home, () => { markMine(here.identity.key, there.identity.key); noteTheirs(there.identity.key, true); });
-  withHome(sara.home, () => markMine(sara.identity.key, li.identity.key));
+  for (const [here, there] of [[ana, li], [li, ana]]) withHome(here.home, () => { shareProjects(here.identity.key, there.identity.key); });
   enable(ana.home, bootstrap, { box: 'devbox' }); enable(sara.home, bootstrap, { box: 'studio' }); enable(li.home, bootstrap, { box: 'laptop' });
   await daemon(t, li.home, prod); await daemon(t, ana.home, { ...prod, noPunchTo: [sara.identity.key] });
   await until(() => online(ana.home, li.identity.key) && online(li.home, ana.identity.key), 'the devbox and the laptop online');
@@ -3231,13 +3209,13 @@ test('a computer back after a long time is reached at once through the computer 
   const via = (home, key) => { const m = memberOf(home, teamId, key); return m?.online && m.path === 'relayed' ? m.via : null; };
   await until(() => {
     const m = memberOf(ana.home, teamId, sara.identity.key); if (m && !m.online) said.add(m.reach ?? 'offline');
-    return /^your computer (laptop|li)$/.test(via(ana.home, sara.identity.key) ?? '') && via(sara.home, ana.identity.key) === "li's computer";
+    return via(ana.home, sara.identity.key) === "li's computer" && via(sara.home, ana.identity.key) === "li's computer";
   }, 'the devbox and the studio online to each other through the laptop', 40000);
   const took = Date.now() - back;
   assert.ok(took < 40000, `within seconds of the studio coming back, not minutes: ${took} ms`);
   assert.ok(!said.has('blocked'), `the devbox never said there was no way through while it looked: ${[...said].join(', ')}`);
-  assert.match(daemonLog(ana.home), /is there but cannot be connected to directly: through your computer (laptop|li)/);
-  assert.match(await peersText(ana.home), /● sara\s+member\s+online · through your computer (laptop|li)/);
+  assert.match(daemonLog(ana.home), /is there but cannot be connected to directly: through li's computer/);
+  assert.match(await peersText(ana.home), /● sara\s+member\s+online · through li's computer/);
 });
 
 test('a computer asked to carry for two teammates does it only while it reaches the other one, tells who runs a relay, and refuses a computer that is not on its team', async t => {

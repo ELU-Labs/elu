@@ -16,7 +16,7 @@ import { createTeam, teams as everyTeam } from '../lib/peer/roster.mjs';
 import { createInvite, redeemCode } from '../lib/peer/invite.mjs';
 import { share } from '../lib/peer/shares.mjs';
 import { saveTeamAccess } from '../lib/peer/access.mjs';
-import { markMine, noteTheirs } from '../lib/peer/mine.mjs';
+import { shareProjects } from './peer-helpers.mjs';
 import { savePeerPolicy, savePeerSettings } from '../lib/peer/settings.mjs';
 import { message, task as a2aTask, TaskState } from '../lib/peer/a2a.mjs';
 import { intakeMethods } from '../lib/peer/intake.mjs';
@@ -55,9 +55,10 @@ async function until(check, what, timeout = 20000) {
   while (!check()) { if (Date.now() - started > timeout) throw new Error(`Timed out waiting for ${what}`); await new Promise(resolve => setTimeout(resolve, 20)); }
 }
 // Kai's daemon as far as a message goes: ana is on his team, and send() delivers one of
-// hers as the wire would. shared: the project is the one teammates' messages run in.
+// hers as the wire would. shared: the project is the one teammates' messages run in. His
+// computer's machine name is kai, the name every computer's lists show it by.
 function answering(p, { shared = true } = {}) {
-  const me = createIdentity({ name: 'kai' }), team = createTeam(me, 'core');
+  const me = createIdentity({ name: 'kai' }), team = createTeam(me, 'core'); savePeerSettings({ box: 'kai' });
   redeemCode(createInvite(me, team.id, { hours: 1 }), ANA, 'ana');
   if (shared) share(p.root, { teams: everyTeam().map(state => state.id), handle: 'shop' });
   const pushed = [], ctx = { me, kick: () => {}, event: () => {}, push: (key, task) => pushed.push({ key, task }) }, methods = intakeMethods(ctx);
@@ -132,7 +133,7 @@ test('each way a session a teammate\'s message started can fail is told in plain
   assert.ok(long.length <= 300 && long.endsWith('… Send it again.'), long);
 });
 
-test('a teammate gets the reason with paths cut, a trusted one and my own computer with paths kept, and a possible secret stays here', t => {
+test('another computer gets the reason with paths cut, whoever owns it, a trusted one with paths kept, and a possible secret stays here', t => {
   const p = setup(t), kai = answering(p), place = '/srv/kai/private/notes.txt';
   const error = `Refusing a symbolic link at ${place}`;
   // A message that has a project to run in waits for the owner's y, and says so to its sender with what the owner can do: delivered is not started.
@@ -141,10 +142,11 @@ test('a teammate gets the reason with paths cut, a trusted one and my own comput
   assert.equal(ended(p, kai, { error: 'Could not read the settings: API_KEY=sk-ant-abcdefghijklmnopqrstuvwxyz0123456789', session: {} }), 'The run failed on @kai. Its reason stays there: it may hold a secret.');
   savePeerPolicy(ANA, { trusted: true });
   assert.equal(ended(p, kai, { error, session: {} }), `Refusing a symbolic link at ${place} on @kai. Send it again.`);
-  // Ana's key is another computer of kai's own: it reads this one by its machine name, as its lists show it.
+  // Ana's key is another computer of kai's own: there is no "mine", so its paths are cut as
+  // for anyone, and it reads this one by its machine name, as every list shows it.
   savePeerPolicy(ANA, { trusted: false }); savePeerSettings({ box: 'Devbox' });
-  markMine(kai.me.key, ANA); noteTheirs(ANA, true);
-  assert.equal(ended(p, kai, { error, session: {} }), `Refusing a symbolic link at ${place} on @Devbox. Send it again.`);
+  shareProjects(kai.me.key, ANA, { handling: 'manual' });
+  assert.equal(ended(p, kai, { error, session: {} }), 'Refusing a symbolic link at [path] on @Devbox. Send it again.');
   assert.equal(ended(p, kai, { error: 'Grok Build is signed out. Run grok login to sign in, then send again.', session: {} }), 'Grok Build is signed out. Sign Grok Build in on @Devbox, then send it again.');
 });
 
@@ -155,23 +157,19 @@ test('a message to a computer with no project for teammates\' messages waits the
   assert.equal(said(record.task), 'No project is set on @kai for teammates\' messages, so it waits for its owner. On @kai: open ELU in the project teammates work in, then use /access there.');
 });
 
-// The sender's lists call a computer that one side marked as the owner's by its machine name,
-// before the other agrees (docs/peer-network.md, "What the app calls one"), so what this computer
-// says about itself does too: never by the name the team calls its owner.
-test('a message from my other computer that has not agreed yet is told about this computer by its machine name, as the lists there show it', t => {
+// Every computer's lists call this one by its machine name, whoever owns it (docs/peer-network.md,
+// "What the app calls one"), so what this computer says about itself does too. A claim an
+// ELU from 0.1.26 to 0.1.33 left in peer/mine.json changes nothing.
+test('a message from any computer is told about this computer by its machine name, as the lists there show it, whatever an older ELU marked', t => {
   const p = setup(t), kai = answering(p, { shared: false }); savePeerSettings({ box: 'Studio' });
   const none = at => `No project is set on ${at} for teammates' messages, so it waits for its owner. On ${at}: open ELU in the project teammates work in, then use /access there.`;
-  assert.equal(said(kai.send().task), none('@kai'), 'a teammate reads the name the team calls its owner');
-  // Ana's computer marked this one as its own, and this one has not agreed.
-  noteTheirs(ANA, true);
+  assert.equal(said(kai.send().task), none('@Studio'));
+  fs.mkdirSync(peerFile(), { recursive: true }); fs.writeFileSync(peerFile('mine.json'), JSON.stringify({ [ANA]: { at: new Date().toISOString(), theirs: true, theirsAt: new Date().toISOString() } }));
   assert.equal(said(kai.send().task), none('@Studio'));
   // A project to run in: the message waits for the owner's y, and says so under the same name.
   share(p.root, { teams: everyTeam().map(state => state.id), handle: 'shop' });
   assert.equal(said(kai.send().task), 'It waits for its owner on @Studio, who approves each message from a teammate. On @Studio: y on the message starts it, and /access set to Auto starts the next ones without asking.');
-  // This one marked ana's, which has not agreed: ana's lists call this one by its machine name too.
-  noteTheirs(ANA, false); markMine(kai.me.key, ANA);
-  assert.equal(said(kai.send().task), 'It waits for its owner on @Studio, who approves each message from a teammate. On @Studio: y on the message starts it, and /access set to Auto starts the next ones without asking.');
-  // Paths and accounts still go out as to a teammate until both agree.
+  // Paths and accounts go out as to anyone.
   assert.equal(ended(p, kai, { error: 'Refusing a symbolic link at /srv/kai/private/notes.txt', session: {} }), 'Refusing a symbolic link at [path] on @Studio. Send it again.');
 });
 
@@ -229,10 +227,10 @@ test('the sender keeps the reason, and Chats shows it whole: failed, why, and th
 });
 
 // A connection as the daemon hands it to a method, from the owner's laptop.
-const connection = key => ({ key, admitted: true, remoteHello: { remote: 1 }, sent: [], notify() {}, request: async () => { throw new Error('No answer'); } });
+const connection = key => ({ key, admitted: true, remoteHello: { remote: 1, shared: 1 }, sent: [], notify() {}, request: async () => { throw new Error('No answer'); } });
 test('a session on my other computer that failed lists and shows there with the same words, naming that computer', async t => {
   const team = makeTeam(t, { founderName: 'ana', memberName: 'box' }), laptop = team.founder, devbox = team.member;
-  const shop = withHome(devbox.home, () => { const shop = registeredProject(t); saveTeamAccess(team.teamId, { root: shop.root }); savePeerSettings({ box: 'devbox' }); markMine(devbox.identity.key, laptop.identity.key); noteTheirs(laptop.identity.key, true); return shop; });
+  const shop = withHome(devbox.home, () => { const shop = registeredProject(t); saveTeamAccess(team.teamId, { root: shop.root }); savePeerSettings({ box: 'devbox' }); shareProjects(devbox.identity.key, laptop.identity.key); return shop; });
   const ctx = { me: devbox.identity, session: () => null, name: key => key.slice(0, 4), box: () => null, log: () => {}, kick: () => {}, soon: () => {}, event: () => {} };
   const host = hostMethods(ctx), from = connection(laptop.identity.key);
   const listed = await withHome(devbox.home, () => {

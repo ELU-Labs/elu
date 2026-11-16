@@ -21,7 +21,7 @@ import { repoId, setBoardOff, share, shares, unshare } from '../lib/peer/shares.
 import { savePeerSettings } from '../lib/peer/settings.mjs';
 import { saveBot } from '../lib/bots.mjs';
 import { approveTask, planFile, proposeTask, sessionTasks } from '../lib/plan.mjs';
-import { markMine, noteTheirs, unmarkMine } from '../lib/peer/mine.mjs';
+import { shareProjects } from './peer-helpers.mjs';
 import { BINDING } from '../lib/peer/a2a.mjs';
 import { PART_BYTES, listParts } from '../lib/peer/lists.mjs';
 import { PeerDaemon } from '../lib/peer/daemon.mjs';
@@ -588,14 +588,11 @@ test('every session in a repository a teammate proves they have is told them, fr
     saveCards(ana.identity.key, sara.identity.key, [{ ...told[0], title: `Loud\x1b[2J\x07 ${'x'.repeat(400)}`, by: 'a\x00na' }]);
     const [loud] = teammateSessions(atSara.repo.root).people[0].sessions;
     assert.deepEqual([loud.title.length, /[\x00-\x1f]/.test(loud.title), loud.by], [TITLE_MAX, false, 'ana']);
-    // Ana's computer is Sara's own (both marked it): a card started by either of their names is
-    // hers, whichever computer it came from; one a real teammate started stays theirs. On a
-    // computer that is not hers, no card is.
+    // There is no "mine": every card keeps who started it, and none is anyone's own, whoever
+    // owns the computer it came from.
     const by = () => teammateSessions(atSara.repo.root).people.map(person => [person.mine === true, person.sessions.map(card => [card.by, card.own === true]).sort()]);
     saveCards(ana.identity.key, sara.identity.key, [{ ...told[0], by: 'ana' }, { ...told[1], by: 'sara' }, { ...told[0], id: '9123456789abcdef', by: 'kim' }]);
     assert.deepEqual(by(), [[false, [['ana', false], ['kim', false], ['sara', false]]]]);
-    markMine(sara.identity.key, ana.identity.key); noteTheirs(ana.identity.key, true);
-    assert.deepEqual(by(), [[true, [['ana', true], ['kim', false], ['sara', true]]]]);
     // Kept off here: none shown.
     setBoardOff(atSara.repo.root, true); assert.deepEqual(teammateSessions(atSara.repo.root), { repos: [], people: [] });
     assert.equal([...localRepos(now).values()].some(row => row.roots.includes(atSara.repo.root)), false, 'and its repositories are proven to nobody');
@@ -643,9 +640,10 @@ test('who started a session goes with its card, and only the computer of mine th
   withHome(ana.home, () => {
     const repo = folderProject(t), shop = cloneIn(repo, 'shop');
     session(repo, 1, shop, { goal: 'Asked by a teammate', origin: { kind: 'handoff', peer: sara.identity.key, name: 'sa\x1bra' } });
-    session(repo, 2, shop, { goal: 'From my laptop', origin: { kind: 'mine', mine: true, machine: sara.identity.key, name: 'laptop', remoteId: '0f0e0d0c-0b0a-4908-8706-050403020100' } });
+    // Started from another computer on the project (elu.remote.start): by that computer's person, whoever owns it.
+    session(repo, 2, shop, { goal: 'From my laptop', origin: { kind: 'mine', mine: true, machine: sara.identity.key, name: 'ben', remoteId: '0f0e0d0c-0b0a-4908-8706-050403020100' } });
     const repos = localRepos(now), rows = sessionCards({ me: ana.identity.key, owner: 'ana', repos, now });
-    assert.deepEqual(rows.map(row => [row.card.title, row.card.by]).sort(), [['Asked by a teammate', 'sara'], ['From my laptop', 'ana']]);
+    assert.deepEqual(rows.map(row => [row.card.title, row.card.by]).sort(), [['Asked by a teammate', 'sara'], ['From my laptop', 'ben']]);
     const proofs = key => [...repos.values()].map(row => repoProof(key, ana.identity.key, row.repoId, row.commit));
     const toSara = cardsFor(sara.identity.key, ana.identity.key, rows, repos, proofs(sara.identity.key)), toBob = cardsFor('d'.repeat(64), ana.identity.key, rows, repos, proofs('d'.repeat(64)));
     assert.equal(toSara.find(card => card.title === 'From my laptop').remote, '0f0e0d0c-0b0a-4908-8706-050403020100');
@@ -653,42 +651,36 @@ test('who started a session goes with its card, and only the computer of mine th
   });
 });
 
-// Ana's two computers (ana and sara here) are paired as her own; kim is a real teammate whose
-// name is Sara. Whose a card is goes by the key that started its session, never by a name.
-test('a computer of mine tells mine which of its sessions are mine, by the key that started each; a teammate named like my computer keeps their card, and so does an older one\'s card by that name', t => {
-  const crew = makeTeam(t), ana = crew.founder, sara = crew.member, now = Date.now(), kim = withHome(newHome(t), () => createIdentity({ name: 'Sara' })), bob = 'd'.repeat(64);
-  const log = withHome(ana.home, () => { redeemCode(createInvite(ana.identity, crew.teamId, { hours: 1 }), kim.key, 'Sara'); return readLog(crew.teamId).ops; });
-  withHome(sara.home, () => { const { rejected } = merge(crew.teamId, log); assert.deepEqual(rejected, []); });
+// There is no "mine": every computer is told a card the same way, by who started its session,
+// and never whose own it is, whoever owns the computer. A card an ELU from 0.1.26 to 0.1.33
+// sends with own, or with a session's place, Task or first message, is kept without them.
+test('every computer is told who started each session the same way and never whose own it is; what an older ELU adds for its own computers is not kept', t => {
+  const crew = makeTeam(t), ana = crew.founder, sara = crew.member, now = Date.now(), bob = 'd'.repeat(64);
   const atAna = withHome(ana.home, () => {
-    markMine(ana.identity.key, sara.identity.key); noteTheirs(sara.identity.key, true);
+    shareProjects(ana.identity.key, sara.identity.key);
     const repo = folderProject(t), shop = cloneIn(repo, 'shop');
     session(repo, 1, shop, { goal: 'Typed there by hand' });
-    session(repo, 2, shop, { goal: 'A message from my other computer', origin: { kind: 'handoff', peer: sara.identity.key, name: 'sara', own: true } });
-    session(repo, 3, shop, { goal: 'A message from kim', origin: { kind: 'handoff', peer: kim.key, name: 'Sara', own: true } });
-    // Taken on there in a mode picked by hand (w): still mine, as it came from my other computer.
-    session(repo, 4, shop, { goal: 'Worked on from my other computer', origin: { kind: 'handoff', peer: sara.identity.key, name: 'sara' } });
+    session(repo, 2, shop, { goal: 'A message from another computer', origin: { kind: 'handoff', peer: sara.identity.key, name: 'sara', own: true } });
     const repos = localRepos(now), rows = sessionCards({ owner: 'ana', repos, now });
     return { repo, shop, repos, rows };
   });
-  assert.deepEqual(atAna.rows.map(row => [row.card.title, row.card.by, row.own]).sort(), [['A message from kim', 'Sara', false], ['A message from my other computer', 'sara', true], ['Typed there by hand', 'ana', true], ['Worked on from my other computer', 'sara', true]]);
   const atSara = withHome(sara.home, () => { const repo = folderProject(t); cloneIn(repo, 'shop', { from: atAna.shop }); return { repo, repos: localRepos(now) }; });
-  // Told to my computer with own; to a teammate's, without.
   const told = withHome(ana.home, () => cardsFor(sara.identity.key, ana.identity.key, atAna.rows, atAna.repos, proofsFor(sara.identity.key, ana.identity.key, atSara.repos)));
-  assert.deepEqual(told.map(card => [card.title, card.own]).sort(), [['A message from kim', false], ['A message from my other computer', true], ['Typed there by hand', true], ['Worked on from my other computer', true]]);
   const toBob = withHome(ana.home, () => cardsFor(bob, ana.identity.key, atAna.rows, atAna.repos, atAna.rows.map(row => repoProof(bob, ana.identity.key, atAna.repos.get(row.repo).repoId, atAna.repos.get(row.repo).commit))));
-  assert.equal(toBob.length, 4); assert.ok(toBob.every(card => !('own' in card)), 'a teammate is not told');
+  assert.deepEqual(told.map(card => [card.title, card.by]).sort(), [['A message from another computer', 'sara'], ['Typed there by hand', 'ana']]);
+  // Bob is on no team with sara: the handoff she sent is withheld from him, as before.
+  assert.deepEqual(toBob.map(card => [card.title, card.by]).sort(), [['Session', 'teammate'], ['Typed there by hand', 'ana']]);
+  for (const list of [told, toBob]) for (const card of list) for (const field of ['own', 'ref', 'task', 'first', 'check']) assert.equal(field in card, false, `${card.title}: ${field}`);
   withHome(sara.home, () => {
-    markMine(sara.identity.key, ana.identity.key); noteTheirs(ana.identity.key, true);
+    shareProjects(sara.identity.key, ana.identity.key);
     fs.mkdirSync(peerFile(), { recursive: true });
     fs.writeFileSync(peerFile('state.json'), JSON.stringify({ key: sara.identity.key, running: true, at: new Date().toISOString(), teams: [{ id: crew.teamId, members: [{ key: ana.identity.key, name: 'ana', online: true, box: 'ana-box' }] }] }));
     saveLocalRepos(atSara.repos); saveProofs(ana.identity.key, proofsFor(ana.identity.key, sara.identity.key, atAna.repos));
-    const shown = () => Object.fromEntries(teammateSessions(atSara.repo.root).people[0].sessions.map(card => [card.title, card.own === true]));
-    saveCards(ana.identity.key, sara.identity.key, told);
-    assert.deepEqual(shown(), { 'A message from kim': false, 'A message from my other computer': true, 'Typed there by hand': true, 'Worked on from my other computer': true }, "kim's card names Sara, and stays kim's");
-    // An older computer of mine says nothing of own: a name says whose it is, but not Sara,
-    // which kim also goes by here. Mine there by that name shows as a teammate's, never the other way.
-    saveCards(ana.identity.key, sara.identity.key, told.map(({ own: _own, ...card }) => card));
-    assert.deepEqual(shown(), { 'A message from kim': false, 'A message from my other computer': false, 'Typed there by hand': true, 'Worked on from my other computer': false });
+    saveCards(ana.identity.key, sara.identity.key, told.map((card, n) => ({ ...card, own: true, ref: `${'0'.repeat(16)}:${n + 1}`, first: 'What only its own computers were told', task: { ...plan(), state: 'proposed' } })));
+    const [person] = teammateSessions(atSara.repo.root).people;
+    assert.equal(person.mine, undefined);
+    assert.deepEqual(person.sessions.map(card => card.title).sort(), ['A message from another computer', 'Typed there by hand']);
+    for (const card of person.sessions) for (const field of ['own', 'ref', 'task', 'first', 'check']) assert.equal(field in card, false, `${card.title}: ${field}`);
   });
 });
 
@@ -715,14 +707,14 @@ test('a card\'s title leaves without a secret or a path, and its id says nothing
   });
 });
 
-// A session started with only a dropped file is named after the file (messageTitle,
-// lib/state.mjs), and its card on my other computer's Kanban is too. A teammate is told no
-// name of a file of mine: their card reads its path as [path], as before. Words name it for both.
-test('a session started with only a dropped file is named after the file on my other computer\'s Kanban; a teammate is told no file name', t => {
+// A session started with only a dropped file is named after the file here (messageTitle,
+// lib/state.mjs). No other computer is told the name of a file, whoever owns it: its card
+// reads the path as [path]. Words name it for every computer.
+test('a session started with only a dropped file is told to every other computer without the file\'s name, whoever owns it', t => {
   const crew = makeTeam(t), ana = crew.founder, sara = crew.member, bob = 'd'.repeat(64), now = Date.now();
   const name = 'Screenshot 2026-11-15 at 1.02 PM.png', shot = `/Users/someone/Desktop/${name}`;
   withHome(ana.home, () => {
-    markMine(ana.identity.key, sara.identity.key); noteTheirs(sara.identity.key, true);
+    shareProjects(ana.identity.key, sara.identity.key);
     const repo = folderProject(t), shop = cloneIn(repo, 'shop');
     session(repo, 1, shop, { goal: `'${shot}'` });
     session(repo, 2, shop, { goal: '/tmp/elu-code-pictures/1a2b3c4d-shot-1.png' });
@@ -731,9 +723,8 @@ test('a session started with only a dropped file is named after the file on my o
     session(repo, 5, shop, { goal: `'${shot}'`, title: 'Cut off total' });
     const repos = localRepos(now), rows = sessionCards({ owner: 'ana', repos, now });
     const told = key => cardsFor(key, ana.identity.key, rows, repos, [...repos.values()].map(row => repoProof(key, ana.identity.key, row.repoId, row.commit))).map(card => card.title).sort();
-    assert.deepEqual(told(sara.identity.key), [name, 'shot-1.png', 'why is this cut off', 'why is the total cut off', 'Cut off total'].sort());
-    assert.deepEqual(told(bob), ["'[path]'", '[path]', 'why is this cut off', 'why is the total cut off', 'Cut off total'].sort());
-    for (const text of [JSON.stringify(rows.map(row => row.card)), JSON.stringify(told(bob))]) for (const word of ['Screenshot', 'shot-1', '/Users/someone']) assert.equal(text.includes(word), false, word);
+    for (const key of [sara.identity.key, bob]) assert.deepEqual(told(key), ["'[path]'", '[path]', 'why is this cut off', 'why is the total cut off', 'Cut off total'].sort());
+    for (const text of [JSON.stringify(rows.map(row => row.card)), JSON.stringify(told(sara.identity.key)), JSON.stringify(told(bob))]) for (const word of ['Screenshot', 'shot-1', '/Users/someone']) assert.equal(text.includes(word), false, word);
   });
 });
 
@@ -803,11 +794,12 @@ test('a session a teammate\'s message started keeps what was asked and who asked
   });
 });
 
-test('my other computer is told each session\'s Task with its card, or its first message while it has none, and where it is there; a teammate is told neither', t => {
-  // Sara's machine stands for Ana's laptop: both mark each other as their own.
+// There is no "mine": no computer is told a session's Task, its first message or its place
+// with its card, whoever owns the computer. Those were for the owner's own computers alone.
+test('no computer is told a session\'s Task, its first message or its place with its card, whoever owns it', t => {
   const crew = makeTeam(t), ana = crew.founder, sara = crew.member, now = Date.now();
-  withHome(ana.home, () => { markMine(ana.identity.key, sara.identity.key); noteTheirs(sara.identity.key, true); });
-  withHome(sara.home, () => { markMine(sara.identity.key, ana.identity.key); noteTheirs(ana.identity.key, true); });
+  withHome(ana.home, () => { shareProjects(ana.identity.key, sara.identity.key); });
+  withHome(sara.home, () => { shareProjects(sara.identity.key, ana.identity.key); });
   const atAna = withHome(ana.home, () => {
     const repo = folderProject(t), shop = cloneIn(repo, 'shop');
     session(repo, 1, shop, { goal: 'Speed up the search page' });
@@ -817,38 +809,12 @@ test('my other computer is told each session\'s Task with its card, or its first
   });
   const rows = withHome(ana.home, () => sessionCards({ me: ana.identity.key, owner: 'ana', repos: atAna.repos, now }));
   const proofs = key => [...atAna.repos.values()].map(row => repoProof(key, ana.identity.key, row.repoId, row.commit));
-  const toLaptop = withHome(ana.home, () => cardsFor(sara.identity.key, ana.identity.key, rows, atAna.repos, proofs(sara.identity.key)));
-  const toBob = withHome(ana.home, () => cardsFor('d'.repeat(64), ana.identity.key, rows, atAna.repos, proofs('d'.repeat(64))));
-  const byTitle = (list, title) => list.find(card => card.title.startsWith(title));
-  // The session with a Task: the Task, its success criteria and its estimates, never what approval starts.
-  const working = byTitle(toLaptop, 'Speed up the search');
-  assert.match(working.ref, /^[0-9a-f]{16}:1$/); assert.equal(working.first, undefined);
-  assert.deepEqual([working.task.title, working.task.criteria, working.task.estimateMinutes, working.task.etaMinutes], ['Fix the login redirect', ['The search page answers in under a second'], 90, 30]);
-  assert.equal(JSON.stringify(toLaptop).includes('fix the login redirect please'), false); assert.equal(JSON.stringify(toLaptop).includes('/Users/someone'), false);
-  // The one with none: its first message.
-  const asking = byTitle(toLaptop, 'Look into the flaky');
-  assert.match(asking.ref, /^[0-9a-f]{16}:2$/); assert.equal(asking.task, undefined); assert.match(asking.first, /^Look into the flaky checkout\nx+$/); assert.equal(asking.first.length, 400);
-  // Anyone else: the card alone.
-  for (const card of toBob) for (const field of ['ref', 'task', 'first']) assert.equal(card[field], undefined, field);
-  // At the laptop: kept from a computer of mine, shown on its board as mine, the first message cut to 400.
-  withHome(sara.home, () => {
-    const repo = folderProject(t), shop = cloneIn(repo, 'shop', { from: atAna.shop }), saraRepos = localRepos(now);
-    fs.mkdirSync(peerFile(), { recursive: true });
-    fs.writeFileSync(peerFile('state.json'), JSON.stringify({ key: sara.identity.key, running: true, at: new Date().toISOString(), teams: [{ id: crew.teamId, members: [{ key: ana.identity.key, name: 'ana', online: true, box: 'devbox' }] }] }));
-    saveLocalRepos(saraRepos); saveProofs(ana.identity.key, proofsFor(ana.identity.key, sara.identity.key, atAna.repos));
-    saveCards(ana.identity.key, sara.identity.key, toLaptop);
-    const [person] = teammateSessions(repo.root).people, kept = title => person.sessions.find(card => card.title.startsWith(title));
-    assert.deepEqual([person.mine, person.box], [true, 'devbox']);
-    assert.deepEqual(kept('Speed up the search').task.criteria, ['The search page answers in under a second']); assert.equal(kept('Speed up the search').task.state, 'approved');
-    assert.equal(kept('Look into the flaky').first.length, 400); assert.match(kept('Look into the flaky').ref, /:2$/);
-    // No longer mine: what it sends is kept as a teammate's card, without them.
-    unmarkMine(ana.identity.key);
-    saveCards(ana.identity.key, sara.identity.key, toLaptop);
-    const [teammate] = teammateSessions(repo.root).people;
-    assert.equal(teammate.mine, undefined);
-    for (const card of teammate.sessions) for (const field of ['ref', 'task', 'first']) assert.equal(card[field], undefined, field);
-    assert.ok(shop);
-  });
+  for (const key of [sara.identity.key, 'd'.repeat(64)]) {
+    const told = withHome(ana.home, () => cardsFor(key, ana.identity.key, rows, atAna.repos, proofs(key)));
+    assert.equal(told.length, 2);
+    for (const card of told) for (const field of ['ref', 'task', 'first', 'own']) assert.equal(card[field], undefined, `${card.title}: ${field}`);
+    for (const word of ['The search page answers in under a second', 'x'.repeat(20)]) assert.equal(JSON.stringify(told).includes(word), false, word);
+  }
   // A card's Task: cleaned as a teammate's Task is, waiting for approval too; a message stays under its size, dropping the oldest cards' Tasks first.
   assert.equal(cleanCard(cardOf({ task: { ...plan(), state: 'proposed' } }), { mine: true }).task.state, 'proposed');
   assert.equal(cleanCard(cardOf({ task: { ...plan(), state: 'rejected' } }), { mine: true }).task, undefined);
@@ -865,12 +831,13 @@ test('my other computer is told each session\'s Task with its card, or its first
   assert.deepEqual(listParts([]), [[]]);
 });
 
-// Nothing goes to Done by itself (lib/owner-check.mjs): a session of mine that ended waits for
-// my check on my other computer's board too, saying how it ended. A teammate is told neither.
-test('a session of mine that waits for my check says so on my other computer\'s board, with how it ended; a teammate is told nothing of it', t => {
+// Nothing goes to Done by itself (lib/owner-check.mjs). How a session waiting for its owner's
+// check ended stays on the computer that runs it: no computer is told it, whoever owns it, and
+// no card on another computer's board says it is yours.
+test('how a session waiting for its owner\'s check ended is told to no computer, whoever owns it, and no card elsewhere says it is yours', t => {
   const crew = makeTeam(t), ana = crew.founder, sara = crew.member, now = Date.now();
-  withHome(ana.home, () => { markMine(ana.identity.key, sara.identity.key); noteTheirs(sara.identity.key, true); });
-  withHome(sara.home, () => { markMine(sara.identity.key, ana.identity.key); noteTheirs(ana.identity.key, true); });
+  withHome(ana.home, () => { shareProjects(ana.identity.key, sara.identity.key); });
+  withHome(sara.home, () => { shareProjects(sara.identity.key, ana.identity.key); });
   const atAna = withHome(ana.home, () => {
     const repo = folderProject(t), shop = cloneIn(repo, 'shop');
     session(repo, 1, shop, { goal: 'Speed up the search page', state: 'ready' });
@@ -883,24 +850,20 @@ test('a session of mine that waits for my check says so on my other computer\'s 
   const proofs = key => [...atAna.repos.values()].map(row => repoProof(key, ana.identity.key, row.repoId, row.commit));
   const toLaptop = withHome(ana.home, () => cardsFor(sara.identity.key, ana.identity.key, rows, atAna.repos, proofs(sara.identity.key)));
   const toBob = withHome(ana.home, () => cardsFor('d'.repeat(64), ana.identity.key, rows, atAna.repos, proofs('d'.repeat(64))));
-  const checks = list => Object.fromEntries(list.map(card => [card.title, [card.column, card.check ?? null]]));
-  assert.deepEqual(checks(toLaptop), { 'Speed up the search page': ['needs', 'ready to publish'], 'Publish the cart fix': ['needs', 'published'], 'Still at work': ['progress', null], 'Checked already': ['done', null] });
-  for (const card of toBob) assert.equal(card.check, undefined, card.title);
-  // At the laptop: shown as mine, under Needs you, with how it ended and that it waits for my check.
+  const columns = list => Object.fromEntries(list.map(card => [card.title, [card.column, card.check ?? null]]));
+  for (const list of [toLaptop, toBob]) assert.deepEqual(columns(list), { 'Speed up the search page': ['needs', null], 'Publish the cart fix': ['needs', null], 'Still at work': ['progress', null], 'Checked already': ['done', null] });
   withHome(sara.home, () => {
     const repo = folderProject(t); cloneIn(repo, 'shop', { from: atAna.shop }); const saraRepos = localRepos(now);
     fs.mkdirSync(peerFile(), { recursive: true });
     fs.writeFileSync(peerFile('state.json'), JSON.stringify({ key: sara.identity.key, running: true, at: new Date().toISOString(), teams: [{ id: crew.teamId, members: [{ key: ana.identity.key, name: 'ana', online: true, box: 'devbox' }] }] }));
     saveLocalRepos(saraRepos); saveProofs(ana.identity.key, proofsFor(ana.identity.key, sara.identity.key, atAna.repos));
-    saveCards(ana.identity.key, sara.identity.key, toLaptop);
-    const people = teammateSessions(repo.root).people, items = boardColumns(readBoard(repo), { tasks: [], queue: [] }, Date.now(), [], people).flatMap(column => column.items.map(item => [item.title, column.column, item.detail]));
-    assert.deepEqual(items.filter(([title]) => title !== 'Still at work').sort(), [['Checked already', 'done', 'you · devbox'], ['Publish the cart fix', 'needs', 'you · devbox · published · check it'], ['Speed up the search page', 'needs', 'you · devbox · ready to publish · check it']]);
-    // The row under the board says it too, where Needs you would be.
-    const notes = Object.fromEntries(boardColumns(readBoard(repo), { tasks: [], queue: [] }, Date.now(), [], people).flatMap(column => column.items.map(item => [item.title, item.note])));
-    assert.equal(notes['Publish the cart fix'], 'Your session on devbox · published · check it'); assert.equal(notes['Checked already'], 'Your session on devbox · Done');
-    // No longer mine: kept as a teammate's card, without it.
-    unmarkMine(ana.identity.key); saveCards(ana.identity.key, sara.identity.key, toLaptop);
-    for (const card of teammateSessions(repo.root).people[0].sessions) assert.equal(card.check, undefined, card.title);
+    // As an ELU from 0.1.26 to 0.1.33 sends them to a computer it calls its own: kept without how it ended.
+    saveCards(ana.identity.key, sara.identity.key, toLaptop.map(card => card.column === 'needs' ? { ...card, check: 'published', own: true } : card));
+    const people = teammateSessions(repo.root).people;
+    for (const card of people[0].sessions) assert.equal(card.check, undefined, card.title);
+    const items = boardColumns(readBoard(repo), { tasks: [], queue: [] }, Date.now(), [], people).flatMap(column => column.items);
+    assert.ok(items.length >= 3);
+    for (const item of items) { assert.doesNotMatch(String(item.detail ?? ''), /^you\b|check it/, item.title); assert.doesNotMatch(String(item.note ?? ''), /^Your session/, item.title); }
   });
   assert.equal(cleanCard(cardOf({ column: 'needs', check: 'published' }), { mine: true }).check, 'published');
   assert.equal(cleanCard(cardOf({ column: 'needs', check: 'published' })).check, undefined, 'not from a teammate');

@@ -111,7 +111,9 @@ test('send now on a turn that then leaves a command in the background: the same 
   assert.deepEqual(results(log), [[null, false]], 'one result, and no error');
   assert.deepEqual(lifecycle(log, sent.uuid), ['queued', 'started', 'completed']);
   assert.deepEqual(f.absorbed().map(row => [row.mid, row.uuid]), [[true, sent.uuid]]);
-  assert.deepEqual(task.messages.map(row => [row.text, row.during === true]), [['Run the long check', false], ['Also keep the old name', true]]);
+  assert.deepEqual(task.messages.filter(row => !row.from).map(row => [row.text, row.during === true]), [['Run the long check', false], ['Also keep the old name', true]]);
+  // The chat says in one line of ELU's that the command it left ended with the turn (lib/left-running.mjs).
+  assert.deepEqual(task.messages.filter(row => row.from).map(row => [row.from, row.text, row.line]), [['ELU', `Its turn ended, and the command it left running in the background ended with it: ${LOOP}`, true]]);
   assert.match(conversationEntries(f.repo, task).findLast(row => row.lead).text, /Also took in what you sent while it worked: Also keep the old name/);
   assert.deepEqual([request(f, sent.id).state, request(f, sent.id).reason], ['done', 'Sent to the running turn.']);
   // It had answered and stayed for the command it left: ended at its result, and the command with it.
@@ -179,7 +181,8 @@ test('a launch that is run again without the option that shows its work still ta
   const [run] = task.runs;
   assert.deepEqual([run.code, run.endedAfterResult, run.leftRunning], [0, true, LOOP]);
   assert.deepEqual(f.absorbed().map(row => row.mid), [true]);
-  assert.deepEqual(task.messages.map(row => [row.text, row.during === true]), [['Tidy the coupon module', false], ['Also keep the old name', true]]);
+  assert.deepEqual(task.messages.filter(row => !row.from).map(row => [row.text, row.during === true]), [['Tidy the coupon module', false], ['Also keep the old name', true]]);
+  assert.deepEqual(task.messages.filter(row => row.from).map(row => [row.from, row.text, row.line]), [['ELU', `Its turn ended, and the command it left running in the background ended with it: ${LOOP}`, true]]);
   assert.match(conversationEntries(f.repo, task).findLast(row => row.lead).text, /Also took in what you sent while it worked: Also keep the old name/);
   const pid = Number(fs.readFileSync(path.join(f.fake.dir, 'background.pid'), 'utf8'));
   for (const end = Date.now() + 5000; alive(pid) && Date.now() < end;) await new Promise(resolve => setTimeout(resolve, 100));

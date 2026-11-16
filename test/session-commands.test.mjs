@@ -15,7 +15,7 @@ import { createConversation } from '../lib/runner.mjs';
 import { createIdentity } from '../lib/peer/identity.mjs';
 import { createTeam } from '../lib/peer/roster.mjs';
 import { createInvite, redeemCode } from '../lib/peer/invite.mjs';
-import { markMine, noteTheirs } from '../lib/peer/mine.mjs';
+import { shareProjects } from './peer-helpers.mjs';
 import { pendingRequests } from '../lib/workspace.mjs';
 import { Conductor, conductorAlive, enqueue } from '../lib/conductor.mjs';
 import { listSchedules, parseWhen, runScheduleNow, saveSchedule } from '../lib/schedules.mjs';
@@ -485,8 +485,8 @@ test('each vendor of the owner\'s session is told the commands; the shell can ru
   const runs = f.leads(), told = f.inputs('claude');
   assert.equal(runs.length, 3); assert.ok(told.every(row => OWN_COMMANDS.every(line => row.input.includes(line))));
   const [ask, auto, full] = runs.map(call => call.args);
-  for (const args of [ask, auto]) assert.deepEqual(settingsOf(args).sandbox.excludedCommands, ['elu sessions:*', 'elu schedules:*', 'elu artifacts:*']);
-  assert.deepEqual(auto.filter(arg => arg.startsWith('--allowedTools=Bash(elu')), ['--allowedTools=Bash(elu sessions:*)', '--allowedTools=Bash(elu schedules:*)']);
+  for (const args of [ask, auto]) assert.deepEqual(settingsOf(args).sandbox.excludedCommands, ['elu sessions:*', 'elu schedules:*', 'elu artifacts:*', 'elu jobs:*']);
+  assert.deepEqual(auto.filter(arg => arg.startsWith('--allowedTools=Bash(elu')), ['--allowedTools=Bash(elu sessions:*)', '--allowedTools=Bash(elu schedules:*)', '--allowedTools=Bash(elu jobs:*)']);
   // elu artifacts reads the file it names outside the sandbox: Claude Code allows it in no mode,
   // and ELU's relay answers it (lib/permission-rules.mjs allowedBy).
   assert.deepEqual(ask.filter(arg => arg.startsWith('--allowedTools=Bash(elu')), [], 'Ask for approval asks for each');
@@ -653,24 +653,19 @@ test('a Codex turn in Ask for approval asks before elu sessions delete, which de
   assert.ok(!sessions(f).some(task => String(task.id) === '1'));
 });
 
-// The hand-off holds elu sessions delete to the owner's own sessions. From a session a
-// teammate's message started it is refused in every mode, --learn too, and no lessons run
-// starts. A session he handed off from another computer of his own is his: there it runs.
-test("elu sessions delete handed to ELU from a session a teammate's message started is refused in every mode, --learn too; from one his own other computer handed off, it runs", async t => {
+// The hand-off holds elu sessions delete to the owner's own sessions. From a session another
+// computer's message started it is refused in every mode, --learn too, whoever owns that
+// computer (there is no "mine"), and no lessons run starts.
+test("elu sessions delete handed to ELU from a session another computer's message started is refused in every mode, --learn too, whoever owns that computer", async t => {
   const f = setup(t, { learned: { add: ['Use pnpm, not npm.'], remove: [] } });
   const LAPTOP = 'c'.repeat(64), me = createIdentity({ name: 'ana' }), team = createTeam(me, 'core');
   for (const [key, name] of [[LAPTOP, 'laptop'], [SARA, 'sara']]) redeemCode(createInvite(me, team.id, { hours: 1 }), key, name);
-  markMine(me.key, LAPTOP); noteTheirs(LAPTOP, true);
   const old = archivedChat(f, 'Check the build', [{ at: new Date().toISOString(), text: 'no, we use pnpm here' }]);
   const handed = (peer, name) => { const task = createConversation(f.repo, f.controller.draftConfig, `Work on the handoff from @${name} shown in the peer data block.`, { origin: { kind: 'handoff', peer, name, threadId: `thread-${name}` }, permissions: 'auto' }); saveTask(f.repo, { ...readTask(f.repo, task.id), state: 'answered' }); return String(task.id); };
-  const theirs = handed(SARA, 'sara'), mine = handed(LAPTOP, 'laptop');
-  for (const mode of ['ask', 'auto', 'full']) for (const args of [['sessions', 'delete', old, '--learn'], ['sessions', 'delete', 'archived', '--learn'], ['sessions', 'delete', old]]) {
-    assert.deepEqual(await runOwnCommand(args, { repo: f.repo, taskId: theirs, mode }), { code: 1, err: `${TEAMMATE_REFUSAL}\n` }, `${mode}: ${args.join(' ')}`);
+  for (const from of [handed(SARA, 'sara'), handed(LAPTOP, 'laptop')]) for (const mode of ['ask', 'auto', 'full']) for (const args of [['sessions', 'delete', old, '--learn'], ['sessions', 'delete', 'archived', '--learn'], ['sessions', 'delete', old]]) {
+    assert.deepEqual(await runOwnCommand(args, { repo: f.repo, taskId: from, mode }), { code: 1, err: `${TEAMMATE_REFUSAL}\n` }, `${mode}: ${args.join(' ')}`);
   }
   assert.ok(sessions(f).some(task => String(task.id) === old)); assert.deepEqual(f.inputs('claude'), [], 'no lessons run started');
-  const done = await runOwnCommand(['sessions', 'delete', 'archived', '--learn'], { repo: f.repo, taskId: mine, mode: 'auto' });
-  assert.equal(done.code, 0, done.err); assert.match(done.out, new RegExp(`^Deleted session ${old}\\.\\nSaved to memory: Use pnpm, not npm\\.\\n?$`));
-  assert.ok(!sessions(f).some(task => String(task.id) === old));
 });
 
 // A refresh script runs on its own with no turn, so the owner reads it whole before it is kept:

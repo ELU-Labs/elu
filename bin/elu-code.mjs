@@ -23,10 +23,10 @@ addUserBin();
 sweepServers();
 // Peer commands load lib/peer/ only when used; it never imports the optional packages at load time.
 const PEER_COMMANDS = new Set(['id', 'team', 'invite', 'join', 'access', 'share', 'unshare', 'peers', 'peer', 'ask', 'relay', 'mine']);
-const HELP = `ELU — terminal coding workspace\n\nRun elu anywhere to open the terminal app.\nThe first start asks for a project name; later starts open your last project.\nSessions lists every session; type a message to start one.\nKanban shows the open project's tasks. Chats holds your channels and direct messages. Type / for commands and help.\nEditing workspaces are prepared automatically. Pushes require separate approval.\n\nCommands:\n  update\n  conductor [stop]\n  schedule [list]\n  dashboard\n  init [--yes] [--dry-run]\n  run <goal> [--yes] [--dry-run] [--permissions auto|full] [--place here|branch:NAME] [--folder PATH]... [--bot NAME[,NAME]]\n  run <id> --publish [--approve-push <confirmationId>]\n  status [id] [--recover]\n  open <id> [--bot NAME] [--exec]\n  check <id>\n  policy show\n  permissions [list|remove N|on N]\n  allow-home <session>\n  uninstall [--yes] [--dry-run]\n\nSessions and schedules (in your shell, and in a session's):\n  sessions [--all] | sessions archive N|this | sessions unarchive N\n  sessions rename N|this NAME | sessions new MESSAGE [--mode ask|auto|full]\n  sessions goal N GOAL   Give one a new goal, also while it works.\n  sessions copy N GOAL   Start a copy of one, with a new goal.\n  sessions delete N|archived [--learn]\n  schedules [--all] | schedules add WHEN MESSAGE [--mode ask|auto|full]\n  schedules pause|resume|delete|run N\n\nMCP servers (Claude Code's own; a key is asked for, never an argument):\n  mcp [list]\n  mcp add NAME URL [--header NAME] | mcp add NAME [--env NAME] -- COMMAND [ARGS]...\n  mcp remove NAME [--yes]\n\nPeer network:\n  id [--name N] [--computer NAME] [--export] [--import CODE]\n  team create NAME | team | team leave [TEAM] | team remove NAME [--team ID]\n  invite [--team ID] [--hours N] [--project PATH] [--auto|--manual] [--rules TEXT] [--mine]\n  join CODE [--project PATH] [--auto|--manual] [--rules TEXT] [--mine]\n  access [--team ID] [--auto|--manual] [--rules TEXT] [--project PATH]\n  mine [@NAME | remove @NAME | auto on|off]\n  share [PATH] [--as HANDLE] [--no-status] | unshare HANDLE\n  peers\n  peer off | peer install|uninstall | peer trust|untrust @NAME\n  ask [@NAME] [--project H] TEXT\n  relay [--team ID]\n\nEvery command accepts --json. --dry-run prints the proposed task setup;\nit does not execute the task or verify the resulting implementation.\n\nELU_NO_COLOR=1 elu opens the app without color.\n`;
+const HELP = `ELU — terminal coding workspace\n\nRun elu anywhere to open the terminal app.\nThe first start asks for a project name; later starts open your last project.\nSessions lists every session; type a message to start one.\nKanban shows the open project's tasks. Chats holds your channels and direct messages. Type / for commands and help.\nEditing workspaces are prepared automatically. Pushes require separate approval.\n\nCommands:\n  update\n  conductor [stop]\n  schedule [list]\n  dashboard\n  init [--yes] [--dry-run]\n  run <goal> [--yes] [--dry-run] [--permissions auto|full] [--place here|branch:NAME] [--folder PATH]... [--bot NAME[,NAME]]\n  run <id> --publish [--approve-push <confirmationId>]\n  status [id] [--recover]\n  open <id> [--bot NAME] [--exec]\n  check <id>\n  policy show\n  permissions [list|remove N|on N]\n  allow-home <session>\n  uninstall [--yes] [--dry-run]\n\nSessions and schedules (in your shell, and in a session's):\n  sessions [--all] | sessions archive N|this | sessions unarchive N\n  sessions rename N|this NAME | sessions new MESSAGE [--mode ask|auto|full]\n  sessions goal N GOAL   Give one a new goal, also while it works.\n  sessions copy N GOAL   Start a copy of one, with a new goal.\n  sessions delete N|archived [--learn]\n  schedules [--all] | schedules add WHEN MESSAGE [--mode ask|auto|full]\n  schedules pause|resume|delete|run N\n\nLong jobs (in a session's shell; they outlive the turn that starts them):\n  jobs | jobs start NAME -- COMMAND | jobs stop NAME | jobs log NAME\n\nMCP servers (Claude Code's own; a key is asked for, never an argument):\n  mcp [list]\n  mcp add NAME URL [--header NAME] | mcp add NAME [--env NAME] -- COMMAND [ARGS]...\n  mcp remove NAME [--yes]\n\nPeer network:\n  id [--name N] [--computer NAME] [--export] [--import CODE]\n  team create NAME | team | team leave [TEAM] | team remove NAME [--team ID]\n  invite [--team ID] [--hours N] [--project PATH] [--auto|--manual] [--rules TEXT]\n  join CODE [--project PATH] [--auto|--manual] [--rules TEXT]\n  access [--team ID] [--auto|--manual] [--rules TEXT] [--project PATH] [--home]\n  share [PATH] [--as HANDLE] [--no-status] | unshare HANDLE\n  peers\n  peer off | peer install|uninstall | peer trust|untrust @NAME\n  ask [@NAME] [--project H] TEXT\n  relay [--team ID]\n\nEvery command accepts --json. --dry-run prints the proposed task setup;\nit does not execute the task or verify the resulting implementation.\n\nELU_NO_COLOR=1 elu opens the app without color.\n`;
 function argumentsOf(argv) {
   const flags = {}; const words = [];
-  const boolean = new Set(['json', 'yes', 'dry-run', 'publish', 'recover', 'exec', 'help', 'version', 'daemon', 'export', 'no-status', 'auto', 'manual', 'mine']);
+  const boolean = new Set(['json', 'yes', 'dry-run', 'publish', 'recover', 'exec', 'help', 'version', 'daemon', 'export', 'no-status', 'auto', 'manual', 'mine', 'home']);
   const values = new Set(['role', 'bot', 'approve-push', 'name', 'computer', 'import', 'team', 'hours', 'as', 'project', 'permissions', 'place', 'rules']);
   // An empty --computer gives this computer its host name back (elu id).
   const empty = new Set(['computer']);
@@ -57,24 +57,28 @@ async function confirm(plan, flags) {
   try { const answer=await Promise.race([prompt.question('Make these writes? [y/N] ').catch(error=>{if(error.code==='ERR_USE_AFTER_CLOSE'||error.code==='ABORT_ERR')return'';throw error;}),closed]);return /^y(?:es)?$/i.test(answer.trim()); }
   finally { prompt.close(); }
 }
+// What the help prints: HELP, then the switch that keeps a chart as text in a terminal that
+// would show it as a picture (lib/terminal-pictures.mjs).
+const HELP_TEXT = `${HELP}ELU_NO_PICTURES=1 elu keeps charts as text.\n`;
 // elu mcp reads its own arguments: what follows its -- is a command's, untouched.
 const mcpAt = argv => { const at = argv.findIndex(arg => !arg.startsWith('--')); return argv[at] === 'mcp' ? at : -1; };
 // elu sessions, elu schedules and elu artifacts read theirs too (lib/session-commands.mjs): after -- is the message.
-const ownAt = argv => { const at = argv.findIndex(arg => !arg.startsWith('-')); return ['sessions', 'schedules', 'artifacts'].includes(argv[at]) ? at : -1; };
+// elu jobs too: after its -- is the job's command.
+const ownAt = argv => { const at = argv.findIndex(arg => !arg.startsWith('-')); return ['sessions', 'schedules', 'artifacts', 'jobs'].includes(argv[at]) ? at : -1; };
 const ownArgs = argv => (mcpAt(argv) >= 0 || ownAt(argv) >= 0) && argv.includes('--') ? argv.slice(0, argv.indexOf('--')) : argv;
 export async function main(argv = process.argv.slice(2)) {
   if (ownAt(argv) >= 0) {
     const commands = await import('../lib/session-commands.mjs'), at = ownAt(argv), rest = [...argv.slice(0, at), ...argv.slice(at + 1)];
-    return argv[at] === 'sessions' ? commands.sessionsCli(rest) : argv[at] === 'artifacts' ? commands.artifactsCommand(rest) : commands.schedulesCli(rest);
+    return argv[at] === 'sessions' ? commands.sessionsCli(rest) : argv[at] === 'artifacts' ? commands.artifactsCommand(rest) : argv[at] === 'jobs' ? commands.jobsCli(rest) : commands.schedulesCli(rest);
   }
   // Your Claude Code MCP servers: the key is asked for with echo off, or read from stdin.
   if (mcpAt(argv) >= 0) {
     const { mcpArguments, mcpCli } = await import('../lib/mcp.mjs'), at = mcpAt(argv), { flags, words } = mcpArguments([...argv.slice(0, at), ...argv.slice(at + 1)]);
-    if (flags.help) return { help: HELP };
+    if (flags.help) return { help: HELP_TEXT };
     return mcpCli(words, flags, { root: findRepository(process.cwd())?.root ?? null });
   }
   const { flags, words } = argumentsOf(argv);
-  if (flags.help || words[0] === 'help') return { help: `${HELP}\nOptions:\n  --help, -h\n  --version\n` };
+  if (flags.help || words[0] === 'help') return { help: `${HELP_TEXT}\nOptions:\n  --help, -h\n  --version\n` };
   if (flags.version) return { version: readJson(fileURLToPath(new URL('../package.json', import.meta.url))).version };
   if (words[0] === 'schedule') {
     const schedules = await import('../lib/schedules.mjs');
@@ -154,7 +158,7 @@ export async function main(argv = process.argv.slice(2)) {
     if (flags.json) { const { dashboardSnapshot } = await import('../lib/projects.mjs'); return dashboardSnapshot(); }
     const { launchTerminal } = await import('../lib/terminal.mjs'); return launchTerminal();
   }
-  if (!words.length && !flags.json && (!process.stdin.isTTY || !process.stdout.isTTY)) return { help: HELP };
+  if (!words.length && !flags.json && (!process.stdin.isTTY || !process.stdout.isTTY)) return { help: HELP_TEXT };
   if (!words.length) {
     const repo = findRepository(process.cwd());
     if (flags.json) { const { projectSnapshot, dashboardSnapshot } = await import('../lib/projects.mjs'); return repo ? projectSnapshot(repo) : { welcome: true, directory: process.cwd(), ...dashboardSnapshot() }; }

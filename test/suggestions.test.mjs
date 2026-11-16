@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { argumentMatches, mentionMatches, botMatches, sessionMentions, commandMatches, parseCommand, needsArgument, typedCommand, yourComputer, COMMANDS } from '../lib/terminal-commands.mjs';
+import { argumentMatches, mentionMatches, botMatches, sessionMentions, commandMatches, parseCommand, needsArgument, typedCommand, COMMANDS } from '../lib/terminal-commands.mjs';
 
 const ctx = {
   models: () => [{ name: 'opus', vendor: 'Claude', note: 'most capable', current: true }, { name: 'gpt', vendor: 'Codex' }],
@@ -101,21 +101,13 @@ test('@ in a session offers bots, then teammates; a teammate named like a bot is
   assert.deepEqual(sessionMentions('@mo', { ...open, teammates: () => [{ name: 'model', online: true }] }).map(row => row.description), ['Opus 5 · the model of this session']);
 });
 
-test('another computer of mine is offered as your computer, never as a teammate', () => {
-  const mine = { ...ctx, bots: () => [], teammates: () => [{ name: 'devbox', online: true, path: 'direct', mine: true }, { name: 'sara', online: false }], invitees: () => ({ channel: 'ops', people: [{ name: 'devbox', online: true, mine: true }, { name: 'sara', online: false }] }) };
-  assert.deepEqual(sessionMentions('@', mine).map(row => `${row.value} ${row.description}`), ['@devbox your computer · online', '@sara teammate · offline']);
-  assert.deepEqual(mentionMatches('@', mine).map(row => `${row.value} ${row.description}`), ['@devbox your computer · online · direct', '@sara offline']);
-  assert.deepEqual(argumentMatches('/invite ', mine).map(row => `${row.word} ${row.description}`), ['@devbox add to #ops · your computer · online', '@sara add to #ops · offline']);
-});
-
-test('a computer of mine that has not marked this one back says it waits, in place of whether it is online', () => {
-  const row = { name: 'devbox', online: true, path: 'direct', mine: true, waiting: true };
-  const waits = { ...ctx, bots: () => [], teammates: () => [row, { name: 'sara', online: true, path: 'relayed' }], invitees: () => ({ channel: 'ops', people: [row] }) };
-  assert.deepEqual(sessionMentions('@', waits).map(row => `${row.value} ${row.description}`), ['@devbox your computer · waiting for it to agree', '@sara teammate · online']);
-  assert.deepEqual(mentionMatches('@', waits).map(row => `${row.value} ${row.description}`), ['@devbox your computer · waiting for it to agree', '@sara online · relayed']);
-  assert.deepEqual(argumentMatches('/invite ', waits).map(row => `${row.word} ${row.description}`), ['@devbox add to #ops · your computer · waiting for it to agree']);
-  // The words themselves: none for a teammate, and the piece between them is the caller's.
-  assert.deepEqual([yourComputer(null), yourComputer({}), yourComputer({ waiting: true }), yourComputer({ waiting: true }, ', ')], ['', 'your computer', 'your computer · waiting for it to agree', 'your computer, waiting for it to agree']);
+// There is no "mine": a computer an older ELU called the owner's own (mine: true on its row)
+// is offered as any other computer is, with no words of its own.
+test('every computer is offered the same way, whoever owns it, with no words for yours', () => {
+  const rows = { ...ctx, bots: () => [], teammates: () => [{ name: 'devbox', online: true, path: 'direct', mine: true }, { name: 'sara', online: false }], invitees: () => ({ channel: 'ops', people: [{ name: 'devbox', online: true, mine: true }, { name: 'sara', online: false }] }) };
+  assert.deepEqual(sessionMentions('@', rows).map(row => `${row.value} ${row.description}`), ['@devbox teammate · online', '@sara teammate · offline']);
+  assert.deepEqual(mentionMatches('@', rows).map(row => `${row.value} ${row.description}`), ['@devbox online · direct', '@sara offline']);
+  assert.deepEqual(argumentMatches('/invite ', rows).map(row => `${row.word} ${row.description}`), ['@devbox add to #ops · online', '@sara add to #ops · offline']);
 });
 
 test('@ offers teammates by name, and stops after a space', () => {

@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { makeTeam, withHome, registeredProject } from './peer-helpers.mjs';
 import { fakeClis } from './helpers.mjs';
-import { markMine, noteTheirs } from '../lib/peer/mine.mjs';
+import { shareProjects } from './peer-helpers.mjs';
 import { hostMethods, hostTick, remoteCommand, remoteSessions, viewMethods } from '../lib/peer/remote.mjs';
 import { saveTeamAccess } from '../lib/peer/access.mjs';
 import { pendingRequests, projectFolder } from '../lib/workspace.mjs';
@@ -21,14 +21,14 @@ import { ASIDE_ANSWERED } from '../lib/message-aside.mjs';
 // daemon run. The computer he typed on is told at once what happens, and shows the answer.
 function connection(key) {
   const sent = [];
-  return { key, admitted: true, remoteHello: { remote: 1 }, sent, notify: (method, params) => sent.push([method, params]), request: async () => { throw new Error('No answer'); } };
+  return { key, admitted: true, remoteHello: { remote: 1, shared: 1 }, sent, notify: (method, params) => sent.push([method, params]), request: async () => { throw new Error('No answer'); } };
 }
 const context = (me, sessions = {}) => ({ me, session: key => sessions[key] ?? null, name: key => key.slice(0, 4), box: () => null, log: () => {}, kick: () => {}, soon: () => {}, event: () => {} });
 // Two computers of one owner, each marked as the other's: here (he types on it) and there (the session runs on it).
 function pair(t) {
   const team = makeTeam(t, { founderName: 'ana', memberName: 'box' }), here = team.founder, there = team.member;
-  const project = withHome(there.home, () => { const project = registeredProject(t, { origin: 'https://github.com/acme/shop.git' }); saveTeamAccess(team.teamId, { root: project.root }); markMine(there.identity.key, here.identity.key); noteTheirs(here.identity.key, true); return project; });
-  withHome(here.home, () => { markMine(here.identity.key, there.identity.key); noteTheirs(there.identity.key, true); });
+  const project = withHome(there.home, () => { const project = registeredProject(t, { origin: 'https://github.com/acme/shop.git' }); saveTeamAccess(team.teamId, { root: project.root }); shareProjects(there.identity.key, here.identity.key); return project; });
+  withHome(here.home, () => { shareProjects(here.identity.key, there.identity.key); });
   const toHost = connection(here.identity.key), toViewer = connection(there.identity.key);
   const hostCtx = context(there.identity, { [here.identity.key]: toHost }), viewCtx = context(here.identity, { [there.identity.key]: toViewer });
   const host = hostMethods(hostCtx), viewer = viewMethods(viewCtx);
@@ -42,7 +42,7 @@ async function until(check, message, timeout = 20000) {
 }
 const BESIDE = 'You are not that turn: you run beside it';
 
-test('a message from my other computer to a session whose turn takes none is answered beside the turn there, with no window open there, and shows here; one that asks for work says so, and Enter here starts it there', { timeout: 90000 }, async t => {
+test('a message from another computer to a session whose turn takes none is answered beside the turn there, with no window open there, and shows here; one that asks for work says so, and Enter here starts it there', { timeout: 90000 }, async t => {
   const { here, there, project, toHost, hostCtx, viewCtx, host, viewer } = pair(t);
   // The computer the session runs on: a stand-in Codex whose turn never ends, while a run beside it answers at once.
   const fake = fakeClis(project.parent, { mode: 'slow' }), file = path.join(fake.dir, 'fake.json');
@@ -69,7 +69,7 @@ test('a message from my other computer to a session whose turn takes none is ans
     delivered = events.length;
   };
   const seen = () => withHome(here.home, () => remoteSessions().find(row => row.id === started.id));
-  const app = remoteGlue({ facade: { mineRows: () => [{ key: there.identity.key, mine: true, theirs: true }], remoteSessions: () => [] }, peerRead: () => null, peerCommand: async () => ({}), chatMessage: ({ title, text }) => `${title}: ${text}`, ink: text => text, colour: false });
+  const app = remoteGlue({ facade: { remoteSessions: () => [] }, peerRead: () => ({ key: here.identity.key, teams: [] }), peerCommand: async () => ({}), chatMessage: ({ title, text }) => `${title}: ${text}`, ink: text => text, colour: false });
   const pane = () => app.view(remoteRow(seen(), 'box'), 140);
   look(); assert.equal(seen().state, 'running');
   // A question, typed here: that computer says at once what its running turn does with it.
@@ -109,5 +109,7 @@ test('a message from my other computer to a session whose turn takes none is ans
   assert.equal(seen().entries.filter(entry => entry.text === 'Two of three steps are done. It is running the tests now.').length, 1, 'its answer is kept once');
   assert.equal(seen().beside, undefined, 'nothing is beside a running turn any more');
   assert.equal(pane().split('How far are you?').length, 2, 'the answered question shows once');
+  // Each message he sent from here says so there (computer), so here it reads You, whoever owns that computer.
+  assert.deepEqual(seen().entries.filter(entry => entry.role === 'You').map(entry => [entry.text, entry.computer]), [['Tidy the coupon module', here.identity.key], ['How far are you?', here.identity.key], ['Rename the helper too', here.identity.key]]);
   assert.match(pane(), /You → @box: Tidy the coupon module\n\nYou → @box: How far are you\?\n\n[^\n]+ on @box · beside the turn: Two of three steps are done\. It is running the tests now\.\n\nAnswered beside the running turn, from what it has done so far\. The turn goes on\.\n[\s\S]*You → @box: Rename the helper too/);
 });
