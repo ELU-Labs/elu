@@ -532,7 +532,7 @@ test('elu --help and elu sessions --help list the commands', () => {
   assert.ok(SCHEDULES_HELP.split('\n').filter(line => !line.startsWith(' ')).every(line => line.length < 80), 'each line of its words fits a terminal of 80 columns');
   // goal and copy, one line each, in the words elu sessions --help has; README's list names them too.
   const readme = fs.readFileSync(new URL('../README.md', import.meta.url), 'utf8'), section = readme.slice(readme.indexOf('### ELU from a session'), readme.indexOf('## Keys'));
-  for (const [verb, words, said] of [['goal', 'Give one a new goal, also while it works.', 'gives one a new goal, also while it works: its turn is told without being stopped.'], ['copy', 'Start a copy of one, with a new goal.', 'starts a copy of one, with a new goal.']]) {
+  for (const [verb, words, said] of [['goal', 'Give one a new goal, also while it works.', 'gives one a new goal, also while it works: its turn is not stopped.'], ['copy', 'Start a copy of one, with a new goal.', 'starts a copy of one, with a new goal.']]) {
     assert.ok(SESSIONS_HELP.includes(`elu sessions ${verb} N GOAL `) && SESSIONS_HELP.includes(words), verb);
     assert.ok(help.split('\n').some(line => line.startsWith(`  sessions ${verb} N GOAL `) && line.endsWith(words) && line.length < 80), verb);
     assert.ok(section.replace(/\s+/g, ' ').includes(`\`elu sessions ${verb} N "goal"\` ${said}`), verb);

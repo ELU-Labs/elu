@@ -9042,7 +9042,8 @@ test('a session at work: its Task has New goal and /done offers only that; the e
   liveTask(p.root, { id: '3', goal: 'Uppercase coupon codes', state: 'ready' });
   proposeTask(p.repo, '3', TASK); approvePlan(p.repo, '3'); reportProgress(p.repo, '3', { met: [1] });
   const began = new Date().toISOString();
-  saveTask(p.repo, { ...readTask(p.repo, '3'), state: 'running', activeRole: 'lead', activeSince: began, owner: { pid: process.pid, identity: processIdentity(process.pid) }, messages: [{ at: began, text: 'Uppercase coupon codes' }] });
+  // Its turn takes no message while it works (activeDeaf): it reads the new goal when it ends.
+  saveTask(p.repo, { ...readTask(p.repo, '3'), state: 'running', activeRole: 'lead', activeSince: began, activeDeaf: true, owner: { pid: process.pid, identity: processIdentity(process.pid) }, messages: [{ at: began, text: 'Uppercase coupon codes' }] });
   const v = await view(t, { repo: p.repo, conductor: false }), panels = v.current.panels, status = () => panels.status.getText();
   for (const [columns, rows] of [[140, 50], [80, 24]]) {
     v.output.columns = columns; v.output.rows = rows; v.output.emit('resize'); await until(() => v.current.screen.width === columns, `${columns}x${rows}`);
@@ -9068,14 +9069,35 @@ test('a session at work: its Task has New goal and /done offers only that; the e
   const goalTitle = 'New goal (objectives below it, one per line)';
   await until(() => editor(v, goalTitle)?.__listener, 'the new goal editor');
   assert.equal(editor(v, goalTitle).getValue(), [TASK.goal, ...TASK.objectives].join('\n'));
+  // Saved as it opened, it changes nothing: no new revision, nothing sent, and the turn is not told again.
+  v.input.write('\x13');
+  await until(() => !modal(v, goalTitle) && /Nothing changed: "Uppercase coupons" keeps its goal\./.test(status()), 'nothing changed');
+  assert.deepEqual([JSON.parse(fs.readFileSync(planFile(p.repo, '3'), 'utf8')).tasks.at(-1).revision ?? 1, pendingRequests(p.root)], [1, []]);
+  panels.ask.focus(); await until(() => panels.ask.__listener, 'the message box reads');
+  v.input.write('\x14'); await until(() => modal(v, 'Task'), 'its Task'); v.input.write('\r');
+  await until(() => editor(v, goalTitle)?.__listener, 'the new goal editor');
   editor(v, goalTitle).setValue(`${TASK.goal}\nnormalize returns upper case\nnormalize trims spaces\nThe coupon test passes`); v.input.write('\x13');
-  await until(() => /"Uppercase coupons" has the new goal\. It is told without stopping its turn\./.test(status()), 'told');
+  // Its turn takes no message while it works: the status line says it is told when that turn ends, as its row says.
+  await until(() => /"Uppercase coupons" has the new goal\. It is told when its turn ends\./.test(status()), 'told when its turn ends');
+  assert.doesNotMatch(status(), /without stopping/);
   // The Task has it at once, none met yet, and it goes to the turn as a new goal; the turn still works.
   const plan = JSON.parse(fs.readFileSync(planFile(p.repo, '3'), 'utf8')).tasks.at(-1);
   assert.deepEqual([plan.objectives, plan.met, plan.revision, plan.realign], [['normalize returns upper case', 'normalize trims spaces', 'The coupon test passes'], [], 2, true]);
   const [sent] = pendingRequests(p.root);
   assert.deepEqual([sent.continuationTaskId, sent.typed, sent.goalChange], ['3', true, { task: plan.id, revision: 2 }]);
   assert.equal(readTask(p.repo, '3').state, 'running');
+  // Its row says when it reaches the turn, and names no ↑: it is the Task's goal already.
+  const chat = () => panels.chat.getText().replace(/\s+/g, ' ');
+  await until(() => /takes no message while it works: the new goal reaches it when that turn ends\./.test(chat()), 'its row');
+  assert.doesNotMatch(chat(), /↑ takes it back/);
+  // ↑ in the empty box does not take it back: it still waits, and the Task keeps it.
+  panels.ask.focus(); panels.ask.readInput(); await until(() => panels.ask.__listener, 'message box');
+  await until(() => /enter send it now/.test(panels.keys.getText()), 'the key bar names what Enter does');
+  assert.doesNotMatch(panels.keys.getText(), /take it back/, 'nor the key bar');
+  v.input.write('\x1b[A'); await new Promise(resolve => setTimeout(resolve, 300));
+  assert.doesNotMatch(status(), /Taken back/);
+  assert.deepEqual(pendingRequests(p.root).map(row => [row.id, row.goalChange]), [[sent.id, { task: plan.id, revision: 2 }]]);
+  assert.equal(JSON.parse(fs.readFileSync(planFile(p.repo, '3'), 'utf8')).tasks.at(-1).revision, 2);
 });
 
 // His new goal has no length or count of ours: the check takes a goal of 6,000 characters with

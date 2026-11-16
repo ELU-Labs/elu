@@ -192,7 +192,9 @@ test('a lesson learned in A\'s ELU is in B\'s ELU context with no step, and noth
 
 test('the team\'s project is the joiner\'s own folder, not a second row in Projects; another project shared with the team still is one', t => {
   const team = makeTeam(t, { founderName: 'ana', memberName: 'ben' }), a = team.founder, b = team.member;
+  // B has two projects: with one, that one would be the team's project here from the start.
   const elu = withHome(a.home, () => registeredProject(t)), docs = withHome(a.home, () => registeredProject(t)), mine = withHome(b.home, () => registeredProject(t));
+  withHome(b.home, () => registeredProject(t));
   withHome(a.home, () => { nameProject(repository(elu.root), 'ELU'); nameProject(repository(docs.root), 'Docs site'); });
   invited(team, a, elu.root); withHome(a.home, () => share(docs.root, { handle: 'docs-site', teams: [team.teamId] }));
   // A tells B what it shares with the team, as its status does.

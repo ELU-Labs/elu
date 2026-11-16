@@ -1637,6 +1637,15 @@ test('a session on my other computer that waits for my check is checked from her
     updateRequest(project.root, sent.id, { state: 'done', taskId: '1' });
     assert.equal(sessionPlace(readBoard(repo), readTask(repo, '1')), 'needs');
   });
+  // At work there with its Task, it takes a new goal too, its turn not stopped: the answer says
+  // so, with when its turn is told (takes), for the status line here.
+  const before = withHome(devbox.home, () => { const was = readTask(repo, '1'); saveTask(repo, { ...was, state: 'running', activeRole: 'lead', activeInbox: true }); return was; });
+  assert.deepEqual(await check(one, { answer: 'goal', text: 'Trim spaces too\nnormalize trims the code\nREADME says so' }), { answer: 'goal', shown: 'Uppercase coupons', working: true, takes: 'turn' });
+  withHome(devbox.home, () => {
+    assert.deepEqual([currentTask(repo, '1').objectives.length, currentTask(repo, '1').realign], [2, true]);
+    for (const row of pendingRequests(project.root).filter(value => value.state === 'queued')) updateRequest(project.root, row.id, { state: 'done', taskId: '1' });
+    saveTask(repo, before);
+  });
   // Done: in Done there, with when.
   assert.deepEqual(await check(two, { answer: 'done' }), { answer: 'done', shown: 'Where is the export?' });
   withHome(devbox.home, () => { assert.equal(sessionPlace(readBoard(repo), readTask(repo, '2')), 'done'); assert.equal(typeof readBoard(repo).checked['2'], 'string'); });
