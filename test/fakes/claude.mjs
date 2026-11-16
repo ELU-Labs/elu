@@ -217,8 +217,9 @@ if(cfg.noCredits&&modelArg===cfg.noCredits){console.log(JSON.stringify({type:'sy
 // tooLong (fake.json): a review this model will not take, ended as the real CLI ends a prompt
 // longer than its model takes: a number, one over that many characters; 'files', one that
 // carries any file's content or excerpts; 'all', every one. tooLongOn: the texts that mark such a
-// turn, one of which its input holds (a review's by default).
-const tooLong=cfg.tooLong!==undefined&&(cfg.tooLongOn??['Review as @']).some(text=>input.includes(text))&&(cfg.tooLong==='all'||cfg.tooLong==='files'&&/"content":"|"excerpts":\[/.test(input)||typeof cfg.tooLong==='number'&&input.length>cfg.tooLong);
+// turn, one of which its input holds (a review's by default). tooLongModels: the --model values
+// that refuse it, so a larger model takes it; every model when not given.
+const tooLong=cfg.tooLong!==undefined&&(!Array.isArray(cfg.tooLongModels)||cfg.tooLongModels.includes(modelArg))&&(cfg.tooLongOn??['Review as @']).some(text=>input.includes(text))&&(cfg.tooLong==='all'||cfg.tooLong==='files'&&/"content":"|"excerpts":\[/.test(input)||typeof cfg.tooLong==='number'&&input.length>cfg.tooLong);
 // standupTooLong (fake.json): a Standup turn over that many characters, refused the same way.
 const standupTooLong=typeof cfg.standupTooLong==='number'&&input.includes("owner's Standup")&&input.length>cfg.standupTooLong;
 // promptTooLong (fake.json): any prompt over that many characters, refused the same way.

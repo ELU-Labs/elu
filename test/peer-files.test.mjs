@@ -9,10 +9,10 @@ import { PassThrough } from 'node:stream';
 import { makeTeam, newHome, withHome, registeredProject, liveTask } from './peer-helpers.mjs';
 import { hash } from '../lib/util.mjs';
 import { markMine, noteTheirs } from '../lib/peer/mine.mjs';
-import { FILES_UPDATE, NOT_MINE, NOT_OWN_SESSION, hostMethods, remoteCommand, watchId } from '../lib/peer/remote.mjs';
+import { FILES_UPDATE, NOT_MINE, NOT_OWN_SESSION, hostMethods, relist, remoteCommand, remoteSessions, watchId } from '../lib/peer/remote.mjs';
 import { saveTeamAccess } from '../lib/peer/access.mjs';
-import { pendingRequests } from '../lib/workspace.mjs';
-import { readTask, saveTask } from '../lib/state.mjs';
+import { pendingRequests, updateRequest } from '../lib/workspace.mjs';
+import { readTask, saveTask, taskTitle } from '../lib/state.mjs';
 import { repository } from '../lib/git.mjs';
 import { offerFiles, offerPaths, stageFiles } from '../lib/peer/index.mjs';
 import { BYTES_MAX, FILES_MAX, PIECE, collectFiles, inboxRoot, landFiles, namedPaths, pathsInText, pieces, stageFiles as stageCollected, stagedFiles, takePiece } from '../lib/peer/files.mjs';
@@ -314,6 +314,28 @@ test('the message box offers the files a message names: y sends them with it, n 
   assert.deepEqual(parseCommand(`/send ${b.root.replaceAll(' ', '\\ ')} ~/x`).args, [b.root, '~/x']);
 });
 
+// The question says Esc cancels: Esc (null) sends nothing, neither the files nor the text alone,
+// and the message stays where it was typed. y and n answer as before.
+test('Esc on the files question sends nothing: not the text alone, and not the files', async t => {
+  const home = newHome(t), b = batch(t), commands = [], asked = [];
+  const status = { running: true, key: 'k'.repeat(64), name: 'ana', box: 'laptop', teams: [{ members: [{ key: 'k'.repeat(64), name: 'ana' }, { key: 'd'.repeat(64), name: 'ana', box: 'devbox', online: true }] }] };
+  const facade = { mineRows: () => [{ key: 'd'.repeat(64), mine: true, theirs: true }], remoteSessions: () => [], offerFiles, offerPaths, stageFiles };
+  const glue = remoteGlue({ facade, peerRead: () => status, peerCommand: async command => { commands.push(command); return command.type === 'remoteFiles' ? { id: command.id, files: command.files.count, bytes: command.files.bytes } : {}; }, chatMessage: ({ text }) => text, ink: text => text, colour: false });
+  const row = { id: crypto.randomUUID(), machine: 'devbox', ref: null };
+  const esc = { confirm: async line => { asked.push(line); return null; }, sending: () => {} };
+  await withHome(home, async () => {
+    await assert.rejects(glue.send(row, `Look at ${b.key}`, esc), { message: 'Nothing was sent. The message is still here.' });
+    assert.equal(asked.at(-1), 'Send 1 file (1 KB), including 1 key file, from this computer with this message?');
+    assert.deepEqual(commands, [], 'nothing went');
+    // Over the limit, the question about the text alone: Esc sends nothing either.
+    const huge = path.join(b.dir, 'huge.bin'); fs.writeFileSync(huge, ''); fs.truncateSync(huge, BYTES_MAX + 1);
+    await assert.rejects(glue.send(row, `see ${huge}`, esc), { message: 'Nothing was sent. The message is still here.' });
+    assert.match(asked.at(-1), /Send the text only\?$/); assert.deepEqual(commands, []);
+    // /send PATH: nothing goes.
+    assert.equal(await glue.sendPaths(row, [b.key], esc), 'Nothing was sent.'); assert.deepEqual(commands, []);
+  });
+});
+
 // The relay as Claude Code starts it for one of the owner's own sessions, driven in process.
 function relay(t, argv) {
   const input = new PassThrough(), output = new PassThrough(), rows = [], waiting = [];
@@ -559,4 +581,32 @@ test('a typed message from my other computer naming a picture under ~/Library he
   assert.equal(copies(first()).length, 1, first()); assert.equal(first(), `what is in ${copies(first())[0]}`);
   await view({ type: 'remoteSend', id: started.id, text: `and ${dropped}`, typed: true });
   assert.equal(copies(first()).length, 2, first()); assert.ok(!first().includes(dropped), first());
+});
+
+// The owner's case: a screenshot dropped alone in the New session box after @ his other
+// computer, then Enter. Its message there names the inbox it landed in, and ELU's note of it.
+// The session is named after the picture: in the row here from the moment it starts, in the
+// list there while it waits to start, and once it has started. With words, it is named as before.
+test('a session started there with only a dropped picture is named after the picture, here and there', async t => {
+  const p = pair(t), PNG = Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex'), name = 'Screenshot 2026-11-15 at 1.02 PM.png';
+  p.toViewer.remoteHello = { remote: 1, files: 1, startFiles: 1 };
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'elu-code-shots-'))), shot = path.join(dir, name); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  fs.writeFileSync(shot, PNG);
+  const start = text => withHome(p.laptop.home, () => remoteCommand(p.viewCtx, { type: 'remoteStart', to: p.devbox.identity.key, text, permissions: 'ask', typed: true, files: stageFiles(offerFiles(text)) }));
+  const shown = id => withHome(p.laptop.home, () => remoteSessions().find(row => row.id === id)?.title);
+  const there = id => withHome(p.devbox.home, () => pendingRequests(p.project.root).find(row => row.mine?.remoteId === id));
+  const list = () => withHome(p.devbox.home, () => { relist(); return p.host['elu.remote.list']({}, p.toHost).sessions; });
+  const started = await start(`'${shot}'`);
+  assert.equal(started.files, 1);
+  assert.equal(shown(started.id), name, 'the row here');
+  const request = there(started.id);
+  assert.match(request.goal, /^".*\/Screenshot 2026-11-15 at 1\.02 PM\.png"\n\nFiles from @mac: 1 file \(1 KB\) in /, request.goal);
+  assert.equal(list().find(row => row.remoteId === started.id)?.title, name, 'the list there, while it waits to start');
+  // Started: the session the conductor makes of it.
+  withHome(p.devbox.home, () => { liveTask(p.project.root, { id: '2', goal: request.goal, state: 'answered' }); updateRequest(p.project.root, request.id, { taskId: '2', state: 'done' }); });
+  assert.equal(withHome(p.devbox.home, () => taskTitle(readTask(repository(p.project.root), '2'))), name);
+  assert.equal(list().find(row => row.ref === `${p.ref.split(':')[0]}:2`)?.title, name, 'the list there, once it started');
+  // With words after it, on the next line: those words.
+  const worded = await start(`'${shot}'\nwhy is this cut off`);
+  assert.equal(shown(worded.id), 'why is this cut off'); assert.equal(list().find(row => row.remoteId === worded.id)?.title, 'why is this cut off');
 });

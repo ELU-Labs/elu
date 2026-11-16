@@ -551,6 +551,32 @@ test('elu invite never turns Auto on for a team that already has members; a new 
   });
 });
 
+// A code made in another project of the team: whoever joins with it writes from that project,
+// and a message of theirs that names none runs there (intake.mjs), not in the folder elu access
+// set. So the invite names that project, and says such a message waits there for the owner.
+test('elu invite in another project of the team names that project and says its messages wait there unless elu access set it', async t => {
+  const crew = makeTeam(t), ana = crew.founder;
+  await withHome(ana.home, async () => {
+    const first = registeredProject(t), notes = registeredProject(t);
+    peer.share(first.root, { teams: [crew.teamId] });
+    saveTeamAccess(crew.teamId, { handling: 'auto', root: first.root });
+    peer.share(notes.root, { handle: 'notes', teams: [crew.teamId] });
+    assert.match(peer.invitedProject(crew.teamId, notes.root) ?? '', /^[0-9a-f]{16}$/, 'the notes are another project of the team');
+    const there = await peerCli(['invite'], { project: notes.root });
+    assert.ok(there.lines.includes(`Project: ${notes.root}`), there.lines.join('\n'));
+    assert.ok(there.lines.includes('Manual: each message waits for you to approve it.'), there.lines.join('\n'));
+    // In the first project the setting is said as it is.
+    const here = await peerCli(['invite'], { project: first.root });
+    assert.ok(here.lines.includes(`Project: ${first.root}`), here.lines.join('\n'));
+    assert.ok(here.lines.some(line => line.startsWith('Auto: ')), here.lines.join('\n'));
+    // Once elu access sets the notes, a code made there says Auto.
+    saveTeamAccess(crew.teamId, { handling: 'auto', root: notes.root });
+    const set = await peerCli(['invite'], { project: notes.root });
+    assert.ok(set.lines.some(line => line.startsWith('Auto: ')), set.lines.join('\n'));
+    assert.ok(set.lines.includes(`Project: ${notes.root}`), set.lines.join('\n'));
+  });
+});
+
 test('elu access shows and changes what teammates can do here; --auto with --manual is refused', async t => {
   const crew = makeTeam(t), sara = crew.member;
   await withHome(sara.home, async () => {
@@ -663,7 +689,7 @@ function fakeSocket() {
   const wire = { out: '' }, socket = Object.assign(new EventEmitter(), { destroyed: false, write: chunk => { wire.out += chunk; return true; }, destroy() { this.destroyed = true; this.emit('close'); } });
   return { socket, wire, frames: () => wire.out.split('\n').filter(Boolean).map(line => JSON.parse(line)), say: value => socket.emit('data', Buffer.from(`${JSON.stringify(value)}\n`)) };
 }
-const NOBODY = { name: '', teams: [], handles: [], plans: true, remote: 1, cards: 1, files: 1, standup: 1, folders: 1, carry: 1, model: 1, lists: 1, edit: 1, reach: 1, clean: 1, notes: 1, check: 1, own: 1, board: 1, whole: 1, shared: 1, startFiles: 1 };
+const NOBODY = { name: '', teams: [], handles: [], plans: true, remote: 1, cards: 1, files: 1, standup: 1, folders: 1, carry: 1, model: 1, lists: 1, edit: 1, reach: 1, clean: 1, notes: 1, check: 1, own: 1, board: 1, whole: 1, shared: 1, startFiles: 1, projects: 1 };
 
 test('a hello names only the teams its receiver is on, and a stranger or a removed teammate gets no team and no name', async t => {
   const crew = makeTeam(t), ana = crew.founder.identity, sara = crew.member, bob = withHome(newHome(t), () => createIdentity({ name: 'bob' }));
@@ -769,6 +795,82 @@ test('a short code over the wire: the inviter announces its topic, proves itself
     assert.deepEqual(merge(teamId, ops).rejected, []);
     assert.deepEqual(team(teamId).members.map(m => m.name), ['ana', 'li']);
   });
+});
+
+test('a short code made in another project of the team names it to whoever joins with it, and an ELU before 0.1.31 is told to update first; one made in the first project names none', async t => {
+  peerHome(t);
+  const me = createIdentity({ name: 'ana' }), made = createTeam(me, 'core'), other = 'e'.repeat(16);
+  const { daemon } = inviterDaemon(me);
+  const someone = () => withHome(newHome(t), () => createIdentity({ name: 'x' }).key);
+  // old: the joiner's hello is an ELU's before 0.1.31, which has no projects in it.
+  const join = async (code, { old = false } = {}) => {
+    const keys = inviteKeys(code), key = someone(), joiner = fakeSocket(), joinerNonce = crypto.randomBytes(32).toString('hex');
+    const { projects, ...before } = hi.params;
+    daemon.attach(joiner.socket, key); joiner.say(old ? { ...hi, params: before } : hi);
+    joiner.say({ jsonrpc: '2.0', id: 1, method: 'elu.invite.start', params: { topic: keys.topic, nonce: joinerNonce } });
+    const started = await until(() => joiner.frames().find(frame => frame.id === 1 && !Object.hasOwn(frame, 'method')), 'the start reply', 5000);
+    const fields = { topic: keys.topic, joinerNonce, inviterNonce: started.result?.nonce, inviter: me.key, joiner: key };
+    joiner.say({ jsonrpc: '2.0', id: 2, method: 'elu.invite.prove', params: { proof: joinerProof(keys.seed, fields), name: 'li' } });
+    const proved = await until(() => joiner.frames().find(frame => frame.id === 2), 'the prove reply', 5000);
+    await new Promise(resolve => setImmediate(resolve)); joiner.socket.destroy();
+    return { key, proved };
+  };
+  const onTeam = key => team(made.id).members.some(member => member.key === key && !member.removed);
+  const code = createInvite(me, made.id, { hours: 1, project: other });
+  // An ELU before 0.1.31 would take its folder for the team's first project: it is told to
+  // update and is not admitted, and the code is still unused.
+  const old = await join(code, { old: true });
+  assert.match(old.proved.error?.message ?? '', /This invite is for another project of the team. Update ELU, then join again: npx -y @elu-labs\/elu@latest/);
+  assert.equal(onTeam(old.key), false); assert.equal(openInvites([made.id]).length, 1);
+  // Updated, it joins with the same code, and is told which project.
+  const now = await join(code);
+  assert.equal(now.proved.result?.project, other); assert.equal(onTeam(now.key), true);
+  // A code made in the first project names none, and an older ELU joins with it as before.
+  const first = await join(createInvite(me, made.id, { hours: 1 }), { old: true });
+  assert.equal(first.proved.result?.teamId, made.id); assert.equal(Object.hasOwn(first.proved.result, 'project'), false); assert.equal(onTeam(first.key), true);
+});
+
+// A fake socket that hands what is written over on a later turn, as a real one does: what is not
+// out yet when it is destroyed is lost, and end() lets it out first.
+function queuedSocket() {
+  const wire = { out: '' }, queue = [];
+  const socket = Object.assign(new EventEmitter(), { destroyed: false,
+    write(chunk) { queue.push(String(chunk)); setImmediate(() => { if (!socket.destroyed && queue.length) wire.out += queue.shift(); }); return true; },
+    end() { wire.out += queue.splice(0).join(''); setImmediate(() => socket.destroy()); },
+    destroy() { if (this.destroyed) return; this.destroyed = true; queue.length = 0; this.emit('close'); } });
+  return { socket, wire, frames: () => wire.out.split('\n').filter(Boolean).map(line => JSON.parse(line)), say: value => socket.emit('data', Buffer.from(`${JSON.stringify(value)}\n`)) };
+}
+// The joiner's half of a short code, through socket: start, then prove; the prove reply.
+async function proveOver(daemon, joiner, key, code, hello = hi) {
+  const keys = inviteKeys(code), joinerNonce = crypto.randomBytes(32).toString('hex');
+  daemon.attach(joiner.socket, key); joiner.say(hello);
+  joiner.say({ jsonrpc: '2.0', id: 1, method: 'elu.invite.start', params: { topic: keys.topic, nonce: joinerNonce } });
+  const started = await until(() => joiner.frames().find(frame => frame.id === 1 && !Object.hasOwn(frame, 'method')), 'the start reply', 5000);
+  const fields = { topic: keys.topic, joinerNonce, inviterNonce: started.result?.nonce, inviter: daemon.me.key, joiner: key };
+  joiner.say({ jsonrpc: '2.0', id: 2, method: 'elu.invite.prove', params: { proof: joinerProof(keys.seed, fields), name: 'li' } });
+  return until(() => joiner.frames().find(frame => frame.id === 2), 'the prove reply', 5000);
+}
+
+test('an ELU before 0.1.31 refused a code made in another project reads why before the connection ends, not that the teammate went away', async t => {
+  peerHome(t);
+  const me = createIdentity({ name: 'ana' }), made = createTeam(me, 'core'), { daemon } = inviterDaemon(me);
+  const key = withHome(newHome(t), () => createIdentity({ name: 'x' }).key), joiner = queuedSocket(), { projects, ...before } = hi.params;
+  const proved = await proveOver(daemon, joiner, key, createInvite(me, made.id, { hours: 1, project: 'e'.repeat(16) }), { ...hi, params: before });
+  assert.match(proved.error?.message ?? '', /This invite is for another project of the team. Update ELU, then join again/);
+  await until(() => joiner.socket.destroyed, 'the connection ends', 5000);
+});
+
+test('someone already on the team who uses a code made in another project of it is told that project, is not admitted again, and the code is used', async t => {
+  peerHome(t);
+  const me = createIdentity({ name: 'ana' }), made = createTeam(me, 'core'), { daemon } = inviterDaemon(me);
+  const sara = withHome(newHome(t), () => createIdentity({ name: 'sara' }).key);
+  redeemCode(createInvite(me, made.id, { hours: 1 }), sara, 'sara');
+  const code = createInvite(me, made.id, { hours: 1, project: 'e'.repeat(16) }), joiner = fakeSocket();
+  const proved = await proveOver(daemon, joiner, sara, code);
+  assert.equal(proved.result?.member, true, JSON.stringify(proved)); assert.equal(proved.result.project, 'e'.repeat(16)); assert.equal(proved.result.teamId, made.id);
+  assert.equal(team(made.id).members.filter(member => member.key === sara).length, 1);
+  assert.deepEqual(openInvites([made.id]), []);
+  joiner.socket.destroy();
 });
 
 test('a short invite refuses whoever cannot prove the code: a wrong code, a relay, a replay, a proof before the start, elu.join, and too many failures from one key', async t => {

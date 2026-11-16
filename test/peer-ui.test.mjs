@@ -10,6 +10,7 @@ import { markMine, noteTheirs } from '../lib/peer/mine.mjs';
 import { hostMethods, remoteCommand, watchId } from '../lib/peer/remote.mjs';
 import { saveTeamAccess } from '../lib/peer/access.mjs';
 import { offerFiles, offerPaths, stageFiles } from '../lib/peer/index.mjs';
+import { BYTES_MAX } from '../lib/peer/files.mjs';
 import { repository } from '../lib/git.mjs';
 import { claimView, nameProject, registerProject, sessionWire } from '../lib/projects.mjs';
 import { saveRequest, pendingRequests, updateRequest } from '../lib/workspace.mjs';
@@ -81,6 +82,7 @@ function fakePeer({ items, running = true, refuse = () => null, remoteBots = [],
     createInvite: record('createInvite', () => ({ code: 'k7qm-x2pd-9fhw' })),
     createTeam: record('createTeam', name => { facade.made = true; return { id: 'team-1', name }; }),
     joinTeam: record('joinTeam', async () => joined ?? ({ id: 'team-2', name: 'Docs', inviter: { name: 'sara', fingerprint: 'bbbbbbbb' } })),
+    joinedProject: record('joinedProject', (teamId, project) => project),
     mineRows: () => mine,
     remoteSessions: () => remote,
     remoteMachines: () => machines,
@@ -1755,7 +1757,7 @@ test('/done over a session on my other computer: a long new goal is waited for a
 // computer lists, counts and cleans up its own archived sessions. Here /archived lists this
 // computer's only, the line under the list counts only those, and x on the Archived heading and
 // /archived clean ask about and delete only those; Learn first still saves what was taught to
-// the project context. Another computer of mine is sent nothing and its archived sessions are not
+// the project's memory. Another computer of mine is sent nothing and its archived sessions are not
 // listed here: /archived on that computer lists them. Its sessions that are not archived still
 // show under its heading.
 test("/archived lists, counts and cleans up only this computer's archived sessions, never those of my other computers", async t => {
@@ -1787,7 +1789,7 @@ test("/archived lists, counts and cleans up only this computer's archived sessio
   // x on the Archived heading asks about this computer's one only; Esc cancels.
   board.focus(); selectRow(board, /ARCHIVED 1\b/); await until(() => /x clean up all/.test(v.panels.keys.getText()), 'x clean up all on the heading');
   v.input.write('x'); await until(() => modal(v, 'Clean up'), 'the question for all');
-  assert.match(notes('Clean up'), /Deletes "Tidy the logs" for good\. Learn first saves what you taught in it to the project context\./);
+  assert.match(notes('Clean up'), /Deletes "Tidy the logs" for good\. Learn first saves what you taught in it to the project's memory\./);
   assert.doesNotMatch(notes('Clean up'), /sara-box|@li|here/);
   v.input.write('\x1b'); await until(() => !modal(v, 'Clean up'), 'cancelled');
   // /archived clean: the same one only. Learn, then delete saves to this project's context.
@@ -1797,14 +1799,14 @@ test("/archived lists, counts and cleans up only this computer's archived sessio
   v.input.write('\r'); await until(() => modal(v, 'Work not pushed'), 'its work on no remote');
   assert.match(notes('Work not pushed'), /It has 1 file not committed\./);
   v.input.write('\r');
-  await until(() => modal(v, 'Saved to the project context'), 'what its lessons run saved', 20000);
-  assert.deepEqual(modal(v, 'Saved to the project context').children.find(child => child.type === 'list').items.map(item => item.getText().trim()), ['Use pnpm, not npm.']);
-  assert.match(notes('Saved to the project context'), /Deleted "Tidy the logs"\. Kept its work on feat\/task-4\./);
-  assert.doesNotMatch(notes('Saved to the project context'), /sara-box|@li|needs ELU/);
+  await until(() => modal(v, 'Saved to memory'), 'what its lessons run saved', 20000);
+  assert.deepEqual(modal(v, 'Saved to memory').children.find(child => child.type === 'list').items.map(item => item.getText().trim()), ['Use pnpm, not npm.']);
+  assert.match(notes('Saved to memory'), /Deleted "Tidy the logs"\. Kept its work on feat\/task-4\./);
+  assert.doesNotMatch(notes('Saved to memory'), /sara-box|@li|needs ELU/);
   assert.match(readProjectSettings(p.root).context, /Use pnpm, not npm\./);
   assert.ok(!tasks(repo).some(task => task.id === '4'), 'the one here is deleted');
   assert.deepEqual(peer.sent().filter(row => row.type === 'remoteClean'), [], 'nothing went to my other computers');
-  v.input.write('\r'); await until(() => !modal(v, 'Saved to the project context') && !rows().some(row => /ARCHIVED|Tidy the logs/.test(row)), 'nothing archived is left here');
+  v.input.write('\r'); await until(() => !modal(v, 'Saved to memory') && !rows().some(row => /ARCHIVED|Tidy the logs/.test(row)), 'nothing archived is left here');
   await settle();
   assert.ok(rows().some(row => /Sort imports/.test(row)), "sara-box's open session stays");
   assert.ok(!rows().some(row => /archived · \/archived$/.test(row)), `nothing archived here to count:\n${rows().join('\n')}`);
@@ -1864,15 +1866,15 @@ for (const [cols, high] of [[80, 24], [140, 50]]) test(`at ${cols}x${high} every
   assert.match(framed(v, 'Clean up').join(' '), /Learn, then delete.*Deletes "Tidy the logs" for good\./);
   v.input.write('\r'); await until(() => modal(v, 'Work not pushed'), 'its work on no remote');
   assert.match(framed(v, 'Work not pushed').join(' '), /Keep it.*It has 1 file not committed\..*enter choose · esc cancel$/);
-  v.input.write('\r'); await until(() => modal(v, 'Saved to the project context'), 'the result with 40 lessons', 20000);
-  const tail = () => framed(v, 'Saved to the project context').map(row => row.replace(/┃$/, '').trim());
+  v.input.write('\r'); await until(() => modal(v, 'Saved to memory'), 'the result with 40 lessons', 20000);
+  const tail = () => framed(v, 'Saved to memory').map(row => row.replace(/┃$/, '').trim());
   const end = ['OK', '', 'Deleted "Tidy the logs".', 'Kept its work on feat/task-4.', '', 'enter close'];
   assert.deepEqual(tail().slice(-end.length), end, tail().join('\n'));
   assert.ok(tail().some(row => row === 'Lesson 1 for the shop.') && !tail().includes('Lesson 40 for the shop.'), `the rows scroll:\n${tail().join('\n')}`);
   v.input.write('\x1b[F'); await until(() => tail().includes('Lesson 40 for the shop.'), 'the last lesson, after End');
   assert.deepEqual(tail().slice(-end.length), end, 'the result stays whole under the rows');
   assert.doesNotMatch(tail().join(' '), /sara-box/);
-  v.input.write('\r'); await until(() => !modal(v, 'Saved to the project context'), 'closed');
+  v.input.write('\r'); await until(() => !modal(v, 'Saved to memory'), 'closed');
   assert.deepEqual(peer.sent().filter(row => row.type === 'remoteClean'), [], 'nothing went to sara-box');
 });
 
@@ -1893,7 +1895,7 @@ for (const [cols, high] of [[80, 24], [140, 50]]) test(`at ${cols}x${high} the n
   for (const [at, id] of back.entries()) { liveTask(p.root, { id, goal: `Round the refunds to the cent for shop ${at + 1}`, state: 'stopped', files: {} }); closeSession(repo, id); }
   machines[0].sessions[0].archived = true; machines[0].clean = true;
   const peer = fakePeer({ items: [], mine: [{ key: SARA, mine: true, theirs: true }], machines, repoId: SHOP_REPO, answer }), v = await view(t, { repo, dashboard: true, peer, columns: cols, rows: high });
-  const board = v.panels.board, rows = () => board.items.map(plainItem).map(row => row.trim()), narrow = cols === 80, title = 'Saved to the project context';
+  const board = v.panels.board, rows = () => board.items.map(plainItem).map(row => row.trim()), narrow = cols === 80, title = 'Saved to memory';
   await send(v, '/archived'); await until(() => rows().some(row => /^ARCHIVED 9\b/.test(row)), "this computer's 9 archived sessions");
   await send(v, '/archived clean'); await until(() => modal(v, 'Clean up'), 'the question');
   assert.match(framed(v, 'Clean up').join(' '), /Deletes 9 archived sessions for good\./);
@@ -3315,7 +3317,9 @@ test('the first /invite makes the team, named after the open project', async t =
   await choose(v, 'What teammates can do here', /^Auto/); await closeDialog(v, 'Rules for teammates', '');
   await until(() => modal(v, 'Team invite'), 'invite');
   assert.deepEqual(peer.calls.filter(row => row[0] === 'createTeam'), [['createTeam', path.basename(p.root)]]);
-  assert.deepEqual(peer.calls.find(row => row[0] === 'createInvite').slice(1), ['team-1', { hours: 24 }]);
+  // The open project is shared before the code is made, and the code is made for it.
+  assert.deepEqual(peer.calls.find(row => row[0] === 'createInvite').slice(1), ['team-1', { hours: 24, root: p.root }]);
+  assert.ok(peer.calls.findIndex(row => row[0] === 'share') < peer.calls.findIndex(row => row[0] === 'createInvite'), 'shared before the code');
   await closeDialog(v, 'Team invite');
 });
 
@@ -3425,9 +3429,10 @@ test('share, invite and join use the open project', async t => {
   const bots = 'Bots your teammates can use';
   await send(v, '/invite'); await choose(v, 'Invite', /^Someone new/);
   await until(() => modal(v, 'Team invite'), 'invite');
-  assert.deepEqual(peer.calls.filter(row => row[0] === 'share').at(-1).slice(1), [p.root, { teams: ['team-1'] }]);
+  // With status on: a project kept off with /share off is shared again, as whoever joins it sees it.
+  assert.deepEqual(peer.calls.filter(row => row[0] === 'share').at(-1).slice(1), [p.root, { teams: ['team-1'], status: true }]);
   const window = modal(v, 'Team invite').children.find(child => child.options?.scrollable).getText();
-  assert.match(window, /Teammates can ask about sample, the folder \S[^]*sample app\.[^]*Run npx -y @elu-labs\/elu[^]*type \/join and paste this code/); assert.doesNotMatch(window, /fingerprint/i);
+  assert.match(window, /It shares \S[^]*, the folder \S[^]*sample app: whoever joins with it joins that project\.[^]*Run npx -y @elu-labs\/elu[^]*type \/join and paste this code/); assert.doesNotMatch(window, /fingerprint/i);
   await closeDialog(v, 'Team invite');
   await send(v, '/join nope'); await until(() => /That is not an invite code\. Use \/join code/.test(v.panels.status.getText()), 'join usage');
   assert.equal(peer.calls.some(row => row[0] === 'joinTeam'), false);
@@ -3437,7 +3442,29 @@ test('share, invite and join use the open project', async t => {
   await until(() => /Joined Docs with sara\. Their messages start sessions here, as if you typed them\./.test(v.panels.status.getText()), 'joined');
   assert.deepEqual(peer.calls.find(row => row[0] === 'joinTeam').slice(1, 2), ['k7qm-x2pd-9fhw']);
   assert.equal(shares(), before, 'nothing shared');
+  assert.ok(!peer.calls.some(row => row[0] === 'joinedProject'), 'a code made in the first project names none');
   assert.deepEqual(peer.calls.find(row => row[0] === 'saveTeamAccess').slice(1), ['team-2', { handling: 'auto', rules: '', root: p.root }]);
+});
+
+test('a code made in another project of the team: /join takes the open project as that one, before what teammates can do here is saved', async t => {
+  const p = project(later(t)); environment(t, p.parent);
+  const other = 'e'.repeat(16), peer = fakePeer({ joined: { id: 'team-2', name: 'Docs', project: other, inviter: { name: 'sara', fingerprint: 'bbbbbbbb' } } });
+  const v = await view(t, { repo: repository(p.root), peer });
+  await send(v, '/join k7qm-x2pd-9fhw'); await answerJoin(v);
+  await until(() => /Joined Docs with sara./.test(v.panels.status.getText()), 'joined');
+  assert.deepEqual(peer.calls.filter(row => row[0] === 'joinedProject').map(row => row.slice(1)), [['team-2', other, p.root, { member: false }]]);
+  assert.ok(peer.calls.findIndex(row => row[0] === 'joinedProject') < peer.calls.findIndex(row => row[0] === 'saveTeamAccess'), 'the project first');
+  assert.deepEqual(peer.calls.find(row => row[0] === 'saveTeamAccess').slice(1), ['team-2', { handling: 'auto', rules: '', root: p.root }]);
+});
+
+test('already on the team, /join with a code made in another project of it takes the open project as that one, and leaves what teammates can do here as it was', async t => {
+  const p = project(later(t)); environment(t, p.parent);
+  const other = 'e'.repeat(16), peer = fakePeer({ joined: { id: 'team-2', name: 'Docs', project: other, member: true, inviter: { name: 'sara', fingerprint: 'bbbbbbbb' } } });
+  const v = await view(t, { repo: repository(p.root), peer });
+  await send(v, '/join k7qm-x2pd-9fhw'); await answerJoin(v);
+  await until(() => /Joined sara's project in this folder\. You see each other's sessions here now\./.test(v.panels.status.getText()), 'joined');
+  assert.deepEqual(peer.calls.filter(row => row[0] === 'joinedProject').map(row => row.slice(1)), [['team-2', other, p.root, { member: true }]]);
+  assert.equal(peer.calls.some(row => row[0] === 'saveTeamAccess'), false, 'nothing about what teammates can do here changed');
 });
 
 test('/join counts while it looks for the inviter and says their ELU must be open; Esc cancels it at once; a join that goes through clears the line', async t => {
@@ -4762,13 +4789,34 @@ test("a project's settings say which other computers have it, read only, with no
   await send(v, '/projects'); await until(() => v.current.view === 'projects' && list.items.some(item => /sample app/.test(plainItem(item))), 'Projects');
   list.focus(); selectRow(list, /sample app/); v.input.write('\r');
   await until(() => modal(v, title) && row(), 'its settings');
-  rowsOf(v, title).forEach((text, n) => assert.match(text, [/^● Active project/, /^Instructions/, /^Context/, /^Also on/, /^Default model/, /^This computer/, /^Archive/][n]));
+  rowsOf(v, title).forEach((text, n) => assert.match(text, [/^● Active project/, /^Instructions/, /^Memory/, /^Also on/, /^Default model/, /^This computer/, /^Archive/][n]));
   assert.equal(row(), 'Also on       @sara-box');
   assert.ok(!rowsOf(v, title).some(text => /link/i.test(text)));
   // Enter on it only says what it means: nothing to choose, nothing changed.
   await choose(v, title, /^Also on/);
-  await until(() => /sample app is the same project on @sara-box: the same instructions, context and lessons\./.test(status()), 'what it means');
+  await until(() => /sample app is the same project on @sara-box: the same instructions and memory\./.test(status()), 'what it means');
   assert.deepEqual(peer.calls.filter(call => call[0] === 'linkProject'), []);
+  // Instructions and Memory each say first what they are, and that sessions on @sara-box use the
+  // same. A project on another computer can be a team's: what is in them was written, and
+  // learned, from everyone on it, not from this computer's owner alone, so neither says "you".
+  const reader = name => modal(v, name)?.children.find(child => child.options?.scrollable && child.type !== 'textarea');
+  const abouts = [['Instructions', ['Rules every session in this project follows, here and on @sara-box.', 'Everyone on it writes them; e edits.']], ['Memory', ['What ELU learned from everyone on it, and what they added.', 'Sessions here and on @sara-box read it. e edits; remove anything wrong.']]];
+  for (const [label, about] of abouts) {
+    const name = `${label} · sample app`;
+    await choose(v, title, new RegExp(`^${label}`)); await until(() => reader(name)?.lpos, `${label} to read`);
+    assert.deepEqual(reader(name).getText().split('\n'), [...about, '', `No ${label.toLowerCase()} yet. e adds text.`]);
+    assert.doesNotMatch(reader(name).getText(), /\byou\b/i);
+    v.input.write('\x1b'); await until(() => modal(v, title) && !modal(v, name), 'back in its settings');
+  }
+  // At 80 columns each still says it in two rows.
+  v.output.columns = 80; v.output.rows = 24; v.output.emit('resize'); await until(() => v.current.screen.width === 80, '80 columns');
+  for (const [label, about] of abouts) {
+    const name = `${label} · sample app`;
+    await choose(v, title, new RegExp(`^${label}`)); await until(() => reader(name)?.lpos, `${label} to read at 80 columns`);
+    assert.deepEqual(reader(name).getText().split('\n').slice(0, 3), [...about, ''], reader(name).getText());
+    v.input.write('\x1b'); await until(() => modal(v, title) && !modal(v, name), 'back in its settings at 80 columns');
+  }
+  v.output.columns = 160; v.output.rows = 40; v.output.emit('resize'); await until(() => v.current.screen.width === 160, '160 columns');
   // On no other computer (one there on an older ELU says none): no row.
   links = [{ key: SARA, older: true, linked: null, same: null, projects: [] }];
   v.input.write('\x1b'); await until(() => !modal(v, title), 'closed');
@@ -4930,6 +4978,128 @@ test('a picture dropped in the New session box after @ my other computer goes th
   await until(() => /older ELU/.test(asked()), 'asked again'); v.input.write('y');
   await until(() => started().length === 2 && /Started on @sara-box/.test(status()), 'the text alone');
   assert.equal(started()[1].goal, `${dropped} and this`);
+});
+
+// The files question says Esc cancels. Over a session on my other computer, Esc there sends
+// nothing: not the text without the picture. The message stays in the box as typed, and the
+// line says so. n still sends the text alone.
+test('Esc on the files question over a session on my other computer sends nothing and keeps the message in the box; n still sends the text alone', { timeout: 60000 }, async t => {
+  const PNG = Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex'), at = new Date().toISOString();
+  const team = makeTeam(t, { founderName: 'ana', memberName: 'box' }), laptop = team.founder, devbox = team.member;
+  const home = temp(later(t)), shot = path.join(home, 'Library', 'Application Support', 'Shots', 'shot 1.png'), dropped = shot.replaceAll(' ', '\\ ');
+  const values = { HOME: home, XDG_DATA_HOME: path.join(home, 'data'), XDG_CONFIG_HOME: laptop.home, ELU_NO_COLOR: '1', TERM: 'xterm-256color' }, previous = Object.fromEntries(Object.keys(values).map(key => [key, process.env[key]]));
+  owned(t).files.push(() => { for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } });
+  Object.assign(process.env, values);
+  fs.mkdirSync(path.dirname(shot), { recursive: true }); fs.writeFileSync(shot, PNG);
+  const there = withHome(devbox.home, () => {
+    const made = registeredProject(t); saveTeamAccess(team.teamId, { root: made.root });
+    markMine(devbox.identity.key, laptop.identity.key); noteTheirs(laptop.identity.key, true);
+    liveTask(made.root, { id: '1', goal: 'Look at the batch results', state: 'ready' });
+    return made;
+  });
+  markMine(laptop.identity.key, devbox.identity.key); noteTheirs(devbox.identity.key, true);
+  const link = key => ({ key, admitted: true, remoteHello: { remote: 1, files: 1 }, notify: () => {}, request: async () => { throw new Error('No answer'); } });
+  const ctx = (me, sessions) => ({ me, session: key => sessions[key] ?? null, name: key => key.slice(0, 4), box: key => key === me.key ? null : 'mac', log: () => {}, kick: () => {}, soon: () => {}, event: () => {} });
+  const toHost = link(laptop.identity.key), toViewer = link(devbox.identity.key);
+  const host = hostMethods(ctx(devbox.identity, { [laptop.identity.key]: toHost })), viewCtx = ctx(laptop.identity, { [devbox.identity.key]: toViewer });
+  toViewer.request = async (method, params) => withHome(devbox.home, () => host[method](params, toHost));
+  const ref = `${hash(`project\0${there.root}`).slice(0, 16)}:1`, id = watchId(laptop.identity.key, devbox.identity.key, ref);
+  const remote = [{ id, machine: SARA, createdAt: at, lastAt: at, title: 'Look at the batch results', state: 'answered', steps: [], entries: [{ role: 'You', at, text: 'Look at the batch results' }, { role: 'Opus 5.5', lead: true, at, text: 'Done.' }], approvals: [] }];
+  const peer = fakePeer({ items: [], mine: [{ key: SARA, mine: true, theirs: true }], remote, answer: command => ['remoteFiles', 'remoteSend'].includes(command.type) ? remoteCommand(viewCtx, { ...command, to: devbox.identity.key, ref }) : null });
+  Object.assign(peer, { offerFiles, offerPaths, stageFiles });
+  const p = project(later(t)), v = await view(t, { repo: repository(p.root), dashboard: true, peer });
+  const board = v.panels.board, ask = v.panels.ask, status = () => v.panels.status.getText().replace(/\s+/g, ' ');
+  const asked = () => modal(v, 'Send files')?.children.map(child => child.getText?.() ?? '').join(' ').replace(/\s+/g, ' ') ?? '';
+  const keysSaid = () => modal(v, 'Send files')?.children.find(child => child.type === 'textbox')?._label?.getText() ?? '';
+  const goals = () => withHome(devbox.home, () => pendingRequests(there.root).filter(row => row.continuationTaskId === '1').map(row => row.goal));
+  await until(() => board.items.map(plainItem).some(row => /Look at the batch results/.test(row)), 'the session there is listed');
+  board.focus(); selectRow(board, /Look at the batch results/);
+  await until(() => / on @sara-box /.test(ask._label.getText()), 'the box writes to the session there');
+  // Dropped in the box, words after it, Enter: the question, which says Esc cancels.
+  ask.focus(); ask.readInput(); await until(() => ask.__listener, 'message box');
+  v.input.write(`\x1b[200~${dropped}\x1b[201~`); await until(() => ask.getValue() === dropped, 'the drop is in the box');
+  v.input.write(' why is this cut off'); await until(() => ask.getValue() === `${dropped} why is this cut off`, 'typed');
+  v.input.write('\r');
+  await until(() => /Send 1 file \(1 KB\) from this computer with this message\?/.test(asked()), 'asked');
+  assert.match(keysSaid(), /Esc cancels/);
+  // Esc: nothing goes there, the message is in the box as typed, and the line says so.
+  v.input.write('\x1b');
+  await until(() => !modal(v, 'Send files') && (/Nothing was sent/.test(status()) || /Sent /.test(status()) || goals().length > 0), 'answered');
+  await new Promise(resolve => setTimeout(resolve, 300));
+  assert.deepEqual(goals(), [], 'nothing went there');
+  assert.match(status(), /Nothing was sent\. The message is still here\./);
+  assert.equal(ask.getValue(), `${dropped} why is this cut off`);
+  // n, as before: the text alone.
+  await send(v, ask.getValue());
+  await until(() => /Send 1 file/.test(asked()), 'asked again'); v.input.write('n');
+  await until(() => goals().length === 1 && /Sent to .* on @sara-box\./.test(status()) && ask.getValue() === '', 'the text alone went');
+  assert.doesNotMatch(goals()[0], /Files from/); assert.match(goals()[0], /why is this cut off$/);
+});
+
+// The same for a new session on my other computer: Esc on the files question, and on the
+// questions about the text alone (an older ELU there, or more than a send carries), starts
+// nothing. The message stays in the box as typed, and the line says so. n starts it with the text alone.
+test('Esc on the files question for a new session on my other computer starts nothing and keeps the message in the box; so does Esc on "Start it with the text only?"', { timeout: 60000 }, async t => {
+  const PNG = Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex');
+  const team = makeTeam(t, { founderName: 'ana', memberName: 'box' }), laptop = team.founder, devbox = team.member;
+  const home = temp(later(t)), shot = path.join(home, 'Library', 'Application Support', 'Shots', 'shot 1.png'), dropped = shot.replaceAll(' ', '\\ ');
+  const values = { HOME: home, XDG_DATA_HOME: path.join(home, 'data'), XDG_CONFIG_HOME: laptop.home, ELU_NO_COLOR: '1', TERM: 'xterm-256color' }, previous = Object.fromEntries(Object.keys(values).map(key => [key, process.env[key]]));
+  owned(t).files.push(() => { for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } });
+  Object.assign(process.env, values);
+  fs.mkdirSync(path.dirname(shot), { recursive: true }); fs.writeFileSync(shot, PNG);
+  const huge = path.join(home, 'huge.bin'); fs.writeFileSync(huge, ''); fs.truncateSync(huge, BYTES_MAX + 1);
+  const there = withHome(devbox.home, () => {
+    const made = registeredProject(t); saveTeamAccess(team.teamId, { root: made.root });
+    markMine(devbox.identity.key, laptop.identity.key); noteTheirs(laptop.identity.key, true);
+    return made;
+  });
+  markMine(laptop.identity.key, devbox.identity.key); noteTheirs(devbox.identity.key, true);
+  const link = key => ({ key, admitted: true, remoteHello: { remote: 1, files: 1, startFiles: 1 }, notify: () => {}, request: async () => { throw new Error('No answer'); } });
+  const ctx = (me, sessions) => ({ me, session: key => sessions[key] ?? null, name: key => key.slice(0, 4), box: key => key === me.key ? null : 'mac', log: () => {}, kick: () => {}, soon: () => {}, event: () => {} });
+  const toHost = link(laptop.identity.key), toViewer = link(devbox.identity.key);
+  const host = hostMethods(ctx(devbox.identity, { [laptop.identity.key]: toHost })), viewCtx = ctx(laptop.identity, { [devbox.identity.key]: toViewer });
+  const devboxHome = temp(later(t));
+  toViewer.request = async (method, params) => withHome(devbox.home, () => { const mac = process.env.HOME; process.env.HOME = devboxHome; try { return host[method](params, toHost); } finally { process.env.HOME = mac; } });
+  const peer = fakePeer({ items: [], mine: [{ key: SARA, mine: true, theirs: true }], answer: command => command.type === 'remoteStart' ? remoteCommand(viewCtx, { ...command, to: devbox.identity.key }) : null });
+  Object.assign(peer, { offerFiles, offerPaths, stageFiles });
+  const p = project(later(t)), v = await view(t, { repo: repository(p.root), dashboard: true, peer });
+  const ask = v.panels.ask, status = () => v.panels.status.getText().replace(/\s+/g, ' ');
+  const asked = () => modal(v, 'Send files')?.children.map(child => child.getText?.() ?? '').join(' ').replace(/\s+/g, ' ') ?? '';
+  const started = () => withHome(devbox.home, () => pendingRequests(there.root).filter(row => row.mine));
+  const starts = () => peer.sent().filter(command => command.type === 'remoteStart').length;
+  // Esc on a question: once it closes, nothing started, the box holds the message as typed, and the line says so.
+  const escKeeps = async (typed, what) => {
+    v.input.write('\x1b');
+    await until(() => !modal(v, 'Send files') && (/Nothing was sent/.test(status()) || /Start(?:ed|ing) on/.test(status())), `${what}: answered`);
+    await new Promise(resolve => setTimeout(resolve, 300));
+    assert.deepEqual(started(), [], `${what}: nothing started`);
+    assert.match(status(), /Nothing was sent\. The message is still here\./, what);
+    assert.equal(ask.getValue(), typed, what);
+  };
+  ask.focus(); ask.readInput(); await until(() => ask.__listener, 'message box');
+  const typed = `@sara-box ${dropped} why is this cut off`;
+  v.input.write('@sara-box '); v.input.write(`\x1b[200~${dropped}\x1b[201~`); v.input.write(' why is this cut off');
+  await until(() => ask.getValue() === typed, 'typed');
+  v.input.write('\r');
+  await until(() => /Send 1 file \(1 KB\) from this computer with this message\?/.test(asked()), 'asked');
+  await escKeeps(typed, 'the files question');
+  assert.equal(starts(), 0, 'nothing was asked to start there');
+  // More than a send carries: "Send the text only?", and Esc keeps it too.
+  const over = `@sara-box ${huge} look`;
+  ask.setValue(''); await send(v, over);
+  await until(() => /Send the text only\?/.test(asked()), 'asked about the text alone');
+  await escKeeps(over, 'the text-only question');
+  // An older ELU there: y to the files asks whether the text goes alone. Esc starts nothing.
+  toViewer.remoteHello = { remote: 1, files: 1 };
+  ask.setValue(''); await send(v, typed);
+  await until(() => /Send 1 file/.test(asked()), 'offered'); v.input.write('y');
+  await until(() => /older ELU, which takes files only into a session that has started\. Start it with the text only\?/.test(asked()), 'asked about the text alone');
+  await escKeeps(typed, 'Start it with the text only?');
+  // n to the files question, as before: it starts there with the text alone.
+  ask.setValue(''); await send(v, typed);
+  await until(() => /Send 1 file/.test(asked()), 'offered again'); v.input.write('n');
+  await until(() => started().length === 1 && /Started on @sara-box/.test(status()), 'the text alone');
+  assert.equal(started()[0].goal, `${dropped} why is this cut off`);
 });
 
 // @here and a CleanShot capture dropped from ~/Library, over a session on my other computer:

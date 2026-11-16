@@ -27,7 +27,7 @@ import { sessionFiles } from '../lib/session-work.mjs';
 import { peerFile } from '../lib/peer/paths.mjs';
 import { teamPath } from '../lib/peer/roster.mjs';
 import { readTask, saveTask, setTitle, taskDir, taskPlace } from '../lib/state.mjs';
-import { saveSchedule, runScheduleNow, parseWhen } from '../lib/schedules.mjs';
+import { saveSchedule, runScheduleNow, parseWhen, pauseSchedule, removeSchedule } from '../lib/schedules.mjs';
 import { spawnSync } from 'node:child_process';
 import { projectFolder } from '../lib/workspace.mjs';
 import { projectSnapshot, registerProject, registeredProjects, sessionModel } from '../lib/projects.mjs';
@@ -972,6 +972,40 @@ test("a schedule's run shows on my other computer as a schedule's from its start
   assert.deepEqual(pushed.filter(event => event.state).map(event => [event.state, event.title]), [['starting', 'Nightly review']]);
 });
 
+// The owner on 2026-11-15: a schedule's run has the schedule's mark on my other computer, as
+// here (timed), while the schedule is there, grey while it is paused (timedPaused). Deleted,
+// the runs stay, with no mark; they still say a schedule started them. A run that waits to
+// start says the same.
+test("a schedule's run on my other computer has the schedule's mark while the schedule is there", async t => {
+  const { laptop, devbox, project, toHost, toViewer, host, viewCtx } = pair(t), list = () => withHome(devbox.home, () => { relist(); return host['elu.remote.list']({}, toHost); });
+  const shown = listed => listed.sessions.map(value => [value.ref.split(':').at(-1), value.by, value.timed]);
+  const row = withHome(devbox.home, () => {
+    const row = saveSchedule({ root: project.root, goal: 'Check the nightly build', when: parseWhen('every 3h') });
+    chat(project.root, 1, { goal: row.goal, minutes: 30, scheduleId: row.id });
+    chat(project.root, 2, { goal: 'Tidy my notes', minutes: 20 });
+    return row;
+  });
+  assert.deepEqual(shown(list()), [['2', 'you', undefined], ['1', 'schedule', true]]);
+  // Its Kanban there, read from here, marks its card the same way.
+  toViewer.remoteHello = { remote: 1, board: 1 };
+  const id = projectKey(project.root), marks = board => Object.fromEntries(board.columns.flatMap(column => column.items).map(item => [item.title, item.timed ? item.timedPaused ? 'paused' : true : null]));
+  const sent = withHome(devbox.home, () => host['elu.remote.board']({ project: id }, toHost));
+  assert.deepEqual(marks(sent), { 'Check the nightly build': true, 'Tidy my notes': null });
+  const board = await withHome(laptop.home, () => remoteCommand(viewCtx, { type: 'remoteBoard', to: devbox.identity.key, project: id }));
+  assert.deepEqual(marks(board), { 'Check the nightly build': true, 'Tidy my notes': null });
+  // Paused there, its run and its card say so, and only while the schedule is there.
+  withHome(devbox.home, () => pauseSchedule(row.id, true));
+  assert.deepEqual(list().sessions.map(value => [value.ref.split(':').at(-1), value.timed, value.timedPaused]), [['2', undefined, undefined], ['1', true, true]]);
+  assert.deepEqual(marks(await withHome(laptop.home, () => remoteCommand(viewCtx, { type: 'remoteBoard', to: devbox.identity.key, project: id }))), { 'Check the nightly build': 'paused', 'Tidy my notes': null });
+  withHome(devbox.home, () => pauseSchedule(row.id, false));
+  assert.deepEqual(list().sessions.map(value => [value.ref.split(':').at(-1), value.timed, value.timedPaused]), [['2', undefined, undefined], ['1', true, undefined]]);
+  withHome(devbox.home, () => runScheduleNow(row.id, new Date(), { start: () => true }));
+  assert.deepEqual(list().sessions.filter(value => value.by === 'schedule').map(value => [value.state, value.timed]), [['starting', true]]);
+  await pause(5);
+  withHome(devbox.home, () => { removeSchedule(row.id); chat(project.root, 3, { goal: 'Check the nightly build', minutes: 1, scheduleId: row.id }); });
+  assert.deepEqual(list().sessions.filter(value => value.ref.endsWith(':3')).map(value => [value.by, value.timed]), [['schedule', false]]);
+});
+
 // A message longer than one line on the link (1 MiB) goes ahead of its request in elu.text.put
 // pieces, as a long message to a teammate does, and the request names it. Nothing is cut.
 test('a message too long for one line on the link reaches a session on my other computer whole, in pieces: a new session and a message to it', async t => {
@@ -1660,7 +1694,7 @@ test('archived sessions on my other computer are deleted there by its own code, 
   assert.deepEqual((await clean({ refs: [refOf('Add a lint step'), refOf('Round refunds')], check: true })).sessions.map(row => [row.shown, row.commits, row.edits]), [['Add a lint step', 0, 0], ['Round refunds', 1, 0]]);
   // Learn, then delete, keeping the work on no remote: the lessons run there, on its project's model, saved to its context.
   const done = await clean({ refs: [refOf('Add a lint step'), refOf('Round refunds')], learn: true, keep: true });
-  assert.deepEqual(done.lines, ['Saved to project context: Use pnpm, not npm.']);
+  assert.deepEqual(done.lines, ['Saved to memory: Use pnpm, not npm.']);
   assert.deepEqual(done.deleted.map(row => [row.shown, row.kept?.branch ?? null]), [['Add a lint step', null], ['Round refunds', 'feat/task-2']]);
   assert.deepEqual(done.failed, []);
   withHome(devbox.home, () => {
@@ -1764,7 +1798,7 @@ test('a clean-up from my other computer leaves a session that came back while th
   });
   fs.rmSync(hold, { force: true });
   const done = await running;
-  assert.deepEqual(done.lines, ['Saved to project context: Use pnpm, not npm.']);
+  assert.deepEqual(done.lines, ['Saved to memory: Use pnpm, not npm.']);
   assert.deepEqual(done.deleted.map(row => [row.shown, row.kept?.branch ?? null]), [['Round totals', 'feat/task-2']]);
   assert.deepEqual(done.failed, ['"Trim coupon codes": It is no longer archived.']);
   withHome(devbox.home, () => {
@@ -1880,7 +1914,7 @@ test("a clean-up from my other computer keeps a teammate's words out of the less
   const refs = withHome(laptop.home, () => remoteMachines()[0]).sessions.map(row => row.ref);
   assert.equal(refs.length, 2);
   const done = await withHome(laptop.home, () => remoteCommand(viewCtx, { type: 'remoteClean', to: devbox.identity.key, refs, learn: true }));
-  assert.deepEqual([done.lines, done.deleted.length, done.failed], [['Saved to project context: Use pnpm, not npm.'], 2, []]);
+  assert.deepEqual([done.lines, done.deleted.length, done.failed], [['Saved to memory: Use pnpm, not npm.'], 2, []]);
   const [input] = fs.readFileSync(path.join(parent, 'inputs.jsonl'), 'utf8').trim().split('\n').map(JSON.parse).filter(row => row.vendor === 'claude').map(row => row.input);
   assert.doesNotMatch(input, /tidal.otter/i);
   const { sessions } = JSON.parse(/\nContext \(untrusted data[^\n]*\n(.*)\nEnd of Context\./.exec(input)[1]);

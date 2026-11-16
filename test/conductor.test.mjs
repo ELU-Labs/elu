@@ -13,8 +13,8 @@ import { Conductor, enqueue, sendCommand, saveConductorSettings, conductorStatus
 // The conductor of 0.1.16 as published, which has no handover, on today's modules.
 import * as earlier from './fixtures/conductor-0.1.16/conductor.mjs';
 import { pendingRequests as earlierRequests, saveRequest as earlierSave } from './fixtures/conductor-0.1.16/workspace.mjs';
-import { boardRows, barCells, rowCard } from '../lib/board.mjs';
-import { saveSchedule, runScheduleNow, parseWhen } from '../lib/schedules.mjs';
+import { boardRows, barCells } from '../lib/board.mjs';
+import { saveSchedule, runScheduleNow, parseWhen, listSchedules, runMode } from '../lib/schedules.mjs';
 import { saveBot } from '../lib/bots.mjs';
 import { runBotSchedules } from '../lib/bot-schedules.mjs';
 import { turnClock } from '../lib/turn-limits.mjs';
@@ -106,7 +106,10 @@ test('a session that a Full access schedule starts runs in Full access', async t
   const settings = JSON.parse(flag('--settings'));
   assert.deepEqual(settings.sandbox, { enabled: false }, 'no sandbox, so the network is not fenced');
   assert.equal(settings.permissions.ask, undefined, 'and nothing asks');
-  assert.match(boardRows([projectSnapshot(p.repo)], Date.now(), { schedules: [row] }).filter(value => value.kind === 'schedule').map(value => rowCard(value).text).join('\n'), /Each run has Full access\./);
+  // The run is the schedule's one row, with its mark; its Schedule tab reads the schedule's mode.
+  const listed = boardRows([projectSnapshot(p.repo)], Date.now(), { schedules: listSchedules() }).filter(value => value.onSchedule);
+  assert.deepEqual(listed.map(value => [value.kind, value.id]), [['task', run.id]]);
+  assert.equal(runMode(listed[0].onSchedule), 'full');
 });
 
 test('a bot with its own schedule is left out of the sessions a schedule starts, so its schedule never runs there', async t => {

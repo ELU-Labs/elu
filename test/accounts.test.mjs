@@ -107,9 +107,10 @@ test('Claude: a second account signs in beside the first; a switch moves new tur
   assert.equal(mine.usage.weekly.usedPercent, 40); assert.equal(mine.usage.fiveHour.usedPercent, 5);
   const [claude] = usageTab({ vendors: [{ vendor: 'claude', available: true, signedIn: true }], now: Date.now() });
   assert.deepEqual(claude.accounts.map(row => [row.login, row.account, row.plan, row.active, row.usage?.weekly?.usedPercent ?? null]), [['default', 'first@example.com', 'Max 20x', true, 71], [slot.id, 'second@example.com', 'Max 5x', false, 40]]);
-  const text = usageBlocks([claude]).map(row => row.text).join('\n');
-  assert.match(text, /^Claude {6}first@example\.com · Max 20x · active\n {12}5h  \[##----\]   36%  resets [^\n]+\n {12}wk  \[####--\]   71%  resets [^\n]+\n {12}second@example\.com · Max 5x\n {12}5h  \[------\]    5%  resets [^\n]+\n {12}wk  \[##----\]   40%  resets [^\n]+\n {12}Switch accounts by itself  on\n {12}Use paid extra usage {7}off\n {12}enter on an account uses it · x forgets it · a adds one$/m);
-  assert.deepEqual(usageBlocks([claude]).filter(row => row.login === slot.id).length, 3, 'Enter on any line of the account uses it');
+  // Each account on one line, its two windows after it where the pane has room for both.
+  const text = usageBlocks([claude], { width: 136 }).map(row => row.text).join('\n');
+  assert.match(text, /^Claude {6}first@example\.com · Max 20x · active  5h \[##----\]  36% resets [^\n]+? {2}wk \[####--\]  71% resets [^\n]+\n {12}second@example\.com · Max 5x {11}5h \[------\]   5% resets [^\n]+? {2}wk \[##----\]  40% resets [^\n]+\n {12}Switch accounts by itself  on\n {12}Use paid extra usage {7}off\n {12}enter on an account uses it · x forgets it · a adds one$/m);
+  assert.deepEqual(usageBlocks([claude]).filter(row => row.login === slot.id).length, 1, 'one line for the account, and Enter on it uses it');
   // No sign-in, and no account's email, is kept with a session.
   for (const task of [first, second, finished, back]) assert.doesNotMatch(JSON.stringify(readTask(f.controller.repo, task.id)), /@example\.com|never-shown/);
   for (const name of ['accounts.json', 'logins.json', 'usage.json']) assert.doesNotMatch(read(path.join(personalDirectory(), name)), /never-shown|accessToken|refresh/, name);

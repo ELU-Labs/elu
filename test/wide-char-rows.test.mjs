@@ -540,7 +540,7 @@ test('the app at every width from 80 to 200: the settings of a project named wit
     const text = label => inside.find(row => row.includes(label));
     assert.ok(text(`Instructions  ${cut(TEXT, 48, '...')}`), `the instructions row, cut between two characters at ${width}:\n${inside.join('\n')}`);
     assert.ok(text('Default model Opus') && text('This computer Opus'), `the rows that name the model at ${width}:\n${inside.join('\n')}`);
-    assert.deepEqual(['● Active project', 'Instructions', 'Context', 'Default model', 'This computer', 'Archive'].map(label => columnOf(text(label), label)), Array(6).fill(box.aleft + 1), `every row starts in the dialog's first column at ${width}`);
+    assert.deepEqual(['● Active project', 'Instructions', 'Memory', 'Default model', 'This computer', 'Archive'].map(label => columnOf(text(label), label)), Array(6).fill(box.aleft + 1), `every row starts in the dialog's first column at ${width}`);
   }
 });
 

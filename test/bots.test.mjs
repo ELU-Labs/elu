@@ -337,6 +337,92 @@ test('a scheduled @reviewer never runs in a session that held it only by the old
   assert.equal(tick(), 1);
 });
 
+// A message a schedule wrote to a bot is not the owner's: a scheduled run never counts as the
+// owner adding the bot. 0.1.28 ran a scheduled @reviewer in sessions that held it only by the
+// old default, and those sessions still have no bots. A list 0.1.29 marked as his after such a
+// run (botsPicked) reads the same as one he added himself before its schedule ran, so it stands.
+test('a scheduled run never counts as the owner writing to @reviewer: a session that held it only by the old default has no bots', t => {
+  store(t);
+  const at = '2026-11-14T08:00:00.000Z', ran = [{ at, text: 'Scheduled run (every 1h).', to: '@reviewer', scheduled: true }, { at, text: 'Nothing to change.', from: '@reviewer', bot: 'reviewer' }];
+  assert.deepEqual(sessionBots({ bots: ['reviewer'], messages: ran }), [], 'only its schedule wrote to it');
+  assert.deepEqual(sessionBots({ bots: ['reviewer'], messages: [...ran, { at, text: 'Look again', to: '@reviewer' }] }), ['reviewer'], 'he wrote to it too');
+  assert.deepEqual(sessionBots({ bots: ['reviewer'], botsPicked: true, messages: ran }), ['reviewer'], 'marked as his: it stands');
+});
+
+// /bots run is the owner running the bot himself, as plain as writing to it. Every version saves
+// its message as a scheduled one, but in words no schedule writes ('Run now (asked with /bots
+// run).', where a schedule writes 'Scheduled run (<label>).'). A session that held @reviewer only
+// by the old default, where he typed /bots run reviewer in 0.1.28, keeps it and its schedule.
+test('a /bots run the owner typed counts as writing to @reviewer: a session that held it only by the old default keeps it', async t => {
+  const f = setup(t); registerProject(f.repo);
+  const chat = await f.controller.ask('Where is coupon normalization?').finished;
+  const at = new Date(Date.now() - 2 * 3600000).toISOString(), record = readTask(f.repo, chat.id);
+  delete record.botsPicked; record.bots = ['reviewer'];
+  record.messages.push({ at, text: 'Run now (asked with /bots run).', to: '@reviewer', scheduled: true }, { at, text: 'Nothing to change.', from: '@reviewer', bot: 'reviewer' });
+  saveTask(f.repo, record);
+  saveBot({ ...getBot('reviewer'), schedule: 'every 1h' });
+  const kept = readTask(f.repo, chat.id), now = Date.now();
+  assert.deepEqual(sessionBots(kept), ['reviewer']);
+  assert.equal(botScheduleLines(f.repo, kept).length, 1, '/bots shows its schedule');
+  assert.deepEqual(Object.keys(botSchedulesShown(f.repo, [kept])), [String(chat.id)], 'and so does its title');
+  // Its schedule runs there, counted from the run he asked for.
+  assert.equal(runBotSchedules(new Date(now), { start: () => true }) + runBotSchedules(new Date(now + 2 * 3600000), { start: () => true }), 1);
+  assert.equal(pendingRequests(f.root).filter(row => row.bot === 'reviewer').length, 1, 'its next run is queued');
+});
+
+// The 0.1.28 session where its schedule ran @reviewer: no schedule shows or runs there after
+// the update, not even from the row 0.1.30's tick kept of it, which counted that run as his.
+test('a scheduled @reviewer that 0.1.28 ran in a session that held it only by the old default never runs there again', async t => {
+  const f = setup(t); registerProject(f.repo);
+  const chat = await f.controller.ask('Where is coupon normalization?').finished;
+  const at = new Date(Date.now() - 2 * 3600000).toISOString(), record = readTask(f.repo, chat.id);
+  delete record.botsPicked; record.bots = ['reviewer'];
+  record.messages.push({ at, text: 'Scheduled run (every 1h).', to: '@reviewer', scheduled: true }, { at, text: 'Nothing to change.', from: '@reviewer', bot: 'reviewer' });
+  saveTask(f.repo, record);
+  saveBot({ ...getBot('reviewer'), schedule: 'every 1h' });
+  // Ticks now and two hours on: its schedule would be due by then in a session it is in.
+  const old = readTask(f.repo, chat.id), now = Date.now(), tick = () => runBotSchedules(new Date(now), { start: () => true }) + runBotSchedules(new Date(now + 2 * 3600000), { start: () => true });
+  assert.deepEqual(sessionBots(old), []);
+  assert.deepEqual(botScheduleLines(f.repo, old), [], '/bots shows no schedule');
+  assert.deepEqual(botSchedulesShown(f.repo, [old]), {}, 'nor does its title');
+  assert.equal(tick(), 0); assert.equal(pendingRequests(f.root).filter(row => row.bot === 'reviewer').length, 0, 'nothing queued');
+  // The row 0.1.30's tick kept of the session: its bots as 0.1.30 counted them, with that run as his.
+  // (The file also holds the rows this test process kept of earlier tests' sessions.)
+  const seenFile = path.join(personalDirectory(), 'bot-schedule-sessions.json'), seen = JSON.parse(fs.readFileSync(seenFile, 'utf8'));
+  assert.ok(Object.values(seen.files).some(entry => entry.row.id === String(chat.id)), 'the tick read the session');
+  for (const entry of Object.values(seen.files)) { const { id, state, createdAt, runs, peer, place, permissions, botChat, asked } = entry.row; entry.row = { id, state, createdAt, runs, messages: [], bots: ['reviewer'], inSession: true, peer, place, permissions, botChat, asked }; }
+  fs.writeFileSync(seenFile, JSON.stringify(seen));
+  const lib = new URL('../lib/bot-schedules.mjs', import.meta.url).href;
+  const ran = spawnSync(process.execPath, ['--input-type=module', '-e', `import { runBotSchedules } from ${JSON.stringify(lib)}; const now = ${now}, start = () => true; process.stdout.write(String(runBotSchedules(new Date(now), { start }) + runBotSchedules(new Date(now + 2 * 3600000), { start })));`], { env: process.env, encoding: 'utf8' });
+  assert.equal(ran.stdout, '0', ran.stderr); assert.equal(pendingRequests(f.root).filter(row => row.bot === 'reviewer').length, 0, 'nothing queued after the update');
+  // A run queued there before does nothing, and leaves the session as it was.
+  enqueue(f.root, 'Scheduled run (every 1h).', { continuationTaskId: chat.id, bot: 'reviewer', scheduled: true, priority: 1 });
+  const conductor = conduct(t);
+  await until(() => pendingRequests(f.root).every(row => row.state === 'done'), 'the queued run');
+  await conductor.stop();
+  const after = readTask(f.repo, chat.id);
+  assert.deepEqual(sessionBots(after), []); assert.equal(after.botsPicked, undefined);
+  assert.equal(after.messages.filter(row => row.to === '@reviewer').length, 1, 'no new run in the chat');
+});
+
+// Where @reviewer runs on its schedule, its run leaves the session's list as the owner left it:
+// the record never says he picked the bot because its schedule ran.
+test('a scheduled run of a bot in the session leaves its list unmarked as the owner\'s choice', async t => {
+  const f = setup(t); registerProject(f.repo);
+  const chat = await f.controller.ask('Where is coupon normalization?').finished;
+  const at = new Date(Date.now() - 2 * 3600000).toISOString(), record = readTask(f.repo, chat.id);
+  delete record.botsPicked; record.bots = ['reviewer'];
+  record.messages.push({ at, text: 'Look again', to: '@reviewer' }, { at, text: 'Nothing to change.', from: '@reviewer', bot: 'reviewer' });
+  saveTask(f.repo, record);
+  saveBot({ ...getBot('reviewer'), schedule: 'every 1h' });
+  assert.deepEqual(sessionBots(readTask(f.repo, chat.id)), ['reviewer'], 'he wrote to it');
+  const run = await f.controller.ask('Scheduled run (every 1h).', chat.id, { bot: 'reviewer', scheduled: true }).finished;
+  assert.ok(!run.error, JSON.stringify(run.error)); assert.ok(run.runs.some(row => row.role === 'bot:reviewer'), 'it ran');
+  const after = readTask(f.repo, chat.id);
+  assert.ok(after.messages.some(row => row.to === '@reviewer' && row.scheduled), 'its run is in the chat');
+  assert.deepEqual(after.bots, ['reviewer']); assert.equal(after.botsPicked, undefined, 'not marked as his choice');
+});
+
 test('a message written to a bot runs the bot and not the lead, saves the reply as the bot\'s, and adds the bot to the chat', async t => {
   const f = setup(t);
   const first = await f.controller.ask('Where is coupon normalization?').finished;

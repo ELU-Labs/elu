@@ -532,7 +532,7 @@ test('elu --help and elu sessions --help list the commands', () => {
   assert.ok(SCHEDULES_HELP.split('\n').filter(line => !line.startsWith(' ')).every(line => line.length < 80), 'each line of its words fits a terminal of 80 columns');
   // goal and copy, one line each, in the words elu sessions --help has; README's list names them too.
   const readme = fs.readFileSync(new URL('../README.md', import.meta.url), 'utf8'), section = readme.slice(readme.indexOf('### ELU from a session'), readme.indexOf('## Keys'));
-  for (const [verb, words, said] of [['goal', 'Keep one open with a new goal; it carries on at once.', 'keeps one open with a new goal; it carries on at once.'], ['copy', 'Start a copy of one, with a new goal.', 'starts a copy of one, with a new goal.']]) {
+  for (const [verb, words, said] of [['goal', 'Give one a new goal, also while it works.', 'gives one a new goal, also while it works: its turn is told without being stopped.'], ['copy', 'Start a copy of one, with a new goal.', 'starts a copy of one, with a new goal.']]) {
     assert.ok(SESSIONS_HELP.includes(`elu sessions ${verb} N GOAL `) && SESSIONS_HELP.includes(words), verb);
     assert.ok(help.split('\n').some(line => line.startsWith(`  sessions ${verb} N GOAL `) && line.endsWith(words) && line.length < 80), verb);
     assert.ok(section.replace(/\s+/g, ' ').includes(`\`elu sessions ${verb} N "goal"\` ${said}`), verb);
@@ -562,7 +562,7 @@ test('elu sessions delete deletes an archived session for good, or every archive
   // Every archived one, after --learn: what was saved is said once, and the work on no remote stays on its branch.
   const all = elu(f, ['sessions', 'delete', 'archived', '--learn']);
   assert.equal(all.status, 0, all.stderr);
-  assert.equal(all.stdout.trim(), 'Deleted session 3.\nKept 1 commit not pushed of session 3 on feat/task-3.\nSaved to project context: Use pnpm, not npm.');
+  assert.equal(all.stdout.trim(), 'Deleted session 3.\nKept 1 commit not pushed of session 3 on feat/task-3.\nSaved to memory: Use pnpm, not npm.');
   assert.match(readProjectSettings(f.root).context, /Use pnpm, not npm\./);
   assert.deepEqual(sessions(f).map(task => task.id), ['4']); assert.match(git(f.root, ['branch', '--list', 'feat/task-3']), /feat\/task-3/);
   assert.equal(json(elu(f, ['sessions', 'delete', 'archived', '--json'])).message, 'No archived sessions.');
@@ -587,7 +587,7 @@ test("a Codex turn in Approve for me deletes archived sessions with elu sessions
   assert.equal(String(turn.id), '3');
   assert.deepEqual([ran[0].status, ran[0].out], [1, 'This session is not archived: it runs this command.']);
   assert.deepEqual(JSON.parse(ran[1].out), { code: 1, err: 'This request names session "1", not the session it came from. Nothing was changed.\n' });
-  assert.deepEqual([ran[2].status, ran[2].out], [0, 'Deleted 2 sessions.\nKept 1 commit not pushed of session 2 on feat/task-2.\nSaved to project context: Use pnpm, not npm.']);
+  assert.deepEqual([ran[2].status, ran[2].out], [0, 'Deleted 2 sessions.\nKept 1 commit not pushed of session 2 on feat/task-2.\nSaved to memory: Use pnpm, not npm.']);
   // Each ran in the sandbox with the core environment alone, and nothing was asked in Approve for me.
   assert.ok(ran.every(row => row.inherit === 'core' && row.fenced === BWRAP), JSON.stringify(ran));
   assert.deepEqual(readTask(f.repo, String(turn.id)).approvals ?? [], []);
@@ -629,6 +629,6 @@ test("elu sessions delete handed to ELU from a session a teammate's message star
   }
   assert.ok(sessions(f).some(task => String(task.id) === old)); assert.deepEqual(f.inputs('claude'), [], 'no lessons run started');
   const done = await runOwnCommand(['sessions', 'delete', 'archived', '--learn'], { repo: f.repo, taskId: mine, mode: 'auto' });
-  assert.equal(done.code, 0, done.err); assert.match(done.out, new RegExp(`^Deleted session ${old}\\.\\nSaved to project context: Use pnpm, not npm\\.\\n?$`));
+  assert.equal(done.code, 0, done.err); assert.match(done.out, new RegExp(`^Deleted session ${old}\\.\\nSaved to memory: Use pnpm, not npm\\.\\n?$`));
   assert.ok(!sessions(f).some(task => String(task.id) === old));
 });

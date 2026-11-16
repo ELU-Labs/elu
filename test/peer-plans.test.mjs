@@ -715,6 +715,28 @@ test('a card\'s title leaves without a secret or a path, and its id says nothing
   });
 });
 
+// A session started with only a dropped file is named after the file (messageTitle,
+// lib/state.mjs), and its card on my other computer's Kanban is too. A teammate is told no
+// name of a file of mine: their card reads its path as [path], as before. Words name it for both.
+test('a session started with only a dropped file is named after the file on my other computer\'s Kanban; a teammate is told no file name', t => {
+  const crew = makeTeam(t), ana = crew.founder, sara = crew.member, bob = 'd'.repeat(64), now = Date.now();
+  const name = 'Screenshot 2026-11-15 at 1.02 PM.png', shot = `/Users/someone/Desktop/${name}`;
+  withHome(ana.home, () => {
+    markMine(ana.identity.key, sara.identity.key); noteTheirs(sara.identity.key, true);
+    const repo = folderProject(t), shop = cloneIn(repo, 'shop');
+    session(repo, 1, shop, { goal: `'${shot}'` });
+    session(repo, 2, shop, { goal: '/tmp/elu-code-pictures/1a2b3c4d-shot-1.png' });
+    session(repo, 3, shop, { goal: `'${shot}'\nwhy is this cut off` });
+    session(repo, 4, shop, { goal: `${shot.replaceAll(' ', '\\ ')} why is the total cut off` });
+    session(repo, 5, shop, { goal: `'${shot}'`, title: 'Cut off total' });
+    const repos = localRepos(now), rows = sessionCards({ owner: 'ana', repos, now });
+    const told = key => cardsFor(key, ana.identity.key, rows, repos, [...repos.values()].map(row => repoProof(key, ana.identity.key, row.repoId, row.commit))).map(card => card.title).sort();
+    assert.deepEqual(told(sara.identity.key), [name, 'shot-1.png', 'why is this cut off', 'why is the total cut off', 'Cut off total'].sort());
+    assert.deepEqual(told(bob), ["'[path]'", '[path]', 'why is this cut off', 'why is the total cut off', 'Cut off total'].sort());
+    for (const text of [JSON.stringify(rows.map(row => row.card)), JSON.stringify(told(bob))]) for (const word of ['Screenshot', 'shot-1', '/Users/someone']) assert.equal(text.includes(word), false, word);
+  });
+});
+
 test('a session waiting for its owner to approve a Task, or to check what it did, is in Needs you on a teammate\'s board, as on the owner\'s own', t => {
   const crew = makeTeam(t), ana = crew.founder, now = Date.now();
   withHome(ana.home, () => {

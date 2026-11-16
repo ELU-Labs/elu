@@ -6,7 +6,8 @@ import { project } from './helpers.mjs';
 import { liveTask } from './peer-helpers.mjs';
 import { repository } from '../lib/git.mjs';
 import { projectSnapshot } from '../lib/projects.mjs';
-import { readTask, saveTask, taskTitle, setTitle, suggestTitle, titleFromTask, modelTitle, hasTitle, nameFile, lock, TITLE_MAX, MODEL_TITLE_MAX } from '../lib/state.mjs';
+import { readTask, saveTask, taskTitle, requestTitle, firstWords, setTitle, suggestTitle, titleFromTask, modelTitle, hasTitle, nameFile, lock, TITLE_MAX, MODEL_TITLE_MAX } from '../lib/state.mjs';
+import { filesLine, landedText } from '../lib/peer/files.mjs';
 
 // A project whose list is read: ELU's own folder is in a temporary place for the test,
 // so the record of approved project files is never written to the real one.
@@ -35,6 +36,42 @@ test('without a name a session shows the first words of its request, in one row 
   assert.equal(taskTitle({ goal: `${'word '.repeat(11)}stop, and more words after it` }), `${'word '.repeat(11)}stop…`, 'a cut right after a word keeps the word');
   assert.equal(taskTitle({ goal: `Trim the codes, ${'x'.repeat(70)}` }), 'Trim the codes…', 'no comma is left before the dots');
   assert.equal(taskTitle({ goal: long, title: 'Receipt email fixes' }), 'Receipt email fixes'); assert.equal(taskTitle({}), '');
+});
+
+// A file dropped on the terminal is pasted as its path, in quotes or with its spaces escaped.
+// A session started with that alone is named after the file, not its path: here, and on my
+// other computer, where its message names the inbox the file landed in and ELU's note of it.
+// Words with the file name the session: before it as they did, after it on its line or on the next.
+test('a session started with only a dropped file is named after the file; words with it name it, never its path', () => {
+  const name = 'Screenshot 2026-11-15 at 1.02 PM.png', shot = `/Users/someone/Desktop/${name}`, escaped = shot.replaceAll(' ', '\\ ');
+  for (const goal of [`'${shot}'`, `"${shot}"`, escaped, `\n  '${shot}'  \n`, `${escaped}.`]) {
+    assert.equal(taskTitle({ goal }), name, goal); assert.equal(requestTitle({ goal }), name, goal);
+  }
+  assert.equal(taskTitle({ goal: `'${shot}' '/Users/someone/Desktop/notes.pdf'` }), `${name}, notes.pdf`, 'two files');
+  assert.equal(taskTitle({ goal: `'${shot}' ${escaped}` }), name, 'one file named twice');
+  // A picture under ~/Library goes to the session as a copy (lib/pictures.mjs), named without the mark that keeps copies apart.
+  assert.equal(taskTitle({ goal: '/tmp/elu-code-pictures/1a2b3c4d-CleanShot-2026-11-15-at-13.02.05@2x.png' }), 'CleanShot-2026-11-15-at-13.02.05@2x.png');
+  // My other computer: the path where it landed in the session's inbox, then ELU's note of it.
+  const dir = '/home/someone/.local/share/elu-code/inbox/0123456789abcdef-1/2026-11-15T21-02-00-000Z-mac';
+  const there = (text, written = `'${shot}'`) => [landedText(text, [{ name, written }], dir).trim(), filesLine('@mac', 1, 2048, dir)].join('\n\n');
+  assert.ok(there(`'${shot}'`).startsWith(`"${dir}/${name}"\n\nFiles from @mac: 1 file`), there(`'${shot}'`));
+  assert.equal(taskTitle({ goal: there(`'${shot}'`) }), name); assert.equal(requestTitle({ goal: there(`'${shot}'`) }), name);
+  // Words before it name the session as before. Words after it, on its line as the owner
+  // drops a picture and then types, or on the next line: those words, here and there.
+  assert.equal(taskTitle({ goal: `why is this cut off '${shot}'` }), firstWords(`why is this cut off '${shot}'`, TITLE_MAX));
+  for (const goal of [`'${shot}' why is this cut off`, `${escaped} why is this cut off`, `"${shot}" - why is this cut off`, `'${shot}' '/Users/someone/Desktop/b.png' why is this cut off`,
+    there(`'${shot}' why is this cut off`), there(`${escaped} why is this cut off`, escaped), `'${shot}'\nwhy is this cut off`, there(`'${shot}'\nwhy is this cut off`)]) {
+    assert.equal(taskTitle({ goal }), 'why is this cut off', goal); assert.equal(requestTitle({ goal }), 'why is this cut off', goal);
+  }
+  assert.ok(there(`${escaped} why is this cut off`, escaped).startsWith(`"${dir}/${name}" why`));
+  // A /word with no second slash is a command's name, not a file (startsWithPath, lib/terminal-commands.mjs).
+  assert.equal(taskTitle({ goal: '/review the cart total' }), '/review the cart total');
+  // Not a dropped file alone: a project's path, a link, a path in a sentence, ELU's note alone.
+  for (const goal of ['public/images/hero.png is blurry', 'https://example.com/logo.png is blurry', 'see /srv/app/notes.md please', `Files from @mac: 1 file (2 KB) in ${dir}`])
+    assert.equal(taskTitle({ goal }), firstWords(goal, TITLE_MAX), goal);
+  // A name someone chose shows over it, and a schedule's run keeps its wording.
+  assert.equal(taskTitle({ goal: `'${shot}'`, title: 'Cut off total' }), 'Cut off total');
+  assert.equal(requestTitle({ goal: `'${shot}'`, scheduleId: 'schedule-1', title: 'Nightly shot' }), 'Nightly shot');
 });
 
 test('the model names a session once; the owner\'s name always shows, and comes off to the model\'s again', t => {
