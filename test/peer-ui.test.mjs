@@ -2642,6 +2642,54 @@ test('Projects lists a project a teammate shares that is not on this computer: E
   assert.ok(!rows().some(row => /shared by/.test(row)), 'never a second row for the same project');
 });
 
+// A team's project this computer has no folder of yet (lib/peer/shared.mjs gives its row the team):
+// a project of its own here, never "shared by". Its page has its sessions and its board on every
+// computer of the team, its instructions and memory to read, and which folder here it is.
+test("a team's project with no folder here opens its page from Projects: its sessions and board on every computer of the team, its instructions and memory to read, and e on them asks which folder here it is", async t => {
+  const TEAM = 'f'.repeat(64), p2 = '2'.repeat(16);
+  const session = (n, title, minutes, extra = {}) => ({ id: `${n}1111111-1111-4111-8111-11111111111${n}`, ref: `${p2}:${n}`, project: p2, title, state: 'answered', at: ago(minutes), createdAt: ago(minutes + 1), approvals: [], by: 'you', who: null, ...extra });
+  const machines = [{ key: SARA, theirs: true, listedAt: ago(0), older: false, projects: [{ id: p2, name: 'ELU', repoId: null, home: false, teams: [TEAM] }], sessions: [session(1, 'Fix the login page', 2), session(2, 'Write the release notes', 5, { state: 'running' })] }];
+  const p = project(later(t)); environment(t, p.parent);
+  const peer = sharing(fakePeer({ items: [], machines }), [sharedRow({ id: `${SARA.slice(0, 16)}-elu`, name: 'ELU', handle: 'elu', repoId: null, address: null, team: TEAM }, { handle: 'elu', title: 'ELU' })]);
+  peer.teamNotes = team => team === TEAM ? { instructions: 'Use pnpm, not npm.\n', memory: 'The login page lives in web/login.\n' } : { instructions: '', memory: '' };
+  peer.keepTeamFolder = (team, root) => { peer.calls.push(['keepTeamFolder', team, root]); peer.shared = []; return root; };
+  const v = await view(t, { repo: repository(p.root), dashboard: true, peer }), panels = v.panels, list = panels.projectsList;
+  const rows = () => list.items.map(plainItem).map(row => row.trimEnd()), column = index => panels.kanbanLists[index].items.map(item => plainItem(item).trimEnd());
+  await send(v, '/projects'); await until(() => v.current.view === 'projects' && rows().some(row => /no folder here yet/.test(row)), 'the team\'s project');
+  assert.match(rows()[1], /^ {2}ELU\s+no folder here yet\s+2 sessions · 2 on @sara-box/);
+  assert.ok(!rows().some(row => /shared by/.test(row)), rows().join('\n'));
+  list.focus(); selectRow(list, /no folder here yet/);
+  await until(() => /enter open/.test(panels.keys.getText()), 'its keys');
+  v.input.write('\r'); await until(() => rowsOf(v, 'Project ELU').length === 5, 'its page');
+  const page = rowsOf(v, 'Project ELU').map(row => row.trimEnd());
+  assert.match(page[0], /^Sessions\s+2 sessions · 2 on @sara-box$/); assert.match(page[1], /^Kanban\s+its board on every computer$/);
+  assert.match(page[2], /^Instructions\s+Use pnpm, not npm\.$/); assert.match(page[3], /^Memory\s+The login page lives in web\/login\.$/);
+  assert.match(page[4], /^Folder here\s+none yet · Enter chooses which$/);
+  // Its instructions, the team's, to read; Esc goes back to its page.
+  await choose(v, 'Project ELU', /^Instructions/);
+  await until(() => modal(v, 'Instructions · ELU'), 'its instructions');
+  assert.match(modal(v, 'Instructions · ELU').children.find(child => child.options?.scrollable).getText(), /Use pnpm, not npm\./);
+  v.input.write('\x1b'); await until(() => rowsOf(v, 'Project ELU').length === 5, 'its page again');
+  // Kanban: its board, the sessions of it on every computer of the team.
+  await choose(v, 'Project ELU', /^Kanban/);
+  await until(() => v.current.view === 'kanban' && column(1).length === 1 && column(2).length === 1, 'its board');
+  assert.match(panels.header.getText(), /ELU {2}· {2}no folder here yet/); assert.doesNotMatch(panels.header.getText(), /shared by|on @sara-box/);
+  assert.match(column(1)[0], /^Write the release.*@sara · sara-box$/); assert.match(column(2)[0], /^Fix the login page.*@sara · sara-box$/);
+  assert.match(panels.kanbanTeam.getText(), /^ELU on every computer of the team\. It has no folder here yet/);
+  // Sessions shows its sessions under each computer, and keeps it open: back in Kanban, it is its board still.
+  await send(v, '/sessions'); await until(() => v.current.view === 'tasks' && v.panels.board.items.some(item => /ELU ON SARA-BOX/.test(plainItem(item))) && v.panels.board.items.some(item => /Fix the login page/.test(plainItem(item))), 'its sessions');
+  await send(v, '/kanban'); await until(() => v.current.view === 'kanban' && column(2).some(row => /Fix the login page/.test(row)), 'its board again');
+  // e on its memory: written here, it is its folder's, so it asks which folder that is.
+  await send(v, '/projects'); await until(() => v.current.view === 'projects' && rows().some(row => /no folder here yet/.test(row)), 'Projects');
+  list.focus(); selectRow(list, /no folder here yet/); v.input.write('\r');
+  await choose(v, 'Project ELU', /^Memory/);
+  await until(() => modal(v, 'Memory · ELU'), 'its memory');
+  v.input.write('e'); await until(() => rowsOf(v, 'Which folder here is ELU?').length === 1, 'which folder');
+  await choose(v, 'Which folder here is ELU?', /sample app|shop|\S/);
+  await until(() => peer.calls.some(row => row[0] === 'keepTeamFolder'), 'kept');
+  assert.deepEqual(peer.calls.filter(row => row[0] === 'keepTeamFolder').map(row => row.slice(1)), [[TEAM, v.current.controller.repo.root]]);
+});
+
 // No length of ours on what the owner sends: a long spec typed on a shared project's team board
 // goes to whoever shares it whole, as a long message in Chats goes (lib/peer/asks.mjs sends one
 // too long for a line on the link in pieces ahead of its message).
