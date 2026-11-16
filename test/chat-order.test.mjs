@@ -8,10 +8,10 @@ import { liveTask } from './peer-helpers.mjs';
 import { git, repository } from '../lib/git.mjs';
 import { launchTerminal } from '../lib/terminal.mjs';
 import { remoteSessions as remoteGlue } from '../lib/terminal-remote.mjs';
-import { remoteRow } from '../lib/board.mjs';
+import { remoteRow, rowBadge } from '../lib/board.mjs';
 import { taskPlace } from '../lib/terminal-plan.mjs';
 import { proposeTask, approveTask, planFile } from '../lib/plan.mjs';
-import { saveRequest } from '../lib/workspace.mjs';
+import { saveRequest, pendingRequests } from '../lib/workspace.mjs';
 import { ASIDE_ANSWERED, saveAside } from '../lib/message-aside.mjs';
 import { saveTask, readTask, taskDir, lock } from '../lib/state.mjs';
 import { processIdentity } from '../lib/process.mjs';
@@ -146,6 +146,33 @@ test('a session on another computer: its question, why it stopped, an approval, 
 });
 
 // The app itself, at two sizes.
+// A message, or a new session, sent into a project that takes its work by hand waits there for
+// a yes. That is not a failure and it is never to be sent again: it says what it waits for, its
+// row is not a failed one, and the line under the list says it waits. One another computer sent
+// reads as that computer's person. A computer on an ELU that does not say the key (yes) reads
+// as before.
+test('a session on another computer: what waits for a yes there says so, names who sent it, and is never to be sent again', async () => {
+  const OTHER = 'c'.repeat(64), asked = [];
+  const status = { key: ME, name: 'ana', teams: [{ id: 'team-1', members: [{ key: ME, name: 'ana', online: true }, { key: BOX, name: 'ana', box: 'my-box', online: true }, { key: OTHER, name: 'ben', box: 'studio', online: true }] }] };
+  const app = remoteGlue({ facade: { remoteSessions: () => [] }, peerRead: () => status, peerCommand: async command => { asked.push(command.type); return command.type === 'remoteStart' ? { id: '77777777-7777-4777-8777-777777777777', project: 'shop', waits: true } : { id: command.id, waits: true }; }, chatMessage: ({ title, text }) => `${title}: ${text}`, ink: text => text, colour: false, restMs: 1e9 });
+  const entries = [{ role: 'You', at: ago(10), text: 'Fix the report' }, { role: 'Claude', lead: true, at: ago(9), text: 'It is fixed.' }];
+  const last = waiting => flat(app.parts(partRow({ state: 'answered', entries, waiting }), 96).at(-1).text);
+  const YES = { at: ago(1), text: 'Keep the logo', state: 'blocked', reason: 'Waits for a yes on @my-box.', yes: true };
+  assert.equal(last([{ ...YES, computer: ME }]), 'You → @my-box (waits for a yes): Keep the logo Waits for a yes on @my-box.');
+  assert.equal(last([YES]), 'You → @my-box (waits for a yes): Keep the logo Waits for a yes on @my-box.');
+  assert.equal(last([{ ...YES, computer: OTHER }]), 'ben on @studio → @my-box (waits for a yes): Keep the logo Waits for a yes on @my-box.');
+  // One that did not start for another reason still says to send it again, as before.
+  assert.equal(last([{ at: ago(1), text: 'Keep the logo', state: 'blocked', reason: 'The model was not available.' }]), 'You → @my-box (blocked): Keep the logo The model was not available. Send it again once that is fixed.');
+  // A new session that waits there: its row waits, where one that failed to start is a failed row.
+  const badge = view => { const { icon, title } = rowBadge(partRow(view)); return [icon, title]; };
+  assert.deepEqual(badge({ state: 'blocked', error: 'Waits for a yes on @my-box.', yes: true, entries: [] }), ['◷', 'on my-box · waits for a yes']);
+  assert.deepEqual(badge({ state: 'blocked', error: 'The model was not available.', entries: [] }), ['✗', 'on my-box · blocked']);
+  // What the line under the list says once it went.
+  assert.equal((await app.start({ key: BOX, name: 'my-box' }, 'List the big files', { permissions: 'ask', place: null })).line, 'Sent to @my-box in shop. It waits for a yes there.');
+  assert.equal(await app.send(partRow({ state: 'answered', entries }), 'Keep the logo'), 'Sent to Claude on @my-box. It waits for a yes there.');
+  assert.deepEqual(asked, ['remoteStart', 'remoteSend']);
+});
+
 function fakePeer({ remote = [] } = {}) {
   const calls = [], record = (name, value) => (...args) => { calls.push([name, ...args]); return typeof value === 'function' ? value(...args) : value; };
   const facade = {
@@ -155,7 +182,8 @@ function fakePeer({ remote = [] } = {}) {
     peerItems: record('peerItems', () => []), teamAgents: record('teamAgents', () => []), tickerEvents: record('tickerEvents', () => []),
     sendPeerCommand: record('sendPeerCommand', command => { facade.last = command; return { id: `command-${calls.length}` }; }), awaitCommand: record('awaitCommand', async () => ({})),
     startPeer: record('startPeer', true), restartStale: record('restartStale', false),
-    mineRows: () => [{ key: BOX, mine: true, theirs: true }], remoteSessions: () => remote, remoteMachines: () => [], projectRepoId: () => null,
+    // The box shares a project with this computer, so it lists its sessions here.
+    remoteSessions: () => remote, remoteMachines: () => [{ key: BOX, theirs: true, listedAt: new Date().toISOString(), projects: [], sessions: [] }], projectRepoId: () => null,
     access: { 'team-1': { handling: 'auto', rules: '', root: null, at: null } }, teamAccess: id => facade.access[id] ?? null,
   };
   return facade;
@@ -369,6 +397,60 @@ for (const [columns, rows] of [[140, 50], [80, 24]]) test(`the app at ${columns}
 // The Changes tab of a session here counts its changes without the owner having opened them,
 // as one on another computer does. Git is asked when the session shows and when its state
 // changes, not at each draw; with no changes the tab has no count.
+// Who did what, by computer: a message another computer on the shared project sent into a
+// session here (its key, computer) reads as that computer's person on that computer, here as on
+// every other computer; one typed here, or one this computer sent, reads You.
+test('a message another computer sent into a session here reads as its person on that computer, and one typed here reads You', { timeout: 60000 }, async t => {
+  const p = start(t), repo = localSession(p, { state: 'answered', replies: [[9, 'It is fixed.']], asked: [[5, 'And the header too'], [4, 'Keep the logo']] });
+  const task = readTask(repo, '4');
+  saveTask(repo, { ...task, messages: task.messages.map(row => row.text === 'And the header too' ? { ...row, computer: BOX } : row.text === 'Keep the logo' ? { ...row, computer: ME } : row) });
+  const v = await view(p, { columns: 140, rows: 50, repo: p.repo, dashboard: true, peer: fakePeer() });
+  await onRow(v, /Fix the report/);
+  await until(() => v.lines().some(line => line.includes('Keep the logo')), 'the chat shows');
+  const shown = v.lines().map(line => line.slice(42)).join('\n');
+  assert.match(shown, /ana on @my-box[^\n]*\n[^\n]*And the header too/);
+  assert.match(shown, /You  [^\n]*\n[^\n]*Keep the logo/);
+  assert.match(shown, /You  [^\n]*\n[^\n]*Fix the report/);
+});
+
+// A message, or a new session, that another computer on the shared project sent into a project
+// that takes its work by hand waits here for this computer's yes. It reads as that computer's
+// person, never as You or as a saved request of the owner's own: r says yes, and Enter does not
+// bring its text into the message box to be sent again.
+test('what another computer sent that waits for a yes here names that computer, r says yes, and nothing is to be sent again', { timeout: 60000 }, async t => {
+  const p = start(t); localSession(p, { state: 'answered', replies: [[9, 'It is fixed.']] });
+  const from = { priority: 0, attempts: 0, notBefore: null, computer: BOX, state: 'waiting' };
+  saveRequest(p.root, 'Keep the logo', null, { ...from, continuationTaskId: '4', queuedAt: ago(2), createdAt: ago(2) });
+  saveRequest(p.root, 'List the big files', null, { ...from, queuedAt: ago(1), createdAt: ago(1) });
+  const v = await view(p, { columns: 140, rows: 50, repo: p.repo, dashboard: true, peer: fakePeer() });
+  const { chat, keys, status, ask } = v.panels;
+  // Into a session here.
+  await onRow(v, /Fix the report/);
+  await until(() => flat(chat.getText()).includes('Keep the logo'), 'the chat shows');
+  assert.match(flat(chat.getText()), /ana on @my-box \(waits for your yes\)[^]*Keep the logo In Sessions, r says yes and s removes it\.$/);
+  assert.doesNotMatch(flat(chat.getText()), /You \(saved\)|sends it again/);
+  await until(() => /enter open {2}r yes {2}s remove/.test(keys.getText()), `its keys: ${keys.getText()}`);
+  // A new session.
+  await onRow(v, /List the big files/);
+  await until(() => flat(chat.getText()).includes('List the big files'), 'the request shows');
+  assert.match(flat(chat.getText()), /^ana on @my-box \(waits for your yes\)[^]*List the big files In Sessions, r starts it and c removes it\.$/);
+  assert.doesNotMatch(flat(chat.getText()), /Saved request|Send it to retry/);
+  // Its title is its first words, as its row reads, never "saved request".
+  await until(() => /· {2}List the big files$/.test(v.panels.header.getText().trim()), `its title: ${v.panels.header.getText()}`);
+  assert.doesNotMatch(v.panels.header.getText(), /saved request/);
+  await until(() => /enter open {2}r yes {2}c remove/.test(keys.getText()), `its keys: ${keys.getText()}`);
+  // r from the list is named first, as every row key is, and Enter does it.
+  v.input.write('r');
+  await until(() => /enter says yes/.test(keys.getText()), 'what r does').catch(error => { throw new Error(`${error.message}: ${keys.getText()}`); });
+  v.input.write('\r');
+  await until(() => /You said yes\. It starts next\./.test(status.getText()) && pendingRequests(p.root).find(row => row.goal === 'List the big files')?.state === 'queued', 'the yes').catch(error => { throw new Error(`${error.message}: ${status.getText()} | ${keys.getText()} | ${JSON.stringify(pendingRequests(p.root).map(row => [row.goal, row.state]))}`); });
+  // Enter opens the session, and what waits in it stays out of the message box.
+  await onRow(v, /Fix the report/);
+  await until(() => /r yes/.test(keys.getText()), 'its row again');
+  v.input.write('\r'); await pause(400);
+  assert.equal(ask.getValue(), ''); assert.doesNotMatch(status.getText(), /Saved request restored/);
+});
+
 test('the Changes tab of a session here counts its changes without being opened, and again when its state changes', { timeout: 60000 }, async t => {
   const p = start(t), repo = localSession(p, { state: 'answered', replies: [[9, 'It is fixed.']] }), worktree = readTask(repo, '4').worktree;
   const v = await view(p, { columns: 140, rows: 50, repo: p.repo, dashboard: true, peer: fakePeer() });

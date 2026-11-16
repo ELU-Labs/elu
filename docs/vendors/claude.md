@@ -2,8 +2,9 @@
 
 Sessions and reviews. Sign-in is `claude`'s own; ELU never reads your sign-in
 token. The Usage tab names the account from `~/.claude.json` (email, organization,
-plan and rate limit tier) and shows only the five-hour and weekly usage windows that
-Claude Code prints during sessions. An account you add there runs with `CLAUDE_CONFIG_DIR`
+plan and rate limit tier) and shows only the usage limits that Claude Code prints during
+sessions: the five-hour and weekly windows, and a model's own week where it prints one. An
+account you add there runs with `CLAUDE_CONFIG_DIR`
 set to a folder of its own that links to your `~/.claude` for everything but the sign-in
 ([../../SECURITY.md](../../SECURITY.md#several-accounts)); `claude auth login` signs it in on a
 cleared screen under one line of ELU's. On a computer with no browser (an SSH session, or

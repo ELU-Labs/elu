@@ -429,8 +429,8 @@ test('Sessions fits an 80 by 24 terminal, with six tabs and a four-line message 
   // Plan usage lives in the Usage tab.
   await v.current.controller.refreshUsage();
   await send(v, '/usage'); await until(() => v.current.view === 'usage' && !panels.usageBox.hidden, 'Usage tab');
-  // At 80 columns the Codex account's line shows its tightest window, its week.
-  await until(() => /^Codex {7}\S[^\n]* {2}wk \[####--\]  62% resets /m.test(panels.usageList.items.map(item => item.getText()).join('\n')), 'the Codex account and its week');
+  // At 80 columns the Codex account, in use, has a line under it for each of its two windows.
+  await until(() => /^Codex {5}▾ \S[^\n]*\n +5h █+░+ {2}18% [^\n]+\n +wk █+░+ {2}62% /m.test(panels.usageList.items.map(item => item.getText()).join('\n')), 'the Codex account and its two windows');
   assert.ok(panels.usageList.items.every(item => item.getText().length <= 76), 'every usage line fits the pane');
   assert.ok(panels.usageBox.aleft + panels.usageBox.width <= 80 && panels.usageBox.atop + panels.usageBox.height <= panels.status.atop, 'Usage fits');
   assert.equal(panels.tabs[5].style.underline, true, 'Usage is the current tab');
@@ -1725,7 +1725,7 @@ test('/model takes the name it shows (/model opus 5.5), and a message after the 
   // /help says it, with an example.
   await send(v, '/help'); await until(() => modal(v, 'Commands'), 'help');
   const help = dialogText(v, 'Commands').replace(/\s+/g, ' ');
-  assert.match(help, /Model: each session has its own\. \/model NAME changes it; the name it is shown by works too \(\/model opus 5\.5\), and a message after the name is sent on that model\. Over a session on your other computer, it changes that session’s model there\. \/model default NAME sets what new sessions start with, and \/model add adds one by name\./);
+  assert.match(help, /Model: each session has its own\. \/model NAME changes it; the name it is shown by works too \(\/model opus 5\.5\), and a message after the name is sent on that model\. Over a session on another computer, it changes that session’s model there\. \/model default NAME sets what new sessions start with, and \/model add adds one by name\./);
   assert.match(help, /Examples: \/model sonnet \/model opus 5\.5 fix the build \/model default opus /); await dialog(v, 'Commands', '');
   // A name and version Claude has no model for is never run as another model: Claude refuses it, and the session says why and what to do.
   await send(v, '/model opus 9.9 and the docs?');
@@ -5701,14 +5701,15 @@ test('the Changes view keeps the whole of a line that holds emoji, where blessed
   }
 });
 
-test('a Usage row cut to its pane keeps its end when one character in it is two columns wide', { timeout: 30000 }, async t => {
-  const p = setup(t), fake = fakeUsage(t); delete process.env.ELU_NO_COLOR;
-  fs.writeFileSync(path.join(fake.home, 'claude', '.claude.json'), JSON.stringify({ oauthAccount: { accountUuid: 'uuid-never-shown', emailAddress: 'owner@example.invalid', organizationName: 'Example', planDisplayName: `Max 中 ${'plan '.repeat(30)}`.trim(), userRateLimitTier: 'default_claude_max_20x', hasExtraUsageEnabled: false } }));
-  const v = await view(t, { repo: p.repo, usage: fake }), panels = v.current.panels, row = () => panels.usageList.items.find(item => /owner@example\.invalid/.test(item.getText()));
+test('a Usage row whose account is cut to fit its pane keeps its end when one character in it is two columns wide', { timeout: 30000 }, async t => {
+  const p = setup(t), fake = fakeUsage(t, { vendors: () => [{ vendor: 'claude', available: true, signedIn: true }, ...['codex', 'agy', 'grok'].map(vendor => ({ vendor, available: false, signedIn: false }))] }); delete process.env.ELU_NO_COLOR;
+  fs.writeFileSync(path.join(fake.home, 'claude', '.claude.json'), JSON.stringify({ oauthAccount: { accountUuid: 'uuid-never-shown', emailAddress: 'owner@example.invalid', organizationName: 'Example', planDisplayName: `Max 中 ${'plan '.repeat(3)}`.trim(), userRateLimitTier: 'default_claude_max_20x', hasExtraUsageEnabled: false } }));
+  const v = await view(t, { repo: p.repo, usage: fake }), panels = v.current.panels, row = () => panels.usageList.items.find(item => /^Claude /.test(item.getText()));
   await send(v, '/usage'); await until(() => v.current.view === 'usage' && row(), 'the account in Usage'); await nextDraw(v);
-  // A list row stops one column short of its pane, 中 counted as the two columns it takes.
+  // The account's name is cut in its middle and its plan kept, so the row stops one column short
+  // of its pane, 中 counted as the two columns it takes, with what it says last whole.
   const text = row().getText().replace(/\x03/g, '');
-  assert.ok(text.includes('中') && text.endsWith('...') && columns(text) === row().width - 1, `cut to the pane: ${text}`);
+  assert.ok(text === 'Claude      owner@ex….invalid · Max 中 plan plan plan · active  no usage yet' && columns(text) === row().width - 1, `cut to the pane: ${text}`);
   assert.deepEqual(drawnIn(v, row()).map(line => line.replace(/\x03/g, '')), [text], 'the whole row is drawn');
   assert.deepEqual(brokenRows(v), []);
 });
@@ -6687,12 +6688,13 @@ test('Usage shows each account with the usage its sessions reported, r checks ag
   fs.writeFileSync(accountsFile, JSON.stringify({ version: 1, rows: [{ vendor: 'claude', account: 'old@example.invalid', plan: 'Pro', firstSeen: '2026-10-01T10:00:00Z', lastSeen: '2026-11-09T10:00:00Z', usage: { weekly: { usedPercent: 100, resetsAt: Math.floor(Date.now() / 1000) + 3600 }, fiveHour: null, observedAt: '2026-11-09T10:00:00Z' } }] }));
   const v = await view(t, { repo: p.repo, usage: fake }), panels = v.current.panels, text = () => panels.usageList.items.map(item => item.getText()).join('\n'), status = () => panels.status.getText();
   await send(v, '/usage'); await until(() => v.current.view === 'usage' && !panels.usageBox.hidden, 'Usage tab');
-  // Opening the tab checks once. The blocks: the active account and its usage on one line, the older account, how to switch.
+  // Opening the tab checks once. The summary, then a rule over each vendor: the account in use, the older account, how to switch.
   // No session on Claude Code has run yet, so its line says there is no usage yet.
-  await until(() => /Usage updated \d\d:\d\d/.test(status()), 'first check');
-  assert.match(text(), /^Claude {6}owner@example.invalid · Max 20x · active  no usage yet\n {12}old@example.invalid · Pro {17}last seen Nov 9\n {12}enter on an account uses it · x forgets it · a adds one$/m);
-  await until(() => /^Codex {7}owner@example.invalid · Team · active {5}wk  62% resets /m.test(text()), 'the Codex account');
-  assert.match(text(), /^Antigravity \(agy\) not signed in for ELU · s signs in\nGrok Build {2}not installed\n\nTop agents today\nNo agent has run today\.$/m);
+  await until(() => /Usage updated \d\d:\d\d/.test(status()) && / 62% /.test(text()), 'first check');
+  assert.match(text(), /^2 accounts · 1 free · 1 no reading +used {5}left\n─{76}\nClaude {6}owner@example.invalid · Max 20x · active  no usage yet\n {12}old@example.invalid · Pro {16}last seen Nov 9\n {12}enter on an account uses it · x forgets it · a adds one\n─{76}$/m);
+  // Codex is in use and reported two windows: a line under it for each, a bar, the share used and the time left.
+  assert.match(text(), /^Codex {5}▾ owner@example.invalid · Team · active\n {53}5h █░{5} {2}18% +\d[^\n]*\n {53}wk █{4}░░ {2}62% +\d[^\n]*\n/m);
+  assert.match(text(), /^Antigravity \(agy\) not signed in for ELU · s signs in\n─{76}\nGrok Build {2}not installed\n\nTop agents today\nNo agent has run today\.$/m);
   assert.ok(panels.usageList.items.every(item => item.getText().length <= 76), 'every line fits the pane');
   // A session on Claude Code reports its windows. r checks again now and records them with the account.
   const saved = JSON.parse(fs.readFileSync(usageFile, 'utf8'));
@@ -6701,13 +6703,14 @@ test('Usage shows each account with the usage its sessions reported, r checks ag
   assert.match(panels.keys.getText(), /enter use {2}a add account {2}x forget {2}d details {2}r refresh/);
   const recorded = () => JSON.parse(fs.readFileSync(accountsFile, 'utf8')).rows.find(row => row.vendor === 'claude' && row.account === 'owner@example.invalid')?.usage?.weekly?.usedPercent;
   assert.equal(recorded(), undefined);
-  v.input.write('r'); await until(() => recorded() === 12, 'second check');
-  await until(() => /^Claude {6}owner@example.invalid · Max 20x · active  wk  12% resets [^\n]+\n {12}old@example.invalid · Pro {17}last seen Nov 9\n {12}enter on an account uses it · x forgets it · a adds one$/m.test(text()), 'the Claude windows');
+  v.input.write('r'); await until(() => recorded() === 12 && / 12% /.test(text()), 'second check');
+  // Its one window on its own line, in the columns of Codex's; at 80 columns that takes a character of its name.
+  assert.match(text(), /^2 accounts · 2 free +used {5}left\n─{76}\nClaude {6}owner@exam…e\.invalid · Max 20x · active {2}wk █░{5} {2}12% +(?:59m|1h 0m)\n {12}old@example.invalid · Pro {16}last seen Nov 9\n {12}enter on an account uses it · x forgets it · a adds one$/m);
   // Enter on the account in use says so; d opens the vendor's details.
   panels.usageList.select(0); v.input.write('\r'); await until(() => /New Claude Code turns already use owner@example.invalid\./.test(status()), 'already in use');
   v.input.write('d'); await until(() => modal(v, 'Claude usage'), 'details');
   const details = dialogText(v, 'Claude usage');
-  assert.match(details, /owner@example.invalid · Max 20x · default_claude_max_20x\nReported \d\d:\d\d/); assert.match(details, /wk  \[#-----\]   12%  resets/); assert.match(details, /Other accounts\nold@example.invalid · Pro · first seen Oct 1 · last seen Nov 9 · wk 100% then/);
+  assert.match(details, /owner@example.invalid · Max 20x · default_claude_max_20x\nReported \d\d:\d\d/); assert.match(details, /^wk █░{7} {3}12% {2}resets /m); assert.match(details, /Other accounts\nold@example.invalid · Pro · first seen Oct 1 · last seen Nov 9 · wk 100% then/);
   await dialog(v, 'Claude usage', '');
   // On a line of the vendor that is not an account's, Enter opens those details too, and the key bar says so.
   panels.usageList.focus(); panels.usageList.select(panels.usageList.items.findIndex(item => /old@example\.invalid · Pro +last seen/.test(item.getText())));
@@ -6724,7 +6727,7 @@ test('Usage shows each account with the usage its sessions reported, r checks ag
 
 // The owner's case: each account was two lines in one colour, so the account in use, and
 // which usage was whose, were hard to see.
-test('Usage at 80x24 and at 140x50: each account is one line with its usage after it, and the account in use is drawn in the accent colour', { timeout: 30000 }, async t => {
+test('Usage at 80x24 and at 140x50: each limit is a bar, its share and the time left in the same columns, in the colour of how full it is, and the account in use is drawn in the accent colour', { timeout: 30000 }, async t => {
   const p = setup(t), fake = fakeUsage(t); delete process.env.ELU_NO_COLOR;
   fs.writeFileSync(path.join(fake.home, 'claude', '.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'owner@ab.test', planDisplayName: 'Ultra' } }));
   const payload = Buffer.from(JSON.stringify({ email: 'owner@ab.test', 'https://api.openai.com/auth': { chatgpt_plan_type: 'team' } })).toString('base64url');
@@ -6733,17 +6736,68 @@ test('Usage at 80x24 and at 140x50: each account is one line with its usage afte
   fs.writeFileSync(path.join(personalDirectory(), 'usage.json'), JSON.stringify({ version: 1, claude: { observedAt: new Date().toISOString(), fiveHour: null, weekly: { usedPercent: 42, resetsAt: Math.floor(Date.now() / 1000) + 3 * 86400 } } }));
   const v = await view(t, { repo: p.repo, usage: fake }), list = v.current.panels.usageList, rows = () => list.items.map(item => item.getText());
   const tagged = pattern => list.ritems[rows().findIndex(text => pattern.test(text))] ?? '';
-  await send(v, '/usage'); await until(() => v.current.view === 'usage' && rows().some(text => /^Codex .*resets/.test(text)), 'the accounts and their usage');
-  for (const [width, height, codex] of [[80, 24, / {3}wk \[####--\]  62% resets \w{3} \d+$/], [140, 50, / {3}5h \[#-----\]  18% resets [^\n]+? {2,}wk \[####--\]  62% resets \w{3} \d+ \d\d:\d\d$/]]) {
-    await sized(v, width, height); await nextDraw(v);
-    // One line each: the account, its plan, then its usage, in one column; at 80 the week, the tightest of Codex's windows, and at 140 both.
-    await until(() => /^Claude {6}owner@ab\.test · Ultra · active {2}wk \[###---\]  42% resets \w{3} \d+/m.test(rows().join('\n')) && new RegExp(`^Codex {7}owner@ab\\.test · Team · active${codex.source}`, 'm').test(rows().join('\n')), `the accounts at ${width}x${height}:\n${rows().join('\n')}`);
+  await send(v, '/usage'); await until(() => v.current.view === 'usage' && rows().some(text => / 62% /.test(text)), 'the accounts and their usage');
+  for (const [width, height, bar] of [[80, 24, 15], [140, 50, 20]]) {
+    await sized(v, width, height); await nextDraw(v); await until(() => rows()[1] === '─'.repeat(width - 4), `the rule across the pane at ${width}x${height}`);
+    const cells = share => { const filled = Math.round(share * bar / 100); return `█{${filled}}░{${bar - filled}}`; };
+    // Claude Code reported its week: the account's line with that limit after it. Codex is in
+    // use with two windows: a line under it for each, in the same columns, with the two words
+    // of the summary over them. The bar is as long as the pane leaves it, 20 cells at most.
+    assert.match(rows().join('\n'), new RegExp(`^2 accounts · 2 free {${bar + 29}}used {5}left\\n─+\\nClaude {6}owner@ab\\.test · Ultra · active {2}wk ${cells(42)} {2}42% {3}(?:2d 23h| 3d 0h)\\n {12}enter on an account uses it · x forgets it · a adds one\\n─+\\nCodex {5}▾ owner@ab\\.test · Team · active\\n {44}5h ${cells(18)} {2}18% +\\d[^\\n]*\\n {44}wk ${cells(62)} {2}62% +\\d[^\\n]*\\n`), `the accounts at ${width}x${height}`);
     assert.ok(rows().every(text => columns(text) <= list.width - 2 && !text.endsWith('...')), `every line whole in the pane at ${width}x${height}`);
-    // The account in use in the accent colour, bold; the vendor's name bold; its usage as the text.
-    assert.match(tagged(/^Claude /), /^\{255-fg\}\{bold\}Claude {6}\{\/bold\}\{\/\}\{209-fg\}\{bold\}owner@ab\.test · Ultra · active\{\/bold\}\{\/\}\{255-fg\} {2}wk \[###---\]/);
-    assert.match(tagged(/^Codex /), /\{209-fg\}\{bold\}owner@ab\.test · Team · active\{\/bold\}\{\/\}\{255-fg\} {3}(wk|5h) \[/);
+    // The account in use in the accent colour, bold; the vendor's name bold; a limit's name
+    // muted, its bar and its share green under half and yellow from half, the time left as the text.
+    assert.match(tagged(/^Claude /), /^\{255-fg\}\{bold\}Claude {6}\{\/bold\}\{\/\}\{209-fg\}\{bold\}owner@ab\.test · Ultra · active {2}\{\/bold\}\{\/\}\{247-fg\}wk \{\/\}\{79-fg\}█+\{\/\}\{241-fg\}░+\{\/\}\{79-fg\}\{bold\} {2}42%\{\/bold\}\{\/\}\{255-fg\} +\d[^{]*\{\/\}$/);
+    assert.match(tagged(/^Codex /), /^\{255-fg\}\{bold\}Codex {5}\{\/bold\}\{\/\}\{247-fg\}▾ \{\/\}\{209-fg\}\{bold\}owner@ab\.test · Team · active\{\/bold\}\{\/\}$/);
+    assert.match(tagged(/^ +wk /), /^\{255-fg\} {44}\{\/\}\{247-fg\}wk \{\/\}\{221-fg\}█+\{\/\}\{241-fg\}░+\{\/\}\{221-fg\}\{bold\} {2}62%\{\/bold\}\{\/\}\{255-fg\} +\d[^{]*\{\/\}$/);
+    // The summary: the count of each level in its colour, and the two words over the columns muted. A rule in the colour of a border.
+    assert.match(tagged(/^\d accounts/), /^\{255-fg\}\{bold\}2 accounts\{\/bold\}\{\/\}\{247-fg\} · \{\/\}\{79-fg\}2 free\{\/\}\{247-fg\} +used {5}left\{\/\}$/);
+    assert.match(tagged(/^─/), /^\{238-fg\}─+\{\/\}$/);
   }
   assert.deepEqual(brokenRows(v), []);
+});
+
+// The limit that binds can be one model's own (Fable's week) while the account's own week has
+// room. Colour is off in this test: the lines say it with the bars and the word.
+test('Usage: a model\'s own limit stands under the account with its windows, f folds the account to its tightest limit and unfolds it, and every key and a click act from each line of the account', { timeout: 30000 }, async t => {
+  const p = setup(t), fake = fakeUsage(t);
+  fs.writeFileSync(path.join(fake.home, 'claude', '.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'owner@example.invalid', planDisplayName: 'Max 20x' } }));
+  fs.mkdirSync(personalDirectory(), { recursive: true });
+  const soon = Math.floor(Date.now() / 1000) + 4 * 3600 + 1800, later = soon + 2 * 86400;
+  fs.writeFileSync(path.join(personalDirectory(), 'usage.json'), JSON.stringify({ version: 1, claude: { observedAt: new Date().toISOString(), fiveHour: { usedPercent: 8, resetsAt: soon }, weekly: { usedPercent: 41, resetsAt: later }, models: [{ id: 'fable', weekly: { usedPercent: 99, resetsAt: later } }] } }));
+  const v = await view(t, { repo: p.repo, usage: fake }), panels = v.current.panels, list = panels.usageList;
+  const rows = () => list.items.map(item => item.getText()), text = () => rows().join('\n'), status = () => panels.status.getText(), keys = () => panels.keys.getText().trim(), rowOf = pattern => rows().findIndex(row => pattern.test(row));
+  await send(v, '/usage'); await until(() => v.current.view === 'usage' && / 62% /.test(text()) && / 99% /.test(text()), 'the accounts and their limits');
+  // The account in use is open: its line, then its 5 hours, its week, and Fable's own week,
+  // which is FULL while the week has room. The summary counts it by that limit.
+  const open = /^2 accounts · 1 free · 1 FULL +used {5}left\n─{76}\nClaude {4}▾ owner@example\.invalid · Max 20x · active\n {53}5h █░{5} {3}8% {3}4h (?:29|30)m\n {53}wk ██░{4} {2}41% {4}2d 4h\n {50}Fable █FULL█ {2}99% {4}2d 4h\n {12}enter on an account uses it · x forgets it · a adds one\n─{76}\nCodex {5}▾ signed in · active\n {53}5h █░{5} {2}18% [^\n]+\n {53}wk █{4}░░ {2}62% [^\n]+\n/;
+  assert.match(text(), open);
+  assert.doesNotMatch(list.ritems.join('\n'), /-fg\}/, 'no colour'); assert.match(list.ritems[rowOf(/Fable/)], /Fable █\{inverse\}\{bold\}FULL\{\/bold\}\{\/inverse\}█\{bold\} {2}99%\{\/bold\} {4}2d 4h$/);
+  // The tab opens on its first account, and the key bar says f folds it.
+  list.focus(); await until(() => v.current.screen.focused === list, 'list focused');
+  assert.equal(list.selected, rowOf(/^Claude /)); await until(() => /^enter use {2}f fold {2}a add account {2}x forget /.test(keys()), 'the keys of an open account');
+  v.input.write('f'); await until(() => rowOf(/^Claude {4}▸/) >= 0, 'folded');
+  // Folded, the account is one line with its tightest limit, and Codex's account is as it was.
+  assert.match(text(), /^─{76}\nClaude {4}▸ owner@ex…\.invalid · Max 20x · active {2}Fable █FULL█ {2}99% {4}2d 4h\n {12}enter on an account uses it · x forgets it · a adds one\n─{76}\nCodex {5}▾ signed in · active\n {53}5h /m);
+  assert.equal(list.selected, rowOf(/^Claude /)); await until(() => /^enter use {2}f unfold {2}a add account {2}x forget /.test(keys()), 'the key says unfold');
+  v.input.write('\r'); await until(() => /New Claude Code turns already use owner@example\.invalid\./.test(status()), 'Enter on the folded account');
+  v.input.write('f'); await until(() => rowOf(/^Claude {4}▾/) >= 0, 'unfolded'); assert.match(text(), open);
+  // On the line of one of its limits the keys are the account's: x, d, Enter and f act on it.
+  list.select(rowOf(/^ +Fable /)); await until(() => list.selected === rowOf(/^ +Fable /) && /^enter use {2}f fold /.test(keys()), 'the keys on a limit\'s line');
+  v.input.write('x'); await until(() => /owner@example\.invalid is your own sign-in: ELU keeps no copy to forget\./.test(status()), 'x on a limit\'s line');
+  v.input.write('d'); await until(() => modal(v, 'Claude usage'), 'details');
+  assert.match(dialogText(v, 'Claude usage'), /^5h {4}█░{7} {4}8% {2}resets [^\n]+\nwk {4}███░{5} {3}41% {2}resets [^\n]+\nFable █{7}░ {3}99% {2}FULL {2}resets /m);
+  await dialog(v, 'Claude usage', '');
+  // A click on the summary lands on the nearest line that can be chosen; a click on a limit's line chooses it.
+  list.focus(); await until(() => v.current.screen.focused === list, 'list focused again');
+  click(v, list.items[0]); await until(() => list.selected === rowOf(/^Claude /), 'a click on the summary');
+  click(v, list.items[rowOf(/^ +wk ██░/)]); await until(() => list.selected === rowOf(/^ +wk ██░/), 'a click on a limit\'s line');
+  // f from a limit's line folds its account, and the cursor is on the account's line.
+  v.input.write('f'); await until(() => rowOf(/^Claude {4}▸/) >= 0 && list.selected === rowOf(/^Claude /), 'folded from a limit\'s line');
+  // r reads again and t changes the period of Top agents, as before; the fold stays.
+  v.input.write('t'); await until(() => /^Top agents, last 7 days$/m.test(text()), 'the period');
+  v.input.write('r'); await until(() => /Usage updated \d\d:\d\d/.test(status()), 'read again');
+  assert.ok(rowOf(/^Claude {4}▸/) >= 0, 'still folded'); assert.deepEqual(brokenRows(v), []);
 });
 
 test('Usage at 80x24 and at 140x50: Down from the last account goes into Top agents, with the table in view, and Up goes back', { timeout: 30000 }, async t => {
@@ -6767,6 +6821,26 @@ test('Usage at 80x24 and at 140x50: Down from the last account goes into Top age
     await until(() => list.selected === rowOf(/^Grok Build/), `Up from the agent to Grok Build at ${columns}x${rows}`);
     assert.ok(shown(list.selected));
   }
+});
+
+// A reading that arrives while the cursor is in Top agents adds lines over it: an account's
+// limits, each on a line of its own. Up then came back to the agent, because the list still
+// counted from the row the cursor was on before those lines were there.
+test('Usage: Up from Top agents goes back to the last vendor after a reading added lines over the cursor', { timeout: 30000 }, async t => {
+  const p = setup(t), now = new Date().toISOString(), fake = fakeUsage(t);
+  fs.writeFileSync(path.join(fake.home, 'claude', '.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'owner@example.invalid', planDisplayName: 'Max 20x' } }));
+  saveTask(p.repo, { id: '1', kind: 'conversation', goal: 'Uppercase coupons', state: 'answered', worktree: p.root, base: null, branch: null, createdAt: now, runs: [{ role: 'lead', vendor: 'claude', at: now, costUsd: 1.5, model: 'claude-opus-5-5', logFile: path.join(p.parent, 'run.log') }], reviews: [], responses: [], messages: [], sessions: {}, result: null });
+  const v = await view(t, { repo: p.repo, usage: fake }), panels = v.current.panels, list = panels.usageList;
+  const rowOf = pattern => list.items.findIndex(item => pattern.test(item.getText())), status = () => panels.status.getText();
+  await send(v, '/usage'); await until(() => v.current.view === 'usage' && rowOf(/Uppercase coup/) >= 0 && rowOf(/ 62% /) >= 0 && /Usage updated \d\d:\d\d/.test(status()), 'the accounts, their usage and the agent');
+  list.focus(); await until(() => v.current.screen.focused === list, 'list focused');
+  list.select(rowOf(/^Grok Build/)); v.input.write('\x1b[B'); await until(() => list.selected === rowOf(/Uppercase coup/), 'Down to the agent');
+  // A session reports the Claude account's two windows. r reads them, and the account, in use, opens into a line for each.
+  const before = rowOf(/Uppercase coup/), soon = Math.floor(Date.now() / 1000) + 3600, usageFile = path.join(personalDirectory(), 'usage.json');
+  fs.writeFileSync(usageFile, JSON.stringify({ ...JSON.parse(fs.readFileSync(usageFile, 'utf8')), claude: { observedAt: new Date().toISOString(), fiveHour: { usedPercent: 8, resetsAt: soon }, weekly: { usedPercent: 41, resetsAt: soon + 86400 } } }));
+  v.input.write('r'); await until(() => rowOf(/ 41% /) >= 0 && rowOf(/Uppercase coup/) === before + 2 && list.selected === before + 2, 'two more lines over the agent, with the cursor still on it');
+  v.input.write('\x1b[A'); await until(() => list.selected === rowOf(/^Grok Build/), 'Up from the agent to Grok Build');
+  v.input.write('\x1b[B'); await until(() => list.selected === rowOf(/Uppercase coup/), 'Down to the agent again');
 });
 
 test('Usage with no agent today: Down from the last account goes to its line in Top agents, which offers t, and Up goes back', { timeout: 30000 }, async t => {
@@ -6806,7 +6880,8 @@ test('Usage: a signs another account in with the vendor\'s own sign-in, Enter ma
   assert.equal(asked[1].config, path.join(personalDirectory(), 'logins', 'claude', id, '.claude'));
   assert.equal(fs.readFileSync(own, 'utf8'), signedIn); assert.equal(activeLogin('claude'), 'default');
   // Two Claude accounts take over from each other: the two settings of that, each its value, and u.
-  await until(() => /^Claude {6}owner@example.invalid · Max 20x · active  no usage yet\n {12}second@example\.com · Pro {18}no usage yet\n {12}Switch accounts by itself  on\n {12}Use paid extra usage {7}off\n {12}enter on an account uses it · x forgets it · a adds one$/m.test(text()), 'both accounts');
+  await until(() => /second@example\.com · Pro/.test(text()), 'both accounts');
+  assert.match(text(), /^Claude {6}owner@example.invalid · Max 20x · active  no usage yet\n {12}second@example\.com · Pro {17}no usage yet\n {12}Switch accounts by itself  on\n {12}Use paid extra usage {7}off\n {12}enter on an account uses it · x forgets it · a adds one$/m);
   // Enter on a setting turns it off, and on again.
   panels.usageList.select(rowOf(/Switch accounts by itself/)); v.input.write('\r');
   await until(() => /Claude accounts switch only when you pick one\./.test(status()) && /^ {12}Switch accounts by itself  off$/m.test(text()), 'switching off');
@@ -6829,8 +6904,8 @@ test('Usage: a signs another account in with the vendor\'s own sign-in, Enter ma
   panels.usageList.select(rowOf(/^ {12}second@example\.com · Pro/)); v.input.write('\r');
   await until(() => /New Claude Code turns use second@example\.com\./.test(status()), 'switched');
   assert.equal(activeLogin('claude'), id);
-  // The column stays where it was: as wide as the widest account in use.
-  await until(() => /^Claude {6}owner@example.invalid · Max 20x {11}no usage yet\n {12}second@example\.com · Pro · active {9}no usage yet$/m.test(text()), `the second account in use:\n${text()}`);
+  // The column stays where it was, under Codex's limits: the second account's words are where they were.
+  await until(() => /^Claude {6}owner@example.invalid · Max 20x {10}no usage yet\n {12}second@example\.com · Pro · active {8}no usage yet$/m.test(text()), `the second account in use:\n${text()}`);
   // x on the owner's own account: the vendor's sign-in, nothing of ELU's to forget.
   panels.usageList.select(0); v.input.write('x');
   await until(() => /owner@example\.invalid is your own sign-in: ELU keeps no copy to forget\./.test(status()), 'own sign-in');
@@ -6846,6 +6921,107 @@ test('Usage: a signs another account in with the vendor\'s own sign-in, Enter ma
   assert.equal(fs.existsSync(path.join(personalDirectory(), 'logins', 'claude', id)), false); assert.equal(fs.readFileSync(own, 'utf8'), signedIn);
   await until(() => /^Claude {6}owner@example.invalid · Max 20x · active  no usage yet$/m.test(text()) && !/second@example/.test(text()), 'one account again');
   assert.doesNotMatch(v.raw, /never-shown/); assert.doesNotMatch(v.frame(), /never-shown/);
+});
+
+// What the tab did on 0.1.34 with one line an account, it does with an account's limits on lines
+// of their own: three Claude accounts of three limits each, open and folded in every mix. On
+// each line of an account, its own and each limit's, by the keys and after a click, Enter uses
+// that account and x asks about that account; u moves the account of the line; the settings
+// under the accounts and the lines of Codex under those are where the keys find them.
+test('Usage with three Claude accounts of three limits each, open and folded in every mix: Enter, x, u and a click act on the account of the line they are on, and the settings and Codex\'s lines under them keep theirs', { timeout: 300000 }, async t => {
+  const p = setup(t), asked = [], fakeFile = path.join(p.dir, 'fake.json');
+  // The stand-in's sign-in ends as that account, or does not finish.
+  const signInAs = loginAs => fs.writeFileSync(fakeFile, JSON.stringify({ ...JSON.parse(fs.readFileSync(fakeFile, 'utf8')), accounts: loginAs ? { loginAs, plan: 'Pro' } : undefined }));
+  const fake = fakeUsage(t, { signIn: async ({ vendor, bin, args, env }) => { asked.push(vendor); return spawnSync(bin, args, { env, encoding: 'utf8' }).status; } });
+  const OWNER = 'owner@example.invalid', SECOND = 'second@example.invalid', THIRD = 'third@example.invalid', EMAILS = [OWNER, SECOND, THIRD];
+  fs.writeFileSync(path.join(fake.home, 'claude', '.claude.json'), JSON.stringify({ oauthAccount: { accountUuid: 'uuid-never-shown', emailAddress: OWNER, planDisplayName: 'Max 20x' } }));
+  fs.mkdirSync(personalDirectory(), { recursive: true });
+  // The owner's account has room, the second is tight on its week, and the third is FULL on Fable's own week.
+  const soon = Math.floor(Date.now() / 1000) + 4 * 3600 + 1800, later = soon + 2 * 86400, seen = new Date().toISOString();
+  const limits = (fiveHour, weekly, fable) => ({ observedAt: seen, fiveHour: { usedPercent: fiveHour, resetsAt: soon }, weekly: { usedPercent: weekly, resetsAt: later }, models: [{ id: 'fable', weekly: { usedPercent: fable, resetsAt: later } }] });
+  fs.writeFileSync(path.join(personalDirectory(), 'usage.json'), JSON.stringify({ version: 1, claude: limits(8, 41, 60) }));
+  fs.writeFileSync(path.join(personalDirectory(), 'accounts.json'), JSON.stringify({ version: 1, rows: [[SECOND, limits(12, 80, 30)], [THIRD, limits(3, 20, 99)]].map(([account, usage]) => ({ vendor: 'claude', account, plan: 'Pro', firstSeen: seen, lastSeen: seen, usage })) }));
+  const v = await view(t, { repo: p.repo, usage: fake }), panels = v.current.panels, list = panels.usageList;
+  await sized(v, 140, 50);
+  const rows = () => list.items.map(item => item.getText()), text = () => rows().join('\n'), status = () => panels.status.getText();
+  const esc = value => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), said = pattern => until(() => pattern.test(status()), `${pattern} in the status line`);
+  const focus = async () => { list.focus(); await until(() => v.current.screen.focused === list, 'the list has the keys'); };
+  await send(v, '/usage'); await until(() => v.current.view === 'usage' && !panels.usageBox.hidden, 'the Usage tab'); await said(/Usage updated \d\d:\d\d/);
+  await focus();
+  for (const email of [SECOND, THIRD]) { signInAs(email); list.select(rows().findIndex(row => /^Claude /.test(row))); v.input.write('a'); await said(new RegExp(`Added ${esc(email)}\\. Enter on it uses it\\.`)); await focus(); }
+  signInAs(null);
+  // An account's lines: its own, then each of its limits while it is open.
+  const head = email => rows().findIndex(row => new RegExp(`^(?:Claude {4}| {10})[▾▸] ${esc(email)} · `).test(row));
+  const isOpen = email => rows()[head(email)].includes(`▾ ${email}`), linesOf = email => { const from = head(email); return isOpen(email) ? [from, from + 1, from + 2, from + 3] : [from]; };
+  const shown = () => [...EMAILS].sort((a, b) => head(a) - head(b));
+  await until(() => EMAILS.every(email => head(email) >= 0), 'the three accounts, each with several limits');
+  // As it opens: the account in use open, the tight and the FULL one each on one line with its tightest limit.
+  assert.match(rows()[0], /^4 accounts · 2 free · 1 tight · 1 FULL +used {5}left$/, text());
+  assert.deepEqual(EMAILS.map(isOpen), [true, false, false], text());
+  assert.match(rows()[head(SECOND)], / {2}wk █{16}░{4} {2}80% {4}2d 4h$/); assert.match(rows()[head(THIRD)], / Fable █{8}FULL█{8} {2}99% {4}2d 4h$/);
+  // Enter on each account's own line, as on 0.1.34: which sign-in of ELU's each one is.
+  const logins = {};
+  const use = async (email, at = head(email)) => { list.select(at); v.input.write('\r'); await until(() => logins[email] ? activeLogin('claude') === logins[email] : new RegExp(`New Claude Code turns (?:already )?use ${esc(email)}\\.`).test(status()), `Enter on line ${at} to use ${email}: ${status()}\n${text()}`); };
+  for (const email of [THIRD, SECOND, OWNER]) { await use(email); logins[email] = activeLogin('claude'); }
+  assert.equal(new Set(Object.values(logins)).size, 3); assert.equal(logins[OWNER], 'default');
+  // f on the last line of an account, a limit's line while it is open, flips that account.
+  const flip = async email => { const before = isOpen(email); list.select(linesOf(email).at(-1)); v.input.write('f'); await until(() => head(email) >= 0 && isOpen(email) !== before, `f on the last line of ${email}:\n${text()}`); };
+  for (const email of EMAILS) { await flip(email); await flip(email); }
+  const other = email => EMAILS[(EMAILS.indexOf(email) + 1) % 3];
+  let checked = 0;
+  for (let mix = 0; mix < 8; mix++) {
+    const want = EMAILS.map((_, n) => Boolean(mix >> n & 1)), where = () => `open ${JSON.stringify(want)}:\n${text()}`;
+    for (const [n, email] of EMAILS.entries()) if (isOpen(email) !== want[n]) await flip(email);
+    assert.deepEqual(EMAILS.map(isOpen), want, where());
+    for (const email of EMAILS) { const at = linesOf(email); if (at.length === 4) [/^ +5h █/, /^ +wk █/, /^ +Fable █/].forEach((pattern, n) => assert.match(rows()[at[n + 1]], pattern, where())); }
+    for (const email of EMAILS) for (const n of linesOf(email).keys()) {
+      // Another account is put in use first, so Enter on this line has something to change.
+      await use(other(email));
+      const at = linesOf(email)[n];
+      // Every second line is chosen with a click, the others with the keys.
+      if ((n + mix) % 2) { click(v, list.items[at]); await until(() => list.selected === at, `a click on line ${at}, ${where()}`); } else list.select(at);
+      v.input.write('\r'); await until(() => activeLogin('claude') === logins[email], `Enter on line ${n} of ${email}: ${status()}, ${where()}`);
+      await said(new RegExp(`New Claude Code turns use ${esc(email)}\\.`));
+      assert.equal(linesOf(email)[n], at, 'its lines are where they were'); list.select(at);
+      // x: his own sign-in has nothing to forget; an added account is asked about by its name. He says no.
+      v.input.write('x');
+      if (email === OWNER) await said(/owner@example\.invalid is your own sign-in: ELU keeps no copy to forget\./);
+      else { await dialog(v, `Forget ${email}`, ''); await until(() => !modal(v, `Forget ${email}`), 'the question closed'); await focus(); }
+      checked++;
+    }
+    // u on the last line of the last account moves that account up, and u on the last line of the one it passed moves that one back.
+    const before = shown(), [first, passed, last] = before;
+    list.select(linesOf(last).at(-1)); v.input.write('u');
+    await until(() => shown().join() === [first, last, passed].join(), `u on the last line of ${last}: ${status()}, ${where()}`); await said(new RegExp(`${esc(last)} moved up\\.`));
+    assert.deepEqual(readSwitch().order, [first, last, passed].map(email => logins[email]));
+    list.select(linesOf(passed).at(-1)); v.input.write('u');
+    await until(() => shown().join() === before.join(), `u on the last line of ${passed}: ${status()}, ${where()}`); await said(new RegExp(`${esc(passed)} moved up\\.`));
+    assert.deepEqual(EMAILS.map(isOpen), want, 'a move keeps each account open or folded');
+    // The two settings stand under the last account's last line: Enter on one flips it.
+    const setting = rows().findIndex(row => /^ {12}Switch accounts by itself {2}on$/.test(row));
+    assert.equal(setting, Math.max(...EMAILS.map(email => linesOf(email).at(-1))) + 1, where());
+    list.select(setting); v.input.write('\r'); await until(() => readSwitch().auto === false && /^ {12}Switch accounts by itself {2}off$/m.test(text()), 'switching off');
+    v.input.write('\r'); await until(() => readSwitch().auto !== false && /^ {12}Switch accounts by itself {2}on$/m.test(text()), 'switching on again');
+    // d on a limit's line of Codex, under however many lines Claude has, opens Codex's details; on a line of Claude, Claude's.
+    const codex = rows().findIndex(row => /^Codex /.test(row));
+    assert.match(rows()[codex + 1], /^ +5h █/); list.select(codex + 1); v.input.write('d'); await dialog(v, 'Codex usage', ''); await until(() => !modal(v, 'Codex usage'), 'Codex details closed'); await focus();
+    const line = linesOf(EMAILS[mix % 3]).at(-1);
+    list.select(line); v.input.write('d'); await dialog(v, 'Claude usage', ''); await until(() => !modal(v, 'Claude usage'), 'Claude details closed'); await focus();
+    // s and c say what they do for this vendor, and a starts its sign-in, from any line of it.
+    list.select(line); v.input.write('s'); await said(/a adds a Claude Code account\./);
+    list.select(line); v.input.write('c'); await said(/Claude Code needs no check\./);
+    if (mix % 4 === 0) { const calls = asked.length; list.select(line); v.input.write('a'); await said(/No account was added: the Claude Code sign-in did not finish\./); assert.deepEqual(asked.slice(calls), ['claude']); await focus(); }
+  }
+  // Every line of every account in every mix: four when open, one when folded.
+  assert.equal(checked, 3 * (4 * 4 + 4 * 1));
+  // t and r as before, and each account stays as it was put.
+  v.input.write('t'); await until(() => /^Top agents, last 7 days$/m.test(text()), 'the period');
+  v.input.write('r'); await said(/Usage updated \d\d:\d\d/);
+  assert.deepEqual(EMAILS.map(isOpen), [true, true, true]); assert.equal(listLogins('claude').length, 3);
+  // Nothing of a sign-in was drawn, and what is kept is numbers, times and names.
+  assert.doesNotMatch(v.raw, /never-shown/); assert.doesNotMatch(v.frame(), /never-shown/);
+  for (const name of ['usage.json', 'accounts.json']) assert.doesNotMatch(fs.readFileSync(path.join(personalDirectory(), name), 'utf8'), /never-shown|token|uuid/i);
+  assert.deepEqual(brokenRows(v), []);
 });
 
 test('Usage on macOS: x forgets an added Claude Code account with its Keychain item, keeps every other, and names an item a locked Keychain kept', { timeout: 30000 }, async t => {

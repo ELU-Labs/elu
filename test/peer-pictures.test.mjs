@@ -14,7 +14,6 @@ import { checkRunPictures, pictureKind, picturesRoot } from '../lib/pictures.mjs
 import * as claude from '../lib/adapters/claude.mjs';
 import { peerFile } from '../lib/peer/paths.mjs';
 import { savePeerPolicy, savePeerSettings } from '../lib/peer/settings.mjs';
-import { noteTheirs } from '../lib/peer/mine.mjs';
 import { identity as loadIdentity } from '../lib/peer/identity.mjs';
 import { share } from '../lib/peer/shares.mjs';
 import { PEER_EXT, createRpcHandler, filePart, message, task as a2aTask, textPart } from '../lib/peer/a2a.mjs';
@@ -176,9 +175,7 @@ test('the receiving side takes pieces only from a teammate, checks every picture
     const small = picture(path.join(temp(t), 's.png'), 900);
     assert.throws(() => piece(crypto.randomUUID(), small, 0, { session: { key: crypto.randomBytes(32).toString('hex'), admitted: true } }), /not on a team with this machine/);
     assert.throws(() => piece(crypto.randomUUID(), small, 0, { session: { key: ana.key, admitted: false } }), /not on a team/);
-    savePeerPolicy(ana.key, { muted: true }); assert.throws(() => piece(crypto.randomUUID(), small, 0), /This teammate is not taking requests from you\./);
-    // To another computer of its owner's this machine is a computer, never a teammate.
-    noteTheirs(ana.key, true); assert.throws(() => piece(crypto.randomUUID(), small, 0), /This computer is not taking requests from you\./); noteTheirs(ana.key, false);
+    savePeerPolicy(ana.key, { muted: true }); assert.throws(() => piece(crypto.randomUUID(), small, 0), /This computer is not taking requests from you\./);
     savePeerPolicy(ana.key, { muted: false });
     // Not a picture, too large, out of order, not the size or the bytes it said, or not a piece at all.
     assert.throws(() => piece(crypto.randomUUID(), Buffer.from('#!/bin/sh\necho no\n'), 0), /Only PNG, JPEG, GIF and WebP pictures can be sent\./);
@@ -236,7 +233,7 @@ test('the receiving side takes pieces only from a teammate, checks every picture
     assert.equal(waiting().length, FLIGHT_COUNT); for (const file of many) fs.utimesSync(file, old, old);
     upload(small); assert.equal(waiting().length, 2);
     hollow(peerFile('pictures', 'kept', ana.key, 'filler', '1.png'), KEPT_PEER_MAX);
-    assert.throws(() => piece(crypto.randomUUID(), small, 0), error => error.details?.rpc === undefined && /This teammate has no room for more pictures from you\./.test(error.message));
+    assert.throws(() => piece(crypto.randomUUID(), small, 0), error => error.details?.rpc === undefined && /This computer has no room for more pictures from you\./.test(error.message));
     // The hourly sweep drops kept pictures with no record, and a record takes its pictures with it.
     sweepPictures();
     assert.equal(fs.existsSync(peerFile('pictures', 'kept', ana.key, 'filler')), false); assert.deepEqual(fs.readdirSync(keptDir), ['1.png']);

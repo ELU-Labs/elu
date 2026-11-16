@@ -835,10 +835,26 @@ test('a rule kept once answers the next session; defaults never ask; the never l
   const theirs = await settle(f.controller.ask('Work on the request from @sara in the peer data block.', null, { origin: origin('handoff'), context: 'Run the tests.', permissions: 'ask' }));
   assert.deepEqual(theirs.asked.map(row => [row.summary, row.rules]), [['Run: npm test outside the sandbox', 'defaults']]);
   assert.deepEqual(theirs.task.approvals.map(row => [row.decision, row.by ?? null]), [['allow', 'default'], ['deny', null]]);
-  // One the owner's own other computer started (origin.mine, lib/peer/remote.mjs) uses his rules.
-  const mine = await settle(f.controller.ask('Run the tests.', null, { mine: { machine: 'c'.repeat(64), name: 'rio', remoteId: '0f0e0d0c-0b0a-4908-8706-050403020100' }, permissions: 'ask' }));
-  assert.deepEqual(mine.asked, []); assert.equal(mine.task.origin.mine, true); assert.equal(mine.task.origin.peer, undefined);
-  assert.deepEqual(mine.task.approvals.map(row => [row.decision, row.by, row.rule]), [['allow', 'default', 'git status'], ['allow', 'rule', 'npm test']]);
+  // One another computer on the project started (origin.mine, lib/peer/remote.mjs) gets the
+  // defaults too, whoever owns that computer: there is no "mine".
+  const other = await settle(f.controller.ask('Run the tests.', null, { mine: { machine: 'c'.repeat(64), name: 'rio', remoteId: '0f0e0d0c-0b0a-4908-8706-050403020100' }, permissions: 'ask' }));
+  assert.equal(other.task.origin.mine, true); assert.equal(other.task.origin.peer, undefined);
+  assert.deepEqual(other.asked.map(row => [row.summary, row.rules]), [['Run: npm test outside the sandbox', 'defaults']]);
+  assert.deepEqual(other.task.approvals.map(row => [row.decision, row.by ?? null]), [['allow', 'default'], ['deny', null]]);
+});
+
+// A message another computer sent here (a request with its key, lib/peer/remote.mjs) is kept
+// with that key on the session's message, and its entry says it; it is not the owner's words
+// for the lessons of this computer. One typed here says no computer.
+test('a message from another computer keeps the key of the computer that sent it on the session, and only that one', { timeout: 60000 }, async t => {
+  const f = setup(t, 'answer'), there = 'b'.repeat(64);
+  const sent = await f.controller.ask('Fix the footer', null, { computer: there }).finished;
+  assert.equal(sent.state, 'answered', JSON.stringify(sent.error));
+  assert.equal(readTask(f.controller.repo, sent.id).messages[0].computer, there);
+  const typed = await f.controller.ask('Fix the header', sent.id).finished;
+  assert.equal(typed.state, 'answered', JSON.stringify(typed.error));
+  const entries = conversationEntries(f.controller.repo, readTask(f.controller.repo, sent.id), { all: true }).filter(entry => entry.role === 'You');
+  assert.deepEqual(entries.map(entry => [entry.text, entry.computer ?? null]), [['Fix the footer', there], ['Fix the header', null]]);
 });
 
 // Where user namespaces are turned off, bwrap can still make a network namespace when it runs as

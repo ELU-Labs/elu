@@ -146,6 +146,12 @@ test("a limit of one model's own moves only that model's requests, and the accou
   assert.deepEqual(answered(p.api).map(row => [row.account, row.status]), [['a@example.com', 429], ['b@example.com', 200]]);
   assert.deepEqual(moves.map(move => [move.to, move.why, move.model]), [[b.id, 'model', 'opus']]);
   assert.equal(activeLogin('claude'), 'default'); assert.equal(readSwitch().spent.default.model, 'opus');
+  // Usage keeps what the refusal said: Opus's own week reached, beside the account's two windows, which have room.
+  const kept = usageSnapshot().claude;
+  assert.deepEqual(kept.models.map(model => [model.id, model.weekly.usedPercent, model.weekly.reached, model.weekly.resetsAt > Date.now() / 1000]), [['opus', 100, true, true]]);
+  assert.ok(kept.weekly.usedPercent < 75 && !kept.weekly.reached && !kept.fiveHour.reached, JSON.stringify(kept));
+  const [claude] = usageTab({ vendors: [{ vendor: 'claude', available: true, signedIn: true }], now: Date.now() }), own = claude.accounts.find(item => item.login === 'default');
+  assert.deepEqual([own.usage.models.map(model => model.id), own.spent.window, own.spent.model, own.spentUntil], [['opus'], 'model', 'opus', undefined]);
   launch.close();
   const other = await openLaunch({ login: 'default', bin: p.bin });
   assert.equal((await ask(other, a)).status, 200); assert.equal(answered(p.api).at(-1).account, 'a@example.com');

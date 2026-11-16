@@ -14,7 +14,8 @@ import { boardRows } from '../lib/board.mjs';
 import { createConversation } from '../lib/runner.mjs';
 import { saveTeamAccess } from '../lib/peer/access.mjs';
 import { localRepos, repoProof, saveCards, saveLocalRepos, saveProofs, sessionCards } from '../lib/peer/cards.mjs';
-import { markMine, noteTheirs } from '../lib/peer/mine.mjs';
+import { noteTheirs } from '../lib/peer/mine.mjs';
+import { shareProjects } from './peer-helpers.mjs';
 import { peerFile } from '../lib/peer/paths.mjs';
 import { readCaps } from '../lib/peer/intake.mjs';
 import { savePeerPolicy, savePeerSettings } from '../lib/peer/settings.mjs';
@@ -251,7 +252,7 @@ test("a teammate's round spends from their allowance, is checked again when appr
   const full = newRound();
   teamStandupAsk(ctx, sara, { round: full, cards: [card.id] });
   assert.equal(pendingRequests(p.root).filter(value => value.standupFor?.round === full).length, 0);
-  assert.deepEqual(teamStandupRead(sara, { round: full }).answers.map(value => [value.text, value.failed]), [["Not asked: you have used the 1 request a day this teammate's computer allows you.", true]]);
+  assert.deepEqual(teamStandupRead(sara, { round: full }).answers.map(value => [value.text, value.failed]), [["Not asked: you have used the 1 request a day this computer allows you.", true]]);
   // To another computer of its owner's this machine is a computer, never a teammate.
   noteTheirs(sara, true);
   const fullMine = newRound();
@@ -299,19 +300,19 @@ test("a teammate's standup asks every session: each model update counts what it 
   savePeerSettings({ caps: { peerUsdPerDay: 3.95 } });
   const over = newRound(); teamStandupAsk(ctx, sara, { round: over, cards: cards.slice(0, 2).map(card => card.id) });
   assert.equal(pendingRequests(p.root).filter(value => value.standupFor?.round === over).length, 0);
-  assert.deepEqual((await answer(over)).map(value => [value.text, value.failed]), Array(2).fill(["Not asked: you have used the $3.95 a day this teammate's computer allows you.", true]));
+  assert.deepEqual((await answer(over)).map(value => [value.text, value.failed]), Array(2).fill(["Not asked: you have used the $3.95 a day this computer allows you.", true]));
   // Reached while the round runs: an update that would pass it is not run, and its session's chat here says why.
   savePeerSettings({ caps: { peerUsdPerDay: 5 } });
   const late = newRound(); teamStandupAsk(ctx, sara, { round: late, cards: cards.slice(0, 2).map(card => card.id) });
   savePeerSettings({ caps: { peerUsdPerDay: 3.95 } });
-  assert.deepEqual((await answer(late)).map(value => [value.text, value.failed]), Array(2).fill(["Not asked: you have used the $3.95 a day this teammate's computer allows you.", true]));
+  assert.deepEqual((await answer(late)).map(value => [value.text, value.failed]), Array(2).fill(["Not asked: you have used the $3.95 a day this computer allows you.", true]));
   const said = readTask(controller.repo, rows[0].taskId).messages.find(value => value.standup === late && value.failed);
-  assert.deepEqual([said.text, said.sent], ['Not asked: @sara has used the $3.95 a day this computer allows them.', "Not asked: you have used the $3.95 a day this teammate's computer allows you."]);
+  assert.deepEqual([said.text, said.sent], ['Not asked: @sara has used the $3.95 a day this computer allows them.', "Not asked: you have used the $3.95 a day this computer allows you."]);
   near(readCaps().peers[sara].usd, 26 * 0.15);
   // The team's limit here, the same way.
   savePeerSettings({ caps: { peerUsdPerDay: 5, teamUsdPerDay: 3.95 } });
   const team = newRound(); teamStandupAsk(ctx, sara, { round: team, cards: [cards[0].id] });
-  assert.deepEqual((await answer(team)).map(value => value.text), ["Not asked: your team has used the $3.95 a day this teammate's computer allows it."]);
+  assert.deepEqual((await answer(team)).map(value => value.text), ["Not asked: your team has used the $3.95 a day this computer allows it."]);
 });
 
 // A model update whose cost may be more than its tokens say (atLeast: a Codex run in Approve for
@@ -347,7 +348,7 @@ test('an update leaves the answering computer whole, for my other computer and f
   // A build that cuts updates at 4000 characters itself is sent no more than that, in one answer as before.
   assert.deepEqual(hostStandupRead({ round }, other).answers.map(row => row.text.length), [13, 4000, 4000]);
   // This build reads them whole: every answer is one line on the link, and the parts are joined here.
-  markMine(founder.identity.key, other); noteTheirs(other, true);
+  shareProjects(founder.identity.key, other);
   const lines = [], asked = [];
   const ctx = { me: founder.identity, session: () => ({ remoteHello: { remote: 1, standup: 1 }, request: async (method, params) => { asked.push([method, params]); const result = hostStandupRead(params, other); lines.push(Buffer.byteLength(JSON.stringify({ jsonrpc: '2.0', id: 1, result }))); return result; } }) };
   const got = new Map();
@@ -399,7 +400,7 @@ test('the Standup says what it does while it runs: waiting for the sessions, the
   assert.equal(standupStage({ state: 'running', messages: [] }), null, 'not a Standup');
 });
 
-test("the Standup's model reads the owner's other computers apart from his teammates", async t => {
+test("the Standup's model reads the sessions of every other computer the same way, whoever owns that computer", async t => {
   const { teamId, founder, member } = makeTeam(t);
   const p = project(t), fake = fakeClis(p.parent, { mode: 'answer' }); environment(t, { ...fake.env, XDG_CONFIG_HOME: founder.home });
   git(p.root, ['remote', 'add', 'origin', 'https://github.com/example/shop.git']);
@@ -415,15 +416,15 @@ test("the Standup's model reads the owner's other computers apart from his teamm
   const board = () => boardsFor(controller.repo, readTask(controller.repo, standup.id))[0];
   assert.deepEqual(board().teammates, [{ who: '@ana', title: 'Flaky test', column: 'Done' }]);
   assert.equal(board().otherComputers, undefined);
-  // Once it is his own other computer, its session is his, named by that computer.
-  markMine(me, other); noteTheirs(other, true);
-  assert.deepEqual(board().otherComputers, [{ computer: '@devbox', title: 'Flaky test', column: 'Done' }]);
-  assert.equal(board().otherComputersReadOnly, true);
-  assert.equal(board().teammates, undefined);
-  // It reads every card: of a column, and of the owner's other computers.
+  // Sharing more with that computer, as the owner's own computers do, sets it apart in nothing.
+  shareProjects(me, other);
+  assert.deepEqual(board().teammates, [{ who: '@ana', title: 'Flaky test', column: 'Done' }]);
+  assert.equal(board().teammatesReadOnly, true);
+  assert.equal(board().otherComputers, undefined);
+  // It reads every card: of a column, and of the other computers.
   saveCards(other, me, Array.from({ length: 60 }, (_, n) => ({ repoId: repo.repoId, id: n.toString(16).padStart(16, '0'), title: `Card ${n}`, column: 'progress', by: 'ana', at: new Date().toISOString() })), { repos });
   for (let n = 0; n < 45; n++) addCard(controller.repo, `To do ${n}`);
-  assert.equal(board().otherComputers.length, 60);
+  assert.equal(board().teammates.length, 60);
   const todo = board().columns.find(column => column.column === 'To do');
   assert.equal(todo.cards.length, 45); assert.equal(todo.more, undefined);
 });

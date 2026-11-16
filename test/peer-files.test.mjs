@@ -8,7 +8,7 @@ import { spawnSync } from 'node:child_process';
 import { PassThrough } from 'node:stream';
 import { makeTeam, newHome, withHome, registeredProject, liveTask } from './peer-helpers.mjs';
 import { hash } from '../lib/util.mjs';
-import { markMine, noteTheirs } from '../lib/peer/mine.mjs';
+import { shareProjects } from './peer-helpers.mjs';
 import { FILES_UPDATE, NOT_MINE, NOT_OWN_SESSION, hostMethods, relist, remoteCommand, remoteSessions, watchId } from '../lib/peer/remote.mjs';
 import { saveTeamAccess } from '../lib/peer/access.mjs';
 import { pendingRequests, updateRequest } from '../lib/workspace.mjs';
@@ -39,7 +39,7 @@ const before = { HOME: process.env.HOME, XDG_DATA_HOME: process.env.XDG_DATA_HOM
 process.env.HOME = HOME; delete process.env.XDG_DATA_HOME;
 after(() => { for (const [name, value] of Object.entries(before)) if (value === undefined) delete process.env[name]; else process.env[name] = value; fs.rmSync(HOME, { recursive: true, force: true }); });
 
-function connection(key, hello = { remote: 1, files: 1 }) {
+function connection(key, hello = { remote: 1, files: 1, shared: 1 }) {
   const sent = [];
   return { key, admitted: true, remoteHello: hello, sent, notify: (method, params) => sent.push([method, params]), request: async () => { throw new Error('No answer'); } };
 }
@@ -50,11 +50,11 @@ function pair(t) {
   const team = makeTeam(t, { founderName: 'ana', memberName: 'box' }), laptop = team.founder, devbox = team.member;
   const project = withHome(devbox.home, () => {
     const project = registeredProject(t); saveTeamAccess(team.teamId, { root: project.root });
-    markMine(devbox.identity.key, laptop.identity.key); noteTheirs(laptop.identity.key, true);
+    shareProjects(devbox.identity.key, laptop.identity.key);
     liveTask(project.root, { id: '1', goal: 'Look at the batch results', state: 'ready' });
     return project;
   });
-  withHome(laptop.home, () => { markMine(laptop.identity.key, devbox.identity.key); noteTheirs(devbox.identity.key, true); });
+  withHome(laptop.home, () => { shareProjects(laptop.identity.key, devbox.identity.key); });
   const toHost = connection(laptop.identity.key), toViewer = connection(devbox.identity.key);
   const hostCtx = context(devbox.identity, { [laptop.identity.key]: toHost }), viewCtx = context(laptop.identity, { [devbox.identity.key]: toViewer });
   const host = hostMethods(hostCtx), calls = [];
@@ -264,23 +264,20 @@ test('a name that is not a plain relative path is refused, and nothing is writte
   withHome(home, () => { const found = collectFiles(namedPaths([folder])); assert.deepEqual(found.files.map(row => row.path), ['odd/ok.txt']); assert.equal(found.skipped, 1); });
 });
 
-test('only a computer that is mine on both sides may send, and an older host is told to update', async t => {
+test('only a computer on a shared project may send, and an older host is told to update', async t => {
   const p = pair(t), b = batch(t);
   const piece = () => ({ id: p.id, send: crypto.randomUUID(), seq: 0, last: true, size: 1, data: 'eA==', text: '' });
-  // A teammate's key, or a computer marked on one side only, is refused before any piece is taken.
+  // A computer on no team with this one is refused before any piece is taken.
   withHome(p.devbox.home, () => assert.throws(() => p.host['elu.remote.files'](piece(), connection('e'.repeat(64))), { message: NOT_MINE }));
-  withHome(p.devbox.home, () => noteTheirs(p.laptop.identity.key, false));
-  withHome(p.devbox.home, () => assert.throws(() => p.host['elu.remote.files'](piece(), p.toHost), { message: NOT_MINE }));
-  withHome(p.devbox.home, () => noteTheirs(p.laptop.identity.key, true));
   const files = () => withHome(p.laptop.home, () => stageFiles(offerPaths([b.key])));
   const sendIt = () => withHome(p.laptop.home, () => remoteCommand(p.viewCtx, { type: 'remoteFiles', id: p.id, to: p.devbox.identity.key, ref: p.ref, text: '', files: files() }));
   // A host whose hello says nothing of files: nothing is sent.
-  p.toViewer.remoteHello = { remote: 1 };
+  p.toViewer.remoteHello = { remote: 1, shared: 1 };
   await assert.rejects(sendIt(), { message: FILES_UPDATE('@mac') });
   assert.equal(FILES_UPDATE('@mac'), '@mac needs to update ELU to receive files.');
   assert.equal(p.calls.filter(([method]) => method === 'elu.remote.files').length, 0);
   // One that does not know the method answers Method not found: the same line.
-  p.toViewer.remoteHello = { remote: 1, files: 1 };
+  p.toViewer.remoteHello = { remote: 1, shared: 1, files: 1 };
   const request = p.toViewer.request;
   p.toViewer.request = (method, params) => { if (method !== 'elu.remote.files') return request(method, params); const error = new Error('Method not found'); error.details = { rpc: { code: -32601 } }; throw error; };
   await assert.rejects(sendIt(), { message: '@mac needs to update ELU to receive files.' });
@@ -359,7 +356,7 @@ function relay(t, argv) {
   return { send: value => input.write(`${JSON.stringify(value)}\n`), next: async predicate => { for (;;) { const row = rows.find(predicate); if (row) return row; await new Promise(resolve => waiting.push(resolve)); } } };
 }
 
-test("a session's tool sends only what the session may read, lists only my computers, and in Ask for approval the owner answers the send", async t => {
+test("a session's tool sends only what the session may read, lists only computers on a shared project, and in Ask for approval the owner answers the send", async t => {
   const p = pair(t), b = batch(t);
   fs.mkdirSync(path.join(HOME, '.ssh'), { recursive: true }); fs.writeFileSync(path.join(HOME, '.ssh', 'id_ed25519'), 'PRIVATE KEY');
   await withHome(p.laptop.home, async () => {
@@ -393,7 +390,7 @@ test("a session's tool sends only what the session may read, lists only my compu
     said = await call(6, SEND_TOOL, { session: p.id, paths: [b.key], message: 'x' });
     assert.equal(said.isError, true); assert.match(said.content[0].text, /outside the folders this session reads/);
     assert.deepEqual(outgoing(), []);
-    // The list names my other computer and its sessions; an id that is none of them is refused.
+    // The list names the other computer on the project and its sessions; an id that is none of them is refused.
     // A teammate's session there (a handoff accepted on it) is neither listed nor sent to.
     const machines = path.join(env, 'elu-code', 'peer', 'remote', 'machines'), TEAMMATE = crypto.randomUUID(); fs.mkdirSync(machines, { recursive: true });
     fs.writeFileSync(path.join(machines, `${p.devbox.identity.key}.json`), JSON.stringify({ key: p.devbox.identity.key, listedAt: new Date().toISOString(), projects: [{ id: p.ref.split(':')[0], name: 'shop', repoId: null, home: false }], sessions: [{ id: p.id, ref: p.ref, project: p.ref.split(':')[0], title: 'Look at the batch results', state: 'needs_input', question: 'Where are the batch results?', approvals: [], by: 'you' }, { id: TEAMMATE, ref: `${p.ref.split(':')[0]}:2`, project: p.ref.split(':')[0], title: "Sara's handoff", state: 'running', approvals: [], by: 'teammate', who: 'sara' }] }));
@@ -403,17 +400,12 @@ test("a session's tool sends only what the session may read, lists only my compu
     assert.deepEqual(listed.computers[0].sessions, [{ session: p.id, title: 'Look at the batch results', state: 'needs_input', project: 'shop', waits: 'question: Where are the batch results?' }]);
     for (const [n, session] of [[8, crypto.randomUUID()], [43, TEAMMATE]]) {
       said = await call(n, SEND_TOOL, { session, paths: [path.join(project.root, 'notes.txt')] });
-      assert.match(said.content[0].text, /No session on your other computers has that id/);
+      assert.match(said.content[0].text, /No session on the other computers has that id/);
     }
     // The session is there, but this computer's daemon is not running: nothing is staged.
     said = await call(9, SEND_TOOL, { session: p.id, paths: [path.join(project.root, 'notes.txt')] });
     assert.equal(said.isError, true); assert.match(said.content[0].text, /offline|not running/);
     assert.deepEqual(outgoing(), []);
-    // Marked on one side only: nothing is listed.
-    noteTheirs(p.devbox.identity.key, false);
-    said = await call(10, LIST_TOOL, {});
-    assert.match(said.content[0].text, /No other computer of yours is paired with this one/);
-    noteTheirs(p.devbox.identity.key, true);
     // In Ask for approval the owner is asked about a send, with its paths; the list is answered at once.
     const ask = relay(t, argv('ask'));
     ask.send({ jsonrpc: '2.0', id: 20, method: 'tools/call', params: { name: TOOL_NAME, arguments: { tool_name: `mcp__${APPROVAL_SERVER}__${LIST_TOOL}`, input: {}, tool_use_id: 'list' } } });
@@ -569,31 +561,20 @@ test('files are not received into a Git work tree: a home folder that is a repos
   assert.equal(spawnSync('git', ['-C', HOME, 'status', '--porcelain', '--untracked-files=all', '--', '.local'], { encoding: 'utf8' }).stdout.trim(), '');
 });
 
-// The owner's case: ELU on his devbox over ssh, a session on his Mac open there, and a Mac
-// CleanShot capture dropped on the terminal. The devbox does not have it, so the message goes
-// as text; the session runs on the Mac, which has the picture, under ~/Library, which no session
-// may read. As for a message typed on the Mac itself, the session is given a copy it may read:
-// in a message to a session, to one that waits to start, and in the first of a new one. What a
-// session's tool sends there goes as it is: only what the owner typed is read for pictures.
-test('a typed message from my other computer naming a picture under ~/Library here gives the session here a copy it may read', async t => {
+// A picture under ~/Library on this computer (where a session may not read) named in a message
+// from another computer is taken as it is, whoever owns that computer: copying a file of this
+// computer's home into the session was for the owner's own computers, and there is no "mine".
+// Files go with /send (elu.remote.files) instead.
+test('a message from another computer naming a picture under ~/Library here is taken as it is, with no copy, typed or not', async t => {
   const p = pair(t), PNG = Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex');
   const shot = path.join(HOME, 'Library', 'Application Support', 'Shots', 'shot 1.png'), dropped = shot.replaceAll(' ', '\\ ');
   fs.mkdirSync(path.dirname(shot), { recursive: true }); fs.writeFileSync(shot, PNG); t.after(() => fs.rmSync(path.join(HOME, 'Library'), { recursive: true, force: true }));
-  const copies = goal => goal.match(/\/\S*elu-code-pictures\/[0-9a-f]{8}-shot-1\.png/g) ?? [];
   const view = command => withHome(p.laptop.home, () => remoteCommand(p.viewCtx, { to: p.devbox.identity.key, ...command }));
   const goals = () => withHome(p.devbox.home, () => requestsFor(p.project.root).map(row => row.goal));
   await view({ type: 'remoteSend', id: p.id, ref: p.ref, text: `${dropped} why is this cut off`, typed: true });
-  const [typed] = goals();
-  assert.equal(copies(typed).length, 1, `the session gets the path under ~/Library, which it may not read: ${typed}`); assert.equal(typed, `${copies(typed)[0]} why is this cut off`);
-  assert.deepEqual(fs.readFileSync(copies(typed)[0]), PNG);
   await view({ type: 'remoteSend', id: p.id, ref: p.ref, text: `${dropped} from a tool` });
-  assert.equal(goals()[1], `${dropped} from a tool`, "a session's tool sends text as it is");
-  // A new session there, as the app starts it, and a message to it before it starts.
-  const started = await view({ type: 'remoteStart', text: `what is in ${dropped}`, permissions: 'ask', typed: true });
-  const first = () => withHome(p.devbox.home, () => pendingRequests(p.project.root).find(row => row.mine?.remoteId === started.id)).goal;
-  assert.equal(copies(first()).length, 1, first()); assert.equal(first(), `what is in ${copies(first())[0]}`);
-  await view({ type: 'remoteSend', id: started.id, text: `and ${dropped}`, typed: true });
-  assert.equal(copies(first()).length, 2, first()); assert.ok(!first().includes(dropped), first());
+  assert.deepEqual(goals(), [`${dropped} why is this cut off`, `${dropped} from a tool`]);
+  assert.ok(!goals().join('\n').includes('elu-code-pictures'));
 });
 
 // The owner's case: a screenshot dropped alone in the New session box after @ his other
@@ -602,7 +583,7 @@ test('a typed message from my other computer naming a picture under ~/Library he
 // list there while it waits to start, and once it has started. With words, it is named as before.
 test('a session started there with only a dropped picture is named after the picture, here and there', async t => {
   const p = pair(t), PNG = Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex'), name = 'Screenshot 2026-11-15 at 1.02 PM.png';
-  p.toViewer.remoteHello = { remote: 1, files: 1, startFiles: 1 };
+  p.toViewer.remoteHello = { remote: 1, shared: 1, files: 1, startFiles: 1 };
   const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'elu-code-shots-'))), shot = path.join(dir, name); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   fs.writeFileSync(shot, PNG);
   const start = text => withHome(p.laptop.home, () => remoteCommand(p.viewCtx, { type: 'remoteStart', to: p.devbox.identity.key, text, permissions: 'ask', typed: true, files: stageFiles(offerFiles(text)) }));

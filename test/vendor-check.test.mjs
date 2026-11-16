@@ -263,7 +263,7 @@ test('Grok Build: a token written over ELU\'s link instead of through it signs e
   const checked = await m.row('grok');
   assert.deepEqual([checked.signedIn, checked.conformant], [true, true]);
   const blank = { available: false }, tab = usageTab({ vendors: withCheck([{ vendor: 'claude', ...blank }, { vendor: 'codex', ...blank }, { vendor: 'agy', ...blank }, checked], { env: m.env }), env: m.env });
-  assert.deepEqual(usageBlocks([tab[3]]).map(line => line.text), ['Grok Build  signed in · ready']);
+  assert.deepEqual(usageBlocks([tab[3]]).map(line => line.text), ['1 account · 1 no reading', '─'.repeat(76), 'Grok Build  signed in · ready']);
   // The owner signs in in his terminal later: his file is the newer one, and ELU's runs use it through the link again.
   const now = Math.floor(Date.now() / 1000); fs.utimesSync(link, now - 100, now - 100);
   fs.writeFileSync(real, '{"token":"never-read"}\n', { mode: 0o600 });

@@ -14,7 +14,10 @@ const mode=cfg.mode??'normal';
 // login` signs in there. accounts.limited: accounts whose turns fail at their usage limit.
 // accounts.lapsed: accounts whose sign-in lapsed (true: every account). `login status` still
 // says signed in, and a turn fails in the words codex-cli 0.167.0 keeps for it.
-// accounts.codexUsage: per account, the percent of the windows the app-server reports.
+// accounts.codexUsage: per account, the percent of the windows the app-server reports. With
+// models ({ "<limit id>": { name, fiveHour, weekly } }) the answer also lists its limits by id,
+// as codex-cli 0.167.0 does (rateLimitsByLimitId): the account's own as codex, and each of
+// those, a model's own limit, with its limitName.
 const codexHome=process.env.CODEX_HOME??path.join(process.env.HOME??'','.codex');
 // codexTurn (fake.json): { requests: [usage], model }. Each turn makes those requests and keeps
 // them as codex-cli 0.167.0 keeps a thread: a rollout file under CODEX_HOME,
@@ -163,7 +166,7 @@ if(args[0]==='app-server'){
   if(row.method&&row.method!=='initialize'&&row.method!=='initialized')fs.appendFileSync(path.join(dir,'appserver.jsonl'),JSON.stringify({method:row.method,params,flags:args.flatMap((value,i)=>args[i-1]==='-c'?[value]:[])})+'\n');
   if(row.id==null)continue;
   if(row.method==='initialize'){out({id:row.id,result:{userAgent:'codex_fake/0.166.0-alpha.5.1',codexHome,platformFamily:'unix',platformOs:'linux'}});continue;}
-  if(row.method==='account/rateLimits/read'){const resetsAt=Math.floor(Date.now()/1000)+7200,used=cfg.accounts?.codexUsage?.[account]??{fiveHour:18,weekly:62};out({id:row.id,result:{rateLimits:{primary:{usedPercent:used.fiveHour,windowDurationMins:300,resetsAt},secondary:{usedPercent:used.weekly,windowDurationMins:10080,resetsAt:resetsAt+604800}}}});continue;}
+  if(row.method==='account/rateLimits/read'){const resetsAt=Math.floor(Date.now()/1000)+7200,used=cfg.accounts?.codexUsage?.[account]??{fiveHour:18,weekly:62};const windows=of=>({...(of.fiveHour===undefined?{}:{primary:{usedPercent:of.fiveHour,windowDurationMins:300,resetsAt}}),...(of.weekly===undefined?{}:{secondary:{usedPercent:of.weekly,windowDurationMins:10080,resetsAt:resetsAt+604800}})});const byId=used.models?{rateLimitsByLimitId:{codex:{limitId:'codex',limitName:null,...windows(used)},...Object.fromEntries(Object.entries(used.models).map(([id,of])=>[id,{limitId:id,limitName:of.name??null,...windows(of)}]))}}:{};out({id:row.id,result:{rateLimits:windows(used),...byId}});continue;}
   if(!speaks||row.method==='turn/steer'&&cfg.appServer!=='steer'){refuse(row.id,`Invalid request: unknown variant \`${row.method}\`, expected one of \`initialize\`, \`account/rateLimits/read\``);continue;}
   if(row.method==='config/read'){let own='';try{own=fs.readFileSync(path.join(codexHome,'config.toml'),'utf8');}catch{}out({id:row.id,result:{config:{},origins:{},layers:[{name:{type:'sessionFlags'},version:'1',config:{}},...(own.trim()?[{name:{type:'user',file:path.join(codexHome,'config.toml'),profile:null},version:'1',config:{model:'owner-model'}}]:[]),{name:{type:'system',file:'/etc/codex/config.toml'},version:'1',config:{}}]}});continue;}
   if(row.method==='thread/start'||row.method==='thread/resume'){thread=row.method==='thread/resume'?params.threadId:turnUse?newThread():'12345678-1234-4234-8234-123456789abc';threadModel=params.model??(turnUse?turnUse.model??'gpt-6.1-sol':'fake-model');const kept=turnUse?{path:rolloutOf(thread)??rolloutNew(thread)}:{};out({id:row.id,result:{thread:{id:thread,turns:[],...kept},model:threadModel,modelProvider:'openai',cwd:params.cwd??process.cwd(),approvalPolicy:params.approvalPolicy??'on-request',sandbox:{type:params.sandbox==='danger-full-access'?'dangerFullAccess':'readOnly'},reasoningEffort:null}});if(row.method==='thread/start')note('thread/started',{thread:{id:thread,turns:[]}});continue;}

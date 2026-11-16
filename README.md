@@ -52,7 +52,7 @@ as `.env`, stops it until `.gitignore` keeps that file out.
 | --- | --- |
 | Sessions | Every session across your projects. The selected one is open beside the list. Typing on a row writes a message to it; a row's key is its letter, then Enter. Task in a session's header (a click on it, or Ctrl+T) opens its Task: the goal, the objectives with the model's marks, and the checklist of its work from ELU's own records (committed, checks, review, pushed, pull request, and what it waits for). |
 | Projects | Your projects. `n` makes one, `o` makes another the active one. Enter opens a project's settings: its Instructions (rules every session in it follows, which you write) and Memory (what ELU learned from you there, and what you added; every session reads it) open to read, each first saying what it is, and `e` edits them. When the project is on other computers too (Also on), both are the same there and hold what everyone on it wrote, and what ELU learned from each of them. A project a teammate shares that is not on this computer is listed too, as `ELU   shared by @rio   on @rio-mac`: Enter opens its team board, and `c` clones it here. |
-| Kanban | The open project's tasks and sessions: To do, In progress, Needs you, Done. On a team, everyone with a clone of the same repository shares one board: every session a teammate, or another computer of yours, runs in it shows in the same columns with who started it and on which machine, to read only. A project whose folder holds several repositories has a board for each. `/share off` keeps a project off it both ways. Nothing goes to Done until you check it: Shift+→ under Needs you, or `/done` in a session, shows its goal and objectives, then Done, a new goal, or a copy with one. A session at work on a Task takes a new goal too, from `/done` or its Task: its turn is not stopped, and is told at its next step, or when it ends if it takes no message. A project on another computer of yours that no project here holds is "<project> on devbox" under Board ▾: its board is read from there, and what you do on it is done there. With no project here, Kanban opens on it. |
+| Kanban | The open project's tasks and sessions: To do, In progress, Needs you, Done. On a team, everyone with a clone of the same repository shares one board: every session another computer on the team runs in it shows in the same columns with who started it and on which machine, to read only. A project whose folder holds several repositories has a board for each. `/share off` keeps a project off it both ways. Nothing goes to Done until you check it: Shift+→ under Needs you, or `/done` in a session, shows its goal and objectives, then Done, a new goal, or a copy with one. A session at work on a Task takes a new goal too, from `/done` or its Task: its turn is not stopped, and is told at its next step, or when it ends if it takes no message. A project shared with you on another computer that no project here holds is "<project> on devbox" under Board ▾: its board is read from there, and what you do on it is done there. With no project here, Kanban opens on it. |
 | Chats | Your team's channels, your teammates and your bots. |
 | Bots | Your bots. `n` makes one, Enter opens one. |
 | Usage | Your vendor accounts and their plan usage, then your top 10 agents by cost with their tokens. `t` switches between today and the last 7 days. |
@@ -61,6 +61,10 @@ Click a tab's name. Or press Tab until the tab row is selected, choose with ← 
 press Enter.
 
 ELU draws in color also where `NO_COLOR` is set; `ELU_NO_COLOR=1 elu` opens it without color.
+
+A chart on a session's Artifacts tab is a picture in a terminal that shows pictures (kitty,
+Ghostty, WezTerm, iTerm2) and text in every other, as inside tmux; `ELU_NO_PICTURES=1 elu`
+keeps it text.
 
 ## Tasks
 
@@ -85,14 +89,14 @@ An approval you type counts too, in your own words: `yes`, `I approve`, `go ahea
 A question gets a plain answer and no Task. A follow-up
 inside an approved Task's goal starts at once; a new piece of work gets a Task of its own.
 An approved Task gives its session its name, unless you named the session yourself.
-A session started with only a dropped file, here or on your other computer, is named after
+A session started with only a dropped file, here or on another computer, is named after
 that file.
 
 On the Kanban tab a session with a Task shows as that Task: its title, how far it is, its
 priority and its severity. One that waits for your approval is under Needs you. Enter opens
 the whole Task, as does a click: the goal, the objectives, the success criteria, the subtasks
-and the ETA. Its Go to session button opens its session; Enter presses it. A teammate's card,
-and one of your other computer's, open the same way.
+and the ETA. Its Go to session button opens its session; Enter presses it. A card of another
+computer opens the same way.
 
 After approval, the model splits the work into subtasks and changes them as it likes.
 The card lists them as a checklist that follows the model's own to-do list while the turn
@@ -114,16 +118,16 @@ first turn depends on the vendor and the mode:
 
 Type these in the message box. `/` alone lists every command, and `/help` explains the keys.
 
-You can send a message at any time, and a working session answers it right away. On Claude Code and on Codex, one sent while the session is working goes to that turn: the model reads it at its next step, the chat then says "Sent to the running turn." under it, and the reply answers it too. Behind a long command the turn reads it when that command ends, the chat says so, and Enter in the empty message box sends it now: Claude Code moves the command to the background and the same turn reads your message; Codex stops the command and goes on with your message at once. Where a turn takes no message while it works (Grok Build, Antigravity, a Codex or Claude Code that cannot, and while the project's checks run), the message is answered at once beside the turn: a short read-only run on the session's own model reads the chat and what the turn has done so far, and its answer shows in the chat within seconds, under the working line and the turn's steps, marked "Answered beside the running turn, from what it has done so far. The turn goes on." A question is done with that answer, and the session reads both at its next turn. A message that asks for work is answered the same way, says that it asks for work, and starts the next turn when this one ends; Enter in the empty message box sends it now by stopping the turn and the command that is running, its changes kept: your message starts the next turn, in the same vendor session where it can go on, and where it cannot, with what the stopped turn had said and done. The chat never says only that a message waits: each one says what happens to it and when, and the status line says the same when you send it. `↑` in the empty message box takes the newest one back so you can change it. The same holds for a session on your other computer, where that computer answers, with no window open there; if it runs an older ELU, the chat says that the message starts when its turn ends and that nothing answers it before, and still offers Enter where that computer can send it now. It holds for a message to a bot while that bot works too.
+You can send a message at any time, and a working session answers it right away. On Claude Code and on Codex, one sent while the session is working goes to that turn: the model reads it at its next step, the chat then says "Sent to the running turn." under it, and the reply answers it too. Behind a long command the turn reads it when that command ends, the chat says so, and Enter in the empty message box sends it now: Claude Code moves the command to the background and the same turn reads your message; Codex stops the command and goes on with your message at once. Where a turn takes no message while it works (Grok Build, Antigravity, a Codex or Claude Code that cannot, and while the project's checks run), the message is answered at once beside the turn: a short read-only run on the session's own model reads the chat and what the turn has done so far, and its answer shows in the chat within seconds, under the working line and the turn's steps, marked "Answered beside the running turn, from what it has done so far. The turn goes on." A question is done with that answer, and the session reads both at its next turn. A message that asks for work is answered the same way, says that it asks for work, and starts the next turn when this one ends; Enter in the empty message box sends it now by stopping the turn and the command that is running, its changes kept: your message starts the next turn, in the same vendor session where it can go on, and where it cannot, with what the stopped turn had said and done. The chat never says only that a message waits: each one says what happens to it and when, and the status line says the same when you send it. `↑` in the empty message box takes the newest one back so you can change it. The same holds for a session of a shared project on another computer, where that computer answers, with no window open there; if it runs an older ELU, the chat says that the message starts when its turn ends and that nothing answers it before, and still offers Enter where that computer can send it now. It holds for a message to a bot while that bot works too.
 
-A chat reads in time order, here and for a session on your other computer. What you sent that has not been read yet is the last thing in it, right above the message box, with nothing under it; the working turn's steps are right above that. A session's Task sits after the reply that proposed it.
+A chat reads in time order, here and for a session on another computer. What you sent that has not been read yet is the last thing in it, right above the message box, with nothing under it; the working turn's steps are right above that. A session's Task sits after the reply that proposed it.
 
-While the model or a bot works, the chat shows what it does now under the working line: its newest step, such as its latest thought (a long one cut to its last lines) or its last tool call (● running, ✓ done, ✗ failed), and every tool call still running. The steps before fold into one line above them, such as `▸ 14 earlier steps · ctrl+o shows all`. Opened, it shows every thought, tool call, plan and what the turn wrote on the way, and stays open while more come. A thought that comes without its text shows how many tokens it has taken so far, such as `✻ thinking · 1.2k tokens`. A call says how long it has run, second by second, such as `● Run: npm test · 2m 10s`, and keeps its total when it ends. Commands the turn left running in the background are one line, such as `● 1 background command: npm run watch · 4m 0s`. When the turn ends its steps fold into one line above its reply, such as `▸ 12 steps in 1m 12s`. A turn you stop with `/stop` keeps its steps, and its line says `stopped`. `ctrl+o` opens or folds the steps of every turn, in the message box too; a click on a turn's line opens or folds that turn's. A session on your other computer shows the same. A program that prints only when it ends has no steps to show: the chat then counts the time under the working line, such as `1m 12s so far. Antigravity reports only when it ends.` Antigravity shows its steps in every permission mode where its one-time check proved `agy acp` on this machine, and runs that way otherwise ([docs/vendors/antigravity.md](docs/vendors/antigravity.md)).
+While the model or a bot works, the chat shows what it does now under the working line: its newest step, such as its latest thought (a long one cut to its last lines) or its last tool call (● running, ✓ done, ✗ failed), and every tool call still running. The steps before fold into one line above them, such as `▸ 14 earlier steps · ctrl+o shows all`. Opened, it shows every thought, tool call, plan and what the turn wrote on the way, and stays open while more come. A thought that comes without its text shows how many tokens it has taken so far, such as `✻ thinking · 1.2k tokens`. A call says how long it has run, second by second, such as `● Run: npm test · 2m 10s`, and keeps its total when it ends. Commands the turn left running in the background are one line, such as `● 1 background command: npm run watch · 4m 0s`. When the turn ends its steps fold into one line above its reply, such as `▸ 12 steps in 1m 12s`. A turn you stop with `/stop` keeps its steps, and its line says `stopped`. `ctrl+o` opens or folds the steps of every turn, in the message box too; a click on a turn's line opens or folds that turn's. A session on another computer shows the same. A program that prints only when it ends has no steps to show: the chat then counts the time under the working line, such as `1m 12s so far. Antigravity reports only when it ends.` Antigravity shows its steps in every permission mode where its one-time check proved `agy acp` on this machine, and runs that way otherwise ([docs/vendors/antigravity.md](docs/vendors/antigravity.md)).
 
 | Type | What it does |
 | --- | --- |
 | `/new` | Starts a new session |
-| `/model sonnet` | Chooses the model of this session; `/model` alone lists them. The name can be the one the app shows, and a message after it is sent on that model: `/model opus 5.5 fix the build`. Over a session on your other computer it changes that session's model there |
+| `/model sonnet` | Chooses the model of this session; `/model` alone lists them. The name can be the one the app shows, and a message after it is sent on that model: `/model opus 5.5 fix the build`. Over a session on another computer it changes that session's model there |
 | `/permissions auto` | Sets what the model may do: `ask`, `auto` or `full` |
 | `/place branch try-coupons` | Sets where a new session runs: `worktree`, `branch NAME` or `here` |
 | `/bots add qa` | Keeps a bot in this session; `/bots remove qa` takes it out |
@@ -131,18 +135,19 @@ While the model or a bot works, the chat shows what it does now under the workin
 | `@pair is there a simpler way?` | Asks a bot. Your next messages in that session go to it too |
 | `@lead plan the coupon work` | Asks a bot that works. The session stays its own: your next messages, your approval of its Task and a new goal go to it, and it hands work to its helpers |
 | `@model and what do you think?` | Writes to the session's model again |
-| `/changes` | Shows what this session changed; `/chat` goes back. The name of its Changes tab counts them (`Chat   Changes 7`) before you open it: a session of this computer counts again when a turn ends or its state changes, and one on your other computer shows its changes the same way, whole. In a session of this computer, `+` on a line (or a click on its `+`) notes what should change, and `s` sends the notes to the model together |
+| `/changes` | Shows what this session changed; `/chat` goes back. The name of its Changes tab counts them (`Chat   Changes 7`) before you open it: a session of this computer counts again when a turn ends or its state changes, and one on another computer shows its changes the same way, whole. In a session of this computer, `+` on a line (or a click on its `+`) notes what should change, and `s` sends the notes to the model together |
 | `/publish` | Shows the exact push and draft pull request, then asks you |
-| `/stop` | Stops the running response. Messages you sent while it ran then go at once, in order; `↑` takes one back first. Over a session on your other computer, it stops that session there. While a session of this computer works, the key bar under the message box names it (`/stop stop`) |
-| `/archived` | Lists this computer's archived sessions last in Sessions; `/archived` again hides them. `c` archives a session, and `u` or a new message brings it back. `/archived clean` deletes them for good, or first saves what you taught in them to the project's memory. Each of your other computers lists and cleans up its own |
+| `/stop` | Stops the running response, and the [long jobs](#long-jobs) the session started. Messages you sent while it ran then go at once, in order; `↑` takes one back first. Over a session on another computer, it stops that session there, when it was started from here or that project is Auto there. While a session of this computer works, the key bar under the message box names it (`/stop stop`) |
+| `/archived` | Lists this computer's archived sessions last in Sessions; `/archived` again hides them. `c` archives a session, and `u` or a new message brings it back. `/archived clean` deletes them for good, or first saves what you taught in them to the project's memory. Every other computer lists and cleans up its own |
 | Enter (empty box) | While a turn works and a message of yours waits, sends that message now. On Claude Code the command the turn waits on moves to the background and the same turn reads the message. On the other vendors the turn stops as `/stop` stops it and the message starts the next turn, in the same vendor session where it can go on |
 | `/schedule in 1h check the build` | Starts a session later or on a schedule: `/schedule [when] [message]`. `/schedule ` lists times such as `in 5m`, `in 1h` and `daily 9:00`. Each run is a new session with the model, mode and bots of the form (a bot with its own schedule is left out); it does not see the chat it was made in. Each run is named with the schedule's message, or with the name you gave its last run, and it archives the schedule's earlier runs, so Sessions lists one run of each schedule; `/archived` shows the others. A run that still works or needs you stays until a later run finds it done. A schedule gets Full access only when you pick it for that schedule, and the form asks you once before saving it |
 | `/budget 5` | Limits this session to 5 dollars, or any amount from a cent up; `/budget` alone says what it has spent, and `/budget off` removes the limit. At the limit it offers a higher one, or `/budget off` while a run's cost is not known. See [Install details](#install-details) for where the limit is checked |
-| `/slots 12` | Limits how many sessions run at once, in one project as in several, to any whole number from 1. Until you set a limit there is none and no session waits for a slot; `/slots off` removes it, and `/slots` alone says which it is. What you type always starts; this number limits what starts by itself. A new session you start, a message you send, here or from your other computer, a Task you approve, a teammate's message you accept with y or w and a schedule or bot you run now start whatever runs. A scheduled run that comes due, a bot's scheduled turn, a teammate's message that Auto starts, a retry after a failure and a message one session sends another wait under Queued past the limit, and the chat says what each waits for, such as "Waiting for a free slot: 13 sessions are running, and 12 run at once. /slots changes it."; it starts when a slot frees. Running work is not interrupted |
-| `/standup` | Asks every open session of yours, here and on your other computers, and your teammates' shared ones, for an update, in a new Standup session. See [Standup](#standup) |
+| `/keepgoing off` | Whether ELU starts this session again by itself while its Task's objectives are not all met and nothing is running: `on` or `off`; `/keepgoing` alone says which it is. See [Long jobs](#long-jobs) |
+| `/slots 12` | Limits how many sessions run at once, in one project as in several, to any whole number from 1. Until you set a limit there is none and no session waits for a slot; `/slots off` removes it, and `/slots` alone says which it is. What you type always starts; this number limits what starts by itself. A new session you start or a message you send here, a Task you approve here, a teammate's message you accept with y or w and a schedule or bot you run now start whatever runs. A scheduled run that comes due, a bot's scheduled turn, a teammate's message that Auto starts, what another computer on a shared project asks for here, a retry after a failure and a message one session sends another wait under Queued past the limit, and the chat says what each waits for, such as "Waiting for a free slot: 13 sessions are running, and 12 run at once. /slots changes it."; it starts when a slot frees. Running work is not interrupted |
+| `/standup` | Asks every open session of yours here, and those of your shared projects on other computers, for an update, in a new Standup session. See [Standup](#standup) |
 | `@everyone did anyone touch auth?` | In a Standup session, asks the sessions of its last round again, with your question; `@everyone standup` asks for an update. Elsewhere it starts a Standup with the question |
 | `! git status` | Runs a shell command. In an open session the model gets the command and its output with your next message |
-| `/computer name studio` | Renames this computer. Your other computers and teammates see the new name within seconds, in their Sessions headings and `@studio`. `/computer` alone says its name; `/computer name default` goes back to its host name. On the command line: `elu id --computer studio` |
+| `/computer name studio` | Renames this computer. The other computers on your teams see the new name within seconds, in their Sessions headings and `@studio`. `/computer` alone says its name; `/computer name default` goes back to its host name. On the command line: `elu id --computer studio` |
 | `/update` | Says how to update: `/quit`, then `elu update` |
 | `/takeover` | In a view-only window, moves the project to this window. The other window turns view only |
 | `/quit` | Closes ELU. Sessions that are running or queued go on in the background; `elu conductor stop` stops them |
@@ -188,6 +193,10 @@ works. The app shows each change at once.
   Work on no remote stays in its folder and on its branch.
 - `elu schedules [--all]` lists the schedules, and `elu schedules add <when> <message>` (the
   words `/schedule` takes), `pause N`, `resume N`, `delete N` and `run N` change them.
+- `elu jobs` lists the session's [long jobs](#long-jobs), and `elu jobs start NAME -- COMMAND`,
+  `stop NAME` and `log NAME` start one, end one and print the end of its log.
+  `elu sessions keep-going N|this [on|off]` says or sets whether ELU starts a session again
+  while its Task is not met.
 
 A session started from a session gets that session's mode, or a lower one with `--mode`. In
 Ask for approval you are asked before one runs; Approve for me and Full access run them. Every
@@ -197,6 +206,44 @@ gets that session's mode or a lower one, and `elu schedules run`, `resume` and `
 take only a schedule whose runs get no more: the others are yours, in ELU. A teammate's
 question or review, or a session a teammate's message started, is never told about them and
 cannot run them.
+
+### Long jobs
+
+A command a turn leaves running in the background ends when the turn ends. Work that takes
+longer than a turn is a job: the model, a bot that works or a helper it starts runs
+`elu jobs start NAME -- COMMAND` and ends its turn. Every turn with a shell is told so. ELU
+runs the job apart from the turn, in the session's folder and in the session's mode, never a
+higher one, and writes what it prints to a log beside the session's records. The job goes on
+when the turn ends, when you close ELU and when ELU updates. A restart of the computer ends
+it, and it is then listed as ended.
+
+- When a job ends, ELU starts the session's working agent again by itself, with one message:
+  the job's name, its exit code, how long it ran, where its log is and its last lines. Jobs
+  that end within a few seconds of each other come in one message. A turn that works then
+  gets it as it gets your messages. No model is called while a job runs.
+- A session with jobs is listed under Running in Sessions (`2 jobs running · gate 43m`) and
+  is In progress on the Kanban: it waits for your check only once they have ended. Its chat
+  shows the same line and its Task lists each job, also on the other computers of its
+  project.
+- `/stop`, archiving and deleting the session end its jobs, and the chat says so in one line.
+  A session in Done or archived gets no turn for a job, and one you stopped gets none from ELU
+  until you write to it.
+- Below Full access a job runs in ELU's sandbox, with no network, and changes only the files
+  its turn may change: a chat's job reads the project folder and changes nothing in it, and
+  an editing session's job writes that session's folder, less its protected files. On a
+  computer with no sandbox it does not start, and says so.
+- When a turn ends while a background command it started still runs, the chat says in one
+  line that the command ended with it, and the next turn is told.
+
+A session whose Task you approved keeps going until its objectives are met. When they are not
+all met, nothing runs and it waits for nothing from you, ELU starts it again after three idle
+minutes with one message: "The Task's objectives are not all met and nothing is running.
+Carry on, or say exactly what you need from the owner." ELU reads its own records for this
+and calls no model. After two such turns in a row with no progress (no objective newly met,
+no job started, no change, no question) it stops starting the session, which then waits for
+you and says why; your next message starts it again. This is on in Full access and Approve
+for me, and off in Ask for approval, in a schedule's runs and in a bot's own chat until you
+turn it on with `/keepgoing on`.
 
 ## Keys
 
@@ -277,7 +324,7 @@ Details:
 When the model commits its own work in the session's workspace, that commit is the
 session's work. The checks and the review run on it, `/changes` shows it against the
 session's base, and the session ends as any other does. With all of its work committed it
-is listed as `committed`, here and on your other computers, and its chat says where the
+is listed as `committed`, here and on other computers on the project, and its chat says where the
 work is: the branch, the commit, and whether it is pushed. `/publish` then pushes what is
 there, on the branch it is on; when that branch is on GitHub already with a pull request
 for the same commit, it names the pull request and pushes nothing. A commit made in the
@@ -329,8 +376,8 @@ Five come with the app. You can edit or remove any of them in the Bots tab.
   the message, such as `Message @lead · @model writes to Opus 5.5`. In a session you wrote to
   a bot that works, such as `@lead`, everything else goes to it as well: your approval of its
   Task (`y` or in words), a new goal (from its Task, `/done` or `elu sessions goal`), `a` on
-  its row, the turn after a bot reviews its edits, its standup answer and what you type over
-  it on your other computer. After `@model` the session is
+  its row, the turn after a bot reviews its edits, its standup answer and what is typed over
+  it on another computer of the project. After `@model` the session is
   the model's until you name a bot again. A bot you stop picks up where it stopped on your next message when it runs on
   Claude Code or Grok Build; on the others its next turn starts from the chat. When it
   cannot pick up, a line in the chat says so and the turn starts from the chat.
@@ -431,8 +478,13 @@ with no step. An invite or share made in another folder shares that folder as an
 project of the team, and whoever joins with that invite joins it; each project keeps its own
 sessions, instructions and memory. Everyone on it sees its sessions from each of those computers in
 Sessions, under that computer and its owner ("On studio · sara"): Enter opens one, with its
-chat, steps and changes, and its tasks are on the Kanban. Only the computer's owner works in
-them. Its instructions and memory are the same everywhere it is. A project you
+chat, steps and changes, and its tasks are on the Kanban. Everyone on it also works in them,
+under the access the computer that runs them set for that project (`/access` there): Auto
+starts what they ask at once, Manual keeps it for a yes there. A computer whose folder of the
+project is its home folder keeps it for a yes too, until its owner picks Auto in `/access`
+there and answers y to "Let the other computers on it work here without asking?" (or runs
+`elu access --auto --home` in that folder). Its instructions and memory
+are the same everywhere it is. A project you
 never shared, or keep off with `/share off`, stays on your computer.
 The Kanban board needs no share either:
 every session you run in a repository a teammate also has is on their Kanban, with its title,
@@ -465,24 +517,28 @@ sees them when it answers.
 team. Either way, a new invite brings them back, also when nobody heard the leave yet: the
 leave goes along with the invite.
 
-Your own computers work together the same way. Two computers on one team that are signed
-in to GitHub with `gh` as the same account pair by themselves. Otherwise run
-`elu invite --mine` on your laptop, then `/join` that code on your devbox and answer Yes when
-it asks if the laptop is yours too (or `elu join CODE --mine`). A devbox already on your team
-needs no code: run `/mine @devbox` on the laptop, then on the devbox press Enter on "@laptop says it is yours" in Chats and `y` (or run `/mine @laptop`). From then on, `@devbox fix the flaky test` in the
-new session box starts the session on the devbox, with the mode, model and bots you picked.
-It shows in Sessions marked "on devbox", live, and its approvals wait on both machines. The
+Your own computers work the same way as anyone's: there is no "mine" any more, and nothing to
+mark. Invite your devbox to the project like a teammate (`/invite` in the project on the
+laptop, `/join` that code on the devbox in its folder of that project). From then on,
+`@devbox fix the flaky test` in the new session box starts the session on the devbox in that
+project, with the model and bots you picked and your mode, up to the devbox's own default.
+It shows in Sessions under "On devbox", live, and its approvals wait on both machines. The
 name of its Changes tab counts what it changed, and `d` opens its Changes beside the chat, as for a
 session here: the files with their counts, each change under the file and the line it is at,
-`[` and `]` between files, `n` and `p` between changes. It is
-your own session there, so your rules apply, and `a` on its approval, from either machine,
-keeps the rule on the devbox, where it runs. When the devbox's home folder is one of its projects,
-the box first asks which folder the session works in there: its projects, the home folder, and
-each Git repository in the home folder, the cursor on where it would run. Enter starts it there;
-Esc sends nothing and keeps your message.
-Sessions also lists every other session on the devbox in the same repository under "On devbox": they are part of your project, in Sessions and on its Kanban ("you · devbox"), whichever of your computers started them.
-A project is one on all your computers: its row in Projects counts its sessions on the devbox too ("22 sessions · 22 on @devbox"). Projects lists a devbox project as "<project> on devbox" only for its sessions no project here shows, and says how many, and never lists a project the devbox shares again when this computer has it.
-A devbox project that no project here holds, and every one on a computer with no project, has its sessions under "On devbox" too, by project name.
+`[` and `]` between files, `n` and `p` between changes. It runs under that project's access on
+the devbox (`/access` there), as a teammate's message does: Auto starts it at once; Manual keeps
+it on the devbox until someone there says yes (`r` on it in Sessions), and anything else you ask
+of its sessions from here is refused with what to do. The devbox's saved rules do not answer for
+it: the defaults and the team's `/access` rules do, and `a` on its approval keeps the rule on
+the devbox for that project only. A message you send from here into a session someone started
+on the devbox is told those `/access` rules too, as its own turn. Sessions started from here
+take no teammate slot there: only `/slots` on the devbox makes them wait. With several projects shared with the laptop, the box first
+asks which one the session works in there. Enter starts it there; Esc sends nothing and keeps
+your message.
+Sessions also lists every other session of that project on the devbox under "On devbox",
+whoever started it, and they are on its Kanban.
+A project is one on every computer that has it: its row in Projects counts its sessions on the devbox too ("22 sessions · 22 on @devbox").
+A project you never shared stays on its computer, yours too: no other computer sees it or works in it.
 With a devbox session under the cursor, what you type goes to that session, as if you had
 typed it on the devbox: `yes`, the number of a choice or your own words answer the question
 it waits on, and any other message continues it. The message box names its model and the
@@ -514,28 +570,18 @@ the text alone, and Esc sends nothing and keeps your message in the box. `/send 
 sends files without a message. They land in that session's
 inbox on the devbox, which it may read in every mode, and each path in your message points
 there. `@devbox` and a screenshot dragged into the new session box asks the same, and y
-starts the session with it. A Claude Code session of yours can list your sessions on your other computers and send
-them files itself; in Ask for approval you allow each send.
-A project's instructions and memory are the same on all your computers, for every
-model and bot there, like its tasks: the project a team was invited to, else the one of the
-same repository, else the one of the same name. An edit on one, and every line a session
+starts the session with it. A Claude Code session of yours can list the sessions of your shared
+projects on other computers and send them files itself; in Ask for approval you allow each send.
+A project's instructions and memory are the same on every computer that has it, for every
+model and bot there, like its tasks: the project a team was invited to. An edit on one, and every line a session
 learned from you, is on the others within seconds, and on one that was off when it comes back.
 When both changed the same text while apart, the newer edit is used, and the line that says so
 names where the other was kept (`.elu-code/history/` in the project). The project's settings
 say where else it is: "Also on @devbox, @studio". A computer on an older ELU shares none.
-`/mine` lists your computers and `/mine remove @devbox` ends it.
-Each computer goes by its host name until you name it: `/computer name devbox` on it (or `elu id --computer devbox`) renames it, and your other computers show the new name within seconds, ELU 0.1.27 and older too. `/computer name default` goes back to the host name.
-Your other computers take a new one as yours with no step on them: a computer that is already yours on both sides tells them, signed, and a teammate's computer is never heard. `/mine remove` reaches them the same way.
-A computer on ELU 0.1.25 still needs `/mine` on each side: one that your other computers said is yours reads "update ELU on <name>" until it agrees.
-
-Signed in to GitHub with `gh` as the same account on both, your laptop and devbox need none
-of that: once they are on a team together they pair by themselves, and say
-"@devbox is yours: both computers are signed in to GitHub as <you>." To do this, each one keeps
-its public peer key and box name in one secret gist of that account ("ELU Code computers"),
-written and read only through `gh`; nothing else goes to GitHub. Anyone signed in to that
-GitHub account counts as you. A computer you `/mine remove` stays removed until you `/mine` it
-again. `/mine auto off` (or `ELU_NO_GITHUB_PAIRING=1`) turns this off.
-[SECURITY.md](SECURITY.md#your-other-computers) says what that allows.
+`/mine` only answers that there is nothing to mark. An older ELU that still says this computer is
+its own is not heard: it gets nothing for it, and what it asks is handled as anyone's.
+Each computer goes by its host name until you name it: `/computer name devbox` on it (or `elu id --computer devbox`) renames it, and the other computers on your teams show the new name within seconds, ELU 0.1.27 and older too. `/computer name default` goes back to the host name.
+[SECURITY.md](SECURITY.md#computers-on-a-shared-project) says what that allows.
 
 In a channel, `/invite @kim` adds a teammate you already have. `/invite` alone makes a
 code for someone new; the first time, it also makes your team, named after the open project.
@@ -553,8 +599,8 @@ next, and what blocks it. Open means not archived and not moved to Done (a chat 
 answered is asked), and working, waiting for you, or active in the last 7 days. The same rule
 holds for your teammates' sessions, as their computers apply it; a teammate's computer on an
 older build does not say which of its sessions in Done answered, so those are listed, not asked. That is every such session of yours in every project on
-this computer, those on your other computers that are online (`/mine`), and your teammates'
-sessions on the shared Kanban whose computers are online. A project kept off the Kanban
+this computer, and every session of a shared project on the shared Kanban whose computer is
+online, whoever owns that computer. A project kept off the Kanban
 (`/share off`) is never asked. Every one of them is asked, newest first.
 
 The Standup answers within seconds. It first shows one block for every session it asks,
@@ -562,7 +608,7 @@ filled from what ELU already has on record for it, with no model run: whether it
 and for how long, waiting for you and for what, blocked and why, or finished; its Task and how
 many subtasks are done; the last thing it said, the last command it ran and the last file it
 changed in the turn it is in; its pull request or branch; and when it last wrote anything. A
-session on another computer of yours shows what this computer last listed for it, then that
+session on another computer shows what this computer last listed for it, then that
 computer's own record as soon as it sends it; a computer whose ELU is too old to send one is
 named as such. A session that waits for you comes first, with its question, then the ones
 that work, then the newest. Each block is titled with its session, agent and computer: "Email
@@ -619,7 +665,7 @@ shell, no web, no Task and none of your MCP servers; Full access runs as Approve
 another vendor runs it Read only. It runs once a round and is never
 retried on its own. Then you talk to
 it: each message goes to that model with the updates and this computer's Kanban boards for
-the projects involved, your other computers' sessions and teammates' cards on them read-only. It can keep the Kanban right: in
+the projects involved, and other computers' cards on them read-only. It can keep the Kanban right: in
 a Claude Code session with permissions it lists the boards, adds a To do card that says where
 it came from ("from @billing on @kim"), changes a To do card's text, moves a card or session
 back out of Done (only you move one to Done), and removes a card it added. It never changes another computer's board or a
@@ -673,7 +719,7 @@ every project that has not chosen uses, is set with `/model computer <name>` or 
 computer row there. `none` in place of the name clears either. With nothing chosen, the
 default is the first vendor installed on this computer, in this order: Claude Code, Codex,
 Antigravity CLI, Grok Build. So a computer that has only Grok Build runs every new session on
-it, also one that a teammate's message, your other computer or a schedule starts. A default
+it, also one that a teammate's message, another computer or a schedule starts. A default
 whose vendor is not installed here is not used, and ELU says so wherever it shows the
 default. A bot whose vendor is not installed here runs on this computer's default, reviews
 too: its row in the Bots tab says so. Where no vendor installed can review, an edit goes on
@@ -711,9 +757,13 @@ the tab says `Reading what is installed and signed in here…` meanwhile and eve
 It keeps several Claude Code or Codex accounts signed in at once, so when one runs out of its
 limit you switch instead of signing in again: `a` adds an account with the vendor's own
 sign-in, Enter on an account makes new turns use it, and `x` forgets one. Claude accounts
-also switch by themselves ([below](#several-claude-accounts)). Each account is one line: its
-plan, then its own five-hour and weekly usage. The one in use is in its own colour and says
-active ([how accounts are kept](SECURITY.md#several-accounts)).
+also switch by themselves ([below](#several-claude-accounts)). Each account names its plan,
+and each of its limits has a line under it: a bar, the percent used and the time left until
+it starts again, for its five hours, its week and a model's own week (`Fable`). An account
+whose tightest limit is tight (75% used) or FULL, and that is not the one in use, is one line
+with that limit; `f` unfolds it, and folds an open one. The tab's first line counts the
+accounts: free, tight, FULL and with no reading. The account in use is in its own colour and
+says active ([how accounts are kept](SECURITY.md#several-accounts)).
 Antigravity (`agy`) and Grok Build (`grok`) are checked once on each machine, for each
 release of them. The check proves what Read only, Ask for approval and Approve for me stand
 on, so your first message to one in those modes starts it by itself and waits for it: eight

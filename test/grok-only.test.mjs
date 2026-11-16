@@ -16,6 +16,7 @@ import { stopLine } from '../lib/stop-line.mjs';
 import { ADAPTERS } from '../lib/adapters/index.mjs';
 import { CAPS } from '../lib/vendors.mjs';
 import { conformanceState } from '../lib/conformance.mjs';
+import { savePeerSettings } from '../lib/peer/settings.mjs';
 import { createIdentity } from '../lib/peer/identity.mjs';
 import { createTeam } from '../lib/peer/roster.mjs';
 import { createInvite, redeemCode } from '../lib/peer/invite.mjs';
@@ -77,9 +78,10 @@ async function until(check, label, timeout = 60000) {
 const request = (root, id) => pendingRequests(root).find(row => row.id === id);
 const said = task => task.status.message?.parts?.map(part => part.text).join(' ') ?? null;
 // Kai's daemon as far as a message goes: ana is on his team, the project is the one her
-// messages run in, and send() delivers one of hers as the wire would.
+// messages run in, and send() delivers one of hers as the wire would. His computer's machine
+// name is kai, the name every computer's lists show it by.
 function answering(p, handling) {
-  const me = createIdentity({ name: 'kai' }), team = createTeam(me, 'core');
+  const me = createIdentity({ name: 'kai' }), team = createTeam(me, 'core'); savePeerSettings({ box: 'kai' });
   redeemCode(createInvite(me, team.id, { hours: 1 }), ANA, 'ana');
   share(p.root, { teams: [team.id], handle: 'shop' });
   saveTeamAccess(team.id, { handling, root: p.root });

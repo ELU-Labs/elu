@@ -275,9 +275,10 @@ tool: a small MCP server over stdio, started from the same private config file
 as your own servers, with one tool. When Claude would prompt, the call becomes a
 request under ELU's personal directory and the terminal shows it under
 Needs you. Allow lets the action run; deny tells the model not to retry it
-another way. The request shows in every ELU window of yours that lists the
-session, on this computer and on your other computers: its row says what it
-waits for, any of those windows can answer it, and the terminal bell rings once.
+another way. The request shows in every ELU window that lists the session, on
+this computer and on the other computers on its project: its row says what it
+waits for, and the terminal bell rings once. Any window here can answer it; one
+on another computer can where the project's `/access` here is Auto.
 No answer within 20 minutes is not a no: the action does not run, and the model
 is told that nobody declined it, to go on with the work that does not need it,
 and to say at the end what still waits for your answer. The session then shows
@@ -414,13 +415,12 @@ When a rule or a default answers, nothing waits under Needs you; the decision is
 the task as allowed by your rule or by default, and the session shows "Allowed by your rule:
 npm test".
 
-Your rules apply in your own sessions and your bots' sessions, and in a session started from
-one of your own machines (`origin.mine`). A session a teammate started uses the defaults
-only, and `a` is not offered there. Rules live on each machine: a session runs with the rules
-of the machine it runs on. An approval of a session on your other computer waits on both
-machines, with `a` beside `y` and `n` where that machine offers it, and `a` from either one
-keeps the rule on the machine where the session runs. That machine makes the rule from its own
-copy of the request.
+Your rules apply in your own sessions and your bots' sessions. A session another computer
+started, a teammate's or one of your own alike, uses the defaults and that team's `/access`
+rules only. Rules live on each machine: a session runs with the rules of the machine it runs
+on. An approval of a session on another computer waits on both machines, with `a` beside `y`
+and `n` where that machine offers it; `a` keeps the rule on the machine where the session
+runs, for that project only. That machine makes the rule from its own copy of the request.
 
 ELU's own commands, `elu sessions` and `elu schedules` ([README](../README.md#elu-from-a-session)),
 run without asking in Approve for me, as one command alone, and are asked for in Ask for
@@ -481,7 +481,7 @@ ELU enforces this much, on every vendor:
   or in a message. A few words that all say go (`yes`, `ok`, `I approve`, `go ahead`, `yes go ahead`,
   `do it`, `sounds good`, `continue`) approve at once. An approval in other words is read
   by the turn that answers your message, which is told that a plain approval in any words
-  counts; the work starts right after its reply. Over a session on your other computer
+  counts; the work starts right after its reply. Over a session on another computer
   the same few words approve its Task there, with or without that computer's `@name`; an
   approval in other words goes to the session there, as any message typed over it does.
   After `@here` either one is a message for your agent here. A teammate's message, a

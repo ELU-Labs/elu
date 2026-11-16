@@ -21,7 +21,8 @@ import { rowActions, rowTitle } from '../lib/board.mjs';
 import { closeSession } from '../lib/kanban.mjs';
 import { proposeTask } from '../lib/plan.mjs';
 import * as peerFacade from '../lib/peer/index.mjs';
-import { dropStrangers, markMine, noteTheirs, unmarkMine } from '../lib/peer/mine.mjs';
+import { dropStrangers, unmarkMine } from '../lib/peer/mine.mjs';
+import { shareProjects } from './peer-helpers.mjs';
 import { createAsk, deliver } from '../lib/peer/asks.mjs';
 import { intakeMethods } from '../lib/peer/intake.mjs';
 import { pendingRequests } from '../lib/workspace.mjs';
@@ -109,27 +110,32 @@ test('A invites B to the project ELU and B joins in a folder of its own: each se
   await withHome(b.home, () => viewTick(ab.viewCtx));
   const view = withHome(b.home, () => remoteSessions().find(row => row.ref === ref));
   assert.ok(view.entries.some(entry => entry.text === 'Fixed: the form posts again.'), JSON.stringify(view.entries));
-  // Seeing is not acting: B cannot write to it, stop it or start one on A.
-  await assert.rejects(withHome(b.home, () => remoteCommand(ab.viewCtx, { type: 'remoteSend', id: view.id, text: 'hi', typed: true })));
-  await assert.rejects(withHome(b.home, () => remoteCommand(ab.viewCtx, { type: 'remoteStart', to: a.identity.key, text: 'hi', permissions: 'ask', place: null, model: null, bots: [] })));
+  // Acting follows A's handling of ELU, as any member's request does, whoever owns B: under
+  // Auto (the first save) B's message goes in at once; under Manual it waits there for A's yes.
+  const goes = () => withHome(a.home, () => pendingRequests(elu.root).filter(row => row.continuationTaskId != null).map(row => [row.goal, row.state]));
+  await withHome(b.home, () => remoteCommand(ab.viewCtx, { type: 'remoteSend', id: view.id, text: 'Check the signup page too' }));
+  assert.deepEqual(goes(), [['Check the signup page too', 'queued']]);
+  withHome(a.home, () => saveTeamAccess(team.teamId, { handling: 'manual', root: elu.root }));
+  await withHome(b.home, () => remoteCommand(ab.viewCtx, { type: 'remoteSend', id: view.id, text: 'And the footer' }));
+  assert.deepEqual(goes(), [['Check the signup page too', 'queued'], ['And the footer', 'waiting']]);
   // The project A never shared cannot be watched by its place either.
   const hidden = withHome(a.home, () => ab.methods['elu.remote.list']({}, ab.toHost)).sessions.map(row => row.ref);
   assert.equal(hidden.length, 1);
-  // A row of A's computer here only opens and shows its changes.
+  // A row of A's computer here works as a row here does: it opens, shows its changes, and renames and archives there.
   withHome(a.home, () => nameProject(repository(elu.root), 'ELU')); withHome(b.home, () => nameProject(repository(mine.root), 'elu-copy'));
   const row = withHome(b.home, () => remoteGlue({ facade: peerFacade, peerRead: () => ({ key: b.identity.key, teams: [{ members: Object.entries(names).map(([key, value]) => ({ key, ...value })) }] }), peerCommand: async () => ({}), chatMessage: () => '', ink: text => text, colour: false, roots: () => [mine.root] }).sections(Date.now(), mine.root).find(line => line.row)?.row);
-  assert.deepEqual(rowActions(row).map(([key]) => key), ['enter', 'd']);
+  assert.deepEqual(rowActions(row).map(([key]) => key), ['enter', 'd', 'e', 'c']);
   // It is the same project: B reads it by the name B gave it, whatever A calls it.
   assert.equal(row.project, 'elu-copy');
-  // Its message box says whose it is and sends nothing: the key bar offers no Enter.
-  const glue = remoteGlue({ facade: peerFacade, peerRead: () => ({ key: b.identity.key, teams: [{ members: Object.entries(names).map(([key, value]) => ({ key, ...value })) }] }), peerCommand: async () => ({}), chatMessage: () => '', ink: text => text, colour: false });
-  assert.deepEqual(glue.route(row, 'please stop'), { to: 'none', text: 'please stop' });
-  assert.equal(glue.label(row).trim(), "ana's session on @box-one · read here");
-  assert.deepEqual(boxKeys(row, 'none').map(([key]) => key), ['esc']);
+  // Its message box writes to it there, as to a session here; A's handling decides what runs.
+  const glue = remoteGlue({ facade: peerFacade, peerRead: () => ({ key: b.identity.key, name: 'ben', teams: [{ members: Object.entries(names).map(([key, value]) => ({ key, ...value })) }] }), peerCommand: async () => ({}), chatMessage: () => '', ink: text => text, colour: false });
+  assert.deepEqual(glue.route(row, 'please stop'), { to: 'there', text: 'please stop' });
+  assert.match(glue.label(row), /@box-one/); assert.doesNotMatch(glue.label(row), /read here/);
+  assert.ok(boxKeys(row, 'there').some(([key]) => key === 'enter'));
   // Its chat says whose words are whose: what ana wrote there is ana's, never "You", and it runs in B's project.
-  const reader = remoteGlue({ facade: peerFacade, peerRead: () => ({ key: b.identity.key, teams: [] }), peerCommand: async () => ({}), chatMessage: message => `${message.title}: ${message.text}`, ink: text => text, colour: false });
+  const reader = remoteGlue({ facade: peerFacade, peerRead: () => ({ key: b.identity.key, name: 'ben', teams: [] }), peerCommand: async () => ({}), chatMessage: message => `${message.title}: ${message.text}`, ink: text => text, colour: false });
   const read = withHome(b.home, () => reader.view(row, 100));
-  assert.match(read, /Runs on @box-one in elu-copy\. It is ana's: you read it here\./);
+  assert.match(read, /Runs on @box-one in elu-copy\./); assert.doesNotMatch(read, /you read it here/);
   assert.match(read, /ana on @box-one/);
   assert.doesNotMatch(read, /\bYou\b/);
 
@@ -311,7 +317,36 @@ test('/share off on the computer that joined shows none of the teammates\' sessi
   }
 });
 
-test('a teammate\'s session whose Task waits says whose approval it waits for, and offers no key to answer it', async t => {
+// Who did what, by computer: in a session of the shared project, the words its own computer's
+// person typed there read as that person's on that computer, and a message sent from this
+// computer reads You, on every computer, whoever owns them; neither reads as the other's.
+test('a message sent into a session of the shared project from another computer reads You there, and the words typed on the session\'s computer read as its person\'s', async t => {
+  const team = makeTeam(t, { founderName: 'ana', memberName: 'ana' }), a = team.founder, b = team.member, c = addMember(t, team, 'li');
+  const elu = withHome(a.home, () => registeredProject(t)), mine = withHome(b.home, () => registeredProject(t));
+  invited(team, a, elu.root); joined(team, b, mine.root);
+  const at = minutes => new Date(Date.now() - minutes * 60000).toISOString();
+  // On A: ana typed the first, B sent the second (a message from B, by its key), and C the third.
+  withHome(a.home, () => chat(elu.root, 1, { goal: 'Tidy the footer', messages: [{ at: at(3), text: 'Tidy the footer' }, { at: at(2), text: 'And the header too', computer: b.identity.key }, { at: at(1), text: 'Leave the logo', computer: c.identity.key }] }));
+  const names = { [a.identity.key]: { name: 'ana', box: 'box-one', online: true }, [b.identity.key]: { name: 'ana', box: 'box-two', online: true }, [c.identity.key]: { name: 'li', box: 'box-three', online: true } };
+  const ab = link(b, a);
+  await withHome(b.home, () => listTick(ab.viewCtx));
+  const ref = withHome(b.home, () => remoteMachines().find(row => row.key === a.identity.key)).sessions[0].ref;
+  await withHome(b.home, () => remoteCommand(ab.viewCtx, { type: 'remoteWatch', to: a.identity.key, ref }));
+  withHome(a.home, () => hostTick(ab.hostCtx));
+  withHome(b.home, () => { for (const [, params] of ab.toHost.sent.filter(([method]) => method === 'elu.remote.events')) ab.views['elu.remote.events'](params, ab.toViewer); });
+  await withHome(b.home, () => viewTick(ab.viewCtx));
+  const status = { key: b.identity.key, name: 'ana', teams: [{ members: Object.entries(names).map(([key, value]) => ({ key, ...value })) }] };
+  const reader = remoteGlue({ facade: peerFacade, peerRead: () => status, peerCommand: async () => ({}), chatMessage: message => `${message.title}: ${message.text}`, ink: text => text, colour: false });
+  const row = withHome(b.home, () => reader.sections(Date.now(), mine.root).find(line => line.row)?.row);
+  assert.ok(row, 'the session of A is a row here');
+  const read = withHome(b.home, () => reader.view(row, 120));
+  assert.match(read, /ana on @box-one: Tidy the footer/);
+  assert.match(read, /You → @box-one: And the header too/);
+  assert.match(read, /li on @box-three: Leave the logo/);
+  assert.doesNotMatch(read, /You → @box-one: (Tidy the footer|Leave the logo)/);
+});
+
+test('a session of another computer on the shared project whose Task waits offers y and n here, as one here does, whoever owns that computer', async t => {
   const team = makeTeam(t, { founderName: 'ana', memberName: 'ben' }), a = team.founder, b = team.member;
   const elu = withHome(a.home, () => registeredProject(t)), mine = withHome(b.home, () => registeredProject(t));
   invited(team, a, elu.root); joined(team, b, mine.root);
@@ -326,11 +361,11 @@ test('a teammate\'s session whose Task waits says whose approval it waits for, a
   await withHome(b.home, () => viewTick(ab.viewCtx));
   const reader = remoteGlue({ facade: peerFacade, peerRead: () => ({ key: b.identity.key, teams: [{ members: Object.entries(names).map(([key, value]) => ({ key, ...value })) }] }), peerCommand: async () => ({}), chatMessage: message => `${message.title}: ${message.text}`, ink: text => text, colour: false, roots: () => [mine.root] });
   const row = withHome(b.home, () => reader.sections(Date.now(), mine.root).find(line => line.row)?.row);
-  assert.ok(row?.seeOnly, 'a teammate\'s row');
+  assert.ok(row && !row.seeOnly, 'a row to work in');
+  assert.deepEqual(rowActions(row).map(([key]) => key), ['y', 'n', 'enter', 'd', 'e', 'c']);
   const read = withHome(b.home, () => reader.view(row, 100));
-  assert.match(read, /Task · waits for ana's approval\b/); assert.match(read, /Uppercase coupons/);
-  assert.doesNotMatch(read, /waits for your approval/);
-  assert.doesNotMatch(read, /y approve|n reject|type what to change/);
+  assert.match(read, /Uppercase coupons/);
+  assert.doesNotMatch(read, /you read it here|waits for ana's approval/);
 });
 
 // /invite in a project, as the app does it: the project is shared with the team first, with
@@ -596,7 +631,7 @@ test('a message from someone who joined another project of the team, naming none
 test('the owner\'s own computer that is not his any more, unmarked or off the team, shows nothing ELU 0.1.29 mixed: nothing is taken out or kept out, and no line is added', t => {
   for (const how of ['unmarked', 'removed']) {
     const team = makeTeam(t, { founderName: 'ana', memberName: 'ana' }), laptop = team.founder, devbox = team.member;
-    for (const [side, other] of [[laptop, devbox], [devbox, laptop]]) withHome(side.home, () => { markMine(side.identity.key, other.identity.key); noteTheirs(other.identity.key, true); });
+    for (const [side, other] of [[laptop, devbox], [devbox, laptop]]) withHome(side.home, () => { shareProjects(side.identity.key, other.identity.key); });
     const elu = withHome(laptop.home, () => registeredProject(t)), notes = withHome(laptop.home, () => registeredProject(t)), elu2 = withHome(devbox.home, () => registeredProject(t)), notes2 = withHome(devbox.home, () => registeredProject(t));
     withHome(laptop.home, () => { nameProject(repository(elu.root), 'ELU'); nameProject(repository(notes.root), 'Team notes'); });
     invited(team, laptop, elu.root); joined(team, devbox, elu2.root);

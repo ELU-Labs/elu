@@ -17,7 +17,7 @@ import { hostMethods, listTick, relist, remoteMachines, viewMethods } from '../l
 import { remoteSessions as remoteGlue } from '../lib/terminal-remote.mjs';
 import { rowTitle } from '../lib/board.mjs';
 import * as peerFacade from '../lib/peer/index.mjs';
-import { markMine, noteTheirs } from '../lib/peer/mine.mjs';
+import { shareProjects } from './peer-helpers.mjs';
 import { notesRows, notesTick, takeNotes } from '../lib/peer/notes.mjs';
 import { readProjectSettings, saveContext, saveInstructions } from '../lib/project-settings.mjs';
 
@@ -225,7 +225,7 @@ test('on the owner\'s other computer whose one project is the team\'s, Projects 
   invited(team, a, elu.root);
   const home = withHome(b.home, () => plainProject(t, 'ana'));
   withHome(a.home, () => { chat(elu.root, 1, { goal: 'Fix the login page' }); chat(elu.root, 2, { goal: 'Write the release notes' }); relist(); });
-  for (const [from, to] of [[a, b], [b, a]]) withHome(from.home, () => { markMine(from.identity.key, to.identity.key); noteTheirs(to.identity.key, true); });
+  for (const [from, to] of [[a, b], [b, a]]) withHome(from.home, () => { shareProjects(from.identity.key, to.identity.key); });
   tellProjects(a, b, team);
   assert.deepEqual((await listed(b, a)).sort(), ['Fix the login page', 'Write the release notes']);
   const names = { [a.identity.key]: { name: 'ana', box: 'laptop', online: true }, [b.identity.key]: { name: 'ana', box: 'devbox', online: true } };
@@ -234,7 +234,7 @@ test('on the owner\'s other computer whose one project is the team\'s, Projects 
   assert.deepEqual(withHome(b.home, () => glue.projects(Date.now(), home.root).map(row => row.name)), []);
   assert.equal(withHome(b.home, () => glue.counts(Date.now(), [home.root]).get(home.root).sessions), 2);
   const shown = withHome(b.home, () => glue.sections(Date.now(), home.root).flatMap(line => line.header ? [`# ${line.header}`] : line.row ? [rowTitle(line.row)] : []));
-  assert.deepEqual(shown.slice(0, 1), ['# On laptop · online']);
+  assert.deepEqual(shown.slice(0, 1), ['# On laptop · ana']);
   assert.deepEqual(shown.slice(1).sort(), ['Fix the login page', 'Write the release notes']);
 });
 
