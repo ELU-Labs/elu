@@ -59,13 +59,13 @@ async function confirm(plan, flags) {
 }
 // elu mcp reads its own arguments: what follows its -- is a command's, untouched.
 const mcpAt = argv => { const at = argv.findIndex(arg => !arg.startsWith('--')); return argv[at] === 'mcp' ? at : -1; };
-// elu sessions and elu schedules read theirs too (lib/session-commands.mjs): after -- is the message.
-const ownAt = argv => { const at = argv.findIndex(arg => !arg.startsWith('-')); return ['sessions', 'schedules'].includes(argv[at]) ? at : -1; };
+// elu sessions, elu schedules and elu artifacts read theirs too (lib/session-commands.mjs): after -- is the message.
+const ownAt = argv => { const at = argv.findIndex(arg => !arg.startsWith('-')); return ['sessions', 'schedules', 'artifacts'].includes(argv[at]) ? at : -1; };
 const ownArgs = argv => (mcpAt(argv) >= 0 || ownAt(argv) >= 0) && argv.includes('--') ? argv.slice(0, argv.indexOf('--')) : argv;
 export async function main(argv = process.argv.slice(2)) {
   if (ownAt(argv) >= 0) {
     const commands = await import('../lib/session-commands.mjs'), at = ownAt(argv), rest = [...argv.slice(0, at), ...argv.slice(at + 1)];
-    return argv[at] === 'sessions' ? commands.sessionsCli(rest) : commands.schedulesCli(rest);
+    return argv[at] === 'sessions' ? commands.sessionsCli(rest) : argv[at] === 'artifacts' ? commands.artifactsCommand(rest) : commands.schedulesCli(rest);
   }
   // Your Claude Code MCP servers: the key is asked for with echo off, or read from stdin.
   if (mcpAt(argv) >= 0) {

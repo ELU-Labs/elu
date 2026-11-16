@@ -483,9 +483,10 @@ test('each vendor of the owner\'s session is told the commands; the shell can ru
   const runs = f.leads(), told = f.inputs('claude');
   assert.equal(runs.length, 3); assert.ok(told.every(row => OWN_COMMANDS.every(line => row.input.includes(line))));
   const [ask, auto, full] = runs.map(call => call.args);
-  for (const args of [ask, auto]) assert.deepEqual(settingsOf(args).sandbox.excludedCommands, ['elu sessions:*', 'elu schedules:*']);
+  for (const args of [ask, auto]) assert.deepEqual(settingsOf(args).sandbox.excludedCommands, ['elu sessions:*', 'elu schedules:*', 'elu artifacts:*']);
   assert.ok(auto.includes('--allowedTools=Bash(elu sessions:*)') && auto.includes('--allowedTools=Bash(elu schedules:*)'));
-  assert.ok(!ask.some(arg => arg.startsWith('--allowedTools=Bash(elu')), 'Ask for approval asks for them');
+  // elu artifacts only changes what the Artifacts tab draws: no mode asks for it.
+  assert.deepEqual(ask.filter(arg => arg.startsWith('--allowedTools=Bash(elu')), ['--allowedTools=Bash(elu artifacts:*)'], 'Ask for approval asks for the others');
   assert.equal(settingsOf(full).sandbox.enabled, false);
   const ctx = { project: f.root, cwd: f.root, access: 'read', saved: true, sandboxed: true };
   assert.deepEqual(allowedBy('Bash', { command: 'elu sessions archive this' }, { ...ctx, mode: 'auto' }), { by: 'default', text: 'elu sessions' });
