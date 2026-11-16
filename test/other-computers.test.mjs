@@ -27,7 +27,8 @@ import { repository } from '../lib/git.mjs';
 import { saveTeamAccess } from '../lib/peer/access.mjs';
 import { pendingRequests, updateRequest } from '../lib/workspace.mjs';
 import { requestApproval, pendingApprovals } from '../lib/approvals.mjs';
-import { boardRows, remoteRow } from '../lib/board.mjs';
+import { barCells, boardRows, remoteRow } from '../lib/board.mjs';
+import { parseWhen, pauseSchedule, removeSchedule, saveSchedule } from '../lib/schedules.mjs';
 import { remoteSessions as remoteGlue } from '../lib/terminal-remote.mjs';
 import { saveTask, taskTitle } from '../lib/state.mjs';
 import { projectSnapshot } from '../lib/projects.mjs';
@@ -87,6 +88,37 @@ test("a row of another computer of mine shows the time that computer's own Sessi
   });
   assert.equal(there.length, 7);
   assert.deepEqual(Object.fromEntries(there.map(row => [row.remote.title, row.time])), own, 'each row there shows what the row here shows');
+});
+
+// The owner on 2026-11-15: a schedule's run has the schedule's mark (◷) in front of its name,
+// blue while the schedule runs on its own and grey while it is paused, here and on my other
+// computer alike. One whose schedule was deleted has none. A computer on 0.1.30 or before does
+// not say whether a run's schedule is still there, so none of its rows has the mark here, as
+// none has it there.
+test("a schedule's run on my other computer has the schedule's mark, grey while that schedule is paused there", async t => {
+  const marks = async ({ laptop, devbox, project, viewCtx, toViewer }, older = false) => {
+    const now = Date.now();
+    withHome(devbox.home, () => {
+      const on = saveSchedule({ root: project.root, goal: 'Get the issues', when: parseWhen('every 3h') }), paused = saveSchedule({ root: project.root, goal: 'Check the build', when: parseWhen('every 2h') }), gone = saveSchedule({ root: project.root, goal: 'Tidy the docs', when: parseWhen('every 1d') });
+      pauseSchedule(paused.id, true); removeSchedule(gone.id);
+      session(project.root, 1, 'Get the issues', 'answered', { scheduleId: on.id, title: 'Issues review', titleBy: 'owner' });
+      session(project.root, 2, 'Check the build', 'answered', { scheduleId: paused.id });
+      session(project.root, 3, 'Tidy the docs', 'answered', { scheduleId: gone.id });
+      session(project.root, 4, 'Trim coupon codes', 'answered');
+      relist();
+    });
+    // What a computer on 0.1.30 sends: the same rows, by 'schedule', and nothing on whether the schedule is there.
+    if (older) { const asked = toViewer.request; toViewer.request = async (method, params) => { const value = await asked(method, params); return method === 'elu.remote.list' ? { ...value, sessions: value.sessions.map(({ timed, timedPaused, ...row }) => row) } : value; }; }
+    await withHome(laptop.home, () => listTick(viewCtx));
+    return withHome(laptop.home, () => {
+      const [machine] = remoteMachines(), status = { key: laptop.identity.key, name: 'ana', box: 'laptop', teams: [{ members: [{ key: laptop.identity.key, name: 'ana' }, { key: devbox.identity.key, name: 'ana', box: 'devbox', online: true }] }] };
+      const facade = { mineRows, remoteSessions, remoteMachines, projectRepoId: () => machine.projects[0].repoId };
+      const glue = remoteGlue({ facade, peerRead: () => status, peerCommand: async () => ({}), chatMessage: ({ text }) => text, ink: text => text, colour: false, restMs: 0 });
+      return Object.fromEntries(glue.sections(now, '/work/shop').filter(line => line.row).map(line => { const cells = barCells(line.row, 60, now); return [line.row.remote.title, cells[1].text === '◷ ' ? cells[1].tone : null]; }));
+    });
+  };
+  assert.deepEqual(await marks(pair(t)), { 'Issues review': 'blue', 'Check the build': 'muted', 'Tidy the docs': null, 'Trim coupon codes': null });
+  assert.deepEqual(await marks(pair(t), true), { 'Issues review': null, 'Check the build': null, 'Tidy the docs': null, 'Trim coupon codes': null });
 });
 
 test('a row of a session on a computer of mine counts from what that computer says, and for one on an earlier version from the start of its run', () => {

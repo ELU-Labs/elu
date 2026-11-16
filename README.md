@@ -51,8 +51,8 @@ as `.env`, stops it until `.gitignore` keeps that file out.
 | Tab | What it shows |
 | --- | --- |
 | Sessions | Every session across your projects. The selected one is open beside the list. Typing on a row writes a message to it; a row's key is its letter, then Enter. Task in a session's header (a click on it, or Ctrl+T) opens its Task: the goal, the objectives with the model's marks, and the checklist of its work from ELU's own records (committed, checks, review, pushed, pull request, and what it waits for). |
-| Projects | Your projects. `n` makes one, `o` makes another the active one. Enter opens a project's settings: its Instructions and Context open to read, and `e` edits them. A project a teammate shares that is not on this computer is listed too, as `ELU   shared by @rio   on @rio-mac`: Enter opens its team board, and `c` clones it here. |
-| Kanban | The open project's tasks and sessions: To do, In progress, Needs you, Done. On a team, everyone with a clone of the same repository shares one board: every session a teammate, or another computer of yours, runs in it shows in the same columns with who started it and on which machine, to read only. A project whose folder holds several repositories has a board for each. `/share off` keeps a project off it both ways. Nothing goes to Done until you check it: Shift+→ under Needs you, or `/done` in a session, shows its goal and objectives, then Done, a new goal, or a copy with one. A project on another computer of yours that no project here holds is "<project> on devbox" under Board ▾: its board is read from there, and what you do on it is done there. With no project here, Kanban opens on it. |
+| Projects | Your projects. `n` makes one, `o` makes another the active one. Enter opens a project's settings: its Instructions (rules every session in it follows, which you write) and Memory (what ELU learned from you there, and what you added; every session reads it) open to read, each first saying what it is, and `e` edits them. When the project is on other computers too (Also on), both are the same there and hold what everyone on it wrote, and what ELU learned from each of them. A project a teammate shares that is not on this computer is listed too, as `ELU   shared by @rio   on @rio-mac`: Enter opens its team board, and `c` clones it here. |
+| Kanban | The open project's tasks and sessions: To do, In progress, Needs you, Done. On a team, everyone with a clone of the same repository shares one board: every session a teammate, or another computer of yours, runs in it shows in the same columns with who started it and on which machine, to read only. A project whose folder holds several repositories has a board for each. `/share off` keeps a project off it both ways. Nothing goes to Done until you check it: Shift+→ under Needs you, or `/done` in a session, shows its goal and objectives, then Done, a new goal, or a copy with one. A session at work on a Task takes a new goal too, from `/done` or its Task: it is told while it works, and its turn is not stopped. A project on another computer of yours that no project here holds is "<project> on devbox" under Board ▾: its board is read from there, and what you do on it is done there. With no project here, Kanban opens on it. |
 | Chats | Your team's channels, your teammates and your bots. |
 | Bots | Your bots. `n` makes one, Enter opens one. |
 | Usage | Your vendor accounts and their plan usage, then your top 10 agents by cost with their tokens. `t` switches between today and the last 7 days. |
@@ -85,6 +85,8 @@ An approval you type counts too, in your own words: `yes`, `I approve`, `go ahea
 A question gets a plain answer and no Task. A follow-up
 inside an approved Task's goal starts at once; a new piece of work gets a Task of its own.
 An approved Task gives its session its name, unless you named the session yourself.
+A session started with only a dropped file, here or on your other computer, is named after
+that file.
 
 On the Kanban tab a session with a Task shows as that Task: its title, how far it is, its
 priority and its severity. One that waits for your approval is under Needs you. Enter opens
@@ -131,7 +133,7 @@ While the model or a bot works, the chat shows what it does now under the workin
 | `/changes` | Shows what this session changed; `/chat` goes back. The name of its Changes tab counts them (`Chat   Changes 7`) before you open it: a session of this computer counts again when a turn ends or its state changes, and one on your other computer shows its changes the same way, whole. In a session of this computer, `+` on a line (or a click on its `+`) notes what should change, and `s` sends the notes to the model together |
 | `/publish` | Shows the exact push and draft pull request, then asks you |
 | `/stop` | Stops the running response. Messages you sent while it ran then go at once, in order; `↑` takes one back first. Over a session on your other computer, it stops that session there. While a session of this computer works, the key bar under the message box names it (`/stop stop`) |
-| `/archived` | Lists this computer's archived sessions last in Sessions; `/archived` again hides them. `c` archives a session, and `u` or a new message brings it back. `/archived clean` deletes them for good, or first saves what you taught in them to the project context. Each of your other computers lists and cleans up its own |
+| `/archived` | Lists this computer's archived sessions last in Sessions; `/archived` again hides them. `c` archives a session, and `u` or a new message brings it back. `/archived clean` deletes them for good, or first saves what you taught in them to the project's memory. Each of your other computers lists and cleans up its own |
 | Enter (empty box) | While a turn works and a message of yours waits, sends that message now. On Claude Code the command the turn waits on moves to the background and the same turn reads the message. On the other vendors the turn stops as `/stop` stops it and the message starts the next turn, in the same vendor session where it can go on |
 | `/schedule in 1h check the build` | Starts a session later or on a schedule: `/schedule [when] [message]`. `/schedule ` lists times such as `in 5m`, `in 1h` and `daily 9:00`. Each run is a new session with the model, mode and bots of the form (a bot with its own schedule is left out); it does not see the chat it was made in. Each run is named with the schedule's message, or with the name you gave its last run, and it archives the schedule's earlier runs, so Sessions lists one run of each schedule; `/archived` shows the others. A run that still works or needs you stays until a later run finds it done. A schedule gets Full access only when you pick it for that schedule, and the form asks you once before saving it |
 | `/budget 5` | Limits this session to 5 dollars, or any amount from a cent up; `/budget` alone says what it has spent, and `/budget off` removes the limit. At the limit it offers a higher one, or `/budget off` while a run's cost is not known. See [Install details](#install-details) for where the limit is checked |
@@ -157,9 +159,11 @@ task's or a bot's: ELU removes it with the last one, also while ELU is closed, a
 a systemd user timer, which runs while you are logged in; `loginctl enable-linger` keeps it
 running after you log out. On macOS, while an agent works or a schedule is on, ELU
 stops the Mac from going to sleep on its own (`caffeinate -i`); the display can still
-sleep. Schedules show in the Sessions tab under Scheduled: `p` pauses one and `x` deletes
-it, each followed by Enter. A new run archives the schedule's earlier ones, as `c` would, so
-its row stays one; `u` or a new message brings one back. A time is `in 30m`, `every 2h` (15 minutes to 7 days),
+sleep. In the Sessions tab a schedule is the session it runs, marked `◷`, or a row under
+Queued until it first runs (under Recent while paused). Its Schedule tab (`t`, or a click on
+the name) shows when it runs, the next run, its message and its mode, and changes them for
+the next run; there `r` runs it now, `p` pauses it and `x` deletes it. A new run archives the schedule's earlier ones, as `c`
+would, so its row stays one, with the name you gave the last one; `u` or a new message brings one back. A time is `in 30m`, `every 2h` (15 minutes to 7 days),
 `daily 9:00`, `weekdays 9am`,
 `mon,thu 14:30`, `tomorrow 15:00` or `2026-12-01 9:00`, in this computer's local time.
 Asked to repeat work, the model makes the schedule with `elu schedules add` where it has
@@ -175,11 +179,12 @@ works. The app shows each change at once.
   started it, and whether it is archived or in Done. `elu sessions archive N|this`, `unarchive N`,
   `rename N|this "name"` and `new "message" [--mode ask|auto|full]` change them. `this` is the
   session the command runs in: it is archived when its turn ends, after its reply.
-  `elu sessions goal N "goal"` keeps one open with a new goal; it carries on at once.
+  `elu sessions goal N "goal"` gives one a new goal, also while it works: its turn is told
+  without being stopped.
   `elu sessions copy N "goal"` starts a copy of one, with a new goal.
   `elu sessions delete N|archived [--learn]` deletes an archived session for good, or every
-  archived one; `--learn` first saves what you taught in them to the project context. Work
-  on no remote stays in its folder and on its branch.
+  archived one; `--learn` first saves what you taught in them to the project's memory.
+  Work on no remote stays in its folder and on its branch.
 - `elu schedules [--all]` lists the schedules, and `elu schedules add <when> <message>` (the
   words `/schedule` takes), `pause N`, `resume N`, `delete N` and `run N` change them.
 
@@ -202,7 +207,7 @@ The last row of the screen names the keys for whatever has the focus.
 | Enter | Sends the message, or opens the selected row |
 | Esc | Leaves the message box for the list, and the list for the message box; closes a dialog |
 | ↑ ↓ | Move in a list; scroll the chat when it has the focus |
-| PgUp PgDn | Move a page: in a session's chat or its changes and in the threads of a chat in Chats, from the message box too; in the Sessions list; in the text of a dialog, such as a teammate's thread or `/help` |
+| PgUp PgDn | Move a page: in a session's chat or its changes and in the threads of a chat in Chats, from the message box too; in the Sessions list; in the text of a dialog, such as a teammate's thread, `/help` or a bot's instructions as you edit them |
 
 ## Permissions
 
@@ -416,10 +421,12 @@ and see its live work. Inviting a teammate shares one too: `elu invite` shares t
 run it in when it is an ELU project (`--project PATH` names another), and `/invite`
 the open project. A computer that joins takes the folder it joins in as that same project,
 whatever its folder, repository or name: it is one project on every computer that has it,
-with no step. Everyone on it sees its sessions from each of those computers in
+with no step. An invite or share made in another folder shares that folder as another
+project of the team, and whoever joins with that invite joins it; each project keeps its own
+sessions, instructions and memory. Everyone on it sees its sessions from each of those computers in
 Sessions, under that computer and its owner ("On studio · sara"): Enter opens one, with its
 chat, steps and changes, and its tasks are on the Kanban. Only the computer's owner works in
-them. Its instructions, context and lessons are the same everywhere it is. A project you
+them. Its instructions and memory are the same everywhere it is. A project you
 never shared, or keep off with `/share off`, stays on your computer.
 The Kanban board needs no share either:
 every session you run in a repository a teammate also has is on their Kanban, with its title,
@@ -494,12 +501,13 @@ Sessions. A teammate's session on the devbox, such as a handoff you accepted the
 agent here: every word you type goes to it.
 A message to a devbox session that names files or folders on the laptop asks
 "Send 14 files (2.1 MB) from this computer with this message?": y sends them along, n sends
-the text alone. `/send PATH...` sends files without a message. They land in that session's
+the text alone, and Esc sends nothing and keeps your message in the box. `/send PATH...`
+sends files without a message. They land in that session's
 inbox on the devbox, which it may read in every mode, and each path in your message points
 there. `@devbox` and a screenshot dragged into the new session box asks the same, and y
 starts the session with it. A Claude Code session of yours can list your sessions on your other computers and send
 them files itself; in Ask for approval you allow each send.
-A project's instructions, context and lessons are the same on all your computers, for every
+A project's instructions and memory are the same on all your computers, for every
 model and bot there, like its tasks: the project a team was invited to, else the one of the
 same repository, else the one of the same name. An edit on one, and every line a session
 learned from you, is on the others within seconds, and on one that was off when it comes back.
@@ -694,8 +702,9 @@ the tab says `Reading what is installed and signed in here…` meanwhile and eve
 It keeps several Claude Code or Codex accounts signed in at once, so when one runs out of its
 limit you switch instead of signing in again: `a` adds an account with the vendor's own
 sign-in, Enter on an account makes new turns use it, and `x` forgets one. Claude accounts
-also switch by themselves ([below](#several-claude-accounts)). Each account shows its own
-five-hour and weekly usage ([how accounts are kept](SECURITY.md#several-accounts)).
+also switch by themselves ([below](#several-claude-accounts)). Each account is one line: its
+plan, then its own five-hour and weekly usage. The one in use is in its own colour and says
+active ([how accounts are kept](SECURITY.md#several-accounts)).
 Antigravity (`agy`) and Grok Build (`grok`) are checked once on each machine, for each
 release of them. The check proves what Read only, Ask for approval and Approve for me stand
 on, so your first message to one in those modes starts it by itself and waits for it: eight
@@ -755,8 +764,8 @@ checks for a newer version and says so in its status line; `ELU_NO_UPDATE_CHECK=
 that check off. Both ask the npm registry for the latest version number and send nothing
 else.
 
-To remove ELU, first delete your schedules in the app (Sessions tab, under Scheduled:
-`x`, then Enter, on each one), so they no longer keep the Mac awake, and quit it with `/quit`.
+To remove ELU, first delete your schedules in the app (Sessions tab, `t` on a row marked
+`◷`, then `x` in its Schedule tab), so they no longer keep the Mac awake, and quit it with `/quit`.
 
 Then remove the login item that runs schedules, and bots with a schedule such as `@elu`,
 while ELU is closed, if there is one. On macOS, run

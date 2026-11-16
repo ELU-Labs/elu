@@ -4,7 +4,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
-import { parseWhen, splitWhen, nextRun, saveSchedule, listSchedules, runDue, runScheduleNow, pauseSchedule, removeSchedule, installScheduler, uninstallScheduler, schedulerFiles } from '../lib/schedules.mjs';
+import { parseWhen, splitWhen, nextRun, saveSchedule, changeSchedule, listSchedules, runDue, runScheduleNow, pauseSchedule, removeSchedule, installScheduler, uninstallScheduler, schedulerFiles } from '../lib/schedules.mjs';
+import { boardRows, barCells } from '../lib/board.mjs';
 import { atomic, personalDirectory } from '../lib/util.mjs';
 import { saveBot, removeBot } from '../lib/bots.mjs';
 import { scheduleTick, setBotSchedule } from '../lib/bot-schedules.mjs';
@@ -355,6 +356,63 @@ test("a schedule's run takes the name the owner gave its latest run, and otherwi
   // Only a schedule's run takes a name this way, of one line of up to 60 characters.
   assert.throws(() => enqueue(p.root, 'Plain', { title: 'Backlog review' }), /A schedule's run is named with one line of up to 60 characters\./);
   assert.throws(() => enqueue(p.root, 'Plain', { scheduleId: row.id, title: 'x'.repeat(61) }), /up to 60 characters/);
+});
+
+// The owner on 2026-11-15: he renamed the latest run of an every-3h schedule, and then could not
+// find the schedule. Renaming never loses the run's link to its schedule: the run is the
+// schedule's one row, with its mark, and no other row stands for the schedule beside it. The
+// next run takes his name and archives the one he renamed, so it is one row again.
+test("a run the owner renamed stays the schedule's run: one row with the mark, and the next run takes his name and archives it", t => {
+  home(t); const p = project(t), repo = repository(p.root), start = () => true;
+  const row = saveSchedule({ root: p.root, goal: 'Get the issues from the tracker\nand sort them', when: parseWhen('every 3h') });
+  const listed = () => boardRows([{ activity: [], ...projectSnapshot(repo) }], Date.now(), { schedules: listSchedules() }).filter(value => value.onSchedule);
+  const text = value => barCells(value, 40, Date.now()).map(cell => cell.text).join('');
+  run(repo, 46, { scheduleId: row.id, goal: row.goal }); setTitle(repo, '46', 'Issues review');
+  assert.deepEqual(listed().map(value => [value.kind, value.id]), [['task', '46']]);
+  assert.match(text(listed()[0]), /^✓ ◷ Issues review /);
+  assert.equal(runScheduleNow(row.id, new Date(), { start }), true);
+  const next = pendingRequests(p.root).find(value => value.scheduleId === row.id);
+  assert.equal(next.title, 'Issues review'); assert.deepEqual(archivedNow(repo), ['46']);
+  assert.deepEqual(listed().map(value => [value.kind, value.request?.id]), [['request', next.id]]);
+  assert.match(text(listed()[0]), /^· ◷ Issues review /);
+});
+
+// The Schedule tab changes a schedule by the rules /schedule saves one by. The next run uses
+// what changed; a run that started keeps what it started with.
+test("a schedule's time, message and mode change by the rules it was saved by, and the next run uses them", t => {
+  home(t); const p = project(t), start = () => true;
+  const row = saveSchedule({ root: p.root, goal: 'Get the issues', when: parseWhen('every 3h', at(9, 8)) }, at(9, 8));
+  // A new time moves the next run. A paused schedule stays paused.
+  const moved = changeSchedule(row.id, { when: parseWhen('daily 9:00', at(9, 10)) }, at(9, 10));
+  assert.equal(moved.when.label, 'daily 9:00'); assert.equal(Date.parse(moved.nextRunAt), at(10, 9).getTime());
+  pauseSchedule(row.id, true);
+  assert.equal(changeSchedule(row.id, { when: parseWhen('every 2h', at(9, 10)) }, at(9, 10)).enabled, false);
+  pauseSchedule(row.id, false, at(9, 10));
+  assert.throws(() => changeSchedule(row.id, { when: { kind: 'once', at: at(9, 9).toISOString() } }, at(9, 10)), /That time has passed/);
+  assert.throws(() => changeSchedule(row.id, { when: { kind: 'sometimes' } }, at(9, 10)), /Choose when it runs/);
+  // The message is never empty.
+  assert.throws(() => changeSchedule(row.id, { goal: '  ' }), /Enter a task/);
+  assert.equal(changeSchedule(row.id, { goal: ' Get the issues\nand sort them ' }).goal, 'Get the issues\nand sort them');
+  // Full access only when he picked it.
+  assert.throws(() => changeSchedule(row.id, { permissions: 'full' }), /Full access only when you pick it/);
+  assert.throws(() => changeSchedule(row.id, { permissions: 'locked', picked: true }), /Choose ask, auto, or full/);
+  const full = changeSchedule(row.id, { permissions: 'full', picked: true }); assert.deepEqual([full.permissions, full.picked], ['full', true]);
+  assert.throws(() => changeSchedule('schedule-00000000', { goal: 'x' }), /no longer exists/);
+  // The next run uses all of it.
+  assert.equal(runScheduleNow(row.id, at(9, 11), { start }), true);
+  const run = pendingRequests(p.root).find(value => value.scheduleId === row.id);
+  assert.deepEqual([run.goal, run.permissions, run.picked], ['Get the issues\nand sort them', 'full', true]);
+  // A mode below Full access is kept as picked.
+  assert.deepEqual(['permissions', 'picked'].map(key => changeSchedule(row.id, { permissions: 'auto', picked: true })[key]), ['auto', true]);
+  // A one-time schedule that ran runs again at a new time.
+  const once = saveSchedule({ root: p.root, goal: 'Release notes', when: parseWhen('tomorrow 15:00', at(9, 12)) }, at(9, 12));
+  runDue(at(10, 15), { start });
+  assert.equal(listSchedules().find(value => value.id === once.id).enabled, false);
+  const again = changeSchedule(once.id, { when: parseWhen('in 1h', at(10, 16)) }, at(10, 16));
+  assert.equal(again.enabled, true); assert.equal(Date.parse(again.nextRunAt), at(10, 17).getTime());
+  // One on a branch runs once: a repeating time is refused, as when it is saved.
+  const branch = saveSchedule({ root: p.root, goal: 'Bump', when: parseWhen('tomorrow 15:00', at(9, 12)), permissions: 'auto', picked: true, place: { kind: 'branch', branch: 'bump' } }, at(9, 12));
+  assert.throws(() => changeSchedule(branch.id, { when: parseWhen('every 2h', at(9, 12)) }, at(9, 12)), /A branch is checked out in one place at a time/);
 });
 
 test('a schedule whose project folder is gone is noted, not run', t => {

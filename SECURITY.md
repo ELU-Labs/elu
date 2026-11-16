@@ -257,20 +257,25 @@ repository, and is kept only from someone who proved it. For a public repository
 get the history, so any teammate can. `/share off` in a project keeps its sessions and its
 repositories to itself, and shows no teammate's session in it.
 
-**A shared project's sessions, instructions, context and lessons.** The project a team was
-invited to (the one `elu invite` or `/invite` shared) and the folder each member joined it in
-(`/join` in a project, or `elu join` in a folder: never the home folder or a folder that holds
-it) are one project. It stays the team's project: a later `/share` or invite from another
-project, or `/access`, does not move it, and none of another project's sessions,
-instructions, context or lessons go to the team. Every member of that
-team is shown, on each of their computers whose ELU does this, the sessions of that project on
+**A shared project's sessions, instructions and memory.** The project an invite
+shared (the folder `elu invite` or `/invite` was made in) and the folder each member joined
+it in with that invite (`/join` in a project, or `elu join` in a folder: never the home folder
+or a folder that holds it) are one project. A team holds every project shared with it: a later
+`/share`, `elu share` or invite in another folder shares that folder as another project of
+the team, and whoever joins with that invite joins it. Each project keeps its own sessions,
+instructions and memory, and none of one goes to another; `/access` moves only
+where teammates' messages run. Every member of that
+team who has a folder of that project is shown, on each of their computers whose ELU does this, the sessions of that project on
 yours: each one's title, state, question, the approvals it waits on, and, once they open it,
 its chat, the steps of its runs, its Task and its changes (the diff). The same goes from their
-computers to yours. Its instructions, context and the lines it learned are put together with
+computers to yours. Its instructions and memory, with the lines it learned, are put together with
 theirs, as between your own computers (see Your other computers), and are in force at once:
 what a teammate writes there is read by your models in that project as you would write it.
 Seeing is all: only your own computers can start, write to, stop, answer, rename, archive or
-check a session on yours. Nothing of another project is listed or sent, an archived session
+check a session on yours. A teammate on the same team who has no folder of a project is not
+shown its sessions nor sent its notes (an ELU before 0.1.31, which names no project it has, is
+shown only the team's first, as before). A message from a teammate written in another project of
+the team runs in your folder of that project, and waits for you there unless /access set that folder. Nothing of another project is listed or sent, an archived session
 stays on its computer, and `/share off` in the project, unsharing it or leaving the team stops
 all of it, both ways: that computer then shows none of the teammates' sessions either. A
 teammate's ELU up to 0.1.28 neither asks nor is sent any of it.
@@ -348,7 +353,7 @@ limits teammates get. Treat it like a login to this machine.
 - Only such a machine can start, continue, stop or answer a session here. Everyone else,
   teammates included, is refused. A teammate is sent the events of a session only when it is
   in a project shared with a team you are both on, and is never sent an archived one (see A
-  shared project's sessions, instructions, context and lessons).
+  shared project's sessions, instructions and memory).
 - The never list, the sandbox, approvals and this machine's limits still apply to those
   sessions as they do to your own: push, merge and deploy stay blocked outside Full access.
 - An invite code for another computer of yours works once, for 1 hour unless you choose
@@ -466,16 +471,16 @@ use until you approve a change: a file that changed, that you turned down or tha
 removed does not put the defaults back. A file over 100 KB is never used. Scripted runs
 are refused while the settings file in the folder is not one you approved. Your answers are
 kept by content hash, with the text you approved last, in ELU's own state folder,
-never in the project. Instructions and context you saved on another computer of yours (both
+never in the project. Instructions and memory you saved on another computer of yours (both
 marked as yours) count as approved here: they are your own edit. A project there is the same
 as one here when both are one team's shared project, else when both are of one repository,
 else when they have the same name and the same repository or none on both: two repositories
 of one name are two projects. They never write over a file that changed some other way, such
 as a pull of a teammate's change: that file still waits for your answer, the text from your
 other computer is the one in use meanwhile, and the teammate's text is never sent on. A
-teammate's computer is sent your instructions, context and lessons only for a project shared
+teammate's computer is sent your instructions and memory only for a project shared
 with a team you are both on, and what comes from it is taken only for that project (see A
-shared project's sessions, instructions, context and lessons). Like approvals, this is not a boundary against a process that already
+shared project's sessions, instructions and memory). Like approvals, this is not a boundary against a process that already
 runs as your user: a Full access session can write that folder, and so can a command that
 was approved to leave the sandbox in Ask for approval or in Approve for me, where the
 approver is the vendor's reviewer model. With a Codex model, the repository's own

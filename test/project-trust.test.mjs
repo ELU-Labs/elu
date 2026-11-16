@@ -319,7 +319,22 @@ test('the question shows a file as it is: hidden characters are written out and 
   // A change shows the lines that went and came, and names a run of empty ones.
   assert.deepEqual(reviewLines({ name: 'context.md', state: 'changed', text: 'a\nB\nc\n\n\n\n\nd\n', before: 'a\nb\nc\nd\n' }).slice(2), ['- b', '+ B', '…', '+ (4 empty lines)']);
   // With no approved text to compare with, the whole file is shown.
-  assert.deepEqual(reviewLines({ name: 'context.md', state: 'changed', text: 'a\n', before: null }), ["This project's notes changed. The model reads them. The file now reads:", '', 'a']);
+  assert.deepEqual(reviewLines({ name: 'context.md', state: 'changed', text: 'a\n', before: null }), ["This project's memory changed. The model reads it. The file now reads:", '', 'a']);
+});
+
+// context.md is the project's Memory wherever a person reads about it: Shared files names it so
+// in every state, as the project's settings and its dialog do, never as notes.
+test("Shared files calls context.md the project's memory in every state it asks about", () => {
+  const at = '2026-11-14T12:00:00.000Z', on = approvedOn(at), first = row => reviewLines({ name: 'context.md', text: 'b\n', before: null, at, ...row })[0];
+  assert.equal(first({ state: 'new' }), 'This project came with memory. The model reads it. It is used only if you say so.');
+  assert.equal(first({ state: 'declined' }), "You chose not to use this project's memory. The model reads it. The file reads:");
+  assert.equal(first({ state: 'changed' }), "This project's memory changed. The model reads it. The file now reads:");
+  assert.equal(first({ state: 'changed', before: 'a\n' }), `This project's memory changed since you approved it${on}. The approved version stays in use until you choose otherwise. Lines with - were removed and lines with + are new.`);
+  assert.equal(first({ state: 'declined', before: 'a\n' }), `You kept the memory you approved${on}. The file in the folder is different. Lines with - were removed and lines with + are new.`);
+  assert.equal(first({ state: 'changed', before: 'a\n', gone: true }), `This project's memory file is gone. The version you approved${on} stays in use until you choose otherwise. It reads:`);
+  // The other two files keep their words.
+  assert.equal(reviewLines({ name: 'instructions.md', state: 'changed', text: 'b\n', before: 'a\n', at })[0], `This project's instructions changed since you approved them${on}. The approved version stays in use until you choose otherwise. Lines with - were removed and lines with + are new.`);
+  assert.equal(reviewLines({ name: 'instructions.md', state: 'new', text: 'b\n', before: null })[0], 'This project came with instructions. The model follows them as yours. They are used only if you say so.');
 });
 
 test('a record that goes missing approves nothing: the one-time pass is not given again and every file is asked about', t => {

@@ -72,12 +72,15 @@ test('a teammate is told each project shared with a team they are on: its handle
     daemon.attach(socket, crew.member.identity.key);
     socket.emit('data', Buffer.from(`${JSON.stringify({ jsonrpc: '2.0', method: 'elu.hello', params: { binding: BINDING, a2aVersion: '1.0', name: 'sara', teams: [{ id: crew.teamId, ...head(crew.teamId), ops: [] }], handles: [] } })}\n`));
     const status = () => wire.out.split('\n').flatMap(row => { try { const frame = JSON.parse(row); return frame.method === 'elu.status' ? [frame.params] : []; } catch { return []; } }).at(-1);
-    assert.deepEqual(status().projects, [
-      // The team's project says so: the first one shared with it, as an invite shares it. Those
-      // shared with it later are askable and listed, and never move it.
+    // Each project of the team says which it is: the first one shared with it, as an invite
+    // shares it, by the team's id; each shared with it later is another project of the team, by
+    // an id of its own (project-share.mjs), and never moves the first.
+    const other = new RegExp(`^${crew.teamId}:[0-9a-f]{16}$`), ids = status().projects.map(row => row.project ?? []);
+    assert.ok(ids[1].length === 1 && other.test(ids[1][0]) && ids[2].length === 1 && other.test(ids[2][0]) && ids[1][0] !== ids[2][0], JSON.stringify(ids));
+    assert.deepEqual(status().projects.map(row => ({ ...row, project: row.project?.map(slot => other.test(slot) ? 'another' : slot) })), [
       { handle: 'shop', name: 'Shop', repoId: SHOP, address: ORIGIN, teams: [crew.teamId], project: [crew.teamId] },
-      { handle: 'notes', name: 'sample app', repoId: null, address: null, teams: [crew.teamId] },
-      { handle: 'tools', name: 'sample app', repoId: hash('file/srv/git/tools'), address: null, teams: [crew.teamId] },
+      { handle: 'notes', name: 'sample app', repoId: null, address: null, teams: [crew.teamId], project: ['another'] },
+      { handle: 'tools', name: 'sample app', repoId: hash('file/srv/git/tools'), address: null, teams: [crew.teamId], project: ['another'] },
     ]);
     assert.equal(JSON.stringify(status()).includes('ghp_secretToken1234'), false, 'the sign-in in the remote never leaves');
     // Renamed, or no longer shared: every teammate hears it on the next tick.

@@ -116,9 +116,17 @@ test('a project of the same repository is linked by itself; when both computers 
   assert.deepEqual(said.map(row => row.text), [`Instructions of sample app changed here and on @devbox: the newer, from @devbox, is in use. The other is in ${path.join(history, kept[0])}.`]);
   // Said once: the next looks add nothing.
   talk(laptop, devbox, at(5)); assert.equal(on(laptop, () => notesSaid()).length, 1);
+  // His own text of the Memory (context.md) the same way, and the line calls it Memory.
+  on(laptop, () => saveContext(mac.root, 'Laptop notes.')); look(laptop, devbox, at(6));
+  on(devbox, () => saveContext(box.root, 'Devbox notes.')); look(devbox, laptop, at(7));
+  talk(laptop, devbox, at(8));
+  for (const [side, root] of [[laptop, mac.root], [devbox, box.root]]) assert.equal(on(side, () => readProjectSettings(root).context), 'Devbox notes.\n', side.name);
+  const notes = fs.readdirSync(history).filter(name => /^context-.*\.md$/.test(name));
+  assert.equal(notes.length, 1); assert.equal(fs.readFileSync(path.join(history, notes[0]), 'utf8'), 'Laptop notes.\n');
+  assert.equal(on(laptop, () => notesSaid()).at(-1).text, `Memory of sample app changed here and on @devbox: the newer, from @devbox, is in use. The other is in ${path.join(history, notes[0])}.`);
   // The learned lines are a set: a line from each computer is on both.
   on(laptop, () => saveLearned(mac.root, { add: ['Laptop lesson.'], remove: [] })); on(devbox, () => saveLearned(box.root, { add: ['Devbox lesson.'], remove: [] }));
-  talk(laptop, devbox, at(6));
+  talk(laptop, devbox, at(9));
   for (const [side, root] of [[laptop, mac.root], [devbox, box.root]]) assert.deepEqual(on(side, () => splitContext(readProjectSettings(root).context).learned.map(row => row.line.replace(/^- \S+ /, ''))).sort(), ['Devbox lesson.', 'Laptop lesson.'], side.name);
 });
 
@@ -205,4 +213,17 @@ test('two computers of the owner with projects of one name in different reposito
   talk(laptop, devbox); talk(laptop, devbox);
   assert.equal(on(laptop, () => readProjectSettings(one.root).instructions), 'Rules of the first web repository.\n');
   assert.equal(on(devbox, () => readProjectSettings(three.root).instructions), 'Rules of a folder with no remote.\n');
+});
+
+test('his own text of the context, edited on one computer, is on the other with nothing said and nothing kept in its history', t => {
+  const { laptop, devbox } = ownComputers(t);
+  const mac = on(laptop, () => registeredProject(t)), box = on(devbox, () => registeredProject(t));
+  talk(laptop, devbox);
+  on(laptop, () => saveContext(mac.root, 'The API lives in src/.\n'));
+  talk(laptop, devbox); talk(laptop, devbox);
+  for (const [side, root] of [[laptop, mac.root], [devbox, box.root]]) {
+    assert.equal(on(side, () => splitContext(readProjectSettings(root).context).own), 'The API lives in src/.', side.name);
+    assert.deepEqual(on(side, () => notesSaid()).map(row => row.text), [], side.name);
+    assert.equal(fs.existsSync(path.join(root, '.elu-code', 'history')), false, side.name);
+  }
 });

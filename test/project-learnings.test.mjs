@@ -58,7 +58,7 @@ test('a reply\'s learned part is read leniently, and one that may hold a secret 
   const saved = saveLearned(root, { add: ['The staging password is hunter22', 'Use pnpm, not npm.'], remove: [] }, { now: NOV });
   assert.deepEqual(saved, { added: ['Use pnpm, not npm.'], removed: [], held: 1 });
   assert.doesNotMatch(read(contextFile(root)), /hunter22/);
-  assert.deepEqual(learnedLines(saved), ['Saved to project context: Use pnpm, not npm.', 'Not saved to project context: a learning that may hold a secret.']);
+  assert.deepEqual(learnedLines(saved), ['Saved to memory: Use pnpm, not npm.', 'Not saved to memory: a learning that may hold a secret.']);
   // Only secrets: nothing is written.
   const other = temp(t);
   assert.deepEqual(saveLearned(other, { add: ['The staging password is hunter22'], remove: [] }), { added: [], removed: [], held: 1 });
@@ -82,7 +82,7 @@ test('a save goes through the owner\'s own save: the file stays approved and is 
   fs.writeFileSync(contextFile(root), 'A teammate rewrote this.\n');
   const waiting = saveLearned(root, { add: ['Deploys go out on Fridays.'], remove: [] });
   assert.equal(waiting.waiting, true); assert.equal(read(contextFile(root)), 'A teammate rewrote this.\n');
-  assert.match(learnedLines(waiting)[0], /^Not saved to project context: its file changed and waits for your review\./);
+  assert.match(learnedLines(waiting)[0], /^Not saved to memory: its file changed and waits for your review\./);
   // One that came with the folder and was never approved is not his either.
   const fresh = temp(t); fs.mkdirSync(path.join(fresh, '.elu-code')); fs.writeFileSync(contextFile(fresh), 'Came with the folder.\n');
   assert.equal(saveLearned(fresh, { add: ['A.'], remove: [] }).waiting, true); assert.equal(read(contextFile(fresh)), 'Came with the folder.\n');
@@ -121,9 +121,9 @@ test('what the owner teaches the lead is saved, said in the chat after the reply
   assert.ok(f.offered(f.inputs()[0])); assert.ok(f.inputs()[0].input.includes(LEARN_NOTE));
   assert.equal(first.result.learned, undefined, 'the reply keeps no learned part');
   const line = first.messages.at(-1);
-  assert.deepEqual({ text: line.text, from: line.from, line: line.line }, { text: 'Saved to project context: Use pnpm, not npm.', from: 'ELU', line: true });
+  assert.deepEqual({ text: line.text, from: line.from, line: line.line }, { text: 'Saved to memory: Use pnpm, not npm.', from: 'ELU', line: true });
   const entries = conversationEntries(f.repo, first);
-  assert.deepEqual(entries.slice(-2).map(entry => [Boolean(entry.lead), entry.text]), [[true, first.result.summary], [false, 'Saved to project context: Use pnpm, not npm.']]);
+  assert.deepEqual(entries.slice(-2).map(entry => [Boolean(entry.lead), entry.text]), [[true, first.result.summary], [false, 'Saved to memory: Use pnpm, not npm.']]);
   assert.ok(entries.at(-1).line, 'a quiet line');
   // Not asked about again: nothing waits for review, and the chat has no line about it.
   assert.deepEqual(pendingTrust(f.root), []);
@@ -136,7 +136,7 @@ test('what the owner teaches the lead is saved, said in the chat after the reply
   f.fake({ learned: { add: ['Use npm: pnpm was dropped.'], remove: [`- ${today()}: Use pnpm, not npm.`] } });
   const corrected = await f.controller.ask('We dropped pnpm, back to npm.', first.id).finished;
   assert.equal(read(contextFile(f.root)), `The API lives in src/.\n\n${LEARNED_HEADING}\n\n- ${today()}: Use npm: pnpm was dropped.\n`);
-  assert.equal(corrected.messages.at(-1).text, 'Saved to project context: Use npm: pnpm was dropped.\nRemoved from project context: Use pnpm, not npm.');
+  assert.equal(corrected.messages.at(-1).text, 'Saved to memory: Use npm: pnpm was dropped.\nRemoved from memory: Use pnpm, not npm.');
 });
 
 test('a reply without the learned part, as before, changes nothing', async t => {
@@ -155,7 +155,7 @@ test('a bot the owner writes to may save what he taught it, after its reply', as
   assert.equal(task.state, 'answered', JSON.stringify(task.error));
   assert.match(read(contextFile(f.root)), /: Ana owns the billing code\.\n$/);
   const said = task.messages.slice(-2);
-  assert.equal(said[0].bot, 'scout'); assert.equal(said[1].text, 'Saved to project context: Ana owns the billing code.');
+  assert.equal(said[0].bot, 'scout'); assert.equal(said[1].text, 'Saved to memory: Ana owns the billing code.');
 });
 
 test('a teammate\'s message, with its peer data, never teaches: the turn is not offered learned', async t => {

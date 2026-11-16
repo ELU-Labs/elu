@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { boardRows, boardSections, barCells, barColumns, rowTitle, rowCard, rowActions, rowBadge } from '../lib/board.mjs';
+import { boardRows, boardSections, barCells, barColumns, rowTitle, rowCard, rowActions, rowBadge, remoteRow } from '../lib/board.mjs';
 import { supersededRequests } from '../lib/workspace.mjs';
 
 // The Sessions bar: one line per row, as wide as the bar, beside the open session.
@@ -37,7 +37,8 @@ test('a bar row is exactly as wide as the bar at every width from 24 to 60', () 
 test('a title too long for the bar is cut at a word, never inside one', () => {
   let cut = 0;
   for (const rows of [one, two]) for (let width = 24; width <= 60; width++) for (const row of rows) {
-    const full = rowTitle(row, now), shown = barCells(row, width, now, barColumns(rows, width))[1].text.trimEnd();
+    // A row a schedule runs has the schedule's mark before its title.
+    const cells = barCells(row, width, now, barColumns(rows, width)), full = rowTitle(row, now), shown = cells[cells[1].text === '◷ ' ? 2 : 1].text.trimEnd();
     // A session that waits on an approval is cut twice, its name and then the whole: see below.
     if (shown === full || row.kind === 'task' && row.approval) continue;
     cut++;
@@ -54,7 +55,8 @@ test('a title too long for the bar is cut at a word, never inside one', () => {
   assert.equal(barCells(find(one, 'task', '2'), 41, now)[1].text, 'Why does the checkout total round…');
   // A cut never ends on the dot between a row's two parts.
   assert.equal(barCells(find(one, 'peer'), 24, now)[1].text, '@sara question…'.padEnd(19));
-  assert.equal(barCells(find(one, 'schedule'), 30, now)[1].text, 'daily 9:00 · Check…'.padEnd(21));
+  // A schedule with no run in the list: its mark takes 2 more, and the age 7.
+  assert.equal(barCells(find(one, 'schedule'), 30, now)[2].text, 'Check the nightly…'.padEnd(19));
 });
 
 test('a session reads as its title, never its number, and any other row as what it is', () => {
@@ -78,7 +80,7 @@ test('a session reads as its title, never its number, and any other row as what 
   assert.equal(rowTitle(find(one, 'approval'), now), 'wants to edit: src/auth.mjs');
   assert.equal(rowTitle({ ...find(one, 'approval'), agent: '@qa' }, now), '@qa wants to edit: src/auth.mjs', 'a bot is named, the session\'s model is not');
   assert.equal(rowTitle(find(one, 'peer'), now), '@sara question · How do we rotate the signing keys on the build machines?');
-  assert.equal(rowTitle(find(one, 'schedule'), now), 'daily 9:00 · Check the nightly build and list what failed');
+  assert.equal(rowTitle(find(one, 'schedule'), now), 'Check the nightly build and list what failed');
   const later = boardRows([{ ...shop, tasks: [], queue: [{ id: 'request-c', goal: 'Try again', state: 'queued', notBefore: new Date(now + 30000).toISOString(), queuedAt: at(1) }, { id: 'request-d', goal: 'Continue it', state: 'queued', continuationTaskId: '7', queuedAt: at(0) }] }], now);
   assert.deepEqual(later.map(row => rowTitle(row, now)), ['retry 30s · Try again', 'Continue it']);
   // One that waits longer, such as a session waiting for a Claude account to reset, says it in minutes or hours.
@@ -98,7 +100,7 @@ test('a session reads as its title, never its number, and any other row as what 
   assert.deepEqual(boardSections(boardRows([{ ...shop, tasks: [], queue: [{ id: 'request-h', goal: 'Later', state: 'queued', queuedAt: at(1), waits: { on: 'slot', running: 6, limit: 2 } }] }], now)).find(line => line.header === 'Queued').said, ['6 running, 2 at once', '2 at once']);
   // The icon in front says the state, in the colour the row had before.
   assert.deepEqual(['3', '2', '4', '1', '5'].map(id => { const [icon] = barCells(find(one, 'task', id), 30, now); return [icon.text.trim().replace(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/, 'spin'), icon.tone]; }), [['?', 'orange'], ['spin', 'blue'], ['✓', 'green'], ['✓', 'green'], ['?', 'orange']], 'a session that waits for an approval has no spinner');
-  assert.deepEqual([barCells(find(one, 'request', 'request-b'), 30, now)[0], barCells(find(one, 'schedule'), 30, now)[0]].map(cell => [cell.text, cell.tone]), [['✗ ', 'red'], ['◷ ', 'blue']]);
+  assert.deepEqual([barCells(find(one, 'request', 'request-b'), 30, now)[0], ...barCells(find(one, 'schedule'), 30, now).slice(0, 2)].map(cell => [cell.text, cell.tone]), [['✗ ', 'red'], ['· ', 'muted'], ['◷ ', 'blue']]);
 });
 
 // A schedule's run that waits to start goes by the name the owner gave its latest run
@@ -134,17 +136,17 @@ test('the age sits at the right edge, in its short form', () => {
 
 test('the project is named only when the rows come from more than one', () => {
   assert.deepEqual(barColumns(one, 40), { project: 0, clock: 0 });
-  assert.ok(one.every(row => barCells(row, 40, now, barColumns(one, 40)).length === 3), 'icon, title, age');
+  assert.ok(one.every(row => barCells(row, 40, now, barColumns(one, 40)).length === (row.onSchedule ? 4 : 3)), 'icon, title, age; a row a schedule runs has its mark after the icon');
   // 40 columns: a name gets up to 11, cut at a word, so "billing service" shows as "billing…".
   const columns = barColumns(two, 40); assert.deepEqual(columns, { project: 8, clock: 6 });
   const named = row => barCells(row, 40, now, columns)[2];
   assert.deepEqual([named(find(two, 'task', '2')).text, named(find(two, 'task', '2')).tone], [' shop    ', 'muted']);
   assert.equal(named(two.find(row => row.root === '/p/billing')).text, ' billing…');
   // The names start in one column, because the ages share a width.
-  assert.equal(new Set(two.map(row => line(row, 40, columns).length - barCells(row, 40, now, columns).slice(2).map(cell => cell.text).join('').length)).size, 1);
+  assert.equal(new Set(two.map(row => line(row, 40, columns).length - barCells(row, 40, now, columns).slice(-2).map(cell => cell.text).join('').length)).size, 1);
   // A bar too narrow for a title and a project keeps the title.
   const narrow = barColumns(two, 24);
-  for (const row of two) { const cells = barCells(row, 24, now, narrow); assert.equal(cells.length, 3, line(row, 24, narrow)); assert.equal(cells[1].text.length, 24 - 2 - cells[2].text.length, line(row, 24, narrow)); }
+  for (const row of two) { const cells = barCells(row, 24, now, narrow).filter(cell => cell.text !== '◷ '); assert.equal(cells.length, 3, line(row, 24, narrow)); assert.equal(cells[1].text.length, 24 - 2 - (row.onSchedule ? 2 : 0) - cells[2].text.length, line(row, 24, narrow)); }
   assert.equal(line(find(two, 'task', '3'), 24, narrow), '? Add a loyalty…     30m');
   // One project with a teammate's row from no project is still one project.
   assert.equal(barColumns(boardRows([shop], now, { items: [{ ...items[0], root: undefined, project: undefined }] }), 40).project, 0);
@@ -152,10 +154,10 @@ test('the project is named only when the rows come from more than one', () => {
 
 test('every kind of row is listed once, under a heading that counts its group', () => {
   const lines = boardSections(one);
-  assert.deepEqual(lines.filter(row => row.header).map(row => [row.header, row.count]), [['Needs you', 5], ['Running', 1], ['Queued', 1], ['Recent', 2], ['Scheduled', 1]]);
+  assert.deepEqual(lines.filter(row => row.header).map(row => [row.header, row.count]), [['Needs you', 5], ['Running', 1], ['Queued', 2], ['Recent', 2]]);
   assert.deepEqual(lines.filter(row => row.row).map(row => row.row.key), one.map(row => row.key));
   assert.deepEqual([...new Set(one.map(row => row.kind))].sort(), ['approval', 'peer', 'request', 'schedule', 'task']);
-  assert.deepEqual(boardSections(two).filter(row => row.header).map(row => row.count), [5, 1, 1, 3, 1]);
+  assert.deepEqual(boardSections(two).filter(row => row.header).map(row => row.count), [5, 1, 2, 3]);
 });
 
 test('a session that waits for your approval is listed once, under Needs you, and keeps its row when it goes back to work', () => {
@@ -173,14 +175,10 @@ test('a session that waits for your approval is listed once, under Needs you, an
 });
 
 test('a row that is not a session shows its own text and keys beside the list', () => {
-  // It has not run yet: there is no last run for Enter to open.
-  assert.deepEqual(rowCard(find(one, 'schedule'), now), { title: '◷ daily 9:00 · shop', tone: 'blue', text: 'Check the nightly build and list what failed\nNext run in 18h.', keys: 'r run now · p pause · x delete' });
   assert.deepEqual(rowCard(find(one, 'approval'), now), { title: '? wants to · shop', tone: 'orange', text: 'The model wants to edit: src/auth.mjs', keys: 'y allow · n deny · enter open' });
   const ask = rowCard(find(one, 'peer'), now);
   assert.deepEqual([ask.title, ask.tone, ask.keys], ['? @sara question · shop', 'orange', 'y accept · n decline · enter read · c decline']);
   assert.match(ask.text, /How do we rotate the signing keys on the build machines\?/);
-  const paused = boardRows([shop], now, { schedules: [{ ...schedule, enabled: false }] }).find(row => row.kind === 'schedule');
-  assert.match(rowCard(paused, now).text, /\nPaused\.$/); assert.match(rowCard(paused, now).keys, /p resume/);
 });
 
 // The owner's list on 2026-11-12: session 3 runs his newest message; two older "I approve" were
@@ -224,31 +222,79 @@ test("the owner's list: one session is one row, and the teammate's question is t
 });
 
 // Enter is named on a row only where it opens something: a teammate's standup is y or n and
-// has no thread to read, and a schedule that never ran has no last run.
-test('a row names Enter only where it opens something: not on a teammate\'s standup, nor on a schedule that has not run yet', () => {
+// has no thread to read.
+test("a row names Enter only where it opens something: not on a teammate's standup", () => {
   const home = { name: 'home', root: '/p/home', activity: [], tasks: [], queue: [] };
   const standup = boardRows([home], now, { items: [{ ...ownerAsk, id: 'peer-standup', kind: 'standup', request: undefined }] }).find(row => row.kind === 'peer');
   assert.deepEqual(rowActions(standup), [['y', 'accept'], ['n', 'decline'], ['c', 'decline']]);
-  const schedule = { id: 'schedule-1', root: '/p/home', project: 'home', goal: 'Check the build', when: { kind: 'every', label: 'every 2h' }, enabled: true, createdAt: at(60), nextRunAt: new Date(now + 3600000).toISOString(), lastRunAt: null, lastRequestId: null, lastTaskId: null, runs: 0, note: null };
-  const row = (value, project = home) => boardRows([project], now, { schedules: [value] }).find(item => item.kind === 'schedule');
-  assert.deepEqual(rowActions(row(schedule)), [['r', 'run now'], ['p', 'pause'], ['x', 'delete']]);
-  // The run r queued opens until it starts: its request waits in the queue.
-  const queued = { ...home, queue: [{ id: 'request-1', goal: 'Check the build', state: 'queued', scheduleId: 'schedule-1', priority: 1, createdAt: at(5) }] };
-  assert.deepEqual(rowActions(row({ ...schedule, runs: 1, lastRequestId: 'request-1', lastRunAt: at(5) }, queued)).at(-1), ['enter', 'last run']);
-  // Its session opens once it started, archived or not.
-  const ran = { ...home, tasks: [{ ...base, id: '7', state: 'answered', goal: 'Check the build', scheduleId: 'schedule-1' }] };
-  assert.deepEqual(rowActions(row({ ...schedule, runs: 1, lastTaskId: '7', lastRunAt: at(5) }, ran)).at(-1), ['enter', 'last run']);
-  assert.deepEqual(rowActions(row({ ...schedule, runs: 1, lastTaskId: '7', lastRunAt: at(5) }, { ...ran, closed: ['7'] })).at(-1), ['enter', 'last run']);
-  // One saved before runs were counted, with its last run named, still opens it.
-  const { runs, ...older } = schedule;
-  assert.deepEqual(rowActions(row({ ...older, lastTaskId: '7' }, ran)).at(-1), ['enter', 'last run']);
-  // It ran, and its last run was cleaned up since: Enter has nothing to open, so neither the
-  // row nor its card beside the list names it.
-  const gone = row({ ...schedule, runs: 1, lastTaskId: '7', lastRunAt: at(5) });
-  assert.deepEqual(rowActions(gone), [['r', 'run now'], ['p', 'pause'], ['x', 'delete']]);
-  assert.equal(rowCard(gone, now).keys, 'r run now · p pause · x delete');
-  // A run r queued that was then removed is gone too.
-  assert.deepEqual(rowActions(row({ ...schedule, runs: 1, lastRequestId: 'request-1', lastRunAt: at(5) })), [['r', 'run now'], ['p', 'pause'], ['x', 'delete']]);
+});
+
+// The owner on 2026-11-15: a schedule's runs are sessions, so they are listed where sessions are,
+// with the schedule's mark (◷) in front of the name, not under a Scheduled heading of their own.
+// Each run archives the one before, so a schedule is one row. A schedule with no run in the list
+// is one row under Queued, by the name its next run takes.
+test('a schedule is listed once, by its run, with ◷ in front of its name: there is no Scheduled heading', () => {
+  const every = { id: 'schedule-1', root: '/p/home', project: 'home', goal: 'Get the issues from the tracker\nand sort them', when: { kind: 'every', minutes: 180, label: 'every 3h' }, enabled: true, createdAt: at(600), nextRunAt: new Date(now + 3 * 3600000).toISOString(), lastRunAt: at(14), lastRequestId: 'request-46', lastTaskId: '46', runs: 46, note: null };
+  // Run 24 was archived by a later run; 46 is the latest, and the owner renamed it.
+  const run = (id, extra = {}) => ({ ...base, id, state: 'answered', kind: 'conversation', goal: every.goal, scheduleId: every.id, result: { summary: 'Done.' }, ...extra });
+  const home = { name: 'home', root: '/p/home', activity: [], tasks: [run('24'), run('46', { title: 'Issues review', titleBy: 'owner', runs: [{ role: 'lead', at: at(14) }] })], queue: [], closed: ['24'], archived: ['24'] };
+  const rows = boardRows([home], now, { schedules: [every] }), mine = rows.filter(row => row.onSchedule?.id === every.id);
+  assert.deepEqual(mine.map(row => [row.kind, row.id, row.group]), [['task', '46', 3]], 'one row: its latest run, under Recent');
+  assert.equal(rows.some(row => row.group === 4 || row.kind === 'schedule'), false);
+  assert.deepEqual(boardSections(rows).filter(line => line.header).map(line => line.header), ['Recent']);
+  assert.match(line(mine[0], 40), /^✓ ◷ Issues review +14m$/, 'its state, then the mark, then the name he gave it');
+  assert.deepEqual(rowActions(mine[0]).slice(0, 2), [['enter', 'open'], ['t', 'schedule']], 't shows its Schedule tab');
+  // Paused, the mark is grey; a run whose schedule was deleted has none.
+  assert.equal(barCells(boardRows([home], now, { schedules: [{ ...every, enabled: false }] }).find(row => row.id === '46'), 40, now)[1].tone, 'muted');
+  const gone = boardRows([home], now, { schedules: [] }).find(row => row.id === '46');
+  assert.equal(gone.onSchedule, undefined); assert.match(line(gone, 40), /^✓ Issues review/); assert.equal(rowActions(gone).some(([key]) => key === 't'), false);
+  // A run an earlier version started names no schedule: the schedule's last run (lastTaskId) is known.
+  const older = { ...home, tasks: [run('46', { scheduleId: undefined })], closed: [], archived: [] };
+  assert.match(line(boardRows([older], now, { schedules: [every] }).find(row => row.id === '46'), 40), /^✓ ◷ /);
+  // Its next run waits to start: that is the row, under Queued, by the name it takes; the run before is archived.
+  const next = { ...home, tasks: [run('24'), run('46', { title: 'Issues review', titleBy: 'owner' })], closed: ['24', '46'], archived: ['24', '46'], queue: [{ id: 'request-47', goal: every.goal, state: 'queued', priority: 1, scheduleId: every.id, title: 'Issues review', queuedAt: at(0), createdAt: at(0) }] };
+  const waiting = boardRows([next], now, { schedules: [every] }).filter(row => row.onSchedule);
+  assert.deepEqual(waiting.map(row => [row.kind, row.group]), [['request', 2]]); assert.match(line(waiting[0], 40), /^· ◷ Issues review +now$/);
+  // With no run in the list (all archived, or none yet), it is one row of its own under Queued,
+  // by the name its next run takes, with when that runs; Enter opens its Schedule tab.
+  const quiet = boardRows([{ ...next, queue: [] }], now, { schedules: [every] }).filter(row => row.onSchedule);
+  assert.deepEqual(quiet.map(row => [row.kind, row.group]), [['schedule', 2]]); assert.match(line(quiet[0], 40), /^· ◷ Issues review +in 3h$/);
+  assert.deepEqual(rowActions(quiet[0]), [['enter', 'open'], ['r', 'run now'], ['p', 'pause'], ['x', 'delete']]);
+  const fresh = boardRows([{ ...home, tasks: [], closed: [], archived: [] }], now, { schedules: [{ ...every, runs: 0, lastTaskId: null, lastRequestId: null, lastRunAt: null }] });
+  assert.match(line(fresh[0], 40), /^· ◷ Get the issues from the… +in 3h$/);
+  // Paused, it waits for nothing: it is under Recent, at its last run, with a grey mark, not under Queued.
+  const paused = boardRows([{ ...home, tasks: [], closed: [], archived: [] }], now, { schedules: [{ ...every, enabled: false }] });
+  assert.deepEqual(paused.map(row => [row.kind, row.group, row.order]), [['schedule', 3, -Date.parse(every.lastRunAt)]]);
+  assert.deepEqual(boardSections(paused).filter(line => line.header).map(line => line.header), ['Recent']);
+  assert.match(line(paused[0], 40), /^· ◷ Get the issues from the… +paused$/); assert.equal(barCells(paused[0], 40, now)[1].tone, 'muted');
+  // One that never ran sorts by when it was made.
+  const never = boardRows([{ ...home, tasks: [], closed: [], archived: [] }], now, { schedules: [{ ...every, enabled: false, runs: 0, lastTaskId: null, lastRequestId: null, lastRunAt: null }] });
+  assert.deepEqual(never.map(row => [row.group, row.order]), [[3, -Date.parse(every.createdAt)]]);
+  // A one-time schedule that ran and whose run is gone has nothing more to do: it is not listed.
+  assert.deepEqual(boardRows([{ ...home, tasks: [], closed: [], archived: [] }], now, { schedules: [{ ...every, when: { kind: 'once', at: at(14), label: 'once' }, enabled: false, nextRunAt: null }] }), []);
+});
+
+// A session on another computer of mine that a schedule there runs has the mark too: that
+// computer lists it by 'schedule' (lib/peer/remote.mjs), which every version since 0.1.26 sends.
+test('a session on another computer that a schedule there runs has ◷ in front of its name', () => {
+  const view = { id: 'w1', machine: 'k', state: 'answered', title: 'Issues review', createdAt: at(20), lastAt: at(14) };
+  const on = barCells({ ...remoteRow(view, 'mini', now), grouped: true, bySchedule: { enabled: true } }, 40, now);
+  assert.match(on.map(cell => cell.text).join(''), /^✓ ◷ Issues review/); assert.equal(on[1].tone, 'blue');
+  // Paused there, the mark is grey, as it is there.
+  assert.equal(barCells({ ...remoteRow(view, 'mini', now), grouped: true, bySchedule: { enabled: false } }, 40, now)[1].tone, 'muted');
+  assert.doesNotMatch(barCells({ ...remoteRow(view, 'mini', now), grouped: true }, 40, now).map(cell => cell.text).join(''), /◷/);
+});
+
+// A run whose message waits for a Claude account to reset is waiting (◷). A schedule's run
+// already has the schedule's ◷ in front of its name: its state reads as a queued row's (·), so
+// the row has one clock, the schedule's. Any other session that waits keeps its ◷.
+test("a schedule's run that waits for a Claude account to reset shows one clock, the schedule's", () => {
+  const task = { ...base, id: '7', goal: 'Sort the issues', state: 'blocked', error: { message: 'You have hit your limit.' } };
+  const row = { kind: 'task', root: '/p/home', project: 'home', id: '7', task, agent: '-', group: 3, order: 0, label: 'waiting', now: 'Sort the issues', time: '10m ago', waiting: true };
+  const timed = barCells({ ...row, onSchedule: { id: 'schedule-1', enabled: true } }, 40, now), text = timed.map(cell => cell.text).join('');
+  assert.equal(text.split('◷').length - 1, 1, text);
+  assert.deepEqual([timed[0].text, timed[1].text, timed[1].tone], ['· ', '◷ ', 'blue']);
+  assert.match(barCells(row, 40, now).map(cell => cell.text).join(''), /^◷ Sort the issues/, 'a session no schedule runs keeps its ◷');
 });
 
 test("only the owner's own later turns spend his blocked message: a bot's scheduled turn or a teammate's message in the session does not", () => {
