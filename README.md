@@ -129,6 +129,7 @@ While the model or a bot works, the chat shows what it does now under the workin
 | `/bots add qa` | Keeps a bot in this session; `/bots remove qa` takes it out |
 | `/agent add fable` | Adds another model to this session as an agent; write `@fable` and what to do. Words after the model say what it is for, and `--name NAME` names it: `/agent add sonnet you review my SQL --name sql` |
 | `@pair is there a simpler way?` | Asks a bot. Your next messages in that session go to it too |
+| `@lead plan the coupon work` | Asks a bot that works. The session stays its own: your next messages, your approval of its Task and a new goal go to it, and it hands work to its helpers |
 | `@model and what do you think?` | Writes to the session's model again |
 | `/changes` | Shows what this session changed; `/chat` goes back. The name of its Changes tab counts them (`Chat   Changes 7`) before you open it: a session of this computer counts again when a turn ends or its state changes, and one on your other computer shows its changes the same way, whole. In a session of this computer, `+` on a line (or a click on its `+`) notes what should change, and `s` sends the notes to the model together |
 | `/publish` | Shows the exact push and draft pull request, then asks you |
@@ -325,7 +326,11 @@ Five come with the app. You can edit or remove any of them in the Bots tab.
   through, look at, make sure), is a question: the bot answers it in the chat.
 - After you write to a bot, your next messages in that session go to it too, until you name
   another bot or start a message with `@model`. The title of the message box names who gets
-  the message. A bot you stop picks up where it stopped on your next message when it runs on
+  the message, such as `Message @lead · @model writes to Opus 5.5`. In a session you wrote to
+  a bot that works, such as `@lead`, everything else goes to it as well: your approval of its
+  Task (`y` or in words), a new goal (from its Task, `/done` or `elu sessions goal`), the
+  turn after a bot reviews its edits, and its standup answer. After `@model` the session is
+  the model's until you name a bot again. A bot you stop picks up where it stopped on your next message when it runs on
   Claude Code or Grok Build; on the others its next turn starts from the chat. When it
   cannot pick up, a line in the chat says so and the turn starts from the chat.
 - To make a bot, open the Bots tab, press `n` and answer its questions. Enter on a bot

@@ -356,7 +356,7 @@ test('a Task is checked as untrusted text', () => {
   assert.throws(() => checkProposal({ ...TASK, description: '   ' }), /needs a description/);
   assert.equal(checkProposal({ ...TASK, description: 'One\r\n\r\n\r\n\r\nTwo\tend  ' }).description, 'One\n\nTwo end');
   // Extra fields of a reply never reach the record.
-  assert.deepEqual(Object.keys(checkProposal({ ...TASK, state: 'approved', edit: { repository: '/' } })), ['title', 'description', 'goal', 'objectives', 'priority', 'severity', 'criteria', 'estimateMinutes']);
+  assert.deepEqual(Object.keys(checkProposal({ ...TASK, state: 'approved', edit: { repository: '/' } })), ['title', 'description', 'goal', 'objectives', 'priority', 'severity', 'criteria', 'estimateMinutes', 'artifacts']);
   // Success criteria are checked as the objectives are; with none, or no estimate, the Task still reads.
   assert.deepEqual(checkProposal({ ...TASK, criteria: [' The coupon  test passes ', '', 'No other file changes'], estimateMinutes: 45 }), { ...checkProposal(TASK), criteria: ['The coupon test passes', 'No other file changes'], estimateMinutes: 45 });
   assert.deepEqual([checkProposal(TASK).criteria, checkProposal(TASK).estimateMinutes], [[], null]);
@@ -392,7 +392,7 @@ test("the owner's goal and objectives are taken whole however long and however m
 test('the reply fields: one Task at most, subtasks read leniently, and the result keeps its own keys', () => {
   const schema = planSchema(conversationSchema({}), { propose: true, progress: true });
   assert.deepEqual(schema.required.slice(-5), ['task', 'subtasks', 'objectivesMet', 'etaMinutes', 'objectivesEvidence']); assert.equal(schema.properties.task.maxItems, 1);
-  assert.deepEqual(schema.properties.task.items.required.slice(-2), ['criteria', 'estimateMinutes']); assert.deepEqual(schema.properties.etaMinutes, { type: ['integer', 'null'] });
+  assert.deepEqual(schema.properties.task.items.required.slice(-3), ['criteria', 'estimateMinutes', 'artifacts']); assert.deepEqual(schema.properties.etaMinutes, { type: ['integer', 'null'] });
   // The minutes left: a whole number up to a week, 0 too; null or anything else keeps the last estimate.
   assert.equal(readPlanReply({ etaMinutes: 25 }, { progress: true }).reply.eta, 25); assert.equal(readPlanReply({ etaMinutes: 0 }, { progress: true }).reply.eta, 0);
   for (const eta of [null, -1, 2.5, '9', TASK_LIMITS.minutes + 1]) assert.equal(readPlanReply({ etaMinutes: eta }, { progress: true }).reply, null, `eta ${eta}`);
