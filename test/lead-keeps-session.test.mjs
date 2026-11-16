@@ -4,12 +4,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { PassThrough } from 'node:stream';
-import { project, fakeClis, autoApprove, cli, git, CLI } from './helpers.mjs';
+import { project, fakeClis, autoApprove, cli, git, CLI, keyThenEnter } from './helpers.mjs';
 import { repository } from '../lib/git.mjs';
 import { ProjectController, registerProject } from '../lib/projects.mjs';
 import { launchTerminal } from '../lib/terminal.mjs';
 import { projectFolder, pendingRequests } from '../lib/workspace.mjs';
-import { readTask, saveTask, taskTitle } from '../lib/state.mjs';
+import { readTask, saveTask, setTitle, taskTitle } from '../lib/state.mjs';
 import { Conductor } from '../lib/conductor.mjs';
 import { approveTask, proposeTask } from '../lib/plan.mjs';
 import { keepOpen } from '../lib/owner-check.mjs';
@@ -168,14 +168,30 @@ test('his y on a Task the model wrote in a session written to @lead: @lead does 
 
 // The record the vendor fake says has no usage credits for the model.
 const NO_CREDITS = { models: { fable: 'claude-fable-5-2', opus: 'claude-opus-5-5' } };
-test('@lead that ran on the session\'s model once (no credits) still has the session: the next turn is @lead\'s', { timeout: 90000 }, async t => {
+// Each turn after that tries @lead's own model first: while the account still has no credits
+// for it the turn runs on the session's model again, and the chat does not say so twice; once
+// it has credits again the turn runs on @lead's own model.
+test('@lead that ran on the session\'s model once (no credits) still has the session: the next turn is @lead\'s, and tries its own model again', { timeout: 90000 }, async t => {
   const f = await leadSession(t, { fake: { ...NO_CREDITS, noCredits: 'fable' } });
   assert.deepEqual(f.session().modelFallback, { lead: 'fable' }, 'it ran on the session\'s model in its place');
+  const said = () => f.session().messages.filter(row => row.bot === 'lead' && / ran on .* instead\.$/.test(row.text ?? '')).length;
+  assert.equal(said(), 1, 'the chat says it once');
   saveTask(f.repo, { ...f.session(), messages: [...f.session().messages, ...LATER_ROWS()] });
-  const count = f.session().runs.length;
+  let count = f.session().runs.length, calls = f.runs().length;
   const r = await elu(f, ['sessions', 'goal', '1', 'The keys are in the settings now.']);
   assert.equal(r.status, 0, r.stderr);
-  assert.deepEqual(await nextTurn(f, count), ['bot:lead'], 'the next turn is @lead again, not the model');
+  const roles = await nextTurn(f, count);
+  assert.ok(roles.length && roles.every(role => role === 'bot:lead'), `the next turn is @lead again, not the model: ${roles}`);
+  assert.deepEqual(f.runs().slice(calls).map(row => after(row.args, '--model')), ['fable', 'opus'], 'it tried its own model first, then ran on the session\'s');
+  assert.equal(said(), 1, 'and the chat does not say it again');
+  // His account has credits for @lead's model again: the following turn runs on it.
+  withAgents(fakeClis(f.parent, { mode: 'answer', ...NO_CREDITS }).dir);
+  count = f.session().runs.length; calls = f.runs().length;
+  const again = await elu(f, ['sessions', 'goal', '1', 'And trim the spaces.']);
+  assert.equal(again.status, 0, again.stderr);
+  assert.deepEqual(await nextTurn(f, count), ['bot:lead']);
+  assert.deepEqual(f.runs().slice(calls).map(row => after(row.args, '--model')), ['fable'], "the following turn runs on @lead's own model");
+  assert.equal(f.session().modelFallback, undefined, 'and the session no longer keeps the fallback');
 });
 
 // The app, as the owner uses it: his sessions' records, and what he types.
@@ -255,4 +271,76 @@ test('his session written to @lead, then his approval, two command-line messages
   count = roles().length;
   await send(v, 'continue');
   assert.deepEqual(await turn(count, 'the model answers again'), ['lead'], 'continue after @model is the model');
+});
+
+// A dialog of the app by its label, and its text field answered.
+const modalNamed = (v, pattern) => v.current.screen.children.find(child => !child.destroyed && pattern.test(child.options?.label ?? ''));
+async function fill(v, pattern, value) {
+  await until(() => modalNamed(v, pattern), `the dialog ${pattern}`);
+  const field = modalNamed(v, pattern).children.find(child => child.type === 'textbox');
+  await until(() => field.__listener, 'its text field');
+  field.setValue(value); field.submit();
+}
+// A session's row under Sessions, selected there (not opened).
+async function selectRow(v, title, id) {
+  if (v.current.view !== 'tasks') await send(v, '/tasks');
+  const items = () => v.current.panels.board.items.map(item => item.getText());
+  await until(() => v.current.view === 'tasks' && items().some(row => row.includes(title)), `the row of ${title}`);
+  const board = v.current.panels.board; board.focus(); board.select(items().findIndex(row => row.includes(title)));
+  await until(() => v.current.session === id && v.current.screen.focused === board, 'the row is selected');
+}
+// @lead's own work turn after his y stopped on what Ask for approval refuses, the internet: its
+// run as the runner keeps it, by @lead (bot:lead), with the action it was refused.
+function stoppedOnTheInternet(repo, id) {
+  const task = readTask(repo, id), log = path.join(path.dirname(task.runs.at(-1).logFile), 'bot-lead-work.jsonl');
+  fs.writeFileSync(log, `${JSON.stringify({ type: 'result', structured_output: { summary: 'I stopped here.' } })}\n`);
+  const run = { role: 'bot:lead', vendor: 'claude', session: 'work-1', launch: 'work-1', at: new Date().toISOString(), logFile: log, permissions: 'ask', denials: [{ tool: 'Bash', tool_use_id: 'toolu_1', input: { command: 'curl -sS https://elu.dev/' }, network: 'elu.dev' }] };
+  saveTask(repo, { ...task, state: 'needs_input', permissions: 'ask', runs: [...task.runs, run] });
+}
+
+// Before, the work turn after his y was the model's, and the chat said what stopped it and
+// /permissions full continued it at once. The work turn is @lead's now: so does @lead's.
+test("his session written to @lead: @lead's work turn after his y stops on the internet, the chat says what blocked it, and /permissions full continues it with @lead", { timeout: 120000 }, async t => {
+  const p = appEnvironment(t, 'answer');
+  const controller = autoApprove(new ProjectController(projectFolder(p.root)));
+  const first = await controller.ask('Plan coupons', null, { bot: 'lead', permissions: 'ask' }).finished;
+  await controller.close();
+  saveTask(p.repo, { ...readTask(p.repo, first.id), messages: [...readTask(p.repo, first.id).messages, { at: at(), text: 'Approved the Task: Uppercase coupons' }] });
+  stoppedOnTheInternet(p.repo, first.id);
+  const session = () => readTask(p.repo, first.id), count = session().runs.length;
+  const v = await app(t, p.repo);
+  await open(v, taskTitle(first), first.id);
+  const chat = () => v.current.panels.chat.getText().replace(/\s+/g, ' ');
+  await until(() => /Blocked: Connect to elu\.dev\. The internet is off for commands in Ask for approval: \/permissions full continues it\./.test(chat()), `the Blocked line in the chat: "${chat().slice(-400)}"`);
+  await send(v, '/permissions full');
+  await fill(v, /Full access/, 'y');
+  await until(() => /Full access\. Continuing where it stopped\./.test(v.current.panels.status.getText()), `the status line: "${v.current.panels.status.getText()}"`);
+  assert.deepEqual(pendingRequests(p.root).filter(row => /^Continue where you stopped: /.test(row.goal)).map(row => row.bot ?? null), ['lead'], 'it goes on with @lead');
+  await until(() => session().runs.length > count && pendingRequests(p.root).every(row => row.state === 'done') && !['running', 'preparing'].includes(session().state), 'the turn that goes on');
+  assert.deepEqual(session().runs.slice(count).map(run => run.role), ['bot:lead']);
+});
+
+// a on a session's row answers it from the list: as a message typed in it with no @name goes,
+// to the working bot it is written to; a bot that does not work (@reviewer) keeps today, and
+// the answer goes to the model.
+test('the answer prompt (a on its row) sends to @lead in a session written to @lead, and to the model in one written only to @reviewer, as before', { timeout: 120000 }, async t => {
+  const p = appEnvironment(t, 'answer');
+  const controller = autoApprove(new ProjectController(projectFolder(p.root)));
+  const lead = await controller.ask('Plan coupons', null, { bot: 'lead', permissions: 'ask' }).finished;
+  const reviewer = await controller.ask('Look at the coupon code', null, { bot: 'reviewer', permissions: 'ask' }).finished;
+  await controller.close();
+  saveTask(p.repo, { ...readTask(p.repo, lead.id), messages: [...readTask(p.repo, lead.id).messages, ...LATER_ROWS()] });
+  setTitle(p.repo, lead.id, 'Coupons plan'); setTitle(p.repo, reviewer.id, 'Coupon review');
+  const v = await app(t, p.repo);
+  // A key on the list is its letter, then Enter, as he presses it.
+  keyThenEnter(v.input, () => v.current);
+  const answer = async (title, id, text) => {
+    await selectRow(v, title, id);
+    v.input.write('a');
+    await fill(v, /Answer /, text);
+    await until(() => pendingRequests(p.root).some(row => row.goal === text), 'the answer is sent');
+    return pendingRequests(p.root).find(row => row.goal === text);
+  };
+  assert.equal((await answer('Coupon review', reviewer.id, 'Use upper case.')).bot ?? null, null, 'a bot that does not work keeps today: the model');
+  assert.equal((await answer('Coupons plan', lead.id, 'Trim them too.')).bot, 'lead');
 });

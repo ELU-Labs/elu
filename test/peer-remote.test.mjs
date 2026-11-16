@@ -428,6 +428,11 @@ test('events stream to the viewer, a gap is caught up by seq, and approvals are 
   assert.deepEqual(await withHome(devbox.home, () => host['elu.remote.answer']({ id: started.id, approval: 'approval-2', decision: 'deny' }, toHost)), { answered: true });
   assert.deepEqual(await withHome(devbox.home, () => host['elu.remote.answer']({ id: started.id, approval: 'approval-2', decision: 'allow' }, toHost)), { answered: false });
   assert.throws(() => withHome(devbox.home, () => host['elu.remote.answer']({ id: started.id, approval: 'approval-2', decision: 'maybe' }, toHost)), { message: 'Answer allow or deny.' });
+  // A refresh script to keep is allowed only where it shows whole, on the computer it runs on: from here it can be declined.
+  withHome(devbox.home, () => requestApproval({ id: 'approval-s1', root: project.root, taskId, role: 'lead', vendor: 'codex', tool: 'ArtifactScript', input: { command: 'elu artifacts script 1 refresh.sh' }, title: 'Save the refresh script of "Chat eval", which ELU runs every 1 min', script: { artifact: 'Chat eval', every: 1, text: 'cat results.json\n' } }));
+  for (const always of [undefined, 'project']) assert.throws(() => withHome(devbox.home, () => host['elu.remote.answer']({ id: started.id, approval: 'approval-s1', decision: 'allow', ...(always ? { always } : {}) }, toHost)), { message: 'A refresh script is allowed on the computer it runs on, where it shows whole. n declines it from here.' });
+  withHome(devbox.home, () => assert.deepEqual(pendingApprovals({ taskId }).map(row => row.id), ['approval-s1']));
+  assert.deepEqual(await withHome(devbox.home, () => host['elu.remote.answer']({ id: started.id, approval: 'approval-s1', decision: 'deny' }, toHost)), { answered: true });
 });
 
 // A message I hand off from my laptop to my devbox and work on there as my own session is
@@ -1494,6 +1499,57 @@ test('a model with a message goes only to a computer whose ELU takes one: an old
   assert.deepEqual(await withHome(laptop.home, () => remoteCommand(viewCtx, { type: 'remoteSend', id: item.id, text: 'sonnet And the tests', model })), { id: item.id, model: 'Sonnet 5.5', sent: true });
   assert.deepEqual(sends.at(-1), { id: item.id, text: 'sonnet And the tests', model: true });
   assert.deepEqual(await withHome(laptop.home, () => remoteCommand(viewCtx, { type: 'remoteSend', id: item.id, text: 'sonnet', model })), { id: item.id, model: 'Sonnet 5.5', sent: false });
+});
+
+// His session on the devbox, written to @lead, then his approval and his continue, which name
+// nobody. What he types over it on the laptop goes where one typed on the devbox goes: with no
+// @name to @lead, and "@model ..." to the session's model. The laptop's box names @lead, as the
+// devbox's does. A message from an older ELU on the laptop, which takes @model off and says
+// nothing of it, goes to the model as before.
+test('a message typed over my session on my other computer goes where one typed there goes: to its working bot, and @model to its model; an older ELU\'s goes to its model as before', async t => {
+  const { laptop, devbox, project, toHost, hostCtx, viewCtx, viewer } = pair(t), at = () => new Date().toISOString();
+  withHome(devbox.home, () => { chat(project.root, 1, { goal: 'Plan coupons', bots: ['lead'], botsPicked: true, messages: [{ at: at(), text: 'Plan coupons', to: '@lead' }, { at: at(), text: 'Planned.', from: '@lead', bot: 'lead' }, { at: at(), text: 'Approved the Task: Uppercase coupons' }, { at: at(), text: 'continue' }] }); relist(); });
+  await withHome(laptop.home, () => listTick(viewCtx));
+  const item = withHome(laptop.home, () => remoteMachines()[0].sessions[0]);
+  await withHome(laptop.home, () => remoteCommand(viewCtx, { type: 'remoteWatch', to: devbox.identity.key, ref: item.ref }));
+  withHome(devbox.home, () => hostTick(hostCtx));
+  withHome(laptop.home, () => viewer['elu.remote.events'](toHost.sent.filter(([method]) => method === 'elu.remote.events').at(-1)[1], connection(devbox.identity.key)));
+  const seen = () => withHome(laptop.home, () => remoteSessions().find(row => row.id === item.id));
+  assert.equal(seen().talks, 'lead', 'the devbox says who a message with no @name goes to');
+  // The app on the laptop, as it sends what he typed over the session.
+  const status = { key: laptop.identity.key, name: 'ana', box: 'laptop', teams: [{ members: [{ key: laptop.identity.key, name: 'ana' }, { key: devbox.identity.key, name: 'box', box: 'devbox', online: true }] }] };
+  const commands = [], app = remoteGlue({ facade: { mineRows: () => [{ key: devbox.identity.key, mine: true, theirs: true }], remoteSessions: () => [] }, peerRead: () => status, peerCommand: async command => { commands.push(command); return withHome(laptop.home, () => remoteCommand(viewCtx, command)); }, chatMessage: ({ text }) => text, ink: text => text, colour: false });
+  const row = remoteRow(seen(), 'devbox');
+  assert.match(app.label(row), /^ Message @lead on @devbox( · @model writes to .+)? $/, 'the box names @lead');
+  assert.doesNotMatch(app.label(row, Infinity, '@model hi'), /@lead/, 'and the model while @model starts the text');
+  const requests = () => withHome(devbox.home, () => pendingRequests(project.root));
+  const typed = async text => { const way = app.route(row, text); return app.send(row, way.text, { toModel: way.toModel === true }); };
+  // continue, as he types it there with no @name: @lead's.
+  assert.equal(await typed('continue'), 'Sent to @lead on @devbox.');
+  assert.deepEqual([commands.at(-1).toSession, commands.at(-1).toModel], [true, undefined]);
+  assert.deepEqual([requests().at(-1).goal, requests().at(-1).bot, requests().at(-1).toModel], ['continue', 'lead', undefined]);
+  // @model hi: the session's model, kept as his message to @model.
+  assert.match(await typed('@model hi'), /^Sent to (?!@lead).+ on @devbox\.$/);
+  assert.deepEqual([commands.at(-1).toSession, commands.at(-1).toModel], [undefined, true]);
+  assert.deepEqual([requests().at(-1).goal, requests().at(-1).bot, requests().at(-1).toModel], ['hi', undefined, true]);
+  // An older ELU on the laptop sends neither: its message goes to the model, as before.
+  await withHome(laptop.home, () => remoteCommand(viewCtx, { type: 'remoteSend', id: item.id, text: 'go on', typed: true }));
+  assert.deepEqual([requests().at(-1).goal, requests().at(-1).bot, requests().at(-1).toModel], ['go on', undefined, undefined]);
+  // A session written only to @reviewer, a bot that answers and does not work, goes to its
+  // model from the laptop, as before; the box names the model.
+  withHome(devbox.home, () => { chat(project.root, 2, { goal: 'Review coupons', bots: ['reviewer'], botsPicked: true, messages: [{ at: at(), text: 'Look at the coupon code', to: '@reviewer' }, { at: at(), text: 'It looks fine.', from: '@reviewer', bot: 'reviewer' }] }); relist(); });
+  await withHome(laptop.home, () => listTick(viewCtx, Date.now() + 10000));
+  const review = withHome(laptop.home, () => remoteMachines()[0].sessions.find(row => row.title === 'Review coupons'));
+  await withHome(laptop.home, () => remoteCommand(viewCtx, { type: 'remoteWatch', to: devbox.identity.key, ref: review.ref }));
+  withHome(devbox.home, () => hostTick(hostCtx, Date.now() + 1));
+  withHome(laptop.home, () => viewer['elu.remote.events'](toHost.sent.filter(([method]) => method === 'elu.remote.events').at(-1)[1], connection(devbox.identity.key)));
+  const reviewed = remoteRow(withHome(laptop.home, () => remoteSessions().find(row => row.id === review.id)), 'devbox');
+  assert.equal(reviewed.remote.talks, null);
+  assert.doesNotMatch(app.label(reviewed), /@reviewer/);
+  const sent = await app.send(reviewed, 'And the tests?');
+  assert.doesNotMatch(sent, /@reviewer/);
+  const last = withHome(devbox.home, () => pendingRequests(project.root).filter(row => String(row.continuationTaskId) === '2').at(-1));
+  assert.deepEqual([last.goal, last.bot, last.toModel], ['And the tests?', undefined, undefined]);
 });
 
 // The owner, on his laptop, in a session that lives on his devbox, typed /rename and was told

@@ -9,6 +9,7 @@ import { project, fakeClis, fakeKeychain, claudeKeychainNames, cli, git, temp, a
 import { repository } from '../lib/git.mjs';
 import { CHANGES_PAGE, ProjectController, projectSnapshot, dashboardSnapshot, claimView, takeOver, registerProject, registeredProjects, nameProject, savedProjectName, personalDirectory, setupCommitPlan, commitSetup, taskDetails } from '../lib/projects.mjs';
 import { answerTrust, pendingTrust, trustedText, unusedTrust } from '../lib/project-trust.mjs';
+import { conversationEntries, sessionModel } from '../lib/projects.mjs';
 import { launchTerminal, geometry, plain, foldersNamed } from '../lib/terminal.mjs';
 import { WHEEL_FRAME_MS } from '../lib/wheel.mjs';
 import { projectFolder, saveRequest, pendingRequests, updateRequest } from '../lib/workspace.mjs';
@@ -2697,12 +2698,12 @@ test('slash commands filter as typed and Tab completes without calling a model',
   await until(() => v.current.panels.ask.__listener, 'default input');
   v.input.write('/ag');
   await until(() => !palette.hidden, 'filtered command menu');
-  assert.deepEqual(offered(), ['/agent Add a model to this session as an agent, or take one out', '/agents Show who is in this session']);
+  assert.deepEqual(offered(), ['/agent Add an agent to this session, change one, or take one out', '/agents Show who is in this session']);
   assert.equal(palette.height, 4);
   const frames = [{ title: 'Type / to discover and filter commands', text: v.frame() }];
   v.input.write('\t'); await until(() => v.current.panels.ask.getValue() === '/agent ', 'Tab completion');
   // After the name, the list offers the next word; Esc closes it and Enter runs what is typed.
-  await until(() => palette.items.map(item => item.getText().split(' ')[0]).join() === 'add,remove', 'what /agent takes');
+  await until(() => palette.items.map(item => item.getText().split(' ')[0]).join() === 'add,change,remove', 'what /agent takes');
   v.input.write('\x1b'); await until(() => palette.hidden, 'list closed');
   // With no more words it says who is in the session, in the status line. No dialog opens.
   v.input.write('\r'); await until(() => /In this session: Opus\. \/agent add <model> adds another\./.test(v.current.panels.status.getText().replace(/\s+/g, ' ')), 'who is in the session');
@@ -2746,7 +2747,7 @@ test('/agent add offers the models, puts one in the session as an agent, and /ag
   const typing = async () => { ask.focus(); ask.readInput(); await until(() => ask.__listener, 'message box'); };
   await until(() => ask.__listener, 'default input');
   // After /agent the list offers add and remove; after add, the models /model offers.
-  v.input.write('/agent '); await until(() => rows().join() === 'add,remove', 'add or remove');
+  v.input.write('/agent '); await until(() => rows().join() === 'add,change,remove', 'add, change or remove');
   v.input.write('add '); await until(() => rows().join() === 'fable,opus,sonnet,codex,big-model,quick-model,agy,grok', 'the models to add');
   v.input.write('so'); await until(() => rows().join() === 'sonnet', 'filtered as typed');
   // Enter adds it to the session the form starts: a bot named after its model, which works when it is written to.
@@ -2768,11 +2769,77 @@ test('/agent add offers the models, puts one in the session as an agent, and /ag
   assert.equal(getBot('sonnet').model, 'sonnet', 'the bot is kept');
   // A model that is not listed is refused and nothing is made; any other word gets the usage.
   await send(v, '/agent add nosuchmodel'); await until(() => /No model named nosuchmodel\. \/model lists them; \/model add adds one by name\./.test(status()), 'unknown model');
-  await send(v, '/agent edit sonnet claude'); await until(() => /Use \/agent add <model> \[what it does\] \[--name NAME\], or \/agent remove <name>\./.test(status()), 'usage');
+  await send(v, '/agent edit sonnet claude'); await until(() => /Use \/agent add <model> \[what it does\] \[--name NAME\], \/agent change <name>, or \/agent remove <name>\./.test(status()), 'usage');
   assert.deepEqual(listBots().map(bot => bot.name), ['reviewer', 'lead', 'qa', 'pair', 'sonnet', 'sql', 'elu']);
   // Nothing was committed and no model was called.
   assert.equal(git(p.root, ['rev-parse', 'HEAD']), before);
   assert.equal(fs.readFileSync(p.calls, 'utf8').trim().split('\n').map(JSON.parse).some(call => call.args.includes('-p') || call.args[0] === 'exec'), false, 'no model was called');
+});
+
+// An agent of the session is changed on its page: a click on the heading of its reply opens
+// it, and /agent change does the same from the keyboard, or changes it in one line.
+test('a click on a reply heading opens its agent; effort and model change there or by /agent change, another vendor only once it is confirmed', { timeout: 30000 }, async t => {
+  const p = setup(t, 'answer'), v = await view(t, { repo: p.repo }), chat = v.current.panels.chat;
+  const status = () => v.current.panels.status.getText().replace(/\s+/g, ' ');
+  const opened = start => v.current.screen.children.find(child => !child.destroyed && child.options?.label?.trim().startsWith(start));
+  const listOf = start => opened(start)?.children.filter(child => child.type === 'list').at(-1);
+  const choose = async (start, index) => { await until(() => listOf(start), start); const list = listOf(start); list.focus(); list.select(index); v.input.write('\r'); };
+  await until(() => v.current.panels.ask.__listener, 'default input');
+  await send(v, 'Reply with the summary "first".');
+  await until(() => v.current.snapshot?.tasks?.[0]?.state === 'answered', 'the first reply', 15000);
+  const id = v.current.snapshot.tasks[0].id, task = () => readTask(p.repo, id);
+  const lead = conversationEntries(p.repo, task()).find(entry => entry.lead).role;
+  // The heading of the reply, where it is drawn: a click on it opens the agent's page.
+  const plainRow = index => String(chat._clines?.[index] ?? '').replace(/\x1b\[[\d;]*m/g, '').trimStart();
+  await until(() => (chat._clines ?? []).some((_, index) => plainRow(index).startsWith(lead)), 'the heading');
+  const row = (chat._clines ?? []).findIndex((_, index) => plainRow(index).startsWith(lead));
+  click(v, chat, 2, row + chat.itop - chat.childBase);
+  await until(() => opened('Agent '), 'the agent page');
+  assert.deepEqual(listOf('Agent ').items.map(item => item.getText().replace(/\s+/g, ' ').trim()).slice(-2), ['Save', 'Cancel']);
+  assert.match(listOf('Agent ').items[0].getText().replace(/\s+/g, ' '), /^Model Opus/);
+  // Effort alone: picked from the vendor's levels and saved with no warning.
+  await choose('Agent ', 1);
+  await choose('Effort', 3);
+  await until(() => opened('Agent ') && !opened('Effort'), 'back on the page');
+  assert.match(listOf('Agent ').items[1].getText().replace(/\s+/g, ' '), /^Effort high/);
+  await choose('Agent ', 2);
+  await until(() => /Effort of Opus.*: .+ → high/.test(status()), 'saved, and said in one line');
+  assert.equal(task().leadEffort, 'high');
+  await until(() => /Effort of Opus.*: .+ → high/.test(chat.getContent()), 'the chat keeps the line');
+  // From the keyboard: another model of the same vendor, said in one line, no question asked.
+  await send(v, '/agent change @model model sonnet');
+  await until(() => /Sonnet reads this session's conversation again on its next turn: the first turn is slower and costs more\./.test(status()), 'model changed, and what it does said');
+  await until(() => /Model of this session: Opus.* → Sonnet\n/.test(chat.getContent().replace(/\x1b\[[\d;]*m/g, '') + '\n'), 'the chat keeps the change');
+  assert.equal(opened('Hand '), undefined, 'no handoff to confirm');
+  // Another vendor asks first: no leaves it as it was, yes hands it off.
+  await send(v, '/agent change @model model big-model');
+  await until(() => opened('Hand '), 'the handoff question');
+  assert.match(dialogText(v, opened('Hand ').options.label.trim()).replace(/\s+/g, ' '), /Handoff: Big Model starts a new conversation/);
+  await dialog(v, opened('Hand ').options.label.trim(), 'n');
+  await until(() => /Nothing changed\./.test(status()), 'declined');
+  assert.equal(sessionModel(p.repo, task()).vendor, 'claude');
+  await send(v, '/agent change @model model big-model effort low');
+  await until(() => opened('Hand '), 'asked again');
+  await dialog(v, opened('Hand ').options.label.trim(), 'y');
+  await until(() => /Model of this session: Sonnet.* → Big Model, effort high → low/.test(status()), 'handed off');
+  assert.deepEqual(sessionModel(p.repo, task()), { vendor: 'codex', model: 'big-model' }); assert.equal(task().leadEffort, 'low');
+  // Effort alone from the keyboard: no question, one line.
+  await send(v, '/agent change @model effort high'); await until(() => /Effort of Big Model: low → high/.test(status()), 'effort alone');
+  assert.equal(opened('Hand '), undefined); assert.equal(task().leadEffort, 'high');
+  // What it refuses, each in the line under the box.
+  await send(v, '/agent change @ghost effort high'); await until(() => /@ghost is not in this session\. \/agents shows who is\./.test(status()), 'not in it');
+  await send(v, '/agent change @model size big'); await until(() => /Use \/agent change <name> \[model <model>\] \[effort <level>\] \[--every-session\]\./.test(status()), 'usage');
+  await send(v, '/agent change @model effort huge'); await until(() => /Effort on Codex is one of: low, medium, high, xhigh, max\./.test(status()), 'a level Codex does not offer');
+  // With no name, the session's agents first: the list of words closed, Enter runs it as typed.
+  const ask = v.current.panels.ask; ask.focus(); ask.readInput(); await until(() => ask.__listener, 'message box');
+  v.input.write('/agent change '); await until(() => !v.current.panels.palette.hidden, 'the agents offered');
+  assert.deepEqual(v.current.panels.palette.items.map(item => item.getText().split(/\s+/)[0]), ['@model']);
+  v.input.write('\x1b'); await until(() => v.current.panels.palette.hidden, 'list closed');
+  v.input.write('\r'); await until(() => opened('Agents'), 'the agents');
+  assert.match(listOf('Agents').items[0].getText().replace(/\s+/g, ' '), /^Big Model Big Model · high/);
+  v.input.write('\x1b'); await until(() => !opened('Agents'), 'closed');
+  // Nothing ran on a model but the one reply.
+  assert.equal(fs.readFileSync(p.calls, 'utf8').trim().split('\n').map(JSON.parse).filter(call => call.args.includes('-p') || call.args[0] === 'exec').length, 1);
 });
 
 test('switching tabs keeps running work alive and returns to the same chat', { timeout: 15000 }, async t => {
@@ -2823,7 +2890,7 @@ test('unknown commands never reach a model, the removed ones included', { timeou
   assert.equal(fs.existsSync(fake.calls), false); assert.equal(v.current.snapshot?.tasks?.length ?? 0, 0);
   await send(v, '/help'); await until(() => modal(v, 'Commands'), 'help');
   const help = dialogText(v, 'Commands').replace(/\s+/g, ' ');
-  assert.match(help, /\/agent \[add <model>\|remove <name>\] Add a model to this session as an agent, or take one out \/agents Show who is in this session/); assert.match(help, /Six tabs: Sessions, Projects, Kanban, Chats, Bots, and Usage/);
+  assert.match(help, /\/agent \[add <model>\|change <name>\|remove <name>\] Add an agent to this session, change one, or take one out \/agents Show who is in this session/); assert.match(help, /Six tabs: Sessions, Projects, Kanban, Chats, Bots, and Usage/);
   assert.match(help, /Sessions: every session, in a list on the left\. The selected one shows beside it\. Enter moves into it and Esc moves back\./);
   assert.match(help, /In a session, @name alone adds one and @name with a message asks it; a teammate’s @name with a message asks them\./);
   assert.match(help, /Agents: \/agent add <model> puts another model in this session with no bot to write first\./); await dialog(v, 'Commands', '');
@@ -4413,6 +4480,32 @@ test("r in a schedule's run's Schedule tab runs the next one, which the list and
   const conductor = new Conductor({ tickMs: 20 }).start(); resources(t).views.push(() => conductor.stop());
   await until(() => v.current.session === '2' && /◷ Check the build/.test(cursor(v)), 'its session, once it starts');
   assert.equal(readTask(repo, '2').scheduleId, schedule.id);
+});
+
+// The owner on 2026-11-15: a session whose Task had no artifact had no Artifacts tab, so nothing
+// said where they go or how to add one. Every session with a Task has it; empty, it says how.
+test('a session whose Task has no artifact yet has an Artifacts tab that says how to add one, at 80 and at 160 columns', { timeout: 40000 }, async t => {
+  const p = setup(t);
+  liveTask(p.root, { id: '3', goal: 'Uppercase coupons', state: 'answered' });
+  proposeTask(p.repo, '3', { title: 'Uppercase coupons', description: 'One file changes.', goal: 'Coupon codes compare equal whatever their case.', objectives: ['It works'], priority: 'high', severity: 'low' }); approvePlan(p.repo, '3');
+  liveTask(p.root, { id: '4', goal: 'Trim coupon codes', state: 'answered' });
+  const v = await view(t, { repo: p.repo }), panels = v.current.panels, tabs = () => panels.sessionTabs.getText();
+  // Its headline, then its one line, wrapped to the pane.
+  const shown = () => { const [head, ...rest] = panels.artifacts.getText().split('\n').map(line => line.replace(/[┃\s]+$/, '').trim()).filter(Boolean); return [head, rest.join(' ')]; };
+  // A session with no Task has none.
+  await selectRow(v, /Trim coupon codes/);
+  await until(() => /^ Chat {3}\S/.test(tabs()), 'its tabs'); assert.doesNotMatch(tabs(), /Artifacts/);
+  await selectRow(v, /Uppercase coupons/);
+  await until(() => / {3}Artifacts $/.test(tabs()), 'its Artifacts tab, with no artifact yet');
+  click(v, panels.sessionTabs, tabs().indexOf('Artifacts'));
+  await until(() => v.current.sessionView === 'artifacts' && !panels.artifacts.hidden, 'a click on its name shows it');
+  assert.deepEqual(shown(), ['No artifacts yet', 'Say in the chat what to show, or Ctrl+T, New goal, with an Artifact: line.']);
+  await wide(v);
+  await until(() => v.current.screen.width === 160 && panels.artifacts.getText().split('\n').filter(line => line.trim()).length === 2, 'its one line on one row at 160 columns');
+  assert.deepEqual(shown(), ['No artifacts yet', 'Say in the chat what to show, or Ctrl+T, New goal, with an Artifact: line.']);
+  // /artifacts in another session with no Task says why there is nothing to show.
+  await selectRow(v, /Trim coupon codes/);
+  await send(v, '/artifacts'); await until(() => /This session has no Task yet: its artifacts come with one\./.test(statusShown(v)), 'no Task, no tab');
 });
 
 // The owner on 2026-11-15: he renamed a schedule's latest run, and found no schedule to change.
@@ -9220,4 +9313,53 @@ test('the Task of a session whose Task waits for approval names y and n, and y o
   };
   await answer(/Uppercase coupon/, '3', 'y', 'approved', /Task approved\./);
   await answer(/Trim coupon/, '4', 'n', 'rejected', /Task rejected\. Nothing was changed\./);
+});
+
+import { saveScript } from '../lib/artifacts.mjs';
+import { checkProposal } from '../lib/plan.mjs';
+// A refresh script is code: the Task shows it as written, never as Markdown. The question before
+// ELU keeps one shows it whole, in the chat and under Needs you, where PgUp and PgDn page it.
+const REFRESH = ['#!/bin/sh', '# Prints the last run: `cat .evals/chat.json`', 'run=$(cat .evals/chat.json)', 'echo "**kept** as _written_ <b>"', ...Array.from({ length: 44 }, (_, index) => `echo "step ${index + 1}"`), 'printf "%s" "$run"'].join('\n');
+test('a refresh script shows as written in the Task, and whole where the owner is asked to keep it: in the chat and under Needs you, paged', { timeout: 60000 }, async t => {
+  const p = setup(t);
+  liveTask(p.root, { id: '3', goal: 'Answer more eval questions', state: 'needs_input' }); saveTask(p.repo, { ...readTask(p.repo, '3'), permissions: 'ask' });
+  proposeTask(p.repo, '3', checkProposal({ title: 'Chat answers at 85%', description: 'Raise the answered share.', goal: 'Answer 85% of the eval questions.', objectives: ['Answered at 85%'], priority: 'medium', severity: 'low', criteria: [], estimateMinutes: null, artifacts: [{ title: 'Chat eval', shows: 'Answered against 85%', everyMinutes: 1 }] }));
+  approvePlan(p.repo, '3'); saveScript(p.repo, '3', 'Chat eval', REFRESH);
+  const v = await view(t, { repo: p.repo, conductor: false }), panels = v.current.panels, status = () => panels.status.getText(), lines = REFRESH.split('\n');
+  // A code line longer than the pane goes on under ↪: read back whole.
+  const missing = text => { const shown = String(text).replace(/\s*\n\s*↪ /g, '').split('\n').map(row => row.trim()); return lines.filter(line => !shown.includes(line)); };
+  for (const [columns, height] of [[140, 50], [80, 24]]) {
+    v.output.columns = columns; v.output.rows = height; v.output.emit('resize'); await until(() => v.current.screen.width === columns, `${columns}x${height}`);
+    await openTask(v, /Chat answers at 85%/);
+    panels.ask.focus(); await until(() => panels.ask.__listener, 'the message box reads');
+    v.input.write('\x14'); await until(() => modal(v, 'Task'), `its Task at ${columns}x${height}`);
+    const shown = dialogRows(v, 'Task').join('\n');
+    assert.deepEqual(missing(shown), [], `the script as written at ${columns}x${height}:\n${shown}`);
+    v.input.write('\x1b'); await until(() => !modal(v, 'Task'), 'Esc closes it');
+    await send(v, '/sessions');
+  }
+  // The question before it is kept: the script whole under what it asks, in the chat.
+  const answer = id => { const file = path.join(approvalsDir(), `${id}.answer.json`); return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')).decision : null; };
+  requestApproval({ id: 'run-3-script', root: p.root, taskId: '3', role: 'lead', vendor: 'codex', tool: 'ArtifactScript', input: { command: 'elu artifacts script 1 refresh.sh' }, title: 'Save the refresh script of "Chat eval", which ELU runs every 1 min', script: { artifact: 'Chat eval', every: 1, text: REFRESH } });
+  for (const [columns, height] of [[140, 50], [80, 24]]) {
+    v.output.columns = columns; v.output.rows = height; v.output.emit('resize'); await until(() => v.current.screen.width === columns, `${columns}x${height}`);
+    await send(v, '/sessions');
+    const board = panels.board, at = pattern => rows(v).findIndex(row => pattern.test(row)), chat = () => panels.chat.getText();
+    await until(() => at(/wants to save the\b/) >= 0, `its row under Needs you at ${columns}x${height}`).catch(error => { throw new Error(`${error.message}:\n${rows(v).join('\n')}`); });
+    board.focus(); board.select(at(/wants to save the\b/));
+    await until(() => /Waiting for your approval\n.+ wants to:\nSave the refresh script of "Chat eval",\s+which ELU runs every 1 min\n/.test(chat()) && !missing(chat()).length, `the script whole in the chat at ${columns}x${height}`).catch(error => { throw new Error(`${error.message}:\n${chat()}`); });
+    // Enter: the question as a dialog, the script whole, paged with PgUp and PgDn.
+    const asked = () => v.current.screen.children.find(child => !child.destroyed && child.options?.label?.trim() === 'Needs you' && child.children?.some(item => item.type === 'textbox'));
+    board.focus(); board.select(at(/wants to save the\b/)); v.input.write('\r'); await until(asked, `the question at ${columns}x${height}`);
+    const body = asked().children.find(child => child.options?.scrollable);
+    await until(() => !missing(body.getText()).length, `the script whole in the question at ${columns}x${height}`).catch(error => { throw new Error(`${error.message}:\n${body.getText()}`); });
+    assert.match(body.getText(), /wants to:\nSave the refresh script of "Chat eval",\s+which ELU runs every 1 min/);
+    assert.match(asked().children.find(child => child.type === 'textbox')._label.getText(), /PgUp PgDn page/);
+    const top = body.childBase; v.input.write('\x1b[6~'); await until(() => body.childBase > top, `PgDn pages it at ${columns}x${height}`);
+    v.input.write('\x1b'); await until(() => !asked(), 'Esc leaves it waiting');
+    assert.equal(answer('run-3-script'), null);
+  }
+  const board = panels.board, at = pattern => rows(v).findIndex(row => pattern.test(row));
+  board.focus(); board.select(at(/wants to save the\b/)); v.input.write('y');
+  await until(() => answer('run-3-script') === 'allow' && /Allowed\./.test(status()), 'y allows it');
 });

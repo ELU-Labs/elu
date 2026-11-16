@@ -328,8 +328,9 @@ Five come with the app. You can edit or remove any of them in the Bots tab.
   another bot or start a message with `@model`. The title of the message box names who gets
   the message, such as `Message @lead · @model writes to Opus 5.5`. In a session you wrote to
   a bot that works, such as `@lead`, everything else goes to it as well: your approval of its
-  Task (`y` or in words), a new goal (from its Task, `/done` or `elu sessions goal`), the
-  turn after a bot reviews its edits, and its standup answer. After `@model` the session is
+  Task (`y` or in words), a new goal (from its Task, `/done` or `elu sessions goal`), `a` on
+  its row, the turn after a bot reviews its edits, its standup answer and what you type over
+  it on your other computer. After `@model` the session is
   the model's until you name a bot again. A bot you stop picks up where it stopped on your next message when it runs on
   Claude Code or Grok Build; on the others its next turn starts from the chat. When it
   cannot pick up, a line in the chat says so and the turn starts from the chat.
@@ -485,7 +486,10 @@ A devbox project that no project here holds, and every one on a computer with no
 With a devbox session under the cursor, what you type goes to that session, as if you had
 typed it on the devbox: `yes`, the number of a choice or your own words answer the question
 it waits on, and any other message continues it. The message box names its model and the
-computer ("Message Opus 5.5 on @devbox"), and its reply shows in the same pane. This works
+computer ("Message Opus 5.5 on @devbox"), and its reply shows in the same pane. In a session
+you wrote to a bot that works, such as `@lead`, your message goes to that bot, as it would on
+the devbox ("Message @lead on @devbox · @model writes to Opus 5.5"); `@model` first writes to
+its model. This works
 with ELU closed on the devbox, or open there in a view-only window: the devbox runs the
 session in the background. A message that has not run there yet is the last thing in the pane,
 right above the message box, marked waiting, with why: its turn has not ended, no slot is free,

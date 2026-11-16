@@ -10,7 +10,7 @@ import { readTask, saveTask } from '../lib/state.mjs';
 import { Conductor, OLDER_GOAL, enqueue } from '../lib/conductor.mjs';
 import { conductorFolder, statusPath } from '../lib/conductor-files.mjs';
 import { GOAL_DURING, GOAL_TOLD } from '../lib/runner.mjs';
-import { GOAL_NEW, approveTask, currentTask, planSchema, proposeTask, readPlanReply, settleWork, turnPlan } from '../lib/plan.mjs';
+import { GOAL_NEW, approveTask, currentTask, planSchema, proposeTask, readPlanReply, reportProgress, settleWork, turnPlan } from '../lib/plan.mjs';
 import { conversationSchema } from '../lib/config.mjs';
 import { GOAL_SAME, answerCheck, checkDone, checkView, copySession, goalToldWords, taskView } from '../lib/owner-check.mjs';
 import { waitingWords } from '../lib/message-aside.mjs';
@@ -183,6 +183,42 @@ test('the check of a session at work with a Task shows it with working and takes
   // Once it stops, the check offers all three again, with no working.
   saveTask(f.repo, { ...session(f), state: 'answered', activeRole: null });
   assert.equal(checkView(f.repo, session(f)).working, undefined);
+});
+
+// The owner on 2026-11-15: he added an artifact to a working session by Ctrl+T, New goal, with
+// its goal and objectives as they were and an Artifact: line, and lost what the session had
+// marked, its evidence and its ETA. Only the artifacts change then: the Task keeps its revision
+// and its progress, keeps no earlier goal, and no turn is told to align with a new goal. What he
+// typed reaches the session as his message, so the work fills the new artifact.
+test('a new goal that only adds or changes Artifact: lines changes only the artifacts: the marks, evidence, ETA and revision stay, from the app and from elu sessions goal', { timeout: 90000 }, async t => {
+  const f = await setup(t, {}, { conduct: false });
+  saveTask(f.repo, { ...session(f), state: 'running', activeRole: 'lead', activeSince: new Date().toISOString() });
+  reportProgress(f.repo, '1', { met: [1], evidence: [[1, 'normalize returns value.toUpperCase()']], eta: 20 });
+  const before = currentTask(f.repo, '1'), progress = task => [task.revision, task.met, task.evidence, task.etaMinutes, task.etaAt, task.goals, task.realign, task.goal, task.objectives, task.state];
+  const same = [TASK.goal, ...TASK.objectives].join('\n');
+  // From the app (Ctrl+T, New goal): his goal and objectives as they are, and an Artifact: line.
+  const kept = answerCheck(f.repo, f.root, session(f), 'goal', `${same}\nArtifact: Eval history · accuracy by run · every 10 min`);
+  assert.equal(kept.artifacts, true);
+  const after = currentTask(f.repo, '1');
+  assert.deepEqual(progress(after), progress(before), 'nothing of its progress changes');
+  assert.deepEqual(after.artifacts, [{ title: 'Eval history', shows: 'accuracy by run', every: 10 }]);
+  // His words go to the session as a message, never as a new goal its turn aligns with.
+  assert.deepEqual(toSession(f).map(row => [row.goal, row.goalChange]), [[`${same}\nArtifact: Eval history · accuracy by run · every 10 min`, undefined]]);
+  // From elu sessions goal in his shell: one more, the same way.
+  const owner = { ...process.env }; delete owner.ELU_SESSION; delete owner.ELU_PROJECT;
+  const r = spawnSync(process.execPath, [CLI, 'sessions', 'goal', '1', `${same}\nArtifact: Eval history · accuracy by run · every 10 min\nArtifact: Latency · median seconds`], { cwd: f.root, env: owner, encoding: 'utf8', timeout: 60000 });
+  assert.equal(r.status, 0, r.stderr); assert.match(r.stdout, /has the new artifacts; its progress stays\./);
+  assert.deepEqual(progress(currentTask(f.repo, '1')), progress(before));
+  assert.deepEqual(currentTask(f.repo, '1').artifacts.map(row => row.title), ['Eval history', 'Latency']);
+  // The same artifacts again change nothing, as the same goal does.
+  assert.throws(() => answerCheck(f.repo, f.root, session(f), 'goal', `${same}\nArtifact: Eval history · accuracy by run · every 10 min\nArtifact: Latency · median seconds`), { message: GOAL_SAME });
+  // A session that ended keeps its progress too.
+  saveTask(f.repo, { ...session(f), state: 'answered', activeRole: null });
+  assert.equal(answerCheck(f.repo, f.root, session(f), 'goal', `${same}\nArtifact: none`).artifacts, true);
+  assert.deepEqual([progress(currentTask(f.repo, '1')), currentTask(f.repo, '1').artifacts], [progress(before), []]);
+  // A goal that changes is a new goal, as before: a new revision, its marks cleared.
+  answerCheck(f.repo, f.root, session(f), 'goal', `${NEW_GOAL}\nArtifact: Eval history · accuracy by run`);
+  assert.deepEqual([currentTask(f.repo, '1').revision, currentTask(f.repo, '1').met], [before.revision + 1, []]);
 });
 
 // A turn an update left running on the build before it (a conductor that drains, or one that

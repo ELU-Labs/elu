@@ -159,6 +159,19 @@ test('files sent to a session land under XDG_DATA_HOME, even outside the home fo
   assert.throws(() => checkFolders([path.join(data, 'elu-code', 'inbox')], { mode: 'ask' }), /Folders must be inside your home/, 'the whole inbox is not one session\'s');
 });
 
+// Files with a message he typed over his session written to @lead go where the message alone
+// goes there: with no @name to @lead, with @model to the model. An older ELU on the laptop
+// says neither, and its message goes to the model as before.
+test('files with a message typed over a session written to @lead go to @lead, and with @model to the model', async t => {
+  const p = pair(t), b = batch(t), at = () => new Date().toISOString();
+  withHome(p.devbox.home, () => { const repo = repository(p.project.root); saveTask(repo, { ...readTask(repo, '1'), bots: ['lead'], botsPicked: true, messages: [{ at: at(), text: 'Look at the batch results', to: '@lead' }, { at: at(), text: 'continue' }] }); });
+  const send = extra => withHome(p.laptop.home, () => remoteCommand(p.viewCtx, { type: 'remoteFiles', id: p.id, to: p.devbox.identity.key, ref: p.ref, text: 'Here is the key.', files: stageFiles(offerPaths([b.key])), typed: true, ...extra }));
+  const last = () => withHome(p.devbox.home, () => requestsFor(p.project.root).at(-1));
+  await send({ toSession: true }); assert.deepEqual([last().bot, last().toModel], ['lead', undefined]);
+  await send({ toModel: true }); assert.deepEqual([last().bot, last().toModel], [undefined, true]);
+  await send({}); assert.deepEqual([last().bot, last().toModel], [undefined, undefined]);
+});
+
 test('a message too long for one line on the link goes with its files whole, named on the last piece of the send', async t => {
   const p = pair(t), b = batch(t), put = textMethods(p.hostCtx, {})['elu.text.put'];
   p.toViewer.request = (method, params) => { p.calls.push([method, params]); return withHome(p.devbox.home, () => (method === 'elu.text.put' ? put : p.host[method])(params, p.toHost)); };

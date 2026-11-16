@@ -283,16 +283,23 @@ test('a model that takes no file of the change reviews its diff alone', async t 
   assert.deepEqual(source.files, [{ path: 'src/big.mjs', content: null }, { path: 'src/coupon.mjs', content: null }]);
 });
 
-// A bot whose model takes not even the diff alone cannot review the change. That never stops
-// the session: its checks decide as in a session with no bot, and the chat says so in one line.
-const TOO_LARGE = name => `@${name} could not review this change: it is too large for its model.`;
+// A bot whose model takes not even the diff alone reviews the change in parts, by files; one
+// whose model takes no file of it on its own cannot review it. That never stops the session:
+// its checks decide as in a session with no bot, and the chat names the files in one line.
+// The line names the model the bot asked for: the reviewer is on Opus, the critic on Big Model.
+const TOO_LARGE = (name, lines = '8,005') => `@${name} could not review src/big.mjs (${lines} lines) and src/coupon.mjs (1 line): too long for ${name === 'critic' ? 'Big Model' : 'Opus'}.`;
 test('a bot whose model takes not even the diff leaves the session as one with no bot would be, says so in one line, and the edits are kept', async t => {
   const f = bigChange(t, 'normal', { tooLong: 'all' });
   const task = await f.controller.ask('Normalize coupon codes', null, { bots: ['reviewer'] }).finished;
   assert.equal(task.state, 'ready', JSON.stringify(task.error)); assert.equal(task.error, null); assert.equal(task.reviewStatus, 'skipped');
   assert.ok(task.evidence.results.every(row => row.status === 'passed'), 'the checks ran');
   assert.equal(stopLine(task), null, 'nothing stopped');
-  assert.equal(reviewOf(f.inputs('claude'), 'reviewer').length, 3, 'whole, excerpts, then the diff alone');
+  // The change whole, as excerpts and as the diff alone; then src/big.mjs as its diff alone (its
+  // file whole or as excerpts is longer than the refused diff of both), and src/coupon.mjs whole and as its diff.
+  const reviews = reviewOf(f.inputs('claude'), 'reviewer');
+  assert.equal(reviews.length, 6, 'whole, excerpts, the diff alone, then each file on its own');
+  assert.deepEqual(reviews.slice(3).map(input => { const { source } = contextOf(input); return [source.files.map(row => [row.path, row.content === null]), source.otherFiles]; }),
+    [[[['src/big.mjs', true]], ['src/coupon.mjs']], [[['src/coupon.mjs', false]], ['src/big.mjs']], [[['src/coupon.mjs', true]], ['src/big.mjs']]]);
   assert.deepEqual(task.messages.filter(row => /could not review|too large/.test(row.text)).map(row => [row.text, row.from]), [[TOO_LARGE('reviewer'), 'ELU']]);
   assert.equal(conversationEntries(f.repo, task).filter(row => row.text === TOO_LARGE('reviewer')).length, 1, 'the chat shows the line once');
   assert.doesNotMatch(JSON.stringify(readTask(f.repo, task.id)), /smaller sessions/);
@@ -328,7 +335,7 @@ test('a bot that cannot take the change tries the fixed one after another bot\'s
   assert.ok(fs.readFileSync(path.join(task.worktree, 'src/big.mjs'), 'utf8').includes(FIXED.text), 'the fix changed the files');
   assert.equal(task.state, 'ready', JSON.stringify(task.error)); assert.equal(task.error, null); assert.equal(task.reviewStatus, 'passed');
   assert.deepEqual(task.reviews.map(review => [review.round, review.role]), [[1, 'bot:critic'], [2, 'bot:critic']]);
-  assert.equal(reviewOf(f.inputs('claude'), 'reviewer').length, 6, 'the change and the fixed one, each whole, as excerpts and as the diff alone');
+  assert.equal(reviewOf(f.inputs('claude'), 'reviewer').length, 12, 'the change and the fixed one, each whole, as excerpts, as the diff alone and file by file');
   assert.deepEqual(task.messages.filter(row => /could not review/.test(row.text)).map(row => row.text), [TOO_LARGE('reviewer')], 'said once');
   assert.doesNotThrow(() => assertReady(readTask(f.repo, task.id)));
 });
@@ -339,7 +346,7 @@ test('when every bot leaves the review of the fixed change, its checks decide an
   assert.ok(fs.readFileSync(path.join(task.worktree, 'src/big.mjs'), 'utf8').includes(FIXED.text), 'the fix changed the files');
   assert.equal(task.state, 'ready', JSON.stringify(task.error)); assert.equal(task.error, null); assert.equal(task.reviewStatus, 'skipped');
   assert.deepEqual(task.reviews.map(review => [review.round, review.role]), [[1, 'bot:critic']]);
-  assert.deepEqual(task.messages.filter(row => /could not review/.test(row.text)).map(row => row.text), [TOO_LARGE('reviewer'), TOO_LARGE('critic')]);
+  assert.deepEqual(task.messages.filter(row => /could not review/.test(row.text)).map(row => row.text), [TOO_LARGE('reviewer'), TOO_LARGE('critic', '8,006')], 'the critic could not take the fixed change, one line longer');
   assert.doesNotThrow(() => assertReady(readTask(f.repo, task.id)));
 });
 
@@ -352,12 +359,12 @@ test('a later turn that leaves the change as it was does not ask the bot that co
   const first = await f.controller.ask('Normalize coupon codes', null, { bots: ['reviewer'] }).finished;
   assert.equal(first.state, 'ready', JSON.stringify(first.error));
   const digest = readTask(f.repo, first.id).evidence.digest, lines = task => conversationEntries(f.repo, task).filter(row => row.text === TOO_LARGE('reviewer')).length;
-  assert.equal(reviewOf(f.inputs('claude'), 'reviewer').length, 3);
+  assert.equal(reviewOf(f.inputs('claude'), 'reviewer').length, 6);
   const same = await f.controller.ask('Normalize coupon codes', first.id).finished;
   let task = readTask(f.repo, same.id);
   assert.equal(task.evidence.digest, digest, 'the turn left the change as it was');
   assert.equal(task.state, 'ready', JSON.stringify(task.error)); assert.equal(task.error, null); assert.equal(task.reviewStatus, 'skipped');
-  assert.equal(reviewOf(f.inputs('claude'), 'reviewer').length, 3, 'not asked again');
+  assert.equal(reviewOf(f.inputs('claude'), 'reviewer').length, 6, 'not asked again');
   assert.equal(lines(task), 1, 'the chat says it once');
   assert.doesNotThrow(() => assertReady(task));
   // A turn that changes the files: it tries the new change.
@@ -365,14 +372,14 @@ test('a later turn that leaves the change as it was does not ask the bot that co
   task = readTask(f.repo, moved.id);
   assert.notEqual(task.evidence.digest, digest, 'the turn changed the files');
   assert.equal(task.state, 'ready', JSON.stringify(task.error)); assert.equal(task.reviewStatus, 'skipped');
-  assert.equal(reviewOf(f.inputs('claude'), 'reviewer').length, 6, 'it tried the new change');
+  assert.equal(reviewOf(f.inputs('claude'), 'reviewer').length, 12, 'it tried the new change');
   assert.equal(lines(task), 2, 'and says it cannot take that one either');
   assert.doesNotThrow(() => assertReady(task));
   // The owner writes to it about the edits: it tries again, and the line is its answer.
   const asked = await f.controller.ask('Review it again', first.id, { bot: 'reviewer' }).finished;
   task = readTask(f.repo, asked.id);
   assert.equal(task.state, 'ready', JSON.stringify(task.error)); assert.equal(task.reviewStatus, 'skipped');
-  assert.equal(reviewOf(f.inputs('claude'), 'reviewer').length, 9, 'asked again');
+  assert.equal(reviewOf(f.inputs('claude'), 'reviewer').length, 18, 'asked again');
   assert.deepEqual(task.messages.slice(-2).map(row => [row.text, row.to ?? row.from]), [['Review it again', '@reviewer'], [TOO_LARGE('reviewer'), 'ELU']]);
   assert.doesNotThrow(() => assertReady(task));
 });
@@ -388,12 +395,12 @@ test('a bot that could not take a change tries it again once the owner gives it 
   const first = await f.controller.ask('Normalize coupon codes', null, { bots: ['reviewer'] }).finished;
   assert.equal(first.state, 'ready', JSON.stringify(first.error)); assert.equal(first.reviewStatus, 'skipped');
   const digest = readTask(f.repo, first.id).evidence.digest, lines = task => conversationEntries(f.repo, task).filter(row => row.text === TOO_LARGE('reviewer')).length;
-  assert.equal(reviewOf(f.inputs('claude'), 'reviewer').length, 3);
+  assert.equal(reviewOf(f.inputs('claude'), 'reviewer').length, 6);
   reviewerOn(LARGER);
   const next = await f.controller.ask('Normalize coupon codes', first.id).finished;
   const task = readTask(f.repo, next.id);
   assert.equal(task.evidence.digest, digest, 'the turn left the change as it was');
-  assert.equal(reviewOf(f.inputs('claude'), 'reviewer').length, 4, 'it tried the change on its new model, which took it whole');
+  assert.equal(reviewOf(f.inputs('claude'), 'reviewer').length, 7, 'it tried the change on its new model, which took it whole');
   assert.equal(task.state, 'ready', JSON.stringify(task.error)); assert.equal(task.reviewStatus, 'passed');
   assert.deepEqual(task.reviews.map(review => review.role), ['bot:reviewer']);
   assert.equal(lines(task), 1, 'the line is not said again');
@@ -406,16 +413,16 @@ test('a bot whose larger model cannot take the change either says so once more, 
   const first = await f.controller.ask('Normalize coupon codes', null, { bots: ['reviewer'] }).finished;
   assert.equal(first.state, 'ready', JSON.stringify(first.error));
   const lines = task => conversationEntries(f.repo, task).filter(row => row.text === TOO_LARGE('reviewer')).length;
-  assert.equal(reviewOf(f.inputs('claude'), 'reviewer').length, 3);
+  assert.equal(reviewOf(f.inputs('claude'), 'reviewer').length, 6);
   reviewerOn(LARGER);
   let task = readTask(f.repo, (await f.controller.ask('Normalize coupon codes', first.id).finished).id);
   assert.equal(task.state, 'ready', JSON.stringify(task.error)); assert.equal(task.error, null); assert.equal(task.reviewStatus, 'skipped');
-  assert.equal(reviewOf(f.inputs('claude'), 'reviewer').length, 6, 'it tried once more on its new model');
+  assert.equal(reviewOf(f.inputs('claude'), 'reviewer').length, 12, 'it tried once more on its new model');
   assert.equal(lines(task), 2, 'and the chat says it cannot take it either');
   assert.doesNotThrow(() => assertReady(task));
   task = readTask(f.repo, (await f.controller.ask('Normalize coupon codes', first.id).finished).id);
   assert.equal(task.state, 'ready', JSON.stringify(task.error)); assert.equal(task.reviewStatus, 'skipped');
-  assert.equal(reviewOf(f.inputs('claude'), 'reviewer').length, 6, 'not asked again');
+  assert.equal(reviewOf(f.inputs('claude'), 'reviewer').length, 12, 'not asked again');
   assert.equal(lines(task), 2);
 });
 
@@ -427,11 +434,11 @@ test('a bot an earlier version kept as unable to take the change, with no model 
   const record = readTask(f.repo, first.id); delete record.unreviewableOn; saveTask(f.repo, record);
   assert.deepEqual(record.unreviewable, { 'bot:reviewer': record.evidence.digest });
   let task = readTask(f.repo, (await f.controller.ask('Normalize coupon codes', first.id).finished).id);
-  assert.equal(task.reviewStatus, 'skipped'); assert.equal(reviewOf(f.inputs('claude'), 'reviewer').length, 3, 'on the same model it is not asked again');
+  assert.equal(task.reviewStatus, 'skipped'); assert.equal(reviewOf(f.inputs('claude'), 'reviewer').length, 6, 'on the same model it is not asked again');
   reviewerOn(LARGER);
   task = readTask(f.repo, (await f.controller.ask('Normalize coupon codes', first.id).finished).id);
   assert.equal(task.state, 'ready', JSON.stringify(task.error)); assert.equal(task.reviewStatus, 'passed');
-  assert.equal(reviewOf(f.inputs('claude'), 'reviewer').length, 4, 'it tried the change on its new model');
+  assert.equal(reviewOf(f.inputs('claude'), 'reviewer').length, 7, 'it tried the change on its new model');
   assert.equal(conversationEntries(f.repo, task).filter(row => row.text === TOO_LARGE('reviewer')).length, 1);
 });
 

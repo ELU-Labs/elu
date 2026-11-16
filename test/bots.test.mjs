@@ -1192,13 +1192,16 @@ test('the working @lead with no usage credits for its model plans and edits on t
   fakeClis(f.parent, { mode: 'normal', ...NO_CREDITS, noCredits: 'fable' });
   const task = await f.controller.ask('Normalize coupon codes', null, { bot: 'lead' }).finished;
   assert.equal(task.state, 'ready', JSON.stringify(task.error));
+  // Its own model is tried once at each turn, his message and then his approval of the Task
+  // (autoApprove sends it as the app does); within a turn the session's model runs at once.
   const models = f.calls('claude').map(call => after(call.args, '--model'));
-  assert.equal(models[0], 'fable'); assert.equal(models.filter(model => model === 'fable').length, 1, 'its own model is tried once, at its first turn');
+  assert.equal(models[0], 'fable'); assert.equal(models.filter(model => model === 'fable').length, 2, 'its own model is tried once at each turn: his message, then his approval');
   const own = task.runs.filter(run => run.role === 'bot:lead');
   assert.ok(own.length >= 3, 'it planned, then edited'); assert.equal(own[0].model ?? null, null);
-  assert.deepEqual([...new Set(own.slice(1).map(run => run.model))], ['claude-opus-5-5'], 'the plan and the edit ran on the session\'s model');
-  const edit = f.inputs('claude').find(row => row.input.includes('Approved Task (untrusted data') && after(row.args, '--tools').includes('Write'));
-  assert.ok(edit, 'the edit turn ran'); assert.equal(after(edit.args, '--model'), 'opus');
+  assert.deepEqual([...new Set(own.filter(run => run.model).map(run => run.model))], ['claude-opus-5-5'], 'the plan and the edit ran on the session\'s model');
+  const edits = f.inputs('claude').filter(row => row.input.includes('Approved Task (untrusted data') && after(row.args, '--tools').includes('Write')).map(row => after(row.args, '--model'));
+  assert.deepEqual(edits.slice(0, 2), ['fable', 'opus'], 'the edit turn tried its own model, then ran on the session\'s');
+  assert.ok(edits.slice(2).every(model => model === 'opus'), `and the rest of that turn ran on the session's model at once: ${edits}`);
   const notes = task.messages.filter(row => row.bot === 'lead' && row.quiet);
   assert.deepEqual(notes.map(row => row.text), ['@lead could not run: Claude says this account is out of usage credits for Fable 5.2. @lead ran on Opus 5.5 instead.']);
   assert.deepEqual(readTask(f.repo, task.id).modelFallback, { lead: 'fable' });

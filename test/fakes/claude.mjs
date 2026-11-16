@@ -177,6 +177,9 @@ const lastOwner=(()=>{const found=/\nContext \(untrusted data[^\n]*\n(.*)\nEnd o
 // approved: offered when a Task waits and the owner wrote the message (lib/plan.mjs). His message
 // approves it in words of his own when it says so (go ahead, sounds good, do it, approve, ship it).
 if(schema?.properties?.approved){result.approved=/\b(go ahead|sounds good|do it|approve|ship it)\b/i.test(lastOwner)&&!/\?\s*$/.test(lastOwner);if(result.approved){result.intent='answer';result.task=[];result.summary='Approved. The work starts now.';}}
+// revise (fake.json): { when, task }: a turn whose prompt holds when returns task, the whole revised
+// Task a model returns when the owner asks it to change what the Task shows.
+if(cfg.revise&&schema?.properties?.task&&input.includes(cfg.revise.when))result.task=[cfg.revise.task];
 // ops (mode): work that changes no repository file. The turn answers with a Task. Told to do such
 // work now, in this turn (a mode that approves Tasks), or given its approved Task, it runs its
 // check and reports both objectives met; told to plan first, it only writes the Task.
@@ -214,6 +217,10 @@ const ALIASES=['fable','opus','sonnet','haiku','default','best','opusplan'];cons
 const reported=cfg.models?.[modelArg]??listed??'claude-fable-5-1';
 if(modelArg!==null&&cfg.models?.[modelArg]===undefined&&!listed&&!ALIASES.includes(plainModel)){console.log(JSON.stringify({type:'system',subtype:'init',session_id:session,model:modelArg,permissionMode:'default',mcp_servers:[]}));console.log(JSON.stringify({type:'result',subtype:'success',is_error:true,api_error_status:404,api_error:'not_found_error',duration_ms:150,num_turns:1,result:`There's an issue with the selected model (${modelArg}). It may not exist or you may not have access to it. Run --model to pick a different model.`,session_id:session,total_cost_usd:nothingSpent}));process.exit(1);}
 if(cfg.noCredits&&modelArg===cfg.noCredits){console.log(JSON.stringify({type:'system',subtype:'init',session_id:session,model:reported,permissionMode:'default',mcp_servers:[]}));console.log(JSON.stringify({type:'result',subtype:'success',is_error:true,api_error_status:429,api_error:'model_requires_usage_credits',duration_ms:180,num_turns:1,result:"You're out of usage credits. Switch to another model, or manage usage credits at https://claude.ai/settings/usage?from=cc_cli_limit_message, to continue.",session_id:session,total_cost_usd:nothingSpent}));process.exit(1);}
+// overloaded (fake.json): the first that many turns end as the real CLI ends one Anthropic answered
+// with 529 Overloaded each time it asked, after its own retries. overloaded.count beside the fake
+// counts them.
+if(cfg.overloaded){const counter=path.join(path.dirname(process.argv[1]),'overloaded.count');let seen=0;try{seen=Number(fs.readFileSync(counter,'utf8'))||0;}catch{}if(seen<cfg.overloaded){fs.writeFileSync(counter,String(seen+1));console.log(JSON.stringify({type:'system',subtype:'init',session_id:session,model:reported,permissionMode:'default',mcp_servers:[]}));console.log(JSON.stringify({type:'result',subtype:'success',is_error:true,api_error_status:529,api_error:'overloaded_error',duration_ms:150,num_turns:1,result:'API Error: 529 Overloaded',terminal_reason:'api_error',session_id:session,total_cost_usd:nothingSpent}));process.exit(1);}}
 // tooLong (fake.json): a review this model will not take, ended as the real CLI ends a prompt
 // longer than its model takes: a number, one over that many characters; 'files', one that
 // carries any file's content or excerpts; 'all', every one. tooLongOn: the texts that mark such a
@@ -473,7 +480,9 @@ if(mode==='stall'&&edit){console.log(JSON.stringify({type:'assistant',message:{c
 // turn before it printed nothing: that one goes on to its answer.
 if(cfg.quiet&&(cfg.quiet==='always'||!input.includes('ELU stopped it and started this one in its place'))){console.log(JSON.stringify({type:'assistant',message:{content:[{type:'text',text:'Reading the code. Thinking.'}]}}));await new Promise(resolve=>setTimeout(resolve,60000));}
 if(mode==='question'&&!args.includes('--resume')&&!input.includes('Uppercase')){result.outcome='needs_input';result.question='Which format?';result.choices=['Uppercase','Lowercase'];}
-if((mode==='review-fix'||mode==='review-block')&&input.includes('Address the review')){result.responses=[{id:'R1',action:mode==='review-fix'?'fixed':'disputed',reason:mode==='review-fix'?'Handled the edge case.':'The finding still needs owner input.'}];}
+// A turn that answers a review answers R1; one that answers a review made in parts answers each
+// of its must-fix findings (part1-1, part2-1 ...) by its ID.
+if((mode==='review-fix'||mode==='review-block')&&input.includes('Address the review')){const parts=[...new Set([...input.matchAll(/"id":"(part\d+-\d+)","severity":"must_fix"/g)].map(found=>found[1]))];result.responses=(parts.length?parts:['R1']).map(id=>({id,action:mode==='review-fix'?'fixed':'disputed',reason:mode==='review-fix'?'Handled the edge case.':'The finding still needs owner input.'}));}
 // steps (mode): a turn that shows its work as the real CLI writes it without partial messages:
 // one assistant row per block. A thinking block carries its text only with --thinking-display
 // summarized; without it the text is empty, as Claude Code's default (omitted) sends it. gate
@@ -606,14 +615,33 @@ if(Array.isArray(cfg.commands)&&promptTool){
 }
 // shell (fake.json): what the model runs when the message the turn answers asks for it, as a model
 // told of ELU's own commands does: each { when, run }, its commands run when the owner's last
-// message (a schedule's too) holds when. Each runs as commands above do, after CLAUDE_ENV_FILE,
+// message (a schedule's too) holds when, or with anywhere its whole prompt (a message to a bot,
+// which names it). Each runs as commands above do, after CLAUDE_ENV_FILE,
 // with the turn's own environment; the reply says what each printed. Each one is recorded in
 // shell.jsonl beside the fake, with the session and project ELU named to the turn.
+// asksOutside (fake.json): as the real CLI, a command the sandbox's excludedCommands names runs
+// outside the sandbox, so where no --allowedTools rule allows it the host is asked first, with a
+// can_use_tool control request on the output whose answer is read on the input. One not allowed
+// does not run: its result says so, and shell.jsonl records it with asked and status 1.
+const allowRules=args.filter(arg=>arg.startsWith('--allowedTools=')).map(arg=>/^Bash\((.*):\*\)$/.exec(arg.slice(15))?.[1]).filter(Boolean);
+const startsWith=(command,prefix)=>command===prefix||command.startsWith(`${prefix} `);
+const outsideSandbox=command=>sandbox?.enabled===true&&(sandbox.excludedCommands??[]).some(rule=>startsWith(command,rule.replace(/:\*$/,'')));
+let shellAsks=0;
+async function hostAllows(command){
+ const id=`req_fake_shell_${++shellAsks}`;
+ if(!streaming||inputEnded)return false;
+ console.log(JSON.stringify({type:'control_request',request_id:id,request:{subtype:'can_use_tool',tool_name:'Bash',input:{command,description:'Run it'},permission_suggestions:[],tool_use_id:`toolu_fake_shell_ask_${shellAsks}`,description:'Allow Bash?'}}));
+ for(;;){const line=await nextLine();if(line===null)return false;let row;try{row=JSON.parse(line);}catch{continue;}if(row.type==='control_response'&&row.response?.request_id===id)return row.response.subtype==='success'&&row.response.response?.behavior==='allow';}
+}
 if(Array.isArray(cfg.shell)&&promptTool){
  const {spawnSync}=await import('node:child_process');const named=process.env.CLAUDE_ENV_FILE;const ahead=named&&fs.existsSync(named)?fs.readFileSync(named,'utf8').trim():'';
  const said=lastOwner||(()=>{try{return String(JSON.parse(/\nTask goal \(untrusted data[^\n]*\n(.*)\nEnd of Task goal\./.exec(input)[1]));}catch{return '';}})();const outs=[];
- for(const [n,ask] of cfg.shell.entries()){if(!said.includes(ask.when))continue;for(const [i,command] of ask.run.entries()){
+ for(const [n,ask] of cfg.shell.entries()){if(!(ask.anywhere?input:said).includes(ask.when))continue;for(const [i,command] of ask.run.entries()){
   const id=`toolu_fake_shell_${n+1}_${i+1}`;console.log(JSON.stringify({type:'assistant',message:{content:[{type:'tool_use',id,name:'Bash',input:{command,description:'Run it'}}]}}));
+  if(cfg.asksOutside&&permissionMode!=='bypassPermissions'&&outsideSandbox(command)&&!allowRules.some(rule=>startsWith(command,rule))&&!await hostAllows(command)){
+   const out='The owner did not allow it.';console.log(JSON.stringify({type:'user',message:{content:[{type:'tool_result',tool_use_id:id,content:out,is_error:true}]}}));
+   fs.appendFileSync(path.join(path.dirname(process.argv[1]),'shell.jsonl'),JSON.stringify({command,status:1,out,asked:true,session:process.env.ELU_SESSION??null,project:process.env.ELU_PROJECT??null})+'\n');outs.push(`${command}: ${out}`);continue;
+  }
   const r=spawnSync('/bin/sh',['-c',`PATH="/usr/bin:/bin:$PATH"\n${ahead}\neval "$1"`,'sh',command],{env:process.env,encoding:'utf8'});const out=`${r.stdout??''}${r.stderr??''}`.trim();
   console.log(JSON.stringify({type:'user',message:{content:[{type:'tool_result',tool_use_id:id,content:r.status===0?out:`Exit code ${r.status}\n${out}`,...(r.status===0?{}:{is_error:true})}]}}));
   fs.appendFileSync(path.join(path.dirname(process.argv[1]),'shell.jsonl'),JSON.stringify({command,status:r.status,out,session:process.env.ELU_SESSION??null,project:process.env.ELU_PROJECT??null})+'\n');outs.push(`${command}: ${out}`);

@@ -11,8 +11,15 @@ const ctx = {
 const values = (text, context = ctx) => argumentMatches(text, context).map(row => row.value);
 
 test('the command list offers each next word of a command', () => {
-  assert.deepEqual(values('/agents '), ['/agents add', '/agents remove']);
-  assert.deepEqual(values('/agent '), ['/agent add', '/agent remove'], '/agent and /agents take the same words');
+  assert.deepEqual(values('/agents '), ['/agents add', '/agents change', '/agents remove']);
+  assert.deepEqual(values('/agent '), ['/agent add', '/agent change', '/agent remove'], '/agent and /agents take the same words');
+  // /agent change: the session's model or a bot of it, then what to change, then the models or the levels.
+  assert.deepEqual(values('/agent change '), ['/agent change @model', '/agent change @sec']);
+  assert.deepEqual(values('/agent change @sec '), ['/agent change @sec model', '/agent change @sec effort', '/agent change @sec --every-session']);
+  assert.deepEqual(values('/agent change @model '), ['/agent change @model model', '/agent change @model effort'], 'every session is for a bot');
+  assert.deepEqual(values('/agent change @sec model '), ['/agent change @sec model opus', '/agent change @sec model gpt']);
+  assert.deepEqual(values('/agent change @sec effort h'), ['/agent change @sec effort high']);
+  assert.deepEqual(values('/agent change @sec effort high '), ['/agent change @sec effort high model', '/agent change @sec effort high --every-session']);
   assert.deepEqual(argumentMatches('/agents add ', ctx).map(row => `${row.value} · ${row.description}`), ['/agents add opus · Claude · most capable', '/agents add gpt · Codex'], 'the models /model offers, without which one is in use');
   assert.deepEqual(values('/agents add G'), ['/agents add gpt']);
   assert.deepEqual(values('/agents remove '), ['/agents remove sec'], 'the bots of this session');
