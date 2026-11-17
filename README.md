@@ -3,7 +3,9 @@
 A full-screen terminal app that runs coding sessions on the AI command lines you already
 use, with bots that review and do work, and teammates you can ask.
 
-![You type a message, a session starts, the agent works in its own Git worktree, the project's checks run and the reply shows.](docs/media/sessions.svg)
+One message starts a session: ELU plans the change as a Task, you approve it, the agent works in its own Git worktree, ELU runs your project's checks, and the reply shows.
+
+![In the ELU terminal app, one message starts a session: ELU plans it as a Task, the agent works in its own Git worktree, the project's checks run, and the reply shows.](docs/media/sessions.svg)
 
 ## Install
 
@@ -35,57 +37,57 @@ worktree on its own branch.
 
 ### Tasks
 
-Ask for a change and the first reply is a Task: its goal, its objectives and a checklist of the work. Approve it and the work starts; where keep going is on (`/keepgoing`), ELU starts the session again by itself until the objectives are met.
+Ask for a change and the first reply is a Task: its goal, its objectives and its success criteria, with a checklist of subtasks once the work starts. Approve it, and where keep going is on (`/keepgoing on` turns it on) ELU starts the session again by itself until every objective is met.
 
-![A session proposes a Task with a goal, objectives and a checklist, you approve it, and the session keeps going until the objectives are met.](docs/media/task.svg)
+![A Task in the ELU terminal app: a card with a goal and two objectives is approved with y, the session works, and ELU starts it again until both objectives are met.](docs/media/task.svg)
 
 ### Replies while it works
 
-Write to a session while it works: its answer shows at once under your message, with a line such as `Read 12:45 PM · answered 12:46 PM.`
+Write to a session while it works: the turn reads your message at its next step, and its answer shows at once under your message, with a line such as `Read 12:45 PM · answered 12:46 PM.` The turn keeps working.
 
-![You write to a turn that is still working, and its answer shows at once under your message.](docs/media/reply.svg)
+![A message written to a session of the ELU terminal app that is still working: the line under it changes to Read, then answered, and the answer shows under it while the turn keeps working.](docs/media/reply.svg)
 
 ### Bots
 
-Add a bot to a session: `@reviewer` reviews each change, and `@lead` plans the work and hands the pieces to helpers.
+Add a bot to a session: `@reviewer` reviews each change under its own name, and the agent fixes what it finds. Another bot, `@lead`, plans the work and hands the pieces to helpers.
 
-![The bot @reviewer reviews a session's change, and the bot @lead leads the work.](docs/media/bots.svg)
+![A bot in an ELU session: @reviewer is added to a new session, reviews the agent's change under its own name, asks for one fix, and passes the change once it is fixed.](docs/media/bots.svg)
 
 ### Models and agents
 
-Change the model, the vendor or the effort in the middle of a session: `/model` picks another model, and `/agent change` sets a model's effort.
+Change the model, the vendor or the effort in the middle of a session: `/model` picks another model and the next reply comes from it, in the same chat; `/agent change` sets a model's effort.
 
-![The model and the effort of a session are changed in the middle of its work.](docs/media/agents.svg)
+![Changing the model in the middle of an ELU session: /model lists the models, the session changes from Opus to Sonnet, the next reply comes from Sonnet, and /agent change sets its effort to high.](docs/media/agents.svg)
 
 ### Long jobs
 
-Work that takes longer than a turn runs as a job, and when the job ends ELU starts the session again by itself.
+Work that takes longer than a turn runs as a job. The turn ends, the job keeps running, and when it ends ELU starts the session again by itself.
 
-![A session starts a long job and ends its turn, and starts again by itself when the job ends.](docs/media/jobs.svg)
+![A long job in ELU: the agent starts a long test run as a job and ends its turn, the job keeps running, and when it ends ELU starts the session again by itself and the agent reports the result.](docs/media/jobs.svg)
 
 ### Artifacts
 
-A session's Artifacts tab shows charts and tables that track the numbers its Task asked to see.
+A Task can name numbers to track. The session's Artifacts tab shows them as charts and tables, and the session fills them in while it works.
 
-![The Artifacts tab of a session shows a chart and a table of its Task's numbers.](docs/media/artifacts.svg)
+![The Artifacts tab of a session in the ELU terminal app: a chart of tests passing by run starts empty and fills in while the session works, until it reaches the target.](docs/media/artifacts.svg)
 
 ### Usage
 
-The Usage tab lists your vendor accounts and how much of each limit is used.
+The Usage tab lists your vendor accounts, with how much of each limit is used and how much time is left.
 
-![The Usage tab lists the vendor accounts and how much of each limit is used.](docs/media/usage.svg)
+![The ELU Usage tab lists made-up Claude and Codex accounts, each limit as a bar with the percent used and the time left, and a folded account is opened to show all its limits.](docs/media/usage.svg)
 
 ### Your computers and your team
 
-Share a project with your other computers and your teammates: every computer on it sees its sessions and can write to them, and they share one Kanban board.
+Share a project with your other computers and your teammates. Every computer on it sees the project's sessions and can write to them, and the computer that runs a session answers. They also share one Kanban board.
 
-![A session of a shared project shows on another computer, which writes to it, and both see the same Kanban board.](docs/media/team.svg)
+![Two computers on one shared ELU project: a session ana starts on her laptop shows on ben's desk computer, ben writes to it from there, and the laptop's agent answers on both.](docs/media/team.svg)
 
 ### Publishing
 
-Nothing is pushed until you type `/publish` and confirm, unless you give a session Full access. `/permissions` sets what a session may do without asking.
+Nothing is pushed until you type `/publish`, read the exact push and confirm; then ELU pushes the branch and opens a draft pull request. `/permissions` sets what a session may do without asking; only Full access lets it push by itself.
 
-![A session's change is pushed only after you type /publish and confirm.](docs/media/publish.svg)
+![In the ELU terminal app, /publish shows the exact push and asks before it pushes the branch and opens a draft pull request, and /permissions sets what a session may do without asking.](docs/media/publish.svg)
 
 ## More
 
