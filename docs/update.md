@@ -11,8 +11,8 @@ elu update
 ```
 
 On 0.1.11 or older, which have no `elu update`, update once with
-`cd ~ && npx -y @elu-labs/elu@0.1.12`. Name the version: `@latest` can reuse an old copy
-npx kept.
+`cd ~ && npx -y @elu-labs/elu@$(npm view @elu-labs/elu version)`. That asks npm for the
+newest version and names it: `@latest` can reuse an old copy npx kept.
 
 `elu update` installs the newest version where `elu` already is and restarts the peer
 daemon on it; sessions still running finish on the old version first. Once a day ELU
