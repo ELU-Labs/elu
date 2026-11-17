@@ -9478,7 +9478,7 @@ test('PgUp and PgDn from the message box page a Standup chat, at 80x24 and at 14
   }
 });
 
-// The session's header names its Task, never its state (README, "Sessions"): a click on Task, or
+// The session's header names its Task, never its state (docs/sessions.md, "The tabs"): a click on Task, or
 // Ctrl+T, opens the Task with its goal, its objectives with the agent's marks and evidence, and
 // the checklist of its work from ELU's own records, where the state's word used to be. Check
 // under it goes on to the owner's check when the session waits for it, and the check shows the

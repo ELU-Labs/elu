@@ -28,7 +28,7 @@ import { DURING_ELU, eluLine, jobsEndedText, sentByElu } from '../lib/elu-sent.m
 import { lookJobs } from '../lib/long-work.mjs';
 import { leftCommands, leftLine, leftNote, ranCommands } from '../lib/left-running.mjs';
 
-// Long jobs (README, "Long jobs"): a command ELU runs for a session apart from the turn that
+// Long jobs (docs/jobs.md): a command ELU runs for a session apart from the turn that
 // started it. The turn ends, the job runs on, and when it ends ELU starts the session again
 // with its result, with no model call in between.
 after(() => { setTimeout(() => { console.error('jobs.test: something is still running 10 s after the last test.'); process.exit(1); }, 10000).unref(); });

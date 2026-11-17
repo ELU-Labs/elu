@@ -15,7 +15,7 @@ import { endJobs, jobsDir, listJobs, startJob } from '../lib/jobs.mjs';
 import { KEEP_OFF, KEEP_ON, keepGoingFile, readKeepGoing } from '../lib/keep-going.mjs';
 import { KEEP_GOING_LINE, KEEP_GOING_TEXT, STOPPED_LINE } from '../lib/elu-sent.mjs';
 
-// Long jobs and keep going (README, "Long jobs"), as the app's screen shows them: the chat, the
+// Long jobs and keep going (docs/jobs.md), as the app's screen shows them: the chat, the
 // Sessions list, the Kanban, the Task, /keepgoing and Stop.
 after(() => { setTimeout(() => { console.error('jobs-app.test: something is still running 10 s after the last test.'); process.exit(1); }, 10000).unref(); });
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));

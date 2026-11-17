@@ -1,0 +1,16 @@
+{
+  "slug": "sessions",
+  "alt": "In the ELU terminal app, one message starts a session: ELU plans it as a Task, the agent works in its own Git worktree, the project's checks run, and the reply shows.",
+  "cols": 100,
+  "rows": 30,
+  "top": 0,
+  "show": 30,
+  "still": 5,
+  "frames": [
+    { "file": "01.ansi", "seconds": 2, "caption": "You type what you want and press Enter." },
+    { "file": "02.ansi", "seconds": 2.5, "caption": "ELU answers with a Task. You approve it with y." },
+    { "file": "03.ansi", "seconds": 2.5, "caption": "The agent works in its own Git worktree." },
+    { "file": "04.ansi", "seconds": 2, "caption": "ELU runs the project's checks on the change." },
+    { "file": "05.ansi", "seconds": 3.5, "caption": "The reply shows. The checks passed. Nothing is pushed." }
+  ]
+}

@@ -22,7 +22,7 @@ import { KEEP_GOING_TEXT, sentByElu } from '../lib/elu-sent.mjs';
 import { lookJobs } from '../lib/long-work.mjs';
 import { lookKeepGoing, readKeepGoing, setKeepGoing, standing } from '../lib/keep-going.mjs';
 
-// Long jobs and keep going (README, "Long jobs") beside what a session has of its own: the
+// Long jobs and keep going (docs/jobs.md) beside what a session has of its own: the
 // agent it works with (@lead in a session written to @lead, the model after @model), what a
 // working bot's turn may run, the model and effort the owner gave it, and the states of a turn
 // that is not over: one that waits to try again after an overloaded answer, a review that

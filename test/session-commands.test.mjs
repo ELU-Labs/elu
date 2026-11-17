@@ -30,7 +30,7 @@ import { saveDefaultMode } from '../lib/modes.mjs';
 import { readStore } from '../lib/artifacts.mjs';
 import { approveTask, checkProposal, proposeTask } from '../lib/plan.mjs';
 
-// ELU from inside a session (README, "ELU from a session"): elu sessions and elu schedules,
+// ELU from inside a session (docs/commands.md, "ELU from a session"): elu sessions and elu schedules,
 // from the owner's shell and from a turn, through the app's own records and locks.
 after(() => { setTimeout(() => { console.error('session-commands.test: something is still running 10 s after the last test.'); process.exit(1); }, 10000).unref(); });
 function environment(t, values) {
@@ -413,7 +413,7 @@ test('elu schedules adds, lists, pauses, resumes, runs and deletes with the word
   r = elu(f, ['schedules', 'pause', '7']); assert.equal(r.status, 1); assert.match(r.stderr, /No schedule 7 in sample app/);
 });
 
-// README "ELU from a session": a session started from a session gets that session's mode or a
+// docs/commands.md "ELU from a session": a session started from a session gets that session's mode or a
 // lower one, and ELU runs a command handed to it no higher than the session's mode. A schedule's
 // run gets the schedule's mode, so inside a session run, resume and delete refuse a schedule
 // whose runs get more. Approve for me runs elu schedules without asking the owner, and text in
@@ -570,8 +570,8 @@ test('elu --help and elu sessions --help list the commands', () => {
   assert.equal(run(['sessions', '--help']).stdout, SESSIONS_HELP); assert.equal(run(['schedules', '-h']).stdout, SCHEDULES_HELP);
   assert.match(SESSIONS_HELP, /elu sessions archive N\|this/); assert.match(SESSIONS_HELP, /elu sessions new MESSAGE/);
   assert.ok(SCHEDULES_HELP.split('\n').filter(line => !line.startsWith(' ')).every(line => line.length < 80), 'each line of its words fits a terminal of 80 columns');
-  // goal and copy, one line each, in the words elu sessions --help has; README's list names them too.
-  const readme = fs.readFileSync(new URL('../README.md', import.meta.url), 'utf8'), section = readme.slice(readme.indexOf('### ELU from a session'), readme.indexOf('## Keys'));
+  // goal and copy, one line each, in the words elu sessions --help has; the list in docs/commands.md names them too.
+  const page = fs.readFileSync(new URL('../docs/commands.md', import.meta.url), 'utf8'), section = page.slice(page.indexOf('## ELU from a session'), page.indexOf('## Keys'));
   for (const [verb, words, said] of [['goal', 'Give one a new goal, also while it works.', 'gives one a new goal, also while it works: its turn is not stopped.'], ['copy', 'Start a copy of one, with a new goal.', 'starts a copy of one, with a new goal.']]) {
     assert.ok(SESSIONS_HELP.includes(`elu sessions ${verb} N GOAL `) && SESSIONS_HELP.includes(words), verb);
     assert.ok(help.split('\n').some(line => line.startsWith(`  sessions ${verb} N GOAL `) && line.endsWith(words) && line.length < 80), verb);

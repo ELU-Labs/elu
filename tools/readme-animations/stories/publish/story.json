@@ -1,0 +1,16 @@
+{
+  "slug": "publish",
+  "alt": "In the ELU terminal app, /publish shows the exact push and asks before it pushes the branch and opens a draft pull request, and /permissions sets what a session may do without asking.",
+  "cols": 100,
+  "rows": 30,
+  "top": 0,
+  "show": 30,
+  "still": 3,
+  "frames": [
+    { "file": "01.ansi", "seconds": 2, "caption": "The work is checked. Nothing is pushed yet." },
+    { "file": "02.ansi", "seconds": 1.5, "caption": "You type /publish." },
+    { "file": "03.ansi", "seconds": 3, "caption": "ELU shows the exact push and asks first." },
+    { "file": "04.ansi", "seconds": 2.5, "caption": "You answer y. ELU pushes and opens a draft pull request." },
+    { "file": "05.ansi", "seconds": 3.5, "caption": "/permissions: what a session may do without asking." }
+  ]
+}

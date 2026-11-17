@@ -16,7 +16,7 @@ import { GOAL_SAME, answerCheck, checkDone, checkView, copySession, goalToldWord
 import { readWords, waitingWords } from '../lib/message-aside.mjs';
 import { messageTime } from '../lib/terminal-visuals.mjs';
 
-// A new goal while the session works (README, "Kanban"; lib/owner-check.mjs keepOpen): the
+// A new goal while the session works (docs/sessions.md, "The tabs"; lib/owner-check.mjs keepOpen): the
 // owner gives it from elu sessions goal or from the app at any time. The Task's goal and
 // objectives change at once, and the working turn is not stopped. A turn that takes messages
 // (Claude Code) reads the new goal at its next step, told to align its work with it, and its

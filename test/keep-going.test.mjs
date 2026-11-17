@@ -19,7 +19,7 @@ import { KEEP_GOING_LINE, KEEP_GOING_TEXT, eluLine, sentByElu } from '../lib/elu
 import { stopLongWork } from '../lib/long-work.mjs';
 import { IDLE_MS, KEEP_OFF, KEEP_ON, STOPPED_LINE, expectKeepGoing, keepGoingStop, keepGoingWaits, keepsGoing, lookKeepGoing, readKeepGoing, setKeepGoing, standing } from '../lib/keep-going.mjs';
 
-// Keep going until the goal is met (README, "Long jobs"): a session whose approved Task has
+// Keep going until the goal is met (docs/jobs.md): a session whose approved Task has
 // objectives not all met, with nothing running and nothing it waits on the owner for, is
 // started again by ELU after a few idle minutes, from ELU's own records and with no model call.
 after(() => { setTimeout(() => { console.error('keep-going.test: something is still running 10 s after the last test.'); process.exit(1); }, 10000).unref(); });

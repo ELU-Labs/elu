@@ -1,9 +1,25 @@
 # Permissions
 
+Back to the [README](../README.md).
+
 A turn runs in one of four profiles. You choose one of three modes when you start a
 session; a turn that is not your own session's runs read only.
 
 ## Modes
+
+Each session runs in one of three modes. `/permissions ask`, `auto` or `full` changes it,
+and `/permissions default auto` sets what new sessions start with.
+
+- **Ask for approval** (`ask`, the default): edits the session's files and asks you before
+  anything else, the internet included.
+  Codex cannot ask you during a turn, so there these are refused and reported.
+- **Approve for me** (`auto`): edits the session's files; a reviewer model, not you, decides
+  the rest. Commands get no internet unless the reviewer lets one leave the sandbox.
+  On Grok Build, what its reviewer refuses then asks you.
+- **Full access** (`full`): any file, any command, the internet, with no sandbox. That
+  includes push, tags, merges, publishing and deploys: the never list below does not apply.
+  Nothing of ELU's limits it: every tool the vendor has, your secret files and sign-ins,
+  your whole environment. [What stays, and why](#full-access).
 
 | | Read only | Ask for approval | Approve for me | Full access |
 | --- | --- | --- | --- | --- |
@@ -155,6 +171,26 @@ state stay closed below Full access, as the table says. Your session's answer tu
 bot's until the session's work is published, also get a list of up to 60 Git
 repositories found in your home, so the model can find the code you mean.
 
+## MCP servers
+
+On Claude Code, your own MCP servers (`claude mcp list`) are on for the model and for bots
+that work, and their tools run without asking in every mode. Neither the sandbox nor the
+never list below covers them, so a server can reach the internet and act on other services.
+`/mcp off NAME` turns one off for the project. A teammate's question never gets them.
+
+`/mcp add` adds a server: it asks for a name, the URL (or the command that starts it), the
+header that carries its key, such as `Authorization`, and then the key, in a field that
+shows only dots. Claude Code saves it for every folder (`claude mcp add-json --scope user`),
+and sessions get it from their next turn. `/mcp remove NAME` removes one after asking. From
+a shell, `elu mcp add NAME URL --header Authorization` asks for the key with echo off, or
+reads it from standard input; a command goes after `--`, as in
+`elu mcp add github --env GITHUB_TOKEN -- docker run -i --rm ghcr.io/github/github-mcp-server`.
+`elu mcp remove NAME` removes one. If you paste a server config, such as an `mcpServers`
+block, or a `claude mcp add` line (with `!` or without) into the message box, ELU does
+not send or run it: it offers to add the server, so the key stays out of the chat. The model
+is told to ask you to type `/mcp add` when it needs a server you do not have, and adding or
+removing one is on the never list, outside Full access.
+
 ## Which profile a turn runs with
 
 In order: a bot that reviews or answers runs read only; a teammate's question or
@@ -178,6 +214,11 @@ included: pick Full access for the session, when you start it or with `/permissi
 and its bots' schedules run with it, with nobody watching. In a session that edits your
 checkout in place, they run while the session has Full access.
 
+ELU does not push, merge, tag, deploy or publish by itself. `/publish` shows the exact
+push and the draft pull request, waits for you, and refuses a default branch. Outside Full
+access the model is told never to run those commands, and on Claude Code they are denied by
+rule. Details: [SECURITY.md](../SECURITY.md).
+
 Full access has no never list. A turn that runs with it, your session's or a working
 bot's, runs what your own shell could: `git push` (tags too), `git tag`, `git merge`,
 `gh pr merge`, `gh release`, `npm publish`, deploys, and adding or removing an MCP
@@ -189,7 +230,8 @@ Approve for me, and a read-only turn has no shell to run them with.
 
 One entry of the never list can open outside Full access: a bot that is allowed to merge
 pull requests (`@elu` comes allowed; a bot you make is not) may run `gh pr merge` in its
-own working turn on `claude`. Ask for approval still asks you before each merge. Push,
+own working turn on `claude`. Ask for approval still asks you before each merge; in Approve
+for me the reviewer model decides. Push,
 tag, `git merge`, deploy and publish stay blocked for that bot and for everyone else.
 
 A longer command line that holds a never-list command is refused whole. The chat
@@ -329,6 +371,8 @@ The keys are `y` allow and `n` deny, each followed by Enter. Where the session c
 be given Full access there is a third, `f`: it asks what `/permissions full` asks,
 then allows the action and switches the session to Full access, so that session stops asking.
 It is not offered for a turn that runs read only.
+On the session's row or in its chat each is the letter, then Enter, so a message that starts
+with one of them is only a message.
 
 ### Network
 
@@ -422,7 +466,7 @@ on. An approval of a session on another computer waits on both machines, with `a
 and `n` where that machine offers it; `a` keeps the rule on the machine where the session
 runs, for that project only. That machine makes the rule from its own copy of the request.
 
-ELU's own commands, `elu sessions` and `elu schedules` ([README](../README.md#elu-from-a-session)),
+ELU's own commands, `elu sessions` and `elu schedules` ([Commands](commands.md#elu-from-a-session)),
 run without asking in Approve for me, as one command alone, and are asked for in Ask for
 approval like any other command. Only a turn of your own session has them, on every vendor:
 its PATH starts with an `elu` of that turn's own. That `elu` reads none of ELU's files and
@@ -563,6 +607,9 @@ What the agent is told, in every mode that has a shell:
   long to show whole included. The never list is not asked,
   so it stays refused in that turn, which started without Full access; the next
   turn runs it.
+- When a turn stopped on something a wider mode allows, its Blocked line says which, and
+  raising the mode continues the turn at once, with only what that mode allows. A turn that
+  also stopped on your no, or on the never list, waits for your reply.
 - A turn that starts in Full access asks you nothing. What its vendor asks in
   every mode (Claude Code asks before `rm` or `rmdir` on your home, the working
   folder or a top-level folder) is allowed at once. The same holds for a turn

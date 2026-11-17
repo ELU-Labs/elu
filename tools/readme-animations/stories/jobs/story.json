@@ -1,0 +1,16 @@
+{
+  "slug": "jobs",
+  "alt": "A long job in ELU: the agent starts a long test run as a job and ends its turn, the job keeps running, and when it ends ELU starts the session again by itself and the agent reports the result.",
+  "cols": 100,
+  "rows": 30,
+  "top": 0,
+  "show": 30,
+  "still": 5,
+  "frames": [
+    { "file": "01.ansi", "seconds": 2, "caption": "You ask for the full test run." },
+    { "file": "02.ansi", "seconds": 2.5, "caption": "The agent wants to run it as a job. You allow it with y." },
+    { "file": "03.ansi", "seconds": 2.5, "caption": "The turn ends. The job keeps running." },
+    { "file": "04.ansi", "seconds": 2.5, "caption": "The job ends. ELU starts the session again by itself." },
+    { "file": "05.ansi", "seconds": 3.5, "caption": "The agent reads the result and reports." }
+  ]
+}

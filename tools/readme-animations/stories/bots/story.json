@@ -1,0 +1,16 @@
+{
+  "slug": "bots",
+  "alt": "A bot in an ELU session: @reviewer is added to a new session, reviews the agent's change under its own name, asks for one fix, and passes the change once it is fixed.",
+  "cols": 100,
+  "rows": 30,
+  "top": 0,
+  "show": 30,
+  "still": 5,
+  "frames": [
+    { "file": "01.ansi", "seconds": 2, "caption": "You add the bot @reviewer to a new session." },
+    { "file": "02.ansi", "seconds": 2, "caption": "It will review each change. You ask for one." },
+    { "file": "03.ansi", "seconds": 2, "caption": "You approve the Task. Opus makes the change." },
+    { "file": "04.ansi", "seconds": 3, "caption": "@reviewer finds one thing to fix. Opus works on it." },
+    { "file": "05.ansi", "seconds": 4, "caption": "Opus fixed it. @reviewer reviews again: Passed." }
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "slug": "task",
+  "alt": "A Task in the ELU terminal app: a card with a goal and two objectives is approved with y, the session works, and ELU starts it again until both objectives are met.",
+  "cols": 100,
+  "rows": 30,
+  "top": 0,
+  "show": 30,
+  "still": 1,
+  "frames": [
+    { "file": "01.ansi", "seconds": 2.5, "caption": "You ask for a change. The first reply is a Task." },
+    { "file": "02.ansi", "seconds": 2, "caption": "You type /keepgoing on, then approve the Task with y." },
+    { "file": "03.ansi", "seconds": 1.5, "caption": "The work starts by itself." },
+    { "file": "04.ansi", "seconds": 2.5, "caption": "The turn ends: one objective is met, one is open." },
+    { "file": "05.ansi", "seconds": 2, "caption": "After three idle minutes ELU starts it again." },
+    { "file": "06.ansi", "seconds": 3.5, "caption": "Both objectives are met. The session stops for your check." }
+  ]
+}

@@ -26,7 +26,7 @@ import { share, setTeamProject } from '../lib/peer/shares.mjs';
 import { saveTeamAccess } from '../lib/peer/access.mjs';
 import { hostMethods, projectKey, relist } from '../lib/peer/remote.mjs';
 
-// Where long jobs and keep going (README, "Long jobs") meet the other computers of a shared
+// Where long jobs and keep going (docs/jobs.md) meet the other computers of a shared
 // project (README, "A shared project"). Every computer on the project acts on a session under
 // that project's /access on the computer that runs it. A job has the mode of the turn that
 // starts it and never more, whoever's message that turn answers; ELU's own commands, elu jobs
@@ -198,18 +198,21 @@ test('an artifact with a chart goes to another computer as its data alone: no sc
 });
 
 // The commands as they are named to the owner: each once, and none of what "mine" had.
-test('elu --help, the README commands and the command list name the long-job commands once and nothing of "mine"', { timeout: 60000 }, () => {
+test('elu --help, the README and its docs pages, and the command list name the long-job commands once and nothing of "mine"', { timeout: 60000 }, () => {
   const names = COMMANDS.map(command => command.name);
   assert.deepEqual(names.filter((name, index) => names.indexOf(name) !== index), [], 'no command is listed twice');
   assert.ok(names.includes('keepgoing') && !names.includes('mine'));
-  const readme = fs.readFileSync(new URL('../README.md', import.meta.url), 'utf8');
+  // The README and the docs pages that hold what it used to say: the commands table is in
+  // docs/commands.md, and long jobs are in docs/jobs.md.
+  const pages = ['README.md', ...['install', 'sessions', 'tasks', 'commands', 'jobs', 'permissions', 'bots', 'teammates', 'standup', 'usage', 'update'].map(name => `docs/${name}.md`)];
+  const page = name => fs.readFileSync(new URL(`../${name}`, import.meta.url), 'utf8'), readme = pages.map(page).join('\n');
   const table = [...readme.matchAll(/^\| `(\/[a-z-]+)[^`]*` \|/gm)].map(match => match[1]);
-  assert.deepEqual(table.filter((name, index) => table.indexOf(name) !== index), [], 'the README table names each command once');
+  assert.deepEqual(table.filter((name, index) => table.indexOf(name) !== index), [], 'the commands table names each command once');
   for (const name of ['/stop', '/keepgoing', '/slots', '/standup', '/archived']) assert.ok(table.includes(name), name);
   assert.ok(!table.includes('/mine'));
   for (const gone of [/--mine\b/, /\belu mine\b/, /GitHub pairing/i]) assert.doesNotMatch(readme, gone);
   // Long jobs are told for the other computers of the project, whoever owns them.
-  const jobs = readme.slice(readme.indexOf('### Long jobs'), readme.indexOf('\n## ', readme.indexOf('### Long jobs')));
+  const jobs = page('docs/jobs.md');
   assert.match(jobs, /also on the other computers of its\s+project\./); assert.doesNotMatch(jobs, /your\s+other\s+computers?|your\s+teammates/i);
   const help = spawnSync(process.execPath, [CLI, '--help'], { encoding: 'utf8', timeout: 30000, env: { ...process.env, ELU_NO_UPDATE_CHECK: '1' } });
   assert.equal(help.status, 0, help.stderr);

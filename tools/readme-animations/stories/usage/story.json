@@ -1,0 +1,15 @@
+{
+  "slug": "usage",
+  "alt": "The ELU Usage tab lists made-up Claude and Codex accounts, each limit as a bar with the percent used and the time left, and a folded account is opened to show all its limits.",
+  "cols": 100,
+  "rows": 30,
+  "top": 0,
+  "show": 30,
+  "still": 2,
+  "frames": [
+    { "file": "01.ansi", "seconds": 2, "caption": "Type /usage to open the Usage tab." },
+    { "file": "02.ansi", "seconds": 3, "caption": "Each account shows every limit as a bar: used, time left." },
+    { "file": "03.ansi", "seconds": 2.5, "caption": "A folded account shows only its tightest limit." },
+    { "file": "04.ansi", "seconds": 3.5, "caption": "f opens it: all the limits of that account." }
+  ]
+}
