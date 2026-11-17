@@ -80,12 +80,14 @@ test('a message sent while Claude Code works goes to that turn at its next step,
   assert.deepEqual(controls(f), [], 'nothing was interrupted');
   assert.ok(f.absorbed()[0].content.startsWith(DURING_LEAD), 'the turn is told what the message is');
   assert.ok(f.absorbed()[0].content.includes('"text":"Also keep the old name"'));
-  // In the chat each shows once, where it was sent, and the one reply answers all of it.
-  assert.deepEqual(task.messages.map(row => [row.text, row.during === true]), [['Tidy the coupon module', false], ['Also keep the old name', true], ['And say which file changed', true]]);
+  // In the chat each shows once, where it was sent.
+  assert.deepEqual(task.messages.filter(row => !row.whileWorking).map(row => [row.text, row.during === true]), [['Tidy the coupon module', false], ['Also keep the old name', true], ['And say which file changed', true]]);
   const entries = conversationEntries(f.repo, task);
-  assert.deepEqual(entries.map(row => [row.role, row.during === true]), [['You', false], ['You', true], ['You', true], [entries.at(-1).role, false]]);
+  assert.deepEqual(entries.filter(row => !row.whileWorking).map(row => [row.role, row.during === true]), [['You', false], ['You', true], ['You', true], [entries.at(-1).role, false]]);
   assert.equal(entries.at(-1).lead, true);
-  assert.match(entries.at(-1).text, /Also took in what you sent while it worked: Also keep the old name \| And say which file changed$/);
+  // What it wrote while it worked answers each, under the message, and the reply at its end repeats none of it (test/reply-while-working.test.mjs).
+  assert.deepEqual(entries.filter(row => row.whileWorking).map(row => row.text), ['Answer while working: Also keep the old name', 'Answer while working: And say which file changed']);
+  assert.doesNotMatch(entries.at(-1).text, /Also took in/);
   assert.equal(task.activeInbox, undefined, 'no turn takes messages now');
   // The next turn reads them as the owner's messages.
   enqueue(f.root, 'Thanks', { continuationTaskId: '1', priority: 0 });
@@ -125,8 +127,9 @@ test('a message sent while a long command runs waits for the command; sent now, 
   assert.match(fs.readFileSync(log, 'utf8'), /Command was moved to the background \(ID: bash_1\) so that a message that arrived while it was running can reach you; it was not interrupted\./);
   assert.deepEqual(lifecycle(log, uuid), ['queued', 'started', 'completed']);
   assert.deepEqual(logRows(log).filter(row => row.type === 'result').map(row => row.is_error), [false], 'one result, and no error');
-  assert.deepEqual(task.messages.map(row => [row.text, row.during === true]), [['Run the long check', false], ['Also keep the old name', true]]);
-  assert.match(conversationEntries(f.repo, task).at(-1).text, /Also took in what you sent while it worked: Also keep the old name$/);
+  assert.deepEqual(task.messages.filter(row => !row.whileWorking).map(row => [row.text, row.during === true]), [['Run the long check', false], ['Also keep the old name', true]]);
+  assert.deepEqual(conversationEntries(f.repo, task).filter(row => row.whileWorking).map(row => row.text), ['Answer while working: Also keep the old name'], 'answered while it worked');
+  assert.doesNotMatch(conversationEntries(f.repo, task).at(-1).text, /Also took in/);
   assert.equal(task.activeInbox, undefined); assert.equal(task.activeSendNow, undefined);
 });
 
@@ -149,7 +152,7 @@ test('sent now while the turn works on something that cannot move, the turn is c
   assert.deepEqual(logRows(log).filter(row => row.type === 'result').map(row => [row.subtype ?? null, row.is_error]), [['error_during_execution', true], [null, false]]);
   assert.deepEqual(lifecycle(log, uuid), ['queued', 'started', 'completed']);
   assert.deepEqual(f.absorbed().map(row => [row.mid, row.uuid]), [[false, uuid]]);
-  assert.deepEqual(task.messages.map(row => [row.text, row.during === true]), [['Tidy the coupon module', false], ['Also keep the old name', true]]);
+  assert.deepEqual(task.messages.filter(row => !row.whileWorking).map(row => [row.text, row.during === true]), [['Tidy the coupon module', false], ['Also keep the old name', true]]);
   const entries = conversationEntries(f.repo, task);
   assert.deepEqual(entries.map(row => row.lead === true), [false, false, true], 'the cut turn wrote no reply of its own');
   assert.equal(entries.at(-1).text, 'Answered what you sent after the turn: Also keep the old name');

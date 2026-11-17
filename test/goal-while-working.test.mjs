@@ -13,7 +13,8 @@ import { GOAL_DURING, GOAL_TOLD } from '../lib/runner.mjs';
 import { GOAL_NEW, approveTask, currentTask, planSchema, proposeTask, readPlanReply, reportProgress, settleWork, turnPlan } from '../lib/plan.mjs';
 import { conversationSchema } from '../lib/config.mjs';
 import { GOAL_SAME, answerCheck, checkDone, checkView, copySession, goalToldWords, taskView } from '../lib/owner-check.mjs';
-import { waitingWords } from '../lib/message-aside.mjs';
+import { readWords, waitingWords } from '../lib/message-aside.mjs';
+import { messageTime } from '../lib/terminal-visuals.mjs';
 
 // A new goal while the session works (README, "Kanban"; lib/owner-check.mjs keepOpen): the
 // owner gives it from elu sessions goal or from the app at any time. The Task's goal and
@@ -86,7 +87,13 @@ test('elu sessions goal while Claude Code works: the Task changes at once, that 
   assert.equal(taken.mid, true, 'the running turn took it in');
   assert.ok(taken.content.startsWith(GOAL_DURING), taken.content.slice(0, 200));
   for (const line of ['1. normalize returns upper case', '2. normalize trims spaces', '3. The coupon test passes']) assert.ok(taken.content.includes(line), line);
+  // Under his goal in the chat: when he gave it, and when the turn read it.
+  const given = () => session(f).messages.find(row => row.text === NEW_GOAL);
+  assert.ok(Date.parse(given().sentAt) <= Date.parse(given().at), 'when he gave it, and when the turn read it');
+  assert.match(readWords(given(), messageTime), /^Read \d{1,2}:\d\d [AP]M\.$/);
   await until(() => session(f).state !== 'running', 'the turn ends');
+  // A goal is not a question: however many steps the turn took after it, nothing says it carried on without answering.
+  assert.deepEqual([given().carriedOn, given().answeredAt], [undefined, undefined]);
   // One run: it was never stopped or started again, and nothing was interrupted.
   assert.equal(f.runs().length, 1);
   assert.deepEqual(f.controls(), [], 'no interrupt');

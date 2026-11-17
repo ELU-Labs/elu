@@ -400,14 +400,16 @@ test("a click on @lead's reply heading in a session written to @lead opens @lead
   await until(() => modalNamed(v, /^ ?Agent @lead/), "@lead's page");
   assert.deepEqual(shown(/^ ?Agent @lead/).map(text => text.split(' ')[0]), ['Model', 'Effort', 'For', 'Save', 'Cancel']);
   assert.match(shown(/^ ?Agent @lead/)[0], /^Model Fable/); assert.equal(shown(/^ ?Agent @lead/)[2], 'For this session');
-  // Its effort, picked from Claude Code's levels, saved for this session.
-  await choose(/^ ?Agent @lead/, 1); await choose(/^ ?Effort/, 3);
-  await until(() => modalNamed(v, /^ ?Agent @lead/) && !modalNamed(v, /^ ?Effort/) && /^Effort high/.test(shown(/^ ?Agent @lead/)[1]), 'back on its page, with the level');
+  // Its effort reads as the level its heading shows (high, Claude Code's own for that model).
+  assert.equal(shown(/^ ?Agent @lead/)[1], 'Effort high');
+  // Another, picked from Claude Code's levels, is saved for this session.
+  await choose(/^ ?Agent @lead/, 1); await choose(/^ ?Effort/, 2);
+  await until(() => modalNamed(v, /^ ?Agent @lead/) && !modalNamed(v, /^ ?Effort/) && /^Effort medium/.test(shown(/^ ?Agent @lead/)[1]), 'back on its page, with the level');
   await choose(/^ ?Agent @lead/, 3);
-  await until(() => /Effort of @lead: .+ → high/.test(status()), `saved, and said in one line: ${status()}`);
-  assert.deepEqual(session().botModels, { lead: { vendor: 'claude', model: 'fable', effort: 'high' } });
+  await until(() => /Effort of @lead: high → medium/.test(status()), 'saved, and said in one line');
+  assert.deepEqual(session().botModels, { lead: { vendor: 'claude', model: 'fable', effort: 'medium' } });
   assert.equal(getBot('lead').effort ?? null, null, 'the saved bot is as it was');
-  await until(() => /Effort of @lead: .+ → high/.test(chat.getContent().replace(/\x1b\[[\d;]*m/g, '')), 'the chat keeps the line');
+  await until(() => /Effort of @lead: high → medium/.test(chat.getContent().replace(/\x1b\[[\d;]*m/g, '')), 'the chat keeps the line');
   // The session is still @lead's: the box says so, and what he types next goes to @lead, with that effort.
   await until(() => /^ Message @lead · @model writes to Opus $/.test(label(v)), `still @lead: "${label(v)}"`);
   const count = roles().length;
@@ -415,10 +417,10 @@ test("a click on @lead's reply heading in a session written to @lead opens @lead
   await until(() => roles().length > count && session().state === 'answered' && pendingRequests(p.root).every(row => row.state === 'done'), '@lead answers');
   assert.deepEqual(roles().slice(count), ['bot:lead']);
   const sent = calls().at(-1).args;
-  assert.deepEqual([after(sent, '--model'), after(sent, '--effort')], ['fable', 'high']);
+  assert.deepEqual([after(sent, '--model'), after(sent, '--effort')], ['fable', 'medium']);
   // /agent change names it too, and the model stays the session's own.
   await send(v, '/agent change @lead effort low');
-  await until(() => /Effort of @lead: high → low/.test(status()), `changed from the keyboard: ${status()}`);
+  await until(() => /Effort of @lead: medium → low/.test(status()), 'changed from the keyboard');
   assert.equal(session().botModels.lead.effort, 'low'); assert.equal(session().leadEffort, undefined);
   await until(() => /^ Message @lead · @model writes to Opus $/.test(label(v)), 'and still @lead');
   // While @lead works, its heading names the model and effort it runs on in this session.

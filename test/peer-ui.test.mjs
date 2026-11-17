@@ -2009,10 +2009,10 @@ test('/model NAME and a message over a session on my other computer go there as 
   // What the other computer answers: the model it read at the start of the text, by the name it shows it by, and whether words came after it.
   const THERE = [[/^opus 5\.5\b/i, 'Opus 5.5'], [/^opus\b/, 'Opus 5.5'], [/^sonnet 5\b/, 'Sonnet 5'], [/^devbox-model\b/, 'devbox-model']];
   const took = text => THERE.find(([name]) => name.test(text));
-  let older = false;
+  let older = false, works = false;
   const peer = fakePeer({ items: [], sharing: [SARA], remote, refuse: command => command.type !== 'remoteSend' || !command.model ? null
     : older ? 'Update ELU on @sara-box to change its model from here.' : took(command.text) ? null : `@sara-box: No model named ${command.text.split(' ')[0]}. /model lists them; /model add adds one by name.` });
-  const answer = peer.awaitCommand; peer.awaitCommand = async (...args) => { const out = await answer(...args), command = peer.last; return command.type === 'remoteSend' && command.model ? { id, model: took(command.text)[1], sent: command.text.replace(took(command.text)[0], '').trim() !== '' } : out; };
+  const answer = peer.awaitCommand; peer.awaitCommand = async (...args) => { const out = await answer(...args), command = peer.last; return command.type === 'remoteSend' && command.model ? { id, model: took(command.text)[1], sent: command.text.replace(took(command.text)[0], '').trim() !== '', ...(works ? { later: true } : {}) } : out; };
   const v = await view(t, { repo: repository(p.root), dashboard: true, peer });
   const board = v.panels.board, sentThere = () => peer.sent().filter(row => row.type === 'remoteSend'), status = () => v.panels.status.getText().replace(/\s+/g, ' ');
   const over = async () => { board.focus(); selectRow(board, /Invoice page test handoff/); await until(() => /@sara-box/.test(v.panels.ask._label.getText()), 'the box writes about the session there'); };
@@ -2037,11 +2037,56 @@ test('/model NAME and a message over a session on my other computer go there as 
   await over(); await send(v, '/model nosuch and the tests');
   await until(() => /@sara-box: No model named nosuch\. \/model lists them; \/model add adds one by name\./.test(status()), 'that computer says it has no such model');
   assert.equal(v.panels.ask.getValue(), '/model nosuch and the tests'); v.panels.ask.setValue('');
+  // Its turn works there (later): the model starts with its next turn, and a message after the name waits for that turn to end. Each line says so.
+  works = true;
+  await over(); await send(v, '/model opus 5.5');
+  await until(() => sentThere().at(-1).text === 'opus 5.5' && /The session on @sara-box uses Opus 5\.5 from its next turn\./.test(status()), 'the model alone, while it works there');
+  await over(); await send(v, '/model opus 5.5 and the tests');
+  await until(() => sentThere().at(-1).text === 'opus 5.5 and the tests' && /Sent to the session on @sara-box\. Opus 5\.5 takes it when its running turn ends\./.test(status()), 'a message with it, while it works there');
+  works = false;
   // That computer runs an older ELU, which would send the whole text as a message and keep the old model: one plain line, nothing sent, and the text stays.
   older = true;
   await over(); await send(v, '/model opus 5.5 and the tests');
   await until(() => /Update ELU on @sara-box to change its model from here\./.test(status()), 'the status says to update it');
   assert.equal(v.panels.ask.getValue(), '/model opus 5.5 and the tests');
+});
+
+// The check's report: over an open session on another computer, /agent change read "Open a
+// session first." and a click on its reply heading did nothing. Its agents are changed on the
+// computer that runs it, and both say so, with what does work from here.
+test('over a session on my other computer, /agent and a click on a reply heading say where its agents are changed, and nothing is sent there', { timeout: 60000 }, async t => {
+  const at = new Date().toISOString(), id = '55555555-5555-4555-8555-555555555555';
+  const remote = [{ id, machine: SARA, createdAt: at, lastAt: at, title: 'Invoice totals fix', state: 'answered', question: null, choices: [], steps: [], entries: [{ role: 'You', at, text: 'Fix the totals' }, { role: 'Opus 5.5', lead: true, at, text: 'Fixed them.' }, { role: '@reviewer', bot: 'reviewer', at, text: 'The totals read right.' }], approvals: [] }];
+  const p = project(later(t)); environment(t, p.parent);
+  const before = process.env.PATH; process.env.PATH = fakeClis(p.parent).env.PATH; owned(t).files.push(() => { process.env.PATH = before; });
+  const peer = fakePeer({ items: [], sharing: [SARA], remote });
+  const v = await view(t, { repo: repository(p.root), dashboard: true, peer });
+  const board = v.panels.board, pane = v.panels.chat, status = () => v.panels.status.getText().replace(/\s+/g, ' ').trim();
+  const opened = start => v.current.screen.children.find(child => !child.destroyed && child.options?.label?.trim().startsWith(start));
+  const over = async () => { board.focus(); selectRow(board, /Invoice totals fix/); await until(() => /@sara-box/.test(v.panels.ask._label.getText()), 'the box writes about the session there'); };
+  const THERE = "This session's agents are changed on @sara-box. /model <name> changes its model from here.";
+  await until(() => board.items.map(plainItem).some(row => /Invoice totals fix/.test(row)), 'the row of the session there');
+  await over();
+  const plainRow = index => String(pane._clines?.[index] ?? '').replace(/\x1b\[[\d;]*m/g, '').trimStart();
+  const heading = start => (pane._clines ?? []).findIndex((_, index) => plainRow(index).startsWith(start));
+  await until(() => heading('Opus 5.5') >= 0 && heading('@reviewer') >= 0, 'the reply headings of the session there show');
+  // Another line under the box first, so each one below is seen to come.
+  const other = async () => { await over(); await send(v, '/model'); await until(() => /\/model default <name> changes it\./.test(status()), 'another line'); };
+  // By keys: every /agent line, and the text stays in the box.
+  for (const typed of ['/agent change @model effort high', '/agent change @reviewer model sonnet --every-session', '/agents', '/agent add sonnet', '/agent remove reviewer']) {
+    await other(); await over(); await send(v, typed);
+    try { await until(() => status().includes(THERE), typed, 5000); } catch { assert.fail(`${typed}: ${status()} | box: ${v.panels.ask.getValue()}`); }
+    assert.equal(v.panels.ask.getValue(), typed); v.panels.ask.setValue('');
+  }
+  // By mouse: the heading of the model's reply and of a bot's, where each is drawn.
+  for (const start of ['Opus 5.5', '@reviewer']) {
+    await other(); await over();
+    const x = pane.aleft + 3, y = pane.atop + heading(start) + pane.itop - pane.childBase + 1;
+    v.input.write(`\x1b[<0;${x};${y}M`); v.input.write(`\x1b[<0;${x};${y}m`);
+    try { await until(() => status().includes(THERE), start, 5000); } catch { assert.fail(`a click on ${start}: ${status()}`); }
+    assert.equal(opened('Agent '), undefined, 'no page of an agent that is not changed from here');
+  }
+  assert.deepEqual(peer.sent().filter(row => /^remote(Send|Start)$/.test(row.type)), [], 'nothing was sent there');
 });
 
 test('status typed on the row of a running session on my other computer is a message and stops nothing there; s then Enter stops it', async t => {

@@ -7,6 +7,7 @@ import { USAGE_LEVELS, accountLimits, tightest, timeLeft, usageBlocks, usageDeta
 import * as terminal from '../lib/terminal.mjs';
 import { claudeUsage, codexUsage, keepClaudeUsage, observeClaudeLog, personalDirectory, readAccounts, recordAccount, usageSnapshot, usageTab } from '../lib/usage.mjs';
 import { THRESHOLD, markSpent } from '../lib/claude-switch.mjs';
+import { finishLogin, newLogin } from '../lib/logins.mjs';
 
 // The Usage tab's lines (lib/terminal-usage.mjs): the summary, the vendors with a rule between,
 // each limit in columns that line up, open and closed accounts, and the limits of one model.
@@ -236,8 +237,8 @@ test('Usage: the time left is counted from the two times, across midnight and ac
   assert.equal(timeLeft(seconds(23, 23, 49), late), '6d 23h');
   assert.equal(timeLeft(seconds(16, 23, 59), late), '9m');
   assert.equal(timeLeft(seconds(17, 0, 50), late), '1h 0m');
-  // Under a minute, and a reset that has passed and is not read again yet.
-  assert.equal(timeLeft(seconds(16, 23, 50, 30), late), '<1m'); assert.equal(timeLeft(seconds(16, 23, 49), late), '<1m');
+  // Under a minute; and none once the limit has started again.
+  assert.equal(timeLeft(seconds(16, 23, 50, 30), late), '<1m'); assert.equal(timeLeft(seconds(16, 23, 49), late), ''); assert.equal(timeLeft(seconds(16, 23, 50), late), '');
   assert.equal(timeLeft(null, late), '');
   // On its line a limit that resets after midnight says how long, and its details say the day.
   const usage = { observedAt: late.toISOString(), fiveHour: { usedPercent: 30, resetsAt: seconds(17, 0, 10) }, weekly: { usedPercent: 10, resetsAt: seconds(18, 17, 50) } };
@@ -246,8 +247,10 @@ test('Usage: the time left is counted from the two times, across midnight and ac
   assert.deepEqual(usageDetailLines(codex, late).slice(0, 5), ['owner@example.invalid · Pro', 'Reported 23:50', '', '5h ██░░░░░░   30%  resets Nov 17 00:10', 'wk █░░░░░░░   10%  resets Nov 18 17:50']);
 });
 
-test('Claude: a limit of one model\'s own week is read from the event that names it, kept beside the account\'s windows, and gone once it has reset', t => {
-  const folder = temp(t); environment(t, { XDG_CONFIG_HOME: folder });
+test('Claude: a limit of one model\'s own week is read from the event that names it, kept with the account beside its windows, and gone once it has reset', t => {
+  const folder = temp(t), config = path.join(folder, 'claude'); fs.mkdirSync(config, { recursive: true });
+  environment(t, { XDG_CONFIG_HOME: path.join(folder, 'personal'), HOME: path.join(folder, 'home'), CLAUDE_CONFIG_DIR: config });
+  fs.writeFileSync(path.join(config, '.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'owner@example.invalid', planDisplayName: 'Max 20x' } }));
   const now = Date.now(), soon = Math.floor(now / 1000) + 3600, later = soon + 86400;
   const event = info => JSON.stringify({ type: 'rate_limit_event', rate_limit_info: info });
   // Refused for Fable's own week, as Claude Code says it: no share, the reset, and the windows of the account, which have room.
@@ -258,24 +261,24 @@ test('Claude: a limit of one model\'s own week is read from the event that names
   // A refusal for a window of the account marks that window reached; nothing else is a model.
   assert.deepEqual(claudeUsage(event({ status: 'rejected', resetsAt: soon, rateLimitType: 'five_hour', unifiedWindows: { five_hour: { utilization: 1, resetsAt: soon } } })), { fiveHour: { usedPercent: 100, resetsAt: soon, reached: true } });
   for (const type of ['overage', 'seven_day_', 'seven_day_Opus!', 'seven_day_../x']) assert.equal(claudeUsage(event({ status: 'rejected', resetsAt: later, rateLimitType: type })), null, type);
-  // A session's log: the reading is kept with the model's week, and a later reading that does
-  // not name the model keeps it until it resets.
-  const log = path.join(folder, 'session.log');
+  // A session's log on the owner's own sign-in: the reading is kept with the account that
+  // sign-in names, the model's week with it, and a later reading that does not name the model
+  // keeps it until it resets.
+  const log = path.join(folder, 'session.log'), fable = [{ id: 'fable', weekly: { usedPercent: 99, resetsAt: later } }];
+  const own = at => usageTab({ vendors: [{ vendor: 'claude', available: true, signedIn: true }], now: at })[0].accounts[0].usage;
   fs.writeFileSync(log, `${event({ status: 'allowed_warning', resetsAt: later, rateLimitType: 'seven_day_fable', utilization: 0.99 })}\n${event({ unifiedWindows: { five_hour: { utilization: 0.08, resetsAt: soon }, seven_day: { utilization: 0.41, resetsAt: later } } })}\n`); observeClaudeLog(log)();
-  assert.deepEqual(usageSnapshot(now).claude.models, [{ id: 'fable', weekly: { usedPercent: 99, resetsAt: later } }]);
+  assert.deepEqual([own(now).weekly.usedPercent, own(now).models], [41, fable]);
   keepClaudeUsage('default', { observedAt: new Date(now).toISOString(), fiveHour: { usedPercent: 9, resetsAt: soon }, weekly: { usedPercent: 42, resetsAt: later } });
-  assert.deepEqual([usageSnapshot(now).claude.weekly.usedPercent, usageSnapshot(now).claude.models], [42, [{ id: 'fable', weekly: { usedPercent: 99, resetsAt: later } }]]);
-  assert.deepEqual([usageSnapshot((later + 1) * 1000).claude.weekly, usageSnapshot((later + 1) * 1000).claude.models], [null, undefined], 'every window has reset');
-  // Nothing but the numbers is kept, and the file is the owner's alone.
+  assert.deepEqual([own(now).weekly.usedPercent, own(now).models], [42, fable]);
+  assert.equal(own((later + 1) * 1000), null, 'every window has reset');
+  // usage.json has the two windows, numbers and times only; the model's name is with the
+  // account, in accounts.json. Both files are the owner's alone.
   const file = path.join(personalDirectory(), 'usage.json');
-  assert.deepEqual(Object.keys(JSON.parse(fs.readFileSync(file, 'utf8')).claude).sort(), ['fiveHour', 'models', 'observedAt', 'weekly']); assert.equal(fs.statSync(file).mode & 0o777, 0o600);
-  // The account's own record keeps it too, as an ELU before this reads it: the two windows as they were.
-  recordAccount('claude', 'owner@example.invalid', 'Max 20x', usageSnapshot(now).claude, now);
+  assert.deepEqual(Object.keys(JSON.parse(fs.readFileSync(file, 'utf8')).claude).sort(), ['fiveHour', 'observedAt', 'weekly']); assert.equal(usageSnapshot(now).claude.models, undefined);
+  for (const name of ['usage.json', 'accounts.json']) assert.equal(fs.statSync(path.join(personalDirectory(), name)).mode & 0o777, 0o600, name);
   const [row] = readAccounts();
-  assert.deepEqual([row.usage.fiveHour, row.usage.weekly, row.usage.models], [{ usedPercent: 9, resetsAt: soon }, { usedPercent: 42, resetsAt: later }, [{ id: 'fable', weekly: { usedPercent: 99, resetsAt: later } }]]);
-  // A reading that names no model keeps the one recorded while it runs, and a record with a junk model keeps none.
-  recordAccount('claude', 'owner@example.invalid', 'Max 20x', { observedAt: new Date(now).toISOString(), fiveHour: null, weekly: { usedPercent: 43, resetsAt: later } }, now);
-  assert.deepEqual([readAccounts()[0].usage.weekly.usedPercent, readAccounts()[0].usage.models.map(model => model.id)], [43, ['fable']]);
+  assert.deepEqual([row.account, row.usage.fiveHour, row.usage.weekly, row.usage.models], ['owner@example.invalid', { usedPercent: 9, resetsAt: soon }, { usedPercent: 42, resetsAt: later }, fable]);
+  // A record with a junk model keeps none.
   fs.writeFileSync(path.join(personalDirectory(), 'accounts.json'), JSON.stringify({ version: 1, rows: [{ vendor: 'claude', account: 'owner@example.invalid', lastSeen: new Date(now).toISOString(), usage: { weekly: { usedPercent: 43, resetsAt: later }, models: [{ id: '../x', weekly: { usedPercent: 1, resetsAt: later } }, { id: 'opus', token: 'never', weekly: { usedPercent: 'many' } }, 'junk'] } }] }));
   assert.deepEqual(readAccounts()[0].usage, { fiveHour: null, weekly: { usedPercent: 43, resetsAt: later }, observedAt: null });
 });
@@ -299,9 +302,155 @@ test('Codex: every other limit its answer lists by id is kept under the name Cod
   const usage = { observedAt, ...codexUsage(answer) }, now = new Date(resetsAt * 1000 - 7200000);
   const codex = { vendor: 'codex', installed: true, signedIn: true, accounts: [{ login: 'default', account: 'owner@example.invalid', plan: 'Pro', active: true, usage }], active: { account: 'owner@example.invalid', plan: 'Pro' }, usage, keysHint: KEYS };
   assert.deepEqual(usageBlocks([codex], { now, width: 136 }).filter(row => row.login).slice(1).map(row => row.text.trim().replace(/ +/g, ' ')), ['5h ████░░░░░░░░░░░░░░░░ 18% 2h 0m', 'wk ████████████░░░░░░░░ 62% 1d 2h', 'Small-Model 5h █░░░░░░░░░░░░░░░░░░░ 4% 2h 0m', 'Small-Model wk ██████████░░░░░░░░░░ 51% 1d 2h', 'Unnamed █░░░░░░░░░░░░░░░░░░░ 7% 1d 2h']);
-  // At 80 columns a long name of a model is cut in its middle, its window kept.
-  assert.match(usageBlocks([codex], { now, width: 76 }).map(row => row.text).join('\n'), /^ +Sma…del 5h █░░░░░ {3}4% {4}2h 0m\n +Sma…del wk ███░░░ {2}51% {4}1d 2h$/m);
+  // At 80 columns too the model's name is whole on its own line, which has the room, and its bar stands under the others.
+  const narrow = usageBlocks([codex], { now, width: 76 }).map(row => row.text);
+  assert.deepEqual(narrow.slice(3, 8).map(text => text.trim()), ['5h █░░░░░  18%    2h 0m', 'wk ████░░  62%    1d 2h', 'Small-Model 5h █░░░░░   4%    2h 0m', 'Small-Model wk ███░░░  51%    1d 2h', 'Unnamed █░░░░░   7%    1d 2h']);
+  assert.equal(new Set(narrow.slice(3, 8).map(text => text.search(/[█░]/))).size, 1, 'one column of bars');
   assert.deepEqual(usageDetailLines(codex, now).slice(3), ['5h             █░░░░░░░   18%  resets ' + usageDetailLines(codex, now)[3].split('resets ')[1], 'wk             █████░░░   62%  resets ' + usageDetailLines(codex, now)[4].split('resets ')[1], 'Small-Model 5h █░░░░░░░    4%  resets ' + usageDetailLines(codex, now)[5].split('resets ')[1], 'Small-Model wk ████░░░░   51%  resets ' + usageDetailLines(codex, now)[6].split('resets ')[1], 'Unnamed        █░░░░░░░    7%  resets ' + usageDetailLines(codex, now)[7].split('resets ')[1]]);
+});
+
+test('Usage: a model\'s name is whole wherever its line has the room: on its own line as far left as it needs, and on an account\'s one line while the account keeps 12 columns', () => {
+  const long = 'GPT-6.1-Sol-Codex-Spark', resetsAt = at(2), week = at(26);
+  const usage = tightWeek => ({ observedAt, fiveHour: { usedPercent: 18, resetsAt }, weekly: { usedPercent: 62, resetsAt: week }, models: [{ id: 'spark', name: long, fiveHour: { usedPercent: 4, resetsAt }, weekly: { usedPercent: tightWeek, resetsAt: week } }] });
+  const codex = (active, tightWeek = 51) => ({ vendor: 'codex', installed: true, signedIn: true, keysHint: KEYS, others: [], accounts: [
+    { login: 'default', account: 'owner@example.invalid', plan: 'Pro', active, usage: usage(tightWeek) },
+    { login: 'b', account: 'b@example.invalid', plan: 'Plus', active: !active, usage: { observedAt, fiveHour: null, weekly: { usedPercent: 5, resetsAt: week } } }] });
+  // Open, at 140 and at 80 columns: the whole name, and every bar in one column.
+  for (const [width, size] of [[136, 20], [76, 6]]) {
+    const lines = texts([codex(true)], { width }).slice(3, 7);
+    assert.deepEqual(lines.map(text => text.trim().replace(/ [█░]+ +/, ' | ')), ['5h | 18%    2h 0m', 'wk | 62%    1d 2h', `${long} 5h | 4%    2h 0m`, `${long} wk | 51%    1d 2h`], `at ${width}`);
+    assert.deepEqual([...new Set(lines.map(text => text.search(/[█░]/)))].length, 1, `one column of bars at ${width}`); assert.ok(lines.every(text => /[█░]{6,}/.exec(text)[0].length === size && text.length <= width));
+  }
+  // Closed to its tightest limit, the model's week: the name is whole and the account's is cut in its middle, the plan kept.
+  assert.equal(texts([codex(false, 80)], { width: 76 })[2], `Codex     ▸ owne…alid · Pro  ${limit(`${long} wk`, bar(5, 6), '80%', '1d 2h')}`);
+  assert.equal(texts([codex(false, 80)], { width: 136 })[2], `Codex     ▸ ${'owner@example.invalid · Pro'.padEnd(34)}  ${limit(`${long} wk`, bar(16, 20), '80%', '1d 2h')}`);
+  // Only a line with no room for it cuts the name, in its middle, with the window after it kept.
+  assert.equal(texts([codex(false, 80)], { width: 60 })[2], `Codex     ▸ owner@…valid  ${limit('GPT-6…park wk', bar(5, 6), '80%', '1d 2h')}`);
+  // A name of 40 characters, the longest kept, under a short account: whole, further left than the account starts.
+  const wide = { ...codex(true), accounts: [{ login: 'default', account: 'o@example.invalid', plan: null, active: true, usage: { observedAt, fiveHour: { usedPercent: 18, resetsAt }, weekly: null, models: [{ id: 'long', name: 'M'.repeat(40), fiveHour: { usedPercent: 4, resetsAt }, weekly: { usedPercent: 51, resetsAt: week } }] } }] };
+  assert.deepEqual(texts([wide], { width: 76 }).slice(2, 6).map(text => text.replace(/ [█░]+ .*$/, '')), ['Codex     ▾ o@example.invalid · active', `${' '.repeat(48)}5h`, `${' '.repeat(7)}${'M'.repeat(40)} 5h`, `${' '.repeat(7)}${'M'.repeat(40)} wk`]);
+});
+
+// Made-up accounts in shapes drawn from a fixed seed, at many widths: what holds whatever they are.
+test('Usage at any width from 21 columns: no line of an account is wider than the pane, each limit shown keeps its whole percent, time left and FULL, and the limits stand in one column', () => {
+  let seed = 20261116; const random = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; }, pick = list => list[Math.floor(random() * list.length)];
+  const word = size => Array.from({ length: size }, () => pick([...'abcdefghijklmnopqrstuvwxyz'])).join('');
+  const win = () => random() < 0.15 ? null : { usedPercent: pick([0, 1, 8, 49, 50, 74, 75, 97, 97.5, 98, 100]), resetsAt: at(pick([0, 1, 4, 24, 42, 167]), pick([1, 30, 59])), ...(random() < 0.1 ? { reached: true } : {}) };
+  const models = () => Array.from({ length: pick([0, 0, 1, 2, 3]) }, (_, place) => ({ id: `m${place}`, name: pick(['Fable', 'Small-Model', 'GPT-6.1-Sol-Codex-Spark', 'M'.repeat(40)]), ...(random() < 0.6 ? { fiveHour: win() ?? undefined } : {}), weekly: win() ?? { usedPercent: 5, resetsAt: at(100) } }));
+  const account = (login, active) => ({ login, account: `${word(3 + Math.floor(random() * 26))}@${word(3 + Math.floor(random() * 20))}.example.invalid`, plan: pick([null, 'Pro', 'Max 20x']), active, usage: random() < 0.15 ? null : { observedAt, fiveHour: win(), weekly: win(), models: models() } });
+  for (let round = 0; round < 200; round++) {
+    const many = 1 + Math.floor(random() * 8), accounts = Array.from({ length: many }, (_, place) => account(place ? `a${place}` : 'default', place === 0));
+    const rows = [{ vendor: 'claude', installed: true, signedIn: true, accounts, others: [], keysHint: KEYS, ...(many > 1 ? { switches: { auto: true, extraUsage: false } } : {}) }, { vendor: 'codex', installed: true, signedIn: true, accounts: [account('default', true)], others: [], keysHint: KEYS }];
+    for (const width of [21, 26, 40, 60, 76, 96, 136, 200, ...Array.from({ length: 3 }, () => 21 + Math.floor(random() * 180))]) {
+      const drawn = usageBlocks(rows, { now: NOW, width }), say = () => `at ${width}:\n${drawn.map(row => row.text).join('\n')}`;
+      for (const row of drawn.filter(row => row.login && row.parts)) { assert.ok(row.text.length <= width, say()); assert.equal(row.parts.map(part => part.text).join(''), row.text); }
+      for (const vendor of rows) for (const item of vendor.accounts) {
+        const lines = drawn.filter(row => row.vendor === vendor.vendor && row.login === item.login), limits = accountLimits(item, NOW);
+        if (!limits.length) continue;
+        for (const limit of (lines[0].flips ? lines[0].open : limits.length > 1) ? limits : [tightest(limits)]) {
+          const percent = limit.usedPercent == null ? '—' : `${Math.round(limit.usedPercent)}%`;
+          assert.ok(lines.some(row => { const from = row.text.lastIndexOf(percent); return from >= 0 && row.text.includes(timeLeft(limit.resetsAt, NOW), from) && (usageLevel(limit) !== 'full' || row.text.includes('FULL')); }), `${limit.label} ${percent} ${say()}`);
+        }
+      }
+      // Where the limits stand in columns, with the two words over them: every bar starts in one column and every line of a limit ends in one.
+      if (!drawn.some(row => row.summary && /used +left$/.test(row.text))) continue;
+      const bars = drawn.filter(row => row.login && /[█░]/.test(row.text));
+      assert.ok(new Set(bars.map(row => row.text.search(/[█░]/))).size <= 1 && new Set(bars.map(row => row.text.length)).size <= 1, say());
+    }
+  }
+});
+
+test('Usage: a limit that has started again is not drawn, whenever the tab last read it: its account is no longer FULL', () => {
+  const usage = { observedAt, fiveHour: null, weekly: { usedPercent: 100, resetsAt: at(0, 1) } };
+  const codex = { vendor: 'codex', installed: true, signedIn: true, keysHint: KEYS, others: [], accounts: [{ login: 'default', account: 'owner@example.invalid', plan: 'Pro', active: true, usage }], active: { account: 'owner@example.invalid', plan: 'Pro' }, usage };
+  const lines = now => usageBlocks([codex], { now }).map(row => row.text);
+  assert.match(lines(NOW)[0], /^1 account · 1 FULL/); assert.match(lines(NOW)[2], /wk █+FULL█+ 100% {7}1m$/);
+  assert.match(lines(new Date(NOW.getTime() + 30000))[2], /wk █+FULL█+ 100% {6}<1m$/);
+  // Three seconds after its reset: nothing of it, and the account is one ELU has no reading for.
+  const after = lines(new Date(NOW.getTime() + 63000));
+  assert.match(after[0], /^1 account · 1 no reading$/); assert.equal(after[2], 'Codex       owner@example.invalid · Pro · active  usage not reported'); assert.doesNotMatch(after.join('\n'), /FULL|100%|<1m/);
+  assert.deepEqual(accountLimits({ usage }, new Date(NOW.getTime() + 63000)), []);
+  assert.match(usageDetailLines(codex, new Date(NOW.getTime() + 63000)).join('\n'), /Usage not reported\./);
+});
+
+test('Claude: a model\'s limit is kept with the account it was read for, so the account the owner signs in next in the same folder never shows it', t => {
+  const folder = temp(t), config = path.join(folder, 'claude'); fs.mkdirSync(config, { recursive: true });
+  environment(t, { XDG_CONFIG_HOME: path.join(folder, 'personal'), HOME: path.join(folder, 'home'), CLAUDE_CONFIG_DIR: config });
+  const signIn = (email, plan) => fs.writeFileSync(path.join(config, '.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: email, planDisplayName: plan } }));
+  const soon = Math.floor(Date.now() / 1000) + 3600, fable = { id: 'fable', weekly: { usedPercent: 99, resetsAt: soon + 5 * 86400 } };
+  const reading = (five, week, models) => ({ observedAt: new Date().toISOString(), fiveHour: { usedPercent: five, resetsAt: soon }, weekly: { usedPercent: week, resetsAt: soon + 86400 }, ...(models ? { models } : {}) });
+  const tab = () => usageTab({ vendors: [{ vendor: 'claude', available: true, signedIn: true }], now: Date.now() }), own = () => tab()[0].accounts.find(item => item.login === 'default');
+  const lines = () => usageBlocks(tab(), { width: 76 }).filter(row => row.summary || row.login).map(row => row.text.replace(/ {2,}/g, '  ').trim());
+  // A session on first@: its two windows, and Fable's own week at 99%, five days to run.
+  signIn('first@example.invalid', 'Max 20x'); keepClaudeUsage('default', reading(8, 3, [fable]));
+  assert.deepEqual([own().account, own().usage.fiveHour.usedPercent, own().usage.models], ['first@example.invalid', 8, [fable]]);
+  // Its next reading names no model: Fable's week is still running, and stays.
+  keepClaudeUsage('default', reading(9, 4));
+  assert.deepEqual([own().usage.fiveHour.usedPercent, own().usage.models], [9, [fable]]); assert.match(lines().join('\n'), /^1 account · 1 FULL/);
+  // The owner signs Claude Code in as another account (claude /login). Fable's week was first@'s.
+  signIn('other@example.invalid', 'Pro');
+  assert.deepEqual([own().account, own().usage?.models ?? []], ['other@example.invalid', []]);
+  // Its first session reports its two windows: that is all it shows.
+  keepClaudeUsage('default', reading(1, 2));
+  assert.deepEqual([own().account, own().usage.fiveHour.usedPercent, own().usage.weekly.usedPercent, own().usage.models ?? []], ['other@example.invalid', 1, 2, []]);
+  assert.deepEqual(lines().map(text => text.replace(/  (?:\d+[dhm] ?)+$/, '')), ['1 account · 1 free  used  left', 'Claude  ▾ other@example.invalid · Pro · active', '5h █░░░░░░░░  1%', 'wk █░░░░░░░░  2%']);
+  // usage.json, which has no account's name, has no model's limit of Claude's either.
+  const kept = JSON.parse(fs.readFileSync(path.join(personalDirectory(), 'usage.json'), 'utf8')).claude;
+  assert.deepEqual(Object.keys(kept).sort(), ['fiveHour', 'observedAt', 'weekly']); assert.equal(usageSnapshot().claude.models, undefined);
+  // Signed in as first@ again: its Fable week, still running, is its own.
+  signIn('first@example.invalid', 'Max 20x'); keepClaudeUsage('default', reading(10, 5));
+  assert.deepEqual([own().account, own().usage.fiveHour.usedPercent, own().usage.models], ['first@example.invalid', 10, [fable]]);
+});
+
+// The files 0.1.35 left. It kept a model's limit of the owner's own sign-in in usage.json, and
+// its tab's check copied that reading to the account the sign-in named then; an added account's
+// was with the account from the start.
+test('Claude after an update from 0.1.35: a model\'s limit kept with an account shows on that account; one kept only in usage.json, which names no account, shows on none and comes back when Claude names it again', t => {
+  const folder = temp(t), config = path.join(folder, 'claude'); fs.mkdirSync(config, { recursive: true });
+  environment(t, { XDG_CONFIG_HOME: path.join(folder, 'personal'), HOME: path.join(folder, 'home'), CLAUDE_CONFIG_DIR: config });
+  const account = (dir, email, plan) => fs.writeFileSync(path.join(dir, '.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: email, planDisplayName: plan } }));
+  const soon = Math.floor(Date.now() / 1000) + 3600, seen = new Date().toISOString(), fable = share => ({ id: 'fable', weekly: { usedPercent: share, resetsAt: soon + 5 * 86400 } });
+  const reading = (five, week, models) => ({ observedAt: seen, fiveHour: { usedPercent: five, resetsAt: soon }, weekly: { usedPercent: week, resetsAt: soon + 86400 }, ...(models ? { models } : {}) });
+  const file = name => path.join(personalDirectory(), name), claudeKept = () => JSON.parse(fs.readFileSync(file('usage.json'), 'utf8')).claude;
+  // left(own, rows): usage.json and accounts.json as 0.1.35 wrote them.
+  const left = (own, rows) => { fs.writeFileSync(file('usage.json'), JSON.stringify({ version: 1, claude: own, codex: null, codexCheckedAt: null, checkedAt: seen, signIns: {} })); fs.writeFileSync(file('accounts.json'), JSON.stringify({ version: 1, rows: rows.map(([email, plan, usage]) => ({ vendor: 'claude', account: email, plan, firstSeen: seen, lastSeen: seen, usage })) })); };
+  const shown = email => { const item = usageTab({ vendors: [{ vendor: 'claude', available: true, signedIn: true }], now: Date.now() })[0].accounts.find(row => row.account === email); return [item.usage?.fiveHour?.usedPercent ?? null, item.usage?.models ?? []]; };
+  account(config, 'owner@example.invalid', 'Max 20x'); fs.mkdirSync(personalDirectory(), { recursive: true });
+  const slot = newLogin('claude'); account(slot.dir, 'second@example.invalid', 'Pro'); finishLogin('claude', slot.id);
+  // Its tab checked after the reading: Fable's week is with the owner's account too, and shows. So does an added account's.
+  left(reading(8, 41, [fable(60)]), [['owner@example.invalid', 'Max 20x', reading(8, 41, [fable(60)])], ['second@example.invalid', 'Pro', reading(12, 80, [fable(99)])]]);
+  assert.deepEqual([shown('owner@example.invalid'), shown('second@example.invalid')], [[8, [fable(60)]], [12, [fable(99)]]]);
+  // Its tab did not check after the reading: Fable's week is in usage.json only, and shows on no account.
+  left(reading(8, 41, [fable(99)]), [['second@example.invalid', 'Pro', reading(12, 80)]]);
+  assert.deepEqual([shown('owner@example.invalid'), shown('second@example.invalid')], [[8, []], [12, []]]);
+  // The same two files are left when Claude Code was signed in as another account after that
+  // reading: whose limit it was cannot be told, and it must not show on that account.
+  account(config, 'other@example.invalid', 'Pro');
+  assert.deepEqual(shown('other@example.invalid'), [8, []]);
+  // The next reading, with the two windows only, takes it out of usage.json; the answer that names Fable's week brings it back, with its account.
+  account(config, 'owner@example.invalid', 'Max 20x'); keepClaudeUsage('default', reading(9, 42));
+  assert.deepEqual(Object.keys(claudeKept()).sort(), ['fiveHour', 'observedAt', 'weekly']); assert.deepEqual(shown('owner@example.invalid'), [9, []]);
+  keepClaudeUsage('default', reading(10, 43, [fable(99)]));
+  assert.deepEqual(shown('owner@example.invalid'), [10, [fable(99)]]); assert.equal(claudeKept().models, undefined);
+  account(config, 'other@example.invalid', 'Pro'); assert.deepEqual(shown('other@example.invalid')[1], []);
+});
+
+test('Claude: a reading that names only a model\'s limit leaves the account\'s two windows as they were kept', t => {
+  const folder = temp(t), config = path.join(folder, 'claude'); fs.mkdirSync(config, { recursive: true });
+  environment(t, { XDG_CONFIG_HOME: path.join(folder, 'personal'), HOME: path.join(folder, 'home'), CLAUDE_CONFIG_DIR: config });
+  fs.writeFileSync(path.join(config, '.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'owner@example.invalid', planDisplayName: 'Max 20x' } }));
+  const now = Date.now(), soon = Math.floor(now / 1000) + 3600, later = soon + 86400, observed = new Date(now).toISOString();
+  const own = () => usageTab({ vendors: [{ vendor: 'claude', available: true, signedIn: true }], now })[0].accounts[0].usage;
+  keepClaudeUsage('default', { observedAt: observed, fiveHour: { usedPercent: 8, resetsAt: soon }, weekly: { usedPercent: 41, resetsAt: later } });
+  // A short run whose only word on limits is a warning for Opus's own week.
+  const log = path.join(folder, 'session.log'); fs.writeFileSync(log, `${JSON.stringify({ type: 'rate_limit_event', rate_limit_info: { status: 'allowed_warning', resetsAt: later, rateLimitType: 'seven_day_opus', utilization: 0.8 } })}\n`); observeClaudeLog(log)();
+  assert.deepEqual([own().fiveHour, own().weekly, own().models], [{ usedPercent: 8, resetsAt: soon }, { usedPercent: 41, resetsAt: later }, [{ id: 'opus', weekly: { usedPercent: 80, resetsAt: later } }]]);
+  assert.deepEqual([usageSnapshot(now).claude.fiveHour, usageSnapshot(now).claude.weekly], [{ usedPercent: 8, resetsAt: soon }, { usedPercent: 41, resetsAt: later }]);
+  // The same for an account's own record.
+  recordAccount('claude', 'second@example.invalid', 'Pro', { observedAt: observed, fiveHour: { usedPercent: 5, resetsAt: soon }, weekly: { usedPercent: 6, resetsAt: later } }, now);
+  recordAccount('claude', 'second@example.invalid', 'Pro', { observedAt: observed, models: [{ id: 'fable', weekly: { usedPercent: 70, resetsAt: later } }] }, now);
+  const second = readAccounts().find(row => row.account === 'second@example.invalid').usage;
+  assert.deepEqual([second.fiveHour, second.weekly, second.models.map(model => model.id)], [{ usedPercent: 5, resetsAt: soon }, { usedPercent: 6, resetsAt: later }, ['fable']]);
 });
 
 test('Usage: a limit ELU holds a Claude account at is FULL on its line until it resets: one model\'s week while the account\'s own week has room, or a window', t => {

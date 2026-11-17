@@ -604,7 +604,8 @@ tab opens and has not read that `agy` yet, when the tab's check is due, and on `
 
 What is saved, in `~/.config/elu-code`, is usage reduced to numbers and times, with the
 name of the model where a limit is one model's own (`usage.json`), and the email and plan
-name of each account seen, with its last usage (`accounts.json`). The Usage tab takes
+name of each account seen, with its last usage (`accounts.json`). A limit of one Claude
+model is kept only there, with the account it was read for. The Usage tab takes
 the Claude email, plan name and rate limit tier from
 `~/.claude.json`. It decodes the Codex email and plan on your machine from the id token in
 `auth.json` in the Codex home. No token from that file is sent, saved or shown.
