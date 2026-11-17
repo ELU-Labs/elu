@@ -2,7 +2,7 @@
 
 How two ELU installs find each other, what they send, and how a team keeps its list of
 members. This page is also the A2A custom binding document (A2A v1.0.1 §12 requires one for a
-custom binding). The commands a person types are in the [README](../README.md#teammates).
+custom binding). The commands a person types are in [Teammates](teammates.md).
 
 ## What it does
 
@@ -498,7 +498,7 @@ Anything anyone works on in a repository shows on one Kanban for everyone on the
 
 ## Standup
 
-`/standup` (README, "Standup") asks open sessions on other computers too. Only a machine whose
+`/standup` ([Standup](standup.md)) asks open sessions on other computers too. Only a machine whose
 `elu.hello` says `standup: 1` is sent any of this; an older one is listed in the Standup as
 not asked, and shows an asked session's rows as plain chat.
 

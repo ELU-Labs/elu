@@ -24,7 +24,7 @@ import { kanbanTool, standupSession } from '../lib/standup-kanban.mjs';
 import { serve, TOOL_NAME } from '../lib/approval-server.mjs';
 import { answerApproval, pendingApprovals } from '../lib/approvals.mjs';
 
-// /standup (README, "Standup"): who is asked, the read-only answer turn, a round, its summary,
+// /standup (docs/standup.md): who is asked, the read-only answer turn, a round, its summary,
 // @everyone, the Standup's Kanban tools, and what reaches another computer.
 
 function environment(t, values) {

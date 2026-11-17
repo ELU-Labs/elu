@@ -8,7 +8,7 @@ import { projectFolder } from '../lib/workspace.mjs';
 import { plainOutput, fitOutput, runShell, recordShell, shellRows, shellText, shellMessages, shellForModel, OUTPUT_MAX } from '../lib/shell.mjs';
 import { saveBot } from '../lib/bots.mjs';
 
-// Commands the owner runs from the message box with ! (README, "Commands").
+// Commands the owner runs from the message box with ! (docs/commands.md).
 const row = (extra = {}) => ({ at: new Date().toISOString(), command: 'git status --short', cwd: '/work/app', output: ' M src/coupon.mjs', code: 0, signal: null, stopped: null, error: null, ...extra });
 function environment(t, values) {
   const previous = Object.fromEntries(Object.keys(values).map(key => [key, process.env[key]])); Object.assign(process.env, values);

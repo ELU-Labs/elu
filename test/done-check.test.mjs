@@ -22,7 +22,7 @@ import { runOwnCommand } from '../lib/session-commands.mjs';
 import { personalDirectory } from '../lib/util.mjs';
 import { peerFile } from '../lib/peer/paths.mjs';
 
-// Nothing goes to Done by itself (README, "Kanban"): a session that ended waits under Needs you
+// Nothing goes to Done by itself (docs/sessions.md, "The tabs"): a session that ended waits under Needs you
 // until the owner checks its goal and objectives, then moves it to Done, keeps it open with a new
 // goal, or copies it with one. Only he does: never a turn, a schedule or elu sessions.
 after(() => { setTimeout(() => { console.error('done-check.test: something is still running 10 s after the last test.'); process.exit(1); }, 10000).unref(); });

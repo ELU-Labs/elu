@@ -14,7 +14,7 @@ import { STOPPED_LINE } from '../lib/elu-sent.mjs';
 import { keepGoingFile, lookKeepGoing } from '../lib/keep-going.mjs';
 import { registeredProjects } from '../lib/projects.mjs';
 
-// A session's long jobs and ELU's keep-going stop (README, "Long jobs"), as another computer
+// A session's long jobs and ELU's keep-going stop (docs/jobs.md), as another computer
 // on its project shows them: its Sessions row is at work while jobs run there and waits when
 // ELU stopped starting it, its chat has the jobs line, and its Task lists each job, to read.
 // What that computer may stop follows the project's /access there, whoever owns it.
@@ -137,7 +137,7 @@ test('a computer on an earlier ELU sends no jobs and its rows are as before; wha
 });
 
 // /stop over a session on another computer stops that session there where its project is Auto
-// (README, "/stop"): with no turn running and its long jobs running, it ends them there, as
+// (docs/commands.md, "/stop"): with no turn running and its long jobs running, it ends them there, as
 // /stop there does.
 test('/stop from another computer of an Auto project over a session whose long jobs run there ends them there, and both computers say so', { timeout: 120000 }, async t => {
   const p = pair(t), root = p.project.root;

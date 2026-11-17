@@ -16,7 +16,7 @@ import { STANDUP_QUESTION, foldStandup, newRound, sideAnswer, standupHas, standu
 import { cleanRecord, listedRecord, localRecord, recordLines, sessionRecord, span } from '../lib/standup-record.mjs';
 import { headLine, runStandupRound } from '../lib/standup-round.mjs';
 
-// /standup answers within seconds (README, "Standup"): one block for every session at once,
+// /standup answers within seconds (docs/standup.md): one block for every session at once,
 // from what ELU has on record and with no model run; each model update added to its block
 // when it arrives; a session in the middle of a turn answers beside that turn, with every
 // slot taken, here and on another computer; the first line says what is in and what is
