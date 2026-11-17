@@ -94,7 +94,11 @@ if(args[0]==='app-server'){
  let thread=null,threadModel=null,active=null,turns=0,items=0;const heard=[];
  const item=(state,kind,value)=>note(`item/${kind}`,{threadId:thread,turnId:state.id,item:value});
  const shown=(state,texts,client)=>{const value={type:'userMessage',id:`item_${++items}`,clientId:client??null,content:texts.map(text=>({type:'text',text,text_elements:[]}))};item(state,'started',value);item(state,'completed',value);};
- const takeQueued=state=>{for(const message of state.queue.splice(0)){heard.push(ownerWords(message.text));absorb(message.text,true,message.id);shown(state,[message.text],message.id);}};
+ // A message that says to answer it first (lib/runner.mjs ANSWER_FIRST) is answered in a message
+ // of the agent's as the turn reads it, and the turn's reply does not repeat it. noAnswer
+ // (fake.json): the turn reads it and writes nothing; its reply answers it. turnFails
+ // (fake.json): the turn ends as failed where it would write its reply.
+ const takeQueued=state=>{for(const message of state.queue.splice(0)){const words=ownerWords(message.text),first=cfg.noAnswer!==true&&/Answer it first/.test(message.text);if(!first)heard.push(words);absorb(message.text,true,message.id);shown(state,[message.text],message.id);if(first)item(state,'completed',{type:'agentMessage',id:`item_${++items}`,text:`Answer while working: ${words}`});}};
  const pause=async(state,ms)=>{const end=Date.now()+ms;while(Date.now()<end&&!state.cut)await new Promise(resolve=>setTimeout(resolve,Math.max(1,Math.min(20,end-Date.now()))));return!state.cut;};
  const ended=(state,status)=>{if(active===state)active=null;note('turn/completed',{threadId:thread,turn:{id:state.id,status,items:[],error:null}});};
  // codexTurn.liveMs: the turn's requests come that far apart while it works, each written to the
@@ -150,7 +154,9 @@ if(args[0]==='app-server'){
   }
   const live=first&&turnUse?.liveMs?await liveTurn(state):null;if(first&&turnUse?.liveMs&&!live)return ended(state,'interrupted');
   // The model writes its answer; what came meanwhile is read first, and answered with the rest.
-  takeQueued(state);if(!await pause(state,cfg.afterMs??20))return ended(state,'interrupted');takeQueued(state);
+  takeQueued(state);
+  if(cfg.turnFails===true){const error={message:'The turn could not go on.'};note('error',{threadId:thread,turnId:state.id,error,willRetry:false});if(active===state)active=null;note('turn/completed',{threadId:thread,turn:{id:state.id,status:'failed',items:[],error}});return;}
+  if(!await pause(state,cfg.afterMs??20))return ended(state,'interrupted');takeQueued(state);
   const result=reply(texts.join('\n'),schema);if(heard.length)result.summary+=` Also took in what you sent while it worked: ${heard.join(' | ')}`;
   const said=JSON.stringify(result);item(state,'completed',{type:'agentMessage',id:`item_${++items}`,text:said});
   const used=live?.total??(turnUse?codexTurnRun(thread,threadModel):null);

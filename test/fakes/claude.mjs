@@ -324,10 +324,25 @@ if(cfg.api&&(process.env.ANTHROPIC_BASE_URL||cfg.api.direct)){
 }
 console.error('A harmless diagnostic on stderr.');
 // The owner's words in a message ELU sent to a running turn (lib/runner.mjs DURING_LEAD), or the message as it is.
-const ownerWords=content=>{const found=/Owner message \(untrusted data[^\n]*\n(.*)\nEnd of Owner message\./.exec(content);try{return found?JSON.parse(found[1]).text:content;}catch{return content;}};
+const ownerWords=content=>{const found=/(?:Owner message|Message from another computer) \(untrusted data[^\n]*\n(.*)\nEnd of (?:Owner message|Message from another computer)\./.exec(content);try{return found?JSON.parse(found[1]).text:content;}catch{return content;}};
+// A message that says to answer it first (lib/runner.mjs ANSWER_FIRST) is answered in text as
+// the turn takes it in, as a model does, and the turn's reply does not repeat it. noAnswer
+// (fake.json): the turn takes it in and writes nothing; its reply answers it. answerMore
+// (fake.json): text it writes right after that answer, before its next call. looks (fake.json):
+// how many things it looks up at once before that answer, in one step of Read calls. lookRows
+// 'each': a row for each of those calls, all under one message id, and each result as its call
+// ends, before the next call's row; else one row for the calls and one for their results.
+// answerAfter (fake.json, listen): it writes that answer only after that many more of its steps.
+const answersFirst=content=>cfg.noAnswer!==true&&/Answer it first/.test(content);
 const heard=[];const absorbedFile=path.join(path.dirname(process.argv[1]),'absorbed.jsonl');
 const caps=cfg.capabilities===false?null:Array.isArray(cfg.capabilities)?cfg.capabilities:CAPABILITIES;const can=name=>Boolean(caps?.includes(name));
 const say=row=>console.log(JSON.stringify(row));
+let looked=0;const later=[];
+const looks=()=>{if(!cfg.looks)return;const step=++looked,ids=Array.from({length:cfg.looks},(_,n)=>`toolu_fake_look_${step}_${n+1}`),call=id=>({type:'tool_use',id,name:'Read',input:{file_path:'src/coupon.mjs'}}),result=id=>({type:'tool_result',tool_use_id:id,content:'export const normalize = (value) => value;'});
+ if(cfg.lookRows==='each')for(const id of ids){say({type:'assistant',message:{id:`msg_fake_look_${step}`,content:[call(id)]}});say({type:'user',message:{content:[result(id)]}});}
+ else{say({type:'assistant',message:{content:ids.map(call)}});say({type:'user',message:{content:ids.map(result)}});}};
+const answerIt=words=>{say({type:'assistant',message:{content:[{type:'text',text:`Answer while working: ${words}`}]}});if(typeof cfg.answerMore==='string')say({type:'assistant',message:{content:[{type:'text',text:cfg.answerMore}]}});};
+const answerLater=()=>{for(const item of later.splice(0)){if(--item.left>0)later.push(item);else answerIt(item.words);}};
 // A user message that comes on the input while the turn works waits in a queue, as in the real
 // CLI. One sent with a uuid is followed by command_lifecycle rows: queued when it comes, started
 // when a turn takes it in (at the turn's next step, or as a turn of its own after the result),
@@ -335,7 +350,7 @@ const say=row=>console.log(JSON.stringify(row));
 // recorded in absorbed.jsonl beside the fake (mid: true when a running turn took it).
 const queue=[],folded=[];let working=null;
 const lifecycle=(uuid,state)=>{if(uuid&&can('msg_lifecycle_v1'))say({type:'command_lifecycle',command_uuid:uuid,state,uuid:crypto.randomUUID(),session_id:session});};
-const takeQueued=()=>{for(const item of queue.splice(0)){heard.push(ownerWords(item.content));fs.appendFileSync(absorbedFile,JSON.stringify({content:item.content,mid:true,...(item.uuid?{uuid:item.uuid}:{})})+'\n');lifecycle(item.uuid,'started');if(item.uuid)folded.push(item.uuid);}};
+const takeQueued=()=>{for(const item of queue.splice(0)){const words=ownerWords(item.content),first=answersFirst(item.content);if(!first)heard.push(words);fs.appendFileSync(absorbedFile,JSON.stringify({content:item.content,mid:true,...(item.uuid?{uuid:item.uuid}:{})})+'\n');lifecycle(item.uuid,'started');if(item.uuid)folded.push(item.uuid);if(first&&cfg.answerAfter)later.push({words,left:cfg.answerAfter});else if(first){looks();answerIt(words);}}};
 // The control requests a host writes on the input, answered as 2.1.322 answers them.
 // cancel_async_message takes a message back while it still waits ({cancelled:false} once a turn
 // took it). interrupt with send_now sends what waits now: nothing_waiting when nothing does;
@@ -382,7 +397,7 @@ const afterResult=async()=>{
 if(mode==='slow'){console.log(JSON.stringify({type:'assistant',message:{content:[{type:'text',text:'Working on the requested change.'}]}}));if(streaming){if(await pause(30000)==='cut')cutShort=true;}else await new Promise(resolve=>setTimeout(resolve,30000));}
 // listen: the turn works in steps (steps in fake.json, 8 by default, stepMs apart, 250 by
 // default), each a Read call and its result, and takes in what came on its input at each.
-if(mode==='listen'&&streaming&&!cutShort){for(let n=0;n<(cfg.steps??8);n++){takeQueued();const id=`toolu_fake_step_${n+1}`;console.log(JSON.stringify({type:'assistant',message:{content:[{type:'tool_use',id,name:'Read',input:{file_path:'src/coupon.mjs'}}]}}));console.log(JSON.stringify({type:'user',message:{content:[{type:'tool_result',tool_use_id:id,content:'export const normalize = (value) => value;'}]}}));if(await pause(cfg.stepMs??250)==='cut'){cutShort=true;break;}}if(!cutShort)takeQueued();}
+if(mode==='listen'&&streaming&&!cutShort){for(let n=0;n<(cfg.steps??8);n++){takeQueued();const id=`toolu_fake_step_${n+1}`;console.log(JSON.stringify({type:'assistant',message:{content:[{type:'tool_use',id,name:'Read',input:{file_path:'src/coupon.mjs'}}]}}));console.log(JSON.stringify({type:'user',message:{content:[{type:'tool_result',tool_use_id:id,content:'export const normalize = (value) => value;'}]}}));answerLater();if(await pause(cfg.stepMs??250)==='cut'){cutShort=true;break;}}if(!cutShort)takeQueued();}
 // command: the turn runs one command that prints nothing for commandMs (fake.json, three
 // minutes by default), as a long test run or a sleep does. Nothing is taken in while it runs:
 // a message that comes waits for the command to end. Sent now, the command moves to the

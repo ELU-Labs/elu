@@ -117,6 +117,39 @@ test('Claude: a second account signs in beside the first; a switch moves new tur
   assert.doesNotMatch(read(path.join(personalDirectory(), 'logins.json')), /@/);
 });
 
+// The stand-in Claude Code reports a model's own week as the real one does, in the event for
+// one limit. The owner then signs Claude Code in as another account in the same folder
+// (claude /login), and that account's first run reports its two windows only.
+test('Claude: a run reports a model\'s own week and Usage shows it on the account the run was on; the account signed in next in the same folder shows its own limits only', { timeout: 60000 }, async t => {
+  const f = setup(t, 'claude', { usage: { 'first@example.com': { fiveHour: 0.08, weekly: 0.03, models: { fable: 0.99, opus: 1 } }, 'other@example.com': { fiveHour: 0.02, weekly: 0.05 } } });
+  const tab = () => usageTab({ vendors: [{ vendor: 'claude', available: true, signedIn: true }], now: Date.now() }), own = () => tab()[0].accounts.find(row => row.login === 'default');
+  const lines = () => usageBlocks([tab()[0]], { width: 136 }).filter(row => row.summary || row.login).map(row => row.text.replace(/ {2,}/g, '  ').trim().replace(/  \d+d \d+h$|  \d+h \d+m$/, ''));
+  const first = await f.controller.ask('Where is coupon normalization?').finished;
+  assert.equal(first.state, 'answered', JSON.stringify(first.error)); assert.equal(f.runs().at(-1).account, 'first@example.com');
+  assert.deepEqual(own().usage.models.map(model => [model.id, model.weekly.usedPercent, model.weekly.reached === true]), [['fable', 99, false], ['opus', 100, true]]);
+  assert.deepEqual(lines(), ['1 account · 1 FULL  used  left', 'Claude  ▾ first@example.com · Max 20x · active', `5h ${'█'.repeat(2)}${'░'.repeat(18)}  8%`, `wk █${'░'.repeat(19)}  3%`, 'Fable ████████FULL████████  99%', 'Opus ████████FULL████████ 100%']);
+  fs.writeFileSync(path.join(f.normal, '.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'other@example.com', planDisplayName: 'Pro' } }));
+  const second = await f.controller.ask('And the tests?').finished;
+  assert.equal(second.state, 'answered', JSON.stringify(second.error)); assert.equal(f.runs().at(-1).account, 'other@example.com');
+  assert.deepEqual([own().account, own().usage.fiveHour.usedPercent, own().usage.weekly.usedPercent, own().usage.models ?? []], ['other@example.com', 2, 5, []]);
+  assert.deepEqual(lines(), ['1 account · 1 free  used  left', 'Claude  ▾ other@example.com · Pro · active', `5h █${'░'.repeat(19)}  2%`, `wk █${'░'.repeat(19)}  5%`]);
+  // first@ is an account seen before now, with the limit it was last at.
+  assert.match(usageBlocks([tab()[0]], { width: 136 }).map(row => row.text).join('\n'), /^ {12}first@example\.com · Max 20x +last seen [A-Z][a-z]+ \d+ · Opus 100% then$/m);
+});
+
+// The stand-in Codex lists its limits by id, as codex-cli 0.167.0 does: the account's own, and one model's own under its name.
+test('Codex: the check keeps every limit the answer lists for each account, and Usage draws a model\'s own under its name, whole at 80 columns', { timeout: 60000 }, async t => {
+  const f = setup(t, 'codex', { loginAs: 'codex-second@example.com', plan: 'plus', codexUsage: { 'codex-first@example.com': { fiveHour: 10, weekly: 20, models: { codex_small: { name: 'Small-Model', fiveHour: 4, weekly: 51 }, codex_week: { weekly: 99 } } }, 'codex-second@example.com': { fiveHour: 70, weekly: 30 } } });
+  const slot = addAccount(f, 'codex');
+  await refreshUsage({ force: true });
+  const kept = Object.fromEntries(readAccounts().filter(row => row.vendor === 'codex').map(row => [row.account, (row.usage.models ?? []).map(model => [model.id, model.name ?? null, model.fiveHour?.usedPercent ?? null, model.weekly?.usedPercent ?? null])]));
+  assert.deepEqual(kept, { 'codex-first@example.com': [['codex_small', 'Small-Model', 4, 51], ['codex_week', null, null, 99]], 'codex-second@example.com': [] });
+  const [, codex] = usageTab({ vendors: [{ vendor: 'claude', available: false }, { vendor: 'codex', available: true, signedIn: true }] });
+  const text = usageBlocks([codex], { width: 76 }).map(row => row.text.replace(/ +\d+[dhm](?: \d+[hm])?$/, '')).join('\n');
+  assert.match(text, /^2 accounts · 1 free · 1 FULL {2,}used {5}left\n─{76}\nCodex {5}▾ codex-first@example\.com · Pro · active\n +5h █░{5} {2}10%\n +wk █░{5} {2}20%\n +Small-Model 5h █░{5} {3}4%\n +Small-Model wk ███░{3} {2}51%\n +Codex_week █FULL█ {2}99%\n {10}▾ codex-second@example\.com · Plus\n +5h █{4}░░ {2}70%\n +wk ██░{4} {2}30%\n {12}enter on an account uses it · x forgets it · a adds one$/);
+  assert.equal(slot.id, listLogins('codex')[1]);
+});
+
 test('Claude, with switching turned off: a run that hits the account limit names that account, the limit it hit and when it resets, and says to switch in Usage; nothing switches by itself', { timeout: 60000 }, async t => {
   const f = setup(t, 'claude', { loginAs: 'second@example.com', limited: ['second@example.com'] });
   setAuto(false);

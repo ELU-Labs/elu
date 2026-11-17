@@ -25,7 +25,8 @@ import { clockTime } from '../lib/terminal-plan.mjs';
 import { columns } from '../lib/width.mjs';
 import { saveTask, readTask, taskDir, taskTitle, setTitle, lock, tasks } from '../lib/state.mjs';
 import { closeWindow, eluWindow, processIdentity, processRecord } from '../lib/process.mjs';
-import { activeLogin, listLogins } from '../lib/logins.mjs';
+import { activeLogin, finishLogin, listLogins, newLogin } from '../lib/logins.mjs';
+import { recordAccount } from '../lib/usage.mjs';
 import { readSwitch } from '../lib/claude-switch.mjs';
 import { detect } from '../lib/detect.mjs';
 import { signInCommand } from '../lib/vendors.mjs';
@@ -1678,7 +1679,7 @@ test('a message with no @name goes to whoever the owner last wrote to in the ses
   // (Reading the vendor before a turn no longer holds the app, so this test runs on meanwhile.)
   await until(() => turns() > before, 'the bot\'s turn started');
   await send(v, 'and the deploy key?');
-  await until(() => /You → @sec {2}\d{1,2}:\d\d [AP]M\n┃ and the deploy key\? *\nSent to the running turn\./.test(chat()), 'the message went to the bot\'s turn');
+  await until(() => /You → @sec {2}\d{1,2}:\d\d [AP]M\n┃ and the deploy key\? *\nRead \d{1,2}:\d\d [AP]M/.test(chat()), 'the message went to the bot\'s turn, and the chat says when it read it');
   assert.deepEqual(pendingRequests(p.root).filter(row => row.state === 'queued'), []);
   assert.deepEqual(tasks()[0].messages.filter(row => row.during).map(row => [row.to, row.text]), [['@sec', 'and the deploy key?']]);
   // A bot taken out of the session is no longer who a plain message goes to.
@@ -1697,8 +1698,8 @@ test('/model takes the name it shows (/model opus 5.5), and a message after the 
   await send(v, 'Where is the cart total?'); await until(() => tasks()[0]?.state === 'answered', 'the model answered');
   await until(() => /^ Message Opus 5\.5 · /.test(label()), 'the box names the model as Opus 5.5');
   // The name as the box shows it.
-  await send(v, '/model sonnet'); await until(() => /Sonnet from your next message\./.test(status()), 'sonnet');
-  await send(v, '/model opus 5.5'); await until(() => /Opus 5\.5 from your next message\./.test(status()), 'the shown name is taken');
+  await send(v, '/model sonnet'); await until(() => /Sonnet reads this session's conversation again on its next turn/.test(status()), 'sonnet');
+  await send(v, '/model opus 5.5'); await until(() => /Opus 5\.5 reads this session's conversation again on its next turn/.test(status()), 'the shown name is taken');
   assert.equal(panels.ask.getValue(), '');
   // A name and then a message: the model changes and the message goes, as typed, to that model.
   await send(v, "/model sonnet can't you help this agent with the files it needs?");
@@ -1716,7 +1717,7 @@ test('/model takes the name it shows (/model opus 5.5), and a message after the 
   assert.ok(from >= 0 && to > from, 'the status line named the model the message went to, then said it answered');
   assert.deepEqual(said.slice(from, to).filter(text => !/Opus 5\.5 from this message\./.test(text)), [], 'and it stayed while the session worked'); panels.status.setContent = setContent;
   // A Claude name and version that is not a short name is the model of that version.
-  await send(v, '/model sonnet 5'); await until(() => /Sonnet 5 from your next message\./.test(status()), 'a family and version');
+  await send(v, '/model sonnet 5'); await until(() => /Sonnet 5 reads this session's conversation again on its next turn/.test(status()), 'a family and version');
   // No model at the start: refused, and the text stays in the box.
   await send(v, '/model nosuch can you help'); await until(() => /No model named nosuch\./.test(status()), 'unknown');
   assert.equal(panels.ask.getValue(), '/model nosuch can you help'); panels.ask.setValue('');
@@ -1775,7 +1776,7 @@ test('a bot at work is named in the chat; one that is stopped or cannot answer s
   // The session reads as working before the vendor starts. The run has read its mode once its call is recorded; only then may the mode change.
   await until(() => started() > before, 'the slow run has started');
   // Written to the bot while it works, a message goes to its turn, which takes it at its next step.
-  await send(v, '@sec And the deploy key?'); await until(() => /You → @sec {2}\d{1,2}:\d\d [AP]M\n┃ And the deploy key\? *\nSent to the running turn\./.test(chat()), 'sent to the bot\'s turn');
+  await send(v, '@sec And the deploy key?'); await until(() => /You → @sec {2}\d{1,2}:\d\d [AP]M\n┃ And the deploy key\? *\nRead \d{1,2}:\d\d [AP]M/.test(chat()), 'sent to the bot\'s turn');
   // /stop ends the bot's turn without touching the lead's answer; the next message to it is answered.
   answers('answer');
   await send(v, '/stop'); await until(() => /@sec {2}\d{1,2}:\d\d [AP]M\n┃ Stopped before answering\./.test(chat()), 'stopped');
@@ -2797,15 +2798,30 @@ test('a click on a reply heading opens its agent; effort and model change there 
   await until(() => opened('Agent '), 'the agent page');
   assert.deepEqual(listOf('Agent ').items.map(item => item.getText().replace(/\s+/g, ' ').trim()).slice(-2), ['Save', 'Cancel']);
   assert.match(listOf('Agent ').items[0].getText().replace(/\s+/g, ' '), /^Model Opus/);
-  // Effort alone: picked from the vendor's levels and saved with no warning.
+  // Its effort reads as the heading he clicked shows it: the level, not whose it is.
+  const shown = /\((\w+)\)/.exec(plainRow(row))?.[1];
+  assert.equal(shown, 'high', `the heading names the level: ${plainRow(row)}`);
+  assert.equal(listOf('Agent ').items[1].getText().replace(/\s+/g, ' ').trim(), 'Effort high');
+  // That same level picked is no change: nothing is saved, and no line says it changed.
   await choose('Agent ', 1);
+  await until(() => listOf('Effort'), 'the levels'); assert.equal(listOf('Effort').items[0].getText().replace(/\s+/g, ' ').trim(), "high · Claude Code's own");
   await choose('Effort', 3);
   await until(() => opened('Agent ') && !opened('Effort'), 'back on the page');
-  assert.match(listOf('Agent ').items[1].getText().replace(/\s+/g, ' '), /^Effort high/);
+  assert.equal(listOf('Agent ').items[1].getText().replace(/\s+/g, ' ').trim(), 'Effort high');
   await choose('Agent ', 2);
-  await until(() => /Effort of Opus.*: .+ → high/.test(status()), 'saved, and said in one line');
-  assert.equal(task().leadEffort, 'high');
-  await until(() => /Effort of Opus.*: .+ → high/.test(chat.getContent()), 'the chat keeps the line');
+  await until(() => /This session already runs on Opus, high\./.test(status()), `the level it runs with already: ${status()}`);
+  assert.equal(task().leadEffort, undefined); assert.equal(task().agentChanges, undefined);
+  // Effort alone: picked from the vendor's levels and saved with no warning.
+  click(v, chat, 2, row + chat.itop - chat.childBase);
+  await until(() => opened('Agent '), 'the agent page again');
+  await choose('Agent ', 1);
+  await choose('Effort', 2);
+  await until(() => opened('Agent ') && !opened('Effort'), 'back on the page');
+  assert.match(listOf('Agent ').items[1].getText().replace(/\s+/g, ' '), /^Effort medium/);
+  await choose('Agent ', 2);
+  await until(() => /Effort of Opus: high → medium/.test(status()), `saved, and said in one line: ${status()}`);
+  assert.equal(task().leadEffort, 'medium');
+  await until(() => /Effort of Opus: high → medium/.test(chat.getContent()), 'the chat keeps the line');
   // From the keyboard: another model of the same vendor, said in one line, no question asked.
   await send(v, '/agent change @model model sonnet');
   await until(() => /Sonnet reads this session's conversation again on its next turn: the first turn is slower and costs more\./.test(status()), 'model changed, and what it does said');
@@ -2821,7 +2837,7 @@ test('a click on a reply heading opens its agent; effort and model change there 
   await send(v, '/agent change @model model big-model effort low');
   await until(() => opened('Hand '), 'asked again');
   await dialog(v, opened('Hand ').options.label.trim(), 'y');
-  await until(() => /Model of this session: Sonnet.* → Big Model, effort high → low/.test(status()), 'handed off');
+  await until(() => /Model of this session: Sonnet.* → Big Model, effort medium → low/.test(status()), 'handed off');
   assert.deepEqual(sessionModel(p.repo, task()), { vendor: 'codex', model: 'big-model' }); assert.equal(task().leadEffort, 'low');
   // Effort alone from the keyboard: no question, one line.
   await send(v, '/agent change @model effort high'); await until(() => /Effort of Big Model: low → high/.test(status()), 'effort alone');
@@ -2836,10 +2852,127 @@ test('a click on a reply heading opens its agent; effort and model change there 
   assert.deepEqual(v.current.panels.palette.items.map(item => item.getText().split(/\s+/)[0]), ['@model']);
   v.input.write('\x1b'); await until(() => v.current.panels.palette.hidden, 'list closed');
   v.input.write('\r'); await until(() => opened('Agents'), 'the agents');
-  assert.match(listOf('Agents').items[0].getText().replace(/\s+/g, ' '), /^Big Model Big Model · high/);
+  // The session's model is named once on its row: its name, then its effort.
+  assert.equal(listOf('Agents').items[0].getText().replace(/\s+/g, ' ').trim(), 'Big Model high');
   v.input.write('\x1b'); await until(() => !opened('Agents'), 'closed');
   // Nothing ran on a model but the one reply.
   assert.equal(fs.readFileSync(p.calls, 'utf8').trim().split('\n').map(JSON.parse).filter(call => call.args.includes('-p') || call.args[0] === 'exec').length, 1);
+});
+
+// A session whose first turn works for a while and takes messages (the stand-in vendor's listen mode).
+async function workingSession(t, steps = 20) {
+  const p = setup(t, 'listen'); fakeClis(p.parent, { mode: 'listen', steps, stepMs: 200 });
+  const v = await view(t, { repo: p.repo });
+  await until(() => v.current.panels.ask.__listener, 'default input');
+  await send(v, 'Work on the coupon code');
+  await until(() => { const row = v.current.snapshot?.tasks?.[0]; return row?.state === 'running' && readTask(p.repo, row.id).activeInbox === true; }, 'a turn that works and takes messages', 30000);
+  const id = v.current.snapshot.tasks[0].id, task = () => readTask(p.repo, id);
+  const status = () => v.current.panels.status.getText().replace(/\s+/g, ' ').trim(), chat = () => v.current.panels.chat.getText().replace(/\s+/g, ' '), label = () => v.current.panels.ask._label.getText();
+  // The model each turn was started on, and what the turns read from their input while they worked.
+  const launches = () => fs.readFileSync(p.calls, 'utf8').trim().split('\n').map(JSON.parse).filter(call => call.args.includes('-p')).map(call => call.args[call.args.indexOf('--model') + 1]);
+  const taken = () => { const file = path.join(p.dir, 'absorbed.jsonl'); return fs.existsSync(file) ? fs.readFileSync(file, 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse).filter(row => row.mid === true).map(row => String(row.content)) : []; };
+  return { p, v, id, task, status, chat, label, launches, taken };
+}
+
+// The check's report: /model sonnet and a message, typed while Opus worked, read "Sonnet from
+// this message." and the turn of Opus read the message; no Sonnet ever started. The message
+// waits for that turn to end and starts the next one, on the model it names.
+test('/model NAME and a message, typed while a turn works: the message waits for that turn to end and starts the next one on that model', { timeout: 120000 }, async t => {
+  const s = await workingSession(t);
+  assert.deepEqual(s.launches(), ['opus'], 'the turn that works was started on Opus');
+  await send(s.v, '/model sonnet Use the short form');
+  await until(() => /Sonnet from this message, when the running turn ends\./.test(s.status()), `the line under the box: ${s.status()}`, 15000);
+  assert.equal(s.task().state, 'running', 'the turn of Opus goes on');
+  await until(() => /Model of this session: Opus → Sonnet\. It applies from the next turn\./.test(s.chat()), 'the chat keeps the change, as for /agent change');
+  const waits = pendingRequests(s.p.root).find(row => row.goal === 'Use the short form');
+  assert.deepEqual([waits?.state, waits?.model, waits?.turn], ['queued', { vendor: 'claude', model: 'sonnet' }, undefined], 'the message waits with its model, and is not on the running turn');
+  await until(() => s.launches().length === 2, 'the next turn starts when that one ends', 60000);
+  assert.deepEqual(s.launches(), ['opus', 'sonnet'], 'on the model the message named');
+  assert.deepEqual(s.taken().filter(text => /Use the short form/.test(text)), [], 'the turn of Opus never read it');
+  await until(() => s.task().messages.some(row => row.text === 'Use the short form'), 'the message is in the chat');
+  assert.notEqual(s.task().messages.find(row => row.text === 'Use the short form').during, true, 'as a message of its own turn');
+  await send(s.v, '/stop'); await until(() => !['running', 'preparing'].includes(s.task().state), 'stopped', 30000);
+});
+
+// The check's report: after a model was chosen while Opus worked, the chat read "Sonnet is
+// working" and, when the turn ended, "Sonnet answered", over a reply of Opus.
+test('a model chosen while a turn works: the chat and the box name the model that works, and the line when the turn ends names the one that answered', { timeout: 120000 }, async t => {
+  const s = await workingSession(t, 25);
+  await until(() => /Opus is working/.test(s.chat()) && /^ Message Opus · /.test(s.label()), 'the working line and the box name Opus');
+  await send(s.v, '/agent change @model model sonnet');
+  await until(() => /Model of this session: Opus → Sonnet\. It applies from the next turn\./.test(s.chat()), 'the change is said in the chat while the turn works', 15000);
+  assert.equal(s.task().state, 'running');
+  assert.match(s.chat(), /Opus is working/, 'the turn that works is still the one started on Opus'); assert.doesNotMatch(s.chat(), /Sonnet is working/);
+  assert.match(s.label(), /^ Message Opus · /, 'and a message typed now goes to it');
+  // The model it waits on is the one its page and the next change start from.
+  assert.deepEqual(sessionModel(s.p.repo, s.task()), { vendor: 'claude', model: 'sonnet' });
+  await until(() => !['running', 'preparing'].includes(s.task().state), 'the turn ended', 60000);
+  await until(() => / answered/.test(s.status()), 'the line that says who answered', 15000);
+  assert.match(s.status(), /Opus answered/, 'Opus answered: Sonnet was never started'); assert.doesNotMatch(s.status(), /Sonnet answered/);
+  assert.deepEqual(s.launches(), ['opus']);
+  await until(() => /^ Message Sonnet · /.test(s.label()), 'the next message goes to Sonnet');
+});
+
+// The check's report: /model changed what the page and /agent change do, with no line in the
+// chat and no question before another vendor's model.
+test('/model in a session is the change /agent change makes: the chat keeps its line, and a model of another vendor is a handoff asked first', { timeout: 60000 }, async t => {
+  const p = setup(t, 'answer'), v = await view(t, { repo: p.repo }), chat = () => v.current.panels.chat.getText().replace(/\s+/g, ' ');
+  const status = () => v.current.panels.status.getText().replace(/\s+/g, ' ').trim();
+  const opened = start => v.current.screen.children.find(child => !child.destroyed && child.options?.label?.trim().startsWith(start));
+  await until(() => v.current.panels.ask.__listener, 'default input');
+  await send(v, 'Reply with the summary "first".');
+  await until(() => v.current.snapshot?.tasks?.[0]?.state === 'answered', 'the first reply', 15000);
+  const id = v.current.snapshot.tasks[0].id, task = () => readTask(p.repo, id);
+  await send(v, '/model sonnet');
+  await until(() => /Sonnet reads this session's conversation again on its next turn/.test(status()), `what it does, under the box: ${status()}`);
+  await until(() => /Model of this session: Opus → Sonnet/.test(chat()), 'the chat keeps the change');
+  assert.deepEqual((task().agentChanges ?? []).map(row => row.text), ['Model of this session: Opus → Sonnet']);
+  // Another vendor: the question first. No leaves the model and keeps the message in the box.
+  await send(v, '/model big-model And the tax line?');
+  await until(() => opened('Hand '), 'the handoff question');
+  assert.match(dialogText(v, opened('Hand ').options.label.trim()).replace(/\s+/g, ' '), /Handoff: Big Model starts a new conversation/);
+  await dialog(v, opened('Hand ').options.label.trim(), 'n');
+  await until(() => /Nothing changed\./.test(status()), 'declined');
+  assert.deepEqual(sessionModel(p.repo, task()), { vendor: 'claude', model: 'sonnet' }); assert.equal(task().runs.length, 1, 'and nothing was sent');
+  assert.equal(v.current.panels.ask.getValue(), '/model big-model And the tax line?'); v.current.panels.ask.setValue('');
+  await send(v, '/model big-model');
+  await until(() => opened('Hand '), 'asked again');
+  await dialog(v, opened('Hand ').options.label.trim(), 'y');
+  await until(() => /Model of this session: Sonnet → Big Model/.test(status()), 'handed off');
+  assert.deepEqual(sessionModel(p.repo, task()), { vendor: 'codex', model: 'big-model' });
+  assert.deepEqual(task().agentChanges.map(row => row.text), ['Model of this session: Opus → Sonnet', 'Model of this session: Sonnet → Big Model']);
+  // The model it already runs on: nothing to change, and no line.
+  await send(v, '/model big-model'); await until(() => /This session already runs on Big Model/.test(status()), 'already on it');
+  assert.equal(task().agentChanges.length, 2);
+});
+
+// The check's report: a bot given Opus for this session only, then "effort high" for every
+// session, was saved on Opus for every session, under a line that named the effort alone.
+test("a bot's effort for every session leaves the model it was given for this session only: the saved bot keeps its own, and the line says what every session gets", { timeout: 120000 }, async t => {
+  const p = setup(t, 'answer');
+  saveBot({ name: 'critic', vendor: 'claude', model: 'sonnet', effort: 'low', about: 'Reads for risk', instructions: 'Say what could break.' });
+  const v = await view(t, { repo: p.repo });
+  const status = () => v.current.panels.status.getText().replace(/\s+/g, ' ').trim();
+  await until(() => v.current.panels.ask.__listener, 'default input');
+  await send(v, 'Reply with the summary "first".');
+  await until(() => v.current.snapshot?.tasks?.[0]?.state === 'answered', 'the first reply', 20000);
+  const id = v.current.snapshot.tasks[0].id, task = () => readTask(p.repo, id), saved = () => { const bot = getBot('critic'); return [bot.vendor, bot.model ?? null, bot.effort ?? null]; };
+  await send(v, '@critic What could break?');
+  await until(() => (task().runs ?? []).length >= 2 && !['running', 'preparing'].includes(task().state), "the bot's reply", 30000);
+  await send(v, '/agent change @critic model opus');
+  await until(() => /Opus takes over/.test(status()), 'the model, for this session only', 10000);
+  assert.deepEqual(saved(), ['claude', 'sonnet', 'low'], 'the saved bot keeps its model: the change was for this session');
+  assert.deepEqual(task().botModels, { critic: { vendor: 'claude', model: 'opus', effort: 'low' } });
+  await send(v, '/agent change @critic effort high --every-session');
+  await until(() => /in every session/.test(status()), 'the effort, saved for every session', 10000);
+  assert.match(status(), /Effort of @critic: low → high, in every session/);
+  assert.deepEqual(saved(), ['claude', 'sonnet', 'high'], 'the effort alone is saved with the bot');
+  assert.deepEqual(task().botModels, { critic: { vendor: 'claude', model: 'opus', effort: 'high' } }, 'and this session keeps the model it was given');
+  // Every session with nothing else named: the bot is saved as this session runs it, and the line says so.
+  await send(v, '/agent change @critic --every-session');
+  await until(() => /Model of @critic: Sonnet → Opus, in every session/.test(status()), `the model, now for every session: ${status()}`, 10000);
+  assert.deepEqual(saved(), ['claude', 'opus', 'high']); assert.equal(task().botModels, undefined, 'this session runs it as saved');
+  assert.deepEqual(task().agentChanges.map(row => row.text).slice(-2), ['Effort of @critic: low → high, in every session', 'Model of @critic: Sonnet → Opus, in every session']);
 });
 
 test('switching tabs keeps running work alive and returns to the same chat', { timeout: 15000 }, async t => {
@@ -3854,24 +3987,29 @@ test('a long turn shows its thought as a token count, how long its silent comman
   captureFrames('live-steps-real', frames);
 });
 
-// Claude Code takes a message while its turn works: it goes to that turn at once, the chat
-// says so under it, and the one reply answers it too.
-test('a message sent while Claude Code works goes to its turn, and the chat says it was sent to it', { timeout: 40000 }, async t => {
+// Claude Code takes a message while its turn works: it goes to that turn at once. The chat says
+// under it when the turn read it and answered it, and shows the answer at once, as a reply the
+// model wrote while it works; the reply at the turn's end does not repeat it.
+test('a message sent while Claude Code works goes to its turn: the chat says when it was read and answered, and shows the answer while the turn goes on', { timeout: 40000 }, async t => {
   const p = setup(t, 'listen'); fakeClis(p.parent, { mode: 'listen', steps: 40, stepMs: 200 });
   const v = await view(t, { repo: p.repo }), panels = v.current.panels, chat = () => panels.chat.getText(), task = () => projectSnapshot(p.repo).tasks[0];
   await send(v, 'Keep working on the board');
   await until(() => task()?.activeInbox === true && /Opus is working/.test(chat()), 'the model works and takes messages');
   await send(v, 'Also cover refunds');
-  await until(() => /You {2}\d{1,2}:\d\d [AP]M\n┃ Also cover refunds *\nSent to the running turn\./.test(chat()), 'sent to the running turn');
-  assert.doesNotMatch(chat(), /\(waiting\)/); assert.equal(task().state, 'running', 'the same turn goes on');
+  await until(() => /You {2}\d{1,2}:\d\d [AP]M\n┃ Also cover refunds *\nRead \d{1,2}:\d\d [AP]M · answered \d{1,2}:\d\d [AP]M\. *\n *\n\S[^\n]* · while working {2}\d{1,2}:\d\d [AP]M\n┃ Answer while working: Also cover refunds/.test(chat()), 'read and answered, with the answer under it');
+  assert.doesNotMatch(chat(), /\(waiting\)|Sent to the running turn/); assert.equal(task().state, 'running', 'the same turn goes on');
+  assert.equal(chat().match(/┃ Answer while working: Also cover refunds/g).length, 1, 'the answer is in the chat once');
+  // The status line says what the line under his message says.
+  await until(() => /› Read \d{1,2}:\d\d [AP]M · answered \d{1,2}:\d\d [AP]M\./.test(panels.status.getText()), 'the status line says it was read and answered');
   assert.deepEqual(pendingRequests(p.root).filter(row => row.state === 'queued'), []);
   // The status line follows that turn to its end: it never stops at the bare word "running".
   await new Promise(resolve => setTimeout(resolve, 300));
   assert.equal(task().state, 'running'); assert.doesNotMatch(panels.status.getText(), /› running/);
   await until(() => task().state === 'answered', 'the turn ends');
   await until(() => /› Opus answered/.test(panels.status.getText()), 'the status line says it answered');
-  assert.deepEqual(task().messages.map(row => [row.text, row.during === true]), [['Keep working on the board', false], ['Also cover refunds', true]]);
-  await until(() => /Also took in what you sent while it worked: Also cover refunds/.test(chat().replace(/\s*\n┃ /g, ' ')), 'the reply answers it');
+  assert.deepEqual(task().messages.map(row => [row.text, row.during === true, row.whileWorking === true]), [['Keep working on the board', false, false], ['Also cover refunds', true, false], ['Answer while working: Also cover refunds', false, true]]);
+  await until(() => !/is working/.test(chat()) && /\d+ steps in \d+s/.test(chat()), 'the turn is over in the chat, its steps folded above its reply');
+  assert.doesNotMatch(chat(), /Also took in/, 'which does not repeat the answer'); assert.equal(chat().match(/Also cover refunds/g).length, 2, 'his message and its answer, once each');
   assert.equal(task().runs.length, 1, 'one turn');
 });
 
@@ -3932,18 +4070,18 @@ test('a message sent while Claude Code runs a long command waits for the command
   await until(() => /› Sent\. The running turn reads it when the command it is running ends\./.test(panels.status.getText()), 'the status line says what the row says');
   await until(() => /You \(read after the command\) {2}[^\n]*\n[^\n]*Also cover refunds *\nThe\s+running\s+turn\s+reads\s+it\s+when\s+the\s+command\s+it\s+is\s+running\s+ends\.\nEnter sends it now · ↑ takes it back/.test(chat()), 'it waits for the command, and the keys are named');
   await new Promise(resolve => setTimeout(resolve, 600));
-  assert.doesNotMatch(chat(), /Sent to the running turn\./, 'not said before the turn took it');
+  assert.doesNotMatch(chat(), /Sent to the running turn\.|\nRead \d{1,2}:\d\d/, 'not said to be read before the turn took it');
   assert.deepEqual(pendingRequests(p.root).filter(row => row.state === 'queued').map(row => row.goal), ['Also cover refunds']); assert.deepEqual(controls(), []);
   panels.ask.focus(); panels.ask.readInput(); await until(() => panels.ask.__listener, 'message box');
   await until(() => /^enter send it now {2}↑ take it back/.test(panels.keys.getText().trim()), 'the key bar names it');
   v.input.write('\r');
   await until(() => /› Sending now\. The turn goes on with it\.$/m.test(panels.status.getText()), 'what Enter says');
-  await until(() => /You {2}\d{1,2}:\d\d [AP]M\n┃ Also cover refunds *\nSent to the running turn\./.test(chat()), 'the turn took it');
+  await until(() => /You {2}\d{1,2}:\d\d [AP]M\n┃ Also cover refunds *\nRead \d{1,2}:\d\d [AP]M/.test(chat()), 'the turn took it');
   assert.doesNotMatch(chat(), /\(waiting\)/);
   assert.deepEqual(controls().map(row => [row.subtype, row.send_now]), [['interrupt', true]]);
   await until(() => task().state === 'answered', 'the turn answers');
   assert.equal(task().runs.length, 1, 'the same run: nothing stopped');
-  assert.deepEqual(task().messages.map(row => [row.text, row.during === true]), [['Run the long check', false], ['Also cover refunds', true]]);
+  assert.deepEqual(task().messages.filter(row => !row.whileWorking).map(row => [row.text, row.during === true]), [['Run the long check', false], ['Also cover refunds', true]]);
   await until(() => /› Opus answered/.test(panels.status.getText()), 'the status line says it answered');
 });
 
@@ -3968,10 +4106,10 @@ test('Up takes a message back from the running turn before it is read, and one t
   await until(() => waiting().length === 1 && pendingRequests(p.root).some(row => row.turn), 'it waits again');
   await until(() => panels.ask.getValue() === '', 'the box is empty');
   panels.ask.focus(); panels.ask.readInput(); await until(() => panels.ask.__listener, 'message box'); v.input.write('\r');
-  await until(() => /Sent to the running turn\./.test(chat()), 'the turn took it');
+  await until(() => /\nRead \d{1,2}:\d\d [AP]M/.test(chat()), 'the turn took it');
   assert.deepEqual(waiting(), []);
   await until(() => task().state === 'answered', 'the turn answers');
-  assert.equal(task().runs.length, 1); assert.deepEqual(task().messages.map(row => row.text), ['Run the long check', 'Also cover refunds']);
+  assert.equal(task().runs.length, 1); assert.deepEqual(task().messages.filter(row => !row.whileWorking).map(row => row.text), ['Run the long check', 'Also cover refunds']);
 });
 
 // A vendor that cannot take a message during its turn: Enter in the empty box sends what
@@ -4497,6 +4635,10 @@ test('a session whose Task has no artifact yet has an Artifacts tab that says ho
   await until(() => /^ Chat {3}\S/.test(tabs()), 'its tabs'); assert.doesNotMatch(tabs(), /Artifacts/);
   await selectRow(v, /Uppercase coupons/);
   await until(() => / {3}Artifacts $/.test(tabs()), 'its Artifacts tab, with no artifact yet');
+  // v, then Enter, on its row shows it, as on a row whose Task has an artifact. Esc goes back to the row.
+  v.type('v'); await until(() => /^enter shows its artifacts/.test(panels.keys.getText().trim()), 'v is a key of its row');
+  v.type('\r'); await until(() => v.current.sessionView === 'artifacts' && v.current.screen.focused === panels.artifacts && /No artifacts yet/.test(panels.artifacts.getText()), 'v then Enter shows it');
+  v.input.write('\x1b'); await until(() => v.current.sessionView === 'chat' && v.current.screen.focused === panels.board, 'Esc goes back to its row');
   click(v, panels.sessionTabs, tabs().indexOf('Artifacts'));
   await until(() => v.current.sessionView === 'artifacts' && !panels.artifacts.hidden, 'a click on its name shows it');
   assert.deepEqual(shown(), ['No artifacts yet', 'Say in the chat what to show, or Ctrl+T, New goal, with an Artifact: line.']);
@@ -6436,6 +6578,27 @@ test('a message that started the model twice says so in the chat', { timeout: 20
   await until(() => /\S+ was asked for its reply again: the first one was not accepted\./.test(panels.chat.getText().replace(/\s+/g, ' ')) && !/started twice/.test(panels.chat.getText()), 'the other note', 15000);
 });
 
+// The owner's report: the line was drawn at the end of the chat, so it sat under whatever message
+// was newest, long after the run it is about. It stays with that run: under the reply it wrote.
+test('the started-twice line stays under the reply of the run it is about, above every later message and turn', { timeout: 20000 }, async t => {
+  const p = setup(t), v = await view(t, { repo: p.repo }), panels = v.current.panels, flat = () => panels.chat.getText().replace(/\s+/g, ' ');
+  liveTask(p.root, { id: '6', goal: 'Run the tests', state: 'answered' });
+  const log = path.join(taskDir(p.repo, '6'), 'lead-1.jsonl'), ago = seconds => new Date(Date.now() - seconds * 1000).toISOString();
+  fs.writeFileSync(log, `${JSON.stringify({ type: 'result', structured_output: { summary: 'The tests pass.' } })}\n`);
+  // A bot answered later, and he wrote again after that: neither is the message the model was started twice for.
+  saveTask(p.repo, { ...readTask(p.repo, '6'), createdAt: ago(90), messages: [{ at: ago(90), text: 'Run the tests' }, { at: ago(40), text: 'Is the token a secret?', to: '@sec' }, { at: ago(30), text: 'No secret in it.', from: '@sec', bot: 'sec' }, { at: ago(20), text: 'Good, thanks.', to: '@sec' }, { at: ago(10), text: 'Any time.', from: '@sec', bot: 'sec' }],
+    runs: [{ role: 'lead', vendor: 'claude', at: ago(60), logFile: log, again: 'The run returned an invalid outcome or summary.' }] });
+  await openTask(v, /Run the tests/); await until(() => v.current.session === '6', 'that session is open');
+  await until(() => /Any time\./.test(flat()) && /started twice/.test(flat()), 'the chat, with the note');
+  assert.match(flat(), /┃ The tests pass\. \S+ was started twice for this message: its first reply was not accepted\. Anything it ran may have run twice\. You → @sec/, 'under the reply of that run, before what came later');
+  assert.doesNotMatch(flat(), /Any time\.[\s\S]*started twice/, 'never under a later message');
+  assert.equal(flat().match(/started twice/g).length, 1, 'said once');
+  // The same for its sibling line: the same session asked for its reply again.
+  const row = readTask(p.repo, '6'); row.runs[0].resumed = true; saveTask(p.repo, row);
+  await until(() => /┃ The tests pass\. \S+ was asked for its reply again: the first one was not accepted\. You → @sec/.test(flat()), 'the other note, in the same place', 15000);
+  assert.doesNotMatch(flat(), /Any time\.[\s\S]*asked for its reply again|started twice/);
+});
+
 test('a session asked for Approve for me that the model ran in Ask for approval says so, from the run itself', { timeout: 60000 }, async t => {
   // The stand-in model reports the mode it really ran with; nothing is written into the run by hand.
   const p = setup(t, 'answer'); fakeClis(p.parent, { mode: 'answer', permissionMode: 'default' });
@@ -6764,7 +6927,10 @@ test('Usage: a model\'s own limit stands under the account with its windows, f f
   fs.writeFileSync(path.join(fake.home, 'claude', '.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'owner@example.invalid', planDisplayName: 'Max 20x' } }));
   fs.mkdirSync(personalDirectory(), { recursive: true });
   const soon = Math.floor(Date.now() / 1000) + 4 * 3600 + 1800, later = soon + 2 * 86400;
-  fs.writeFileSync(path.join(personalDirectory(), 'usage.json'), JSON.stringify({ version: 1, claude: { observedAt: new Date().toISOString(), fiveHour: { usedPercent: 8, resetsAt: soon }, weekly: { usedPercent: 41, resetsAt: later }, models: [{ id: 'fable', weekly: { usedPercent: 99, resetsAt: later } }] } }));
+  // What a session on the account left: its two windows in usage.json, and Fable's week with the account.
+  const reading = { observedAt: new Date().toISOString(), fiveHour: { usedPercent: 8, resetsAt: soon }, weekly: { usedPercent: 41, resetsAt: later } };
+  fs.writeFileSync(path.join(personalDirectory(), 'usage.json'), JSON.stringify({ version: 1, claude: reading }));
+  recordAccount('claude', 'owner@example.invalid', 'Max 20x', { ...reading, models: [{ id: 'fable', weekly: { usedPercent: 99, resetsAt: later } }] });
   const v = await view(t, { repo: p.repo, usage: fake }), panels = v.current.panels, list = panels.usageList;
   const rows = () => list.items.map(item => item.getText()), text = () => rows().join('\n'), status = () => panels.status.getText(), keys = () => panels.keys.getText().trim(), rowOf = pattern => rows().findIndex(row => pattern.test(row));
   await send(v, '/usage'); await until(() => v.current.view === 'usage' && / 62% /.test(text()) && / 99% /.test(text()), 'the accounts and their limits');
@@ -6841,6 +7007,64 @@ test('Usage: Up from Top agents goes back to the last vendor after a reading add
   v.input.write('r'); await until(() => rowOf(/ 41% /) >= 0 && rowOf(/Uppercase coup/) === before + 2 && list.selected === before + 2, 'two more lines over the agent, with the cursor still on it');
   v.input.write('\x1b[A'); await until(() => list.selected === rowOf(/^Grok Build/), 'Up from the agent to Grok Build');
   v.input.write('\x1b[B'); await until(() => list.selected === rowOf(/Uppercase coup/), 'Down to the agent again');
+});
+
+// Claude Code signed in as the owner, and a second account ELU added, as a on the tab leaves it.
+function twoClaudeAccounts(t) {
+  const p = setup(t), fake = fakeUsage(t);
+  fs.writeFileSync(path.join(fake.home, 'claude', '.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'owner@example.invalid', planDisplayName: 'Max 20x' } }));
+  fs.mkdirSync(personalDirectory(), { recursive: true });
+  const slot = newLogin('claude'); fs.writeFileSync(path.join(slot.dir, '.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'second@example.invalid', planDisplayName: 'Pro' } })); finishLogin('claude', slot.id);
+  return { p, fake };
+}
+// A reading arrives while the tab is open and no key is pressed (a session ended its turn): an
+// account opens into a line for each of its limits, over the cursor, or closes to one line. The
+// cursor stays on the line it was on, so Enter does what the key bar said before the reading.
+test('Usage: a reading that adds lines over the cursor, or takes them away, leaves the cursor on its line: a setting, the vendor\'s line of keys, the line of Top agents', { timeout: 40000 }, async t => {
+  const { p, fake } = twoClaudeAccounts(t), soon = Math.floor(Date.now() / 1000) + 3600;
+  recordAccount('claude', 'second@example.invalid', 'Pro', null);
+  const v = await view(t, { repo: p.repo, usage: fake }), panels = v.current.panels, list = panels.usageList;
+  const rows = () => list.items.map(item => item.getText()), rowOf = pattern => rows().findIndex(row => pattern.test(row)), status = () => panels.status.getText(), keys = () => panels.keys.getText().trim();
+  const cursor = () => rows()[list.selected] ?? '', second = week => recordAccount('claude', 'second@example.invalid', 'Pro', { observedAt: new Date().toISOString(), fiveHour: { usedPercent: 21, resetsAt: soon }, weekly: { usedPercent: week, resetsAt: soon + 3 * 86400 } });
+  await send(v, '/usage'); await until(() => v.current.view === 'usage' && rowOf(/second@example\.invalid/) >= 0 && rowOf(/ 62% /) >= 0 && /Usage updated \d\d:\d\d/.test(status()), 'the accounts');
+  list.focus(); await until(() => v.current.screen.focused === list, 'list focused');
+  // On a setting. The owner's account reports its two windows: two more lines over the cursor.
+  list.select(rowOf(/Use paid extra usage/)); await until(() => /Use paid extra usage/.test(cursor()) && /^enter turn on/.test(keys()), 'the cursor on the setting');
+  const usageFile = path.join(personalDirectory(), 'usage.json'), at = list.selected;
+  fs.writeFileSync(usageFile, JSON.stringify({ ...JSON.parse(fs.readFileSync(usageFile, 'utf8')), claude: { observedAt: new Date().toISOString(), fiveHour: { usedPercent: 8, resetsAt: soon }, weekly: { usedPercent: 41, resetsAt: soon + 86400 } } }));
+  await until(() => rowOf(/ 41% /) >= 0, 'the reading drawn with no key pressed'); await nextDraw(v);
+  assert.match(cursor(), /Use paid extra usage {7}off$/, rows().join('\n')); assert.equal(list.selected, at + 2); assert.match(keys(), /^enter turn on/);
+  v.input.write('\r'); await until(() => /An account at its limit goes on with paid extra usage\./.test(status()), 'Enter turns on the setting the cursor was on');
+  assert.deepEqual([readSwitch().extraUsage, readSwitch().auto !== false], [true, true], 'and no other');
+  // On the line of keys under Claude's accounts, where Enter opens the details. The added account reports its two windows and opens.
+  const keysLine = () => rows().findIndex((row, place) => /enter on an account uses it/.test(row) && place < rowOf(/^Codex /));
+  list.select(keysLine()); await until(() => list.selected === keysLine() && /^enter details/.test(keys()), 'the cursor on the line of keys');
+  second(30); await until(() => rowOf(/ 30% /) >= 0, 'the added account\'s limits drawn'); await nextDraw(v);
+  assert.equal(list.selected, keysLine(), rows().join('\n')); assert.match(keys(), /^enter details/);
+  // On the line of Top agents. The added account is now tight on its week and closes to one line: two lines fewer over the cursor.
+  list.select(rowOf(/^No agent has run today\./)); await until(() => /^No agent has run today\./.test(cursor()), 'the cursor on the line of Top agents');
+  second(80); await until(() => rowOf(/second@example\.invalid.* 80% /) >= 0 && rowOf(/ 30% /) < 0, 'the added account closed to its week'); await nextDraw(v);
+  assert.match(cursor(), /^No agent has run today\./, rows().join('\n')); assert.equal(keys(), 'r refresh  t 7 days  tab next');
+  // It has room again and opens: two lines more over the cursor.
+  second(31); await until(() => rowOf(/ 31% /) >= 0, 'the added account open again'); await nextDraw(v);
+  assert.match(cursor(), /^No agent has run today\./, rows().join('\n')); assert.deepEqual(brokenRows(v), []);
+});
+
+// A limit starts again while the tab stays open: no key is pressed and no session runs.
+test('Usage: a limit that started again while the tab is open is no longer drawn as FULL, and its account is no longer counted FULL', { timeout: 40000 }, async t => {
+  const { p, fake } = twoClaudeAccounts(t);
+  recordAccount('claude', 'second@example.invalid', 'Pro', null);
+  const v = await view(t, { repo: p.repo, usage: fake }), panels = v.current.panels, list = panels.usageList;
+  const rows = () => list.items.map(item => item.getText()), line = () => rows().find(row => /second@example\.invalid/.test(row)) ?? '';
+  await send(v, '/usage'); await until(() => v.current.view === 'usage' && /second@example\.invalid/.test(line()) && /Usage updated \d\d:\d\d/.test(panels.status.getText()), 'the accounts');
+  // The added account's week is at 100% and starts again in five seconds.
+  const resetsAt = Math.floor(Date.now() / 1000) + 5;
+  recordAccount('claude', 'second@example.invalid', 'Pro', { observedAt: new Date().toISOString(), fiveHour: null, weekly: { usedPercent: 100, resetsAt } });
+  await until(() => /second@example\.invalid · Pro +wk █FULL█ 100% +<1m$/.test(line()), 'the account at its limit', 4000);
+  assert.match(rows()[0], /^3 accounts · 1 free · 1 FULL · 1 no reading/);
+  await until(() => Date.now() / 1000 > resetsAt + 1, 'the reset', 15000); await nextDraw(v); await nextDraw(v);
+  assert.doesNotMatch(line(), /FULL|100%|<1m/, 'the limit started again'); assert.match(line(), /second@example\.invalid · Pro +(?:Usage shows after a session|no usage yet)/);
+  assert.match(rows()[0], /^3 accounts · 1 free · 2 no reading/);
 });
 
 test('Usage with no agent today: Down from the last account goes to its line in Top agents, which offers t, and Up goes back', { timeout: 30000 }, async t => {
@@ -6937,10 +7161,13 @@ test('Usage with three Claude accounts of three limits each, open and folded in 
   fs.writeFileSync(path.join(fake.home, 'claude', '.claude.json'), JSON.stringify({ oauthAccount: { accountUuid: 'uuid-never-shown', emailAddress: OWNER, planDisplayName: 'Max 20x' } }));
   fs.mkdirSync(personalDirectory(), { recursive: true });
   // The owner's account has room, the second is tight on its week, and the third is FULL on Fable's own week.
+  // Each account's three limits are kept with the account. The two windows of the owner's own
+  // sign-in are in usage.json as well, which never has a model's limit (keepClaudeUsage).
   const soon = Math.floor(Date.now() / 1000) + 4 * 3600 + 1800, later = soon + 2 * 86400, seen = new Date().toISOString();
-  const limits = (fiveHour, weekly, fable) => ({ observedAt: seen, fiveHour: { usedPercent: fiveHour, resetsAt: soon }, weekly: { usedPercent: weekly, resetsAt: later }, models: [{ id: 'fable', weekly: { usedPercent: fable, resetsAt: later } }] });
-  fs.writeFileSync(path.join(personalDirectory(), 'usage.json'), JSON.stringify({ version: 1, claude: limits(8, 41, 60) }));
-  fs.writeFileSync(path.join(personalDirectory(), 'accounts.json'), JSON.stringify({ version: 1, rows: [[SECOND, limits(12, 80, 30)], [THIRD, limits(3, 20, 99)]].map(([account, usage]) => ({ vendor: 'claude', account, plan: 'Pro', firstSeen: seen, lastSeen: seen, usage })) }));
+  const windows = (fiveHour, weekly) => ({ observedAt: seen, fiveHour: { usedPercent: fiveHour, resetsAt: soon }, weekly: { usedPercent: weekly, resetsAt: later } });
+  const limits = (fiveHour, weekly, fable) => ({ ...windows(fiveHour, weekly), models: [{ id: 'fable', weekly: { usedPercent: fable, resetsAt: later } }] });
+  fs.writeFileSync(path.join(personalDirectory(), 'usage.json'), JSON.stringify({ version: 1, claude: windows(8, 41) }));
+  fs.writeFileSync(path.join(personalDirectory(), 'accounts.json'), JSON.stringify({ version: 1, rows: [[OWNER, 'Max 20x', limits(8, 41, 60)], [SECOND, 'Pro', limits(12, 80, 30)], [THIRD, 'Pro', limits(3, 20, 99)]].map(([account, plan, usage]) => ({ vendor: 'claude', account, plan, firstSeen: seen, lastSeen: seen, usage })) }));
   const v = await view(t, { repo: p.repo, usage: fake }), panels = v.current.panels, list = panels.usageList;
   await sized(v, 140, 50);
   const rows = () => list.items.map(item => item.getText()), text = () => rows().join('\n'), status = () => panels.status.getText();
@@ -7868,6 +8095,8 @@ test('Usage names Enter only where it acts: not while the vendors are read; on a
   await until(() => v.current.screen.focused === list && list.selected === 0 && keys() === 'r refresh  t 7 days  tab next', `no Enter, a or x while the vendors are read, not ${keys()}`);
   v.input.write('\r'); await pause(300); assert.ok(!shown(), 'Enter opened nothing'); assert.equal(v.current.screen.focused, list);
   release(); await until(() => /^Antigravity \(agy\) not signed in for ELU · s signs in$/m.test(text()), 'the vendors show');
+  // The cursor was on the line that said what was being read: it goes to the first account, not to a line with nothing to choose.
+  await until(() => /owner@example\.invalid/.test(list.items[list.selected]?.getText() ?? ''), `the cursor is on the first account, not on [${list.items[list.selected]?.getText()}]`);
   // Antigravity offers its sign-in: Enter opens its details.
   list.select(rowOf(/^Antigravity/)); await until(() => /^enter details {2}/.test(keys()) && /s sign in/.test(keys()) && !/d details/.test(keys()), `Enter opens the details, not ${keys()}`);
   v.input.write('\r'); await until(() => modal(v, 'Antigravity usage'), 'Enter opens them');
@@ -9367,6 +9596,9 @@ test('a session at work: its Task has New goal and /done offers only that; the e
   assert.doesNotMatch(status(), /Taken back/);
   assert.deepEqual(pendingRequests(p.root).map(row => [row.id, row.goalChange]), [[sent.id, { task: plan.id, revision: 2 }]]);
   assert.equal(JSON.parse(fs.readFileSync(planFile(p.repo, '3'), 'utf8')).tasks.at(-1).revision, 2);
+  // Once a turn read it (the chat's line of that goal, lib/runner.mjs toldGoal), the status line says when.
+  const told = readTask(p.repo, '3'); saveTask(p.repo, { ...told, messages: [...(told.messages ?? []), { at: new Date().toISOString(), text: 'Goal changed. The session was told and aligns its work with it.', from: 'ELU', line: true, goalTold: 2 }] });
+  await until(() => /"Uppercase coupons" read the new goal at \d{1,2}:\d\d [AP]M\./.test(status()), 'the status line says when it was read');
 });
 
 // His new goal has no length or count of ours: the check takes a goal of 6,000 characters with

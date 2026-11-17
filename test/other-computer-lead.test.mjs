@@ -191,6 +191,33 @@ test('what another computer changes of a session\'s agents where the project is 
   assert.deepEqual(kept(w, 'And the tests'), ['@lead', null, SARA]);
 });
 
+// The check's report, on the computer that runs the session: /model NAME message from another
+// computer, while a turn worked here on another model, went to that turn, and the sender read
+// "now on NAME". The message waits for that turn to end and starts the next one, on that model.
+test('/model NAME message from another computer while a turn works here: the message waits for that turn to end and starts the next one on that model, and the sender is told so', { timeout: 180000 }, async t => {
+  const w = await world(t, 'auto');
+  // The stand-in works for a while here, and takes messages while it does.
+  withAgents(fakeClis(w.parent, { mode: 'listen', steps: 20, stepMs: 200 }).dir);
+  conduct(t);
+  const count = w.session().runs.length, before = sessionModel(w.repo, w.session());
+  assert.notEqual(before.model, 'sonnet');
+  enqueue(w.root, 'Work on the coupon code', { continuationTaskId: '1', priority: 0, typed: true, toModel: true });
+  await until(() => w.session().state === 'running' && w.session().activeInbox === true, 'a turn of the model that works and takes messages');
+  const took = await w.send({ text: 'sonnet And the tests', typed: true, model: true, toModel: true });
+  assert.deepEqual([took.sent, took.later, took.working, took.takes], [true, true, undefined, undefined], 'the sender is told it waits for the turn to end');
+  const row = w.from('And the tests');
+  assert.deepEqual([row.state, row.model, row.turn, row.toModel], ['queued', { vendor: 'claude', model: 'sonnet' }, undefined, true], 'it waits with its model, and is not on the running turn');
+  assert.equal(w.session().state, 'running', 'the turn that works goes on');
+  assert.deepEqual(sessionModel(w.repo, w.session(), { turn: true }), before, 'on the model it was started on');
+  // The name alone, meanwhile: the model starts with the next turn, and that is said too.
+  const alone = await w.send({ text: 'sonnet', typed: true, model: true, toModel: true });
+  assert.deepEqual([alone.sent, alone.later], [false, true]);
+  await until(() => w.request(row.id)?.state === 'done' && !['running', 'preparing'].includes(w.session().state), 'the turn of its message', 120000);
+  assert.deepEqual(w.session().runs.slice(count).filter(run => run.role === 'lead').map(run => run.asked ?? null), [before.model ?? null, 'sonnet'], 'the next turn started on the model it named');
+  const taken = rows(path.join(w.fake.dir, 'absorbed.jsonl')).filter(item => item.mid === true && /And the tests/.test(String(item.content)));
+  assert.deepEqual(taken, [], 'the turn that worked never read it');
+});
+
 test('in a project worked by hand another computer changes nothing of a session\'s agents: /model is refused, and a message to a bot waits for the yes', { timeout: 120000 }, async t => {
   const w = await world(t, 'manual');
   const before = JSON.stringify(sessionModel(w.repo, w.session())), bots = sessionBots(w.session());

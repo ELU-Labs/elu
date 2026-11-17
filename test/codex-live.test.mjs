@@ -91,17 +91,39 @@ test('a message sent while Codex works goes to that turn at its next step, and t
   assert.deepEqual(written.find(row => row.item?.type === 'reasoning').item.text, 'Working on the requested change.');
   assert.deepEqual(written.find(row => row.type === 'turn.completed').usage, { input_tokens: 20, cached_input_tokens: 5, cache_write_input_tokens: 0, output_tokens: 12, reasoning_output_tokens: 2 });
   assert.equal(task.sessions.lead.id, THREAD);
-  // In the chat each shows once, where it was sent, and the one reply answers all of it.
-  assert.deepEqual(task.messages.map(row => [row.text, row.during === true]), [['Tidy the coupon module', false], ['Also keep the old name', true], ['And say which file changed', true]]);
+  // In the chat each shows once, where it was sent.
+  assert.deepEqual(task.messages.filter(row => !row.whileWorking).map(row => [row.text, row.during === true]), [['Tidy the coupon module', false], ['Also keep the old name', true], ['And say which file changed', true]]);
   const entries = conversationEntries(f.repo, task);
-  assert.deepEqual(entries.map(row => [row.role, row.during === true]), [['You', false], ['You', true], ['You', true], [entries.at(-1).role, false]]);
-  assert.match(entries.at(-1).text, /Also took in what you sent while it worked: Also keep the old name \| And say which file changed$/);
+  assert.deepEqual(entries.filter(row => !row.whileWorking).map(row => [row.role, row.during === true]), [['You', false], ['You', true], ['You', true], [entries.at(-1).role, false]]);
+  // What it wrote while it worked answers each, under the message, and the reply at its end repeats none of it (test/reply-while-working.test.mjs): Codex writes it as a message of the agent's that is not its JSON reply.
+  assert.deepEqual(entries.filter(row => row.whileWorking).map(row => row.text), ['Answer while working: Also keep the old name', 'Answer while working: And say which file changed']);
+  assert.doesNotMatch(entries.at(-1).text, /Also took in/);
+  // Under the name its reply has: the model the thread named, on Codex's own default too.
+  assert.deepEqual(entries.filter(row => row.whileWorking).map(row => [row.role, row.model]), [['Fake Model', 'fake-model'], ['Fake Model', 'fake-model']]);
+  assert.deepEqual([entries.at(-1).role, entries.at(-1).model], ['Fake Model', 'fake-model']);
   assert.equal(task.activeInbox, undefined, 'no turn takes messages now'); assert.equal(task.activeNowStops, undefined);
   // The next turn goes on in that thread, through the app-server again.
   enqueue(f.root, 'Thanks', { continuationTaskId: '1', priority: 0 });
   await until(() => f.asked('thread/resume').length === 1 && only(f).state === 'answered' && only(f).runs.length === 2, 'the next turn');
   assert.deepEqual([f.asked('thread/resume')[0].params.threadId, f.asked('thread/resume')[0].params.sandbox], [THREAD, 'danger-full-access']);
   assert.equal(f.launches('exec').length, 0);
+});
+
+// A Codex turn that fails ends with no reply, and its log ends with the last message the agent
+// wrote: the answer it gave on the way. That answer is in the chat already, as written while it worked.
+test('a Codex turn that answers a message it took and then fails: its answer is in the chat once', { timeout: 60000 }, async t => {
+  const f = setup(t, { appServer: 'steer', mode: 'answer', steps: 12, stepMs: 200 });
+  // turnFails: the stand-in's turn ends as failed where it would write its reply.
+  const file = path.join(f.fake.dir, 'fake.json'); fs.writeFileSync(file, JSON.stringify({ ...JSON.parse(fs.readFileSync(file, 'utf8')), turnFails: true }));
+  enqueue(f.root, 'Tidy the coupon module', { priority: 0, permissions: 'full' });
+  await until(() => sessionOf(f)?.state === 'running' && sessionOf(f).activeInbox === true, 'the turn works and takes messages');
+  enqueue(f.root, 'Also keep the old name', { continuationTaskId: '1', priority: 0 });
+  await until(() => (only(f).messages ?? []).some(row => row.whileWorking), 'the turn answered it');
+  await until(() => !['running', 'preparing'].includes(only(f).state), 'the turn ends');
+  const task = only(f), written = logRows(task.runs[0].logFile);
+  assert.equal(task.state, 'blocked', JSON.stringify(task.error));
+  assert.deepEqual([written.filter(row => ['turn.completed', 'turn.failed'].includes(row.type)).map(row => row.type), written.findLast(row => row.item?.type === 'agent_message').item.text], [['turn.failed'], 'Answer while working: Also keep the old name']);
+  assert.deepEqual(conversationEntries(f.repo, task).map(row => [row.role, row.text, row.whileWorking === true]), [['You', 'Tidy the coupon module', false], ['You', 'Also keep the old name', false], ['Fake Model', 'Answer while working: Also keep the old name', true]]);
 });
 
 test('a message sent while Codex runs a long command waits for the command and can be taken back; sent now, the command stops and the same run goes on with the message', { timeout: 60000 }, async t => {
@@ -136,7 +158,7 @@ test('a message sent while Codex runs a long command waits for the command and c
   const log = task.runs[0].logFile;
   assert.deepEqual(lifecycle(log, uuid), ['started', 'completed']);
   assert.deepEqual(logRows(log).filter(row => ['turn.completed', 'turn.failed'].includes(row.type)).map(row => row.type), ['turn.completed'], 'the interrupted turn is not the end of the run');
-  assert.deepEqual(task.messages.map(row => [row.text, row.during === true]), [['Run the long check', false], ['Also keep the old name', true]]);
+  assert.deepEqual(task.messages.filter(row => !row.whileWorking).map(row => [row.text, row.during === true]), [['Run the long check', false], ['Also keep the old name', true]]);
   assert.match(conversationEntries(f.repo, task).at(-1).text, /Also took in what you sent while it worked: Also keep the old name$/);
 });
 

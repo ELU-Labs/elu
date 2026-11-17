@@ -9,7 +9,7 @@ import { lock, readTask, taskDir, settingsFile } from '../lib/state.mjs';
 import { parseConfig } from '../lib/config.mjs';
 import { takeNextModel } from '../lib/models.mjs';
 import { getBot, saveBot } from '../lib/bots.mjs';
-import { CHANGE_USAGE, changeKind, changeLine, changeWarning, changeWords, sessionBot } from '../lib/agent-change.mjs';
+import { CHANGE_USAGE, changeKind, changeLine, changeWarning, changeWords, everyBot, sessionBot } from '../lib/agent-change.mjs';
 
 // Changing an agent of a session (lib/agent-change.mjs), against the stand-in vendors: the
 // session's model by effort, by another model of its vendor and by another vendor, a bot in
@@ -200,4 +200,65 @@ test("the agent's page says each change once: the vendor's own effort on both si
   assert.equal(asked.length, 1, 'no question for the same vendor');
   assert.equal(await pages.apply(lead, { vendor: 'claude', model: 'opus', effort: 'high' }), true);
   assert.equal(said.at(-1), "Effort of Opus: Claude Code's own → high");
+});
+
+// The check's report: a bot given Opus for this session only, then "effort high" for every
+// session, was saved on Opus for every session, under a line that named the effort alone,
+// and the session's own entry was removed.
+test("for every session, a bot's change saves what he changed now: the model it has in this session only stays this session's, and the line says what every session gets", async t => {
+  const f = setup(t);
+  saveBot({ name: 'critic', vendor: 'claude', model: 'sonnet', effort: 'low', about: 'Reads for risk', instructions: 'Say what could break.' });
+  const first = await f.controller.ask('Reply with the summary "one".').finished;
+  f.controller.setBots(first.id, ['critic']);
+  const bot = () => [getBot('critic').vendor, getBot('critic').model ?? null, getBot('critic').effort ?? null], here = () => readTask(f.controller.repo, first.id).botModels;
+  f.controller.changeAgent(first.id, { bot: 'critic', to: { vendor: 'claude', model: 'opus', effort: 'low' } });
+  assert.deepEqual([bot(), here()], [['claude', 'sonnet', 'low'], { critic: { vendor: 'claude', model: 'opus', effort: 'low' } }], 'Opus, for this session only');
+  // Effort alone, for every session: the saved bot keeps Sonnet, and this session keeps Opus.
+  f.controller.changeAgent(first.id, { bot: 'critic', every: true, to: { vendor: 'claude', model: 'opus', effort: 'high' } });
+  assert.deepEqual(bot(), ['claude', 'sonnet', 'high'], 'the saved bot takes the effort, and keeps its model');
+  assert.deepEqual(here(), { critic: { vendor: 'claude', model: 'opus', effort: 'high' } }, 'this session keeps the model it was given');
+  // The model too, for every session: now the saved bot is as this session runs it, which keeps nothing of its own.
+  f.controller.changeAgent(first.id, { bot: 'critic', every: true, to: { vendor: 'claude', model: 'opus', effort: 'high' } });
+  assert.deepEqual([bot(), here()], [['claude', 'opus', 'high'], undefined], 'every session alone saves the bot as this session runs it');
+  // What is saved, by what was changed: the effort, the model, both, or neither (the bot as it runs here).
+  const saved = { vendor: 'claude', model: 'sonnet', effort: 'low' }, own = { vendor: 'codex', model: 'big-model', effort: 'high' };
+  assert.deepEqual(everyBot(saved, { ...saved, model: 'opus' }, { vendor: 'claude', model: 'opus', effort: 'high' }), { vendor: 'claude', model: 'sonnet', effort: 'high' });
+  assert.deepEqual(everyBot(saved, own, { ...own, model: 'quick-model' }), { vendor: 'codex', model: 'quick-model', effort: 'low' });
+  assert.deepEqual(everyBot(saved, saved, { vendor: 'claude', model: 'opus', effort: null }), { vendor: 'claude', model: 'opus', effort: null });
+  assert.deepEqual(everyBot(saved, own, own), own);
+  // The line: what the saved bot gets, never the model this session alone has.
+  const { agentDialogs } = await import('../lib/terminal-agent.mjs');
+  const names = { opus: 'Opus', sonnet: 'Sonnet' }, said = [], lines = [];
+  const pages = agentDialogs({ listDialog: async () => null, yes: async () => true, setMessage: text => said.push(text), colour: false, pickModel: async () => null, pickEffort: async () => undefined,
+    nameOf: choice => names[choice.model] ?? choice.vendor, save: (agent, to, every, line) => { lines.push(line(false)); return { later: false, line: line(false) }; } });
+  const critic = { who: '@critic', bot: 'critic', vendor: 'claude', model: 'opus', effort: 'low', saved };
+  assert.equal(await pages.apply(critic, { vendor: 'claude', model: 'opus', effort: 'high' }, true), true);
+  assert.equal(lines.at(-1), 'Effort of @critic: low → high, in every session');
+  assert.equal(await pages.apply({ ...critic, effort: 'high', saved: { ...saved, effort: 'high' } }, { vendor: 'claude', model: 'opus', effort: 'high' }, true), true);
+  assert.equal(lines.at(-1), 'Model of @critic: Sonnet → Opus, in every session');
+  assert.equal(await pages.apply(critic, { vendor: 'claude', model: 'opus', effort: 'high' }), true);
+  assert.equal(lines.at(-1), 'Effort of @critic: low → high', 'this session only, as before');
+  // Saved so already, and run so here: nothing to do.
+  assert.equal(await pages.apply({ ...critic, model: 'sonnet' }, { vendor: 'claude', model: 'sonnet', effort: 'low' }, true), false);
+  assert.equal(said.at(-1), '@critic already runs on Sonnet, low.'); assert.equal(lines.length, 3);
+});
+
+// The check's report: the page and the chat's line read "Claude Code's own" where the clicked
+// heading showed the level, and that same level picked read as a change.
+test("an effort reads as its level where the vendor's own is known: the page and the line name it, and that same level picked is no change", async () => {
+  const { agentDialogs, effortText } = await import('../lib/terminal-agent.mjs');
+  const names = { opus: 'Opus', sonnet: 'Sonnet' }, said = [], lines = [], rows = [];
+  const lead = { who: 'Opus', bot: null, vendor: 'claude', model: 'opus', effort: null, own: 'high' };
+  assert.equal(effortText(lead), 'high'); assert.equal(effortText({ ...lead, own: null }), "Claude Code's own"); assert.equal(effortText({ ...lead, effort: 'low' }), 'low');
+  const pages = agentDialogs({ listDialog: async (title, list) => { rows.push(list); return null; }, yes: async () => true, setMessage: text => said.push(text), colour: false, pickModel: async () => null, pickEffort: async () => undefined,
+    nameOf: choice => names[choice.model] ?? choice.vendor, save: (agent, to, every, line) => { lines.push(line(false)); return { later: false, line: line(false) }; } });
+  await pages.open(lead);
+  assert.match(rows.at(-1)[1].replace(/\s+/g, ' '), /^Effort high$/, 'the page names the level');
+  assert.equal(await pages.apply(lead, { vendor: 'claude', model: 'opus', effort: 'high' }), false);
+  assert.equal(said.at(-1), 'This session already runs on Opus, high.'); assert.equal(lines.length, 0, 'nothing saved, no line');
+  assert.equal(await pages.apply(lead, { vendor: 'claude', model: 'opus', effort: 'low' }), true);
+  assert.equal(lines.at(-1), 'Effort of Opus: high → low');
+  // Another model, with no effort chosen on either: the model alone is said.
+  assert.equal(await pages.apply(lead, { vendor: 'claude', model: 'sonnet', effort: null }), true);
+  assert.equal(lines.at(-1), 'Model of this session: Opus → Sonnet');
 });
