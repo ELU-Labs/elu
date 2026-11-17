@@ -49,7 +49,9 @@ your account suspended or terminated. ELU wraps `agy`, so read
 New sessions start on the default model. A project's default is set with `/model default
 <name>`, or in its settings: Projects, Enter, Default model. This computer's default, which
 every project that has not chosen uses, is set with `/model computer <name>` or the This
-computer row there. `none` in place of the name clears either. With nothing chosen, the
+computer row there. `none` in place of the name clears either. `/model computer auto`
+starts the sessions you start on this computer with [Auto model](models.md): ELU then picks
+the model for each step, from the models of the default model's vendor. With nothing chosen, the
 default is the first vendor installed on this computer, in this order: Claude Code, Codex,
 Antigravity CLI, Grok Build. So a computer that has only Grok Build runs every new session on
 it, also one that a teammate's message, another computer or a schedule starts. A default

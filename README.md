@@ -54,7 +54,7 @@ Add a bot to a session: `@reviewer` reviews each change under its own name, and 
 
 ### Models and agents
 
-Change the model, the vendor or the effort in the middle of a session: `/model` picks another model and the next reply comes from it, in the same chat; `/agent change` sets a model's effort.
+Change the model, the vendor or the effort in the middle of a session: `/model` picks another model and the next reply comes from it, in the same chat; `/agent change` sets a model's effort. `/model auto` turns on [Auto model](docs/models.md): ELU picks the model for each step, the top model to plan and the work model to edit, and each reply names the one that wrote it.
 
 ![Changing the model in the middle of an ELU session: /model lists the models, the session changes from Opus to Sonnet, the next reply comes from Sonnet, and /agent change sets its effort to high.](docs/media/agents.svg)
 
@@ -94,6 +94,7 @@ Nothing is pushed until you type `/publish`, read the exact push and confirm; th
 - [Sessions](docs/sessions.md): the tabs, the chat, messages while a session works, worktrees.
 - [Tasks](docs/tasks.md): what a Task holds, approving it, its card on the Kanban.
 - [Commands and keys](docs/commands.md): the commands, schedules, `elu` from a shell or a session, the keys.
+- [Models and Auto model](docs/models.md): the model of a session, and letting ELU pick it for each step.
 - [Long jobs](docs/jobs.md): jobs that outlive a turn, and keep going.
 - [Permissions](docs/permissions.md): the modes, approvals, rules, MCP servers, the never list.
 - [Bots](docs/bots.md): the five that come with the app, and making your own.
