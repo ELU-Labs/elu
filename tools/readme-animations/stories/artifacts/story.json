@@ -1,0 +1,16 @@
+{
+  "slug": "artifacts",
+  "alt": "The Artifacts tab of a session in the ELU terminal app: a chart of tests passing by run starts empty and fills in while the session works, until it reaches the target.",
+  "cols": 100,
+  "rows": 30,
+  "top": 0,
+  "show": 30,
+  "still": 5,
+  "frames": [
+    { "file": "01.ansi", "seconds": 2.5, "caption": "The Task names what to track: tests passing, by run." },
+    { "file": "02.ansi", "seconds": 1.5, "caption": "/artifacts opens the tab. It is empty at first." },
+    { "file": "03.ansi", "seconds": 2, "caption": "The session fills the chart as it runs the tests." },
+    { "file": "04.ansi", "seconds": 2, "caption": "Each run adds a point: 36 of 40 pass after run 4." },
+    { "file": "05.ansi", "seconds": 3.5, "caption": "The last run reaches the target: all 40 tests pass." }
+  ]
+}

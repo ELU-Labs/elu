@@ -1,0 +1,17 @@
+{
+  "slug": "agents",
+  "alt": "Changing the model in the middle of an ELU session: /model lists the models, the session changes from Opus to Sonnet, the next reply comes from Sonnet, and /agent change sets its effort to high.",
+  "cols": 100,
+  "rows": 30,
+  "top": 0,
+  "show": 30,
+  "still": 6,
+  "frames": [
+    { "file": "01.ansi", "seconds": 2.5, "caption": "Opus answered. You type /model to see the models." },
+    { "file": "02.ansi", "seconds": 2, "caption": "You pick sonnet. The session's model changes." },
+    { "file": "03.ansi", "seconds": 1.5, "caption": "Your next message goes to Sonnet." },
+    { "file": "04.ansi", "seconds": 2.5, "caption": "The reply comes from Sonnet, in the same chat." },
+    { "file": "05.ansi", "seconds": 1.5, "caption": "/agent change sets the effort of a model too." },
+    { "file": "06.ansi", "seconds": 3.5, "caption": "From its next turn Sonnet works at high effort." }
+  ]
+}

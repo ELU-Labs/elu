@@ -1,0 +1,16 @@
+{
+  "slug": "reply",
+  "alt": "A message written to a session of the ELU terminal app that is still working: the line under it changes to Read, then answered, and the answer shows under it while the turn keeps working.",
+  "cols": 100,
+  "rows": 30,
+  "top": 0,
+  "show": 30,
+  "still": 5,
+  "frames": [
+    { "file": "01.ansi", "seconds": 2, "caption": "A session is working on your request." },
+    { "file": "02.ansi", "seconds": 2, "caption": "You write to it while it works." },
+    { "file": "03.ansi", "seconds": 2, "caption": "ELU sends your message to the running turn." },
+    { "file": "04.ansi", "seconds": 1.5, "caption": "The turn reads it at its next step." },
+    { "file": "05.ansi", "seconds": 3.5, "caption": "The answer shows at once. The turn keeps working." }
+  ]
+}

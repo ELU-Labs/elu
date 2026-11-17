@@ -1,0 +1,16 @@
+{
+  "slug": "team",
+  "alt": "Two computers on one shared ELU project: a session ana starts on her laptop shows on ben's desk computer, ben writes to it from there, and the laptop's agent answers on both.",
+  "cols": 100,
+  "rows": 30,
+  "top": 0,
+  "show": 30,
+  "still": 4,
+  "frames": [
+    { "file": "01.ansi", "seconds": 2.5, "caption": "ana asks her agent a question on her laptop." },
+    { "file": "02.ansi", "seconds": 2.5, "caption": "ben's desk computer lists it under On laptop · ana." },
+    { "file": "03.ansi", "seconds": 2, "caption": "ben writes to that session from his desk." },
+    { "file": "04.ansi", "seconds": 3, "caption": "The laptop's agent answers. ben reads it at his desk." },
+    { "file": "05.ansi", "seconds": 3.5, "caption": "On the laptop, ana sees ben's message and the answer." }
+  ]
+}
