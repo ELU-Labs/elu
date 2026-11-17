@@ -274,11 +274,11 @@ test('Chats shows channels and direct messages beside the open one at 160x40', a
   assert.ok(!text.includes('Internal') && !text.includes('Global'), 'Chats has no sub-tabs');
   const [mates, threads] = v.panels.teamBoxes;
   assert.equal(v.panels.teamBoxes.length, 2); assert.equal(mates.atop, threads.atop); assert.ok(threads.aleft > mates.aleft);
-  // Channels, then people, then my own bots: the five the app comes with. A teammate's sessions sit under that teammate, named by what they do with no number, and a row counts the threads that wait for me.
+  // Channels, then people, then my own bots: the six the app comes with. A teammate's sessions sit under that teammate, named by what they do with no number, and a row counts the threads that wait for me.
   const items = v.panels.teamLists[0].items.map(item => plainItem(item).trimEnd()), sara = items.findIndex(line => /@sara-box · sara\s+direct/.test(line));
   assert.deepEqual(items.slice(0, 5), ['Channels', '# general  3', '+ Add channel', '', 'Direct messages']);
   assert.match(items[sara], /^● @sara-box · sara\s+direct\s+1$/); assert.match(items[sara + 1], /^\s+⚠ @sara web editing · overlap/); assert.ok(!/#\d/.test(items[sara + 1]), 'a teammate’s session shows no number');
-  assert.match(items[sara + 2], /^○ @li\s+offline\s+2$/); assert.deepEqual(items.slice(sara + 3), ['◆ @reviewer', '◆ @lead', '◆ @qa', '◆ @pair', '◆ @elu', '+ Add teammate']);
+  assert.match(items[sara + 2], /^○ @li\s+offline\s+2$/); assert.deepEqual(items.slice(sara + 3), ['◆ @reviewer', '◆ @lead', '◆ @qa', '◆ @pair', '◆ @orchestrator', '◆ @elu', '+ Add teammate']);
   assert.equal(v.panels.teamBoxes[1]._label.getText().trim(), '@sara'); assert.ok(!/draft to send|@li/.test(v.panels.teamLists[1].items.map(plainItem).join('\n')), 'only the open row’s threads show');
   assertPanes(v, 160);
   await openRow(v, /# general/, '#general');

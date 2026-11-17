@@ -48,7 +48,7 @@ Write to a session while it works: the turn reads your message at its next step,
 
 ### Bots
 
-Add a bot to a session: `@reviewer` reviews each change under its own name, and the agent fixes what it finds. Another bot, `@lead`, plans the work and hands the pieces to helpers.
+Add a bot to a session: `@reviewer` reviews each change under its own name, and the agent fixes what it finds. Another bot, `@lead`, plans the work and hands the pieces to helpers. `@orchestrator` watches every session on your computer and advises you; it edits nothing, and `/orchestrator` sets how much it may do by itself.
 
 ![A bot in an ELU session: @reviewer is added to a new session, reviews the agent's change under its own name, asks for one fix, and passes the change once it is fixed.](docs/media/bots.svg)
 
@@ -96,7 +96,8 @@ Nothing is pushed until you type `/publish`, read the exact push and confirm; th
 - [Commands and keys](docs/commands.md): the commands, schedules, `elu` from a shell or a session, the keys.
 - [Long jobs](docs/jobs.md): jobs that outlive a turn, and keep going.
 - [Permissions](docs/permissions.md): the modes, approvals, rules, MCP servers, the never list.
-- [Bots](docs/bots.md): the five that come with the app, and making your own.
+- [Bots](docs/bots.md): the six that come with the app, and making your own.
+- [Orchestrator](docs/orchestrator.md): the bot that oversees your sessions, its levels, and what it learns.
 - [Teammates](docs/teammates.md): teams, invites, shared projects, your own computers. The wire format is in [docs/peer-network.md](docs/peer-network.md).
 - [Standup](docs/standup.md): an update from every open session.
 - [Usage](docs/usage.md): accounts, limits, costs, `/budget`.

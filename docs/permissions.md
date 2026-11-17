@@ -23,7 +23,7 @@ and `/permissions default auto` sets what new sessions start with.
 
 | | Read only | Ask for approval | Approve for me | Full access |
 | --- | --- | --- | --- | --- |
-| Who gets it | bots that review or answer, teammate questions, tasks saved without a mode | your session | your session; at most this for a schedule whose mode you did not pick | your session with its bots' schedules, and a schedule you pick it for |
+| Who gets it | bots that review or answer, teammate questions, tasks saved without a mode | your session | your session; at most this for a schedule whose mode you did not pick | your session with its bots' schedules, and a schedule you pick it for. A bot that oversees never gets edits or a shell: [its table](#a-bot-that-oversees) |
 | Reads | the workspace; answer turns may read your home | without asking: the workspace, folders and, for answer turns, your home (below) | same | anything |
 | Edits in the workspace | edit turns only | yes | yes | yes |
 | Edits outside it | no | asks | a reviewer model decides; on Antigravity refused, and on Claude Code an answer turn's edit asks | yes |
@@ -176,7 +176,9 @@ repositories found in your home, so the model can find the code you mean.
 On Claude Code, your own MCP servers (`claude mcp list`) are on for the model and for bots
 that work, and their tools run without asking in every mode. Neither the sandbox nor the
 never list below covers them, so a server can reach the internet and act on other services.
-`/mcp off NAME` turns one off for the project. A teammate's question never gets them.
+`/mcp off NAME` turns one off for the project. A teammate's question never gets them. A bot
+that oversees gets only the servers named on its own row, and ELU asks you before any tool
+of theirs that is not a reading one.
 
 `/mcp add` adds a server: it asks for a name, the URL (or the command that starts it), the
 header that carries its key, such as `Authorization`, and then the key, in a field that
@@ -193,9 +195,9 @@ removing one is on the never list, outside Full access.
 
 ## Which profile a turn runs with
 
-In order: a bot that reviews or answers runs read only; a teammate's question or
-review, or a read-only turn, runs read only; otherwise the session's mode. A task
-saved without a mode runs read only.
+In order: a bot that reviews or answers runs read only; a bot that oversees runs as
+[below](#a-bot-that-oversees); a teammate's question or review, or a read-only turn, runs
+read only; otherwise the session's mode. A task saved without a mode runs read only.
 
 Your message to a session whose approved Task stopped (on a question, a block or your
 stop) continues that work with the Task's edit access, in the session's mode now. Only a
@@ -213,6 +215,29 @@ model for them. A turn its schedule started runs in the session's mode too, Full
 included: pick Full access for the session, when you start it or with `/permissions full`,
 and its bots' schedules run with it, with nobody watching. In a session that edits your
 checkout in place, they run while the session has Full access.
+
+### A bot that oversees
+
+`@orchestrator` ([Orchestrator](orchestrator.md)) never edits, writes or runs a shell, in
+any mode, Full access included. On Claude Code it runs in Claude Code's ask-first mode, and
+ELU answers each tool it asks for from this table, not a model:
+
+| Tool | Read only | Ask for approval | Approve for me | Full access |
+| --- | --- | --- | --- | --- |
+| Read and search files | yes | yes | yes | yes |
+| Edit, write, shell | never | never | never | never |
+| ELU's orchestrator tools | no | by its level | by its level | by its level |
+| Web search and fetch | no | asks you | yes | yes |
+| A connected source's reading tools | no | yes | yes | yes |
+| A connected source's other tools | no | asks you | asks you | asks you |
+| Opus helpers | no | yes | yes | yes |
+
+It gets only the MCP servers named on its own row, never the project's others. Its helpers
+read and search, the web too, with no MCP server and none of ELU's tools. ELU's
+orchestrator tools go through one check in ELU's code: the rules it never breaks, its level
+(`/orchestrator`), its caps, then your yes where the level needs it. The session's mode
+lifts none of them. On another vendor, and in a Read only session, it only answers, read
+only.
 
 ELU does not push, merge, tag, deploy or publish by itself. `/publish` shows the exact
 push and the draft pull request, waits for you, and refuses a default branch. Outside Full
