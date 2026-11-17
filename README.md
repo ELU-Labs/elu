@@ -15,8 +15,7 @@ From your home folder, not inside a project you do not trust:
 npx -y @elu-labs/elu
 ```
 
-This opens ELU and installs the `elu` command; next time you type `elu`. To install
-a given version, name it: `npx -y @elu-labs/elu@0.1.12`.
+This opens ELU and installs the `elu` command; next time you type `elu`.
 
 You need macOS or Linux, Node 22 or newer, Git, Claude Code signed in, and Codex installed
 (no sign-in needed; its sandbox runs your project's checks):
