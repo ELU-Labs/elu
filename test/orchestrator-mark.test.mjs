@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { temp, project, fakeClis, git } from './helpers.mjs';
 import { Conductor, enqueue } from '../lib/conductor.mjs';
 import { addToRequest, joinRequests, pendingRequests, projectFolder, supersededRequests, takeRequest, typedRequest } from '../lib/workspace.mjs';
@@ -14,6 +15,7 @@ import { saveBot, sessionTalker, overseerWrote } from '../lib/bots.mjs';
 import { overseeRunUsd } from '../lib/runner.mjs';
 import { OVERSEE_RUN_USD } from '../lib/bots.mjs';
 import { setCap } from '../lib/orchestrator-settings.mjs';
+import { actionsFile, readActions } from '../lib/orchestrator-actions.mjs';
 
 // What the bot that oversees the sessions sends carries its mark from the request on
 // (overseer, lib/conductor.mjs enqueue), and nothing it sends is ever the owner's: it approves
@@ -106,6 +108,39 @@ test('Stop takes back the bot\'s waiting notes, and his own messages stay', t =>
   enqueue(f.root, 'For session 4.', { continuationTaskId: '4', ...NOTE });
   stopLongWork(f.root, '3');
   assert.deepEqual(pendingRequests(f.root).map(row => row.goal), ['Mine.', 'For session 4.']);
+});
+
+test('a first Stop in a process that never loaded the bot\'s log still says the notes were taken back', t => {
+  const f = fixture(t);
+  const note = enqueue(f.root, 'Session 3 is slow.', { continuationTaskId: '3', ...NOTE }), other = enqueue(f.root, 'For session 4.', { continuationTaskId: '4', ...NOTE });
+  const row = (id, request) => JSON.stringify({ id, at: new Date().toISOString(), bot: 'orchestrator', from: { root: f.root, session: '1', run: 'r' }, action: 'session_message', target: { root: f.root, session: request === note.id ? '3' : '4', request }, summary: 'Send a note', level: 'act', decision: 'allow', by: 'level', undo: { kind: 'message', root: f.root, request }, undoneAt: null });
+  fs.mkdirSync(path.dirname(actionsFile()), { recursive: true });
+  fs.writeFileSync(actionsFile(), `${row('a1', note.id)}\n${row('a2', other.id)}\n`, { mode: 0o600 });
+  // A process of its own, as the peer daemon's Stop is: nothing of the bot's is loaded there.
+  const code = `const { stopLongWork } = await import(${JSON.stringify(new URL('../lib/long-work.mjs', import.meta.url).href)}); stopLongWork(${JSON.stringify(f.root)}, '3');`;
+  const ran = spawnSync(process.execPath, ['--input-type=module', '-e', code], { env: process.env, encoding: 'utf8', timeout: 60000 });
+  assert.equal(ran.status, 0, ran.stderr);
+  assert.deepEqual(pendingRequests(f.root).map(request => request.id), [other.id]);
+  assert.deepEqual(readActions().map(action => [action.id, action.undone]), [['a1', 'taken back'], ['a2', null]]);
+});
+
+test('an answer of the bot names the question it answers by its mark, and the conductor hands that on', t => {
+  const f = fixture(t), mark = 'a1b2c3d4e5f60718';
+  const answer = enqueue(f.root, 'Use Postgres.', { continuationTaskId: '3', ...NOTE, asks: mark });
+  assert.equal(answer.asks, mark);
+  assert.equal(pendingRequests(f.root).find(row => row.id === answer.id).asks, mark);
+  const note = enqueue(f.root, 'A note.', { continuationTaskId: '4', ...NOTE });
+  assert.equal('asks' in note, false);
+  // Only with the bot's mark, on a session, and as 16 hex characters.
+  for (const fields of [{ continuationTaskId: '3', typed: true, asks: mark }, { continuationTaskId: '3', asks: mark }, { ...START, asks: mark }, { continuationTaskId: '3', ...NOTE, asks: mark.toUpperCase() }, { continuationTaskId: '3', ...NOTE, asks: mark.slice(1) }, { continuationTaskId: '3', ...NOTE, asks: `${mark}0` }, { continuationTaskId: '3', ...NOTE, asks: 7 }, { continuationTaskId: '3', ...NOTE, asks: null }, { continuationTaskId: '3', ...NOTE, asks: '' }])
+    assert.throws(() => enqueue(f.root, 'Use Postgres.', fields), /Only an answer of the bot that oversees your sessions names the question it answers/, JSON.stringify(fields));
+  assert.equal(pendingRequests(f.root).length, 2, 'nothing refused was queued');
+  // The conductor passes it to the session's ask beside the bot's name, and nothing for a note.
+  const conductor = new Conductor(), seen = [];
+  conductor.controller = () => ({ ask: (goal, id, options) => { seen.push([goal, id, options.overseer, options.asks]); throw new Error('That session is already running.'); } });
+  for (const row of pendingRequests(f.root)) conductor.launch(projectFolder(f.root), row);
+  assert.deepEqual(seen, [['Use Postgres.', '3', 'orchestrator', mark], ['A note.', '4', 'orchestrator', undefined]]);
+  assert.deepEqual(pendingRequests(f.root).map(row => row.state), ['queued', 'queued']);
 });
 
 test('a note that says yes, ok, approve or go ahead approves nothing, teaches nothing, and shows under the bot\'s name', async t => {

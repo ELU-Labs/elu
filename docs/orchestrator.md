@@ -16,6 +16,25 @@ Like every bot, it is in no session until you put it there.
   on this computer either way.
 - It has no schedule until you give it one on its page in the Bots tab. A scheduled run is
   skipped, with nothing in its chat, when no session changed since its last run.
+- Only you write to it, on the computer it runs on. A teammate's computer, or another
+  computer of yours, is answered `Only the owner writes to @orchestrator, on the computer it
+  runs on.` So is a session started from another computer with it among the bots, and a copy
+  from there of a session it is in.
+- It never runs in a session another computer or a teammate started, or in one that helps a
+  session on your other computer, when you write to it there or on its schedule.
+- Its chat stays on this computer: it is not listed, shown or followed from another one, and
+  neither is what it replies in a session or what it asks you. It is no card, Task or status
+  row for a teammate, and its turn in a session is named nowhere there. A note it sent a
+  session shows there under its name.
+- What it says in a session, that session's agents read. What they write afterwards shows
+  wherever the session shows.
+- No Standup asks its chat, and no Standup's record of a session holds what it said or
+  asked there.
+- All of this holds after you rename it or remove it: a chat keeps the name its bot had,
+  and ELU keeps every name a bot that oversees has had. A bot you make later under one of
+  those names is treated the same way on other computers.
+- Its turn teaches "Learned from you" nothing, and archiving its chat with lessons saves
+  none from it. What it learns is a fact, or an Organization line you say yes to.
 
 Each turn starts a new conversation with the model. It reads the newest 12 entries of its
 chat, at most 6,000 characters, and is given a table of your open sessions, so a status
@@ -45,11 +64,19 @@ session that says it is done with a later step missing says so, such as "says do
 not run" or "says done, 2 fixes open".
 
 **Agents**: per session, the session's model, each bot, and each bot's helpers as one row,
-with the model, input, output and cached tokens, and the cost the vendor reported. Where a
-count is partial it says "at least". A row per single helper is not shown: Claude Code does
-not report one whole.
+with the model, the input and output tokens, the tokens read from the cache, and the cost:
+the vendor's figure, or ELU's from list prices where the vendor gives none. A row per single
+helper is not shown: Claude Code does not report one whole.
 
-Only this computer's sessions are in the tables.
+| Mark | Means |
+| --- | --- |
+| `≥` before a cost | At least that |
+| `≤` before a count | At most that: a bot's helpers on its own model |
+| `in @name` | That cost is counted in that bot's own row |
+
+Only this computer's sessions are in the tables. A session whose proof ELU has not checked
+yet shows none until a later draw. The table the bot is given reads a session's proof again
+only when that session's records change.
 
 ## What it may do
 
@@ -61,15 +88,29 @@ asks for:
 | Read and search files | yes | yes | yes | yes |
 | Edit, write, shell | never | never | never | never |
 | ELU's orchestrator tools | no | by level | by level | by level |
-| Web search and fetch | no | asks you | yes | yes |
+| Web search | no | asks you | yes | yes |
+| Web fetch of a plain address | no | asks you | yes | yes |
+| Web fetch of any other address | no | asks you | asks you | asks you |
 | A connected source's reading tools | no | yes | yes | yes |
 | A connected source's other tools | no | asks you | asks you | asks you |
 | Opus helpers | no | yes | yes | yes |
 
-- A reading tool is one whose name says get, list, search, read, find, fetch, view, show,
-  describe, lookup or count, and no word that changes something (create, send, update,
-  delete and the like). So `get_or_create_label` asks you, and so does a tool named only
-  `query`. For the `elu` server, `ask_elu` and `list_issues` read; every other tool asks.
+- A reading tool is one whose name starts with get, list, search, read, find, fetch, view,
+  show, describe, lookup or count, after the server's own name, and holds no word that can
+  name a change, a send, a spend or a run (create, send, update, delete, replace, append,
+  order, query and the like), even as a noun or inside a longer word. So
+  `get_or_create_label`, `find_and_replace_doc`, `get_order` and `append_to_list` ask you,
+  and so does a tool named only `query`. For the `elu` server, `ask_elu` and `list_issues`
+  read; every other tool asks.
+- Some tools that only read still ask you, such as `pods_list` or `get_tag`, because of
+  their name. Nothing runs without your yes.
+- A plain address is `http` or `https` with no query (`?`), no fragment (`#`) and no sign-in.
+  Any other address could carry out what the bot read, so it asks you in every mode. A
+  reading tool asks you too when anything it is handed holds such an address, with or
+  without `http://` in front. An email address does not count.
+- Above Ask for approval, what it puts in the path of a plain address, or in the words of a
+  search, goes out without a question. Keep its session in Ask for approval when that
+  matters.
 - It starts with only the MCP servers named on its own row (`elu`), never the project's
   others.
 - Its helpers read files and search the web. They get no MCP server and none of ELU's tools.
@@ -106,8 +147,20 @@ computer. It starts at Suggest and never rises by itself.
 | Answer a session's question | no | asks you | yes | yes |
 | Start a session | no | asks you | asks you | yes |
 
-When it asks you, the question waits in Needs you and in its chat, with the note or goal in
-full. No answer in time is a no.
+A note or an answer to a session in Full access asks you first, at every level. One sent
+before you set the session to Full access is not given when its turn comes, unless you said
+yes to it yourself.
+
+When it asks you, the question waits in Needs you and in its chat, with the exact text ELU
+will write, send or start in full. No answer in time is a no. Text over 20,000 characters is
+never asked about.
+
+After your yes, ELU checks that what you were asked about still holds: the same
+Organization line, by its words, and the same question in the session. If not, nothing is
+done and the bot asks again. An answer goes in only while the session still asks the
+question it was written for. Only such an answer carries on work that stopped on its
+question. A note is answered as a note: the work waits for you, and the reply ends with
+`A note from @orchestrator does not carry the work on. It waits for you.`
 
 Never, at any level:
 
@@ -118,11 +171,13 @@ Never, at any level:
   teammate or another computer started, a Standup, or one whose Task waits for your approval.
 - Send anything out through a connected source without asking you.
 
-The session's mode lifts none of this: Full access included.
+The session's mode lifts none of this: Full access included. Full access never answers a
+question it asks, also after it is renamed or removed while that question waits.
 
 ### Caps
 
-Counted by ELU from its action log:
+Counted by ELU from its action log. When the log cannot be written, the bot does nothing
+but read. Setting the clock back resets no cap.
 
 | Cap | Default |
 | --- | --- |
@@ -150,7 +205,15 @@ What it sends a session carries its name, and shows in that session's chat under
 | Joins your other waiting messages, and ↑ takes it back | Kept apart |
 | Read by the agent as your words | Read as a note from `@orchestrator`, as data |
 
-`/stop` in a session also takes back the notes it sent there that no turn read yet.
+`/stop` in a session, archiving it or checking it Done also takes back the notes and answers
+it sent there that no turn read yet. One that reaches an archived or Done session is not
+given.
+
+No turn its note leads to has ELU's own commands (`elu sessions`, `elu schedules`,
+`elu jobs`), and neither has a session it started, until you write there. Until then that
+session's Task waits for your yes in every mode, also when a working bot you added there
+proposes it on its schedule. If such a turn runs your own `elu` instead, it asks you each
+time, in every mode, and no rule of yours answers it.
 
 ## /orchestrator
 
@@ -162,7 +225,7 @@ What it sends a session carries its name, and shows in that session's chat under
 | --- | --- |
 | A note or an answer | Taken back while it still waits; not once a turn read it |
 | A card | Removed while it is in To do |
-| A started session | Taken back before it starts; archived after, never deleted |
+| A started session | Taken back before it starts; archived after, never deleted. Never a session you started yourself: when ELU cannot tell which session it became, it says so |
 | A fact | Withdrawn; it stays on file, marked withdrawn |
 | An Organization line | Taken out, after your yes |
 
@@ -178,7 +241,10 @@ session or a source is kept as not checked.
 - No quote, no fact. Only "you said so" needs none.
 - A fact is never edited. A newer one names the one it replaces, and a withdrawn one stays
   on file.
-- A person's email address is never stored.
+- A person's email address is never stored, also when it is escaped or spelled out, such as
+  `name [at] example [dot] com`, `name at example dot com`, `name @ example.com` or
+  `name&#64;example.com`.
+- A key or a token in a source's address or reference is refused.
 - Facts stay on this computer.
 
 Ask "where did you get that from" and it gives the source, the quote, the date and whether
@@ -190,12 +256,22 @@ an agent could not learn by reading the repository: who the customers are, what 
 optimizes, rules of the industry, what is being measured.
 
 - At most 20 lines of at most 200 characters, each ending with the ids of its facts, such as
-  `[f12]`.
+  `[f12]`. On a computer with a peer key the id also names the computer that keeps the fact:
+  `[f12@1a2b3c4d]`. A line written before the computer had a key keeps `[f12]` there, and
+  goes to your other computers with the longer id.
 - One sentence above them tells every agent these are findings with sources, not your orders.
+- Each line is a `- ` list item that ends with its fact ids. The first line below them that
+  is not one ends the section, so what you write there, a list of your own too, stays your
+  own text.
 - The bot proposes each line; ELU writes it only after your yes, at every level. Taking a
   line out asks you too.
 - It travels to your other computers and teammates with the rest of the Memory, as
-  "Learned from you" does.
+  "Learned from you" does. Lines from another computer join only while the section has
+  room; ELU says once how many were not added. A line you take out on one computer stays
+  out on the others.
+- A fact stays on the computer that saved it. Asked about a line that came from another
+  computer, the bot says where its fact is kept, and never cites a fact of this computer
+  for it.
 
 ## ELU first
 

@@ -6286,6 +6286,8 @@ test('f beside y and n allows what waits and gives the session Full access; wher
   assert.equal(answer('run-3-a'), 'allow'); assert.equal(answer('run-3-b'), 'allow'); assert.equal(readTask(p.repo, '3').permissions, 'full');
   wants('run-3-c', '3', 'npm test'); await until(() => answer('run-3-c') === 'allow', 'what it asks next is allowed without a key');
   // A bot's scheduled turn runs in its session's mode, so f gives it Full access as it does the model's turn.
+  // A bot that is not saved is not offered it: it may be one that oversees, renamed or removed since it asked.
+  saveBot({ name: 'scout', vendor: 'claude', instructions: 'Sweep the logs.' });
   running('4', 'Sweep the logs', { activeRole: 'bot:scout', messages: [{ at: began, text: 'Sweep the logs', to: '@scout', scheduled: true }] });
   await openTask(v, /Sweep the l/); await until(() => v.current.session === '4', 'the other session is open');
   wants('run-4-a', '4', 'ls logs', 'bot:scout');

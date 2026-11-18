@@ -132,6 +132,40 @@ test('an email address or a secret never gets into a fact', t => {
   assert.throws(() => saveFact({ ...WEB, source: { kind: 'session', session: '3', project: 'ana@acme.example' } }), email, 'a project that is no folder here is text like any other');
 });
 
+test('where a fact came from is checked for secrets too, and an address is found however it is written', t => {
+  home(t);
+  const email = { message: 'A fact never holds an email address. Say who by role or by name.' }, secret = { message: 'That may hold a secret, so it is not saved as a fact.' };
+  // A key or token in the page's address, in a source's ref, or in the question asked.
+  assert.throws(() => saveFact({ ...WEB, source: { kind: 'web', url: `https://acme.example/pricing?api_key=${keyLike('sk-ant-api03-', 'aB3dE5fG7hJ9kL1mN3pQ5rS7tU9vW1xY')}` } }), secret);
+  assert.throws(() => saveFact({ ...WEB, source: { kind: 'web', url: 'https://acme.example/pricing?access_token=Zx81Kq0Pw7Lm2Nv9Qa4Rt6Ys3Ub5Wc1De8Fg0Hj' } }), secret);
+  assert.throws(() => saveFact({ ...WEB, source: { kind: 'source', server: 'github', tool: 'get_issue', ref: keyLike('ghp_', 'a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8') } }), secret);
+  assert.throws(() => saveFact({ ...WEB, source: { kind: 'source', server: 'slack', tool: 'search', question: `token ${keyLike('xoxb-', '1234567890-abcdefghij')}` } }), secret);
+  // An address escaped in a link, spelled out, or written with look-alike or unseen characters.
+  assert.throws(() => saveFact({ ...WEB, source: { kind: 'web', url: 'https://acme.example/team?email=jane.doe%40acme.example' } }), email);
+  for (const quote of ['Write to jane.doe [at] acme [dot] example for a quote.', 'Write to jane.doe (at) acme.example for a quote.', 'Write to help＠acme.example for a quote.', 'Write to help​@acme.example for a quote.', 'Write to help%2540acme.example for a quote.']) assert.throws(() => saveFact({ ...WEB, quote }), email, quote);
+  assert.equal(fs.existsSync(factsFile()), false, 'nothing was written');
+  // A shared document's address names it with an id that looks random: that is no secret, and neither is the same id as a ref.
+  const doc = 'https://docs.example/document/d/1aBcD3fGhIjKlMnOpQrStUvWxYz0123456789AbCdQ/edit';
+  assert.equal(saveFact({ ...WEB, source: { kind: 'web', url: doc } }).source.url, doc);
+  assert.equal(saveFact({ ...WEB, source: { kind: 'source', server: 'drive', tool: 'get_file', ref: '1aBcD3fGhIjKlMnOpQrStUvWxYz0123456789AbCdQ' } }).source.ref, '1aBcD3fGhIjKlMnOpQrStUvWxYz0123456789AbCdQ');
+  for (const text of ['Meet at the office [at] noon. Then lunch.', 'Prices rose 50%40 times', 'See the docs [at] acme']) assert.equal(holdsEmail(text), false, text);
+});
+
+test('an address written out in words, with spaces round its @, or as a web page writes it is never stored, and sentences with "at" and "dot" still are', t => {
+  home(t);
+  const email = { message: 'A fact never holds an email address. Say who by role or by name.' };
+  const written = ['Write to jane.doe at acme dot com for access.', 'jane.doe AT acme DOT com is the lead.', 'Write to ana at mail.acme dot co dot uk.', 'Contact: jane.doe @ acme.com', 'Contact: jane.doe@ acme.com',
+    'Mail jane.doe&#64;acme.com today.', 'Mail jane.doe&#x40;acme.com today.', 'Mail jane.doe&commat;acme.com today.', 'Mail jane.doe&amp;#64;acme.com today.', 'Mail jane.doe{at}acme{dot}com today.', 'Mail jane.doe {at} acme.com today.'];
+  for (const quote of written) assert.throws(() => saveFact({ ...WEB, quote }), email, quote);
+  assert.throws(() => saveFact({ ...WEB, source: { kind: 'source', server: 'gmail', tool: 'search_threads', question: 'from jane.doe at acme dot com' } }), email);
+  assert.equal(fs.existsSync(factsFile()), false, 'nothing was written');
+  const ordinary = ['Point at the dot in the middle of the chart.', 'Look at it dot by dot until it loads.', 'Stop at each dot on the map to see the city.', 'Click any dot at the top to zoom in.', 'The release went out at 9.30 on the dot.',
+    'Growth was strong at the dot com peak.', 'Ana works at Acme. Dot runs the sales team.', 'Put a dot at the end of each line.', 'Prices start at 4.99 and the dot on the chart shows it.', 'Sign up at acme.example, then click the blue dot.'];
+  for (const quote of ordinary) assert.equal(saveFact({ ...WEB, quote }).quote, quote, quote);
+  assert.equal(allFacts().length, 10);
+  for (const text of ['Meet @ 10.30 in room 4', 'R&amp;D is &#8220;two teams&#8221;.']) assert.equal(holdsEmail(text), false, text);
+});
+
 test('a fact is never edited: a newer one replaces it and names it, and one taken back stays in the file', t => {
   home(t);
   saveFact(WEB);

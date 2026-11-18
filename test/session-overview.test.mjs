@@ -6,13 +6,14 @@ import path from 'node:path';
 import { project as sampleProject, temp } from './helpers.mjs';
 import { liveTask } from './peer-helpers.mjs';
 import { readTask } from '../lib/state.mjs';
+import { repository } from '../lib/git.mjs';
 import { registerProject } from '../lib/projects.mjs';
 import { setDone } from '../lib/kanban.mjs';
 import { checkData } from '../lib/artifacts.mjs';
 import { artifactsView } from '../lib/terminal-artifacts.mjs';
 import { clockTime } from '../lib/terminal-plan.mjs';
 import { getBot, saveBot } from '../lib/bots.mjs';
-import { DIGEST_CHARS, DIGEST_ROWS, PROOF_STEPS, STATUS_WORDS, agentsTable, clock, forgetOverview, overview, overviewArtifacts, proofText, readOverview, readSession, requestStatus, sessionAgents, sessionStatus, sessionsTable, stateDigest, statusRows } from '../lib/session-overview.mjs';
+import { DIGEST_CHARS, DIGEST_ROWS, PROOF_BUDGET, PROOF_STEPS, STATUS_WORDS, agentsTable, clock, forgetOverview, overview, overviewArtifacts, proofText, readOverview, readSession, requestStatus, sessionAgents, sessionStatus, sessionsTable, stateDigest, statusRows } from '../lib/session-overview.mjs';
 
 // The two tables of the bot that oversees the sessions (lib/session-overview.mjs), on made-up
 // records: every title, name and number here is invented; the shapes are the ones ELU and the
@@ -253,6 +254,36 @@ test('the checklist, which asks git, is asked once per session until its records
   status(edit({ id: '7', state: 'unverified' }), { checklist, repo, fresh: true }); assert.equal(asked, 5);
 });
 
+test('one look of the tables asks git only so long about proofs not kept yet; later looks ask about the rest', t => {
+  // Forty editing sessions, each checklist a stand-in that takes 20 ms, as git does on a busy computer.
+  const p = sampleProject(t), state = temp(t), repo = { root: p.root, state, worktrees: path.join(state, 'worktrees') }, ids = Array.from({ length: 40 }, (_, at) => String(at + 1));
+  for (const id of ids) { fs.mkdirSync(path.join(state, 'tasks', id), { recursive: true }); fs.writeFileSync(path.join(state, 'tasks', id, 'task.json'), JSON.stringify({ id })); }
+  const tasks = ids.map(id => edit({ id, state: 'unverified', goal: `Session ${id}` }));
+  let asked = 0; const checklist = () => { asked++; const end = Date.now() + 20; while (Date.now() < end) { /* As git takes its time. */ } return [{ text: 'Edits committed', met: true, evidence: 'Committed.' }]; };
+  const look = () => overview([web({ root: p.root, tasks })], { now: NOW, repos: new Map([[p.root, repo]]), checklist, proofMs: PROOF_BUDGET });
+  const began = Date.now(), first = look(), took = Date.now() - began;
+  assert.ok(took < 400, `one look took ${took} ms`);
+  assert.ok(asked >= 1 && asked < 40, `asked ${asked}`);
+  // A session not asked about yet has no proof yet, never a lower step than its records reach.
+  const waiting = first.status.filter(row => row.done === null);
+  assert.equal(waiting.length, 40 - asked); assert.ok(waiting.every(row => row.proof.length === 0 && proofText(row) === null));
+  assert.equal(first.status.filter(row => row.done === 'committed').length, asked);
+  for (let n = 0; n < 40 && look().status.some(row => row.done === null); n++);
+  assert.deepEqual(look().status.map(row => row.done), ids.map(() => 'committed'));
+  assert.equal(asked, 40, 'each asked once');
+  // With no budget, as for one session a tool reads, every proof is asked for at once.
+  forgetOverview(); asked = 0;
+  assert.deepEqual(overview([web({ root: p.root, tasks })], { now: NOW, repos: new Map([[p.root, repo]]), checklist }).status.map(row => row.done), ids.map(() => 'committed'));
+  assert.equal(asked, 40);
+  // This computer's own records are read with the budget.
+  forgetOverview(); asked = 0;
+  const mine = sampleProject(t).root;
+  for (const id of ids.slice(0, 12)) liveTask(mine, { id, goal: `Session ${id}`, state: 'unverified' });
+  registerProject(repository(mine));
+  const read = readOverview({ now: Date.now(), checklist });
+  assert.ok(asked >= 1 && asked < 12, `asked ${asked}`); assert.equal(read.status.filter(row => row.done === null).length, 12 - asked);
+});
+
 // A Claude Code log: its first line and its result. models: { name: [in, out, cacheRead,
 // cacheWrite, dollars] }; usage: the tokens of the agent's own loop.
 const MODELS = { opus: 'claude-opus-5-5', fable: 'claude-fable-5-2', haiku: 'claude-haiku-5' };
@@ -370,13 +401,13 @@ test('the two tables are artifact blocks the Artifacts tab draws as it draws a T
   // Token counts are short text, never numbers the renderer would write out in full.
   assert.deepEqual(agents.columns.map(column => column.label), ['Session', 'Agent', 'Model', 'In', 'Out', 'Cache', 'Cost']);
   assert.deepEqual(agents.rows, [
-    ['Search speed', 'Opus 5.5', 'Opus 5.5', '150', '80k', '1.4M', '$6.00'],
-    ['Search speed', '@qa', 'Fable 5.2', '16', '9k', '490k', '$2.10'],
-    ['Fix the login form', 'Opus 5.5', 'Opus 5.5', '1.2k', '34k', '412k', '$3.10'],
+    ['Search speed', 'Opus 5.5', 'Opus 5.5', '150', '80k', '1.2M', '$6.00'],
+    ['Search speed', '@qa', 'Fable 5.2', '16', '9k', '400k', '$2.10'],
+    ['Fix the login form', 'Opus 5.5', 'Opus 5.5', '1.2k', '34k', '400k', '$3.10'],
   ]);
   const drawn = artifactsView(items, { width: 140, colour: false, now: NOW });
   const text = drawn.join('\n');
-  for (const part of ['Sessions', 'Agents', 'Project', "Agent's ETA", 'Proof', 'Asks you', 'Which index should it use?', 'Accepted', 'Cache', '412k', '$3.10', `updated ${clockTime(NOW, NOW)}`]) assert.ok(text.includes(part), part);
+  for (const part of ['Sessions', 'Agents', 'Project', "Agent's ETA", 'Proof', 'Asks you', 'Which index should it use?', 'Accepted', 'Cache', '400k', '$3.10', `updated ${clockTime(NOW, NOW)}`]) assert.ok(text.includes(part), part);
   assert.ok(!text.includes('more column'), text);
   // What is at most, at least, or inside another row is said in the cell.
   const marks = agentsTable([
@@ -384,7 +415,9 @@ test('the two tables are artifact blocks the Artifacts tab draws as it draws a T
     { title: 'A', agent: '@lead helpers', model: 'fable 5.2', tokens: counts([100, 30000, 4000000, 300000]), costUsd: null, partial: false, atMost: true, within: '@lead' },
     { title: 'A', agent: '@qa', model: '', tokens: null, costUsd: null, partial: false, atMost: false, within: null },
   ]).rows;
-  assert.deepEqual(marks, [['A', '@lead', 'Fable 5.2', '112', '41k', '4.7M', '≥$4.30'], ['A', '@lead helpers', 'Fable 5.2', '≤100', '≤30k', '≤4.3M', 'in @lead'], ['A', '@qa', null, null, null, null, '—']]);
+  assert.deepEqual(marks, [['A', '@lead', 'Fable 5.2', '112', '41k', '4.3M', '≥$4.30'], ['A', '@lead helpers', 'Fable 5.2', '≤100', '≤30k', '≤4M', 'in @lead'], ['A', '@qa', null, null, null, null, '—']]);
+  // Cache is what was read from the cache, as the Usage tab's Cache counts it: what was written to it is not added.
+  assert.deepEqual(agentsTable([{ title: 'B', agent: '@lead', model: 'opus 5.5', tokens: counts([1000, 200, 50000, 20000]), costUsd: 1, partial: false, atMost: false, within: null }]).rows[0].slice(3, 6), ['1k', '200', '50k']);
 });
 
 test('on a narrow tab a long title or step gives up room before the state is pushed off the screen', () => {

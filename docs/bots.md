@@ -31,8 +31,12 @@ that kind may do.
 | Reviews each change | yes | no | no |
 | Takes the session's work | no | yes | no |
 
-The kind is saved with the bot, so it stays when you rename it. A bot that oversees cannot
-merge, shadow or be shared with teammates.
+The kind is saved with the bot, so it stays when you rename it, and when an older ELU saves
+your bots without it, also in one save that renames it and changes its instructions. A save
+here never changes the kind of a bot that oversees: to have another kind, remove it and
+make a new bot. A bot that oversees cannot merge, shadow or be shared with teammates, only
+you write to it, on the computer it runs on, and it never runs in a session another computer
+or a teammate started.
 
 - A new session has no bots. `/bots add reviewer` adds one, and so does `@reviewer` alone
   and then Enter. With no bots, the checks alone decide whether a change is ready.

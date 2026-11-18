@@ -12,10 +12,10 @@ import { saveBot } from '../lib/bots.mjs';
 import { APPROVAL_SERVER } from '../lib/mcp.mjs';
 import { answerApproval, ownersToAnswer, pendingApprovals } from '../lib/approvals.mjs';
 import { allFacts, saveFact } from '../lib/facts.mjs';
-import { orgLines } from '../lib/org-section.mjs';
+import { orgLines, removeOrgLine } from '../lib/org-section.mjs';
 import { forgetOverview } from '../lib/session-overview.mjs';
 import { DEFAULT_CAPS, DEFAULT_LEVEL, LEVELS, capLines, levelLines, readSettings, setCap, setLevel, settingsFile } from '../lib/orchestrator-settings.mjs';
-import { ACTION_NAMES, LEVEL_TABLE, act, actionLine, actionsFile, decide, lastActions, orchestratorLines, readActions, takeBackNotes, undoAction } from '../lib/orchestrator-actions.mjs';
+import { ACTION_NAMES, LEVEL_TABLE, act, actionLine, actionsFile, decide, lastActions, orchestratorLines, questionMark, readActions, takeBackNotes, undoAction } from '../lib/orchestrator-actions.mjs';
 import { ORCH_TOOLS, ORCH_TOOL_DEFS, orchSession, orchTitle, orchTool, overseeingAnswer, readingTool, toolWords } from '../lib/orchestrator-tools.mjs';
 
 // What the bot that oversees the sessions may do (lib/orchestrator-actions.mjs), driven through
@@ -154,6 +154,24 @@ test('what it reads comes back as data: the sessions without its own chat, one s
   assert.match(none, /3\. elu is on your own list already/);
   assert.deepEqual(readActions({ reads: false }), [], 'what it only looked at is no action');
   assert.equal(readActions().length, 9, 'and it is logged all the same');
+});
+
+test('a session it reads says what each agent read from the cache, as the Usage tab counts it', async t => {
+  const w = world(t, { level: 'watch' });
+  w.session(2, { runs: [{ role: 'lead', vendor: 'claude', at: new Date(T0 - 60000).toISOString(), code: 0, model: 'claude-opus-5-5', ownCost: true, tokens: { input: 1200, output: 300, cacheRead: 40000, cacheWrite: 900000 }, costUsd: 0.5, permissions: 'auto' }] });
+  const [agent] = inBlock((await w.act('session_read', { session: '2' })).text).agents;
+  assert.deepEqual([agent.in, agent.out, agent.cache], ['1.2k', '300', '40k']);
+});
+
+test('an id of a fact kept on another computer is said to be there, alone or after the facts found here', async t => {
+  const w = world(t, { level: 'watch' }), there = 'is a fact kept on the computer that wrote the line that cites it, not on this one. Ask there where it came from.';
+  assert.equal((await w.act('facts_find', { ids: ['f1@deadbeef'] })).text, `f1@deadbeef ${there}`);
+  ownerFact();
+  const both = (await w.act('facts_find', { ids: ['f1', 'f2@deadbeef'] })).text;
+  assert.match(both, /^1 saved fact, each with its source/);
+  assert.ok(both.endsWith(`\nf2@deadbeef ${there}`), both);
+  assert.equal((await w.act('facts_find', { ids: ['f7'] })).text, 'No saved fact has that id.');
+  assert.match((await w.act('facts_find', { words: 'f2@deadbeef' })).text, /No saved fact holds that/);
 });
 
 test('what it queues carries its own mark and is never typed, approved or picked; a session it starts gets a new worktree, no bots, Approve for me at most and the budget', async t => {
@@ -510,14 +528,18 @@ test('undo of a started session: taken back before it starts, archived after and
   assert.deepEqual(undoAction(second.id), { done: true, id: second.id, how: 'archived', text: 'Archived session 20 of web. Nothing was deleted: /archived lists it.' });
   assert.equal(sessionArchived(readBoard(w.repo), readTask(w.repo, '20')), true);
   assert.equal(fs.existsSync(path.join(taskDir(w.repo, '20'), 'task.json')), true);
-  // Its request is long gone: the session is found by its goal, and two that fit are not guessed between.
+  // Its request is long gone: the session is found by its goal and by its record, which says this
+  // bot started it. One the owner started with the same goal is never taken for it.
   const third = await w.act('session_start', { goal: 'Tidy the readme' });
   removeRequest(w.root, third.undo.request);
   assert.throws(() => undoAction(third.id), { message: 'ELU could not tell which session it became. Archive it in Sessions.' });
-  w.session(21, { goal: 'Tidy the readme', createdAt: new Date().toISOString() });
-  w.session(22, { goal: 'Tidy the readme', createdAt: new Date(T0 - DAY).toISOString() });
+  w.session(23, { goal: 'Tidy the readme', createdAt: new Date().toISOString() });
+  assert.throws(() => undoAction(third.id), { message: 'ELU could not tell which session it became. Archive it in Sessions.' }, "the owner's own session is not archived");
+  w.session(21, { goal: 'Tidy the readme', createdAt: new Date().toISOString(), overseer: 'orchestrator' });
+  w.session(22, { goal: 'Tidy the readme', createdAt: new Date(T0 - DAY).toISOString(), overseer: 'orchestrator' });
+  w.session(24, { goal: 'Tidy the readme', createdAt: new Date().toISOString(), overseer: 'watcher' });
   assert.equal(undoAction(third.id).text, 'Archived session 21 of web. Nothing was deleted: /archived lists it.');
-  assert.equal(sessionArchived(readBoard(w.repo), readTask(w.repo, '22')), false);
+  assert.deepEqual(['22', '23', '24'].map(id => sessionArchived(readBoard(w.repo), readTask(w.repo, id))), [false, false, false]);
   // One taken back before it started is not counted; one that ran and was archived is.
   assert.deepEqual(readActions({ reads: false }).map(row => row.undone), ['taken back', 'archived', 'archived']);
   const over = await w.act('session_start', { goal: 'One more' });
@@ -535,6 +557,141 @@ test('the owner stops a session: what the bot sent it and no turn read yet goes 
   assert.equal(takeBackNotes(w.root, '2'), 0);
   assert.equal(takeBackNotes(w.root, '99'), 0);
   assert.equal((await note('2')).decision, 'allow', 'what was taken back is not counted');
+});
+
+test('what the bot sent a session the owner archived or checked goes with it, notes and answers alike', async t => {
+  const w = world(t, { level: 'act' }); w.session(2, ASKS); w.session(4, ASKS);
+  const note = await w.act('session_message', { session: '2', text: 'The checks fail on main as well.' });
+  const answer = await w.act('session_answer', { session: '2', text: 'Use Postgres.' });
+  const other = await w.act('session_answer', { session: '4', text: 'Use Postgres.' });
+  closeSession(w.repo, '2');
+  assert.equal(takeBackNotes(w.root, '2'), 2);
+  assert.deepEqual(readActions().map(row => [row.id, row.undone]), [[note.id, 'taken back'], [answer.id, 'taken back'], [other.id, null]]);
+  assert.deepEqual(pendingRequests(w.root).map(row => row.id), [w.queued[2].id]);
+  setDone(w.repo, { task: { id: '4' } }, true);
+  assert.equal(takeBackNotes(w.root, '4'), 1);
+  assert.deepEqual(pendingRequests(w.root), []);
+  assert.throws(() => undoAction(other.id), { message: `${other.id} was undone already.` });
+});
+
+// A stand-in for the owner that holds each answer until the test gives it.
+function holding() {
+  const held = [];
+  const until = async count => { for (let tries = 0; held.length < count; tries++) { if (tries > 400) assert.fail('nothing was asked'); await new Promise(resolve => setTimeout(resolve, 5)); } };
+  return { held, until, askOwner: question => new Promise(resolve => held.push({ question, resolve })) };
+}
+const CHANGED = 'What you were asked about changed while you were asked. Nothing was done: ask again.';
+
+test("after the owner's yes, what is done is what he was shown, or nothing, and the bot is told to ask again", async t => {
+  const w = world(t, { level: 'suggest' }); w.session(3, ASKS);
+  const fact = ownerFact(), owner = holding(), hold = { askOwner: owner.askOwner }, lines = () => orgLines(w.root).map(row => row.line);
+  for (const n of [1, 2, 3, 4]) await w.act('org_propose', { line: `Line ${n} of the section.`, facts: [fact] });
+  assert.deepEqual(lines(), [1, 2, 3, 4].map(n => `Line ${n} of the section. [f1]`));
+  // Two removals by number, both asked before either answer: each removes the line it named then.
+  const second = w.act('org_propose', { remove: '2' }, hold), third = w.act('org_propose', { remove: '3' }, hold);
+  await owner.until(2);
+  assert.deepEqual(owner.held.map(row => row.question.whole), ['Line 2 of the section. [f1]', 'Line 3 of the section. [f1]']);
+  owner.held[0].resolve('allow'); assert.deepEqual(said(await second), ['allow', 'owner']);
+  owner.held[1].resolve('allow'); const done = await third;
+  assert.deepEqual(said(done), ['allow', 'owner']); assert.match(done.text, /"Line 3 of the section\. \[f1\]"$/);
+  assert.deepEqual(lines(), ['Line 1 of the section. [f1]', 'Line 4 of the section. [f1]']);
+  // The line he was asked about went while he was asked: nothing is removed in its place.
+  const gone = w.act('org_propose', { remove: '1' }, hold);
+  await owner.until(3); removeOrgLine(w.root, 1); owner.held[2].resolve('allow');
+  const refused = await gone;
+  assert.deepEqual([said(refused), refused.text, lines()], [['refused', 'level'], CHANGED, ['Line 4 of the section. [f1]']]);
+  // The session asks another question by his yes: the answer is not queued.
+  const answering = w.act('session_answer', { session: '3', text: 'Use Postgres.' }, hold);
+  await owner.until(4);
+  saveTask(w.repo, { ...readTask(w.repo, '3'), reply: { outcome: 'needs_input', question: 'Which region?' } });
+  owner.held[3].resolve('allow');
+  const moved = await answering;
+  assert.deepEqual([said(moved), moved.text, pendingRequests(w.root)], [['refused', 'level'], CHANGED, []]);
+  // His caps changed while he was asked to start one: the budget he was shown no longer holds.
+  const starting = w.act('session_start', { goal: 'Find the slow test' }, hold);
+  await owner.until(5); setCap('startBudgetUsd', 1); owner.held[4].resolve('allow');
+  const capped = await starting;
+  assert.deepEqual([said(capped), capped.text, pendingRequests(w.root)], [['refused', 'level'], CHANGED, []]);
+  // Asked again as it now is, it is done, and the answer names the question it was written for.
+  const again = w.act('session_answer', { session: '3', text: 'Use eu-west.' }, hold);
+  await owner.until(6); owner.held[5].resolve('allow');
+  assert.deepEqual(said(await again), ['allow', 'owner']);
+  assert.deepEqual([w.queued.at(-1).goal, w.queued.at(-1).asks], ['Use eu-west.', questionMark(readTask(w.repo, '3'))]);
+  assert.match(w.queued.at(-1).asks, /^[0-9a-f]{16}$/);
+  assert.notEqual(w.queued.at(-1).asks, questionMark(ASKS));
+  assert.equal(questionMark(readTask(w.repo, '1')), null, 'a session that asks nothing has no mark');
+});
+
+test('a note or an answer to a session in Full access asks the owner first, at every level that allows it', async t => {
+  for (const level of ['act', 'run']) {
+    const w = world(t, { level }); w.session(2, { permissions: 'full' }); w.session(3, { ...ASKS, permissions: 'full' }); w.session(4);
+    assert.deepEqual(said(await w.act('session_message', { session: '2', text: 'The build is red.' })), ['allow', 'owner'], level);
+    assert.deepEqual(said(await w.act('session_answer', { session: '3', text: 'Use Postgres.' })), ['allow', 'owner'], level);
+    assert.deepEqual(said(await w.act('session_message', { session: '4', text: 'The build is red.' })), ['allow', 'level'], `${level}: a session in another mode, as before`);
+    assert.deepEqual(w.asked.map(row => row.tool), ['session_message', 'session_answer'], level);
+    w.answer = 'deny';
+    assert.deepEqual(said(await w.act('session_message', { session: '2', text: 'Once more.' })), ['deny', 'owner'], level);
+    assert.equal(pendingRequests(w.root).length, 3, level);
+  }
+  const w = world(t, { level: 'watch' }); w.session(2, { permissions: 'full' });
+  assert.deepEqual(said(await w.act('session_message', { session: '2', text: 'The build is red.' })), ['refused', 'level'], 'Watch still refuses it');
+  assert.deepEqual(w.asked, []);
+});
+
+test('when the action log cannot be written, nothing is done and the owner is not asked', async t => {
+  const w = world(t, { level: 'suggest' }); w.session(2);
+  assert.equal((await w.act('sessions_list')).decision, 'allow');
+  const file = actionsFile(), dir = path.dirname(file), unlogged = /^The action log cannot be written, so nothing was done\. Say so in your reply\./;
+  t.after(() => { for (const [at, mode] of [[dir, 0o700], [file, 0o600]]) { try { fs.chmodSync(at, mode); } catch { /* Gone already. */ } } });
+  fs.chmodSync(file, 0o400);
+  for (const [name, input] of [['card_add', { text: 'Fix the flaky login test' }], ['session_message', { session: '2', text: 'The build is red.' }], ['fact_save', { claim: 'Releases need a sign-off.', topic: 'business', source: { kind: 'owner' } }]]) {
+    const out = await w.act(name, input);
+    assert.equal(out.decision, 'refused', name); assert.match(out.text, unlogged, name);
+  }
+  assert.deepEqual([readBoard(w.repo).cards, pendingRequests(w.root), w.asked, allFacts()], [[], [], [], []]);
+  assert.equal((await w.act('sessions_list')).decision, 'allow', 'what only reads still answers');
+  // Nor with no log yet, in a folder that takes no file.
+  fs.rmSync(file); fs.chmodSync(dir, 0o500);
+  const card = await w.act('card_add', { text: 'Fix the flaky login test' });
+  assert.equal(card.decision, 'refused'); assert.match(card.text, unlogged);
+  assert.deepEqual(readBoard(w.repo).cards, []);
+  fs.chmodSync(dir, 0o700);
+  assert.equal((await w.act('card_add', { text: 'Fix the flaky login test' })).decision, 'allow');
+});
+
+test('a clock set back starts no cap again', async t => {
+  const w = world(t, { level: 'act' }); w.session(2); w.session(4);
+  const file = actionsFile(), ahead = hours => new Date(T0 + hours * HOUR).toISOString();
+  const row = (n, action, at, target) => JSON.stringify({ id: `a${n}`, at, bot: 'orchestrator', from: { root: w.root, session: '1', run: 'r' }, action, target, summary: action, level: 'act', decision: 'allow', by: 'level', undo: null, undoneAt: null });
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  // Six notes logged ten minutes ahead of the clock as it is now.
+  fs.writeFileSync(file, Array.from({ length: 6 }, (_, n) => row(n + 1, 'session_message', ahead(1 / 6), { root: w.root, session: '4' })).join('\n') + '\n', { mode: 0o600 });
+  const note = await w.act('session_message', { session: '2', text: 'The build is red.' });
+  assert.deepEqual(said(note), ['capped', 'level']); assert.match(note.text, /The owner's cap is 6 messages and answers an hour, and you sent 6 in the last hour/);
+  // A session started two hours ahead, with one a day (a7 is the capped note's own line).
+  setLevel('run'); setCap('sessionsPerDay', 1);
+  fs.appendFileSync(file, `${row(8, 'session_start', ahead(2), { root: w.root })}\n`);
+  assert.equal((await w.act('session_start', { goal: 'Find the slow test' })).decision, 'capped');
+  assert.deepEqual(pendingRequests(w.root), []);
+});
+
+test('the owner reads whole what a yes writes, sends or starts, even where the question cuts the call short', async t => {
+  const w = world(t, { level: 'suggest' }); w.session(2);
+  const fact = ownerFact();
+  let goal = ''; for (let n = 1; goal.length < 3975; n++) goal += `Step ${n}: check "the ${n} build". `;
+  goal = `${goal.slice(0, 3974)}.`;
+  await w.act('org_propose', { line: 'The customers are finance teams.', facts: [fact] });
+  await w.act('session_message', { session: '2', text: 'The build is red.' });
+  assert.deepEqual(w.asked.map(row => row.whole), ['The customers are finance teams. [f1]', 'The build is red.']);
+  // Where every approval waits, the call is cut at 4 KB, and what a yes starts is kept whole beside it.
+  const waiting = async () => { for (let tries = 0; tries < 400; tries++) { const [row] = pendingApprovals({ root: w.root, taskId: '1' }); if (row) return row; await new Promise(resolve => setTimeout(resolve, 10)); } assert.fail('nothing was asked'); };
+  const going = w.act('session_start', { goal }, { askOwner: undefined, waitSeconds: 60 });
+  const row = await waiting(); answerApproval(row.id, 'allow');
+  const out = await going;
+  assert.ok(goal.length === 3975 && JSON.stringify({ goal }).length > 4096);
+  assert.deepEqual([row.whole, row.oversee, row.input.clipped], [goal, true, true]);
+  assert.deepEqual(said(out), ['allow', 'owner']);
+  assert.equal(pendingRequests(w.root).at(-1).goal, goal);
 });
 
 test('removeCard takes a card that is not started, as before, and with todo only one still in To do', t => {
@@ -609,7 +766,7 @@ test('the tools as the relay serves them: ten definitions, the session they are 
 // Tool names as their servers publish them: Slack, Gmail, GitHub, Notion, Linear, Jira, a file
 // system, two databases and ELU.
 const READING = {
-  slack: ['slack_list_channels', 'slack_get_channel_history', 'slack_get_thread_replies', 'slack_get_users', 'slack_get_user_profile', 'slack_search_public', 'slack_read_channel', 'slack_read_thread', 'channels_list'],
+  slack: ['slack_list_channels', 'slack_get_channel_history', 'slack_get_thread_replies', 'slack_get_users', 'slack_get_user_profile', 'slack_search_public', 'slack_read_channel', 'slack_read_thread'],
   gmail: ['search_emails', 'read_email', 'list_email_labels', 'list_filters', 'get_filter', 'search_threads', 'get_thread', 'get_message', 'list_drafts', 'list_labels'],
   github: ['get_file_contents', 'search_code', 'search_repositories', 'search_issues', 'list_commits', 'list_issues', 'get_issue', 'get_pull_request', 'list_pull_requests'],
   notion: ['notion-search', 'notion-fetch', 'notion-get-comments', 'notion-get-users'],
@@ -620,7 +777,7 @@ const READING = {
   elu: ['ask_elu', 'list_issues'],
 };
 const ASKING = {
-  slack: ['slack_post_message', 'slack_reply_to_thread', 'slack_add_reaction', 'slack_send_message', 'slack_schedule_message', 'slack_create_canvas', 'chat_postMessage', 'conversations_history'],
+  slack: ['slack_post_message', 'slack_reply_to_thread', 'slack_add_reaction', 'slack_send_message', 'slack_schedule_message', 'slack_create_canvas', 'chat_postMessage', 'conversations_history', 'channels_list'],
   gmail: ['send_email', 'draft_email', 'delete_email', 'modify_email', 'batch_modify_emails', 'batch_delete_emails', 'create_label', 'update_label', 'delete_label', 'get_or_create_label', 'create_filter', 'delete_filter', 'download_attachment',
     'create_draft', 'get_draft', 'reply', 'forward', 'send_message', 'trash_thread', 'untrash_thread', 'label_message', 'unlabel_thread', 'mark_message_spam'],
   github: ['create_issue', 'update_issue', 'add_issue_comment', 'create_pull_request', 'merge_pull_request', 'create_or_update_file', 'push_files', 'create_branch', 'fork_repository'],
@@ -650,7 +807,7 @@ test('a reading tool of a source is told from one that changes something by its 
   assert.deepEqual(toolWords('docs', 'docs.getHTTPStatus'), ['get', 'http', 'status']);
   assert.deepEqual(toolWords('search', 'search'), ['search']);
   // Whole words only, in both lists.
-  for (const [tool, reads] of [['get_settings', true], ['getaway_plan', false], ['listing', false], ['list_updates', true], ['list_update', false], ['settings_get', true], ['items.count', true], ['count_and_delete', false], ['query', false], ['run_query', false], ['search', true], ['', false]]) assert.equal(readingTool('things', tool), reads, tool);
+  for (const [tool, reads] of [['get_settings', true], ['getaway_plan', false], ['listing', false], ['list_updates', true], ['list_update', false], ['settings_get', false], ['items.count', false], ['count_and_delete', false], ['query', false], ['run_query', false], ['search', true], ['', false]]) assert.equal(readingTool('things', tool), reads, tool);
   // A first word that repeats the server is dropped before the words are read, a change word included.
   assert.equal(readingTool('send', 'send_list'), true);
   assert.equal(readingTool('list', 'list_send'), false);
@@ -663,7 +820,9 @@ test('what the relay answers the overseeing turn: its own ten at once, the web b
   const modes = ['ask', 'auto', 'full'], own = name => `mcp__${APPROVAL_SERVER}__${name}`;
   for (const mode of [...modes, 'locked', null, 'root']) for (const tool of ['Bash', 'Edit', 'Write', 'MultiEdit', 'NotebookEdit']) assert.equal(overseeingAnswer(tool, { mode }), 'deny', `${tool} in ${mode}`);
   for (const mode of modes) for (const name of ORCH_TOOLS) assert.equal(overseeingAnswer(own(name), { mode }), 'allow', `${name} in ${mode}`);
-  assert.deepEqual(['ask', 'auto', 'full', 'locked', null].map(mode => overseeingAnswer('WebFetch', { mode })), ['ask', 'allow', 'allow', 'deny', 'ask']);
+  const page = { url: 'https://example.test/page', prompt: 'Read it' };
+  assert.deepEqual(['ask', 'auto', 'full', 'locked', null].map(mode => overseeingAnswer('WebFetch', { mode, input: page })), ['ask', 'allow', 'allow', 'deny', 'ask']);
+  assert.deepEqual(['ask', 'auto', 'full', 'locked', null].map(mode => overseeingAnswer('WebFetch', { mode })), ['ask', 'ask', 'ask', 'deny', 'ask'], 'one with no address it can read asks');
   assert.deepEqual(['ask', 'auto', 'full', 'locked', null].map(mode => overseeingAnswer('WebSearch', { mode })), ['ask', 'allow', 'allow', 'deny', 'ask']);
   for (const mode of modes) {
     assert.equal(overseeingAnswer('mcp__slack__slack_read_channel', { mode }), 'allow');

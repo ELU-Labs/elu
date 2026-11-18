@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { approvalsDir, approvalSummary, requestApproval, answerApproval, awaitDecision, pendingApprovals, readApprovalLog } from '../lib/approvals.mjs';
+import { TOO_LONG, WHOLE_LIMIT, approvalsDir, approvalSummary, requestApproval, answerApproval, awaitDecision, pendingApprovals, readApprovalLog } from '../lib/approvals.mjs';
 
 function home(t) {
   const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'elu-code-approvals-'))), previous = process.env.XDG_CONFIG_HOME;
@@ -53,6 +53,25 @@ test('a request is written once, answered once, and both files go when the wait 
   assert.throws(() => answerApproval('ok-id', 'maybe'), /allow or deny/);
   assert.throws(() => requestApproval({ id: 'no-tool', tool: '', input: {} }), /names its tool/);
   assert.throws(() => requestApproval({ id: 'no-wait', tool: 'Bash', input: {}, waitSeconds: 0 }), /positive wait/);
+});
+
+test('the bot that oversees the sessions marks its question, and what a yes does is kept whole beside the clipped input', t => {
+  home(t);
+  const goal = `Find why "the build" is slow. ${'Then check "each step" again. '.repeat(140)}`.trim();
+  assert.ok(goal.length < WHOLE_LIMIT && JSON.stringify({ goal }).length > 4096);
+  requestApproval({ id: 'orch-1', root: '/p', taskId: 1, role: '@orchestrator', vendor: 'claude', tool: 'mcp__elu-code-approval__session_start', input: { goal }, oversee: true, whole: `${goal}\u0007` });
+  const [row] = pendingApprovals();
+  assert.deepEqual([row.oversee, row.whole, row.input.clipped], [true, goal, true]);
+  // Nothing else is marked, or carries more than its input.
+  requestApproval({ id: 'run-1-b', root: '/p', taskId: 1, role: 'lead', vendor: 'claude', tool: 'Bash', input: { command: 'npm test' } });
+  for (const [n, oversee] of [1, 'yes', {}].entries()) requestApproval({ id: `odd-${n}`, tool: 'Bash', input: {}, oversee });
+  for (const plain of pendingApprovals().filter(value => value.id !== 'orch-1')) assert.deepEqual(['oversee' in plain, 'whole' in plain], [false, false], plain.id);
+  // What is too long to show whole is never asked about.
+  const files = () => fs.readdirSync(approvalsDir()).length, before = files();
+  assert.throws(() => requestApproval({ id: 'orch-2', tool: 'mcp__elu-code-approval__session_start', input: {}, oversee: true, whole: 'x'.repeat(WHOLE_LIMIT + 1) }), { message: TOO_LONG });
+  assert.equal(files(), before);
+  requestApproval({ id: 'orch-3', tool: 'mcp__elu-code-approval__session_start', input: {}, oversee: true, whole: 'x'.repeat(WHOLE_LIMIT) });
+  assert.equal(pendingApprovals().find(value => value.id === 'orch-3').whole.length, WHOLE_LIMIT);
 });
 
 test('a request is never found half written: a list running in another process leaves every new request alone', async t => {

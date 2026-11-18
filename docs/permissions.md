@@ -68,7 +68,8 @@ Full access is everything. A turn that runs with it has no limit of ELU's:
   checks (ignored output, files outside the declared paths, deleted tests) fail nothing:
   what one finds is shown as a note.
 - **Approvals.** Once a session has Full access, ELU allows everything its running turn
-  asks, a removal and an MCP tool included.
+  asks, a removal and an MCP tool included. Not what the bot that oversees asks, nor what a
+  bot that is no longer saved under its name asks: those wait for you.
 - **No wait.** A message runs at once. The one-time check of Antigravity and Grok Build
   proves the other three modes and nothing Full access needs, so a Full access turn never
   runs it and never waits for one, its own or another session's
@@ -227,15 +228,23 @@ ELU answers each tool it asks for from this table, not a model:
 | Read and search files | yes | yes | yes | yes |
 | Edit, write, shell | never | never | never | never |
 | ELU's orchestrator tools | no | by its level | by its level | by its level |
-| Web search and fetch | no | asks you | yes | yes |
+| Web search | no | asks you | yes | yes |
+| Web fetch of a plain address | no | asks you | yes | yes |
+| Web fetch of any other address | no | asks you | asks you | asks you |
 | A connected source's reading tools | no | yes | yes | yes |
 | A connected source's other tools | no | asks you | asks you | asks you |
 | Opus helpers | no | yes | yes | yes |
 
+A plain address is `http` or `https` with no query, no fragment and no sign-in. A reading
+tool asks you too when anything it is handed holds any other address.
+
 It gets only the MCP servers named on its own row, never the project's others. Its helpers
 read and search, the web too, with no MCP server and none of ELU's tools. ELU's
 orchestrator tools go through one check in ELU's code: the rules it never breaks, its level
-(`/orchestrator`), its caps, then your yes where the level needs it. The session's mode
+(`/orchestrator`), its caps, then your yes where the level needs it. A note or an answer to
+a session in Full access always needs your yes (one sent before you set that session to
+Full access is not given unless you said yes to it), and nothing is done when its action log
+cannot be written. Full access never answers what this bot asks you. The session's mode
 lifts none of them. On another vendor, and in a Read only session, it only answers, read
 only.
 
@@ -494,7 +503,10 @@ runs, for that project only. That machine makes the rule from its own copy of th
 ELU's own commands, `elu sessions` and `elu schedules` ([Commands](commands.md#elu-from-a-session)),
 run without asking in Approve for me, as one command alone, and are asked for in Ask for
 approval like any other command. Only a turn of your own session has them, on every vendor:
-its PATH starts with an `elu` of that turn's own. That `elu` reads none of ELU's files and
+its PATH starts with an `elu` of that turn's own. A turn that a note of the bot that
+oversees led to has none, and neither has a session that bot started until you write there:
+`elu sessions`, `elu schedules` and `elu jobs` are asked for there in every mode, and no
+rule of yours answers an `elu` command there. That `elu` reads none of ELU's files and
 needs nothing from the environment. It writes the command into a folder ELU made for the turn
 and prints ELU's answer. ELU, outside any sandbox, refuses a request that names another
 session or a higher mode than the turn's, then runs it with the code your shell's `elu` uses.

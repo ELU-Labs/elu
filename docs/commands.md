@@ -81,7 +81,9 @@ which runs it only for that session and no higher than its mode. A schedule adde
 gets that session's mode or a lower one, and `elu schedules run`, `resume` and `delete` there
 take only a schedule whose runs get no more: the others are yours, in ELU. A teammate's
 question or review, or a session a teammate's message started, is never told about them and
-cannot run them.
+cannot run them. Neither is a turn that a note of `@orchestrator` led to, nor a session it
+started until you write there: an `elu` command such a turn runs is your own `elu`, and it
+asks you each time, in every mode.
 
 ## Keys
 

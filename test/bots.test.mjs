@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { temp, project, fakeClis, autoApprove } from './helpers.mjs';
-import { BOTS_MAX, BOT_COLORS, CHAT_BOTS_MAX, EFFORTS, botColor, botColorProblem, pickBotColor, botReviews, botWorks, botShadows, botsFile, botVendors, botEfforts, listBots, getBot, needBot, saveBot, removeBot, botRuns, sharedBots, chatBots, botRole, botKey, botOfKey, chatBotsNote, botNameProblem, BOT_FINDINGS, sessionBots } from '../lib/bots.mjs';
+import { BOTS_MAX, BOT_COLORS, CHAT_BOTS_MAX, EFFORTS, botColor, botColorProblem, pickBotColor, botOversees, botReviews, botWorks, botShadows, botsFile, botVendors, botEfforts, listBots, getBot, needBot, saveBot, removeBot, botRuns, sharedBots, chatBots, botRole, botKey, botOfKey, chatBotsNote, botNameProblem, BOT_FINDINGS, sessionBots } from '../lib/bots.mjs';
 import { ProjectController, conversationEntries, registerProject, activity } from '../lib/projects.mjs';
 import { projectFolder, pendingRequests, saveRequest } from '../lib/workspace.mjs';
 import { runConversation, botReplies, ownerMessages } from '../lib/runner.mjs';
@@ -176,6 +176,36 @@ test('six bots come with the app: each is saved once, in a fixed order with @elu
   const file = JSON.parse(fs.readFileSync(botsFile(), 'utf8'));
   assert.equal(file.defaults, 2); assert.deepEqual(file.builtIn, [...earlier, 'lead', 'qa', 'pair', 'orchestrator']);
   removeBot('pair'); assert.deepEqual(listBots().map(bot => bot.name), ['lead', 'qa', 'orchestrator', 'mine', 'security'], 'and nothing is offered a second time');
+});
+
+// An ELU from before bots could oversee saves every row through its own check, which drops the
+// field: a bot that oversaw must never come back as one that works or reviews.
+test('a bot that oversees stays one when an older ELU saves the store without that field', t => {
+  store(t);
+  const list = path.join(personalDirectory(), 'overseeing-bots.json');
+  const older = (change = rows => rows) => { const file = JSON.parse(fs.readFileSync(botsFile(), 'utf8')); fs.writeFileSync(botsFile(), JSON.stringify({ ...file, bots: change(file.bots.map(({ oversees, ...row }) => row)) })); };
+  const kind = name => { const bot = getBot(name); return [botOversees(bot), botWorks(bot), botReviews(bot)]; };
+  saveBot({ ...getBot('orchestrator'), schedule: 'daily 9:00' }); saveBot({ name: 'watch', vendor: 'claude', instructions: 'Watch my sessions.', oversees: true }); saveBot(SCOUT);
+  older();
+  assert.equal(JSON.parse(fs.readFileSync(botsFile(), 'utf8')).bots.some(row => 'oversees' in row), false);
+  assert.deepEqual(kind('orchestrator'), [true, false, false]); assert.equal(getBot('orchestrator').schedule, 'daily 9:00');
+  assert.deepEqual(kind('watch'), [true, false, false]); assert.deepEqual(kind('scout'), [false, false, true]);
+  // Renamed there, the one the app comes with is known by its instructions; edited there, the owner's by when it was made.
+  older(rows => rows.map(row => row.name === 'orchestrator' ? { ...row, name: 'overseer' } : row.name === 'watch' ? { ...row, instructions: 'Watch every session.' } : row));
+  assert.deepEqual(kind('overseer'), [true, false, false]); assert.deepEqual(kind('watch'), [true, false, false]);
+  // Then renamed there as well: its new instructions were noted on that read.
+  older(rows => rows.map(row => row.name === 'watch' ? { ...row, name: 'eye' } : row));
+  assert.deepEqual(kind('eye'), [true, false, false]);
+  // A save here writes the field back on each row, and an ordinary bot is never made one.
+  saveBot({ ...getBot('scout'), color: 'gold' });
+  assert.deepEqual(JSON.parse(fs.readFileSync(botsFile(), 'utf8')).bots.filter(row => row.oversees).map(row => row.name).sort(), ['eye', 'overseer']);
+  assert.deepEqual(kind('scout'), [false, false, true]);
+  // Removed here, it leaves the list of bots that oversee, and its name is free for a bot that works.
+  assert.equal(removeBot('eye'), true); assert.equal(JSON.parse(fs.readFileSync(list, 'utf8')).bots.some(row => row.name === 'eye'), false);
+  saveBot({ name: 'eye', vendor: 'claude', instructions: 'Fix what I ask.', works: true }); assert.deepEqual(kind('eye'), [false, true, false]);
+  // With the list gone, the one the app comes with is still known by its instructions.
+  fs.rmSync(list); older();
+  assert.deepEqual(kind('overseer'), [true, false, false]); assert.deepEqual(kind('eye'), [false, true, false]);
 });
 
 test('a bot shows in a color: one no other bot has when the owner names none, the same one after an edit, and a named one is checked', t => {

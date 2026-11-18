@@ -3,13 +3,14 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { temp } from './helpers.mjs';
-import { newHome, withHome } from './peer-helpers.mjs';
+import { makeTeam, newHome, withHome } from './peer-helpers.mjs';
 import { LEARNED_HEADING, LEARNED_USE, projectPromptParts, readProjectSettings, saveContext } from '../lib/project-settings.mjs';
 import { saveLearned } from '../lib/project-learnings.mjs';
 import { answerTrust, approvedAsItStands, pendingTrust, trustRows } from '../lib/project-trust.mjs';
 import { composeContext, localNotes, mergeNotes, putBackContext, saveContextEdit, splitContext } from '../lib/project-notes.mjs';
-import { joinRows } from '../lib/peer/notes.mjs';
-import { replaceFact, saveFact, withdrawFact } from '../lib/facts.mjs';
+import { factsElsewhere, findFacts, replaceFact, saveFact, withdrawFact } from '../lib/facts.mjs';
+import { createIdentity } from '../lib/peer/identity.mjs';
+import { joinRows, takeNotes, teamNotes } from '../lib/peer/notes.mjs';
 import { ORG_HEADING, ORG_LINES, ORG_LINE_CHARS, ORG_NOTE, addOrgLine, applyOrg, checkOrgLine, findOrgLine, orgLineParts, orgLines, orgSection, removeOrgLine } from '../lib/org-section.mjs';
 
 // The Organization section of a project's Memory (lib/org-section.mjs): findings with their
@@ -28,6 +29,8 @@ const section = (...lines) => `${ORG_HEADING}\n\n${ORG_NOTE}\n\n${lines.map(line
 const fact = (claim = 'The customers are finance teams of mid-size companies.') => saveFact({ claim, topic: 'business', source: { kind: 'owner' } }).id;
 const CUSTOMERS = 'The customers are finance teams. [f1]', SIGN_OFF = 'A release needs a sign-off from compliance. [f2, f3]';
 const TAUGHT = `${LEARNED_HEADING}\n\n- 2026-11-12: Use pnpm, not npm.\n`;
+// What another computer sends of the section: its lines, each { line, since, at, on }.
+const sent = (lines, { at = 1000 } = {}) => ({ instructions: { text: '', at: 1 }, own: { text: 'The API lives in src/.', at: 1 }, learned: [], org: lines.map((line, n) => ({ line: `- ${line}`, since: at + n, at: at + n, on: true })) });
 
 test('the section goes before what the owner taught, under its one sentence, and nothing outside it changes', () => {
   assert.equal(ORG_HEADING, '## Organization'); assert.equal(ORG_LINES, 20); assert.equal(ORG_LINE_CHARS, 200);
@@ -211,6 +214,8 @@ test('an edit of the Memory in the Projects tab keeps a line accepted while it w
 
 // Two computers that have the same project, each with its own ELU folder and its own facts.
 // What one has is put together with what the other has, as their daemons do every few seconds.
+// Neither has a peer key: a line that goes and comes back is one line only on a computer that
+// knows its own (identified).
 function computers(t) {
   const one = { home: newHome(t), root: temp(t), key: 'a'.repeat(64) }, two = { home: newHome(t), root: temp(t), key: 'b'.repeat(64) };
   let clock = new Date(2026, 10, 17, 9).getTime();
@@ -219,25 +224,33 @@ function computers(t) {
   const memory = side => on(side, () => readProjectSettings(side.root).context);
   return { one, two, on, send, memory };
 }
+// The same two computers, each with its peer identity: the key a fact id names its computer by.
+function identified(t, both = computers(t)) {
+  for (const side of [both.one, both.two]) { side.key = both.on(side, () => createIdentity({ name: side === both.one ? 'laptop' : 'devbox' })).key; side.tag = side.key.slice(0, 8); }
+  return both;
+}
+// A line as a computer writes it, its fact id with that computer's tag.
+const cites = (side, text, id = 'f1') => `${text} [${id}@${side.tag}]`;
 
 test('a line accepted on one computer is on the other within a trade, and one taken out goes from both', t => {
-  const { one, two, on, send, memory } = computers(t);
+  const { one, two, on, send, memory } = identified(t);
+  const customers = cites(one, 'The customers are finance teams.'), release = cites(two, 'A release needs a sign-off from compliance.'), seat = cites(one, 'The product is sold per seat.');
   on(one, () => { fact(); saveContext(one.root, 'The API lives in src/.'); addOrgLine(one.root, 'The customers are finance teams.', ['f1']); });
   assert.equal(send(one, two).changed, true);
-  assert.equal(memory(two), `The API lives in src/.\n\n${section(CUSTOMERS)}`);
-  on(two, () => { assert.equal(approvedAsItStands(two.root, 'context.md'), true); assert.deepEqual(pendingTrust(two.root), []); assert.deepEqual(orgLines(two.root).map(row => row.line), [CUSTOMERS]); });
+  assert.equal(memory(two), `The API lives in src/.\n\n${section(customers)}`);
+  on(two, () => { assert.equal(approvedAsItStands(two.root, 'context.md'), true); assert.deepEqual(pendingTrust(two.root), []); assert.deepEqual(orgLines(two.root).map(row => row.line), [customers]); });
   // Nothing comes back that the first does not have, and a second trade changes nothing.
   assert.deepEqual(send(two, one), { said: [], changed: false }); assert.deepEqual(send(one, two), { said: [], changed: false });
   // Each computer accepts a line of its own, and the owner edits his text on one meanwhile: all three hold on both.
   on(two, () => { fact('A release is signed off by compliance.'); addOrgLine(two.root, 'A release needs a sign-off from compliance.', ['f1']); });
   on(one, () => { addOrgLine(one.root, 'The product is sold per seat.', ['f1']); saveContextEdit(one.root, readProjectSettings(one.root).context, readProjectSettings(one.root).context.replace('lives in src/.', 'lives in src/ and its tests in test/.')); });
   send(two, one); send(one, two);
-  const whole = `The API lives in src/ and its tests in test/.\n\n${section(CUSTOMERS, 'A release needs a sign-off from compliance. [f1]', 'The product is sold per seat. [f1]')}`;
+  const whole = `The API lives in src/ and its tests in test/.\n\n${section(customers, release, seat)}`;
   assert.equal(memory(one), whole); assert.equal(memory(two), whole);
   // A line taken out on one goes from the other, and stays out when the other sends again.
-  on(two, () => removeOrgLine(two.root, CUSTOMERS));
+  on(two, () => removeOrgLine(two.root, customers));
   send(two, one); send(one, two);
-  const less = `The API lives in src/ and its tests in test/.\n\n${section('A release needs a sign-off from compliance. [f1]', 'The product is sold per seat. [f1]')}`;
+  const less = `The API lives in src/ and its tests in test/.\n\n${section(release, seat)}`;
   assert.equal(memory(one), less); assert.equal(memory(two), less);
   // The lessons trade as before, beside it.
   on(one, () => saveLearned(one.root, { add: ['Use pnpm, not npm.'], remove: [] }, { now: new Date(2026, 10, 12) }));
@@ -288,4 +301,192 @@ test('a record from before the section is read again from the file once, so its 
   on(two, () => saveContext(two.root, 'The API lives in src/.'));
   send(two, one);
   assert.equal(memory(one), `The API lives in src/.\n\n${section(CUSTOMERS)}`);
+});
+
+test('what the owner writes below the section is his own text: it is never taken for an Organization line', t => {
+  const root = folder(t); fact(); fact('A release is signed off by compliance.');
+  saveContext(root, 'Own.\n');
+  addOrgLine(root, 'The customers are finance teams.', ['f1']);
+  // He adds a sentence, a command and a heading of a lower level below it in the Projects tab.
+  const mine = 'Mine below.\n\n```sh\nnpm test\n```\n\n### Glossary\n\n- ARR: yearly revenue.\n';
+  saveContextEdit(root, readProjectSettings(root).context, `${readProjectSettings(root).context}\n${mine}`);
+  const text = read(contextFile(root));
+  assert.equal(splitContext(text).own, `Own.\n\n${mine.trimEnd()}`);
+  assert.deepEqual(orgLines(root).map(row => row.line), [CUSTOMERS]);
+  // A line ELU adds goes into the section, above his text, and his text stays as he wrote it.
+  addOrgLine(root, 'A release needs a sign-off from compliance.', ['f2']);
+  assert.equal(read(contextFile(root)), `Own.\n\n${section(CUSTOMERS, 'A release needs a sign-off from compliance. [f2]')}\n${mine}`);
+  assert.equal(orgLines(root).length, 2);
+  // Neither line can be his, and none of his can be taken out as one of ELU's.
+  assert.throws(() => findOrgLine(root, 'Mine below.'), { message: 'The Organization section has no such line. Name it by its number or its text.' });
+  assert.throws(() => findOrgLine(root, 3), { message: 'The Organization section has no such line. Name it by its number or its text.' });
+  // When ELU's lines go, his text stays, and no heading of ELU's stays above it.
+  removeOrgLine(root, 1); removeOrgLine(root, 1);
+  assert.equal(read(contextFile(root)), `Own.\n\n${mine}`);
+  // A list of his right under the section is his too: each line ELU writes ends with the ids of its facts.
+  assert.deepEqual(splitContext(`${section(CUSTOMERS)}\n- And one more.\n`), { own: '- And one more.', learned: [], org: [{ key: 'the customers are finance teams. [f1]', line: `- ${CUSTOMERS}` }] });
+});
+
+test('a list the owner writes below the section is his own: only a line that ends with fact ids is one of ELU\'s', t => {
+  const root = folder(t); fact();
+  saveContext(root, 'Own notes.\n'); addOrgLine(root, 'The customers are finance teams.', ['f1']);
+  // He adds a list of his own at the end of his Memory, below the section, in the Projects tab.
+  const his = '- Deploys go out on Fridays only.\n- Ask Ana before touching billing.\n';
+  saveContextEdit(root, readProjectSettings(root).context, `${readProjectSettings(root).context}\n${his}`);
+  assert.equal(splitContext(read(contextFile(root))).own, `Own notes.\n\n${his.trimEnd()}`);
+  // It is not filed as ELU's: it does not count toward the 20 lines, and the bot cannot name it to take it out.
+  assert.deepEqual(orgLines(root).map(row => row.line), [CUSTOMERS]);
+  for (const which of ['Deploys go out on Fridays only.', 2]) assert.throws(() => findOrgLine(root, which), { message: 'The Organization section has no such line. Name it by its number or its text.' });
+  // When ELU's line goes, his list stays as he wrote it, with no heading or sentence of ELU's above it.
+  removeOrgLine(root, 1);
+  assert.equal(read(contextFile(root)), `Own notes.\n\n${his}`);
+  // A line written before fact ids named their computer, one that names it, and one with several ids are ELU's, with or without a blank line before his.
+  const named = 'The product is sold per seat. [f2@1a2b3c4d, f3]';
+  for (const gap of ['', '\n']) assert.deepEqual(splitContext(`Top.\n\n${section(CUSTOMERS, named)}${gap}${his}`), { own: `Top.\n\n${his.trimEnd()}`, learned: [], org: [{ key: 'the customers are finance teams. [f1]', line: `- ${CUSTOMERS}` }, { key: 'the product is sold per seat. [f2@1a2b3c4d, f3]', line: `- ${named}` }] });
+  // A line of his that ends with fact ids cannot be told from one of ELU's, so it is taken for one.
+  assert.deepEqual(splitContext(`${section(CUSTOMERS)}- Mine, but it ends with ids. [f4]\n`).org.length, 2);
+  // A line from another computer that is not one ELU writes is never added: it would end the section above the lines after it.
+  const merged = folder(t); saveContext(merged, 'The API lives in src/.');
+  mergeNotes(merged, 'c'.repeat(64), { ...sent([]), org: [{ line: '- A line with no ids.', since: 1, at: 1, on: true }, { line: '- A finding from there. [f3]', since: 2, at: 2, on: true }] });
+  assert.equal(read(contextFile(merged)), `The API lives in src/.\n\n${section('A finding from there. [f3@cccccccc]')}`);
+});
+
+test('a line names the computer that keeps its facts: another computer never reads its own fact of that number for it', t => {
+  const { one, two, on, send, memory } = identified(t);
+  on(one, () => { fact(); saveContext(one.root, 'The API lives in src/.'); assert.equal(addOrgLine(one.root, 'The customers are finance teams.', ['f1']).line, `The customers are finance teams. [f1@${one.tag}]`); });
+  // The second computer has a fact f1 of its own, about something else.
+  on(two, () => fact('The office is in Lisbon.'));
+  send(one, two);
+  assert.equal(memory(two), `The API lives in src/.\n\n${section(`The customers are finance teams. [f1@${one.tag}]`)}`);
+  on(two, () => {
+    const cited = orgLines(two.root)[0].facts;
+    assert.deepEqual(cited, [`f1@${one.tag}`]);
+    // Asked for that id, it finds nothing here, and says where the fact is kept.
+    assert.deepEqual(findFacts({ ids: cited }), []);
+    assert.equal(factsElsewhere(cited), `f1@${one.tag} is a fact kept on the computer that wrote the line that cites it, not on this one. Ask there where it came from.`);
+    // Its own f1, with its own mark or none, is its own.
+    assert.deepEqual([findFacts({ ids: ['f1'] })[0].claim, findFacts({ ids: [`f1@${two.tag}`] })[0].claim], ['The office is in Lisbon.', 'The office is in Lisbon.']);
+    assert.equal(factsElsewhere(['f1', `f1@${two.tag}`]), '');
+    // A line here never stands on a fact kept there.
+    assert.throws(() => checkOrgLine(two.root, 'The office is in Lisbon.', [`f1@${one.tag}`]), { message: `f1@${one.tag} is a fact kept on another computer. Name a fact saved on this one.` });
+    assert.equal(checkOrgLine(two.root, `The office is in Lisbon. [f1@${two.tag}]`, ['f1']).line, `The office is in Lisbon. [f1@${two.tag}]`);
+  });
+  // A computer with no peer key writes the id alone.
+  const root = folder(t); fact();
+  assert.equal(addOrgLine(root, 'The customers are finance teams.', ['f1']).line, CUSTOMERS);
+});
+
+test('lines that come from another computer keep the section within its 20 lines of 200 characters', t => {
+  const root = folder(t), ids = [];
+  for (let n = 0; n < 20; n++) ids.push(fact(`Fact number ${n + 1} about the customers.`));
+  saveContext(root, 'The API lives in src/.');
+  for (let n = 0; n < 20; n++) addOrgLine(root, `Finding here number ${n + 1}.`, [ids[n]]);
+  const long = `A finding from the desktop that runs on and on ${'and on '.repeat(66)}. [f1]`;
+  assert.ok(long.length > 500);
+  const theirs = sent([...Array.from({ length: 21 }, (_, n) => `Finding from the desktop number ${n + 1}. [f${n + 1}]`), long], { at: Date.now() });
+  const merged = mergeNotes(root, 'c'.repeat(64), theirs);
+  assert.equal(orgLines(root).length, 20); assert.ok(orgLines(root).every(row => row.line.length <= ORG_LINE_CHARS));
+  assert.deepEqual(orgLines(root).map(row => row.line), Array.from({ length: 20 }, (_, n) => `Finding here number ${n + 1}. [f${n + 1}]`), 'the lines here stay');
+  assert.deepEqual(merged.said, [`22 Organization lines of ${path.basename(root)} from another computer were not added: the section holds at most 20 lines of at most 200 characters.`]);
+  // What did not fit is neither on here nor taken out: it is not sent on, and comes once a line here goes.
+  assert.equal(localNotes(root).org.length, 20);
+  removeOrgLine(root, 1); removeOrgLine(root, 1);
+  mergeNotes(root, 'c'.repeat(64), theirs);
+  const now = orgLines(root).map(row => row.line);
+  assert.equal(now.length, 20); assert.ok(now.every(line => line.length <= ORG_LINE_CHARS)); assert.ok(!now.some(line => line.startsWith('A finding from the desktop that runs on')));
+  assert.deepEqual(now.filter(line => /desktop/.test(line)), ['Finding from the desktop number 20. [f20@cccccccc]', 'Finding from the desktop number 21. [f21@cccccccc]'], 'the newest of theirs that fit');
+});
+
+test('a computer with no folder of the team\'s project yet reads its section within the same limits', t => {
+  const team = makeTeam(t, { founderName: 'ana', memberName: 'ben' }), here = team.founder, there = team.member, tag = there.identity.key.slice(0, 8);
+  const lines = [...Array.from({ length: 21 }, (_, n) => `Finding from the desktop number ${n + 1}. [f${n + 1}]`), `A finding that runs on ${'and on '.repeat(40)}. [f22]`, 'A bare line, with no mark. [f23]', 'The newest line, with no ids.'];
+  const notes = { ...sent([]), org: lines.map((line, n) => ({ line: n === 22 ? line : `- ${line}`, since: 1000 + n, at: 1000 + n, on: true })) };
+  const row = { id: 'c'.repeat(16), seq: 0, of: 1, data: JSON.stringify({ id: 'c'.repeat(16), name: 'shop', repoId: null, home: false, links: [], teams: [team.teamId], notes }) };
+  withHome(here.home, () => takeNotes(here.identity.key, there.identity.key, [row]));
+  const memory = withHome(here.home, () => teamNotes(team.teamId).memory), { org } = splitContext(memory);
+  assert.equal(org.length, ORG_LINES); assert.ok(org.every(item => item.line.length - 2 <= ORG_LINE_CHARS && item.line.startsWith('- ')));
+  // Each id that named no computer names the one the line came from, and the line with no ids is not one of the section.
+  assert.deepEqual(org.map(item => item.line).slice(-2), [`- Finding from the desktop number 21. [f21@${tag}]`, `- A bare line, with no mark. [f23@${tag}]`], 'the newest that fit');
+  assert.doesNotMatch(memory, /no ids/);
+});
+
+test('a line that came without its list mark is still a line of the section, and nothing it holds reads as a heading', t => {
+  const root = folder(t);
+  saveContext(root, 'The API lives in src/.');
+  mergeNotes(root, 'c'.repeat(64), { ...sent([]), org: [{ line: 'No ids at all.', since: 0, at: 1, on: true }, { line: 'Bare line. [f1]', since: 1, at: 1, on: true }, { line: '## Not a heading. [f2]', since: 2, at: 2, on: true }, { line: '- Marked line. [f3@1a2b3c4d]', since: 3, at: 3, on: true }] });
+  assert.deepEqual(splitContext(read(contextFile(root))), { own: 'The API lives in src/.', learned: [], org: [{ key: 'bare line. [f1@cccccccc]', line: '- Bare line. [f1@cccccccc]' }, { key: '## not a heading. [f2@cccccccc]', line: '- ## Not a heading. [f2@cccccccc]' }, { key: 'marked line. [f3@1a2b3c4d]', line: '- Marked line. [f3@1a2b3c4d]' }] });
+});
+
+test('a record that lost its Organization lines to an older ELU never brings back a line another computer took out', t => {
+  const { one, two, on, send, memory } = identified(t);
+  on(one, () => { fact(); saveContext(one.root, 'The API lives in src/.'); addOrgLine(one.root, 'The customers are finance teams.', ['f1']); });
+  send(one, two);
+  // The first takes the line out; the second ran an older ELU meanwhile, which kept no record of the section and left the line in its file.
+  on(one, () => removeOrgLine(one.root, 1));
+  const file = path.join(two.home, 'elu-code', 'project-notes.json'), store = JSON.parse(read(file));
+  for (const row of Object.values(store.projects)) delete row.org;
+  fs.writeFileSync(file, JSON.stringify(store));
+  assert.equal(memory(two), `The API lives in src/.\n\n${section(cites(one, 'The customers are finance teams.'))}`);
+  // Back on this ELU, the line goes from both.
+  send(one, two); send(two, one);
+  assert.equal(memory(two), 'The API lives in src/.\n'); assert.equal(memory(one), 'The API lives in src/.\n');
+  // A line only it has stays, and goes to the other.
+  on(two, () => { fact('A release is signed off by compliance.'); addOrgLine(two.root, 'A release needs a sign-off from compliance.', ['f1']); });
+  const again = JSON.parse(read(file));
+  for (const row of Object.values(again.projects)) delete row.org;
+  fs.writeFileSync(file, JSON.stringify(again));
+  send(two, one);
+  assert.equal(memory(one), `The API lives in src/.\n\n${section(cites(two, 'A release needs a sign-off from compliance.'))}`);
+});
+
+test('a record that is lost or does not read never brings back a line another computer took out, and a line only here still goes', t => {
+  const { one, two, on, send, memory } = identified(t);
+  on(one, () => { fact(); saveContext(one.root, 'The API lives in src/.'); addOrgLine(one.root, 'The customers are finance teams.', ['f1']); });
+  send(one, two);
+  // The first takes the line out; then the second's record does not read.
+  on(one, () => removeOrgLine(one.root, 1));
+  const file = path.join(two.home, 'elu-code', 'project-notes.json');
+  fs.writeFileSync(file, '{ broken');
+  send(one, two); send(two, one);
+  assert.equal(memory(two), 'The API lives in src/.\n'); assert.equal(memory(one), 'The API lives in src/.\n');
+  // The same once its record is lost, as on a new install that still has the project's Memory.
+  on(one, () => addOrgLine(one.root, 'The product is sold per seat.', ['f1']));
+  send(one, two);
+  on(one, () => removeOrgLine(one.root, 1));
+  fs.rmSync(file);
+  send(one, two); send(two, one);
+  assert.equal(memory(two), 'The API lives in src/.\n'); assert.equal(memory(one), 'The API lives in src/.\n');
+  // A line only it has, found with no record, still goes to the other.
+  on(two, () => { fact('A release is signed off by compliance.'); addOrgLine(two.root, 'A release needs a sign-off from compliance.', ['f1']); });
+  fs.rmSync(file);
+  send(two, one);
+  assert.equal(memory(one), `The API lives in src/.\n\n${section(cites(two, 'A release needs a sign-off from compliance.'))}`);
+});
+
+test('a line written before the computer had a peer key leaves with its tag, and is one line on both computers', t => {
+  const { one, two, on, send, memory } = computers(t);
+  on(one, () => { fact(); saveContext(one.root, 'The API lives in src/.'); assert.equal(addOrgLine(one.root, 'The customers are finance teams.', ['f1']).line, CUSTOMERS); });
+  // Only then are the two computers set up for the network; the second has an f1 of its own.
+  identified(t, { one, two, on });
+  on(two, () => fact('The office is in Lisbon.'));
+  const customers = cites(one, 'The customers are finance teams.');
+  on(one, () => {
+    // The same line with the tag is the line it has: it is not added again.
+    assert.deepEqual(addOrgLine(one.root, 'The customers are finance teams.', ['f1']), { line: customers, added: false });
+    // It leaves with this computer's tag.
+    assert.deepEqual(localNotes(one.root).org.map(item => item.line), [`- ${customers}`]);
+  });
+  send(one, two);
+  on(two, () => { const cited = orgLines(two.root)[0].facts; assert.deepEqual(cited, [`f1@${one.tag}`]); assert.deepEqual(findFacts({ ids: cited }), []); });
+  // Back on the first, with its tag on: one line, and the fact it cites is the first computer's own.
+  send(two, one);
+  on(one, () => { const rows = orgLines(one.root); assert.equal(rows.length, 1); assert.deepEqual(findFacts({ ids: rows[0].facts }).map(found => found.claim), ['The customers are finance teams of mid-size companies.']); });
+  assert.deepEqual(send(one, two), { said: [], changed: false }); assert.deepEqual(send(two, one), { said: [], changed: false });
+  // Taken out on the second, it goes from both.
+  on(two, () => removeOrgLine(two.root, 1));
+  send(two, one); send(one, two);
+  assert.equal(memory(one), 'The API lives in src/.\n'); assert.equal(memory(two), 'The API lives in src/.\n');
+  // A line that comes with an id that names no computer, from a build that sent it so, names the computer it came from.
+  on(two, () => mergeNotes(two.root, one.key, sent(['The product is sold per seat. [f1]'])));
+  on(two, () => { assert.deepEqual(orgLines(two.root).map(row => row.line), [cites(one, 'The product is sold per seat.')]); assert.deepEqual(findFacts({ ids: orgLines(two.root)[0].facts }), []); });
 });
