@@ -244,7 +244,7 @@ orchestrator tools go through one check in ELU's code: the rules it never breaks
 (`/orchestrator`), its caps, then your yes where the level needs it. A note or an answer to
 a session in Full access always needs your yes (one sent before you set that session to
 Full access is not given unless you said yes to it), and nothing is done when its action log
-cannot be written. Full access never answers what this bot asks you. The session's mode
+cannot be written. Full access never answers what this bot asks you, under any name it had. The session's mode
 lifts none of them. On another vendor, and in a Read only session, it only answers, read
 only.
 

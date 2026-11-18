@@ -236,6 +236,13 @@ test('a name reads only when its first word reads and nothing in it can change s
     'list.bulkdelete', 'get_bulkdelete', 'get_and_bulkdelete', 'list-bulkDelete', 'find_and_tag', 'fetch_and_hide', 'list_and_flag', 'get_and_dequeue', 'get_and_consume', 'get_and_claim', 'get_and_expire', 'fetch_and_ingest',
     'list_pop', 'find_incr', 'count_and_decrement', 'search_reindex', 'get_ping', 'search_and_spam', 'get_and_evict', 'get_and_lease', 'list_and_sendemail', 'search_email2send', 'read_markread', 'get_createorupdate', 'list_updated_and_deleted'];
   for (const tool of changes) assert.equal(readingTool('things', tool), false, tool);
+  // After a joining word only a part that reads again reads, so a change this file has no word for asks too.
+  for (const tool of ['get_and_unarchive', 'get_and_unset', 'get_or_unset', 'fetch_and_sign', 'get_and_void', 'fetch_and_dispatch', 'get_and_release', 'find_and_email', 'search_and_message', 'get_and_undo', 'get_and_bulkedit', 'get_and_deletes', 'get_then_zap', 'list_plus_frobnicate', 'get_and', 'list_unarchive', 'get_bulkedit', 'find_massupdate']) assert.equal(readingTool('things', tool), false, tool);
+  for (const tool of ['get_and_list_items', 'search_or_find_users', 'search_public_and_private', 'list_issues_and_pull_requests', 'get_cost_and_usage', 'list_unread', 'get_units', 'read_email', 'get_message', 'search_messages']) assert.equal(readingTool('things', tool), true, tool);
+  // A reading tool told to send: a method that is not a reading one, at any depth, asks.
+  const fetch = input => overseeingAnswer('mcp__http__fetch', { mode: 'full', servers: ['http'], input });
+  assert.equal(fetch({ url: 'https://a.example/page' }), 'allow'); assert.equal(fetch({ url: 'https://a.example/page', method: 'get' }), 'allow');
+  for (const input of [{ url: 'https://a.example/page', method: 'POST' }, { url: 'https://a.example/page', options: { http_method: 'delete' } }, { request: [{ verb: 'PUT' }] }, { method: 7 }, { httpMethod: 'PATCH' }]) assert.equal(fetch(input), 'ask', JSON.stringify(input));
   for (const tool of ['list_updates', 'list_commits', 'list_comments', 'get_orders', 'get_deployment', 'list_deployments', 'get_replacements', 'search', 'getUserProfile', 'list_ec2_instances']) assert.equal(readingTool('things', tool), true, tool);
   for (const [server, tool] of [['todo', 'append_to_list'], ['db', 'alter_view'], ['counter', 'increment_count'], ['redis', 'pop_from_list'], ['notes', 'hide_view'], ['mail', 'tag_search'], ['google_workspace', 'find_and_replace_doc']]) {
     for (const mode of ['ask', 'auto', 'full']) assert.equal(overseeingAnswer(`mcp__${server}__${tool}`, { mode, servers: [server], input: {} }), 'ask', `${tool} in ${mode}`);

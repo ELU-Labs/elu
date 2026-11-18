@@ -418,15 +418,23 @@ test('what the bot that oversees asks to send shows whole from the text ELU send
   assert.equal(askedWhole({ tool: 'mcp__elu-code-approval__session_message', input: { text: 'clipped' }, whole: 'Short.', summary: 'Send: Short.' }), null, 'the question holds it all');
 });
 
-test('Full access never answers what the bot that oversees asks, nor a bot it cannot find saved', () => {
+test('Full access never answers what the bot that oversees asks, under any name it had, and still answers a plain bot renamed or removed since it asked', t => {
+  environment(t, { XDG_CONFIG_HOME: temp(t) });
   const task = { permissions: 'ask', origin: null }, scout = { name: 'scout', vendor: 'claude', instructions: 'x', oversees: false }, watch = { name: 'watch', oversees: true };
   const find = name => ({ scout, watch })[name] ?? null;
   assert.equal(fullAllowed(task, 'lead', find), true); assert.equal(fullAllowed(task, 'bot:scout', find), true);
   assert.equal(fullAllowed(task, 'bot:watch', find), false);
   // A question it raised says so, whatever its role and whatever the bots read now.
   for (const role of ['lead', 'bot:scout', 'bot:gone']) assert.equal(fullAllowed(task, role, find, { role, oversee: true }), false, role);
-  // A bot renamed, removed or unreadable since it asked is not taken for one that does not oversee.
-  assert.equal(fullAllowed(task, 'bot:gone', find), false);
+  // A plain bot renamed or removed since it asked is answered, as before the bot that oversees came.
+  assert.equal(fullAllowed(task, 'bot:gone', find), true);
+  // The bot that oversees, renamed or removed since it asked: its old name is still its.
+  assert.equal(fullAllowed(task, 'bot:orchestrator', find), false, 'the name the built-in one has');
+  saveBot({ ...getBot('orchestrator'), name: 'boss' }, { previous: 'orchestrator' });
+  assert.equal(getBot('orchestrator'), null, 'renamed'); assert.equal(fullAllowed(task, 'bot:orchestrator', find), false, 'after a rename'); assert.equal(fullAllowed(task, 'bot:boss', find), false);
+  removeBot('boss');
+  assert.equal(fullAllowed(task, 'bot:boss', find), false, 'after a removal'); assert.equal(fullAllowed(task, 'bot:orchestrator', find), false);
+  // With no way to look the bot up, or a look that fails, no.
   assert.equal(fullAllowed(task, 'bot:scout', () => { throw new Error('unreadable'); }), false);
   assert.equal(fullAllowed(task, 'bot:scout'), false);
 });

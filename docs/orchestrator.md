@@ -102,6 +102,8 @@ asks for:
   `get_or_create_label`, `find_and_replace_doc`, `get_order` and `append_to_list` ask you,
   and so does a tool named only `query`. For the `elu` server, `ask_elu` and `list_issues`
   read; every other tool asks.
+- After `and`, `or` or `then` in a name, only another reading word reads: `get_and_list_items`
+  reads, `get_and_unarchive` asks. A reading tool handed a method other than GET asks too.
 - Some tools that only read still ask you, such as `pods_list` or `get_tag`, because of
   their name. Nothing runs without your yes.
 - A plain address is `http` or `https` with no query (`?`), no fragment (`#`) and no sign-in.
@@ -204,10 +206,16 @@ What it sends a session carries its name, and shows in that session's chat under
 | May teach "Learned from you" | Never |
 | Joins your other waiting messages, and ↑ takes it back | Kept apart |
 | Read by the agent as your words | Read as a note from `@orchestrator`, as data |
+| Picks a step of [Auto model](models.md) | Picks none: the turn runs on the model the session ran last |
 
 `/stop` in a session, archiving it or checking it Done also takes back the notes and answers
 it sent there that no turn read yet. One that reaches an archived or Done session is not
 given.
+
+An older ELU does not know these notes. If you go back to one while a note still waits, it
+runs as your own message: `/stop` the session first.
+
+A session it starts never begins with Auto model.
 
 No turn its note leads to has ELU's own commands (`elu sessions`, `elu schedules`,
 `elu jobs`), and neither has a session it started, until you write there. Until then that
