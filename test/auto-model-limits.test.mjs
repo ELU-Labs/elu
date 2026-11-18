@@ -4,23 +4,38 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { temp, fakeClis, fakeKeychain } from './helpers.mjs';
+import { temp, fakeClis, fakeKeychain, project } from './helpers.mjs';
 import { standInAnthropic } from './fakes/anthropic.mjs';
 import { activeLogin, finishLogin, newLogin, useLogin } from '../lib/logins.mjs';
-import { changeSwitch, familyOf, markSignIn, markSpent, notePicked, readSwitch, setAuto, setExtraUsage, switchOn } from '../lib/claude-switch.mjs';
+import { WAITS_FOR, changeSwitch, familyOf, markSignIn, markSpent, notePicked, readSwitch, restartsOnOther, setAuto, setExtraUsage, switchOn, waitsForReset } from '../lib/claude-switch.mjs';
 import { claudeModelFree, familyOf as familyOfAccounts, firstFree, limitOf, modelOver, pick, usable } from '../lib/claude-accounts.mjs';
 import { closeRelay, familyOf as familyOfRelay, openLaunch } from '../lib/claude-relay.mjs';
 import { keepClaudeUsage, readAccounts } from '../lib/usage.mjs';
 import { botModels, keptModels, modelsFile, readBotModels } from '../lib/bot-models.mjs';
+import { repository } from '../lib/git.mjs';
+import { ProjectController, projectSnapshot, registerProject } from '../lib/projects.mjs';
+import { Conductor, conductorTakesAuto, enqueue } from '../lib/conductor.mjs';
+import { conductorFolder } from '../lib/conductor-files.mjs';
+import { pendingRequests, updateRequest } from '../lib/workspace.mjs';
+import { lock, readTask, saveTask } from '../lib/state.mjs';
+import { setSessionModel } from '../lib/models.mjs';
+import { stopLine } from '../lib/stop-line.mjs';
+import { boardRows, rowTitle } from '../lib/board.mjs';
+import { LINES, saveAutoSettings } from '../lib/auto-model.mjs';
+import { parseWhen, runScheduleNow, saveSchedule } from '../lib/schedules.mjs';
 
 // The limits Auto model goes by when it sends a step to a model: whether a Claude model has
 // room now and until when (claudeModelFree and modelOver in lib/claude-accounts.mjs), the
 // relay's refusal that names one model's own week for a run that asked for it
 // (lib/claude-relay.mjs), and Codex's model names saved between starts (lib/bot-models.mjs).
+// Then how the conductor ends a turn of Auto model's that stopped (lib/conductor.mjs): the
+// restart on the other model after one model's week and the line it shows meanwhile, a quick
+// answer ELU ended under, a think that failed, and which new sessions take this computer's default.
 // Nothing here starts a vendor's program: the accounts are files in a temp folder, Anthropic
-// is the stand-in on this computer, and Codex is a stand-in script.
+// is the stand-in on this computer, and Codex and Claude Code are stand-in scripts.
 function environment(t, values) {
-  const previous = Object.fromEntries(Object.keys(values).map(key => [key, process.env[key]])); Object.assign(process.env, values);
+  const previous = Object.fromEntries(Object.keys(values).map(key => [key, process.env[key]]));
+  for (const [key, value] of Object.entries(values)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
   t.after(() => { for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } });
 }
 const UUIDS = ['11111111-1111-4111-8111-111111111111', '22222222-2222-4222-8222-222222222222'];
@@ -311,4 +326,176 @@ test('the saved names are read as carefully as the program\'s own: a file that i
   assert.deepEqual((await readBotModels('claude', { env: claude.env, timeoutMs: 60000 })).map(row => row.name), ['fable', 'opus', 'sonnet']);
   assert.equal(fs.existsSync(modelsFile(claude.env)), false); assert.deepEqual(keptModels('claude', { env: claude.env }).map(row => row.name), ['fable', 'opus', 'sonnet']);
   for (const vendor of ['agy', 'grok', 'constructor', '']) assert.deepEqual(keptModels(vendor, { env: cli.env }), [], vendor);
+});
+
+// How the conductor ends a turn of Auto model's that stopped. A project of the owner's, with
+// the stand-ins of the vendors' programs: Claude Code's fable and opus answer as Fable 5.2 and
+// Opus 5.5, and calls.jsonl keeps each run's flags.
+function autoProject(t) {
+  const p = project(t), clis = fakeClis(p.parent, { mode: 'answer', models: { fable: 'claude-fable-5-2', opus: 'claude-opus-5-5' } });
+  fs.mkdirSync(path.join(p.parent, 'home'), { recursive: true });
+  environment(t, { ...clis.env, HOME: path.join(p.parent, 'home'), ELU_NO_UPDATE_CHECK: '1', ELU_SESSION: undefined, ELU_PROJECT: undefined, ELU_COMMAND_FOLDER: undefined });
+  const controller = new ProjectController(repository(p.root)); registerProject(controller.repo);
+  return { ...p, ...clis, controller, repo: controller.repo };
+}
+// With a session he started with Auto model on.
+async function autoSession(t) {
+  const s = autoProject(t), first = await s.controller.ask('Look at the coupon code.', null, { auto: true }).finished;
+  assert.equal(readTask(s.repo, first.id).auto, true);
+  return { ...s, id: String(first.id) };
+}
+const request = (root, id) => pendingRequests(root).find(row => row.id === id);
+async function until(check, message, timeout = 30000) {
+  const started = Date.now();
+  while (!check()) { if (Date.now() - started > timeout) throw new Error(`Timed out waiting for ${message}`); await sleep(20); }
+}
+// One request started by a conductor that is not running on its own, to its end.
+async function turn(conductor, repo, row) {
+  conductor.launch(repo, row);
+  const record = [...conductor.runs.values()].find(value => value.requestId === row.id); assert.ok(record, 'it started');
+  await record.done;
+}
+const leadCalls = s => fs.readFileSync(s.calls, 'utf8').trim().split('\n').map(line => JSON.parse(line)).filter(row => row.vendor === 'claude' && row.args.includes('--output-format'));
+const flag = (args, name) => args.includes(name) ? args[args.indexOf(name) + 1] : null;
+
+test("one model's own week stops a turn of Auto model's: its message starts again at once, waiting for no reset, and goes on with the other model", { timeout: 60000 }, async t => {
+  const s = await autoSession(t), conductor = new Conductor({ tickMs: 3600000 }), real = conductor.controller(s.repo);
+  // His plan runs on the top model, where its step puts the session.
+  setSessionModel(s.repo, s.id, { vendor: 'claude', model: 'fable' });
+  const sent = enqueue(s.root, 'Plan the coupon change.', { continuationTaskId: s.id, priority: 0, typed: true });
+  const resets = Date.now() + 2 * DAY, limit = { model: 'fable', until: resets, step: 'plan' }, asked = [];
+  // Its turn ends as the runner ends one Fable's own week refused (lib/runner.mjs, modelLimit).
+  conductor.controller = () => ({ repo: real.repo, ask: (text, id, options) => {
+    asked.push(options);
+    if (asked.length > 1) return real.ask(text, id, options);
+    return { id, finished: Promise.reject(Object.assign(new Error('Fable 5.2 could not finish.'), { details: { cause: 'quota', modelLimit: limit } })), worked: () => false };
+  } });
+  await turn(conductor, s.repo, request(s.root, sent.id));
+  const again = request(s.root, sent.id);
+  assert.deepEqual([again.state, again.notBefore ?? null, String(again.continuationTaskId), again.modelLimit, again.attempts ?? 0, again.waitsFor], ['queued', null, s.id, limit, 0, undefined], 'queued to start at once, no retry counted, no reset waited for');
+  await turn(conductor, s.repo, again);
+  assert.deepEqual([asked[1].limited, asked[1].again], [limit, true], 'the turn starts again, told what stopped it');
+  assert.equal(request(s.root, sent.id).state, 'done');
+  assert.equal(readTask(s.repo, s.id).runs.filter(run => run.role === 'lead').at(-1).asked, 'opus');
+  assert.equal(flag(leadCalls(s).at(-1).args, '--model'), 'opus', 'Claude Code was asked for the other model');
+});
+
+test("with Auto model this computer's default, only a session he starts himself begins with it: not a schedule's run, nor one his other computer starts", { timeout: 60000 }, async t => {
+  const s = autoProject(t); saveAutoSettings({ default: true });
+  const schedule = saveSchedule({ root: s.root, goal: 'Check the build.', when: parseWhen('daily 9:00') });
+  runScheduleNow(schedule.id, new Date(), { start: () => true });
+  enqueue(s.root, 'Look at the cart.', { priority: 0, computer: 'b'.repeat(64) });
+  enqueue(s.root, 'Look at the tax.', { priority: 0, typed: true });
+  const conductor = new Conductor({ tickMs: 20 }).start(); t.after(() => conductor.stop());
+  const sessions = () => projectSnapshot(s.repo).tasks, of = goal => sessions().find(task => task.goal === goal);
+  await until(() => sessions().length === 3 && pendingRequests(s.root).every(row => ['done', 'blocked'].includes(row.state)) && sessions().every(task => !['running', 'preparing'].includes(task.state)), 'the three sessions');
+  assert.equal(of('Look at the tax.').auto, true, 'his own begins with it');
+  assert.equal(of('Check the build.').auto, undefined, "the schedule's run does not");
+  assert.equal(of('Look at the cart.').auto, undefined, 'nor the one his other computer started');
+});
+
+test('a quick answer ELU ended under: his question stays, a line under it says it got no answer, and the session is as it was; one that was answered gets no line', t => {
+  const s = autoProject(t), at = new Date(Date.now() - 60000).toISOString();
+  const dead = Number(spawnSync(process.execPath, ['-e', 'console.log(process.pid)'], { encoding: 'utf8' }).stdout.trim());
+  const left = (id, messages, extra = {}) => {
+    fs.mkdirSync(path.join(s.repo.state, 'tasks', id), { recursive: true });
+    saveTask(s.repo, { id, kind: 'conversation', base: null, branch: null, worktree: s.repo.root, goal: 'Look at the coupon code.', state: 'running', activeRole: 'lead', activeLog: null, createdAt: at, owner: { pid: dead, identity: 'not this process' }, runs: [], sessions: {}, reviews: [], responses: [], messages, auto: true, ...extra });
+  };
+  const asked = { at, text: 'where is the build script?', quick: 'q1' }, quickTurn = { state: 'answered', vendor: 'grok', model: null, name: 'Grok Build' };
+  left('1', [{ at, text: 'Look at the coupon code.' }, asked], { quickTurn });
+  left('2', [{ at, text: 'Look at the coupon code.' }, asked, { at, text: 'In package.json.', from: 'Grok Build · quick answer', update: true, quick: 'q1' }], { quickTurn });
+  // A turn of the session's own model, after a quick answer that was answered: as before.
+  left('3', [{ at, text: 'Look at the coupon code.' }, asked, { at, text: 'In package.json.', from: 'Grok Build · quick answer', update: true, quick: 'q1' }, { at, text: 'Now plan it.' }]);
+  new Conductor().recover();
+  const one = readTask(s.repo, '1'), cut = one.messages.at(-1);
+  assert.deepEqual([one.state, one.quickTurn, one.error ?? null], ['answered', undefined, null]);
+  assert.deepEqual([cut.text, cut.from, cut.line, cut.quick], [LINES.quickCut, 'ELU', true, 'q1']);
+  assert.ok(Date.parse(cut.at) > Date.parse(at), 'under his question');
+  assert.equal(one.messages.filter(row => row.text === asked.text).length, 1, 'his question is written once');
+  const two = readTask(s.repo, '2');
+  assert.deepEqual([two.state, two.messages.length], ['answered', 3]);
+  const three = readTask(s.repo, '3');
+  assert.deepEqual([three.state, three.messages.length], ['stopped', 4]); assert.match(three.error.message, /Retry to continue/);
+});
+
+test('think after a quick answer that fails before it asks the question again is blocked, to send again; one that failed after it is shown in the session', { timeout: 60000 }, async t => {
+  const s = await autoSession(t), conductor = new Conductor({ tickMs: 3600000 }), stamp = () => new Date().toISOString();
+  const quick = readTask(s.repo, s.id);
+  quick.messages.push({ at: stamp(), text: 'where is the build script?', quick: 'q1' }, { at: stamp(), text: 'In package.json.', from: 'Grok Build · quick answer', update: true, quick: 'q1' });
+  saveTask(s.repo, quick);
+  // Something holds the session as the turn starts (his /model, say): it fails before it writes anything.
+  const first = enqueue(s.root, 'think', { continuationTaskId: s.id, priority: 0, typed: true }), release = lock(s.repo, `task-${s.id}`);
+  try { await turn(conductor, s.repo, request(s.root, first.id)); } finally { release(); }
+  assert.equal(request(s.root, first.id).state, 'blocked');
+  assert.equal(readTask(s.repo, s.id).messages.filter(row => row.text === 'where is the build script?').length, 1, 'the question was not asked again');
+  // A turn that asked it again, then failed: the session shows that, so the request is done.
+  const second = enqueue(s.root, 'think', { continuationTaskId: s.id, priority: 0, typed: true });
+  conductor.controller = () => ({ repo: s.repo, ask: (text, id) => ({ id, worked: () => false, finished: Promise.resolve().then(() => {
+    const session = readTask(s.repo, id); session.messages.push({ at: stamp(), text: 'where is the build script?' }); Object.assign(session, { state: 'blocked', error: { message: 'Fable 5.2 could not finish.' } }); saveTask(s.repo, session);
+    throw new Error('Fable 5.2 could not finish.');
+  }) }) });
+  await turn(conductor, s.repo, request(s.root, second.id));
+  assert.equal(request(s.root, second.id).state, 'done');
+});
+
+test("one model's own week: while the message waits to start again on the other model, the session and its row say it goes on by itself", t => {
+  const s = autoProject(t), resets = Date.now() + 2 * DAY, limit = { model: 'fable', until: resets };
+  fs.mkdirSync(path.join(s.repo.state, 'tasks', '1'), { recursive: true });
+  saveTask(s.repo, { id: '1', kind: 'conversation', base: null, branch: null, worktree: s.repo.root, goal: 'Plan the coupon change.', state: 'blocked', activeRole: null, activeLog: null, createdAt: new Date().toISOString(), runs: [], sessions: {}, reviews: [], responses: [], messages: [{ at: new Date().toISOString(), text: 'Plan the coupon change.' }], auto: true, error: { message: 'Fable 5.2 could not finish.', modelLimit: limit } });
+  const task = readTask(s.repo, '1'), sent = enqueue(s.root, 'Plan the coupon change.', { continuationTaskId: '1', priority: 0, typed: true });
+  // As before: nothing waits to go on, and he is told to type continue.
+  assert.equal(restartsOnOther(task, pendingRequests(s.root)), false);
+  assert.equal(stopLine(task).action, 'Type continue to go on with the other model.');
+  // The conductor queued it to start again on the other model (lib/conductor.mjs finish).
+  updateRequest(s.root, sent.id, { modelLimit: { ...limit, step: 'plan' } });
+  const queue = pendingRequests(s.root);
+  assert.deepEqual([restartsOnOther(task, queue), waitsForReset(task, queue)], [true, false]);
+  const line = stopLine(task, { goesOn: true, other: true });
+  assert.equal(line.action, 'Goes on with its other model.'); assert.match(line.text, /^Fable is at its limit until .+\. This session goes on with its other model\.$/);
+  const row = boardRows([projectSnapshot(s.repo)], Date.now()).find(value => value.kind === 'task' && value.id === '1');
+  assert.deepEqual([row.label, row.waiting, row.other], ['waiting', true, true]);
+  assert.match(rowTitle(row), /· goes on with its other model$/);
+  assert.match(row.now, /This session goes on with its other model\.$/);
+  // Once it starts, nothing waits: as before.
+  updateRequest(s.root, sent.id, { state: 'starting' });
+  assert.equal(restartsOnOther(task, pendingRequests(s.root)), false);
+  // Every Claude account was at its limit as well (lib/runner.mjs): it still starts again on the other model first.
+  const both = { ...task, error: { ...task.error, waitsFor: WAITS_FOR, resetsAt: resets } };
+  assert.equal(stopLine(both, { goesOn: true, other: true }).action, 'Goes on with its other model.');
+  // And once it waits for an account to reset instead (the limit came again on the other model), it says that.
+  const reset = [{ state: 'queued', continuationTaskId: '1', waitsFor: WAITS_FOR }];
+  assert.deepEqual([waitsForReset(both, reset), restartsOnOther(both, reset)], [true, false]);
+  assert.equal(stopLine(both, { goesOn: true }).action, 'Waits for a Claude account to reset.');
+});
+
+test('a session whose turn still runs on a conductor an update replaced takes Auto model only where that conductor is of this build', t => {
+  const s = autoProject(t), at = new Date().toISOString(), id = '0f0e0d0c-0b0a-4990-8807-0605040302ac', file = path.join(conductorFolder(), `draining-${id}.json`);
+  t.after(() => fs.rmSync(file, { force: true }));
+  // This build's conductor, replaced by an update, finishing session 4's turn: its record says it takes it.
+  const replaced = new Conductor(); Object.assign(replaced, { draining: id, startedAt: at });
+  replaced.runs.set('4', { root: s.repo.root, project: path.basename(s.repo.root), taskId: '4', requestId: 'r-4', startedAt: at, attempts: 0 });
+  replaced.write();
+  assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).auto, 1);
+  assert.equal(conductorTakesAuto('4', [s.repo.root]), true);
+  // One of the build before Auto model writes no such mark: its turn would drop the setting as it saves.
+  const record = JSON.parse(fs.readFileSync(file, 'utf8')); delete record.auto; fs.writeFileSync(file, JSON.stringify(record));
+  assert.equal(conductorTakesAuto('4', [s.repo.root]), false);
+  assert.equal(conductorTakesAuto('5', [s.repo.root]), true, 'another session is not its');
+  assert.equal(conductorTakesAuto(), true, 'a new session starts on the conductor that takes new work');
+});
+
+test('in a session with Auto model, a message r sent again and his next one go as two turns, so only his new words pick a step; with it off they join, as before', t => {
+  const s = autoProject(t), at = new Date().toISOString(), conductor = new Conductor();
+  for (const [id, auto] of [['1', true], ['2', false]]) {
+    fs.mkdirSync(path.join(s.repo.state, 'tasks', id), { recursive: true });
+    saveTask(s.repo, { id, kind: 'conversation', base: null, branch: null, worktree: s.repo.root, goal: 'Look at the coupon code.', state: 'blocked', activeRole: null, activeLog: null, createdAt: at, runs: [], sessions: {}, reviews: [], responses: [], messages: [{ at, text: 'Look at the coupon code.' }], error: { message: 'Fable 5.2 could not finish.' }, ...(auto ? { auto: true } : {}) });
+  }
+  const pair = id => [enqueue(s.root, 'Look at the coupon code.', { continuationTaskId: id, priority: 0, typed: true, retried: true }), enqueue(s.root, 'And the tax line.', { continuationTaskId: id, priority: 0, typed: true })];
+  // The first of the session's waiting messages, with the ones after it, as dispatch hands them over.
+  const first = sent => { const ready = sent.map(row => ({ repo: s.repo, row: request(s.root, row.id) })); return conductor.together(s.repo, ready[0].row, ready); };
+  const [again, next] = pair('1'), alone = first([again, next]);
+  assert.deepEqual([alone.id, alone.goal, alone.retried], [again.id, 'Look at the coupon code.', true]);
+  assert.equal(request(s.root, next.id).state, 'queued', 'his new words wait as a turn of their own');
+  const [off, offNext] = pair('2'), joined = first([off, offNext]);
+  assert.equal(joined.goal, 'Look at the coupon code.\n\nAnd the tax line.'); assert.equal(request(s.root, offNext.id), undefined);
 });

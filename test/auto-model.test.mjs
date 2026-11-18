@@ -20,6 +20,9 @@ import { CAP_CARRY_TEXT } from '../lib/turn-limits.mjs';
 import { AUTO_LINE, AUTO_TEXT } from '../lib/remote-helper.mjs';
 import { ELU_TEXTS, KEEP_GOING_TEXT, eluLine, jobsEndedText, sentByElu, writtenByElu } from '../lib/elu-sent.mjs';
 import { setSessionModel } from '../lib/models.mjs';
+import { changeAgent, pickedOverAuto } from '../lib/agent-change.mjs';
+import { agentSpend, agentTable, cleanTopAgents, topAgentsWire } from '../lib/agent-spend.mjs';
+import { QUICK_ROLE } from '../lib/message-aside.mjs';
 import { AUTO_EFFORT, AUTO_NAME, AUTO_WORD, LINES, autoOn, autoSettings, autoSettingsFile, autoWords, classNames, holdVendor, homeProblem, insteadKey, insteadLine, isAck, isAutoWord, isThink, ownerWords, quickText, quickVendor, routeFor, routeName, routesLine, saveAutoSettings, sayOnce, setSessionAuto, stepOf, vendorReady, vendorState } from '../lib/auto-model.mjs';
 
 // Everything here reads a home and a personal folder of its own, made new for this run: no
@@ -114,8 +117,11 @@ test('the quick table of the design', () => {
     ['how do I run the tests?', {}, true],
     ['where is the build script?', {}, true],
     ['what does the add command do?', {}, true],
+    ['where is the function that parses the config?', {}, true],
     ['is this safe to merge?', {}, false],
     ["what's the root cause?", {}, false],
+    ['what is left?', {}, false],
+    ['how do I roll this back?', {}, false],
     ['can you make the retry count configurable?', {}, false],
     ['what did you mean by step 3?', {}, false],
     ['does that cover the mobile case?', { waiting: true }, false],
@@ -192,7 +198,9 @@ test('a message to a bot picks no step, and the owner\'s approval is an edit', (
 });
 
 test('the text half of the quick rule', () => {
-  const yes = ['what is the default port?', "what's the test command?", 'what’s the test command?', 'What are the build targets?', 'what does --dry-run do', 'where is the config file', 'where are the fixtures?', 'which file holds the routes?', 'which command starts the server?', 'How do I start the dev server?', 'how to run one test file', 'what is the preview port?', 'how do I address the server?', 'what does the explain command print?'];
+  const yes = ['what is the default port?', "what's the test command?", 'what’s the test command?', 'What are the build targets?', 'what does --dry-run do', 'where is the config file', 'where are the fixtures?', 'which file holds the routes?', 'which command starts the server?', 'How do I start the dev server?', 'how to run one test file', 'what is the preview port?', 'how do I address the server?', 'what does the explain command print?',
+    // that in the middle joins two parts and points at nothing.
+    'where is the function that parses the config?', 'which file sets the port?', 'which command starts the dev server?', 'where is the state stored?'];
   for (const text of yes) assert.equal(quickText(text), true, text);
   const no = [
     // Not one of the openers.
@@ -203,6 +211,11 @@ test('the text half of the quick rule', () => {
     'why is it slow?', 'what is the cause of the timeout?', 'what is causing the timeout?', 'what is wrong with the build?', 'what is failing?', 'what is the failure in CI?', 'where is the broken link?', 'what does this error mean?', 'where is the bug?', 'what is the safe way to migrate?', 'what is the secure default?', 'where is the race?', 'where is the deadlock?', 'where is the leak?', 'what is the correct flag?', 'what is the right port?', 'what is the better option?', 'what is the best flag?', 'what is worse here?', 'what is the risk?', "what's the thing I shouldn't touch?", 'how do I compare two runs?', 'what is the design of the cache?', 'what is the plan?', 'how do I review a diff?', 'what is there to think about?', 'what is the port and what if it is taken?', 'what is the order and what happens if it changes?',
     // Asking how to mend something, or about something that misbehaves.
     'how to fix the build?', 'how do I fix the lint step?', 'how do I debug the worker?', 'how to solve the merge conflict', 'what is slow in the build?', 'where is the test that hangs?', 'what is the flaky test?', 'where is the crash?',
+    // What is behind something or follows from it, a choice, and how to do a piece of work, in other words.
+    'what is the problem?', 'what is the reason the CI is red?', 'where is the regression coming from?', 'what is the source of the memory growth?', 'which file has the problem?', 'what is the tradeoff?', 'what are the pros and cons?', 'what are the edge cases?', 'what is the impact of this change?', 'what is the recommended approach?', 'what is the priority?', 'what is blocking the release?',
+    'how do I roll this back?', 'how do I revert this change?', 'how do I migrate the users table without downtime?', 'how do I make the retry count configurable?', 'how to handle concurrent writes here?',
+    // A word that points into the conversation or at the state of the work.
+    'what is left?', 'where are we?', "what's next?", 'what is the status?', 'what does step 3 mean?', 'what is that?', 'how do I do that?',
     // Not plain English letters, more than one paragraph, or too long.
     'what is the café port?', 'where is the build script?\n\nand the tests?', 'what is\tthe port?', `what is ${'a'.repeat(113)}?`, '', '   ',
   ];
@@ -287,8 +300,10 @@ test('only the owner\'s own typed words pick a step: one request of each kind', 
     ['a message to @model', { ...typed, goal: 'add a dark mode', toModel: true }],
     ['his approval of a Task, by the key', { ...typed, goal: 'Approved the Task: Add a dark mode', approved: true }],
     ['a Task the mode he set approved', { ...typed, goal: `${LABELS.auto} approved the Task: Add a dark mode`, approved: true }],
-    ['the retry key: his earlier words again', { ...typed, goal: 'fix the login redirect', attempts: 0 }],
+    ['a request no retry has touched', { ...typed, goal: 'fix the login redirect', attempts: 0 }],
     ['a card he starts from the board', { goal: 'Ship the settings page', typed: true, priority: 0, permissions: 'ask' }],
+    // The work it reopens is a step like any other.
+    ['a new goal he types in the Done check', { ...typed, goal: 'The owner gave this session a new goal.', goalChange: { task: 't-0a1b2c3d', revision: 2 } }],
   ];
   for (const [what, row] of mine) assert.equal(ownerWords(row), true, what);
   const notMine = [
@@ -300,6 +315,8 @@ test('only the owner\'s own typed words pick a step: one request of each kind', 
     ['4 a helper\'s own turn', { ...typed, goal: AUTO_TEXT('laptop', 2) }],
     ['5 a retry after a stall or a rate limit', { ...typed, goal: 'fix the login redirect', attempts: 1 }],
     ['6 the restart after a Claude limit reset', { ...typed, goal: 'fix the login redirect', waitsFor: WAITS_FOR }],
+    // The turn it starts again runs on the model the failed one ran on.
+    ['the retry key', { ...typed, goal: 'fix the login redirect', attempts: 0, retried: true }],
     ['10 a schedule that came due', { goal: 'Check the nightly build', scheduleId: 'schedule-0a1b2c3d', priority: 1 }],
     ['10 a schedule run now by hand', { goal: 'Check the nightly build', scheduleId: 'schedule-0a1b2c3d', priority: 1, typed: true }],
     ['11 a bot\'s schedule', { goal: 'Review what changed', bot: 'reviewer', scheduled: true, typed: true }],
@@ -315,7 +332,8 @@ test('only the owner\'s own typed words pick a step: one request of each kind', 
     ['21 his other computer\'s approval', { ...typed, goal: 'Approved the Task: Add a dark mode', approved: true, computer: key }],
     ['21 words another computer added to a waiting request', { ...typed, goal: 'fix the login redirect\n\nand the logout one', adds: key }],
     ['23 a session another session\'s model started', { goal: 'add a dark mode', typed: true, priority: 0, permissions: 'ask', byElu: true }],
-    ['24 a goal change', { ...typed, goal: 'The owner gave this session a new goal.', goalChange: { task: 'task-1', revision: 2 } }],
+    ['24 a new goal typed on his other computer', { ...typed, goal: 'The owner gave this session a new goal.', goalChange: { task: 't-0a1b2c3d', revision: 2 }, computer: key }],
+    ['24 a new goal, retried by the key', { ...typed, goal: 'The owner gave this session a new goal.', goalChange: { task: 't-0a1b2c3d', revision: 2 }, retried: true }],
     ['25 a copy of a session', { goal: 'add a dark mode', typed: true, priority: 0, copied: true, model: { vendor: 'claude', model: 'opus' } }],
     ['26 a local program with the owner\'s token', { goal: 'add a dark mode', permissions: 'ask' }],
     ['27 the continuation after a mode was raised', { ...typed, goal: `Continue where you stopped: this session now has ${LABELS.full}. Try again only this: npm test. Do not retry anything the owner said no to or that is never allowed.` }],
@@ -437,12 +455,25 @@ test('a quick question goes to the first place that applies', t => {
   grokReady(c, { signedIn: true, checked: true }); fs.rmSync(path.join(c.home, '.grok'), { recursive: true });
   assert.equal(quickVendor({ home: 'claude', ...more }), 'claude');
   grokReady(c);
-  // The vendor the owner set comes first; when it cannot take one, the order goes on.
+  // The vendor the owner set comes first; when it cannot take one, the session's own vendor,
+  // never a second vendor he did not name, however ready Grok Build is.
   saveAutoSettings({ quick: 'codex' }, { env });
   assert.equal(quickVendor({ home: 'claude', ...more }), 'codex');
-  assert.equal(quickVendor({ home: 'claude', env, codexModels: ['gpt-6-astra', 'gpt-6.1-sol'] }), 'grok');
+  assert.equal(quickVendor({ home: 'claude', env, codexModels: ['gpt-6-astra', 'gpt-6.1-sol'] }), 'claude');
+  assert.equal(quickVendor({ home: 'codex', env, codexModels: ['gpt-6-astra', 'gpt-6.1-sol'] }), null);
   saveAutoSettings({ quick: 'claude' }, { env });
   assert.equal(quickVendor({ home: 'codex', ...more }), 'claude');
+  holdVendor('claude', 'unknown', { env });
+  assert.equal(quickVendor({ home: 'codex', ...more }), 'codex');
+  assert.equal(quickVendor({ home: 'claude', ...more }), null);
+  saveAutoSettings({ hold: {} }, { env });
+  // Grok Build named and not ready yet: the session's own vendor meanwhile.
+  saveAutoSettings({ quick: 'grok' }, { env });
+  assert.equal(quickVendor({ home: 'claude', ...more }), 'grok');
+  grokReady(c, { checked: false });
+  assert.equal(quickVendor({ home: 'claude', ...more }), 'claude');
+  assert.equal(quickVendor({ home: 'codex', ...more }), 'codex');
+  grokReady(c);
   // home: only the session's own vendor, so project text goes to no second vendor.
   saveAutoSettings({ quick: 'home' }, { env });
   assert.equal(quickVendor({ home: 'claude', ...more }), 'claude');
@@ -680,16 +711,66 @@ test('a session that cannot change model refuses Auto model with the sentences a
   assert.ok(source.includes(`'${LINES.keepsCommit}'`));
 });
 
+test('every way Auto model goes off forgets which conversation each model had', t => {
+  const p = project(t), repo = repository(p.root), id = createConversation(repo, defaultConfig(), 'add a dark mode').id;
+  // On, with the vendor session each model keeps while it is (lib/runner.mjs).
+  const kept = () => {
+    setSessionAuto(repo, id, true);
+    const task = readTask(repo, id); task.autoSessions = { fable: { vendor: 'claude', id: 'S1' }, opus: { vendor: 'claude', id: 'S2' } }; saveTask(repo, task);
+    assert.deepEqual(Object.keys(readTask(repo, id).autoSessions), ['fable', 'opus']);
+  };
+  const gone = what => { const task = readTask(repo, id); assert.equal(autoOn(task), false, what); assert.equal('autoSessions' in task, false, what); };
+  kept(); assert.equal('autoSessions' in setSessionAuto(repo, id, false), false); gone('/model auto off');
+  kept(); assert.equal(pickedOverAuto(repo, id, 'Opus 5.5'), true); gone('a model picked on his other computer');
+  kept(); changeAgent(repo, id, { to: { vendor: 'claude', model: 'opus', effort: 'high' } }); gone('a model and an effort picked here');
+  assert.equal(readTask(repo, id).leadEffort, 'high');
+  // While a turn holds the session the change waits in settings.json, and the turn's own save
+  // of the copy it holds lays it: what each model had goes then too (lib/state.mjs laySettings).
+  kept();
+  const held = readTask(repo, id), release = lock(repo, `task-${id}`);
+  try { setSessionAuto(repo, id, false); assert.equal(fs.existsSync(settingsFile(repo, id)), true, 'the change waits for the turn'); saveTask(repo, held); }
+  finally { release(); }
+  gone('/model auto off while a turn works');
+});
+
+// ---- Usage ----
+
+test('quick answers are a row of their own in Usage, named once here, on another computer and on a build before Auto model there', () => {
+  const now = new Date(2026, 10, 12, 15, 0, 0).getTime(), at = new Date(now - 3600000).toISOString();
+  const projects = [{ root: '/r', key: 'a'.repeat(16), tasks: [{ id: '3', title: 'Normalize coupon codes', goal: 'Normalize coupon codes', createdAt: at, runs: [{ role: 'lead', vendor: 'claude', at, costUsd: 0.5 }, { role: QUICK_ROLE, vendor: 'grok', at, costUsd: 0.01 }] }] }];
+  const named = line => line.split(LINES.usageRow).length - 1;
+  const here = agentSpend(projects, { now }).rows;
+  assert.deepEqual(here.map(row => [row.agent, row.title]), [['Claude', 'Normalize coupon codes'], ['Quick answers', 'Normalize coupon codes']]);
+  const local = agentTable(here, { width: 120, total: 0.51 }).rows;
+  assert.deepEqual(local.map(named), [0, 1]); assert.match(local[1], /^Quick answers · Normalize coupon codes +Grok Build /);
+  // Over the wire the label goes in the title.
+  const sent = JSON.parse(JSON.stringify(topAgentsWire(projects, now)));
+  assert.deepEqual(sent.today.rows.map(row => [row.agent, row.title]), [['Claude', 'Normalize coupon codes'], ['Quick answers', 'Quick answers · Normalize coupon codes']]);
+  const there = cleanTopAgents(sent).today.rows.map(row => ({ ...row, where: 'laptop' }));
+  const shown = agentTable(there, { width: 120, total: 0.51 }).rows;
+  assert.deepEqual(shown.map(named), [0, 1]); assert.match(shown[1], /^Quick answers · Normalize coupon codes +laptop +Grok Build /);
+  // A build before Auto model labels only an @name, and shows a row by any other name by its
+  // title alone, as this one shows a model's own row.
+  assert.deepEqual(agentTable(there.map(row => ({ ...row, agent: 'Grok Build' })), { width: 120, total: 0.51 }).rows.map(named), [0, 1]);
+  // A row with no title is still named once, both ways.
+  const bare = [{ ...projects[0], tasks: [{ ...projects[0].tasks[0], title: '', goal: '' }] }];
+  const wired = cleanTopAgents(JSON.parse(JSON.stringify(topAgentsWire(bare, now)))).today.rows.find(row => row.agent === LINES.usageRow);
+  assert.equal(named(agentTable([wired], { width: 120 }).rows[0]), 1);
+  assert.equal(named(agentTable(agentSpend(bare, { now }).rows.filter(row => row.agent === LINES.usageRow), { width: 120 }).rows[0]), 1);
+});
+
 // ---- What is typed and what is shown ----
 
 test('what follows /model auto', () => {
-  for (const nothing of ['', '   ', null, undefined]) assert.deepEqual(autoWords(nothing), { kind: 'on' });
+  for (const nothing of ['', '   ', null, undefined, 'on', ' On ']) assert.deepEqual(autoWords(nothing), { kind: 'on' }, String(nothing));
+  // off alone turns it off, and is never sent as a message.
+  for (const off of ['off', ' OFF ']) assert.deepEqual(autoWords(off), { kind: 'off' }, off);
   for (const effort of EFFORTS) assert.deepEqual(autoWords(effort), { kind: 'effort', effort });
   assert.deepEqual(autoWords(' HIGH '), { kind: 'effort', effort: 'high' });
   for (const quick of [...VENDORS, 'home', 'off']) assert.deepEqual(autoWords(`quick ${quick}`), { kind: 'quick', quick });
   assert.deepEqual(autoWords('Quick  GROK'), { kind: 'quick', quick: 'grok' });
   // Anything else is a message, sent with Auto model on, as it was typed.
-  for (const text of ['add a dark mode', 'high priority: fix the login', 'quick', 'quick fix for the login', 'quick grok please', 'medium rare', 'ultra']) assert.deepEqual(autoWords(text), { kind: 'message', text });
+  for (const text of ['add a dark mode', 'high priority: fix the login', 'quick', 'quick fix for the login', 'quick grok please', 'medium rare', 'ultra', 'off the record fix it', 'on second thought, fix it', 'off off']) assert.deepEqual(autoWords(text), { kind: 'message', text });
   assert.deepEqual(autoWords('  Add a  dark mode '), { kind: 'message', text: 'Add a  dark mode' });
 });
 
@@ -713,6 +794,11 @@ test('the sentences, as the design writes them', () => {
   assert.equal(LINES.quickSet('home'), "Quick questions go to the session's own vendor on this computer.");
   assert.equal(LINES.quickSet('off'), 'Quick questions are off on this computer.');
   assert.equal(LINES.effortSet('high'), 'Auto model plans and edits at high on this computer.');
+  assert.equal(LINES.needsHomeHere, 'Auto model needs Claude Code or Codex on this computer.');
+  assert.equal(LINES.quickCut, 'The quick answer was cut off. Send your question again.');
+  // The vendor he set is not ready: the one that answers meanwhile (quickVendor), or none.
+  assert.equal(LINES.quickWaits('grok', 'claude'), 'Grok Build is not ready for quick questions on this computer yet. Until it is, Claude Code answers them.');
+  for (const none of [undefined, null]) assert.equal(LINES.quickWaits('grok', none), 'Grok Build is not ready for quick questions on this computer yet. Until it is, no quick answer is given.');
   // The feature is named in full wherever it is named, and no sentence is left open.
   const said = Object.values(LINES).map(line => typeof line === 'function' ? line(line === LINES.limit || line === LINES.noTop ? { from: 'Fable 5.2', to: 'Opus 5.5' } : 'grok') : line);
   for (const line of said) {

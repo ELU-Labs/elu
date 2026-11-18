@@ -33,6 +33,8 @@ from edits that do not run on the top model.
 | --- | --- |
 | `/model auto` | Turns Auto model on for this session, or for the session you are starting |
 | `/model auto fix the build` | The same, and sends the message |
+| `/model auto on` | The same as `/model auto` |
+| `/model auto off` | Turns it off. The session stays on the model it has |
 | `/model auto high` | Sets the effort of its plans and edits on this computer: `low`, `medium`, `high`, `xhigh` or `max` |
 | `/model auto quick grok` | Sets where quick questions go on this computer: `claude`, `codex`, `grok`, `home` or `off` |
 | `/model computer auto` | New sessions you start on this computer begin with Auto model |
@@ -49,10 +51,11 @@ from edits that do not run on the top model.
   included: `/model NAME`, the Model picker, `/agent change @model`, or the page a click on
   a reply's heading opens. The chat says so: `Model of this session: Opus 5.5. Auto model is
   off.` A bot's model or effort is its own, and changing it leaves Auto model on.
-- `/model computer auto` is for sessions you start yourself on this computer.
-  `/model computer NAME` and `/model computer none` take it away again, and a model you pick
-  in the new session form takes it away for that session. A project's default is always a
-  model: `/model default auto` says where Auto model is set.
+- `/model computer auto` is for sessions you start yourself on this computer, and needs
+  Claude Code or Codex installed here. `/model computer NAME` and `/model computer none`
+  take it away again, and a model you pick in the new session form takes it away for that
+  session. A project's default is always a model: `/model default auto` says where Auto
+  model is set.
 - The word `auto` names no model. A model saved by that name is typed with its vendor in
   front: `vendor:auto`.
 
@@ -110,43 +113,59 @@ A message is a quick question only when all of this holds:
 - It is plain English letters in one paragraph of at most 120 characters.
 - It starts with one of: what is, what's, what are, what does, where is, where are, which
   file, which command, how do I, how to.
-- It does not speak to the model (you, your, please), and has no word that asks for a
-  judgment, such as why, wrong, fail, bug, safe, correct, better, risk, should, compare,
-  design, plan, review, fix or think.
+- It does not speak to the model: no you, your or please.
+- It has no word that asks for a judgment or for work, such as why, cause, reason, problem,
+  wrong, fail, error, bug, fix, safe, correct, better, risk, should, compare, tradeoff,
+  impact, approach, priority, design, plan, review, think, mean, revert, migrate or handle,
+  and no phrase such as what if or the source of.
+- It has no word that points into the conversation or at the state of the work, such as
+  this, it, here, we, now, left, next, status, progress, done or step. Only the session's own
+  model knows what such a word points at. `that` counts too, right after the opening words
+  or at the end: "what is that?".
 
 | Message | Quick |
 | --- | --- |
 | how do I run the tests? | yes |
 | where is the build script? | yes |
 | what does the add command do? | yes |
+| where is the function that parses the config? | yes |
 | is this safe to merge? | no |
 | what's the root cause? | no |
+| what is left? | no |
+| how do I roll this back? | no |
+| what is the reason the CI is red? | no |
 | can you make the retry count configurable? | no |
 
 Where it goes, the first that applies:
 
 | Order | Where |
 | --- | --- |
-| 1 | The vendor you set with `/model auto quick` |
-| 2 | Grok Build, when it is installed, signed in and past its one-time check |
+| 1 | The vendor you set with `/model auto quick`, when it is ready |
+| 2 | With no vendor set: Grok Build, when it is installed, signed in and past its one-time check |
 | 3 | The fast model of the session's own vendor |
-| 4 | Nowhere: the message is not quick, and the top model takes it |
+| 4 | Nowhere: the message is not quick, and goes by its step |
 
-`/model auto quick home` keeps quick questions on the session's own vendor, so nothing of
-the project goes to a second vendor. `/model auto quick off` turns them off.
+A vendor you set never falls through to a second vendor you did not name: when it is not
+ready, the session's own vendor answers. `/model auto quick home` keeps quick questions on
+the session's own vendor, so nothing of the project goes to a second vendor.
+`/model auto quick off` turns them off.
 
 The quick run reads files and nothing else: no shell, no network, no MCP servers, no
 memory, in every mode. It is given the recent chat, the Task, and the project's
 instructions and Memory. It never starts a vendor's one-time check. It starts only while
 the session's [budget](usage.md#spending-limits) holds, and what it costs is its own row in
-Usage, `Quick answers`. On Grok Build the read-only run does not keep reads inside the
-project folder as Claude Code's does.
+Usage: `Quick answers` and the session's name. On Grok Build the read-only run does not
+keep reads inside the project folder as Claude Code's does.
 
 Its answer says who wrote it: `Grok Build · quick answer`. When the fast model says the
 message asks for more, cannot answer from what it has, fails or takes too long, the top
 model takes the message: `Fable 5.2 answers this one: it needs more than a quick answer.` A
-vendor that failed is passed over for 15 minutes, or for an hour after a limit. If a quick
-answer is not enough, type `think`: the same question goes to the top model.
+vendor that failed is passed over for 15 minutes, for an hour after a limit, and after a
+failed sign-in until you sign in again, a day at most. If a quick answer is not enough, type
+`think`: the same question goes to the top model.
+
+If ELU ends while a quick answer is being written, the chat says `The quick answer was cut
+off. Send your question again.`
 
 A quick question typed while a turn works is answered by that turn, as any message is.
 
@@ -169,15 +188,18 @@ it does without Auto model.
 
 | Turn | Model |
 | --- | --- |
-| Keep going, a long job that ended, carry on, a retry | The model the session ran last |
-| A schedule's run, a teammate's message, a message from your other computer | The same |
+| Keep going, a long job that ended, carry on, a retry after a stall or a limit | The model the session ran last |
+| The retry key | The model the failed turn ran on |
+| A schedule's run, a teammate's message, a message from your other computer | The model the session ran last |
 | A bot's turn, a review | The bot's own model |
 | A new session you did not type: a schedule, a teammate, another computer | Starts with Auto model off |
+
+A new goal you type in the Done check is your own message: it picks a step like any other.
 
 A session on another computer is that computer's: `/model auto` over it says `Auto model is
 set on the computer that runs the session.` A schedule runs on one model.
 
-After an update, `/model auto` waits until the sessions that were running have ended: until
+After an update, `/model auto` works once the sessions that were running have ended. Until
 then ELU says it still runs them on the build from before the update.
 
 ## Where it is kept

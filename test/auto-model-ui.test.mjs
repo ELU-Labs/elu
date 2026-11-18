@@ -8,12 +8,13 @@ import { liveTask } from './peer-helpers.mjs';
 import { repository } from '../lib/git.mjs';
 import { ProjectController, registerProject, sessionModel } from '../lib/projects.mjs';
 import { launchTerminal } from '../lib/terminal.mjs';
-import { projectFolder, pendingRequests } from '../lib/workspace.mjs';
+import { projectFolder, pendingRequests, updateRequest } from '../lib/workspace.mjs';
 import { typedCommand, argumentMatches } from '../lib/terminal-commands.mjs';
-import { Conductor } from '../lib/conductor.mjs';
-import { statusPath } from '../lib/conductor-files.mjs';
-import { readTask, changeSettings, taskTitle } from '../lib/state.mjs';
-import { LINES, AUTO_NAME, autoSettings, saveAutoSettings } from '../lib/auto-model.mjs';
+import { Conductor, enqueue } from '../lib/conductor.mjs';
+import { conductorFolder, statusPath } from '../lib/conductor-files.mjs';
+import { readTask, saveTask, changeSettings, taskTitle } from '../lib/state.mjs';
+import { LINES, AUTO_NAME, autoSettings, ownerWords, saveAutoSettings } from '../lib/auto-model.mjs';
+import { answerCheck } from '../lib/owner-check.mjs';
 import { noteChange, pickedOverAuto } from '../lib/agent-change.mjs';
 import { createIdentity } from '../lib/peer/identity.mjs';
 import { createTeam } from '../lib/peer/roster.mjs';
@@ -27,9 +28,10 @@ import { ADAPTERS } from '../lib/adapters/index.mjs';
 // Auto model as a person types it and reads it (lib/auto-model.mjs): /model auto in a session
 // and in the new session form, the pickers, the agent page, a conductor too old to take it, and
 // a session followed from another computer. Turned on, the box and the form name it and ELU
-// writes one line; a model or an effort picked by hand turns it off with one line; the settings
-// of this computer (/model auto <effort>, /model auto quick, /model computer auto) change no
-// session. With it off, every path reads as before.
+// writes one line; a model or an effort picked by hand, or /model auto off, turns it off with
+// one line; the settings of this computer (/model auto <effort>, /model auto quick, /model
+// computer auto) change no session. The retry key and a check answered from another computer
+// pick no step. With it off, every path reads as before.
 
 const cleanups = new WeakMap();
 function resources(t) {
@@ -113,6 +115,11 @@ async function send(v, text) {
   await until(() => v.current.panels.ask.__listener, 'message box');
   v.current.panels.ask.setValue(text); v.current.panels.ask.submit();
 }
+// A session of the owner's that answered, as a message he typed leaves it, with no turn run here.
+function chatSession(p, id, goal) {
+  const at = new Date().toISOString(); fs.mkdirSync(path.join(p.repo.state, 'tasks', id), { recursive: true });
+  saveTask(p.repo, { id, kind: 'conversation', base: null, branch: null, worktree: p.repo.root, goal, state: 'answered', activeRole: null, activeLog: null, createdAt: at, runs: [], sessions: {}, reviews: [], responses: [], messages: [{ at, text: goal }] });
+}
 // The Sessions list, and the session a row shows.
 const rows = v => v.current.panels.board.items.map(item => item.getText());
 const cursor = v => rows(v)[v.current.panels.board.selected] ?? '';
@@ -120,12 +127,16 @@ function rowSession(v, text) {
   const titled = (v.current.controller?.snapshot().tasks ?? []).filter(task => taskTitle(task) && text.includes(taskTitle(task)));
   return titled.sort((a, b) => taskTitle(b).length - taskTitle(a).length)[0]?.id ?? /#(\d+) /.exec(text)?.[1];
 }
-async function openTask(v, pattern) {
+// The cursor on the first row that matches, its session shown beside the list.
+async function selectRow(v, pattern) {
   if (v.current.view !== 'tasks') await send(v, '/tasks');
   await until(() => v.current.view === 'tasks' && rows(v).some(row => pattern.test(row)), `row ${pattern}`);
   const board = v.current.panels.board, before = v.current; board.focus(); board.select(rows(v).findIndex(row => pattern.test(row)));
   const id = rowSession(v, rows(v).find(row => pattern.test(row)));
   await until(() => v.current !== before && pattern.test(cursor(v)) && v.current.screen.focused === board && (!id || v.current.session === id), `row ${pattern} shown`);
+}
+async function openTask(v, pattern) {
+  await selectRow(v, pattern);
   v.input.write('\r'); await until(() => v.current.screen.focused === v.current.panels.ask && v.current.session, 'task chat');
 }
 const squash = text => text.replace(/\s+/g, ' ').trim();
@@ -150,10 +161,10 @@ test('/model auto in an open session: the line, the chat, the box; a model or an
   assert.equal(lines().length, 1); assert.match(lines()[0], /^Auto model is on\. Plans: /);
   await until(() => /^ Message Auto model · /.test(label()), `the box: ${label()}`);
   await until(() => /Auto model is on\. Plans: /.test(chat()), 'the chat keeps the line');
-  // Again: no second line.
+  await send(v, '/agents'); await until(() => /In this session: Auto model\./.test(status()), `agents: ${status()}`);
+  // Again: it says what is on, and the chat keeps no second line.
   await send(v, '/model auto'); await until(() => /^Auto model is on\./.test(status()), 'said again');
   assert.equal(lines().length, 1);
-  await send(v, '/agents'); await until(() => /In this session: Auto model\./.test(status()), `agents: ${status()}`);
   // A model picked: off, and the line says so.
   await send(v, '/model sonnet');
   await until(() => /Model of this session: Sonnet\. Auto model is off\./.test(status()), `picked: ${status()}`);
@@ -258,6 +269,99 @@ test('an older conductor: /model auto is refused with one line, and nothing is t
   await send(v, '/new'); await until(() => v.current.session === 'new' && /New session → Opus/.test(label()), `the form: ${label()}`);
   plant(); await send(v, 'And the tax line?'); await until(() => pendingRequests(p.root).length === 1, 'queued');
   assert.equal(pendingRequests(p.root)[0].auto, undefined);
+});
+
+test('a session whose turn still runs on the conductor an update replaced: /model auto is refused with the one line, and nothing is turned on', { timeout: 60000 }, async t => {
+  const p = setup(t, 'answer');
+  chatSession(p, '4', 'Trim coupon codes'); chatSession(p, '5', 'Round the tax line');
+  // The conductor that takes new work is of this build. The one it replaced, of the build before
+  // Auto model, still finishes session 4's turn: when that turn saves, the setting would be dropped.
+  const at = new Date().toISOString(), id = '0f0e0d0c-0b0a-4990-8807-0605040302ab', drain = path.join(conductorFolder(), `draining-${id}.json`);
+  const plant = (extra = {}) => {
+    fs.mkdirSync(conductorFolder(), { recursive: true });
+    fs.writeFileSync(statusPath(), JSON.stringify({ pid: process.pid, version: '0.0.2', startedAt: at, heartbeatAt: new Date().toISOString(), queued: 0, runs: [], standup: 1, standupAside: 1, copies: 1, goals: 1, auto: 1 }));
+    fs.writeFileSync(drain, JSON.stringify({ id, pid: process.pid, version: '0.0.1', startedAt: at, error: null, runs: [{ root: p.repo.root, project: path.basename(p.repo.root), taskId: '4', requestId: 'r-older', startedAt: at, attempts: 0, stalled: false, origin: null }], heartbeatAt: new Date().toISOString(), goals: 1, ...extra }));
+  };
+  plant();
+  const v = await view(t, { repo: p.repo, conductor: false }), { status, label } = handles(v), task = id => readTask(p.repo, id);
+  await openTask(v, /Trim coupon codes/); plant();
+  await send(v, '/model auto'); await until(() => status() === LINES.older, `older: ${status()}`);
+  assert.deepEqual([task('4').auto, task('4').agentChanges], [undefined, undefined], 'not on, and the chat keeps no line');
+  assert.doesNotMatch(label(), /Auto model/);
+  // Another session, whose turn that conductor does not run, takes it.
+  v.current.panels.ask.setValue('');
+  await openTask(v, /Round the tax line/); plant();
+  await send(v, '/model auto'); await until(() => task('5').auto === true, 'on in the other session');
+  // So does session 4 once the conductor that finishes its turn is of this build.
+  await openTask(v, /Trim coupon codes/); plant({ auto: 1 });
+  await send(v, '/model auto'); await until(() => task('4').auto === true, 'on');
+});
+
+test('/model auto off: the open session goes on with the model it has, with one line; with it off nothing changes; on the form it takes it away; nothing is sent', { timeout: 60000 }, async t => {
+  const p = setup(t, 'answer'); chatSession(p, '4', 'Trim coupon codes');
+  const task = () => readTask(p.repo, '4'), lines = () => (task().agentChanges ?? []).map(row => row.text), waiting = () => pendingRequests(p.root);
+  const v = await view(t, { repo: p.repo, conductor: false }), { status, label } = handles(v);
+  await openTask(v, /Trim coupon codes/);
+  // auto on is auto.
+  await send(v, '/model auto on'); await until(() => task().auto === true && /^Auto model is on\./.test(status()), `on: ${status()}`);
+  assert.equal(lines().length, 1);
+  await send(v, '/model auto off'); await until(() => task().auto === undefined, 'off');
+  await until(() => status() === LINES.picked('Opus'), `off: ${status()}`);
+  assert.deepEqual(lines().slice(1), [LINES.picked('Opus')]);
+  await until(() => /^ Message Opus/.test(label()), `the box names the model: ${label()}`);
+  // Already off: it says so, and nothing changes.
+  await send(v, '/model auto off'); await until(() => status() === LINES.off, `already off: ${status()}`);
+  assert.equal(lines().length, 2);
+  assert.deepEqual([waiting(), task().runs], [[], []], 'nothing was sent');
+  // The new session form: it takes Auto model off the form.
+  await send(v, '/new'); await until(() => v.current.session === 'new', 'the form');
+  await send(v, '/model auto'); await until(() => /New session → Auto model/.test(label()), `on the form: ${label()}`);
+  await send(v, '/model auto off'); await until(() => status() === LINES.off && /New session → Opus/.test(label()), `off the form: ${status()} ${label()}`);
+  await send(v, 'And the tax line?'); await until(() => waiting().length === 1, 'queued');
+  assert.equal(waiting()[0].auto, undefined);
+});
+
+test('/model auto quick names a vendor that is not ready: the line says which vendor answers quick questions until it is', { timeout: 60000 }, async t => {
+  const p = setup(t, 'answer'); environment(t, { HOME: p.parent }); saveAutoSettings({ quick: 'off' });
+  const v = await view(t, { repo: p.repo, conductor: false }), { status } = handles(v);
+  await until(() => v.current.panels.ask.__listener, 'default input');
+  // Grok Build is installed here and not signed in; Claude Code, which new sessions start on, takes them.
+  await send(v, '/model auto quick grok');
+  await until(() => status() === `${LINES.quickSet('grok')} ${LINES.quickWaits('grok', 'claude')}`, `grok: ${status()}`);
+  assert.equal(autoSettings().quick, 'grok');
+});
+
+test('/model computer auto where no vendor here can have it: the line is about this computer, typed or picked', { timeout: 60000 }, async t => {
+  const p = setup(t, 'answer');
+  for (const vendor of ['claude', 'codex']) fs.rmSync(path.join(p.dir, vendor));
+  environment(t, { PATH: [p.dir, '/usr/bin', '/bin'].join(path.delimiter) });
+  const v = await view(t, { repo: p.repo, conductor: false }), { status } = handles(v);
+  await until(() => v.current.panels.ask.__listener, 'default input');
+  await send(v, '/model computer auto'); await until(() => status() === LINES.needsHomeHere, `computer auto: ${status()}`);
+  assert.notEqual(autoSettings().default, true);
+  // Typed with the command list closed (Esc), so Enter runs it as it is.
+  const ask = v.current.panels.ask; ask.focus(); ask.readInput(); await until(() => ask.__listener, 'message box');
+  ask.setValue('/model computer'); ask.__listener('\x1b', { name: 'escape' }); ask.submit();
+  await until(() => modal(v, 'Model'), 'the picker');
+  const field = modal(v, 'Model').children.find(child => child.type === 'textbox'); await until(() => field.__listener, 'field');
+  field.setValue('auto'); field.emit('keypress', '\r', { name: 'enter' });
+  await until(() => squash(dialogText(v, 'Model')).includes(LINES.needsHomeHere), `picked: ${squash(dialogText(v, 'Model'))}`);
+  field.emit('cancel'); await until(() => !modal(v, 'Model'), 'picker closed');
+  assert.notEqual(autoSettings().default, true);
+});
+
+test("a session stopped at one model's own week whose message starts again on its other model: the chat and the line under it say it goes on by itself", { timeout: 60000 }, async t => {
+  const p = setup(t, 'answer'); liveTask(p.root, { id: '4', goal: 'Trim coupon codes', state: 'blocked', activeRole: null });
+  const resets = Date.now() + 2 * 24 * 3600 * 1000;
+  changeSettings(p.repo, '4', row => { row.auto = true; });
+  const stopped = readTask(p.repo, '4'); stopped.error = { message: 'Fable 5.2 could not finish.', modelLimit: { model: 'fable', until: resets } }; saveTask(p.repo, stopped);
+  // The conductor queued it to start again on the other model (lib/conductor.mjs finish).
+  const sent = enqueue(p.root, 'Plan the coupon change.', { continuationTaskId: '4', priority: 0, typed: true });
+  updateRequest(p.root, sent.id, { modelLimit: { model: 'fable', until: resets, step: 'plan' } });
+  const v = await view(t, { repo: p.repo, conductor: false }), { chat } = handles(v);
+  await openTask(v, /Trim coupon codes/);
+  await until(() => /Fable is at its limit until .+\. This session goes on with its other model\./.test(chat()), `the chat: ${chat()}`);
+  assert.doesNotMatch(chat(), /Type continue/);
 });
 
 test('the command list: auto is the first row of /model, and nothing is offered after it but where quick questions go', () => {
@@ -418,6 +522,25 @@ test('a quick question the fast vendor says needs work: ELU says who takes it, a
   assert.deepEqual(task().runs.map(run => [run.role, run.vendor, run.asked ?? null, run.step ?? null]), [['lead', 'claude', 'fable', 'plan'], ['quick', 'grok', null, 'quick'], ['lead', 'claude', 'fable', 'plan']]);
 });
 
+test('r on a session of Auto model\'s that stopped sends his last message again on the model that stopped: a quick question handed up to the top model is not asked of the fast vendor again', { timeout: 120000 }, async t => {
+  const p = grokReady(t);
+  const v = await view(t, { repo: p.repo }), { label, status } = handles(v);
+  await until(() => v.current.panels.ask.__listener, 'default input');
+  await send(v, '/model auto'); await until(() => /New session → Auto model/.test(label()), `the form: ${label()}`);
+  const id = () => v.current.snapshot?.tasks?.[0]?.id, task = () => readTask(p.repo, id()), lead = () => task().runs.filter(run => run.role === 'lead');
+  await send(v, 'Why do coupon codes that differ only in case not match?');
+  await until(() => id() && lead().length === 1 && task().state === 'answered', 'the first answer', 20000);
+  // His quick question went up to Fable 5.2, and that turn failed.
+  const stopped = task(), at = () => new Date().toISOString();
+  stopped.messages.push({ at: at(), text: 'where is the build script?', quick: 'q1' }, { at: at(), text: LINES.handUp('Fable 5.2'), from: 'ELU', line: true, quick: 'q1' });
+  Object.assign(stopped, { state: 'blocked', error: { message: 'Fable 5.2 could not finish.' } }); saveTask(p.repo, stopped);
+  await selectRow(v, new RegExp(`✗ ${taskTitle(task()).slice(0, 10).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`)); v.input.write('r');
+  await until(() => /^Retrying /.test(status()), `retry: ${status()}`);
+  await until(() => lead().length === 2 && !['running', 'preparing'].includes(task().state), 'the turn again', 30000);
+  assert.deepEqual(task().runs.map(run => [run.role, run.vendor, run.asked ?? null, run.step ?? null]), [['lead', 'claude', 'fable', 'plan'], ['lead', 'claude', 'fable', null]], 'no quick answer, and no step: the model that stopped');
+  assert.equal(fs.readFileSync(p.calls, 'utf8').trim().split('\n').map(line => JSON.parse(line)).filter(row => row.vendor === 'grok' && row.args.includes('--sandbox')).length, 0);
+});
+
 // The owner's project, shared with a team that another computer (sara's) is on; session 1 on
 // it, and what that computer asks over the link, as the daemon hands it to the host methods.
 const SARA = 'b'.repeat(64);
@@ -439,8 +562,9 @@ async function sharedSession(t) {
   relist();
   const watched = methods['elu.remote.watch']({ ref: `${projectKey(root)}:1` }, link);
   return {
-    repo, session: () => readTask(repo, '1'),
+    repo, root, session: () => readTask(repo, '1'),
     send: params => methods['elu.remote.send']({ id: watched.id, ...params }, link),
+    check: params => methods['elu.remote.check']({ id: watched.id, ...params }, link),
     // Everything this computer has told sara's of the session, after one more look at it.
     heard: () => { relist(); hostTick({ ...ctx, session: key => key === SARA ? link : null }, Date.now() + heard.length + 1); return heard; },
   };
@@ -466,4 +590,17 @@ test('a session with Auto model, from another computer: its model reads Auto mod
   // With it off the same pick keeps no line, as before.
   await w.send({ text: 'opus', typed: true, model: true, toModel: true });
   assert.equal(lines().length, 1);
+});
+
+test("his answer to a session's check from another computer picks no step of Auto model: it was not typed here; the same answer here does", { timeout: 120000 }, async t => {
+  const w = await sharedSession(t);
+  changeSettings(w.repo, '1', task => { task.auto = true; });
+  w.check({ answer: 'goal', text: 'And the import path?' });
+  const away = pendingRequests(w.root).find(row => row.goal === 'And the import path?');
+  assert.deepEqual([String(away.continuationTaskId), away.typed, away.byElu], ['1', true, true]);
+  assert.equal(ownerWords(away), false);
+  answerCheck(w.repo, w.root, w.session(), 'goal', 'And the export path?');
+  const here = pendingRequests(w.root).find(row => row.goal === 'And the export path?');
+  assert.deepEqual([String(here.continuationTaskId), here.typed, here.byElu], ['1', true, undefined]);
+  assert.equal(ownerWords(here), true);
 });
