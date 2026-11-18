@@ -16,6 +16,7 @@ Type these in the message box. `/` alone lists every command, and `/help` explai
 | `@pair is there a simpler way?` | Asks a bot. Your next messages in that session go to it too |
 | `@lead plan the coupon work` | Asks a bot that works. The session stays its own: your next messages, your approval of its Task and a new goal go to it, and it hands work to its helpers |
 | `@model and what do you think?` | Writes to the session's model again |
+| `/orchestrator act` | Sets how much the bot that oversees your sessions may do by itself: `watch`, `suggest`, `act` or `run`, for every project on this computer. `/orchestrator` alone shows the level, the caps and its last five actions; `/orchestrator undo a12` undoes one of them, and asks you first for an Organization line. See [Orchestrator](orchestrator.md) |
 | `/changes` | Shows what this session changed; `/chat` goes back. The name of its Changes tab counts them (`Chat   Changes 7`) before you open it: a session of this computer counts again when a turn ends or its state changes, and one on another computer shows its changes the same way, whole. In a session of this computer, `+` on a line (or a click on its `+`) notes what should change, and `s` sends the notes to the model together |
 | `/publish` | Shows the exact push and draft pull request, then asks you |
 | `/stop` | Stops the running response, and the [long jobs](jobs.md) the session started. Messages you sent while it ran then go at once, in order; `↑` takes one back first. Over a session on another computer, it stops that session there, when it was started from here or that project is Auto there. While a session of this computer works, the key bar under the message box names it (`/stop stop`) |
@@ -81,7 +82,9 @@ which runs it only for that session and no higher than its mode. A schedule adde
 gets that session's mode or a lower one, and `elu schedules run`, `resume` and `delete` there
 take only a schedule whose runs get no more: the others are yours, in ELU. A teammate's
 question or review, or a session a teammate's message started, is never told about them and
-cannot run them.
+cannot run them. Neither is a turn that a note of `@orchestrator` led to, nor a session it
+started until you write there: an `elu` command such a turn runs is your own `elu`, and it
+asks you each time, in every mode.
 
 ## Keys
 

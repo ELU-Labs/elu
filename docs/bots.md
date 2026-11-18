@@ -6,7 +6,7 @@ A bot is a model with a name and instructions. You write it once and use it in a
 In a session a bot reviews each change, answers when you write `@name`, or does work of its
 own.
 
-Five come with the app. You can edit or remove any of them in the Bots tab.
+Six come with the app. You can edit or remove any of them in the Bots tab.
 
 | Bot | Runs on | What it does |
 | --- | --- | --- |
@@ -14,14 +14,37 @@ Five come with the app. You can edit or remove any of them in the Bots tab.
 | `@lead` | Claude, Fable, with Opus helpers | When you write to it: plans the work, hands the pieces to helpers, and checks what they return |
 | `@qa` | Claude, Opus | When you write to it: tests the change like a user, fixes what it finds, and verifies each fix |
 | `@pair` | Codex, `gpt-6.1-sol`, high effort | A second model beside the working agent: says what it would challenge after each turn, and reviews each change |
+| `@orchestrator` | Claude, Fable, with Opus helpers | Knows your organization, watches every session on this computer, and advises you. It edits nothing. [More](orchestrator.md) |
 | `@elu` | Claude, every hour | Finds issues in your live product with [ELU](https://elu.dev), then reviews and merges the fix pull request or writes the fix |
+
+A bot is one of three kinds. The Bots tab names each bot's kind, and its page says what
+that kind may do.
+
+| | Answers | Works | Oversees |
+| --- | --- | --- | --- |
+| Bots that come with the app | `@reviewer`, `@pair` | `@lead`, `@qa`, `@elu`, and each bot you make | `@orchestrator` |
+| Edits files, runs a shell | no | yes | no |
+| Web | no | yes | yes |
+| MCP servers | no | yes | its own only |
+| Helpers | no | yes | yes, to read and search |
+| ELU's session tools | no | no | yes |
+| Reviews each change | yes | no | no |
+| Takes the session's work | no | yes | no |
+
+The kind is saved with the bot, so it stays when you rename it, and when an older ELU saves
+your bots without it, also in one save that renames it and changes its instructions. A save
+here never changes the kind of a bot that oversees: to have another kind, remove it and
+make a new bot. A bot that oversees cannot merge, shadow or be shared with teammates, only
+you write to it, on the computer it runs on, and it never runs in a session another computer
+or a teammate started.
 
 - A new session has no bots. `/bots add reviewer` adds one, and so does `@reviewer` alone
   and then Enter. With no bots, the checks alone decide whether a change is ready.
   `elu run` takes `--bot reviewer`.
 - `@lead plan the refund change` gives a bot work. `@lead`, `@qa`, `@elu` and each bot you
   make do the work you write to them, within the session's permissions; `@reviewer` and
-  `@pair` read and answer.
+  `@pair` read and answer. `@orchestrator` looks at your sessions and advises: its own
+  chat is where you talk to it, and `/orchestrator` sets how much it may do by itself.
 - After each edit, ELU runs the checks and every reviewing bot of the session reviews
   the change. Its must-fix findings go to the model, which fixes each one or disputes it with
   a reason; then the checks and the review run again, up to the policy's review rounds. The

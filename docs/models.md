@@ -191,8 +191,9 @@ it does without Auto model.
 | Keep going, a long job that ended, carry on, a retry after a stall or a limit | The model the session ran last |
 | The retry key | The model the failed turn ran on |
 | A schedule's run, a teammate's message, a message from your other computer | The model the session ran last |
+| A note or an answer of `@orchestrator` to the session | The model the session ran last |
 | A bot's turn, a review | The bot's own model |
-| A new session you did not type: a schedule, a teammate, another computer | Starts with Auto model off |
+| A new session you did not type: a schedule, a teammate, another computer, `@orchestrator` | Starts with Auto model off |
 
 A new goal you type in the Done check is your own message: it picks a step like any other.
 

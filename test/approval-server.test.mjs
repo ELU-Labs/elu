@@ -196,3 +196,31 @@ test('with --rules the relay allows what a saved rule or a default covers, and a
   await until(() => pendingApprovals().length === 1);
   assert.equal(pendingApprovals()[0].sandboxed, undefined); answerApproval(pendingApprovals()[0].id, 'deny'); await bare.next(row => row.id === 11);
 });
+
+// Whether the bot that oversees the owner's sessions leads the turn (lib/runner.mjs ledByOverseer)
+// reaches the relay as approvalServer() writes it. In his own turn an elu command of his is
+// answered by a default or by his rule; in one the bot leads, or one that does not say, he is asked.
+test('approvalServer() tells the relay whether the bot that oversees leads the turn, and only his own turn gets an elu command answered', async t => {
+  const dir = home(t), project = path.join(dir, 'shop'); fs.mkdirSync(project);
+  saveRule({ kind: 'command', words: ['elu', 'schedules'], exact: false, outside: true }, { scope: 'project', project });
+  const spec = (led, mode) => approvalServer({ session: `led-${led}-${mode}`, root: project, taskId: 7, role: 'lead', vendor: 'claude', log: path.join(dir, `${led}-${mode}.jsonl`), cwd: project, access: 'read', rules: 'saved', mode, ...(led === null ? {} : { led }) });
+  const told = args => args.includes('--led') ? args[args.indexOf('--led') + 1] : null;
+  assert.deepEqual([told(spec(false, 'auto').args), told(spec(true, 'auto').args), told(spec(null, 'auto').args)], ['no', 'yes', null]);
+  // Each question is denied once it waits, so nothing hangs on one.
+  const ask = async (led, mode, command) => {
+    const server = start(t, spec(led, mode).args.slice(1)), waiting = () => pendingApprovals().filter(row => row.id.startsWith(`led-${led}-${mode}-`));
+    let replied = false; const reply = server.next(row => row.id === 1).then(row => { replied = true; return row; });
+    server.send({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: TOOL_NAME, arguments: { tool_name: 'Bash', input: { command }, tool_use_id: 'toolu_elu' } } });
+    await until(() => replied || waiting().length === 1);
+    const [asked] = replied ? [] : waiting();
+    if (asked) answerApproval(asked.id, 'deny');
+    await reply;
+    return asked ? ['asked', asked.led] : ['allow', readApprovalLog(path.join(dir, `${led}-${mode}.jsonl`)).at(-1).by];
+  };
+  assert.deepEqual(await ask(false, 'auto', 'elu sessions list | head -5'), ['allow', 'default']);
+  assert.deepEqual(await ask(false, 'ask', 'elu schedules list | head -5'), ['allow', 'rule']);
+  for (const led of [true, null]) {
+    assert.deepEqual(await ask(led, 'auto', 'elu sessions list | head -5'), ['asked', true], `led ${led}`);
+    assert.deepEqual(await ask(led, 'ask', 'elu schedules list | head -5'), ['asked', true], `led ${led}`);
+  }
+});

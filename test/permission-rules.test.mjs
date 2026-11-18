@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { actionOf, allowedBy, commandShape, DEFAULTS, entryLine, listEntries, readStore, removeEntry, ruleFor, saveRule, turnOnEntry, usesSavedRules } from '../lib/permission-rules.mjs';
+import { actionOf, allowedBy, commandShape, DEFAULTS, entryLine, keepRule, listEntries, readStore, removeEntry, ruleFor, saveRule, turnOnEntry, usesSavedRules } from '../lib/permission-rules.mjs';
+import { pendingApprovals, requestApproval } from '../lib/approvals.mjs';
 import { CLI } from './helpers.mjs';
 import { spawnSync } from 'node:child_process';
 
@@ -281,6 +282,50 @@ test('every vendor\'s way of asking is read the same', () => {
   assert.deepEqual(commandShape('npm test 2>&1 | grep -c ok'), { main: ['npm', 'test'], filters: [['grep', '-c', 'ok']] });
   assert.deepEqual(commandShape('npm test 2>/dev/null | head -n 5'), { main: ['npm', 'test'], filters: [['head', '-n', '5']] });
   assert.equal(commandShape('npm test | grep -r x /'), null);
+});
+
+// A turn the bot that oversees the sessions leads (lib/runner.mjs ledByOverseer) has no elu of
+// the session's: the elu it runs is the owner's own, which starts and schedules sessions as he
+// would. There no default and no rule of his answers an elu command; everywhere else, as before.
+test('in a turn the bot that oversees leads, no default and no rule of his runs an elu command; elsewhere they answer as before', t => {
+  const { project } = home(t);
+  const ctx = { project, cwd: project, access: 'read', saved: true, sandboxed: true, mode: 'auto' };
+  for (const command of ['elu sessions new hello', 'elu sessions delete archived', 'elu schedules add every 1h check the build', 'elu jobs start build -- npm test', 'elu sessions list | head -5']) {
+    assert.deepEqual(allowedBy(...bash(command), ctx), { by: 'default', text: command.split(' ').slice(0, 2).join(' ') }, command);
+    assert.deepEqual(allowedBy(...bash(command), { ...ctx, led: false }), allowedBy(...bash(command), ctx), command);
+    assert.equal(allowedBy(...bash(command), { ...ctx, led: true }), null, command);
+    assert.equal(allowedBy(...bash(command, { dangerouslyDisableSandbox: true }), { ...ctx, led: true }), null, command);
+  }
+  // elu artifacts keeps its default: there it has no session to fill.
+  assert.deepEqual(allowedBy(...bash('elu artifacts'), { ...ctx, led: true }), { by: 'default', text: 'elu artifacts' });
+  // A rule he kept for elu (a makes one for elu with any arguments), or one written as elu sessions.
+  assert.deepEqual(rule('elu sessions new hello').rule, { kind: 'command', words: ['elu'], exact: false, outside: false });
+  saveRule(rule('elu sessions new hello').rule, { scope: 'all' });
+  fs.writeFileSync(path.join(process.env.XDG_CONFIG_HOME, 'elu-code', 'permission-rules.json'), JSON.stringify({ version: 1, rules: [...readStore().rules, { kind: 'command', words: ['elu', 'sessions'], exact: false, outside: false, scope: 'project', project }], off: [] }));
+  assert.equal(readStore().rules.length, 2);
+  for (const mode of ['ask', 'auto']) for (const command of ['elu sessions new hello', 'elu schedules add every 1h check the build', 'elu permissions remove 4', 'elu allow-home']) {
+    const own = { ...ctx, mode };
+    assert.equal(allowedBy(...bash(command), { ...own, led: true }), null, `${mode}: ${command}`);
+    assert.equal(allowedBy(...bash(command), own)?.by, mode === 'auto' && /^elu (?:sessions|schedules) /.test(command) ? 'default' : 'rule', `${mode}: ${command}`);
+    assert.equal(allowedBy(...bash(command), { ...own, led: false })?.by, allowedBy(...bash(command), own)?.by, `${mode}: ${command}`);
+  }
+  // His other rules and the defaults answer such a turn as any other.
+  saveRule(rule('cargo build').rule, { scope: 'all' });
+  assert.deepEqual(allowedBy(...bash('cargo build --release'), { ...ctx, led: true }), { by: 'rule', text: 'cargo build' });
+  assert.deepEqual(allowedBy(...bash('git status'), { ...ctx, led: true }), { by: 'default', text: 'git status' });
+});
+
+// a on a waiting question keeps a rule and answers what else waits that it covers: a question
+// a turn the bot leads asked stays his, and so does one that does not say who led its turn.
+test('a rule kept with a answers no waiting question of a turn the bot leads, nor one that does not say', t => {
+  const { project } = home(t);
+  const ask = (id, command, led) => requestApproval({ id, root: project, taskId: '1', role: 'lead', vendor: 'claude', tool: 'Bash', input: { command }, cwd: project, access: 'read', rules: 'saved', sandboxed: true, ...(led === undefined ? {} : { led }) });
+  ask('ask-own', 'elu sessions list', false); ask('ask-led', 'elu sessions new a', true); ask('ask-also', 'elu sessions new b', false); ask('ask-unsaid', 'elu sessions new c');
+  const waiting = () => pendingApprovals().map(row => row.id).sort();
+  assert.deepEqual(Object.fromEntries(pendingApprovals().map(row => [row.id, row.led ?? null])), { 'ask-own': false, 'ask-led': true, 'ask-also': false, 'ask-unsaid': null });
+  keepRule(pendingApprovals().find(row => row.id === 'ask-own'), null, 'all', { sessionOf: () => ({ origin: null }) });
+  assert.deepEqual(readStore().rules.map(row => row.words), [['elu']]);
+  assert.deepEqual(waiting(), ['ask-led', 'ask-unsaid']);
 });
 
 test('elu permissions lists, removes and turns on, numbered as /permissions numbers them', t => {

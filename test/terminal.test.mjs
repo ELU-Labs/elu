@@ -1554,8 +1554,8 @@ test('@name in a session asks that bot, not the lead: @ offers the saved bots, t
   // In the new session's box, @ offers the saved bots with what each is for: the ones the app comes with, the owner's own by name, and @elu last. Tab fills one in.
   await typing(); await until(() => panels.keys.getText().trim() === '@name ask a bot  / commands  /model choose the model  ! run a shell command  esc sessions', 'the key bar names @name');
   const offered = () => panels.palette.items.map(item => item.getText().replace(/\s+/g, ' ').trim());
-  v.input.write('@'); await until(() => !panels.palette.hidden && panels.palette.items.length === 7, 'every bot offered');
-  assert.deepEqual(offered().map(row => row.split(' ')[0]), ['@reviewer', '@lead', '@qa', '@pair', '@docs', '@sec', '@elu']);
+  v.input.write('@'); await until(() => !panels.palette.hidden && panels.palette.items.length === 8, 'every bot offered');
+  assert.deepEqual(offered().map(row => row.split(' ')[0]), ['@reviewer', '@lead', '@qa', '@pair', '@orchestrator', '@docs', '@sec', '@elu']);
   assert.deepEqual(offered().filter(row => /^@(docs|sec) /.test(row)), ['@docs Check that the docs match the change.', '@sec Review the change for leaked secrets.']);
   v.input.write('s'); await until(() => panels.palette.items.length === 1 && /^@sec /.test(panels.palette.items[0].getText().trim()), 'narrowed to @sec');
   v.input.write('\t'); await until(() => panels.ask.getValue() === '@sec ' && panels.palette.hidden, 'Tab fills it in');
@@ -1596,7 +1596,7 @@ test('@name in a session asks that bot, not the lead: @ offers the saved bots, t
   await send(v, '/bots remove docs'); await until(() => /@docs left this session\./.test(status()) && /with @sec $/.test(label()), 'removed'); assert.deepEqual(task(id).bots, ['sec']);
   await send(v, '/bots remove docs'); await until(() => /@docs is not in this session\./.test(status()), 'not in it');
   await typing(); panels.ask.setValue(''); v.input.write('/bots add'); await until(() => panels.ask.getValue() === '/bots add' && !panels.palette.hidden, 'the command list');
-  v.input.write('\r'); await until(() => panels.ask.getValue() === '/bots add ' && offered().map(row => row.split(' ')[0]).join() === 'reviewer,lead,qa,pair,docs,elu', 'only the bots that are not in the session');
+  v.input.write('\r'); await until(() => panels.ask.getValue() === '/bots add ' && offered().map(row => row.split(' ')[0]).join() === 'reviewer,lead,qa,pair,orchestrator,docs,elu', 'only the bots that are not in the session');
   assert.ok(offered().includes('docs Check that the docs match the change.'));
   v.input.write('d'); await until(() => offered().join('|') === 'docs Check that the docs match the change.', 'narrowed as typed');
   v.input.write('\r'); await until(() => /@docs is in this session\. It reviews the changes\./.test(status()), 'added');
@@ -2628,8 +2628,8 @@ test('a new session opens beside the list; mouse and keys move between Sessions,
   assert.match(panels.composeHint.getText().replace(/\s+/g, ' '), /Your message goes to Opus\. No bot reviews the changes\. Type @name to add one\./);
   click(v, panels.composeList, 1, panels.composeList.items.length - 1);
   click(v, panels.composeList, 1, panels.composeList.items.length - 1);
-  await until(() => dialogRows(v, 'Bots in this session').length === 5, 'the bots to add or remove');
-  assert.deepEqual(dialogRows(v, 'Bots in this session').map(row => row.split(/\s{2,}/)[0]), ['[ ] @reviewer', '[ ] @lead', '[ ] @qa', '[ ] @pair', '[ ] @elu']);
+  await until(() => dialogRows(v, 'Bots in this session').length === 6, 'the bots to add or remove');
+  assert.deepEqual(dialogRows(v, 'Bots in this session').map(row => row.split(/\s{2,}/)[0]), ['[ ] @reviewer', '[ ] @lead', '[ ] @qa', '[ ] @pair', '[ ] @orchestrator', '[ ] @elu']);
   dialogList(v, 'Bots in this session').select(2); v.input.write('\r');
   await until(() => /@qa is in this session\. It works when you write to @qa\./.test(panels.status.getText()) && /^\[x\] @qa/.test(dialogRows(v, 'Bots in this session')[2] ?? ''), 'a bot added from the form, and ticked');
   v.input.write('\x1b'); await until(() => !modal(v, 'Bots in this session') && form().at(-1) === 'Bots  @qa  /bots add NAME, /bots remove NAME', 'the form lists it');
@@ -2753,7 +2753,7 @@ test('/agent add offers the models, puts one in the session as an agent, and /ag
   v.input.write('so'); await until(() => rows().join() === 'sonnet', 'filtered as typed');
   // Enter adds it to the session the form starts: a bot named after its model, which works when it is written to.
   v.input.write('\r'); await until(() => /@sonnet is in this session\. It works when you write to @sonnet\./.test(status()), 'added');
-  assert.deepEqual(listBots().map(bot => bot.name), ['reviewer', 'lead', 'qa', 'pair', 'sonnet', 'elu']);
+  assert.deepEqual(listBots().map(bot => bot.name), ['reviewer', 'lead', 'qa', 'pair', 'orchestrator', 'sonnet', 'elu']);
   assert.deepEqual([getBot('sonnet').vendor, getBot('sonnet').model, getBot('sonnet').works, getBot('sonnet').about], ['claude', 'sonnet', true, 'Sonnet: works when you write to it']);
   await until(() => bots() === 'Bots  @sonnet  /bots add NAME', 'the form lists it');
   assert.equal(modal(v, 'Save agent'), undefined, 'no dialog asks to save anything');
@@ -2771,7 +2771,7 @@ test('/agent add offers the models, puts one in the session as an agent, and /ag
   // A model that is not listed is refused and nothing is made; any other word gets the usage.
   await send(v, '/agent add nosuchmodel'); await until(() => /No model named nosuchmodel\. \/model lists them; \/model add adds one by name\./.test(status()), 'unknown model');
   await send(v, '/agent edit sonnet claude'); await until(() => /Use \/agent add <model> \[what it does\] \[--name NAME\], \/agent change <name>, or \/agent remove <name>\./.test(status()), 'usage');
-  assert.deepEqual(listBots().map(bot => bot.name), ['reviewer', 'lead', 'qa', 'pair', 'sonnet', 'sql', 'elu']);
+  assert.deepEqual(listBots().map(bot => bot.name), ['reviewer', 'lead', 'qa', 'pair', 'orchestrator', 'sonnet', 'sql', 'elu']);
   // Nothing was committed and no model was called.
   assert.equal(git(p.root, ['rev-parse', 'HEAD']), before);
   assert.equal(fs.readFileSync(p.calls, 'utf8').trim().split('\n').map(JSON.parse).some(call => call.args.includes('-p') || call.args[0] === 'exec'), false, 'no model was called');
@@ -6286,6 +6286,8 @@ test('f beside y and n allows what waits and gives the session Full access; wher
   assert.equal(answer('run-3-a'), 'allow'); assert.equal(answer('run-3-b'), 'allow'); assert.equal(readTask(p.repo, '3').permissions, 'full');
   wants('run-3-c', '3', 'npm test'); await until(() => answer('run-3-c') === 'allow', 'what it asks next is allowed without a key');
   // A bot's scheduled turn runs in its session's mode, so f gives it Full access as it does the model's turn.
+  // A bot that is not saved is not offered it: it may be one that oversees, renamed or removed since it asked.
+  saveBot({ name: 'scout', vendor: 'claude', instructions: 'Sweep the logs.' });
   running('4', 'Sweep the logs', { activeRole: 'bot:scout', messages: [{ at: began, text: 'Sweep the logs', to: '@scout', scheduled: true }] });
   await openTask(v, /Sweep the l/); await until(() => v.current.session === '4', 'the other session is open');
   wants('run-4-a', '4', 'ls logs', 'bot:scout');

@@ -18,7 +18,8 @@ import { localRepos, repoProof, saveProofs, sessionCards } from '../lib/peer/car
 import { savePeerPolicy } from '../lib/peer/settings.mjs';
 import { declineStandup, teamStandupAsk, teamStandupCommand, teamStandupRead, waitingStandups } from '../lib/peer/standup.mjs';
 import { remoteCommand } from '../lib/peer/remote.mjs';
-import { STANDUP_QUESTION, UPDATES_MAX, boundedUpdates, checkStandupFor, cutAnswer, everyoneMessage, newRound, standupAgent, standupLeftOut, standupReply, teammateAnswer } from '../lib/standup.mjs';
+import { NOT_OPEN, STANDUP_QUESTION, UPDATES_MAX, boundedUpdates, checkStandupFor, cutAnswer, everyoneMessage, newRound, standupAgent, standupLeftOut, standupReply, teammateAnswer } from '../lib/standup.mjs';
+import { removeBot, saveBot } from '../lib/bots.mjs';
 import { endLine, runStandupRound, standupPlan } from '../lib/standup-round.mjs';
 import { kanbanTool, standupSession } from '../lib/standup-kanban.mjs';
 import { serve, TOOL_NAME } from '../lib/approval-server.mjs';
@@ -88,6 +89,41 @@ test('who is asked: open sessions with an agent, one a teammate\'s message start
   assert.equal(standupLeftOut(board, task('9', { runs: [] }), { now }), 'no agent');
   // A standup answered last week is not activity: the session stays quiet.
   assert.equal(standupLeftOut(board, task('10', { runs: [{ role: 'lead', at: at(now - 9 * day) }, { role: 'lead', at: at(now - day), standup: 'standup-0000000000000000' }] }), { now }), 'quiet');
+});
+
+// The chat of the bot that oversees the owner's sessions holds what it read of every one of them.
+test("the chat of the bot that oversees is never asked, nor any bot's chat while the bots cannot be read", t => {
+  const p = project(t); environment(t, { XDG_CONFIG_HOME: path.join(p.parent, 'personal') });
+  const now = Date.parse('2026-11-12T12:00:00Z'), at = ms => new Date(ms).toISOString(), board = { cards: [], done: [], archived: [] };
+  const chat = (id, name) => ({ id, createdAt: at(now - 86400000), state: 'answered', runs: [{ role: `bot:${name}`, at: at(now - 3600000) }], messages: [], botChat: name });
+  saveBot({ name: 'scout', vendor: 'claude', instructions: 'Look for risky changes.' });
+  assert.equal(standupLeftOut(board, chat('1', 'orchestrator'), { now }), 'overseer');
+  assert.equal(standupLeftOut(board, chat('2', 'scout'), { now }), null);
+  assert.ok(NOT_OPEN.includes('overseer'), 'a host drops it without a word');
+  // Removed, a bot ELU comes with that oversees still counts by its name.
+  assert.equal(removeBot('orchestrator'), true);
+  assert.equal(standupLeftOut(board, chat('1', 'orchestrator'), { now }), 'overseer');
+  assert.equal(standupLeftOut(board, chat('2', 'scout'), { now }), null);
+  // Bots that cannot be read: every bot's chat counts as one, and a session that is none is asked.
+  fs.writeFileSync(path.join(p.parent, 'personal', 'elu-code', 'bots.json'), '{ not json');
+  assert.equal(standupLeftOut(board, chat('2', 'scout'), { now }), 'overseer');
+  assert.equal(standupLeftOut(board, { ...chat('3', 'scout'), botChat: undefined }, { now }), null);
+});
+
+// A chat keeps the name its bot had when it was made, and a rename never changes it.
+test("the chat of a bot that oversaw is never asked after the bot is renamed twice or removed, nor a plain bot's made under that name since", async t => {
+  const p = project(t); environment(t, { XDG_CONFIG_HOME: path.join(p.parent, 'personal') });
+  const { getBot } = await import('../lib/bots.mjs');
+  const now = Date.parse('2026-11-12T12:00:00Z'), at = ms => new Date(ms).toISOString(), board = { cards: [], done: [], archived: [] };
+  const chat = (id, name) => ({ id, createdAt: at(now - 86400000), state: 'answered', runs: [{ role: `bot:${name}`, at: at(now - 3600000) }], messages: [], botChat: name });
+  saveBot({ ...getBot('orchestrator'), name: 'boss' }, { previous: 'orchestrator' });
+  saveBot({ ...getBot('boss'), name: 'chief' }, { previous: 'boss' });
+  assert.equal(standupLeftOut(board, chat('1', 'boss'), { now }), 'overseer');
+  assert.equal(removeBot('chief'), true);
+  assert.deepEqual([chat('1', 'boss'), chat('2', 'chief')].map(task => standupLeftOut(board, task, { now })), ['overseer', 'overseer']);
+  saveBot({ name: 'boss', vendor: 'claude', instructions: 'Answer questions about CSS.' }); saveBot({ name: 'scout', vendor: 'claude', instructions: 'Look for risky changes.' });
+  assert.equal(standupLeftOut(board, chat('3', 'boss'), { now }), 'overseer');
+  assert.equal(standupLeftOut(board, chat('4', 'scout'), { now }), null);
 });
 
 test('a session with a worker bot is answered by that bot; otherwise by its lead', () => {
@@ -235,6 +271,21 @@ test('a round shows and asks open sessions, a working one beside its turn, leave
   assert.equal(pendingRequests(f.root).filter(row => row.standupFor && row.state !== 'done').length, 0, 'no question is left to run later');
   assert.equal(readTask(f.repo, b.id).state, 'running', 'the working one answered beside its turn');
   assert.equal(readTask(f.repo, a.id).state, 'answered');
+});
+
+test('a round never asks the chat of the bot that oversees, never counts it as missing, and shows nothing of it', async t => {
+  const f = setup(t);
+  await f.controller.ask('Explain coupons').finished;
+  const chat = await f.controller.ask('What needs me today?', null, { bot: 'orchestrator', botChat: true }).finished;
+  const standup = createConversation(f.repo, f.controller.draftConfig, '/standup');
+  let over = false; const loop = answering(f.controller, () => over);
+  const { task, answered, listed } = await runStandupRound(f.repo, standup.id, { sources: none, times: TIMES });
+  over = true; await loop;
+  assert.equal(answered, 1, JSON.stringify(task.messages.slice(-4))); assert.equal(listed, 0);
+  assert.equal(task.messages.filter(row => row.standupChat).map(row => row.text).at(-1), 'Standup done · 1 session on 1 computer · 1 model update · 0 not asked');
+  assert.doesNotMatch(JSON.stringify([task.messages, task.standup]), /What needs me today|orchestrator/);
+  assert.equal(pendingRequests(f.root).filter(row => row.standupFor && String(row.continuationTaskId) === String(chat.id)).length, 0, 'never asked');
+  assert.equal(readTask(f.repo, chat.id).messages.filter(row => row.standup).length, 0, 'its chat shows no standup');
 });
 
 // The round's time ends the wait for a question no session has started on. An answer turn that

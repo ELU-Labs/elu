@@ -22,8 +22,8 @@ computer's own record as soon as it sends it; a computer whose ELU is too old to
 named as such. A session that waits for you comes first, with its question, then the ones
 that work, then the newest. Each block is titled with its session, agent and computer: "Email
 logs · Opus 5.5 on @devbox", "Sales Export · Opus 5.5 here", "Billing · @billing on @kim". A
-Standup, a session no agent has run in, and a session that only helps one on another
-computer ("Help: …") are never asked.
+Standup, a session no agent has run in, a session that only helps one on another
+computer ("Help: …") and the chat of `@orchestrator` are never asked.
 
 Each session is then asked for its model's update (working on, done, next, blocked,
 overlap), which is added to its block when it arrives. It is written in one run of the
