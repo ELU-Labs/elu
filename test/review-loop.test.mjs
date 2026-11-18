@@ -14,7 +14,7 @@ import { structuralChecks } from '../lib/checks.mjs';
 import { defaultConfig } from '../lib/config.mjs';
 import { loopStopMessage, stopLine } from '../lib/stop-line.mjs';
 import { currentTask, markChecked, planFile } from '../lib/plan.mjs';
-import { lessLine, reviewRequest } from '../lib/runner.mjs';
+import { lessLine, readChange, reviewRequest } from '../lib/runner.mjs';
 import { sessionChecklist } from '../lib/checklist.mjs';
 
 // After the agent's edit ELU runs the checks and the session's reviewing bots review the
@@ -510,6 +510,67 @@ test('the chat says when a bot answered the owner from excerpts of the edits bec
   assert.equal(reply.bot, 'critic'); assert.notEqual(reply.quiet, true);
   // The line is for the owner: the agent reads the bot's answer, never ELU's line about it.
   assert.equal(shownOf(f, answered, 'critic').at(-2), less.text);
+});
+
+// A bot on Claude Code reads the session's edits itself, as it reads any repository: nothing of
+// them is pasted into its prompt, so no change is too large to send. Its prompt names the files
+// that hold the whole diff, the list of changed files and the checks' details, in a folder its
+// launch may read, with how many files there are of each kind. The folder goes when the turn ends.
+const SECRET = 'API_KEY=a-test-value-that-must-never-reach-a-prompt';
+test('a bot on Claude Code reads the edits itself: its prompt names the diff file and pastes no file, an ignored secret included', async t => {
+  const f = bigChange(t, 'normal');
+  const ready = await f.controller.ask('Normalize coupon codes', null, { bots: ['reviewer'] }).finished;
+  assert.equal(ready.state, 'ready', JSON.stringify(ready.error));
+  fs.writeFileSync(path.join(ready.worktree, '.env'), `${SECRET}\n`);
+  const answered = await f.controller.ask('why is it uppercase?', ready.id, { bot: 'reviewer' }).finished;
+  const chats = f.inputs('claude').filter(row => row.input.includes('You are @reviewer, a bot in a chat')).map(row => row.input);
+  assert.equal(chats.length, 1, 'one turn, nothing refused');
+  const { change, source } = contextOf(chats[0]), big = fs.readFileSync(path.join(ready.worktree, 'src/big.mjs'), 'utf8');
+  assert.equal(source, undefined, 'no file is pasted');
+  assert.ok(!chats[0].includes('value04000') && !chats[0].includes(SECRET), 'neither the large file nor the secret is in the prompt');
+  assert.ok(chats[0].includes("The session's change is not pasted here: read it yourself"));
+  assert.equal(path.basename(change.diff), 'change.diff'); assert.equal(change.diffBytes, Buffer.byteLength(patchOf(ready)));
+  assert.equal(change.files, path.join(path.dirname(change.diff), 'files.jsonl')); assert.deepEqual(change.counts, { ignored: 1, changed: 2 });
+  assert.equal(change.checkDetails, path.join(path.dirname(change.diff), 'checks.json'));
+  assert.deepEqual(change.checks, ready.evidence.results.map(({ name, status }) => ({ name, status })), 'each check by name and result only');
+  assert.ok(!chats[0].includes('src/big.mjs'), 'no file is listed in the prompt either');
+  // Its launch may read the folder of the diff, and the folder is gone with the turn.
+  const run = f.calls('claude').findLast(row => row.args.includes(path.dirname(change.diff)));
+  assert.ok(run, 'the bot was launched with the folder'); assert.equal(run.args[run.args.indexOf(path.dirname(change.diff)) - 1], '--add-dir');
+  assert.equal(fs.existsSync(path.dirname(change.diff)), false);
+  // Nothing was given less, so the chat has no line about it.
+  assert.ok(!answered.messages.some(row => /too large for @reviewer/.test(String(row.text))));
+});
+
+test('the files a bot reads hold the whole diff, every changed file with its size and kind, and the checks', async t => {
+  const f = bigChange(t, 'normal');
+  const ready = await f.controller.ask('Normalize coupon codes', null, { bots: ['critic'] }).finished;
+  fs.rmSync(path.join(ready.worktree, 'src/big.mjs')); fs.writeFileSync(path.join(ready.worktree, 'src/new.mjs'), 'export const fresh = 1;\n');
+  fs.writeFileSync(path.join(ready.worktree, '.env'), `${SECRET}\n`);
+  const checks = [{ name: 'no-ignored-output', status: 'noted', details: '.env' }];
+  const read = readChange(ready, ready.base, { checks });
+  t.after(() => fs.rmSync(read.folder, { recursive: true, force: true }));
+  assert.equal(fs.readFileSync(read.context.diff, 'utf8'), patchOf(ready));
+  const rows = fs.readFileSync(read.context.files, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+  assert.deepEqual(rows, [{ path: '.env', git: 'ignored', bytes: SECRET.length + 1 }, { path: 'src/big.mjs', git: 'deleted', bytes: null }, { path: 'src/coupon.mjs', git: 'changed', bytes: COUPON.content.length }, { path: 'src/new.mjs', git: 'new', bytes: 24 }]);
+  assert.deepEqual(read.context.counts, { ignored: 1, deleted: 1, changed: 1, new: 1 });
+  assert.deepEqual(JSON.parse(fs.readFileSync(read.context.checkDetails, 'utf8')), checks); assert.deepEqual(read.context.checks, [{ name: 'no-ignored-output', status: 'noted' }]);
+  assert.ok(!fs.readFileSync(read.context.files, 'utf8').includes(SECRET), 'a secret is listed by path, never read');
+});
+
+// A bot of another vendor is given the edits as before, but a file whose name may hold a
+// secret is named, never pasted.
+test('a bot of another vendor is given the edits pasted, with an ignored secret by name only', async t => {
+  const f = bigChange(t, 'normal');
+  const ready = await f.controller.ask('Normalize coupon codes', null, { bots: ['critic'] }).finished;
+  fs.writeFileSync(path.join(ready.worktree, '.env'), `${SECRET}\n`);
+  await f.controller.ask('why is it uppercase?', ready.id, { bot: 'critic' }).finished;
+  const chats = f.inputs('codex').filter(row => row.input.includes('You are @critic, a bot in a chat')).map(row => row.input);
+  assert.equal(chats.length, 1);
+  const { source } = contextOf(chats[0]);
+  assert.deepEqual(source.files.find(row => row.path === '.env'), { path: '.env', content: null });
+  assert.ok(source.files.find(row => row.path === 'src/big.mjs').content.includes(ADDED), 'the change is still pasted whole');
+  assert.ok(!chats[0].includes(SECRET));
 });
 
 test('the line names at most two cut files, and says nothing when the bot had the change whole', () => {

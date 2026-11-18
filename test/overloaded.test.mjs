@@ -118,6 +118,10 @@ test('only the vendor\'s own overloaded answer is tried again: credits, limits, 
   assert.equal(claude.classify(result({ api_error_status: 429, api_error: 'model_requires_usage_credits', result: "You're out of usage credits." })), 'model-unavailable');
   assert.equal(claude.classify(result({ api_error_status: 429, api_error: 'usage_limit_reached', result: "You've hit your 5-hour limit" })), 'quota');
   assert.equal(claude.classify(result({ result: 'Prompt is too long' })), 'too-long');
+  // Claude Code refuses input over its own limit before it starts, in its older words and, with
+  // stream-json input, in its newer ones.
+  assert.equal(claude.classify('', { stderr: 'Error: piped stdin input exceeds 10MB' }), 'too-long');
+  assert.equal(claude.classify('', { stderr: 'Error: stream-json input carried over 256M characters with no newline. Each stream-json message must be a single newline-terminated JSON line: either the producer is not newline-terminating its messages, or one message exceeded this budget.' }), 'too-long');
   assert.equal(claude.classify(result({ api_error_status: 500, api_error: 'api_error', result: 'Internal server error' })), 'unknown');
   // Codex, Grok Build and Antigravity say the same in their own words.
   assert.equal(codex.classify(JSON.stringify({ type: 'turn.failed', error: { message: 'exceeded retry limit, last status: 529 Overloaded' } })), 'overloaded');
