@@ -7,7 +7,9 @@ import { ProjectController, registerProject } from '../lib/projects.mjs';
 import { projectFolder } from '../lib/workspace.mjs';
 import { readTask } from '../lib/state.mjs';
 import { setSessionAuto } from '../lib/auto-model.mjs';
-import { enqueue } from '../lib/conductor.mjs';
+import { Conductor, enqueue } from '../lib/conductor.mjs';
+import { pendingRequests } from '../lib/workspace.mjs';
+import { setSessionModel } from '../lib/models.mjs';
 import { createConversation } from '../lib/runner.mjs';
 
 // Where the bot that oversees the sessions (docs/orchestrator.md) meets Auto model
@@ -57,4 +59,34 @@ test('nothing the bot that oversees the sessions sends carries a mark of Auto mo
   assert.equal(started.overseer, 'orchestrator'); assert.equal(started.auto, undefined, 'never begins with Auto model');
   const made = createConversation(f.repo, f.controller.draftConfig, 'Tidy the tests', { ...START, auto: true });
   assert.equal(made.overseer, 'orchestrator'); assert.equal(made.auto, undefined);
+});
+
+// One model's weekly limit makes Auto model start the owner's own message again on the session's
+// other model. A note of the bot is not his message: it ends there, and the session keeps its model.
+test("a note of the bot whose turn meets one model's weekly limit is not started again on the other model", { timeout: 90000 }, async t => {
+  const f = setup(t);
+  const first = await f.controller.ask('Look at the coupon code.', null, { auto: true }).finished, id = String(first.id);
+  assert.equal(readTask(f.repo, id).auto, true);
+  setSessionModel(f.repo, id, { vendor: 'claude', model: 'fable' });
+  const conductor = new Conductor({ tickMs: 3600000 }), real = conductor.controller(f.repo), asked = [];
+  const limit = { model: 'fable', until: Date.now() + 2 * 86400000 };
+  conductor.controller = () => ({ repo: real.repo, ask: (text, session, options) => {
+    asked.push(options);
+    if (asked.length > 1) return real.ask(text, session, options);
+    return { id: session, finished: Promise.reject(Object.assign(new Error('Fable 5.2 could not finish.'), { details: { cause: 'quota', modelLimit: limit } })), worked: () => false };
+  } });
+  const sent = enqueue(f.root, 'Did the tests pass?', { continuationTaskId: id, priority: 1, overseer: 'orchestrator' });
+  const row = () => pendingRequests(f.root).find(value => value.id === sent.id);
+  conductor.launch(f.repo, row());
+  await [...conductor.runs.values()].find(value => value.requestId === sent.id).done;
+  assert.notEqual(row()?.state, 'queued', 'the note does not wait to run again');
+  assert.equal(asked.length, 1);
+  const lines = () => readTask(f.repo, id).messages.filter(message => message.line === true && /answers until then/.test(message.text));
+  assert.deepEqual(lines(), [], 'no line says another model answers');
+  // Handed a limit all the same, a note still runs on the model the session ran last.
+  const before = f.turns().length;
+  await f.controller.ask('Did the tests pass?', id, { ...NOTE, limited: limit }).finished;
+  assert.equal(flag(f.turns().at(-1).args, '--model'), 'fable'); assert.equal(f.turns().length, before + 1);
+  assert.deepEqual(lines(), []);
+  assert.notEqual(readTask(f.repo, id).nextModel?.model, 'opus');
 });

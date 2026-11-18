@@ -102,8 +102,11 @@ asks for:
   `get_or_create_label`, `find_and_replace_doc`, `get_order` and `append_to_list` ask you,
   and so does a tool named only `query`. For the `elu` server, `ask_elu` and `list_issues`
   read; every other tool asks.
-- After `and`, `or` or `then` in a name, only another reading word reads: `get_and_list_items`
-  reads, `get_and_unarchive` asks. A reading tool handed a method other than GET asks too.
+- After `and`, `or`, `then` or `plus` in a name, only another reading word or a common kind of
+  thing reads: `get_and_list_items` and `get_cost_and_usage` read, `get_and_unarchive` asks,
+  and so does `list_tables_and_columns`. A reading tool handed a method other than GET asks too.
+- The list of changes is not complete. A name whose first word reads and whose other words
+  are on neither list reads (`get_sign`).
 - Some tools that only read still ask you, such as `pods_list` or `get_tag`, because of
   their name. Nothing runs without your yes.
 - A plain address is `http` or `https` with no query (`?`), no fragment (`#`) and no sign-in.
