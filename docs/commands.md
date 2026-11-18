@@ -8,6 +8,7 @@ Type these in the message box. `/` alone lists every command, and `/help` explai
 | --- | --- |
 | `/new` | Starts a new session |
 | `/model sonnet` | Chooses the model of this session; `/model` alone lists them. The name can be the one the app shows, and a message after it is sent on that model: `/model opus 5.5 fix the build`. While a turn works, the model and that message start with the next turn. Over a session on another computer it changes that session's model there |
+| `/model auto` | Turns [Auto model](models.md) on for this session, or for the one you are starting: ELU picks the model for each step, and each reply names the one that wrote it. A message after it is sent that way: `/model auto fix the build`. `/model auto on` is the same as `/model auto`. `/model auto off` turns it off, and the session stays on the model it has; a model or an effort you pick for the session turns it off too. `/model auto high` sets the effort of its plans and edits and `/model auto quick grok` where quick questions go, both for this computer. `/model computer auto` starts the sessions you start on this computer with it |
 | `/permissions auto` | Sets what the model may do: `ask`, `auto` or `full` |
 | `/place branch try-coupons` | Sets where a new session runs: `worktree`, `branch NAME` or `here` |
 | `/bots add qa` | Keeps a bot in this session; `/bots remove qa` takes it out |

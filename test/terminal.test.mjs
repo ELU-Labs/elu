@@ -995,7 +995,7 @@ test('/model NAME with no session open opens the new session form on that model,
   await send(v, '/model computer sonnet 5.5 now'); await until(() => /Use \/model computer <name>, or none\./.test(status()), 'a default takes no message'); panels.ask.setValue('');
   await send(v, '/model computer none'); await until(() => computerDefault() === null, 'no choice again');
   // The key bar's usage of /model names it, and /model alone still runs: every word of it is optional.
-  assert.equal(typedCommand('/model ').usage, '/model [name [message]|default <name>|computer <name>|add]');
+  assert.equal(typedCommand('/model ').usage, '/model [name [message]|auto [message]|default <name>|computer <name>|add]');
   assert.equal(needsArgument(typedCommand('/model ')), false);
 });
 
@@ -2730,7 +2730,7 @@ test('/model never holds the screen while a vendor prints its models', { timeout
   // The longest the event loop went without running a timer: what the screen froze for.
   let most = 0, last = Date.now(); const timer = setInterval(() => { const now = Date.now(); most = Math.max(most, now - last); last = now; }, 20);
   t.after(() => clearInterval(timer));
-  v.input.write('/model '); await until(() => rows().join() === 'fable,opus,sonnet,codex,agy,grok,default,computer,add', 'the names known, at once');
+  v.input.write('/model '); await until(() => rows().join() === 'auto,fable,opus,sonnet,codex,agy,grok,default,computer,add', 'the names known, at once');
   await until(() => asked() === 1, 'codex is asked for its models');
   // Keys are taken while codex is still printing.
   v.input.write('so'); await until(() => rows().join() === 'sonnet', 'typing narrows the list meanwhile');
