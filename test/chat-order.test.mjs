@@ -505,3 +505,27 @@ test('the Changes tab of a session here counts a commit made in its folder betwe
   await until(() => tab() === 'Chat   Changes 2', `the commit counts once the count is ten seconds old and the screen changes: "${tab()}"`);
   assert.equal(changes.hidden, true, 'its Changes were never opened');
 });
+
+// A chat reads in time order, a message that still waits included: one sent days ago that
+// waits for a yes, or did not run, sits where it was sent, above the replies that came after
+// it, never under them. Only what was sent after the last reply ends the chat.
+test('a message that waits for a yes, sent before the last reply, sits at its time in a session here', { timeout: 60000 }, async t => {
+  const p = start(t); localSession(p, { state: 'answered', replies: [[9, 'It is fixed.'], [1, 'And the header is checked.']] });
+  saveRequest(p.root, 'Keep the logo', null, { priority: 0, attempts: 0, notBefore: null, computer: BOX, state: 'waiting', continuationTaskId: '4', queuedAt: ago(5), createdAt: ago(5) });
+  const v = await view(p, { columns: 140, rows: 50, repo: p.repo, dashboard: true, peer: fakePeer() });
+  await onRow(v, /Fix the report/);
+  const { chat } = v.panels;
+  await until(() => flat(chat.getText()).includes('Keep the logo') && flat(chat.getText()).includes('And the header is checked.'), 'the chat shows');
+  inOrder(chat.getText(), ['It is fixed.', 'ana on @my-box (waits for your yes)', 'Keep the logo', 'In Sessions, r says yes and s removes it.', 'And the header is checked.']);
+  endsWith(chat.getText(), 'And the header is checked.');
+});
+
+test('a message that waits on another computer, sent before the last reply there, sits at its time', () => {
+  const app = glue();
+  const scene = { state: 'answered', waiting: [{ at: ago(5), text: 'Keep the logo', state: 'blocked', yes: true }, { at: ago(0.5), text: 'Also the footer', state: 'queued' }],
+    entries: [{ role: 'You', at: ago(10), text: 'Fix the report' }, { role: 'Claude', lead: true, at: ago(9), text: 'It is fixed.' }, { role: 'Claude', lead: true, at: ago(1), text: 'And the header is checked.' }] };
+  const parts = app.parts(partRow(scene), 96), said = parts.map(part => part.text).join('\n\n');
+  inOrder(said, ['It is fixed.', 'waits for a yes', 'Keep the logo', 'And the header is checked.', 'Also the footer']);
+  assert.deepEqual(parts.filter(part => part.key.startsWith('waiting')).map(part => part.text.split('\n')[0].replace(/^.*\): /, '')), ['Keep the logo', 'Also the footer']);
+  assert.equal(parts.at(-1).key.split('\0')[0], 'waiting', 'what was sent after the last reply ends the pane');
+});
