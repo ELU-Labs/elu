@@ -14,7 +14,7 @@ Six come with the app. You can edit or remove any of them in the Bots tab.
 | `@lead` | Claude, Fable, with Opus helpers | When you write to it: plans the work, hands the pieces to helpers, and checks what they return |
 | `@qa` | Claude, Opus | When you write to it: tests the change like a user, fixes what it finds, and verifies each fix |
 | `@pair` | Codex, `gpt-6.1-sol`, high effort | A second model beside the working agent: says what it would challenge after each turn, and reviews each change |
-| `@orchestrator` | Claude, Fable, with Opus helpers | Knows your organization, watches every session on this computer, and advises you. It edits nothing. [More](orchestrator.md) |
+| `@orchestrator` | Claude, Fable, with Opus helpers | Knows your organization, watches every session of your projects, on this computer and your other computers, and advises you. It edits nothing. [More](orchestrator.md) |
 | `@elu` | Claude, every hour | Finds issues in your live product with [ELU](https://elu.dev), then reviews and merges the fix pull request or writes the fix |
 
 A bot is one of three kinds. The Bots tab names each bot's kind, and its page says what

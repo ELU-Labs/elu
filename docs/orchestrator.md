@@ -3,7 +3,8 @@
 Back to the [README](../README.md) · [Bots](bots.md)
 
 `@orchestrator` is a bot that oversees your sessions. It learns your organization, watches
-every session on this computer, and advises you. It never edits a file and has no shell. It
+every session of your projects, on this computer and on the other computers on them (your
+devbox, a teammate's computer on a shared project), and advises you. It never edits a file and has no shell. It
 acts only through ELU's own tools, and only as far as the level you set.
 
 Like every bot, it is in no session until you put it there.
@@ -13,7 +14,7 @@ Like every bot, it is in no session until you put it there.
 - Open `@orchestrator` in Chats and write to it. It answers in its own session in the open
   project; your next messages there go on in that session.
 - In any session, `@orchestrator how are my sessions?` asks it there. It reads every session
-  on this computer either way.
+  on this computer, and every session the other computers of your projects list here, either way.
 - It has no schedule until you give it one on its page in the Bots tab. A scheduled run is
   skipped, with nothing in its chat, when no session changed since its last run.
 - Only you write to it, on the computer it runs on. A teammate's computer, or another
@@ -74,7 +75,8 @@ helper is not shown: Claude Code does not report one whole.
 | `≤` before a count | At most that: a bot's helpers on its own model |
 | `in @name` | That cost is counted in that bot's own row |
 
-Only this computer's sessions are in the tables. A session whose proof ELU has not checked
+Only this computer's sessions are in the tables. The bot is also given the sessions of the
+other computers, one line each, as those computers listed them here. A session whose proof ELU has not checked
 yet shows none until a later draw. The table the bot is given reads a session's proof again
 only when that session's records change.
 
@@ -126,15 +128,24 @@ asks for:
 
 | Tool | Does |
 | --- | --- |
-| `sessions_list` | Every open session on this computer: project, title, state, what it is doing, since, ETA, proof |
-| `session_read` | One session: goal, Task, its question, why it stopped, proof, agents, last 6 messages |
+| `sessions_list` | Every open session on this computer: project, title, state, what it is doing, since, ETA, proof. Then every session the other computers of your projects listed here, named `shop on @devbox #27` |
+| `session_read` | One session, here or on another computer (`computer`): goal, Task, its question, why it stopped, proof, agents, last 6 messages. One that nothing here follows yet is followed first |
 | `facts_find` | Saved facts by words, topic or id, with source, quote and date |
 | `connections_list` | Which sources are set up, and the steps to connect ELU, Slack or Gmail |
 | `fact_save` | Saves one fact with its source and quote |
 | `card_add` | Adds a To do card to a project's Kanban |
 | `org_propose` | Proposes a line to add to, or take out of, the Organization section |
-| `session_message` | Sends a note to a session |
-| `session_answer` | Answers the question a session waits on |
+| `session_message` | Sends a note to a session, here or on another computer |
+| `session_answer` | Answers the question a session waits on, here or on another computer |
+
+A note or an answer to a session on another computer always asks you first, at every level
+that allows one: it leaves this computer, and ELU cannot tell your own computer from a
+teammate's. That computer takes it as a note of its own `@orchestrator` (the bot that oversees
+the sessions there), never as your words, and holds it to the same rules: no note to a session
+a teammate started, one you stopped, archived or moved to Done, a Standup, a bot's chat, or one
+whose Task waits for your approval, and an answer only while the session still asks that
+question. A computer whose ELU is too old to keep that mark gets nothing, and the bot is told
+`Update ELU on @devbox so the bot that oversees your sessions can write to its sessions from here.`
 | `session_start` | Starts a new session with a goal |
 
 ### Levels
@@ -256,7 +267,8 @@ session or a source is kept as not checked.
   `name [at] example [dot] com`, `name at example dot com`, `name @ example.com` or
   `name&#64;example.com`.
 - A key or a token in a source's address or reference is refused.
-- Facts stay on this computer.
+- Facts stay on this computer. A note to another computer's session carries only its own words,
+  after your yes.
 
 Ask "where did you get that from" and it gives the source, the quote, the date and whether
 the quote was checked.
