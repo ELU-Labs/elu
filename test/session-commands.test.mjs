@@ -382,7 +382,7 @@ test('a session started from a session gets its mode, or a lower one, never a hi
   f.conduct(); await until(() => conductorAlive(), 'the conductor');
   const started = goal => pendingRequests(f.root).find(row => row.goal === goal);
   let r = elu(f, ['sessions', 'new', 'from', 'ask', '--mode', 'full'], { session: asking.id }); assert.equal(r.status, 0, r.stderr);
-  assert.match(r.stdout, /with Ask for approval: "from ask"\. It shows in Sessions\. This session has Ask for approval, so that is the most it gives\./);
+  assert.match(r.stdout, /Started a sub session with Ask for approval: "from ask"\. It shows in Sessions under session \d+\. This session has Ask for approval, so that is the most it gives\./);
   assert.equal(started('from ask').permissions, 'ask'); assert.equal(started('from ask').typed, true); assert.equal(started('from ask').picked, undefined);
   r = elu(f, ['sessions', 'new', 'from full'], { session: full.id }); assert.equal(r.status, 0, r.stderr); assert.equal(started('from full').permissions, 'full');
   r = elu(f, ['sessions', 'new', 'lower', '--mode', 'auto'], { session: full.id }); assert.equal(r.status, 0, r.stderr); assert.equal(started('lower').permissions, 'auto');
@@ -390,6 +390,36 @@ test('a session started from a session gets its mode, or a lower one, never a hi
   r = elu(f, ['sessions', 'new', 'mine', '--mode', 'full']); assert.equal(r.status, 0, r.stderr); assert.equal(started('mine').permissions, 'full'); assert.equal(started('mine').picked, true);
   r = elu(f, ['sessions', 'new', 'plain']); assert.equal(r.status, 0, r.stderr); assert.equal(started('plain').permissions, 'ask');
   r = elu(f, ['sessions', 'new', 'x', '--mode', 'everything']); assert.equal(r.status, 1); assert.match(r.stderr, /Choose ask, auto, or full/);
+});
+
+test('a session started or scheduled from a session is a sub session of it, one level deep; one from the owner\'s shell is his own', async t => {
+  const f = setup(t);
+  const top = await f.controller.ask('Roll out the release', null, { permissions: 'auto' }).finished;
+  f.conduct(); await until(() => conductorAlive(), 'the conductor');
+  const started = goal => pendingRequests(f.root).find(row => row.goal === goal);
+  let r = elu(f, ['sessions', 'new', 'watch the release'], { session: top.id }); assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, new RegExp(`^Started a sub session with Approve for me: "watch the release"\\. It shows in Sessions under session ${top.id}\\.$`, 'm'));
+  assert.equal(started('watch the release')?.parent ?? sessions(f).find(task => task.goal === 'watch the release')?.parent, String(top.id));
+  // The sub session it became names its parent too, and what it starts goes under the same top session.
+  await until(() => sessions(f).find(task => task.goal === 'watch the release'), 'the sub session');
+  const sub = sessions(f).find(task => task.goal === 'watch the release');
+  assert.equal(sub.parent, String(top.id));
+  r = elu(f, ['sessions', 'new', 'one more'], { session: sub.id }); assert.equal(r.status, 0, r.stderr);
+  assert.equal(started('one more')?.parent ?? sessions(f).find(task => task.goal === 'one more')?.parent, String(top.id));
+  // From the owner's own shell, a session of his own.
+  r = elu(f, ['sessions', 'new', 'mine']); assert.equal(r.status, 0, r.stderr); assert.match(r.stdout, /^Started a new session/);
+  assert.equal(started('mine')?.parent ?? sessions(f).find(task => task.goal === 'mine')?.parent, undefined);
+  // A schedule a session makes runs as its sub sessions; one the owner makes does not.
+  r = elu(f, ['schedules', 'add', 'every', '1h', 'check', 'the', 'release'], { session: top.id }); assert.equal(r.status, 0, r.stderr);
+  r = elu(f, ['schedules', 'add', 'every', '3h', 'check', 'the', 'build']); assert.equal(r.status, 0, r.stderr);
+  const [made, his] = listSchedules();
+  assert.equal(made.parent, String(top.id)); assert.equal(his.parent, undefined);
+  r = elu(f, ['schedules', 'run', '1'], { session: top.id }); assert.equal(r.status, 0, r.stderr);
+  assert.equal(started('check the release')?.parent ?? sessions(f).find(task => task.goal === 'check the release')?.parent, String(top.id));
+  // A session told to archive itself and start a new one hands its work on: the new one is not a sub session.
+  r = elu(f, ['sessions', 'archive', 'this'], { session: sub.id }); assert.equal(r.status, 0, r.stderr);
+  r = elu(f, ['sessions', 'new', 'carry on'], { session: sub.id }); assert.equal(r.status, 0, r.stderr); assert.match(r.stdout, /^Started a new session/);
+  assert.equal(started('carry on')?.parent ?? sessions(f).find(task => task.goal === 'carry on')?.parent, undefined);
 });
 
 test('elu schedules adds, lists, pauses, resumes, runs and deletes with the words /schedule takes', async t => {
