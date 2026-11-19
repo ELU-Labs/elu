@@ -75,7 +75,9 @@ works. The app shows each change at once.
   `elu sessions keep-going N|this [on|off]` says or sets whether ELU starts a session again
   while its Task is not met.
 
-A session started from a session gets that session's mode, or a lower one with `--mode`. In
+A session started from a session, or the run of a schedule added in one, is a
+[sub session](sessions.md#sub-sessions) of it, listed under it in Sessions and in
+`elu sessions`. A session started from a session gets that session's mode, or a lower one with `--mode`. In
 Ask for approval you are asked before one runs; Approve for me and Full access run them. Every
 vendor's session has them, in every mode. Inside a sandbox the command hands itself to ELU,
 which runs it only for that session and no higher than its mode. A schedule added in a session
