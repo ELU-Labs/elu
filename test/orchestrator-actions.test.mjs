@@ -184,7 +184,9 @@ test('what it queues carries its own mark and is never typed, approved or picked
   assert.deepEqual([first.goal, first.continuationTaskId, second.goal, second.continuationTaskId], ['The checks fail on main as well.', '2', 'Use Postgres.', '3']);
   assert.deepEqual([third.goal, third.continuationTaskId, third.permissions, third.place, third.folders, third.bots, third.budgetUsd], ['Find why the nightly build is slow', null, 'auto', { kind: 'worktree' }, [], [], 5]);
   assert.match(note.text, /shows under your name, as a note and not as the owner's word/);
-  assert.match(start.text, /with Approve for me and a \$5 budget.*new worktree with no bots.*started by you/);
+  // In the bot's own project, the session it starts is a sub session of the bot's session, listed under it.
+  assert.match(start.text, /with Approve for me and a \$5 budget.*new worktree with no bots.*shows in Sessions under this session\./);
+  assert.equal(third.parent, '1', "the bot's session");
   assert.deepEqual([note.undo, start.undo.kind, start.undo.request], [{ kind: 'message', root: w.root, request: first.id }, 'session', third.id]);
 });
 
