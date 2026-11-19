@@ -9083,7 +9083,7 @@ test('c takes away whatever the list shows: a blocked message is removed, a team
   assert.equal(rows(v).filter(row => /Add the migration step|Release notes/.test(row)).length, 1);
   await selectRow(v, /Release notes/);
   await until(() => /enter open {2}r retry {2}s remove {2}e rename {2}c archive/.test(panels.keys.getText()), 'its keys');
-  await until(() => /You \(blocked\)[^]*Add the migration step[^]*The model was not available\. In Sessions, r sends it again and s removes it\./.test(panels.chat.getText().replace(/\n┃ /g, ' ').replace(/\s+/g, ' ')), 'its chat says why');
+  await until(() => /You \(blocked\)[^]*Add the migration step[^]*The model was not available\. Send again · Dismiss/.test(panels.chat.getText().replace(/\n┃ /g, ' ').replace(/\s+/g, ' ')), 'its chat says why');
   // A blocked message of a new session: c removes it.
   await selectRow(v, /Add a retry budget/);
   await until(() => /enter open {2}r retry {2}c remove/.test(panels.keys.getText()), 'c in its keys');

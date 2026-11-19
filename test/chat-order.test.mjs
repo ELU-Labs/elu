@@ -248,7 +248,8 @@ for (const [columns, rows] of [[140, 50], [80, 24]]) for (const [name, scene] of
   assert.match(flat(said), /^Runs on @my-box in shop\. Type below to write to it there\. Start with @here to ask your agent here\./);
   assert.doesNotMatch(flat(said), /Changes · |d opens them/);
   // Its changes are the tab's name, as for a session here; a session with a Task has its Artifacts tab.
-  assert.equal(sessionTabs.hidden, false); assert.equal(sessionTabs.getText().trim(), `${scene.view.diff ? 'Chat   Changes 2' : 'Chat   Changes'}${scene.view.plan && scene.view.plan.state !== 'rejected' ? '   Artifacts' : ''}`);
+  // What waits there is counted last, and a click on the count shows the first of them.
+  assert.equal(sessionTabs.hidden, false); assert.equal(sessionTabs.getText().trim(), `${scene.view.diff ? 'Chat   Changes 2' : 'Chat   Changes'}${scene.view.plan && scene.view.plan.state !== 'rejected' ? '   Artifacts' : ''}${scene.view.waiting?.length ? `   ${scene.view.waiting.length} waiting` : ''}`);
   // On the screen: the pane ends with it, and the message box starts right under the pane.
   const screen = onScreen(v); assert.ok(screen.box >= screen.under && screen.box - screen.under <= 1, 'the message box is under the pane, after the status row at most');
   assert.ok(flat(screen.shown.join('\n')).endsWith(scene.last), `the pane on the screen does not end with "${scene.last}":\n${screen.rows.join('\n')}`);
@@ -427,7 +428,7 @@ test('what another computer sent that waits for a yes here names that computer, 
   // Into a session here.
   await onRow(v, /Fix the report/);
   await until(() => flat(chat.getText()).includes('Keep the logo'), 'the chat shows');
-  assert.match(flat(chat.getText()), /ana on @my-box \(waits for your yes\)[^]*Keep the logo In Sessions, r says yes and s removes it\.$/);
+  assert.match(flat(chat.getText()), /ana on @my-box \(waits for your yes\)[^]*Keep the logo Yes · Dismiss · Reply$/);
   assert.doesNotMatch(flat(chat.getText()), /You \(saved\)|sends it again/);
   await until(() => /enter open {2}r yes {2}s remove/.test(keys.getText()), `its keys: ${keys.getText()}`);
   // A new session.
@@ -504,4 +505,80 @@ test('the Changes tab of a session here counts a commit made in its folder betwe
   await pause(8000); v.current.screen.emit('resize');
   await until(() => tab() === 'Chat   Changes 2', `the commit counts once the count is ten seconds old and the screen changes: "${tab()}"`);
   assert.equal(changes.hidden, true, 'its Changes were never opened');
+});
+
+// A chat reads in time order, a message that still waits included: one sent days ago that
+// waits for a yes, or did not run, sits where it was sent, above the replies that came after
+// it, never under them. Only what was sent after the last reply ends the chat.
+test('a message that waits for a yes, sent before the last reply, sits at its time in a session here', { timeout: 60000 }, async t => {
+  const p = start(t); localSession(p, { state: 'answered', replies: [[9, 'It is fixed.'], [1, 'And the header is checked.']] });
+  saveRequest(p.root, 'Keep the logo', null, { priority: 0, attempts: 0, notBefore: null, computer: BOX, state: 'waiting', continuationTaskId: '4', queuedAt: ago(5), createdAt: ago(5) });
+  const v = await view(p, { columns: 140, rows: 50, repo: p.repo, dashboard: true, peer: fakePeer() });
+  await onRow(v, /Fix the report/);
+  const { chat } = v.panels;
+  await until(() => flat(chat.getText()).includes('Keep the logo') && flat(chat.getText()).includes('And the header is checked.'), 'the chat shows');
+  inOrder(chat.getText(), ['It is fixed.', 'ana on @my-box (waits for your yes)', 'Keep the logo', 'Yes · Dismiss · Reply', 'And the header is checked.']);
+  endsWith(chat.getText(), 'And the header is checked.');
+});
+
+test('a message that waits on another computer, sent before the last reply there, sits at its time', () => {
+  const app = glue();
+  const scene = { state: 'answered', waiting: [{ at: ago(5), text: 'Keep the logo', state: 'blocked', yes: true }, { at: ago(0.5), text: 'Also the footer', state: 'queued' }],
+    entries: [{ role: 'You', at: ago(10), text: 'Fix the report' }, { role: 'Claude', lead: true, at: ago(9), text: 'It is fixed.' }, { role: 'Claude', lead: true, at: ago(1), text: 'And the header is checked.' }] };
+  const parts = app.parts(partRow(scene), 96), said = parts.map(part => part.text).join('\n\n');
+  inOrder(said, ['It is fixed.', 'waits for a yes', 'Keep the logo', 'And the header is checked.', 'Also the footer']);
+  assert.deepEqual(parts.filter(part => part.key.startsWith('waiting')).map(part => part.text.split('\n')[0].replace(/^.*\): /, '')), ['Keep the logo', 'Also the footer']);
+  assert.equal(parts.at(-1).key.split('\0')[0], 'waiting', 'what was sent after the last reply ends the pane');
+});
+
+// Under each message that waits in the chat: Yes, Dismiss and Reply, each a word to click.
+// Reply makes the message box answer whoever sent it; the answer shows in the chat as his, the
+// message it answers does not run, and the session's model never reads it. The session's tabs
+// count the messages that wait.
+const clickWord = (v, nth, word) => {
+  const rows = v.lines().map((line, y) => ({ line, y })).filter(({ line }) => /(?:Yes|Send again) · Dismiss/.test(line));
+  const { line, y } = rows[nth], x = line.indexOf(word, line.search(/(?:Yes|Send again) · Dismiss/));
+  v.panels.chat.emit('click', { x: x + 1, y });
+};
+test('Yes, Dismiss and Reply under messages that wait for a yes do what they say, and the tabs count what waits', { timeout: 60000 }, async t => {
+  const p = start(t), repo = localSession(p, { state: 'answered', replies: [[9, 'It is fixed.'], [1, 'And the header is checked.']] });
+  const from = { priority: 0, attempts: 0, notBefore: null, computer: BOX, state: 'waiting', continuationTaskId: '4' };
+  saveRequest(p.root, 'Keep the logo', null, { ...from, queuedAt: ago(5), createdAt: ago(5) });
+  saveRequest(p.root, 'Drop the footer', null, { ...from, queuedAt: ago(4), createdAt: ago(4) });
+  saveRequest(p.root, 'Use the old colours', null, { ...from, queuedAt: ago(3), createdAt: ago(3) });
+  const v = await view(p, { columns: 140, rows: 50, repo: p.repo, dashboard: true, peer: fakePeer() });
+  await onRow(v, /Fix the report/);
+  const { chat, sessionTabs, ask } = v.panels, state = goal => pendingRequests(p.root).find(row => row.goal === goal)?.state;
+  await until(() => flat(chat.getText()).includes('Use the old colours'), 'the chat shows');
+  await until(() => /3 waiting/.test(sessionTabs.getText()), `the count: ${sessionTabs.getText()}`);
+  // Dismiss takes the second away.
+  clickWord(v, 1, 'Dismiss');
+  await until(() => state('Drop the footer') === undefined, 'Dismiss');
+  await until(() => !flat(chat.getText()).includes('Drop the footer'), 'it leaves the chat');
+  // Yes queues the first.
+  clickWord(v, 0, 'Yes');
+  await until(() => state('Keep the logo') === 'queued', 'Yes');
+  // Reply answers the last: the box says whom it answers, and Esc would leave it.
+  await until(() => v.lines().filter(line => /Yes · Dismiss/.test(line)).length === 1, 'one left to answer');
+  clickWord(v, 0, 'Reply');
+  await until(() => /Reply to ana on @my-box/.test(ask._label?.getText?.() ?? ''), `the box: ${ask._label?.getText?.()}`);
+  ask.setValue('Already done in #12'); v.input.write('\r');
+  await until(() => state('Use the old colours') === undefined, 'the reply takes the message away');
+  await until(() => /You → ana on @my-box[^]*Already done in #12/.test(flat(chat.getText())), `the reply in the chat:\n${chat.getText()}`);
+  assert.ok(!(readTask(repo, '4').messages ?? []).some(row => String(row.text).includes('Already done')), 'the reply is not a message to the session');
+  assert.match(fs.readFileSync(path.join(taskDir(repo, '4'), 'replies.jsonl'), 'utf8'), /"who":"ana on @my-box"/);
+});
+
+test('a click on the count of messages that wait shows the first of them at the top of the chat', { timeout: 60000 }, async t => {
+  const LINES = 'The totals add up now, and each row shows the right number of items in it.';
+  const p = start(t); localSession(p, { state: 'answered', replies: Array.from({ length: 24 }, (_, index) => [9 - index * 0.3, `Reply ${index + 1}. ${LINES} ${LINES}`]) });
+  saveRequest(p.root, 'Keep the logo', null, { priority: 0, attempts: 0, notBefore: null, computer: BOX, state: 'waiting', continuationTaskId: '4', queuedAt: ago(8), createdAt: ago(8) });
+  const v = await view(p, { columns: 140, rows: 30, repo: p.repo, dashboard: true, peer: fakePeer() });
+  await onRow(v, /Fix the report/);
+  const { sessionTabs } = v.panels;
+  await until(() => /1 waiting/.test(sessionTabs.getText()), `the count: ${sessionTabs.getText()}`);
+  await until(() => onScreen(v).shown.some(row => row.includes('Reply 24.')), 'the chat at its end');
+  assert.ok(!onScreen(v).shown.some(row => row.includes('waits for your yes')), 'the message that waits is above, out of sight');
+  sessionTabs.emit('click', { x: sessionTabs.aleft + sessionTabs.getText().indexOf('1 waiting'), y: sessionTabs.atop });
+  await until(() => onScreen(v).shown[0]?.includes('ana on @my-box (waits for your yes)'), `the first row of the chat:\n${onScreen(v).rows.join('\n')}`);
 });
