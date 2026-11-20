@@ -442,7 +442,7 @@ test('an Antigravity turn over ACP that the owner stops after he allowed its com
   assert.deepEqual((next.approvals ?? []).map(row => [row.role, row.decision]), [['lead', 'allow'], ['lead', 'allow']], 'the decision of the stopped turn, then that of the one that went on');
 });
 
-test('an Antigravity turn in Read only runs over ACP and writes nothing inside or outside the project, also where the vendor asks instead of refusing; the owner is asked nothing', async t => {
+test('an Antigravity turn in Read only runs over ACP and writes nothing inside or outside the project, also where the vendor asks instead of refusing and ends its turn at the no; the owner is asked nothing', async t => {
   const f = setup(t, 'agy'), outside = path.join(f.parent, 'outside.txt');
   proven('agy', f.bin, '1.5.4', { relay: true });
   // inside.txt is named from the folder the turn runs in: the project, or the session's copy of it.
@@ -460,7 +460,9 @@ test('an Antigravity turn in Read only runs over ACP and writes nothing inside o
   agySet(f, { asksDenied: true });
   const second = await watching(f, f.controller.ask(text, null), () => asked.push(...pendingApprovals()));
   assert.deepEqual(f.calls().at(-1).args, ['acp']); untouched('ELU\'s answers', second);
-  assert.deepEqual(second.runs[0].denials.slice(0, 3), [{ tool: 'edit', summary: `Write ${inside(second)}` }, { tool: 'edit', summary: `Write ${outside}` }, { tool: 'execute', summary: `Run ${f.marker}` }]);
+  // agy (1.5.13) ends the turn at ELU's no, with no answer: the turn ends blocked and says what was not allowed.
+  assert.deepEqual(second.runs[0].denials[0], { tool: 'edit', summary: `Write ${inside(second)}` }); assert.equal(second.error, null);
+  assert.equal(second.result.outcome, 'blocked'); assert.equal(second.result.summary, `Antigravity ended its turn: Write ${inside(second)} was not allowed.`);
   assert.deepEqual(asked, [], 'no permission request reached the owner'); assert.equal(second.approvals, undefined);
 });
 
@@ -775,6 +777,9 @@ test('a Grok lead asks over ACP once the relay is proven here: allow runs the co
   const second = await next;
   assert.equal(fs.existsSync(f.ran), false); assert.equal(second.runs[1].session, run.session, 'the ACP session resumed');
   assert.deepEqual(second.runs[1].denials, [{ tool: 'execute', summary: `Run ${f.marker}` }]);
+  // Grok Build (1.0.77) ends the turn at the no and writes no answer: the turn ends blocked, saying so, and the session goes on.
+  assert.equal(second.error, null); assert.equal(second.result.outcome, 'blocked'); assert.equal(second.result.summary, `Grok Build ended its turn: Run ${f.marker} was not allowed.`);
+  assert.equal(second.sessions.lead.id, run.session, 'the next message goes on in the same session');
   assert.equal(second.approvals.length, 2); assert.equal(second.approvals[1].decision, 'deny');
   assert.equal(pendingApprovals().length, 0, 'nothing is left to answer');
 });
@@ -815,7 +820,7 @@ test('an Antigravity lead runs headless under the workspace HOME and asks over A
   const [run] = task.runs, call = f.calls().find(call => call.args.includes('-p') && !call.args.includes('/usage'));
   assert.equal(run.vendor, 'agy'); assert.equal(run.permissions, 'ask'); assert.equal(run.model, 'gemini-3-pro');
   assert.equal(call.home, agy.privateHome({ cwd: f.controller.repo.root })); assert.equal(call.autoUpdate, 'true');
-  assert.deepEqual(run.denials, [{ tool: 'run_command', summary: 'agy: soft-denied run_command (permissions.ask: command; headless)' }], 'the stderr notice is read');
+  assert.deepEqual(run.denials, [{ tool: 'run_command', summary: 'permission check failed for run_command: Permission denied (permissions.ask: command; headless)' }], 'the refused step is read');
   assert.equal(f.inputs().at(-1).input.includes('Run this command'), true, 'the prompt went on stdin');
   proven('agy', f.bin, '1.5.4', { relay: true });
   const next = f.controller.ask(`Run this command: ${f.marker}. Reply with the summary "live".`, task.id).finished;

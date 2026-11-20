@@ -135,6 +135,9 @@ own state (`agy-home/`, mode 0700), one per workspace, holding only:
 
 - `.gemini/antigravity-cli/settings.json`: the mode's permission rules, written before each run;
 - `.gemini/config/hooks.json`: one PreToolUse hook, `lib/agy-hook.mjs`, run with the mode's name.
+  `agy` 1.5.13 hands it the call as `toolCall` (`name`, `args`, `id`) beside `hookEventName`,
+  `conversationId`, `cwd` and `workspacePaths`, and reads `{"decision":"deny","reason":…}`
+  on its output. The hook reads `tool_name` and `tool_input` too, for a release that sends them.
   Full access has none: the file is written empty, and slash commands, off in the other
   modes (`disableSlashCommands`), stay on;
 - the conversations `agy` keeps there, so a session resumes with `--conversation`, also
@@ -175,7 +178,16 @@ Seen with the stand-in only: no release of `agy` is proven until the one-time ch
 on a signed-in machine.
 
 The prompt goes on standard input, never on the command line, so other users on the
-machine cannot read it with `ps`.
+machine cannot read it with `ps`. It goes as one stream-json user message (`-p ''
+--input-format stream-json --output-format stream-json`, the line
+`{"event":"user","message":{"content":"…"}}`): `agy` 1.5.13 does not give plain text on its
+standard input to the model, which then answered that it had no task, so the `json` and
+`resume` steps failed and Antigravity ran in Full access only. The output is then one JSON
+object a line: an `init` line, a `step_update` line for each step (a tool call it refused, by
+its settings or by the hook, is a tool step that ended in an error such as `permission check
+failed for write_file …` or `tool call denied by pre-tool hook: …`, read as a denial), and
+last `{"event":"result","result":{…}}`, the object `--output-format json` prints. Seen with
+`agy` 1.5.13 on macOS.
 
 ## Messages you send while a turn works
 
@@ -222,13 +234,20 @@ In Full access and Read only no request reaches you. ELU answers each one itself
 yes in Full access, no in Read only. A yes is for that one call wherever `agy` offers one:
 ELU picks it ahead of "always allow", because a rule `agy` kept would live in the workspace
 HOME the other modes share.
-Each no is recorded as a denial on the run. Read only over ACP has the same settings and hook
+Each no is recorded as a denial on the run. `agy` 1.5.13 ends the turn at a no and writes no
+answer (`stopReason` `end_turn`, the refused call its last step): ELU says what was not
+allowed (`Antigravity ended its turn: … was not allowed.`), and the `relay` step counts that
+as the relay working when nothing was written. Read only over ACP has the same settings and hook
 as headless Read only. ELU starts `agy acp` without the `--sandbox` flag a headless Read only
 run gets, so the `live-read-only` step is what proves on this machine that it writes nothing,
-inside the project or outside it.
+inside the project or outside it. `agy` 1.5.13 asks about a write in a Read only turn over
+ACP instead of refusing it, and ends the turn at ELU's no: nothing is written, but every such
+turn would end without an answer, so the step fails (`agy ended the read-only turn at the
+first refused action, with no answer`) and Read only runs headless, where `agy` refuses the
+call itself and the turn goes on.
 
 Over ACP the chat shows each thought and each tool call as it happens, in every mode. A
-headless run prints only its result, so it has no steps to show, while it works or after.
+headless run's steps are not shown: ELU reads only its result, while it works or after.
 Until it ends the chat shows the working line and, under it, how long the run has taken:
 `1m 12s so far. Antigravity reports only when it ends.` A session on your other computer
 shows the same line.
@@ -310,16 +329,18 @@ one-time check is the proof, per machine. In particular, until a check says othe
 - in Ask for approval and Approve for me, stand-in commands first on the session's PATH
   also refuse the never list by name for what a script runs. That was seen only in tests against a stand-in `agy`, not with the
   real one;
-- whether `read_url` denies cover web search (hence the hook), whether the hook loads from
-  the private HOME, and the exact shape of the headless notice and of the ACP permission
-  request;
+- whether `read_url` denies cover web search (hence the hook). The hook loading from the
+  private HOME, the call it is handed, a refused call in the headless output, and the ACP
+  permission request (`allow` as `allow_once`, `deny` as `reject_once`) were seen with
+  `agy` 1.5.13 on macOS;
 - whether `-p` in a folder it does not trust refuses instead of denying softly, and whether
   the keychain sign-in is visible under the private HOME;
 - on Linux with no keyring, where `agy` keeps its token file and whether it writes it in
   place (ELU handles both ways of writing it, and links both places it is reported at);
-- that `-p` reads the task from standard input, that `--print-timeout` takes seconds
-  (`2000000s`, 23 days: ELU has no time limit for a turn, and whether `agy` takes a value
-  that long was not seen with the real one), and that the output names the conversation id (the `json` and `resume` steps);
+- that `--print-timeout` takes seconds (`2000000s`, 23 days: ELU has no time limit for a
+  turn, and whether `agy` takes a value that long was not seen with the real one). The task
+  on standard input as stream-json, and the conversation id in the output, were seen with
+  `agy` 1.5.13, whose check passed the `json` and `resume` steps;
 - secret reads: `agy` has no read deny, so a read of a secret folder is stopped only by
   workspace-only access (Read only, Ask, Approve for me); Full access can read anything;
 - `agy acp` in Full access and Read only was seen only in tests against a stand-in `agy`,

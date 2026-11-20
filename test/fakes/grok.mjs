@@ -287,9 +287,13 @@ if (args.includes('agent') && args.includes('stdio')) {
         const text = (row.params?.prompt ?? []).filter(part => part?.type === 'text').map(part => part.text).join('\n');
         if (cfg.inputs) fs.appendFileSync(cfg.inputs, JSON.stringify({ vendor, args, input: text }) + '\n');
         await slowCheck(record.cwd);
+        // A request answered no ends the turn, with no answer (Grok Build 1.0.77).
+        let rejected = false;
         const ask = async (action, call) => {
           const answer = await request('session/request_permission', { sessionId: record.id, toolCall: { toolCallId: call?.toolCallId ?? `call_${nextId}`, title: action.title, kind: action.kind, status: 'pending', rawInput: action.rawInput }, options: [{ optionId: 'allow', name: 'Allow', kind: 'allow_once' }, { optionId: 'allow_always', name: 'Always allow', kind: 'allow_always' }, { optionId: 'reject', name: 'Reject', kind: 'reject_once' }] });
-          return answer?.outcome?.outcome === 'selected' && String(answer.outcome.optionId).startsWith('allow');
+          const allowed = answer?.outcome?.outcome === 'selected' && String(answer.outcome.optionId).startsWith('allow');
+          if (!allowed) rejected = true;
+          return allowed;
         };
         const update = change => send({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: record.id, update: change } });
         update({ sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: 'Reading the request.' } });
@@ -308,6 +312,7 @@ if (args.includes('agent') && args.includes('stdio')) {
           await sleep(cfg.grok.usageMs ?? 0);
         }
         record.turns.push(text); save(record);
+        if (rejected) return reply({ stopReason: 'cancelled', _meta: { cancellationCategory: 'PermissionRejected', usage: { inputTokens: 40, outputTokens: 5, totalTokens: 45, cachedReadTokens: 30, cacheCreationTokens: 0, reasoningTokens: 2, modelUsage: { [record.model ?? MODELS[0]]: { inputTokens: 40, outputTokens: 5, modelCalls: 1 } }, usageIsIncomplete: false } } });
         send({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: record.id, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: resultText(result) } } } });
         // The turn's tokens ride on the answer: inputTokens is the whole prompt, 10 of it new, 30 read from the cache.
         if (responses) return reply({ stopReason: 'end_turn', _meta: { usage: { inputTokens: used.input, outputTokens: used.output, totalTokens: used.input + used.output, cachedReadTokens: 0, cacheCreationTokens: 0, reasoningTokens: 0, modelUsage: { [record.model ?? MODELS[0]]: { inputTokens: used.input, outputTokens: used.output, modelCalls: responses.length } }, usageIsIncomplete: false } } });
@@ -335,12 +340,33 @@ if (prompt == null) fail('No prompt. Headless mode takes --prompt-file or -p, ne
 if (!signedIn) fail('Not logged in. Run grok login.');
 if (cfg.inputs) fs.appendFileSync(cfg.inputs, JSON.stringify({ vendor, args, input: prompt }) + '\n');
 const permission = value('--permission-mode') ?? 'default', sandbox = value('--sandbox') ?? 'off';
+// The sandbox as Grok Build 1.0.77 applies it (its guide, 18-sandbox.md): a built-in profile, or
+// one of $GROK_HOME/sandbox.toml that extends one and adds read_write folders; a custom profile
+// it cannot find refuses the start. Under any but off the session store must be writable: its
+// GROK_HOME as it is on disk, or a read_write folder. A store that is a link out of GROK_HOME,
+// and in no read_write folder, is refused as the real one refuses it.
+const BUILT_IN = ['off', 'workspace', 'devbox', 'read-only', 'strict'];
+function profileOf(name) {
+  if (BUILT_IN.includes(name)) return { base: name, readWrite: [] };
+  let text = ''; try { text = fs.readFileSync(path.join(home, 'sandbox.toml'), 'utf8'); } catch { /* No custom profiles. */ }
+  const block = text.split(/^\[profiles\./m).find(part => part.startsWith(`${name}]`));
+  if (!block) fail(`Unknown sandbox profile: ${name}`);
+  const base = /^extends\s*=\s*"([^"]+)"/m.exec(block)?.[1] ?? 'workspace';
+  const readWrite = [...(/^read_write\s*=\s*\[([^\]]*)\]/m.exec(block)?.[1] ?? '').matchAll(/"([^"]+)"/g)].map(match => match[1]);
+  return { base, readWrite };
+}
+const profile = profileOf(sandbox), readOnly = profile.base === 'read-only';
+if (sandbox !== 'off') {
+  const real = dir => { try { return fs.realpathSync(dir); } catch { return path.resolve(dir); } };
+  const store = real(sessions), inside = dir => store === dir || store.startsWith(`${dir}${path.sep}`);
+  if (![real(home), ...profile.readWrite.map(real)].some(inside)) fail("Error: Couldn't create session: Operation not permitted (os error 1)");
+}
 const bypass = mode === 'leaky' || permission === 'bypassPermissions' || args.includes('--always-approve') || args.includes('--yolo');
 const disallowed = (value('--disallowed-tools') ?? '').split(','), tools = value('--tools')?.split(',') ?? null, denied = values('--deny');
 const has = tool => (!tools || tools.includes(tool)) && !disallowed.includes(tool);
-const canWrite = has('search_replace') && !denied.includes('Write') && !denied.includes('Edit') && sandbox !== 'read-only' && process.env.GROK_WRITE_FILE !== '0';
-const canShell = has('run_terminal_cmd') && !denied.includes('Bash') && sandbox !== 'read-only';
-const canFetch = has('web_fetch') && !denied.includes('WebFetch') && sandbox !== 'read-only' && process.env.GROK_WEB_FETCH !== '0';
+const canWrite = has('search_replace') && !denied.includes('Write') && !denied.includes('Edit') && !readOnly && process.env.GROK_WRITE_FILE !== '0';
+const canShell = has('run_terminal_cmd') && !denied.includes('Bash') && !readOnly;
+const canFetch = has('web_fetch') && !denied.includes('WebFetch') && !readOnly && process.env.GROK_WEB_FETCH !== '0';
 let session = value('-s') ?? value('--session-id'); const resume = value('-r') ?? value('--resume');
 let record;
 if (resume) { record = load(resume); if (!record) fail(`Session not found: ${resume}`); session = resume; if (record.sandbox !== sandbox) fail('A resumed session keeps its sandbox profile.'); }

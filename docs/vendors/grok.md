@@ -128,8 +128,8 @@ the one the launch named with `-s`, or the ACP session from `session/new`, loade
 
 | Mode | Transport | Permissions |
 |---|---|---|
-| Read only | headless (`--prompt-file`) | `--permission-mode dontAsk`, `--sandbox read-only`, tools `read_file,grep,list_dir`, every write, shell, web and MCP tool denied |
-| Ask | ACP (`grok agent stdio`) when `relay` passed, else headless `dontAsk` | `Read` and `Grep` with no path, workspace edits and reads of each named folder allowed by rule; outside edits, named folders included, shell and web ask you (ACP) or are denied and reported (headless); `--sandbox workspace` in headless mode |
+| Read only | headless (`--prompt-file`) | `--permission-mode dontAsk`, `--sandbox elu-read-only`, tools `read_file,grep,list_dir`, every write, shell, web and MCP tool denied |
+| Ask | ACP (`grok agent stdio`) when `relay` passed, else headless `dontAsk` | `Read` and `Grep` with no path, workspace edits and reads of each named folder allowed by rule; outside edits, named folders included, shell and web ask you (ACP) or are denied and reported (headless); `--sandbox elu-workspace` in headless mode |
 | Auto | ACP with `autoMode`, else headless `--permission-mode auto` | Grok's own reviewer model decides routine actions; what it refuses asks you over ACP |
 | Full | headless `--permission-mode bypassPermissions`, `--sandbox off` | anything, the never list included |
 
@@ -147,6 +147,22 @@ real one, and whether Grok's sandbox lets a command read that folder is not prov
 Read only profile has no shell, so there the never list holds. Grok's sandbox blocks a
 child process's network on Linux only; on macOS the read-only profile holds because it has
 no shell and no web tools, not because the sandbox blocks the network.
+
+`elu-read-only` and `elu-workspace` are ELU's own sandbox profiles, written to each mode's
+`sandbox.toml`: Grok's `read-only` and `workspace` profiles, plus the shared session store
+(`grok-home/.grok/sessions`) as a folder Grok may write. Grok's sandbox lets a run write only
+its own `GROK_HOME`, the temp folder and the working folder, and it checks the real path: a
+mode's `sessions` is a link out of its `GROK_HOME`, so under the built-in profiles every
+sandboxed run ended before it began with `Error: Couldn't create session: Operation not
+permitted (os error 1)`. Seen with Grok Build 1.0.77 on macOS, where the check then failed
+every read-only step; with ELU's profiles its `sandbox-events.jsonl` shows `elu-read-only`
+enforced by Seatbelt, and a headless Ask turn writes inside the workspace only.
+
+Over ACP, a request you answer no (or that times out, or that no one is there to answer)
+ends Grok's turn: it stops with `cancelled` and `_meta.cancellationCategory:
+"PermissionRejected"`, and writes no answer. ELU says what was not allowed (`Grok Build
+ended its turn: … was not allowed.`), and the `relay` step counts that as the relay working
+when nothing was written. Seen with Grok Build 1.0.77.
 
 Headless runs have no schema flag, so ELU puts the output schema in the prompt and
 validates the answer. Sessions resume with `-r`; a mode switch that changes the sandbox
@@ -234,6 +250,8 @@ mode's `GROK_HOME`:
 - `trusted_folders.toml`: empty. A workspace is never trusted, so its `.grok/config.toml`,
   hooks, MCP servers and skills never load. Its `AGENTS.md` and `CLAUDE.md` still reach the
   prompt; they are repository content, treated as untrusted.
+- `sandbox.toml`: ELU's two sandbox profiles, `elu-read-only` and `elu-workspace` (see How
+  each mode runs). Written before every run of that mode.
 - `sessions` and `auth.json`: links to the ones every mode shares, in `grok-home/.grok`.
 
 `grok-home/.grok` holds what the modes share, and is where `grok login` runs:

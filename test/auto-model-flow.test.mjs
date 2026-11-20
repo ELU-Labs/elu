@@ -192,7 +192,7 @@ test('in a Full access session a quick answer still runs read-only, with no netw
   assert.equal(f.task().permissions, 'full');
   await runAutoAnswer(f.repo, f.task(), { text: 'where is the build script?', route: GROK });
   const grok = f.turns('grok').at(-1).args;
-  assert.equal(flag(grok, '--sandbox'), 'read-only'); assert.ok(grok.includes('--disable-web-search'));
+  assert.equal(flag(grok, '--sandbox'), 'elu-read-only'); assert.ok(grok.includes('--disable-web-search'));
   assert.equal(flag(grok, '--permission-mode'), 'dontAsk');
   await runAutoAnswer(f.repo, f.task(), { text: 'which file has normalize?', route: HAIKU });
   const claude = f.turns('claude').at(-1).args, settings = JSON.parse(flag(claude, '--settings'));

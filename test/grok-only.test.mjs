@@ -103,7 +103,7 @@ test('on a computer with only Grok Build, an edit is reviewed by @reviewer on Gr
   assert.equal(conversationEntries(p.repo, task).filter(row => row.bot === 'reviewer').at(-1).text, 'Passed.', 'the chat shows the review');
   // The review ran on the Read only launch: the read-only sandbox, no tool that writes, runs a command or fetches.
   const review = p.calls().filter(call => call.vendor === 'grok' && call.args.includes('--prompt-file')).at(-1).args;
-  assert.equal(review[review.indexOf('--sandbox') + 1], 'read-only'); assert.equal(review[review.indexOf('--tools') + 1], 'read_file,grep,list_dir');
+  assert.equal(review[review.indexOf('--sandbox') + 1], 'elu-read-only'); assert.equal(review[review.indexOf('--tools') + 1], 'read_file,grep,list_dir');
 });
 
 test('@reviewer, @lead, @qa and @pair each answer there, and Grok Build can be a bot\'s vendor', async t => {
