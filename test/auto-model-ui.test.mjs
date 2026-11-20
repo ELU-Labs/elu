@@ -500,7 +500,7 @@ test('the owner\'s example: a question, a quick question, an edit that asks, his
   const turns = calls.filter(row => row.vendor === 'claude' && row.args.includes('--output-format')).map(row => [flag(row.args, '--model'), flag(row.args, '--effort'), row.args.includes('--resume')]);
   assert.deepEqual(turns, [['fable', 'xhigh', false], ['fable', 'xhigh', true], ['opus', 'xhigh', false], ['opus', 'xhigh', true], ['opus', 'xhigh', true]]);
   const quick = calls.filter(row => row.vendor === 'grok' && row.args.includes('--sandbox'));
-  assert.equal(quick.length, 1); assert.equal(flag(quick[0].args, '--sandbox'), 'read-only'); assert.equal(flag(quick[0].args, '--effort'), null);
+  assert.equal(quick.length, 1); assert.equal(flag(quick[0].args, '--sandbox'), 'elu-read-only'); assert.equal(flag(quick[0].args, '--effort'), null);
 });
 
 test('a quick question the fast vendor says needs work: ELU says who takes it, and the top model takes it as a plan, written once', { timeout: 120000 }, async t => {

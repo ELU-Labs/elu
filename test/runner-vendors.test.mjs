@@ -775,6 +775,9 @@ test('a Grok lead asks over ACP once the relay is proven here: allow runs the co
   const second = await next;
   assert.equal(fs.existsSync(f.ran), false); assert.equal(second.runs[1].session, run.session, 'the ACP session resumed');
   assert.deepEqual(second.runs[1].denials, [{ tool: 'execute', summary: `Run ${f.marker}` }]);
+  // Grok Build (1.0.77) ends the turn at the no and writes no answer: the turn ends blocked, saying so, and the session goes on.
+  assert.equal(second.error, null); assert.equal(second.result.outcome, 'blocked'); assert.equal(second.result.summary, `Grok Build ended its turn: Run ${f.marker} was not allowed.`);
+  assert.equal(second.sessions.lead.id, run.session, 'the next message goes on in the same session');
   assert.equal(second.approvals.length, 2); assert.equal(second.approvals[1].decision, 'deny');
   assert.equal(pendingApprovals().length, 0, 'nothing is left to answer');
 });

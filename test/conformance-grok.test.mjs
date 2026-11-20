@@ -67,12 +67,12 @@ test('compile refuses until this machine\'s check passed, then builds each profi
   const never = grok.NEVER_COMMANDS.map(command => `Bash(${command}:*)`);
   const common = turns => ['--no-auto-update', '--no-alt-screen', '--no-memory', '--no-subagents', '--cwd', w.repo, '--output-format', 'streaming-json', '--max-turns', turns, '--prompt-file', path.join(runDir, 'prompt.txt')];
   const deny = rules => rules.flatMap(rule => ['--deny', rule]), allow = rules => rules.flatMap(rule => ['--allow', rule]);
-  assert.deepEqual(grok.compile({ ...base, mode: 'locked' }), [...common('40'), '--permission-mode', 'dontAsk', '--sandbox', 'read-only', '--tools', 'read_file,grep,list_dir', '--disallowed-tools', 'run_terminal_cmd,search_replace,web_search,web_fetch,spawn_subagent,Agent', '--disable-web-search', ...deny(['Bash', 'Edit', 'Write', 'WebFetch', 'WebSearch', 'MCPTool', ...secrets]), '-s', SESSION]);
+  assert.deepEqual(grok.compile({ ...base, mode: 'locked' }), [...common('40'), '--permission-mode', 'dontAsk', '--sandbox', 'elu-read-only', '--tools', 'read_file,grep,list_dir', '--disallowed-tools', 'run_terminal_cmd,search_replace,web_search,web_fetch,spawn_subagent,Agent', '--disable-web-search', ...deny(['Bash', 'Edit', 'Write', 'WebFetch', 'WebSearch', 'MCPTool', ...secrets]), '-s', SESSION]);
   assert.deepEqual(grok.compile({ ...base, mode: 'locked' }), grok.compile({ ...base }), 'locked is the default profile');
   const edits = [`Edit(${w.repo})`, `Edit(${w.repo}/**)`, `Write(${w.repo})`, `Write(${w.repo}/**)`];
   const guarded = ['package.json', '.git'].flatMap(p => [`Edit(${w.repo}/${p})`, `Edit(${w.repo}/${p}/**)`, `Write(${w.repo}/${p})`, `Write(${w.repo}/${p}/**)`]);
   const ask = grok.compile({ ...base, role: lead(), mode: 'ask', folders: [folder], protectedPaths: ['package.json', '.git'] });
-  assert.deepEqual(ask, [...common('120'), '--permission-mode', 'dontAsk', '--sandbox', 'workspace', ...allow(['Read', 'Grep', ...edits, `Read(${folder}/**)`]), ...deny([...guarded, ...never, ...secrets]), '-s', SESSION]);
+  assert.deepEqual(ask, [...common('120'), '--permission-mode', 'dontAsk', '--sandbox', 'elu-workspace', ...allow(['Read', 'Grep', ...edits, `Read(${folder}/**)`]), ...deny([...guarded, ...never, ...secrets]), '-s', SESSION]);
   const auto = grok.compile({ ...base, role: lead(), mode: 'auto', folders: [folder], protectedPaths: ['package.json', '.git'] });
   assert.deepEqual(auto, ask.map(a => a === 'dontAsk' ? 'auto' : a));
   // Full access is everything: no never list and no deny rule, home secrets included, and
@@ -120,6 +120,9 @@ test('childEnv carries every switch and no key variable; each mode\'s private ho
   for (const mode of ['locked', 'ask', 'auto']) assert.equal(configOf(mode), grok.CONFIG_TOML, mode);
   assert.equal(fs.readFileSync(grok.childEnv({ mode: 'full', home: w.home }).GROK_HOME + '/config.toml', 'utf8'), fullConfig, 'and Full access keeps its own');
   for (const mode of PROFILES) { const own = grok.childEnv({ mode, home: w.home }).GROK_HOME; assert.equal(own, grok.modeGrokHome(mode)); for (const name of ['sessions', 'auth.json']) assert.equal(fs.readlinkSync(path.join(own, name)), path.join(shared, name), `${mode} ${name}`); }
+  // Grok's sandbox writes only its own GROK_HOME, so the sandboxed runs name ELU's profiles, which also let them write the shared session store.
+  assert.deepEqual(grok.SANDBOX, { locked: 'elu-read-only', ask: 'elu-workspace', auto: 'elu-workspace' });
+  for (const mode of PROFILES) { const toml = fs.readFileSync(path.join(grok.modeGrokHome(mode), 'sandbox.toml'), 'utf8'); for (const [name, base] of [['elu-read-only', 'read-only'], ['elu-workspace', 'workspace']]) assert.ok(toml.includes(`[profiles.${name}]\nextends = "${base}"\nread_write = [${JSON.stringify(path.join(shared, 'sessions'))}]\n`), `${mode} ${name}`); }
   const config = configOf('locked');
   assert.equal(config, grok.CONFIG_TOML); assert.equal(fs.statSync(path.join(dir, 'config.toml')).mode & 0o777, 0o600);
   for (const line of ['[compat.claude]\nskills = false\nrules = false\nagents = false\nmcps = false\nhooks = false\nsessions = false\n', '[compat.cursor]\nskills = false\nrules = false\nagents = false\nmcps = false\nhooks = false\nsessions = false\n', '[compat.codex]\nskills = false\nrules = false\nagents = false\nmcps = false\nhooks = false\nsessions = false\n', 'telemetry = false', 'feedback = false', 'managed_config = false', 'campaigns = false', 'remote_fetch = false', 'backend_tools = false', 'trace_upload = false', 'mixpanel_enabled = false', '[harness]\ndisable_workspace_teleport = true\ndisable_codebase_upload = true', 'auto_update = false', '[relay]\nenabled = false', 'load_envrc = false', '[subagents]\nenabled = false', 'deny = ["Bash(git push:*)", "Bash(git tag:*)"']) assert.ok(config.includes(line), line);
@@ -361,12 +364,17 @@ test('run() relays an ACP permission request through the approval files: allow w
   assert.match(allowed.session, /^[0-9a-f-]{36}$/); assert.equal(allowed.log, path.join(w.dir, 'allow.log')); assert.ok(allowed.exitCode === null || Number.isInteger(allowed.exitCode));
   assert.equal(JSON.parse(fs.readFileSync(path.join(w.dir, 'allow.pid'), 'utf8')).pid, null);
   assert.ok(fs.readFileSync(path.join(w.dir, 'allow.log'), 'utf8').includes('session/request_permission'), 'the vendor lines are the run log');
-  const denied = await grok.run(start('deny', { prompt: create('deny'), approvals: approvals(async id => { answerApproval(id, 'deny'); return awaitDecision(id, { waitSeconds: 5 }); }) }));
-  assert.equal(denied.result.outcome, 'needs_input'); assert.ok(!fs.existsSync(file('deny'))); assert.deepEqual(denied.denials, [{ tool: 'edit', summary: `Write ${file('deny')}` }]); assert.equal(denied.approvals[0].decision, 'deny');
-  const timed = await grok.run(start('timeout', { prompt: create('timeout'), approvals: approvals(id => awaitDecision(id, { waitSeconds: 1 })) }));
-  assert.ok(!fs.existsSync(file('timeout'))); assert.equal(timed.denials.length, 1); assert.equal(timed.approvals[0].decision, 'timeout');
-  const silent = await grok.run(start('silent', { prompt: create('silent') }));
-  assert.ok(!fs.existsSync(file('silent')), 'no approvals means every request is denied'); assert.equal(silent.denials.length, 1); assert.deepEqual(silent.approvals, []);
+  // Grok Build ends the turn at a request answered no and writes no answer (1.0.77): the run says
+  // what was not allowed (cause denied), with the denial and the session, and nothing was written.
+  const ends = async (name, decide = null) => {
+    const error = await grok.run(start(name, { prompt: create(name), ...(decide ? { approvals: approvals(decide) } : {}) })).then(() => null, failure => failure);
+    assert.equal(error?.details?.cause, 'denied', name); assert.ok(!fs.existsSync(file(name)), name);
+    assert.equal(error.message, `Grok Build ended its turn: Write ${file(name)} was not allowed.`); assert.match(error.details.session, /^[0-9a-f-]{36}$/);
+    return error.details;
+  };
+  assert.deepEqual((await ends('deny', async id => { answerApproval(id, 'deny'); return awaitDecision(id, { waitSeconds: 5 }); })).denials, [{ tool: 'edit', summary: `Write ${file('deny')}` }]);
+  assert.equal((await ends('timeout', id => awaitDecision(id, { waitSeconds: 1 }))).denials.length, 1);
+  assert.equal((await ends('silent')).denials.length, 1, 'no approvals means every request is denied');
   // The time limit waits while the owner decides.
   const held = await grok.run(start('held', { prompt: create('held'), timeoutSeconds: 2, approvals: approvals(async id => { await sleep(2500); answerApproval(id, 'allow'); return awaitDecision(id, { waitSeconds: 5 }); }) }));
   assert.equal(held.result.outcome, 'done'); assert.ok(fs.existsSync(file('held')));
@@ -425,7 +433,7 @@ test('the conformance steps pass against the fake, hide the owner\'s Claude file
   const calls = fs.readFileSync(w.calls, 'utf8').trim().split('\n').map(JSON.parse);
   assert.ok(calls.every(call => call.vendor === 'grok' && !call.args.includes('--trust')), 'no run trusts the workspace');
   assert.ok(calls.some(call => call.args.includes('agent') && call.args.includes('stdio')), 'the relay step spoke ACP');
-  assert.ok(calls.filter(call => call.args.includes('--prompt-file')).every(call => call.args.includes('read-only') && call.args.includes('dontAsk')), 'every headless step ran locked');
+  assert.ok(calls.filter(call => call.args.includes('--prompt-file')).every(call => call.args.includes('elu-read-only') && call.args.includes('dontAsk')), 'every headless step ran locked');
 });
 
 test('a required step that is not proven turns off Read only and the two asking modes, never Full access: a leaky run, a signed-out owner', async t => {
