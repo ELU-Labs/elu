@@ -454,7 +454,7 @@ test('the Usage tab reads Antigravity and Grok Build sign-in before their one-ti
   await readSignInsBeforeCheck(rows, { env: { ...process.env, ...env }, all: true });
   assert.equal(fs.existsSync(path.join(folder, 'asked')), false);
   ({ agy } = tab());
-  assert.deepEqual(text(agy), ['Antigravity (agy) this release cannot run here', '            Antigravity CLI 1.5.4: This untested version is missing required', '            flags: --json-schema, --conversation, --mode, --sandbox,', '            --add-dir, --print-timeout, --dangerously-skip-permissions.']);
+  assert.deepEqual(text(agy), ['Antigravity (agy) this release cannot run here', '            Antigravity CLI 1.5.4: This untested version is missing required', '            flags: --input-format, --json-schema, --conversation, --mode,', '            --sandbox, --add-dir, --print-timeout,', '            --dangerously-skip-permissions.']);
   assert.ok(text(agy).every(line => line.length <= 76));
   // Saved: the program, the answer and when; never more.
   const saved = JSON.parse(fs.readFileSync(path.join(personalDirectory(), 'usage.json'), 'utf8')).signIns;

@@ -183,6 +183,8 @@ test('a headless Antigravity run records the tokens its result reports, read by 
   const use = (input, output, thinking, cache, total) => ({ input_tokens: input, output_tokens: output, thinking_tokens: thinking, cache_read_tokens: cache, total_tokens: total });
   // Every count apart: the total is all four.
   assert.deepEqual(runUsage('agy', result(use(1200, 80, 40, 200, 1520))), { tokens: { input: 1200, output: 120, cacheRead: 200, cacheWrite: 0 }, model: null, thread: '2f6c1d1e-2b1a-4c55-9a77-0d1f9b0c1e2a', turns: 3 });
+  // With --output-format stream-json (agy 1.5.13) the same object is the result of the last line.
+  assert.deepEqual(runUsage('agy', `${JSON.stringify({ event: 'init', conversation_id: '2f6c1d1e-2b1a-4c55-9a77-0d1f9b0c1e2a' })}\n${JSON.stringify({ event: 'result', result: JSON.parse(result(use(1200, 80, 40, 200, 1520))) })}\n`), { tokens: { input: 1200, output: 120, cacheRead: 200, cacheWrite: 0 }, model: null, thread: '2f6c1d1e-2b1a-4c55-9a77-0d1f9b0c1e2a', turns: 3 });
   // The thinking counted apart, the cache read left out of the total: the same tokens.
   assert.deepEqual(runUsage('agy', result(use(1200, 80, 40, 200, 1320))), { tokens: { input: 1200, output: 120, cacheRead: 200, cacheWrite: 0 }, model: null, thread: '2f6c1d1e-2b1a-4c55-9a77-0d1f9b0c1e2a', turns: 3 });
   // A total with no thinking in it, the cache read in it or not: at least the output.

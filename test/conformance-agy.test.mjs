@@ -56,7 +56,7 @@ test('argv per profile is a fixed snapshot; settings and the hook are written pe
   const base = { cwd, protectedPaths: ['.git', 'package.json'], commonDir: path.join(cwd, '.git'), schemaFile, folders: [folder] };
   const tokens = [[schemaFile, '<schema>'], [folder, '<folder>'], [cwd, '<cwd>']];
   const tokenise = value => tokens.reduce((text, [from, to]) => text.split(from).join(to), value);
-  const common = ['-p', 'Your task is on standard input. Read it fully, then do exactly what it says.', '--output-format', 'json', '--json-schema', '<schema>', '--print-timeout', '2000000s'];
+  const common = ['-p', '', '--input-format', 'stream-json', '--output-format', 'stream-json', '--json-schema', '<schema>', '--print-timeout', '2000000s'];
   const expected = {
     locked: [...common, '--sandbox'],
     ask: [...common, '--add-dir', '<folder>'],
@@ -161,6 +161,11 @@ test('until its one-time check passed here compile refuses and says what starts 
 test('the hook denies every matched tool in locked, the never list in every profile but Full access, asks or denies web search, and fails closed', () => {
   for (const tool of TOOLS) assert.equal(decide('locked', { tool_name: tool, tool_input: {} }).decision, 'deny', tool);
   assert.equal(decide('locked', { tool_name: 'view_file', tool_input: {} }), null);
+  // The call as agy 1.5.13 hands it to the hook (seen on macOS): toolCall.name and toolCall.args.
+  const real = (name, args) => ({ hookEventName: 'PreToolUse', conversationId: crypto.randomUUID(), cwd: '/w', workspacePaths: ['/w'], stepIdx: 3, toolCall: { name, args, id: 'call_1' } });
+  for (const tool of TOOLS) assert.equal(decide('locked', real(tool, {})).decision, 'deny', `real: ${tool}`);
+  assert.equal(decide('locked', real('view_file', { AbsolutePath: '/w/x' })), null);
+  assert.equal(decide('ask', real('run_command', { CommandLine: 'git push origin main' }))?.decision, 'deny'); assert.equal(decide('ask', real('run_command', { CommandLine: 'npm test' })), null);
   const never = ['git push origin main', 'git -C . push', 'git -c a=b tag v1', 'git merge feature', 'gh pr merge 5', 'gh release create v1', 'npm publish', 'cargo publish', 'echo ok && git push', 'sudo terraform apply', 'kubectl apply -f x', 'gcloud run deploy api', 'fly deploy',
     'claude mcp add elu https://x', 'claude mcp add-json elu {}', 'claude --debug mcp remove elu', 'echo ok && elu mcp add x https://x'];
   for (const profile of ['ask', 'auto']) for (const command of never) assert.equal(decide(profile, { tool_name: 'run_command', tool_input: { CommandLine: command } })?.decision, 'deny', `${profile}: ${command}`);
@@ -194,6 +199,13 @@ test('parseOutput reads the result, the conversation id and stderr soft-denies; 
   assert.deepEqual(parsed, { result, session: id, model: 'gemini-3-pro', costUsd: null, denials: [{ tool: 'run_command', summary: 'agy: soft-denied run_command (permissions.deny: command)' }, { tool: 'write_to_file', summary: 'agy: soft-denied write_to_file (sandbox)' }] });
   assert.deepEqual(agy.parseOutput(JSON.stringify({ session_id: id, response: `Here you go:\n\`\`\`json\n${JSON.stringify(result)}\n\`\`\`` })).result, result, 'a response string carries the JSON');
   assert.equal(agy.parseOutput(`{"type":"progress"}\n${JSON.stringify({ conversation_id: id, structured_output: result })}\n`).session, id, 'a stream ends with the result');
+  // agy 1.5.13 with --output-format stream-json (seen on macOS): an init line, its steps, a tool
+  // call it refused as a step_update error, and last the result, the object json prints.
+  const refusedStep = (tool, message) => ({ event: 'step_update', step_update: { step_type: 'tool', state: 'ERROR', tool_name: tool, tool_info: { name: tool, error: { type: 'TOOL_ERROR', message } } } });
+  const stream = [{ event: 'init', conversation_id: id, init: { cwd: '/w', permission_mode: 'request-review' } }, refusedStep('write_to_file', 'permission check failed for write_to_file /w/x: Permission denied'), refusedStep('run_command', 'tool call denied by pre-tool hook: ELU: git push is on the never list'), refusedStep('view_file', 'file not found'), { event: 'result', result: { conversation_id: id, status: 'SUCCESS', response: '{}', structured_output: result, num_turns: 1 } }].map(row => JSON.stringify(row)).join('\n');
+  assert.deepEqual(agy.parseOutput(stream), { result, session: id, model: null, costUsd: null, denials: [{ tool: 'write_to_file', summary: 'permission check failed for write_to_file /w/x: Permission denied' }, { tool: 'run_command', summary: 'tool call denied by pre-tool hook: ELU: git push is on the never list' }] }, 'a tool that failed for another reason is no denial');
+  // Its task goes in on stdin as one stream-json user message: plain text there never reaches the model.
+  assert.equal(agy.inputFor('Do "this".\nThen that.'), `${JSON.stringify({ event: 'user', message: { content: 'Do "this".\nThen that.' } })}\n`);
   assert.equal(agy.parseOutput(JSON.stringify({ conversationId: 'not a plain id', structured_output: result })).session, null);
   assert.deepEqual(agy.extractJson(`Working.\nHere is the result:\n${JSON.stringify({ a: { b: 1 } }, null, 2)}\n`), { a: { b: 1 } });
   assert.equal(agy.extractJson('[1,2]'), null); assert.equal(agy.extractJson('no json'), null);
@@ -212,7 +224,7 @@ test('headless runs against the fake: locked soft-denies with exit 0, ask denies
   const go = options => agy.run({ bin: fake.bin, logFile: path.join(dir, `run-${n++}.log`), timeoutSeconds: 60, relay: false, cwd: ws, protectedPaths: ['.git'], commonDir: path.join(ws, '.git'), schemaFile, session: crypto.randomUUID(), ...options });
   const locked = await go({ mode: 'locked', role: reader, prompt: `Create the file ${outside}.locked with text. Run this command: ${marker}. Fetch http://127.0.0.1:9/nowhere and report.` });
   assert.equal(locked.exitCode, 0); assert.equal(locked.effectiveMode, 'locked'); assert.equal(locked.result.outcome, 'blocked'); assert.match(locked.session, UUID);
-  assert.deepEqual(locked.denials.map(row => row.tool), ['write_to_file', 'run_command', 'read_url']); assert.match(locked.denials[0].summary, /^agy: soft-denied write_to_file/);
+  assert.deepEqual(locked.denials.map(row => row.tool), ['write_to_file', 'run_command', 'read_url']); assert.match(locked.denials[0].summary, /^permission check failed for write_to_file/);
   assert.equal(fs.existsSync(`${outside}.locked`), false); assert.equal(fs.existsSync(ran), false);
   const call = fake.last();
   assert.equal(call.home, agy.privateHome({ mode: 'locked', cwd: ws })); assert.equal(call.autoUpdate, 'true'); assert.ok(call.args.includes('--sandbox'));
@@ -297,20 +309,25 @@ test('over ACP a permission request reaches the approvals and the answer decides
   const approvals = decision => { const asked = []; return { asked, request: ({ tool, input, title }) => { asked.push({ tool, input, title }); return { id: `a-${asked.length}`, summary: title }; }, await: async () => decision }; };
   const go = (options, decision) => {
     const relay = decision === undefined ? null : approvals(decision);
-    return agy.run({ bin: fake.bin, logFile: path.join(dir, `run-${n++}.log`), timeoutSeconds: 60, relay: true, approvals: relay, cwd: ws, protectedPaths: ['.git'], commonDir: path.join(ws, '.git'), schemaFile, session: crypto.randomUUID(), role: lead, mode: 'ask', ...options }).then(value => ({ ...value, asked: relay?.asked ?? [] }));
+    return agy.run({ bin: fake.bin, logFile: path.join(dir, `run-${n++}.log`), timeoutSeconds: 60, relay: true, approvals: relay, cwd: ws, protectedPaths: ['.git'], commonDir: path.join(ws, '.git'), schemaFile, session: crypto.randomUUID(), role: lead, mode: 'ask', ...options }).then(value => ({ ...value, asked: relay?.asked ?? [] }), error => { error.asked = relay?.asked ?? []; throw error; });
   };
   const allow = await go({ prompt: `Create the file ${outside}.allow with the text "relay".` }, 'allow');
   assert.equal(allow.asked.length, 1); assert.equal(allow.asked[0].tool, 'edit'); assert.equal(allow.asked[0].title, `Write ${outside}.allow`); assert.equal(allow.asked[0].input.TargetFile, `${outside}.allow`);
   assert.equal(fs.readFileSync(`${outside}.allow`, 'utf8'), 'elu-code\n'); assert.deepEqual(allow.denials, []); assert.equal(allow.result.outcome, 'done');
   assert.equal(allow.effectiveMode, 'ask'); assert.match(allow.session, UUID); assert.equal(allow.exitCode, 0); assert.ok(fake.last().args[0] === 'acp');
   assert.ok(fs.readFileSync(allow.log, 'utf8').trim().split('\n').every(line => JSON.parse(line).jsonrpc === '2.0'), 'the log holds the ACP lines');
-  const deny = await go({ prompt: `Create the file ${outside}.deny with the text "relay".` }, 'deny');
-  assert.equal(deny.asked.length, 1); assert.equal(fs.existsSync(`${outside}.deny`), false); assert.equal(deny.result.outcome, 'blocked');
-  assert.deepEqual(deny.denials[0], { tool: 'edit', summary: `Write ${outside}.deny` }); assert.ok(deny.denials.some(row => row.tool === 'write_to_file'), 'the vendor notice is read too');
-  const timeout = await go({ prompt: `Create the file ${outside}.timeout with the text "relay".` }, 'timeout');
-  assert.equal(fs.existsSync(`${outside}.timeout`), false); assert.equal(timeout.denials[0].summary, `Write ${outside}.timeout (no answer from the owner)`);
-  const nobody = await go({ prompt: `Create the file ${outside}.nobody with the text "relay".` });
-  assert.equal(fs.existsSync(`${outside}.nobody`), false); assert.equal(nobody.denials[0].tool, 'edit');
+  // agy ends the turn at a request answered no and writes no answer (1.5.13): the run says what was
+  // not allowed (cause denied), with the denials and the conversation, and nothing was written.
+  const ends = async (name, decision) => {
+    const error = await go({ prompt: `Create the file ${outside}.${name} with the text "relay".` }, decision).then(() => null, failure => failure);
+    assert.equal(error?.details?.cause, 'denied', name); assert.equal(fs.existsSync(`${outside}.${name}`), false, name); assert.match(error.details.session, UUID);
+    assert.equal(error.message, `Antigravity ended its turn: ${error.details.denials[0].summary} was not allowed.`);
+    return { ...error.details, asked: error.asked };
+  };
+  const deny = await ends('deny', 'deny');
+  assert.equal(deny.asked.length, 1); assert.deepEqual(deny.denials[0], { tool: 'edit', summary: `Write ${outside}.deny` }); assert.ok(deny.denials.some(row => row.tool === 'write_to_file'), 'the vendor notice is read too');
+  assert.equal((await ends('timeout', 'timeout')).denials[0].summary, `Write ${outside}.timeout (no answer from the owner)`);
+  assert.equal((await ends('nobody')).denials[0].tool, 'edit');
   const inside = await go({ prompt: `Create the file ${path.join(ws, 'inside.txt')} with the text "relay".` }, 'deny');
   assert.equal(inside.asked.length, 0); assert.equal(fs.existsSync(path.join(ws, 'inside.txt')), true, 'a workspace edit asks nobody');
   const auto = await go({ mode: 'auto', prompt: 'Reply with the summary "auto".' }, 'allow');
@@ -363,7 +380,7 @@ test('over ACP a Full access turn shows its thought and both tool calls, and eve
   assert.equal(third.result.summary, nonce);
 });
 
-test('over ACP a Read only turn writes nothing inside or outside the project, runs nothing and fetches nothing, also where the vendor asks instead of refusing: every request is answered no at once', async t => {
+test('over ACP a Read only turn writes nothing inside or outside the project, runs nothing and fetches nothing, also where the vendor asks instead of refusing: every request is answered no at once, and such a vendor ends its turn there', async t => {
   const w = world(t), inside = path.join(w.ws, 'inside.txt');
   const text = `Create the file ${inside} with the text "x". Create the file ${w.outside}.locked with the text "x". Run this command: ${w.marker}. Fetch http://127.0.0.1:9/nowhere and report.`;
   const untouched = what => { assert.equal(fs.existsSync(inside), false, `${what}: inside`); assert.equal(fs.existsSync(`${w.outside}.locked`), false, `${what}: outside`); assert.equal(fs.existsSync(w.ran), false, `${what}: the command`); assert.equal(w.status(), '', `${what}: git status`); };
@@ -372,11 +389,15 @@ test('over ACP a Read only turn writes nothing inside or outside the project, ru
   assert.deepEqual(locked.denials.map(row => row.tool), ['write_to_file', 'write_to_file', 'run_command', 'read_url'], 'what its hook and rules refused is reported');
   assert.deepEqual(shown(runSteps(locked.log)).filter(step => step[0] === 'tool'), [['tool', `Write ${inside}`, 'failed'], ['tool', `Write ${w.outside}.locked`, 'failed'], ['tool', `Run ${w.marker}`, 'failed'], ['tool', 'read_url http://127.0.0.1:9/nowhere', 'failed']]);
   assert.equal(settingsOf('locked', w.ws).toolPermission, 'request-review'); assert.equal(hooksOf('locked', w.ws).hooks.PreToolUse[0].matcher, MATCHERS.locked);
-  // A vendor whose own rules did not hold asks about each one: ELU's no is what stops it.
+  // A vendor whose own rules did not hold asks about each one: ELU's no is what stops it, and agy
+  // (1.5.13) then ends the turn with no answer, so each is asked in a turn of its own.
   w.fake.set({ asksDenied: true });
-  const asking = await w.go({ mode: 'locked', role: reader, prompt: text });
-  untouched('ELU\'s answers'); assert.equal(asking.result.outcome, 'blocked');
-  assert.deepEqual(asking.denials.slice(0, 4), [{ tool: 'edit', summary: `Write ${inside}` }, { tool: 'edit', summary: `Write ${w.outside}.locked` }, { tool: 'execute', summary: `Run ${w.marker}` }, { tool: 'fetch', summary: 'read_url http://127.0.0.1:9/nowhere' }]);
+  const asks = [[`Create the file ${inside} with the text "x".`, { tool: 'edit', summary: `Write ${inside}` }], [`Create the file ${w.outside}.locked with the text "x".`, { tool: 'edit', summary: `Write ${w.outside}.locked` }], [`Run this command: ${w.marker}.`, { tool: 'execute', summary: `Run ${w.marker}` }], ['Fetch http://127.0.0.1:9/nowhere and report.', { tool: 'fetch', summary: 'read_url http://127.0.0.1:9/nowhere' }]];
+  for (const [prompt, refused] of asks) {
+    const error = await w.go({ mode: 'locked', role: reader, prompt }).then(() => null, failure => failure);
+    assert.equal(error?.details?.cause, 'denied', prompt); assert.deepEqual(error.details.denials[0], refused); assert.equal(error.message, `Antigravity ended its turn: ${refused.summary} was not allowed.`);
+  }
+  untouched('ELU\'s answers');
   // One that edits the workspace over ACP without reading its rules is what the check's relay step catches.
   assert.deepEqual(w.asked, [], 'no request reached the owner');
 });
@@ -430,12 +451,17 @@ test('the conformance steps pass against the fake and record relay; a vendor tha
   assert.deepEqual(silent, { steps: { signin: 'pass', 'locked-no-write': 'pass', 'locked-no-shell': 'pass', 'locked-no-network': 'pass', json: 'pass', resume: 'pass', relay: 'fail', 'live-read-only': 'pass' }, relay: false });
   assert.ok(log.some(line => line === 'relay: fail: no permission request arrived over ACP'));
   assert.equal(requireConformance('agy', { bin: fake.bin, version: '1.5.4' }), true, 'the relay step is optional: ask and auto fall back to deny and report');
-  // The read-only step runs a Read only turn over ACP. One that asks where it should refuse
-  // passes, since ELU says no; one that edits the workspace without reading its rules fails,
-  // and so does one whose ACP never starts: a headless run proves nothing about ACP.
+  // The read-only step runs a Read only turn over ACP. One that asks where it should refuse and
+  // ends its turn at ELU's no, with no answer (agy 1.5.13), fails: nothing was written, but every
+  // such turn would end without an answer, so Read only stays headless and the others still run
+  // over ACP. One that edits the workspace without reading its rules fails on the write, and one
+  // whose ACP never starts fails too: a headless run proves nothing about ACP.
   fake.set({ asksDenied: true });
   const asking = await runConformance('agy', { bin: fake.bin, version: '1.5.4', scratch: scratch('s5'), env: process.env, log: line => log.push(line) });
-  assert.equal(asking.steps['live-read-only'], 'pass', log.join('\n')); assert.equal(asking.relay, true); assert.equal(agy.acpProven('locked'), true);
+  assert.equal(asking.steps['live-read-only'], 'fail', log.join('\n')); assert.equal(asking.relay, true);
+  assert.ok(log.includes('live-read-only: fail: agy ended the read-only turn at the first refused action, with no answer'), log.join('\n'));
+  assert.deepEqual(['locked', 'ask', 'full'].map(mode => agy.acpProven(mode)), [false, true, true]);
+  assert.equal(requireConformance('agy', { bin: fake.bin, version: '1.5.4' }), true, 'the read-only step is optional: Read only runs headless');
   fake.set({ acpEditsFreely: true });
   const free = await runConformance('agy', { bin: fake.bin, version: '1.5.4', scratch: scratch('s6'), env: process.env, log: line => log.push(line) });
   assert.deepEqual(free, { steps: { signin: 'pass', 'locked-no-write': 'pass', 'locked-no-shell': 'pass', 'locked-no-network': 'pass', json: 'pass', resume: 'pass', relay: 'pass', 'live-read-only': 'fail' }, relay: true });

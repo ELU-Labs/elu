@@ -12,9 +12,17 @@
 // the private HOME's settings.json and hooks.json (the hook command really runs),
 // --sandbox, --dangerously-skip-permissions, --conversation under
 // <HOME>/.gemini/antigravity-cli/brain, soft-denies in -p (exit 0, a stderr notice naming
-// the tool), the /usage sign-in probe, and `acp`: every tool call goes out as a session
+// the tool, or with --output-format stream-json a step_update line whose tool step ended in
+// that error), the /usage sign-in probe, and `acp`: every tool call goes out as a session
 // update, when it starts and when it ends, and session/request_permission asks. A session
 // with no mode set reviews: it asks before each command and each write that no rule allows.
+// As agy 1.5.13 does (seen on macOS): -p reads no plain text from stdin; the task is -p's own
+// text, or with --input-format stream-json (which takes --output-format stream-json) the
+// messages on stdin, one {"event":"user","message":{"content":...}} a line, run here as one
+// turn (ELU sends one). A stream-json run prints an init line, its tool steps, and last
+// {"event":"result","result":{...}}, the object --output-format json prints. A hook gets
+// { hookEventName, toolCall: { name, args, id }, cwd, ... }. Over ACP a permission request
+// answered no ends the turn there: no other tool runs and no answer is written.
 // An ACP session names its model as the protocol does, a `model` config option changed with
 // session/set_config_option, keeps it with the conversation, and ends each turn with the
 // protocol's `usage`. Headless, --model names the model and the output repeats it, and the
@@ -80,14 +88,17 @@ async function signIn() {
 }
 if (cfg.calls) fs.appendFileSync(cfg.calls, JSON.stringify({ vendor: 'agy', args, home: process.env.HOME ?? null, autoUpdate: process.env.AGY_CLI_DISABLE_AUTO_UPDATE ?? null }) + '\n');
 if (args.includes('--version')) { console.log('agy version 1.5.4'); process.exit(0); }
-if (args.includes('--help')) { console.log('Usage: agy [flags]\n  --output-format --json-schema --conversation --mode --sandbox --add-dir --print-timeout --dangerously-skip-permissions'); process.exit(0); }
+if (args.includes('--help')) { console.log('Usage: agy [flags]\n  --output-format --input-format --json-schema --conversation --mode --sandbox --add-dir --print-timeout --dangerously-skip-permissions'); process.exit(0); }
 const HOME = process.env.HOME ?? '';
 const readJson = file => { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; } };
 const settings = readJson(path.join(HOME, '.gemini', 'antigravity-cli', 'settings.json')) ?? {};
 const hooks = readJson(path.join(HOME, '.gemini', 'config', 'hooks.json'));
 const brain = path.join(HOME, '.gemini', 'antigravity-cli', 'brain');
 const flag = name => { const at = args.indexOf(name); return at >= 0 ? args[at + 1] : null; };
-const notice = (tool, rule) => process.stderr.write(`agy: soft-denied ${tool} (${rule})\n`);
+const streaming = flag('--output-format') === 'stream-json';
+const notice = (tool, rule) => streaming
+  ? process.stdout.write(`${JSON.stringify({ event: 'step_update', step_update: { step_type: 'tool', state: 'ERROR', tool_name: tool, tool_info: { name: tool, error: { type: 'TOOL_ERROR', message: `permission check failed for ${tool}: Permission denied (${rule})` } } } })}\n`)
+  : process.stderr.write(`agy: soft-denied ${tool} (${rule})\n`);
 // view_file has no permission action: agy has no read deny (docs/vendors/antigravity.md).
 const ACTION = { write_to_file: 'write_file', run_command: 'command', read_url: 'read_url', search_web: null, view_file: null };
 const KIND = { write_to_file: 'edit', run_command: 'execute', read_url: 'fetch', search_web: 'search', view_file: 'read' };
@@ -101,7 +112,7 @@ function hookDecision(tool, input, cwd) {
   for (const entry of hooks?.hooks?.PreToolUse ?? []) {
     if (!new RegExp(`^(?:${entry.matcher})$`).test(tool)) continue;
     for (const hook of entry.hooks ?? []) {
-      const r = spawnSync('/bin/sh', ['-c', hook.command], { input: JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: tool, tool_input: input, cwd }), encoding: 'utf8', env: process.env, timeout: (hook.timeout ?? 10) * 1000 });
+      const r = spawnSync('/bin/sh', ['-c', hook.command], { input: JSON.stringify({ hookEventName: 'PreToolUse', toolCall: { name: tool, args: input, id: `call_${crypto.randomUUID()}` }, conversationId: '', cwd, workspacePaths: [cwd] }), encoding: 'utf8', env: process.env, timeout: (hook.timeout ?? 10) * 1000 });
       if (r.status === 2) return 'deny';
       try { const out = JSON.parse(r.stdout); if (['deny', 'ask'].includes(out.decision)) return out.decision; } catch { /* No opinion. */ }
     }
@@ -164,27 +175,28 @@ const writeList = (file, states) => fs.writeFileSync(file, JSON.stringify(STEPS.
 
 // One turn: ask is the ACP permission request (null in headless mode), dir the conversation's
 // folder. show: what an ACP session sends about each tool call, start(attempt) → its id and end(id, ok).
+// ended: a permission request answered no, which ends the turn over ACP (agy 1.5.13).
 async function turn(text, { cwd, skip, sandbox, ask, dir, review = false, show = null }) {
-  const done = [], denied = [];
+  const done = [], denied = []; let ended = false;
   for (const attempt of plan(text, cwd)) {
     const call = show ? await show.start(attempt) : null;
     let { verdict, rule } = permit(attempt.tool, attempt.input, { cwd, skip, sandbox, review, free: Boolean(ask) && agy.acpEditsFreely === true });
     if (verdict === 'deny' && ask && agy.asksDenied) verdict = 'ask';
     if (verdict === 'ask') {
       if (ask && agy.noPermissionRequest) verdict = 'allow';
-      else if (ask) { verdict = (await ask(attempt, call)) === 'allow' ? 'allow' : 'deny'; rule = 'permission request rejected'; }
+      else if (ask) { verdict = (await ask(attempt, call)) === 'allow' ? 'allow' : 'deny'; rule = 'permission request rejected'; ended = verdict === 'deny'; }
       else { verdict = 'deny'; rule = `${rule}; headless`; }
     }
     // Each file of reads, and whether it was read, in reads.jsonl beside the fake.
     if (attempt.tool === 'view_file') { let read = false; if (verdict !== 'deny' || agy.ignoreDenies) { try { fs.readFileSync(attempt.input.AbsolutePath); read = true; } catch { /* Not there. */ } } fs.appendFileSync(path.join(path.dirname(process.argv[1]), 'reads.jsonl'), JSON.stringify({ vendor: 'agy', path: attempt.input.AbsolutePath, read }) + '\n'); }
-    if (verdict === 'deny' && !agy.ignoreDenies) { notice(attempt.tool, rule); denied.push(`${attempt.tool} denied (${rule})`); show?.end(call, false); continue; }
+    if (verdict === 'deny' && !agy.ignoreDenies) { notice(attempt.tool, rule); denied.push(`${attempt.tool} denied (${rule})`); show?.end(call, false); if (ended) break; continue; }
     done.push(await perform(attempt)); show?.end(call, true);
   }
   const nonce = /\b[Rr]emember (?:this )?nonce:? ([0-9a-f-]{36})/.exec(text); if (nonce) fs.writeFileSync(path.join(dir, 'nonce'), nonce[1]);
   // The quotes may be JSON-escaped: the runner carries the goal in a data block.
   let summary = /summary \\?"([^"\\]+)\\?"/.exec(text)?.[1] ?? ([...done, ...denied].join(' ') || 'Nothing to do.');
   if (/nonce from earlier/.test(text)) { try { summary = fs.readFileSync(path.join(dir, 'nonce'), 'utf8'); } catch { summary = 'No nonce in this conversation.'; } }
-  return { outcome: denied.length && !done.length ? 'blocked' : 'done', summary, question: null, choices: [], comments: [], responses: [] };
+  return { outcome: denied.length && !done.length ? 'blocked' : 'done', summary, question: null, choices: [], comments: [], responses: [], ...(ended ? { ended } : {}) };
 }
 async function headless() {
   const prompt = flag('-p') ?? '';
@@ -194,12 +206,17 @@ async function headless() {
   }
   if (signedOut()) { console.error('authentication required: run agy to sign in'); process.exit(1); }
   if (prompt === '/usage') { if (agy.usageSeconds) await new Promise(resolve => setTimeout(resolve, agy.usageSeconds * 1000)); console.log(flag('--output-format') === 'json' ? JSON.stringify({ usage: { plan: 'fake' } }) : 'Plan: fake\nUsage: 0%'); process.exit(0); }
-  let input = ''; for await (const chunk of process.stdin) input += chunk;
+  let raw = ''; for await (const chunk of process.stdin) raw += chunk;
+  const streamed = flag('--input-format') === 'stream-json';
+  if (streamed && !streaming) { console.error('error: --input-format stream-json requires --output-format stream-json'); process.exit(1); }
+  const messages = streamed ? raw.split('\n').filter(line => line.trim()).map(line => { try { const row = JSON.parse(line); return row?.event === 'user' && typeof row.message?.content === 'string' ? row.message.content : null; } catch { return null; } }).filter(text => text !== null) : [];
+  const input = messages.join('\n');
   if (cfg.inputs) fs.appendFileSync(cfg.inputs, JSON.stringify({ vendor: 'agy', args, input }) + '\n');
   const text = `${prompt}\n${input}`, cwd = process.cwd(), conversation = flag('--conversation'), id = conversation ?? crypto.randomUUID(), dir = path.join(brain, id);
   if (conversation && !fs.existsSync(dir)) { console.error(`conversation not found: ${conversation}`); process.exit(1); }
   fs.mkdirSync(dir, { recursive: true });
   const schema = flag('--json-schema') ? readJson(flag('--json-schema')) : null;
+  if (streaming) console.log(JSON.stringify({ event: 'init', conversation_id: id, init: { cwd, tools: ['run_command', 'write_to_file', 'view_file', 'read_url_content', 'search_web', 'finish'], permission_mode: 'request-review', ...(schema ? { json_schema: schema } : {}) } }));
   // slow: prints nothing for half a minute first, as a headless run does while it works.
   if (cfg.mode === 'slow') await new Promise(resolve => setTimeout(resolve, 30000));
   await pause();
@@ -215,7 +232,9 @@ async function headless() {
   const own = agy.headlessTurns?.[before.turns] ?? agy.headlessUsage ?? { input_tokens: 1200, output_tokens: 80, thinking_tokens: 40, cache_read_tokens: 200, total_tokens: 1280 };
   const soFar = { turns: before.turns + 1, usage: Object.fromEntries(Object.keys(own).map(key => [key, (before.usage?.[key] ?? 0) + own[key]])) };
   fs.writeFileSync(kept, JSON.stringify(soFar));
-  console.log(JSON.stringify({ conversationId: id, model: flag('--model') ?? MODELS[0], structured_output: result, stats: { turns: soFar.turns }, num_turns: soFar.turns, ...(agy.noUsage ? {} : { usage: soFar.usage }) }, null, 2));
+  const printed = { conversationId: id, model: flag('--model') ?? MODELS[0], structured_output: result, stats: { turns: soFar.turns }, num_turns: soFar.turns, ...(agy.noUsage ? {} : { usage: soFar.usage }) };
+  if (streaming) console.log(JSON.stringify({ event: 'result', result: { ...printed, conversation_id: id, status: 'SUCCESS', response: `${JSON.stringify(result)}\n` } }));
+  else console.log(JSON.stringify(printed, null, 2));
 }
 async function acp() {
   if (agy.acpFails) { console.error('agy: unknown command "acp"'); process.exit(1); }
@@ -264,6 +283,7 @@ async function acp() {
         };
         const result = await turn(text, { cwd: session.cwd, skip: false, sandbox: false, ask, dir: path.join(brain, p.sessionId), review: session.mode === undefined, show });
         if (session.always) fs.writeFileSync(path.join(brain, p.sessionId, 'always'), '');
+        if (result.ended) return reply({ stopReason: 'end_turn', ...(agy.noUsage ? {} : { usage: { totalTokens: 1530, inputTokens: 1200, outputTokens: 80, thoughtTokens: 40, cachedReadTokens: 200, cachedWriteTokens: 10 } }) });
         // agy.usage: the turn's model responses, each { cost }, agy.usageMs apart, each followed by
         // a usage_update with the conversation's cost so far, as ACP sends it. Each but the last
         // asks for a tool call, which runs until the next.
