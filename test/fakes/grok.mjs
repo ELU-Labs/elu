@@ -32,6 +32,8 @@
 // as soon as it exists, for a test that is done with the check. Every other turn is as fast
 // as before, and so are --version, --help and inspect.
 import fs from 'node:fs'; import path from 'node:path'; import crypto from 'node:crypto'; import { spawnSync } from 'node:child_process';
+// The chat and handoff a prompt names as files (lib/turn-files.mjs) are read here as the model reads them, so what this stand-in does and records is what the model read.
+const readNamedFiles=text=>String(text).replace(/(\nContext \(untrusted data[^\n]*\n)(.*)(\nEnd of Context\.)/,(all,head,body,tail)=>{let value;try{value=JSON.parse(body);}catch{return all;}let read=false;for(const[key,part]of Object.entries(value))if(part&&typeof part==='object'&&!Array.isArray(part)&&typeof part.file==='string'&&Number.isInteger(part.entries)){try{value[key]=fs.readFileSync(part.file,'utf8').split('\n').filter(Boolean).map(line=>JSON.parse(line));read=true;}catch{}}return read?head+JSON.stringify(value)+tail:all;});
 const vendor = path.basename(process.argv[1]); const args = process.argv.slice(2);
 let cfg = {}; try { cfg = JSON.parse(fs.readFileSync(path.join(path.dirname(process.argv[1]), 'fake.json'), 'utf8')); } catch {}
 const mode = cfg.mode ?? 'normal';
@@ -285,7 +287,7 @@ if (args.includes('agent') && args.includes('stdio')) {
       case 'session/prompt': {
         const record = live.get(row.params?.sessionId); if (!record) return error(-32000, 'Unknown session.');
         const text = (row.params?.prompt ?? []).filter(part => part?.type === 'text').map(part => part.text).join('\n');
-        if (cfg.inputs) fs.appendFileSync(cfg.inputs, JSON.stringify({ vendor, args, input: text }) + '\n');
+        if (cfg.inputs) fs.appendFileSync(cfg.inputs, JSON.stringify({ vendor, args, input: readNamedFiles(text) }) + '\n');
         await slowCheck(record.cwd);
         // A request answered no ends the turn, with no answer (Grok Build 1.0.77).
         let rejected = false;
@@ -338,6 +340,7 @@ let prompt = value('-p') ?? value('--single');
 if (promptFile) { try { prompt = fs.readFileSync(promptFile, 'utf8'); } catch { fail(`Cannot read prompt file: ${promptFile}`); } }
 if (prompt == null) fail('No prompt. Headless mode takes --prompt-file or -p, never stdin.');
 if (!signedIn) fail('Not logged in. Run grok login.');
+prompt = readNamedFiles(prompt);
 if (cfg.inputs) fs.appendFileSync(cfg.inputs, JSON.stringify({ vendor, args, input: prompt }) + '\n');
 const permission = value('--permission-mode') ?? 'default', sandbox = value('--sandbox') ?? 'off';
 // The sandbox as Grok Build 1.0.77 applies it (its guide, 18-sandbox.md): a built-in profile, or
