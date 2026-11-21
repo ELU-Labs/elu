@@ -9,7 +9,7 @@ import { tasks, projectMark, taskDir } from '../lib/state.mjs';
 import { compile as claude, parse as parseClaude } from '../lib/adapters/claude.mjs';
 import { defaultConfig, parseConfig, validateConfig } from '../lib/config.mjs';
 import { serverNote, sweepServers, writeServers, ADD_NOTE } from '../lib/mcp.mjs';
-import { keepAwake } from '../lib/awake.mjs';
+import { forgetHold, holdAwake, keepAwake } from '../lib/awake.mjs';
 import { memoryFolder } from '../lib/memory.mjs';
 
 function environment(t, values) {
@@ -204,6 +204,24 @@ test('caffeinate runs while there is work and stops when there is none', t => {
   assert.equal(keepAwake(false, options), false); assert.deepEqual(stopped, [process.pid]);
   assert.equal(fs.existsSync(path.join(folder, 'elu-code', 'caffeinate.json')), false);
   assert.equal(keepAwake(true, { ...options, platform: 'linux' }), false, 'only where caffeinate exists');
+});
+
+// The owner's report: sessions ran, and his Mac went to sleep. The shared caffeinate was stopped
+// in the middle of a turn and started again 22 s later; his Mac sleeps after a minute idle.
+test('the conductor holds a caffeinate of its own while its agents work: one that ends with it, and that stopping the shared one leaves alone', t => {
+  const folder = temp(t); environment(t, { XDG_CONFIG_HOME: folder }); forgetHold(); t.after(forgetHold);
+  const started = [], stopped = [], start = (bin, args) => { started.push(args); return { pid: 7000 + started.length, unref() {} }; };
+  const options = { platform: 'darwin', bin: process.execPath, pid: 4242, start, stop: pid => stopped.push(pid) };
+  // -w: caffeinate ends when the conductor does, however it ends, so none outlives it.
+  assert.equal(holdAwake(true, options), true); assert.deepEqual(started, [['-i', '-w', '4242']]);
+  assert.equal(holdAwake(true, options), true); assert.equal(started.length, 1, 'one for the conductor');
+  // A terminal that read no work stops the shared one: the conductor's is not it.
+  const shared = { ...options, start: (bin, args) => { started.push(args); return { pid: process.pid, unref() {} }; } };
+  assert.equal(keepAwake(true, shared), true); assert.equal(keepAwake(false, shared), false);
+  assert.deepEqual(stopped, [process.pid], 'only the shared one stopped');
+  assert.equal(holdAwake(true, options), true); assert.equal(started.length, 2, 'the conductor\'s still holds');
+  assert.equal(holdAwake(false, options), false); assert.deepEqual(stopped, [process.pid, 7001]);
+  assert.equal(holdAwake(true, { ...options, platform: 'linux' }), false, 'only where caffeinate exists');
 });
 
 test('the lead gets the repositories in home, most recently used first, without worktrees or dependencies', t => {

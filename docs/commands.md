@@ -41,7 +41,7 @@ task's or a bot's: ELU removes it with the last one, also while ELU is closed, a
 a systemd user timer, which runs while you are logged in; `loginctl enable-linger` keeps it
 running after you log out. On macOS, while an agent works or a schedule is on, ELU
 stops the Mac from going to sleep on its own (`caffeinate -i`); the display can still
-sleep. In the Sessions tab a schedule is the session it runs, marked `◷`, or a row under
+sleep. A closed lid, or a battery that runs out, still puts the Mac to sleep. In the Sessions tab a schedule is the session it runs, marked `◷`, or a row under
 Queued until it first runs (under Recent while paused). Its Schedule tab (`t`, or a click on
 the name) shows when it runs, the next run, its message and its mode, and changes them for
 the next run; there `r` runs it now, `p` pauses it and `x` deletes it. A new run archives the schedule's earlier ones, as `c`
