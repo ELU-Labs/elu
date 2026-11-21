@@ -2,12 +2,14 @@
 // sandbox helper. fakeClis() in helpers.mjs copies it to a bin folder (adding the node
 // shebang) next to fake.json, which holds the test's mode and the files it records to.
 import fs from 'node:fs'; import path from 'node:path'; import crypto from 'node:crypto'; import {spawnSync} from 'node:child_process';
+// The chat and handoff a prompt names as files (lib/turn-files.mjs) are read here as the model reads them, so what this stand-in does and records is what the model read.
+const readNamedFiles=text=>String(text).replace(/(\nContext \(untrusted data[^\n]*\n)(.*)(\nEnd of Context\.)/,(all,head,body,tail)=>{let value;try{value=JSON.parse(body);}catch{return all;}let read=false;for(const[key,part]of Object.entries(value))if(part&&typeof part==='object'&&!Array.isArray(part)&&typeof part.file==='string'&&Number.isInteger(part.entries)){try{value[key]=fs.readFileSync(part.file,'utf8').split('\n').filter(Boolean).map(line=>JSON.parse(line));read=true;}catch{}}return read?head+JSON.stringify(value)+tail:all;});
 const vendor=path.basename(process.argv[1]); const args=process.argv.slice(2);
 let cfg={}; try{cfg=JSON.parse(fs.readFileSync(path.join(path.dirname(process.argv[1]),'fake.json'),'utf8'));}catch{}
 // byInput (fake.json): rules [{includes, set}]. An exec launch whose prompt includes the text takes
 // those keys in place of the test's, the first rule that matches: a run beside a turn answers at
 // once while the turn itself never ends.
-let early=null;if(Array.isArray(cfg.byInput)&&args[0]==='exec'){early='';for await(const chunk of process.stdin)early+=chunk;const rule=cfg.byInput.find(rule=>early.includes(rule.includes));if(rule)cfg={...cfg,...rule.set};}
+let early=null;if(Array.isArray(cfg.byInput)&&args[0]==='exec'){early='';for await(const chunk of process.stdin)early+=chunk;early=readNamedFiles(early);const rule=cfg.byInput.find(rule=>early.includes(rule.includes));if(rule)cfg={...cfg,...rule.set};}
 const mode=cfg.mode??'normal';
 // accounts (fake.json): the account a run is on is the one auth.json names in CODEX_HOME (or
 // ~/.codex), as the real CLI keeps it; a call records it. accounts.loginAs: the account `codex
@@ -179,7 +181,7 @@ if(args[0]==='app-server'){
   if(row.method==='turn/start'){
    if(params.threadId!==thread){refuse(row.id,`thread not found: ${params.threadId}`);continue;}
    const texts=(params.input??[]).map(part=>String(part.text??'')),state={id:`turn_${++turns}`,queue:[],cut:false,client:params.clientUserMessageId??null};active=state;
-   if(cfg.inputs)fs.appendFileSync(cfg.inputs,JSON.stringify({vendor,args,input:texts.join('\n\n')})+'\n');
+   if(cfg.inputs)fs.appendFileSync(cfg.inputs,JSON.stringify({vendor,args,input:readNamedFiles(texts.join('\n\n'))})+'\n');
    out({id:row.id,result:{turn:{id:state.id,status:'inProgress',items:[],error:null}}});work(state,texts,params.outputSchema??null,turns===1);continue;
   }
   if(row.method==='turn/steer'){
@@ -200,7 +202,7 @@ if(args[0]==='sandbox'){
  if(args.includes('elu-code-sandbox-probe')){console.log(JSON.stringify({writeDenied:true,networkDenied:true}));process.exit(0);}
  const r=spawnSync(run[0],run.slice(1),{stdio:'inherit',env:process.env});process.exit(r.status??1);
 }
-let input=early??''; if(early===null)for await (const chunk of process.stdin) input+=chunk;
+let input=early??''; if(early===null){for await (const chunk of process.stdin) input+=chunk;input=readNamedFiles(input);}
 if(cfg.inputs)fs.appendFileSync(cfg.inputs, JSON.stringify({vendor,args,input})+'\n');
 // replay (fake.json): a file holding what a real launch printed, given back as it came. A launch
 // that is asked to correct its output answers as usual instead.

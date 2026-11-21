@@ -3,6 +3,8 @@
 // test's mode and the files it records to. Without fake.json it behaves as a signed-in
 // 2.1.319 that records nothing.
 import fs from 'node:fs'; import path from 'node:path'; import readline from 'node:readline'; import crypto from 'node:crypto'; import { createRequire } from 'node:module';
+// The chat and handoff a prompt names as files (lib/turn-files.mjs) are read here as the model reads them, so what this stand-in does and records is what the model read.
+const readNamedFiles=text=>String(text).replace(/(\nContext \(untrusted data[^\n]*\n)(.*)(\nEnd of Context\.)/,(all,head,body,tail)=>{let value;try{value=JSON.parse(body);}catch{return all;}let read=false;for(const[key,part]of Object.entries(value))if(part&&typeof part==='object'&&!Array.isArray(part)&&typeof part.file==='string'&&Number.isInteger(part.entries)){try{value[key]=fs.readFileSync(part.file,'utf8').split('\n').filter(Boolean).map(line=>JSON.parse(line));read=true;}catch{}}return read?head+JSON.stringify(value)+tail:all;});
 const require=createRequire(import.meta.url);
 const vendor=path.basename(process.argv[1]); const args=process.argv.slice(2);
 let cfg={}; try{cfg=JSON.parse(fs.readFileSync(path.join(path.dirname(process.argv[1]),'fake.json'),'utf8'));}catch{}
@@ -151,6 +153,7 @@ else for await (const chunk of process.stdin) input+=chunk;
 // stdinLimit (fake.json): input over that many characters is refused before anything starts,
 // as the real CLI refuses piped input over 10MB: one line on stderr, nothing on stdout, exit 1.
 if(typeof cfg.stdinLimit==='number'&&input.length>cfg.stdinLimit){console.error('Error: piped stdin input exceeds 10MB. Pass large content as a file path in your prompt instead.');process.exit(1);}
+input=readNamedFiles(input);
 if(cfg.inputs)fs.appendFileSync(cfg.inputs, JSON.stringify({vendor,args,input})+'\n');
 // hold, or accounts.hold (fake.json): while that file is there, a run waits before it answers.
 {const hold=cfg.hold??cfg.accounts?.hold;if(hold)while(fs.existsSync(hold))await new Promise(resolve=>setTimeout(resolve,20));}

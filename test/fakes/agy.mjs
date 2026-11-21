@@ -52,6 +52,8 @@
 // new file moved over whatever is there. A write that cannot be made ends the sign-in with
 // "failed to write token to file" (agy 1.5.8's own words for it).
 import fs from 'node:fs'; import path from 'node:path'; import crypto from 'node:crypto'; import readline from 'node:readline'; import { spawnSync } from 'node:child_process';
+// The chat and handoff a prompt names as files (lib/turn-files.mjs) are read here as the model reads them, so what this stand-in does and records is what the model read.
+const readNamedFiles=text=>String(text).replace(/(\nContext \(untrusted data[^\n]*\n)(.*)(\nEnd of Context\.)/,(all,head,body,tail)=>{let value;try{value=JSON.parse(body);}catch{return all;}let read=false;for(const[key,part]of Object.entries(value))if(part&&typeof part==='object'&&!Array.isArray(part)&&typeof part.file==='string'&&Number.isInteger(part.entries)){try{value[key]=fs.readFileSync(part.file,'utf8').split('\n').filter(Boolean).map(line=>JSON.parse(line));read=true;}catch{}}return read?head+JSON.stringify(value)+tail:all;});
 const args = process.argv.slice(2);
 let cfg = null; try { cfg = JSON.parse(fs.readFileSync(path.join(path.dirname(process.argv[1]), 'fake.json'), 'utf8')); } catch { /* Not installed as a test CLI. */ }
 if (!cfg) { console.error('fake agy: not installed as a test CLI (no fake.json beside it)'); process.exit(2); }
@@ -210,7 +212,7 @@ async function headless() {
   const streamed = flag('--input-format') === 'stream-json';
   if (streamed && !streaming) { console.error('error: --input-format stream-json requires --output-format stream-json'); process.exit(1); }
   const messages = streamed ? raw.split('\n').filter(line => line.trim()).map(line => { try { const row = JSON.parse(line); return row?.event === 'user' && typeof row.message?.content === 'string' ? row.message.content : null; } catch { return null; } }).filter(text => text !== null) : [];
-  const input = messages.join('\n');
+  const input = readNamedFiles(messages.join('\n'));
   if (cfg.inputs) fs.appendFileSync(cfg.inputs, JSON.stringify({ vendor: 'agy', args, input }) + '\n');
   const text = `${prompt}\n${input}`, cwd = process.cwd(), conversation = flag('--conversation'), id = conversation ?? crypto.randomUUID(), dir = path.join(brain, id);
   if (conversation && !fs.existsSync(dir)) { console.error(`conversation not found: ${conversation}`); process.exit(1); }
@@ -260,7 +262,7 @@ async function acp() {
       case 'session/prompt': {
         const session = sessions.get(p.sessionId); if (!session) return fail(-32602, 'unknown session');
         const text = (p.prompt ?? []).filter(block => block?.type === 'text').map(block => block.text).join('\n');
-        if (cfg.inputs) fs.appendFileSync(cfg.inputs, JSON.stringify({ vendor: 'agy', args, input: text }) + '\n');
+        if (cfg.inputs) fs.appendFileSync(cfg.inputs, JSON.stringify({ vendor: 'agy', args, input: readNamedFiles(text) }) + '\n');
         const change = value => send({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: p.sessionId, update: value } });
         const update = chunk => change({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: chunk } });
         // Its thought and each tool call go out as session updates, as ACP sends them: a call
