@@ -292,6 +292,19 @@ test('in Full access ~ is a mirror of the owner\'s home with the workspace\'s ow
   assert.deepEqual(his(), before, 'his own ~/.gemini and ~/.claude were never written');
 });
 
+// Antigravity (1.5.13 and 1.5.14) keeps the first 191,580 bytes of a prompt and runs on them, exit 0, as if
+// that were all: a review that pasted a change of 460 KB was given a part of the change and said
+// it was blocked. A prompt it would cut is refused before Antigravity starts, as too long, as
+// the vendors whose model says so are: the review then gives the bot less (lib/runner.mjs).
+test('a prompt longer than Antigravity reads is refused as too long before it starts; one that fits runs', async t => {
+  const dir = home(t), ws = repo(dir), fake = install(dir), schemaFile = schemaAt(dir), calls = path.join(dir, 'calls.jsonl');
+  const go = prompt => agy.run({ bin: fake.bin, logFile: path.join(dir, `run-${crypto.randomUUID()}.log`), timeoutSeconds: 60, relay: false, cwd: ws, protectedPaths: ['.git'], commonDir: path.join(ws, '.git'), schemaFile, session: crypto.randomUUID(), mode: 'locked', role: reader, prompt });
+  await assert.rejects(go(`Review this.\n${'x'.repeat(agy.PROMPT_BYTES)}`), error => error.details?.cause === 'too-long' && /reads only the first 191,580 bytes of a prompt, and this one is 191,593 bytes\./.test(error.message));
+  assert.equal(fs.existsSync(calls), false, 'Antigravity never started');
+  const fits = await go(`Reply with the summary "fits".\n${'x'.repeat(150000)}`);
+  assert.equal(fits.result.summary, 'fits'); assert.equal(fs.readFileSync(calls, 'utf8').trim().split('\n').length, 1);
+});
+
 test('over ACP each plan update is handed on as it comes, and reads as subtasks while the turn still runs', async t => {
   const dir = home(t), ws = repo(dir), fake = install(dir), schemaFile = schemaAt(dir), gate = path.join(dir, 'go-on'), settings = path.join(dir, 'bin', 'fake.json');
   fs.writeFileSync(settings, JSON.stringify({ ...JSON.parse(fs.readFileSync(settings, 'utf8')), live: gate }));
