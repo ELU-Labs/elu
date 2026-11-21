@@ -498,18 +498,16 @@ test('every round of a review given excerpts says so, the must-fix round and the
   assert.deepEqual(shownOf(f, task, 'critic'), [`1 must-fix:\n- Handle the edge case.\n${less}`, `Passed.\n${less}`]);
 });
 
-test('the chat says when a bot answered the owner from excerpts of the edits because its model refused them whole', async t => {
+test('a bot of any vendor answers from the change files when its model would refuse the edits pasted whole: one turn, nothing given less', async t => {
   const f = bigChange(t, 'normal', { tooLong: 200000, tooLongOn: ['Review as @', 'You are @critic, a bot in a chat'] });
   const ready = await f.controller.ask('Normalize coupon codes', null, { bots: ['critic'] }).finished;
   assert.equal(ready.state, 'ready', JSON.stringify(ready.error));
   const answered = await f.controller.ask('why is it uppercase?', ready.id, { bot: 'critic' }).finished;
   const chats = f.inputs('codex').filter(row => row.input.includes('You are @critic, a bot in a chat')).map(row => row.input);
-  assert.equal(chats.length, 2, 'the whole edits refused, then the excerpts'); assert.ok(chats[1].includes('"lines":"4851-5155 of 8005"'));
-  const [less, reply] = answered.messages.slice(-2);
-  assert.deepEqual({ text: less.text, bot: less.bot, quiet: less.quiet }, { text: "This change is too large for @critic's model, so it answered from src/big.mjs as excerpts.", bot: 'critic', quiet: true });
+  assert.equal(chats.length, 1, 'nothing refused'); assert.ok(chats[0].includes("The session's change is not pasted here: read it yourself"));
+  const reply = answered.messages.at(-1);
   assert.equal(reply.bot, 'critic'); assert.notEqual(reply.quiet, true);
-  // The line is for the owner: the agent reads the bot's answer, never ELU's line about it.
-  assert.equal(shownOf(f, answered, 'critic').at(-2), less.text);
+  assert.ok(!answered.messages.some(row => /too large for @critic/.test(String(row.text))), 'the chat has no line about less');
 });
 
 // A bot on Claude Code reads the session's edits itself, as it reads any repository: nothing of
@@ -558,19 +556,20 @@ test('the files a bot reads hold the whole diff, every changed file with its siz
   assert.ok(!fs.readFileSync(read.context.files, 'utf8').includes(SECRET), 'a secret is listed by path, never read');
 });
 
-// A bot of another vendor is given the edits as before, but a file whose name may hold a
-// secret is named, never pasted.
-test('a bot of another vendor is given the edits pasted, with an ignored secret by name only', async t => {
+// A bot of another vendor reads the edits itself too, from files in its working folder, which it
+// reads in Read only: nothing of them is pasted, a secret's file included.
+test('a bot of another vendor reads the edits from files in its working folder, and nothing of them is pasted', async t => {
   const f = bigChange(t, 'normal');
   const ready = await f.controller.ask('Normalize coupon codes', null, { bots: ['critic'] }).finished;
   fs.writeFileSync(path.join(ready.worktree, '.env'), `${SECRET}\n`);
   await f.controller.ask('why is it uppercase?', ready.id, { bot: 'critic' }).finished;
   const chats = f.inputs('codex').filter(row => row.input.includes('You are @critic, a bot in a chat')).map(row => row.input);
   assert.equal(chats.length, 1);
-  const { source } = contextOf(chats[0]);
-  assert.deepEqual(source.files.find(row => row.path === '.env'), { path: '.env', content: null });
-  assert.ok(source.files.find(row => row.path === 'src/big.mjs').content.includes(ADDED), 'the change is still pasted whole');
-  assert.ok(!chats[0].includes(SECRET));
+  const { source, change } = contextOf(chats[0]);
+  assert.equal(source, undefined, 'no file is pasted'); assert.equal(path.basename(change.diff), 'change.diff');
+  assert.ok(change.diff.startsWith(path.join(fs.realpathSync(ready.worktree), '.elu-code', 'tmp')), 'in its working folder');
+  assert.ok(!chats[0].includes(ADDED) && !chats[0].includes(SECRET));
+  assert.equal(fs.existsSync(path.dirname(change.diff)), false, 'the folder is gone with the turn');
 });
 
 test('the line names at most two cut files, and says nothing when the bot had the change whole', () => {
