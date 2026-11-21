@@ -53,8 +53,9 @@ test('Codex reviewer has no shell, apps, browser, agents, user hooks, or MCP con
   const cwd = temp(t); const args = codex({ role: reviewer(), cwd, schemaFile: path.join(cwd, 'schema.json') });
   for (const expected of ['--ignore-user-config', '--ignore-rules', 'read-only', 'approval_policy="never"', 'features.shell_tool=false', 'features.unified_exec=false', 'features.apps=false', 'features.hooks=false', 'features.multi_agent=false', 'web_search="disabled"', 'mcp_servers={}']) assert.ok(args.includes(expected), expected);
   assert.equal(args.some((a) => /dangerously|bypass|--yolo/.test(a)), false);
+  // A folder's own .codex/config.toml is never read (--ignore-user-config), and the launch empties MCP servers too.
   fs.mkdirSync(path.join(cwd, '.codex')); fs.writeFileSync(path.join(cwd, '.codex/config.toml'), '[mcp_servers.example]\ncommand="false"\n');
-  assert.throws(() => codex({ role: reviewer(), cwd, schemaFile: 'schema.json' }), /MCP/);
+  assert.ok(codex({ role: reviewer(), cwd, schemaFile: 'schema.json' }).includes('mcp_servers={}'));
 });
 test('a Codex bot reads in a project folder that is not a Git repository: its read-only launch skips the repository check', (t) => {
   // Codex refuses outside a Git repository it trusts ("Not inside a trusted directory and
@@ -245,4 +246,17 @@ test('only a ChatGPT sign-in counts: an API key or no sign-in is reported as sig
     assert.equal(await signedIn({ bin: path.join(f.dir, 'codex'), cwd: parent, env: { ...process.env, PATH: f.env.PATH } }), expected, mode);
   }
   assert.equal(meta.signInHint, 'Codex: sign in with ChatGPT. Run: codex login');
+});
+
+// A project's own .codex/config.toml (MCP servers, a shell policy) once stopped every Codex bot
+// and lead in that folder, though a Codex agent never reads it: --ignore-user-config makes the
+// folder untrusted, and 0.169 then says "Untrusted project-local configuration is disabled".
+test('a Codex bot or lead runs in a folder with its own .codex/config.toml, which its launch never reads', (t) => {
+  const cwd = temp(t), schemaFile = path.join(cwd, 'schema.json');
+  fs.mkdirSync(path.join(cwd, '.codex')); fs.writeFileSync(path.join(cwd, '.codex', 'config.toml'), '[mcp_servers.notes]\nurl = "https://example.com/mcp"\n');
+  for (const [mode, role] of [['locked', reviewer()], ['ask', lead()], ['auto', lead()], ['full', lead()]]) {
+    const args = codex({ mode, role, cwd, schemaFile });
+    assert.ok(args.includes('--ignore-user-config'), `${mode} reads no project file`);
+    assert.equal(args.includes('--trust'), false, `${mode} never trusts the folder`);
+  }
 });
