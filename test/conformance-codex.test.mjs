@@ -56,6 +56,14 @@ test('Codex reviewer has no shell, apps, browser, agents, user hooks, or MCP con
   fs.mkdirSync(path.join(cwd, '.codex')); fs.writeFileSync(path.join(cwd, '.codex/config.toml'), '[mcp_servers.example]\ncommand="false"\n');
   assert.throws(() => codex({ role: reviewer(), cwd, schemaFile: 'schema.json' }), /MCP/);
 });
+test('a Codex bot reads in a project folder that is not a Git repository: its read-only launch skips the repository check', (t) => {
+  // Codex refuses outside a Git repository it trusts ("Not inside a trusted directory and
+  // --skip-git-repo-check was not specified"), and a project folder need not be one.
+  const cwd = temp(t); assert.equal(fs.existsSync(path.join(cwd, '.git')), false);
+  const args = codex({ role: reviewer(), cwd, schemaFile: path.join(cwd, 'schema.json') });
+  assert.ok(args.includes('--skip-git-repo-check'));
+  assert.deepEqual(args.slice(args.indexOf('--sandbox'), args.indexOf('--sandbox') + 2), ['--sandbox', 'read-only']);
+});
 test('stream fixtures parse; failed and unexpected tool streams cannot report done', () => {
   assert.equal(parseCodex(fixture('codex.jsonl')).result.outcome, 'done');
   assert.throws(() => parseCodex(fixture('codex.jsonl').replace('turn.completed', 'turn.failed')));

@@ -231,6 +231,7 @@
   "--ignore-user-config",
   "--ignore-rules",
   "--json",
+  "--skip-git-repo-check",
   "--sandbox",
   "read-only",
   "--cd",
