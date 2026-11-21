@@ -587,6 +587,20 @@ test('a bot that could not finish its review keeps no other bot from reviewing: 
 // The owner's report: @advisor, on Antigravity, reviewed a change of 460 KB pasted whole, and
 // Antigravity kept only the first 191,580 bytes of it. It reads the change itself, as a bot's
 // turn on the chat does: nothing is pasted, so no change is too long for it, and it is not given less.
+// The owner's report: a session stopped with "@pair changed the source tree" while @pair only
+// read. The Codex app had copied the project's .claude skills and agents into .agents and
+// .codex of the worktree, folders the project ignores, in the middle of the review.
+test('a file the project ignores, written while a bot reviews, is named by its check and the bot is not blamed; a file publishing takes still stops the review', async t => {
+  const f = setup(t, 'normal', { reviewWrites: { file: 'skills-cache/plan/SKILL.md', text: '# A copied skill\n' } });
+  fs.appendFileSync(path.join(f.root, '.gitignore'), 'skills-cache/\n'); git(f.root, ['commit', '-qam', 'Ignore copied skills']);
+  const task = await f.controller.ask('Normalize coupon codes', null, { bots: ['critic'] }).finished;
+  assert.equal(task.error ?? null, null, 'the bot is not blamed');
+  assert.ok(task.reviews.length >= 1 && task.reviews.every(review => review.role === 'bot:critic'));
+  assert.deepEqual(task.evidence.results.filter(row => row.status === 'failed').map(row => [row.name, row.details]), [['no-ignored-output', ['skills-cache/plan/SKILL.md']]]);
+  const g = setup(t, 'normal', { reviewWrites: { file: 'src/coupon.mjs', text: '// a reviewer edit\n' } });
+  await assert.rejects(g.controller.ask('Normalize coupon codes', null, { bots: ['critic'] }).finished, /@critic changed the source tree\./);
+});
+
 test('a bot on Antigravity reviews a change larger than it reads in one prompt by reading the change itself, in one run', async t => {
   const f = bigChange(t, 'normal');
   saveBot({ name: 'gem', vendor: 'agy', instructions: 'Look at the edges.' });

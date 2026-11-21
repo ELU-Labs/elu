@@ -1144,7 +1144,17 @@ test('codex lists its models as JSON: the listed ones are offered by the name --
   assert.deepEqual(first.map(row => row.name), ['big-model', 'quick-model']);
   assert.equal(await readBotModels('codex', { env: cli.env }), first, 'the second read is the first one, kept');
   assert.equal(botModels('codex', { env: cli.env }), first, 'and it is what the Model step shows from then on');
-  assert.deepEqual(cli.calls(), ['debug models --bundled'], 'asked once, for the catalog inside the binary');
+  assert.deepEqual(cli.calls(), ['debug models'], 'asked once, for the catalog the account is served');
+});
+
+// Codex 0.169.0-alpha.11.1 lists gpt-6.2-sol in the catalog it is served, and not in the one
+// inside its binary (--bundled), which ELU read before. That one is read only when the first
+// read names no model: signed out, offline, or too slow.
+test('codex is asked for the catalog it is served, and for the one inside its binary only when that names no model', async t => {
+  const cli = standIn(t, 'codex', `if (process.argv.includes('--bundled')) { ${prints(JSON.stringify(CATALOG))} } else process.exit(1);`);
+  const rows = await readBotModels('codex', { env: cli.env, ...PATIENT });
+  assert.deepEqual(rows.map(row => row.name), ['big-model', 'quick-model']);
+  assert.deepEqual(cli.calls(), ['debug models', 'debug models --bundled']);
 });
 
 test('claude names its aliases in --help: they are read from the --model entry, and the built-in names stand in when it cannot be read', async t => {
@@ -1163,7 +1173,8 @@ test('a command line that is missing, fails or is slow never holds up the Model 
   const slow = standIn(t, 'codex', `await new Promise(resolve => setTimeout(resolve, 20000)); ${prints(JSON.stringify(CATALOG))}`), started = Date.now();
   assert.deepEqual(await readBotModels('codex', { env: slow.env, timeoutMs: 300 }), []); assert.ok(Date.now() - started < 10000, 'stopped at the time limit');
   // That answer is kept too: a command line that would now list its models is not asked again.
-  slow.write(prints(JSON.stringify(CATALOG))); assert.deepEqual(await readBotModels('codex', { env: slow.env, ...PATIENT }), []); assert.ok(slow.calls().length <= 1);
+  // It was asked at most twice, once for each catalog (the one it is served, then the one inside it).
+  slow.write(prints(JSON.stringify(CATALOG))); assert.deepEqual(await readBotModels('codex', { env: slow.env, ...PATIENT }), []); assert.ok(slow.calls().length <= 2);
   const slowClaude = standIn(t, 'claude', 'await new Promise(resolve => setTimeout(resolve, 20000));');
   assert.deepEqual(await readBotModels('claude', { env: slowClaude.env, timeoutMs: 300 }), ALIASES);
   for (const vendor of ['agy', 'grok', 'constructor', '']) { const cli = standIn(t, vendor || 'none', prints(JSON.stringify(CATALOG))); assert.deepEqual(await readBotModels(vendor, { env: cli.env }), []); assert.deepEqual(botModels(vendor, { env: cli.env }), []); assert.deepEqual(cli.calls(), [], vendor); }
@@ -1182,7 +1193,7 @@ test('a vendor that takes its time to print its models does not hold the app, an
   const [first, second] = await Promise.all(reads);
   clearInterval(timer); most = Math.max(most, Date.now() - last);
   assert.deepEqual(first.map(row => row.name), ['big-model', 'quick-model']); assert.equal(second, first);
-  assert.deepEqual(slow.calls(), ['debug models --bundled'], 'one program served both reads');
+  assert.deepEqual(slow.calls(), ['debug models'], 'one program served both reads');
   assert.ok(most < 3000, `the app was held ${most} ms`);
   assert.equal(botModels('codex', { env: slow.env }), first, 'kept for the Model step');
 });

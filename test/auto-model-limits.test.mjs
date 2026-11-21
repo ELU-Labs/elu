@@ -263,7 +263,7 @@ test('the relay: a run that asked is still told of the accounts\' own limits whe
   asked.close();
 });
 
-// Codex's names between starts. The stand-in prints what `codex debug models --bundled` prints
+// Codex's names between starts. The stand-in prints what `codex debug models` prints
 // and records each call; a new start is a new process that only reads what was saved.
 const CODEX = { models: [
   { slug: 'gpt-6-astra', description: 'The most capable model.', visibility: 'list', default_reasoning_level: 'high' },
@@ -301,11 +301,11 @@ test('Codex\'s model names are saved between starts: the next start has them wit
   // The next start: the names are there before Codex is asked, and what the Model step shows
   // before its own read is as it was.
   assert.deepEqual(newStart(cli), { kept: NAMES, read: [] });
-  assert.deepEqual(cli.calls(), ['debug models --bundled'], 'the program ran once, for the first read');
+  assert.deepEqual(cli.calls(), ['debug models'], 'the program ran once, for the first read');
   // Codex is updated: the names of the release before it are not this one's.
   cli.write({ models: [{ slug: 'gpt-7-astra', description: 'Newer.', visibility: 'list' }] });
   assert.deepEqual(newStart(cli), { kept: [], read: [] });
-  assert.deepEqual(cli.calls(), ['debug models --bundled']);
+  assert.deepEqual(cli.calls(), ['debug models']);
 });
 
 test('the saved names are read as carefully as the program\'s own: a file that is not ELU\'s, or holds a name no bot could save, gives none of it', { timeout: 120000 }, async t => {

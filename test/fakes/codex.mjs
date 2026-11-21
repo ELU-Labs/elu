@@ -54,7 +54,7 @@ if(args.includes('--help')){console.log('--print --add-dir --restricted --safe-m
 // refuses (fake.json): config keys this release does not take. An exec started with one ends at
 // once with one line on stderr and nothing printed.
 {const unknown=args[0]==='exec'?(cfg.refuses??[]).find(key=>args.some(arg=>arg.startsWith(`${key}=`))):null;if(unknown){console.error(`error: unknown configuration key: ${unknown}`);process.exit(1);}}
-// `debug models --bundled` as the real CLI prints it: the catalog as JSON, one row hidden.
+// `debug models` (with or without --bundled) as the real CLI prints it: the catalog as JSON, one row hidden.
 // fake.json may carry its own rows as `models`.
 if(args[0]==='debug'&&args[1]==='models'){console.log(JSON.stringify({models:cfg.models??[{slug:'big-model',display_name:'Big Model',description:'Frontier model for the most demanding work.',visibility:'list',priority:2},{slug:'quick-model',display_name:'Quick Model',description:'Fast and affordable model for easier tasks.',visibility:'list',priority:1},{slug:'review-model',display_name:'Review Model',description:'Automatic approval review model.',visibility:'hide',priority:9}]}));process.exit(0);}
 // `login status` as the real CLI prints it: a ChatGPT sign-in, an API key (exit 0 too, with a masked key), or nothing.
@@ -224,6 +224,8 @@ const session=resumed??(turnUse?newThread():'12345678-1234-4234-8234-123456789ab
 if(mode==='review-block'||mode==='review-fix'&&!input.includes('Handled the edge case.'))result.comments=[{id:'R1',severity:'must_fix',body:'Handle the edge case.'}];
 // reviewBlocked (fake.json): a review whose prompt holds this text could not be done, as a model that could not read the change says.
 if(typeof cfg.reviewBlocked==='string'&&input.includes(cfg.reviewBlocked)){result.outcome='blocked';result.summary='Blocked: the change I was given was cut off.';}
+// reviewWrites (fake.json): a file written into the folder while a review runs, as another program may write it.
+if(cfg.reviewWrites&&input.includes('Review as @')){const {file,text}=cfg.reviewWrites;fs.mkdirSync(file.includes('/')?file.slice(0,file.lastIndexOf('/')):'.',{recursive:true});fs.appendFileSync(file,text);}
 console.log(JSON.stringify({type:'thread.started',thread_id:session}));
 if(cfg.accounts?.lapsed===true||cfg.accounts?.lapsed?.includes?.(account)){const message='Your access token could not be refreshed because your refresh token has expired. Please log out and sign in again.';console.log(JSON.stringify({type:'turn.started'}));console.log(JSON.stringify({type:'error',message}));console.log(JSON.stringify({type:'turn.failed',error:{message}}));process.exit(1);}
 // slow: a new thread works for half a minute before it answers, as a long turn does; a resumed

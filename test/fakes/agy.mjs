@@ -65,9 +65,13 @@ const signedOut = () => agy.storage === 'file' ? !fs.existsSync(tokenFile()) : a
 async function signIn() {
   const url = `https://accounts.google.com/o/oauth2/auth?client_id=fake-client&state=${crypto.randomUUID().slice(0, 8)}`, seconds = agy.authSeconds ?? 60;
   process.stderr.write(`Authentication required. Please visit the URL to log in:\n  ${url}\n\nWaiting for authentication (timeout ${seconds}s)...\nOr, paste the authorization code here and press Enter:\n`);
+  // It opens the link as agy does, with an opener beside it in its own folder only, which a test
+  // may put there: never the computer's own open or xdg-open, which opened the owner's browser
+  // on Google's sign-in page each time the tests ran.
   for (const opener of ['open', 'xdg-open']) {
-    const found = (process.env.PATH ?? '').split(path.delimiter).map(dir => path.join(dir, opener)).find(file => { try { fs.accessSync(file, fs.constants.X_OK); return true; } catch { return false; } });
-    if (found) { spawnSync(found, [url], { stdio: 'ignore' }); break; }
+    const file = path.join(path.dirname(process.argv[1]), opener);
+    let found = false; try { fs.accessSync(file, fs.constants.X_OK); found = true; } catch { found = false; }
+    if (found) { spawnSync(file, [url], { stdio: 'ignore' }); break; }
   }
   const code = agy.code ?? '4/0AeanS0b-fake-code';
   const signed = await new Promise(resolve => {
