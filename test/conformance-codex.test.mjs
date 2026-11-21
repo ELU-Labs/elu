@@ -123,6 +123,10 @@ test('argv per mode: ask and auto run the elu_ask profile with a sandboxed shell
   // full: no sandbox, no profile, web search on.
   assert.equal(setting(full, 'sandbox_mode'), '"danger-full-access"'); assert.equal(setting(full, 'approval_policy'), '"never"'); assert.equal(setting(full, 'web_search'), '"live"');
   assert.equal(setting(full, 'default_permissions'), undefined); assert.equal(profileOf(full), undefined); assert.equal(setting(full, 'approvals_reviewer'), undefined);
+  // Full access lets a lead run about 30 helpers at once; the other modes run none.
+  assert.equal(setting(full, 'agents.max_concurrent_threads_per_session'), '32');
+  for (const mode of ['ask', 'auto']) assert.equal(setting(codex({ mode, role: lead(), cwd, schemaFile }), 'agents.max_concurrent_threads_per_session'), undefined, mode);
+  assert.equal(setting(codex({ role: reviewer(), cwd, schemaFile }), 'agents.max_concurrent_threads_per_session'), undefined, 'locked');
   // An answer turn (read role) keeps the profile read-only, the named folders included.
   const answer = codex({ mode: 'ask', role: { ...lead(), access: 'read', writablePaths: [] }, cwd, schemaFile, folders: [folder], commonDir: common });
   assert.ok(profileOf(answer).startsWith('{extends=":read-only", filesystem={'), profileOf(answer));
