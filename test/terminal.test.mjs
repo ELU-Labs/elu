@@ -1436,7 +1436,7 @@ test('the Model step lists the models the vendor names and narrows them as you t
   const rows = () => dialogRows(v, 'Bot @sec'), pick = index => { dialogList(v, 'Bot @sec').select(index); v.input.write('\r'); };
   const HINT = 'A model claude knows by name. Empty uses Claude Code\'s own.', ALL = ['> fable   the latest Fable model', '  opus    the latest Opus model', '  sonnet  the latest Sonnet model'];
   const calls = () => fs.readFileSync(p.calls, 'utf8').trim().split('\n').map(JSON.parse);
-  assert.ok(!calls().some(row => ['--help', 'debug models --bundled'].includes(row.args.join(' '))), 'starting the app asks no vendor for its models');
+  assert.ok(!calls().some(row => ['--help', 'debug models'].includes(row.args.join(' '))), 'starting the app asks no vendor for its models');
   await readModels(); await send(v, '/bots'); await until(() => v.current.view === 'bots', 'Bots');
   panels.botsList.focus(); v.input.write('n'); await dialog(v, 'New bot', 'sec'); await until(() => modal(v, 'Runs on'), 'vendor list'); v.input.write('\r');
   // Nothing typed: every option, with the mark on the first.
@@ -1511,7 +1511,7 @@ test('a long list of models is clipped to the dialog with a count of the rest, a
   await until(() => editor(v, 'Instructions · @pages').getValue() === 'Check the pages.', 'typed'); v.input.write('\x13');
   await until(() => getBot('pages')?.model === 'some-model', 'saved as typed');
   const calls = fs.readFileSync(p.calls, 'utf8').trim().split('\n').map(JSON.parse);
-  assert.equal(calls.filter(row => row.vendor === 'codex' && row.args.join(' ') === 'debug models --bundled').length, 1); assert.ok(!calls.some(row => row.vendor === 'agy'), 'agy never ran');
+  assert.equal(calls.filter(row => row.vendor === 'codex' && row.args.join(' ') === 'debug models').length, 1); assert.ok(!calls.some(row => row.vendor === 'agy'), 'agy never ran');
 });
 
 test('a model name that cannot be saved is refused at the Model step, so a long paste of instructions saves', async t => {
@@ -2725,7 +2725,7 @@ test('/model never holds the screen while a vendor prints its models', { timeout
   fs.writeFileSync(file, script.replace(marker, `${marker}await new Promise(resolve=>setTimeout(resolve,3000));`), { mode: 0o755 });
   const v = await view(t, { repo: p.repo }), ask = v.current.panels.ask, palette = v.current.panels.palette;
   const rows = () => palette.hidden ? [] : palette.items.map(item => item.getText().split(/\s+/)[0]);
-  const asked = () => fs.readFileSync(p.calls, 'utf8').trim().split('\n').map(JSON.parse).filter(row => row.args.join(' ') === 'debug models --bundled').length;
+  const asked = () => fs.readFileSync(p.calls, 'utf8').trim().split('\n').map(JSON.parse).filter(row => row.args.join(' ') === 'debug models').length;
   await until(() => ask.__listener, 'default input');
   // The longest the event loop went without running a timer: what the screen froze for.
   let most = 0, last = Date.now(); const timer = setInterval(() => { const now = Date.now(); most = Math.max(most, now - last); last = now; }, 20);
