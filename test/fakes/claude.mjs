@@ -432,6 +432,8 @@ if(edit&&cfg.install===true&&!fs.existsSync('node_modules/pkg')){
  fs.mkdirSync('coupon.egg-info',{recursive:true});fs.writeFileSync('coupon.egg-info/PKG-INFO','Name: coupon\n');
  fs.writeFileSync('.coverage',Buffer.from([0,1,2]));fs.mkdirSync('htmlcov',{recursive:true});fs.writeFileSync('htmlcov/index.html','<p>100%</p>\n');
 }
+// generated (fake.json): a tool's generated folder the project ignores, as a project's generated agent skills.
+if(edit&&cfg.generated===true){fs.mkdirSync('skills-cache/plan',{recursive:true});fs.writeFileSync('skills-cache/plan/SKILL.md','# A generated skill\n'.repeat(4000));}
 if(edit&&cfg.install==='link'){try{fs.lstatSync('tool-link');}catch{fs.symlinkSync('src/coupon.mjs','tool-link');}}
 // insert (fake.json): { file, at, text }, lines an editing turn also puts in that file after line at, once.
 if(edit&&cfg.insert){const {file,at,text}=cfg.insert;const lines=fs.readFileSync(file,'utf8').split('\n');if(!lines.includes(text.split('\n')[0]))fs.writeFileSync(file,[...lines.slice(0,at),text,...lines.slice(at)].join('\n'));}

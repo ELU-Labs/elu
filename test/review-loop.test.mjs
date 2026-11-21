@@ -558,6 +558,50 @@ test('the files a bot reads hold the whole diff, every changed file with its siz
 
 // A bot of another vendor reads the edits itself too, from files in its working folder, which it
 // reads in Read only: nothing of them is pasted, a secret's file included.
+// The owner's report: @advisor reviewed a session and saw none of its change. A tool's
+// generated folder the project ignores (.agents/skills, 1.5 MB) sorted first in the files
+// pasted, ahead of the change, and its model kept only the start of the prompt.
+test('a review holds what the pull request would: a generated folder the project ignores is no file of it, and its check still names it', async t => {
+  const f = bigChange(t, 'normal', { generated: true });
+  fs.appendFileSync(path.join(f.root, '.gitignore'), 'skills-cache/\n'); git(f.root, ['commit', '-qam', 'Ignore generated skills']);
+  const task = await f.controller.ask('Normalize coupon codes', null, { bots: ['reviewer'] }).finished;
+  assert.deepEqual(taskChanges(task).ignored, ['skills-cache/plan/SKILL.md']);
+  assert.deepEqual(task.evidence.results.filter(row => row.status === 'failed').map(row => row.name), ['no-ignored-output']);
+  const reviews = reviewOf(f.inputs('claude'), 'reviewer');
+  assert.ok(reviews.length >= 1);
+  for (const review of reviews) {
+    assert.deepEqual(contextOf(review).source.files.map(row => row.path), ['src/big.mjs', 'src/coupon.mjs']);
+    assert.ok(!review.includes('A generated skill'));
+  }
+});
+
+// The owner's report: @advisor could not read the change and said it was blocked, and the
+// session's other bot never reviewed. Each bot reviews; the session then stops as that one said.
+test('a bot that could not finish its review keeps no other bot from reviewing: each reviews, then the session stops as the first said', async t => {
+  const f = setup(t, 'normal', { reviewBlocked: 'Review as @critic' });
+  const task = await f.controller.ask('Normalize coupon codes', null, { bots: ['critic', 'reviewer'] }).finished;
+  assert.deepEqual(task.reviews.map(review => [review.role, review.result.outcome]), [['bot:critic', 'blocked'], ['bot:reviewer', 'done']]);
+  assert.equal(task.state, 'blocked'); assert.equal(task.result.summary, 'Blocked: the change I was given was cut off.');
+});
+
+// The owner's report: @advisor, on Antigravity, reviewed a change of 460 KB pasted whole, and
+// Antigravity kept only the first 191,580 bytes of it. It reads the change itself, as a bot's
+// turn on the chat does: nothing is pasted, so no change is too long for it, and it is not given less.
+test('a bot on Antigravity reviews a change larger than it reads in one prompt by reading the change itself, in one run', async t => {
+  const f = bigChange(t, 'normal');
+  saveBot({ name: 'gem', vendor: 'agy', instructions: 'Look at the edges.' });
+  const task = await f.controller.ask('Normalize coupon codes', null, { bots: ['gem'], permissions: 'full' }).finished;
+  assert.equal(task.state, 'ready', JSON.stringify(task.error)); assert.equal(task.reviewStatus, 'passed');
+  assert.equal(task.runs.filter(run => run.role === 'bot:gem').length, 1, 'nothing was refused');
+  const [review, ...more] = reviewOf(f.inputs('agy'), 'gem');
+  assert.deepEqual(more, []);
+  assert.ok(review.includes("The session's change is not pasted here: read it yourself") && review.includes('Read the change with your read-only tools'));
+  const { source, change } = contextOf(review);
+  assert.equal(source, undefined, 'no file is pasted'); assert.equal(path.basename(change.diff), 'change.diff');
+  assert.ok(!review.includes(ADDED)); assert.ok(Buffer.byteLength(review) < 50000);
+  assert.ok(!task.messages.some(row => /too large for @gem/.test(String(row.text))), 'the chat has no line about less');
+});
+
 test('a bot of another vendor reads the edits from files in its working folder, and nothing of them is pasted', async t => {
   const f = bigChange(t, 'normal');
   const ready = await f.controller.ask('Normalize coupon codes', null, { bots: ['critic'] }).finished;

@@ -222,6 +222,8 @@ if(schema?.properties?.subtasks){result.subtasks=cfg.subtasks??[{text:'Change no
 const resumed=args[0]==='exec'&&args[1]==='resume'?args[2]:null;
 const session=resumed??(turnUse?newThread():'12345678-1234-4234-8234-123456789abc');
 if(mode==='review-block'||mode==='review-fix'&&!input.includes('Handled the edge case.'))result.comments=[{id:'R1',severity:'must_fix',body:'Handle the edge case.'}];
+// reviewBlocked (fake.json): a review whose prompt holds this text could not be done, as a model that could not read the change says.
+if(typeof cfg.reviewBlocked==='string'&&input.includes(cfg.reviewBlocked)){result.outcome='blocked';result.summary='Blocked: the change I was given was cut off.';}
 console.log(JSON.stringify({type:'thread.started',thread_id:session}));
 if(cfg.accounts?.lapsed===true||cfg.accounts?.lapsed?.includes?.(account)){const message='Your access token could not be refreshed because your refresh token has expired. Please log out and sign in again.';console.log(JSON.stringify({type:'turn.started'}));console.log(JSON.stringify({type:'error',message}));console.log(JSON.stringify({type:'turn.failed',error:{message}}));process.exit(1);}
 // slow: a new thread works for half a minute before it answers, as a long turn does; a resumed
