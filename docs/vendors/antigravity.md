@@ -123,6 +123,13 @@ line then says `ready`, or `Full access only (c checks again)` with the step tha
 proven and why. Signed out, `c` asks first whether to sign in, then runs the check after the
 sign-in.
 
+Signed in, the Usage tab shows Antigravity's limits under its line: for each model group `agy`
+names (Gemini, Claude and GPT), its 5-hour and weekly limit, the share used and the time until
+it starts again. They come from the answer to the same read, `agy -p /usage --output-format
+json`, which the tab's usage check runs at most once a minute (and on `r`); an `agy` last read
+as signed out is not asked. Only the numbers and times are kept. `agy` names no account there,
+and its sign-in is in the keychain, which ELU does not open, so the line says `signed in`.
+
 ## The private HOME
 
 In Full access `~` is a mirror of your home, so a command finds your sign-ins where it

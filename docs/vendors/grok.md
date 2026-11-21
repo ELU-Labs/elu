@@ -55,13 +55,20 @@ project, and only Claude Code's launch keeps every read there and hides the Git 
 what Git does not track. The refusal says so.
 
 The Usage tab shows whether Grok is signed in before the check has run: it looks for
-`~/.grok/auth.json`, never opens it, and runs nothing. Its line then says
+`~/.grok/auth.json` and runs nothing for it. Its line then says
 `(grok) signed in · Full access only (c checks it)`, or `(grok) not signed in for ELU · s signs in`.
 `c` on that line runs the same check there, with each step under the line as it ends, and the
 line then says `ready`, or `Full access only (c checks again)` with the step that was not
 proven and why. Signed out, `c` asks first whether to sign in. The check's folders are made
 in the system temp folder as it is on disk: on macOS `/var` is a link to `/private/var`, and
 ELU follows a link like that one, above what it writes, and refuses one inside it.
+
+Signed in, the line names the account: the email in `~/.grok/auth.json` (or in the one `grok
+login` wrote into ELU's own Grok home), the newest sign-in's when it holds several. Nothing else
+is taken from that file, and its key never leaves it. Beside the account the tab shows what
+`grok usage` says of the plan's limit, its first line, at most once a minute (and on `r`).
+Grok Build 1.0.77 reads that only through its background service; where it cannot read it
+from the shell it says to run `/usage` inside grok, and the line says `/usage in grok shows it`.
 
 The check runs eight steps against the installed binary in a throwaway repository, with a
 planted file outside it, a local web listener and a marker command:

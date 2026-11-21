@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { temp, fakeClis, keyLike } from './helpers.mjs';
-import { claudeUsage, codexUsage, usageSnapshot, observeClaudeLog, readCodexUsage, refreshCodexUsage, personalDirectory, claudeAccount, codexAccount, readAccounts, recordAccount, refreshUsage, usageStale, usageTab } from '../lib/usage.mjs';
+import { claudeUsage, codexUsage, usageSnapshot, observeClaudeLog, readCodexUsage, refreshCodexUsage, personalDirectory, claudeAccount, codexAccount, readAccounts, recordAccount, refreshUsage, usageStale, usageTab , agyUsage, grokUsageWords, grokAccount, accountOf, GROK_USAGE_ELSEWHERE } from '../lib/usage.mjs';
 import { usageBlocks, usageDetailLines } from '../lib/terminal.mjs';
 import { readSignInsBeforeCheck, signInsUnread, withCheck } from '../lib/vendor-check.mjs';
 import { atomic } from '../lib/util.mjs';
@@ -477,4 +477,38 @@ test('the Usage tab reads Antigravity and Grok Build sign-in before their one-ti
   const checks = new Map([['grok', { running: true, lines: ['Checking Grok Build (the grok command): 8 steps, once on this machine for release 1.0.77.'], current: 'Grok Build: 2 of 8 steps, 14s so far. Proven: a read-only turn writes no file.', error: null }]]);
   assert.deepEqual(vendorLines([usageTab({ vendors: withCheck([waiting('grok')], { env }), env, now })[3]], { checks }).map(line => line.text), ['Grok Build  (grok) signed in · checking…', '            Checking Grok Build (the grok command): 8 steps, once on this', '            machine for release 1.0.77.', '            Grok Build: 2 of 8 steps, 14s so far. Proven: a read-only turn', '            writes no file.']);
   assert.ok(!calls().some(call => call.vendor === 'grok'), 'grok was never run');
+});
+test("Antigravity's /usage answer becomes a row of limits per model group, as shares used", () => {
+  const hour = 3600 * 1000, at = offset => new Date(Date.now() + offset).toISOString().replace(/\.\d+Z$/, 'Z');
+  const answer = { status: 'SUCCESS', response: 'Gemini Models\tWeekly Limit Remaining\t99%', command: { name: 'usage', data: { groups: [
+    { name: 'Gemini Models', buckets: [{ id: 'gemini-weekly', window: 'weekly', remaining_fraction: 0.9881, reset_time: at(150 * hour) }, { id: 'gemini-5h', window: '5h', remaining_fraction: 0.25, reset_time: at(4 * hour) }] },
+    { name: 'Claude and GPT models', buckets: [{ id: '3p-weekly', window: 'weekly', remaining_fraction: 1, reset_time: at(160 * hour) }, { id: '3p-5h', window: '5h', remaining_fraction: 7, reset_time: at(hour) }] },
+  ] } } };
+  const usage = agyUsage(JSON.stringify(answer));
+  assert.deepEqual(usage.models.map(row => [row.id, row.name, row.fiveHour?.usedPercent ?? null, row.weekly?.usedPercent ?? null]), [['gemini', 'Gemini', 75, 1], ['3p', 'Claude and GPT', null, 0]]);
+  assert.equal(usage.models[0].fiveHour.resetsAt, Math.floor(Date.parse(at(4 * hour)) / 1000));
+  assert.equal(agyUsage('Authentication required. Please visit the URL to log in:'), null);
+  assert.equal(agyUsage(JSON.stringify({ command: { data: { groups: [] } } })), null);
+});
+
+test("grok usage: its first line when it answers, where to look when it cannot read the plan here", () => {
+  assert.equal(grokUsageWords({ code: 0, stdout: '\n\x1b[1mSuperGrok\x1b[0m · 12% of the weekly limit used\nmore\n' }), 'SuperGrok · 12% of the weekly limit used');
+  assert.equal(grokUsageWords({ code: 1, stderr: "Error: `grok usage` can't show your plan's usage here yet. Run /usage inside grok instead.\n" }), GROK_USAGE_ELSEWHERE);
+  assert.equal(grokUsageWords({ code: 1, stderr: 'Error: not signed in' }), null);
+  assert.equal(grokUsageWords({ code: null, stdout: '', stderr: '' }), null);
+});
+
+test("Grok Build's account is the email its sign-in file names, and its key is never taken", t => {
+  const home = temp(t), key = keyLike('xai-', 'test-', 'not-a-real-key-123');
+  environment(t, { XDG_CONFIG_HOME: path.join(home, 'config') });
+  fs.mkdirSync(path.join(home, '.grok'), { recursive: true });
+  fs.writeFileSync(path.join(home, '.grok', 'auth.json'), JSON.stringify({
+    'https://auth.x.ai::older': { key, email: 'old@example.com', create_time: '2026-01-01T00:00:00Z' },
+    'https://auth.x.ai::newer': { key, email: 'owner@example.com', create_time: '2026-11-01T00:00:00Z', refresh_token: key },
+  }));
+  const account = grokAccount({ env: { HOME: home } });
+  assert.deepEqual(account, { email: 'owner@example.com', plan: null });
+  assert.equal(JSON.stringify(accountOf('grok', 'default', { env: { HOME: home } })).includes(key), false);
+  assert.equal(grokAccount({ env: { HOME: path.join(home, 'nobody') } }), null);
+  assert.equal(accountOf('agy', 'default', { env: { HOME: home } }), null);
 });
