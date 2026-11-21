@@ -16,7 +16,7 @@ import { Conductor, enqueue, peerOrigin } from '../lib/conductor.mjs';
 import { peerFile } from '../lib/peer/paths.mjs';
 import * as claude from '../lib/adapters/claude.mjs';
 import * as codex from '../lib/adapters/codex.mjs';
-import { botModels, readBotModels, codexModels, claudeModels, matchModels } from '../lib/bot-models.mjs';
+import { botModels, readBotModels, codexModels, claudeModels, matchModels, modelEfforts, vendorEfforts, fitEffort } from '../lib/bot-models.mjs';
 import { botModelProblem, botRoomProblem } from '../lib/bots.mjs';
 import { stopLine } from '../lib/stop-line.mjs';
 import { openTask, sessionTasks } from '../lib/plan.mjs';
@@ -93,12 +93,50 @@ test('a bot is saved with its defaults, and each field is checked with a line th
   assert.equal(botRuns(getBot('scout')), 'claude'); assert.equal(botRuns({ vendor: 'codex', model: 'big-model', effort: 'high' }), 'codex · big-model · high effort');
 });
 
-test('each vendor takes the effort levels its command line does', t => {
+test('each vendor takes the effort levels its command line does: ultra on Codex, up to max on Claude Code', t => {
   store(t);
-  assert.deepEqual(EFFORTS, ['low', 'medium', 'high', 'xhigh', 'max']);
-  assert.deepEqual(botEfforts('claude'), EFFORTS); assert.deepEqual(botEfforts('codex'), EFFORTS);
+  assert.deepEqual(EFFORTS, ['low', 'medium', 'high', 'xhigh', 'max', 'ultra']);
+  assert.deepEqual(botEfforts('claude'), ['low', 'medium', 'high', 'xhigh', 'max']); assert.deepEqual(botEfforts('codex'), EFFORTS);
   assert.deepEqual(botEfforts('agy'), []); assert.deepEqual(botEfforts('grok'), []); assert.deepEqual(botEfforts('cursor'), []);
   for (const effort of EFFORTS) assert.equal(saveBot({ name: 'critic', vendor: 'codex', effort, instructions: 'x' }).effort, effort);
+  assert.throws(() => saveBot({ name: 'critic', vendor: 'claude', effort: 'ultra', instructions: 'x' }), /Effort on claude is one of: low, medium, high, xhigh, max\./);
+});
+
+// A Codex catalog as 0.167.0-alpha.4.1 prints it: the efforts each model takes, as rows.
+const LEVELS = names => names.map(effort => ({ effort, description: `${effort} reasoning` }));
+const CODEX_LEVELS = { models: [
+  { slug: 'gpt-6.2-sol', description: 'Workhorse.', visibility: 'list', default_reasoning_level: 'medium', supported_reasoning_levels: LEVELS(['low', 'medium', 'high', 'xhigh', 'max', 'ultra']) },
+  { slug: 'gpt-6-luna', description: 'Fast.', visibility: 'list', default_reasoning_level: 'medium', supported_reasoning_levels: LEVELS(['low', 'medium', 'high', 'xhigh', 'max']) },
+  { slug: 'gpt-next', description: 'A level ELU has never seen.', visibility: 'list', supported_reasoning_levels: LEVELS(['minimal', 'low', 'hyper']) },
+  { slug: 'gpt-plain', description: 'No levels listed.', visibility: 'list' },
+] };
+
+test('a Codex model takes the efforts its catalog lists for it: a bot is held to them, and Auto model runs the nearest one below', async t => {
+  store(t);
+  assert.deepEqual(codexModels(JSON.stringify(CODEX_LEVELS)).map(row => [row.name, row.efforts ?? null]), [
+    ['gpt-6.2-sol', ['low', 'medium', 'high', 'xhigh', 'max', 'ultra']], ['gpt-6-luna', ['low', 'medium', 'high', 'xhigh', 'max']], ['gpt-next', ['minimal', 'low', 'hyper']], ['gpt-plain', null]]);
+  const cli = standIn(t, 'codex', prints(JSON.stringify(CODEX_LEVELS)));
+  environment(t, { PATH: cli.env.PATH });
+  // Before the list is read, every model takes what Codex takes.
+  assert.deepEqual(modelEfforts('codex', 'gpt-6-luna'), EFFORTS);
+  await readBotModels('codex', { env: { ...process.env }, ...PATIENT });
+  assert.deepEqual(modelEfforts('codex', 'gpt-6.2-sol'), EFFORTS);
+  assert.deepEqual(modelEfforts('codex', 'gpt-6-luna'), ['low', 'medium', 'high', 'xhigh', 'max']);
+  assert.deepEqual(modelEfforts('codex', 'gpt-plain'), EFFORTS, 'a model with no levels listed takes what Codex takes');
+  assert.deepEqual(modelEfforts('codex', 'not-in-the-list'), EFFORTS);
+  assert.deepEqual(modelEfforts('codex', null), EFFORTS, "the vendor's own model");
+  assert.deepEqual(vendorEfforts('codex'), [...EFFORTS, 'minimal', 'hyper'], 'a level the catalog names that ELU never saw is one Codex knows');
+  assert.equal(saveBot({ name: 'pair', vendor: 'codex', model: 'gpt-6.2-sol', effort: 'ultra', instructions: 'x' }).effort, 'ultra');
+  assert.throws(() => saveBot({ name: 'pair', vendor: 'codex', model: 'gpt-6-luna', effort: 'ultra', instructions: 'x' }), /Effort on gpt-6-luna is one of: low, medium, high, xhigh, max\./);
+  assert.equal(saveBot({ name: 'pair', vendor: 'codex', model: 'gpt-next', effort: 'hyper', instructions: 'x' }).effort, 'hyper', 'the catalog decides, not a list in ELU');
+  assert.equal(getBot('pair').effort, 'hyper', 'and it is read back');
+  // Auto model's one effort: the model's own when it takes it, else the highest it takes below it.
+  assert.equal(fitEffort('codex', 'gpt-6.2-sol', 'ultra'), 'ultra');
+  assert.equal(fitEffort('codex', 'gpt-6-luna', 'ultra'), 'max');
+  assert.equal(fitEffort('claude', null, 'ultra'), 'max');
+  assert.equal(fitEffort('claude', null, 'high'), 'high');
+  assert.equal(fitEffort('agy', null, 'high'), null);
+  assert.equal(fitEffort('codex', 'gpt-next', 'medium'), 'low');
 });
 
 test('a rename keeps the bot and its first date; a taken or missing name is refused', async t => {
@@ -269,8 +307,10 @@ test('the claude and codex launches carry a role\'s model and effort, and refuse
   assert.deepEqual(resumed.slice(0, 3), ['exec', 'resume', session]); assert.equal(after(resumed, '--model'), 'opus'); assert.ok(resumed.includes('model_reasoning_effort="low"'));
   for (const compile of [extra => claude.compile({ role: { ...plain, ...extra }, cwd, session }), extra => codex.compile({ role: { ...plain, vendor: 'codex', ...extra }, cwd, schemaFile })]) {
     for (const model of ['--dangerous', 'two words', 7]) assert.throws(() => compile({ model }), /A model name starts with a letter or digit/, String(model));
-    for (const effort of ['ultra', 'high" x="y', 3]) assert.throws(() => compile({ effort }), /Effort on (Claude Code|Codex) is one of: low, medium, high, xhigh, max\./, String(effort));
   }
+  for (const effort of ['ultra', 'high" x="y', 3]) assert.throws(() => claude.compile({ role: { ...plain, effort }, cwd, session }), /Effort on Claude Code is one of: low, medium, high, xhigh, max\./, String(effort));
+  for (const effort of ['extreme', 'high" x="y', 3]) assert.throws(() => codex.compile({ role: { ...plain, vendor: 'codex', effort }, cwd, schemaFile }), /Effort on Codex is one of: low, medium, high, xhigh, max, ultra\./, String(effort));
+  assert.ok(codex.compile({ role: { ...role, vendor: 'codex', model: 'gpt-6.2-sol', effort: 'ultra' }, cwd, schemaFile }).includes('model_reasoning_effort="ultra"'));
 });
 
 test('the bots of a chat are saved names, each once, at most five', t => {

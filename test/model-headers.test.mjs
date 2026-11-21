@@ -6,7 +6,7 @@ import { spawnSync } from 'node:child_process';
 import { project, fakeClis, autoApprove, temp } from './helpers.mjs';
 import { claudeId, entryTag, modelTag, shortEffort, shortModel } from '../lib/models.mjs';
 import { claudeOwnEffort, runEffort } from '../lib/bot-models.mjs';
-import { catalogEfforts, catalogRow, fileEfforts, forgetCatalogs, installedEfforts } from '../lib/claude-catalog.mjs';
+import { capabilityLevels, catalogEfforts, catalogOf, catalogRow, fileEfforts, forgetCatalogs, installedEfforts, installedLevels } from '../lib/claude-catalog.mjs';
 import { chatBlock, tagged, visible } from '../lib/terminal-visuals.mjs';
 import { saveBot } from '../lib/bots.mjs';
 import { ProjectController, conversationEntries } from '../lib/projects.mjs';
@@ -83,10 +83,25 @@ test('a Claude Code catalog gives each model its own default effort, from a nati
   assert.deepEqual(catalogEfforts(native(CATALOG)), want, 'a nested default_effort and a brace inside a text change nothing');
   assert.deepEqual(catalogEfforts(`#!/usr/bin/env node\nvar Q=${CATALOG};function f(){}`), want);
   assert.deepEqual(catalogEfforts('{"models":[{"id":"claude-opus-5-5","family":"opus","default_effort":"high"}]}'), { 'claude-opus-5-5': 'high' }, 'the catalog as JSON');
-  assert.deepEqual(catalogRow(ROWS[1]), { id: 'claude-fable-5-2', effort: 'medium' });
-  assert.deepEqual(catalogRow(ROWS[5]), { id: 'claude-3-5-sonnet', effort: null }, 'a model the catalog gives no effort');
+  assert.deepEqual(catalogRow(ROWS[1]), { id: 'claude-fable-5-2', effort: 'medium', levels: ['low', 'medium', 'high'] });
+  assert.deepEqual(catalogRow(ROWS[5]), { id: 'claude-3-5-sonnet', effort: null, levels: [] }, 'a model the catalog gives no effort, and that takes none');
+  assert.deepEqual(catalogRow(ROWS[2]), { id: 'claude-sonnet-5-5', effort: 'medium', levels: null }, 'no capabilities: what it takes is not known');
   // The same model twice with one effort is that effort; with two, neither.
   assert.deepEqual(catalogEfforts(`${ROWS[2]} ${ROWS[2]} {id:"claude-haiku-5-5",default_effort:"medium"} {id:"claude-haiku-5-5",default_effort:"high"}`), { 'claude-sonnet-5-5': 'medium' });
+});
+
+test('each Claude model takes the efforts its capabilities name: effort for low to high, xhigh_effort and max_effort above', () => {
+  assert.deepEqual(catalogOf(native(CATALOG)).levels, { 'claude-opus-5-5': ['low', 'medium', 'high', 'max'], 'claude-fable-5-2': ['low', 'medium', 'high'], 'claude-3-5-sonnet': [] }, 'a model with no capabilities is left out');
+  assert.deepEqual(capabilityLevels(['adaptive_thinking', 'max_effort', 'effort', 'xhigh_effort']), ['low', 'medium', 'high', 'xhigh', 'max'], 'lowest first, whatever the order of the list');
+  assert.deepEqual(capabilityLevels(['max_effort', 'xhigh_effort']), [], 'no effort: none, the others alone give nothing');
+  assert.equal(capabilityLevels(undefined), null);
+  // As Claude Code 2.1.330 writes a row of today's models.
+  assert.deepEqual(catalogOf('{id:"claude-opus-5-5",family:"opus",capabilities:["effort","max_effort","xhigh_effort","adaptive_thinking"],default_effort:"medium"}').levels, { 'claude-opus-5-5': ['low', 'medium', 'high', 'xhigh', 'max'] });
+  // A list that holds anything but texts leaves the model's efforts unknown; its default effort still counts.
+  assert.deepEqual(catalogOf('{id:"claude-opus-5-5",capabilities:["effort",x],default_effort:"medium"}'), { efforts: { 'claude-opus-5-5': 'medium' }, levels: {} });
+  // Two rows that disagree: neither list is kept.
+  assert.deepEqual(catalogOf('{id:"claude-opus-5-5",capabilities:["effort"]} {id:"claude-opus-5-5",capabilities:["effort","max_effort"]}').levels, {});
+  assert.deepEqual(catalogOf('{id:"claude-opus-5-5",capabilities:["effort"]} {id:"claude-opus-5-5",capabilities:["effort"]}').levels, { 'claude-opus-5-5': ['low', 'medium', 'high'] });
 });
 
 test('a malformed or missing catalog gives nothing, never a made-up effort', () => {
@@ -113,7 +128,9 @@ test('the installed program is read once and kept by its path, size and time, in
   const p = program(t, native(CATALOG)), link = path.join(p.dir, 'on-path');
   fs.symlinkSync(p.file, link);
   assert.equal(installedEfforts(link, { cache: p.cache })['claude-opus-5-5'], 'medium');
+  assert.deepEqual(installedLevels(link, { cache: p.cache })['claude-opus-5-5'], ['low', 'medium', 'high', 'max']);
   assert.equal(fs.existsSync(p.mark), false, 'the program was only read');
+  assert.deepEqual(JSON.parse(fs.readFileSync(p.cache, 'utf8')).programs[0].levels['claude-fable-5-2'], ['low', 'medium', 'high'], 'the levels are kept with the reading');
   const kept = JSON.parse(fs.readFileSync(p.cache, 'utf8'));
   assert.deepEqual(kept.programs.map(row => [row.file, row.size, row.efforts['claude-fable-5-2']]), [[p.file, fs.statSync(p.file).size, 'medium']], 'kept by the real path');
   // Another app start reads the kept answer, without reading the program again.

@@ -7,6 +7,10 @@ gives one to the open session or to the session you are starting, and
 [the default model](install.md#the-default-model) is what a new session starts on. Every
 reply names the model and the effort that wrote it.
 
+Each model offers the efforts its vendor lists for it, and `/agent change` and a bot's
+Effort row offer those. Codex models go up to `ultra` where Codex lists it (`gpt-6.2-sol`
+does, `gpt-6-luna` stops at `max`). Claude models go up to `max`.
+
 Auto model is one more choice in that list. With it on, ELU picks the model for each step of
 the session:
 
@@ -35,7 +39,7 @@ from edits that do not run on the top model.
 | `/model auto fix the build` | The same, and sends the message |
 | `/model auto on` | The same as `/model auto` |
 | `/model auto off` | Turns it off. The session stays on the model it has |
-| `/model auto high` | Sets the effort of its plans and edits on this computer: `low`, `medium`, `high`, `xhigh` or `max` |
+| `/model auto high` | Sets the effort of its plans and edits on this computer: `low`, `medium`, `high`, `xhigh`, `max` or `ultra` |
 | `/model auto quick grok` | Sets where quick questions go on this computer: `claude`, `codex`, `grok`, `home` or `off` |
 | `/model computer auto` | New sessions you start on this computer begin with Auto model |
 | `/model opus` | A model you pick wins: Auto model is off for this session |
@@ -95,8 +99,9 @@ limits on what it may do. A session on Claude Code can have Auto model. One on C
 when Codex lists a top and a work model on this computer. One on Antigravity CLI or Grok
 Build cannot: `Auto model needs Claude Code or Codex for this session.`
 
-One effort serves plans and edits: `xhigh` until you change it with `/model auto high`. The
-fast model runs at its own effort. Your own effort for the session is not touched, and it
+One effort serves plans and edits: `xhigh` until you change it with `/model auto high`. A
+model that does not offer that effort runs at the highest one it offers below it: `ultra`
+runs as `max` on Claude. The fast model runs at its own effort. Your own effort for the session is not touched, and it
 is back when Auto model is off.
 
 A bot runs on its own model, as before. Where a bot that works does the session's work, the

@@ -146,7 +146,7 @@ test('what is refused: an effort the vendor does not offer, a bot not in the ses
   assert.equal(first.state, 'answered', JSON.stringify(first.error));
   const change = to => f.controller.changeAgent(first.id, to);
   assert.throws(() => change({ bot: null, to: { vendor: 'grok', model: null, effort: 'high' } }), { message: 'Grok Build has no effort setting.' });
-  assert.throws(() => change({ bot: null, to: { vendor: 'claude', model: 'opus', effort: 'extreme' } }), { message: 'Effort on Claude Code is one of: low, medium, high, xhigh, max.' });
+  assert.throws(() => change({ bot: null, to: { vendor: 'claude', model: 'opus', effort: 'extreme' } }), { message: 'Effort on Opus is one of: low, medium, high, xhigh, max.' });
   assert.throws(() => change({ bot: 'ghost', to: { vendor: 'claude', model: null, effort: null } }), { message: '@ghost is not in this session.' });
   assert.throws(() => change({ bot: null, every: true, to: { vendor: 'claude', model: 'opus', effort: null } }), { message: 'Every session is for a bot. /model default <name> sets what new sessions start with.' });
   assert.throws(() => change({ bot: null, to: { vendor: 'nobody', model: null, effort: null } }), { message: 'Choose a supported vendor: nobody.' });
