@@ -770,7 +770,7 @@ test('what follows /model auto', () => {
   for (const quick of [...VENDORS, 'home', 'off']) assert.deepEqual(autoWords(`quick ${quick}`), { kind: 'quick', quick });
   assert.deepEqual(autoWords('Quick  GROK'), { kind: 'quick', quick: 'grok' });
   // Anything else is a message, sent with Auto model on, as it was typed.
-  for (const text of ['add a dark mode', 'high priority: fix the login', 'quick', 'quick fix for the login', 'quick grok please', 'medium rare', 'ultra', 'off the record fix it', 'on second thought, fix it', 'off off']) assert.deepEqual(autoWords(text), { kind: 'message', text });
+  for (const text of ['add a dark mode', 'high priority: fix the login', 'quick', 'quick fix for the login', 'quick grok please', 'medium rare', 'ultra fast please', 'off the record fix it', 'on second thought, fix it', 'off off']) assert.deepEqual(autoWords(text), { kind: 'message', text });
   assert.deepEqual(autoWords('  Add a  dark mode '), { kind: 'message', text: 'Add a  dark mode' });
 });
 
