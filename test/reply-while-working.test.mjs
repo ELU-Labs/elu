@@ -8,7 +8,7 @@ import { ProjectController, conversationEntries, registerProject } from '../lib/
 import { projectFolder, pendingRequests } from '../lib/workspace.mjs';
 import { readTask } from '../lib/state.mjs';
 import { Conductor, enqueue } from '../lib/conductor.mjs';
-import { ANSWER_FIRST, CARRIED_ON_CALLS, DURING_BOT, DURING_COMPUTER, DURING_LEAD } from '../lib/runner.mjs';
+import { ANSWER_FIRST, ANSWER_NOW, CARRIED_ON_CALLS, DURING_BOT, DURING_COMPUTER, DURING_LEAD } from '../lib/runner.mjs';
 import { WHILE_WORKING, readWords, waitingWords } from '../lib/message-aside.mjs';
 import { runSteps, runsOfEntries, turnMoves } from '../lib/run-activity.mjs';
 import { localRecord } from '../lib/standup-record.mjs';
@@ -153,9 +153,33 @@ test('a turn that takes a message and writes no answer: the line says it read it
   assert.equal(CARRIED_ON_CALLS, 3);
   assert.deepEqual([row.answeredAt, Date.parse(row.carriedOn) >= Date.parse(row.at)], [undefined, true]);
   assert.deepEqual(whileWorking(f), [], 'no answer is made up');
+  // It was told once to answer now, with his message again, and taken in while the turn worked.
+  const reminders = f.absorbed().filter(row => row.content.startsWith(ANSWER_NOW));
+  assert.deepEqual(reminders.map(row => [row.mid, row.content.includes(JSON.stringify(QUESTION))]), [[true, true]]);
   await until(() => f.session().state !== 'running', 'the turn ends');
   assert.match(f.chat().at(-1).text, /Also took in what you sent while it worked: Why not merge them\?$/, 'its reply answers it');
+  assert.equal(f.session().messages.filter(value => value.text?.includes(ANSWER_NOW)).length, 0, 'the reminder is no message of his in the chat');
   assert.match(line(f, QUESTION), CARRIED);
+});
+
+// The owner's report: he asked "ETA?" while Opus worked; it took the message, went straight to
+// its next command and the line said it carried on without answering. A turn that goes on to a
+// call with no answer is told once to answer now, and its answer shows as any answer does.
+test('a turn that took a message and went on to a call with no answer is told once to answer now, and its answer shows at once', { timeout: 90000 }, async t => {
+  const f = setup(t, { mode: 'listen', steps: 40, stepMs: 150 }); f.set({ noAnswer: true, answerWhenReminded: true }); f.start();
+  enqueue(f.root, 'Tidy the coupon module', { priority: 0 });
+  await until(() => works(f), 'the turn works and takes messages');
+  const QUESTION = 'ETA?';
+  enqueue(f.root, QUESTION, { continuationTaskId: '1', priority: 0, typed: true });
+  await until(() => asked(f, QUESTION)?.answeredAt, 'the turn answers once reminded');
+  assert.match(line(f, QUESTION), ANSWERED);
+  assert.equal(asked(f, QUESTION).carriedOn, undefined, 'answered before it carried on');
+  assert.deepEqual(whileWorking(f).map(row => row.text), [`Answer while working: ${QUESTION}`]);
+  assert.equal(f.absorbed().filter(row => row.content.startsWith(ANSWER_NOW)).length, 1);
+  await until(() => f.session().state !== 'running', 'the turn ends');
+  assert.equal(f.absorbed().filter(row => row.content.startsWith(ANSWER_NOW)).length, 1, 'told once');
+  assert.equal(f.session().runs.filter(row => row.role === 'lead').length, 1, 'no turn of its own');
+  assert.match(line(f, QUESTION), ANSWERED);
 });
 
 // Found by the check of this change: a turn that looked three things up at once and then

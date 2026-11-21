@@ -336,7 +336,10 @@ const ownerWords=content=>{const found=/(?:Owner message|Message from another co
 // 'each': a row for each of those calls, all under one message id, and each result as its call
 // ends, before the next call's row; else one row for the calls and one for their results.
 // answerAfter (fake.json, listen): it writes that answer only after that many more of its steps.
+// ELU's reminder to a turn that took a message and went on with no answer (lib/runner.mjs
+// ANSWER_NOW): no message of the owner's. answerWhenReminded (fake.json): the turn answers it then.
 const answersFirst=content=>cfg.noAnswer!==true&&/Answer it first/.test(content);
+const reminded=content=>/went on without answering it\. Answer it now/.test(content);
 const heard=[];const absorbedFile=path.join(path.dirname(process.argv[1]),'absorbed.jsonl');
 const caps=cfg.capabilities===false?null:Array.isArray(cfg.capabilities)?cfg.capabilities:CAPABILITIES;const can=name=>Boolean(caps?.includes(name));
 const say=row=>console.log(JSON.stringify(row));
@@ -353,7 +356,7 @@ const answerLater=()=>{for(const item of later.splice(0)){if(--item.left>0)later
 // recorded in absorbed.jsonl beside the fake (mid: true when a running turn took it).
 const queue=[],folded=[];let working=null;
 const lifecycle=(uuid,state)=>{if(uuid&&can('msg_lifecycle_v1'))say({type:'command_lifecycle',command_uuid:uuid,state,uuid:crypto.randomUUID(),session_id:session});};
-const takeQueued=()=>{for(const item of queue.splice(0)){const words=ownerWords(item.content),first=answersFirst(item.content);if(!first)heard.push(words);fs.appendFileSync(absorbedFile,JSON.stringify({content:item.content,mid:true,...(item.uuid?{uuid:item.uuid}:{})})+'\n');lifecycle(item.uuid,'started');if(item.uuid)folded.push(item.uuid);if(first&&cfg.answerAfter)later.push({words,left:cfg.answerAfter});else if(first){looks();answerIt(words);}}};
+const takeQueued=()=>{for(const item of queue.splice(0)){const words=ownerWords(item.content),again=reminded(item.content),first=!again&&answersFirst(item.content);if(!first&&!again)heard.push(words);fs.appendFileSync(absorbedFile,JSON.stringify({content:item.content,mid:true,...(item.uuid?{uuid:item.uuid}:{})})+'\n');lifecycle(item.uuid,'started');if(item.uuid)folded.push(item.uuid);if(again){if(cfg.answerWhenReminded===true)answerIt(words);}else if(first&&cfg.answerAfter)later.push({words,left:cfg.answerAfter});else if(first){looks();answerIt(words);}}};
 // The control requests a host writes on the input, answered as 2.1.322 answers them.
 // cancel_async_message takes a message back while it still waits ({cancelled:false} once a turn
 // took it). interrupt with send_now sends what waits now: nothing_waiting when nothing does;

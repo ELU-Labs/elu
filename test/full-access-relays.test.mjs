@@ -196,6 +196,13 @@ test('only a turn that began below Full access because its session was below it 
   // The session had Full access before the turn began, and the turn runs below it: it was lowered on purpose.
   assert.equal(switchedToFull(session({ permissionChanges: [{ at: earlier, from: 'ask', to: 'full' }] }), 'lead'), false);
   assert.equal(switchedToFull(session({ permissionChanges: [] }), 'lead'), false);
+  // The owner's report: set to Full access while the turn worked, it allowed each call, until
+  // he asked "ETA?" in the chat and the turn took it; from then on it asked him for each again.
+  // A message the turn took while it worked began no turn: it stays lifted.
+  const eta = { at: '2026-11-13T10:30:00.000Z', text: 'ETA?', during: true, sentAt: '2026-11-13T10:29:40.000Z' };
+  assert.equal(switchedToFull(session({ messages: [{ at: began, text: 'Go' }, eta] }), 'lead'), true);
+  assert.equal(switchedToFull(session({ messages: [{ at: began, text: 'Go' }, { ...eta, to: '@scout' }] }), 'bot:scout'), true);
+  assert.equal(switchedToFull(session({ permissions: 'auto', messages: [{ at: began, text: 'Go' }, eta], permissionChanges: [{ at: later, from: 'ask', to: 'full' }, { at: '2026-11-13T10:40:00.000Z', from: 'full', to: 'auto' }] }), 'lead'), false, 'and set back below it, it asks again');
   // A bot's scheduled turn runs with Approve for me at most.
   assert.equal(switchedToFull(session({ messages: [{ at: began, text: 'Sweep the logs', to: '@scout', scheduled: true }] }), 'bot:scout'), false);
   // A teammate's question, a session from before modes, another role, a turn that is over.
