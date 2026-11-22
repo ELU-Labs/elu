@@ -276,7 +276,9 @@ test('session_log reads the last rows of a run, a key masked, and session_agents
   assert.deepEqual(value.rows.map(row => [row.kind, row.text]), [['text', 'Running the checks now.'], ['tool', 'Run: npm test']]);
   assert.match((await w.act('session_log', { session: '2', role: '@reviewer' })).text, /has no log of @reviewer yet/);
   assert.match((await w.act('session_log', { session: '2', rows: 500 })).text, /Ask for 1 to 200 rows/);
-  assert.match((await w.act('session_agents', { session: '2' })).text, /lists no agents yet/);
+  // The Agents tab's rows (lib/session-agents.mjs): its coder, as its runs say.
+  const agents = inBlock((await w.act('session_agents', { session: '2' })).text);
+  assert.deepEqual(agents.map(row => [row.id, row.kind]), [['lead', 'coder']]);
   assert.equal(readActions().filter(row => ['session_log', 'session_agents'].includes(row.action)).length, 4, 'each read is logged');
 });
 

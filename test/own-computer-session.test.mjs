@@ -22,6 +22,9 @@ import { createTeam } from '../lib/peer/roster.mjs';
 import { createInvite, redeemCode } from '../lib/peer/invite.mjs';
 import { saveTeamAccess } from '../lib/peer/access.mjs';
 import { markMyComputer, unmarkMyComputer } from '../lib/peer/my-computers.mjs';
+import { enqueue } from '../lib/conductor.mjs';
+import { saveMandate } from '../lib/orchestrator-mandates.mjs';
+import { projectKey } from '../lib/peer/remote.mjs';
 
 // A session one of the owner's own computers started here is his own session (the Orchestrator
 // at Full, docs: orchestrator full control, section 4): marked on this computer with /computers
@@ -50,7 +53,7 @@ function fixture(t) {
     saveTask(controller.repo, { ...readTask(controller.repo, task.id), state: 'answered' });
     return readTask(controller.repo, task.id);
   };
-  return { ...p, controller, repo: controller.repo, team, inputs, startedFrom };
+  return { ...p, controller, repo: controller.repo, team, inputs, startedFrom, fakeDir: fake.dir };
 }
 const schemaOf = row => JSON.parse(row.args[row.args.indexOf('--json-schema') + 1]);
 // The turn a message in that session leads to, sent from a computer (answeringComputer), as
@@ -145,10 +148,14 @@ test('the bot that oversees works at Full only at that level, in its own chat, w
   assert.deepEqual(promptRules('full', [], { oversee: true }), promptRules('full', [], { oversee: true, level: null }), 'no level line when it cannot be read');
 });
 
-// Runs once the level exists (lib/orchestrator-settings.mjs) and the Claude adapter builds the
-// Full turn (lib/adapters/claude.mjs, OVERSEE_FULL): the runner's half of it is checked here.
-test('at Full, its turn in its own chat runs in Full access with its shell, elu jobs and no dollar limit of its own', { skip: LEVELS.includes(LEVEL_FULL) ? false : 'the Full level is not in this build yet' }, async t => {
+// The level (lib/orchestrator-settings.mjs) and the Claude adapter's Full turn (lib/adapters/claude.mjs,
+// OVERSEE_FULL) are both in: the runner's half of it is checked here.
+test('at Full, its turn in its own chat runs in Full access with its shell, elu jobs and no dollar limit of its own', async t => {
+  assert.ok(LEVELS.includes(LEVEL_FULL));
   const f = fixture(t);
+  // At Full it has helpers (lib/adapters/claude.mjs), so the stand-in Claude Code lists the --agents flag the real one has.
+  const claudeBin = path.join(f.fakeDir, 'claude'), stand = fs.readFileSync(claudeBin, 'utf8'), flags = "console.log('--print ";
+  assert.ok(stand.includes(flags), 'the stand-in lists its flags'); fs.writeFileSync(claudeBin, stand.replace(flags, "console.log('--agents --print "));
   fs.mkdirSync(path.dirname(settingsFile()), { recursive: true }); atomic(settingsFile(), { version: 1, level: LEVEL_FULL, caps: {} });
   const first = f.inputs().length;
   const task = await f.controller.ask('What needs me today?', null, { bot: 'orchestrator', botChat: true, permissions: 'full' }).finished;
@@ -201,4 +208,46 @@ test('the owner\'s word through the bot that started a session from his other co
   unmarkMyComputer(LAPTOP);
   await assert.rejects(sentFrom(f, task, LAPTOP, 'Merge it.', { asOwner: mark }), { message: NOT_OWNER_WORD('orchestrator') });
   assert.equal(readTask(f.repo, task.id).messages.filter(row => row.text === 'Merge it.').length, 0, 'nothing of a refused one is kept');
+});
+
+// The owner's word on this computer, end to end: the conductor keeps its mark on the request
+// (lib/conductor.mjs enqueue), and his controller runs it as his while the session is in that
+// mandate, else as the bot's note (lib/projects.mjs ask). A start of the bot at Full keeps all it
+// carries; below Full it is what it was.
+test('the owner\'s word through the bot is kept on its request and is his inside a mandate, a note outside one; a Full start keeps all it carries', async t => {
+  const f = fixture(t), mark = { bot: 'orchestrator', mandate: 'm1', computer: null };
+  const own = createConversation(f.repo, f.controller.draftConfig, 'Fix the coupons', { permissions: 'auto' });
+  saveTask(f.repo, { ...readTask(f.repo, own.id), state: 'answered' });
+  // The request keeps the mark, and nothing else of his goes with it.
+  const row = enqueue(f.root, 'Ship it once the tests pass.', { continuationTaskId: own.id, asOwner: mark });
+  assert.deepEqual(row.asOwner, mark); assert.equal(row.overseer, undefined); assert.equal(row.typed, undefined);
+  assert.throws(() => enqueue(f.root, 'Merge it.', { continuationTaskId: own.id, asOwner: mark, overseer: 'orchestrator' }), /A note of the bot that oversees your sessions goes to one of them as it is/, 'not with the bot\'s own mark');
+  for (const [options, what] of [[{ asOwner: mark }, 'a new session'], [{ continuationTaskId: own.id, asOwner: { ...mark, computer: LAPTOP } }, 'naming a computer it did not come from'], [{ continuationTaskId: own.id, asOwner: { ...mark, mandate: 'x' } }, 'no mandate id'], [{ continuationTaskId: own.id, asOwner: mark, typed: true }, 'typed']])
+    assert.throws(() => enqueue(f.root, 'Merge it.', options), /owner's word|marks what it sends/, what);
+  // A start of the bot's: below Full only as before; at Full, all it carries, with no budget of its own.
+  const start = { overseer: 'orchestrator', permissions: 'full', place: { kind: 'worktree' }, bots: ['reviewer'], title: 'Coupons', model: { vendor: 'claude', model: 'opus', effort: 'high' }, botModels: { reviewer: { vendor: 'codex', model: 'gpt-5.5', effort: 'high' } }, mandate: 'm1' };
+  assert.throws(() => enqueue(f.root, 'Start the coupons work', start), /schedule's run is named|Ask for approval or Approve for me/);
+  assert.throws(() => enqueue(f.root, 'Start the coupons work', { permissions: 'auto', title: 'Coupons' }), /schedule's run is named/, 'his own start names itself as before');
+  fs.mkdirSync(path.dirname(settingsFile()), { recursive: true }); atomic(settingsFile(), { version: 1, level: LEVEL_FULL, caps: {} });
+  const started = enqueue(f.root, 'Start the coupons work', start);
+  assert.deepEqual([started.permissions, started.bots, started.title, started.model, started.botModels, started.mandate, started.budgetUsd], ['full', ['reviewer'], 'Coupons', { vendor: 'claude', model: 'opus', effort: 'high' }, { reviewer: { vendor: 'codex', model: 'gpt-5.5', effort: 'high' } }, 'm1', undefined]);
+  assert.throws(() => enqueue(f.root, 'Start', { ...start, model: { vendor: 'claude', model: 'opus', effort: 'loud' } }), /takes no effort loud/);
+  assert.throws(() => enqueue(f.root, 'Start', { ...start, botModels: { pair: { vendor: 'codex' } } }), /@pair is not one of this session's bots/);
+  // His controller: outside a mandate the word goes as the bot's note.
+  const first = f.inputs().length;
+  const noted = await f.controller.ask('Ship it once the tests pass.', own.id, { asOwner: mark }).finished;
+  assert.equal(noted.state, 'answered', JSON.stringify(noted.error));
+  const note = readTask(f.repo, own.id).messages.at(-1);
+  assert.deepEqual([note.text, note.bot, note.overseer, note.asOwner], ['Ship it once the tests pass.', 'orchestrator', true, undefined]);
+  assert.ok(f.inputs().slice(first).every(call => !call.input.includes(OWNER_WORD)), 'not told it is his');
+  // Inside one, as his own, with the mark, and told who sent it for him under which mandate.
+  saveMandate({ name: 'Coupons', goal: 'Coupons', decisions: ['Merge when the checks are green'], sessions: [{ computer: null, project: projectKey(f.repo.project ?? f.repo.root), session: String(own.id) }] }, { by: 'owner' });
+  const next = f.inputs().length;
+  const his = await f.controller.ask('Merge it when green.', own.id, { asOwner: mark }).finished;
+  assert.equal(his.state, 'answered', JSON.stringify(his.error));
+  const word = readTask(f.repo, own.id).messages.at(-1);
+  assert.deepEqual([word.text, word.asOwner, word.via, word.bot, word.overseer], ['Merge it when green.', mark, OWNER_VIA('orchestrator', 'Coupons'), undefined, undefined]);
+  assert.ok(f.inputs().slice(next).some(call => call.input.includes(`${OWNER_WORD} ${OWNER_VIA_LINE('orchestrator', 'Coupons')}`)), 'told it is his, under that mandate');
+  // A note never approves: an approval with a mark that does not hold here sends nothing.
+  assert.throws(() => f.controller.ask('Approved', own.id, { asOwner: { ...mark, mandate: 'm2' }, approved: true }), { message: NOT_OWNER_WORD('orchestrator') });
 });

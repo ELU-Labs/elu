@@ -70,7 +70,7 @@ test('/orchestrator alone is a page: the level, the caps, the mandates and the c
   assert.equal(empty.title, 'Orchestrator');
   assert.match(empty.text, /^Level: Suggest\./);
   assert.match(empty.text, /No mandates: its messages to your sessions are notes\./);
-  assert.match(empty.text, /\/orchestrator watch, suggest, act or run sets the level\./);
+  assert.match(empty.text, /\/orchestrator watch, suggest, act, run or full sets the level\./, 'Full is one of the levels now');
   saveMandate({ name: 'Workflows', goal: 'Workflows', decisions: ['Helpers may run on credits'], sessions: [{ computer: null, project: w.key, session: '4' }] }, { by: 'owner' });
   const page = await orchestratorCommand([], { settings: withFull() });
   assert.match(page.text, /Mandates\n {2}m1 · Workflows · 1 decision · 4 in web/);
