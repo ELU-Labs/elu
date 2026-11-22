@@ -14,7 +14,8 @@ import { answerApproval, ownersToAnswer, pendingApprovals } from '../lib/approva
 import { allFacts, saveFact } from '../lib/facts.mjs';
 import { orgLines, removeOrgLine } from '../lib/org-section.mjs';
 import { forgetOverview } from '../lib/session-overview.mjs';
-import { DEFAULT_CAPS, DEFAULT_LEVEL, LEVELS, capLines, levelLines, readSettings, setCap, setLevel, settingsFile } from '../lib/orchestrator-settings.mjs';
+import { DEFAULT_CAPS, DEFAULT_LEVEL, LEVELS, LEVEL_NAMES, capLines, levelLines, readSettings, setCap, setLevel, settingsFile } from '../lib/orchestrator-settings.mjs';
+import { FULL_TOOLS } from '../lib/orchestrator-seams.mjs';
 import { ACTION_NAMES, LEVEL_TABLE, act, actionLine, actionsFile, decide, lastActions, orchestratorLines, questionMark, readActions, takeBackNotes, undoAction } from '../lib/orchestrator-actions.mjs';
 import { ORCH_TOOLS, ORCH_TOOL_DEFS, orchSession, orchTitle, orchTool, overseeingAnswer, readingTool, toolWords } from '../lib/orchestrator-tools.mjs';
 
@@ -37,7 +38,7 @@ function world(t, { level = null } = {}) {
   environment(t, { XDG_CONFIG_HOME: temp(t) }); forgetOverview();
   const root = path.join(temp(t), 'web'); fs.mkdirSync(root);
   const repo = projectFolder(root); registerProject(repo);
-  if (level) setLevel(level);
+  if (level) setLevel(level, { by: 'owner' });
   const w = { root, repo, asked: [], queued: [], answer: 'allow', started: 0 };
   w.session = (id, extra = {}) => {
     saveTask(repo, { id: String(id), kind: 'conversation', base: null, branch: null, worktree: repo.root, goal: `Goal of session ${id}`, state: 'answered', createdAt: new Date(T0 - HOUR).toISOString(), runs: [], messages: [], reviews: [], responses: [], sessions: {}, permissions: 'auto', ...extra });
@@ -65,17 +66,22 @@ const calls = fact => ({
   session_answer: { session: '3', text: 'Use Postgres.' },
   session_start: { goal: 'Find why the nightly build is slow' },
 });
-// The design's table, as written there: Watch, Suggest, Act, Run.
+// The design's table, as written there: Watch, Suggest, Act, Run, Full. The tools of Full are
+// nothing below it (test/orchestrator-full.test.mjs tries them at Full).
 const TABLE = {
-  sessions_list: ['yes', 'yes', 'yes', 'yes'], session_read: ['yes', 'yes', 'yes', 'yes'], facts_find: ['yes', 'yes', 'yes', 'yes'], connections_list: ['yes', 'yes', 'yes', 'yes'], fact_save: ['yes', 'yes', 'yes', 'yes'],
-  card_add: ['no', 'yes', 'yes', 'yes'], org_propose: ['no', 'ask', 'ask', 'ask'], session_message: ['no', 'ask', 'yes', 'yes'], session_answer: ['no', 'ask', 'yes', 'yes'], session_start: ['no', 'ask', 'ask', 'yes'],
+  sessions_list: ['yes', 'yes', 'yes', 'yes', 'yes'], session_read: ['yes', 'yes', 'yes', 'yes', 'yes'], facts_find: ['yes', 'yes', 'yes', 'yes', 'yes'], connections_list: ['yes', 'yes', 'yes', 'yes', 'yes'], fact_save: ['yes', 'yes', 'yes', 'yes', 'yes'],
+  card_add: ['no', 'yes', 'yes', 'yes', 'yes'], org_propose: ['no', 'ask', 'ask', 'ask', 'ask'], session_message: ['no', 'ask', 'yes', 'yes', 'yes'], session_answer: ['no', 'ask', 'yes', 'yes', 'yes'], session_start: ['no', 'ask', 'ask', 'yes', 'yes'],
+  session_approve: ['no', 'no', 'no', 'no', 'yes'], session_stop: ['no', 'no', 'no', 'no', 'yes'], session_rename: ['no', 'no', 'no', 'no', 'yes'], session_archive: ['no', 'no', 'no', 'no', 'yes'],
+  session_settings: ['no', 'no', 'no', 'no', 'yes'], session_log: ['no', 'no', 'no', 'no', 'yes'], session_agents: ['no', 'no', 'no', 'no', 'yes'], mandate_propose: ['no', 'no', 'no', 'no', 'ask'],
 };
+const TEN = ORCH_TOOLS.filter(name => !FULL_TOOLS.includes(name));
 const SAID = { yes: ['allow', 'level'], ask: ['allow', 'owner'], no: ['refused', 'level'] };
 const said = out => [out.decision, out.by];
 const inBlock = text => JSON.parse(text.split('\n').find(line => /^[\[{]/.test(line)));
 
-test('the ten tools and the four levels are the ones of the table, and a level or a tool that is not there is refused', () => {
-  assert.deepEqual(LEVELS, ['watch', 'suggest', 'act', 'run']);
+test('the tools and the five levels are the ones of the table, and a level or a tool that is not there is refused', () => {
+  assert.deepEqual(LEVELS, ['watch', 'suggest', 'act', 'run', 'full']);
+  assert.deepEqual(ACTION_NAMES.slice(10), [...FULL_TOOLS]);
   assert.deepEqual(ACTION_NAMES, Object.keys(TABLE));
   assert.deepEqual(Object.keys(LEVEL_TABLE), Object.keys(TABLE));
   for (const name of ACTION_NAMES) for (const [at, level] of LEVELS.entries()) assert.equal(decide(level, name), { yes: 'allow', ask: 'ask', no: 'refuse' }[TABLE[name][at]], `${name} at ${level}`);
@@ -85,7 +91,7 @@ test('the ten tools and the four levels are the ones of the table, and a level o
 for (const [at, level] of LEVELS.entries()) test(`at ${level}, each of the ten tools is done, asked for or refused as the table says`, async t => {
   const w = world(t, { level }); w.session(2); w.session(3, ASKS);
   const given = calls(ownerFact());
-  for (const name of ORCH_TOOLS) {
+  for (const name of TEN) {
     const want = TABLE[name][at], before = w.asked.length, out = await w.act(name, given[name]);
     assert.deepEqual(said(out), SAID[want], `${name} at ${level}: ${out.text}`);
     assert.equal(w.asked.length - before, want === 'ask' ? 1 : 0, `${name} at ${level}: whether the owner was asked`);
@@ -98,7 +104,13 @@ for (const [at, level] of LEVELS.entries()) test(`at ${level}, each of the ten t
   assert.deepEqual(pendingRequests(w.root).map(row => row.goal), ['session_message', 'session_answer', 'session_start'].filter(did).map(name => given[name].text ?? given[name].goal));
   assert.equal(w.started, w.queued.length);
   assert.equal(allFacts().length, 2, 'a cited fact is saved at every level');
-  assert.deepEqual(readActions().map(row => [row.id, row.action, row.level, row.decision, row.by]), ORCH_TOOLS.map((name, n) => [`a${n + 1}`, name, level, ...SAID[TABLE[name][at]]]));
+  assert.deepEqual(readActions().map(row => [row.id, row.action, row.level, row.decision, row.by]), TEN.map((name, n) => [`a${n + 1}`, name, level, ...SAID[TABLE[name][at]]]));
+  // Below Full each tool of Full is refused by the level, before anything is looked at.
+  for (const name of FULL_TOOLS) {
+    const out = await w.act(name, { session: '2' });
+    if (level === 'full') continue;
+    assert.deepEqual(said(out), SAID.no, name); assert.match(out.text, new RegExp(`The owner set the level to ${LEVEL_NAMES[level]}, where the bot .*: that needs the level Full\\. .*Only the owner changes the level`));
+  }
   assert.equal(fs.existsSync(settingsFile()), true);
   assert.equal(readSettings().level, level, 'no call changes the level');
 });
@@ -331,7 +343,7 @@ test('the hard rules hold at Run and in Full access: no session that is not the 
     assert.match(out.text, why);
   }
   // What it never does has no tool at all.
-  for (const name of ['task_approve', 'permission_answer', 'session_done', 'session_delete', 'session_stop', 'card_move', 'card_remove', 'publish', 'merge', 'deploy', 'toString', '', null]) {
+  for (const name of ['task_approve', 'permission_answer', 'session_done', 'session_delete', 'session_kill', 'card_move', 'card_remove', 'publish', 'merge', 'deploy', 'toString', '', null]) {
     const out = await w.act(name, { session: '2' }, { mode: 'full' });
     assert.deepEqual(said(out), ['refused', 'level']); assert.match(out.text, /^There is no tool named/);
   }
@@ -713,7 +725,9 @@ test('the settings: Suggest with no file, Watch when the file cannot be used, ca
   assert.equal(path.relative(process.env.XDG_CONFIG_HOME, settingsFile()), path.join('elu-code', 'orchestrator.json'));
   assert.deepEqual([setLevel(' Act ').level, readSettings().saved], ['act', true]);
   assert.deepEqual(JSON.parse(fs.readFileSync(settingsFile(), 'utf8')), { version: 1, level: 'act', caps: { ...DEFAULT_CAPS } });
-  for (const word of ['boss', '', null, 'full']) assert.throws(() => setLevel(word), { message: 'Choose a level: watch, suggest, act or run.' });
+  for (const word of ['boss', '', null]) assert.throws(() => setLevel(word), { message: 'Choose a level: watch, suggest, act, run or full.' });
+  // Full only by the owner himself, never by a turn or in passing.
+  for (const who of [undefined, {}, { by: 'turn' }, { by: 'orchestrator' }, { typed: true }]) assert.throws(() => setLevel('full', who), { message: 'Only you set the level to Full: type /orchestrator full yourself.' });
   assert.equal(readSettings().level, 'act');
   assert.deepEqual([setCap('messagesPerHour', '4').caps.messagesPerHour, setCap('startBudgetUsd', 2.5).caps.startBudgetUsd, setCap('startMode', 'ask').caps.startMode, readSettings().level], [4, 2.5, 'ask', 'act']);
   for (const [name, value, why] of [['sessionsPerDay', 21, /Sessions started a day: a whole number from 0 to 20/], ['sessionsPerDay', 1.5, /a whole number/], ['cardsPerDay', -1, /a whole number/], ['startBudgetUsd', 0, /dollars from 0\.01 to 100/], ['turnLimitUsd', 'lots', /dollars from 0\.01 to 20/], ['startMode', 'full', /Ask for approval or Approve for me at most: write ask or auto/], ['everything', 1, /There is no cap named everything/]]) assert.throws(() => setCap(name, value), why);
