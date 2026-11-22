@@ -16,6 +16,7 @@ import { loopStopMessage, stopLine } from '../lib/stop-line.mjs';
 import { currentTask, markChecked, planFile } from '../lib/plan.mjs';
 import { lessLine, readChange, reviewRequest } from '../lib/runner.mjs';
 import { sessionChecklist } from '../lib/checklist.mjs';
+import { fitClock } from '../lib/review-fit.mjs';
 
 // After the agent's edit ELU runs the checks and the session's reviewing bots review the
 // change; their must-fix findings go back to the agent. What the agent leaves in its worktree
@@ -444,14 +445,16 @@ test('a bot an earlier version kept as unable to take the change, with no model 
 
 // A session whose bots could not take its change is as one with no bot in its Task checklist
 // too: no review row, and nothing there left to do for a review.
-test('after a must-fix whose fix is too large for the bot, the Task checklist has no review row, as in a session no bot reviews', async t => {
+test('after a must-fix whose fix is too large for the bot, the Task checklist has no review row, as in a session no bot reviews, and names the bot as not reviewed, with why', async t => {
   const f = bigChange(t, 'review-fix', { tooLong: 'all', tooLongOn: ['Handled the edge case.'] });
   const task = await f.controller.ask('Normalize coupon codes', null, { bots: ['critic'] }).finished;
   assert.equal(task.state, 'ready', JSON.stringify(task.error)); assert.equal(task.reviewStatus, 'skipped');
   assert.equal(task.reviews.length, 1, 'its review of the change before the fix');
   const list = sessionChecklist(readTask(f.repo, task.id));
-  assert.deepEqual(list.map(row => row.text), ['Edits committed', 'Checks passed', 'Pushed', 'Pull request']);
+  assert.deepEqual(list.map(row => row.text), ['Edits committed', 'Checks passed', 'Reviewed by @critic', 'Pushed', 'Pull request']);
   assert.equal(list.find(row => row.text === 'Checks passed').met, true);
+  const unreviewed = list.find(row => row.text === 'Reviewed by @critic');
+  assert.equal(unreviewed.met, false); assert.match(unreviewed.evidence, /^Could not review: the change is too long for \S/);
 });
 
 test('a must-fix found in the excerpts of a change too long for the model goes to the agent, and the review runs again', async t => {
@@ -642,7 +645,11 @@ test('the line names at most two cut files, and says nothing when the bot had th
 // A changed file of any size is checked and reviewed: ELU sets no size limit of its own on a
 // file, a diff or the lines of a change. Only the model's own refusal gives a bot less.
 const MiB = 1024 * 1024;
+// A vendor that takes a prompt this long (lib/review-fit.mjs): what is tested here is that ELU
+// reads such a file whole; a Claude model of today takes less, and is given the change in parts.
+const takesAll = t => { const saved = fitClock.limits; fitClock.limits = { claude: 64 * MiB }; t.after(() => { fitClock.limits = saved; }); };
 test('a five-line change to a file over 4 MiB is checked and reviewed with the whole file', async t => {
+  takesAll(t);
   const f = setup(t, 'normal', { insert: { file: 'src/big.mjs', at: 5000, text: ADDED } }); largeFile(f.root, 'src/big.mjs', 80000);
   assert.ok(fs.statSync(path.join(f.root, 'src/big.mjs')).size > 4 * MiB);
   const task = await f.controller.ask('Normalize coupon codes', null, { bots: ['reviewer'] }).finished;
@@ -672,8 +679,18 @@ test('a new file and an ignored file over 4 MiB are read whole, and a diff over 
 });
 
 test('a model that refuses a change over 4 MiB whole reviews it as excerpts', async t => {
+  takesAll(t);
   const f = setup(t, 'normal', { insert: { file: 'src/big.mjs', at: 5000, text: ADDED }, tooLong: 1000000 }); largeFile(f.root, 'src/big.mjs', 80000);
   const task = await f.controller.ask('Normalize coupon codes', null, { bots: ['reviewer'] }).finished;
   assert.equal(task.state, 'ready', JSON.stringify(task.error));
   assert.ok(reviewOf(f.inputs('claude'), 'reviewer')[1].includes('"lines":"4851-5155 of 80005"'));
+});
+
+test("a change over 4 MiB, longer than Claude takes, is never sent to it whole: its excerpts are", async t => {
+  const f = setup(t, 'normal', { insert: { file: 'src/big.mjs', at: 5000, text: ADDED } }); largeFile(f.root, 'src/big.mjs', 80000);
+  const task = await f.controller.ask('Normalize coupon codes', null, { bots: ['reviewer'] }).finished;
+  assert.equal(task.state, 'ready', JSON.stringify(task.error)); assert.equal(task.reviewStatus, 'passed');
+  const reviews = reviewOf(f.inputs('claude'), 'reviewer');
+  assert.equal(reviews.length, 1, 'one review, sent once'); assert.ok(reviews[0].includes('"lines":"4851-5155 of 80005"'));
+  assert.ok(reviews[0].length < 3000000, `${reviews[0].length}`);
 });

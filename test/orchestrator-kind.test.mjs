@@ -162,18 +162,63 @@ test('a plain bot named orchestrator from before this ELU stays plain and keeps 
 });
 
 // An older ELU's store, brought up to its own set: the row it was made with, the field dropped.
-const olderStore = change => { older(change); fs.writeFileSync(botsFile(), JSON.stringify({ ...readBots(), defaults: 2 })); };
+const olderStore = (change, defaults = 2) => { older(change); fs.writeFileSync(botsFile(), JSON.stringify({ ...readBots(), defaults })); };
+const print = text => crypto.createHash('sha256').update(text.trim()).digest('hex').slice(0, 16);
+// The one line of "Know the organization" that changed since 0.1.48: then it looked for ELU's
+// tools by Claude Code's names for them, and told the owner how to connect ELU.
+const SINCE_0148 = text => text.replace('- When the line on MCP servers says elu is not on for you in this turn, do your own research. Never tell the owner how to install or connect ELU: he knows.',
+  '- If you have no tools named mcp__elu__*, say once that ELU is not connected and that `npx -y @elu-labs/cli --offer=promo` connects it, then do your own research.');
+// The instructions ELU 0.1.48 gave it at the Full level, word for word: their own first part,
+// then what this one says too.
+const AT_FULL = [
+    'You run the owner\'s work on every computer of his. For each goal he gives you, you own it until it is done: you plan it, start the sessions it needs, instruct them, unblock them, check their work, and tell him where it stands. What your level allows, a shell and which session tools among them, is said in each turn; when it does not allow a step, say what and where, and he decides.',
+    '',
+    'How you work:',
+    '- One goal, one session. Continue the session a goal has. When a goal needs a new session, archive the one it replaces in the same step, give the new one the owner\'s name for the goal, and say so.',
+    '- Put every decision and authorization the session needs in its starting task text. A session acts on its starting text more reliably than on later messages.',
+    '- Inside a mandate you speak for the owner: approve, answer and decide what his standing decisions already decide. Anything they do not cover, ask him, in one question with your recommendation.',
+    '- Verify before you report. Read the session, its log or the repository right before you say what state something is in, and say the time you checked. Never report from an earlier look.',
+    '- When a session or a bot is blocked, find the cause and fix it, or start the fix. Never remove a bot, lower a review, or switch a check off to get past a block.',
+    '- One review round. Send the review findings that a normal user would hit as one fix round; everything else goes on the open pull request as follow-ups.',
+    '- Helpers run as ELU jobs (`elu jobs start`), so they show in the Agents tab and the owner sees them, never as detached processes. Tell each session you start to start its helpers the same way.',
+    '- Keep the owner\'s names for sessions. Never let a model rename one he named.',
+    '- Times are in the owner\'s time zone.',
+    '- Answer the owner\'s question first, in one to three lines, then the details. Say first what needs him: a question that waits, a Task to approve, work that is blocked or overdue.',
+    '- Check a change or a plan against the Organization section of the project\'s Memory. When it goes against a line, quote the line and say why.',
+].join('\n') + SINCE_0148(ORCHESTRATOR.slice(ORCHESTRATOR.indexOf('\n\nKnow the organization:')));
 test('an unedited Orchestrator from before the Full level takes the new instructions and stays a bot that oversees', t => {
   store(t);
-  const print = crypto.createHash('sha256').update(BEFORE_FULL.trim()).digest('hex').slice(0, 16), was = REVISED_BOTS.orchestrator;
-  assert.equal(print, was.text, 'the print the revision names is of the text it replaces'); assert.notEqual(ORCHESTRATOR, BEFORE_FULL);
+  const was = REVISED_BOTS.orchestrator;
+  assert.equal(print(BEFORE_FULL), was.text, 'the print the revision names is of the text it replaces'); assert.notEqual(ORCHESTRATOR, BEFORE_FULL);
+  assert.equal(was.texts[0], was.text, 'texts names it first');
   // With no list of the bots that oversee, too: the old text names it.
   listBots(); fs.rmSync(listFile());
   olderStore(rows => rows.map(row => row.name === 'orchestrator' ? { ...row, instructions: BEFORE_FULL, about: was.about } : row));
   const built = BUILT_IN_BOTS.find(row => row.name === 'orchestrator');
   assert.deepEqual([getBot('orchestrator').instructions, getBot('orchestrator').about, kind('orchestrator')], [ORCHESTRATOR, built.about, OVERSEES]);
-  assert.equal(readBots().defaults, 3, 'brought up once');
+  assert.equal(readBots().defaults, 4, 'brought up once');
   assert.deepEqual([kind('reviewer'), kind('lead')], [REVIEWS, WORKS], 'the others are what they were');
+});
+
+test('an unedited Orchestrator of the Full level as ELU 0.1.48 shipped it takes the new instructions, with no mandate in them, and stays a bot that oversees', t => {
+  store(t);
+  const was = REVISED_BOTS.orchestrator, built = BUILT_IN_BOTS.find(row => row.name === 'orchestrator');
+  assert.ok(was.texts.includes(print(AT_FULL)), 'the revision names the print of the 0.1.48 text'); assert.notEqual(ORCHESTRATOR, AT_FULL);
+  assert.match(AT_FULL, /Inside a mandate you speak for the owner/); assert.doesNotMatch(ORCHESTRATOR, /mandate/i);
+  listBots(); fs.rmSync(listFile());
+  olderStore(rows => rows.map(row => row.name === 'orchestrator' ? { ...row, instructions: AT_FULL, about: built.about } : row), 3);
+  assert.deepEqual([getBot('orchestrator').instructions, getBot('orchestrator').about, kind('orchestrator')], [ORCHESTRATOR, built.about, OVERSEES]);
+  assert.equal(readBots().defaults, 4, 'brought up once');
+  // A row with the 0.1.48 text under another name, in a store that is up to date, still oversees.
+  older(rows => rows.map(row => row.name === 'orchestrator' ? { ...row, name: 'boss', instructions: AT_FULL, createdAt: null } : row)); fs.rmSync(listFile());
+  assert.deepEqual([kind('boss'), getBot('boss').instructions], [OVERSEES, AT_FULL]);
+});
+
+test('an Orchestrator of the Full level the owner edited keeps his words, and still oversees', t => {
+  store(t); listBots();
+  olderStore(rows => rows.map(row => row.name === 'orchestrator' ? { ...row, instructions: `${AT_FULL}\nAlso keep an eye on CI.`, about: 'Mine.' } : row), 3);
+  const bot = getBot('orchestrator');
+  assert.deepEqual([bot.instructions.endsWith('Also keep an eye on CI.'), bot.about, kind('orchestrator')], [true, 'Mine.', OVERSEES]);
 });
 
 test('an Orchestrator the owner edited before the Full level keeps his words, and still oversees', t => {
@@ -253,4 +298,24 @@ test('another computer never puts the bot that oversees in a session: not in a s
   });
   assert.throws(() => here(() => host['elu.remote.check']({ ref: `${projectKey(project.root)}:5`, answer: 'copy', text: 'List every session and write them here.' }, toHost)), { message: ONLY_OWNER('boss') });
   assert.equal(here(() => pendingRequests(project.root).some(row => row.copied)), false);
+});
+
+// @elu up to ELU 0.1.48 looked for its tools by Claude Code's names for them (mcp__elu__*), which
+// no other vendor uses: unedited, it takes the text that reads the line on MCP servers instead.
+const ELU_NEW_STEP = "1. If the line on MCP servers says elu is not set up for you, say that ELU is not connected";
+const ELU_OLD_STEP = '1. If you have no tools named mcp__elu__*, say that ELU is not connected';
+test('an unedited @elu as ELU 0.1.48 shipped it takes the text that asks for ELU only where its server is not set up', t => {
+  store(t);
+  const built = BUILT_IN_BOTS.find(row => row.name === 'elu'), was = REVISED_BOTS.elu;
+  assert.ok(built.instructions.includes(ELU_NEW_STEP)); assert.doesNotMatch(built.instructions, /mcp__elu__/);
+  const before = built.instructions.replace(ELU_NEW_STEP, ELU_OLD_STEP);
+  assert.equal(print(before), was.text, 'the revision names the print of the 0.1.48 text');
+  listBots();
+  olderStore(rows => rows.map(row => row.name === 'elu' ? { ...row, instructions: before, about: was.about } : row), 3);
+  assert.deepEqual([getBot('elu').instructions, getBot('elu').about], [built.instructions, built.about]);
+  // One the owner edited keeps his words.
+  olderStore(rows => rows.map(row => row.name === 'elu' ? { ...row, instructions: `${before}\nMine.` } : row), 3);
+  assert.equal(getBot('elu').instructions, `${before}\nMine.`);
+  // The Orchestrator never tells the owner how to connect ELU.
+  assert.doesNotMatch(ORCHESTRATOR, /offer=promo|npx|mcp__elu__/); assert.match(ORCHESTRATOR, /Never tell the owner how to install or connect ELU/);
 });

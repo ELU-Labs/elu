@@ -14,7 +14,7 @@ import { answerApproval, ownersToAnswer, pendingApprovals } from '../lib/approva
 import { allFacts, saveFact } from '../lib/facts.mjs';
 import { orgLines, removeOrgLine } from '../lib/org-section.mjs';
 import { forgetOverview } from '../lib/session-overview.mjs';
-import { DEFAULT_CAPS, DEFAULT_LEVEL, LEVELS, LEVEL_NAMES, capLines, levelLines, readSettings, setCap, setLevel, settingsFile } from '../lib/orchestrator-settings.mjs';
+import { DEFAULT_CAPS, DEFAULT_LEVEL, FULL_DEFAULT_CAPS, LEVELS, LEVEL_NAMES, capLines, levelLines, readSettings, setCap, setLevel, settingsFile } from '../lib/orchestrator-settings.mjs';
 import { FULL_TOOLS } from '../lib/orchestrator-seams.mjs';
 import { ACTION_NAMES, LEVEL_TABLE, act, actionLine, actionsFile, decide, lastActions, orchestratorLines, questionMark, readActions, takeBackNotes, undoAction } from '../lib/orchestrator-actions.mjs';
 import { ORCH_TOOLS, ORCH_TOOL_DEFS, orchSession, orchTitle, orchTool, overseeingAnswer, readingTool, toolWords } from '../lib/orchestrator-tools.mjs';
@@ -72,7 +72,7 @@ const TABLE = {
   sessions_list: ['yes', 'yes', 'yes', 'yes', 'yes'], session_read: ['yes', 'yes', 'yes', 'yes', 'yes'], facts_find: ['yes', 'yes', 'yes', 'yes', 'yes'], connections_list: ['yes', 'yes', 'yes', 'yes', 'yes'], fact_save: ['yes', 'yes', 'yes', 'yes', 'yes'],
   card_add: ['no', 'yes', 'yes', 'yes', 'yes'], org_propose: ['no', 'ask', 'ask', 'ask', 'ask'], session_message: ['no', 'ask', 'yes', 'yes', 'yes'], session_answer: ['no', 'ask', 'yes', 'yes', 'yes'], session_start: ['no', 'ask', 'ask', 'yes', 'yes'],
   session_approve: ['no', 'no', 'no', 'no', 'yes'], session_stop: ['no', 'no', 'no', 'no', 'yes'], session_rename: ['no', 'no', 'no', 'no', 'yes'], session_archive: ['no', 'no', 'no', 'no', 'yes'],
-  session_settings: ['no', 'no', 'no', 'no', 'yes'], session_log: ['no', 'no', 'no', 'no', 'yes'], session_agents: ['no', 'no', 'no', 'no', 'yes'], mandate_propose: ['no', 'no', 'no', 'no', 'ask'],
+  session_settings: ['no', 'no', 'no', 'no', 'yes'], session_log: ['no', 'no', 'no', 'no', 'yes'], session_agents: ['no', 'no', 'no', 'no', 'yes'], session_update_task: ['no', 'no', 'no', 'no', 'yes'],
 };
 const TEN = ORCH_TOOLS.filter(name => !FULL_TOOLS.includes(name));
 const SAID = { yes: ['allow', 'level'], ask: ['allow', 'owner'], no: ['refused', 'level'] };
@@ -115,12 +115,13 @@ for (const [at, level] of LEVELS.entries()) test(`at ${level}, each of the ten t
   assert.equal(readSettings().level, level, 'no call changes the level');
 });
 
-test('a computer with no settings is at Suggest, and no call writes the settings', async t => {
+test('a computer with no settings is at Full, and no call writes the settings', async t => {
   const w = world(t); w.session(2);
-  assert.equal(DEFAULT_LEVEL, 'suggest');
+  assert.equal(DEFAULT_LEVEL, 'full');
   assert.deepEqual(said(await w.act('card_add', { text: 'Write the release notes' })), ['allow', 'level']);
-  assert.deepEqual(said(await w.act('session_message', { session: '2', text: 'The build is red.' })), ['allow', 'owner']);
-  assert.equal(w.asked.length, 1);
+  assert.deepEqual(said(await w.act('session_message', { session: '2', text: 'The build is red.' })), ['allow', 'level'], 'his word in his own session, unasked');
+  assert.deepEqual(w.queued.at(-1).asOwner, { bot: 'orchestrator', computer: null });
+  assert.equal(w.asked.length, 0);
   assert.equal(fs.existsSync(settingsFile()), false);
 });
 
@@ -163,7 +164,7 @@ test('what it reads comes back as data: the sessions without its own chat, one s
   const none = (await w.act('connections_list')).text;
   assert.match(none, /No MCP server is set up in Claude Code for this project\.\nOn your list but not set up in Claude Code: elu\.\nNot connected: ELU, Slack, Gmail\./);
   assert.match(none, /claude mcp add-json --scope user slack .*"callbackPort":3118.*\n2\. Then: claude mcp login slack/);
-  assert.match(none, /3\. elu is on your own list already/);
+  assert.doesNotMatch(none, /To connect ELU|npx|offer=promo/, 'ELU is listed, never how to connect it: the owner knows');
   assert.deepEqual(readActions({ reads: false }), [], 'what it only looked at is no action');
   assert.equal(readActions().length, 9, 'and it is logged all the same');
 });
@@ -454,7 +455,7 @@ test('messages in a row: two to one session, then none there until something mov
 });
 
 test('the log is one line a call, also for a refusal, in a file only the owner reads', async t => {
-  const w = world(t); w.session(2);
+  const w = world(t, { level: 'suggest' }); w.session(2);
   await w.act('sessions_list'); const card = await w.act('card_add', { text: 'Fix the flaky login test' }); const note = await w.act('session_message', { session: '2', text: 'The checks fail on main as well.' });
   await w.act('session_message', { session: '1', text: 'Hello me.' }); await w.act('session_delete', { session: '2' });
   const file = actionsFile(), lines = fs.readFileSync(file, 'utf8').trimEnd().split('\n').map(line => JSON.parse(line)), cardId = readBoard(w.repo).cards[0].id;
@@ -719,12 +720,12 @@ test('removeCard takes a card that is not started, as before, and with todo only
   assert.deepEqual(readBoard(w.repo).cards.map(card => card.text), ['Three']);
 });
 
-test('the settings: Suggest with no file, Watch when the file cannot be used, caps within their ceilings, and only the owner\'s command writes them', async t => {
+test('the settings: Full with no file, Watch when the file cannot be used, caps within their ceilings, and only the owner\'s command writes them', async t => {
   const w = world(t), write = value => fs.writeFileSync(settingsFile(), typeof value === 'string' ? value : JSON.stringify(value));
-  assert.deepEqual(readSettings(), { version: 1, level: 'suggest', caps: { ...DEFAULT_CAPS }, saved: false, problem: null });
+  assert.deepEqual(readSettings(), { version: 1, level: 'full', chosen: false, caps: { ...FULL_DEFAULT_CAPS }, saved: false, problem: null });
   assert.equal(path.relative(process.env.XDG_CONFIG_HOME, settingsFile()), path.join('elu-code', 'orchestrator.json'));
   assert.deepEqual([setLevel(' Act ').level, readSettings().saved], ['act', true]);
-  assert.deepEqual(JSON.parse(fs.readFileSync(settingsFile(), 'utf8')), { version: 1, level: 'act', caps: { ...DEFAULT_CAPS } });
+  assert.deepEqual(JSON.parse(fs.readFileSync(settingsFile(), 'utf8')), { version: 1, level: 'act', levelBy: 'set', caps: { ...DEFAULT_CAPS } });
   for (const word of ['boss', '', null]) assert.throws(() => setLevel(word), { message: 'Choose a level: watch, suggest, act, run or full.' });
   // Full only by the owner himself, never by a turn or in passing.
   for (const who of [undefined, {}, { by: 'turn' }, { by: 'orchestrator' }, { typed: true }]) assert.throws(() => setLevel('full', who), { message: 'Only you set the level to Full: type /orchestrator full yourself.' });
@@ -734,7 +735,7 @@ test('the settings: Suggest with no file, Watch when the file cannot be used, ca
   assert.deepEqual(capLines(readSettings().caps), ['Sessions started a day: 3', 'Messages and answers an hour: 4', 'Messages in a row to one session with no progress there: 2', 'Cards added a day: 20', 'Budget of a session it starts: $2.5', 'Limit of one of its own turns: $2', 'Questions to ELU a day: 20', 'Mode of a session it starts: Ask for approval at most']);
   // A file written by hand: what does not read is the default, what is too much is the ceiling.
   write({ version: 1, level: 'run', caps: { sessionsPerDay: 999, messagesPerHour: 1e9, messagesInARow: 'many', cardsPerDay: -4, startBudgetUsd: 1e6, turnLimitUsd: null, startMode: 'full' } });
-  assert.deepEqual(readSettings(), { version: 1, level: 'run', caps: { sessionsPerDay: 20, messagesPerHour: 60, messagesInARow: 2, cardsPerDay: 20, startBudgetUsd: 100, turnLimitUsd: 2, eluCallsPerDay: 20, startMode: 'auto' }, saved: true, problem: null });
+  assert.deepEqual(readSettings(), { version: 1, level: 'run', chosen: true, caps: { sessionsPerDay: 20, messagesPerHour: 60, messagesInARow: 2, cardsPerDay: 20, startBudgetUsd: 100, turnLimitUsd: 2, eluCallsPerDay: 20, startMode: 'auto' }, saved: true, problem: null });
   // A file that cannot be used never gives more than Watch.
   for (const bad of ['{ not json', '[]', { version: 1, level: 'god' }, { version: 1 }, { version: 1, level: ['run'] }]) {
     write(bad);

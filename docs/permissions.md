@@ -245,8 +245,7 @@ orchestrator tools go through one check in ELU's code: the rules it never breaks
 a session in Full access always needs your yes (one sent before you set that session to
 Full access is not given unless you said yes to it), and nothing is done when its action log
 cannot be written. Full access never answers what this bot asks you, under any name it had. The session's mode
-lifts none of them. On another vendor, and in a Read only session, it only answers, read
-only.
+lifts none of them. In a Read only session it only answers, read only.
 
 ELU does not push, merge, tag, deploy or publish by itself. `/publish` shows the exact
 push and the draft pull request, waits for you, and refuses a default branch. Outside Full

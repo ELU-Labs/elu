@@ -262,3 +262,22 @@ test("an effort reads as its level where the vendor's own is known: the page and
   assert.equal(await pages.apply(lead, { vendor: 'claude', model: 'sonnet', effort: null }), true);
   assert.equal(lines.at(-1), 'Model of this session: Opus → Sonnet');
 });
+
+// The bot that oversees the sessions works in every session: its page has no For row, and a
+// change to it is always the saved bot's. Every other bot keeps the row.
+test('the Orchestrator\'s page has no For row: a change to it is for every session; another bot keeps the row', async () => {
+  const { agentDialogs } = await import('../lib/terminal-agent.mjs');
+  const rows = [], saved = [];
+  const pages = agentDialogs({ listDialog: async (title, list) => { rows.push(list.map(item => String(item).replace(/\s+/g, ' ').trim())); return null; }, yes: async () => true, setMessage: () => {}, colour: false, pickModel: async () => null, pickEffort: async () => undefined,
+    nameOf: choice => choice.model ?? choice.vendor, save: (agent, to, every, line) => { saved.push([agent.bot, every]); return { later: false, line: line(false) }; } });
+  const orchestrator = { who: '@orchestrator', bot: 'orchestrator', oversees: true, vendor: 'claude', model: 'opus', effort: null, saved: { vendor: 'claude', model: 'opus', effort: null } };
+  await pages.open(orchestrator);
+  assert.equal(rows.at(-1).some(text => /^For\b/.test(text)), false, 'no For row');
+  assert.equal(await pages.apply(orchestrator, { vendor: 'claude', model: 'sonnet', effort: null }, false), true);
+  assert.deepEqual(saved.at(-1), ['orchestrator', true], 'saved with the bot, whatever was asked');
+  const reviewer = { ...orchestrator, who: '@reviewer', bot: 'reviewer', oversees: false };
+  await pages.open(reviewer);
+  assert.equal(rows.at(-1).some(text => /^For this session$/.test(text)), true, 'another bot keeps it');
+  assert.equal(await pages.apply(reviewer, { vendor: 'claude', model: 'sonnet', effort: null }, false), true);
+  assert.deepEqual(saved.at(-1), ['reviewer', false]);
+});

@@ -56,6 +56,19 @@ test('Codex: reasoning, commands as they start and end, prose on the way and edi
     ['tool', 'Edit: src/coupon.mjs', 'ok'], ['tool', 'Run: rm -rf build', 'failed', 'declined'], ['plan', ['done Fix', 'todo Test']], ['tool', 'Search the web: coupon casing', 'ok'], ['tool', 'docs search: coupons', 'failed']]);
 });
 
+// Codex prints a notice of its own as an error item: every launch with ELU's hook (the Orchestrator's,
+// and Read only) opens with this one, from codex exec and from the app-server (lib/codex-live.mjs).
+test('Codex: its own notices, such as the hook-trust warning, are never a step the owner reads', t => {
+  const dir = temp(t), file = path.join(dir, 'lead.log');
+  const warning = '`--dangerously-bypass-hook-trust` is enabled. Enabled hooks may run without review for this invocation.';
+  write(file, [{ type: 'thread.started', thread_id: 't' }, { type: 'item.completed', item: { id: 'item_0', type: 'error', message: warning } }, { type: 'turn.started' },
+    { type: 'item.completed', item: { id: 'item_note_1', type: 'error', message: warning } },
+    { type: 'item.completed', item: { id: 'item_1', type: 'reasoning', text: 'Reading the sessions.' } },
+    { type: 'item.completed', item: { id: 'item_2', type: 'agent_message', text: JSON.stringify({ outcome: 'done', summary: 'Two sessions wait.' }) } }, { type: 'turn.completed', usage: {} }]);
+  assert.deepEqual(plain(runSteps(file)), [['thinking', 'Reading the sessions.']]);
+  assert.equal(JSON.stringify(runSteps(file)).includes('hook-trust'), false);
+});
+
 test('Grok Build streaming-json: thoughts in pieces are one step, tool calls end as reported, and the reply is cut from the text even while it arrives', t => {
   const dir = temp(t), file = path.join(dir, 'lead.log');
   write(file, [{ type: 'thought', data: 'Looking at ' }, { type: 'thought', data: 'the tests.' }, { type: 'text', data: 'Let me read the module. ' },

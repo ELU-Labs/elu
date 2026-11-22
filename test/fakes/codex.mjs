@@ -236,7 +236,11 @@ if(cfg.accounts?.limited?.includes(account)){const message="You've hit your usag
 // tooLong (fake.json): a review this model will not take (as in the fake Claude Code), ended as
 // the real CLI ends a prompt longer than the model's context window.
 const tooLong=cfg.tooLong!==undefined&&(cfg.tooLongOn??['Review as @']).some(text=>input.includes(text))&&(cfg.tooLong==='all'||cfg.tooLong==='files'&&/"content":"|"excerpts":\[/.test(input)||typeof cfg.tooLong==='number'&&input.length>cfg.tooLong);
-if(tooLong){const message="Codex ran out of room in the model's context window. Start a new conversation or clear earlier history before retrying.";console.log(JSON.stringify({type:'turn.started'}));console.log(JSON.stringify({type:'error',message}));console.log(JSON.stringify({type:'turn.failed',error:{message}}));process.exit(1);}
+// tooLongText: the words it ends such a turn with, for another vendor's or version's (the app
+// server's "Input exceeds the maximum length of 1048576 characters").
+// reviewFails (fake.json): a review it ends with this error, as a vendor that fails a turn does.
+if(typeof cfg.reviewFails==='string'&&input.includes('Review as @')){const message=cfg.reviewFails;console.log(JSON.stringify({type:'turn.started'}));console.log(JSON.stringify({type:'error',message}));console.log(JSON.stringify({type:'turn.failed',error:{message}}));process.exit(1);}
+if(tooLong){const message=typeof cfg.tooLongText==='string'?cfg.tooLongText:"Codex ran out of room in the model's context window. Start a new conversation or clear earlier history before retrying.";console.log(JSON.stringify({type:'turn.started'}));console.log(JSON.stringify({type:'error',message}));console.log(JSON.stringify({type:'turn.failed',error:{message}}));process.exit(1);}
 // commands (fake.json): what the model runs this turn. Each runs in a plain shell with the
 // environment this process was started with, as a session's command does, and is shown as it ran:
 // item.started before it runs and item.completed after, as the real CLI prints them.

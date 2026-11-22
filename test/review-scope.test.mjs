@@ -182,7 +182,7 @@ test("a review in parts whose vendor answers one part overloaded tries that part
   assert.doesNotThrow(() => assertReady(task));
 });
 
-test('a file its model refuses on its own is left out of the review, the chat names it in one line, and publishing never waits for it', async t => {
+test('a file its model refuses on its own is reviewed in pieces of its diff, nothing is left out, and only a model that takes no piece leaves it, in one line', async t => {
   const f = setup(t, 'normal', { models: { opus: 'claude-opus-5-5' } });
   write(f.root, { 'backend/x.json': '[]\n', 'src/a.mjs': 'export const a = 1;\n', 'src/b.mjs': 'export const b = 1;\n' }); git(f.root, ['add', '-A']); git(f.root, ['commit', '-q', '-m', 'Add data']);
   const first = await f.controller.ask('Normalize coupon codes', null, { bots: ['reviewer'] }).finished;
@@ -190,21 +190,30 @@ test('a file its model refuses on its own is left out of the review, the chat na
   write(first.worktree, { 'backend/x.json': data(2679, 'x'), 'src/a.mjs': 'export const a = 2;\n', 'src/b.mjs': 'export const b = 2;\n' });
   assert.equal(fs.readFileSync(path.join(first.worktree, 'backend/x.json'), 'utf8').split('\n').length - 1, 2681);
   f.mode('normal', { models: { opus: 'claude-opus-5-5' }, tooLong: 100000 });
+  const asked = reviewOf(f.inputs('claude'), 'reviewer').length;
   let task = readTask(f.repo, (await f.controller.ask('Normalize coupon codes', first.id).finished).id);
   assert.equal(task.state, 'ready', JSON.stringify(task.error)); assert.equal(task.error ?? null, null); assert.equal(task.reviewStatus, 'passed');
-  const line = '@reviewer could not review backend/x.json (2,681 lines): too long for Opus. It reviewed the other 3 files.';
-  assert.deepEqual(task.messages.filter(row => /could not review|too large/.test(row.text)).map(row => [row.text, row.from]), [[line, 'ELU']]);
-  assert.deepEqual(task.reviews.at(-1).left, [{ path: 'backend/x.json', lines: 2681 }]);
-  assert.deepEqual(shownOf(f, task, 'reviewer').at(-1), 'Passed.');
-  const last = reviewOf(f.inputs('claude'), 'reviewer').map(input => contextOf(input).source).filter(source => source.otherFiles).at(-1);
-  assert.deepEqual(last.files.map(row => row.path), ['src/a.mjs', 'src/b.mjs', 'src/coupon.mjs']); assert.deepEqual(last.otherFiles, ['backend/x.json']);
-  assert.doesNotThrow(() => assertReady(task), 'publishing waits for no bot over the file it left');
-  // A turn that leaves the change as it is reviews it again, and the chat does not say the line again.
-  task = readTask(f.repo, (await f.controller.ask('Normalize coupon codes', first.id).finished).id);
-  assert.equal(task.reviewStatus, 'passed');
-  assert.equal(task.messages.filter(row => row.text === line).length, 1);
-  // The same bot on the same model, once it can review no file at all, names that model the same
-  // way, though its last run that reviewed reported Opus 5.5.
+  // The model refused x.json's diff whole: it was given in pieces of its hunks' lines, each a
+  // diff of its own under what the model takes, and every file was reviewed.
+  assert.deepEqual(said(task), [], 'no file was left out');
+  const review = task.reviews.at(-1);
+  assert.equal(review.left, undefined); assert.ok(review.parts >= 3, JSON.stringify(review.parts));
+  const given = reviewOf(f.inputs('claude'), 'reviewer').slice(asked), pieces = given.filter(input => input.includes('The diff of backend/x.json is too long for one part'));
+  assert.ok(pieces.length >= 2, `${pieces.length} pieces`);
+  const answered = pieces.filter(input => input.length <= 100000);
+  assert.ok(answered.length >= 2, 'the pieces the model took');
+  for (const input of answered) {
+    const { source } = contextOf(input);
+    assert.deepEqual(source.files, [{ path: 'backend/x.json', content: null }]);
+    assert.match(source.patch, /^diff --git a\/backend\/x\.json b\/backend\/x\.json\n[\s\S]*?^@@ -[0-9]+,[0-9]+ \+[0-9]+,[0-9]+ @@/m);
+  }
+  // Together the pieces it took hold every line x.json gained.
+  const added = new Set(answered.flatMap(input => contextOf(input).source.patch.split('\n').filter(line => /^\+ {2}\{"id": /.test(line))));
+  assert.equal(added.size, 2679);
+  assert.match(shownOf(f, task, 'reviewer').at(-1), /^Passed\.\nThis change is too long for @reviewer's model in one piece, so it reviewed it in [0-9]+ parts\.$/);
+  assert.doesNotThrow(() => assertReady(task));
+  // The same bot on the same model, once it can review no piece at all, leaves every file, and
+  // the chat names them and its model in one line, as before.
   assert.equal(task.runs.findLast(row => row.role === 'bot:reviewer' && row.model)?.model, 'claude-opus-5-5');
   write(first.worktree, { 'src/b.mjs': 'export const b = 3;\n' });
   f.mode('normal', { models: { opus: 'claude-opus-5-5' }, tooLong: 'all' });

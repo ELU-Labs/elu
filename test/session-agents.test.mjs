@@ -6,6 +6,12 @@ import { peerHome } from './peer-helpers.mjs';
 import { temp } from './helpers.mjs';
 import { saveBot } from '../lib/bots.mjs';
 import { agentThread, AGENT_KINDS, AGENT_STATES, sessionAgents, SUMMARY_MAX } from '../lib/session-agents.mjs';
+import { SESSION_TAG } from '../lib/process.mjs';
+import { projectIdOf, useProcessLister } from '../lib/agent-processes.mjs';
+
+// No helper of a session runs outside its jobs here, unless a test puts one in this computer's
+// process table (lib/agent-processes.mjs): the real one is never read.
+useProcessLister(() => []);
 
 // The Agents tab's rows and threads (lib/session-agents.mjs), read from a session's records and
 // the logs its runs and jobs wrote, as each vendor writes them. Nothing here starts a model.
@@ -182,6 +188,40 @@ test('text from a log is one cleaned line in a row, and its keys are masked in r
   fs.appendFileSync(task.activeLog, lines([said([{ type: 'text', text: 'x'.repeat(400) }])]));
   const long = sessionAgents(repo, task).find(row => row.id === 'lead').summary;
   assert.equal(long.length, SUMMARY_MAX); assert.ok(long.endsWith('…'));
+});
+
+test('a helper started outside ELU jobs: found by the session names its turn gave it, under the agent above it, kept as done once it ends', t => {
+  const { repo, task, dir, root } = fixture(t), tag = { [SESSION_TAG.session]: '7', [SESSION_TAG.project]: projectIdOf(repo) };
+  // The run's own record names the turn's process: never one of its helpers.
+  fs.writeFileSync(path.join(dir, 'process.json'), JSON.stringify({ pid: 500, identity: null }));
+  const log = write(path.join(root, 'helper.log'), [
+    { type: 'thread.started', thread_id: '019a0000-0000-7000-8000-000000000009' },
+    { type: 'item.completed', item: { id: 'i1', type: 'command_execution', command: "/bin/zsh -lc 'npm test'", exit_code: 0, status: 'completed' } },
+  ]);
+  const at = Date.parse(ago(5)), base = [
+    { pid: 1, ppid: 0, argv: ['/sbin/launchd'] },
+    { pid: 400, ppid: 1, argv: ['node', '/usr/local/lib/node_modules/@elu-labs/elu/bin/elu.cjs'] },
+    { pid: 500, ppid: 400, argv: ['claude', '-p', '--output-format', 'stream-json'], env: tag },
+    { pid: 501, ppid: 500, argv: ['/bin/zsh', '-c', 'codex exec'], env: tag },
+    { pid: 502, ppid: 501, start: at, argv: ['codex', 'exec', '--json', '-m', 'gpt-6.1-sol', '-c', 'model_reasoning_effort=xhigh', '-C', '/work/elu-app', 'Run the tests'], env: tag, out: log },
+    { pid: 600, ppid: 1, start: at + 1000, argv: ['claude', '-p', '--model', 'opus', 'Watch the build'], env: tag, cwd: '/work/notes' },
+  ].map(row => ({ start: null, env: null, out: null, cwd: null, ...row }));
+  let rows = base; t.after(useProcessLister(() => rows));
+  const listed = sessionAgents(repo, task), by = id => listed.find(row => row.id === id);
+  assert.deepEqual(listed.filter(row => row.id.startsWith('proc:')).map(row => row.id), ['proc:502', 'proc:600'], 'never the turn itself (500)');
+  assert.deepEqual(pick(by('proc:502'), ['kind', 'name', 'parent', 'vendor', 'model', 'effort', 'state', 'since', 'summary', 'log']), { kind: 'helper', name: 'codex exec in elu-app', parent: 'lead', vendor: 'codex', model: 'gpt-6.1-sol', effort: 'xhigh', state: 'working', since: new Date(at).toISOString(), summary: 'Run: npm test', log });
+  // One whose output goes nowhere ELU can read says the folder it works in.
+  assert.deepEqual(pick(by('proc:600'), ['name', 'parent', 'vendor', 'model', 'state', 'summary', 'log']), { name: 'claude -p in notes', parent: 'lead', vendor: 'claude', model: 'opus', state: 'working', summary: 'Working in notes', log: null });
+  // The coder is listed first, its helpers under it.
+  assert.ok(listed.findIndex(row => row.id === 'proc:502') > listed.findIndex(row => row.id === 'lead'));
+  // Its thread: the command it was started with and its steps.
+  assert.deepEqual(agentThread(repo, task, 'proc:502').map(entry => `${entry.kind}:${entry.text.split('\n')[0]}`), ["note:codex exec --json -m gpt-6.1-sol -c model_reasoning_effort=xhigh -C /work/elu-app Run the tests", 'step:Run: npm test']);
+  // Both end: the one whose log is known stays, done, with its last message; the other goes.
+  fs.appendFileSync(log, lines([{ type: 'item.completed', item: { id: 'i2', type: 'agent_message', text: '{"summary":"All tests pass."}' } }]));
+  rows = base.filter(row => ![502, 600].includes(row.pid)); useProcessLister(() => rows);
+  const after = sessionAgents(repo, task).filter(row => row.id.startsWith('proc:'));
+  assert.deepEqual(after.map(row => pick(row, ['id', 'state', 'summary'])), [{ id: 'proc:502', state: 'done', summary: 'All tests pass.' }]);
+  assert.deepEqual(agentThread(repo, task, 'proc:502').slice(-2).map(entry => `${entry.kind}:${entry.text}`), ['result:All tests pass.', 'note:It ended.']);
 });
 
 function pick(row, keys) { return Object.fromEntries(keys.map(key => [key, row?.[key]])); }

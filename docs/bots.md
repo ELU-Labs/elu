@@ -14,7 +14,7 @@ Six come with the app. You can edit or remove any of them in the Bots tab.
 | `@lead` | Claude, Fable, with Opus helpers | When you write to it: plans the work, hands the pieces to helpers, and checks what they return |
 | `@qa` | Claude, Opus | When you write to it: tests the change like a user, fixes what it finds, and verifies each fix |
 | `@pair` | Codex, `gpt-6.1-sol`, high effort | A second model beside the working agent: says what it would challenge after each turn, and reviews each change |
-| `@orchestrator` | Claude, Fable, with Opus helpers | Knows your organization, watches every session of your projects, on this computer and your other computers, and advises you. It edits nothing. [More](orchestrator.md) |
+| `@orchestrator` | Claude, Fable, with Opus helpers | Your orchestrator: you talk to it, and it runs your sessions for you, on this computer and your paired ones. It knows your organization. [More](orchestrator.md) |
 | `@elu` | Claude, every hour | Finds issues in your live product with [ELU](https://elu.dev), then reviews and merges the fix pull request or writes the fix |
 
 A bot is one of three kinds. The Bots tab names each bot's kind, and its page says what
@@ -43,8 +43,8 @@ or a teammate started.
   `elu run` takes `--bot reviewer`.
 - `@lead plan the refund change` gives a bot work. `@lead`, `@qa`, `@elu` and each bot you
   make do the work you write to them, within the session's permissions; `@reviewer` and
-  `@pair` read and answer. `@orchestrator` looks at your sessions and advises: its own
-  chat is where you talk to it, and `/orchestrator` sets how much it may do by itself.
+  `@pair` read and answer. `@orchestrator` runs your sessions for you: its own chat is
+  where you talk to it, and `/orchestrator` shows how much it may do by itself.
 - After each edit, ELU runs the checks and every reviewing bot of the session reviews
   the change. Its must-fix findings go to the model, which fixes each one or disputes it with
   a reason; then the checks and the review run again, up to the policy's review rounds. The

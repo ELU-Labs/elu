@@ -14,9 +14,11 @@ import { currentTask, saysYes, sessionTasks } from '../lib/plan.mjs';
 import { saveBot, sessionTalker, overseerWrote } from '../lib/bots.mjs';
 import { NOT_OWNER_WORD, OWNER_WORD, OWNER_WORD_NOTE, answeringAsOwner, createConversation, ledByOverseer, overseeRunUsd, ownerWord, runConversation } from '../lib/runner.mjs';
 import { OVERSEER_NOTE } from '../lib/bots.mjs';
-import { decisionsBlock, saveMandate } from '../lib/orchestrator-mandates.mjs';
+import { decisionsBlock } from '../lib/owner-decisions.mjs';
+import { updateTask } from '../lib/owner-decisions.mjs';
+import { atomic } from '../lib/util.mjs';
+import { settingsFile } from '../lib/orchestrator-settings.mjs';
 import { OWNER_VIA, OWNER_VIA_LINE } from '../lib/peer/remote-methods.mjs';
-import { projectKey } from '../lib/peer/remote.mjs';
 import { OVERSEE_RUN_USD } from '../lib/bots.mjs';
 import { setCap } from '../lib/orchestrator-settings.mjs';
 import { actionsFile, readActions } from '../lib/orchestrator-actions.mjs';
@@ -45,6 +47,8 @@ const START = { permissions: 'auto', place: { kind: 'worktree' }, folders: [], b
 
 test('the request keeps the mark and the budget it was queued with, and nothing of the owner\'s goes with it', t => {
   const f = fixture(t);
+  // Below Full, as the owner set it: Full lets a start carry more (test/orchestrator-full.test.mjs).
+  fs.mkdirSync(path.dirname(settingsFile()), { recursive: true }); atomic(settingsFile(), { version: 1, level: 'run', levelBy: 'owner', caps: {} });
   saveBot({ name: 'builder', vendor: 'claude', instructions: 'Build what the session asks for.', works: true });
   const note = enqueue(f.root, 'Session 3 waits on a database answer.', { continuationTaskId: '3', priority: 1, ...NOTE });
   assert.equal(note.overseer, 'orchestrator'); assert.equal('budgetUsd' in note, false); assert.equal(note.typed, undefined);
@@ -260,42 +264,47 @@ test('one run of the bot that oversees may spend the owner\'s per-run limit', t 
   assert.equal(overseeRunUsd(), 0.5);
 });
 
-// The Orchestrator at Full: inside a mandate the owner gave it, what it sends a session of his
-// on this computer is his word (asOwner, lib/peer/remote-methods.mjs), not its note. The turn is
-// told so, with his decisions for that mandate, and the chat keeps it as his, marked.
-test('inside a mandate, what the bot sends for the owner is his word: kept as his with the mark, and the turn reads his decisions', async t => {
+// The Orchestrator at Full, the default: what it sends a session of his on this computer is his
+// word (asOwner, lib/peer/remote-methods.mjs), not its note, with no mandate. The turn is told so,
+// reads his decisions for that session (lib/owner-decisions.mjs), and the chat keeps it as his, marked.
+test('at Full, what the bot sends for the owner to his own session is his word with no mandate: kept as his with the mark, and the turn reads his decisions', async t => {
   const f = fixture(t); f.fake({ mode: 'answer' });
-  const own = createConversation(f.repo, f.controller.draftConfig, 'Ship the coupon fix', { permissions: 'auto' }), other = createConversation(f.repo, f.controller.draftConfig, 'Tidy the docs', { permissions: 'auto' });
-  for (const task of [own, other]) saveTask(f.repo, { ...readTask(f.repo, task.id), state: 'answered' });
-  const mandate = saveMandate({ name: 'Coupon launch', goal: 'Coupons ship this week.', decisions: ['Use Postgres.', 'No new dependencies.'], sessions: [{ computer: null, project: projectKey(f.repo.project ?? f.repo.root), session: String(own.id) }] }, { by: 'owner' });
-  const mark = { bot: 'orchestrator', mandate: mandate.id, computer: null };
-  assert.deepEqual(ownerWord(f.repo, readTask(f.repo, own.id), mark), { ...mark, name: 'Coupon launch', decisions: decisionsBlock(mandate) });
-  // Not his word: another mandate, a session outside it, a mark naming a computer this one did
-  // not get it from, one that came from another computer, a bot's own chat, a teammate's session.
-  for (const [task, given, options] of [[own, { ...mark, mandate: 'm9' }], [other, mark], [own, { ...mark, computer: 'c'.repeat(64) }], [own, mark, { from: 'c'.repeat(64) }], [{ ...readTask(f.repo, own.id), botChat: 'orchestrator' }, mark], [{ ...readTask(f.repo, own.id), origin: { kind: 'handoff', peer: 'b'.repeat(64), name: 'sara', threadId: 't' } }, mark], [own, { bot: 'orchestrator' }]])
+  const own = createConversation(f.repo, f.controller.draftConfig, 'Ship the coupon fix', { permissions: 'auto' });
+  saveTask(f.repo, { ...readTask(f.repo, own.id), state: 'answered' });
+  const mark = { bot: 'orchestrator', computer: null };
+  assert.deepEqual(ownerWord(f.repo, readTask(f.repo, own.id), mark), { ...mark, name: null }, 'a fresh install is at Full');
+  // Not his word: a mark naming a computer this one did not get it from, one that came from
+  // another computer, a bot's own chat, a teammate's session, a bot that does not oversee.
+  for (const [task, given, options] of [[own, { ...mark, computer: 'c'.repeat(64) }], [own, mark, { from: 'c'.repeat(64) }], [{ ...readTask(f.repo, own.id), botChat: 'orchestrator' }, mark], [{ ...readTask(f.repo, own.id), origin: { kind: 'handoff', peer: 'b'.repeat(64), name: 'sara', threadId: 't' } }, mark], [own, { bot: 'reviewer', computer: null }]])
     assert.equal(ownerWord(f.repo, task.messages ? task : readTask(f.repo, task.id), given, options), null, JSON.stringify([task.id, given, options]));
+  // His decisions for the session, kept by the bot (session_update_task).
+  updateTask(f.repo, own.id, { add: ['Use Postgres.', 'No new dependencies.'] }, { by: 'orchestrator' });
 
   const first = fs.existsSync(path.join(f.parent, 'inputs.jsonl')) ? inputs(f).length : 0;
   const done = await answeringAsOwner(f.repo, own.id, mark, () => runConversation(f.repo, readTask(f.repo, own.id), 'Go ahead with the migration.', { owner: true }));
   assert.equal(done.state, 'answered', JSON.stringify(done.error));
   const turn = inputs(f).slice(first).find(row => schemaOf(row).properties?.intent);
-  assert.ok(turn.input.includes(`${OWNER_WORD} ${OWNER_VIA_LINE('orchestrator', 'Coupon launch')}`));
-  assert.ok(turn.input.includes(decisionsBlock(mandate)), 'his decisions for the mandate');
+  assert.ok(turn.input.includes(`${OWNER_WORD} ${OWNER_VIA_LINE('orchestrator')}`));
+  assert.ok(turn.input.includes(decisionsBlock(readTask(f.repo, own.id))), "his decisions for the session, under Your owner's decisions for this session");
+  assert.match(turn.input, /Your owner's decisions for this session:/);
   assert.ok(turn.input.includes(OWNER_WORD_NOTE) && !turn.input.includes(OVERSEER_NOTE), 'his word, not the bot\'s note');
+  assert.doesNotMatch(turn.input, /mandate/i);
   assert.equal(schemaOf(turn).properties.learned, undefined, 'the bot\'s words for him teach nothing');
   const row = readTask(f.repo, own.id).messages.find(entry => entry.text === 'Go ahead with the migration.');
-  assert.deepEqual([row.asOwner, row.via, row.from, row.bot, row.overseer], [mark, OWNER_VIA('orchestrator', 'Coupon launch'), undefined, undefined, undefined]);
-  // The chat shows it as his, through the bot: its heading is You · via @orchestrator.
-  assert.equal(conversationEntries(f.repo, readTask(f.repo, own.id)).find(entry => entry.text === 'Go ahead with the migration.')?.via, OWNER_VIA('orchestrator', 'Coupon launch'));
+  assert.deepEqual([row.asOwner, row.via, row.from, row.bot, row.overseer], [mark, OWNER_VIA('orchestrator'), undefined, undefined, undefined]);
+  // The chat shows it as his, through the bot, and the task's update too.
+  const entries = conversationEntries(f.repo, readTask(f.repo, own.id));
+  assert.equal(entries.find(entry => entry.text === 'Go ahead with the migration.')?.via, OWNER_VIA('orchestrator'));
+  assert.deepEqual(entries.filter(entry => entry.role === 'You · via @orchestrator' && /^Updated the task:/.test(entry.text)).map(entry => entry.text), ['Updated the task: added "Use Postgres."; added "No new dependencies.".']);
   // A session the bot started (overseer) is led by it until the owner writes there; his word through it counts.
   const at = new Date().toISOString(), note = { at, text: 'Draft the plan', from: '@orchestrator', bot: 'orchestrator', overseer: true };
   assert.equal(ledByOverseer(f.repo, { id: '90', overseer: 'orchestrator', messages: [note] }), true);
   assert.equal(ledByOverseer(f.repo, { id: '90', overseer: 'orchestrator', messages: [note, row] }), false);
 
-  // Outside the mandate it is refused, so it can go only as the bot's note, and nothing is kept.
-  for (const [id, given] of [[other.id, mark], [own.id, { ...mark, mandate: 'm9' }]])
-    await assert.rejects(answeringAsOwner(f.repo, id, given, () => runConversation(f.repo, readTask(f.repo, id), 'Merge it.', { owner: true })), { message: NOT_OWNER_WORD('orchestrator') });
-  assert.equal(readTask(f.repo, other.id).messages.some(entry => entry.text === 'Merge it.'), false);
+  // Below Full it is refused, so it can go only as the bot's note, and nothing is kept.
+  atomic(settingsFile(), { version: 1, level: 'run', levelBy: 'owner', caps: {} });
+  await assert.rejects(answeringAsOwner(f.repo, own.id, mark, () => runConversation(f.repo, readTask(f.repo, own.id), 'Merge it.', { owner: true })), { message: NOT_OWNER_WORD('orchestrator') });
+  assert.equal(readTask(f.repo, own.id).messages.some(entry => entry.text === 'Merge it.'), false);
   // With no mark the turn runs as it is.
   assert.equal(await answeringAsOwner(f.repo, own.id, null, async () => 'ran'), 'ran');
 });

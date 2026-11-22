@@ -24,6 +24,7 @@ import { proposeTask, approveTask as approvePlan, reportProgress, finishTask, re
 import { clockTime } from '../lib/terminal-plan.mjs';
 import { columns } from '../lib/width.mjs';
 import { saveTask, readTask, taskDir, taskTitle, setTitle, lock, tasks } from '../lib/state.mjs';
+import { updateTask as updateOwnerTask } from '../lib/owner-decisions.mjs';
 import { closeWindow, eluWindow, processIdentity, processRecord } from '../lib/process.mjs';
 import { activeLogin, finishLogin, listLogins, newLogin } from '../lib/logins.mjs';
 import { recordAccount } from '../lib/usage.mjs';
@@ -1188,10 +1189,11 @@ test('Bots with none saved says how to make one; n or + New bot makes one throug
   await dialog(v, 'Model', 'two words');
   await until(() => /A model name has no spaces: up to 80 letters/.test(dialogText(v, 'Model')), 'refused at the Model step'); assert.equal(modal(v, 'Instructions · @pages'), undefined);
   await dialog(v, 'Model', '');
-  // agy has no effort setting, so that list is skipped. Its MCP servers step says they reach Claude runs only.
+  // agy has no effort setting, so that list is skipped. Its MCP servers reach it, as they reach every vendor whose launch takes them: its step says nothing else.
   await until(() => modal(v, 'Schedule'), 'straight to the schedule'); assert.equal(modal(v, 'Effort'), undefined);
   await dialog(v, 'Schedule', '');
-  await until(() => modal(v, 'MCP servers') && /MCP servers reach Claude runs only\. This bot runs on agy\./.test(dialogText(v, 'MCP servers')), 'servers prompt for agy');
+  await until(() => modal(v, 'MCP servers') && /The MCP servers this bot may use/.test(dialogText(v, 'MCP servers')), 'servers prompt for agy');
+  assert.doesNotMatch(dialogText(v, 'MCP servers'), /reach Claude runs only|do not reach/);
   await dialog(v, 'MCP servers', '');
   await until(() => modal(v, 'Color'), 'color list for agy'); v.input.write('\r');
   await until(() => editor(v, 'Instructions · @pages')?.__listener, 'the instructions');
@@ -9545,6 +9547,23 @@ test('the session header says Task, not its state: a click on it or Ctrl+T opens
     v.input.write('\x1b'); await until(() => !modal(v, 'Task'), 'closed');
     await send(v, '/sessions');
   }
+});
+
+// The owner's decisions for a session, kept for him by the bot that oversees (session_update_task,
+// lib/owner-decisions.mjs): each change shows in the session's chat as his, through the bot, and
+// its Task lists them in his words, numbered as every turn of it reads them.
+test('a change the bot that oversees made to his decisions shows as his, via the bot, and Ctrl+T lists his decisions', { timeout: 30000 }, async t => {
+  const p = setup(t), at = new Date(Date.now() - 60000).toISOString();
+  saveTask(p.repo, { id: '4', kind: 'conversation', goal: 'Where are the coupon notes?', state: 'answered', worktree: p.root, branch: null, base: null, createdAt: at, runs: [], reviews: [], responses: [], sessions: {}, result: { outcome: 'done', intent: 'answer', summary: 'They are in docs/coupons.md.', question: null, choices: [], comments: [], responses: [] }, messages: [{ at, text: 'Where are the coupon notes?' }] });
+  updateOwnerTask(p.repo, '4', { add: ['Use Postgres.', 'No new dependencies.'] }, { by: 'orchestrator' });
+  const v = await view(t, { repo: p.repo, conductor: false }), panels = v.current.panels, chat = () => panels.chat.getText().replace(/\s+/g, ' ');
+  await openTask(v, /Where are the/);
+  await until(() => /You · via @orchestrator: updated the task: added "Use Postgres\."; added "No new dependencies\."\./.test(chat()), 'the change, as his through the bot').catch(error => { throw new Error(`${error.message}: ${chat()}`); });
+  panels.ask.focus(); await until(() => panels.ask.__listener, 'the message box reads');
+  v.input.write('\x14'); await until(() => modal(v, 'Task'), 'Ctrl+T opens its Task');
+  const shown = dialogRows(v, 'Task').map(row => row.trimEnd()).filter(row => row);
+  assert.deepEqual(shown.slice(shown.indexOf('Your decisions'), shown.indexOf('Checklist')), ['Your decisions', '  1. Use Postgres.', '  2. No new dependencies.'], shown.join('\n'));
+  v.input.write('\x1b'); await until(() => !modal(v, 'Task'), 'closed');
 });
 
 // A session at work takes a new goal from the owner (lib/owner-check.mjs keepOpen): its Task
