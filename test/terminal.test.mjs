@@ -329,7 +329,8 @@ test('a session started with only a dropped picture is named after the picture, 
   await until(() => listed('Screenshot'), 'named after the picture while it waits').catch(error => { throw new Error(`${error.message}: ${seen()}`); });
   conductor.busy = false;
   await until(() => tasks()[0]?.state === 'answered', 'the session answered');
-  await until(() => named('Screenshot', 'Screenshot 2026-11-15 at 1.02'), 'named after the picture once it started').catch(error => { throw new Error(`${error.message}: ${seen()}`); });
+  // Over the chat, Task and Agents beside it leave its first word at 80 columns; its whole name is its title.
+  await until(() => named('Screenshot', 'Screenshot…'), 'named after the picture once it started').catch(error => { throw new Error(`${error.message}: ${seen()}`); });
   assert.equal(taskTitle(tasks()[0]), name);
   await dropAlone(d.dropped);
   await until(() => tasks()[1]?.state === 'answered', 'the second session answered');
@@ -4840,9 +4841,10 @@ test("a schedule's run that takes the owner's name reads it in its row and its t
   assert.ok(rows(v).every(row => !/^\W*· (◷ )?Check the build/.test(row)), rows(v).join('\n'));
   await selectRow(v, /· ◷ Backlog review/);
   await until(() => v.current.session === 'request' && /Schedule \(queued\)/.test(panels.chat.getText()) && /^sample app {2}· {2}Backlog review$/.test(header()), 'titled with its name while it waits').catch(error => { throw new Error(`${error.message}: ${header()}`); });
-  // Once it starts it is its session, under the same name, in its row and its title.
+  // Once it starts it is its session, under the same name, in its row and its title. At 80
+  // columns its Task and Agents leave no room for the project before it.
   const conductor = new Conductor({ tickMs: 20 }).start(); resources(t).views.push(() => conductor.stop());
-  await until(() => /^\d+$/.test(String(v.current.session)) && /Backlog review/.test(cursor(v)) && /^sample app {2}· {2}Backlog review {2}· /.test(header()), 'the same title once its session starts');
+  await until(() => /^\d+$/.test(String(v.current.session)) && /Backlog review/.test(cursor(v)) && /^(sample app {2}· {2})?Backlog review {2}· /.test(header()), 'the same title once its session starts');
   assert.equal(taskTitle(readTask(p.repo, v.current.session)), 'Backlog review');
 });
 

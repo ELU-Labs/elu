@@ -1298,8 +1298,8 @@ test('a run that waits to start on my other computer says what it waits for in i
   await titled('billing · Check the nightly build · Task · Agents · Auto', 'the title at 140 columns');
   await taskSays('Waiting to start', 'Waiting for a free slot: 1 of 1 session is running. /slots on @sara-box changes it.', 'a free slot');
   redraw(80, 24); await until(() => v.current.screen.width === 80, '80 columns');
-  // The request is cut to the room left, at a word; Task and the mode stay whole.
-  await titled(/^(billing · )?Check the[\w ]* · Task · Agents · Auto$/, 'the title at 80 columns');
+  // The request is cut to the room left, at a word, with … where it is cut; Task, Agents and the mode stay whole.
+  await titled(/^(billing · )?Check the[\w ]*…? · Task · Agents · Auto$/, 'the title at 80 columns');
   await taskSays('Waiting to start', 'Waiting for a free slot: 1 of 1 session is running. /slots on @sara-box changes it.', 'a free slot at 80 columns');
   // Each other wait in its own words.
   Object.assign(remote[0], { waits: { on: 'teammates', running: 1, limit: 1 } }); redraw(140, 50);
