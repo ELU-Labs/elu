@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { compile as claude, parse as parseClaude, sandboxRefusal, secretReads, unwritable, NEVER_RULES } from '../lib/adapters/claude.mjs';
+import { compile as claude, parse as parseClaude, sandboxRefusal, secretReads, unwritable, NEVER_RULES, SETTINGS_INLINE_LIMIT } from '../lib/adapters/claude.mjs';
 import { defaultConfig } from '../lib/config.mjs';
 import { temp, readRole, git as gitIn } from './helpers.mjs';
 import { commandRule } from '../lib/policy.mjs';
@@ -53,6 +53,29 @@ function modeFixture(t) {
 }
 const valueOf = (args, flag) => args[args.indexOf(flag) + 1];
 const settingsOf = args => JSON.parse(valueOf(args, '--settings'));
+
+// Linux refuses one argument over 128 KiB (E2BIG), and a large project's protected files gave a
+// reviewer's settings 134,604 bytes. Settings too long for the command line go to the run's file.
+test('settings too long for one argument go to the run file, the same rules, and short ones stay inline', t => {
+  const cwd = temp(t), run = temp(t), role = defaultConfig().roles.lead, settingsFile = path.join(run, 'bot-advisor-run.settings.json');
+  const many = Array.from({ length: 400 }, (_, i) => `packages/area-${i}/workspace-folder/package.json`);
+  for (const mode of ['locked', 'ask']) {
+    const relay = mode === 'locked' ? {} : (() => { const f = modeFixture(t); return { mcp: f.mcp, approval: { tool: APPROVAL_TOOL } }; })();
+    const inline = (() => { try { return claude({ role, cwd, mode, protectedPaths: many, session: SESSION, ...relay }); } catch (error) { return error; } })();
+    assert.match(inline.message, /protects too many files/, `${mode}: refused without a run file, never started to fail`);
+    const args = claude({ role, cwd, mode, protectedPaths: many, session: SESSION, settingsFile, ...relay });
+    assert.equal(valueOf(args, '--settings'), settingsFile, mode);
+    assert.ok(args.every(arg => Buffer.byteLength(arg) <= SETTINGS_INLINE_LIMIT), `${mode}: no argument near the limit`);
+    const written = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
+    assert.ok(Buffer.byteLength(JSON.stringify(written)) > SETTINGS_INLINE_LIMIT, mode);
+    assert.ok(written.permissions.deny.includes(`Edit(//${path.join(cwd, many[399]).slice(1)})`), `${mode}: the last protected file is still denied`);
+    if (process.platform !== 'win32') assert.equal(fs.statSync(settingsFile).mode & 0o777, 0o600, mode);
+    fs.rmSync(settingsFile);
+  }
+  const short = claude({ role, cwd, protectedPaths: ['.git', 'package.json'], session: SESSION, settingsFile });
+  assert.equal(typeof settingsOf(short).permissions, 'object', 'short settings stay inline');
+  assert.equal(fs.existsSync(settingsFile), false, 'and write no file');
+});
 
 test('ask, auto and full launch through the approval relay, ask and auto deny the never list and secrets, and none runs agents', t => {
   const f = modeFixture(t);
