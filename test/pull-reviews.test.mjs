@@ -121,7 +121,7 @@ const args = process.argv.slice(2), s = JSON.parse(fs.readFileSync(${JSON.string
 fs.appendFileSync(${JSON.stringify(calls)}, JSON.stringify({ args, cwd: process.cwd() }) + '\\n');
 if (args[0] === 'pr' && args[1] === 'create') { console.error('Creating pull request for feat/coupons into main in acme/shop'); console.log(s.url); process.exit(0); }
 if (args[0] === 'pr' && args[1] === 'view') { console.log(JSON.stringify({ number: 7, title: 'Coupons', state: s.state, url: s.url, headRefOid: s.head, headRefName: 'feat/coupons', baseRefName: 'main', baseRefOid: 'b'.repeat(40) })); process.exit(0); }
-if (args[0] === 'pr' && args[1] === 'diff') { process.stdout.write(s.diff); process.exit(0); }
+if (args[0] === 'pr' && args[1] === 'diff') { while (s.hold && fs.existsSync(s.hold)) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50); process.stdout.write(s.diff); process.exit(0); }
 process.exit(1);
 `, { mode: 0o755 });
   return { set, calls: () => rows(calls) };
@@ -174,8 +174,15 @@ test('a pull request the lead opens with gh pr create from a helper folder is re
   // its head, and its must-fix is tagged with the number, in the chat and in the lead's message.
   f.mode('review-fix', { intent: 'answer', commands: [] });
   for (const row of pendingRequests(f.root)) { try { (await import('../lib/workspace.mjs')).removeRequest(f.root, row.id); } catch { /* Gone. */ } }
-  const ran = await f.controller.ask(leadAskText('critic', `review ${URL} once more`), own.id, { bot: 'critic' }).finished;
+  // Its review runs beside the session: the ask is done while the review still waits for the
+  // diff, so a message sent meanwhile is not held behind it (2026-11-22: up to an hour).
+  const hold = path.join(f.parent, 'hold-diff'); fs.writeFileSync(hold, ''); gh.set({ hold });
+  const asked = f.controller.ask(leadAskText('critic', `review ${URL} once more`), own.id, { bot: 'critic' }).finished;
+  const ran = await Promise.race([asked, new Promise(resolve => setTimeout(() => resolve('held'), 20000))]);
+  assert.notEqual(ran, 'held', 'the ask waited for the review');
   assert.notEqual(ran.state, 'blocked', JSON.stringify(ran.error));
+  assert.equal(runner.pullSweepsRunning(), 1, 'the review is still running beside the session');
+  fs.rmSync(hold); await runner.pullSweepsDone(); gh.set({ hold: null });
   task = readTask(f.repo, own.id);
   assert.deepEqual(conversationEntries(f.repo, task).filter(row => row.pull === 7).map(row => row.text).at(-1), 'PR #7: 1 must-fix:\n- Handle the edge case.');
   const fix = pendingRequests(f.root).filter(row => String(row.continuationTaskId) === String(own.id) && row.goal.startsWith(REVIEWS_HEAD)).at(-1);

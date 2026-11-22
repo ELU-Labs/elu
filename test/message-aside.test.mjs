@@ -7,7 +7,7 @@ import { ProjectController, conversationEntries, projectSnapshot, registerProjec
 import { projectFolder, pendingRequests, takeRequest } from '../lib/workspace.mjs';
 import { readTask } from '../lib/state.mjs';
 import { Conductor, enqueue, sendCommand } from '../lib/conductor.mjs';
-import { ASIDE_ANSWERED, ASIDE_RUNNING, ASIDE_WORK, readAsides, runsCommand, sentWords, waitingWords } from '../lib/message-aside.mjs';
+import { ASIDE_ANSWERED, ASIDE_RUNNING, ASIDE_WORK, asideInstructions, readAsides, runsCommand, sentWords, waitingWords } from '../lib/message-aside.mjs';
 
 // The owner's report: he wrote to a session in the middle of a long turn on a vendor that
 // takes no message while it works, and the chat said only that his message waits for the turn
@@ -47,6 +47,14 @@ const only = f => readTask(f.repo, '1');
 const sessionOf = f => { try { return only(f); } catch { return null; } };
 const request = (f, id) => pendingRequests(f.root).find(row => row.id === id);
 const shown = (f) => conversationEntries(f.repo, only(f)).map(row => [row.role, row.text, row.line === true, row.update === true]);
+
+// 2026-11-22: an answer beside a turn ended "This is a status question.": told to "say what kind of
+// message it is", the model said it in the text the owner reads, as well as in intent.
+test('the answer beside a turn keeps what kind of message it is to intent, out of the text he reads', () => {
+  const told = asideInstructions();
+  assert.match(told, /say what kind of message it is in intent alone, never in your answer/);
+  assert.doesNotMatch(told, /Then say what kind of message it is\. /);
+});
 
 test('a question sent to a turn that takes no message is answered beside it within seconds: the turn goes on, the message is done, and the next turn reads both', { timeout: 90000 }, async t => {
   const f = setup(t, { mode: 'slow', extra: { byInput: SIDE } });
