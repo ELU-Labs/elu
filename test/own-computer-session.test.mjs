@@ -169,6 +169,30 @@ test('at Full, its turn in its own chat runs in Full access with its shell, elu 
   assert.equal(call.args.includes('--max-budget-usd'), false, 'no per-run limit at Full');
 });
 
+// 2026-11-22: a chat made in Ask access before Full was the default got Full access only when
+// he wrote to it in the terminal or ran /orchestrator full. His message that came another way
+// ran in Ask access with no shell, and the bot could not read the file he pointed it to.
+test('at Full, its own chat made in Ask access runs in Full access however the turn came; below Full it keeps Ask', async t => {
+  const f = fixture(t);
+  const claudeBin = path.join(f.fakeDir, 'claude'), stand = fs.readFileSync(claudeBin, 'utf8'), flags = "console.log('--print ";
+  fs.writeFileSync(claudeBin, stand.replace(flags, "console.log('--agents --print "));
+  fs.mkdirSync(path.dirname(settingsFile()), { recursive: true }); atomic(settingsFile(), { version: 1, level: 'run', caps: {} });
+  let first = f.inputs().length;
+  const chat = await f.controller.ask('What needs me today?', null, { bot: 'orchestrator', botChat: true, permissions: 'ask' }).finished;
+  assert.equal(chat.state, 'answered', JSON.stringify(chat.error));
+  assert.equal(readTask(f.repo, chat.id).permissions, 'ask', 'below Full it keeps the access it was made with');
+  assert.ok(!f.inputs().slice(first).some(call => call.input.includes(OVERSEE_FULL_RULE)));
+  atomic(settingsFile(), { version: 1, level: LEVEL_FULL, caps: {} });
+  first = f.inputs().length;
+  const next = await f.controller.ask('Read the handoff file and take over.', chat.id, { bot: 'orchestrator' }).finished;
+  assert.equal(next.state, 'answered', JSON.stringify(next.error));
+  const [call] = f.inputs().slice(first);
+  assert.ok(call.input.includes(OVERSEE_FULL_RULE), 'its turn runs at Full, with its shell');
+  const saved = readTask(f.repo, chat.id);
+  assert.equal(saved.permissions, 'full');
+  assert.deepEqual(saved.permissionChanges.map(row => [row.from, row.to]), [['ask', 'full']]);
+});
+
 test('what he picked on his other computer as he started a session is the session\'s from its first turn: effort, bot models and his name for it', async t => {
   const f = fixture(t);
   const task = f.startedFrom(LAPTOP, 'laptop', { bots: ['reviewer'], effort: 'high', botModels: { reviewer: { vendor: 'codex', model: 'gpt-5.5', effort: 'high' } }, title: 'Payments cleanup' });

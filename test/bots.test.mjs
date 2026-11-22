@@ -71,7 +71,7 @@ test('a bot is saved with its defaults, and each field is checked with a line th
   assert.match(saved.createdAt, /^\d{4}-\d\d-\d\dT/); assert.equal(saved.updatedAt, saved.createdAt);
   // The file holds every bot in the order they are listed, and the names the app has offered, so each is added once.
   const file = JSON.parse(fs.readFileSync(botsFile(), 'utf8'));
-  assert.deepEqual({ ...file, bots: file.bots.map(row => row.name) }, { version: 1, defaults: 4, builtIn: DEFAULTS, bots: named('scout') }); assert.deepEqual(file.bots.find(row => row.name === 'scout'), saved);
+  assert.deepEqual({ ...file, bots: file.bots.map(row => row.name) }, { version: 1, defaults: 5, builtIn: DEFAULTS, bots: named('scout') }); assert.deepEqual(file.bots.find(row => row.name === 'scout'), saved);
   assert.deepEqual(getBot('@scout'), saved); assert.deepEqual(needBot('scout'), saved);
   const bot = { name: 'helper', instructions: 'Help.' };
   for (const name of ['Scout', '9lives', 'a b', '', 'x'.repeat(31), 'under_score']) assert.throws(() => saveBot({ ...bot, name }), { message: 'Name a bot with 1 to 30 lowercase letters, digits or -, starting with a letter.' }, name);
@@ -187,7 +187,7 @@ test('a bots file that is not valid JSON is reported, and a row that is no longe
   fs.writeFileSync(botsFile(), JSON.stringify({ version: 1, bots: [{ name: 'good', vendor: 'claude', instructions: 'x' }, { name: 'Bad Name', instructions: 'x' }, { name: 'no-text' }, 'junk'] }));
   assert.deepEqual(listBots().map(row => row.name), named('good'));
   // Bots that are not a list are no bots: an empty store when it was offered every bot the app comes with, and a new one when it was not.
-  fs.writeFileSync(botsFile(), JSON.stringify({ version: 1, defaults: 4, builtIn: DEFAULTS, bots: 'none' })); assert.deepEqual(listBots(), []);
+  fs.writeFileSync(botsFile(), JSON.stringify({ version: 1, defaults: 5, builtIn: DEFAULTS, bots: 'none' })); assert.deepEqual(listBots(), []);
   fs.writeFileSync(botsFile(), JSON.stringify({ bots: 'none' })); assert.deepEqual(listBots().map(row => row.name), DEFAULTS);
 });
 
@@ -212,7 +212,7 @@ test('six bots come with the app: each is saved once, in a fixed order with @elu
   fs.writeFileSync(botsFile(), JSON.stringify({ version: 1, builtIn: earlier, bots: [{ name: 'security', vendor: 'claude', instructions: 'My own security rules.' }, { name: 'mine', vendor: 'claude', instructions: 'x' }] }));
   assert.deepEqual(listBots().map(bot => bot.name), ['lead', 'qa', 'pair', 'orchestrator', 'mine', 'security']); assert.equal(getBot('security').instructions, 'My own security rules.');
   const file = JSON.parse(fs.readFileSync(botsFile(), 'utf8'));
-  assert.equal(file.defaults, 4); assert.deepEqual(file.builtIn, [...earlier, 'lead', 'qa', 'pair', 'orchestrator']);
+  assert.equal(file.defaults, 5); assert.deepEqual(file.builtIn, [...earlier, 'lead', 'qa', 'pair', 'orchestrator']);
   removeBot('pair'); assert.deepEqual(listBots().map(bot => bot.name), ['lead', 'qa', 'orchestrator', 'mine', 'security'], 'and nothing is offered a second time');
 });
 

@@ -275,6 +275,10 @@ test('a round shows and asks open sessions, a working one beside its turn, leave
 
 test('a round never asks the chat of the bot that oversees, never counts it as missing, and shows nothing of it', async t => {
   const f = setup(t);
+  // The stand-in Claude Code lists the --agents flag the real one has: at the default level, Full,
+  // the chat of the bot that oversees runs in Full access, and starts helpers.
+  const claude = path.join(f.parent, 'bin', 'claude'), flags = "console.log('--print ", stand = fs.readFileSync(claude, 'utf8');
+  assert.ok(stand.includes(flags), 'the stand-in lists its flags'); fs.writeFileSync(claude, stand.replace(flags, "console.log('--agents --print "));
   await f.controller.ask('Explain coupons').finished;
   const chat = await f.controller.ask('What needs me today?', null, { bot: 'orchestrator', botChat: true }).finished;
   const standup = createConversation(f.repo, f.controller.draftConfig, '/standup');

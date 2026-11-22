@@ -147,6 +147,19 @@ test('the coder waits on the owner, on another agent at work, and on a helper of
   assert.deepEqual(sessionAgents(repo, {}), []); assert.deepEqual(sessionAgents({}, { id: 'x' }), []);
 });
 
+// 2026-11-22: the Orchestrator's chat showed "@orchestrator opus waiting" over "@orchestrator
+// gpt-6.2-sol working": a coder row that never ran, named for the bot, with the project's model.
+test("a bot's own chat lists the bot alone, with no coder row that never ran; one where the coder ran keeps it", t => {
+  const { repo, task } = fixture(t);
+  const chat = { ...task, botChat: 'advisor', bots: ['advisor'], activeRole: 'bot:advisor', runs: task.runs.filter(run => run.role === 'bot:advisor') };
+  const rows = sessionAgents(repo, chat).filter(row => !row.parent);
+  assert.deepEqual(rows.map(row => [row.id, row.name, row.model, row.state]), [['bot:advisor', '@advisor', 'gpt-6.1-sol', 'working']]);
+  assert.deepEqual(sessionAgents(repo, { ...chat, activeRole: null, activeLog: null, state: 'answered' }).filter(row => !row.parent).map(row => row.id), ['bot:advisor']);
+  // A coder that ran there, or runs now, is listed as before.
+  assert.ok(sessionAgents(repo, { ...chat, runs: task.runs }).some(row => row.id === 'lead'));
+  assert.ok(sessionAgents(repo, { ...chat, activeRole: 'lead' }).some(row => row.id === 'lead'));
+});
+
 test('a log read as it grows: what is new is read, and a sub-agent ends when its answer comes', t => {
   const { repo, task } = fixture(t), row = () => sessionAgents(repo, task).find(value => value.id === 'sub:lead:toolu_C');
   assert.equal(row().state, 'working'); const since = row().since;
