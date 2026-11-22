@@ -207,6 +207,15 @@ async function selectRow(v, pattern) {
   // The right side follows on the next draw.
   await until(() => v.current !== before && pattern.test(cursor(v)) && v.current.screen.focused === board && (!id || v.current.session === id), `row ${pattern} shown`);
 }
+// All projects, last in Projects: Sessions lists the sessions of every project, not only the
+// active one's, until a project is made active again. Back in Sessions.
+async function showAll(v) {
+  const list = v.current.panels.projectsList, at = () => list.items.findIndex(item => /All projects/.test(item.getText()));
+  await send(v, '/projects'); await until(() => v.current.view === 'projects' && at() >= 0, 'All projects');
+  list.focus(); list.select(at()); v.input.write('\r');
+  await until(() => /Showing all projects\./.test(v.current.panels.status.getText()), 'every project shown');
+  await send(v, '/tasks'); await until(() => v.current.view === 'tasks', 'Sessions');
+}
 // Opens the first session whose row matches: the cursor goes to its row, then Enter moves
 // into its chat, to the message box.
 async function openTask(v, pattern) {
@@ -479,7 +488,7 @@ test('a project name that a folder ships is drawn as plain text, and one with a 
   const name = '{bold}Shop{/bold}';
   registerProject(one.repo); registerProject(repository(two.root)); ship(name); assert.equal(savedProjectName(two.root), name);
   const v = await view(t, { dashboard: true }), panels = v.current.panels, items = () => panels.projectsList.items.map(item => item.getText());
-  await send(v, '/projects'); await until(() => v.current.view === 'projects' && items().length === 2, 'two project rows');
+  await send(v, '/projects'); await until(() => v.current.view === 'projects' && items().length === 3, 'two project rows, then All projects');
   assert.ok(items()[1].startsWith(`  ${name}  `), 'in the list of projects');
   panels.projectsList.focus(); panels.projectsList.select(1); v.input.write('o');
   await until(() => v.current.controller?.repo.root === fs.realpathSync(two.root), 'the named project is active');
@@ -498,7 +507,7 @@ test('Projects lists each project with its folder, sessions and last activity; E
   registerProject(one.repo); nameProject(repository(two.root), 'Shop');
   liveTask(one.root, { id: '3', goal: 'Add a retry budget', state: 'answered' });
   const v = await view(t, { dashboard: true }), panels = v.current.panels, items = () => panels.projectsList.items.map(item => item.getText());
-  await send(v, '/projects'); await until(() => v.current.view === 'projects' && items().length === 2, 'two project rows');
+  await send(v, '/projects'); await until(() => v.current.view === 'projects' && items().length === 3, 'two project rows, then All projects');
   const [first, second] = items();
   // A folder under the home folder reads ~/…; any other reads from the root.
   assert.match(first, /^[● ] sample app {2,}~?\/\S+\.\.\. {2}1 session {4,}just now$/); assert.match(second, /^ {2}Shop {2,}~?\/\S+\.\.\. {2}0 sessions {3,}no activity$/);
@@ -548,14 +557,14 @@ test('a project inside another project\'s folder: either one can be made the act
   assert.equal(panels.brand.getText().trim(), '◆ ELU'); assert.equal(v.current.view, 'projects'); assert.equal(v.current.screen.focused, panels.projectsList);
   assert.match(panels.status.getText(), /ELU is now the active project\./);
   await until(() => items().some(row => /^● ELU /.test(row)) && items().some(row => /^ {2}ELU2 /.test(row)), 'the mark moved to ELU');
-  assert.deepEqual(items().map(row => row.slice(0, 6).trim()), ['● ELU', 'ELU2'], 'the active project is listed first');
+  assert.deepEqual(items().map(row => row.slice(0, 6).trim()).slice(0, 2), ['● ELU', 'ELU2'], 'the active project is listed first');
   // Enter on the inner one opens its settings on Make active; Enter again switches back.
   pick('ELU2'); v.input.write('\r'); await until(() => modal(v, 'Project ELU2') && dialogList(v, 'Project ELU2').selected === 0, 'settings, on Make active');
   assert.equal(dialogRows(v, 'Project ELU2')[0], 'Make active');
   v.input.write('\r'); await until(() => v.current.controller?.repo.root === fs.realpathSync(inner) && !modal(v, 'Project ELU2'), 'the inner project is active');
   assert.equal(panels.brand.getText().trim(), '◆ ELU2');
   await until(() => items().some(row => /^● ELU2 /.test(row)) && items().some(row => /^ {2}ELU /.test(row)), 'the mark moved to ELU2');
-  assert.deepEqual(items().map(row => row.slice(0, 7).trim()), ['● ELU2', 'ELU'], 'and ELU2 is first once it is the active one');
+  assert.deepEqual(items().map(row => row.slice(0, 7).trim()).slice(0, 2), ['● ELU2', 'ELU'], 'and ELU2 is first once it is the active one');
   // o on the project that is already active says so and changes nothing.
   pick('ELU2'); v.input.write('o'); await until(() => /ELU2 is already the active project\./.test(panels.status.getText()), 'already active');
 });
@@ -800,7 +809,7 @@ test('a click on a Projects row behind a project\'s settings closes the dialog a
   const one = setup(t), two = project({ after: close => resources(t).files.push(close) });
   registerProject(one.repo); nameProject(repository(two.root), 'Shop');
   const v = await view(t, { dashboard: true }), panels = v.current.panels, list = panels.projectsList, title = 'Project sample app';
-  await send(v, '/projects'); await until(() => v.current.view === 'projects' && list.items.length === 2, 'two project rows');
+  await send(v, '/projects'); await until(() => v.current.view === 'projects' && list.items.length === 3, 'two project rows, then All projects');
   list.focus(); v.input.write('\r'); await until(() => dialogList(v, title)?.lpos, 'settings dialog');
   const other = list.items[1];
   assert.ok(other.lpos.yl <= modal(v, title).lpos.yi, 'the second row is outside the dialog');
@@ -829,15 +838,15 @@ test('the wheel moves the Projects list one row a step, and every step of a trac
   const one = setup(t); registerProject(one.repo);
   for (const name of ['Shop', 'Docs', 'Site']) nameProject(repository(project({ after: close => resources(t).files.push(close) }).root), name);
   const v = await view(t, { dashboard: true }), list = v.current.panels.projectsList;
-  await send(v, '/projects'); await until(() => v.current.view === 'projects' && list.items.length === 4, 'four project rows');
+  await send(v, '/projects'); await until(() => v.current.view === 'projects' && list.items.length === 5, 'four project rows, then All projects');
   list.focus(); list.select(0); v.current.screen.render(); await pause(60);
   wheel(v, list.items[0]); await until(() => list.selected === 1, 'one step, one row'); await pause(60);
   // Two steps in one read, as a trackpad sends them: two rows, not one and not four.
   v.input.write(`\x1b[<65;${list.aleft + 2};${list.atop + 1}M`.repeat(2)); await pause();
   assert.equal(list.selected, 3, 'a burst moves a row a step');
   v.input.write(`\x1b[<65;${list.aleft + 2};${list.atop + 1}M`.repeat(6)); await pause();
-  assert.equal(list.selected, 3, 'and stops at the last row');
-  v.input.write(`\x1b[<64;${list.aleft + 2};${list.atop + 1}M`); await until(() => list.selected === 2, 'up a row at once');
+  assert.equal(list.selected, 4, 'and stops at the last row');
+  v.input.write(`\x1b[<64;${list.aleft + 2};${list.atop + 1}M`); await until(() => list.selected === 3, 'up a row at once');
   assert.equal(v.current.view, 'projects'); assert.equal(modal(v, 'Project sample app'), undefined, 'the wheel opens nothing');
 });
 
@@ -1076,7 +1085,7 @@ test('keys stay with an open dialog when focus has moved behind it: arrows move 
   const one = setup(t), two = project({ after: close => resources(t).files.push(close) });
   registerProject(one.repo); nameProject(repository(two.root), 'Shop');
   const v = await view(t, { dashboard: true }), panels = v.current.panels, list = panels.projectsList, title = 'Project sample app';
-  await send(v, '/projects'); await until(() => v.current.view === 'projects' && list.items.length === 2, 'two project rows');
+  await send(v, '/projects'); await until(() => v.current.view === 'projects' && list.items.length === 3, 'two project rows, then All projects');
   list.focus(); v.input.write('\r'); await until(() => dialogList(v, title)?.lpos, 'settings dialog');
   const rows = dialogList(v, title), start = rows.selected;
   // Focus lands on the list behind, as a finished step or a timer might leave it.
@@ -3302,6 +3311,9 @@ test('a key typed on the row of another project waits for that project to open, 
   registerProject(one.repo); registerProject(repository(two.root));
   liveTask(one.root, { id: '4', goal: 'Trim coupon codes', state: 'answered' }); liveTask(one.root, { id: '6', goal: 'Sort the cart', state: 'answered' }); liveTask(two.root, { id: '5', goal: 'Rename billing', state: 'answered' });
   const opened = [], v = await view(t, { repo: one.repo, onRender: value => opened.push(value.controller?.repo.root) }), panels = v.current.panels, ask = panels.ask, board = panels.board, at = pattern => rows(v).findIndex(row => pattern.test(row));
+  // The active project's sessions only, until All projects shows every project's.
+  await until(() => at(/Trim coupon/) >= 0 && at(/Sort the cart/) >= 0, 'the sessions of the active project'); assert.equal(at(/Rename billing/), -1);
+  await showAll(v);
   await until(() => at(/Trim coupon/) >= 0 && at(/Sort the cart/) >= 0 && at(/Rename billing/) >= 0, 'the sessions of both projects');
   await selectRow(v, /Trim coupon/);
   // The cursor goes to the session of the other project and the message follows at once: all of it is in that session's box.

@@ -1149,16 +1149,18 @@ test('a teammate’s shared bot is in Direct messages with its machine name, and
   assert.deepEqual(peer.sent().at(-1), { type: 'ask', to: SARA, project: null, text: 'are you free?' });
 });
 
-test('my own bot is in Direct messages, and writing to it starts a session with it in the active project', async t => {
+test('my own bot is in Direct messages once I write to it in the active project, and writing to it starts a session with it there', async t => {
   const p = project(later(t)); environment(t, p.parent);
   saveBot({ name: 'helper', vendor: 'claude', instructions: 'Answer briefly.' });
-  const peer = fakePeer(), v = await view(t, { repo: repository(p.root), peer, team: true });
-  await until(() => v.current.view === 'chats', 'Chats');
-  await openRow(v, /◆ @helper\s*$/, '@helper');
-  await until(() => /Message @helper · it answers in its own session/.test(v.panels.ask._label.getText()), 'the box names my bot');
-  await send(v, 'what does this repo do?');
+  const peer = fakePeer(), v = await view(t, { repo: repository(p.root), peer, team: true }), bar = () => v.panels.teamLists[0].items.map(plainItem);
+  await until(() => v.current.view === 'chats' && bar().some(row => /Direct messages/.test(row)), 'Chats');
+  // The bots Chats lists are those with a chat in the active project: none yet. @name writes to one.
+  assert.ok(!bar().some(row => /◆ @helper/.test(row)), bar().join(' | '));
+  await send(v, '@helper what does this repo do?');
   await until(() => /@helper answers in a new session\. It is in Sessions\./.test(v.panels.status.getText()), 'started');
   assert.deepEqual(pendingRequests(p.root).map(row => [row.goal, row.bot]), [['what does this repo do?', 'helper']]);
+  await openRow(v, /◆ @helper\s*$/, '@helper');
+  await until(() => /Message @helper · it answers in its own session/.test(v.panels.ask._label.getText()), 'the box names my bot');
   assert.deepEqual(peer.sent(), [], 'nothing went to a teammate');
 });
 
@@ -2138,7 +2140,7 @@ test('Projects lists a project a teammate shares that is not on this computer: E
   const rows = () => list.items.map(plainItem).map(row => row.trimEnd()), status = () => panels.status.getText(), keys = () => panels.keys.getText(), label = () => panels.ask._label.getText();
   const column = index => panels.kanbanLists[index].items.map(item => plainItem(item).trimEnd());
   await send(v, '/projects'); await until(() => v.current.view === 'projects' && rows().some(row => /Shop/.test(row)), 'the shared project');
-  assert.equal(rows().length, 2, 'this computer\'s project, then the shared one');
+  assert.deepEqual(rows().slice(2), ['  All projects'], 'this computer\'s project, then the shared one, then All projects');
   assert.match(rows()[1], /^ {2}Shop\s+shared by @sara {3}on @sara-box\s+online$/);
   list.focus(); selectRow(list, /shared by @sara/);
   await until(() => /enter team board/.test(keys()), 'its keys'); assert.match(keys(), /c bring here/); assert.doesNotMatch(keys(), /archive|make active/);
@@ -2173,7 +2175,7 @@ test('Projects lists a project a teammate shares that is not on this computer: E
   await until(() => /Shop is here now, in \S.*shop here\. It is the active project\./.test(status()), 'brought here');
   assert.deepEqual(peer.calls.filter(row => row[0] === 'cloneProject').map(row => row.slice(1)), [['https://github.com/acme/shop.git', here]]);
   assert.ok(fs.existsSync(path.join(here, '.git')));
-  await until(() => rows().length === 2 && rows().some(row => /^● Shop\s/.test(row)), 'one row for it: the project here');
+  await until(() => rows().length === 3 && rows().some(row => /^● Shop\s/.test(row)), 'one row for it: the project here, beside this computer\'s and All projects');
   assert.ok(!rows().some(row => /shared by/.test(row)), 'never a second row for the same project');
 });
 
@@ -2250,7 +2252,7 @@ test('a shared project with no git address says how to get it here, the board of
   // The status line is one row here: each line is the longest form of it that fits.
   const v = await view(t, { repo: repository(p.root), dashboard: true, peer, columns: 80, rows: 24 }), panels = v.panels, list = panels.projectsList, status = () => panels.status.getText().trimEnd();
   const rows = () => list.items.map(plainItem).map(row => row.trimEnd());
-  await send(v, '/projects'); await until(() => v.current.view === 'projects' && rows().length === 3, 'both shared projects');
+  await send(v, '/projects'); await until(() => v.current.view === 'projects' && rows().length === 4, 'both shared projects, then All projects');
   for (const row of rows()) assert.ok(row.length <= list.width - 2, `it fits at 80: ${row}`);
   assert.match(rows()[1], /^ {2}A much longer proje\.\.\.\s+shared by @a-teammate-with-a-long-name/); assert.match(rows()[2], /Old one\s+shared by @sara {3}on @sara-box\s+offline$/);
   // c with no address: nothing to clone, and what to do instead.
@@ -2279,7 +2281,7 @@ test('leaving the team while the board of a project it shares is open closes tha
   // The only team: leaving it takes this machine off every team.
   const peer = sharing(fakePeer({ items: [] }), [sharedRow()]); peer.lastTeam = true;
   const v = await view(t, { repo: repository(p.root), dashboard: true, peer }), panels = v.panels, list = panels.projectsList, status = () => panels.status.getText().trimEnd();
-  await send(v, '/projects'); await until(() => v.current.view === 'projects' && list.items.length === 2, 'the shared project');
+  await send(v, '/projects'); await until(() => v.current.view === 'projects' && list.items.length === 3, 'the shared project, then All projects');
   list.focus(); selectRow(list, /Shop/); v.input.write('\r');
   await until(() => v.current.view === 'kanban' && /Message @sara/.test(panels.ask._label.getText()), 'its team board');
   await send(v, '/leave'); await closeDialog(v, 'Leave Core', 'y');
@@ -2366,7 +2368,7 @@ test("Projects lists a project my other computer shares once when this computer 
   assert.match(rows()[0], /^● ELU\s/);
   assert.ok(!rows().some(row => /(ELU|website)\s+shared by you/.test(row)), `never a second row for a project here: ${rows().join(' | ')}`);
   assert.ok(rows().some(row => /ELU\s+shared by @li {3}on @li-box\s+offline$/.test(row)), `a teammate's share stays: ${rows().join(' | ')}`);
-  assert.equal(rows().length, 3, rows().join(' | '));
+  assert.equal(rows().length, 4, rows().join(' | ')); assert.equal(rows()[3], '  All projects');
 });
 
 test('/join names the project the team shares once it is in Projects', async t => {
@@ -4580,4 +4582,35 @@ test('a picture dropped after @here over a session on my other computer goes to 
   await until(() => pendingRequests(p.root).some(row => row.continuationTaskId === '1'), 'the helper is continued');
   const next = pendingRequests(p.root).find(row => row.continuationTaskId === '1').goal;
   assert.equal(copies(next).length, 1, next); assert.equal(next, `${copies(next)[0]} again`);
+});
+
+// The owner made a project for new work and made it active: Sessions and Chats still showed
+// his other project's sessions and team. They show the active project's only, and All projects,
+// last in Projects, shows every project's until a project is made active again.
+test('while a project is active, Sessions and Chats show its own and no other project\'s; All projects in Projects shows them all until o makes one active', async t => {
+  const p = project(later(t)), two = project(later(t)); environment(t, p.parent);
+  for (const [root, name] of [[p.root, 'Core'], [two.root, 'Notes']]) { registerProject(repository(root)); nameProject(repository(root), name); }
+  liveTask(p.root, { id: '1', goal: 'Trim the coupon codes', state: 'answered' }); liveTask(two.root, { id: '1', goal: 'Sort the reading list', state: 'answered' });
+  const peer = fakePeer({ items: [] }), v = await view(t, { repo: repository(p.root), peer, dashboard: true }), panels = v.panels, list = panels.projectsList;
+  const board = () => panels.board.items.map(plainItem).join('\n'), rows = () => list.items.map(plainItem).map(row => row.trimEnd()), bar = () => panels.teamLists[0].items.map(plainItem).join('\n');
+  await send(v, '/sessions'); await until(() => v.current.view === 'tasks' && /Trim the coupon codes/.test(board()), 'the active project\'s session');
+  assert.doesNotMatch(board(), /Sort the reading list/);
+  // Core is the team's project: Chats shows the team.
+  await send(v, '/chats'); await until(() => v.current.view === 'chats' && /@sara/.test(bar()), 'the team of Core');
+  await send(v, '/projects'); await until(() => v.current.view === 'projects' && rows().length === 3, 'two projects, then All projects');
+  assert.deepEqual(rows().map(row => row.slice(0, 14).trim()), ['● Core', 'Notes', 'All projects']);
+  list.focus(); list.select(2); await until(() => /enter show all/.test(panels.keys.getText()), 'its key');
+  v.input.write('\r'); await until(() => /Showing all projects\./.test(panels.status.getText()), 'all projects');
+  assert.equal(panels.brand.getText().trim(), '◆ All projects');
+  await until(() => rows()[2] === '● All projects' && rows()[0].startsWith('  Core'), 'the mark moved');
+  await send(v, '/sessions'); await until(() => /Trim the coupon codes/.test(board()) && /Sort the reading list/.test(board()), 'every project\'s sessions');
+  // o on a project makes it the active one, and only its sessions show again.
+  await send(v, '/projects'); await until(() => v.current.view === 'projects', 'Projects');
+  list.focus(); list.select(1); v.input.write('o');
+  await until(() => v.current.controller?.repo.root === fs.realpathSync(two.root) && /Notes is now the active project\./.test(panels.status.getText()), 'Notes is active');
+  assert.equal(panels.brand.getText().trim(), '◆ Notes');
+  await send(v, '/sessions'); await until(() => /Sort the reading list/.test(board()) && !/Trim the coupon codes/.test(board()), 'only its sessions');
+  // The team is Core's project, not Notes': Chats shows no team in it.
+  await send(v, '/chats'); await until(() => v.current.view === 'chats' && /No team in this project yet/.test(bar()), 'no team in Notes');
+  assert.doesNotMatch(bar(), /@sara/);
 });
