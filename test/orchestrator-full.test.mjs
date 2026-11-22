@@ -323,6 +323,13 @@ test('on the owner\'s own computer it does all of it, his word inside a mandate;
   const sent = w.sent.at(-1);
   assert.deepEqual([sent.type, sent.to, sent.folder, sent.permissions, sent.title, sent.bots, sent.mandate, sent.budgetUsd], ['remoteStart', DEVBOX, '/work/shop', 'full', 'Search', ['tester'], 'm1', undefined]);
   assert.ok(mandateFor({ computer: DEVBOX, project: 'c0ffee00c0ffee00', session: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd' }));
+  // A computer with one project and nothing to pick names it as root and project: naming it starts there.
+  w.reply = command => command.type === 'remoteFolders' ? { pick: false, root: '/srv/shop', project: 'shop', folders: [] } : { id: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee', project: 'shop', projectId: 'c0ffee00c0ffee00' };
+  const one = await w.act('session_start', { computer: 'devbox', project: 'shop', goal: 'Profile search again', access: 'full' });
+  assert.deepEqual(said(one), ['allow', 'level'], one.text);
+  assert.equal(w.sent.at(-1).folder, '/srv/shop');
+  w.reply = command => command.type === 'remoteFolders' ? { pick: false, root: '/srv/shop', project: 'shop', folders: [] } : { id: 'x' };
+  assert.match((await w.act('session_start', { computer: 'devbox', project: 'blog', goal: 'x', access: 'full' })).text, /lists no project named blog/);
   assert.match((await w.act('session_start', { computer: 'laptop', goal: 'x' })).text, /not marked as one of the owner's own computers/);
 });
 

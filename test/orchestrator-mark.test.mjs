@@ -285,6 +285,8 @@ test('inside a mandate, what the bot sends for the owner is his word: kept as hi
   assert.equal(schemaOf(turn).properties.learned, undefined, 'the bot\'s words for him teach nothing');
   const row = readTask(f.repo, own.id).messages.find(entry => entry.text === 'Go ahead with the migration.');
   assert.deepEqual([row.asOwner, row.via, row.from, row.bot, row.overseer], [mark, OWNER_VIA('orchestrator', 'Coupon launch'), undefined, undefined, undefined]);
+  // The chat shows it as his, through the bot: its heading is You · via @orchestrator.
+  assert.equal(conversationEntries(f.repo, readTask(f.repo, own.id)).find(entry => entry.text === 'Go ahead with the migration.')?.via, OWNER_VIA('orchestrator', 'Coupon launch'));
   // A session the bot started (overseer) is led by it until the owner writes there; his word through it counts.
   const at = new Date().toISOString(), note = { at, text: 'Draft the plan', from: '@orchestrator', bot: 'orchestrator', overseer: true };
   assert.equal(ledByOverseer(f.repo, { id: '90', overseer: 'orchestrator', messages: [note] }), true);
