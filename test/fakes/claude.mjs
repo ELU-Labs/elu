@@ -440,6 +440,10 @@ if(edit&&cfg.insert){const {file,at,text}=cfg.insert;const lines=fs.readFileSync
 // fixInsert (fake.json): { file, at, text }, lines a turn that fixes a review puts in that file, once, so the fixed change differs.
 if(edit&&cfg.fixInsert&&input.includes('Address the review')){const {file,at,text}=cfg.fixInsert;const lines=fs.readFileSync(file,'utf8').split('\n');if(!lines.includes(text.split('\n')[0]))fs.writeFileSync(file,[...lines.slice(0,at),text,...lines.slice(at)].join('\n'));}
 if(edit&&(input.includes('Trim spaces')||cfg.next&&continued))fs.writeFileSync('src/coupon.mjs','export const normalize = (value) => value.trim().toUpperCase();\n');
+// A turn that answers a review as fixed (review-fix) changes the file it fixed: each such turn
+// adds its own numbered line, so every fix is a change. With fixChanges (fake.json) false it
+// leaves the file as the turn wrote it: a fix that is not in the folder.
+if(edit&&mode==='review-fix'&&cfg.fixChanges!==false&&input.includes('Address the review')&&fs.existsSync('src/coupon.mjs')&&cfg.calls){const counter=path.join(path.dirname(cfg.calls),'fixes.count');const n=(fs.existsSync(counter)?Number(fs.readFileSync(counter,'utf8'))||0:0)+1;fs.writeFileSync(counter,String(n));fs.appendFileSync('src/coupon.mjs',`// Handled the edge case (${n}).\n`);}
 // commit (fake.json): an editing turn commits its own work with Git, as an agent that was told
 // to commit does. 'once': one commit of everything it changed. 'twice': a second commit after
 // it. 'amend': the commit, then that commit amended. 'branch': a new branch first, and the

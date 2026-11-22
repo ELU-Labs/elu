@@ -78,6 +78,9 @@ works. The app shows each change at once.
   lead's turn ends, and its answer comes back in the lead's next turn. It answers `Asked` only
   when the bot was asked, and refuses a name that is no bot of the session. `@NAME` written in
   a reply, a file or a note reaches no bot: ELU says so in the chat when a reply claims it.
+  An ask that a reviewing bot review a pull request starts beside the turn. At a head that bot
+  already reviewed, ELU gives the lead that review again and no bot runs, unless the ask says
+  to review again (`again`, `once more`) or that review failed.
 
 A session started from a session, or the run of a schedule added in one, is a
 [sub session](sessions.md#sub-sessions) of it, listed under it in Sessions and in

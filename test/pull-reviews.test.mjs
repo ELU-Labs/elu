@@ -4,9 +4,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { project, fakeClis, autoApprove, git } from './helpers.mjs';
 import { saveBot } from '../lib/bots.mjs';
-import { ProjectController, conversationEntries } from '../lib/projects.mjs';
+import { ProjectController, conversationEntries, registerProject } from '../lib/projects.mjs';
+import { Conductor, enqueue } from '../lib/conductor.mjs';
 import { pendingRequests, projectFolder } from '../lib/workspace.mjs';
-import { readTask, saveTask } from '../lib/state.mjs';
+import { readTask, saveTask, taskDir } from '../lib/state.mjs';
 import { sessionChecklist } from '../lib/checklist.mjs';
 import { assertReady } from '../lib/publish.mjs';
 import { REVIEWS_HEAD, eluLine, leadAskText, sentByElu } from '../lib/elu-sent.mjs';
@@ -121,7 +122,7 @@ const args = process.argv.slice(2), s = JSON.parse(fs.readFileSync(${JSON.string
 fs.appendFileSync(${JSON.stringify(calls)}, JSON.stringify({ args, cwd: process.cwd() }) + '\\n');
 if (args[0] === 'pr' && args[1] === 'create') { console.error('Creating pull request for feat/coupons into main in acme/shop'); console.log(s.url); process.exit(0); }
 if (args[0] === 'pr' && args[1] === 'view') { console.log(JSON.stringify({ number: 7, title: 'Coupons', state: s.state, url: s.url, headRefOid: s.head, headRefName: 'feat/coupons', baseRefName: 'main', baseRefOid: 'b'.repeat(40) })); process.exit(0); }
-if (args[0] === 'pr' && args[1] === 'diff') { process.stdout.write(s.diff); process.exit(0); }
+if (args[0] === 'pr' && args[1] === 'diff') { while (s.hold && fs.existsSync(s.hold)) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50); process.stdout.write(s.diff); process.exit(0); }
 process.exit(1);
 `, { mode: 0o755 });
   return { set, calls: () => rows(calls) };
@@ -174,8 +175,15 @@ test('a pull request the lead opens with gh pr create from a helper folder is re
   // its head, and its must-fix is tagged with the number, in the chat and in the lead's message.
   f.mode('review-fix', { intent: 'answer', commands: [] });
   for (const row of pendingRequests(f.root)) { try { (await import('../lib/workspace.mjs')).removeRequest(f.root, row.id); } catch { /* Gone. */ } }
-  const ran = await f.controller.ask(leadAskText('critic', `review ${URL} once more`), own.id, { bot: 'critic' }).finished;
+  // Its review runs beside the session: the ask is done while the review still waits for the
+  // diff, so a message sent meanwhile is not held behind it (2026-11-22: up to an hour).
+  const hold = path.join(f.parent, 'hold-diff'); fs.writeFileSync(hold, ''); gh.set({ hold });
+  const asked = f.controller.ask(leadAskText('critic', `review ${URL} once more`), own.id, { bot: 'critic' }).finished;
+  const ran = await Promise.race([asked, new Promise(resolve => setTimeout(() => resolve('held'), 20000))]);
+  assert.notEqual(ran, 'held', 'the ask waited for the review');
   assert.notEqual(ran.state, 'blocked', JSON.stringify(ran.error));
+  assert.equal(runner.pullSweepsRunning(), 1, 'the review is still running beside the session');
+  fs.rmSync(hold); await runner.pullSweepsDone(); gh.set({ hold: null });
   task = readTask(f.repo, own.id);
   assert.deepEqual(conversationEntries(f.repo, task).filter(row => row.pull === 7).map(row => row.text).at(-1), 'PR #7: 1 must-fix:\n- Handle the edge case.');
   const fix = pendingRequests(f.root).filter(row => String(row.continuationTaskId) === String(own.id) && row.goal.startsWith(REVIEWS_HEAD)).at(-1);
@@ -189,6 +197,34 @@ test('a pull request the lead opens with gh pr create from a helper folder is re
   task = readTask(f.repo, own.id);
   assert.equal(task.pullReviews[URL].reviews.critic.head, 'c'.repeat(40));
   assert.equal(conversationEntries(f.repo, task).filter(row => row.pull === 7).at(-1).text, 'PR #7: Passed.');
+});
+
+// 2026-11-22: a session's lead asked its bots to review after each push. Each ask waited for the
+// lead's turn, then held the session for its whole review, and the owner's messages waited behind
+// every one: up to an hour. The ask now starts beside the running turn and ends at once.
+test('a review the lead asks for while its turn works starts beside that turn at once, and its review holds nothing', { timeout: 240000 }, async t => {
+  const f = setup(t, 'slow');
+  const gh = fakeGh(f);
+  const own = runner.createConversation(f.repo, f.controller.draftConfig, 'Open the coupons pull request', { permissions: 'auto', bots: ['critic'] });
+  saveTask(f.repo, { ...readTask(f.repo, own.id), state: 'answered' });
+  registerProject(f.controller.repo);
+  const conductor = new Conductor({ tickMs: 20 }).start(); t.after(() => conductor.stop());
+  const until = async (check, what, timeout = 20000) => { const started = Date.now(); while (!check()) { if (Date.now() - started > timeout) throw new Error(`Timed out waiting for ${what}`); await new Promise(resolve => setTimeout(resolve, 20)); } };
+  const request = id => pendingRequests(f.root).find(row => row.id === id);
+  enqueue(f.root, 'Go on with the coupons.', { continuationTaskId: String(own.id), priority: 0 });
+  await until(() => readTask(f.repo, own.id).state === 'running', 'the lead turn to work');
+  // The review waits for the diff until the test lets it go.
+  const hold = path.join(f.parent, 'hold-diff'); fs.writeFileSync(hold, ''); gh.set({ hold });
+  const asked = enqueue(f.root, leadAskText('critic', `review ${URL}`), { continuationTaskId: String(own.id), priority: 0, bot: 'critic', byElu: true });
+  await until(() => request(asked.id)?.state === 'done', 'the ask to be done beside the turn', 10000);
+  await until(() => gh.calls().some(row => row.args[0] === 'pr' && row.args[1] === 'diff'), 'its review to start', 10000);
+  assert.equal(readTask(f.repo, own.id).state, 'running', 'the lead turn still works');
+  assert.equal(runner.pullSweepsRunning(), 1, 'its review runs beside the session');
+  // Let go, the bot reviews the pull request at its head, and what it found goes to the lead.
+  f.mode('normal', { intent: 'answer', commands: [] });
+  fs.rmSync(hold); await runner.pullSweepsDone(); gh.set({ hold: null });
+  assert.equal(readPulls(f.repo, own.id).pulls[URL].reviews.critic.head, 'a'.repeat(40));
+  await until(() => readTask(f.repo, own.id).state !== 'running', 'the lead turn to end', 60000);
 });
 
 test('a long turn has its pull requests reviewed while it works, not only when it ends', { timeout: 240000 }, async t => {
@@ -212,4 +248,43 @@ test('pull requests are found in what gh printed and in a reply, by address, and
   assert.deepEqual(pullsIn(`Opened ${URL} and https://github.com/acme/shop/pull/8.`).map(row => row.number), [7, 8]);
   assert.deepEqual(pullsIn('see acme/shop#9'), [], 'a reply names one by address');
   assert.deepEqual(pullsIn('acme/shop#9', { short: true }).map(row => row.url), ['https://github.com/acme/shop/pull/9']);
+});
+
+// 2026-11-22: six asks for a review waited in one session's queue, several at a head the bot had
+// reviewed, and each was a new run of the bot. Such an ask now gets that review from the record.
+test('a review the lead asks for at a head the bot reviewed is answered from the record, unless the head moved, it failed or the ask says again', { timeout: 240000 }, async t => {
+  const f = setup(t, 'normal'), gh = fakeGh(f);
+  const own = runner.createConversation(f.repo, f.controller.draftConfig, 'Open the coupons pull request', { permissions: 'auto', bots: ['critic'] });
+  saveTask(f.repo, { ...readTask(f.repo, own.id), state: 'answered' });
+  f.mode('review-fix', { intent: 'answer' });
+  const ask = async words => { await f.controller.ask(leadAskText('critic', words), own.id, { bot: 'critic' }).finished; await runner.pullSweepsDone(); };
+  const ran = () => reviewOf(f.inputs('codex'), 'critic').filter(input => input.includes('"pullRequest":')).length;
+  const given = () => pendingRequests(f.root).filter(row => row.goal.startsWith(REVIEWS_HEAD)).at(-1).goal;
+  await ask(`review ${URL}`);
+  assert.equal(ran(), 1); assert.match(given(), /"body":"Handle the edge case\."/);
+
+  await ask(`review ${URL}`);
+  assert.equal(ran(), 1, 'no new run at the same head');
+  assert.match(given(), /"alreadyReviewed":/); assert.match(given(), /"severity":"must_fix","body":"Handle the edge case\."/);
+  assert.match(conversationEntries(f.repo, readTask(f.repo, own.id)).filter(row => row.pull === 7).at(-1).text, /@critic reviewed aaaaaaa already/);
+  await ask(`review ${URL}. No need to review it again if you did.`);
+  assert.equal(ran(), 1, 'those words do not ask for it again');
+
+  // A record of ELU up to 0.1.50 kept no findings: those the chat showed are given.
+  const file = path.join(taskDir(f.repo, own.id), 'pulls.json');
+  const edit = change => { const value = JSON.parse(fs.readFileSync(file, 'utf8')); change(value.pulls[URL].reviews.critic); fs.writeFileSync(file, JSON.stringify(value)); };
+  edit(review => { delete review.comments; delete review.summary; });
+  await ask(`review ${URL}`);
+  assert.equal(ran(), 1, 'an older record answers too'); assert.match(given(), /"findings":"PR #7: 1 must-fix:\\n- Handle the edge case\."/);
+
+  await ask(`review ${URL} again`);
+  assert.equal(ran(), 2, 'it was asked to review again');
+  await ask(`review ${URL} once more`);
+  assert.equal(ran(), 3, 'once more');
+  edit(review => { review.failed = 'stream disconnected'; });
+  await ask(`review ${URL}`);
+  assert.equal(ran(), 4, 'the last review failed');
+  gh.set({ head: 'c'.repeat(40) });
+  await ask(`review ${URL}`);
+  assert.equal(ran(), 5, 'the head moved');
 });

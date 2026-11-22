@@ -194,6 +194,35 @@ test('the owner\'s message to a reviewing bot about the edits runs a review: its
   assert.equal(answered.messages.at(-1).bot, 'critic');
 });
 
+// 2026-11-22: a session's lead fixed its review's findings in the folders of its pull requests,
+// so the session's own folder never changed, and its bots reviewed the same tree ten times.
+const FIX_UNCHANGED = "The fix changed nothing in this session's folder, so its bots were not asked to review it again: its must-fix finding stands.";
+const AS_REVIEWED = "This session's folder is as its bots last reviewed it, so they were not asked again: its must-fix finding stands.";
+test('a fix that leaves the folder as it was is not reviewed again, nor is that folder on a later turn: the finding stands until the folder changes', async t => {
+  const f = setup(t, 'review-fix', { fixChanges: false });
+  const first = await f.controller.ask('Normalize coupon codes', null, { bots: ['critic'] }).finished;
+  let task = readTask(f.repo, first.id);
+  assert.equal(reviewOf(f.inputs('codex'), 'critic').length, 1, 'reviewed once');
+  assert.deepEqual([task.state, task.reviewStatus], ['blocked', 'blocked'], JSON.stringify(task.error));
+  assert.equal(task.messages.filter(row => row.from === 'ELU' && row.text === FIX_UNCHANGED).length, 1);
+  assert.throws(() => assertReady(task));
+  // A later turn that leaves the folder as it is: the bot is not asked again, and its finding goes to the lead.
+  const leadRuns = f.calls('claude').length;
+  await f.controller.ask('Go on.', first.id).finished;
+  task = readTask(f.repo, first.id);
+  assert.equal(reviewOf(f.inputs('codex'), 'critic').length, 1, 'not asked again');
+  assert.equal(task.messages.filter(row => row.from === 'ELU' && row.text === AS_REVIEWED).length, 1);
+  assert.ok(f.inputs('claude').at(-1).input.includes('"body":"Handle the edge case."'), 'the lead was given the finding that stands');
+  assert.equal(f.calls('claude').length, leadRuns + 2, 'its turn and the fix, and no more');
+  assert.deepEqual([task.state, task.reviewStatus], ['blocked', 'blocked']);
+  // A fix that changes the folder is reviewed again, and passes.
+  f.mode('review-fix');
+  await f.controller.ask('Go on.', first.id).finished;
+  task = readTask(f.repo, first.id);
+  assert.equal(reviewOf(f.inputs('codex'), 'critic').length, 2, 'the changed folder is reviewed');
+  assert.deepEqual([task.state, task.reviewStatus], ['ready', 'passed'], JSON.stringify(task.error));
+});
+
 test('an error after the edit shows a plain stop line with what to do, never the path it failed on', async t => {
   const f = setup(t, 'normal', { install: 'link' });
   const run = f.controller.ask('Normalize coupon codes');
@@ -288,7 +317,8 @@ test('a model that takes no file of the change reviews its diff alone', async t 
 // whose model takes no file of it on its own cannot review it. That never stops the session:
 // its checks decide as in a session with no bot, and the chat names the files in one line.
 // The line names the model the bot asked for: the reviewer is on Opus, the critic on Big Model.
-const TOO_LARGE = (name, lines = '8,005') => `@${name} could not review src/big.mjs (${lines} lines) and src/coupon.mjs (1 line): too long for ${name === 'critic' ? 'Big Model' : 'Opus'}.`;
+// fixed: the change after the fake's fix, which adds a line to src/coupon.mjs.
+const TOO_LARGE = (name, lines = '8,005', { fixed = false } = {}) => `@${name} could not review src/big.mjs (${lines} lines) and src/coupon.mjs (${fixed ? '2 lines' : '1 line'}): too long for ${name === 'critic' ? 'Big Model' : 'Opus'}.`;
 test('a bot whose model takes not even the diff leaves the session as one with no bot would be, says so in one line, and the edits are kept', async t => {
   const f = bigChange(t, 'normal', { tooLong: 'all' });
   const task = await f.controller.ask('Normalize coupon codes', null, { bots: ['reviewer'] }).finished;
@@ -322,7 +352,7 @@ test('a bot whose model cannot take the change once its must-fix is fixed leaves
   const task = await f.controller.ask('Normalize coupon codes', null, { bots: ['critic'] }).finished;
   assert.equal(task.state, 'ready', JSON.stringify(task.error)); assert.equal(task.error, null); assert.equal(task.reviewStatus, 'skipped');
   assert.deepEqual(task.reviews.map(review => [review.role, review.result.comments.some(row => row.severity === 'must_fix')]), [['bot:critic', true]], 'its review of the change before the fix');
-  assert.deepEqual(task.messages.filter(row => /could not review/.test(row.text)).map(row => row.text), [TOO_LARGE('critic')]);
+  assert.deepEqual(task.messages.filter(row => /could not review/.test(row.text)).map(row => row.text), [TOO_LARGE('critic', '8,005', { fixed: true })]);
   assert.doesNotThrow(() => assertReady(readTask(f.repo, task.id)));
 });
 
@@ -347,7 +377,7 @@ test('when every bot leaves the review of the fixed change, its checks decide an
   assert.ok(fs.readFileSync(path.join(task.worktree, 'src/big.mjs'), 'utf8').includes(FIXED.text), 'the fix changed the files');
   assert.equal(task.state, 'ready', JSON.stringify(task.error)); assert.equal(task.error, null); assert.equal(task.reviewStatus, 'skipped');
   assert.deepEqual(task.reviews.map(review => [review.round, review.role]), [[1, 'bot:critic']]);
-  assert.deepEqual(task.messages.filter(row => /could not review/.test(row.text)).map(row => row.text), [TOO_LARGE('reviewer'), TOO_LARGE('critic', '8,006')], 'the critic could not take the fixed change, one line longer');
+  assert.deepEqual(task.messages.filter(row => /could not review/.test(row.text)).map(row => row.text), [TOO_LARGE('reviewer'), TOO_LARGE('critic', '8,006', { fixed: true })], 'the critic could not take the fixed change, one line longer');
   assert.doesNotThrow(() => assertReady(readTask(f.repo, task.id)));
 });
 
