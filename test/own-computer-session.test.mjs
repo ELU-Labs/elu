@@ -23,8 +23,10 @@ import { createInvite, redeemCode } from '../lib/peer/invite.mjs';
 import { saveTeamAccess } from '../lib/peer/access.mjs';
 import { markMyComputer, unmarkMyComputer } from '../lib/peer/my-computers.mjs';
 import { enqueue } from '../lib/conductor.mjs';
-import { saveMandate } from '../lib/orchestrator-mandates.mjs';
-import { projectKey } from '../lib/peer/remote.mjs';
+import { leadAsked, leadAskText, sentByElu } from '../lib/elu-sent.mjs';
+import { pendingRequests } from '../lib/workspace.mjs';
+import { ASK_BOTS, runOwnCommand } from '../lib/session-commands.mjs';
+import { NOT_ASKED, unaskedBots } from '../lib/projects.mjs';
 
 // A session one of the owner's own computers started here is his own session (the Orchestrator
 // at Full, docs: orchestrator full control, section 4): marked on this computer with /computers
@@ -131,8 +133,8 @@ test('the bot that oversees works at Full only at that level, in its own chat, w
   assert.equal(overseesFull(chat, watch, { level: LEVEL_FULL }), true);
   for (const [task, bot, level] of [[chat, watch, 'run'], [{ ...chat, permissions: 'auto' }, watch, LEVEL_FULL], [{ ...chat, botChat: 'other' }, watch, LEVEL_FULL], [{ ...chat, botChat: undefined }, watch, LEVEL_FULL], [{ ...chat, botChat: 'builder' }, getBot('builder'), LEVEL_FULL], [chat, null, LEVEL_FULL]])
     assert.equal(overseesFull(task, bot, { level }), false, JSON.stringify([task, bot?.name, level]));
-  // Read from the owner's settings when not given: none saved is Suggest, not Full.
-  assert.equal(overseesFull(chat, watch), false);
+  // Read from the owner's settings when not given: none saved is Full, the default.
+  assert.equal(overseesFull(chat, watch), true);
   // What its turn is told there: Full access, what still asks him, and its level, last.
   const full = promptRules('full', ['/srv/data'], { oversee: true, overseeFull: true, helpers: true, level: 'LEVEL LINE' });
   assert.ok(full.includes(OVERSEE_FULL_RULE) && full.includes(KEEP_GOING)); assert.equal(full.at(-1), 'LEVEL LINE');
@@ -192,10 +194,11 @@ test('what he picked on his other computer as he started a session is the sessio
 test('the owner\'s word through the bot that started a session from his other computer is his from its first message', async t => {
   const f = fixture(t);
   markMyComputer(LAPTOP, 'laptop');
-  const mark = { bot: 'orchestrator', mandate: 'm1', computer: LAPTOP };
+  const mark = { bot: 'orchestrator', computer: LAPTOP };
   const task = f.startedFrom(LAPTOP, 'laptop');
   const first = await sentFrom(f, task, LAPTOP, 'Check the build, and fix what fails.', { asOwner: mark });
-  assert.ok(first.input.includes(`${OWNER_WORD} ${OWNER_VIA_LINE('orchestrator', 'm1')}`), 'its mandate lives there, so it is named by its id');
+  assert.ok(first.input.includes(`${OWNER_WORD} ${OWNER_VIA_LINE('orchestrator')}`), 'no mandate: his word as it is');
+  assert.doesNotMatch(first.input, /mandate/i);
   assert.ok(first.input.includes(OWN_COMMANDS[0]) && !first.input.includes(RULES_HEADING));
   assert.equal(first.schema.properties.learned, undefined, 'the bot\'s words for him teach nothing');
   const row = first.task.messages.at(-1);
@@ -211,43 +214,111 @@ test('the owner\'s word through the bot that started a session from his other co
 });
 
 // The owner's word on this computer, end to end: the conductor keeps its mark on the request
-// (lib/conductor.mjs enqueue), and his controller runs it as his while the session is in that
-// mandate, else as the bot's note (lib/projects.mjs ask). A start of the bot at Full keeps all it
-// carries; below Full it is what it was.
-test('the owner\'s word through the bot is kept on its request and is his inside a mandate, a note outside one; a Full start keeps all it carries', async t => {
-  const f = fixture(t), mark = { bot: 'orchestrator', mandate: 'm1', computer: null };
+// (lib/conductor.mjs enqueue), and his controller runs it as his at Full, with no mandate, else
+// as the bot's note (lib/projects.mjs ask). A start of the bot at Full keeps all it carries;
+// below Full it is what it was.
+test('the owner\'s word through the bot is kept on its request and is his at Full, a note below it; a Full start keeps all it carries', async t => {
+  const f = fixture(t), mark = { bot: 'orchestrator', computer: null };
+  fs.mkdirSync(path.dirname(settingsFile()), { recursive: true }); atomic(settingsFile(), { version: 1, level: 'run', levelBy: 'owner', caps: {} });
   const own = createConversation(f.repo, f.controller.draftConfig, 'Fix the coupons', { permissions: 'auto' });
   saveTask(f.repo, { ...readTask(f.repo, own.id), state: 'answered' });
   // The request keeps the mark, and nothing else of his goes with it.
   const row = enqueue(f.root, 'Ship it once the tests pass.', { continuationTaskId: own.id, asOwner: mark });
   assert.deepEqual(row.asOwner, mark); assert.equal(row.overseer, undefined); assert.equal(row.typed, undefined);
   assert.throws(() => enqueue(f.root, 'Merge it.', { continuationTaskId: own.id, asOwner: mark, overseer: 'orchestrator' }), /A note of the bot that oversees your sessions goes to one of them as it is/, 'not with the bot\'s own mark');
-  for (const [options, what] of [[{ asOwner: mark }, 'a new session'], [{ continuationTaskId: own.id, asOwner: { ...mark, computer: LAPTOP } }, 'naming a computer it did not come from'], [{ continuationTaskId: own.id, asOwner: { ...mark, mandate: 'x' } }, 'no mandate id'], [{ continuationTaskId: own.id, asOwner: mark, typed: true }, 'typed']])
+  for (const [options, what] of [[{ asOwner: mark }, 'a new session'], [{ continuationTaskId: own.id, asOwner: { ...mark, computer: LAPTOP } }, 'naming a computer it did not come from'], [{ continuationTaskId: own.id, asOwner: mark, typed: true }, 'typed']])
     assert.throws(() => enqueue(f.root, 'Merge it.', options), /owner's word|marks what it sends/, what);
   // A start of the bot's: below Full only as before; at Full, all it carries, with no budget of its own.
-  const start = { overseer: 'orchestrator', permissions: 'full', place: { kind: 'worktree' }, bots: ['reviewer'], title: 'Coupons', model: { vendor: 'claude', model: 'opus', effort: 'high' }, botModels: { reviewer: { vendor: 'codex', model: 'gpt-5.5', effort: 'high' } }, mandate: 'm1' };
+  const start = { overseer: 'orchestrator', permissions: 'full', place: { kind: 'worktree' }, bots: ['reviewer'], title: 'Coupons', model: { vendor: 'claude', model: 'opus', effort: 'high' }, botModels: { reviewer: { vendor: 'codex', model: 'gpt-5.5', effort: 'high' } } };
   assert.throws(() => enqueue(f.root, 'Start the coupons work', start), /schedule's run is named|Ask for approval or Approve for me/);
   assert.throws(() => enqueue(f.root, 'Start the coupons work', { permissions: 'auto', title: 'Coupons' }), /schedule's run is named/, 'his own start names itself as before');
-  fs.mkdirSync(path.dirname(settingsFile()), { recursive: true }); atomic(settingsFile(), { version: 1, level: LEVEL_FULL, caps: {} });
+  atomic(settingsFile(), { version: 1, level: LEVEL_FULL, levelBy: 'owner', caps: {} });
   const started = enqueue(f.root, 'Start the coupons work', start);
-  assert.deepEqual([started.permissions, started.bots, started.title, started.model, started.botModels, started.mandate, started.budgetUsd], ['full', ['reviewer'], 'Coupons', { vendor: 'claude', model: 'opus', effort: 'high' }, { reviewer: { vendor: 'codex', model: 'gpt-5.5', effort: 'high' } }, 'm1', undefined]);
+  assert.deepEqual([started.permissions, started.bots, started.title, started.model, started.botModels, started.mandate, started.budgetUsd], ['full', ['reviewer'], 'Coupons', { vendor: 'claude', model: 'opus', effort: 'high' }, { reviewer: { vendor: 'codex', model: 'gpt-5.5', effort: 'high' } }, undefined, undefined]);
   assert.throws(() => enqueue(f.root, 'Start', { ...start, model: { vendor: 'claude', model: 'opus', effort: 'loud' } }), /takes no effort loud/);
   assert.throws(() => enqueue(f.root, 'Start', { ...start, botModels: { pair: { vendor: 'codex' } } }), /@pair is not one of this session's bots/);
-  // His controller: outside a mandate the word goes as the bot's note.
+  // His controller: below Full the word goes as the bot's note.
+  atomic(settingsFile(), { version: 1, level: 'run', levelBy: 'owner', caps: {} });
   const first = f.inputs().length;
   const noted = await f.controller.ask('Ship it once the tests pass.', own.id, { asOwner: mark }).finished;
   assert.equal(noted.state, 'answered', JSON.stringify(noted.error));
   const note = readTask(f.repo, own.id).messages.at(-1);
   assert.deepEqual([note.text, note.bot, note.overseer, note.asOwner], ['Ship it once the tests pass.', 'orchestrator', true, undefined]);
   assert.ok(f.inputs().slice(first).every(call => !call.input.includes(OWNER_WORD)), 'not told it is his');
-  // Inside one, as his own, with the mark, and told who sent it for him under which mandate.
-  saveMandate({ name: 'Coupons', goal: 'Coupons', decisions: ['Merge when the checks are green'], sessions: [{ computer: null, project: projectKey(f.repo.project ?? f.repo.root), session: String(own.id) }] }, { by: 'owner' });
+  // At Full, as his own, with the mark, and told who sent it for him.
+  atomic(settingsFile(), { version: 1, level: LEVEL_FULL, levelBy: 'owner', caps: {} });
   const next = f.inputs().length;
   const his = await f.controller.ask('Merge it when green.', own.id, { asOwner: mark }).finished;
   assert.equal(his.state, 'answered', JSON.stringify(his.error));
   const word = readTask(f.repo, own.id).messages.at(-1);
-  assert.deepEqual([word.text, word.asOwner, word.via, word.bot, word.overseer], ['Merge it when green.', mark, OWNER_VIA('orchestrator', 'Coupons'), undefined, undefined]);
-  assert.ok(f.inputs().slice(next).some(call => call.input.includes(`${OWNER_WORD} ${OWNER_VIA_LINE('orchestrator', 'Coupons')}`)), 'told it is his, under that mandate');
+  assert.deepEqual([word.text, word.asOwner, word.via, word.bot, word.overseer], ['Merge it when green.', mark, OWNER_VIA('orchestrator'), undefined, undefined]);
+  assert.ok(f.inputs().slice(next).some(call => call.input.includes(`${OWNER_WORD} ${OWNER_VIA_LINE('orchestrator')}`)), 'told it is his');
   // A note never approves: an approval with a mark that does not hold here sends nothing.
-  assert.throws(() => f.controller.ask('Approved', own.id, { asOwner: { ...mark, mandate: 'm2' }, approved: true }), { message: NOT_OWNER_WORD('orchestrator') });
+  assert.throws(() => f.controller.ask('Approved', own.id, { asOwner: { ...mark, computer: LAPTOP }, approved: true }), { message: NOT_OWNER_WORD('orchestrator') });
+});
+
+// The owner's word may write to a bot of the session (@advisor ...), here through the bot that
+// runs his sessions and from his paired computer, exactly as he could on this computer.
+test('at Full the owner\'s word reaches a bot of the session, here and from his paired computer', async t => {
+  const f = fixture(t);
+  saveBot({ name: 'advisor', vendor: 'claude', instructions: 'Review designs.' });
+  atomic(settingsFile(), { version: 1, level: LEVEL_FULL, levelBy: 'owner', caps: {} });
+  const own = createConversation(f.repo, f.controller.draftConfig, 'Build the settings page', { permissions: 'auto', bots: ['advisor'] });
+  saveTask(f.repo, { ...readTask(f.repo, own.id), state: 'answered' });
+  const here = await f.controller.ask('Review the Wave 3 seams note.', own.id, { asOwner: { bot: 'orchestrator', computer: null }, bot: 'advisor' }).finished;
+  assert.equal(here.state, 'answered', JSON.stringify(here.error));
+  const rows = readTask(f.repo, own.id).messages;
+  const asked = rows.findLast(row => row.text === 'Review the Wave 3 seams note.');
+  assert.deepEqual([asked.to, asked.asOwner, asked.via], ['@advisor', { bot: 'orchestrator', computer: null }, OWNER_VIA('orchestrator')]);
+  assert.ok(rows.at(-1).bot === 'advisor' && !rows.at(-1).overseer, '@advisor answered him');
+  // From his own computer.
+  markMyComputer(LAPTOP, 'laptop');
+  const laptop = f.startedFrom(LAPTOP, 'laptop', { bots: ['advisor'] });
+  const there = await f.controller.ask('Review the seams again.', laptop.id, { computer: LAPTOP, asOwner: { bot: 'orchestrator', computer: LAPTOP }, bot: 'advisor' }).finished;
+  assert.equal(there.state, 'answered', JSON.stringify(there.error));
+  assert.equal(readTask(f.repo, laptop.id).messages.at(-1).bot, 'advisor');
+});
+
+// The session's lead asks one of its bots (elu sessions ask): the bot answers once the lead's
+// turn ends, and its answer comes back to the lead's next turn. Saying a bot was asked when
+// nothing asked it is said in the chat at once.
+test('the lead asks its bot with elu sessions ask, and the answer comes back to it; a claim that nothing backs is said', async t => {
+  const f = fixture(t);
+  saveBot({ name: 'advisor', vendor: 'claude', instructions: 'Review designs.' });
+  const own = createConversation(f.repo, f.controller.draftConfig, 'Build the settings page', { permissions: 'auto', bots: ['advisor'] });
+  saveTask(f.repo, { ...readTask(f.repo, own.id), state: 'answered' });
+  // A bot the session does not have, an empty message, and a new session that names a bot ask nothing.
+  for (const [argv, why] of [[['sessions', 'ask', 'pair', 'Look.'], /@pair is not one of this session's bots, so nothing was asked/], [['sessions', 'ask', 'advisor'], /Use elu sessions ask NAME/], [['sessions', 'new', '@advisor review this'], /it asks no bot/]]) {
+    const out = await runOwnCommand(argv, { repo: f.repo, taskId: own.id, mode: 'auto' });
+    assert.equal(out.code, 1, argv.join(' ')); assert.match(out.err, why);
+  }
+  const out = await runOwnCommand(['sessions', 'ask', '@advisor', 'Review the Wave 3 seams note.'], { repo: f.repo, taskId: own.id, mode: 'auto' });
+  assert.equal(out.code, 0, out.err); assert.match(out.out, /Asked @advisor\. It answers once this turn ends/);
+  const [request] = pendingRequests(f.root).filter(row => String(row.continuationTaskId) === String(own.id));
+  assert.deepEqual([request.bot, request.goal, leadAsked(request.goal)?.text, request.asOwner, request.overseer], ['advisor', leadAskText('advisor', 'Review the Wave 3 seams note.'), 'Review the Wave 3 seams note.', undefined, undefined]);
+  assert.equal(sentByElu(request.goal), true, "ELU's, never the owner's");
+  // Nothing claimed: the request backs it.
+  saveTask(f.repo, { ...readTask(f.repo, own.id), reply: { outcome: 'done', intent: 'answer', summary: 'I asked @advisor for the seams review.' } });
+  assert.equal(unaskedBots(f.repo, readTask(f.repo, own.id)), null);
+  // The conductor runs it as the bot's turn: the advisor answers, and the lead gets its answer next.
+  const ran = await f.controller.ask(request.goal, own.id, { bot: 'advisor' }).finished;
+  assert.equal(ran.state, 'answered', JSON.stringify(ran.error));
+  const back = pendingRequests(f.root).filter(row => String(row.continuationTaskId) === String(own.id) && row.state === 'queued').at(-1);
+  assert.match(back.goal, /^ELU: @advisor answered what you asked it\. \(ELU sent this, not the owner\.\)/);
+  assert.equal(back.bot, undefined, 'to the lead, the model');
+  assert.equal(sentByElu(back.goal), true);
+  // A claim with nothing behind it: said in the chat.
+  saveTask(f.repo, { ...readTask(f.repo, own.id), reply: { outcome: 'done', intent: 'answer', summary: 'The seams note has been sent to the configured @advisor.' } });
+  for (const row of pendingRequests(f.root)) { try { (await import('../lib/workspace.mjs')).removeRequest(f.root, row.id); } catch { /* gone */ } }
+  const said = unaskedBots(f.repo, readTask(f.repo, own.id));
+  assert.equal(said.messages.at(-1).text, NOT_ASKED('advisor'));
+  // The lead of a session with bots is told how to ask them; one with none is not.
+  const told = f.inputs().length;
+  const lead = await f.controller.ask('Go on.', own.id).finished;
+  assert.equal(lead.state, 'answered', JSON.stringify(lead.error));
+  assert.ok(f.inputs().slice(told).some(call => call.input.includes(ASK_BOTS)));
+  const plain = createConversation(f.repo, f.controller.draftConfig, 'Look around', { permissions: 'auto' });
+  const none = f.inputs().length;
+  await f.controller.ask('Go on.', plain.id).finished;
+  assert.ok(f.inputs().slice(none).every(call => !call.input.includes(ASK_BOTS)));
 });

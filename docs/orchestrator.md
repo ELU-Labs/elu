@@ -2,17 +2,21 @@
 
 Back to the [README](../README.md) · [Bots](bots.md)
 
-`@orchestrator` is a bot that oversees your sessions. It learns your organization, watches
-every session of your projects, on this computer and on the other computers on them (your
-devbox, a teammate's computer on a shared project), and advises you. It never edits a file and has no shell. It
-acts only through ELU's own tools, and only as far as the level you set.
+`@orchestrator` is your orchestrator. You talk to it, and it runs your sessions for you: it
+reads them, tells their agents what to do as you, updates their tasks with your decisions,
+starts, stops and archives them, reviews and merges their work within the repository's rules,
+and reports back short. It works on this computer and on your computers paired with it.
+
+There is nothing to set up. A new install is at Full, the top level: its chat runs in Full
+access, with a shell, files, the web and every session tool, and what it sends your own
+sessions is your word there. `/orchestrator` shows the level and changes it.
 
 Like every bot, it is in no session until you put it there.
 
 ## Talk to it
 
 - Open `@orchestrator` in Chats and write to it. It answers in its own session in the open
-  project; your next messages there go on in that session.
+  project, and your next messages there go on in that same session, with its history.
 - In any session, `@orchestrator how are my sessions?` asks it there. It reads every session
   on this computer, and every session the other computers of your projects list here, either way.
 - It has no schedule until you give it one on its page in the Bots tab. A scheduled run is
@@ -25,8 +29,7 @@ Like every bot, it is in no session until you put it there.
   session on your other computer, when you write to it there or on its schedule.
 - Its chat stays on this computer: it is not listed, shown or followed from another one, and
   neither is what it replies in a session or what it asks you. It is no card, Task or status
-  row for a teammate, and its turn in a session is named nowhere there. A note it sent a
-  session shows there under its name.
+  row for a teammate, and its turn in a session is named nowhere there.
 - What it says in a session, that session's agents read. What they write afterwards shows
   wherever the session shows.
 - No Standup asks its chat, and no Standup's record of a session holds what it said or
@@ -37,53 +40,137 @@ Like every bot, it is in no session until you put it there.
 - Its turn teaches "Learned from you" nothing, and archiving its chat with lessons saves
   none from it. What it learns is a fact, or an Organization line you say yes to.
 
-Each turn starts a new conversation with the model. It reads the newest 12 entries of its
-chat, at most 6,000 characters, and is given a table of your open sessions, so a status
-question needs no tool call. What must last, it saves as a fact.
+Each turn is given the newest 12 entries of its chat, at most 6,000 characters, and a table
+of your open sessions, so a status question needs no tool call. What must last, it saves as
+a fact.
 
-## The two tables
+## It works without being asked
 
-The Artifacts tab of its own chat shows two tables. ELU computes them from its records each
-time the tab is drawn: no model runs, and nothing is stored. Another session's Artifacts tab
-is as before.
+At Full it takes a turn by itself when one of your sessions, here or on a paired computer:
 
-**Sessions**, what needs you first:
+- finishes a turn;
+- asks a question, or waits for your approval;
+- fails or stops;
+- has been working for 15 minutes with nothing new in its log.
 
-| Column | Says |
+It reads what changed and acts on it. Several changes of one session make one turn, and it
+wakes no more often than its limit allows. A teammate's session never wakes it.
+
+## Your computers
+
+Your own computers are the ones paired with this one as yours. What the Orchestrator sends a
+session on one of them is your word there, as it is here, and it can start, change and read
+sessions there with every tool it has here.
+
+Pairing needs no step of yours. Each computer signed in to GitHub with `gh` keeps its public
+peer key in one secret gist of that account, "ELU Code computers", and reads the others' keys
+from it: at start and every 15 minutes. A computer on one of your projects whose key is in the
+gist of the account this one is signed in as is paired. Each computer reads the gist for
+itself, so nothing a computer sends can make it yours. Computers both marked as each other's
+by an older ELU stay paired too. `ELU_NO_GITHUB_PAIRING=1` turns the GitHub pairing off on a
+computer; a check that fails keeps the last good one for a day.
+
+- `/computers` lists the computers on your projects, and which of them are yours.
+- `/computers unmine NAME` says one is not yours, also when it is paired: from then on what it
+  sends counts as a teammate's, and the Orchestrator's words are a note there.
+- `/computers mine NAME` makes a computer yours that is not paired with this one.
+
+A teammate's computer is never yours. Each computer decides for itself: a message from
+another computer never changes the list.
+
+## Levels
+
+`/orchestrator watch`, `suggest`, `act`, `run` or `full` sets the level, for every project on
+this computer. A new install is at Full, and so is one whose level you never chose. A level
+you set stays. A turn never sets one, and the level never rises by itself.
+
+| Action | Watch | Suggest | Act | Run | Full |
+| --- | --- | --- | --- | --- | --- |
+| Read sessions, facts, connections | yes | yes | yes | yes | yes |
+| Save a cited fact | yes | yes | yes | yes | yes |
+| Add a To do card | no | yes | yes | yes | yes |
+| Propose an Organization line | no | asks you | asks you | asks you | asks you |
+| Message a session | no | asks you | yes | yes | yes, as you |
+| Answer a session's question | no | asks you | yes | yes | yes, as you |
+| Start a session | no | asks you | asks you | yes | yes |
+| Approve a Task or a permission request | no | no | no | no | yes, as you |
+| Update a session's task | no | no | no | no | yes, as you |
+| Stop, rename, archive, change access, model or bots | no | no | no | no | yes |
+| Read a session's log and agents | no | no | no | no | yes |
+| Shell, edit, write, merge | no | no | no | no | yes |
+
+"As you" holds only in your own sessions, here or on a paired computer: never in a
+teammate's session, nor on a teammate's computer. There it is a note, as below Full.
+
+### At Full
+
+Its own chat runs in Full access. It runs commands, reads, edits and writes files, reads the
+web, and works with your whole environment, as a command you type does: your SSH agent, your
+GitHub and cloud sign-ins. Its helpers run on Opus, in Full access.
+
+These still ask you, every time, and ELU never answers them for you: publishing a package, a
+tag, a release, a workflow run, a deploy, a force-push, deleting a repository, and `rm -rf` of
+your home folder. So does an Organization line, and sending anything out through a connected
+source.
+
+Never, at any level:
+
+- Delete a session (it archives one).
+- Speak as you in a teammate's session or on a teammate's computer.
+- Change its own level, caps or action log, or which computers are yours: those change only
+  with `/orchestrator` and `/computers`, which you type.
+
+Every action it takes is a line in its action log, `~/.config/elu-code/orchestrator/actions.jsonl`,
+and says when it spoke as you. `/orchestrator` lists the last ones.
+
+### Your word in your sessions
+
+At Full, what it sends one of your sessions is your own message there. The session's chat
+shows it as `You · via @orchestrator`, and its agents follow it as yours: "yes" in it approves
+a waiting Task.
+
+`session_update_task` keeps your decisions for one session: a short list every turn of that
+session reads, the model's and its bots', under "Your owner's decisions for this session". It
+adds, changes and removes entries, and adds to the session's goal when you ask for new work
+in it. Each change shows in the chat as `You · via @orchestrator: updated the task: ...`.
+You can say the same to the session yourself; you never have to.
+
+A message of its that starts with `@NAME`, here or to one of your sessions on a paired
+computer, goes to that bot of the session as your message to it, as `@advisor ...` typed in
+that chat would: a bot not in the session yet joins it. The bot that oversees is never
+written to that way.
+
+The lead of a session asks its own bots with `elu sessions ask NAME "message"`
+([commands](commands.md)): the bot answers when the lead's turn ends, and the lead reads its
+answer in its next turn. `@advisor` written in a reply asks nobody, and ELU says so in the
+chat when a reply says a bot was asked and none was.
+
+### ELU's orchestrator tools
+
+| Tool | Does |
 | --- | --- |
-| Project | The project's name |
-| Session | Its title |
-| State | Needs approval, Asks you, Blocked, Stopped, Ready for your check, Working, Queued or Done |
-| Doing | Its latest step, the question it asks, or why it stopped |
-| Since | When that state began |
-| Agent's ETA | The Task's own estimate as a clock time, or "overdue 12 min" when it passed |
-| Proof | The highest step its records prove |
+| `sessions_list` | Every open session on this computer: project, title, state, what it is doing, since, ETA, proof. Then every session the other computers of your projects listed here, named `shop on @devbox #27` |
+| `session_read` | One session, here or on another computer (`computer`): goal, Task, its question, why it stopped, proof, agents, last 6 messages. One that nothing here follows yet is followed first |
+| `facts_find` | Saved facts by words, topic or id, with source, quote and date |
+| `connections_list` | Which sources are set up, and the steps to connect ELU, Slack or Gmail |
+| `fact_save` | Saves one fact with its source and quote |
+| `card_add` | Adds a To do card to a project's Kanban |
+| `org_propose` | Proposes a line to add to, or take out of, the Organization section |
+| `session_message` | Writes to a session, here or on another computer |
+| `session_answer` | Answers the question a session waits on, here or on another computer |
+| `session_start` | Starts a new session with a goal. At Full: on a paired computer too, with its name, the model and effort of its lead, bots and their models, any access, where it works and extra folders |
+| `session_approve` | At Full: approves or rejects a session's Task, or answers one of its permission requests |
+| `session_update_task` | At Full: changes your decisions for a session, or adds to its goal |
+| `session_stop`, `session_rename`, `session_archive` | At Full: stops, renames, archives or brings back a session |
+| `session_settings` | At Full: a session's access, the model and effort of its lead, its bots and their models |
+| `session_log`, `session_agents` | At Full: a session's run log, and its agents as its Agents tab lists them |
 
-The proof steps are Reported (the agent marked every objective met), Committed, Checks
-passed, Review passed, Published and Accepted (you). Only the first is the agent's word. A
-session that says it is done with a later step missing says so, such as "says done, checks
-not run" or "says done, 2 fixes open".
+### Below Full
 
-**Agents**: per session, the session's model, each bot, and each bot's helpers as one row,
-with the model, the input and output tokens, the tokens read from the cache, and the cost:
-the vendor's figure, or ELU's from list prices where the vendor gives none. A row per single
-helper is not shown: Claude Code does not report one whole.
-
-| Mark | Means |
-| --- | --- |
-| `≥` before a cost | At least that |
-| `≤` before a count | At most that: a bot's helpers on its own model |
-| `in @name` | That cost is counted in that bot's own row |
-
-Only this computer's sessions are in the tables. The bot is also given the sessions of the
-other computers, one line each, as those computers listed them here. A session whose proof ELU has not checked
-yet shows none until a later draw. The table the bot is given reads a session's proof again
-only when that session's records change.
-
-## What it may do
-
-On Claude Code it runs in the mode of the session it is in, and ELU answers each tool it
-asks for:
+It runs on any vendor you pick for it on its page (Claude Code, Codex, Grok Build or
+Antigravity CLI), with the same launch on each: ELU's own tools, a shell only at Full, and
+the ask list asking you. Below Full it runs in the mode of the session it is in, edits nothing
+and has no shell, and ELU answers each tool it asks for:
 
 | Tool | Read only | Ask for approval | Approve for me | Full access |
 | --- | --- | --- | --- | --- |
@@ -124,48 +211,17 @@ asks for:
 - On another vendor, and in a Read only session, it only answers.
 - One of its turns stops at $2, or sooner when the session's budget has less left.
 
-### ELU's orchestrator tools
+Below Full, what it sends a session is a note, never your word. A note or an answer to a
+session on another computer asks you first at every level that allows one: it leaves this
+computer. That computer takes it as a note of its own `@orchestrator`, and holds it to the
+same rules: no note to a session a teammate started, one you stopped, archived or moved to
+Done, a Standup, a bot's chat, or one whose Task waits for your approval, and an answer only
+while the session still asks that question. A computer whose ELU is too old to keep that mark
+gets nothing.
 
-| Tool | Does |
-| --- | --- |
-| `sessions_list` | Every open session on this computer: project, title, state, what it is doing, since, ETA, proof. Then every session the other computers of your projects listed here, named `shop on @devbox #27` |
-| `session_read` | One session, here or on another computer (`computer`): goal, Task, its question, why it stopped, proof, agents, last 6 messages. One that nothing here follows yet is followed first |
-| `facts_find` | Saved facts by words, topic or id, with source, quote and date |
-| `connections_list` | Which sources are set up, and the steps to connect ELU, Slack or Gmail |
-| `fact_save` | Saves one fact with its source and quote |
-| `card_add` | Adds a To do card to a project's Kanban |
-| `org_propose` | Proposes a line to add to, or take out of, the Organization section |
-| `session_message` | Sends a note to a session, here or on another computer |
-| `session_answer` | Answers the question a session waits on, here or on another computer |
-
-A note or an answer to a session on another computer always asks you first, at every level
-that allows one: it leaves this computer, and ELU cannot tell your own computer from a
-teammate's. That computer takes it as a note of its own `@orchestrator` (the bot that oversees
-the sessions there), never as your words, and holds it to the same rules: no note to a session
-a teammate started, one you stopped, archived or moved to Done, a Standup, a bot's chat, or one
-whose Task waits for your approval, and an answer only while the session still asks that
-question. A computer whose ELU is too old to keep that mark gets nothing, and the bot is told
-`Update ELU on @devbox so the bot that oversees your sessions can write to its sessions from here.`
-| `session_start` | Starts a new session with a goal |
-
-### Levels
-
-`/orchestrator watch`, `suggest`, `act` or `run` sets the level, for every project on this
-computer. It starts at Suggest and never rises by itself.
-
-| Action | Watch | Suggest | Act | Run |
-| --- | --- | --- | --- | --- |
-| Read sessions, facts, connections | yes | yes | yes | yes |
-| Save a cited fact | yes | yes | yes | yes |
-| Add a To do card | no | yes | yes | yes |
-| Propose an Organization line | no | asks you | asks you | asks you |
-| Message a session | no | asks you | yes | yes |
-| Answer a session's question | no | asks you | yes | yes |
-| Start a session | no | asks you | asks you | yes |
-
-A note or an answer to a session in Full access asks you first, at every level. One sent
-before you set the session to Full access is not given when its turn comes, unless you said
-yes to it yourself.
+A note or an answer to a session in Full access asks you first, at every level below Full. One
+sent before you set the session to Full access is not given when its turn comes, unless you
+said yes to it yourself.
 
 When it asks you, the question waits in Needs you and in its chat, with the exact text ELU
 will write, send or start in full. No answer in time is a no. Text over 20,000 characters is
@@ -177,42 +233,6 @@ done and the bot asks again. An answer goes in only while the session still asks
 question it was written for. Only such an answer carries on work that stopped on its
 question. A note is answered as a note: the work waits for you, and the reply ends with
 `A note from @orchestrator does not carry the work on. It waits for you.`
-
-Never, at any level:
-
-- Approve a Task, or answer a permission request.
-- Move work to Done, delete a session, or change a card.
-- Publish, merge or deploy.
-- Write to the session it is in, a session you stopped, archived or moved to Done, one a
-  teammate or another computer started, a Standup, or one whose Task waits for your approval.
-- Send anything out through a connected source without asking you.
-
-The session's mode lifts none of this: Full access included. Full access never answers a
-question it asks, also after it is renamed or removed while that question waits.
-
-### Caps
-
-Counted by ELU from its action log. When the log cannot be written, the bot does nothing
-but read. Setting the clock back resets no cap.
-
-| Cap | Default |
-| --- | --- |
-| Sessions started a day | 3 |
-| Messages and answers an hour | 6 |
-| Messages in a row to one session with no progress there | 2 |
-| Cards added a day | 20 |
-| Budget of a session it starts | $5 |
-| Limit of one of its own turns | $2 |
-| Questions to ELU a day | 20 |
-| Mode of a session it starts | Approve for me at most |
-
-A session it starts works in a new worktree, with no extra folders and no bots, in a mode no
-higher than the session it was asked from. It shows as started by `@orchestrator`.
-
-### Its notes are never yours
-
-What it sends a session carries its name, and shows in that session's chat under
-`@orchestrator`.
 
 | Your message | Its note |
 | --- | --- |
@@ -226,21 +246,31 @@ What it sends a session carries its name, and shows in that session's chat under
 it sent there that no turn read yet. One that reaches an archived or Done session is not
 given.
 
-An older ELU does not know these notes. If you go back to one while a note still waits, it
-runs as your own message: `/stop` the session first.
+## Caps
 
-A session it starts never begins with Auto model.
+Counted by ELU from its action log. When the log cannot be written, the bot does nothing
+but read. Setting the clock back resets no cap. Full has caps of its own, kept apart from the
+others: a cap you set below Full never limits Full, nor the other way round.
 
-No turn its note leads to has ELU's own commands (`elu sessions`, `elu schedules`,
-`elu jobs`), and neither has a session it started, until you write there. Until then that
-session's Task waits for your yes in every mode, also when a working bot you added there
-proposes it on its schedule. If such a turn runs your own `elu` instead, it asks you each
-time, in every mode, and no rule of yours answers it.
+| Cap | Below Full | At Full |
+| --- | --- | --- |
+| Sessions started a day | 3 | 20 |
+| Messages and answers an hour | 6 | 60 |
+| Messages in a row to one session with no progress there | 2 | 5 |
+| Cards added a day | 20 | 20 |
+| Budget of a session it starts | $5 | none: the session's own |
+| Limit of one of its own turns | $2 | none |
+| Questions to ELU a day | 20 | 20 |
+| Mode of a session it starts | Approve for me at most | Full access at most |
+
+Below Full, a session it starts works in a new worktree, with no extra folders and no bots,
+in a mode no higher than the session it was asked from, and never begins with Auto model. It
+shows as started by `@orchestrator`.
 
 ## /orchestrator
 
 - `/orchestrator` shows the level, the caps and its last five actions, each with its id.
-- `/orchestrator watch|suggest|act|run` sets the level.
+- `/orchestrator watch|suggest|act|run|full` sets the level.
 - `/orchestrator undo a12` undoes one action:
 
 | Action | Undo |
@@ -250,6 +280,45 @@ time, in every mode, and no rule of yours answers it.
 | A started session | Taken back before it starts; archived after, never deleted. Never a session you started yourself: when ELU cannot tell which session it became, it says so |
 | A fact | Withdrawn; it stays on file, marked withdrawn |
 | An Organization line | Taken out, after your yes |
+
+## The two tables
+
+The Artifacts tab of its own chat shows two tables. ELU computes them from its records each
+time the tab is drawn: no model runs, and nothing is stored. Another session's Artifacts tab
+is as before.
+
+**Sessions**, what needs you first:
+
+| Column | Says |
+| --- | --- |
+| Project | The project's name |
+| Session | Its title |
+| State | Needs approval, Asks you, Blocked, Stopped, Ready for your check, Working, Queued or Done |
+| Doing | Its latest step, the question it asks, or why it stopped |
+| Since | When that state began |
+| Agent's ETA | The Task's own estimate as a clock time, or "overdue 12 min" when it passed |
+| Proof | The highest step its records prove |
+
+The proof steps are Reported (the agent marked every objective met), Committed, Checks
+passed, Review passed, Published and Accepted (you). Only the first is the agent's word. A
+session that says it is done with a later step missing says so, such as "says done, checks
+not run" or "says done, 2 fixes open".
+
+**Agents**: per session, the session's model, each bot, and each bot's helpers as one row,
+with the model, the input and output tokens, the tokens read from the cache, and the cost:
+the vendor's figure, or ELU's from list prices where the vendor gives none. A row per single
+helper is not shown: Claude Code does not report one whole.
+
+| Mark | Means |
+| --- | --- |
+| `≥` before a cost | At least that |
+| `≤` before a count | At most that: a bot's helpers on its own model |
+| `in @name` | That cost is counted in that bot's own row |
+
+Only this computer's sessions are in the tables. The bot is also given the sessions of the
+other computers, one line each, as those computers listed them here. A session whose proof ELU has not checked
+yet shows none until a later draw. The table the bot is given reads a session's proof again
+only when that session's records change.
 
 ## What it learns
 
@@ -267,8 +336,8 @@ session or a source is kept as not checked.
   `name [at] example [dot] com`, `name at example dot com`, `name @ example.com` or
   `name&#64;example.com`.
 - A key or a token in a source's address or reference is refused.
-- Facts stay on this computer. A note to another computer's session carries only its own words,
-  after your yes.
+- Facts stay on this computer. What it sends another computer's session carries only its own
+  words.
 
 Ask "where did you get that from" and it gives the source, the quote, the date and whether
 the quote was checked.

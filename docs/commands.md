@@ -73,6 +73,11 @@ works. The app shows each change at once.
   `stop NAME` and `log NAME` start one, end one and print the end of its log.
   `elu sessions keep-going N|this [on|off]` says or sets whether ELU starts a session again
   while its Task is not met.
+- `elu sessions ask NAME "message"`, run by a session's lead, asks one of that session's bots
+  (`@advisor`, `@reviewer` and the rest) for a review or an answer. The bot answers once the
+  lead's turn ends, and its answer comes back in the lead's next turn. It answers `Asked` only
+  when the bot was asked, and refuses a name that is no bot of the session. `@NAME` written in
+  a reply, a file or a note reaches no bot: ELU says so in the chat when a reply claims it.
 
 A session started from a session, or the run of a schedule added in one, is a
 [sub session](sessions.md#sub-sessions) of it, listed under it in Sessions and in

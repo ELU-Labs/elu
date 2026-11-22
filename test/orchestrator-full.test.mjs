@@ -14,15 +14,15 @@ import { pendingApprovals, readApprovalLog, requestApproval } from '../lib/appro
 import { forgetOverview } from '../lib/session-overview.mjs';
 import { FULL_DEFAULT_CAPS, capLines, levelLines, readSettings, setCap, setLevel, settingsFile } from '../lib/orchestrator-settings.mjs';
 import { FULL_ASK_LIST, FULL_TOOLS } from '../lib/orchestrator-seams.mjs';
-import { mandateFor, mandates, mandatesFile, removeMandate, saveMandate } from '../lib/orchestrator-mandates.mjs';
-import { projectKey } from '../lib/peer/remote.mjs';
+import { DECISIONS_HEADING, decisionLines } from '../lib/owner-decisions.mjs';
+import { ownerDecisionsPart } from '../lib/runner.mjs';
 import { act, actionLine, askListed, readActions, undoAction } from '../lib/orchestrator-actions.mjs';
 import { ORCH_TOOLS, ORCH_TOOL_DEFS, orchToolDefs, overseeingAnswer } from '../lib/orchestrator-tools.mjs';
 import { OVERSEE_OWN_DENIED, TOOL_NAME, overseeing, serve } from '../lib/approval-server.mjs';
 
-// The level Full: the Orchestrator's session tools on this computer and on the owner's own
-// others, his word inside his mandates, the ask list that still asks him, and the audit of what
-// it did as him. Below Full nothing of this exists (test/orchestrator-actions.test.mjs).
+// The level Full, the default: the Orchestrator's session tools on this computer and on the
+// owner's own others, his word in his own sessions with no step of his, his decisions kept in a
+// session's task, the ask list that still asks him, and the audit of what it did as him. Below Full nothing of this exists (test/orchestrator-actions.test.mjs).
 
 function environment(t, values) {
   const previous = Object.fromEntries(Object.keys(values).map(key => [key, process.env[key]]));
@@ -74,14 +74,23 @@ function world(t, { level = 'full' } = {}) {
   return w;
 }
 const proposed = (w, id, title = 'Ship it') => fs.writeFileSync(planFile(w.repo, String(id)), JSON.stringify({ tasks: [{ id: 't-0000000a', title, state: 'proposed', objectives: ['It ships'], subtasks: [], met: [] }] }));
-const mandate = (w, sessions, extra = {}) => saveMandate({ name: 'Checkout', goal: 'Checkout under one second', decisions: ['Helpers may run on credits.', 'Postgres, not MySQL.'], sessions, ...extra }, { by: 'owner' });
-const here = (w, id) => ({ computer: null, project: projectKey(w.root), session: String(id) });
+const TEAMMATE = { origin: { kind: 'handoff', peer: SARA, name: 'sara' } };
 
 test('settings: Full is set only by the owner, has its own caps and ceilings, and lowers nothing below it', t => {
-  const w = world(t, { level: null });
-  assert.equal(readSettings().level, 'suggest', 'a new install stays at Suggest');
+  world(t, { level: null });
+  assert.deepEqual([readSettings().level, readSettings().chosen], ['full', false], 'a new install is at Full with no command');
+  assert.deepEqual(readSettings().caps, { ...FULL_DEFAULT_CAPS });
   for (const who of [undefined, { by: 'turn' }, { typed: true }]) assert.throws(() => setLevel('full', who), /Only you set the level to Full/);
+  // A level the owner chose stays, Suggest among them; a file ELU wrote with the old default reads as Full.
+  setLevel('suggest', { by: 'owner' });
+  assert.equal(readSettings().level, 'suggest');
+  fs.writeFileSync(settingsFile(), JSON.stringify({ version: 1, level: 'suggest', caps: {} }));
+  assert.equal(readSettings().level, 'full', 'the old default, never chosen');
+  fs.writeFileSync(settingsFile(), JSON.stringify({ version: 1, level: 'act', caps: {} }));
+  assert.equal(readSettings().level, 'act', 'any other level was his choice');
+  setLevel('suggest', { by: 'owner' });
   setCap('messagesPerHour', 4);
+  assert.equal(readSettings().level, 'suggest', 'a cap keeps the level he set');
   assert.equal(setLevel('FULL', { by: 'owner' }).level, 'full');
   assert.deepEqual(readSettings().caps, { ...FULL_DEFAULT_CAPS });
   assert.deepEqual([FULL_DEFAULT_CAPS.sessionsPerDay, FULL_DEFAULT_CAPS.messagesPerHour, FULL_DEFAULT_CAPS.messagesInARow, FULL_DEFAULT_CAPS.startBudgetUsd, FULL_DEFAULT_CAPS.turnLimitUsd, FULL_DEFAULT_CAPS.startMode], [20, 60, 5, null, null, 'full']);
@@ -112,23 +121,24 @@ test('the relay serves the ten below Full and all of them at Full, each defined'
     for (const name of def.inputSchema.required ?? []) assert.ok(Object.hasOwn(def.inputSchema.properties, name), `${def.name}.${name}`);
   }
   const start = full.find(def => def.name === 'session_start');
-  assert.deepEqual(Object.keys(start.inputSchema.properties).sort(), ['access', 'botModels', 'bots', 'computer', 'folders', 'goal', 'mandate', 'model', 'place', 'project', 'title']);
+  assert.deepEqual(Object.keys(start.inputSchema.properties).sort(), ['access', 'botModels', 'bots', 'computer', 'folders', 'goal', 'model', 'place', 'project', 'title']);
+  for (const def of full) assert.doesNotMatch(`${def.description} ${JSON.stringify(def.inputSchema)}`, /mandate/i, def.name);
+  assert.equal(full.some(def => def.name === 'mandate_propose'), false);
+  assert.deepEqual(full.find(def => def.name === 'session_update_task').inputSchema.required, ['session']);
 });
 
-test('a start at Full gives the session everything it is told, its mandate\'s decisions, and no budget of the bot\'s', async t => {
+test('a start at Full gives the session everything it is told, and no budget of the bot\'s', async t => {
   const w = world(t), extra = temp(t);
   saveBot({ name: 'reviewer', instructions: 'Review the change.' });
-  const m = mandate(w, []);
-  const out = await w.act('session_start', { goal: 'Make checkout fast', title: 'Checkout speed', model: { vendor: 'claude', model: 'opus', effort: 'high' }, bots: ['@reviewer'], botModels: { reviewer: { vendor: 'claude', effort: 'low' } }, access: 'full', place: 'here', folders: [extra], mandate: 'checkout' });
+  const out = await w.act('session_start', { goal: 'Make checkout fast', title: 'Checkout speed', model: { vendor: 'claude', model: 'opus', effort: 'high' }, bots: ['@reviewer'], botModels: { reviewer: { vendor: 'claude', effort: 'low' } }, access: 'full', place: 'here', folders: [extra] });
   assert.deepEqual(said(out), ['allow', 'level'], out.text);
   assert.equal(w.asked.length, 0);
   const [row] = w.queued;
   assert.deepEqual([row.permissions, row.place, row.bots, row.title, row.model, row.botModels, row.overseer, row.budgetUsd, row.mandate],
-    ['full', { kind: 'here' }, ['reviewer'], 'Checkout speed', { vendor: 'claude', model: 'opus', effort: 'high' }, { reviewer: { vendor: 'claude', model: null, effort: 'low' } }, 'orchestrator', undefined, m.id]);
+    ['full', { kind: 'here' }, ['reviewer'], 'Checkout speed', { vendor: 'claude', model: 'opus', effort: 'high' }, { reviewer: { vendor: 'claude', model: null, effort: 'low' } }, 'orchestrator', undefined, undefined]);
   assert.equal(row.folders.length, 1);
-  assert.equal(row.goal, "Make checkout fast\n\nOwner's decisions (mandate Checkout):\n- Helpers may run on credits.\n- Postgres, not MySQL.");
-  assert.match(out.text, /Full access, its own budget, in its project folder itself, claude · opus at high, @reviewer, 1 extra folder, under the mandate Checkout/);
-  assert.deepEqual(mandates()[0].sessions, [{ computer: null, project: projectKey(w.root), session: `request-${row.id}` }]);
+  assert.equal(row.goal, 'Make checkout fast');
+  assert.match(out.text, /Full access, its own budget, in its project folder itself, claude · opus at high, @reviewer, 1 extra folder/);
   // Never more than this session and this turn have.
   const capped = await w.act('session_start', { goal: 'Look around', access: 'full' }, { mode: 'auto' });
   assert.equal(w.queued.at(-1).permissions, 'auto', capped.text);
@@ -137,9 +147,8 @@ test('a start at Full gives the session everything it is told, its mandate\'s de
     [{ goal: 'x', bots: ['orchestrator'] }, /oversees the sessions: it joins none of them/],
     [{ goal: 'x', bots: ['nobody'] }, /There is no bot named nobody/],
     [{ goal: 'x', model: { vendor: 'claude', effort: 'ultra' } }, /takes the efforts low, medium, high, xhigh, max, not ultra/],
-    [{ goal: 'x', mandate: 'nope' }, /The owner has no mandate named nope\. His mandates: m1 Checkout/],
     [{ goal: 'x', title: 'a\nb'.repeat(150) }, /Keep the name to 200 characters|A session name is one line/],
-    [{ goal: 'x', computer: 'laptop' }, /@laptop is not marked as one of the owner's own computers here/],
+    [{ goal: 'x', computer: 'laptop' }, /@laptop is not one of the owner's own computers here/],
     [{ goal: 'x', place: 'here' }, null],
   ]) {
     const refused = await w.act('session_start', input, { mode: why ? 'full' : 'auto' });
@@ -153,47 +162,58 @@ test('a start at Full gives the session everything it is told, its mandate\'s de
   assert.equal(pendingRequests(w.root).some(request => request.goal === 'Name it'), false, 'the request is taken back');
 });
 
-test("inside a mandate a message and an answer are the owner's word; outside it they stay notes, and the log says which", async t => {
+test("at Full a message and an answer to his own session are the owner's word with no mandate; a teammate's session gets a note, and the log says which", async t => {
   const w = world(t); w.session(2); w.session(3, ASKS); w.session(4, { permissions: 'full' }); w.session(5); proposed(w, 5);
-  w.session(6, { state: 'stopped', error: { message: 'Stopped by the owner.' } });
-  const m = mandate(w, [here(w, 3), here(w, 5), here(w, 6)]);
-  const note = await w.act('session_message', { session: '2', text: 'The checks fail on main.' });
-  assert.deepEqual(said(note), ['allow', 'level']);
-  assert.equal(w.queued.at(-1).overseer, 'orchestrator'); assert.equal(w.queued.at(-1).asOwner, undefined);
-  // Outside a mandate a session in Full access still asks him first.
-  await w.act('session_message', { session: '4', text: 'Carry on.' });
-  assert.equal(w.asked.length, 1);
-  const word = await w.act('session_answer', { session: '3', text: 'Use Postgres.' });
+  w.session(6, { state: 'stopped', error: { message: 'Stopped by the owner.' } }); w.session(7, TEAMMATE);
+  const word = await w.act('session_message', { session: '2', text: 'The checks fail on main.' });
   assert.deepEqual(said(word), ['allow', 'level'], word.text);
-  assert.deepEqual(w.queued.at(-1).asOwner, { bot: 'orchestrator', mandate: m.id, computer: null });
+  assert.deepEqual(w.queued.at(-1).asOwner, { bot: 'orchestrator', computer: null });
   assert.equal(w.queued.at(-1).overseer, undefined, 'his word never carries the bot\'s mark');
-  assert.match(word.text, /as the owner's word, under his mandate Checkout/);
+  assert.match(word.text, /as the owner's word\. It shows there as his, via @orchestrator/);
+  // His word in a session in Full access is not asked about.
+  assert.deepEqual(said(await w.act('session_message', { session: '4', text: 'Carry on.' })), ['allow', 'level']);
+  assert.equal(w.asked.length, 0);
+  const answer = await w.act('session_answer', { session: '3', text: 'Use Postgres.' });
+  assert.deepEqual(said(answer), ['allow', 'level'], answer.text);
+  assert.deepEqual(w.queued.at(-1).asOwner, { bot: 'orchestrator', computer: null });
+  // His word to a bot of the session (@NAME ...) goes to that bot, as his own does; never to a bot that oversees.
+  saveBot({ name: 'advisor', instructions: 'Review designs.' });
+  const toBot = await w.act('session_message', { session: '2', text: '@advisor Review the Wave 3 seams note.' });
+  assert.deepEqual(said(toBot), ['allow', 'level'], toBot.text);
+  assert.deepEqual([w.queued.at(-1).bot, w.queued.at(-1).goal, w.queued.at(-1).asOwner], ['advisor', 'Review the Wave 3 seams note.', { bot: 'orchestrator', computer: null }]);
+  assert.match(toBot.text, /^Sent to @advisor in /);
+  assert.match((await w.act('session_message', { session: '2', text: '@orchestrator look' })).text, /Only the owner writes to @orchestrator/);
   // His word goes where only his goes: a Task that waits for him, a session he stopped.
   assert.deepEqual(said(await w.act('session_message', { session: '5', text: 'Go on with the plan.' })), ['allow', 'level']);
   assert.deepEqual(said(await w.act('session_message', { session: '6', text: 'Go on.' })), ['allow', 'level']);
+  // A teammate's session: a note under the bot's name, never his word.
+  const note = await w.act('session_message', { session: '7', text: 'Look at this.' });
+  if (note.decision === 'allow') { assert.equal(w.queued.at(-1).asOwner, undefined); assert.equal(w.queued.at(-1).overseer, 'orchestrator'); }
+  else assert.equal(note.decision, 'refused');
+  // The bot's own chat is never spoken to as him.
+  assert.equal(w.queued.some(row => row.continuationTaskId === '1'), false);
   const dropped = await w.act('session_message', { session: '3', text: 'Use Postgres 16.' }, { enqueue: (at, goal, { asOwner, ...fields }) => w.enqueue(at, goal, fields) });
   assert.deepEqual(said(dropped), ['refused', 'level'], 'a conductor that drops his mark sends nothing');
-  // The audit: asOwner and the mandate on what it did as him, and only on that.
+  // The audit: asOwner on what it did as him, and only on that.
   const rows = readActions();
-  assert.deepEqual(rows.map(row => [row.action, row.target?.session ?? null, row.asOwner ?? false, row.mandate ?? null, row.decision]).filter(row => row[4] === 'allow'),
-    [['session_message', '2', false, null, 'allow'], ['session_message', '4', false, null, 'allow'], ['session_answer', '3', true, 'm1', 'allow'], ['session_message', '5', true, 'm1', 'allow'], ['session_message', '6', true, 'm1', 'allow']]);
-  assert.match(actionLine(rows[2], T0), /as you, under the mandate Checkout/);
-  assert.equal(actionLine(rows[0], T0).includes('as you'), false);
-  // Below Full the same mandate makes nothing his.
+  assert.deepEqual(rows.filter(row => row.decision === 'allow' && row.target?.session !== '7').map(row => [row.action, row.target?.session ?? null, row.asOwner ?? false]),
+    [['session_message', '2', true], ['session_message', '4', true], ['session_answer', '3', true], ['session_message', '2', true], ['session_message', '5', true], ['session_message', '6', true]]);
+  assert.equal(rows.some(row => row.mandate), false);
+  assert.match(actionLine(rows[0], T0), /as you/);
+  // Below Full nothing is his word.
   setLevel('run', { by: 'owner' });
   const run = await w.act('session_message', { session: '5', text: 'Go on.' });
   assert.match(run.text, /waits for the owner's approval\. Only he approves a Task/);
 });
 
-test('session_approve approves a Task or a permission for him only inside a mandate, and never what only he answers', async t => {
-  const w = world(t); w.session(2); proposed(w, 2); w.session(3); proposed(w, 3, 'Other');
-  const outside = await w.act('session_approve', { session: '3' });
-  assert.deepEqual(said(outside), ['refused', 'level']); assert.match(outside.text, /in none of the owner's mandates/);
-  mandate(w, [here(w, 2)]);
+test('session_approve approves a Task or a permission for him in his own session, and never what only he answers', async t => {
+  const w = world(t); w.session(2); proposed(w, 2); w.session(3, TEAMMATE); proposed(w, 3, 'Other');
+  const teammate = await w.act('session_approve', { session: '3' });
+  assert.deepEqual(said(teammate), ['refused', 'level']); assert.match(teammate.text, /not one of the owner's own sessions/);
   const out = await w.act('session_approve', { session: '2' });
   assert.deepEqual(said(out), ['allow', 'level'], out.text);
   assert.equal(currentTask(w.repo, '2').state, 'approved');
-  assert.deepEqual([w.queued.at(-1).goal, w.queued.at(-1).approved, w.queued.at(-1).asOwner?.mandate], ['Approved the Task: Ship it', true, 'm1']);
+  assert.deepEqual([w.queued.at(-1).goal, w.queued.at(-1).approved, w.queued.at(-1).asOwner], ['Approved the Task: Ship it', true, { bot: 'orchestrator', computer: null }]);
   assert.equal(currentTask(w.repo, '3').state, 'proposed');
   assert.match((await w.act('session_approve', { session: '2' })).text, /No Task waits for approval/);
   // A permission request, by its id from session_read.
@@ -201,7 +221,8 @@ test('session_approve approves a Task or a permission for him only inside a mand
   ask('perm-test', 'Bash', { command: 'npm test' }); ask('perm-publish', 'Bash', { command: 'cd pkg && npm publish' }); ask('perm-force', 'Bash', { command: 'git push origin main --force' });
   ask('perm-mine', 'mcp__elu-code-approval__session_start', {}, { oversee: true }); ask('perm-mail', 'mcp__gmail__send_email', { to: 'a@example.test' });
   const read = inBlock((await w.act('session_read', { session: '2' })).text);
-  assert.equal(read.mandate, 'm1 Checkout: your words there are the owner\'s');
+  assert.equal(read.yourWord, "your messages, answers and approvals there are the owner's");
+  assert.equal(read.mandate, undefined);
   assert.deepEqual(read.approvals.map(row => row.id).sort(), ['perm-force', 'perm-mail', 'perm-mine', 'perm-publish', 'perm-test']);
   const allowed = await w.act('session_approve', { session: '2', approval: 'perm-test', decision: 'allow' });
   assert.deepEqual(said(allowed), ['allow', 'level'], allowed.text);
@@ -211,7 +232,7 @@ test('session_approve approves a Task or a permission for him only inside a mand
     assert.deepEqual(said(refused), ['refused', 'level'], id); assert.match(refused.text, why);
   }
   assert.equal(pendingApprovals({ taskId: '2' }).length, 4);
-  assert.deepEqual(readActions().filter(row => row.decision === 'allow' && row.action === 'session_approve').map(row => [row.asOwner, row.mandate]), [[true, 'm1'], [true, 'm1']]);
+  assert.deepEqual(readActions().filter(row => row.decision === 'allow' && row.action === 'session_approve').map(row => row.asOwner), [true, true]);
 });
 
 test('stop, rename and archive a session here, with undo where there is one', async t => {
@@ -231,9 +252,7 @@ test('stop, rename and archive a session here, with undo where there is one', as
   undoAction(readActions().at(-1).id);
   assert.equal(readTask(w.repo, '3').title, 'Checkout speed');
   const { setTitle } = await import('../lib/state.mjs'); setTitle(w.repo, '4', 'Mine');
-  assert.match((await w.act('session_rename', { session: '4', title: 'Theirs' })).text, /The owner named web #4 .*himself/);
-  mandate(w, [here(w, 4)]);
-  assert.deepEqual(said(await w.act('session_rename', { session: '4', title: 'Theirs' })), ['allow', 'level'], 'inside a mandate it may');
+  assert.deepEqual(said(await w.act('session_rename', { session: '4', title: 'Theirs' })), ['allow', 'level'], 'in his own session at Full it renames as he would');
   assert.match((await w.act('session_rename', { session: '3', title: 'x'.repeat(201) })).text, /200 characters/);
   // Archive and bring back.
   assert.match((await w.act('session_archive', { session: '2' })).text, /at work\. Stop it first/);
@@ -282,24 +301,22 @@ test('session_log reads the last rows of a run, a key masked, and session_agents
   assert.equal(readActions().filter(row => ['session_log', 'session_agents'].includes(row.action)).length, 4, 'each read is logged');
 });
 
-test('on the owner\'s own computer it does all of it, his word inside a mandate; on a teammate\'s nothing', async t => {
+test('on the owner\'s own computer it does all of it as his word with no mandate; on a teammate\'s nothing', async t => {
   const w = world(t);
-  // A note there outside a mandate asks him, as below Full, and a Task that waits for him takes none.
-  assert.match((await w.act('session_message', { computer: 'devbox', session: '27', text: 'Look at the checkout page.' })).text, /waits for the owner's approval/);
-  await w.act('session_message', { computer: 'devbox', session: '69', text: 'Look at the checkout page.' });
-  assert.equal(w.asked.length, 1); assert.equal(w.sent.at(-1).asOwner, undefined);
-  saveMandate({ name: 'Speed', goal: 'Every page fast', decisions: [], sessions: [{ computer: DEVBOX, project: 'c0ffee00c0ffee00', session: '27' }] }, { by: 'owner' });
   w.reply = { id: 'x', overseer: 'orchestrator', asOwner: true };
   const word = await w.act('session_message', { computer: 'devbox', session: '27', text: 'Approve round 2.' });
   assert.deepEqual(said(word), ['allow', 'level'], word.text);
-  assert.equal(w.asked.length, 1, 'his word inside a mandate is not asked about');
-  assert.deepEqual(w.sent.at(-1), { type: 'remoteSend', to: DEVBOX, ref: 'c0ffee00c0ffee00:27', text: 'Approve round 2.', overseer: 'orchestrator', asOwner: { bot: 'orchestrator', mandate: 'm1', computer: ME } });
+  assert.equal(w.asked.length, 0, 'his word on his own computer is not asked about, a Task that waits for him included');
+  assert.deepEqual(w.sent.at(-1), { type: 'remoteSend', to: DEVBOX, ref: 'c0ffee00c0ffee00:27', text: 'Approve round 2.', overseer: 'orchestrator', asOwner: { bot: 'orchestrator', computer: ME } });
   assert.equal(readActions().at(-1).asOwner, true);
   // A computer that did not take it as his: said so, and not logged as his.
   w.reply = { id: 'x', overseer: 'orchestrator' };
   const older = await w.act('session_message', { computer: 'devbox', session: '27', text: 'Again.' });
   assert.match(older.text, /did not take it as the owner's word/);
   assert.equal(readActions().at(-1).asOwner, undefined);
+  // A teammate's computer: a note under the bot's name, asked of him first, never his word.
+  await w.act('session_message', { computer: 'laptop', session: '3', text: 'Look at the docs.' });
+  assert.equal(w.asked.length, 1); assert.equal(w.sent.at(-1).asOwner, undefined);
   // Approve there, stop, rename, archive, settings, log and agents, each through its command.
   w.reply = command => ({ remoteTask: { answered: true }, remoteAnswer: { answered: true }, remoteStop: { stopping: true }, remoteRename: { shown: 'Fast' }, remoteArchive: {}, remoteSettings: {}, remoteLog: { rows: [{ kind: 'text', text: 'Done.' }] }, remoteAgents: { agents: [{ id: 'lead', kind: 'lead', name: 'lead', vendor: 'claude', model: 'opus', state: 'idle' }] } })[command.type];
   for (const [name, input, type] of [['session_approve', {}, 'remoteTask'], ['session_approve', { approval: 'perm-1', decision: 'allow' }, 'remoteAnswer'], ['session_stop', {}, 'remoteStop'], ['session_rename', { title: 'Fast' }, 'remoteRename'], ['session_archive', {}, 'remoteArchive'], ['session_settings', { access: 'auto' }, 'remoteSettings'], ['session_log', { rows: 3 }, 'remoteLog'], ['session_agents', {}, 'remoteAgents']]) {
@@ -313,16 +330,16 @@ test('on the owner\'s own computer it does all of it, his word inside a mandate;
   const before = w.sent.length;
   for (const name of ['session_stop', 'session_rename', 'session_archive', 'session_log', 'session_approve']) {
     const out = await w.act(name, { computer: 'laptop', session: '3', title: 'x' });
-    assert.deepEqual(said(out), ['refused', 'level'], name); assert.match(out.text, /not marked as one of the owner's own computers|in none of the owner's mandates/);
+    assert.deepEqual(said(out), ['refused', 'level'], name); assert.match(out.text, /not one of the owner's own computers|not one of the owner's own sessions/);
   }
   assert.equal(w.sent.length, before);
-  // A start there: only on his own, with what it is told, and the session joins the mandate.
+  // A start there: only on his own, with what it is told.
   w.reply = command => command.type === 'remoteFolders' ? { pick: true, folders: [{ path: '/work/shop', label: 'shop', name: 'shop', project: true }] } : { id: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd', project: 'shop', projectId: 'c0ffee00c0ffee00' };
-  const start = await w.act('session_start', { computer: 'devbox', project: 'shop', goal: 'Profile search', title: 'Search', access: 'full', bots: ['tester'], mandate: 'm1' });
+  const start = await w.act('session_start', { computer: 'devbox', project: 'shop', goal: 'Profile search', title: 'Search', access: 'full', bots: ['tester'], model: { vendor: 'codex', model: 'gpt-5', effort: 'high' } });
   assert.deepEqual(said(start), ['allow', 'level'], start.text);
   const sent = w.sent.at(-1);
-  assert.deepEqual([sent.type, sent.to, sent.folder, sent.permissions, sent.title, sent.bots, sent.mandate, sent.budgetUsd], ['remoteStart', DEVBOX, '/work/shop', 'full', 'Search', ['tester'], 'm1', undefined]);
-  assert.ok(mandateFor({ computer: DEVBOX, project: 'c0ffee00c0ffee00', session: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd' }));
+  assert.deepEqual([sent.type, sent.to, sent.folder, sent.permissions, sent.title, sent.bots, sent.mandate, sent.budgetUsd], ['remoteStart', DEVBOX, '/work/shop', 'full', 'Search', ['tester'], undefined, undefined]);
+  assert.equal(sent.model?.vendor, 'codex', 'any vendor, model and effort goes to his computer as asked');
   // A computer with one project and nothing to pick names it as root and project: naming it starts there.
   w.reply = command => command.type === 'remoteFolders' ? { pick: false, root: '/srv/shop', project: 'shop', folders: [] } : { id: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee', project: 'shop', projectId: 'c0ffee00c0ffee00' };
   const one = await w.act('session_start', { computer: 'devbox', project: 'shop', goal: 'Profile search again', access: 'full' });
@@ -330,34 +347,57 @@ test('on the owner\'s own computer it does all of it, his word inside a mandate;
   assert.equal(w.sent.at(-1).folder, '/srv/shop');
   w.reply = command => command.type === 'remoteFolders' ? { pick: false, root: '/srv/shop', project: 'shop', folders: [] } : { id: 'x' };
   assert.match((await w.act('session_start', { computer: 'devbox', project: 'blog', goal: 'x', access: 'full' })).text, /lists no project named blog/);
-  assert.match((await w.act('session_start', { computer: 'laptop', goal: 'x' })).text, /not marked as one of the owner's own computers/);
+  assert.match((await w.act('session_start', { computer: 'laptop', goal: 'x' })).text, /not one of the owner's own computers/);
 });
 
-test('mandate_propose always asks him, and only his yes makes one', async t => {
-  const w = world(t); w.session(2);
-  w.answer = 'deny';
-  const no = await w.act('mandate_propose', { name: 'Release', goal: 'Ship 2.0', decisions: ['Merge when green.'], sessions: [{ session: '2' }] });
-  assert.deepEqual(said(no), ['deny', 'owner']); assert.deepEqual(mandates(), []);
-  w.answer = 'allow';
-  const yes = await w.act('mandate_propose', { name: 'Release', goal: 'Ship 2.0', decisions: ['Merge when green.'], sessions: [{ session: '2' }] });
-  assert.deepEqual(said(yes), ['allow', 'owner'], yes.text);
-  assert.match(w.asked.at(-1).whole, /Mandate: Release\nGoal: Ship 2\.0\nDecisions:\n- Merge when green\.\nSessions:\n- web #2/);
-  assert.deepEqual(mandates().map(row => [row.id, row.name, row.decisions, row.sessions]), [['m1', 'Release', ['Merge when green.'], [here(w, 2)]]]);
-  const changed = await w.act('mandate_propose', { id: 'm1', decisions: ['Merge when green.', 'No Friday deploys.'] });
-  assert.deepEqual(said(changed), ['allow', 'owner']);
-  assert.deepEqual(mandates()[0].decisions, ['Merge when green.', 'No Friday deploys.']);
-  assert.equal(mandates()[0].sessions.length, 1);
-  // Ended by the owner only, and its id is never given again.
-  assert.throws(() => removeMandate('m1', { by: 'turn' }), /Only the owner/);
-  assert.equal(removeMandate('release', { by: 'owner' }).id, 'm1');
-  assert.equal(saveMandate({ name: 'Next', goal: '' }, { by: 'owner' }).id, 'm2');
-  assert.ok(fs.existsSync(mandatesFile()));
+test('session_update_task keeps his decisions in his own session\'s task, which every turn there reads; never a teammate\'s', async t => {
+  const w = world(t); w.session(2); w.session(3, TEAMMATE); w.session(4, { standup: true });
+  const added = await w.act('session_update_task', { session: '2', add: ['Helpers may run on credits.', 'Postgres, not MySQL.'] });
+  assert.deepEqual(said(added), ['allow', 'level'], added.text);
+  assert.equal(w.asked.length, 0, 'nothing asks him');
+  assert.deepEqual(readTask(w.repo, '2').ownerDecisions, ['Helpers may run on credits.', 'Postgres, not MySQL.']);
+  assert.deepEqual(said(await w.act('session_update_task', { session: '2', change: [{ number: 2, text: 'Postgres 16.' }], remove: [1], add: ['Merge your own PRs.'] })), ['allow', 'level']);
+  const task = readTask(w.repo, '2');
+  assert.deepEqual(task.ownerDecisions, ['Postgres 16.', 'Merge your own PRs.']);
+  // The chat shows each change as his, via the bot.
+  const lines = decisionLines(task);
+  assert.equal(lines.length, 2);
+  assert.equal(lines[0].role, 'You · via @orchestrator');
+  assert.match(lines[0].text, /^Updated the task: added "Helpers may run on credits\."; added "Postgres, not MySQL\."\.$/);
+  assert.match(lines[1].text, /^Updated the task: changed 2: "Postgres 16\."; removed 1 \("Helpers may run on credits\."\); added "Merge your own PRs\."\.$/);
+  // Every turn there reads them, under the heading; a teammate's session reads none.
+  assert.deepEqual(ownerDecisionsPart(task), [`${DECISIONS_HEADING}:\nThe owner set these for this session. Follow each of them in every turn, as his own instructions, until he changes them.\n1. Postgres 16.\n2. Merge your own PRs.`]);
+  assert.deepEqual(ownerDecisionsPart({ ...readTask(w.repo, '3'), ownerDecisions: ['x'] }), []);
+  // Audited as his.
+  const rows = readActions().filter(row => row.action === 'session_update_task');
+  assert.deepEqual(rows.map(row => [row.decision, row.asOwner, row.target?.session]), [['allow', true, '2'], ['allow', true, '2']]);
+  // The goal grows only with an agreed Task.
+  assert.match((await w.act('session_update_task', { session: '2', goal: 'Also make search fast.' })).text, /no agreed Task yet/);
+  fs.writeFileSync(planFile(w.repo, '2'), JSON.stringify({ tasks: [{ id: 't-0000000b', title: 'Speed', goal: 'Checkout fast', state: 'approved', objectives: ['Checkout fast'], subtasks: [], met: [] }] }));
+  const grown = await w.act('session_update_task', { session: '2', goal: 'Also make search fast.' });
+  assert.deepEqual(said(grown), ['allow', 'level'], grown.text);
+  assert.deepEqual(currentTask(w.repo, '2').objectives, ['Checkout fast', 'Also make search fast.']);
+  // Refused: a number it does not have, a teammate's session, a Standup, the chat it is in, below Full.
+  for (const [input, why] of [[{ session: '2', remove: [9] }, /There is no decision 9/], [{ session: '3', add: ['x'] }, /by a teammate\. Only its owner changes its task/], [{ session: '4', add: ['x'] }, /Standup/], [{ session: '1', add: ['x'] }, /the session you are in/], [{ session: '2' }, /Say what to change/]]) {
+    const refused = await w.act('session_update_task', input);
+    assert.deepEqual(said(refused), ['refused', 'level'], JSON.stringify(input)); assert.match(refused.text, why);
+  }
+  assert.equal(readTask(w.repo, '3').ownerDecisions, undefined);
+  // On his own computer, through its command; on a teammate's, nothing.
+  w.reply = command => command.type === 'remoteDecisions' ? { decisions: ['Ship Friday.'], line: 'Updated the task: added "Ship Friday.".' } : {};
+  const there = await w.act('session_update_task', { computer: 'devbox', session: '27', add: ['Ship Friday.'] });
+  assert.deepEqual(said(there), ['allow', 'level'], there.text);
+  assert.deepEqual(w.sent.at(-1), { type: 'remoteDecisions', to: DEVBOX, ref: 'c0ffee00c0ffee00:27', change: { add: ['Ship Friday.'], change: [], remove: [], goal: null }, by: 'orchestrator' });
+  const before = w.sent.length;
+  assert.match((await w.act('session_update_task', { computer: 'laptop', session: '3', add: ['x'] })).text, /not one of the owner's own computers/);
+  assert.equal(w.sent.length, before);
+  setLevel('run', { by: 'owner' });
+  assert.equal((await w.act('session_update_task', { session: '2', add: ['x'] })).decision, 'refused', 'Full only');
 });
 
 test('caps at Full: approvals count with messages an hour, and starts against the day', async t => {
   const w = world(t); w.session(2);
   setCap('messagesPerHour', 2);
-  mandate(w, [here(w, 2)]);
   proposed(w, 2);
   assert.deepEqual(said(await w.act('session_message', { session: '2', text: 'One.' })), ['allow', 'level']);
   assert.deepEqual(said(await w.act('session_approve', { session: '2' })), ['allow', 'level']);

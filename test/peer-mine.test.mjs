@@ -7,7 +7,7 @@ import { makeTeam, registeredProject, shareProjects, withHome } from './peer-hel
 import { saveTeamAccess } from '../lib/peer/access.mjs';
 import { NOT_MARKED, ONLY_OWNER, REMOTE_COMMANDS, hostMethods, hostTick, listTick, projectKey, relist, remoteCommand, remoteMachines, remoteSessions, viewMethods } from '../lib/peer/remote.mjs';
 import { MY_COMPUTERS_FILE, isMyComputer, markMyComputer, myComputers, unmarkMyComputer } from '../lib/peer/my-computers.mjs';
-import { NEEDS_NEWER, NEW_REMOTE_COMMANDS, NOT_MY_COMPUTER, REMOTE_METHODS } from '../lib/peer/remote-methods.mjs';
+import { NEEDS_NEWER, NEW_REMOTE_COMMANDS, NOT_MY_COMPUTER, OWNER_WORD_FULL, REMOTE_METHODS } from '../lib/peer/remote-methods.mjs';
 import { peerFile } from '../lib/peer/paths.mjs';
 import * as peerFacade from '../lib/peer/index.mjs';
 import { repository } from '../lib/git.mjs';
@@ -24,7 +24,7 @@ import { defaultConfig } from '../lib/config.mjs';
 // other computer, a teammate's, gets exactly what it got before: each new power is refused, or
 // the owner's word goes as the bot's note.
 
-function connection(key, hello = { remote: 1, shared: 1, oversee: 1, full: 1 }) {
+function connection(key, hello = { remote: 1, shared: 1, oversee: 1, full: OWNER_WORD_FULL }) {
   const sent = [];
   return { key, admitted: true, remoteHello: hello, sent, notify: (method, params) => sent.push([method, params]), request: async () => { throw new Error('No answer'); } };
 }
@@ -55,7 +55,7 @@ const ref = (p, id) => `${projectKey(p.project.root)}:${id}`;
 // A conductor that keeps the owner's mark on what it queues, and one that does not.
 const keeping = (root, text, { asOwner, ...options }) => { const row = enqueue(root, text, options); return asOwner ? updateRequest(root, row.id, { asOwner }) : row; };
 const dropping = (root, text, { asOwner: _asOwner, ...options }) => enqueue(root, text, options);
-const MARK = { bot: 'orchestrator', mandate: 'm1' };
+const MARK = { bot: 'orchestrator' };
 
 test('my computers: the mark is made on this computer, names a computer on a team here, and is kept in a file of its own', t => {
   const { founder, member } = makeTeam(t);
@@ -84,7 +84,7 @@ test('a start from a computer not marked here is capped at this computer\'s acce
   const p = pair(t);
   withHome(p.devbox.home, () => {
     const base = { text: 'Ship the coupons', permissions: 'full', place: null, model: { vendor: 'claude', model: 'opus' }, bots: ['reviewer'], botsPicked: true };
-    for (const extra of [{ title: 'Coupons' }, { model: { vendor: 'claude', model: 'opus', effort: 'high' } }, { botModels: { reviewer: { vendor: 'claude', model: 'sonnet' } } }, { folders: [p.project.root] }, { mandate: 'm1' }]) {
+    for (const extra of [{ title: 'Coupons' }, { model: { vendor: 'claude', model: 'opus', effort: 'high' } }, { botModels: { reviewer: { vendor: 'claude', model: 'sonnet' } } }, { folders: [p.project.root] }]) {
       assert.throws(() => p.host['elu.remote.start']({ ...base, id: crypto.randomUUID(), ...extra }, p.toHost), { message: NOT_MY_COMPUTER }, JSON.stringify(extra));
     }
     assert.deepEqual(pendingRequests(p.project.root), [], 'a refused start leaves nothing');
@@ -102,12 +102,11 @@ test('a start from a computer marked here runs as asked: Full access, its folder
   markOnDevbox(p);
   const id = crypto.randomUUID();
   withHome(p.devbox.home, () => {
-    const start = { id, text: 'Ship the coupons', permissions: 'full', place: null, model: { vendor: 'claude', model: 'opus', effort: 'high' }, bots: ['reviewer'], botsPicked: true, title: 'Coupons', botModels: { reviewer: { vendor: 'claude', model: 'sonnet', effort: 'low' } }, folders: [p.project.parent], mandate: 'm1' };
+    const start = { id, text: 'Ship the coupons', permissions: 'full', place: null, model: { vendor: 'claude', model: 'opus', effort: 'high' }, bots: ['reviewer'], botsPicked: true, title: 'Coupons', botModels: { reviewer: { vendor: 'claude', model: 'sonnet', effort: 'low' } }, folders: [p.project.parent] };
     // Each field is checked here before anything is queued.
     assert.throws(() => p.host['elu.remote.start']({ ...start, id: crypto.randomUUID(), model: { vendor: 'claude', model: 'opus', effort: 'ultra' } }, p.toHost), /Effort on .* is one of/);
     assert.throws(() => p.host['elu.remote.start']({ ...start, id: crypto.randomUUID(), botModels: { qa: { vendor: 'claude' } } }, p.toHost), /@qa is not one of this session's bots/);
     assert.throws(() => p.host['elu.remote.start']({ ...start, id: crypto.randomUUID(), folders: ['/no/such/folder'] }, p.toHost), /Folder not found/);
-    assert.throws(() => p.host['elu.remote.start']({ ...start, id: crypto.randomUUID(), mandate: 'Workflows' }, p.toHost), /named by its id/);
     assert.throws(() => p.host['elu.remote.start']({ ...start, id: crypto.randomUUID(), title: 'x'.repeat(80) }, p.toHost), /one line of up to 60 characters/);
     assert.deepEqual(pendingRequests(p.project.root), []);
     const started = p.host['elu.remote.start'](start, p.toHost);
@@ -118,7 +117,7 @@ test('a start from a computer marked here runs as asked: Full access, its folder
     assert.deepEqual(request.mine.machine, p.laptop.identity.key);
     const hosted = JSON.parse(fs.readFileSync(peerFile('remote', 'host', `${id}.json`), 'utf8'));
     assert.deepEqual(hosted.apply, { title: 'Coupons', effort: 'high', botModels: { reviewer: { vendor: 'claude', model: 'sonnet', effort: 'low' } } });
-    assert.equal(hosted.mandate, 'm1');
+    assert.equal(hosted.mandate, undefined, 'no mandate');
     // The conductor starts it as session 1; the next look sets what it asked on it, once.
     const repo = chat(p.project.root, 1, { goal: 'Ship the coupons', state: 'running', bots: ['reviewer'], botsPicked: true, permissions: 'full', origin: { mine: true, machine: p.laptop.identity.key, name: 'ana', remoteId: id } });
     updateRequest(p.project.root, request.id, { taskId: '1', state: 'running' });
@@ -173,6 +172,17 @@ test('settings, log and agents are refused to a computer not marked here, before
     // The agents, as the Agents tab lists them.
     assert.ok(Array.isArray(p.host[REMOTE_METHODS.agents]({ ref: ref(p, 1) }, p.toHost).agents));
     assert.throws(() => p.host[REMOTE_METHODS.agents]({ ref: ref(p, 1), agent: 'job:nothing' }, p.toHost), /not in this session/);
+    // The owner's decisions for the session, kept for him by the bot that runs his sessions there.
+    const updated = p.host[REMOTE_METHODS.decisions]({ ref: ref(p, 1), change: { add: ['Merge your own PRs.'] }, by: 'orchestrator' }, p.toHost);
+    assert.deepEqual(updated, { decisions: ['Merge your own PRs.'], line: 'Updated the task: added "Merge your own PRs.".' });
+    assert.deepEqual(readTask(repo, '1').ownerDecisions, ['Merge your own PRs.']);
+    assert.equal(readTask(repo, '1').decisionChanges.at(-1).by, 'orchestrator');
+    assert.throws(() => p.host[REMOTE_METHODS.decisions]({ ref: ref(p, 1), change: { remove: [5] }, by: 'orchestrator' }, p.toHost), /There is no decision 5/);
+    assert.throws(() => p.host[REMOTE_METHODS.decisions]({ ref: ref(p, 1), change: { add: ['x'] } }, p.toHost), /Name the bot/);
+    // A teammate's session here is never changed from there.
+    chat(p.project.root, 2, { goal: 'Their fix', origin: { kind: 'handoff', peer: 'e'.repeat(64), name: 'kim', threadId: 't' } }); relist();
+    assert.throws(() => p.host[REMOTE_METHODS.decisions]({ ref: ref(p, 2), change: { add: ['x'] }, by: 'orchestrator' }, p.toHost), /teammate's/);
+    assert.equal(readTask(repo, '2').ownerDecisions, undefined);
   });
 });
 
@@ -205,7 +215,7 @@ test('the owner\'s word from a computer marked here is his, with its mark; from 
   await assert.rejects(send(watch(2), 'Rewrite it.'), /started from another computer or by a teammate/);
   assert.deepEqual(queued('Rewrite it.'), []);
   // A mark that does not read as one is refused plainly, and so is an answer to a question it no longer asks.
-  await assert.rejects(send(one, 'x', { asOwner: { bot: 'orchestrator', mandate: 'Workflows' } }), /names the bot that sends it and the mandate/);
+  await assert.rejects(send(one, 'x', { asOwner: { bot: 'Orchestrator' } }), /names the bot that sends it/);
   await assert.rejects(send(one, 'Yes', { answers: 'Deploy now?' }), /asks no question now/);
 });
 
@@ -226,8 +236,13 @@ test('the laptop sends the owner\'s word only to a computer it marked as his, on
   const second = await send('Two');
   assert.deepEqual([second.asOwner, second.why], [false, NEEDS_NEWER(p.devboxName)]);
   assert.equal(sent().asOwner, undefined);
-  // Both marked, on an ELU that keeps it: his word.
+  // Both marked, on an ELU from 0.1.46 to 0.1.48, which keeps it only under a mandate: the note.
   p.toViewer.remoteHello = { ...p.toViewer.remoteHello, full: 1 };
+  const older = await send('Older');
+  assert.deepEqual([older.asOwner, older.why], [false, NEEDS_NEWER(p.devboxName)]);
+  assert.equal(sent().asOwner, undefined);
+  // On an ELU that keeps it with no mandate: his word.
+  p.toViewer.remoteHello = { ...p.toViewer.remoteHello, full: OWNER_WORD_FULL };
   const third = await send('Three');
   assert.deepEqual([third.asOwner, third.overseer, third.why], [true, null, undefined]);
   assert.deepEqual(sent().asOwner, MARK);
@@ -235,7 +250,7 @@ test('the laptop sends the owner\'s word only to a computer it marked as his, on
   withHome(p.devbox.home, () => unmarkMyComputer(p.laptop.identity.key));
   const fourth = await send('Four');
   assert.deepEqual([fourth.asOwner, fourth.why], [false, `${p.devboxName}: ${NOT_MY_COMPUTER}`]);
-  await assert.rejects(withHome(p.laptop.home, () => remoteCommand(p.viewCtx, { type: 'remoteSend', to: p.devbox.identity.key, ref: row.ref, text: 'x', asOwner: { bot: 'orchestrator' } })), /names the bot that sends it/);
+  await assert.rejects(withHome(p.laptop.home, () => remoteCommand(p.viewCtx, { type: 'remoteSend', to: p.devbox.identity.key, ref: row.ref, text: 'x', asOwner: { bot: 'Orchestrator' } })), /names the bot that sends it/);
 });
 
 test('the mark comes to the computer that follows the session, on a message that waits and on a chat entry, and a mark that does not read as one is left out', async t => {
@@ -287,20 +302,25 @@ test('the laptop starts a session with the owner\'s fields, changes settings and
   await assert.rejects(own('remoteLog'), { message: `${p.devboxName}: ${NOT_MY_COMPUTER}` });
   // Both marked: as asked.
   markOnDevbox(p);
-  const started = await start({ title: 'Coupons', model: { vendor: 'claude', model: 'opus', effort: 'high' }, mandate: 'm1' });
+  const started = await start({ title: 'Coupons', model: { vendor: 'codex', model: 'gpt-5.5', effort: 'xhigh' } });
   const asked = p.asked.filter(([method]) => method === 'elu.remote.start').at(-1)[1];
-  assert.deepEqual([asked.title, asked.model, asked.mandate], ['Coupons', { vendor: 'claude', model: 'opus', effort: 'high' }, 'm1']);
+  assert.deepEqual([asked.title, asked.model, asked.mandate], ['Coupons', { vendor: 'codex', model: 'gpt-5.5', effort: 'xhigh' }, undefined], 'any vendor, model and effort');
   assert.equal(withHome(p.laptop.home, () => remoteSessions()).find(item => item.id === started.id).title, 'Coupons');
   assert.equal(withHome(p.devbox.home, () => pendingRequests(p.project.root)).find(item => item.goal === 'Ship the coupons').permissions, 'full');
   const changed = await own('remoteSettings', { access: 'full' });
   assert.equal(changed.access, 'full');
   assert.equal(withHome(p.devbox.home, () => readTask(repository(p.project.root), '1').permissions), 'full');
   assert.deepEqual(await own('remoteLog'), { run: null, rows: [], more: false });
+  // Its task's decisions, only on an ELU that keeps the owner's word with no mandate.
+  await assert.rejects(own('remoteDecisions', { change: { add: ['Ship Friday.'] }, by: 'orchestrator' }), { message: NEEDS_NEWER(p.devboxName) });
+  p.toViewer.remoteHello = { ...p.toViewer.remoteHello, full: OWNER_WORD_FULL };
+  assert.deepEqual((await own('remoteDecisions', { change: { add: ['Ship Friday.'] }, by: 'orchestrator' })).decisions, ['Ship Friday.']);
+  assert.deepEqual(withHome(p.devbox.home, () => readTask(repository(p.project.root), '1').ownerDecisions), ['Ship Friday.']);
   assert.ok(Array.isArray((await own('remoteAgents')).agents));
   await assert.rejects(own('remoteSettings'), /Say what to change/);
   // An ELU there from before these methods: it needs the new one.
   p.toViewer.request = async method => { throw Object.assign(new Error('Method not found'), { details: { rpc: { code: -32601 } } }); };
-  for (const type of NEW_REMOTE_COMMANDS) await assert.rejects(own(type, { access: 'full' }), { message: NEEDS_NEWER(p.devboxName) }, type);
+  for (const type of NEW_REMOTE_COMMANDS) await assert.rejects(own(type, { access: 'full', change: { add: ['x'] }, by: 'orchestrator' }), { message: NEEDS_NEWER(p.devboxName) }, type);
 });
 
 test('the new commands are peer commands the app and the tools can send', t => {

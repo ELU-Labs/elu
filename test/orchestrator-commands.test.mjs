@@ -2,19 +2,19 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { keyLike, temp } from './helpers.mjs';
+import { temp } from './helpers.mjs';
 import { makeTeam, withHome } from './peer-helpers.mjs';
 import { readTask, saveTask } from '../lib/state.mjs';
 import { projectFolder } from '../lib/workspace.mjs';
 import { registerProject } from '../lib/projects.mjs';
 import { readSettings } from '../lib/orchestrator-settings.mjs';
-import { mandateFor, mandates, saveMandate } from '../lib/orchestrator-mandates.mjs';
 import { isMyComputer, markMyComputer } from '../lib/peer/my-computers.mjs';
 import { projectKey } from '../lib/peer/remote.mjs';
+import { peerFile } from '../lib/peer/paths.mjs';
 import { computersCommand, orchestratorCommand } from '../lib/orchestrator-commands.mjs';
 
-// The owner's commands for the Orchestrator at Full (lib/orchestrator-commands.mjs): its level,
-// Full among them, his mandates, and which computers are his. Made-up sessions of a plain folder
+// The owner's commands for the Orchestrator (lib/orchestrator-commands.mjs): its level, Full the
+// default among them, and which computers are his. Made-up sessions of a plain folder
 // and two made-up computers on a team; no model is asked, no turn runs and no daemon is started.
 // ELU's own folder is a new empty one in every test.
 function environment(t, values) {
@@ -64,91 +64,26 @@ test('/orchestrator: a level word sets the level, Full is the owner\'s own typin
   await assert.rejects(orchestratorCommand(['undo', 'a1']), /No logged action/);
 });
 
-test('/orchestrator alone is a page: the level, the caps, the mandates and the commands', async t => {
-  const w = world(t);
-  const empty = await orchestratorCommand([]);
-  assert.equal(empty.title, 'Orchestrator');
-  assert.match(empty.text, /^Level: Suggest\./);
-  assert.match(empty.text, /No mandates: its messages to your sessions are notes\./);
-  assert.match(empty.text, /\/orchestrator watch, suggest, act, run or full sets the level\./, 'Full is one of the levels now');
-  saveMandate({ name: 'Workflows', goal: 'Workflows', decisions: ['Helpers may run on credits'], sessions: [{ computer: null, project: w.key, session: '4' }] }, { by: 'owner' });
-  const page = await orchestratorCommand([], { settings: withFull() });
-  assert.match(page.text, /Mandates\n {2}m1 · Workflows · 1 decision · 4 in web/);
-  assert.match(page.text, /watch, suggest, act, run or full sets the level/);
-});
-
-test('/orchestrator mandate: the owner makes one with a goal and decisions, changes its decisions, and the list and one mandate read back', async t => {
+test('/orchestrator alone is a page: Full by default, the caps and the commands, no mandates', async t => {
   world(t);
-  const settings = withFull();
-  const made = await orchestratorCommand(['mandate', 'Workflows:', 'Codex', 'helpers', 'may', 'spend', 'credits;', 'merge', 'your', 'own', 'PRs'], { text: 'mandate Workflows: Codex helpers may spend credits; merge your own PRs', settings });
-  assert.equal(made.line, 'Mandate m1 Workflows: 2 decisions. Sessions started under it join it, and /orchestrator mandate m1 add N adds one. It gives your word at Full only: /orchestrator full.');
-  assert.deepEqual(mandates()[0].decisions, ['Codex helpers may spend credits', 'merge your own PRs']);
-  // Without text the words are joined.
-  const again = await orchestratorCommand(['mandate', 'workflows:', 'Helpers', 'may', 'run', 'on', 'credits'], { settings });
-  assert.equal(again.line, 'Mandate m1 Workflows has 1 decision now. It gives your word at Full only: /orchestrator full.');
-  assert.equal(mandates().length, 1, 'the same name is the same mandate');
-  settings.setLevel('full');
-  assert.equal((await orchestratorCommand(['mandate'], { text: 'mandate m1: A; B; C', settings })).line, 'Mandate m1 Workflows has 3 decisions now.');
-  const long = 'Ship the workflows tab with the agent and Gmail nodes working end to end on the devbox';
-  const second = await orchestratorCommand([], { text: `mandate ${long}: Merge when the checks pass`, settings });
-  assert.match(second.line, /^Mandate m2 Ship the workflows tab with the agent and Gmail nodes working end to end on…: 1 decision\./);
-  assert.equal(mandates()[1].goal, long);
-  const list = await orchestratorCommand(['mandates']);
-  assert.equal(list.title, 'Mandates');
-  assert.match(list.text, /^m1 · Workflows · 3 decisions · 0 sessions\n {2}- A\n {2}- B\n {2}- C\n\nm2 · /);
-  assert.match(list.text, new RegExp(`  Goal: ${long}`));
-  const one = await orchestratorCommand(['mandate', 'm2']);
-  assert.equal(one.title, 'Mandate m2');
-  await assert.rejects(orchestratorCommand(['mandate', 'Nothing']), /No mandate is named Nothing/);
-  await assert.rejects(orchestratorCommand([], { text: 'mandate m9: A' }), /No mandate has the id m9/);
-  await assert.rejects(orchestratorCommand([], { text: 'mandate : A' }), /Use \/orchestrator mandate/);
-  await assert.rejects(orchestratorCommand([], { text: `mandate Keys: use ${keyLike('ghp_', 'A1b2C3d4E5f6G7h8I9j0K1l2M3n4')}` }), /may hold a secret/);
-  await assert.rejects(orchestratorCommand([], { text: `mandate Long: ${'x'.repeat(501)}` }), /each decision to 500/);
-  await assert.rejects(orchestratorCommand([], { text: `mandate Many: ${Array.from({ length: 41 }, (_, i) => `d${i}`).join('; ')}` }), /up to 40 decisions/);
-  assert.equal(mandates().length, 2, 'nothing refused was saved');
+  const page = await orchestratorCommand([]);
+  assert.equal(page.title, 'Orchestrator');
+  assert.match(page.text, /^Level: Full, the default\. /, 'a fresh install is at Full with no command');
+  assert.match(page.text, /never in a teammate's/);
+  assert.match(page.text, /\/orchestrator watch, suggest, act, run or full sets the level\./);
+  assert.doesNotMatch(page.text, /mandate/i);
+  // A level the owner set stays.
+  await orchestratorCommand(['suggest']);
+  assert.match((await orchestratorCommand([])).text, /^Level: Suggest\./);
+  // The mandate words are gone.
+  await assert.rejects(orchestratorCommand(['mandate', 'Settings:', 'A']), /Use \/orchestrator/);
+  await assert.rejects(orchestratorCommand(['mandates']), /Use \/orchestrator/);
 });
 
-test('/orchestrator mandate add and drop: a session here by its number or the open one joins it, one at a time, and never a teammate\'s', async t => {
-  const w = world(t);
-  w.session(4); w.session(5); w.session(6, { origin: { kind: 'ask', peer: 'f'.repeat(64), name: 'sara' } });
-  await orchestratorCommand([], { text: 'mandate Workflows: A' });
-  await orchestratorCommand([], { text: 'mandate Billing: B' });
-  const ref = id => ({ computer: null, project: w.key, session: id });
-  assert.equal((await orchestratorCommand(['mandate', 'Workflows', 'add', '4'], { root: w.root })).line, 'Session 4 joined mandate m1 Workflows.');
-  assert.equal(mandateFor(ref('4'))?.id, 'm1');
-  assert.equal((await orchestratorCommand(['mandate', 'Workflows', 'add', '4'], { root: w.root })).line, 'Session 4 is in mandate m1 Workflows already.');
-  // The open session, and a move: a session is in one mandate at a time.
-  assert.equal((await orchestratorCommand(['mandate', 'billing', 'add'], { open: { root: w.root, id: '4' } })).line, 'Session 4 joined mandate m2 Billing, and left m1 Workflows.');
-  assert.equal(mandateFor(ref('4'))?.id, 'm2');
-  assert.deepEqual(mandates().find(m => m.id === 'm1').sessions, []);
-  assert.equal((await orchestratorCommand(['mandate', 'm2', 'drop', '4'], { root: w.root })).line, 'Session 4 left mandate m2 Billing.');
-  assert.equal(mandateFor(ref('4')), null);
-  assert.equal((await orchestratorCommand(['mandate', 'm2', 'drop', '4'], { root: w.root })).line, 'Session 4 is not in mandate m2 Billing.');
-  await assert.rejects(orchestratorCommand(['mandate', 'm1', 'add', '6'], { root: w.root }), /teammate's message started is never in a mandate/);
-  await assert.rejects(orchestratorCommand(['mandate', 'm1', 'add', '9'], { root: w.root }), /No session 9/);
-  await assert.rejects(orchestratorCommand(['mandate', 'm1', 'add', '4']), /Open a project first/);
-  await assert.rejects(orchestratorCommand(['mandate', 'm1', 'add']), /Open a session/);
-  // A session on another computer joins only when that computer is marked as the owner's here.
-  await assert.rejects(orchestratorCommand(['mandate', 'm1', 'add'], { open: { computer: 'd'.repeat(64), project: 'abc123', session: '113' } }), /not marked as yours here/);
-});
-
-test('/orchestrator mandate remove: the mandate is gone, and its sessions get notes again', async t => {
-  const w = world(t); w.session(4);
-  await orchestratorCommand([], { text: 'mandate Workflows: A' });
-  await orchestratorCommand([], { text: 'mandate Billing: B' });
-  await orchestratorCommand(['mandate', 'm1', 'add', '4'], { root: w.root });
-  assert.equal((await orchestratorCommand(['mandate', 'remove', 'workflows'])).line, "Removed mandate m1 Workflows. In its sessions the Orchestrator's messages are notes again.");
-  assert.deepEqual(mandates().map(m => m.id), ['m2']);
-  assert.equal(mandateFor({ computer: null, project: w.key, session: '4' }), null);
-  await assert.rejects(orchestratorCommand(['mandate', 'remove', 'm1']), /No mandate is named m1/);
-  assert.equal((await orchestratorCommand(['mandate', 'remove', 'm2'])).line.startsWith('Removed mandate m2'), true);
-  assert.equal((await orchestratorCommand(['mandates'])).line, 'No mandates yet. /orchestrator mandate NAME: decision; decision makes one.');
-});
-
-test('/computers: the owner marks a computer on his team as his on this computer, by its name, and takes the mark away', async t => {
+test('/computers: the owner marks a computer on his team as his on this computer, by its name, and unmine says it is not', async t => {
   const { founder, member } = makeTeam(t);
   await withHome(founder.home, async () => {
-    assert.equal((await computersCommand([])).line, 'None is marked as yours here. Not marked: @sara. /computers mine NAME marks one.');
+    assert.equal((await computersCommand([])).line, 'None is yours here yet: a computer signed in to the same GitHub account is paired as yours. Not yours: @sara. /computers mine NAME makes one yours.');
     await assert.rejects(computersCommand(['mine', 'nobody']), /No computer on your projects goes by @nobody/);
     await assert.rejects(computersCommand(['mine']), /Use \/computers/);
     await assert.rejects(computersCommand(['own', 'sara']), /Use \/computers/);
@@ -159,16 +94,32 @@ test('/computers: the owner marks a computer on his team as his on this computer
     assert.equal(isMyComputer(member.identity.key), false);
     assert.match(asked[0][1], /^@sara is sara's on your team\. Marked, what it sends for you counts as your own words here/);
     const yes = await computersCommand(['mine', 'sara'], { yes: async () => true });
-    assert.match(yes.line, /^@sara is yours here: what it sends for you counts as your own words\. On @sara, \/computers mine .+ marks this one too\.$/);
+    assert.match(yes.line, /^@sara is yours here: what it sends for you counts as your own words\. Unless the two are paired, on @sara \/computers mine .+ makes this one its too\.$/);
     assert.equal(isMyComputer(member.identity.key), true);
     assert.equal((await computersCommand(['mine', member.identity.key.slice(0, 8)])).line, '@sara is yours here already.');
     assert.equal((await computersCommand([])).line, 'Yours here: @sara.');
-    assert.equal((await computersCommand(['unmine', 'sara'])).line, "@sara is not yours here now: what it sends counts as a teammate's again.");
+    assert.equal((await computersCommand(['unmine', 'sara'])).line, "@sara is not yours here now, paired or not: what it sends counts as a teammate's again. /computers mine sara makes it yours again.");
     assert.equal(isMyComputer(member.identity.key), false);
-    assert.equal((await computersCommand(['unmine', 'sara'])).line, '@sara was not marked as yours here.');
+    assert.equal((await computersCommand(['unmine', 'sara'])).line, '@sara is not yours here.');
   });
   // The mark is that computer's own: the member's computer marked nothing.
   await withHome(member.home, async () => assert.equal(isMyComputer(founder.identity.key), false));
+});
+
+test('/computers: a paired computer is listed as his with no step, and unmine overrides the pairing', async t => {
+  const { founder, member } = makeTeam(t);
+  await withHome(founder.home, async () => {
+    fs.mkdirSync(peerFile(), { recursive: true });
+    const okAt = new Date().toISOString();
+    fs.writeFileSync(peerFile('github-pairing.json'), JSON.stringify({ version: 1, state: 'ok', at: okAt, keys: [member.identity.key], okAt }));
+    assert.equal((await computersCommand([])).line, 'Yours here: @sara.');
+    assert.equal((await computersCommand(['mine', 'sara'])).line, '@sara is yours here already.');
+    assert.match((await computersCommand(['unmine', 'sara'])).line, /^@sara is not yours here now, paired or not/);
+    assert.equal(isMyComputer(member.identity.key), false);
+    assert.match((await computersCommand([])).line, /Not yours: @sara\./);
+    await computersCommand(['mine', 'sara'], { yes: async () => true });
+    assert.equal(isMyComputer(member.identity.key), true);
+  });
 });
 
 test('/computers: a computer with nothing shared says so, and a mark is never made for a computer off the team', async t => {

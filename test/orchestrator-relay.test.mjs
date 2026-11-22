@@ -14,6 +14,7 @@ import { projectFolder } from '../lib/workspace.mjs';
 import { actionsFile } from '../lib/orchestrator-actions.mjs';
 import { ORCH_TOOLS, overseeingAnswer, readingTool } from '../lib/orchestrator-tools.mjs';
 import { FULL_TOOLS } from '../lib/orchestrator-seams.mjs';
+import { setLevel } from '../lib/orchestrator-settings.mjs';
 
 // The approval relay for the turn of the bot that oversees the sessions (--oversee,
 // lib/approval-server.mjs): its own table answers first, in every mode and before any rule of
@@ -30,6 +31,9 @@ function environment(t, values) {
 // A project on this computer with the bot's own chat as session 1.
 function world(t) {
   const dir = temp(t); environment(t, { XDG_CONFIG_HOME: path.join(dir, 'personal') });
+  // These are the relay below Full, where the owner set the level (Full is the default now:
+  // test/orchestrator-full.test.mjs has the relay at Full).
+  setLevel('suggest', { by: 'owner' });
   const root = path.join(dir, 'web'); fs.mkdirSync(root);
   const repo = projectFolder(root); registerProject(repo);
   saveTask(repo, { id: '1', kind: 'conversation', base: null, branch: null, worktree: repo.root, goal: 'Oversee the sessions', state: 'answered', createdAt: new Date().toISOString(), runs: [], messages: [], reviews: [], responses: [], sessions: {}, permissions: 'auto', botChat: 'orchestrator' });

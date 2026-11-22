@@ -18,7 +18,7 @@ import { forgetCatalogs } from '../lib/claude-catalog.mjs';
 import { WAITS_FOR, changeSwitch, dayClock, markSpent } from '../lib/claude-switch.mjs';
 import { CAP_CARRY_TEXT } from '../lib/turn-limits.mjs';
 import { AUTO_LINE, AUTO_TEXT } from '../lib/remote-helper.mjs';
-import { ELU_TEXTS, KEEP_GOING_TEXT, eluLine, jobsEndedText, sentByElu, writtenByElu } from '../lib/elu-sent.mjs';
+import { ELU_TEXTS, KEEP_GOING_TEXT, eluLine, jobsEndedText, sentByElu, writtenByElu, leadAskText, leadBackText, WAKE_HEAD } from '../lib/elu-sent.mjs';
 import { setSessionModel } from '../lib/models.mjs';
 import { changeAgent, pickedOverAuto } from '../lib/agent-change.mjs';
 import { agentSpend, agentTable, cleanTopAgents, topAgentsWire } from '../lib/agent-spend.mjs';
@@ -350,8 +350,12 @@ test('only the owner\'s own typed words pick a step: one request of each kind', 
 test('one list names every text ELU sends by itself, and the chat reads the two it always did', t => {
   const jobs = jobsEndedText([{ name: 'gate', code: 0, signal: null, ranMs: 61000, log: path.join(temp(t), 'no.log') }]);
   const helper = AUTO_TEXT('laptop', 1), lifted = `Continue where you stopped: this session now has ${LABELS.auto}. Try again only this: npm install; npm test. Do not retry anything the owner said no to or that is never allowed.`;
-  assert.deepEqual(ELU_TEXTS.map(row => row.id), ['keep-going', 'jobs-ended', 'carry-on', 'helper-turn', 'mode-continue']);
+  assert.deepEqual(ELU_TEXTS.map(row => row.id), ['keep-going', 'jobs-ended', 'orchestrator-wake', 'lead-asks-bot', 'bot-answered-lead', 'carry-on', 'helper-turn', 'mode-continue']);
   const kind = text => ELU_TEXTS.filter(row => row.is(text)).map(row => row.id);
+  // What a session's lead asks its bot, and the answer ELU hands back to it: ELU's, never the owner's.
+  assert.deepEqual(kind(leadAskText('advisor', 'Review the seams.')), ['lead-asks-bot']);
+  assert.deepEqual(kind(leadBackText('advisor', 'Fine.')), ['bot-answered-lead']);
+  assert.deepEqual(kind(`${WAKE_HEAD(2)}\n- #1`), ['orchestrator-wake']);
   assert.deepEqual(kind(KEEP_GOING_TEXT), ['keep-going']);
   assert.deepEqual(kind(jobs), ['jobs-ended']);
   assert.deepEqual(kind(CAP_CARRY_TEXT), ['carry-on']);
