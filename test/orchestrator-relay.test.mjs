@@ -13,6 +13,7 @@ import { saveTask } from '../lib/state.mjs';
 import { projectFolder } from '../lib/workspace.mjs';
 import { actionsFile } from '../lib/orchestrator-actions.mjs';
 import { ORCH_TOOLS, overseeingAnswer, readingTool } from '../lib/orchestrator-tools.mjs';
+import { FULL_TOOLS } from '../lib/orchestrator-seams.mjs';
 
 // The approval relay for the turn of the bot that oversees the sessions (--oversee,
 // lib/approval-server.mjs): its own table answers first, in every mode and before any rule of
@@ -251,7 +252,8 @@ test('a name reads only when its first word reads and nothing in it can change s
 
 test('the relay of the overseeing turn serves its ten tools, and none for the other computers', async t => {
   const w = world(t), server = start(t, argv(w));
-  assert.deepEqual(await server.list(), [TOOL_NAME, ...ORCH_TOOLS]);
+  // Below the level Full, the ten (test/orchestrator-full.test.mjs serves the rest at Full).
+  assert.deepEqual(await server.list(), [TOOL_NAME, ...ORCH_TOOLS.filter(name => !FULL_TOOLS.includes(name))]);
   // One of the ten runs through act for the session the turn is in.
   const read = await server.call('sessions_list', {}).reply();
   assert.equal(read.result.isError, undefined, read.result.content[0].text);
