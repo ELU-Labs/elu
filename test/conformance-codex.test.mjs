@@ -38,7 +38,7 @@ const assertIsolated = (args) => {
 
 // The feature switches of a launch, whole. On 0.166.0-alpha.5.1 a session's commands and file
 // reads run through the code-mode host: switched off, a real turn starts none of them.
-test('a Codex session leaves the code-mode host at the release default; a reviewer keeps it off', (t) => {
+test('every Codex launch leaves the code-mode host at the release default; a reviewer starts no helper', (t) => {
   const cwd = temp(t), schemaFile = path.join(cwd, 'schema.json');
   const features = args => args.filter(arg => arg.startsWith('features.')).sort();
   const off = ['apps', 'browser_use', 'browser_use_external', 'browser_use_full_cdp_access', 'code_mode', 'computer_use', 'goals', 'hooks', 'image_generation', 'in_app_browser', 'multi_agent', 'multi_agent_v2', 'plugin_discovery_prefetch', 'plugins', 'remote_plugin', 'shell_snapshot', 'skill_mcp_dependency_install', 'skill_search', 'sleep_tool', 'tool_suggest', 'view_image', 'workspace_dependencies'];
@@ -49,7 +49,12 @@ test('a Codex session leaves the code-mode host at the release default; a review
   }
   // Full access is everything: no feature is switched off, the code-mode host among them.
   for (const resume of [null, '12345678-1234-4234-8234-123456789abc']) assert.deepEqual(features(codex({ mode: 'full', role: lead(), cwd, schemaFile, resume })), ['features.shell_tool=true', 'features.unified_exec=true'], `full${resume ? ', resumed' : ''}`);
-  assert.deepEqual(features(codex({ role: reviewer(), cwd, schemaFile })), [...off, 'code_mode_host'].map(name => `features.${name}=false`).concat('features.shell_tool=false', 'features.unified_exec=false').sort());
+  // A reviewer too: with the host off its every turn opened with "Code Mode is unavailable" (codex-cli
+  // 0.169.0-alpha.11.1). It has no shell and no helper: agents.enabled=false, which a session does not set.
+  const read = codex({ role: reviewer(), cwd, schemaFile });
+  assert.deepEqual(features(read), off.map(name => `features.${name}=false`).concat('features.shell_tool=false', 'features.unified_exec=false').sort());
+  assert.ok(read.includes('agents.enabled=false'));
+  for (const mode of ['ask', 'auto', 'full']) assert.equal(codex({ mode, role: lead(), cwd, schemaFile }).includes('agents.enabled=false'), false, mode);
 });
 
 test('Codex reviewer has no shell, apps, browser, agents, user hooks, or MCP configuration', (t) => {
@@ -303,6 +308,7 @@ test('a Codex turn that oversees gets ELU\'s MCP server and the hook that asks t
     assert.equal(setting(args, 'default_permissions'), undefined, mode); assert.equal(setting(args, 'agents.max_concurrent_threads_per_session'), undefined, mode);
     // The code-mode host stays at the release default: every model of the catalog calls its tools, MCP ones too, only through it.
     for (const kept of ['features.code_mode=false', 'features.code_mode_host=false', 'features.hooks=false']) assert.equal(args.includes(kept), false, `${mode}: ${kept}`);
+    assert.ok(args.includes('agents.enabled=false'), `${mode}: no helper below Full`);
     // Every call reaches the hook first: this file, with what the relay knows of the turn.
     assert.match(setting(args, 'hooks.PreToolUse'), /^\[\{matcher="\*", hooks=\[\{type="command", command=".*", timeout=1320\}\]\}\]$/);
     assert.ok(hookCommand(args).startsWith(`'${process.execPath}' '${path.resolve('lib/adapters/codex.mjs')}' 'hook' `), hookCommand(args));
@@ -358,8 +364,9 @@ test('a Codex launch that does not oversee and has no server of the owner\'s is 
       assert.equal(without.some(arg => /^hooks\.|^features\.hooks=true$|dangerously/.test(arg)), false, mode);
     }
   }
-  // The read-only reviewer launch is still the pinned one (test/argv-snapshot.test.mjs) and keeps the code-mode host off.
-  assert.ok(codex({ role: reviewer(), cwd: f.cwd, schemaFile: f.schemaFile }).includes('features.code_mode_host=false'));
+  // The read-only reviewer launch is still the pinned one (test/argv-snapshot.test.mjs): the code-mode host on, no helper.
+  const read = codex({ role: reviewer(), cwd: f.cwd, schemaFile: f.schemaFile });
+  assert.equal(read.includes('features.code_mode_host=false'), false); assert.ok(read.includes('agents.enabled=false'));
 });
 
 test('the hook of a turn that oversees answers each call as the relay answers Claude Code, under the names the relay knows', async (t) => {
@@ -457,7 +464,8 @@ test('parse reads the calls of the MCP servers a turn that oversees was given, a
   const resources = '{"type":"item.completed","item":{"id":"item_8","type":"mcp_tool_call","server":"codex","tool":"list_mcp_resources","status":"completed"}}\n';
   assert.equal(parseCodex(call('elu') + resources + base, { mode: 'locked', servers: ['elu'] }).result.outcome, 'done');
   assert.throws(() => parseCodex(call('other') + base, { mode: 'locked', servers: ['elu'] }), /reviewer must not have/);
-  assert.throws(() => parseCodex(resources + base, { mode: 'locked' }), /reviewer must not have/, 'a run with no servers lists no resources');
+  // The code-mode host offers that listing in every launch, of no server where the run has none.
+  assert.equal(parseCodex(resources + base, { mode: 'locked' }).result.outcome, 'done');
   assert.throws(() => parseCodex(call(APPROVAL_SERVER) + base, { mode: 'locked' }), /reviewer must not have/);
 });
 
@@ -479,16 +487,17 @@ test('a Codex run given the owner\'s servers has them, keys off the command line
       assert.deepEqual(args.map(arg => arg.startsWith('mcp_servers=') ? 'mcp_servers={}' : arg), without, `${mode}: only mcp_servers differs`);
     }
   }
-  // Read only: the reviewer's launch, with the code-mode host on (every model calls an MCP tool only
+  // Read only: the reviewer's launch (its code-mode host on: every model calls an MCP tool only
   // through it) and the hook that lets the turn use those servers and nothing else.
   const role = { ...reviewer(), maxCostUsd: null }, without = codex({ role, cwd: f.cwd, schemaFile: f.schemaFile }), args = codex({ role, cwd: f.cwd, schemaFile: f.schemaFile, mcp: f.mcp });
   for (const secret of [KEY, TOKEN]) assert.equal(args.some(arg => arg.includes(secret)), false, secret);
   assert.deepEqual(args.slice(args.indexOf('--sandbox'), args.indexOf('--sandbox') + 2), ['--sandbox', 'read-only']);
   for (const expected of ['approval_policy="never"', 'web_search="disabled"', 'features.shell_tool=false', 'features.unified_exec=false', 'features.multi_agent=false', 'features.hooks=true', '--dangerously-bypass-hook-trust']) assert.ok(args.includes(expected), expected);
-  for (const gone of ['features.code_mode_host=false', 'features.code_mode=false', 'features.hooks=false', 'mcp_servers={}']) assert.equal(args.includes(gone), false, gone);
+  for (const gone of ['features.code_mode_host=false', 'features.hooks=false', 'mcp_servers={}']) assert.equal(args.includes(gone), false, gone);
+  assert.ok(args.includes('agents.enabled=false'));
   assert.equal(setting(args, 'mcp_servers'), setting(codex({ mode: 'ask', role: lead(), cwd: f.cwd, schemaFile: f.schemaFile, mcp: f.mcp }), 'mcp_servers'));
   assert.deepEqual(hookContext(args), { kind: 'servers', servers: ['elu', 'notes'] });
-  const kept = list => list.filter((arg, i) => !['features.code_mode_host=false', 'features.code_mode=false'].includes(arg) && !['features.code_mode_host=false', 'features.code_mode=false'].includes(list[i + 1]) && !arg.startsWith('mcp_servers=') && !/^hooks\.|^features\.hooks=|^--dangerously/.test(arg) && !(arg === '-c' && /^hooks\./.test(list[i + 1])));
+  const kept = list => list.filter((arg, i) => !arg.startsWith('mcp_servers=') && !/^hooks\.|^features\.hooks=|^--dangerously/.test(arg) && !(arg === '-c' && /^hooks\./.test(list[i + 1])));
   assert.deepEqual(kept(args), kept(without));
   assert.equal(args.at(-1), '-');
 });
