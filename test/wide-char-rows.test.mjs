@@ -489,9 +489,9 @@ test('the app at every width from 80 to 200: Projects lists a project named with
   assert.equal(columns(DOCS.name), 48); assert.equal(columns(short), 29); assert.ok(columns(who) > who.length - 3 && columns(machine) > machine.length);
   for (let width = 80; width <= 200; width++) {
     await v.sized(width, 30);
-    // Projects: this computer's project, then the two a teammate shares. Each column starts under the one above.
+    // Projects: this computer's project, then the two a teammate shares, then All projects. Each column starts under the one above.
     await v.send('/projects');
-    await until(() => v.current.view === 'projects' && panels().projectsList.items.length === 3, 'the three projects');
+    await until(() => v.current.view === 'projects' && panels().projectsList.items.length === 4, 'the three projects, then All projects');
     let rows = await v.screen(`Projects at ${width}`);
     const list = panels().projectsList, room = Math.max(20, list.width - 2), left = tail => Math.max(4, room - 26 - tail.length - 2);
     const mine = `● ${padEnd(OWN, 24)}`, shop = `  ${padEnd(SHOP.name, 24)}${padEnd(cut('shared by @小林   on @开发机', left('online'), '...'), left('online') + 2)}online`;
