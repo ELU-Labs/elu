@@ -4,7 +4,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { project, fakeClis, autoApprove, git } from './helpers.mjs';
 import { saveBot } from '../lib/bots.mjs';
-import { ProjectController, conversationEntries } from '../lib/projects.mjs';
+import { ProjectController, conversationEntries, registerProject } from '../lib/projects.mjs';
+import { Conductor, enqueue } from '../lib/conductor.mjs';
 import { pendingRequests, projectFolder } from '../lib/workspace.mjs';
 import { readTask, saveTask } from '../lib/state.mjs';
 import { sessionChecklist } from '../lib/checklist.mjs';
@@ -196,6 +197,34 @@ test('a pull request the lead opens with gh pr create from a helper folder is re
   task = readTask(f.repo, own.id);
   assert.equal(task.pullReviews[URL].reviews.critic.head, 'c'.repeat(40));
   assert.equal(conversationEntries(f.repo, task).filter(row => row.pull === 7).at(-1).text, 'PR #7: Passed.');
+});
+
+// 2026-11-22: a session's lead asked its bots to review after each push. Each ask waited for the
+// lead's turn, then held the session for its whole review, and the owner's messages waited behind
+// every one: up to an hour. The ask now starts beside the running turn and ends at once.
+test('a review the lead asks for while its turn works starts beside that turn at once, and its review holds nothing', { timeout: 240000 }, async t => {
+  const f = setup(t, 'slow');
+  const gh = fakeGh(f);
+  const own = runner.createConversation(f.repo, f.controller.draftConfig, 'Open the coupons pull request', { permissions: 'auto', bots: ['critic'] });
+  saveTask(f.repo, { ...readTask(f.repo, own.id), state: 'answered' });
+  registerProject(f.controller.repo);
+  const conductor = new Conductor({ tickMs: 20 }).start(); t.after(() => conductor.stop());
+  const until = async (check, what, timeout = 20000) => { const started = Date.now(); while (!check()) { if (Date.now() - started > timeout) throw new Error(`Timed out waiting for ${what}`); await new Promise(resolve => setTimeout(resolve, 20)); } };
+  const request = id => pendingRequests(f.root).find(row => row.id === id);
+  enqueue(f.root, 'Go on with the coupons.', { continuationTaskId: String(own.id), priority: 0 });
+  await until(() => readTask(f.repo, own.id).state === 'running', 'the lead turn to work');
+  // The review waits for the diff until the test lets it go.
+  const hold = path.join(f.parent, 'hold-diff'); fs.writeFileSync(hold, ''); gh.set({ hold });
+  const asked = enqueue(f.root, leadAskText('critic', `review ${URL}`), { continuationTaskId: String(own.id), priority: 0, bot: 'critic', byElu: true });
+  await until(() => request(asked.id)?.state === 'done', 'the ask to be done beside the turn', 10000);
+  await until(() => gh.calls().some(row => row.args[0] === 'pr' && row.args[1] === 'diff'), 'its review to start', 10000);
+  assert.equal(readTask(f.repo, own.id).state, 'running', 'the lead turn still works');
+  assert.equal(runner.pullSweepsRunning(), 1, 'its review runs beside the session');
+  // Let go, the bot reviews the pull request at its head, and what it found goes to the lead.
+  f.mode('normal', { intent: 'answer', commands: [] });
+  fs.rmSync(hold); await runner.pullSweepsDone(); gh.set({ hold: null });
+  assert.equal(readPulls(f.repo, own.id).pulls[URL].reviews.critic.head, 'a'.repeat(40));
+  await until(() => readTask(f.repo, own.id).state !== 'running', 'the lead turn to end', 60000);
 });
 
 test('a long turn has its pull requests reviewed while it works, not only when it ends', { timeout: 240000 }, async t => {
