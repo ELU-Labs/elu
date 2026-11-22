@@ -10,6 +10,7 @@ import { EventEmitter } from 'node:events';
 import { readProjectSettings } from '../lib/project-settings.mjs';
 import { createIdentity } from '../lib/peer/identity.mjs';
 import { shareProjects } from './peer-helpers.mjs';
+import { markMyComputer } from '../lib/peer/my-computers.mjs';
 import { NOT_MINE, UPDATE, UPDATE_LIST, hostMethods, hostTick, listTick, projectKey, relist, remoteCommand, remoteConnected, remoteMachines, remoteSessions, viewMethods, viewTick, watchId } from '../lib/peer/remote.mjs';
 import { repository } from '../lib/git.mjs';
 import { EluCodeError } from '../lib/util.mjs';
@@ -1411,6 +1412,33 @@ test('a session I started on my other computer and archive there leaves Needs yo
   await refresh();
   assert.deepEqual(needsYou().map(value => value.label), ['WAITING YOU']);
   assert.equal(underDevbox().length, 1);
+});
+
+test('a session on a computer I marked as mine and archived from here stays kept here, marked archived, so it can be brought back from here', async t => {
+  const { laptop, devbox, project, toHost, toViewer, hostCtx, viewCtx, viewer } = pair(t), D = devbox.identity.key;
+  toViewer.remoteHello = { remote: 1, shared: 1, edit: 1 };
+  withHome(laptop.home, () => markMyComputer(D, 'devbox'));
+  const started = await withHome(laptop.home, () => remoteCommand(viewCtx, { type: 'remoteStart', to: D, text: 'Which coupon wins?', permissions: 'ask' }));
+  withHome(devbox.home, () => { const [request] = pendingRequests(project.root); chat(project.root, 1, { goal: 'Which coupon wins?', state: 'needs_input', origin: { kind: 'mine', mine: true, ...request.mine }, result: { outcome: 'needs_input', question: 'Which one?' } }); });
+  let given = 0, at = Date.now();
+  const refresh = async () => {
+    at += 5000;
+    withHome(devbox.home, () => { relist(); hostTick(hostCtx); });
+    const pushes = toHost.sent.filter(([method]) => method === 'elu.remote.events');
+    for (const [, params] of pushes.slice(given)) withHome(laptop.home, () => viewer['elu.remote.events'](params, toViewer));
+    given = pushes.length;
+    await withHome(laptop.home, () => viewTick(viewCtx, at));
+    await withHome(laptop.home, () => listTick(viewCtx, at));
+  };
+  await refresh();
+  const kept = () => withHome(laptop.home, () => remoteMachines())[0].sessions.find(row => row.remoteId === started.id);
+  const ref = kept()?.ref; assert.ok(ref, 'listed');
+  assert.equal((await withHome(laptop.home, () => remoteCommand(viewCtx, { type: 'remoteArchive', id: started.id, to: D, ref, archived: true }))).archived, true);
+  await refresh(); await refresh();
+  assert.equal(kept()?.archived, true, 'kept here, marked archived, after that computer lists its sessions again');
+  assert.equal((await withHome(laptop.home, () => remoteCommand(viewCtx, { type: 'remoteArchive', id: started.id, to: D, ref, archived: false }))).archived, false);
+  await refresh();
+  assert.notEqual(kept()?.archived, true, 'back, and listed as open');
 });
 
 // A session started from here is renamed by the id both machines give it, once it has started there.
