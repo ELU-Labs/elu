@@ -18,6 +18,7 @@ import { claimView, nameProject, registerProject, sessionWire } from '../lib/pro
 import { saveRequest, pendingRequests, updateRequest } from '../lib/workspace.mjs';
 import { launchTerminal } from '../lib/terminal.mjs';
 import { listBots, removeBot, saveBot } from '../lib/bots.mjs';
+import { setLevel } from '../lib/orchestrator-settings.mjs';
 import { boardRows, barCells, barColumns } from '../lib/board.mjs';
 import { closeSession, readBoard, reopenSession } from '../lib/kanban.mjs';
 import { readTask, saveTask, taskDir, tasks } from '../lib/state.mjs';
@@ -1163,6 +1164,21 @@ test('my own bot is in Direct messages once I write to it in the active project,
   await openRow(v, /◆ @helper\s*$/, '@helper');
   await until(() => /Message @helper · it answers in its own session/.test(v.panels.ask._label.getText()), 'the box names my bot');
   assert.deepEqual(peer.sent(), [], 'nothing went to a teammate');
+});
+
+test('at the Full level, a new chat with the bot that oversees starts in Full access; below Full it starts in the default', async t => {
+  const p = project(later(t)); environment(t, p.parent);
+  saveBot({ name: 'boss', vendor: 'claude', instructions: 'Oversee.', oversees: true });
+  const v = await view(t, { repo: repository(p.root), peer: fakePeer(), team: true });
+  await until(() => v.current.view === 'chats', 'Chats');
+  setLevel('full', { by: 'owner' });
+  await send(v, '@boss look at the sessions');
+  await until(() => /@boss answers in a new session/.test(v.panels.status.getText()), 'started');
+  assert.deepEqual(pendingRequests(p.root).map(row => [row.bot, row.permissions]), [['boss', 'full']]);
+  setLevel('suggest', { by: 'owner' }); saveBot({ name: 'aide', vendor: 'claude', instructions: 'Oversee.', oversees: true });
+  await send(v, '@aide look again');
+  await until(() => /@aide answers in a new session/.test(v.panels.status.getText()), 'started below Full');
+  assert.notEqual(pendingRequests(p.root).find(row => row.bot === 'aide')?.permissions, 'full');
 });
 
 test('/invite offers a code for someone new or which bots teammates may use, and the code comes without a bots question', async t => {
