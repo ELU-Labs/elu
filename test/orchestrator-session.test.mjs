@@ -45,12 +45,20 @@ function environment(t, values) {
   for (const [key, value] of Object.entries(values)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
   resources(t).files.push(() => { for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } });
 }
+// The stand-in Claude Code lists the --agents flag the real one has: at the default level, Full,
+// the chat of the bot that oversees runs in Full access however its turn came, and starts helpers.
+function clis(parent, options) {
+  const fake = fakeClis(parent, options), file = path.join(parent, 'bin', 'claude'), from = "console.log('--print ";
+  const text = fs.readFileSync(file, 'utf8'); assert.ok(text.includes(from), 'the stand-in lists its flags');
+  fs.writeFileSync(file, text.replace(from, "console.log('--agents --print "));
+  return fake;
+}
 function fixture(t, more = {}) {
-  const p = project(t), fake = fakeClis(p.parent, { mode: 'normal', ...more });
+  const p = project(t), fake = clis(p.parent, { mode: 'normal', ...more });
   environment(t, { ...fake.env, ELU_NO_UPDATE_CHECK: '1', ELU_SESSION: undefined, ELU_PROJECT: undefined, ELU_COMMAND_FOLDER: undefined, GIT_AUTHOR_NAME: 'Test Owner', GIT_AUTHOR_EMAIL: 'owner@example.invalid', GIT_COMMITTER_NAME: 'Test Owner', GIT_COMMITTER_EMAIL: 'owner@example.invalid' });
   const controller = new ProjectController(projectFolder(p.root));
   const lines = file => fs.existsSync(file) ? fs.readFileSync(file, 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse) : [];
-  return { ...p, controller, repo: controller.repo, calls: () => lines(fake.calls).filter(row => row.vendor === 'claude' && row.args.includes('-p')), inputs: () => lines(path.join(p.parent, 'inputs.jsonl')).filter(row => row.vendor === 'claude'), fake: next => fakeClis(p.parent, { mode: 'normal', ...more, ...next }) };
+  return { ...p, controller, repo: controller.repo, calls: () => lines(fake.calls).filter(row => row.vendor === 'claude' && row.args.includes('-p')), inputs: () => lines(path.join(p.parent, 'inputs.jsonl')).filter(row => row.vendor === 'claude'), fake: next => clis(p.parent, { mode: 'normal', ...more, ...next }) };
 }
 const NOTE = { overseer: 'orchestrator' };
 const START = { permissions: 'auto', place: { kind: 'worktree' }, folders: [], bots: [], overseer: 'orchestrator', budgetUsd: 1.5 };
