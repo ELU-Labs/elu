@@ -234,6 +234,12 @@ question it was written for. Only such an answer carries on work that stopped on
 question. A note is answered as a note: the work waits for you, and the reply ends with
 `A note from @orchestrator does not carry the work on. It waits for you.`
 
+Notes that wait for a session share a turn, with ELU's own notes there when some wait too (a
+job ended, the bots reviewed, a bot answered). Each note still shows as the Orchestrator's,
+and that turn has a note's limits: it approves nothing, teaches nothing and runs no `elu`
+command. It can carry on the work you approved, because ELU's note does. In Full access a
+note joins only after your yes to that note, and an answer to a question never joins.
+
 | Your message | Its note |
 | --- | --- |
 | "yes" approves the waiting Task | Approves nothing |

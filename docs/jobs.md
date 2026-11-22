@@ -28,6 +28,12 @@ it, and it is then listed as ended.
 - When a turn ends while a background command it started still runs, the chat says in one
   line that the command ended with it, and the next turn is told.
 
+## ELU's notes that wait
+
+What ELU tells a session's working agent while it cannot take it (a job ended, the bots
+reviewed, a bot answered) starts one turn for all that waits, oldest first. It is never
+joined with a message of yours, and none of it goes past your message in the queue.
+
 ## Keep going
 
 A session whose Task you approved keeps going until its objectives are met. When they are not

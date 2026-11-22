@@ -7,7 +7,7 @@ import { saveBot } from '../lib/bots.mjs';
 import { ProjectController, conversationEntries, registerProject } from '../lib/projects.mjs';
 import { Conductor, enqueue } from '../lib/conductor.mjs';
 import { pendingRequests, projectFolder } from '../lib/workspace.mjs';
-import { readTask, saveTask } from '../lib/state.mjs';
+import { readTask, saveTask, taskDir } from '../lib/state.mjs';
 import { sessionChecklist } from '../lib/checklist.mjs';
 import { assertReady } from '../lib/publish.mjs';
 import { REVIEWS_HEAD, eluLine, leadAskText, sentByElu } from '../lib/elu-sent.mjs';
@@ -248,4 +248,43 @@ test('pull requests are found in what gh printed and in a reply, by address, and
   assert.deepEqual(pullsIn(`Opened ${URL} and https://github.com/acme/shop/pull/8.`).map(row => row.number), [7, 8]);
   assert.deepEqual(pullsIn('see acme/shop#9'), [], 'a reply names one by address');
   assert.deepEqual(pullsIn('acme/shop#9', { short: true }).map(row => row.url), ['https://github.com/acme/shop/pull/9']);
+});
+
+// 2026-11-22: six asks for a review waited in one session's queue, several at a head the bot had
+// reviewed, and each was a new run of the bot. Such an ask now gets that review from the record.
+test('a review the lead asks for at a head the bot reviewed is answered from the record, unless the head moved, it failed or the ask says again', { timeout: 240000 }, async t => {
+  const f = setup(t, 'normal'), gh = fakeGh(f);
+  const own = runner.createConversation(f.repo, f.controller.draftConfig, 'Open the coupons pull request', { permissions: 'auto', bots: ['critic'] });
+  saveTask(f.repo, { ...readTask(f.repo, own.id), state: 'answered' });
+  f.mode('review-fix', { intent: 'answer' });
+  const ask = async words => { await f.controller.ask(leadAskText('critic', words), own.id, { bot: 'critic' }).finished; await runner.pullSweepsDone(); };
+  const ran = () => reviewOf(f.inputs('codex'), 'critic').filter(input => input.includes('"pullRequest":')).length;
+  const given = () => pendingRequests(f.root).filter(row => row.goal.startsWith(REVIEWS_HEAD)).at(-1).goal;
+  await ask(`review ${URL}`);
+  assert.equal(ran(), 1); assert.match(given(), /"body":"Handle the edge case\."/);
+
+  await ask(`review ${URL}`);
+  assert.equal(ran(), 1, 'no new run at the same head');
+  assert.match(given(), /"alreadyReviewed":/); assert.match(given(), /"severity":"must_fix","body":"Handle the edge case\."/);
+  assert.match(conversationEntries(f.repo, readTask(f.repo, own.id)).filter(row => row.pull === 7).at(-1).text, /@critic reviewed aaaaaaa already/);
+  await ask(`review ${URL}. No need to review it again if you did.`);
+  assert.equal(ran(), 1, 'those words do not ask for it again');
+
+  // A record of ELU up to 0.1.50 kept no findings: those the chat showed are given.
+  const file = path.join(taskDir(f.repo, own.id), 'pulls.json');
+  const edit = change => { const value = JSON.parse(fs.readFileSync(file, 'utf8')); change(value.pulls[URL].reviews.critic); fs.writeFileSync(file, JSON.stringify(value)); };
+  edit(review => { delete review.comments; delete review.summary; });
+  await ask(`review ${URL}`);
+  assert.equal(ran(), 1, 'an older record answers too'); assert.match(given(), /"findings":"PR #7: 1 must-fix:\\n- Handle the edge case\."/);
+
+  await ask(`review ${URL} again`);
+  assert.equal(ran(), 2, 'it was asked to review again');
+  await ask(`review ${URL} once more`);
+  assert.equal(ran(), 3, 'once more');
+  edit(review => { review.failed = 'stream disconnected'; });
+  await ask(`review ${URL}`);
+  assert.equal(ran(), 4, 'the last review failed');
+  gh.set({ head: 'c'.repeat(40) });
+  await ask(`review ${URL}`);
+  assert.equal(ran(), 5, 'the head moved');
 });
