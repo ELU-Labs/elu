@@ -15,6 +15,7 @@ import { createConversation } from '../lib/runner.mjs';
 import { createIdentity } from '../lib/peer/identity.mjs';
 import { createTeam } from '../lib/peer/roster.mjs';
 import { createInvite, redeemCode } from '../lib/peer/invite.mjs';
+import { markMyComputer, unmarkMyComputer } from '../lib/peer/my-computers.mjs';
 import { shareProjects } from './peer-helpers.mjs';
 import { pendingRequests } from '../lib/workspace.mjs';
 import { Conductor, conductorAlive, enqueue } from '../lib/conductor.mjs';
@@ -696,6 +697,27 @@ test("elu sessions delete handed to ELU from a session another computer's messag
     assert.deepEqual(await runOwnCommand(args, { repo: f.repo, taskId: from, mode }), { code: 1, err: `${TEAMMATE_REFUSAL}\n` }, `${mode}: ${args.join(' ')}`);
   }
   assert.ok(sessions(f).some(task => String(task.id) === old)); assert.deepEqual(f.inputs('claude'), [], 'no lessons run started');
+});
+
+// A session one of the owner's own computers started here (marked on this computer with
+// /computers mine) is his own session: ELU's commands run from it as from one he typed here.
+// Unmarked, or started from a teammate's computer, they are refused as before.
+test("ELU's commands run in a session the owner's own computer started here, and only while it is marked his", async t => {
+  const f = setup(t);
+  const LAPTOP = 'c'.repeat(64), me = createIdentity({ name: 'ana' }), team = createTeam(me, 'core');
+  for (const [key, name] of [[LAPTOP, 'laptop'], [SARA, 'sara']]) redeemCode(createInvite(me, team.id, { hours: 1 }), key, name);
+  const startedFrom = (machine, name) => { const task = createConversation(f.repo, f.controller.draftConfig, 'Check the build', { mine: { machine, name, remoteId: crypto.randomUUID() }, permissions: 'auto' }); saveTask(f.repo, { ...readTask(f.repo, task.id), state: 'answered' }); return String(task.id); };
+  const laptop = startedFrom(LAPTOP, 'laptop'), sara = startedFrom(SARA, 'sara');
+  const refused = { code: 1, err: `${TEAMMATE_REFUSAL}\n` };
+  for (const args of [['jobs'], ['sessions']]) for (const taskId of [laptop, sara]) assert.deepEqual(await runOwnCommand(args, { repo: f.repo, taskId, mode: 'auto' }), refused, `unmarked: ${args.join(' ')}`);
+  markMyComputer(LAPTOP, 'laptop');
+  const jobs = await runOwnCommand(['jobs'], { repo: f.repo, taskId: laptop, mode: 'auto' });
+  assert.equal(jobs.code, 0, JSON.stringify(jobs));
+  const listed = await runOwnCommand(['sessions'], { repo: f.repo, taskId: laptop, mode: 'auto' });
+  assert.equal(listed.code, 0, JSON.stringify(listed)); assert.match(listed.out, /Check the build/);
+  for (const args of [['jobs'], ['sessions']]) assert.deepEqual(await runOwnCommand(args, { repo: f.repo, taskId: sara, mode: 'auto' }), refused, `a teammate's computer: ${args.join(' ')}`);
+  unmarkMyComputer(LAPTOP);
+  assert.deepEqual(await runOwnCommand(['jobs'], { repo: f.repo, taskId: laptop, mode: 'auto' }), refused, 'unmarked again');
 });
 
 // A refresh script runs on its own with no turn, so the owner reads it whole before it is kept:

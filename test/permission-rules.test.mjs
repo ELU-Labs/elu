@@ -6,6 +6,10 @@ import path from 'node:path';
 import { actionOf, allowedBy, commandShape, DEFAULTS, entryLine, keepRule, listEntries, readStore, removeEntry, ruleFor, saveRule, turnOnEntry, usesSavedRules } from '../lib/permission-rules.mjs';
 import { pendingApprovals, requestApproval } from '../lib/approvals.mjs';
 import { CLI } from './helpers.mjs';
+import { createIdentity } from '../lib/peer/identity.mjs';
+import { createTeam } from '../lib/peer/roster.mjs';
+import { createInvite, redeemCode } from '../lib/peer/invite.mjs';
+import { markMyComputer, unmarkMyComputer } from '../lib/peer/my-computers.mjs';
 import { spawnSync } from 'node:child_process';
 
 // Approvals you give once: what a rule becomes, what it matches, and what it never allows.
@@ -342,4 +346,19 @@ test('elu permissions lists, removes and turns on, numbered as /permissions numb
   assert.match(run([]).stdout, /1\. off  Read and search/); assert.match(run([]).stdout, /No rules of yours yet: press a when a session asks\./);
   assert.match(run(['on', '1']).stdout, /Turned on: Read and search/);
   const bad = run(['remove']); assert.notEqual(bad.status, 0); assert.match(bad.stdout + bad.stderr, /Use elu permissions \[list\|remove N\|on N\]/);
+});
+
+// A session one of the owner's own computers started here (marked with /computers mine) runs
+// with his saved rules, as one he typed here does. A teammate's computer's never does.
+test('a session the owner\'s own computer started uses his saved rules; a teammate\'s computer\'s does not', t => {
+  home(t);
+  const laptop = 'c'.repeat(64), sara = 'b'.repeat(64), me = createIdentity({ name: 'ana' }), team = createTeam(me, 'core');
+  for (const [key, name] of [[laptop, 'laptop'], [sara, 'sara']]) redeemCode(createInvite(me, team.id, { hours: 1 }), key, name);
+  const started = machine => ({ kind: 'mine', mine: true, machine, name: 'x', remoteId: '0f0e0d0c-0b0a-4908-8706-050403020100' });
+  assert.equal(usesSavedRules(started(laptop)), false, 'nothing marked');
+  markMyComputer(laptop, 'laptop');
+  assert.equal(usesSavedRules(started(laptop)), true);
+  for (const origin of [started(sara), { ...started(laptop), peer: sara }, { kind: 'handoff', peer: laptop }, { kind: 'ask', peer: laptop }]) assert.equal(usesSavedRules(origin), false, JSON.stringify(origin));
+  unmarkMyComputer(laptop);
+  assert.equal(usesSavedRules(started(laptop)), false);
 });

@@ -3,7 +3,11 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { MODES, PROFILES, LABELS, BADGES, DEFAULT_MODE, checkMode, checkPlace, checkFolders, capMode, defaultMode, saveDefaultMode, runProfile, isPeerRun } from '../lib/modes.mjs';
+import { MODES, PROFILES, LABELS, BADGES, DEFAULT_MODE, checkMode, checkPlace, checkFolders, capMode, defaultMode, saveDefaultMode, runProfile, isPeerRun, fromMyComputer, fromTeammate, myComputer, myComputersLoaded } from '../lib/modes.mjs';
+import { createIdentity } from '../lib/peer/identity.mjs';
+import { createTeam } from '../lib/peer/roster.mjs';
+import { createInvite, redeemCode } from '../lib/peer/invite.mjs';
+import { markMyComputer, unmarkMyComputer } from '../lib/peer/my-computers.mjs';
 import { onDisk, onDiskUp, personalDirectory } from '../lib/util.mjs';
 
 // A temp folder with its own ELU personal directory (XDG_CONFIG_HOME) for the test.
@@ -97,4 +101,23 @@ test("only the owner's lead gets a mode; teammates, reviewers and read-only turn
   assert.equal(runProfile({ roleName: 'lead', task: { permissions: 'root' } }), 'locked');
   assert.equal(isPeerRun({ kind: 'ask' }), true); assert.equal(isPeerRun({ kind: 'review' }), true);
   assert.equal(isPeerRun({ kind: 'handoff' }), false); assert.equal(isPeerRun(null), false); assert.equal(isPeerRun(undefined), false);
+});
+
+// A session another computer started here (origin.mine) is a teammate's, unless the owner marked
+// that computer as his own on this one (/computers mine, lib/peer/my-computers.mjs): then it is his.
+test('a session the owner\'s own computer started is not a teammate\'s; every other origin still is', async t => {
+  home(t); await myComputersLoaded;
+  const laptop = 'c'.repeat(64), sara = 'b'.repeat(64), me = createIdentity({ name: 'ana' }), team = createTeam(me, 'core');
+  for (const [key, name] of [[laptop, 'laptop'], [sara, 'sara']]) redeemCode(createInvite(me, team.id, { hours: 1 }), key, name);
+  const started = machine => ({ kind: 'mine', mine: true, machine, name: 'x', remoteId: '0f0e0d0c-0b0a-4908-8706-050403020100' });
+  const others = [{ kind: 'handoff', peer: laptop, name: 'laptop', threadId: 't' }, { kind: 'ask', peer: laptop }, { kind: 'review', peer: laptop }, { ...started(laptop), peer: sara }, { ...started(laptop), mine: 'yes' }, { ...started(laptop), kind: 'handoff' }, { ...started(laptop), machine: 'C'.repeat(64) }, started(sara)];
+  const check = (mine) => {
+    assert.deepEqual([fromTeammate(started(laptop)), fromMyComputer(started(laptop))], [!mine, mine]);
+    for (const origin of others) assert.deepEqual([fromTeammate(origin), fromMyComputer(origin)], [true, false], JSON.stringify(origin));
+    for (const origin of [null, undefined]) assert.deepEqual([fromTeammate(origin), fromMyComputer(origin)], [false, false]);
+  };
+  check(false);
+  markMyComputer(laptop, 'laptop'); assert.equal(myComputer(laptop), true); check(true);
+  assert.equal(myComputer(me.key), false, 'never this computer itself'); assert.equal(myComputer('not a key'), false); assert.equal(myComputer(undefined), false);
+  unmarkMyComputer(laptop); check(false);
 });
