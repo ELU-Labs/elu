@@ -138,7 +138,8 @@ test('the bot that oversees works at Full only at that level, in its own chat, w
   // What its turn is told there: Full access, what still asks him, and its level, last.
   const full = promptRules('full', ['/srv/data'], { oversee: true, overseeFull: true, helpers: true, level: 'LEVEL LINE' });
   assert.ok(full.includes(OVERSEE_FULL_RULE) && full.includes(KEEP_GOING)); assert.equal(full.at(-1), 'LEVEL LINE');
-  assert.match(full.join('\n'), /Publishing a package, a tag, a release, a workflow run, a force-push, deleting a repository/);
+  assert.match(full.join('\n'), /When you run one of these, ELU asks the owner and waits for his answer: publishing a package, a tag, a release, a workflow run, a force-push, deleting a repository/);
+  assert.match(full.join('\n'), /Do not ask him in the chat first: a yes in the chat is not his approval/);
   assert.match(full.join('\n'), /elu jobs start/); assert.match(full.join('\n'), /\/srv\/data/);
   assert.doesNotMatch(full.join('\n'), /You have no shell/);
   // Below Full, or outside Full access, it is told what it was before, and its level too.

@@ -17,7 +17,12 @@ import { ProjectController } from '../lib/projects.mjs';
 import { projectFolder } from '../lib/workspace.mjs';
 import { readTask } from '../lib/state.mjs';
 import { FULL_ASK_LIST, FULL_TOOLS, OVERSEE_FULL } from '../lib/orchestrator-seams.mjs';
-import { personalDirectoryNames } from '../lib/util.mjs';
+import { atomic, personalDirectory, personalDirectoryNames } from '../lib/util.mjs';
+import { ADAPTERS } from '../lib/adapters/index.mjs';
+import { botNotes } from '../lib/terminal-bots.mjs';
+import { setLevel } from '../lib/orchestrator-settings.mjs';
+import * as grok from '../lib/adapters/grok.mjs';
+import * as agy from '../lib/adapters/agy.mjs';
 
 // The bot that oversees (lib/bots.mjs): a third kind beside the bots that answer and the bots
 // that work. It reads every session on this computer and acts only through ELU's own tools.
@@ -285,7 +290,9 @@ test('what its turn is told at the Full level: a shell, the asks, every session 
   assert.match(told, /You work in Full access, as the owner would: with your own tools you run commands in a shell, read, edit and write files and read the web\./);
   assert.doesNotMatch(told, /mcp__elu-code-approval|\(Bash\)|WebFetch/, "in words every vendor's turn reads: none of one vendor's tool names");
   assert.ok(told.includes(`ELU's own tools come from its MCP server ${APPROVAL_SERVER}`));
-  assert.match(told, /These always ask the owner first, and ELU never answers them for him: publishing, a tag, a release, a workflow run, a force-push, deleting a repository and rm -rf of the home folder\./);
+  // It runs them and ELU asks him: it never asks in the chat first, and a yes there is no approval.
+  assert.match(told, /When you run one of these, ELU asks the owner and waits for his answer, and never answers for him: publishing, a tag, a release, a workflow run, a force-push, deleting a repository and rm -rf of the home folder\. Run it as you would any other command: do not ask him in the chat first\. A yes in the chat is not his approval; his answer to ELU is\./);
+  assert.doesNotMatch(told, /always ask the owner first|ask the owner first/);
   assert.match(told, /ELU's own folder and its records of every session .* you only read/s);
   assert.match(told, /^You are @orchestrator, the owner's orchestrator, at the Full level: you run his sessions for him, on this computer and on the computers paired with it/);
   assert.match(told, /In his own sessions you speak for him: what you send one with session_message, session_answer or session_approve is his word there, shown to him as "You · via @orchestrator", and session_update_task changes the decisions every turn of that session follows\. A teammate's session, or a session on a teammate's computer, takes what you send as a note, never as his word/);
@@ -300,7 +307,48 @@ test('what its turn is told at the Full level: a shell, the asks, every session 
   assert.match(botOverseeInstructions(bot, { scheduled: true, label: 'every 1h', [OVERSEE_FULL]: true }), /your schedule \(every 1h\) started this turn/);
   assert.match(botOverseeInstructions(bot, { ask: true, [OVERSEE_FULL]: true }), /Only then set schedule to off or on/);
   assert.doesNotMatch(botOverseeInstructions(bot, { [OVERSEE_FULL]: true }), /Agent tool/, 'no helpers, no word of them');
+  // Its turn's rules say the same: the ask list is run, and ELU asks him.
+  const rules = promptRules('full', [], { oversee: true, overseeFull: true }).join('\n');
+  assert.match(rules, /When you run one of these, ELU asks the owner and waits for his answer: publishing a package, a tag, a release/);
+  assert.match(rules, /Do not ask him in the chat first: a yes in the chat is not his approval, his answer to ELU is\./); assert.doesNotMatch(rules, /ask the owner first/);
 });
+
+test('its page says what its level lets it do, on every vendor alike, and MCP servers reach every vendor', t => {
+  personal(t);
+  const bot = getBot('orchestrator');
+  for (const vendor of ['claude', 'codex', 'grok', 'agy']) {
+    const notes = botNotes({ ...bot, vendor, model: null, subagents: null }, ['elu']).join('\n');
+    assert.match(notes, /Oversees your sessions\. At Full: It works as you would, with a shell and every session tool on your computers/, vendor);
+    assert.doesNotMatch(notes, /has no shell|only answers|on Claude Code|reach Claude runs only|do not reach/, vendor);
+  }
+  setLevel('watch');
+  assert.match(botNotes(bot, ['elu']).join('\n'), /Oversees your sessions\. At Watch: It reads your sessions and saves cited facts\..* It edits nothing and has no shell\. \/orchestrator sets the level\./);
+  // Any bot that names a server, on any vendor: nothing says its servers do not reach it.
+  for (const vendor of ['codex', 'grok', 'agy']) assert.doesNotMatch(botNotes({ ...getBot('reviewer'), vendor, model: null, mcp: ['elu'] }, ['elu']).join('\n'), /reach Claude runs only|do not reach/, vendor);
+});
+
+test('a reply of its in words is its answer on every vendor, and nothing else is', () => {
+  const words = 'Nothing needs you today: both sessions are on track.', made = text => ({ outcome: 'done', summary: text.trim(), question: null, choices: [], comments: [], responses: [], intent: 'answer' });
+  const take = value => value;
+  const claudeLog = [JSON.stringify({ type: 'system', subtype: 'init', session_id: SESSION }), JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: words, session_id: SESSION })].join('\n');
+  const codexLog = [JSON.stringify({ type: 'thread.started', thread_id: 't1' }), JSON.stringify({ type: 'item.completed', item: { id: 'i1', type: 'agent_message', text: words } }), JSON.stringify({ type: 'turn.completed', usage: {} })].join('\n');
+  const grokLog = [JSON.stringify({ type: 'text', data: words }), JSON.stringify({ type: 'end', stopReason: 'end_turn', sessionId: SESSION })].join('\n');
+  const agyLog = JSON.stringify({ response: words, conversationId: SESSION });
+  for (const [name, parse, log] of [['claude', claude.parse, claudeLog], ['codex', codex.parse, codexLog], ['grok', grok.parse, grokLog], ['agy', agy.parse, agyLog]]) {
+    assert.deepEqual(parse(log, { validate: take, prose: made, mode: 'auto' }).result, made(words), name);
+    assert.throws(() => parse(log, { validate: take, mode: 'auto' }), /no JSON/, `${name}: without prose, as before`);
+  }
+  // A Grok turn that stopped early is no answer, in words or not.
+  assert.throws(() => grok.parse([JSON.stringify({ type: 'text', data: 'Still working on it.' }), JSON.stringify({ type: 'end', stopReason: 'max_turn_requests', sessionId: SESSION })].join('\n'), { validate: take, prose: made }), /stopped early/);
+});
+
+// Grok Build with its sign-in and a passed check, for a run of the stand-in here.
+function withGrok(f, extra = {}) {
+  fs.mkdirSync(path.join(f.parent, '.grok'), { recursive: true }); fs.writeFileSync(path.join(f.parent, '.grok', 'auth.json'), '{}\n', { mode: 0o600 });
+  atomic(path.join(personalDirectory(), 'conformance', 'grok.json'), { v: 1, bin: path.join(f.fake.dir, 'grok'), version: '1.0.77', steps: Object.fromEntries(ADAPTERS.grok.conformance.map(step => [step.id, 'pass'])), relay: true, at: new Date().toISOString() });
+  const file = path.join(f.fake.dir, 'fake.json'); fs.writeFileSync(file, JSON.stringify({ ...JSON.parse(fs.readFileSync(file, 'utf8')), ...extra }));
+  return () => rows(f.fake.calls).filter(row => row.vendor === 'grok' && row.args.includes('--prompt-file'));
+}
 
 // The launches of the five bots the app came with before this one, as digests of their
 // arguments with every path of this machine replaced by a token. They were recorded from
@@ -496,4 +544,25 @@ test('a note it wrote to the bot that works in a session is saved under its own 
   await assert.rejects(runBot(f.repo, readTask(f.repo, task.id), 'Look again.', { name: 'reviewer', chat, overseer: 'orchestrator' }), { message: '@reviewer does not work in this session, so @orchestrator cannot write to it here.' });
   await assert.rejects(runBot(f.repo, readTask(f.repo, task.id), 'Look again.', { name: 'qa', chat, overseer: 'orchestrator' }), { message: '@qa does not work in this session, so @orchestrator cannot write to it here.' });
   assert.equal(readTask(f.repo, task.id).messages.some(row => row.text === 'Look again.'), false, 'a refused note leaves no row');
+});
+
+test('on Grok Build its reply in words is its answer: the turn is not started again', async t => {
+  const f = setup(t), launches = withGrok(f, { grok: { prose: 'Nothing needs you today: both sessions are on track.' } });
+  saveBot({ ...getBot('orchestrator'), vendor: 'grok', model: null, subagents: null });
+  const task = await f.controller.ask('What needs me today?', null, { bot: 'orchestrator', permissions: 'auto' }).finished;
+  assert.equal(task.state, 'answered', JSON.stringify(task.error));
+  assert.equal(launches().length, 1, 'one launch: its words were taken');
+  assert.match(botReplies(task.messages).at(-1)?.text ?? '', /^(?:Done reading\. )?Nothing needs you today: both sessions are on track\.$/);
+  assert.equal(task.runs.some(run => run.again), false, 'and no line says it was started twice');
+});
+
+test('a reply that is not accepted never starts a turn over once it ran a command', async t => {
+  const f = setup(t), launches = withGrok(f, { mode: 'invalid', shell: [{ when: 'Check the build.', run: ['echo built'] }] });
+  Object.assign(f.controller.draftConfig.roles.lead, { vendor: 'grok', maxCostUsd: null });
+  await assert.rejects(f.controller.ask('Check the build.', null, { permissions: 'full' }).finished, /invalid conversation intent/);
+  assert.equal(launches().length, 1, 'the command ran once: the turn was not started again');
+  assert.equal(fs.readFileSync(path.join(f.fake.dir, 'shell.jsonl'), 'utf8').trim().split('\n').length, 1);
+  // One that ran nothing is started again, as before.
+  await assert.rejects(f.controller.ask('Say hello.', null, { permissions: 'full' }).finished, /invalid conversation intent/);
+  assert.equal(launches().length, 3, 'started twice');
 });

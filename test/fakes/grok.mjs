@@ -19,7 +19,7 @@
 // with a Task until the prompt carries one the owner approved; a working turn changes
 // src/coupon.mjs where the launch lets it write, and reports its subtasks. Without it every
 // conversation turn is an answer, as before.
-// grok.version (fake.json): the release it says it is, 1.0.77 when not set.
+// grok.version (fake.json): the release it says it is, 1.0.77 when not set. grok.prose: its reply in words only.
 // grokSpend (fake.json): what a headless turn reports it used, in place of its fixed figures
 // (or grok.usage's sum): usage and modelUsage, and extra, more fields of its result (usage_is_incomplete,
 // cost_is_partial, total_cost_usd); sideCalls, the types of the events a streaming-json turn
@@ -189,7 +189,8 @@ async function act(prompt, record, { bypass, canWrite, canShell, canFetch, cwd, 
   if (cfg.name !== undefined && /"name"\s*:\s*\{"type"/.test(prompt)) result.name = cfg.name;
   return planned(result, prompt);
 }
-const resultText = result => mode === 'invalid' ? JSON.stringify({ outcome: 'nope' }) : mode === 'fenced' ? `Here it is:\n\`\`\`json\n${JSON.stringify(result)}\n\`\`\`\n` : JSON.stringify(result);
+// grok.prose (fake.json): the reply is these words, with no JSON object, as a model that forgot the schema writes it.
+const resultText = result => typeof cfg.grok?.prose === 'string' ? cfg.grok.prose : mode === 'invalid' ? JSON.stringify({ outcome: 'nope' }) : mode === 'fenced' ? `Here it is:\n\`\`\`json\n${JSON.stringify(result)}\n\`\`\`\n` : JSON.stringify(result);
 
 // inspect --json, as Grok Build 1.0.77 prints it. Watched with the real program, signed out, in
 // a scratch home: on an empty home, with Cursor and Claude files in the home and their
