@@ -10,6 +10,7 @@ import { OVERSEE_FULL } from '../lib/orchestrator-seams.mjs';
 import { defaultConfig } from '../lib/config.mjs';
 import { HOME_SECRETS } from '../lib/vendors.mjs';
 import { personalDirectory } from '../lib/util.mjs';
+import { setLevel } from '../lib/orchestrator-settings.mjs';
 import { temp, fakeClis, readRole, command } from './helpers.mjs';
 import { shimsBase } from '../lib/never-shims.mjs';
 
@@ -419,6 +420,9 @@ test('the hook of a turn that oversees answers each call as the relay answers Cl
 
 test('the hook runs as Codex starts it, with the relay\'s answers: below Full a command is refused and ELU\'s tools are allowed', (t) => {
   const f = overseeFixture(t), args = codex({ mode: 'auto', role: overseer(), cwd: f.cwd, schemaFile: f.schemaFile, commonDir: f.common, oversee: true, mcp: f.mcp });
+  // Full is the default level: the owner set this one below it, in the folder the hook reads.
+  const was = process.env.XDG_CONFIG_HOME; process.env.XDG_CONFIG_HOME = f.personal;
+  try { setLevel('suggest', { by: 'owner' }); } finally { if (was === undefined) delete process.env.XDG_CONFIG_HOME; else process.env.XDG_CONFIG_HOME = was; }
   const run = input => spawnSync('/bin/sh', ['-c', hookCommand(args)], { input, encoding: 'utf8', cwd: f.cwd, env: { ...process.env, XDG_CONFIG_HOME: f.personal }, timeout: 30000 });
   const refused = run(JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'ls' }, tool_use_id: 'exec-a' }));
   assert.equal(refused.status, 0, refused.stderr);
