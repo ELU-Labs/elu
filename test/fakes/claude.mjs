@@ -419,7 +419,9 @@ if(mode==='command'&&streaming&&!cutShort){
 if(cutShort){say({type:'result',subtype:'error_during_execution',is_error:true,session_id:session,total_cost_usd:0});await afterResult();process.exit(0);}
 if(mode==='slow-answer')await new Promise(resolve=>setTimeout(resolve,250));
 if(edit&&mode==='protected')fs.appendFileSync('package.json',' ');
-else if(edit&&mode!=='no-change')fs.writeFileSync('src/coupon.mjs','export const normalize = (value) => value.toUpperCase();\n');
+// A turn that answers a review as fixed (review-fix) changes the file it fixed, unless fixChanges
+// (fake.json) is false: then it writes the file as it was, a fix that is not in the folder.
+else if(edit&&mode!=='no-change')fs.writeFileSync('src/coupon.mjs','export const normalize = (value) => value.toUpperCase();\n'+(mode==='review-fix'&&cfg.fixChanges!==false&&input.includes('Address the review')?'// Handled the edge case.\n':''));
 // install (fake.json): what an editing turn also leaves in its worktree. true: what npm install
 // leaves, an ignored node_modules with a link in .bin, a 5 MB file and 20,000 small files, a
 // Python cache, and what pip install -e and pytest-cov leave (egg-info, .coverage, htmlcov);
