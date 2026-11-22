@@ -97,6 +97,11 @@ test('what wakes it is ELU\'s message, never the owner\'s', () => {
   assert.match(text, /^ELU: a session of the owner's changed\. \(ELU sent this, not the owner\.\)\n- #2 in web on this computer "Login": asks a question: Which database\? \(/);
   assert.equal(sentByElu(text), true); assert.equal(writtenByElu(text), true);
   assert.equal(eluLine(text), 'ELU woke it: a session of yours changed.');
+  // Its reply is about these sessions alone (2026-11-22: a wake for one session's question was
+  // answered with a report on every session, read from "only what needs him").
+  assert.match(text, /Your reply is about these sessions alone: one short line for each/);
+  assert.match(text, /Say nothing of his other sessions, and read none of them for this\.$/);
+  assert.doesNotMatch(text, /only what needs him/);
   assert.equal(eluLine(wakeText([1, 2, 3].map(n => ({ key: `k${n}`, word: 'turn', label: `#${n}`, detail: '', at: iso(T0) })), T0)), 'ELU woke it: 3 sessions of yours changed.');
   // An owner's message that only starts the same way is his.
   assert.equal(sentByElu("ELU: a session of the owner's changed."), false);

@@ -125,7 +125,7 @@ test('Antigravity CLI in Full access keeps its slash commands and has no hook of
 test('Codex in Full access keeps every feature of its release and every kind of item is read; lower modes keep the list', t => {
   const w = world(t), lead = plainLead('codex'), base = { role: lead, cwd: w.cwd, commonDir: path.join(w.cwd, '.git'), schemaFile: w.schemaFile };
   const full = codex.compile({ ...base, mode: 'full' }), sets = args => args.filter((arg, at) => args[at - 1] === '-c');
-  assert.deepEqual(sets(full), ['sandbox_mode="danger-full-access"', 'approval_policy="never"', 'web_search="live"', 'mcp_servers={}', 'tools.experimental_request_user_input.enabled=false', 'features.shell_tool=true', 'features.unified_exec=true', 'model_reasoning_summary="auto"']);
+  assert.deepEqual(sets(full), ['sandbox_mode="danger-full-access"', 'approval_policy="never"', 'web_search="live"', 'mcp_servers={}', 'tools.experimental_request_user_input.enabled=false', 'features.shell_tool=true', 'features.unified_exec=true', `agents.max_concurrent_threads_per_session=${codex.FULL_HELPERS}`, 'model_reasoning_summary="auto"']);
   assert.equal(sets(full).some(set => /=false$/.test(set) && !set.startsWith('tools.experimental_request_user_input')), false, 'nothing else is switched off');
   for (const mode of ['ask', 'auto']) { const lower = sets(codex.compile({ ...base, mode })); for (const set of ['features.multi_agent=false', 'features.plugins=false', 'tools.update_plan.enabled=false', 'allow_login_shell=false', 'shell_environment_policy.inherit="core"', 'skills.bundled.enabled=false']) assert.ok(lower.includes(set), `${mode} ${set}`); }
   // A helper, an MCP tool and a kind this release does not have yet: Full access reads them all.
