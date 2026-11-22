@@ -18,9 +18,11 @@ import { claimView, nameProject, registerProject, sessionWire } from '../lib/pro
 import { saveRequest, pendingRequests, updateRequest } from '../lib/workspace.mjs';
 import { launchTerminal } from '../lib/terminal.mjs';
 import { listBots, removeBot, saveBot } from '../lib/bots.mjs';
+import { setLevel } from '../lib/orchestrator-settings.mjs';
 import { boardRows, barCells, barColumns } from '../lib/board.mjs';
 import { closeSession, readBoard, reopenSession } from '../lib/kanban.mjs';
-import { readTask, saveTask, tasks } from '../lib/state.mjs';
+import { readTask, saveTask, taskDir, tasks } from '../lib/state.mjs';
+import { markMyComputer } from '../lib/peer/my-computers.mjs';
 import { helperLink } from '../lib/remote-helper.mjs';
 import { clockTime } from '../lib/terminal-plan.mjs';
 import { botTarget, chatBar, dmTarget, fitWords, ink, membersLine, peerName, roomTarget, teamPanes, threadTarget, visible } from '../lib/terminal-visuals.mjs';
@@ -1149,17 +1151,34 @@ test('a teammate’s shared bot is in Direct messages with its machine name, and
   assert.deepEqual(peer.sent().at(-1), { type: 'ask', to: SARA, project: null, text: 'are you free?' });
 });
 
-test('my own bot is in Direct messages, and writing to it starts a session with it in the active project', async t => {
+test('my own bot is in Direct messages once I write to it in the active project, and writing to it starts a session with it there', async t => {
   const p = project(later(t)); environment(t, p.parent);
   saveBot({ name: 'helper', vendor: 'claude', instructions: 'Answer briefly.' });
-  const peer = fakePeer(), v = await view(t, { repo: repository(p.root), peer, team: true });
-  await until(() => v.current.view === 'chats', 'Chats');
-  await openRow(v, /◆ @helper\s*$/, '@helper');
-  await until(() => /Message @helper · it answers in its own session/.test(v.panels.ask._label.getText()), 'the box names my bot');
-  await send(v, 'what does this repo do?');
+  const peer = fakePeer(), v = await view(t, { repo: repository(p.root), peer, team: true }), bar = () => v.panels.teamLists[0].items.map(plainItem);
+  await until(() => v.current.view === 'chats' && bar().some(row => /Direct messages/.test(row)), 'Chats');
+  // The bots Chats lists are those with a chat in the active project: none yet. @name writes to one.
+  assert.ok(!bar().some(row => /◆ @helper/.test(row)), bar().join(' | '));
+  await send(v, '@helper what does this repo do?');
   await until(() => /@helper answers in a new session\. It is in Sessions\./.test(v.panels.status.getText()), 'started');
   assert.deepEqual(pendingRequests(p.root).map(row => [row.goal, row.bot]), [['what does this repo do?', 'helper']]);
+  await openRow(v, /◆ @helper\s*$/, '@helper');
+  await until(() => /Message @helper · it answers in its own session/.test(v.panels.ask._label.getText()), 'the box names my bot');
   assert.deepEqual(peer.sent(), [], 'nothing went to a teammate');
+});
+
+test('at the Full level, a new chat with the bot that oversees starts in Full access; below Full it starts in the default', async t => {
+  const p = project(later(t)); environment(t, p.parent);
+  saveBot({ name: 'boss', vendor: 'claude', instructions: 'Oversee.', oversees: true });
+  const v = await view(t, { repo: repository(p.root), peer: fakePeer(), team: true });
+  await until(() => v.current.view === 'chats', 'Chats');
+  setLevel('full', { by: 'owner' });
+  await send(v, '@boss look at the sessions');
+  await until(() => /@boss answers in a new session/.test(v.panels.status.getText()), 'started');
+  assert.deepEqual(pendingRequests(p.root).map(row => [row.bot, row.permissions]), [['boss', 'full']]);
+  setLevel('suggest', { by: 'owner' }); saveBot({ name: 'aide', vendor: 'claude', instructions: 'Oversee.', oversees: true });
+  await send(v, '@aide look again');
+  await until(() => /@aide answers in a new session/.test(v.panels.status.getText()), 'started below Full');
+  assert.notEqual(pendingRequests(p.root).find(row => row.bot === 'aide')?.permissions, 'full');
 });
 
 test('/invite offers a code for someone new or which bots teammates may use, and the code comes without a bots question', async t => {
@@ -1292,15 +1311,15 @@ test('a run that waits to start on my other computer says what it waits for in i
   board.focus(); selectRow(board, /Check the nightly build/);
   // Its chat says the wait in a sentence, and its Task says it the same way, never "starting".
   await until(() => /Waiting for a free slot: 1 of 1 session is running\. \/slots on @sara-box changes it\./.test(v.panels.chat.getText()), 'its chat says what it waits for');
-  await titled('billing · Check the nightly build · Task · Auto', 'the title at 140 columns');
+  await titled('billing · Check the nightly build · Task · Agents · Auto', 'the title at 140 columns');
   await taskSays('Waiting to start', 'Waiting for a free slot: 1 of 1 session is running. /slots on @sara-box changes it.', 'a free slot');
   redraw(80, 24); await until(() => v.current.screen.width === 80, '80 columns');
-  // The request is cut to the room left, at a word; Task and the mode stay whole.
-  await titled(/^(billing · )?Check the[\w ]* · Task · Auto$/, 'the title at 80 columns');
+  // The request is cut to the room left, at a word, with … where it is cut; Task, Agents and the mode stay whole.
+  await titled(/^(billing · )?Check the[\w ]*…? · Task · Agents · Auto$/, 'the title at 80 columns');
   await taskSays('Waiting to start', 'Waiting for a free slot: 1 of 1 session is running. /slots on @sara-box changes it.', 'a free slot at 80 columns');
   // Each other wait in its own words.
   Object.assign(remote[0], { waits: { on: 'teammates', running: 1, limit: 1 } }); redraw(140, 50);
-  await titled('billing · Check the nightly build · Task · Auto', 'a teammate slot');
+  await titled('billing · Check the nightly build · Task · Agents · Auto', 'a teammate slot');
   await taskSays('Waiting to start', 'Waiting for a free teammate slot: 1 of 1 is in use.', 'a teammate slot');
   Object.assign(remote[0], { waits: { on: 'turn' } }); redraw(140, 50);
   await taskSays('Waiting to start', "Waiting for this session's current turn to end.", 'the current turn of its session');
@@ -1312,7 +1331,7 @@ test('a run that waits to start on my other computer says what it waits for in i
   assert.deepEqual(peer.sent().filter(row => row.type === 'remoteCheck'), [], 'nothing was asked there');
   // Once it starts there it is at work, and its title row still says Task.
   Object.assign(remote[0], { unsent: undefined, state: 'running' }); redraw(140, 50);
-  await titled('billing · Check the nightly build · Task · Auto', 'at work');
+  await titled('billing · Check the nightly build · Task · Agents · Auto', 'at work');
 });
 // A session on my other computer beside the list is named over it as a session here is: its
 // project, its request, Task and its mode, cut to the room as a session here is.
@@ -1326,15 +1345,15 @@ test('a session on my other computer beside the list has its title row: project,
   await until(() => board.items.map(plainItem).some(row => /Round the invoice totals/.test(row)), 'its row');
   board.focus(); selectRow(board, /Round the invoice totals/);
   await until(() => /Runs on @sara-box/.test(v.panels.chat.getText()), 'its chat beside the list');
-  await titled('billing · Round the invoice totals to cents before they are saved · Task · Auto', 'the title at 140 columns');
+  await titled('billing · Round the invoice totals to cents before they are saved · Task · Agents · Auto', 'the title at 140 columns');
   // At 80 columns the request is cut at a word to the room left; Task and the mode stay whole.
   v.output.columns = 80; v.output.rows = 24; v.output.emit('resize');
-  await until(() => v.current.screen.width === 80, '80 columns'); await titled(/^Round the invoice[\w ]*… · Task · Auto$/, 'the title at 80 columns');
+  await until(() => v.current.screen.width === 80, '80 columns'); await titled(/^Round the invoice[\w ]*… · Task · Agents · Auto$/, 'the title at 80 columns');
   // What that computer says next shows here: it waits for an approval in Full access, in my checkout there.
   // The title still says Task, and the badge says the mode and the place; its Task says what it waits for.
   Object.assign(remote[0], { state: 'running', mode: 'full', place: 'here', approvals: [{ id: 'run-9-a', summary: 'Run: npm test', at }] });
   v.output.columns = 140; v.output.rows = 50; v.output.emit('resize');
-  await titled(/^(billing · )?Round the invoice totals to cents before they are saved · Task · Full Here$/, 'the title as it waits');
+  await titled(/^(billing · )?Round the invoice totals to cents before they are saved · Task · Agents · Full Here$/, 'the title as it waits');
 });
 test("over a session on my other computer that waits for my answer, a typed yes goes to that session and no session is made here; its row keeps the cursor when it goes on, and only @here asks my agent here", async t => {
   const T = Date.now(), at = new Date(T).toISOString(), stamp = minutes => new Date(T - minutes * 60000).toISOString(), id = '44444444-4444-4444-8444-444444444444';
@@ -2138,7 +2157,7 @@ test('Projects lists a project a teammate shares that is not on this computer: E
   const rows = () => list.items.map(plainItem).map(row => row.trimEnd()), status = () => panels.status.getText(), keys = () => panels.keys.getText(), label = () => panels.ask._label.getText();
   const column = index => panels.kanbanLists[index].items.map(item => plainItem(item).trimEnd());
   await send(v, '/projects'); await until(() => v.current.view === 'projects' && rows().some(row => /Shop/.test(row)), 'the shared project');
-  assert.equal(rows().length, 2, 'this computer\'s project, then the shared one');
+  assert.deepEqual(rows().slice(2), ['  All projects'], 'this computer\'s project, then the shared one, then All projects');
   assert.match(rows()[1], /^ {2}Shop\s+shared by @sara {3}on @sara-box\s+online$/);
   list.focus(); selectRow(list, /shared by @sara/);
   await until(() => /enter team board/.test(keys()), 'its keys'); assert.match(keys(), /c bring here/); assert.doesNotMatch(keys(), /archive|make active/);
@@ -2173,7 +2192,7 @@ test('Projects lists a project a teammate shares that is not on this computer: E
   await until(() => /Shop is here now, in \S.*shop here\. It is the active project\./.test(status()), 'brought here');
   assert.deepEqual(peer.calls.filter(row => row[0] === 'cloneProject').map(row => row.slice(1)), [['https://github.com/acme/shop.git', here]]);
   assert.ok(fs.existsSync(path.join(here, '.git')));
-  await until(() => rows().length === 2 && rows().some(row => /^● Shop\s/.test(row)), 'one row for it: the project here');
+  await until(() => rows().length === 3 && rows().some(row => /^● Shop\s/.test(row)), 'one row for it: the project here, beside this computer\'s and All projects');
   assert.ok(!rows().some(row => /shared by/.test(row)), 'never a second row for the same project');
 });
 
@@ -2250,7 +2269,7 @@ test('a shared project with no git address says how to get it here, the board of
   // The status line is one row here: each line is the longest form of it that fits.
   const v = await view(t, { repo: repository(p.root), dashboard: true, peer, columns: 80, rows: 24 }), panels = v.panels, list = panels.projectsList, status = () => panels.status.getText().trimEnd();
   const rows = () => list.items.map(plainItem).map(row => row.trimEnd());
-  await send(v, '/projects'); await until(() => v.current.view === 'projects' && rows().length === 3, 'both shared projects');
+  await send(v, '/projects'); await until(() => v.current.view === 'projects' && rows().length === 4, 'both shared projects, then All projects');
   for (const row of rows()) assert.ok(row.length <= list.width - 2, `it fits at 80: ${row}`);
   assert.match(rows()[1], /^ {2}A much longer proje\.\.\.\s+shared by @a-teammate-with-a-long-name/); assert.match(rows()[2], /Old one\s+shared by @sara {3}on @sara-box\s+offline$/);
   // c with no address: nothing to clone, and what to do instead.
@@ -2279,7 +2298,7 @@ test('leaving the team while the board of a project it shares is open closes tha
   // The only team: leaving it takes this machine off every team.
   const peer = sharing(fakePeer({ items: [] }), [sharedRow()]); peer.lastTeam = true;
   const v = await view(t, { repo: repository(p.root), dashboard: true, peer }), panels = v.panels, list = panels.projectsList, status = () => panels.status.getText().trimEnd();
-  await send(v, '/projects'); await until(() => v.current.view === 'projects' && list.items.length === 2, 'the shared project');
+  await send(v, '/projects'); await until(() => v.current.view === 'projects' && list.items.length === 3, 'the shared project, then All projects');
   list.focus(); selectRow(list, /Shop/); v.input.write('\r');
   await until(() => v.current.view === 'kanban' && /Message @sara/.test(panels.ask._label.getText()), 'its team board');
   await send(v, '/leave'); await closeDialog(v, 'Leave Core', 'y');
@@ -2366,7 +2385,7 @@ test("Projects lists a project my other computer shares once when this computer 
   assert.match(rows()[0], /^● ELU\s/);
   assert.ok(!rows().some(row => /(ELU|website)\s+shared by you/.test(row)), `never a second row for a project here: ${rows().join(' | ')}`);
   assert.ok(rows().some(row => /ELU\s+shared by @li {3}on @li-box\s+offline$/.test(row)), `a teammate's share stays: ${rows().join(' | ')}`);
-  assert.equal(rows().length, 3, rows().join(' | '));
+  assert.equal(rows().length, 4, rows().join(' | ')); assert.equal(rows()[3], '  All projects');
 });
 
 test('/join names the project the team shares once it is in Projects', async t => {
@@ -4336,6 +4355,73 @@ test('a picture dropped over a session on my other computer, its path first with
   assert.equal(goals().length, 3);
 });
 
+// The Agents tab of a session on my other computer: its rows and one agent's thread are asked of
+// that computer (remoteAgents, elu.remote.agents there), read only, through the real calls of
+// both sides, each in its own home. Each computer marked the other as the owner's.
+test('the Agents tab of a session on my other computer lists the agents that computer reads, and opens one agent\'s thread', { timeout: 60000 }, async t => {
+  const at = new Date(Date.now() - 30 * 60000).toISOString();
+  const team = makeTeam(t, { founderName: 'ana', memberName: 'box' }), laptop = team.founder, devbox = team.member;
+  const values = { XDG_CONFIG_HOME: laptop.home, ELU_NO_COLOR: '1', TERM: 'xterm-256color' }, previous = Object.fromEntries(Object.keys(values).map(key => [key, process.env[key]]));
+  owned(t).files.push(() => { for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } });
+  Object.assign(process.env, values);
+  // The devbox: a session of the owner's whose coder started a sub-agent, and the laptop marked as his.
+  const there = withHome(devbox.home, () => {
+    const made = registeredProject(t); saveTeamAccess(team.teamId, { root: made.root });
+    shareProjects(devbox.identity.key, laptop.identity.key);
+    const { repo } = liveTask(made.root, { id: '1', goal: 'Uppercase coupon codes', state: 'answered', activeRole: null });
+    const log = path.join(taskDir(repo, '1'), 'lead-1.jsonl'), said = (content, parent = null, model = 'claude-opus-5-5') => ({ type: 'assistant', message: { id: `msg_${Math.random().toString(36).slice(2)}`, model, content }, parent_tool_use_id: parent });
+    fs.writeFileSync(log, [
+      { type: 'system', subtype: 'init', model: 'claude-opus-5-5' },
+      said([{ type: 'text', text: 'Looking for the coupon code.' }, { type: 'tool_use', id: 'toolu_A', name: 'Task', input: { description: 'Find the coupon code', prompt: 'Find where coupons are read.' } }]),
+      { type: 'user', message: { content: [{ type: 'text', text: 'Find where coupons are read.' }] }, parent_tool_use_id: 'toolu_A' },
+      said([{ type: 'tool_use', id: 'toolu_A1', name: 'Grep', input: { pattern: 'coupon' } }], 'toolu_A', 'claude-sonnet-5'),
+      { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'toolu_A1', content: 'src/coupon.mjs:1' }] }, parent_tool_use_id: 'toolu_A' },
+      { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'toolu_A', content: [{ type: 'text', text: 'In src/coupon.mjs, line 1.' }] }] }, parent_tool_use_id: null },
+      { type: 'result', subtype: 'success', total_cost_usd: 0.42, structured_output: { summary: 'Codes are upper case now.' } },
+    ].map(row => JSON.stringify(row)).join('\n') + '\n');
+    saveTask(repo, { ...readTask(repo, '1'), runs: [{ role: 'lead', vendor: 'claude', logFile: log, code: 0, startedAt: at, at, model: 'claude-opus-5-5', asked: 'opus', effort: 'high' }] });
+    markMyComputer(laptop.identity.key, 'laptop');
+    return made;
+  });
+  shareProjects(laptop.identity.key, devbox.identity.key);
+  withHome(laptop.home, () => markMyComputer(devbox.identity.key, 'devbox'));
+  const link = key => ({ key, admitted: true, remoteHello: { remote: 1, shared: 1, oversee: 1, full: 1 }, notify: () => {}, request: async () => { throw new Error('No answer'); } });
+  const ctx = (me, sessions) => ({ me, session: key => sessions[key] ?? null, name: key => key.slice(0, 4), box: key => key === me.key ? null : 'mac', log: () => {}, kick: () => {}, soon: () => {}, event: () => {} });
+  const toHost = link(laptop.identity.key), toViewer = link(devbox.identity.key), asked = [];
+  const host = hostMethods(ctx(devbox.identity, { [laptop.identity.key]: toHost })), viewCtx = ctx(laptop.identity, { [devbox.identity.key]: toViewer });
+  toViewer.request = async (method, params) => { asked.push([method, params]); return withHome(devbox.home, () => host[method](params, toHost)); };
+  const ref = `${hash(`project\0${there.root}`).slice(0, 16)}:1`, id = watchId(laptop.identity.key, devbox.identity.key, ref), now = new Date().toISOString();
+  // The laptop's window: its daemon is the stand-in, which hands remoteAgents to the real calls.
+  const remote = [{ id, machine: SARA, createdAt: now, lastAt: now, title: 'Uppercase coupon codes', project: 'billing', state: 'answered', mode: 'auto', steps: [], entries: [{ role: 'You', at: now, text: 'Uppercase coupon codes' }, { role: 'Opus 5.5', lead: true, at: now, text: 'Done.' }], approvals: [] }];
+  const peer = fakePeer({ items: [], sharing: [SARA], remote, answer: command => command.type === 'remoteAgents' ? withHome(laptop.home, () => remoteCommand(viewCtx, { ...command, to: devbox.identity.key, ref })) : null });
+  const p = project(later(t)), v = await view(t, { columns: 140, rows: 40, repo: repository(p.root), dashboard: true, peer });
+  const board = v.panels.board, agents = v.panels.agents, shown = () => agents.getText().split('\n').map(line => line.replace(/┃\s*$/, '').trimEnd());
+  await until(() => board.items.map(plainItem).some(row => /Uppercase coupon codes/.test(row)), 'the session there is listed');
+  board.focus(); selectRow(board, /Uppercase coupon codes/);
+  await until(() => /Task {2}· {2}Agents/.test(v.panels.header.getText()), 'its header names Agents');
+  // Ctrl+A from the list: the rows that computer read, the coder and the sub-agent it started.
+  v.input.write('\x01'); await until(() => v.current.sessionView === 'agents' && v.current.screen.focused === agents, 'Ctrl+A shows its agents');
+  await until(() => shown().some(line => /Find the coupon code/.test(line)), 'the rows from there').catch(error => { throw new Error(`${error.message}: ${shown().join('\n')}`); });
+  const rows = shown().filter(line => line.trim());
+  assert.match(rows[0], /Opus 5\.5 {2}high +done/); assert.match(rows[1], /Codes are upper case now\./);
+  assert.match(rows[2], /└ Find the coupon code {2}sonnet 5 +done/); assert.match(rows[3], /In src\/coupon\.mjs, line 1\./);
+  const listedThere = asked.filter(([method]) => method === 'elu.remote.agents');
+  assert.ok(listedThere.length >= 1); assert.deepEqual(listedThere[0][1], { ref }, 'the rows, asked by its place there');
+  const sentAgents = peer.sent().filter(row => row.type === 'remoteAgents');
+  assert.deepEqual(Object.keys(sentAgents[0]).sort(), ['id', 'type'], 'the window asks by the session it follows');
+  // Down and Enter: the sub-agent's thread, as that computer sends it ({ agent, entries }).
+  v.input.write('\x1b[B'); await until(() => /▌└ Find the coupon code/.test(shown().filter(line => line.trim())[2] ?? ''), 'the cursor on the sub-agent');
+  v.input.write('\r'); await until(() => /← Find the coupon code {2}sonnet 5/.test(shown()[0] ?? ''), 'its thread').catch(error => { throw new Error(`${error.message}: ${shown().join('\n')}`); });
+  await until(() => /┃ In src\/coupon\.mjs, line 1\./.test(shown().join('\n')), 'its answer, from there').catch(error => { throw new Error(`${error.message}: ${shown().join('\n')}`); });
+  const thread = asked.filter(([method, params]) => method === 'elu.remote.agents' && params.agent).at(-1);
+  assert.equal(thread[1].ref, ref); assert.match(thread[1].agent, /\S/);
+  const answered = await withHome(laptop.home, () => remoteCommand(viewCtx, { type: 'remoteAgents', to: devbox.identity.key, ref, agent: thread[1].agent }));
+  assert.deepEqual(Object.keys(answered).sort(), ['agent', 'entries']); assert.ok(answered.entries.some(entry => entry.text === 'In src/coupon.mjs, line 1.'), JSON.stringify(answered.entries));
+  // Esc goes back to the rows, and again to the list.
+  v.input.write('\x1b'); await until(() => /▌└ Find the coupon code/.test(shown().filter(line => line.trim())[2] ?? ''), 'back to the rows');
+  v.input.write('\x1b'); await until(() => v.current.sessionView === 'chat' && v.current.screen.focused === board, 'back to the list');
+});
+
 // In Chats the message box writes to the open channel or person: a dropped file shows in it at
 // once while the list has the focus, and a message that starts with its path goes to them.
 test('in Chats a dropped picture shows in the box at once from the list, and a message that starts with its path goes to the person, never Unknown command', async t => {
@@ -4580,4 +4666,35 @@ test('a picture dropped after @here over a session on my other computer goes to 
   await until(() => pendingRequests(p.root).some(row => row.continuationTaskId === '1'), 'the helper is continued');
   const next = pendingRequests(p.root).find(row => row.continuationTaskId === '1').goal;
   assert.equal(copies(next).length, 1, next); assert.equal(next, `${copies(next)[0]} again`);
+});
+
+// The owner made a project for new work and made it active: Sessions and Chats still showed
+// his other project's sessions and team. They show the active project's only, and All projects,
+// last in Projects, shows every project's until a project is made active again.
+test('while a project is active, Sessions and Chats show its own and no other project\'s; All projects in Projects shows them all until o makes one active', async t => {
+  const p = project(later(t)), two = project(later(t)); environment(t, p.parent);
+  for (const [root, name] of [[p.root, 'Core'], [two.root, 'Notes']]) { registerProject(repository(root)); nameProject(repository(root), name); }
+  liveTask(p.root, { id: '1', goal: 'Trim the coupon codes', state: 'answered' }); liveTask(two.root, { id: '1', goal: 'Sort the reading list', state: 'answered' });
+  const peer = fakePeer({ items: [] }), v = await view(t, { repo: repository(p.root), peer, dashboard: true }), panels = v.panels, list = panels.projectsList;
+  const board = () => panels.board.items.map(plainItem).join('\n'), rows = () => list.items.map(plainItem).map(row => row.trimEnd()), bar = () => panels.teamLists[0].items.map(plainItem).join('\n');
+  await send(v, '/sessions'); await until(() => v.current.view === 'tasks' && /Trim the coupon codes/.test(board()), 'the active project\'s session');
+  assert.doesNotMatch(board(), /Sort the reading list/);
+  // Core is the team's project: Chats shows the team.
+  await send(v, '/chats'); await until(() => v.current.view === 'chats' && /@sara/.test(bar()), 'the team of Core');
+  await send(v, '/projects'); await until(() => v.current.view === 'projects' && rows().length === 3, 'two projects, then All projects');
+  assert.deepEqual(rows().map(row => row.slice(0, 14).trim()), ['● Core', 'Notes', 'All projects']);
+  list.focus(); list.select(2); await until(() => /enter show all/.test(panels.keys.getText()), 'its key');
+  v.input.write('\r'); await until(() => /Showing all projects\./.test(panels.status.getText()), 'all projects');
+  assert.equal(panels.brand.getText().trim(), '◆ All projects');
+  await until(() => rows()[2] === '● All projects' && rows()[0].startsWith('  Core'), 'the mark moved');
+  await send(v, '/sessions'); await until(() => /Trim the coupon codes/.test(board()) && /Sort the reading list/.test(board()), 'every project\'s sessions');
+  // o on a project makes it the active one, and only its sessions show again.
+  await send(v, '/projects'); await until(() => v.current.view === 'projects', 'Projects');
+  list.focus(); list.select(1); v.input.write('o');
+  await until(() => v.current.controller?.repo.root === fs.realpathSync(two.root) && /Notes is now the active project\./.test(panels.status.getText()), 'Notes is active');
+  assert.equal(panels.brand.getText().trim(), '◆ Notes');
+  await send(v, '/sessions'); await until(() => /Sort the reading list/.test(board()) && !/Trim the coupon codes/.test(board()), 'only its sessions');
+  // The team is Core's project, not Notes': Chats shows no team in it.
+  await send(v, '/chats'); await until(() => v.current.view === 'chats' && /No team in this project yet/.test(bar()), 'no team in Notes');
+  assert.doesNotMatch(bar(), /@sara/);
 });

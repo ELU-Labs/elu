@@ -207,6 +207,15 @@ async function selectRow(v, pattern) {
   // The right side follows on the next draw.
   await until(() => v.current !== before && pattern.test(cursor(v)) && v.current.screen.focused === board && (!id || v.current.session === id), `row ${pattern} shown`);
 }
+// All projects, last in Projects: Sessions lists the sessions of every project, not only the
+// active one's, until a project is made active again. Back in Sessions.
+async function showAll(v) {
+  const list = v.current.panels.projectsList, at = () => list.items.findIndex(item => /All projects/.test(item.getText()));
+  await send(v, '/projects'); await until(() => v.current.view === 'projects' && at() >= 0, 'All projects');
+  list.focus(); list.select(at()); v.input.write('\r');
+  await until(() => /Showing all projects\./.test(v.current.panels.status.getText()), 'every project shown');
+  await send(v, '/tasks'); await until(() => v.current.view === 'tasks', 'Sessions');
+}
 // Opens the first session whose row matches: the cursor goes to its row, then Enter moves
 // into its chat, to the message box.
 async function openTask(v, pattern) {
@@ -320,7 +329,8 @@ test('a session started with only a dropped picture is named after the picture, 
   await until(() => listed('Screenshot'), 'named after the picture while it waits').catch(error => { throw new Error(`${error.message}: ${seen()}`); });
   conductor.busy = false;
   await until(() => tasks()[0]?.state === 'answered', 'the session answered');
-  await until(() => named('Screenshot', 'Screenshot 2026-11-15 at 1.02'), 'named after the picture once it started').catch(error => { throw new Error(`${error.message}: ${seen()}`); });
+  // Over the chat, Task and Agents beside it leave its first word at 80 columns; its whole name is its title.
+  await until(() => named('Screenshot', 'Screenshot…'), 'named after the picture once it started').catch(error => { throw new Error(`${error.message}: ${seen()}`); });
   assert.equal(taskTitle(tasks()[0]), name);
   await dropAlone(d.dropped);
   await until(() => tasks()[1]?.state === 'answered', 'the second session answered');
@@ -479,7 +489,7 @@ test('a project name that a folder ships is drawn as plain text, and one with a 
   const name = '{bold}Shop{/bold}';
   registerProject(one.repo); registerProject(repository(two.root)); ship(name); assert.equal(savedProjectName(two.root), name);
   const v = await view(t, { dashboard: true }), panels = v.current.panels, items = () => panels.projectsList.items.map(item => item.getText());
-  await send(v, '/projects'); await until(() => v.current.view === 'projects' && items().length === 2, 'two project rows');
+  await send(v, '/projects'); await until(() => v.current.view === 'projects' && items().length === 3, 'two project rows, then All projects');
   assert.ok(items()[1].startsWith(`  ${name}  `), 'in the list of projects');
   panels.projectsList.focus(); panels.projectsList.select(1); v.input.write('o');
   await until(() => v.current.controller?.repo.root === fs.realpathSync(two.root), 'the named project is active');
@@ -498,7 +508,7 @@ test('Projects lists each project with its folder, sessions and last activity; E
   registerProject(one.repo); nameProject(repository(two.root), 'Shop');
   liveTask(one.root, { id: '3', goal: 'Add a retry budget', state: 'answered' });
   const v = await view(t, { dashboard: true }), panels = v.current.panels, items = () => panels.projectsList.items.map(item => item.getText());
-  await send(v, '/projects'); await until(() => v.current.view === 'projects' && items().length === 2, 'two project rows');
+  await send(v, '/projects'); await until(() => v.current.view === 'projects' && items().length === 3, 'two project rows, then All projects');
   const [first, second] = items();
   // A folder under the home folder reads ~/…; any other reads from the root.
   assert.match(first, /^[● ] sample app {2,}~?\/\S+\.\.\. {2}1 session {4,}just now$/); assert.match(second, /^ {2}Shop {2,}~?\/\S+\.\.\. {2}0 sessions {3,}no activity$/);
@@ -548,14 +558,14 @@ test('a project inside another project\'s folder: either one can be made the act
   assert.equal(panels.brand.getText().trim(), '◆ ELU'); assert.equal(v.current.view, 'projects'); assert.equal(v.current.screen.focused, panels.projectsList);
   assert.match(panels.status.getText(), /ELU is now the active project\./);
   await until(() => items().some(row => /^● ELU /.test(row)) && items().some(row => /^ {2}ELU2 /.test(row)), 'the mark moved to ELU');
-  assert.deepEqual(items().map(row => row.slice(0, 6).trim()), ['● ELU', 'ELU2'], 'the active project is listed first');
+  assert.deepEqual(items().map(row => row.slice(0, 6).trim()).slice(0, 2), ['● ELU', 'ELU2'], 'the active project is listed first');
   // Enter on the inner one opens its settings on Make active; Enter again switches back.
   pick('ELU2'); v.input.write('\r'); await until(() => modal(v, 'Project ELU2') && dialogList(v, 'Project ELU2').selected === 0, 'settings, on Make active');
   assert.equal(dialogRows(v, 'Project ELU2')[0], 'Make active');
   v.input.write('\r'); await until(() => v.current.controller?.repo.root === fs.realpathSync(inner) && !modal(v, 'Project ELU2'), 'the inner project is active');
   assert.equal(panels.brand.getText().trim(), '◆ ELU2');
   await until(() => items().some(row => /^● ELU2 /.test(row)) && items().some(row => /^ {2}ELU /.test(row)), 'the mark moved to ELU2');
-  assert.deepEqual(items().map(row => row.slice(0, 7).trim()), ['● ELU2', 'ELU'], 'and ELU2 is first once it is the active one');
+  assert.deepEqual(items().map(row => row.slice(0, 7).trim()).slice(0, 2), ['● ELU2', 'ELU'], 'and ELU2 is first once it is the active one');
   // o on the project that is already active says so and changes nothing.
   pick('ELU2'); v.input.write('o'); await until(() => /ELU2 is already the active project\./.test(panels.status.getText()), 'already active');
 });
@@ -800,7 +810,7 @@ test('a click on a Projects row behind a project\'s settings closes the dialog a
   const one = setup(t), two = project({ after: close => resources(t).files.push(close) });
   registerProject(one.repo); nameProject(repository(two.root), 'Shop');
   const v = await view(t, { dashboard: true }), panels = v.current.panels, list = panels.projectsList, title = 'Project sample app';
-  await send(v, '/projects'); await until(() => v.current.view === 'projects' && list.items.length === 2, 'two project rows');
+  await send(v, '/projects'); await until(() => v.current.view === 'projects' && list.items.length === 3, 'two project rows, then All projects');
   list.focus(); v.input.write('\r'); await until(() => dialogList(v, title)?.lpos, 'settings dialog');
   const other = list.items[1];
   assert.ok(other.lpos.yl <= modal(v, title).lpos.yi, 'the second row is outside the dialog');
@@ -829,15 +839,15 @@ test('the wheel moves the Projects list one row a step, and every step of a trac
   const one = setup(t); registerProject(one.repo);
   for (const name of ['Shop', 'Docs', 'Site']) nameProject(repository(project({ after: close => resources(t).files.push(close) }).root), name);
   const v = await view(t, { dashboard: true }), list = v.current.panels.projectsList;
-  await send(v, '/projects'); await until(() => v.current.view === 'projects' && list.items.length === 4, 'four project rows');
+  await send(v, '/projects'); await until(() => v.current.view === 'projects' && list.items.length === 5, 'four project rows, then All projects');
   list.focus(); list.select(0); v.current.screen.render(); await pause(60);
   wheel(v, list.items[0]); await until(() => list.selected === 1, 'one step, one row'); await pause(60);
   // Two steps in one read, as a trackpad sends them: two rows, not one and not four.
   v.input.write(`\x1b[<65;${list.aleft + 2};${list.atop + 1}M`.repeat(2)); await pause();
   assert.equal(list.selected, 3, 'a burst moves a row a step');
   v.input.write(`\x1b[<65;${list.aleft + 2};${list.atop + 1}M`.repeat(6)); await pause();
-  assert.equal(list.selected, 3, 'and stops at the last row');
-  v.input.write(`\x1b[<64;${list.aleft + 2};${list.atop + 1}M`); await until(() => list.selected === 2, 'up a row at once');
+  assert.equal(list.selected, 4, 'and stops at the last row');
+  v.input.write(`\x1b[<64;${list.aleft + 2};${list.atop + 1}M`); await until(() => list.selected === 3, 'up a row at once');
   assert.equal(v.current.view, 'projects'); assert.equal(modal(v, 'Project sample app'), undefined, 'the wheel opens nothing');
 });
 
@@ -1076,7 +1086,7 @@ test('keys stay with an open dialog when focus has moved behind it: arrows move 
   const one = setup(t), two = project({ after: close => resources(t).files.push(close) });
   registerProject(one.repo); nameProject(repository(two.root), 'Shop');
   const v = await view(t, { dashboard: true }), panels = v.current.panels, list = panels.projectsList, title = 'Project sample app';
-  await send(v, '/projects'); await until(() => v.current.view === 'projects' && list.items.length === 2, 'two project rows');
+  await send(v, '/projects'); await until(() => v.current.view === 'projects' && list.items.length === 3, 'two project rows, then All projects');
   list.focus(); v.input.write('\r'); await until(() => dialogList(v, title)?.lpos, 'settings dialog');
   const rows = dialogList(v, title), start = rows.selected;
   // Focus lands on the list behind, as a finished step or a timer might leave it.
@@ -1562,7 +1572,7 @@ test('@name in a session asks that bot, not the lead: @ offers the saved bots, t
   // The name alone adds the bot to the session the form starts: nothing runs, and the form and the label name it.
   v.input.write('\r'); await until(() => /@sec is in this session\. It reviews the changes\./.test(status()) && panels.ask.getValue() === '', 'added to the new session');
   assert.equal(v.current.view, 'tasks'); assert.equal(tasks().length, 0); assert.equal(runs().length, 0);
-  await until(() => /New session → Opus · sample app · with @sec /.test(label()) && panels.composeList.items.some(item => /^Bots\s+@sec\b/.test(item.getText())), 'the form and the label name the bot');
+  await until(() => /^ New session → Opus · sample app $/.test(label()) && panels.composeList.items.some(item => /^Bots\s+@sec\b/.test(item.getText())), 'the form names the bot; the label names the model and the project only');
   // With a message, a new session starts and the bot answers it. The session's model does not run.
   await typing(); v.input.write('@sec Is the token in config.js a secret?'); await until(() => panels.ask.getValue() === '@sec Is the token in config.js a secret?', 'typed');
   v.input.write('\r'); await until(() => tasks()[0]?.state === 'answered' && v.current.session === tasks()[0].id, 'the bot answered in a new session');
@@ -1577,9 +1587,9 @@ test('@name in a session asks that bot, not the lead: @ offers the saved bots, t
   assert.match(panels.chat.content, /\{141-fg\}\{bold\}@sec \(fable 5\.1 high\)\{\/bold\}/); assert.match(panels.chat.content, /\{75-fg\}\{bold\}You → @sec\{\/bold\}/);
   // The session keeps the bots its form had. The owner wrote to @sec, so the message box names @sec as who gets the next message.
   assert.deepEqual(task(id).bots, ['sec']); await until(() => /^ Message @sec · @model writes to Opus $/.test(label()), 'the label names who gets the next message');
-  // @model writes to the session's model, and the message box names it and the bots again. A message that starts with a word that is no bot goes there too.
+  // @model writes to the session's model, and the message box names it and the session's access, not its bots (its Agents tab lists them). A message that starts with a word that is no bot goes there too.
   await send(v, '@model Can I add multiple agents?'); await until(() => roles(id).length === 2 && task(id).state === 'answered', 'the lead answered');
-  await until(() => /^ Message Opus · Ask for approval · with @sec $/.test(label()), 'the label names the bots');
+  await until(() => /^ Message Opus · Ask for approval $/.test(label()), 'the label names the model and the access');
   await send(v, '@nobody what does this function do?'); await until(() => roles(id).length === 3 && task(id).state === 'answered', 'the lead answered again');
   assert.deepEqual(roles(id), ['bot:sec', 'lead', 'lead']); assert.equal(task(id).messages.at(-1).text, '@nobody what does this function do?', 'sent as typed');
   await until(() => /^Fable 5\.1 \(high\) {2}\d{1,2}:\d\d [AP]M\n┃ Yes/m.test(chat()) && /You {2}\d{1,2}:\d\d [AP]M\n┃ @nobody what does this function do\?/.test(chat()), 'the model’s side of the chat, under its name'); assert.doesNotMatch(chat(), /\(lead\)/);
@@ -1593,7 +1603,7 @@ test('@name in a session asks that bot, not the lead: @ offers the saved bots, t
   assert.deepEqual(task(id).bots, ['sec', 'docs'], 'the bot that was written to joined the session');
   assert.match(panels.chat.content, /\{221-fg\}\{bold\}@docs \(fable 5\.1 high\)\{\/bold\}/, '@docs answers in its own color, gold');
   // /bots remove and /bots add change who is in the chat. The command list offers the bots each can take.
-  await send(v, '/bots remove docs'); await until(() => /@docs left this session\./.test(status()) && /with @sec $/.test(label()), 'removed'); assert.deepEqual(task(id).bots, ['sec']);
+  await send(v, '/bots remove docs'); await until(() => /@docs left this session\./.test(status()), 'removed'); assert.deepEqual(task(id).bots, ['sec']);
   await send(v, '/bots remove docs'); await until(() => /@docs is not in this session\./.test(status()), 'not in it');
   await typing(); panels.ask.setValue(''); v.input.write('/bots add'); await until(() => panels.ask.getValue() === '/bots add' && !panels.palette.hidden, 'the command list');
   v.input.write('\r'); await until(() => panels.ask.getValue() === '/bots add ' && offered().map(row => row.split(' ')[0]).join() === 'reviewer,lead,qa,pair,orchestrator,docs,elu', 'only the bots that are not in the session');
@@ -1610,12 +1620,12 @@ test('@name in a session asks that bot, not the lead: @ offers the saved bots, t
   await selectRow(v, /◷ Check the/); await until(() => v.current.session === null, 'a row that is not a session');
   await send(v, '/bots add sec'); await until(() => /Open a session first\./.test(status()), 'no session open');
   await send(v, '/new'); await until(() => v.current.session === 'new' && !panels.compose.hidden, 'the new session form');
-  await send(v, '/bots add sec'); await until(() => /@sec is in this session\. It reviews the changes\./.test(status()) && /New session → Opus · sample app · with @sec $/.test(label()), 'kept for the session about to start');
+  await send(v, '/bots add sec'); await until(() => /@sec is in this session\. It reviews the changes\./.test(status()) && panels.composeList.items.some(item => /^Bots\s+@sec\b/.test(item.getText())), 'kept for the session about to start');
   await send(v, 'Can I add multiple agents?'); await until(() => tasks().length === 2 && tasks().every(row => row.state === 'answered'), 'the new session ran');
   const next = tasks().find(row => row.id !== id);
   assert.deepEqual(next.bots, ['sec']); assert.deepEqual(next.runs.map(run => run.role), ['lead']);
   // A bot that was deleted since drops out of a session the next time its bots change.
-  removeBot('docs'); await openTask(v, /✓ Is the token in…/); await until(() => v.current.session === id && /with @sec @docs $/.test(label()), 'the first session, still naming both');
+  removeBot('docs'); await openTask(v, /✓ Is the token in…/); await until(() => v.current.session === id, 'the first session'); assert.deepEqual(task(id).bots, ['sec', 'docs'], 'still with both');
   await send(v, '/bots remove sec'); await until(() => /@sec left this session\./.test(status()) && !/ with @/.test(label()), 'no bot is left in it');
   assert.deepEqual(task(id).bots, []);
 });
@@ -2987,7 +2997,7 @@ test('switching tabs keeps running work alive and returns to the same chat', { t
   await send(v, '/sessions'); await until(() => v.current.view === 'tasks' && v.current.session === id && /^.[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] Keep working/.test(cursor(v)), 'the same session');
   assert.match(rows(v).join('\n'), /RUNNING 1 /); assert.doesNotMatch(rows(v).join('\n'), /#\d/, 'no row shows a number');
   await openTask(v, /Keep working/);
-  assert.equal(v.current.session, id); assert.match(v.current.panels.header.getText(), /Keep working while I look at… {2}· {2}Task {2}· /, 'the title is cut at a word, and Task after it is whole'); assert.doesNotMatch(v.current.panels.header.getText(), /#\d/); assert.equal(modal(v, 'Open project'), undefined);
+  assert.equal(v.current.session, id); assert.match(v.current.panels.header.getText(), /Keep working while… {2}· {2}Task {2}· {2}Agents {2}· /, 'the title is cut at a word, and Task and Agents after it are whole'); assert.doesNotMatch(v.current.panels.header.getText(), /#\d/); assert.equal(modal(v, 'Open project'), undefined);
   await send(v, '/stop'); await until(() => projectSnapshot(p.repo).tasks[0].state === 'stopped', 'stopped response');
 });
 
@@ -3302,6 +3312,9 @@ test('a key typed on the row of another project waits for that project to open, 
   registerProject(one.repo); registerProject(repository(two.root));
   liveTask(one.root, { id: '4', goal: 'Trim coupon codes', state: 'answered' }); liveTask(one.root, { id: '6', goal: 'Sort the cart', state: 'answered' }); liveTask(two.root, { id: '5', goal: 'Rename billing', state: 'answered' });
   const opened = [], v = await view(t, { repo: one.repo, onRender: value => opened.push(value.controller?.repo.root) }), panels = v.current.panels, ask = panels.ask, board = panels.board, at = pattern => rows(v).findIndex(row => pattern.test(row));
+  // The active project's sessions only, until All projects shows every project's.
+  await until(() => at(/Trim coupon/) >= 0 && at(/Sort the cart/) >= 0, 'the sessions of the active project'); assert.equal(at(/Rename billing/), -1);
+  await showAll(v);
   await until(() => at(/Trim coupon/) >= 0 && at(/Sort the cart/) >= 0 && at(/Rename billing/) >= 0, 'the sessions of both projects');
   await selectRow(v, /Trim coupon/);
   // The cursor goes to the session of the other project and the message follows at once: all of it is in that session's box.
@@ -4537,7 +4550,7 @@ test('the list shows live agents and stops, retries, and starts work from its ro
   await send(v, '/tasks'); await until(() => v.current.view === 'tasks', 'Tasks');
   const board = panels.board, spinner = '[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]';
   // The row has the spinner and the session's title. Its latest step shows beside the list, in the session.
-  await until(() => new RegExp(`${spinner} Keep working`).test(cursor(v)) && /Opus is working\n\n• Working on the requested change\.$/.test(panels.chat.getText()) && /^Keep working on the board {2}· {2}Task {2}· {2}Ask/.test(panels.header.getText()), 'live row, with the work under way beside it');
+  await until(() => new RegExp(`${spinner} Keep working`).test(cursor(v)) && /Opus is working\n\n• Working on the requested change\.$/.test(panels.chat.getText()) && /^Keep working on… {2}· {2}Task {2}· {2}Agents {2}· {2}Ask/.test(panels.header.getText()), 'live row, with the work under way beside it');
   assert.match(cursor(v), /0m\d\d$/, 'a running row counts its time');
   assert.match(rows(v)[0], /\+ New session/); assert.match(rows(v)[2], /RUNNING 1/);
   board.focus(); await until(() => /s stop/.test(panels.keys.getText()), 's stop in the key bar'); v.input.write('s');
@@ -4828,9 +4841,10 @@ test("a schedule's run that takes the owner's name reads it in its row and its t
   assert.ok(rows(v).every(row => !/^\W*· (◷ )?Check the build/.test(row)), rows(v).join('\n'));
   await selectRow(v, /· ◷ Backlog review/);
   await until(() => v.current.session === 'request' && /Schedule \(queued\)/.test(panels.chat.getText()) && /^sample app {2}· {2}Backlog review$/.test(header()), 'titled with its name while it waits').catch(error => { throw new Error(`${error.message}: ${header()}`); });
-  // Once it starts it is its session, under the same name, in its row and its title.
+  // Once it starts it is its session, under the same name, in its row and its title. At 80
+  // columns its Task and Agents leave no room for the project before it.
   const conductor = new Conductor({ tickMs: 20 }).start(); resources(t).views.push(() => conductor.stop());
-  await until(() => /^\d+$/.test(String(v.current.session)) && /Backlog review/.test(cursor(v)) && /^sample app {2}· {2}Backlog review {2}· /.test(header()), 'the same title once its session starts');
+  await until(() => /^\d+$/.test(String(v.current.session)) && /Backlog review/.test(cursor(v)) && /^(sample app {2}· {2})?Backlog review {2}· /.test(header()), 'the same title once its session starts');
   assert.equal(taskTitle(readTask(p.repo, v.current.session)), 'Backlog review');
 });
 
@@ -5045,7 +5059,7 @@ test('/schedule offers times in the command list, saves a time and message typed
   // The form it is typed in keeps what it holds: a bot added there goes with the schedule.
   await send(v, '/bots add qa'); await until(() => /Bots\s+@qa/.test(composeText(v)), 'qa in the form');
   await send(v, '/schedule every 2h'); await until(() => /Runs every 2h, next .+\. Write the message below\./.test(status()), 'the time is set and the message is next');
-  assert.match(composeText(v), /When\s+every 2h/); assert.match(panels.ask._label.getText(), /Schedule → Opus · every 2h · sample app · with @qa/);
+  assert.match(composeText(v), /When\s+every 2h/); assert.match(panels.ask._label.getText(), /Schedule → Opus · every 2h · sample app $/);
   assert.equal(panels.composeHint.getContent().replace(/\s+/g, ' ').trim(), `${RUNS.replace('no bots', '@qa')} Runs while this computer is awake, even with ELU closed.`);
   await send(v, 'Run the linters'); await until(() => saved('Run the linters'), 'saved from the form');
   assert.deepEqual([saved('Run the linters').when.label, saved('Run the linters').bots], ['every 2h', ['qa']]);
@@ -5113,7 +5127,7 @@ test('/schedule typed in a session saves that session\'s bots, and the form keep
   // Something typed in + New session, and not sent.
   await selectRow(v, /\+ New session/); await until(() => v.current.session === 'new' && !panels.compose.hidden, 'the form');
   panels.ask.setValue('Keep this draft');
-  await openTask(v, /Trim coupon codes/); await until(() => /with @reviewer @qa $/.test(panels.ask._label.getText()), 'the session names its bots');
+  await openTask(v, /Trim coupon codes/); await until(() => /^ Message /.test(panels.ask._label.getText()) && !/with @/.test(panels.ask._label.getText()), 'the session\'s label, which names no bot');
   await send(v, '/schedule in 1h check'); await until(() => saved('check'), 'saved');
   assert.deepEqual(saved('check').bots, ['reviewer', 'qa']);
   assert.match(status(), /Ask for approval and @reviewer @qa\. It does not see this chat\.$/);
@@ -5813,7 +5827,7 @@ test('from 80 to 120 columns no pane wraps a row that fits it a second time: the
   await selectRow(v, /Which format/); await until(() => v.current.session === '5', 'its session shows');
   await sweep('a session beside the list', width => {
     const title = panels.header.getText();
-    assert.match(title, / {2}· {2}Task$/); assert.deepEqual(drawnIn(v, panels.header), [title], `the title at ${width}`);
+    assert.match(title, / {2}· {2}Task {2}· {2}Agents$/); assert.deepEqual(drawnIn(v, panels.header), [title], `the title at ${width}`);
     if (title.length === panels.header.width) filled.title.push(width);
     keys(width);
   });
@@ -8139,7 +8153,7 @@ test('Sessions shows the list on the left and the open session on the right, at 
     }
     assert.ok(!rows(v).some(row => /sample/.test(row)));
     // The right side is the session as before: its header line, its chat, its status and its message box.
-    assert.match(panels.header.getText(), width === 100 ? /^Trim coupon codes before they are compared at checkout {2}· {2}Task$/ : /^Trim coupon codes before they are… {2}· {2}Task$/);
+    assert.match(panels.header.getText(), width === 100 ? /^Trim coupon codes before they are compared at… {2}· {2}Task {2}· {2}Agents$/ : /^Trim coupon codes before… {2}· {2}Task {2}· {2}Agents$/);
     assert.match(panels.chat.getText(), /^You {2}\d{1,2}:\d\d [AP]M\n┃ Trim coupon codes before they are/); assert.match(panels.chat.getText().replace(/\s+/g, ' '), /Checks complete\. \/changes to inspect · \/publish to review push/);
     assert.equal(panels.chat._clines.length, panels.chat.getContent().split('\n').length, 'the chat fits its pane without a second wrap');
     assert.equal(panels.status.getText(), 'ready to publish'); assert.equal(panels.ask._label.getText(), ' Message Opus ');
@@ -8174,11 +8188,11 @@ test('moving the list’s cursor shows each row on the right at once, and the fo
   };
   // Down: the first session, with its own header, chat and message box. No Enter is needed.
   await shows('\x1b[B', /\? Which format/, '5', 'Down shows the first session');
-  await until(() => /^sample app {2}· {2}Which format should the export use {2}· {2}Task$/.test(panels.header.getText()) && /┃ Which format should the export use/.test(panels.chat.getText()), 'the header and the chat are that session’s');
+  await until(() => /^Which format should the export use {2}· {2}Task {2}· {2}Agents$/.test(panels.header.getText()) && /┃ Which format should the export use/.test(panels.chat.getText()), 'the header and the chat are that session’s');
   assert.equal(panels.compose.hidden, true); assert.equal(panels.chat.hidden, false); assert.equal(panels.ask.getValue(), '', 'the box is that session’s, not the new session’s'); assert.equal(panels.ask._label.getText(), ' Message Opus ');
   assert.match(panels.keys.getText(), /enter open {2}a answer/);
   await shows('\x1b[B', /✓ Trim coupon/, '4', 'Down again shows the next session');
-  await until(() => /^Trim coupon codes before they are compared at checkout {2}· {2}Task$/.test(panels.header.getText()) && /┃ Trim coupon codes before they are compared at checkout/.test(panels.chat.getText()), 'the header and the chat are that session’s');
+  await until(() => /^Trim coupon codes before they are compared at… {2}· {2}Task {2}· {2}Agents$/.test(panels.header.getText()) && /┃ Trim coupon codes before they are compared at checkout/.test(panels.chat.getText()), 'the header and the chat are that session’s');
   assert.match(panels.keys.getText(), /enter open {2}p publish {2}d changes/);
   // Home and End jump, and the right side follows them too.
   await shows('\x1b[1~', /\+ New session/, 'new', 'Home shows the new session form');
@@ -8291,7 +8305,7 @@ test('+ New session shows the new session form, and a message sent from it opens
   // It is open on the right, its row is the selected one, and the focus is in its message box.
   await until(() => v.current.session === id && /✓ Can I add/.test(cursor(v)), 'the new session is open, with its row selected');
   assert.equal(focused(), panels.ask); assert.equal(panels.compose.hidden, true); assert.equal(panels.chat.hidden, false); assert.equal(panels.ask.getValue(), '');
-  assert.match(panels.header.getText(), /^sample app {2}· {2}Can I add multiple agents\? {2}· {2}Task/); assert.match(panels.chat.getText(), /You {2}\d{1,2}:\d\d [AP]M\n┃ Can I add multiple agents\?[^]*\nFable 5\.1 \(high\) {2}\d{1,2}:\d\d [AP]M\n┃ Yes/);
+  assert.match(panels.header.getText(), /^Can I add multiple agents\? {2}· {2}Task {2}· {2}Agents/); assert.match(panels.chat.getText(), /You {2}\d{1,2}:\d\d [AP]M\n┃ Can I add multiple agents\?[^]*\nFable 5\.1 \(high\) {2}\d{1,2}:\d\d [AP]M\n┃ Yes/);
   assert.deepEqual(rows(v).filter(row => /^.[?✓] /.test(row)).map(row => /^.[?✓] (\w+ \w+)/.exec(row)[1]).sort(), ['Can I', 'Trim coupon', 'Which format'], 'the list has all three sessions'); assert.match(rows(v)[0], /^ \+ New session$/);
   // A follow-up from the same box stays in that session.
   await send(v, 'Can one review security?');
@@ -8321,11 +8335,11 @@ test('a session opened from Kanban takes the whole width, and ‹ Kanban or Esc 
   v.input.write('\x1b'); await until(() => !cardDialog(v), 'Esc closes it'); assert.equal(v.current.view, 'kanban');
   pickRow(needs, /Trim coupon codes/); v.input.write('\r'); await until(() => cardButton(v), 'Enter shows the card');
   click(v, cardButton(v));
-  await until(() => v.current.view === 'chat' && v.current.session === '4' && /^sample app {2}· {2}Trim coupon codes before they are compared at checkout {2}· {2}Task$/.test(panels.header.getText()), 'the button opens its session');
+  await until(() => v.current.view === 'chat' && v.current.session === '4' && /^sample app {2}· {2}Trim coupon codes before they are compared at… {2}· {2}Task {2}· {2}Agents$/.test(panels.header.getText()), 'the button opens its session');
   assert.equal(cardDialog(v), undefined);
   // No list is behind this session. Its title line reads the session at every redraw: what it shows about schedules comes from this project.
   const titles = new Set(); for (const end = Date.now() + 2600; Date.now() < end;) { titles.add(panels.header.getText()); await new Promise(resolve => setTimeout(resolve, 10)); }
-  assert.deepEqual([...titles].filter(text => !/Trim coupon codes before they are compared at checkout/.test(text)), [], 'the title line never shows anything else');
+  assert.deepEqual([...titles].filter(text => !/^sample app {2}· {2}Trim coupon codes before they are compared at… {2}· {2}Task {2}· {2}Agents$/.test(text)), [], 'the title line never shows anything else');
   // No list beside it: the chat and the message box take the whole width, and ‹ Kanban leads back.
   assert.equal(panels.boardBox.hidden, true); assert.equal(panels.back.hidden, false); assert.equal(panels.back.getText().trim(), '‹ Kanban');
   assert.deepEqual([[panels.chat.aleft, panels.chat.width], [panels.ask.aleft, panels.ask.width]], [[0, 100], [0, 100]]); assert.deepEqual([panels.status.aleft, panels.status.width], [1, 98]);
@@ -9497,7 +9511,7 @@ test('the session header says Task, not its state: a click on it or Ctrl+T opens
     v.output.columns = columns; v.output.rows = rows; v.output.emit('resize'); await until(() => v.current.screen.width === columns, `${columns}x${rows}`);
     await openTask(v, /Uppercase coupons/);
     // The header: its name, then Task. No state word, stored or plain.
-    await until(() => /Uppercase coupons {2}· {2}Task$/.test(header()), `the header names its Task at ${columns}x${rows}`);
+    await until(() => /Uppercase coupons {2}· {2}Task {2}· {2}Agents$/.test(header()), `the header names its Task at ${columns}x${rows}`);
     assert.doesNotMatch(header(), /unverified|not verified|ready|answered|replied|committed|waiting|working/);
     // The message box's bar names Ctrl+T first while the box is empty (it names no Enter then), or after the page keys where the chat is longer than its pane.
     await until(() => /^(pgup pgdn page {2})?ctrl\+t Task {2}/.test(keys()), `the key bar at ${columns}x${rows}`).catch(error => { throw new Error(`${error.message}: ${keys()}`); });
@@ -9525,7 +9539,7 @@ test('the session header says Task, not its state: a click on it or Ctrl+T opens
     // A chat with no Task: Task all the same, its first message as the goal, no objectives, and that it replied.
     // Its row is cut at 80 columns: Where are the…
     await send(v, '/sessions'); await openTask(v, /Where are the/);
-    await until(() => /Where are the coupon notes\? {2}· {2}Task$/.test(header()), 'its header');
+    await until(() => /Where are the coupon notes\? {2}· {2}Task {2}· {2}Agents$/.test(header()), 'its header');
     v.input.write('\x14'); await until(() => modal(v, 'Task'), 'its Task');
     assert.deepEqual(dialogRows(v, 'Task').map(row => row.trimEnd()).filter(row => row), ['Where are the coupon notes?', 'It waits for your check.', 'Goal', 'Where are the coupon notes?', 'Checklist', '  ✓ Replied', '    Its reply is in the chat.']);
     v.input.write('\x1b'); await until(() => !modal(v, 'Task'), 'closed');
@@ -9689,19 +9703,82 @@ test('Task in the header opens the session\'s Task while a message to it waits, 
   // A message queued to session 3: its row shows that session, and the header names its Task.
   v.current.controller.queue('Also trim the codes', null, { state: 'queued', continuationTaskId: '3', reason: 'Waiting for a free slot.' });
   await selectRow(v, /Also trim the codes/);
-  await until(() => /Uppercase coupon codes {2}· {2}Task$/.test(header()), 'the header names the Task of the session it continues');
+  await until(() => /Uppercase coupon codes {2}· {2}Task {2}· {2}Agents$/.test(header()), 'the header names the Task of the session it continues');
   await until(() => / {2}ctrl\+t Task$/.test(keys()), 'the bar of the list names Ctrl+T').catch(error => { throw new Error(`${error.message}: ${keys()}`); });
   v.input.write('\x14'); await opens('Uppercase coupon codes', 'Ctrl+T from the list', panels.board);
   // Enter on its row: its message box, whose bar names Ctrl+T too. Ctrl+T and a click open it.
   v.input.write('\r'); await until(() => v.current.screen.focused === panels.ask, 'the message box');
-  await until(() => /Uppercase coupon codes {2}· {2}Task$/.test(header()) && /^ctrl\+t Task {2}/.test(keys()), 'the bar of the box names Ctrl+T').catch(error => { throw new Error(`${error.message}: ${keys()}`); });
+  await until(() => /Uppercase coupon codes {2}· {2}Task {2}· {2}Agents$/.test(header()) && /^ctrl\+t Task {2}/.test(keys()), 'the bar of the box names Ctrl+T').catch(error => { throw new Error(`${error.message}: ${keys()}`); });
   v.input.write('\x14'); await opens('Uppercase coupon codes', 'Ctrl+T from the box', panels.ask);
   click(v, panels.header, header().lastIndexOf('Task')); await opens('Uppercase coupon codes', 'a click on Task', panels.ask);
   // Its Changes: d, then Enter, on the row of session 4. Its bar names Ctrl+T, and it opens the Task there too.
   await selectRow(v, /Trim coupon/);
   v.input.write('d'); await until(() => v.current.sessionView === 'changes' && v.current.screen.focused === panels.changes, 'its Changes');
-  await until(() => /Trim coupon codes {2}· {2}Task$/.test(header()) && / {2}ctrl\+t Task$/.test(keys()), 'the bar of its Changes names Ctrl+T').catch(error => { throw new Error(`${error.message}: ${keys()}`); });
+  await until(() => /Trim coupon codes {2}· {2}Task {2}· {2}Agents$/.test(header()) && / {2}ctrl\+t Task$/.test(keys()), 'the bar of its Changes names Ctrl+T').catch(error => { throw new Error(`${error.message}: ${keys()}`); });
   v.input.write('\x14'); await opens('Trim coupon codes', 'Ctrl+T from its Changes', panels.changes);
+});
+
+// Agents in a session's header, beside Task: every agent of the session in the chat's place
+// (lib/session-agents.mjs), each with its model, state, spend and what it is on. Ctrl+A or a
+// click on Agents shows them; Enter or a click opens one agent's thread, drawn as the chat is;
+// Esc goes back to the rows, then to where the focus was. The message box names no bots now.
+test('Agents in the header lists the session\'s agents, and opens one agent\'s thread', { timeout: 30000 }, async t => {
+  const p = setup(t);
+  const { repo } = liveTask(p.root, { id: '3', goal: 'Uppercase coupon codes', state: 'ready', activeRole: null });
+  const log = path.join(taskDir(repo, '3'), 'lead-1.jsonl'), at = new Date(Date.now() - 30 * 60000).toISOString(), said = (content, parent = null, model = 'claude-opus-5-5') => ({ type: 'assistant', message: { id: `msg_${Math.random().toString(36).slice(2)}`, model, content }, parent_tool_use_id: parent });
+  fs.writeFileSync(log, [
+    { type: 'system', subtype: 'init', model: 'claude-opus-5-5' },
+    said([{ type: 'text', text: 'Looking for the coupon code.' }, { type: 'tool_use', id: 'toolu_A', name: 'Task', input: { description: 'Find the coupon code', prompt: 'Find where coupons are read.' } }]),
+    { type: 'user', message: { content: [{ type: 'text', text: 'Find where coupons are read.' }] }, parent_tool_use_id: 'toolu_A' },
+    said([{ type: 'tool_use', id: 'toolu_A1', name: 'Grep', input: { pattern: 'coupon' } }], 'toolu_A', 'claude-sonnet-5'),
+    { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'toolu_A1', content: 'src/coupon.mjs:1' }] }, parent_tool_use_id: 'toolu_A' },
+    { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'toolu_A', content: [{ type: 'text', text: 'In src/coupon.mjs, line 1.' }] }] }, parent_tool_use_id: null },
+    { type: 'result', subtype: 'success', total_cost_usd: 0.42, structured_output: { summary: 'Codes are upper case now.' } },
+  ].map(row => JSON.stringify(row)).join('\n') + '\n');
+  saveTask(repo, { ...readTask(repo, '3'), bots: ['pair'], botsPicked: true, runs: [{ role: 'lead', vendor: 'claude', logFile: log, code: 0, startedAt: at, at, model: 'claude-opus-5-5', asked: 'opus', effort: 'high' }] });
+  const v = await view(t, { repo: p.repo, conductor: false }), panels = v.current.panels, header = () => panels.header.getText().trim(), keys = () => panels.keys.getText().trim();
+  const shown = () => panels.agents.getText().split('\n').map(line => line.replace(/┃\s*$/, '').trimEnd()), label = () => panels.ask._label.getText();
+  await sized(v, 140, 40);
+  await openTask(v, /Uppercase coupon codes/);
+  await until(() => /Uppercase coupon codes {2}· {2}Task {2}· {2}Agents$/.test(header()), 'the header names Task, then Agents');
+  // The message box names the model it writes to and no bot: the Agents tab lists them.
+  await until(() => /^ Message /.test(label()), 'the label'); assert.doesNotMatch(label(), /with @/);
+  // Ctrl+A from the empty box: a row for the coder, the sub-agent it started under it, then its bot.
+  v.input.write('\x01'); await until(() => v.current.sessionView === 'agents' && v.current.screen.focused === panels.agents, 'Ctrl+A shows its agents');
+  await until(() => shown().some(line => /Find the coupon code/.test(line)), 'the rows').catch(error => { throw new Error(`${error.message}: ${shown().join('\n')}`); });
+  const rows = shown().filter(line => line.trim());
+  assert.match(rows[0], /^ *▌Opus 5\.5 {2}high +done · 30m ago · \$0\.42$/); assert.match(rows[1], /^ +▌ +Codes are upper case now\.$/, 'the cursor\'s bar beside both its lines');
+  assert.match(rows[2], /^ +└ Find the coupon code {2}sonnet 5 +done · \d+m ago · <?\$0\.0\d$|^ +└ Find the coupon code {2}sonnet 5 +done · \d+m ago$/); assert.match(rows[3], /^ +In src\/coupon\.mjs, line 1\.$/);
+  assert.match(rows[4], /^ +@pair\b.* waiting$/); assert.equal(rows.length, 6);
+  assert.equal(keys(), '↑↓ move  enter open  esc chat  tab next  ctrl+t Task');
+  // Down and Enter: the sub-agent's thread, as the chat draws one: what it was asked, its steps, its answer.
+  v.input.write('\x1b[B'); await until(() => /^ +▌└ Find the coupon code/.test(shown().filter(line => line.trim())[2]), 'the cursor on the sub-agent');
+  v.input.write('\r'); await until(() => /^ *← Find the coupon code {2}sonnet 5$/.test(shown()[0]), 'its thread');
+  const thread = shown().join('\n');
+  assert.match(thread, /Opus 5\.5 {2}\d{1,2}:\d\d [AP]M\n *┃ Find where coupons are read\./); assert.match(thread, /• Search: coupon/); assert.match(thread, /Find the coupon code {2}\d{1,2}:\d\d [AP]M\n *┃ In src\/coupon\.mjs, line 1\./);
+  assert.equal(keys(), '↑↓ scroll  pgup pgdn page  esc agents  tab next  ctrl+t Task');
+  // Esc goes back to the rows, the cursor where it was, and again to the message box.
+  v.input.write('\x1b'); await until(() => /^ +▌└ Find the coupon code/.test(shown().filter(line => line.trim())[2] ?? ''), 'back to the rows');
+  v.input.write('\x1b'); await until(() => v.current.sessionView === 'chat' && v.current.screen.focused === panels.ask, 'back to the chat');
+  // A click on Agents in the header shows them; a click on the coder's row opens its thread, and one on its name goes back.
+  click(v, panels.header, header().lastIndexOf('Agents')); await until(() => v.current.sessionView === 'agents' && v.current.screen.focused === panels.agents, 'a click on Agents');
+  click(v, panels.agents, 4, 1); await until(() => /^ *← Opus 5\.5 {2}high$/.test(shown()[0]), 'a click opens the coder\'s thread');
+  await until(() => /You {2}\d{1,2}:\d\d [AP]M\n *┃ Uppercase coupon codes/.test(shown().join('\n')) && /• Agent: Find the coupon code/.test(shown().join('\n')) && /┃ Codes are upper case now\./.test(shown().join('\n')), 'what it was given, what it did and its reply');
+  click(v, panels.agents, 4, 1); await until(() => /^ *▌Opus 5\.5/.test(shown()[0]), 'a click on its name goes back to the rows');
+  // Ctrl+A from them goes back to the chat.
+  v.input.write('\x01'); await until(() => v.current.sessionView === 'chat' && v.current.screen.focused === panels.ask, 'Ctrl+A again');
+  // With text in the box, Ctrl+A goes to the start of its line, and the chat stays.
+  panels.ask.readInput(); await until(() => panels.ask.__listener, 'message box');
+  v.input.write('trim them'); await until(() => panels.ask.getValue() === 'trim them', 'typed');
+  v.input.write('\x01'); v.input.write('Please '); await until(() => panels.ask.getValue() === 'Please trim them', 'the line\'s start');
+  assert.equal(v.current.sessionView, 'chat'); panels.ask.clearValue();
+  // From the list: Ctrl+A shows them, and Esc goes back to the list.
+  await selectRow(v, /Uppercase coupon codes/);
+  v.input.write('\x01'); await until(() => v.current.sessionView === 'agents' && v.current.screen.focused === panels.agents, 'Ctrl+A from the list');
+  v.input.write('\x1b'); await until(() => v.current.sessionView === 'chat' && v.current.screen.focused === panels.board, 'Esc, back to the list');
+  // At 80 columns every row still fits its pane.
+  await sized(v, 80, 24); v.input.write('\x01'); await until(() => v.current.sessionView === 'agents' && shown().some(line => /Find the coupon/.test(line)), 'at 80 columns').catch(error => { throw new Error(`${error.message}: ${v.current.sessionView} ${panels.status.getText()} ${shown().join('\n')}`); });
+  assert.ok(panels.agents.getText().split('\n').every(line => columns(line) <= panels.agents.width - 2), 'no row wraps');
 });
 
 // A session whose Task waits for the owner's yes: its Task says so with the keys that answer it,

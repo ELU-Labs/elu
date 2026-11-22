@@ -296,7 +296,8 @@ test('his session written to @lead, then his approval, two command-line messages
   await send(v, '@model hi');
   assert.deepEqual(await turn(count, 'the model answers'), ['lead']);
   assert.equal(session().messages.filter(row => !row.bot && !row.from).at(-1).toModel, true);
-  await until(() => /^ Message Opus · .* · with @lead $/.test(label(v)), `the box names the model: "${label(v)}"`);
+  // It names the model and the access, not the bots: the Agents tab lists them.
+  await until(() => /^ Message Opus · Ask for approval $/.test(label(v)), `the box names the model: "${label(v)}"`);
   count = roles().length;
   await send(v, 'continue');
   assert.deepEqual(await turn(count, 'the model answers again'), ['lead'], 'continue after @model is the model');

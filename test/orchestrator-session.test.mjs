@@ -3,15 +3,15 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { PassThrough } from 'node:stream';
-import { temp, project, fakeClis, git, keyThenEnter } from './helpers.mjs';
+import { temp, project, fakeClis, git, keyLike, keyThenEnter } from './helpers.mjs';
 import { liveTask } from './peer-helpers.mjs';
 import { Conductor, enqueue } from '../lib/conductor.mjs';
 import { pendingRequests, projectFolder } from '../lib/workspace.mjs';
-import { FULL_UNASKED, ProjectController, QUESTION_CHANGED, registerProject } from '../lib/projects.mjs';
-import { readTask, saveTask, lock } from '../lib/state.mjs';
+import { FULL_UNASKED, ProjectController, QUESTION_CHANGED, applySessionSettings, archiveSession, registerProject, renameSession, sessionLogTail } from '../lib/projects.mjs';
+import { readTask, saveTask, lock, taskDir } from '../lib/state.mjs';
 import { currentTask, sessionTasks } from '../lib/plan.mjs';
-import { getBot, removeBot, saveBot } from '../lib/bots.mjs';
-import { closeSession, readBoard, setDone } from '../lib/kanban.mjs';
+import { getBot, removeBot, saveBot, sessionBots } from '../lib/bots.mjs';
+import { closeSession, readBoard, sessionArchived, setDone } from '../lib/kanban.mjs';
 import { OWN_COMMANDS } from '../lib/session-commands.mjs';
 import { KEEP_GOING_TEXT } from '../lib/elu-sent.mjs';
 import { STANDUP_QUESTION, newRound } from '../lib/standup.mjs';
@@ -20,9 +20,12 @@ import { NOTE_WAITS, sessionsDigest } from '../lib/runner.mjs';
 import { answerApproval, approvalsDir, pendingApprovals, requestApproval } from '../lib/approvals.mjs';
 import { serve, TOOL_NAME } from '../lib/approval-server.mjs';
 import { ADAPTERS } from '../lib/adapters/index.mjs';
-import { atomic, personalDirectory } from '../lib/util.mjs';
+import { atomic, hash, personalDirectory } from '../lib/util.mjs';
 import { processIdentity } from '../lib/process.mjs';
 import { askedWhole, fullAllowed, launchTerminal } from '../lib/terminal.mjs';
+import { LOG_ROWS_MAX } from '../lib/peer/remote-methods.mjs';
+import { defaultConfig } from '../lib/config.mjs';
+import { stringifyYaml } from '../lib/yaml.mjs';
 
 // What the bot that oversees the owner's sessions may reach, and when: a turn it leads never
 // has ELU's own commands or the owner's yes, only the owner writes to it, its answer goes in
@@ -533,4 +536,139 @@ test('in the terminal, archiving a session or checking it Done takes back the no
   await send(v, '/done'); await until(() => modal(v, 'Check'), 'the check');
   v.input.write('\r'); await until(() => /to Done\./.test(status()), 'checked Done');
   await until(() => waiting('4') === 0, 'its note is taken back');
+});
+
+// A session's controls for the Orchestrator at Full (lib/projects.mjs applySessionSettings,
+// renameSession, archiveSession, sessionLogTail, and the ProjectController methods over them),
+// on made-up sessions of a plain folder. No model is asked and no turn runs. ELU's own folder is
+// a new empty one in every test.
+function controls(t) {
+  const parent = temp(t);
+  environment(t, { XDG_CONFIG_HOME: path.join(parent, 'personal'), HOME: parent });
+  const root = path.join(parent, 'web'); fs.mkdirSync(root);
+  const repo = projectFolder(root); registerProject(repo);
+  // Each with the policy a conversation is started with (lib/runner.mjs createConversation), which its model is saved in.
+  const session = (id, extra = {}) => {
+    const policy = stringifyYaml(defaultConfig());
+    saveTask(repo, { id: String(id), kind: 'conversation', base: null, branch: null, worktree: repo.root, goal: `Goal of session ${id}`, state: 'answered', createdAt: new Date().toISOString(), configHash: hash(policy), runs: [], messages: [], reviews: [], responses: [], sessions: {}, permissions: 'auto', ...extra });
+    fs.writeFileSync(path.join(taskDir(repo, String(id)), 'policy.yaml'), policy);
+    return readTask(repo, String(id));
+  };
+  return { parent, root, repo, session };
+}
+// A Claude Code stream-json log in the session's own folder, as a run of role writes it.
+function claudeLog(repo, id, name, rows) {
+  const file = path.join(taskDir(repo, id), name);
+  fs.writeFileSync(file, rows.map(row => JSON.stringify(row)).join('\n') + '\n');
+  return file;
+}
+const said = (text) => ({ type: 'assistant', message: { content: [{ type: 'text', text }] } });
+const bash = (id, command) => ({ type: 'assistant', message: { content: [{ type: 'tool_use', id, name: 'Bash', input: { command } }] } });
+const ended = (id, failed = false) => ({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: id, content: 'done', is_error: failed }] } });
+
+test('settings: access is saved from the next turn, said in one line, and a part that is not a setting changes nothing', t => {
+  const w = controls(t); w.session(2);
+  const out = applySessionSettings(w.repo, '2', { access: 'full' });
+  assert.equal(out.line, 'Full access from its next turn.');
+  assert.equal(readTask(w.repo, '2').permissions, 'full');
+  assert.equal(applySessionSettings(w.repo, '2', { access: 'full' }).line, 'Full access already.');
+  assert.throws(() => applySessionSettings(w.repo, '2', { access: 'root' }), /ask, auto, or full/);
+  assert.throws(() => applySessionSettings(w.repo, '2', { access: 'ask', budget: 5 }), /no setting budget/);
+  assert.equal(readTask(w.repo, '2').permissions, 'full', 'a refused call saves no part of it');
+  assert.throws(() => applySessionSettings(w.repo, '9', { access: 'ask' }), /No session 9/);
+  assert.throws(() => applySessionSettings(w.repo, 'x', { access: 'ask' }), /by its number/);
+  assert.equal(applySessionSettings(w.repo, '2', {}).line, 'Nothing to change.');
+});
+
+test("settings: bots are added and removed by name, a bot's model and effort change with them, and a teammate's question keeps its own", t => {
+  const w = controls(t); w.session(2);
+  const added = applySessionSettings(w.repo, '2', { bots: { add: ['@reviewer', 'pair'] } });
+  assert.equal(added.line, 'Bots: @reviewer, @pair.');
+  assert.deepEqual(sessionBots(readTask(w.repo, '2')), ['reviewer', 'pair']);
+  const changed = applySessionSettings(w.repo, '2', { bots: { remove: ['reviewer'] }, botModels: { pair: { vendor: 'codex', model: 'gpt-6.1-sol', effort: 'medium' } } });
+  assert.deepEqual(changed.lines, ['Bots: @pair.', 'Effort of @pair: high → medium.']);
+  assert.deepEqual(readTask(w.repo, '2').botModels, { pair: { vendor: 'codex', model: 'gpt-6.1-sol', effort: 'medium' } });
+  // A bot's model is changed only for a bot the session has, once its bots are changed.
+  assert.throws(() => applySessionSettings(w.repo, '2', { botModels: { reviewer: { vendor: 'claude', model: 'opus' } } }), /@reviewer is not in this session/);
+  assert.throws(() => applySessionSettings(w.repo, '2', { bots: { add: ['nobody'] } }), /no bot named nobody/);
+  assert.throws(() => applySessionSettings(w.repo, '2', { bots: { add: 'reviewer' } }), /list of bot names/);
+  w.session(3, { origin: { kind: 'ask', peer: 'f'.repeat(64), name: 'sara' } });
+  assert.throws(() => applySessionSettings(w.repo, '3', { access: 'full' }), /teammate's question keeps/);
+});
+
+test("settings: the session's model and effort, with the chat's line, and an effort its model does not take is refused before anything is saved", t => {
+  const w = controls(t); w.session(2);
+  const out = applySessionSettings(w.repo, '2', { model: { vendor: 'claude', model: 'opus', effort: 'high' }, access: 'ask' });
+  assert.equal(out.lines[0], 'Ask for approval from its next turn.');
+  assert.match(out.lines[1], /^Model of this session: .+ → Opus/);
+  const task = readTask(w.repo, '2');
+  assert.equal(task.leadEffort, 'high');
+  assert.ok(task.agentChanges.some(row => /Opus/.test(row.text)), 'the chat keeps one line of the change');
+  assert.throws(() => applySessionSettings(w.repo, '2', { access: 'full', model: { vendor: 'claude', model: 'opus', effort: 'ludicrous' } }), /Effort on/);
+  assert.equal(readTask(w.repo, '2').permissions, 'ask', 'the access waits for a model that is fine');
+  // An effort left out keeps the one it has, where the model takes it.
+  applySessionSettings(w.repo, '2', { model: { vendor: 'claude', model: 'sonnet' } });
+  assert.equal(readTask(w.repo, '2').leadEffort, 'high');
+});
+
+test('rename: the owner\'s name for a session, and an empty one gives back its own', t => {
+  const w = controls(t); w.session(2);
+  assert.equal(renameSession(w.repo, '2', 'Workflows').line, 'Renamed session 2 to "Workflows".');
+  assert.equal(readTask(w.repo, '2').title, 'Workflows');
+  assert.equal(renameSession(w.repo, '2', '').line, 'Session 2 is named "Goal of session 2" again.');
+  assert.throws(() => renameSession(w.repo, '2', 'a'.repeat(400)), /one line of up to/);
+});
+
+test('archive: a session is archived and brought back as elu sessions does it, and nothing is deleted', async t => {
+  const w = controls(t); const task = w.session(2);
+  const out = await archiveSession(w.repo, '2');
+  assert.equal(out.archived, true); assert.match(out.line, /^Archived session 2/);
+  assert.equal(sessionArchived(readBoard(w.repo), task), true);
+  assert.match((await archiveSession(w.repo, '2')).line, /archived already/);
+  const back = await archiveSession(w.repo, '2', { unarchive: true });
+  assert.match(back.line, /back in the list/);
+  assert.equal(sessionArchived(readBoard(w.repo), readTask(w.repo, '2')), false);
+  assert.ok(fs.existsSync(path.join(taskDir(w.repo, '2'), 'task.json')));
+  // One at work is archived when its turn ends.
+  w.session(3, { state: 'running' });
+  const later = await archiveSession(w.repo, '3');
+  assert.equal(later.archiving, true); assert.match(later.line, /when its turn ends/);
+});
+
+test("log: the last rows of the model's last turn, or of the turn at work, with secrets masked and the count held to its most", t => {
+  const w = controls(t); w.session(2);
+  const key = keyLike('sk-', 'ant-', 'A1b2C3d4E5f6G7h8I9j0K1l2');
+  const first = claudeLog(w.repo, '2', 'run-1.jsonl', [said('Looking at the build.'), bash('t1', 'npm test'), ended('t1')]);
+  const second = claudeLog(w.repo, '2', 'run-2.jsonl', [said(`Using the key ${key} now.`), bash('t2', 'npm run build'), ended('t2', true), bash('t3', 'git status')]);
+  const task = readTask(w.repo, '2');
+  saveTask(w.repo, { ...task, runs: [{ role: 'lead', vendor: 'claude', at: new Date().toISOString(), logFile: first }, { role: 'bot:pair', vendor: 'codex', at: new Date().toISOString(), logFile: path.join(w.parent, 'elsewhere.jsonl') }] });
+  const last = sessionLogTail(w.repo, '2');
+  assert.equal(last.live, false); assert.equal(last.vendor, 'claude'); assert.equal(last.total, 2);
+  assert.deepEqual(last.rows.map(row => [row.kind, row.text, row.status ?? null]), [['text', 'Looking at the build.', null], ['tool', 'Run: npm test', 'ok']]);
+  assert.equal(last.line, 'The last 2 of 2 steps of its last turn in session 2.');
+  // A log outside the session's own folder is never read.
+  assert.equal(sessionLogTail(w.repo, '2', { role: 'bot:pair' }).line, '@pair has no turn in session 2 yet.');
+  saveTask(w.repo, { ...readTask(w.repo, '2'), state: 'running', activeRole: 'lead', activeLog: second, activeSince: new Date().toISOString() });
+  const live = sessionLogTail(w.repo, '2', { rows: 2 });
+  assert.equal(live.live, true); assert.equal(live.total, 3);
+  assert.deepEqual(live.rows.map(row => [row.text, row.status]), [['Run: npm run build', 'failed'], ['Run: git status', 'running']]);
+  const all = sessionLogTail(w.repo, '2', { rows: 3 });
+  assert.ok(!all.rows[0].text.includes(key) && all.rows[0].text.includes('[redacted]'), all.rows[0].text);
+  assert.throws(() => sessionLogTail(w.repo, '2', { rows: LOG_ROWS_MAX + 1 }), /whole number from 1/);
+  assert.throws(() => sessionLogTail(w.repo, '2', { role: 'helper' }), /lead or bot/);
+});
+
+test('the controller has each control, and a window that only views the project changes nothing', async t => {
+  const w = controls(t); w.session(2);
+  const controller = new ProjectController(w.repo);
+  assert.equal(controller.applySettings('2', { access: 'full' }).line, 'Full access from its next turn.');
+  assert.equal(controller.rename('2', 'Test').line, 'Renamed session 2 to "Test".');
+  assert.match((await controller.archive('2')).line, /^Archived session 2/);
+  assert.match((await controller.unarchive('2')).line, /back in the list/);
+  assert.equal(controller.logTail('2').rows.length, 0);
+  const viewer = new ProjectController(w.repo, { readOnly: true });
+  assert.throws(() => viewer.applySettings('2', { access: 'ask' }), /View only/);
+  assert.throws(() => viewer.rename('2', 'Other'), /View only/);
+  await assert.rejects(viewer.archive('2'), /View only/);
+  assert.equal(viewer.logTail('2').line, 'The model has no turn in session 2 yet.', 'reading needs no say over the project');
 });

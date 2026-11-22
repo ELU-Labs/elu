@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { compile as claude, parse as parseClaude, sandboxRefusal, secretReads, unwritable, NEVER_RULES, SETTINGS_INLINE_LIMIT } from '../lib/adapters/claude.mjs';
+import { compile as claude, parse as parseClaude, placeholders, sandboxRefusal, secretReads, unwritable, NEVER_RULES, SETTINGS_INLINE_LIMIT } from '../lib/adapters/claude.mjs';
+import { FULL_ASK_LIST, OVERSEE_FULL } from '../lib/orchestrator-seams.mjs';
 import { defaultConfig } from '../lib/config.mjs';
 import { temp, readRole, git as gitIn } from './helpers.mjs';
 import { commandRule } from '../lib/policy.mjs';
@@ -75,6 +76,21 @@ test('settings too long for one argument go to the run file, the same rules, and
   const short = claude({ role, cwd, protectedPaths: ['.git', 'package.json'], session: SESSION, settingsFile });
   assert.equal(typeof settingsOf(short).permissions, 'object', 'short settings stay inline');
   assert.equal(fs.existsSync(settingsFile), false, 'and write no file');
+});
+
+// The Orchestrator at the Full level (OVERSEE_FULL) writes no protected path's rules, so its
+// settings stay on the command line however many files a project protects; below Full the same
+// turn keeps them, and goes to the run file. Its sandbox is off, so nothing is laid in the work tree.
+test('the Orchestrator at the Full level keeps short settings in a large project; below Full the same turn goes to the run file', t => {
+  const f = modeFixture(t), run = temp(t), settingsFile = path.join(run, 'bot-orchestrator-run.settings.json');
+  const many = Array.from({ length: 400 }, (_, i) => `packages/area-${i}/workspace-folder/package.json`);
+  const turn = extra => claude({ ...f.base, role: { ...f.role, access: 'read', commands: [], writablePaths: [] }, mode: 'full', protectedPaths: many, oversee: true, settingsFile, ...extra });
+  const args = turn({ [OVERSEE_FULL]: true });
+  assert.deepEqual(settingsOf(args).permissions.ask, [...FULL_ASK_LIST]); assert.equal(fs.existsSync(settingsFile), false, 'inline, no file');
+  assert.deepEqual(unwritable(args), []); assert.deepEqual(placeholders(args, f.cwd), []);
+  const below = turn({});
+  assert.equal(valueOf(below, '--settings'), settingsFile);
+  assert.ok(JSON.parse(fs.readFileSync(settingsFile, 'utf8')).permissions.deny.includes('Bash'), 'below Full it still has no shell');
 });
 
 test('ask, auto and full launch through the approval relay, ask and auto deny the never list and secrets, and none runs agents', t => {

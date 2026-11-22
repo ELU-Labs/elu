@@ -1365,6 +1365,54 @@ test('a session on another computer on the shared project is renamed, archived a
   withHome(devbox.home, () => assert.deepEqual([projectSnapshot(repo).closed, readTask(repo, '2').title], [[], 'Nightly tests']));
 });
 
+// The owner archived, from his laptop, a session he had started on his devbox that waited for
+// him there. Its chat followed here kept the state it had, so it stayed under Needs you and under
+// the devbox, and came back each time the devbox listed its sessions again. It leaves both at
+// once, stays out after the next list and the next events, and is back once brought back.
+test('a session I started on my other computer and archive there leaves Needs you and its computer here at once, and does not come back with the next list', async t => {
+  const { team, laptop, devbox, project, toHost, toViewer, hostCtx, viewCtx, viewer } = pair(t), D = devbox.identity.key;
+  toViewer.remoteHello = { remote: 1, shared: 1, edit: 1 };
+  const started = await withHome(laptop.home, () => remoteCommand(viewCtx, { type: 'remoteStart', to: D, text: 'Which coupon wins?', permissions: 'ask' }));
+  // It started there, from its message, and asks the owner which coupon wins.
+  withHome(devbox.home, () => { const [request] = pendingRequests(project.root); chat(project.root, 1, { goal: 'Which coupon wins?', state: 'needs_input', origin: { kind: 'mine', mine: true, ...request.mine }, result: { outcome: 'needs_input', question: 'The newest one or the biggest?', choices: [] } }); updateRequest(project.root, request.id, { state: 'running', taskId: '1' }); });
+  let given = 0, at = Date.now();
+  const refresh = async () => {
+    at += 5000;
+    withHome(devbox.home, () => { relist(); hostTick(hostCtx); });
+    const pushes = toHost.sent.filter(([method]) => method === 'elu.remote.events');
+    for (const [, params] of pushes.slice(given)) withHome(laptop.home, () => viewer['elu.remote.events'](params, toViewer));
+    given = pushes.length;
+    await withHome(laptop.home, () => viewTick(viewCtx, at));
+    await withHome(laptop.home, () => listTick(viewCtx, at));
+  };
+  await refresh();
+  const listed = withHome(laptop.home, () => remoteMachines())[0];
+  assert.equal(listed.sessions.find(row => row.remoteId === started.id)?.state, 'needs_input', 'listed there as asking');
+  const status = { key: laptop.identity.key, name: 'ana', box: 'laptop', teams: [{ id: team.teamId, members: [{ key: laptop.identity.key, name: 'ana' }, { key: D, name: 'box', box: 'devbox', online: true }] }] };
+  const facade = { mineRows: peerFacade.mineRows, remoteSessions: peerFacade.remoteSessions, remoteMachines: peerFacade.remoteMachines, projectRepoId: () => listed.projects[0].repoId, projectRepoIds: () => [], teamProjectRoots: () => (listed.projects[0].teams ?? []).map(slot => ({ team: slot, root: '/work/shop', name: 'shop' })) };
+  const glue = remoteGlue({ facade, peerRead: () => status, peerCommand: async command => withHome(laptop.home, () => remoteCommand(viewCtx, command)), chatMessage: ({ title, text }) => `${title}\n${text}`, ink: text => text, colour: false, restMs: 1e9 });
+  let n = 0;
+  const needsYou = () => withHome(laptop.home, () => glue.rows(at + 1000 * ++n)).filter(row => row.id === started.id);
+  const underDevbox = () => withHome(laptop.home, () => glue.sections(at + 1000 * ++n, '/work/shop')).filter(line => line.row?.id === started.id);
+  assert.deepEqual(needsYou().map(row => row.label), ['WAITING YOU']);
+  assert.equal(underDevbox().length, 1, 'under the devbox too');
+  // Archived from here: done there, and gone from both lists here at once.
+  const [row] = underDevbox();
+  assert.equal((await withHome(laptop.home, () => glue.archive(row.row))).archived, true);
+  withHome(devbox.home, () => assert.deepEqual(projectSnapshot(repository(project.root)).closed, ['1']));
+  assert.deepEqual([needsYou(), underDevbox()], [[], []]);
+  // The devbox lists its sessions again without it, and sends what it has: it stays out, though nothing it sends says it was archived.
+  await refresh(); await refresh();
+  assert.ok(!withHome(laptop.home, () => remoteMachines())[0].sessions.some(item => item.remoteId === started.id), 'that computer lists it no more');
+  assert.deepEqual([needsYou(), underDevbox()], [[], []], 'not back with its state from before');
+  assert.equal(withHome(laptop.home, () => remoteSessions().find(view => view.id === started.id)).archived, true, 'its chat here is marked archived');
+  // Brought back there: listed again, and here again.
+  assert.equal((await withHome(laptop.home, () => remoteCommand(viewCtx, { type: 'remoteArchive', id: started.id, to: D, ref: row.row.ref, archived: false }))).archived, false);
+  await refresh();
+  assert.deepEqual(needsYou().map(value => value.label), ['WAITING YOU']);
+  assert.equal(underDevbox().length, 1);
+});
+
 // A session started from here is renamed by the id both machines give it, once it has started there.
 test('a session I started on my other computer is renamed there once it has started, and one not started yet says so', async t => {
   const { laptop, devbox, project, toViewer, viewCtx } = pair(t);
