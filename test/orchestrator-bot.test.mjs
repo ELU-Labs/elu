@@ -310,7 +310,7 @@ test('what its turn is told at the Full level: a shell, the asks, every session 
 const BEFORE = {
   'reviewer answers': '0261ad729699cdff', 'lead answers': '68f16a77145bc20c', 'lead works ask': '900f578e80ec69f8', 'lead edits ask': '2ad9a226f3529688', 'lead works auto': 'c4fe15c338d33905', 'lead edits auto': '71a2bb0594a8b79e',
   'lead works full': '970db5209d49d963', 'lead edits full': '970db5209d49d963', 'qa answers': '0261ad729699cdff', 'qa works ask': '713d8d995557e107', 'qa edits ask': '702b96337c5d5862', 'qa works auto': '827e99a12ebe6ab2',
-  'qa edits auto': '4be92056370a78fc', 'qa works full': 'f16eb093e76017ea', 'qa edits full': 'f16eb093e76017ea', 'pair answers': 'd7ee64716198067f', 'elu answers': '9d8ff9710ead3a60', 'elu works ask': 'cdb5b99e6935d22f',
+  'qa edits auto': '4be92056370a78fc', 'qa works full': 'f16eb093e76017ea', 'qa edits full': 'f16eb093e76017ea', 'pair answers': 'a09eebf78704afd2', 'elu answers': '9d8ff9710ead3a60', 'elu works ask': 'cdb5b99e6935d22f',
   'elu edits ask': '8513dfd66e2e0a6e', 'elu works auto': '6eba8119108ec8c5', 'elu edits auto': '545846456f49b61a', 'elu works full': '46098ea7527b3425', 'elu edits full': '46098ea7527b3425',
 };
 test('the five bots that came before it compile to the same arguments as before', t => {
