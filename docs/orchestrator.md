@@ -208,7 +208,7 @@ and has no shell, and ELU answers each tool it asks for:
 - It starts with only the MCP servers named on its own row (`elu`), never the project's
   others.
 - Its helpers read files and search the web. They get no MCP server and none of ELU's tools.
-- On another vendor, and in a Read only session, it only answers.
+- In a Read only session it only answers.
 - One of its turns stops at $2, or sooner when the session's budget has less left.
 
 Below Full, what it sends a session is a note, never your word. A note or an answer to a

@@ -416,6 +416,14 @@ test('the ask list: what publishes, tags, releases, runs a workflow, deploys, fo
   for (const command of ['npm test', 'git push', 'git push origin feature', 'git commit -m "fix the deploy script"', 'gh pr create --title "deploy docs" --body "publish later"', 'ls ~', 'rm -rf node_modules', 'npm run build', 'git status', 'echo published', '', null]) assert.equal(askListed(command), false, String(command));
 });
 
+test('the ask list: what only lists, shows, verifies or rehearses never asks; making, pushing, publishing and deploying still do', () => {
+  for (const command of ['git tag', 'git tag -l', 'git tag -l "v1.*"', 'git tag --list', 'git tag -n3', 'git tag --contains HEAD', 'git tag --merged main', 'git tag --points-at HEAD', 'git tag -v v1', 'git tag --sort=-creatordate', 'git -C repo tag -l', 'git --no-pager tag -l | head -5', 'cd repo && git tag -l', 'x=$(git tag -l)', 'git tag --help',
+    'git push --dry-run --tags', 'git push -n --force origin x', 'gh release list', 'gh release view v1', 'gh release download v1', 'gh workflow view deploy', 'gh run list --workflow deploy', 'npm publish --dry-run', 'pnpm publish --dry-run',
+    'kubectl get deploy -n prod', 'kubectl describe deploy web', 'kubectl rollout status deploy/web', 'kubectl apply -f a.yaml --dry-run=client', 'helm upgrade web . --dry-run', 'helm status deploy', 'gcloud deploy releases list --delivery-pipeline=web']) assert.equal(askListed(command), false, command);
+  for (const command of ['git tag v1', 'git tag -a v1 -m "One"', 'git tag -d v1', 'git tag -f v1', 'git tag -i v1', 'git tag --format=%(refname) v1', 'git -c core.pager=less tag -l', 'git tag -l; git tag v2', 'git tag -l && npm publish', 'x=$(git tag -l) && git push --tags', 'echo v1 | xargs git tag', 'bash -c "git tag v1"',
+    'gh release create v1', 'gh release delete v1', 'gh release upload v1 a.zip', 'yarn publish --dry-run', 'npx -y lerna publish --dry-run', 'npm run publish --dry-run', 'kubectl -n prod rollout restart deploy/web', 'kubectl apply -f a.yaml --dry-run=none', 'helm upgrade web .', 'gcloud run deploy list', 'gcloud deploy releases promote --release=r1']) assert.equal(askListed(command), true, command);
+});
+
 test('the relay at Full: its work allowed, the ask list asks him, its own files never, and below Full as before', async t => {
   const w = world(t), personal = path.join(process.env.XDG_CONFIG_HOME, 'elu-code');
   const at = (tool, input, mode = 'full') => overseeingAnswer(tool, { mode, input, full: true, cwd: w.root, servers: ['gmail'] });

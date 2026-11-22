@@ -802,6 +802,32 @@ test('a short code over the wire: the inviter announces its topic, proves itself
   });
 });
 
+// The owner's computers pair through his GitHub account (lib/peer/github-pairing.mjs), read at
+// start and every 15 minutes. A join reads it again within seconds on both sides, so a second
+// computer of his is his on the first one at once, not up to 15 minutes later.
+test('a join reads the GitHub pairing again within seconds, on the inviter\'s side and on the joiner\'s', async t => {
+  const anaHome = newHome(t), liHome = newHome(t), li = withHome(liHome, () => createIdentity({ name: 'li' }));
+  await withHome(anaHome, async () => {
+    const me = createIdentity({ name: 'ana' }), made = createTeam(me, 'core');
+    const code = createInvite(me, made.id, { hours: 1 }), keys = inviteKeys(code);
+    const { daemon } = inviterDaemon(me); let checks = 0;
+    daemon.testing.pairSoonMs = 20; daemon.pairing = { check: () => { checks++; } };
+    daemon.inviteTopics();
+    const { joiner, fields } = await startInvite(daemon, li.key, keys.topic);
+    assert.equal(checks, 0, 'nothing before the join');
+    joiner.say({ jsonrpc: '2.0', id: 2, method: 'elu.invite.prove', params: { proof: joinerProof(keys.seed, fields), name: 'li' } });
+    await until(() => daemon.sessions.get(li.key)?.admitted, 'the joiner admitted', 5000);
+    await until(() => checks === 1, 'the inviter reads the pairing again', 5000);
+    joiner.socket.destroy();
+  });
+  await withHome(liHome, async () => {
+    const daemon = Object.assign(new PeerDaemon({ conductor: () => {}, testing: { pairSoonMs: 20 } }), { me: li, node: { dial() {}, leave() {} } });
+    let checks = 0; daemon.pairing = { check: () => { checks++; } }; daemon.joinCode = async () => ({ id: 'team', name: 'core' });
+    await daemon.join('elu-team:any');
+    await until(() => checks === 1, 'the joiner reads the pairing again', 5000);
+  });
+});
+
 test('a short code made in another project of the team names it to whoever joins with it, and an ELU before 0.1.31 is told to update first; one made in the first project names none', async t => {
   peerHome(t);
   const me = createIdentity({ name: 'ana' }), made = createTeam(me, 'core'), other = 'e'.repeat(16);
