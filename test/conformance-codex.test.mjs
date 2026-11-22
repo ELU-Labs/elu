@@ -3,7 +3,10 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { compile as codex, parse as parseCodex, signedIn, meta } from '../lib/adapters/codex.mjs';
+import { spawnSync } from 'node:child_process';
+import { compile as codex, parse as parseCodex, signedIn, meta, overseeHook, serverTool, ARG_BYTES, ARGS_BYTES, RELAY_SERVER } from '../lib/adapters/codex.mjs';
+import { approvalServer, APPROVAL_SERVER } from '../lib/mcp.mjs';
+import { OVERSEE_FULL } from '../lib/orchestrator-seams.mjs';
 import { defaultConfig } from '../lib/config.mjs';
 import { HOME_SECRETS } from '../lib/vendors.mjs';
 import { personalDirectory } from '../lib/util.mjs';
@@ -35,7 +38,7 @@ const assertIsolated = (args) => {
 
 // The feature switches of a launch, whole. On 0.166.0-alpha.5.1 a session's commands and file
 // reads run through the code-mode host: switched off, a real turn starts none of them.
-test('a Codex session leaves the code-mode host at the release default; a reviewer keeps it off', (t) => {
+test('every Codex launch leaves the code-mode host at the release default; a reviewer starts no helper', (t) => {
   const cwd = temp(t), schemaFile = path.join(cwd, 'schema.json');
   const features = args => args.filter(arg => arg.startsWith('features.')).sort();
   const off = ['apps', 'browser_use', 'browser_use_external', 'browser_use_full_cdp_access', 'code_mode', 'computer_use', 'goals', 'hooks', 'image_generation', 'in_app_browser', 'multi_agent', 'multi_agent_v2', 'plugin_discovery_prefetch', 'plugins', 'remote_plugin', 'shell_snapshot', 'skill_mcp_dependency_install', 'skill_search', 'sleep_tool', 'tool_suggest', 'view_image', 'workspace_dependencies'];
@@ -46,7 +49,12 @@ test('a Codex session leaves the code-mode host at the release default; a review
   }
   // Full access is everything: no feature is switched off, the code-mode host among them.
   for (const resume of [null, '12345678-1234-4234-8234-123456789abc']) assert.deepEqual(features(codex({ mode: 'full', role: lead(), cwd, schemaFile, resume })), ['features.shell_tool=true', 'features.unified_exec=true'], `full${resume ? ', resumed' : ''}`);
-  assert.deepEqual(features(codex({ role: reviewer(), cwd, schemaFile })), [...off, 'code_mode_host'].map(name => `features.${name}=false`).concat('features.shell_tool=false', 'features.unified_exec=false').sort());
+  // A reviewer too: with the host off its every turn opened with "Code Mode is unavailable" (codex-cli
+  // 0.169.0-alpha.11.1). It has no shell and no helper: agents.enabled=false, which a session does not set.
+  const read = codex({ role: reviewer(), cwd, schemaFile });
+  assert.deepEqual(features(read), off.map(name => `features.${name}=false`).concat('features.shell_tool=false', 'features.unified_exec=false').sort());
+  assert.ok(read.includes('agents.enabled=false'));
+  for (const mode of ['ask', 'auto', 'full']) assert.equal(codex({ mode, role: lead(), cwd, schemaFile }).includes('agents.enabled=false'), false, mode);
 });
 
 test('Codex reviewer has no shell, apps, browser, agents, user hooks, or MCP configuration', (t) => {
@@ -263,4 +271,252 @@ test('a Codex bot or lead runs in a folder with its own .codex/config.toml, whic
     assert.ok(args.includes('--ignore-user-config'), `${mode} reads no project file`);
     assert.equal(args.includes('--trust'), false, `${mode} never trusts the folder`);
   }
+});
+
+// ---------------------------------------------------------------------------------------
+// The turn of the bot that oversees the owner's sessions (oversee), on Codex as on Claude Code:
+// ELU's MCP server, its PreToolUse hook (lib/adapters/codex.mjs overseeHook) and, at the level
+// Full, a shell. Read against codex-cli 0.169.0-alpha.11.1; never with the owner's ELU folder.
+const KEY = 'a-very-secret-key-1234567890', TOKEN = 'Bearer elu_live_0123456789abcdef';
+function overseeFixture(t, { mode = 'auto', servers = {} } = {}) {
+  const parent = temp(t), cwd = path.join(parent, 'app'), common = path.join(cwd, '.git'), personal = path.join(parent, 'personal');
+  for (const dir of [common, personal]) fs.mkdirSync(dir, { recursive: true });
+  const log = path.join(parent, 'approvals.jsonl'), file = path.join(parent, 'mcp.json');
+  const relay = approvalServer({ session: 'run-1', root: cwd, taskId: '2', role: 'bot:orchestrator', vendor: 'codex', log, cwd, access: 'read', rules: 'saved', mode, folders: [], common, oversee: 'orchestrator', servers: Object.keys(servers) });
+  relay.env = { HOME: os.homedir(), XDG_CONFIG_HOME: personal };
+  fs.writeFileSync(file, JSON.stringify({ mcpServers: { ...servers, [APPROVAL_SERVER]: relay } }));
+  return { parent, cwd, common, personal, log, relay, schemaFile: path.join(parent, 'schema.json'), mcp: { file, names: [...Object.keys(servers), APPROVAL_SERVER] } };
+}
+const overseer = () => ({ ...readRole('codex'), maxCostUsd: null, model: 'gpt-6.2-sol', effort: 'xhigh' });
+const hookCommand = args => JSON.parse(setting(args, 'hooks.PreToolUse').match(/command=("(?:[^"\\]|\\.)*")/)[1]);
+const hookContext = args => JSON.parse(Buffer.from(hookCommand(args).split(' ').at(-1), 'base64url').toString('utf8'));
+
+test('a Codex turn that oversees gets ELU\'s MCP server and the hook that asks the owner; below Full it has no shell', (t) => {
+  assert.equal(RELAY_SERVER, APPROVAL_SERVER, 'the adapter names ELU\'s own server as lib/mcp.mjs does');
+  for (const mode of ['ask', 'auto', 'full']) {
+    const f = overseeFixture(t, { mode });
+    const args = codex({ mode, role: overseer(), cwd: f.cwd, schemaFile: f.schemaFile, commonDir: f.common, oversee: true, mcp: f.mcp });
+    assert.deepEqual(args.slice(0, 2), ['exec', '--ignore-user-config']); assert.equal(args.at(-1), '-');
+    for (const expected of ['--ignore-rules', '--json', '--skip-git-repo-check', '--dangerously-bypass-hook-trust', 'features.hooks=true', 'features.shell_tool=false', 'features.unified_exec=false', 'tools.update_plan.enabled=false', 'tools.experimental_request_user_input.enabled=false', 'shell_environment_policy.inherit="none"']) assert.ok(args.includes(expected), `${mode}: ${expected}`);
+    // ELU's own server, as the relay was written for this run, and nothing else: never mcp_servers={}.
+    assert.equal(args.includes('mcp_servers={}'), false, mode);
+    const servers = setting(args, 'mcp_servers');
+    assert.ok(servers.startsWith(`{"${APPROVAL_SERVER}"={"command"=${JSON.stringify(f.relay.command)}, "args"=[`), servers);
+    for (const part of [`${JSON.stringify('--oversee')}, ${JSON.stringify('orchestrator')}`, `"env"={"HOME"=${JSON.stringify(os.homedir())}, "XDG_CONFIG_HOME"=${JSON.stringify(f.personal)}}`, '"disabled_tools"=["approve"]', '"required"=true', '"tool_timeout_sec"=1320', '"default_tools_approval_mode"="approve"', '"XDG_DATA_HOME"']) assert.ok(servers.includes(part), `${mode}: ${part}`);
+    // No shell, no edit, no web: the read-only sandbox, approvals never asked of nobody.
+    assert.equal(setting(args, 'sandbox_mode'), '"read-only"', mode); assert.equal(setting(args, 'approval_policy'), '"never"', mode); assert.equal(setting(args, 'web_search'), '"disabled"', mode);
+    assert.equal(setting(args, 'default_permissions'), undefined, mode); assert.equal(setting(args, 'agents.max_concurrent_threads_per_session'), undefined, mode);
+    // The code-mode host stays at the release default: every model of the catalog calls its tools, MCP ones too, only through it.
+    for (const kept of ['features.code_mode=false', 'features.code_mode_host=false', 'features.hooks=false']) assert.equal(args.includes(kept), false, `${mode}: ${kept}`);
+    assert.ok(args.includes('agents.enabled=false'), `${mode}: no helper below Full`);
+    // Every call reaches the hook first: this file, with what the relay knows of the turn.
+    assert.match(setting(args, 'hooks.PreToolUse'), /^\[\{matcher="\*", hooks=\[\{type="command", command=".*", timeout=1320\}\]\}\]$/);
+    assert.ok(hookCommand(args).startsWith(`'${process.execPath}' '${path.resolve('lib/adapters/codex.mjs')}' 'hook' `), hookCommand(args));
+    const context = hookContext(args);
+    assert.deepEqual([context.session, context.role, context.bot, context.mode, context.full, context.wait, context.log, context.servers], ['run-1', 'bot:orchestrator', 'orchestrator', mode, false, 1200, f.log, [APPROVAL_SERVER]], mode);
+    assert.ok(context.named.includes(personalDirectory()) && context.kept.includes(path.join(f.common, 'elu-code')), mode);
+    assert.ok(args.includes('--model') && args.includes('model_reasoning_effort="xhigh"'), mode);
+    // A resumed turn keeps the same -c set.
+    const resumed = codex({ mode, role: overseer(), cwd: f.cwd, schemaFile: f.schemaFile, commonDir: f.common, oversee: true, mcp: f.mcp, resume: '12345678-1234-4234-8234-123456789abc' });
+    const configs = list => list.filter((a, i) => list[i - 1] === '-c');
+    assert.deepEqual(configs(resumed), configs(args), mode); assert.deepEqual(resumed.slice(0, 3), ['exec', 'resume', '12345678-1234-4234-8234-123456789abc']); assert.ok(resumed.includes('--dangerously-bypass-hook-trust'));
+  }
+});
+
+test('a Codex turn that oversees at Full works in Full access with a shell and helpers, its servers and its hook kept', (t) => {
+  const f = overseeFixture(t, { mode: 'full' });
+  const args = codex({ mode: 'full', role: overseer(), cwd: f.cwd, schemaFile: f.schemaFile, commonDir: f.common, oversee: true, [OVERSEE_FULL]: true, mcp: f.mcp });
+  assert.equal(setting(args, 'sandbox_mode'), '"danger-full-access"'); assert.equal(setting(args, 'approval_policy'), '"never"'); assert.equal(setting(args, 'web_search'), '"live"');
+  for (const expected of ['features.shell_tool=true', 'features.unified_exec=true', 'features.hooks=true', 'tools.experimental_request_user_input.enabled=false', '--dangerously-bypass-hook-trust']) assert.ok(args.includes(expected), expected);
+  assert.equal(setting(args, 'agents.max_concurrent_threads_per_session'), '32', 'helpers as a Full access session has them');
+  assert.equal(args.some(arg => /^features\..*=false$/.test(arg)), false, 'no feature is off at Full');
+  assert.equal(args.includes('mcp_servers={}'), false); assert.ok(setting(args, 'mcp_servers').includes('"--oversee", "orchestrator"'));
+  assert.equal(hookContext(args).full, true);
+  // The same launch as a Full access session's, with ELU's servers and its hook in place of mcp_servers={}.
+  const session = codex({ mode: 'full', role: overseer(), cwd: f.cwd, schemaFile: f.schemaFile, commonDir: f.common });
+  const plain = list => list.filter((a, i) => !(a === '-c' && /^(?:mcp_servers|hooks\.|features\.hooks=)/.test(list[i + 1])) && !(list[i - 1] === '-c' && /^(?:mcp_servers|hooks\.|features\.hooks=)/.test(a)) && a !== '--dangerously-bypass-hook-trust');
+  assert.deepEqual(plain(args), plain(session));
+});
+
+test('a Codex turn that oversees is refused where Claude Code\'s is, and without ELU\'s server started for that bot', (t) => {
+  const f = overseeFixture(t), base = { role: overseer(), cwd: f.cwd, schemaFile: f.schemaFile, commonDir: f.common, mcp: f.mcp };
+  assert.throws(() => codex({ ...base, mode: 'locked', oversee: true }), /runs in a session of the owner's with permissions/);
+  assert.throws(() => codex({ ...base, mode: 'full', [OVERSEE_FULL]: true }), /Only the turn of a bot that oversees runs at the Full level/);
+  assert.throws(() => codex({ ...base, mode: 'auto', oversee: true, [OVERSEE_FULL]: true }), /at the Full level runs in Full access/);
+  assert.throws(() => codex({ ...base, role: lead(), mode: 'auto', oversee: true }), /never edits, runs no command/);
+  assert.throws(() => codex({ ...base, mode: 'auto', oversee: true, todos: true }), /never edits, runs no command/);
+  assert.throws(() => codex({ ...base, mode: 'auto', oversee: true, mcp: null }), /needs the MCP config that starts ELU's own server/);
+  const other = path.join(f.parent, 'other.json');
+  fs.writeFileSync(other, JSON.stringify({ mcpServers: { notes: { type: 'http', url: 'https://example.invalid/mcp' } } }));
+  assert.throws(() => codex({ ...base, mode: 'auto', oversee: true, mcp: { file: other, names: ['notes'] } }), /needs ELU's own MCP server/);
+  const lead2 = approvalServer({ session: 'run-2', root: f.cwd, taskId: '2', role: 'lead', vendor: 'codex', log: f.log });
+  fs.writeFileSync(other, JSON.stringify({ mcpServers: { [APPROVAL_SERVER]: lead2 } }));
+  assert.throws(() => codex({ ...base, mode: 'auto', oversee: true, mcp: { file: other, names: [APPROVAL_SERVER] } }), /not started for the bot that oversees/);
+});
+
+test('a Codex launch that does not oversee and has no server of the owner\'s is the same with or without an MCP config', (t) => {
+  const f = overseeFixture(t);
+  for (const [mode, role] of [['locked', reviewer()], ['ask', lead()], ['auto', lead()], ['full', lead()], ['full', { ...lead(), access: 'read', writablePaths: [] }]]) {
+    for (const resume of mode === 'locked' ? [null] : [null, '12345678-1234-4234-8234-123456789abc']) {
+      const without = codex({ mode, role, cwd: f.cwd, schemaFile: f.schemaFile, commonDir: f.common, resume });
+      assert.deepEqual(codex({ mode, role, cwd: f.cwd, schemaFile: f.schemaFile, commonDir: f.common, resume, mcp: f.mcp }), without, mode);
+      assert.ok(without.includes('mcp_servers={}'), mode);
+      assert.equal(without.some(arg => /^hooks\.|^features\.hooks=true$|dangerously/.test(arg)), false, mode);
+    }
+  }
+  // The read-only reviewer launch is still the pinned one (test/argv-snapshot.test.mjs): the code-mode host on, no helper.
+  const read = codex({ role: reviewer(), cwd: f.cwd, schemaFile: f.schemaFile });
+  assert.equal(read.includes('features.code_mode_host=false'), false); assert.ok(read.includes('agents.enabled=false'));
+});
+
+test('the hook of a turn that oversees answers each call as the relay answers Claude Code, under the names the relay knows', async (t) => {
+  const f = overseeFixture(t), context = hookContext(codex({ mode: 'auto', role: overseer(), cwd: f.cwd, schemaFile: f.schemaFile, commonDir: f.common, oversee: true, mcp: f.mcp }));
+  const asked = [];
+  let next = { decision: 'allow', by: 'default', summary: 's' };
+  const overseeing = async (tool, input, ctx) => { asked.push([tool, input, ctx.id, ctx.mode, ctx.bot, ctx.waitSeconds, ctx.taskId]); return next; };
+  const event = (tool_name, tool_input, tool_use_id = 'exec-1') => JSON.stringify({ hook_event_name: 'PreToolUse', tool_name, tool_input, tool_use_id });
+  const deny = reason => JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: reason } });
+  const say = (text, ctx = context) => overseeHook(ctx, text, { overseeing });
+  // Codex writes elu-code-approval as elu_code_approval in a tool's name; the relay is asked about it by its own.
+  assert.equal(await say(event('mcp__elu_code_approval__sessions_list', {})), '');
+  assert.deepEqual(asked.at(-1), [`mcp__${APPROVAL_SERVER}__sessions_list`, {}, 'run-1-exec-1', 'auto', 'orchestrator', 1200, '2']);
+  assert.equal(serverTool('mcp__elu_code_approval__session_read', [APPROVAL_SERVER, 'elu']), `mcp__${APPROVAL_SERVER}__session_read`);
+  assert.equal(serverTool('mcp__elu__ask_elu', [APPROVAL_SERVER, 'elu']), 'mcp__elu__ask_elu');
+  // A command goes as Bash; what the relay says no to, or nobody answered, Codex refuses with its words.
+  next = { decision: 'deny', summary: 'Run: npm publish', message: 'The owner declined this.' };
+  assert.equal(await say(event('Bash', { command: 'npm publish' }, 'exec-2')), deny('The owner declined this.'));
+  assert.deepEqual(asked.at(-1).slice(0, 2), ['Bash', { command: 'npm publish' }]);
+  next = { decision: 'timeout', summary: 'Run: git tag v1', message: 'No answer from the owner.' };
+  assert.equal(await say(event('Bash', { command: 'git tag v1' }, 'exec-3')), deny('No answer from the owner.'));
+  // What is typed into a running command is a command too; a poll with nothing typed is not asked about.
+  next = { decision: 'allow', by: 'full', summary: 's' };
+  assert.equal(await say(event('write_stdin', { session_id: 1, chars: 'npm publish\n' }, 'exec-4')), '');
+  assert.deepEqual(asked.at(-1).slice(0, 2), ['Bash', { command: 'npm publish\n' }]);
+  const count = asked.length; assert.equal(await say(event('write_stdin', { session_id: 1, chars: '' })), ''); assert.equal(asked.length, count);
+  // Each file of a patch is an Edit of it.
+  assert.equal(await say(event('apply_patch', { command: '*** Begin Patch\n*** Add File: a.txt\n+x\n*** Update File: src/b.mjs\n*** Move to: src/c.mjs\n@@\n-a\n+b\n*** End Patch' }, 'exec-5')), '');
+  assert.deepEqual(asked.slice(-3).map(row => [row[0], row[1], row[2]]), [['Edit', { file_path: 'a.txt' }, 'run-1-exec-5-1'], ['Edit', { file_path: 'src/b.mjs' }, 'run-1-exec-5-2'], ['Edit', { file_path: 'src/c.mjs' }, 'run-1-exec-5-3']]);
+  // ELU's own folder and its records of the sessions are never changed by the turn's own tools, at Full too: not even asked.
+  const own = asked.length, full = { ...context, full: true };
+  for (const ctx of [context, full]) {
+    assert.match(await say(event('apply_patch', { command: `*** Begin Patch\n*** Add File: ${path.join(personalDirectory(), 'orchestrator.json')}\n+{}\n*** End Patch` }), ctx), /never changes ELU's own folder/);
+    assert.match(await say(event('Bash', { command: 'cat ~/.config/elu-code/orchestrator.json > x; echo {} > .git/elu-code/tasks/1/task.json' }), ctx), /never changes ELU's own folder/);
+    assert.match(await say(event('apply_patch', { command: '*** Begin Patch\n*** End Patch' }), ctx), /never changes ELU's own folder/, 'a patch that names no file is refused');
+  }
+  assert.equal(asked.length, own);
+  // Below Full no helper starts; at Full a helper is the turn's own, and its commands reach the hook as the turn's do.
+  assert.match(await say(event('spawn_agent', { message: 'go' })), /starts no helper/);
+  assert.match(await say(event('multi_agent_v1__spawn_agent', { message: 'go' })), /starts no helper/);
+  assert.equal(await say(event('spawn_agent', { message: 'go' }), full), '');
+  // Any other tool the launch gave the turn needs no answer; an event that does not read is refused.
+  assert.equal(await say(event('web_search', { query: 'x' })), ''); assert.equal(asked.length, own);
+  assert.equal(await say('not json'), deny('ELU could not check this step, so it did not run. Do not retry it another way: say in your reply what you needed.'));
+  // Each answer is a row of the run's approvals, as the relay writes them.
+  const rows = fs.readFileSync(f.log, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+  assert.deepEqual(rows.slice(0, 3).map(row => [row.id, row.tool, row.decision]), [['run-1-exec-1', `mcp__${APPROVAL_SERVER}__sessions_list`, 'allow'], ['run-1-exec-2', 'Bash', 'deny'], ['run-1-exec-3', 'Bash', 'timeout']]);
+  assert.ok(rows.some(row => row.decision === 'deny' && row.by === 'oversee' && /orchestrator\.json/.test(row.summary)));
+});
+
+test('the hook runs as Codex starts it, with the relay\'s answers: below Full a command is refused and ELU\'s tools are allowed', (t) => {
+  const f = overseeFixture(t), args = codex({ mode: 'auto', role: overseer(), cwd: f.cwd, schemaFile: f.schemaFile, commonDir: f.common, oversee: true, mcp: f.mcp });
+  const run = input => spawnSync('/bin/sh', ['-c', hookCommand(args)], { input, encoding: 'utf8', cwd: f.cwd, env: { ...process.env, XDG_CONFIG_HOME: f.personal }, timeout: 30000 });
+  const refused = run(JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'ls' }, tool_use_id: 'exec-a' }));
+  assert.equal(refused.status, 0, refused.stderr);
+  assert.equal(JSON.parse(refused.stdout).hookSpecificOutput.permissionDecision, 'deny');
+  assert.match(JSON.parse(refused.stdout).hookSpecificOutput.permissionDecisionReason, /edits nothing, runs no command/);
+  const allowed = run(JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'mcp__elu_code_approval__sessions_list', tool_input: {}, tool_use_id: 'exec-b' }));
+  assert.equal(allowed.status, 0, allowed.stderr); assert.equal(allowed.stdout, '');
+  const rows = fs.readFileSync(f.log, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+  assert.deepEqual(rows.map(row => [row.tool, row.decision, row.by]), [['Bash', 'deny', 'oversee'], [`mcp__${APPROVAL_SERVER}__sessions_list`, 'allow', 'default']]);
+});
+
+test('the owner\'s own servers reach a Codex turn that oversees with their keys kept off every command line', (t) => {
+  const stdio = { type: 'stdio', command: process.execPath, args: ['-e', 'process.stdout.write(String(process.env.NOTES_KEY))'], env: { NOTES_KEY: KEY } };
+  const web = { type: 'http', url: 'https://mcp.example.invalid/mcp', headers: { Authorization: TOKEN } };
+  const f = overseeFixture(t, { servers: { gmail: stdio, elu: web } });
+  const args = codex({ mode: 'auto', role: overseer(), cwd: f.cwd, schemaFile: f.schemaFile, commonDir: f.common, oversee: true, mcp: f.mcp });
+  for (const secret of [KEY, TOKEN, 'elu_live_0123456789abcdef']) assert.equal(args.some(arg => arg.includes(secret)), false, secret);
+  const servers = setting(args, 'mcp_servers');
+  assert.ok(servers.startsWith('{"gmail"={"command"='), servers);
+  assert.ok(servers.includes('"elu"={"url"="https://mcp.example.invalid/mcp", "http_headers_helper"='), servers);
+  assert.deepEqual(hookContext(args).servers, ['gmail', 'elu', APPROVAL_SERVER]);
+  // The URL server's headers come from the run's private file when Codex connects.
+  const helper = JSON.parse(servers.match(/"http_headers_helper"=("(?:[^"\\]|\\.)*")/)[1]);
+  const headers = spawnSync('/bin/sh', ['-c', helper], { encoding: 'utf8', timeout: 30000 });
+  assert.equal(headers.status, 0, headers.stderr); assert.deepEqual(JSON.parse(headers.stdout), { Authorization: TOKEN });
+  // The command server starts through this file, with the environment its settings give it.
+  const [command, ...rest] = JSON.parse(`[${servers.match(/"gmail"=\{"command"=("(?:[^"\\]|\\.)*"), "args"=\[([^\]]*)\]/).slice(1).join(', ')}]`);
+  const started = spawnSync(command, rest, { encoding: 'utf8', timeout: 30000 });
+  assert.equal(started.status, 0, started.stderr); assert.equal(started.stdout, KEY);
+  // A call of a server of the owner's gets an answer from the relay's table, as on Claude Code.
+  assert.equal(serverTool('mcp__gmail__send_email', hookContext(args).servers), 'mcp__gmail__send_email');
+});
+
+test('parse reads the calls of the MCP servers a turn that oversees was given, and no others', () => {
+  const base = fixture('codex.jsonl');
+  const call = server => `{"type":"item.completed","item":{"id":"item_9","type":"mcp_tool_call","server":"${server}","tool":"sessions_list","status":"completed"}}\n`;
+  for (const mode of ['ask', 'auto']) {
+    assert.equal(parseCodex(call(APPROVAL_SERVER) + base, { mode, servers: [APPROVAL_SERVER] }).result.outcome, 'done', mode);
+    assert.throws(() => parseCodex(call('other') + base, { mode, servers: [APPROVAL_SERVER] }), /must not have/, mode);
+    assert.throws(() => parseCodex(call(APPROVAL_SERVER) + base, { mode }), /must not have/, `${mode}: a launch with no servers reads none`);
+  }
+  // A Read only run given servers reads their calls too, and Codex's own listing of their resources.
+  const resources = '{"type":"item.completed","item":{"id":"item_8","type":"mcp_tool_call","server":"codex","tool":"list_mcp_resources","status":"completed"}}\n';
+  assert.equal(parseCodex(call('elu') + resources + base, { mode: 'locked', servers: ['elu'] }).result.outcome, 'done');
+  assert.throws(() => parseCodex(call('other') + base, { mode: 'locked', servers: ['elu'] }), /reviewer must not have/);
+  // The code-mode host offers that listing in every launch, of no server where the run has none.
+  assert.equal(parseCodex(resources + base, { mode: 'locked' }).result.outcome, 'done');
+  assert.throws(() => parseCodex(call(APPROVAL_SERVER) + base, { mode: 'locked' }), /reviewer must not have/);
+});
+
+// Any bot that names MCP servers (mcp: ['elu']) gets them on Codex as on Claude Code, where each
+// is allowed whole (mcp__NAME): the owner's servers in place of mcp_servers={}, never ELU's relay.
+test('a Codex run given the owner\'s servers has them, keys off the command line, and nothing else of its launch changes', (t) => {
+  const stdio = { type: 'stdio', command: process.execPath, args: ['-e', 'process.stdout.write(String(process.env.NOTES_KEY))'], env: { NOTES_KEY: KEY } };
+  const web = { type: 'http', url: 'https://mcp.example.invalid/mcp', headers: { Authorization: TOKEN } };
+  const f = overseeFixture(t, { servers: { elu: web, notes: stdio } });
+  for (const [mode, role] of [['ask', lead()], ['auto', lead()], ['full', lead()], ['auto', { ...lead(), access: 'read', writablePaths: [] }]]) {
+    for (const resume of [null, '12345678-1234-4234-8234-123456789abc']) {
+      const base = { mode, role, cwd: f.cwd, schemaFile: f.schemaFile, commonDir: f.common, resume };
+      const without = codex(base), args = codex({ ...base, mcp: f.mcp });
+      for (const secret of [KEY, TOKEN]) assert.equal(args.some(arg => arg.includes(secret)), false, `${mode}: ${secret}`);
+      const servers = setting(args, 'mcp_servers');
+      assert.ok(servers.startsWith('{"elu"={"url"="https://mcp.example.invalid/mcp", "http_headers_helper"='), servers);
+      assert.ok(servers.includes('"notes"={"command"=') && servers.includes('"default_tools_approval_mode"="approve"'), servers);
+      assert.equal(servers.includes(APPROVAL_SERVER), false, `${mode}: ELU's relay is not given to a run that does not oversee`);
+      assert.deepEqual(args.map(arg => arg.startsWith('mcp_servers=') ? 'mcp_servers={}' : arg), without, `${mode}: only mcp_servers differs`);
+    }
+  }
+  // Read only: the reviewer's launch (its code-mode host on: every model calls an MCP tool only
+  // through it) and the hook that lets the turn use those servers and nothing else.
+  const role = { ...reviewer(), maxCostUsd: null }, without = codex({ role, cwd: f.cwd, schemaFile: f.schemaFile }), args = codex({ role, cwd: f.cwd, schemaFile: f.schemaFile, mcp: f.mcp });
+  for (const secret of [KEY, TOKEN]) assert.equal(args.some(arg => arg.includes(secret)), false, secret);
+  assert.deepEqual(args.slice(args.indexOf('--sandbox'), args.indexOf('--sandbox') + 2), ['--sandbox', 'read-only']);
+  for (const expected of ['approval_policy="never"', 'web_search="disabled"', 'features.shell_tool=false', 'features.unified_exec=false', 'features.multi_agent=false', 'features.hooks=true', '--dangerously-bypass-hook-trust']) assert.ok(args.includes(expected), expected);
+  for (const gone of ['features.code_mode_host=false', 'features.hooks=false', 'mcp_servers={}']) assert.equal(args.includes(gone), false, gone);
+  assert.ok(args.includes('agents.enabled=false'));
+  assert.equal(setting(args, 'mcp_servers'), setting(codex({ mode: 'ask', role: lead(), cwd: f.cwd, schemaFile: f.schemaFile, mcp: f.mcp }), 'mcp_servers'));
+  assert.deepEqual(hookContext(args), { kind: 'servers', servers: ['elu', 'notes'] });
+  const kept = list => list.filter((arg, i) => !arg.startsWith('mcp_servers=') && !/^hooks\.|^features\.hooks=|^--dangerously/.test(arg) && !(arg === '-c' && /^hooks\./.test(list[i + 1])));
+  assert.deepEqual(kept(args), kept(without));
+  assert.equal(args.at(-1), '-');
+});
+
+test('the hook of a Read only run with servers lets their tools run and refuses every other tool', async () => {
+  const context = { kind: 'servers', servers: ['elu', 'notes'] }, say = (tool_name, tool_input = {}) => overseeHook(context, JSON.stringify({ hook_event_name: 'PreToolUse', tool_name, tool_input, tool_use_id: 'x' }), { overseeing: () => { throw new Error('the relay is not asked'); } });
+  for (const tool of ['mcp__elu__ask_elu', 'mcp__notes__find']) assert.equal(await say(tool), '', tool);
+  for (const [tool, input] of [['mcp__gmail__send_email', {}], ['mcp__elu_code_approval__sessions_list', {}], ['Bash', { command: 'cat ~/.ssh/id_rsa' }], ['apply_patch', { command: '*** Begin Patch\n*** Add File: a\n+x\n*** End Patch' }], ['write_stdin', { chars: 'ls\n' }], ['spawn_agent', {}], ['multi_agent_v1spawn_agent', {}], ['collaboration__spawn_agent', {}]]) assert.match(await say(tool, input), /uses its MCP servers and no other tool/, tool);
+  assert.equal(await say('web_search'), '', 'what the launch never offers needs no answer');
+  assert.match(await overseeHook(context, 'not json'), /could not check this step/);
+  assert.match(await overseeHook({ kind: 'servers' }, JSON.stringify({ tool_name: 'mcp__elu__ask_elu' })), /could not check this step/);
+});
+
+test('a Codex launch never puts more on the command line than every system takes', (t) => {
+  const f = overseeFixture(t), base = { role: lead(), cwd: f.cwd, schemaFile: f.schemaFile, commonDir: f.common };
+  for (const args of [codex({ ...base, mode: 'ask' }), codex({ ...base, mode: 'full' }), codex({ role: reviewer(), cwd: f.cwd, schemaFile: f.schemaFile }), codex({ ...base, role: overseer(), mode: 'auto', oversee: true, mcp: f.mcp })]) {
+    assert.ok(args.every(arg => Buffer.byteLength(arg) < ARG_BYTES), 'each argument');
+    assert.ok(args.reduce((sum, arg) => sum + Buffer.byteLength(arg) + 1, 0) < ARGS_BYTES, 'all of them');
+  }
+  const many = Array.from({ length: 400 }, (_, i) => `${'deep/'.repeat(30)}file-${i}.txt`);
+  assert.throws(() => codex({ ...base, mode: 'ask', protectedPaths: many }), /more settings than a command line holds/);
 });
