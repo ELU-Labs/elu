@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { PRICES, PRICES_CHECKED, listCost, longPriceOf, priceOf } from '../lib/prices.mjs';
 
 const near = (actual, expected) => assert.ok(Number.isFinite(actual) && Math.abs(actual - expected) < 1e-9, `${actual} is not ${expected}`);
@@ -43,6 +44,24 @@ test('the models their makers list that the table lacked are priced, at their ma
     assert.equal(priceOf(id, Date.UTC(2026, 11, 1)).input, 4, id);
     assert.equal(priceOf(id, Date.UTC(2026, 11, 1, 4)).input, 4, id);
   }
+});
+
+test('GPT-6.2 Sol and Astra, which Codex 0.169 lists first, are priced at OpenAI\'s figures, short and long', () => {
+  assert.deepEqual(priceOf('gpt-6.2-sol'), { input: 2, cached: 0.1, output: 10, write: 2.5 });
+  assert.deepEqual(longPriceOf('gpt-6.2-sol'), { from: 272_001, input: 4, cached: 0.2, output: 15, write: 5 });
+  assert.deepEqual(priceOf('gpt-6.2-astra'), { input: 8, cached: 0.4, output: 40, write: 10 });
+  assert.deepEqual(longPriceOf('gpt-6.2-astra'), { from: 272_001, input: 16, cached: 0.8, output: 60, write: 20 });
+  near(listCost('gpt-6.2-sol', tokens(1_000_000, 1_000_000, 1_000_000)), 12.1);
+});
+
+// OpenAI's page lists no price for these, so a run of one shows a dash and Top agents names it.
+const CODEX_UNPUBLISHED = new Set(['gpt-reserve', 'codex-auto-review']);
+test('every model the installed Codex lists has a price, unless OpenAI publishes none', { skip: spawnSync('codex', ['--version']).status !== 0 && 'no codex here' }, () => {
+  const run = spawnSync('codex', ['debug', 'models'], { encoding: 'utf8', timeout: 60_000 });
+  if (run.status !== 0) return;
+  const slugs = (JSON.parse(run.stdout).models ?? []).map(model => model.slug).filter(Boolean);
+  assert.ok(slugs.length > 0);
+  assert.deepEqual(slugs.filter(slug => !priceOf(slug) && !CODEX_UNPUBLISHED.has(slug)), []);
 });
 
 test('an effort a vendor puts in a model name is read past, however many and wherever it is before -preview', () => {

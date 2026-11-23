@@ -5,7 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { fakeClis, temp } from './helpers.mjs';
-import { TOP_AGENTS, agentSpend, agentTable, byCost, cleanTopAgents, compact, costText, modelLabel, moneyText, runSpends, runUsage, shareText, topAgentsWire } from '../lib/agent-spend.mjs';
+import { TOP_AGENTS, agentSpend, agentTable, byCost, cleanTopAgents, compact, costText, modelLabel, moneyText, runSpends, runUsage, shareText, topAgentsWire, unpricedModels } from '../lib/agent-spend.mjs';
 import { usageTotal } from '../lib/terminal.mjs';
 
 const FIXTURES = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures');
@@ -272,4 +272,17 @@ test('a pane too narrow for Session, Model, Cost and Share cuts the model, then 
   assert.deepEqual(headers(20), ['Session', 'Model', 'Cost'], 'the model cut to fit, the share gone');
   assert.deepEqual(headers(12), ['Session', 'Cost']);
   assert.equal(agentTable(rows, { width: 12, total: 20 }).rows[0], '@le…  $12.40');
+});
+
+test('Top agents names the models it has no price for, only where a row\'s cost is not all known', () => {
+  const rows = [
+    { costUsd: null, partial: true, models: [{ vendor: 'codex', model: 'gpt-reserve' }, { vendor: 'codex', model: 'gpt-6.2-sol' }] },
+    { costUsd: 3, partial: true, models: [{ vendor: 'agy', model: 'gemini-9-ultra' }] },
+    { costUsd: 2, partial: false, models: [{ vendor: 'codex', model: 'gpt-unlisted' }] },
+    { costUsd: null, partial: true, models: [{ vendor: 'claude', model: 'claude-haiku-5-5' }] },
+    // A row from another computer names one model.
+    { costUsd: null, model: 'Codex-Auto-Review' },
+  ];
+  assert.deepEqual(unpricedModels(rows), ['codex-auto-review', 'gemini-9-ultra', 'gpt-reserve']);
+  assert.deepEqual(unpricedModels([{ costUsd: 1.5, partial: false, models: [{ vendor: 'codex', model: 'gpt-6.2-sol' }] }]), []);
 });
