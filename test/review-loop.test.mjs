@@ -223,6 +223,32 @@ test('a fix that leaves the folder as it was is not reviewed again, nor is that 
   assert.deepEqual([task.state, task.reviewStatus], ['ready', 'passed'], JSON.stringify(task.error));
 });
 
+// 2026-11-22, on 0.1.51: a session's lead answered its bots' findings with the same disputes
+// after every review of a folder that never changed. Each was taken as new, so the bots reviewed
+// that folder again every turn, with the same result. A dispute is new only in new words.
+test('a dispute the bots were given already for this folder, in the same words, is not reviewed again: the finding stands; one in new words is reviewed', async t => {
+  const f = setup(t, 'review-block');
+  const first = await f.controller.ask('Normalize coupon codes', null, { bots: ['critic'] }).finished;
+  let task = readTask(f.repo, first.id);
+  // The first dispute is new: the bot reviews it, and the session stops at the round limit.
+  assert.equal(reviewOf(f.inputs('codex'), 'critic').length, 2, 'the change, then the dispute');
+  assert.deepEqual([task.state, task.reviewStatus], ['blocked', 'blocked']);
+  // The next turn: the folder is as reviewed, the lead is given the finding and disputes it again in the same words.
+  await f.controller.ask('Go on.', first.id).finished;
+  task = readTask(f.repo, first.id);
+  assert.equal(reviewOf(f.inputs('codex'), 'critic').length, 2, 'the same dispute of the same folder is not reviewed again');
+  assert.deepEqual(task.responses.filter(row => row.action === 'disputed').map(row => row.reason), ['The finding still needs owner input.', 'The finding still needs owner input.']);
+  assert.equal(task.messages.filter(row => row.from === 'ELU' && row.text === FIX_UNCHANGED).length, 1);
+  assert.deepEqual([task.state, task.reviewStatus], ['blocked', 'blocked']);
+  await f.controller.ask('Go on.', first.id).finished;
+  assert.equal(reviewOf(f.inputs('codex'), 'critic').length, 2, 'nor on the turn after');
+  // A dispute in words the bot was not given is new: it reviews it.
+  const saved = readTask(f.repo, first.id);
+  saveTask(f.repo, { ...saved, responses: saved.responses.map(row => ({ ...row, reason: 'An earlier reason.' })) });
+  await f.controller.ask('Go on.', first.id).finished;
+  assert.equal(reviewOf(f.inputs('codex'), 'critic').length, 3, 'the new dispute is reviewed');
+});
+
 test('an error after the edit shows a plain stop line with what to do, never the path it failed on', async t => {
   const f = setup(t, 'normal', { install: 'link' });
   const run = f.controller.ask('Normalize coupon codes');

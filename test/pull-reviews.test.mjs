@@ -10,9 +10,9 @@ import { pendingRequests, projectFolder } from '../lib/workspace.mjs';
 import { readTask, saveTask, taskDir } from '../lib/state.mjs';
 import { sessionChecklist } from '../lib/checklist.mjs';
 import { assertReady } from '../lib/publish.mjs';
-import { REVIEWS_HEAD, eluLine, leadAskText, sentByElu } from '../lib/elu-sent.mjs';
+import { REVIEWS_HEAD, eluLine, leadAskText, leadBackText, sentByElu } from '../lib/elu-sent.mjs';
 import { fitClock } from '../lib/review-fit.mjs';
-import { pullsIn, pullsInLog, readPulls, unreviewedLines } from '../lib/pull-reviews.mjs';
+import { pullsAsked, pullsIn, pullsInLog, readPulls, reviewAgain, unreviewedLines } from '../lib/pull-reviews.mjs';
 import { localWord, slimOf } from '../lib/orchestrator-wake.mjs';
 import * as runner from '../lib/runner.mjs';
 
@@ -287,4 +287,84 @@ test('a review the lead asks for at a head the bot reviewed is answered from the
   gh.set({ head: 'c'.repeat(40) });
   await ask(`review ${URL}`);
   assert.equal(ran(), 5, 'the head moved');
+});
+
+// 2026-11-22, on 0.1.51: a session's lead asked its bots for reviews in these words, naming each
+// pull request with no address. None was read as a review ask, so each waited for the lead's
+// turn and then held the session for a turn of its own, some ten minutes each.
+const ASKED_BY_NAME = [
+  'Review ELU-Labs/elu-web PR #327 only, at GitHub head bc09cd9d5ee0b3102737f10b6eabf0c605bd1a78. Use the matching detached checkout .elu-code/tmp/workflows-pr-heads/327-bc09cd9d5ee0b3102737f10b6eabf0c605bd1a78/tree.',
+  'Review ELU-Labs/elu-web PR #335 at 4a27d4449d13275910e803161c72a0c7e209cd8b. Your earlier path-based request did not provide tools.',
+  'Review ELU-Labs/elu-web PR #326 at 8a7894f140d2cf1af3ab3e8adcf6d864604ec9bb only. The current matched detached tree is .elu-code/tmp/workflows-pr-heads/326-8a7894f140d2cf1af3ab3e8adcf6d864604ec9bb/tree.',
+  'Review ELU-Labs/elu-web PR #326 at 8a7894f140d2cf1af3ab3e8adcf6d864604ec9bb. The following full fix delta is against your previously reviewed 5f07054.',
+  'Review ELU-Labs/elu-web PR #327 at e27cdc013455e8bca66944a36b0ec29d65b691ce only. Use the matched detached checkout .elu-code/tmp/workflows-pr-heads/327-e27cdc013455e8bca66944a36b0ec29d65b691ce/tree.',
+  'Review ELU-Labs/elu-web PR #327 at e27cdc013455e8bca66944a36b0ec29d65b691ce. Here is the complete fix delta against bc09cd9 from the verified checkout.',
+];
+test('a review the lead asks for by name (owner/repo PR #N, owner/repo#N, or PR #N alone where the session knows one repository) starts beside its turn as one by address does', { timeout: 240000 }, async t => {
+  for (const text of ASKED_BY_NAME) assert.deepEqual(pullsAsked(text)?.map(row => row.url), [`https://github.com/ELU-Labs/elu-web/pull/${/PR #(\d+)/.exec(text)[1]}`], text);
+  assert.deepEqual(pullsAsked('Review acme/shop#7, acme/shop pull 8 and acme/shop pull request 9')?.map(row => row.url), [7, 8, 9].map(n => `https://github.com/acme/shop/pull/${n}`));
+  assert.equal(pullsAsked('What is left in acme/shop PR #7?'), null, 'it asks for no review');
+  assert.equal(pullsAsked('Review PR #7'), null, 'no repository known');
+  assert.deepEqual(pullsAsked('Review PR #7', { repos: ['acme/shop'] })?.map(row => row.url), [URL]);
+  assert.equal(pullsAsked('Review PR #7', { repos: ['acme/shop', 'acme/web'] }), null, 'two repositories could have it');
+  assert.deepEqual(pullsAsked('Review acme/shop PR #7 at its head. It replaces PR #6.', { repos: ['acme/shop'] })?.map(row => row.number), [7], 'a number beside one named is context');
+  assert.equal(reviewAgain('Review acme/shop PR #7 again'), true); assert.equal(reviewAgain('Review PR #7 once more'), true);
+  assert.equal(reviewAgain(ASKED_BY_NAME[0]), false); assert.equal(reviewAgain('Review acme/shop PR #7. No need to review it again if you did.'), false);
+
+  const f = setup(t, 'slow');
+  const gh = fakeGh(f);
+  const own = runner.createConversation(f.repo, f.controller.draftConfig, 'Open the coupons pull request', { permissions: 'auto', bots: ['critic'] });
+  saveTask(f.repo, { ...readTask(f.repo, own.id), state: 'answered' });
+  registerProject(f.controller.repo);
+  const conductor = new Conductor({ tickMs: 20 }).start(); t.after(() => conductor.stop());
+  const until = async (check, what, timeout = 20000) => { const started = Date.now(); while (!check()) { if (Date.now() - started > timeout) throw new Error(`Timed out waiting for ${what}`); await new Promise(resolve => setTimeout(resolve, 20)); } };
+  const request = id => pendingRequests(f.root).find(row => row.id === id);
+  const ask = words => enqueue(f.root, leadAskText('critic', words), { continuationTaskId: String(own.id), priority: 0, bot: 'critic', byElu: true });
+  enqueue(f.root, 'Go on with the coupons.', { continuationTaskId: String(own.id), priority: 0 });
+  await until(() => readTask(f.repo, own.id).state === 'running', 'the lead turn to work');
+  const hold = path.join(f.parent, 'hold-diff'); fs.writeFileSync(hold, ''); gh.set({ hold });
+  const named = ask(`Review acme/shop PR #7 only, at GitHub head ${'a'.repeat(40)}.`);
+  await until(() => request(named.id)?.state === 'done', 'the ask by name to be done beside the turn', 10000);
+  await until(() => gh.calls().some(row => row.args[0] === 'pr' && row.args[1] === 'diff'), 'its review to start', 10000);
+  assert.equal(readTask(f.repo, own.id).state, 'running', 'the lead turn still works');
+  f.mode('normal', { intent: 'answer', commands: [] });
+  fs.rmSync(hold); await runner.pullSweepsDone(); gh.set({ hold: null });
+  assert.equal(readPulls(f.repo, own.id).pulls[URL].reviews.critic.head, 'a'.repeat(40));
+  // The session knows acme/shop now (its pulls.json): PR #7 alone is that one, answered from the record.
+  const bare = ask('Review PR #7 at its head.');
+  await until(() => request(bare.id)?.state === 'done', 'the ask by number to be done beside the turn', 10000);
+  await runner.pullSweepsDone();
+  assert.equal(readTask(f.repo, own.id).state, 'running', 'the lead turn still works');
+  await until(() => readTask(f.repo, own.id).state !== 'running', 'the lead turn to end', 60000);
+});
+
+// 2026-11-22, on 0.1.51: the lead's plain question to a reviewing bot (elu sessions ask NAME,
+// no pull request in it) waited for the lead's turn to end, then held the session for a turn.
+test('the lead\'s plain question to a reviewing bot, sent while its turn works, is answered beside that turn by the bot, read-only, and the answer goes to the lead', { timeout: 240000 }, async t => {
+  const f = setup(t, 'slow');
+  const file = path.join(f.fake.dir, 'fake.json'), answer = 'The parser bug is in src/coupon.mjs, where a blank code is read as a valid one.';
+  fs.writeFileSync(file, JSON.stringify({ ...JSON.parse(fs.readFileSync(file, 'utf8')), byInput: [{ includes: 'You are not that turn: you run beside it', set: { mode: 'answer', summary: answer } }] }));
+  const own = runner.createConversation(f.repo, f.controller.draftConfig, 'Tidy the coupon parser', { permissions: 'auto', bots: ['critic'] });
+  saveTask(f.repo, { ...readTask(f.repo, own.id), state: 'answered' });
+  registerProject(f.controller.repo);
+  const conductor = new Conductor({ tickMs: 20 }).start(); t.after(() => conductor.stop());
+  const until = async (check, what, timeout = 20000) => { const started = Date.now(); while (!check()) { if (Date.now() - started > timeout) throw new Error(`Timed out waiting for ${what}`); await new Promise(resolve => setTimeout(resolve, 20)); } };
+  const request = id => pendingRequests(f.root).find(row => row.id === id);
+  enqueue(f.root, 'Go on with the parser.', { continuationTaskId: String(own.id), priority: 0 });
+  await until(() => readTask(f.repo, own.id).state === 'running', 'the lead turn to work');
+  const asked = enqueue(f.root, leadAskText('critic', 'Which file holds the parser bug you found?'), { continuationTaskId: String(own.id), priority: 0, bot: 'critic', byElu: true }), at = Date.now();
+  await until(() => request(asked.id)?.state === 'done', 'the question to be answered beside the turn', 10000);
+  assert.ok(Date.now() - at < 10000, 'within seconds, not when the turn ends');
+  assert.equal(readTask(f.repo, own.id).state, 'running', 'the lead turn still works');
+  assert.equal(request(asked.id).aside.text, answer);
+  // The bot answered on its own vendor, read-only, told the question is the lead's.
+  const side = rows(f.fake.calls).filter(row => row.vendor === 'codex' && row.args[0] === 'exec').at(-1).args;
+  assert.ok(side.includes('read-only'), 'read-only');
+  const prompt = f.inputs('codex').findLast(row => row.input.includes('Which file holds the parser bug')).input;
+  assert.match(prompt, /This session's lead \(its working agent, not the owner\) asked you, @critic,/);
+  assert.ok(prompt.includes('Which file holds the parser bug you found?'));
+  // Its answer waits for the lead as a note of ELU's, as when the question had a turn of its own.
+  const back = pendingRequests(f.root).filter(row => row.goal === leadBackText('critic', answer));
+  assert.deepEqual(back.map(row => [row.byElu, String(row.continuationTaskId), row.state]), [[true, String(own.id), 'queued']]);
+  await until(() => readTask(f.repo, own.id).state !== 'running', 'the lead turn to end', 60000);
 });

@@ -6,6 +6,7 @@ import { project, fakeClis, autoApprove, config, approveProjectFiles } from './h
 import { ProjectController, conversationEntries, projectSnapshot, registerProject } from '../lib/projects.mjs';
 import { projectFolder, pendingRequests, takeRequest } from '../lib/workspace.mjs';
 import { readTask } from '../lib/state.mjs';
+import { saveBot } from '../lib/bots.mjs';
 import { Conductor, enqueue, sendCommand } from '../lib/conductor.mjs';
 import { ASIDE_ANSWERED, ASIDE_RUNNING, ASIDE_WORK, asideInstructions, readAsides, runsCommand, sentWords, waitingWords } from '../lib/message-aside.mjs';
 
@@ -234,6 +235,26 @@ test('a message sent while the session runs its checks, when no turn could take 
   assert.match(f.inputs().findLast(row => row.input.includes(BESIDE)).input, /ELU is running the project's checks on what this session changed\./);
   sendCommand({ type: 'stop', root: f.root, taskId: id });
   await until(() => !['running', 'preparing'].includes(projectSnapshot(f.repo).tasks.find(task => task.id === id).state), 'stopped', 30000);
+});
+
+// 2026-11-22, on 0.1.51: a message sent while a session's bots reviewed its change waited for
+// every round of the review loop, each review some ten minutes. It is answered beside the
+// reviewing bot's turn now, as beside any turn that takes no message.
+test('a message sent while a bot reviews the change in the review loop is answered beside that review within seconds, and the review goes on', { timeout: 150000 }, async t => {
+  const f = setup(t, { vendor: 'claude', mode: 'normal', byMode: { dontAsk: { mode: 'answer' } }, extra: { byInput: [{ includes: 'Review as @critic', set: { mode: 'slow' } }] } });
+  saveBot({ name: 'critic', vendor: 'codex', model: 'big-model', effort: 'xhigh', instructions: 'Look for edge cases.' });
+  enqueue(f.root, 'Normalize coupon codes', { priority: 0, permissions: 'full', bots: ['critic'] });
+  const reviewing = () => sessionOf(f)?.state === 'running' && sessionOf(f).activeRole === 'bot:critic' && sessionOf(f).activeDeaf === true;
+  await until(reviewing, 'the bot to review the change', 60000);
+  const sent = enqueue(f.root, 'How far are you?', { continuationTaskId: '1', priority: 0 }), asked = Date.now();
+  await until(() => request(f, sent.id)?.state === 'done', 'the answer beside the review');
+  assert.equal(only(f).activeReview, true, 'the review loop runs');
+  assert.ok(Date.now() - asked < 10000, 'within seconds, not when the review loop ends');
+  assert.deepEqual([request(f, sent.id).reason, request(f, sent.id).aside.kind], [ASIDE_ANSWERED, 'question']);
+  assert.equal(only(f).activeRole, 'bot:critic', 'the review goes on');
+  sendCommand({ type: 'stop', root: f.root, taskId: '1' });
+  await until(() => !['running', 'preparing'].includes(only(f).state), 'stopped', 30000);
+  assert.equal(only(f).activeReview, undefined, 'the mark ends with the loop');
 });
 
 // A turn that holds his message reads it when the command it runs ends, or at its next step
