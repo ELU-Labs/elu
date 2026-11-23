@@ -11,7 +11,7 @@ import { readTask } from '../lib/state.mjs';
 import { personalDirectory } from '../lib/util.mjs';
 import { activeLogin, finishLogin, newLogin, useLogin } from '../lib/logins.mjs';
 import { closeRelay } from '../lib/claude-relay.mjs';
-import { notePicked, readSwitch, setAuto } from '../lib/claude-switch.mjs';
+import { markSpent, notePicked, readSwitch, setAuto } from '../lib/claude-switch.mjs';
 import { usageTab } from '../lib/usage.mjs';
 import { stopLine } from '../lib/stop-line.mjs';
 import { Conductor, enqueue } from '../lib/conductor.mjs';
@@ -208,4 +208,21 @@ test('switching turned off: no relay, no address, and a limit stops the turn as 
   assert.equal(done.state, 'answered', JSON.stringify(done.error));
   assert.equal(f.runs()[0].base, null, 'no ANTHROPIC_BASE_URL'); assert.equal(f.messages().length, 0);
   assert.equal(fs.existsSync(path.join(personalDirectory(), 'claude-switch.json')), true);
+});
+
+// 2026-11-23: a bot on Fable, with every account's week of Fable used up. The relay answered its
+// requests itself, with the accounts' own weekly claim and when Fable is first back. The runner
+// read that as no model's own limit: it moved the run to accounts with no Fable left, then said
+// the first reset was now ("resets at 9:59 AM" at 10:01 AM), two days early; a session would have
+// started again at once.
+test("every account's week of the run's model used up: the turn waits for that model's first reset, moving to no account without it", { timeout: 90000 }, async t => {
+  const f = await setup(t, [{ email: 'a@example.com' }, { email: 'b@example.com' }]);
+  const first = Date.now() + 2 * 86400000, second = Date.now() + 3 * 86400000;
+  markSpent('default', { window: 'model', until: first, model: 'fable' }); markSpent(f.b.id, { window: 'model', until: second, model: 'fable' });
+  const stopped = await f.controller.ask('Where is coupon normalization?').finished.then(() => null, error => error);
+  assert.match(String(stopped?.message), /^Every Claude account is at its limit\. The first resets at /);
+  assert.equal(stopped.details.waitsFor, 'claude-limit');
+  assert.ok(Math.abs(stopped.details.resetsAt - first) < 60000, `waits for Fable's first reset, not now: ${new Date(stopped.details.resetsAt).toISOString()}`);
+  assert.equal(f.runs().length, 1, 'one run: no move to an account without Fable');
+  assert.equal(f.messages().length, 0, 'no request reached Anthropic');
 });
