@@ -15,6 +15,7 @@ import { fitClock } from '../lib/review-fit.mjs';
 import { pullsAsked, pullsIn, pullsInLog, readPulls, reviewAgain, unreviewedLines } from '../lib/pull-reviews.mjs';
 import { localWord, slimOf } from '../lib/orchestrator-wake.mjs';
 import * as runner from '../lib/runner.mjs';
+import * as pullReviews from '../lib/pull-reviews.mjs';
 
 // A session's bots review its work wherever it is and however long it is: a change too long for
 // a bot's vendor goes in parts under its limit, and the vendor's own word that a part is too
@@ -425,4 +426,25 @@ test("a look reviews its pull requests at once: one whose diff GitHub is slow to
   assert.equal(sent().length, 2); assert.match(sent()[1], /Review of PR #7 \(acme\/shop\) by @critic/);
   // A look asked while another runs starts at once, and a review already running of the same head is not started twice.
   assert.equal(reviewOf(f.inputs('codex'), 'critic').filter(input => input.includes('"pullRequest":')).length, 2);
+});
+
+// 2026-11-23: a session opened its helpers' 30 pull requests, and the record kept only the newest
+// 30, so the session's own open pull requests from before them fell out with their reviews.
+test('the record keeps every open pull request and its reviews, however many came after it; only merged and closed ones are let go', t => {
+  const f = setup(t, 'normal');
+  const own = runner.createConversation(f.repo, f.controller.draftConfig, 'Open many pull requests', { permissions: 'auto', bots: ['critic'] });
+  const { changePulls, notePulls, PULLS_KEPT } = pullReviews;
+  const pull = n => ({ url: `https://github.com/acme/shop/pull/${n}`, owner: 'acme', repo: 'shop', number: n });
+  // The session's own contract pull request, reviewed, and before it ones that were merged.
+  notePulls(f.repo, own.id, Array.from({ length: PULLS_KEPT + 5 }, (_, n) => pull(n + 1)));
+  changePulls(f.repo, own.id, value => { for (const row of Object.values(value.pulls)) if (row.number <= PULLS_KEPT + 4) row.state = 'MERGED'; return value; });
+  changePulls(f.repo, own.id, value => { Object.assign(value.pulls[pull(PULLS_KEPT + 5).url], { state: 'OPEN', reviews: { critic: { head: 'a'.repeat(40), mustFix: 0 } } }); return value; });
+  // Then its helpers' 40 pull requests, each found later.
+  for (let n = 100; n < 140; n += 1) notePulls(f.repo, own.id, [pull(n)]);
+  const kept = readPulls(f.repo, own.id).pulls;
+  assert.deepEqual(kept[pull(PULLS_KEPT + 5).url].reviews.critic.head, 'a'.repeat(40), 'the contract pull request and its review stay');
+  for (let n = 100; n < 140; n += 1) assert.ok(kept[pull(n).url], `#${n} stays`);
+  // The merged ones beyond PULLS_KEPT are let go, oldest first.
+  const merged = Object.values(kept).filter(row => row.state === 'MERGED').map(row => row.number);
+  assert.equal(merged.length, PULLS_KEPT); assert.ok(!merged.includes(1) && merged.includes(PULLS_KEPT + 4));
 });
