@@ -95,6 +95,7 @@ export async function main(argv = process.argv.slice(2)) {
       const owner = new conductor.Conductor({ onExit: () => close() });
       let closing = false; const close = async () => { if (closing) return; closing = true; await owner.stop(); process.exit(0); };
       for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP']) process.on(signal, close);
+      conductor.keepUp(owner);
       owner.start(); return new Promise(() => {});
     }
     if (words[1] === 'stop') {
