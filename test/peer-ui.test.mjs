@@ -4698,3 +4698,22 @@ test('while a project is active, Sessions and Chats show its own and no other pr
   await send(v, '/chats'); await until(() => v.current.view === 'chats' && /No team in this project yet/.test(bar()), 'no team in Notes');
   assert.doesNotMatch(bar(), /@sara/);
 });
+
+// Usage: a model ELU has no price for is named under Top agents, so its dash is never unexplained.
+test('Usage names a model ELU has no price for under Top agents, and prices GPT-6.2 Sol', { timeout: 60000 }, async t => {
+  const p = project(later(t)); environment(t, p.parent); registerProject(repository(p.root));
+  const before = process.env.PATH; process.env.PATH = fakeClis(p.parent).env.PATH; owned(t).files.push(() => { process.env.PATH = before; });
+  const now = new Date().toISOString(), logFile = path.join(p.parent, 'run.log');
+  const { repo } = liveTask(p.root, { id: '1', goal: 'Fix the coupons' });
+  saveTask(repo, { ...readTask(repo, '1'), runs: [
+    { role: 'lead', vendor: 'codex', logFile, at: now, costUsd: null, model: 'gpt-reserve', tokens: { input: 5000, output: 900, cacheRead: 1000, cacheWrite: 0 } },
+    { role: 'bot:pair', vendor: 'codex', logFile, at: now, costUsd: null, model: 'gpt-6.2-sol', tokens: { input: 1000000, output: 100000, cacheRead: 0, cacheWrite: 0 } }] });
+  const v = await view(t, { repo: repository(p.root), dashboard: true, peer: fakePeer({ items: [], sharing: [], machines: [] }), usage: { env: { HOME: temp(t) }, vendors: () => [] } });
+  const list = v.panels.usageList, rows = () => list.items.map(plainItem);
+  await send(v, '/usage'); await until(() => v.current.view === 'usage' && rows().some(row => /^@pair Fix the coupons /.test(row)), 'the agents');
+  // GPT-6.2 Sol at OpenAI's list price: 1M input at $2 and 100k output at $10 is $3.00.
+  assert.match(rows().find(row => /^@pair Fix the coupons /.test(row)), /\$3\.00 /);
+  assert.match(rows().find(row => /^Fix the coupons /.test(row)), / — +— *$/);
+  assert.ok(rows().includes('No price in ELU for gpt-reserve'), rows().join('\n'));
+  assert.ok(rows().every(row => row.length <= list.width - 2), 'every line fits');
+});

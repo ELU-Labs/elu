@@ -15,6 +15,7 @@ import { fitClock } from '../lib/review-fit.mjs';
 import { pullsAsked, pullsIn, pullsInLog, readPulls, reviewAgain, unreviewedLines } from '../lib/pull-reviews.mjs';
 import { localWord, slimOf } from '../lib/orchestrator-wake.mjs';
 import * as runner from '../lib/runner.mjs';
+import * as pullReviews from '../lib/pull-reviews.mjs';
 
 // A session's bots review its work wherever it is and however long it is: a change too long for
 // a bot's vendor goes in parts under its limit, and the vendor's own word that a part is too
@@ -108,7 +109,7 @@ test("a bot whose review fails says so in the chat, its Task lists it unreviewed
   assert.equal(couldNot(task).length, 1, 'said once');
 });
 
-// A gh that answers for one pull request, #7 of acme/shop: gh pr create prints its address, as
+// A gh that answers for #7 of acme/shop, and for any other pull request state.pulls names: gh pr create prints its address, as
 // gh does; gh pr view and gh pr diff read state (its head commit, its diff).
 const URL = 'https://github.com/acme/shop/pull/7';
 const PR_DIFF = 'diff --git a/src/pr-seven.mjs b/src/pr-seven.mjs\nnew file mode 100644\nindex 0000000..1111111\n--- /dev/null\n+++ b/src/pr-seven.mjs\n@@ -0,0 +1,2 @@\n+export const fromPullRequest = 7;\n+export const helper = true;\n';
@@ -118,10 +119,12 @@ function fakeGh(f) {
   set({ url: URL, head: 'a'.repeat(40), diff: PR_DIFF, state: 'OPEN' });
   fs.writeFileSync(path.join(f.fake.dir, 'gh'), `#!${process.execPath}
 import fs from 'node:fs';
-const args = process.argv.slice(2), s = JSON.parse(fs.readFileSync(${JSON.stringify(state)}, 'utf8'));
+const args = process.argv.slice(2), all = JSON.parse(fs.readFileSync(${JSON.stringify(state)}, 'utf8'));
+// Another pull request (all.pulls, by address) answers with its own number, head, diff and hold.
+const s = { ...all, ...((all.pulls ?? {})[args[2]] ?? {}) };
 fs.appendFileSync(${JSON.stringify(calls)}, JSON.stringify({ args, cwd: process.cwd() }) + '\\n');
 if (args[0] === 'pr' && args[1] === 'create') { console.error('Creating pull request for feat/coupons into main in acme/shop'); console.log(s.url); process.exit(0); }
-if (args[0] === 'pr' && args[1] === 'view') { console.log(JSON.stringify({ number: 7, title: 'Coupons', state: s.state, url: s.url, headRefOid: s.head, headRefName: 'feat/coupons', baseRefName: 'main', baseRefOid: 'b'.repeat(40) })); process.exit(0); }
+if (args[0] === 'pr' && args[1] === 'view') { console.log(JSON.stringify({ number: s.number ?? 7, title: s.title ?? 'Coupons', state: s.state, url: s.url, headRefOid: s.head, headRefName: 'feat/coupons', baseRefName: 'main', baseRefOid: 'b'.repeat(40) })); process.exit(0); }
 if (args[0] === 'pr' && args[1] === 'diff') { while (s.hold && fs.existsSync(s.hold)) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50); process.stdout.write(s.diff); process.exit(0); }
 process.exit(1);
 `, { mode: 0o755 });
@@ -367,4 +370,81 @@ test('the lead\'s plain question to a reviewing bot, sent while its turn works, 
   const back = pendingRequests(f.root).filter(row => row.goal === leadBackText('critic', answer));
   assert.deepEqual(back.map(row => [row.byElu, String(row.continuationTaskId), row.state]), [[true, String(own.id), 'queued']]);
   await until(() => readTask(f.repo, own.id).state !== 'running', 'the lead turn to end', 60000);
+});
+
+// 2026-11-22, on 0.1.52: a session's lead waited on its bots' review of one pull request (its
+// helpers' launch gate) while they reviewed another of its pull requests first. ELU gave the lead
+// the bots' findings only once every pull request of that look was reviewed, so the gate waited
+// on a review it did not need. Each pull request's findings now go to the lead when its review ends.
+test("each pull request's findings go to the lead as soon as its bots review it, not when every pull request of the look is reviewed", { timeout: 240000 }, async t => {
+  const f = setup(t, 'review-fix', { intent: 'answer' }), gh = fakeGh(f);
+  const OTHER = 'https://github.com/acme/shop/pull/8', hold = path.join(f.parent, 'hold-eight');
+  fs.writeFileSync(hold, '');
+  gh.set({ pulls: { [OTHER]: { url: OTHER, number: 8, title: 'Refunds', head: 'd'.repeat(40), hold } } });
+  const own = runner.createConversation(f.repo, f.controller.draftConfig, 'Open the coupons and refunds pull requests', { permissions: 'auto', bots: ['critic'] });
+  saveTask(f.repo, { ...readTask(f.repo, own.id), state: 'answered' });
+  // The lead opened both earlier; the end of this turn looks at each.
+  (await import('../lib/pull-reviews.mjs')).notePulls(f.repo, own.id, [{ url: URL, owner: 'acme', repo: 'shop', number: 7 }, { url: OTHER, owner: 'acme', repo: 'shop', number: 8 }]);
+  const done = await f.controller.ask('Carry on.', own.id).finished;
+  assert.notEqual(done.state, 'blocked', JSON.stringify(done.error));
+  const sent = () => pendingRequests(f.root).filter(row => String(row.continuationTaskId) === String(own.id) && row.goal.startsWith(REVIEWS_HEAD)).map(row => row.goal);
+  // #8's diff is held: #7's findings are with the lead already, while #8's review waits.
+  const waited = Date.now();
+  while (!sent().length && Date.now() - waited < 60000) await new Promise(resolve => setTimeout(resolve, 100));
+  assert.equal(sent().length, 1, "PR #7's findings went to the lead while PR #8 was still under review");
+  assert.match(sent()[0], /Review of PR #7 \(acme\/shop\) by @critic/); assert.doesNotMatch(sent()[0], /PR #8/);
+  assert.equal(runner.pullSweepsRunning(), 1, "PR #8's review is still running");
+  // #8's turn comes once its diff is read: its findings go to the lead on their own.
+  fs.rmSync(hold); await runner.pullSweepsDone();
+  assert.equal(sent().length, 2);
+  assert.match(sent()[1], /Review of PR #8 \(acme\/shop\) by @critic/); assert.doesNotMatch(sent()[1], /PR #7 /);
+  const reviews = readPulls(f.repo, own.id).pulls;
+  assert.equal(reviews[URL].reviews.critic.head, 'a'.repeat(40)); assert.equal(reviews[OTHER].reviews.critic.head, 'd'.repeat(40));
+  // Both bots' runs are the session's, as one look's were.
+  assert.equal(readTask(f.repo, own.id).runs.filter(run => run.role === 'bot:critic' && run.pullReview).length, 2);
+});
+
+// 2026-11-22: a session with its helpers' pull requests had them reviewed one after another, so
+// the last waited hours for every review before it. A look's pull requests are reviewed at once.
+test("a look reviews its pull requests at once: one whose diff GitHub is slow to give holds up no other", { timeout: 240000 }, async t => {
+  const f = setup(t, 'review-fix', { intent: 'answer' }), gh = fakeGh(f);
+  const OTHER = 'https://github.com/acme/shop/pull/8', hold = path.join(f.parent, 'hold-seven');
+  fs.writeFileSync(hold, '');
+  // #7, the first of the look, waits for its diff; #8 answers at once.
+  gh.set({ hold, pulls: { [OTHER]: { url: OTHER, number: 8, title: 'Refunds', head: 'd'.repeat(40), hold: null } } });
+  const own = runner.createConversation(f.repo, f.controller.draftConfig, 'Open the coupons and refunds pull requests', { permissions: 'auto', bots: ['critic'] });
+  saveTask(f.repo, { ...readTask(f.repo, own.id), state: 'answered' });
+  (await import('../lib/pull-reviews.mjs')).notePulls(f.repo, own.id, [{ url: URL, owner: 'acme', repo: 'shop', number: 7 }, { url: OTHER, owner: 'acme', repo: 'shop', number: 8 }]);
+  const done = await f.controller.ask('Carry on.', own.id).finished;
+  assert.notEqual(done.state, 'blocked', JSON.stringify(done.error));
+  const sent = () => pendingRequests(f.root).filter(row => String(row.continuationTaskId) === String(own.id) && row.goal.startsWith(REVIEWS_HEAD)).map(row => row.goal);
+  const waited = Date.now();
+  while (!sent().length && Date.now() - waited < 60000) await new Promise(resolve => setTimeout(resolve, 100));
+  assert.equal(sent().length, 1, "PR #8 was reviewed while PR #7's diff was still on its way");
+  assert.match(sent()[0], /Review of PR #8 \(acme\/shop\) by @critic/);
+  fs.rmSync(hold); await runner.pullSweepsDone();
+  assert.equal(sent().length, 2); assert.match(sent()[1], /Review of PR #7 \(acme\/shop\) by @critic/);
+  // A look asked while another runs starts at once, and a review already running of the same head is not started twice.
+  assert.equal(reviewOf(f.inputs('codex'), 'critic').filter(input => input.includes('"pullRequest":')).length, 2);
+});
+
+// 2026-11-23: a session opened its helpers' 30 pull requests, and the record kept only the newest
+// 30, so the session's own open pull requests from before them fell out with their reviews.
+test('the record keeps every open pull request and its reviews, however many came after it; only merged and closed ones are let go', t => {
+  const f = setup(t, 'normal');
+  const own = runner.createConversation(f.repo, f.controller.draftConfig, 'Open many pull requests', { permissions: 'auto', bots: ['critic'] });
+  const { changePulls, notePulls, PULLS_KEPT } = pullReviews;
+  const pull = n => ({ url: `https://github.com/acme/shop/pull/${n}`, owner: 'acme', repo: 'shop', number: n });
+  // The session's own contract pull request, reviewed, and before it ones that were merged.
+  notePulls(f.repo, own.id, Array.from({ length: PULLS_KEPT + 5 }, (_, n) => pull(n + 1)));
+  changePulls(f.repo, own.id, value => { for (const row of Object.values(value.pulls)) if (row.number <= PULLS_KEPT + 4) row.state = 'MERGED'; return value; });
+  changePulls(f.repo, own.id, value => { Object.assign(value.pulls[pull(PULLS_KEPT + 5).url], { state: 'OPEN', reviews: { critic: { head: 'a'.repeat(40), mustFix: 0 } } }); return value; });
+  // Then its helpers' 40 pull requests, each found later.
+  for (let n = 100; n < 140; n += 1) notePulls(f.repo, own.id, [pull(n)]);
+  const kept = readPulls(f.repo, own.id).pulls;
+  assert.deepEqual(kept[pull(PULLS_KEPT + 5).url].reviews.critic.head, 'a'.repeat(40), 'the contract pull request and its review stay');
+  for (let n = 100; n < 140; n += 1) assert.ok(kept[pull(n).url], `#${n} stays`);
+  // The merged ones beyond PULLS_KEPT are let go, oldest first.
+  const merged = Object.values(kept).filter(row => row.state === 'MERGED').map(row => row.number);
+  assert.equal(merged.length, PULLS_KEPT); assert.ok(!merged.includes(1) && merged.includes(PULLS_KEPT + 4));
 });
