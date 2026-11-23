@@ -20,6 +20,8 @@ import { runBotSchedules } from '../lib/bot-schedules.mjs';
 import { turnClock } from '../lib/turn-limits.mjs';
 import { ADAPTERS } from '../lib/adapters/index.mjs';
 import { atomic, personalDirectory } from '../lib/util.mjs';
+import { endSessionJobs, sessionJobsNow, startJob } from '../lib/jobs.mjs';
+import { readTask } from '../lib/state.mjs';
 
 // A test's conductors, stopped before its folder is removed. The hooks of a test run in the
 // order they were registered and the first one that throws ends them, so setup registers
@@ -528,6 +530,69 @@ test('a headless Antigravity turn, which prints only at the end, runs to its ans
   assert.ok(Date.now() - started >= 5000, 'ran to its end');
   assert.equal(done.attempts ?? 0, 0, 'not retried');
   assert.equal(ended.state, 'answered', JSON.stringify(ended.error)); assert.equal(ended.error ?? null, null);
+});
+
+// 2026-11-22: an Antigravity lead worked one turn from 9:08 PM to midnight. Antigravity reads a
+// message only between turns, so 13 messages waited for it the whole time, the owner's decision
+// on a live gate among them. Now a turn that cannot read a message ends once one has waited for
+// it (heldMs), as a stalled run does: the session's long jobs run on, the request is not run
+// again, and the waiting message starts the session's next turn.
+test('a turn that reads messages only between turns ends once a message has waited for it; the message starts the next turn and the session\'s long job runs on', { timeout: 90000 }, async t => {
+  const p = setup(t, 'answer');
+  config(p.root, value => { value.roles.lead.vendor = 'agy'; return value; }); approveProjectFiles(p.root);
+  const bin = path.join(p.dir, 'agy'), fake = path.join(p.dir, 'fake.json'), pace = value => fs.writeFileSync(fake, JSON.stringify({ ...JSON.parse(fs.readFileSync(fake, 'utf8')), agy: { pace: value } }));
+  // Each turn works for 20 seconds before it answers.
+  pace(20000);
+  atomic(path.join(personalDirectory(), 'conformance', 'agy.json'), { v: 1, bin, version: '1.5.4', steps: Object.fromEntries(ADAPTERS.agy.conformance.map(step => [step.id, step.id === 'relay' ? 'fail' : 'pass'])), relay: false, at: new Date().toISOString() });
+  const started = Date.now(), first = enqueue(p.root, 'Reply with the summary "slow".'); conduct(t, { stallMs: 120000, heldMs: 1500 });
+  await until(() => request(p.root, first.id)?.state === 'running' && request(p.root, first.id).taskId, 'the first turn', 20000);
+  const id = request(p.root, first.id).taskId;
+  await until(() => readTask(p.repo, id).activeDeaf === true, 'the turn says it reads no message while it works');
+  // The session's long job, and a message for the session that waits for this turn.
+  await startJob({ repo: p.repo, task: readTask(p.repo, id), root: p.root, name: 'gate-watch', command: ['sleep 300'], mode: 'full' });
+  t.after(() => { try { endSessionJobs(p.root, id, { by: 'stop' }); } catch { /* Gone. */ } });
+  // ELU's note that a job ended, as most of what waited that night was: the owner's own message is answered beside the turn (answerBeside).
+  const NOTE = 'ELU: a job of this session ended. (ELU sent this, not the owner.)\nJob soak-wait ended with exit code 0 after 2m.';
+  const next = enqueue(p.root, NOTE, { continuationTaskId: id, byElu: true });
+  await until(() => request(p.root, first.id)?.state === 'done', 'the first turn to end', 30000);
+  const ended = request(p.root, first.id);
+  assert.ok(Date.now() - started < 20000, 'it ended before its answer came');
+  assert.equal(ended.attempts ?? 0, 0, 'not run again');
+  assert.match(ended.reason, /^ELU ended this turn: a message waited 1 minute for it, and this agent reads messages only between turns\. It starts the next turn\. Jobs keep running\.$/);
+  // The waiting message starts the session's next turn, which answers it.
+  await until(() => request(p.root, next.id)?.state === 'done', 'the waiting message to run', 45000);
+  assert.equal(String(request(p.root, next.id).taskId), String(id), 'in the same session');
+  const after = readTask(p.repo, id);
+  assert.equal(after.messages.filter(row => row.from === 'ELU' && row.line && /^ELU ended this turn:/.test(row.text)).length, 1, 'said once in the chat');
+  // The stopped turn reported nothing, so the only run is the next turn's, which read the note after the stop.
+  const done = request(p.root, next.id);
+  assert.ok(Date.parse(done.startedAt) >= Date.parse(ended.finishedAt), 'the note started after the turn ended');
+  assert.ok(after.runs.some(run => run.role === 'lead' && run.code === 0 && Date.parse(run.at) >= Date.parse(done.startedAt)), 'and that turn answered');
+  assert.ok(after.messages.some(row => row.text === NOTE), 'the note is in the chat');
+  // His Stop would have ended the job: this did not.
+  assert.deepEqual(sessionJobsNow(p.root, id, { fresh: true }).filter(job => job.state === 'running').map(job => job.name), ['gate-watch']);
+});
+
+// A turn that reads messages while it works (activeInbox), one that waits for the owner's
+// approval, and a message held until a time of its own (a retry) never end a turn.
+test('a turn that reads messages while it works, a message held for a retry, or a message younger than the limit ends no turn', async t => {
+  const p = setup(t), conductor = new Conductor({ stallMs: 3600000, heldMs: 60000 }), stops = [];
+  const controller = { repo: p.repo, stop: async (id, message) => { stops.push([id, message]); } };
+  const old = new Date(Date.now() - 5 * 60000).toISOString();
+  for (const [id, extra] of [['1', { activeInbox: true }], ['2', { activeDeaf: true }], ['3', { activeDeaf: true }], ['4', { activeDeaf: true }]]) {
+    const log = path.join(p.parent, `${id}.log`); fs.writeFileSync(log, 'started\n');
+    fs.mkdirSync(path.join(p.repo.state, 'tasks', id), { recursive: true });
+    saveTask(p.repo, { id, kind: 'conversation', base: null, branch: null, worktree: p.repo.root, goal: 'Work', state: 'running', activeRole: 'lead', activeLog: log, ...extra, createdAt: new Date().toISOString(), owner: { pid: process.pid, identity: null }, runs: [], sessions: {}, reviews: [], responses: [], messages: [] });
+    conductor.runs.set(id, { root: p.root, requestId: null, taskId: id, goal: 'Work', origin: null, attempts: 0, controller, quietSince: Date.now(), mark: null });
+  }
+  // 1 reads messages; 2's message is held for a retry; 3's message is new; 4's has waited five minutes.
+  for (const [id, update] of [['1', { queuedAt: old }], ['2', { queuedAt: old, notBefore: new Date(Date.now() + 60000).toISOString() }], ['3', {}], ['4', { queuedAt: old }]]) {
+    const row = enqueue(p.root, `For ${id}`, { continuationTaskId: id }); if (Object.keys(update).length) updateRequest(p.root, row.id, update);
+  }
+  conductor.watch();
+  assert.deepEqual(stops.map(([id]) => id), ['4']);
+  assert.match(stops[0][1], /^ELU ended this turn: a message waited 1 minute for it/);
+  assert.equal(conductor.runs.get('4').stopped, true);
 });
 
 test('a request cancelled before dispatch is never started or revived', async t => {
