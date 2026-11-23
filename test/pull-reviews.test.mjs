@@ -402,3 +402,27 @@ test("each pull request's findings go to the lead as soon as its bots review it,
   // Both bots' runs are the session's, as one look's were.
   assert.equal(readTask(f.repo, own.id).runs.filter(run => run.role === 'bot:critic' && run.pullReview).length, 2);
 });
+
+// 2026-11-22: a session with its helpers' pull requests had them reviewed one after another, so
+// the last waited hours for every review before it. A look's pull requests are reviewed at once.
+test("a look reviews its pull requests at once: one whose diff GitHub is slow to give holds up no other", { timeout: 240000 }, async t => {
+  const f = setup(t, 'review-fix', { intent: 'answer' }), gh = fakeGh(f);
+  const OTHER = 'https://github.com/acme/shop/pull/8', hold = path.join(f.parent, 'hold-seven');
+  fs.writeFileSync(hold, '');
+  // #7, the first of the look, waits for its diff; #8 answers at once.
+  gh.set({ hold, pulls: { [OTHER]: { url: OTHER, number: 8, title: 'Refunds', head: 'd'.repeat(40), hold: null } } });
+  const own = runner.createConversation(f.repo, f.controller.draftConfig, 'Open the coupons and refunds pull requests', { permissions: 'auto', bots: ['critic'] });
+  saveTask(f.repo, { ...readTask(f.repo, own.id), state: 'answered' });
+  (await import('../lib/pull-reviews.mjs')).notePulls(f.repo, own.id, [{ url: URL, owner: 'acme', repo: 'shop', number: 7 }, { url: OTHER, owner: 'acme', repo: 'shop', number: 8 }]);
+  const done = await f.controller.ask('Carry on.', own.id).finished;
+  assert.notEqual(done.state, 'blocked', JSON.stringify(done.error));
+  const sent = () => pendingRequests(f.root).filter(row => String(row.continuationTaskId) === String(own.id) && row.goal.startsWith(REVIEWS_HEAD)).map(row => row.goal);
+  const waited = Date.now();
+  while (!sent().length && Date.now() - waited < 60000) await new Promise(resolve => setTimeout(resolve, 100));
+  assert.equal(sent().length, 1, "PR #8 was reviewed while PR #7's diff was still on its way");
+  assert.match(sent()[0], /Review of PR #8 \(acme\/shop\) by @critic/);
+  fs.rmSync(hold); await runner.pullSweepsDone();
+  assert.equal(sent().length, 2); assert.match(sent()[1], /Review of PR #7 \(acme\/shop\) by @critic/);
+  // A look asked while another runs starts at once, and a review already running of the same head is not started twice.
+  assert.equal(reviewOf(f.inputs('codex'), 'critic').filter(input => input.includes('"pullRequest":')).length, 2);
+});
