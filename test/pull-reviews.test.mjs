@@ -125,6 +125,7 @@ const s = { ...all, ...((all.pulls ?? {})[args[2]] ?? {}) };
 fs.appendFileSync(${JSON.stringify(calls)}, JSON.stringify({ args, cwd: process.cwd() }) + '\\n');
 if (args[0] === 'pr' && args[1] === 'create') { console.error('Creating pull request for feat/coupons into main in acme/shop'); console.log(s.url); process.exit(0); }
 if (args[0] === 'pr' && args[1] === 'view') { console.log(JSON.stringify({ number: s.number ?? 7, title: s.title ?? 'Coupons', state: s.state, url: s.url, headRefOid: s.head, headRefName: 'feat/coupons', baseRefName: 'main', baseRefOid: 'b'.repeat(40) })); process.exit(0); }
+if (args[0] === 'api' && String(args[1]).includes('/compare/')) { if (!s.changed) process.exit(1); console.log(JSON.stringify(s.changed)); process.exit(0); }
 if (args[0] === 'pr' && args[1] === 'diff') { while (s.hold && fs.existsSync(s.hold)) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50); process.stdout.write(s.diff); process.exit(0); }
 process.exit(1);
 `, { mode: 0o755 });
@@ -194,11 +195,19 @@ test('a pull request the lead opens with gh pr create from a helper folder is re
   assert.equal(pendingRequests(f.root).filter(row => /answered what you asked it/.test(row.goal)).length, 0, 'its findings, not a chat answer');
   assert.deepEqual(sessionChecklist(task).filter(row => row.text === 'PR #7 reviewed').map(row => [row.met, row.evidence]), [[false, 'acme/shop at aaaaaaa: @critic: 1 must-fix.']]);
   // A new head is reviewed again; a gh that cannot show it is said once, tagged.
-  gh.set({ head: 'c'.repeat(40) });
+  gh.set({ head: 'c'.repeat(40), changed: ['src/pr-seven.mjs'] });
   f.mode('normal', { intent: 'answer', commands: [] });
   await f.controller.ask('Go on.', own.id).finished; await runner.pullSweepsDone();
   task = readTask(f.repo, own.id);
   assert.equal(task.pullReviews[URL].reviews.critic.head, 'c'.repeat(40));
+  // Its review at the new head has its own earlier must-fix to check, and the files changed
+  // since (2026-11-23: each push was reviewed anew and the must-fixes never went down).
+  const again = contextOf(reviewOf(f.inputs('codex'), 'critic').filter(input => input.includes('"pullRequest":')).at(-1));
+  assert.equal(again.pullRequest.head, 'c'.repeat(40));
+  assert.equal(again.previousReview.head, 'a'.repeat(40));
+  assert.deepEqual(again.previousReview.findings.map(row => [row.severity, row.body]), [['must_fix', 'Handle the edge case.']]);
+  assert.deepEqual(again.previousReview.changedSinceReview, ['src/pr-seven.mjs']);
+  assert.ok(gh.calls().some(call => call.args[0] === 'api' && call.args[1] === `repos/acme/shop/compare/${'a'.repeat(40)}...${'c'.repeat(40)}`));
   assert.equal(conversationEntries(f.repo, task).filter(row => row.pull === 7).at(-1).text, 'PR #7: Passed.');
 });
 
