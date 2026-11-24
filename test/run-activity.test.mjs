@@ -12,6 +12,25 @@ import { temp } from './helpers.mjs';
 const write = (file, rows) => fs.writeFileSync(file, rows.map(row => typeof row === 'string' ? row : JSON.stringify(row)).join('\n') + '\n');
 const plain = steps => steps.map(step => step.kind === 'plan' ? ['plan', step.entries.map(entry => `${entry.state} ${entry.text}`)] : [step.kind, step.text, ...(step.status ? [step.status] : []), ...(step.note ? [step.note] : [])]);
 
+test('logs read in turn beyond what is kept are not read again while they stay the same; one that grows or is replaced is', t => {
+  // 2026-11-23: a view of two long sessions read 885 logs in the same order each look, more
+  // than are kept, so each was let go just before it was read again, and read from its start.
+  const dir = temp(t), files = [];
+  const said = (file, text) => fs.appendFileSync(file, JSON.stringify({ type: 'item.completed', item: { id: `i${text}`, type: 'agent_message', text } }) + '\n');
+  for (let i = 0; i < 450; i++) { const file = path.join(dir, `bot-${i}.log`); said(file, `Run ${i}.`); files.push(file); }
+  const first = files.map(file => runSteps(file));
+  const opened = [], real = fs.openSync;
+  t.mock.method(fs, 'openSync', function (file, ...rest) { opened.push(path.basename(String(file))); return real.call(this, file, ...rest); });
+  for (let again = 0; again < 3; again++) files.forEach((file, i) => assert.equal(runSteps(file), first[i], 'the same frozen steps'));
+  assert.deepEqual(opened, [], 'no log is read again while it stays the same');
+  // A log that grows is read again, and shows its new step.
+  said(files[0], 'More.');
+  assert.deepEqual(plain(runSteps(files[0])), [['text', 'Run 0.'], ['text', 'More.']]);
+  // One replaced by another file of the same size (a new inode) is read again too.
+  const other = path.join(dir, 'other.log'); said(other, 'Run x.'); fs.renameSync(other, files[1]);
+  assert.deepEqual(plain(runSteps(files[1])), [['text', 'Run x.']]);
+  assert.deepEqual(opened, ['bot-0.log', 'bot-1.log']);
+});
 test('Claude Code: thoughts, each tool call and how it ended, the text on the way and the plan; never the reply', t => {
   const dir = temp(t), cwd = path.join(dir, 'repo'), file = path.join(dir, 'lead.log');
   const say = (content, parent = null) => ({ type: 'assistant', message: { id: 'm', role: 'assistant', content: [content] }, parent_tool_use_id: parent, session_id: 's' });
