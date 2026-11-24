@@ -63,6 +63,12 @@ test('run and review results are strict and a question cannot be silently droppe
   // After a blocked step a model answers needs_input and names what it needs in the summary alone.
   assert.deepEqual(validateResult({ ...good, outcome: 'needs_input' }), { ...good, outcome: 'needs_input' });
   for (const value of [{ ...good, outcome: 'done-ish' }, { ...good, outcome: 'needs_input', question: 7 }, { ...good, extra: 1 }, { ...good, comments: [{ id: 'R1', severity: 'fine', body: 'x' }] }]) assert.throws(() => validateResult(value));
+  // A bot's findings keep distinct IDs; a lead's answer that repeats one is dropped, the first
+  // kept, so the turn's result stands (2026-11-23: answers to several pull requests' part1-1).
+  assert.throws(() => validateResult({ ...good, comments: [{ id: 'R1', severity: 'must_fix', body: 'a' }, { id: 'R1', severity: 'suggestion', body: 'b' }] }), /distinct plain words/);
+  const answered = validateResult({ ...good, responses: [{ id: 'part1-1', action: 'fixed', reason: 'First.' }, { id: 'part1-2', action: 'disputed', reason: 'Other.' }, { id: 'part1-1', action: 'fixed', reason: 'Again.' }] });
+  assert.deepEqual(answered.responses.map(row => [row.id, row.reason]), [['part1-1', 'First.'], ['part1-2', 'Other.']]);
+  assert.throws(() => validateResult({ ...good, responses: [{ id: 'not plain', action: 'fixed', reason: 'x' }] }), /distinct plain words/);
 });
 test('YAML rejects aliases, duplicate keys, executable tags, and malformed indentation', () => {
   for (const input of ['x: &anchor 1', 'x: *alias', 'x: !!js/function bad', 'x: 1\nx: 2', 'x:\n\tbad: 1']) assert.throws(() => parseYaml(input));
