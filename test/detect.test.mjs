@@ -98,6 +98,31 @@ fs.writeSync(1, fs.fstatSync(1).isFIFO() ? help.slice(0, 8190) : help); process.
   assert.equal(vendorProblem('claude', [claude]), null);
 });
 
+test('an untested Claude whose help fails once is asked again, and a help that keeps failing says so', async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'elu-code-detect-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const flags = '--print --add-dir --restricted --safe-mode --setting-sources --settings --strict-mcp-config --mcp-config --no-chrome --permission-mode --permission-prompts --tools --allowedTools --disallowedTools --output-format --json-schema --max-budget-usd --session-id --input-format --ignore-user-config --ignore-rules --verbose';
+  const count = path.join(dir, 'help-count');
+  // Fails the first `failures` reads of --help (as a run on a busy machine can), then answers.
+  const write = failures => fs.writeFileSync(path.join(dir, 'claude'), `#!${process.execPath}
+import fs from 'node:fs'; const args = process.argv.slice(2);
+if (args[0] === '--version') { console.log('2.1.999 (Claude Code)'); process.exit(0); }
+if (args[0] === 'auth') { console.log(JSON.stringify({ loggedIn: true })); process.exit(0); }
+const n = (fs.existsSync(${JSON.stringify(count)}) ? Number(fs.readFileSync(${JSON.stringify(count)}, 'utf8')) : 0) + 1;
+fs.writeFileSync(${JSON.stringify(count)}, String(n));
+if (n <= ${failures}) process.exit(3);
+console.log(${JSON.stringify(flags)}); process.exit(0);
+`, { mode: 0o755 });
+  write(1);
+  const [once] = await detect(dir, { PATH: dir, HOME: dir }, { only: 'claude' });
+  assert.equal(once.supported, true, once.reason); assert.equal(once.versionStatus, 'untested version');
+  assert.equal(fs.readFileSync(count, 'utf8'), '2');
+  fs.rmSync(count); write(99);
+  const [always] = await detect(dir, { PATH: dir, HOME: dir }, { only: 'claude' });
+  assert.equal(always.supported, false);
+  assert.equal(always.reason, "This untested version's help (claude --help) could not be read: it exited 3.");
+  assert.equal(fs.readFileSync(count, 'utf8'), '2');
+});
+
 test('the lead error names what is wrong', () => {
   assert.equal(vendorProblem('claude', [{ vendor: 'claude', available: false }]), 'Claude Code is not installed or not on your PATH.');
   assert.equal(vendorProblem('claude', [{ vendor: 'claude', available: true, supported: true, signedIn: false }]), 'Claude Code is signed out. Run claude to sign in, then send again.');
