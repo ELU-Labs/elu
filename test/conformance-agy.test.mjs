@@ -217,6 +217,31 @@ test('parseOutput reads the result, the conversation id and stderr soft-denies; 
   assert.equal(agy.classify('HTTP 429 too many requests'), 'rate-limit'); assert.equal(agy.classify('something else'), 'unknown');
 });
 
+test('a headless turn agy 1.5.13 ended at a tool it could not ask about, with no answer, is refused as denied: what did not run, the conversation, and why nobody was asked', () => {
+  const id = crypto.randomUUID(), command = 'cd ~/web && git status -sb && find . -iname "*flow*"';
+  const tool = state => ({ event: 'step_update', step_update: { conversation_id: id, step_index: 3, state, step_type: 'tool', tool_name: 'run_command', tool_info: { name: 'run_command', parameters: { CommandLine: command } } } });
+  const ended = { event: 'result', result: { conversation_id: id, status: 'SUCCESS', response: '', num_turns: 1, denied_actions: [{ action: 'command', display_name: 'Bash' }] } };
+  const stderr = 'jetski: no output produced — a tool required the "command" permission that headless mode cannot prompt for, so it was auto-denied.\n';
+  const lines = rows => rows.map(row => JSON.stringify(row)).join('\n');
+  const refused = (text, options) => { try { agy.parseOutput(text, options); } catch (error) { return error; } assert.fail('not refused'); };
+  // Seen with 1.5.13 on Linux: the step ends DONE, and only the result's denied_actions and stderr say it was denied.
+  const asked = refused(lines([{ event: 'init', conversation_id: id, init: { cwd: '/w' } }, tool('ACTIVE'), tool('DONE'), ended]), { stderr, mode: 'ask' });
+  assert.equal(asked.message, `Antigravity can't ask you for approval here, so it did not run ${command}. Switch this session to Full access to let it.`);
+  assert.deepEqual(asked.details, { cause: 'denied', session: id, model: null, denials: [{ tool: 'Bash', summary: command }], exitCode: 0 });
+  assert.equal(refused(lines([tool('DONE'), ended]), { stderr, mode: 'auto' }).details.cause, 'denied', 'Approve for me too');
+  assert.equal(refused(lines([tool('DONE'), ended]), { stderr, mode: 'locked' }).message, `Antigravity ended its turn: ${command} was not allowed.`);
+  // The step that ended in a permission error names it; only stderr left says what it was.
+  const failed = { event: 'step_update', step_update: { conversation_id: id, step_type: 'tool', state: 'ERROR', tool_name: 'run_command', tool_info: { name: 'run_command', error: { type: 'TOOL_ERROR', message: 'permission check failed for unsandboxed "ls": user denied permission to run command' } } } };
+  assert.deepEqual(refused(lines([failed, ended]), { stderr, mode: 'ask' }).details.denials, [{ tool: 'run_command', summary: 'permission check failed for unsandboxed "ls": user denied permission to run command' }]);
+  const bare = refused(lines([{ event: 'result', result: { conversation_id: id, status: 'SUCCESS', response: '' } }]), { stderr, mode: 'ask' });
+  assert.equal(bare.details.cause, 'denied'); assert.equal(bare.details.denials[0].tool, 'command');
+  assert.equal(bare.message, "Antigravity can't ask you for approval here, so it did not run a step that needed it. Switch this session to Full access to let it.");
+  // An empty answer with nothing denied is still no answer.
+  assert.equal(refused(lines([{ event: 'result', result: { conversation_id: id, status: 'SUCCESS', response: '' } }]), { mode: 'ask' }).message, 'Antigravity returned no JSON run result.');
+  const long = 'x'.repeat(300);
+  assert.equal(refused(lines([{ ...tool('DONE'), step_update: { ...tool('DONE').step_update, tool_info: { name: 'run_command', parameters: { CommandLine: long } } } }, ended]), { stderr, mode: 'ask' }).details.denials[0].summary, `${'x'.repeat(119)}…`);
+});
+
 test('headless runs against the fake: locked soft-denies with exit 0, ask denies outside edits, full writes anywhere, a conversation resumes in its HOME and starts fresh in another, a signed-out probe fails', async t => {
   const dir = home(t), ws = repo(dir), fake = install(dir), schemaFile = schemaAt(dir), outside = path.join(dir, 'outside.txt'), marker = path.join(dir, 'marker.sh'), ran = path.join(dir, 'ran');
   fs.writeFileSync(outside, 'planted\n'); fs.writeFileSync(marker, `#!/bin/sh\nprintf ran > ${JSON.stringify(ran)}\n`, { mode: 0o700 });
