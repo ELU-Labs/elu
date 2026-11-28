@@ -834,6 +834,24 @@ test('an Antigravity lead runs headless under the workspace HOME and asks over A
   assert.match(cli(f.root, ['open', task.id], { ...f.fake.env, HOME: f.parent }).json.command, /^cd '[^']+' && HOME='[^']+agy-home\/[0-9a-f]{16}' AGY_CLI_DISABLE_AUTO_UPDATE='true'(?: DBUS_SESSION_BUS_ADDRESS='[^']+')? agy '--conversation' '[0-9a-f-]{36}'$/);
 });
 
+test('an Antigravity lead in Ask for approval whose headless run agy ends at a command it cannot ask about ends blocked, says why, and the next message goes on in its conversation', async t => {
+  const f = setup(t, 'agy');
+  proven('agy', f.bin, '1.5.4', { relay: false }); agySet(f, { headlessAskEnds: true });
+  const task = await f.controller.ask(`Run this command: ${f.marker}. Reply with the summary "headless".`, null, { permissions: 'ask' }).finished;
+  const shown = f.marker.length > 120 ? `${f.marker.slice(0, 119)}…` : f.marker;
+  assert.equal(task.state, 'blocked', JSON.stringify(task.error)); assert.equal(task.error, null); assert.equal(task.result.outcome, 'blocked');
+  assert.equal(task.result.summary, `Antigravity can't ask you for approval here, so it did not run ${shown}. Switch this session to Full access to let it.`);
+  assert.equal(fs.existsSync(f.ran), false, 'nothing ran');
+  const [run] = task.runs;
+  assert.match(run.session, /^[0-9a-f-]{36}$/); assert.deepEqual(run.denials, [{ tool: 'Bash', summary: shown }]);
+  agySet(f, {});
+  const second = await f.controller.ask('Reply with the summary "again".', task.id).finished;
+  // The fake reads the first message again from the chat and tries the command again, soft-denied as before 1.5.13: an answer, no failure.
+  assert.equal(second.error, null, JSON.stringify(second.error)); assert.equal(second.runs.length, 2);
+  const call = f.calls().filter(row => row.args.includes('-p') && !row.args.includes('/usage')).at(-1);
+  assert.equal(call.args[call.args.indexOf('--conversation') + 1], run.session, 'the next message went on in its conversation');
+});
+
 // The first reply names its session on every vendor: the name is one more field of the
 // reply every vendor already gives, so no vendor is called a second time for it.
 const NAMING = /Also set name: a short name for this session, taken from what was asked\. Two to six plain words, at most 40 characters/;
