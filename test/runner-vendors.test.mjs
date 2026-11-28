@@ -301,6 +301,20 @@ function quickClock(t, quietSeconds) {
   const before = { ...turnClock }; Object.assign(turnClock, { quietSeconds }); t.after(() => Object.assign(turnClock, before));
 }
 // The owner's case: a long test run inside a turn prints nothing until it ends.
+// Codex 0.167.0 says why it could not start a turn only on its last stderr line, and the
+// chat said no more than "could not finish" (seen on Linux: its sandbox could not be built).
+test('a Codex turn that could not start says why: the last Error line of its stderr, its end kept when it is long', async t => {
+  const f = setup(t, 'codex'), set = value => { const file = path.join(f.fake.dir, 'fake.json'); fs.writeFileSync(file, JSON.stringify({ ...JSON.parse(fs.readFileSync(file, 'utf8')), startFails: value })); };
+  const why = "failed to load AGENTS.md instructions for environment `local`: fs sandbox helper failed with status exit status: 1: bwrap: Can't mkdir /h/.config/elu-code: Read-only file system";
+  set(why);
+  const said = async () => { const ended = await f.controller.ask('Where is coupon normalization?', null, { permissions: 'ask' }).finished.catch(error => error); assert.ok(ended instanceof Error, 'the turn failed'); return ended.message; };
+  assert.equal(await said(), `The model could not finish. thread/start: thread/start failed: error creating thread: ${why} (code -32603)`);
+  set(`${'x'.repeat(400)}: bwrap: Can't mkdir /h/.config/elu-code: Read-only file system`);
+  const long = await said();
+  assert.ok(long.endsWith("bwrap: Can't mkdir /h/.config/elu-code: Read-only file system (code -32603)"), long);
+  assert.equal(long, `The model could not finish. …${long.slice(-299)}`);
+});
+
 test('a Codex turn whose command runs silently past the quiet limit is not stopped', async t => {
   const f = setup(t, 'codex', { commands: ['sleep 3'] }); quickClock(t, 1);
   const task = await f.controller.ask('Where is coupon normalization?', null, { permissions: 'auto' }).finished;

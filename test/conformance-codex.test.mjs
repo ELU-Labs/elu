@@ -215,6 +215,32 @@ test('a denied folder missing from the Git folder cannot stop the Codex sandbox:
   }
 });
 
+// Codex 0.167.0 on Linux masks each denied path with an empty folder it makes read-only, the
+// shallower first (codex-rs/linux-sandbox bwrap.rs). A deny inside another then needs a folder
+// made in that frozen one, and bwrap stopped every turn: "Can't mkdir <home>/.config/elu-code:
+// Read-only file system", ELU's own state being in .config, a home secret.
+test('a denied path inside another denied path gets no entry of its own, unless a folder the turn uses lies between them', (t) => {
+  const home = fs.realpathSync(temp(t)), schemaFile = path.join(temp(t), 'schema.json'), before = { HOME: process.env.HOME, XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME };
+  t.after(() => { for (const [key, value] of Object.entries(before)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } });
+  process.env.HOME = home; process.env.XDG_CONFIG_HOME = path.join(home, '.config');
+  const config = path.join(home, '.config'), state = path.join(config, 'elu-code'); fs.mkdirSync(state, { recursive: true });
+  assert.equal(path.resolve(personalDirectory()), state);
+  const nested = entries => [...entries].filter(([p, access]) => access === 'deny' && [...entries].some(([outer, other]) => other === 'deny' && outer !== p && p.startsWith(`${outer}${path.sep}`))).map(([p]) => p);
+  for (const mode of ['ask', 'auto']) for (const role of [lead(), { ...lead(), access: 'read', writablePaths: [] }]) {
+    // The project is the home folder (a computer whose project is ~), or a folder of its own.
+    for (const cwd of [home, temp(t)]) {
+      const at = `${mode} ${role.access} ${cwd === home ? 'in ~' : 'elsewhere'}`, entries = filesystemOf(profileOf(codex({ mode, role, cwd, schemaFile })));
+      assert.equal(entries.get(config), 'deny', `${at}: .config, and ELU's state in it, stay denied`);
+      assert.equal(entries.has(state), false, at); assert.deepEqual(nested(entries), [], at);
+      for (const name of HOME_SECRETS) assert.equal(entries.get(path.join(home, name)), 'deny', `${at}: ${name}`);
+    }
+  }
+  // A workspace inside .config opens that part of it again, so a deny inside the workspace stays.
+  const cwd = path.join(config, 'project'), inner = path.join(cwd, 'settings'); fs.mkdirSync(path.join(inner, 'elu-code'), { recursive: true });
+  process.env.XDG_CONFIG_HOME = inner;
+  assert.equal(filesystemOf(profileOf(codex({ mode: 'ask', role: lead(), cwd, schemaFile }))).get(path.join(inner, 'elu-code')), 'deny');
+});
+
 test('profile paths that Codex would read as patterns are refused', (t) => {
   const cwd = temp(t), schemaFile = path.join(cwd, 'schema.json');
   const bad = path.join(temp(t), 'evals*');
