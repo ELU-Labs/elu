@@ -6,7 +6,9 @@
 // should refuse by itself), acpEditsFreely (an ACP server that edits the workspace without
 // reading its rules), acpFails (`agy acp` ends at once, as a release without it would),
 // acpNoModels (an ACP session that names no model and takes none), noUsage (an ACP turn
-// that ends without its tokens), pace (milliseconds a headless run waits before it prints,
+// that ends without its tokens), headlessAskEnds (a headless run ends at the first tool that
+// would ask, with an empty response, as agy 1.5.13 did on Linux: the tool step shown, the result's
+// denied_actions naming it, and its "auto-denied" line on stderr), pace (milliseconds a headless run waits before it prints,
 // and an ACP run before each of its steps). Run from test/fakes/ directly, with no fake.json beside it, it exits 2:
 // no path may reach the source file as a program. It honors what the adapter relies on:
 // the private HOME's settings.json and hooks.json (the hook command really runs),
@@ -191,6 +193,7 @@ async function turn(text, { cwd, skip, sandbox, ask, dir, review = false, show =
     if (verdict === 'ask') {
       if (ask && agy.noPermissionRequest) verdict = 'allow';
       else if (ask) { verdict = (await ask(attempt, call)) === 'allow' ? 'allow' : 'deny'; rule = 'permission request rejected'; ended = verdict === 'deny'; }
+      else if (agy.headlessAskEnds) return { headlessAsked: attempt };
       else { verdict = 'deny'; rule = `${rule}; headless`; }
     }
     // Each file of reads, and whether it was read, in reads.jsonl beside the fake.
@@ -229,6 +232,14 @@ async function headless() {
   const named = cfg.live && args.includes('--dangerously-skip-permissions') ? /Keep the Task's subtasks in the file ("[^\n]+?") as you work/.exec(text)?.[1] : null, list = named ? JSON.parse(named) : null;
   if (list) { writeList(list, ['done', 'doing']); await liveGate(); }
   const result = await turn(text, { cwd, skip: args.includes('--dangerously-skip-permissions'), sandbox: args.includes('--sandbox'), ask: null, dir });
+  if (result.headlessAsked) {
+    const { tool, input: params } = result.headlessAsked, step = { conversation_id: id, step_index: 2, step_type: 'tool', tool_name: tool, tool_info: { name: tool, parameters: params } };
+    if (streaming) for (const state of ['ACTIVE', 'DONE']) console.log(JSON.stringify({ event: 'step_update', step_update: { ...step, state } }));
+    const done = { conversation_id: id, status: 'SUCCESS', response: '', num_turns: 1, denied_actions: [{ action: ACTION[tool] ?? tool, display_name: tool === 'run_command' ? 'Bash' : tool }] };
+    console.log(streaming ? JSON.stringify({ event: 'result', result: done }) : JSON.stringify(done, null, 2));
+    process.stderr.write(`jetski: no output produced — a tool required the "${ACTION[tool] ?? tool}" permission that headless mode cannot prompt for, so it was auto-denied. Add an allow-rule under permissions.allow in settings.json (e.g. command(<target>)). Alternatively, re-run with --dangerously-skip-permissions to auto-approve all tools.\n`);
+    process.exit(0);
+  }
   if (list) writeList(list, ['done', 'done']);
   if (schema?.properties?.intent) { result.intent = 'answer'; if (schema.properties.repository) result.repository = ''; }
   if (cfg.name !== undefined && schema?.properties?.name) result.name = cfg.name;
