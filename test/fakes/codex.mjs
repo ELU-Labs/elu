@@ -54,6 +54,9 @@ if(args.includes('--help')){console.log('--print --add-dir --restricted --safe-m
 // refuses (fake.json): config keys this release does not take. An exec started with one ends at
 // once with one line on stderr and nothing printed.
 {const unknown=args[0]==='exec'?(cfg.refuses??[]).find(key=>args.some(arg=>arg.startsWith(`${key}=`))):null;if(unknown){console.error(`error: unknown configuration key: ${unknown}`);process.exit(1);}}
+// startFails (fake.json): why an exec could not start its thread, said as 0.167.0 says it when its
+// sandbox cannot be built (a log line, then "Error: …" last on stderr), and nothing printed.
+if(args[0]==='exec'&&typeof cfg.startFails==='string'){console.error(`2026-11-28T06:03:12.789638Z ERROR codex_core::session: Failed to create session: ${cfg.startFails}`);console.error(`Error: thread/start: thread/start failed: error creating thread: ${cfg.startFails} (code -32603)`);process.exit(1);}
 // `debug models` (with or without --bundled) as the real CLI prints it: the catalog as JSON, one row hidden.
 // fake.json may carry its own rows as `models`.
 if(args[0]==='debug'&&args[1]==='models'){console.log(JSON.stringify({models:cfg.models??[{slug:'big-model',display_name:'Big Model',description:'Frontier model for the most demanding work.',visibility:'list',priority:2},{slug:'quick-model',display_name:'Quick Model',description:'Fast and affordable model for easier tasks.',visibility:'list',priority:1},{slug:'review-model',display_name:'Review Model',description:'Automatic approval review model.',visibility:'hide',priority:9}]}));process.exit(0);}
